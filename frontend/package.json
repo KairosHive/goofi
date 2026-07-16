@@ -1,0 +1,31 @@
+{
+  "name": "goofi-pipe-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "svelte-kit sync && vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.6",
+    "@sveltejs/kit": "^2.8.1",
+    "@sveltejs/vite-plugin-svelte": "^4.0.0",
+    "@types/node": "^25.9.1",
+    "svelte": "^5.1.0",
+    "svelte-check": "^4.0.5",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^4.1.7"
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.1.3",
+    "@xyflow/svelte": "^1.0.0",
+    "marked": "^18.0.5",
+    "uplot": "^1.6.31"
+  }
+}
