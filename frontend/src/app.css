@@ -1,0 +1,257 @@
+/* goofi-pipe — global styles. Single dark theme.
+ *
+ * Palette borrowed from `~/projects/goofi-next/goofi3/frontend/.../theme.ts`
+ * (#111 background, #50d0a0 accent, JetBrains Mono throughout). The token
+ * names match the earlier scheme so every component restyles automatically.
+ */
+
+:root {
+	color-scheme: dark;
+
+	--bg: #111111;
+	--bg-elev-1: #161616;
+	--bg-elev-2: #191919;
+	--bg-elev-3: #1f1f1f;
+	--surface-glass: rgba(25, 25, 25, 0.85);
+	--border: #242424;
+	--border-strong: #2c2c2c;
+	--text: #d0d0d0;
+	--text-dim: #888;
+	--text-faint: #606060;
+	--accent: #50d0a0;
+	--accent-strong: #3fb88a;
+	--success: #50d0a0;
+	--warning: #f0c050;
+	--danger: #f06080;
+
+	/* node category palette — distinguishable on the #111 background and
+	   colour-blind safe at the saturations used here. */
+	--cat-analysis: #b080f0;
+	--cat-array: #50d0a0;
+	--cat-inputs: #f0c050;
+	--cat-misc: #888888;
+	--cat-outputs: #f06080;
+	--cat-signal: #7ab7ff;
+	--cat-viewer: #606060;
+
+	/* dtype palette — slot pins/labels colour-code at a glance. */
+	--dtype-array: #50d0a0;
+	--dtype-string: #f0c050;
+	--dtype-table: #e08060;
+
+	/* node geometry — one harmonic ladder (Fibonacci/φ). Node width is constant
+	   and every height is a multiple of the slot unit, so snap guides line up.
+	   A collapsed output slot and each input both occupy one --node-u; an open
+	   viewer plot is 233/φ ≈ 144 (a golden rectangle), making an open slot 7u —
+	   i.e. seven collapsed slots stack to one open viewer. */
+	--node-w: 233px; /* standard node width */
+	--node-header: 36px; /* title-bar height (1.5u) */
+	--node-u: 24px; /* slot unit: collapsed slot + input connector pitch */
+	--node-viewer: 144px; /* open viewer plot height */
+
+	--shadow-1: 0 4px 18px rgba(0, 0, 0, 0.45);
+	--shadow-2: 0 12px 36px rgba(0, 0, 0, 0.55);
+
+	--radius-sm: 4px;
+	--radius-md: 6px;
+	--radius-lg: 10px;
+
+	/* Z-index scale — single source of truth for stacking. Every overlay
+	   references one of these so layers never collide. Ascending:
+	   panel content → side-panel → layout chrome → error chip → menus →
+	   add-node menu → split/join drag ghost → modals → tab drag.
+	   Layout chrome (splitters + corner grips) sits ABOVE panel content so the
+	   split/join handles are always reachable, even under the slide-in
+	   inspector — the layout owns the panel, not its contents. */
+	--z-side-panel: 50; /* auto selection inspector overlay (panel content) */
+	--z-chrome: 55; /* splitters + panel corner grips (layout mechanics) */
+	--z-chip: 60; /* floating error chip */
+	--z-menu: 100; /* context menus */
+	--z-addmenu: 110; /* node-editor add-node menu + its capture overlay */
+	--z-drag-ghost: 150; /* live split/join preview while corner-dragging */
+	--z-modal: 200; /* expression editor + other modals */
+	--z-tab-drag: 250; /* a tab being dragged to reorder */
+	--z-toast: 260; /* transient toast (undo/redo errors) — above everything */
+
+	/* JetBrains Mono throughout — goofi3 aesthetic. Sans falls back to mono
+	   in case any component still references --font-sans explicitly. */
+	--font-sans:
+		'JetBrains Mono',
+		ui-monospace,
+		SFMono-Regular,
+		Menlo,
+		Consolas,
+		monospace;
+	--font-mono:
+		'JetBrains Mono',
+		ui-monospace,
+		SFMono-Regular,
+		Menlo,
+		Consolas,
+		monospace;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--font-sans);
+	/* Responsive base size — matches goofi3's clamp so the UI scales with
+	   the viewport without losing readability on small screens. */
+	font-size: clamp(11px, 0.9vw + 0.3vh, 14px);
+	line-height: 1.35;
+	overflow: hidden;
+	height: 100vh;
+	width: 100vw;
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+}
+
+button {
+	font: inherit;
+	background: var(--bg-elev-2);
+	color: var(--text);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	padding: 4px 10px;
+	cursor: pointer;
+	transition:
+		background 80ms ease,
+		border-color 80ms ease;
+}
+button:hover:not(:disabled) {
+	background: var(--bg-elev-3);
+	border-color: var(--border-strong);
+}
+button:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+button.primary {
+	background: var(--accent);
+	color: #0a0c10;
+	border-color: var(--accent);
+	font-weight: 600;
+}
+button.primary:hover:not(:disabled) {
+	background: var(--accent-strong);
+}
+button.ghost {
+	background: transparent;
+	border-color: transparent;
+}
+button.ghost:hover:not(:disabled) {
+	background: var(--bg-elev-2);
+}
+
+input,
+select,
+textarea {
+	font: inherit;
+	background: var(--bg-elev-1);
+	color: var(--text);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	padding: 4px 8px;
+	outline: none;
+	transition: border-color 80ms ease;
+}
+input:focus,
+select:focus,
+textarea:focus {
+	border-color: var(--accent);
+}
+
+::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+::-webkit-scrollbar-thumb {
+	background: var(--bg-elev-3);
+	border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+	background: var(--border-strong);
+}
+
+/* Svelte Flow theming overrides */
+.svelte-flow {
+	background: var(--bg) !important;
+}
+.svelte-flow__background {
+	color: rgba(255, 255, 255, 0.035) !important;
+}
+.svelte-flow__controls {
+	border-radius: var(--radius-sm);
+	overflow: hidden;
+	background: var(--bg-elev-1) !important;
+	border: 1px solid var(--border);
+	box-shadow: var(--shadow-1);
+}
+.svelte-flow__controls-button {
+	background: var(--bg-elev-1) !important;
+	color: var(--text) !important;
+	border-bottom: 1px solid var(--border) !important;
+}
+.svelte-flow__controls-button:hover {
+	background: var(--bg-elev-3) !important;
+}
+/* Connectors — "magnet" pills: a small dtype-coloured capsule sitting on the
+   node border, inside an oversized transparent hit-area so cables are easy to
+   grab. Colour comes from --dtype, set on the handle (or inherited) by the node
+   / slot; the visible pill is a ::before so there's no extra DOM per handle. */
+.svelte-flow__handle {
+	width: 22px;
+	height: 20px;
+	min-width: 0;
+	min-height: 0;
+	background: transparent;
+	border: 0;
+	border-radius: 0;
+}
+.svelte-flow__handle::before {
+	content: '';
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	transform: translate(-50%, -50%);
+	width: 14px;
+	height: 9px;
+	border-radius: 999px;
+	background: var(--dtype, var(--border-strong));
+	box-shadow: 0 0 0 2px var(--bg-elev-1);
+	transition:
+		width 90ms ease,
+		height 90ms ease,
+		box-shadow 90ms ease;
+}
+.svelte-flow__handle:hover::before {
+	width: 16px;
+	height: 11px;
+	box-shadow:
+		0 0 0 2px var(--bg-elev-1),
+		0 0 8px var(--dtype, var(--accent));
+}
+.svelte-flow__edge-path {
+	stroke: var(--border-strong);
+	stroke-width: 1.4;
+}
+.svelte-flow__edge:hover .svelte-flow__edge-path {
+	stroke: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
+}
+.svelte-flow__edge.selected .svelte-flow__edge-path {
+	stroke: var(--accent);
+	stroke-width: 2;
+}
+.svelte-flow__attribution {
+	display: none;
+}
