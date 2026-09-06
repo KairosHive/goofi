@@ -124,6 +124,21 @@ pub fn boundary_types_help() -> String {
 }
 
 /// The frontend's vocabulary module, generated from the tables above and checked into the tree.
+/// How often ONE slot's reduced stream is broadcast, as frames a second. The app-wide viewer
+/// rate: the browser paints no faster, so anything above it is bytes nobody draws. The frontend
+/// reads it off the generated table rather than declaring a second one.
+pub const MAX_VIEWER_FPS: u32 = 30;
+
+/// The reducer's own loop quantum: HALF a serve, so it can both drain at twice the viewer rate
+/// and land a serve exactly on the interval. The interval is derived from it rather than the other
+/// way round — a quantum that does not divide the interval aliases the real rate away from
+/// [`MAX_VIEWER_FPS`], and the loop's sleep would be a second owner of the cadence.
+pub const REDUCER_TICK: std::time::Duration =
+    std::time::Duration::from_nanos(1_000_000_000 / (2 * MAX_VIEWER_FPS) as u64);
+
+/// The gap [`MAX_VIEWER_FPS`] asks for between two serves of one slot.
+pub const VIEWER_INTERVAL: std::time::Duration = REDUCER_TICK.saturating_mul(2);
+
 pub fn typescript() -> String {
     let dtypes = SlotType::ALL.iter().map(|t| format!("'{}'", t.name())).collect::<Vec<_>>().join(" | ");
     let feeds = SlotType::ALL
@@ -275,7 +290,11 @@ pub fn typescript() -> String {
          export const feeds = (out: SlotDtype, into: SlotDtype): boolean => FEEDS.has(`${{out}}>${{into}}`);\n\
          \n\
          /** The kind a slot of each dtype opens with, before a viewer has stored one of its own. */\n\
-         export const DEFAULT_KIND: Record<SlotDtype, ViewerKind> = {{\n{defaults}}};\n"
+         export const DEFAULT_KIND: Record<SlotDtype, ViewerKind> = {{\n{defaults}}};\n\
+         \n\
+         /** How fast the manager serves one slot, and so the fastest a viewer can be asked to paint. */\n\
+         export const MAX_VIEWER_FPS = {fps};\n",
+        fps = MAX_VIEWER_FPS,
     )
 }
 
