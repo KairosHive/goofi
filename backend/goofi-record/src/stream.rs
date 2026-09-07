@@ -82,7 +82,8 @@ impl Stream {
         t0_patch: f64,
         t0_utc: SystemTime,
     ) -> Result<Stream, String> {
-        let writer = BufWriter::new(File::create(folder.join(&file)).map_err(|e| e.to_string())?);
+        let made = File::create_new(folder.join(&file)).map_err(|e| e.to_string())?;
+        let writer = BufWriter::new(made);
         Ok(Stream {
             file,
             kind,

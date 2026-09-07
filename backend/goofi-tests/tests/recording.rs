@@ -38,12 +38,23 @@ fn a_recording_is_a_folder_of_decodable_frames() {
         let frame = goofi_core::Data::array_f32(vec![4], vec![0u8; 16], meta).expect("a frame");
         rec.write(&id, &goofi_codec::encode(&frame)).expect("written");
     }
-    let folder = rec.stop().expect("a folder");
+    // Step: a re-arm at the very same patch instant is a NEW file, never the last one truncated.
+    rec.open(&id, goofi_record::Kind::Frames, 0.0, goofi_record::StreamMeta::measured(Some(256.0)))
+        .expect("re-opened at the same patch instant");
+    let frame = goofi_core::Data::array_f32(vec![4], vec![0u8; 16], goofi_core::Meta::empty())
+        .expect("a frame");
+    rec.write(&id, &goofi_codec::encode(&frame)).expect("written to the second file");
+    let folder = rec.stop().expect("the manifest written").expect("a folder");
 
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(folder.join("manifest.json")).expect("a manifest"))
             .expect("json");
     assert_eq!(manifest["streams"][0]["frames"], 8);
+    assert_eq!(manifest["streams"][1]["frames"], 1);
+    assert_ne!(
+        manifest["streams"][0]["file"], manifest["streams"][1]["file"],
+        "two entries never name one file"
+    );
     assert!(manifest["origin_utc"].is_string(), "the one anchor every file adds to");
 
     let file = folder.join(manifest["streams"][0]["file"].as_str().expect("a name"));
