@@ -19,7 +19,6 @@ pub enum Cmd {
     Insert(Uid, usize),
     Remove(Uid),
     Plan(Plan),
-    Clock(Instant),
     Ui(Option<goofi_window::Ui>),
 }
 
@@ -51,7 +50,7 @@ struct State {
 pub struct Runtime {
     plan: Plan,
     states: HashMap<Uid, State>,
-    started: Instant,
+    time: Arc<goofi_core::time::Time>,
     stats: Arc<Stats>,
     /// The window thread, where a stage with a window on the machine's screen sends its frame.
     pub ui: Option<goofi_window::Ui>,
@@ -64,12 +63,12 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    pub fn new(gpu: Arc<Gpu>, started: Instant, stats: Arc<Stats>) -> Runtime {
+    pub fn new(gpu: Arc<Gpu>, time: Arc<goofi_core::time::Time>, stats: Arc<Stats>) -> Runtime {
         Runtime {
             gpu,
             plan: Plan::default(),
             states: HashMap::new(),
-            started,
+            time,
             stats,
             ui: None,
             presenting: HashMap::new(),
@@ -129,7 +128,6 @@ impl Runtime {
                 Cmd::Insert(uid, params) => self.insert(uid, params),
                 Cmd::Remove(uid) => self.remove(uid),
                 Cmd::Plan(plan) => self.set_plan(plan),
-                Cmd::Clock(origin) => self.started = origin,
                 Cmd::Ui(ui) => self.ui = ui,
             }
         }
@@ -140,7 +138,7 @@ impl Runtime {
     pub fn tick(&mut self) {
         self.drain_inbox();
         let began = Instant::now();
-        let t = self.started.elapsed().as_secs_f32();
+        let t = self.time.now();
         let want = self.plan.demanded();
         if !want.contains(&true) {
             self.stats.frames.fetch_add(1, Ordering::Relaxed);
@@ -162,7 +160,7 @@ impl Runtime {
                     state.upload(&self.gpu, k, &up);
                 }
             }
-            self.gpu.queue.write_buffer(&state.time, 0, &t.to_le_bytes());
+            self.gpu.queue.write_buffer(&state.time, 0, &(t as f32).to_le_bytes());
             let res = [(stage.size.0 as f32).to_le_bytes(), (stage.size.1 as f32).to_le_bytes()].concat();
             self.gpu.queue.write_buffer(&state.resolution, 0, &res);
             if let Some(buf) = &state.params {
