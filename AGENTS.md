@@ -166,7 +166,10 @@ In priority order. These override speed.
    trying to prevent?"** — and the way to answer it is to run the broken variant against your
    fixture and watch it pass. This has cost real defects: a fake socket hard-coded to OPEN hid a
    message dropped on a connecting one; a single-node fixture hid a counter summing across
-   streams; a load test into a *fresh* instance passed against code that renumbered every node.
+   streams; a load test into a *fresh* instance passed against code that renumbered every node; and a disarm
+fixture that called `graph.set_recorded` instead of driving the `record disarm` op could not see an
+800-frame loss at all, where driving the real op reported 784 frames written against 55 in the
+manifest.
 
 4. **Structural edits over shallow hacks.** Prefer the change that makes the codebase correct by
    construction over the one that silences the symptom. A larger, well-reasoned refactor is
