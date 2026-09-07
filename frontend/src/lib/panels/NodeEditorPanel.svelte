@@ -634,7 +634,11 @@
 			revertDragged(dragged);
 			for (const id of dragged) pinned.delete(id);
 			const uid = args.nodes[0]?.id ?? '';
-			if ('panel' in target) ws.linkNodeToPanel(target.panel, uid);
+			if ('panel' in target) {
+				const drop = uiStore.nodeDropFor(target.panel);
+				if (drop) drop(uid);
+				else ws.linkNodeToPanel(target.panel, uid);
+			}
 			else void g.linkControl(target.widget, uid).catch(() => {});
 		} else {
 			const current = new Map<string, { x: number; y: number }>();

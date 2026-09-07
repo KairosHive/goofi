@@ -208,6 +208,17 @@ export function viewersJson(doc: Doc, uid: string): unknown {
 	}
 }
 
+/** Every armed output slot, node by node, in the order the document holds them. */
+export function recordedSlots(doc: Doc): { uid: string; slot: string }[] {
+	const out: { uid: string; slot: string }[] = [];
+	for (const [uid, n] of Object.entries(nodesMap(doc))) {
+		const r = n?.record;
+		if (!Array.isArray(r)) continue;
+		for (const slot of r) if (typeof slot === 'string') out.push({ uid, slot });
+	}
+	return out;
+}
+
 export function linkViews(doc: Doc): LinkView[] {
 	return linksArray(doc).map((m) => ({
 		node_out: str(m, 'node_out'),

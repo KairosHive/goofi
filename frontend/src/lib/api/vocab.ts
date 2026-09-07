@@ -15,7 +15,8 @@ export type PanelTypeId =
 	| 'console'
 	| 'globals'
 	| 'control'
-	| 'agent';
+	| 'agent'
+	| 'recorder';
 
 /** The panel type a brand-new tab starts with. */
 export const DEFAULT_PANEL_TYPE = 'node-editor';
@@ -65,6 +66,7 @@ export const PANEL_TYPES: readonly PanelTypeInfo[] = [
 	{ id: 'globals', title: 'Globals', icon: 'globe', acceptsNode: false, doc: 'the patch globals, which any expression can read' },
 	{ id: 'control', title: 'Control', icon: 'sliders-vertical', acceptsNode: false, doc: 'knobs, sliders and fields over one group of globals' },
 	{ id: 'agent', title: 'Agent', icon: 'bot', acceptsNode: false, doc: 'a terminal on an agent harness, running in the patch workspace' },
+	{ id: 'recorder', title: 'Recorder', icon: 'circle-dot', acceptsNode: true, doc: 'capture the output slots of any node to disk, on one clock' },
 ];
 
 export const VIEWER_KINDS: readonly ViewerKindInfo[] = [
