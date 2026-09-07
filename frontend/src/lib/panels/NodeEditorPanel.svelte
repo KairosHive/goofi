@@ -794,6 +794,20 @@
 		);
 	}
 
+	/** Escape's rungs inside the canvas: the menu, then the selection, then the sub-patch. False
+	 * when none of them was there to take it. */
+	function escapeLadder(): boolean {
+		if (menuOpen) {
+			menuOpen = false;
+			menuSeed = null;
+		} else if (sel.nodes(panelId).size || sel.edges(panelId).size) {
+			sel.clear(panelId);
+		} else if (enteredPath.length) {
+			exitToDepth(enteredPath.length - 1); // step one level up
+		} else return false;
+		return true;
+	}
+
 	function onKeydown(e: KeyboardEvent): void {
 		if (!isActive()) return;
 		const t = e.target as HTMLElement | null;
@@ -825,15 +839,9 @@
 			// Shift+Tab is left alone: it is the way back OUT of a canvas nothing has focused yet.
 			e.preventDefault();
 			openAddMenu(mouseX, mouseY);
-		} else if (e.key === 'Escape') {
-			if (menuOpen) {
-				menuOpen = false;
-				menuSeed = null;
-			} else if (sel.nodes(panelId).size || sel.edges(panelId).size) {
-				sel.clear(panelId);
-			} else if (enteredPath.length) {
-				exitToDepth(enteredPath.length - 1); // step one level up
-			}
+		} else if (e.key === 'Escape' && escapeLadder()) {
+			// A consumed Escape says so; unconsumed, it reaches the shell, which ends a panel maximize.
+			e.preventDefault();
 		} else if (e.key.toLowerCase() === 'f') {
 			fitView();
 		}
@@ -1052,7 +1060,9 @@
 			duplicateSelection: () => void duplicateSelection(),
 			hasSelection
 		});
-		window.addEventListener('keydown', onKeydown);
+		// `document`, not `window`: the shell listens on window, so this always runs first — which is
+		// what gives the canvas's own Escape the key ahead of the shell's.
+		document.addEventListener('keydown', onKeydown);
 		window.addEventListener('paste', onPaste);
 		window.addEventListener('mousemove', trackMouse);
 		rootEl?.addEventListener('click', onCanvasClick, true);
@@ -1083,7 +1093,7 @@
 			onCableEnd(); // …nor may a cable in flight leave name tags lit on a torn-down canvas
 			// Do NOT forget this panel's selection here: unmount also fires on a tab switch, and the
 			// selection must survive switching away and back.
-			window.removeEventListener('keydown', onKeydown);
+			document.removeEventListener('keydown', onKeydown);
 			window.removeEventListener('paste', onPaste);
 			window.removeEventListener('mousemove', trackMouse);
 			// A drag in flight must not leave drop outlines lit on the other panels.

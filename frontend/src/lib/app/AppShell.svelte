@@ -17,7 +17,7 @@
 	import { ui } from '$lib/stores/ui.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
-	import { undoKeyAction } from '$lib/app/undoKeys';
+	import { undoKeyAction, escapeKeyAction } from '$lib/app/shellKeys';
 	import { isTextEditingTarget } from '$lib/ui';
 	import { exposeAgentApi } from '$lib/agent';
 	import { Button } from '$lib/ui';
@@ -98,6 +98,20 @@
 			if (standdown) return;
 			if (key === 's') void triggerSave();
 			else triggerLoad();
+			return;
+		}
+		// The DOM answers for a native modal too: it closes itself on Escape, and marks no event.
+		const modal =
+			standdown || Boolean((e.target as HTMLElement | null)?.closest?.('dialog[open]'));
+		if (
+			escapeKeyAction(
+				{ key: e.key, editing: isTextEditingTarget(e.target), consumed: e.defaultPrevented },
+				modal,
+				ws.maximizedPanelId !== null
+			) === 'exit-maximize'
+		) {
+			e.preventDefault();
+			ws.exitMaximize();
 			return;
 		}
 		const undoRedo = undoKeyAction(
