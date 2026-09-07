@@ -2,15 +2,15 @@
 	import { graph } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { dtypeColor } from './categoryColor';
-	import { ALL_TAB, byTab, paletteTabs, rankNodeTypes, tabOf } from './nodeSearch';
+	import { ALL_TAB, byTab, openingTab, paletteTabs, rankNodeTypes, tabOf } from './nodeSearch';
 	import { bareName, familyColor } from './typeId';
 	import { nodeTypeTitle } from './nodeTypeTitle';
 	import { nodeTypeSource } from './nodeTypeSource';
 	import type { NodeTypeInfo } from '$lib/api/control';
 	import { boundaryType } from '$lib/api/vocab';
-	import type { SlotClickSeed } from '$lib/stores/ui.svelte';
+	import { ui, type SlotClickSeed } from '$lib/stores/ui.svelte';
 	import { seedSlot } from './seedSlot';
-	import { onMount, tick } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import { EmptyState, Icon, IconButton, MODE_ATTRS, Tabs } from '$lib/ui';
 
 	type Props = {
@@ -25,13 +25,25 @@
 	const { onPick, onClose, seed = null, boundary = false }: Props = $props();
 
 	const g = graph();
+	const uiStore = ui();
 	let query = $state('');
-	let family = $state(ALL_TAB);
+	// `untrack`: the menu is mounted per opening, so the tab it opens on is settled at birth.
+	let family = $state(
+		untrack(() =>
+			openingTab(seed ? (g.nodeById(seed.node)?.type ?? null) : null, uiStore.paletteTab)
+		)
+	);
 	let listEl = $state<HTMLDivElement | null>(null);
 	let inputEl = $state<HTMLInputElement | null>(null);
 	let highlighted = $state(0);
 
 	const seedName = $derived(seed ? (g.nodeById(seed.node)?.name ?? seed.node) : null);
+
+	/** A tab the USER picks is the one the next unseeded menu opens on. */
+	function selectTab(id: string): void {
+		family = id;
+		uiStore.paletteTab = id;
+	}
 
 	function matchesSeed(t: NodeTypeInfo): boolean {
 		return !seed || seedSlot(seed, t) !== undefined;
@@ -110,7 +122,7 @@
 			// The field keeps the focus throughout — Escape is the way out, never Tab.
 			e.preventDefault();
 			const at = tabs.findIndex((t) => t.id === tab);
-			family = tabs[(at + (e.shiftKey ? tabs.length - 1 : 1)) % tabs.length].id;
+			selectTab(tabs[(at + (e.shiftKey ? tabs.length - 1 : 1)) % tabs.length].id);
 		}
 	}
 </script>
@@ -159,7 +171,7 @@
 			<Tabs
 				items={tabs}
 				active={tab}
-				onSelect={(id) => (family = id)}
+				onSelect={selectTab}
 				tabProps={(item) => engineInk(item.id)}
 				data-testid="add-menu-tabs"
 			/>

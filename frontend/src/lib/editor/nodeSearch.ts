@@ -97,6 +97,12 @@ export function paletteTabs(types: NodeTypeInfo[]): string[] {
 	return [ALL_TAB, ...tabs.filter((t) => t !== VST_TAB), ...tabs.filter((t) => t === VST_TAB)];
 }
 
+/** The tab a fresh menu opens on: the engine of the node a slot click seeded it from, else the tab
+ *  the user was last on. */
+export function openingTab(seedType: string | null, lastTab: string): string {
+	return (seedType && engineOf(seedType)) || lastTab;
+}
+
 /** `types` on one tab. `all` keeps every type, a structural one included. */
 export function byTab(types: NodeTypeInfo[], tab: string): NodeTypeInfo[] {
 	if (tab === ALL_TAB) return types;
