@@ -172,11 +172,6 @@ impl Drop for DeviceClock {
 /// The host default is what a `default` name means.
 pub(crate) const DEFAULT_DEVICE: &str = "default";
 
-/// Where a take lands, and where a playback name is looked for, when it is a bare one.
-pub fn recordings() -> std::path::PathBuf {
-    goofi_core::home::dir().join("recordings")
-}
-
 /// What an input names its device to say the name resolved and nothing was opened.
 pub(crate) const NO_DEVICE: &str = "the external clock owns no device";
 
