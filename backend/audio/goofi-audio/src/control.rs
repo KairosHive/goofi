@@ -136,12 +136,12 @@ impl AudioHalf {
     }
 
     /// The one refreshable list a type has — the graph refuses a refresh on any other param —
-    /// enumerated here rather than under the graph lock: the devices behind the host default, or
-    /// the MIDI ports behind `none`.
+    /// enumerated here rather than under the graph lock: every host's devices behind the platform
+    /// default, or the MIDI ports behind `none`.
     fn enumerate(&self) -> Option<Vec<String>> {
         let named = |kind: crate::host::Kind| {
             let mut names = vec![DEFAULT_DEVICE.to_string()];
-            names.extend(crate::host::named(kind).into_iter().map(|(n, _)| n).filter(|n| n != DEFAULT_DEVICE));
+            names.extend(crate::host::named(kind).into_iter().map(|(n, _)| n));
             names
         };
         match self.manifest.type_name {
