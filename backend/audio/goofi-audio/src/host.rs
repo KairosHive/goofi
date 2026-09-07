@@ -13,10 +13,11 @@
 //!
 //! ASIO is the one host with rules of its own, and they are the SDK's rather than goofi's: it loads
 //! ONE driver per process, takes seconds to answer, and stops enumerating once a stream holds a
-//! driver. [`asio_driver`] and [`seen`] are what those three cost. It is also a build the user
-//! makes and never one that ships — the Steinberg SDK went GPLv3-or-proprietary in 2025 and cannot
-//! travel inside this binary, which `roadmap/audio-engine.md` carries — so `--features asio`, with
-//! `CPAL_ASIO_DIR` naming the unpacked SDK, is the whole of the opt-in.
+//! driver. [`asio_driver`] and [`seen`] are what those three cost. It is compiled in by default and
+//! is inert off Windows, where cpal target-gates it away; what it asks of a Windows build is
+//! libclang, which `goofi-init` asks for, and nothing of the user — asio-sys downloads the
+//! Steinberg SDK itself. `roadmap/audio-engine.md` carries what that SDK's licence still bars,
+//! which is a redistributed binary rather than a build.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -67,14 +68,13 @@ pub fn hosts() -> String {
     cpal::available_hosts().iter().map(|id| id.name()).collect::<Vec<_>>().join(", ")
 }
 
-/// What a Windows build without `--features asio` owes the reader. cpal compiles ASIO behind a
-/// feature because the Steinberg SDK it binds went GPLv3-or-proprietary in 2025 and cannot travel
-/// inside this binary, so a machine holding an ASIO card lists its WASAPI endpoints and nothing at
-/// all says why the driver's own view is absent.
+/// What a Windows build that turned ASIO OFF owes the reader. Without it a machine holding an ASIO
+/// card lists its WASAPI endpoints — the first stereo pair of each — and nothing at all says why
+/// the driver's own view of the same card is absent.
 #[cfg(all(windows, not(feature = "asio")))]
 pub const NO_ASIO_NOTE: &str =
-    " — no ASIO in this build: `cargo run --features asio`, with CPAL_ASIO_DIR naming an unpacked \
-Steinberg SDK and LLVM installed, is what adds it";
+    " — ASIO is OFF in this build: it is a default feature, so something turned it off; \
+`cargo run` with defaults is what brings it back";
 #[cfg(not(all(windows, not(feature = "asio"))))]
 pub const NO_ASIO_NOTE: &str = "";
 
