@@ -1075,6 +1075,17 @@ fn loudest(levels: &[f32]) -> usize {
     (0..levels.len()).max_by(|a, b| levels[*a].total_cmp(&levels[*b])).expect("a band")
 }
 
+/// A node's own output once the shape behind it has stopped moving. A follower's release is tens
+/// of milliseconds, so a tap read the moment a modulator changes still carries the bands that
+/// were open before it — and a measurement compared against another has to come from settled
+/// state, not from the way there.
+fn settled(g: &Goofi, uid: Uid, what: &str) -> Vec<f32> {
+    for _ in 0..5 {
+        drive(g, TENTH);
+    }
+    heard(g, uid, what, |x| peak(x) > 0.02)
+}
+
 #[test]
 fn one_signal_speaks_through_another_band_by_band() {
     let g = Goofi::new();
@@ -1087,6 +1098,25 @@ fn one_signal_speaks_through_another_band_by_band() {
     g.link(carrier, "out", bank, "input");
     let open = heard(&g, bank, "a tone through a bank with every band open", |x| peak(x) > 0.3);
     assert!(near(per_tenth(&open), 88), "A4 leaves as A4: {} crossings", per_tenth(&open));
+
+    // Step: `harmonic` stands the bands on the partials of `pitch` rather than spreading them.
+    // Narrow bands on a bank standing at C4: a tone three times C4 is the third partial and goes
+    // through, and one two and a half times C4 falls between two partials and does not.
+    g.set_param(bank, "band", "layout", "harmonic");
+    g.set_param(bank, "band", "q", 20.0);
+    g.set_param(carrier, "osc", "pitch", 3f32.log2());
+    let partial = heard(&g, bank, "a tone on a partial of the bank's own pitch", |x| peak(x) > 0.5);
+    g.set_param(carrier, "osc", "pitch", 2.5f32.log2());
+    let between = heard(&g, bank, "a tone between two partials", |x| peak(x) < 0.5);
+    assert!(
+        peak(&partial) > 3.0 * peak(&between),
+        "a partial passes where its neighbour's gap does not: {} against {}",
+        peak(&partial),
+        peak(&between)
+    );
+    g.set_param(bank, "band", "layout", "spread");
+    g.set_param(bank, "band", "q", 4.0);
+    g.set_param(carrier, "osc", "pitch", 0.75);
 
     // Step: the follower hears WHERE a signal is. A4 lands in the bands around 440 Hz, and the
     // same tone three octaves up moves the loudest band up the bank with it.
@@ -1109,6 +1139,17 @@ fn one_signal_speaks_through_another_band_by_band() {
     });
     assert!(loudest(&high) >= 12, "three octaves up is high in the bank: {} of 16", loudest(&high));
 
+    // Both banks read the one layout, so the follower stands on partials too: C4 into a bank
+    // standing at C4 is the FIRST partial, which is the first band.
+    g.set_param(follow, "band", "layout", "harmonic");
+    g.set_param(voice, "osc", "pitch", 0.0);
+    let first = g.until("the first partial to become the loudest band", |g| {
+        drive(g, TENTH);
+        shape_held(&levels).filter(|l| loudest(l) == 0)
+    });
+    assert!(first[0] > 0.05, "and it is lit rather than merely least quiet: {first:?}");
+    g.set_param(follow, "band", "layout", "spread");
+
     // Step: the two halves are a vocoder. The carrier becomes noise, and `gains` reads the
     // follower — so the noise is only ever as loud as the tone's own bands are.
     let noise = g.add("audio:Noise");
@@ -1129,9 +1170,9 @@ fn one_signal_speaks_through_another_band_by_band() {
     // zero far less often than the same noise gated open around 3 kHz.
     g.set_param(hush, "gain", "gain", 1.0);
     g.set_param(voice, "osc", "pitch", 0.0);
-    let dark = heard(&g, bank, "noise shaped by a low tone", |x| peak(x) > 0.02);
+    let dark = settled(&g, bank, "noise shaped by a low tone");
     g.set_param(voice, "osc", "pitch", 3.5);
-    let bright = heard(&g, bank, "noise shaped by a high tone", |x| peak(x) > 0.02);
+    let bright = settled(&g, bank, "noise shaped by a high tone");
     assert!(
         per_tenth(&bright) > 2 * per_tenth(&dark),
         "the carrier speaks in the modulator's own band: {} crossings against {}",

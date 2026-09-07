@@ -1,6 +1,7 @@
 use goofi_audio_sdk::goofi_core::SlotType;
 use goofi_audio_sdk::{
-    band_volts, hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK, MAX_CHANNELS,
+    band_partial, band_volts, hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK,
+    MAX_CHANNELS,
 };
 
 goofi_audio_sdk::params! {
@@ -10,6 +11,13 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 4.0 },
         expression: None,
         doc: Some("what each band is worth; an audio reference is one band per channel, and one number opens them all"),
+    },
+    PITCH = ParamDecl {
+        group: "band",
+        name: "pitch",
+        spec: ParamSpec::Float { default: 0.0, min: -6.0, max: 6.5 },
+        expression: None,
+        doc: Some("in `harmonic`, what the bands stand on, in volts per octave; an audio reference is one voice per channel"),
     },
     BANDS = ParamDecl {
         group: "band",
@@ -23,14 +31,14 @@ goofi_audio_sdk::params! {
         name: "low",
         spec: ParamSpec::Float { default: -1.5, min: -6.0, max: 6.5 },
         expression: None,
-        doc: Some("the lowest band's centre in volts per octave, 0 at C4 — the same units as `Osc.pitch`"),
+        doc: Some("in `spread`, the lowest band's centre in volts per octave, 0 at C4 — the same units as `Osc.pitch`"),
     },
     HIGH = ParamDecl {
         group: "band",
         name: "high",
         spec: ParamSpec::Float { default: 4.25, min: -6.0, max: 6.5 },
         expression: None,
-        doc: Some("the highest band's centre; the rest sit evenly between, so a band is a fixed interval"),
+        doc: Some("in `spread`, the highest band's centre; the rest sit evenly between, so a band is a fixed interval"),
     },
     Q = ParamDecl {
         group: "band",
@@ -38,6 +46,13 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 4.0, min: 0.5, max: 20.0 },
         expression: None,
         doc: Some("how narrow one band is; near 4 the default sixteen meet without a gap"),
+    },
+    LAYOUT = ParamDecl {
+        group: "band",
+        name: "layout",
+        spec: ParamSpec::Str { default: "spread", options: &["spread", "harmonic"], refresh: false },
+        expression: None,
+        doc: Some("where the bands sit: `spread` evenly from `low` to `high`, or `harmonic` on the partials of `pitch`"),
     },
 }
 
@@ -50,7 +65,9 @@ static MANIFEST: Manifest = Manifest {
     doc: "Its input split into bands, each one at its own gain, added back up.\n\
           The half of a vocoder that speaks: `gains` from a `BandFollow` puts that signal's shape \
           on this one. With nothing behind `gains` every band is open. One voice per channel of \
-          the input, so a chord goes through as a chord.",
+          the input, so a chord goes through as a chord. In `harmonic` the bands stand on the \
+          partials of `pitch` and take its voices in turn, so what passes is a chord rather than \
+          a spread.",
     inputs: INS,
     outputs: OUTS,
     params: PARAMS,
@@ -70,7 +87,7 @@ impl AudioNode for BandFilter {
     }
 
     fn audio_params(&self, _declared: usize) -> usize {
-        1
+        2
     }
 
     fn prepare(&mut self, rate: f64) {
@@ -83,7 +100,9 @@ impl AudioNode for BandFilter {
         let k = 1.0 / b.scalars[P::Q].max(0.5);
         let bands = (b.scalars[P::BANDS] as usize).clamp(2, MAX_CHANNELS as usize);
 
-        let (input, gains) = (&b.ins[0], &b.params[P::GAINS]);
+        let (input, gains, pitch) = (&b.ins[0], &b.params[P::GAINS], &b.params[P::PITCH]);
+        let harmonic = b.scalars[P::LAYOUT] as u8 == 1;
+        let voices = pitch.channels() as usize;
         let out = &mut b.outs[0];
         for c in 0..out.channels() as usize {
             let x = input.chan(c);
@@ -91,7 +110,16 @@ impl AudioNode for BandFilter {
             let y = out.chan_mut(c);
             y.fill(0.0);
             for band in 0..bands {
-                let f = hz_of(band_volts(band, bands, low, high)).clamp(1.0, 0.45 * rate);
+                // The bank re-tunes once a block: a note lands on a block edge, and a tan per
+                // sample per band buys nothing for it.
+                let volts = match harmonic {
+                    true => {
+                        let (voice, partial) = band_partial(band, voices);
+                        pitch.chan(voice)[0] + partial
+                    }
+                    false => band_volts(band, bands, low, high),
+                };
+                let f = hz_of(volts).clamp(1.0, 0.45 * rate);
                 let g = (std::f32::consts::PI * f / rate).tan();
                 let a1 = 1.0 / (1.0 + g * (g + k));
                 let (a2, a3) = (g * a1, g * g * a1);
