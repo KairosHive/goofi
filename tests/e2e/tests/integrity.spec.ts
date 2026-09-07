@@ -172,6 +172,21 @@ test('a patch under construction holds together at every stage', async ({ page }
 			});
 		}
 
+		await test.step('two slots armed for recording', async () => {
+			// The recorder panel is swept with CONTENT: a row per armed stream, which is the part of
+			// it a restyle can crush. The rows ride the document, so the walk below meets them.
+			await page.evaluate(
+				([a, b]) => {
+					const g = (window as any).goofi;
+					return Promise.all([g.commands.armSlot(a, 'out'), g.commands.armSlot(b, 'out')]);
+				},
+				[osc, buf]
+			);
+			await expect
+				.poll(() => page.evaluate(() => (window as any).goofi.query.graph().nodes.length))
+				.toBeGreaterThan(1);
+		});
+
 		await test.step('a second workspace tab', async () => {
 			await page.evaluate(() => (window as any).goofi.commands.addTab());
 			await expect(page.getByTestId('workspace-tabs').locator('.ui-tab')).toHaveCount(2);
@@ -191,6 +206,8 @@ test('a patch under construction holds together at every stage', async ({ page }
 				expect(names.length, 'the switcher offers types to walk').toBeGreaterThan(3);
 				for (const name of names) {
 					await choosePanelType(page, name);
+					if (name === 'Recorder')
+						await expect(page.getByTestId('recorder-stream').first()).toBeVisible();
 					await expectIntact(page, `the ${name} panel`);
 				}
 				await choosePanelType(page, 'Node Editor');
