@@ -457,12 +457,22 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     assert!(held.len() >= 64, "the whole drive is on disk: {} blocks", held.len());
     assert_eq!(held[0].2, vec![1, 64], "one block of a mono output, as the engine renders it");
     // EXACT, not approximate: a per-block clock read would pass a loose assertion and prove nothing.
+    // Every kept block lies on ONE line through its own number, so a block that went missing moved
+    // none of the blocks around it.
     let step = 64.0 / 48_000.0;
-    for pair in held.windows(2) {
-        assert_eq!(pair[1].0, pair[0].0 + 1, "no block is lost: {} then {}", pair[0].0, pair[1].0);
-        let d = pair[1].1 - pair[0].1;
-        assert!((d - step).abs() < 1e-9, "two blocks are exactly a block apart: {d} against {step}");
-    }
+    let line = |blocks: &[(u64, f64, Vec<usize>)]| {
+        for pair in blocks.windows(2) {
+            let d = pair[1].1 - pair[0].1;
+            let counted = (pair[1].0 - pair[0].0) as f64 * step;
+            assert!((d - counted).abs() < 1e-9, "a block is dated by its number: {d} against {counted}");
+        }
+        blocks.windows(2).map(|p| p[1].0 - p[0].0 - 1).sum::<u64>()
+    };
+    assert_eq!(
+        line(&held),
+        entry["dropped"].as_u64().expect("a count"),
+        "what the file's numbering is missing is what the manifest says was lost: {entry}"
+    );
 
     // Step: the ANCHOR is derived from the count as well, so a stream armed after a long wait is
     // dated by the block it begins at, not by when the drain happened to wake for it. Nothing
@@ -489,6 +499,49 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         "the two recordings are exactly the blocks between them apart: {apart} against {counted}, \
          with 0.3 s of wall clock in which nothing was rendered"
     );
+
+    // …and the tie itself is pinned to the patch clock, not merely self-consistent: what the file
+    // says MINUS what the count says is when the engine began, which is the top of the session —
+    // where a tie made at a drain would be the many seconds of walking above.
+    let began = held[0].1 - held[0].0 as f64 * step;
+    assert!(
+        (0.0..0.5).contains(&began),
+        "the block count is tied to the engine's own beginning: {began} s into the patch"
+    );
+
+    // Step: a block that does not fit the ring is a block the recorder COUNTS. It carries its own
+    // number, so the survivors keep the instants they were rendered at and the gap says how many
+    // went — where a number reconstructed at the drain would close the gap and report nothing.
+    let seventh = g.call("record start", j!({ "root": root.path() }))["folder"]
+        .as_str()
+        .expect("a folder")
+        .to_string();
+    let dropped = |g: &goofi_tests::Goofi| -> u64 {
+        g.call("record status", j!({}))["streams"]
+            .as_array()
+            .map(|s| s.iter().filter(|e| e["node"] == j!(osc_name)).filter_map(|e| e["dropped"].as_u64()).sum())
+            .unwrap_or(0)
+    };
+    // The file has to be OPEN across the loss, or a truncated head would read as a late start
+    // rather than as a gap.
+    g.until("the overflow recording to be writing", |g| {
+        goofi_tests::drive(g, 4_800);
+        (frames(g, &osc_name) > 0).then_some(())
+    });
+    // Four seconds of audio in ONE call, against a one-second ring and a buffer of 1024 blocks:
+    // the render holds the graph lock throughout, so nothing downstream can keep up with it.
+    goofi_tests::drive(&g, 48_000 * 4);
+    g.until("the blocks that survived the overflow to reach the disk", |g| {
+        goofi_tests::drive(g, 4_800);
+        (dropped(g) > 0).then_some(())
+    });
+    g.call("record stop", j!({}));
+    let overflowed = mine(&seventh, &osc_name).pop().expect("the overflowed entry");
+    let lost = overflowed["dropped"].as_u64().expect("a count");
+    assert!(lost > 0, "the manifest says what could not be held: {overflowed}");
+    // The survivors are still where they were rendered — one line through every kept block, gap and
+    // all — and the file's own numbering is missing exactly what the manifest counted.
+    assert_eq!(line(&blocks_of(&seventh, &overflowed)), lost, "the count and the numbering agree");
 }
 
 #[test]
