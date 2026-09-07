@@ -174,6 +174,14 @@ pub fn band_volts(b: usize, bands: usize, low: f32, high: f32) -> f32 {
     }
 }
 
+/// Band `b` of a bank standing on `voices` pitches: which voice it takes, and how far above that
+/// voice's own pitch it sits, in volts. Bands take the voices in turn, so each voice gets every
+/// `voices`th band as its next partial.
+pub fn band_partial(b: usize, voices: usize) -> (usize, f32) {
+    let voices = voices.max(1);
+    (b % voices, ((b / voices + 1) as f32).log2())
+}
+
 
 /// A rising-edge detector over a gate: `true` on the sample the gate goes HIGH.
 #[derive(Default)]

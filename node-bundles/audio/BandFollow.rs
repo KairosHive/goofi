@@ -1,9 +1,17 @@
 use goofi_audio_sdk::goofi_core::SlotType;
 use goofi_audio_sdk::{
-    band_volts, hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK, MAX_CHANNELS,
+    band_partial, band_volts, hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK,
+    MAX_CHANNELS,
 };
 
 goofi_audio_sdk::params! {
+    PITCH = ParamDecl {
+        group: "band",
+        name: "pitch",
+        spec: ParamSpec::Float { default: 0.0, min: -6.0, max: 6.5 },
+        expression: None,
+        doc: Some("in `harmonic`, what the bands stand on, in volts per octave; an audio reference is one voice per channel"),
+    },
     BANDS = ParamDecl {
         group: "band",
         name: "bands",
@@ -16,14 +24,14 @@ goofi_audio_sdk::params! {
         name: "low",
         spec: ParamSpec::Float { default: -1.5, min: -6.0, max: 6.5 },
         expression: None,
-        doc: Some("the lowest band's centre in volts per octave, 0 at C4 — the same units as `Osc.pitch`"),
+        doc: Some("in `spread`, the lowest band's centre in volts per octave, 0 at C4 — the same units as `Osc.pitch`"),
     },
     HIGH = ParamDecl {
         group: "band",
         name: "high",
         spec: ParamSpec::Float { default: 4.25, min: -6.0, max: 6.5 },
         expression: None,
-        doc: Some("the highest band's centre; the rest sit evenly between, so a band is a fixed interval"),
+        doc: Some("in `spread`, the highest band's centre; the rest sit evenly between, so a band is a fixed interval"),
     },
     Q = ParamDecl {
         group: "band",
@@ -46,6 +54,13 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("seconds to follow a band that gets quieter; long smears one word into the next"),
     },
+    LAYOUT = ParamDecl {
+        group: "band",
+        name: "layout",
+        spec: ParamSpec::Str { default: "spread", options: &["spread", "harmonic"], refresh: false },
+        expression: None,
+        doc: Some("where the bands sit: `spread` evenly from `low` to `high`, or `harmonic` on the partials of `pitch`"),
+    },
 }
 
 static INS: &[SlotDecl] =
@@ -56,7 +71,9 @@ static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Analysis],
     doc: "How loud its input is in each band, one band per channel.\n\
           The half of a vocoder that listens: wire `out` to `BandFilter.gains` and the shape of \
-          this signal lands on that one. Every channel of the input is heard as one signal.",
+          this signal lands on that one. Every channel of the input is heard as one signal. In \
+          `harmonic` the bands stand on the partials of `pitch` and take its voices in turn, so \
+          what it measures is a chord rather than a spread.",
     inputs: INS,
     outputs: OUTS,
     params: PARAMS,
@@ -84,7 +101,7 @@ impl AudioNode for BandFollow {
     }
 
     fn audio_params(&self, _declared: usize) -> usize {
-        0
+        1
     }
 
     fn prepare(&mut self, rate: f64) {
@@ -106,10 +123,22 @@ impl AudioNode for BandFollow {
             }
         }
 
+        let pitch = &b.params[P::PITCH];
+        let harmonic = b.scalars[P::LAYOUT] as u8 == 1;
+        let voices = pitch.channels() as usize;
         let out = &mut b.outs[0];
         let bands = out.channels() as usize;
         for band in 0..bands {
-            let f = hz_of(band_volts(band, bands, low, high)).clamp(1.0, 0.45 * rate);
+            // The bank re-tunes once a block: a note lands on a block edge, and a tan per sample
+            // per band buys nothing for it.
+            let volts = match harmonic {
+                true => {
+                    let (voice, partial) = band_partial(band, voices);
+                    pitch.chan(voice)[0] + partial
+                }
+                false => band_volts(band, bands, low, high),
+            };
+            let f = hz_of(volts).clamp(1.0, 0.45 * rate);
             let g = (std::f32::consts::PI * f / rate).tan();
             let a1 = 1.0 / (1.0 + g * (g + k));
             let (a2, a3) = (g * a1, g * g * a1);
