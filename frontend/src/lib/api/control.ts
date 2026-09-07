@@ -185,6 +185,9 @@ export type ControlEvent =
 			};
 	  }
 	| { event: 'error'; payload: { node: string; error: string | null } }
+	// `control draw`: the strokes a turtle script makes, for the pad that holds that global to
+	// draw. The op parses; the WIDGET paints, by the code a mouse reaches.
+	| { event: 'control_draw'; payload: { name: string; marks: Mark[] } }
 	| {
 			event: 'node_stage';
 			payload: { node: string; stage: NodeStage; error?: string | null; runtime?: NodeRuntime | null };
@@ -206,6 +209,12 @@ export type ControlEvent =
 	| { event: 'doc_state'; payload: { v: number; doc: Record<string, unknown> } }
 	// `from` is the version the delta applies TO, `v` the version it produces.
 	| { event: 'doc_patch'; payload: { from: number; v: number; patch: Record<string, unknown> } };
+
+/** One thing a drawing pad is asked to do, in the pad's own 1000-square. `ink` is `#rrggbb`,
+ *  `#rrggbbaa`, or `erase`. */
+export type Mark =
+	| { mark: 'clear' }
+	| { mark: 'stroke'; from: [number, number]; to: [number, number]; ink: string; width: number; soft: number };
 
 type EventHandler = (ev: ControlEvent) => void;
 
