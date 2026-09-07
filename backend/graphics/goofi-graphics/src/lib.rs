@@ -95,6 +95,9 @@ pub struct GraphicsEngine {
     windows: HashMap<Uid, (goofi_window::Id, (u32, u32))>,
     pending: Vec<(Uid, Status)>,
     dirty: bool,
+    /// What the render thread found an armed stage could not record; settled as a fault like any
+    /// other, so a missing encoder reaches the panel the way every node failure does.
+    troubles: runtime::Troubles,
     /// After the classes and the runtime, for the reason [`Gpu`] states.
     gpu: Arc<Gpu>,
     /// Last: every bell onto a control half is built from it, and fields drop in order.
@@ -155,7 +158,14 @@ impl GraphicsEngine {
         let gpu = gpu::shared()?;
         let shared = Arc::new(Shared::new(waker));
         let stats = Arc::new(Stats::default());
-        let runtime = Arc::new(Mutex::new(Runtime::new(gpu.clone(), time.clone(), stats.clone())));
+        let troubles = runtime::Troubles::default();
+        let runtime = Arc::new(Mutex::new(Runtime::new(
+            gpu.clone(),
+            time.clone(),
+            stats.clone(),
+            troubles.clone(),
+            shared.clone(),
+        )));
         let inbox = runtime.lock().expect("the runtime").inbox.clone();
         let ticker = (clock == Clock::Timer).then(|| {
             let stop = Arc::new(AtomicBool::new(false));
@@ -197,6 +207,7 @@ impl GraphicsEngine {
             windows: HashMap::new(),
             pending: Vec::new(),
             dirty: false,
+            troubles,
             bells: goofi_transport::iox_node()?,
         })
     }
@@ -432,6 +443,7 @@ impl Engine for GraphicsEngine {
             self.ask(runtime::Cmd::Remove(uid));
             gpu::give_back(inst);
             self.faults.forget(uid);
+            self.troubles.lock().expect("the record troubles").remove(&uid);
             self.pending.retain(|(u, _)| *u != uid);
             self.dirty = true;
         }
@@ -448,7 +460,8 @@ impl Engine for GraphicsEngine {
         // Windows first: a screen is a reader, so one opened here must be in THIS plan's demand.
         self.follow_windows(view, &plan::sizes(view, &self.live));
         let open: HashMap<Uid, goofi_window::Id> = self.windows.iter().map(|(u, (id, _))| (*u, *id)).collect();
-        let (plan, faults) = plan::compile(view, &self.live, &open);
+        let (plan, mut faults) = plan::compile(view, &self.live, &open);
+        faults.extend(self.troubles.lock().expect("the record troubles").iter().map(|(u, w)| (*u, w.clone())));
         let since = self.time.now();
         self.pending.extend(self.faults.settle(faults, since));
         self.ask(runtime::Cmd::Plan(plan));

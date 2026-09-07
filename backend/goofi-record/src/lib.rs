@@ -46,6 +46,14 @@ pub struct StreamStatus {
     pub fill: f32,
 }
 
+/// What a stream's kind puts in its manifest entry — and, for a video, what its encoding costs.
+fn shape_of(kind: Kind) -> (Option<(u32, u32)>, Option<f64>, Option<&'static str>) {
+    match kind {
+        Kind::Frames => (None, None, None),
+        Kind::Video { size, fps } => (Some(size), Some(fps), Some(video::CLIP)),
+    }
+}
+
 struct Session {
     folder: PathBuf,
     name: String,
@@ -63,10 +71,7 @@ impl Session {
         because: Option<String>,
         error: Option<String>,
     ) -> manifest::Entry {
-        let (size, fps, encoding) = match s.kind {
-            Kind::Frames => (None, None, None),
-            Kind::Video { size, fps } => (Some(size), Some(fps), Some(video::CLIP)),
-        };
+        let (size, fps, encoding) = shape_of(s.kind);
         manifest::Entry {
             file: s.file.clone(),
             node: id.node.clone(),
@@ -86,6 +91,39 @@ impl Session {
             dropped_at: s.dropped_at,
             closed_because: because,
             error,
+        }
+    }
+
+    /// The entry a stream that never opened leaves behind.
+    fn missing(
+        id: &StreamId,
+        file: &str,
+        kind: Kind,
+        meta: &StreamMeta,
+        t0_patch: f64,
+        t0_utc: SystemTime,
+        why: &str,
+    ) -> manifest::Entry {
+        let (size, fps, encoding) = shape_of(kind);
+        manifest::Entry {
+            file: file.to_string(),
+            node: id.node.clone(),
+            slot: id.slot.clone(),
+            uid: id.uid.to_hex(),
+            engine: id.engine,
+            t0_utc: stamp_nanos(t0_utc),
+            t0_patch,
+            sfreq: meta.sfreq,
+            timeline: meta.timeline.name(),
+            channels: meta.channels,
+            size,
+            fps,
+            encoding,
+            frames: 0,
+            dropped: 0,
+            dropped_at: None,
+            closed_because: Some("never opened".to_string()),
+            error: Some(why.to_string()),
         }
     }
 
@@ -123,11 +161,29 @@ impl Session {
 pub struct Recorder {
     time: Arc<Time>,
     session: Mutex<Option<Session>>,
+    encoders: Mutex<Arc<dyn video::Encoders>>,
 }
 
 impl Recorder {
     pub fn new(time: Arc<Time>) -> Recorder {
-        Recorder { time, session: Mutex::new(None) }
+        Recorder {
+            time,
+            session: Mutex::new(None),
+            encoders: Mutex::new(Arc::new(video::FfmpegEncoders)),
+        }
+    }
+
+    /// The encoder every video stream opens through. One swap changes the codec, and nothing
+    /// above this knows there was one.
+    pub fn set_encoders(&self, encoders: Arc<dyn video::Encoders>) {
+        *held(&self.encoders) = encoders;
+    }
+
+    /// Whether a video stream could be opened at all. `record start` asks it, and refuses only a
+    /// recording that would hold nothing else.
+    pub fn can_encode(&self) -> Result<(), String> {
+        let encoders = held(&self.encoders).clone();
+        encoders.probe()
     }
 
     fn held(&self) -> MutexGuard<'_, Option<Session>> {
@@ -191,10 +247,23 @@ impl Recorder {
         let t0_utc = self.time.utc_at(t0_patch);
         let base = format!("{}-{}__{}Z", id.node, id.slot, stamp_nanos(t0_utc));
         let file = session.free_name(&base, kind.extension());
-        let stream = Stream::create(&session.folder, file, kind, meta, t0_patch, t0_utc)?;
-        session.open.insert(id.clone(), Arc::new(Mutex::new(stream)));
+        let encoders = held(&self.encoders).clone();
+        let made = Stream::create(&*encoders, &session.folder, file.clone(), kind, meta.clone(), t0_patch, t0_utc);
         let folder = session.folder.clone();
-        session.manifest(&self.time).write_atomic(&folder)
+        // A stream that could not open is an ENTRY, not an absence: a recording says what it was
+        // asked for and did not get, or nobody reading it later can tell.
+        let opened = match made {
+            Ok(stream) => {
+                session.open.insert(id.clone(), Arc::new(Mutex::new(stream)));
+                Ok(())
+            }
+            Err(why) => {
+                session.closed.push(Session::missing(id, &file, kind, &meta, t0_patch, t0_utc, &why));
+                Err(why)
+            }
+        };
+        session.manifest(&self.time).write_atomic(&folder)?;
+        opened
     }
 
     pub fn close(&self, id: &StreamId, why: &str) {

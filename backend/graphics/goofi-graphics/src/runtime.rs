@@ -102,6 +102,10 @@ pub struct Runtime {
     /// The one recorder, and the video stream each armed stage has open on it.
     recorder: Option<Arc<Recorder>>,
     taping: HashMap<Uid, Tape>,
+    /// What an armed stage the recorder could not open a stream for wears, until it is disarmed
+    /// or the recording ends. The engine folds it into the faults it settles.
+    troubles: Troubles,
+    shared: Arc<goofi_control::Shared>,
     /// What the graph asked for since the last tick. An op appends here and never waits on a
     /// render: a tick is long, and a lock a render holds is a lock an op cannot have.
     pub inbox: Arc<Mutex<Vec<Cmd>>>,
@@ -110,7 +114,13 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    pub fn new(gpu: Arc<Gpu>, time: Arc<goofi_core::time::Time>, stats: Arc<Stats>) -> Runtime {
+    pub fn new(
+        gpu: Arc<Gpu>,
+        time: Arc<goofi_core::time::Time>,
+        stats: Arc<Stats>,
+        troubles: Troubles,
+        shared: Arc<goofi_control::Shared>,
+    ) -> Runtime {
         Runtime {
             gpu,
             plan: Plan::default(),
@@ -121,6 +131,8 @@ impl Runtime {
             presenting: HashMap::new(),
             recorder: None,
             taping: HashMap::new(),
+            troubles,
+            shared,
             inbox: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -293,6 +305,10 @@ impl Runtime {
                 if w == Want::Tap && !stage.tap.lock().expect("the tap").wanted {
                     continue;
                 }
+                // A stage the recorder could not open a stream for is read back for nobody.
+                if w == Want::Record && !self.taping.get(&stage.uid).is_some_and(|t| t.live) {
+                    continue;
+                }
                 let state = self.states.get_mut(&stage.uid).expect("just borrowed");
                 let Some(ring) = state.reads[w as usize].as_mut() else { continue };
                 let out_size = ring.out_size.clone();
@@ -367,22 +383,42 @@ impl Runtime {
                 None => "stopped",
             };
             let held = self.taping.remove(&uid).expect("just read");
-            if held.missed > 0 {
-                rec.dropped(&held.id, held.missed, t);
+            self.trouble(uid, None);
+            if held.live {
+                if held.missed > 0 {
+                    rec.dropped(&held.id, held.missed, t);
+                }
+                rec.close(&held.id, why);
             }
-            rec.close(&held.id, why);
         }
         for (uid, (id, size)) in want {
             if self.taping.contains_key(&uid) {
                 continue;
             }
             let kind = Kind::Video { size, fps: crate::FPS };
-            // A stream that will not open is a failure `record start` already refuses for; it is
-            // never opened again this recording, so nothing spawns an encoder every tick.
-            let opened = rec.open(&id, kind, t, StreamMeta::measured(Some(crate::FPS))).is_ok();
-            if opened {
-                self.taping.insert(uid, Tape { id, size, missed: 0, said: Instant::now() });
-            }
+            let live = match rec.open(&id, kind, t, StreamMeta::measured(Some(crate::FPS))) {
+                Ok(()) => true,
+                // A stream that will not open is this NODE's failure and nobody else's: the
+                // recording keeps every other stream, and the entry the recorder filed says why.
+                Err(why) => {
+                    self.trouble(uid, Some(format!("not recorded: {why}")));
+                    false
+                }
+            };
+            self.taping.insert(uid, Tape { id, size, missed: 0, said: Instant::now(), live });
+        }
+    }
+
+    /// Raise or clear what an armed stage wears, and ask for the settle that publishes it.
+    fn trouble(&self, uid: Uid, why: Option<String>) {
+        let mut held = self.troubles.lock().expect("the record troubles");
+        let was = match why {
+            Some(why) => held.insert(uid, why),
+            None => held.remove(&uid),
+        };
+        if was != held.get(&uid).cloned() {
+            self.shared.replan.store(true, Ordering::Release);
+            self.shared.waker.notify();
         }
     }
 
@@ -426,6 +462,7 @@ impl Runtime {
                         let taken = self
                             .taping
                             .get(&uid)
+                            .filter(|tape| tape.live)
                             .zip(self.recorder.as_ref())
                             .is_some_and(|(tape, rec)| rec.write_video(&tape.id, &rows, t));
                         if let Some(tape) = self.taping.get_mut(&uid) {
@@ -463,7 +500,13 @@ struct Tape {
     size: (u32, u32),
     missed: u64,
     said: Instant,
+    /// Whether the recorder actually opened it. A stage that could not be encoded keeps its tape
+    /// so nothing tries again every tick, and writes nothing.
+    live: bool,
 }
+
+/// What each armed stage the recorder refused wears, shared with the engine that settles it.
+pub type Troubles = Arc<Mutex<HashMap<Uid, String>>>;
 
 /// How often a run of dropped frames reaches the manifest. Every drop is counted; a manifest
 /// rewritten per frame would be the recording's own cost.
