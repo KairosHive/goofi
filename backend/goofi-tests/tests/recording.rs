@@ -601,11 +601,13 @@ fn arming_survives_a_rewire_and_rides_the_document() {
 
     // …and what reached it is the OSCILLATOR: a reader off by a few samples delivers the header's
     // own floats as audio, and the block number among them is nowhere near full scale.
-    let sound: Vec<f32> = held.iter().flat_map(|b| b.3.iter().copied()).collect();
-    let peak = sound.iter().fold(0f32, |m, x| m.max(x.abs()));
+    let peak = held.iter().flat_map(|b| b.3.iter()).fold(0f32, |m, x| m.max(x.abs()));
     assert!((peak - 1.0).abs() < 0.05, "the file holds the oscillator at full scale: peak {peak}");
-    let crossings = sound.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
-    let expect = 880 * sound.len() / 48_000;
+    // Per block, never across two: a splice is not a crossing.
+    let zero = |b: &Vec<f32>| b.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
+    let crossings: usize = held.iter().map(|b| zero(&b.3)).sum();
+    let intervals: usize = held.iter().map(|b| b.3.len().saturating_sub(1)).sum();
+    let expect = 880 * intervals / 48_000;
     assert!(crossings.abs_diff(expect) <= 2, "…and it is A4: {crossings} crossings against {expect}");
     // EXACT, not approximate: every kept block lies on ONE line through its own number, so a block
     // that went missing moved none of the blocks around it. A loose assertion would prove nothing.
