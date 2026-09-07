@@ -183,8 +183,19 @@ test('a patch under construction holds together at every stage', async ({ page }
 				[osc, buf]
 			);
 			await expect
-				.poll(() => page.evaluate(() => (window as any).goofi.query.graph().nodes.length))
-				.toBeGreaterThan(1);
+				.poll(() => page.evaluate(() => (window as any).goofi.query.armed().length))
+				.toBe(2);
+
+			// An arm that changes nothing must leave the undo stack alone: a phantom step there pops
+			// against a manager command that is not here, and takes the user's last real edit with it.
+			await page.evaluate((a) => (window as any).goofi.commands.setNodePos(a, [60, 60]), osc);
+			await expect(page.getByTestId('topbar-undo')).toHaveAttribute('title', /Move/);
+			await page.evaluate((a) => (window as any).goofi.commands.armSlot(a, 'out'), osc);
+			await expect(page.getByTestId('topbar-undo')).toHaveAttribute('title', /Move/);
+			await page.getByTestId('topbar-undo').click();
+			await expect
+				.poll(() => page.evaluate(() => (window as any).goofi.query.armed().length))
+				.toBe(2);
 		});
 
 		await test.step('a second workspace tab', async () => {
