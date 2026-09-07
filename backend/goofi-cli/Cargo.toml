@@ -20,6 +20,7 @@ shell-words = "1"
 serde_json = "1"
 # The scan's outcome vocabulary, which the boot report reads.
 goofi-node = { path = "../goofi-node" }
+goofi-transport = { path = "../goofi-transport" }
 # The engine's Python door, handed the interpreters at boot.
 goofi-signal = { path = "../signal/goofi-signal" }
 goofi-audio = { path = "../audio/goofi-audio" }
