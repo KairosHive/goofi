@@ -44,9 +44,11 @@ goofi-init = { path = "../goofi-init" }
 # One feature for Python node support, not one per tier: the free-threaded probe IS the router,
 # so without it there is nothing to decide between in-process and subprocess.
 [features]
-# Passed through so the flag can be given where the binary is: `cargo run --features asio`.
+# ON by default: ASIO is how a multi-channel interface is reached at all on Windows, and it asks
+# the user for nothing — asio-sys fetches its own SDK, and the feature is inert off Windows.
+# `--no-default-features` is what a build with no libclang takes.
 asio = ["goofi-audio/asio"]
-default = ["python"]
+default = ["python", "asio"]
 python = ["dep:goofi-python", "goofi-python/embed", "goofi-signal/embed"]
 
 [dev-dependencies]

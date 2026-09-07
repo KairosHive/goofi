@@ -63,6 +63,19 @@ jobs:
 
     # 24, not 22: 22 ships npm 10, which resolves this manifest with no lockfile into `Cannot read
     # properties of null (reading 'edgesOut')` and installs nothing; npm 11, what 24 ships, does not.
+    # Windows's twin of that step, and the library it names is a BUILD one rather than a link one:
+    # ASIO is how a multi-channel interface is reached at all there, and asio-sys generates its
+    # binding with bindgen, which loads libclang. The runner image ships LLVM, so naming the folder
+    # only saves bindgen the search — and it is guarded, because a `LIBCLANG_PATH` pointing at
+    # nothing is worse than none at all. This leg is also the ONLY thing that judges the ASIO path:
+    # asio-sys is Windows-only, so no other machine here compiles a line of it.
+    - if: runner.os == 'Windows'
+      run: |
+        if [ -d "/c/Program Files/LLVM/bin" ]; then
+          echo 'LIBCLANG_PATH=C:\Program Files\LLVM\bin' >> "$GITHUB_ENV"
+        fi
+        clang --version || echo "no clang on PATH; bindgen will search for libclang itself"
+
     - uses: actions/setup-node@v7
       with:
         node-version: '24'
