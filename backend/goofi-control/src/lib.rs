@@ -124,8 +124,6 @@ pub struct Cx<'a> {
     pub readers: &'a [bool],
     /// Per output: whether the recorder holds this slot armed.
     pub recorded: &'a [bool],
-    /// Patch seconds at this tick — the one clock read a derived timeline is anchored on.
-    pub now: f64,
     /// One frame onto an armed output's recording service; nothing where it is not armed. A frame
     /// the segment refuses is a gap in `Meta::index`, which is what the recorder counts drops by.
     pub record: &'a dyn Fn(usize, &[u8]),
@@ -562,7 +560,6 @@ impl<H: Half> Control<H> {
             pulses: &pulses,
             readers: &readers,
             recorded: &recorded,
-            now: self.time.now(),
             record: &record,
         };
         let ticked = self.half.tick(&cx, &mut |i, bytes| {

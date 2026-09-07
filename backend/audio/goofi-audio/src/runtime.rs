@@ -2,7 +2,7 @@
 //! every message is a pointer move, every port is a view into the arena the plan laid out.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -134,6 +134,59 @@ impl Inbox {
 pub struct Rec {
     pub ring: rtrb::Producer<f32>,
     pub lost: Arc<AtomicU64>,
+    /// Which engine block this ring's FIRST one was; `UNTIED` until it holds one. A node born late
+    /// is what makes this a number rather than zero, and it is what dates every block after it.
+    pub first: Arc<AtomicU64>,
+}
+
+/// A block count with no tie to the clock yet.
+pub const UNTIED: u64 = u64::MAX;
+
+/// The ONE point where the rendered block count and the patch clock are tied together, made on the
+/// AUDIO thread so the two are the same instant. Every recorded block's time is derived from it, so
+/// when a control half happens to wake cannot move a timeline by one sample.
+pub struct Anchor {
+    /// Blocks rendered since the engine began.
+    pub blocks: AtomicU64,
+    /// Patch seconds, `f64` bits, at block `tied_at`.
+    tied_time: AtomicU64,
+    tied_at: AtomicU64,
+    /// Raised where the tie must be made again: at the first block, and after a rate change, which
+    /// is the one thing that moves what a block is worth.
+    retie: AtomicBool,
+    clock: Arc<goofi_core::time::Time>,
+}
+
+impl Anchor {
+    pub fn new(clock: Arc<goofi_core::time::Time>) -> Anchor {
+        Anchor {
+            blocks: AtomicU64::new(0),
+            tied_time: AtomicU64::new(0.0f64.to_bits()),
+            tied_at: AtomicU64::new(UNTIED),
+            retie: AtomicBool::new(true),
+            clock,
+        }
+    }
+
+    /// Tie the clock to the block being rendered, where one is owed.
+    fn tie(&self, n: u64) {
+        if self.retie.swap(false, Ordering::Acquire) {
+            self.tied_time.store(self.clock.now().to_bits(), Ordering::Relaxed);
+            self.tied_at.store(n, Ordering::Release);
+        }
+    }
+
+    /// A block is worth a different number of seconds at a new rate, so the tie is made again.
+    pub fn rate_moved(&self) {
+        self.retie.store(true, Ordering::Release);
+    }
+
+    /// Patch seconds at engine block `n` — derived from the tie, never from when this was asked.
+    pub fn seconds(&self, n: u64, rate: f64) -> f64 {
+        let tied_at = self.tied_at.load(Ordering::Acquire);
+        let tied_time = f64::from_bits(self.tied_time.load(Ordering::Relaxed));
+        tied_time + (n as f64 - tied_at as f64) * BLOCK as f64 / rate
+    }
 }
 
 pub enum Msg {
@@ -170,10 +223,12 @@ pub struct Runtime {
     device: Option<u16>,
     /// What a node's `process` is held to: `BUDGET` blocks of wall time at the rate.
     pub budget: Duration,
+    /// The block count, and its one tie to the clock.
+    pub anchor: Arc<Anchor>,
 }
 
 impl Runtime {
-    pub fn new(slab: usize, inbox: rtrb::Consumer<Msg>, outbox: rtrb::Producer<Retired>) -> Runtime {
+    pub fn new(slab: usize, inbox: rtrb::Consumer<Msg>, outbox: rtrb::Producer<Retired>, anchor: Arc<Anchor>) -> Runtime {
         Runtime {
             slab: (0..slab).map(|_| None).collect(),
             plan: Plan::default(),
@@ -183,6 +238,7 @@ impl Runtime {
             fifo: Vec::new(),
             device: None,
             budget: Duration::from_secs_f64(BLOCK as f64 / crate::RATE) * BUDGET,
+            anchor,
         }
     }
 
@@ -250,6 +306,8 @@ impl Runtime {
     /// A stage whose index another occupant took since the plan was compiled waits for its own.
     pub fn render_block(&mut self) {
         self.apply_pending();
+        let n = self.anchor.blocks.load(Ordering::Relaxed);
+        self.anchor.tie(n);
         let base = self.arena.as_mut_ptr();
         let len = self.arena.len();
         for stage in &self.plan.stages {
@@ -345,6 +403,7 @@ impl Runtime {
                     }
                 }
                 if let Some(rec) = slot.recs.get_mut(k) {
+                    let _ = rec.first.compare_exchange(UNTIED, n, Ordering::Relaxed, Ordering::Relaxed);
                     match rec.ring.write_chunk_uninit(1 + out.len()) {
                         Ok(chunk) => {
                             chunk.fill_from_iter(std::iter::once(*channels as f32).chain(out.iter().copied()));
@@ -370,6 +429,7 @@ impl Runtime {
                 }
             }
         }
+        self.anchor.blocks.store(n + 1, Ordering::Relaxed);
         let out = Port::new(unsafe { region(base, len, at, channels) }, channels, true);
         let width = self.channels() as usize;
         for i in 0..BLOCK {

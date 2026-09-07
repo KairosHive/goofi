@@ -353,6 +353,7 @@ impl AudioEngine {
             .collect();
         let (inbox, to_audio) = rtrb::RingBuffer::new(QUEUE);
         let (from_audio, outbox) = rtrb::RingBuffer::new(QUEUE);
+        let anchor = Arc::new(runtime::Anchor::new(time.clone()));
         AudioEngine {
             instance,
             time,
@@ -366,12 +367,13 @@ impl AudioEngine {
                 clock,
                 edits: Mutex::new(Vec::new()),
                 waker,
+                anchor: anchor.clone(),
             }),
             classes,
             rust_loaded: HashMap::new(),
             vst3: None,
             ui: None,
-            runtime: Arc::new(Mutex::new(Runtime::new(SLAB, to_audio, from_audio))),
+            runtime: Arc::new(Mutex::new(Runtime::new(SLAB, to_audio, from_audio, anchor))),
             inbox,
             outbox,
             free: (0..SLAB).rev().collect(),
@@ -665,6 +667,7 @@ impl AudioEngine {
                 slot.node.prepare(rate);
             }
             self.audio.rate.store(rate.to_bits(), Ordering::Relaxed);
+            self.audio.anchor.rate_moved();
             rt.budget = Duration::from_secs_f64(BLOCK as f64 / rate) * runtime::BUDGET;
         }
         rt.set_device(Some(channels));
@@ -756,7 +759,8 @@ impl Engine for AudioEngine {
             .map(|_| {
                 let (producer, consumer) = rtrb::RingBuffer::<f32>::new(control::REC_RING);
                 let lost = Arc::new(AtomicU64::new(0));
-                (runtime::Rec { ring: producer, lost: lost.clone() }, (consumer, lost))
+                let first = Arc::new(AtomicU64::new(runtime::UNTIED));
+                (runtime::Rec { ring: producer, lost: lost.clone(), first: first.clone() }, (consumer, lost, first))
             })
             .unzip();
         // The inboxes are built here so the plan can read their channel cells; the half itself is
