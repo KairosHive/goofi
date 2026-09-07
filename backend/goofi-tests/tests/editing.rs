@@ -108,7 +108,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
 
     // A control panel names its group the way an expression does, so the ONE rename moves both.
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "control",
-                                     "state": { "group": "desk", "edit": false } }));
+                                     "state": { "group": "desk" } }));
     // A panel's state rides the document as a JSON string, so the reader parses it.
     let group_of = |g: &Goofi| {
         let raw = entries(g)[&first_panel(g)]["state"].as_str().unwrap_or("null").to_string();
@@ -147,24 +147,40 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "viewer" }));
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "control" }));
     assert_eq!(group_of(&g), j!("control0"), "the first free `controlN` was minted for it");
-    // The `control` door edits a control panel's group THROUGH its lock and leaves it locked, ONE
-    // undo step each; the manager mints the element and the cell where none is given.
+    // The `control` door is ONE undo step each; the manager mints the element and the cell where
+    // none is given.
     let born = g.call("control add", j!({ "group": "control0", "kind": "knob" }));
     assert_eq!(born["name"], "control0.knob0", "{born}");
-    g.call("global group lock", j!({ "group": "control0", "config": true }));
     let born = g.call("control add", j!({ "group": "control0", "kind": "slider" }));
     assert_eq!((&born["name"], &born["control"]["x"], &born["control"]["y"]), (&j!("control0.slider0"), &j!(4.0), &j!(0.0)),
                "placed in the first free cell beside the knob: {born}");
-    assert_eq!(g.doc()["global_groups"]["control0"]["lock"]["config"], true, "…and the group stayed locked");
     g.call("control edit", j!({ "group": "control0", "element": "slider0", "name": "level", "max": 10.0 }));
     assert_eq!(g.doc()["globals"]["control0.level"]["control"]["max"], 10.0);
     g.call("control source", j!({ "group": "control0", "element": "level", "reference": "carrier.out" }));
     let listed = g.call("control list", j!({}));
     assert_eq!(listed["groups"]["control0"]["elements"][1]["source"]["reference"], "carrier.out", "{listed}");
     assert_eq!(listed["panels"][0]["group"], "control0", "{listed}");
+    // A widget that FOLLOWS a producer is still a widget: a move edits the record BESIDE the value
+    // and never the value, so neither a source nor a value lock refuses the drag that made it.
+    g.call("global entry lock", j!({ "name": "control0.level", "value": true }));
+    g.call("control edit", j!({ "group": "control0", "element": "level", "x": 0.0, "y": 3.0 }));
+    assert_eq!(g.doc()["globals"]["control0.level"]["control"]["y"], 3.0, "the followed widget moved");
+    g.call("global entry lock", j!({ "name": "control0.level", "value": false }));
+    // A panel's edit mode is the panel's own view and no state of the manager's, so the widget door
+    // is held by a config lock exactly as every other globals door is.
+    g.call("global group lock", j!({ "group": "control0", "config": true }));
+    for (op, payload) in [
+        ("control add", j!({ "group": "control0", "kind": "toggle" })),
+        ("control edit", j!({ "group": "control0", "element": "level", "max": 4.0 })),
+        ("control source", j!({ "group": "control0", "element": "level", "reference": "" })),
+        ("control remove", j!({ "group": "control0", "element": "level" })),
+    ] {
+        let why = g.refuse(op, payload);
+        assert!(why.contains("config-locked"), "`{op}` under a config lock: {why}");
+    }
+    g.call("global group lock", j!({ "group": "control0", "config": false }));
     g.call("control remove", j!({ "group": "control0", "element": "level" }));
     assert!(g.doc()["globals"]["control0.level"].is_null());
-    g.call("global group lock", j!({ "group": "control0", "config": false }));
     // A lock holds what it names: a group's `config` freezes every name and the membership, an
     // entry's `value` freezes its value — and each lock is ONE undoable command.
     g.call("global group lock", j!({ "group": "desk", "config": true }));
@@ -242,7 +258,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     }
     assert!(g.nodes().is_empty() && g.instances().is_empty(), "back to an empty patch");
     assert!(g.doc()["globals"]["desk.handle"].is_null() && g.doc()["globals"]["patch.subj"].is_null());
-    assert_eq!(steps, 41, "one step per command — a compound (the rename, the two-edit batch) and a three-field node edit are each ONE");
+    assert_eq!(steps, 44, "one step per command — a compound (the rename, the two-edit batch) and a three-field node edit are each ONE");
 
     while g.call("redo", j!({}))["changed"] == true {}
     assert_eq!(g.doc(), built, "redo rebuilt the patch it undid, uid for uid");
