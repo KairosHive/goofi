@@ -403,7 +403,8 @@ fn a_patch_sounds_under_the_external_clock() {
     // Step: the device list is a refresh answered by the node's own thread and echoed to every
     // client, the host default first; the clock itself reports through `session status`.
     let mut ev = g.events();
-    assert_eq!(refreshed(&g, &mut ev, out, "audio", "device")[0], "default");
+    let devices = refreshed(&g, &mut ev, out, "audio", "device");
+    assert_eq!(devices[0], "default");
     let status = g.call("session status", j!({}));
     assert_eq!(status["audio"]["clock"], "external", "{status}");
     assert_eq!(status["audio"]["rate"], 48000.0, "{status}");
@@ -420,6 +421,15 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(global("system.audio_channels")["value"], status["audio"]["channels"], "the channels it published");
     assert_eq!(global("system.audio_device")["value"], j!(""), "no device under the external clock");
     assert_eq!(global("system.audio_driver")["value"], j!(""), "and no ASIO driver holds this process");
+    // The APIs this build carries are published too, and every device a refresh offers is prefixed
+    // with one of them — the name IS the host choice, so a name from an API outside the list would
+    // be one nobody can resolve. It is also the only place a whole API missing from a build says so.
+    let hosts = global("system.audio_hosts")["value"].as_str().unwrap_or_default().to_string();
+    assert!(!hosts.is_empty(), "a build carries at least one audio host");
+    for name in devices.iter().filter(|n| *n != "default") {
+        assert!(hosts.split(", ").any(|h| name.starts_with(&format!("{h}: "))),
+                "`{name}` names an audio host outside `{hosts}`");
+    }
     assert_eq!(global("system.audio_rate")["lock"]["value"], j!(true), "an ephemeral global is value-locked");
     let why = g.refuse("global entry edit", j!({ "name": "system.audio_rate", "value": 22_050.0 }));
     assert!(why.contains("ephemeral"), "the engine's own fact refuses a hand edit: {why}");
@@ -945,7 +955,9 @@ fn a_patch_sounds_under_the_external_clock() {
         };
         let into = dir.join(format!("{name}.vst3")).join("Contents").join(folder);
         std::fs::create_dir_all(&into).unwrap();
-        std::fs::copy(&artifact, into.join(file)).unwrap();
+        let binary = into.join(file);
+        std::fs::copy(&artifact, &binary).unwrap();
+        binary
     };
     // Every child the scan spawns leaves a line here, so what the cache saves is countable.
     let scans = keep.path().join("scans.log");
@@ -1010,7 +1022,7 @@ fn a_patch_sounds_under_the_external_clock() {
     g.link(src, "out", plug, "input");
     heard(&g, plug, "the gain the record keeps, past a restart", |x| (peak(x) - 0.5).abs() < 0.02);
 
-    bundled("Crasher", built("crash"));
+    let crasher = bundled("Crasher", built("crash"));
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Crasher"]));
     let row = g.call("library list", j!({}))["types"].as_array().unwrap().iter()
         .find(|v| v["type"] == "audio:Crasher").cloned().expect("greyed, not absent");
@@ -1029,10 +1041,14 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(scanned(), 3, "an unchanged tree spawns no scanner at all");
     assert_eq!(listed("audio:Crasher")["available"], false, "the refusal came back off the cache");
     assert_eq!(listed("audio:GoofiFixture")["available"], true, "and so did the answer");
-    // A binary re-copied is a stamp that moved, and a stamp that moved is a source that changed.
-    bundled("Crasher", built("crash"));
+    // A binary whose BYTES moved is a source that changed. Appended to rather than re-copied,
+    // because `fs::copy` keeps the source's mtime on macOS and Windows — so re-copying a fixture
+    // cargo did not rebuild moves no stamp at all, and the cache is right to answer from memory.
+    let mut appended = std::fs::OpenOptions::new().append(true).open(&crasher).unwrap();
+    std::io::Write::write_all(&mut appended, b"\0").unwrap();
+    drop(appended);
     g.call("library refresh", j!({}));
-    assert_eq!(scanned(), 4, "a changed binary is scanned again");
+    assert_eq!(scanned(), 4, "a binary whose bytes moved is scanned again");
 
     // The plugin's state is its own blob, and the record is its params: the fixture latches the
     // first time `shape` reaches its last step and halves its tone for ever after, which no param

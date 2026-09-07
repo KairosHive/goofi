@@ -13,10 +13,11 @@
 //!
 //! ASIO is the one host with rules of its own, and they are the SDK's rather than goofi's: it loads
 //! ONE driver per process, takes seconds to answer, and stops enumerating once a stream holds a
-//! driver. [`asio_driver`] and [`seen`] are what those three cost. It is also a build the user
-//! makes and never one that ships — the Steinberg SDK went GPLv3-or-proprietary in 2025 and cannot
-//! travel inside this binary, which `roadmap/audio-engine.md` carries — so `--features asio`, with
-//! `CPAL_ASIO_DIR` naming the unpacked SDK, is the whole of the opt-in.
+//! driver. [`asio_driver`] and [`seen`] are what those three cost. It is compiled in by default and
+//! is inert off Windows, where cpal target-gates it away; what it asks of a Windows build is
+//! libclang, which `goofi-init` asks for, and nothing of the user — asio-sys downloads the
+//! Steinberg SDK itself. `roadmap/audio-engine.md` carries what that SDK's licence still bars,
+//! which is a redistributed binary rather than a build.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -59,6 +60,23 @@ impl Kind {
         }
     }
 }
+
+/// The audio hosts this build carries, comma separated — every prefix a device name can have.
+/// Asked fresh, as [`named`] asks it: a daemon that starts while goofi runs is a host that appears,
+/// and a list kept beside the one the devices come from would be the half that goes stale.
+pub fn hosts() -> String {
+    cpal::available_hosts().iter().map(|id| id.name()).collect::<Vec<_>>().join(", ")
+}
+
+/// What a Windows build that turned ASIO OFF owes the reader. Without it a machine holding an ASIO
+/// card lists its WASAPI endpoints — the first stereo pair of each — and nothing at all says why
+/// the driver's own view of the same card is absent.
+#[cfg(all(windows, not(feature = "asio")))]
+pub const NO_ASIO_NOTE: &str =
+    " — ASIO is OFF in this build: it is a default feature, so something turned it off; \
+`cargo run` with defaults is what brings it back";
+#[cfg(not(all(windows, not(feature = "asio"))))]
+pub const NO_ASIO_NOTE: &str = "";
 
 /// The name a patch stores for one device of one host.
 fn qualified(host: cpal::HostId, device: &str) -> String {

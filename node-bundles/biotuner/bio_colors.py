@@ -92,11 +92,12 @@ class BioColors(goofi.Node):
             lch[i, :, : spec.shape[1]] = spec
             words.append(" ".join("#%02x%02x%02x" % tuple(int(round(255 * v)) for v in c) for c in colours))
 
+        meta = input.drop_axis(-1)
         return {
-            "rgb": rgb.reshape(lead + (wide, 3)).astype(np.float32),
-            "lightness": lch[:, 0].reshape(lead + (wide,)).astype(np.float32),
-            "chroma": lch[:, 1].reshape(lead + (wide,)).astype(np.float32),
-            "hue": lch[:, 2].reshape(lead + (wide,)).astype(np.float32),
+            "rgb": (rgb.reshape(lead + (wide, 3)).astype(np.float32), meta),
+            "lightness": (lch[:, 0].reshape(lead + (wide,)).astype(np.float32), meta),
+            "chroma": (lch[:, 1].reshape(lead + (wide,)).astype(np.float32), meta),
+            "hue": (lch[:, 2].reshape(lead + (wide,)).astype(np.float32), meta),
             "hex": "; ".join(w for w in words if w),
         }
 

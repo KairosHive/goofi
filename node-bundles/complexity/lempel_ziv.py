@@ -36,4 +36,4 @@ class LempelZiv(goofi.Node):
             return antropy.lziv_complexity((x > level).astype(int), normalize=p.normalize)
 
         x = np.asarray(data.data, dtype=np.float64)
-        return np.apply_along_axis(lz, -1, x).astype(np.float32)
+        return np.apply_along_axis(lz, -1, x).astype(np.float32), data.drop_axis(-1)

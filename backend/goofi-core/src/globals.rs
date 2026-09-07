@@ -263,6 +263,12 @@ pub static SYSTEM_GLOBALS: &[GlobalDef] = &[
         ephemeral: true,
     },
     GlobalDef {
+        name: "system.audio_hosts",
+        value: || GlobalValue::Str(String::new()),
+        doc: "The audio APIs this build carries, comma separated. Every device name begins with one of them, so this is the whole of what a device can be chosen from.",
+        ephemeral: true,
+    },
+    GlobalDef {
         name: "system.goofi_home",
         value: || GlobalValue::Str(crate::path::to_slash(&crate::home::dir())),
         doc: "The .goofi folder, where goofi keeps its own files. The machine says where it is.",

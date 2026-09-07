@@ -25,11 +25,12 @@ class SvdEntropy(goofi.Node):
 
     def process(self, data):
         p = self.params.svd
-        return np.apply_along_axis(
+        out = np.apply_along_axis(
             antropy.svd_entropy,
             -1,
             np.asarray(data.data, dtype=np.float64),
             order=p.order,
             delay=p.delay,
             normalize=p.normalize,
-        ).astype(np.float32)
+        )
+        return out.astype(np.float32), data.drop_axis(-1)

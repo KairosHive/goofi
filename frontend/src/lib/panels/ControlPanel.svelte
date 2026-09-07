@@ -13,6 +13,7 @@
 	import { ui } from '$lib/stores/ui.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { bindViewer } from '$lib/api/frames';
+	import { getControl, type Mark } from '$lib/api/control';
 	import type { ArrayData, DataFrame } from '$lib/codec/decode';
 	import { viewSpecForKind } from '$lib/viewers/capacity';
 	import RefPicker from '$lib/inspector/RefPicker.svelte';
@@ -379,9 +380,20 @@
 		if (!edit || (learning && !elements.some((el) => el.name === learning))) stopLearning();
 	});
 	onDestroy(stopLearning);
+
+	/** `control draw` reaches the pad that holds that global, and nothing else: the op parses a
+	    turtle script and the WIDGET makes the strokes, so a script and a hand paint by one code. */
+	let painting = $state<{ id: number; name: string; marks: Mark[] } | null>(null);
+	let batch = 0;
+	const stopDrawing = getControl().on((ev) => {
+		if (ev.event === 'control_draw') {
+			painting = { id: ++batch, name: ev.payload.name, marks: ev.payload.marks };
+		}
+	});
+	onDestroy(stopDrawing);
 </script>
 
-{#snippet widget(c: ControlView, value: Value, label: string, onChange: (v: Value) => void)}
+{#snippet widget(c: ControlView, value: Value, label: string, onChange: (v: Value) => void, name = '')}
 	{#if c.kind === 'knob'}
 		<Knob {label} value={num(value)} min={c.min ?? 0} max={c.max ?? 1} step={c.step ?? 0} {onChange} />
 	{:else if c.kind === 'slider'}
@@ -393,7 +405,7 @@
 	{:else if c.kind === 'dropdown'}
 		<Select value={String(value)} options={c.options ?? []} {onChange} />
 	{:else if c.kind === 'draw'}
-		<DrawPad value={String(value)} {onChange} />
+		<DrawPad value={String(value)} {onChange} pending={painting?.name === name ? painting : null} />
 	{:else}
 		<TextArea value={String(value)} aria-label={label} {onChange} />
 	{/if}
@@ -485,7 +497,7 @@
 							class:held={held.value || gv.source !== undefined}
 							title={gv.source ? `Follows ${gv.source.reference}` : held.value ? 'Value-locked' : undefined}
 						>
-							{@render widget(c, gv.value, gv.element, (v) => commitValue(gv, v))}
+							{@render widget(c, gv.value, gv.element, (v) => commitValue(gv, v), gv.name)}
 						</div>
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<span

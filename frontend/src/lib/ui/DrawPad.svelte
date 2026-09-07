@@ -3,83 +3,45 @@
      expression through machinery that was already there; nothing new had to learn about images.
 
      The stroke is committed on pointer UP, never per move: a data URL runs to tens of kilobytes,
-     and one per pointer event would put megabytes a second through the document. -->
+     and one per pointer event would put megabytes a second through the document.
+
+     ONE colour control: the swatch, which opens the platform's own picker. A hue wheel and a
+     brightness slider stood beside it and were three doors onto one colour — the wheel could not
+     say what the picker could, so the two disagreed on every grey. -->
 <script lang="ts">
 	import { Button } from '$lib/ui';
-	import { hexOf, hsvOfHex, hsvToRgb, pickedAt } from './drawPad';
+	import type { Mark } from '$lib/api/control';
 
 	let {
 		value,
 		onChange,
+		pending = null,
 		disabled = false
-	}: { value: string; onChange: (v: string) => void; disabled?: boolean } = $props();
+	}: {
+		value: string;
+		onChange: (v: string) => void;
+		/** Strokes a turtle script asked for, newest batch last. */
+		pending?: { id: number; marks: Mark[] } | null;
+		disabled?: boolean;
+	} = $props();
 
 	/** The bitmap's own size, independent of the widget's box: resizing the widget rescales the
 	    picture rather than cropping it. */
 	const SIZE = 512;
+	/** The square everything OUTSIDE the bitmap is said in — a pointer's position, a brush across,
+	    a turtle step. One space, so `width 40` from the CLI is the brush the slider says 40. */
+	const SPAN = 1000;
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
-	let wheel = $state<HTMLCanvasElement | null>(null);
-	let hue = $state(210);
-	let sat = $state(0.85);
-	let val = $state(1);
-	let size = $state(12);
-	let feather = $state(0);
+	let hex = $state('#4aa3ff');
+	let size = $state(24);
+	let soft = $state(0);
 	let erasing = $state(false);
 	let drawing = false;
 	let last: { x: number; y: number } | null = null;
 	/** What we last handed to `onChange`, so our own echo does not reload the canvas under the hand
 	    that is drawing on it. */
 	let mine = '';
-
-	const hex = $derived(hexOf(hue, sat, val));
-
-	function setHex(h: string): void {
-		const next = hsvOfHex(h, hue);
-		if (!next) return;
-		hue = next.h;
-		sat = next.s;
-		val = next.v;
-	}
-
-	/** The hue/saturation disc, painted once: angle is hue, radius is saturation. Brightness is the
-	    slider's job, so moving it does not repaint the wheel. */
-	function paintWheel(el: HTMLCanvasElement): void {
-		const ctx = el.getContext('2d');
-		if (!ctx) return;
-		const side = el.width;
-		const r = side / 2;
-		const img = ctx.createImageData(side, side);
-		for (let y = 0; y < side; y++) {
-			for (let x = 0; x < side; x++) {
-				const dx = x - r;
-				const dy = y - r;
-				const dist = Math.hypot(dx, dy);
-				if (dist > r) continue;
-				const i = (y * side + x) * 4;
-				const h = ((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360;
-				const [cr, cg, cb] = hsvToRgb(h, Math.min(1, dist / r), 1);
-				img.data[i] = cr;
-				img.data[i + 1] = cg;
-				img.data[i + 2] = cb;
-				// A pixel of feather at the rim, so the disc is not a staircase.
-				img.data[i + 3] = Math.round(255 * Math.min(1, r - dist));
-			}
-		}
-		ctx.putImageData(img, 0, 0);
-	}
-	$effect(() => {
-		if (wheel) paintWheel(wheel);
-	});
-
-	function pickWheel(e: PointerEvent): void {
-		if (!wheel || disabled) return;
-		const box = wheel.getBoundingClientRect();
-		const r = box.width / 2;
-		const picked = pickedAt(e.clientX - box.left - r, e.clientY - box.top - r, r);
-		hue = picked.h;
-		sat = picked.s;
-	}
 
 	/** Load `value` in whenever it is someone else's — a patch load, another viewer, an agent. */
 	$effect(() => {
@@ -104,29 +66,56 @@
 		if (!canvas) return null;
 		const box = canvas.getBoundingClientRect();
 		return {
-			x: ((e.clientX - box.left) / box.width) * SIZE,
-			y: ((e.clientY - box.top) / box.height) * SIZE
+			x: ((e.clientX - box.left) / box.width) * SPAN,
+			y: ((e.clientY - box.top) / box.height) * SPAN
 		};
 	}
 
-	function stroke(from: { x: number; y: number }, to: { x: number; y: number }): void {
+	/** ONE stroke, whatever asked for it. A hand at the pad and a turtle step from the CLI both
+	    arrive here, so there is no second painter to disagree with this one. */
+	function paint(
+		from: { x: number; y: number },
+		to: { x: number; y: number },
+		ink: string,
+		width: number,
+		softness: number
+	): void {
 		const ctx = canvas?.getContext('2d');
 		if (!ctx) return;
+		const k = SIZE / SPAN;
 		ctx.save();
-		ctx.globalCompositeOperation = erasing ? 'destination-out' : 'source-over';
-		ctx.strokeStyle = hex;
-		ctx.lineWidth = size;
+		ctx.globalCompositeOperation = ink === 'erase' ? 'destination-out' : 'source-over';
+		ctx.strokeStyle = ink === 'erase' ? '#000' : ink;
+		ctx.lineWidth = Math.max(width * k, 0.5);
 		ctx.lineCap = 'round';
 		ctx.lineJoin = 'round';
 		// `filter` is what makes a soft brush soft. Where it is unsupported the stroke is simply
 		// hard-edged, which is a lesser brush and never a broken one.
-		if (feather > 0) ctx.filter = `blur(${feather}px)`;
+		if (softness > 0) ctx.filter = `blur(${softness * k}px)`;
 		ctx.beginPath();
-		ctx.moveTo(from.x, from.y);
-		ctx.lineTo(to.x, to.y);
+		ctx.moveTo(from.x * k, from.y * k);
+		ctx.lineTo(to.x * k, to.y * k);
 		ctx.stroke();
 		ctx.restore();
 	}
+
+	function stroke(from: { x: number; y: number }, to: { x: number; y: number }): void {
+		paint(from, to, erasing ? 'erase' : hex, size, soft);
+	}
+
+	/** A turtle script's strokes, made and then committed as ONE change — the script is a
+	    submission, so the pad answers it the way a pointer answers a gesture, not a move. */
+	let done = $state(0);
+	$effect(() => {
+		const batch = pending;
+		if (!batch || batch.id === done || !canvas) return;
+		done = batch.id;
+		for (const m of batch.marks) {
+			if (m.mark === 'clear') wipe();
+			else paint({ x: m.from[0], y: m.from[1] }, { x: m.to[0], y: m.to[1] }, m.ink, m.width, m.soft);
+		}
+		commit();
+	});
 
 	function commit(): void {
 		if (!canvas) return;
@@ -158,66 +147,49 @@
 		last = null;
 		commit();
 	}
+	function wipe(): void {
+		canvas?.getContext('2d')?.clearRect(0, 0, SIZE, SIZE);
+	}
 	function clear(): void {
-		const ctx = canvas?.getContext('2d');
-		if (!ctx || disabled) return;
-		ctx.clearRect(0, 0, SIZE, SIZE);
+		if (disabled) return;
+		wipe();
 		commit();
 	}
 </script>
 
 <div class="pad" data-testid="draw-pad">
 	<div class="tools">
-		<canvas
-			bind:this={wheel}
-			class="wheel"
-			width="44"
-			height="44"
-			data-testid="draw-wheel"
-			title="Hue around, saturation outward"
-			onpointerdown={(e) => {
-				(e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
-				pickWheel(e);
-			}}
-			onpointermove={(e) => {
-				if (e.buttons) pickWheel(e);
-			}}
-		></canvas>
-		<label class="swatch" title="Pick an exact colour" style={`--ink: ${hex}`}>
+		<label class="swatch" title="Pick the ink" style={`--ink: ${hex}`}>
 			<input
 				type="color"
 				value={hex}
 				{disabled}
 				data-testid="draw-colour"
-				oninput={(e) => setHex((e.currentTarget as HTMLInputElement).value)}
+				oninput={(e) => (hex = (e.currentTarget as HTMLInputElement).value)}
 			/>
 		</label>
-		<label class="dial" title={`Brightness ${Math.round(val * 100)}%`}>
-			<span>lum</span>
-			<input type="range" min="0" max="1" step="0.01" bind:value={val} {disabled} />
-		</label>
-		<label class="dial" title={`Brush ${size} px across`}>
+		<label class="dial" title={`Brush ${size} across`}>
 			<span>size</span>
 			<input
 				type="range"
-				min="1"
-				max="96"
+				min="2"
+				max="190"
 				step="1"
 				bind:value={size}
 				{disabled}
 				data-testid="draw-size"
 			/>
 		</label>
-		<label class="dial" title={`Feather ${feather} px`}>
+		<label class="dial" title={`Softness ${soft}`}>
 			<span>soft</span>
 			<input
 				type="range"
 				min="0"
-				max="32"
+				max="64"
 				step="1"
-				bind:value={feather}
+				bind:value={soft}
 				{disabled}
-				data-testid="draw-feather"
+				data-testid="draw-soft"
 			/>
 		</label>
 		<Button
@@ -265,17 +237,9 @@
 		gap: var(--space-1);
 		flex-wrap: wrap;
 	}
-	.wheel {
+	.swatch {
 		width: 22px;
 		height: 22px;
-		border-radius: 50%;
-		cursor: crosshair;
-		touch-action: none;
-		flex: none;
-	}
-	.swatch {
-		width: 18px;
-		height: 18px;
 		border-radius: var(--radius-sm);
 		background: var(--ink);
 		border: 1px solid var(--border);

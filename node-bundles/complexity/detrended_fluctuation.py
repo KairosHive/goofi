@@ -18,6 +18,7 @@ class DetrendedFluctuation(goofi.Node):
     OUTPUTS = {"exponent": goofi.DataType.ARRAY}
 
     def process(self, data):
-        return np.apply_along_axis(
+        out = np.apply_along_axis(
             antropy.detrended_fluctuation, -1, np.asarray(data.data, dtype=np.float64)
-        ).astype(np.float32)
+        )
+        return out.astype(np.float32), data.drop_axis(-1)

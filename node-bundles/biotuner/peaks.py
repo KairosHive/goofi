@@ -81,7 +81,7 @@ class Peaks(goofi.Node):
             out_a[i, : am.size] = am
 
         shape = lead + (p.n_peaks,)
-        meta = {"sfreq": sfreq}
+        meta = {**input.drop_axis(-1), "sfreq": sfreq}
         return {
             "peaks": (out_p.reshape(shape).astype(np.float32), meta),
             "amps": (out_a.reshape(shape).astype(np.float32), meta),

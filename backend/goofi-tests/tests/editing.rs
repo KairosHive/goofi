@@ -166,6 +166,20 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("control edit", j!({ "group": "control0", "element": "level", "x": 0.0, "y": 3.0 }));
     assert_eq!(g.doc()["globals"]["control0.level"]["control"]["y"], 3.0, "the followed widget moved");
     g.call("global entry lock", j!({ "name": "control0.level", "value": false }));
+    // A `draw` widget takes turtle steps from the CLI. The op PARSES — so a refusal names the line
+    // — and answers the strokes it made of them; the WIDGET paints those, by the code a hand
+    // reaches, so a script and a mouse are one painter and never two.
+    g.call("control add", j!({ "group": "control0", "kind": "draw", "element": "pad" }));
+    let drew = g.call("control draw", j!({ "group": "control0", "element": "pad",
+        "steps": "pen #f0a\nwidth 40\ngoto 100 100\ncurve 100 0 200 100 200 200\nclear" }));
+    assert_eq!(drew["steps"], j!(5), "{drew}");
+    assert!(drew["marks"].as_u64().is_some_and(|m| m > 5), "a curve is many strokes: {drew}");
+    let why = g.refuse("control draw", j!({ "group": "control0", "element": "pad",
+                                            "steps": "forward 10\nfrward 20" }));
+    assert!(why.contains("line 2") && why.contains("frward"), "a refusal names the line: {why}");
+    let why = g.refuse("control draw", j!({ "group": "control0", "element": "knob0", "steps": "forward 10" }));
+    assert!(why.contains("knob"), "only a `draw` widget takes steps: {why}");
+
     // A panel's edit mode is the panel's own view and no state of the manager's, so the widget door
     // is held by a config lock exactly as every other globals door is.
     g.call("global group lock", j!({ "group": "control0", "config": true }));
@@ -258,7 +272,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     }
     assert!(g.nodes().is_empty() && g.instances().is_empty(), "back to an empty patch");
     assert!(g.doc()["globals"]["desk.handle"].is_null() && g.doc()["globals"]["patch.subj"].is_null());
-    assert_eq!(steps, 44, "one step per command — a compound (the rename, the two-edit batch) and a three-field node edit are each ONE");
+    assert_eq!(steps, 45, "one step per command — a compound (the rename, the two-edit batch) and a three-field node edit are each ONE");
 
     while g.call("redo", j!({}))["changed"] == true {}
     assert_eq!(g.doc(), built, "redo rebuilt the patch it undid, uid for uid");

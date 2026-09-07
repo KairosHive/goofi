@@ -5,12 +5,13 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-# ASIO is a build the USER makes, never one that ships. WASAPI publishes an interface as one stereo
-# endpoint per pair the driver exposes, so a multi-input card is reachable past its first pair only
-# through the driver's own ASIO view. The Steinberg SDK that binding needs went
-# GPLv3-or-proprietary in 2025 and cannot travel inside this binary — `roadmap/audio-engine.md`
-# carries that decision — so the flag is off, and whoever turns it on supplies the SDK themselves:
-# `CPAL_ASIO_DIR` names the unpacked copy, and LLVM must be installed for its bindgen to run.
+# WASAPI publishes an interface as one stereo endpoint per pair the driver exposes, so a
+# multi-input card is reachable past its first pair only through the driver's own ASIO view. cpal
+# target-gates `asio-sys` to Windows, so this feature is INERT on Linux and macOS and costs a build
+# there nothing. On Windows it needs libclang, which is what `goofi-init` asks for; it does NOT need
+# a hand-supplied SDK, since asio-sys downloads the Steinberg one itself when `CPAL_ASIO_DIR` names
+# no copy. What the SDK's licence still bars is a goofi BINARY someone else redistributes —
+# `roadmap/audio-engine.md` carries that, and it is a question for a release, not for a build.
 asio = ["cpal/asio"]
 
 [dependencies]

@@ -98,7 +98,9 @@ jobs:
         cache-on-failure: true
 
     # iceoryx2 builds its OS bindings with bindgen, which finds libclang by itself everywhere but
-    # here: the runner ships LLVM and does not name it.
+    # here: the runner ships LLVM and does not name it. asio-sys generates the ASIO binding the same
+    # way, so this one line is also what lets the Windows leg compile the only host that reaches an
+    # interface past its first stereo pair — and this leg is the ONLY machine that compiles it.
     - name: Name libclang (Windows)
       if: runner.os == 'Windows'
       shell: pwsh

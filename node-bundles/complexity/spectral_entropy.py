@@ -29,10 +29,11 @@ class SpectralEntropy(goofi.Node):
         # Without a stamped rate the bins are cycles per sample. That shifts every frequency by the
         # same factor, and the measure only reads the SHAPE of the spectrum, so it is unharmed.
         sfreq = data.meta.get("sfreq") or 1.0
-        return antropy.spectral_entropy(
+        out = antropy.spectral_entropy(
             np.asarray(data.data, dtype=np.float64),
             sf=sfreq,
             method=p.method,
             normalize=p.normalize,
             axis=-1,
-        ).astype(np.float32)
+        )
+        return np.asarray(out, dtype=np.float32), data.drop_axis(-1)

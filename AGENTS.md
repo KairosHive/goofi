@@ -406,6 +406,15 @@ agent's environment naming the server until the kill lands is that same trust, a
 Origin/Host allowlist covers every route including the WebSocket upgrades — a drive-by guard, not
 authentication; this app stays single-user and local by design.
 
+**A drawing pad has ONE painter, and the CLI is another hand on it.** `control draw` parses a
+turtle script — the geometry is Rust's, so a refusal names the line — and broadcasts the STROKES it
+makes; the widget paints them through the very function a pointer reaches, so a script and a finger
+cannot disagree about what a stroke looks like. The op writes nothing, which is what leaves the
+widget's own commit as the drawing's one undo step; the cost is that a pad nobody has open draws
+nothing, and the reply says how many clients heard it. The picture leaves as a frame: `Drawing`
+reads the widget's global the way a knob reads one and decodes the PNG, `graphics:ArrayIn` puts it
+on the GPU. `roadmap/control-panels.md` holds the rest.
+
 **The frontend is a replica, and its styling has one source.** Every colour, spacing, type and
 motion token lives in one `:root`; a component states its own layout, never another's. The
 primitive library is a LEAF layer and must not import a store — doing so reshuffles the CSS chunk

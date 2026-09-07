@@ -125,8 +125,9 @@ class ScaleForaging(goofi.Node):
         for i, h in enumerate(self.held):
             if h:
                 out[i, : len(h)] = h
+        meta = input.drop_axis(-1)
         return {
-            "tuning": out.reshape(lead + (width,)).astype(np.float32),
-            "similarity": scores.reshape(lead if lead else (1,)).astype(np.float32),
-            "changed": changed.reshape(lead if lead else (1,)).astype(np.float32),
+            "tuning": (out.reshape(lead + (width,)).astype(np.float32), meta),
+            "similarity": (scores.reshape(lead if lead else (1,)).astype(np.float32), meta),
+            "changed": (changed.reshape(lead if lead else (1,)).astype(np.float32), meta),
         }
