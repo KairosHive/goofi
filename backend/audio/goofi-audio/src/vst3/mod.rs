@@ -18,7 +18,6 @@ use goofi_audio_sdk::{AudioNode, MAX_PORTS};
 use goofi_core::probe;
 use goofi_node::{Isolation, Scanned, ScannedType, Stamp, Tag};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
 use vst3::{ComPtr, ComWrapper};
@@ -295,7 +294,7 @@ fn scan_bundle(engine: &mut AudioEngine, bundle: &Path) -> Vec<ScannedType> {
     };
     let found = binary_of(bundle).and_then(|binary| {
         let stamp = stamp_of(&binary)?;
-        described(scanner, bundle, &binary).map(|b| (binary, stamp, b))
+        described(scanner, bundle, &binary, stamp).map(|b| (binary, stamp, b))
     });
     match found {
         Err(reason) => greyed(reason),
@@ -307,34 +306,40 @@ fn scan_bundle(engine: &mut AudioEngine, bundle: &Path) -> Vec<ScannedType> {
     }
 }
 
-/// The scanner's answer for this binary, from the cache or from a child. Keyed by the binary's own
-/// BYTES, as an authored node's artifact is: a patch mount is a fresh directory every boot, and a
-/// load restores no mtimes, so nothing about a bundle's path or stamp survives an archive. And by
-/// the scanner's stamp: what a host reads out of a plugin is the host's answer as much as the plugin's.
-fn described(scanner: &Path, bundle: &Path, binary: &Path) -> Result<Bundle, String> {
-    let bytes = std::fs::read(binary).map_err(|e| format!("{}: {e}", binary.display()))?;
+/// The scanner's verdict for this binary, from the cache or from a child. A REFUSAL is remembered
+/// as an answer is: a plugin that crashes or hangs the scanner costs one child EVER rather than one
+/// per load, which on a machine full of plugins is what a patch load waits for. Keyed by the
+/// binary's stamp — the same "did the source change" a rescan asks everywhere else — and by the
+/// scanner's, since what a host reads out of a plugin is the host's answer as much as the plugin's.
+/// A bundle carried inside a patch lands on a fresh path every load, so it is scanned once again.
+fn described(scanner: &Path, bundle: &Path, binary: &Path, stamp: Stamp) -> Result<Bundle, String> {
     let dir = goofi_build::base_dir(&goofi_core::home::dir()).join("vst3");
-    let key = format!("{:x}", Sha256::digest([&bytes[..], &stamp_bytes(scanner)].concat()));
+    let key = key_of(scanner, binary, stamp);
     let file = dir.join(format!("{key}.json"));
-    if let Some(cached) = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()) {
-        return Ok(cached);
+    let read = std::fs::read(&file).ok();
+    if let Some(verdict) = read.and_then(|b| serde_json::from_slice::<Result<Bundle, String>>(&b).ok()) {
+        return verdict;
     }
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    // Written beside and renamed in, so two goofis scanning one bundle cannot tear the cache.
     let part = dir.join(format!("{key}.{}.part", std::process::id()));
-    let said = run_scanner(scanner, bundle, &part);
-    let answer = said.and_then(|()| std::fs::read(&part).map_err(|e| format!("the scanner wrote nothing: {e}")));
-    let found = answer.and_then(|b| serde_json::from_slice(&b).map_err(|e| format!("the scanner's answer did not parse: {e}")));
-    match found {
-        Ok(found) => {
-            let _ = std::fs::rename(&part, &file);
-            Ok(found)
-        }
-        Err(e) => {
-            let _ = std::fs::remove_file(&part);
-            Err(e)
-        }
+    let errors = part.with_extension("err");
+    let mut child = spawn_scanner(scanner, bundle, &part, &errors)?;
+    let verdict = answered(&mut child, &errors)
+        .and_then(|()| std::fs::read(&part).map_err(|e| format!("the scanner wrote nothing: {e}")))
+        .and_then(|b| serde_json::from_slice(&b).map_err(|e| format!("the scanner's answer did not parse: {e}")));
+    // Written beside and renamed in, so two goofis scanning one bundle cannot tear the cache.
+    if serde_json::to_vec(&verdict).is_ok_and(|b| std::fs::write(&part, b).is_ok()) {
+        let _ = std::fs::rename(&part, &file);
     }
+    let _ = std::fs::remove_file(&part);
+    verdict
+}
+
+/// What decides the verdict: the binary's own path and stamp, and the scanner's.
+fn key_of(scanner: &Path, binary: &Path, (len, modified): Stamp) -> String {
+    let nanos = modified.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let (len, nanos, scanner) = (len.to_le_bytes(), nanos.to_le_bytes(), stamp_bytes(scanner));
+    goofi_build::digest([binary.as_os_str().as_encoded_bytes(), &len[..], &nanos[..], &scanner[..]])
 }
 
 /// The scanner's length and mtime, little-endian — the identity that changes when goofi does.
@@ -348,12 +353,12 @@ fn stamp_bytes(scanner: &Path) -> Vec<u8> {
     [len.to_le_bytes().as_slice(), modified.to_le_bytes().as_slice()].concat()
 }
 
-/// One child, under a ceiling. Its own words on failure, from the file its errors go to — never a
-/// pipe, which a plugin's chatter could fill while nobody is reading it.
-fn run_scanner(scanner: &Path, bundle: &Path, part: &Path) -> Result<(), String> {
-    let errors = part.with_extension("err");
-    let sink = std::fs::File::create(&errors).map_err(|e| format!("{}: {e}", errors.display()))?;
-    let mut child = std::process::Command::new(scanner)
+/// One child, its output going to a FILE — never a pipe, which a plugin's chatter could fill while
+/// nobody is reading it. A spawn that fails is goofi's own doing rather than the plugin's, which is
+/// why it is the one refusal [`described`] never remembers.
+fn spawn_scanner(scanner: &Path, bundle: &Path, part: &Path, errors: &Path) -> Result<std::process::Child, String> {
+    let sink = std::fs::File::create(errors).map_err(|e| format!("{}: {e}", errors.display()))?;
+    std::process::Command::new(scanner)
         .arg("vst3-scan")
         .arg(bundle)
         .arg(part)
@@ -361,7 +366,11 @@ fn run_scanner(scanner: &Path, bundle: &Path, part: &Path) -> Result<(), String>
         .stdout(sink.try_clone().map_err(|e| e.to_string())?)
         .stderr(sink)
         .spawn()
-        .map_err(|e| format!("could not run the scanner {}: {e}", scanner.display()))?;
+        .map_err(|e| format!("could not run the scanner {}: {e}", scanner.display()))
+}
+
+/// The child's verdict, under a ceiling, in its own words where it left any.
+fn answered(child: &mut std::process::Child, errors: &Path) -> Result<(), String> {
     let deadline = Instant::now() + SCAN_WAIT;
     let status = loop {
         match child.try_wait() {
@@ -375,8 +384,8 @@ fn run_scanner(scanner: &Path, bundle: &Path, part: &Path) -> Result<(), String>
             Ok(None) => std::thread::sleep(Duration::from_millis(10)),
         }
     };
-    let said = std::fs::read_to_string(&errors).unwrap_or_default().trim().to_string();
-    let _ = std::fs::remove_file(&errors);
+    let said = std::fs::read_to_string(errors).unwrap_or_default().trim().to_string();
+    let _ = std::fs::remove_file(errors);
     match status? {
         s if s.success() => Ok(()),
         _ if !said.is_empty() => Err(said),
