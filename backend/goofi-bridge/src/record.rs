@@ -112,7 +112,7 @@ fn drain_feed(recorder: &Recorder, time: &Time, feed: &mut Feed) {
             (Some(i), Some(last)) => i.saturating_sub(last).saturating_sub(1),
             _ => 0,
         };
-        if let Err(e) = recorder.write(&feed.id, bytes) {
+        if let Err(e) = recorder.write(&feed.id, bytes, gap, at) {
             recorder.close(&feed.id, &format!("the frame could not be written: {e}"));
             feed.failed = true;
             break;
@@ -121,11 +121,6 @@ fn drain_feed(recorder: &Recorder, time: &Time, feed: &mut Feed) {
         missed += gap;
         taken += 1;
     }
-    // Once per sweep: `dropped` rewrites the manifest, and a per-frame rewrite would make a drain
-    // that has fallen behind fall further behind.
-    if missed > 0 {
-        recorder.dropped(&feed.id, missed, time.now());
-    }
     if taken > 0 {
         recorder.fill(&feed.id, taken as f32 / feed.buffer as f32);
     }
@@ -133,6 +128,10 @@ fn drain_feed(recorder: &Recorder, time: &Time, feed: &mut Feed) {
     // patch time, and the manifest carries the last word.
     if let Some(d) = drift {
         recorder.drift(&feed.id, d);
+    }
+    // Once per sweep: every count already rode its own write, so only the manifest is left.
+    if missed > 0 || taken > 0 {
+        recorder.note();
     }
 }
 

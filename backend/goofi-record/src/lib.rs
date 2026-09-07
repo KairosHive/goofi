@@ -386,16 +386,29 @@ impl Recorder {
         let _ = self.publish(guard);
     }
 
-    /// Write one already-encoded frame. The session is unlocked before the disk is touched, so a
-    /// slow stream never stalls another engine's drain.
-    pub fn write(&self, id: &StreamId, frame: &[u8]) -> Result<(), String> {
+    /// Write one already-encoded frame, carrying the frames MISSING before it. The write and the
+    /// count land under ONE stream lock, so a frame is in the file if and only if its own gap was
+    /// counted — a stop cannot take the session between the two and leave a gap nothing accounts
+    /// for.
+    pub fn write(&self, id: &StreamId, frame: &[u8], missed: u64, at: f64) -> Result<(), String> {
         let stream = {
             let guard = self.held();
             let session = guard.as_ref().ok_or("no recording is running")?;
             session.open.get(id).ok_or("no such open stream")?.clone()
         };
         let mut stream = held(&stream);
-        stream.write(frame)
+        let done = stream.write(frame);
+        if done.is_ok() && missed > 0 {
+            stream.dropped += missed;
+            stream.dropped_at = Some(at);
+        }
+        done
+    }
+
+    /// Rewrite the manifest for what a sweep changed. Once per sweep: a rewrite per frame would
+    /// make a drain that has fallen behind fall further behind.
+    pub fn note(&self) {
+        let _ = self.publish(self.held());
     }
 
     /// Hand one video readback to its encoder, dated by the tick that DREW it rather than the one
