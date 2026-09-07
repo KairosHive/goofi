@@ -958,6 +958,7 @@ dependencies = [
  "goofi-graphics",
  "goofi-init",
  "goofi-node",
+ "goofi-record",
  "goofi-signal",
  "goofi-signal-sdk",
  "goofi-transport",

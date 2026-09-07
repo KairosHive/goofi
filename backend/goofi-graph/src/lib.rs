@@ -110,6 +110,8 @@ struct NodeEntry {
     pos: [f64; 2],
     /// Opaque: persisted and round-tripped, never interpreted.
     viewers: serde_json::Value,
+    /// The output slots armed for recording, in the order they were armed.
+    record: Vec<String>,
 }
 
 impl NodeEntry {
@@ -1288,7 +1290,7 @@ impl Graph {
         let born = self.pick_name(name, &base, None);
         self.nodes.insert(
             uid,
-            NodeEntry { kind, name: born.clone(), pos: [0.0, 0.0], viewers: serde_json::json!({}) },
+            NodeEntry { kind, name: born.clone(), pos: [0.0, 0.0], viewers: serde_json::json!({}), record: Vec::new() },
         );
         self.set_member_scope(uid, scope);
         self.rebind_naming(&born);
@@ -1370,6 +1372,7 @@ impl Graph {
                 name,
                 pos: [0.0, 0.0],
                 viewers: serde_json::json!({}),
+                record: Vec::new(),
             },
         );
     }
@@ -1554,6 +1557,19 @@ impl Graph {
     /// The viewer view-state blob of anything a uid can name (empty object if never set).
     pub fn viewers(&self, uid: Uid) -> Option<&serde_json::Value> {
         self.nodes.get(&uid).map(|e| &e.viewers)
+    }
+
+    /// Replace the output slots armed for recording. The whole vector, which is what makes the
+    /// command's inverse exact.
+    pub fn set_recorded(&mut self, uid: Uid, record: Vec<String>) -> Result<(), String> {
+        let e = self.nodes.get_mut(&uid).ok_or_else(|| format!("no such node {uid}"))?;
+        e.record = record;
+        Ok(())
+    }
+
+    /// The output slots armed for recording on anything a uid can name.
+    pub fn recorded(&self, uid: Uid) -> Option<&[String]> {
+        self.nodes.get(&uid).map(|e| e.record.as_slice())
     }
 
     // Grouping never touches the flat runtime — the members stay the exact live nodes they were,
@@ -1945,7 +1961,7 @@ impl Graph {
         let disp = self.fresh_name("subpatch");
         self.nodes.insert(
             scope_uid,
-            NodeEntry { kind: Kind::Facade, name: disp, pos, viewers: serde_json::json!({}) },
+            NodeEntry { kind: Kind::Facade, name: disp, pos, viewers: serde_json::json!({}), record: Vec::new() },
         );
         self.set_member_scope(scope_uid, parent);
 
@@ -2061,6 +2077,7 @@ impl Graph {
                 name: self.pick_name(&name, "subpatch", Some(scope_id)),
                 pos,
                 viewers: serde_json::json!({}),
+                record: Vec::new(),
             },
         );
         for &m in members {
@@ -3085,6 +3102,9 @@ impl Graph {
             if e.viewers.as_object().is_some_and(|m| !m.is_empty()) {
                 rec.insert("viewers".into(), e.viewers.clone());
             }
+            if !e.record.is_empty() {
+                rec.insert("record".into(), json!(e.record));
+            }
             if let Some(p) = self.scope_of(*uid).filter(|p| want.contains(p)) {
                 rec.insert("scope".into(), json!(p.to_hex()));
             }
@@ -3213,6 +3233,7 @@ impl Graph {
                     })
                     .collect(),
                 viewers: rec.get("viewers").filter(|v| v.is_object()).map(|v| remap_slots(v, &idmap)),
+                record: Some(read_record(rec)),
                 // A port cannot exist without a scope, so it takes the paste target when its own
                 // facade is not in the fragment — the same fallback every other kind gets below.
                 scope: subpatch::boundary_type(ty).and(inner.or(scope)),
@@ -3395,12 +3416,14 @@ impl Graph {
                     name: String::new(),
                     pos: read_pos(rec),
                     viewers: serde_json::json!({}),
+                    record: Vec::new(),
                 },
             );
             self.force_set_name(idmap[old], rec.get("name").and_then(|v| v.as_str()).unwrap_or(""));
             if let Some(v) = rec.get("viewers").filter(|v| v.is_object()) {
                 let _ = self.set_node_viewers(idmap[old], v.clone());
             }
+            let _ = self.set_recorded(idmap[old], read_record(rec));
         }
         for (old, rec) in nodes.iter().filter(|(_, r)| !structural(r["type"].as_str().unwrap_or(""))) {
             let ty = rec["type"].as_str().unwrap();
@@ -3420,6 +3443,7 @@ impl Graph {
             if let Some(v) = rec.get("viewers").filter(|v| v.is_object()) {
                 let _ = self.set_node_viewers(uid, v.clone());
             }
+            let _ = self.set_recorded(uid, read_record(rec));
             for (group, name, state) in record_sources(rec) {
                 let _ = self.set_source(uid, &group, &name, state);
             }
@@ -3454,6 +3478,7 @@ impl Graph {
                         .filter(|v| v.is_object())
                         .cloned()
                         .unwrap_or_else(|| serde_json::json!({})),
+                    record: read_record(rec),
                 },
             );
             self.force_set_name(uid, rec.get("name").and_then(|v| v.as_str()).unwrap_or(""));
@@ -3522,6 +3547,14 @@ pub fn name_base(type_name: &str) -> String {
 /// A viewer blob under the uids a paste minted. A facade keys its blob by PORT UID, so a copy that
 /// kept the original's keys would point at slots it does not have; a leaf keys its by slot NAME,
 /// which no remap names, so it rides through unchanged.
+/// A record's armed output slots, as a `.gfi` and a copied fragment carry them.
+fn read_record(rec: &serde_json::Value) -> Vec<String> {
+    rec.get("record")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
 fn remap_slots(viewers: &serde_json::Value, idmap: &HashMap<String, Uid>) -> serde_json::Value {
     match viewers.as_object() {
         None => viewers.clone(),
@@ -3675,6 +3708,7 @@ fn build_view<'a>(
                     manifest: leaf.manifest,
                     params: leaf.params.as_ref(),
                     bindings,
+                    recorded: e.record.as_slice(),
                 },
             ))
         })

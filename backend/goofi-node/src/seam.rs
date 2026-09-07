@@ -119,6 +119,8 @@ pub struct NodeView<'a> {
     pub manifest: &'static NodeManifest,
     pub params: &'a ParamGroups,
     pub bindings: Vec<BindingView<'a>>,
+    /// The output slots armed for recording.
+    pub recorded: &'a [String],
 }
 
 /// The settled graph, as every engine reads it after a batch: the WHOLE graph — engines filter.
