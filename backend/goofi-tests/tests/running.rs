@@ -85,6 +85,21 @@ fn a_chain_runs_streams_and_follows_the_params_edited_under_it() {
     let vals = npy_f32s(&bytes);
     assert!(vals.iter().all(|v| v.is_finite() && v.abs() <= 1.0), "the unit sine, raw: {vals:?}");
     assert_eq!(snap["meta"]["sfreq"], 64.0, "meta rides the snapshot: {snap}");
+    assert!(snap["meta"]["time"].as_f64().is_some(), "…and so does the frame's time: {snap}");
+
+    // One patch time, and every node reads it. A frame's value is the wave at the second the frame
+    // is STAMPED with, so an oscillator made now is already in phase with one made at boot.
+    let late = g.add("LFO");
+    g.set_param(late, "lfo", "frequency", 2.0);
+    let lp = g.probe(late, "out");
+    g.ready(late);
+    let (v, t) = g.until("the late oscillator's first frame", |_| {
+        let d = lp.latest()?;
+        Some((f32s(&d).first().copied()? as f64, d.meta().time()?))
+    });
+    assert!(t > 0.0 && t < 3600.0, "patch seconds, never an epoch: {t}");
+    let want = (std::f64::consts::TAU * 2.0 * t).sin();
+    assert!((v - want).abs() < 1e-4, "the wave at its own stamp: {v} vs sin(2\u{3c0}\u{b7}2\u{b7}{t}) = {want}");
 
     let mut ev = g.events();
     let stats = g.until("a node_stats broadcast", |_| {
