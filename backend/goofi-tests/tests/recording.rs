@@ -8,6 +8,48 @@ impl NoEncoder {
     const WHY: &'static str = "install the `ffmpeg` package";
 }
 
+/// An encoder whose `finish` blocks until it is let go — what a slow ffmpeg finalize is. It is
+/// the same seam a second codec would arrive through, driven from the other end.
+struct SlowEncoders {
+    inside: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    release: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+struct Slow {
+    inside: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    release: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl goofi_record::video::Encoders for SlowEncoders {
+    fn probe(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn extension(&self) -> &'static str {
+        "mkv"
+    }
+    fn open(
+        &self,
+        _file: &std::path::Path,
+        _size: (u32, u32),
+        _fps: f64,
+    ) -> Result<Box<dyn goofi_record::video::Encoder>, String> {
+        Ok(Box::new(Slow { inside: self.inside.clone(), release: self.release.clone() }))
+    }
+}
+
+impl goofi_record::video::Encoder for Slow {
+    fn write(&mut self, _rows: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
+    fn finish(&mut self) -> Result<(), String> {
+        self.inside.store(true, std::sync::atomic::Ordering::Relaxed);
+        while !self.release.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        Ok(())
+    }
+}
+
 impl goofi_record::video::Encoders for NoEncoder {
     fn probe(&self) -> Result<(), String> {
         Err(NoEncoder::WHY.into())
@@ -328,6 +370,59 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     let refusal = g.refuse("record start", j!({ "root": root.path() }));
     assert!(refusal.contains(NoEncoder::WHY), "the refusal names the package: {refusal}");
     g.call("record disarm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
+
+    // Step: finalizing a video holds NO lock anyone else needs. With an encoder whose `finish`
+    // blocks, a `record disarm` sits inside it while an op that takes the graph and a signal
+    // stream's own drain both go through.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let inside = std::sync::Arc::new(AtomicBool::new(false));
+    let release = std::sync::Arc::new(AtomicBool::new(false));
+    g.state
+        .recorder
+        .set_encoders(std::sync::Arc::new(SlowEncoders { inside: inside.clone(), release: release.clone() }));
+    g.call("record arm", j!({ "output": goofi_tests::ep(&src, "out") }));
+    g.call("record arm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
+    g.call("record start", j!({ "root": root.path() }));
+    g.until("both streams to reach the disk", |g| {
+        goofi_tests::render(g, 1);
+        (frames(g, &src_name) > 0 && frames(g, &shader_name) > 0).then_some(())
+    });
+    let went = std::sync::Arc::new(AtomicBool::new(false));
+    let waited = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            g.call("record disarm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
+        });
+        let (inside, flag, probe, node) = (inside.clone(), went.clone(), &g, src.clone());
+        let took = waited.clone();
+        scope.spawn(move || {
+            while !inside.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            // The graph mutex, then the recorder's own session — how long they take IS the
+            // finding: 8 s while a finalize held them, against microseconds when it holds none.
+            let began = std::time::Instant::now();
+            probe.call("node state", j!({ "node": node }));
+            let seen = frames(probe, &src_name);
+            took.store(began.elapsed().as_micros() as u64, Ordering::Relaxed);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while frames(probe, &src_name) <= seen && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            let moved = frames(probe, &src_name) > seen;
+            flag.store(moved, Ordering::Relaxed);
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while !went.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        release.store(true, Ordering::Relaxed);
+    });
+    assert!(went.load(Ordering::Relaxed), "a drain keeps writing while a video finalizes");
+    let took = waited.load(Ordering::Relaxed);
+    assert!(took < 1_000_000, "an op waited {took} us on a finalize that holds no lock it needs");
+    g.call("record stop", j!({}));
+    g.call("record disarm", j!({ "output": goofi_tests::ep(&src, "out") }));
     g.state.recorder.set_encoders(std::sync::Arc::new(goofi_record::video::FfmpegEncoders));
 
     // A recording whose folder went out from under it: the load still opens its patch, because the
@@ -349,6 +444,15 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     g.set_param(fast, "common", "max_frequency", 100000.0);
     g.ready(fast);
     g.call("record arm", j!({ "output": goofi_tests::ep(&fast_hex, "out") }));
+    // ONE drain thread serves every armed stream, so the way to make it fall behind is to give
+    // it more of them than it can take: a single producer alone leaves it idle at 1/64 full.
+    for _ in 0..5 {
+        let other = g.add("_TestConst");
+        g.set_param(other, "constant", "length", 1);
+        g.set_param(other, "common", "max_frequency", 100000.0);
+        g.ready(other);
+        g.call("record arm", j!({ "output": goofi_tests::ep(&goofi_tests::hex(other), "out") }));
+    }
     let third = g.call("record start", j!({ "root": root.path() }))["folder"]
         .as_str()
         .expect("a folder")
