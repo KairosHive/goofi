@@ -339,7 +339,7 @@
 		const { element, name } = gv;
 		let baseline: number[] | null = null;
 		learning = name;
-		unbind = bindViewer(uid, slot, `learn:${name}`, viewSpecForKind('line', 4096, 64), (f: DataFrame) => {
+		unbind = bindViewer(uid, slot, `learn:${name}`, [viewSpecForKind('line', 4096, 64)], (f: DataFrame) => {
 			const values = (f.data as ArrayData).values;
 			if (!values || typeof values.length !== 'number') return;
 			if (!baseline) {

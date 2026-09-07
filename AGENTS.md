@@ -295,6 +295,22 @@ ready; pub/sub has no history, so anything said before that is queued or re-plan
 constraint algebra; the bridge folds every viewer's constraints against the real frame and
 reduces ONCE, on its own subscription — so no number of viewers can slow a `process()` down.
 
+**An accessory never reaches an engine's scheduling, and never widens what it makes.** A viewer's
+box — what it asks a producer to fit its readback into — is a LIVE CELL the render thread reads,
+never plan state: a viewer appearing, resizing or leaving must not be able to re-plan an engine.
+And a reader that declared nothing has asked for no pixels, so its readback is ONE TEXEL — the
+cheapest frame that is still a frame, whose metadata is the whole product. A viewer declares what
+it DRAWS; a frame it accepts but cannot draw is one it can only DESCRIBE, and that is a second,
+cheaper declaration rather than its drawing axes stretched over a frame it renders nothing of. A
+frame NO declaration admits is not a declaration either — it takes the same one texel, never the
+passthrough that "no axes" would otherwise mean. Only a reader of RAW pixels widens a readback at
+all — a global
+following the slot, or a snapshot — because widening is the most expensive thing an engine can be
+told to do. What it cost, at 1920 square: an open metadata panel, which reads no pixels, held the
+engine at 30 fps for as long as it was open; six viewers closing at once — one pan of the node
+editor — took it to 10; and a line viewer parked on a texture, drawing nothing but a shape
+readout, took it to 12 on 9 MB frames.
+
 **Every out-of-crate node runs one contract.** In-process free-threaded and subprocess GIL-bound
 Python nodes share one marshalling seam, so they cannot drift; neither the tier nor the
 interpreter is selectable — one probe per node file routes it, by whether its imports keep the

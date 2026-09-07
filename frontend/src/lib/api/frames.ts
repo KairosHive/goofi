@@ -10,11 +10,11 @@ import { streamKey } from './streamKey';
 
 type FrameCallback = (frame: DataFrame) => void;
 
-/** One viewer bound to a stream. A null `spec` contributes nothing to the reduction, which an
- * empty LIST does not: that means full resolution. */
+/** One viewer bound to a stream. Null `specs` contribute nothing to the reduction; a stream
+ * every viewer declares null for is served one texel, never the full frame. */
 interface BoundViewer {
 	cb: FrameCallback;
-	spec: ViewSpec | null;
+	specs: ViewSpec[] | null;
 }
 
 interface Slot {
@@ -124,12 +124,13 @@ function reconcile(node: string, slot: string, k: string): void {
 function demand(s: Slot): ViewSpec[] {
 	const seen = new Set<string>();
 	const out: ViewSpec[] = [];
-	for (const { spec } of s.viewers.values()) {
-		if (!spec) continue;
-		const sig = JSON.stringify(spec);
-		if (seen.has(sig)) continue;
-		seen.add(sig);
-		out.push(spec);
+	for (const { specs } of s.viewers.values()) {
+		for (const spec of specs ?? []) {
+			const sig = JSON.stringify(spec);
+			if (seen.has(sig)) continue;
+			seen.add(sig);
+			out.push(spec);
+		}
 	}
 	return out;
 }
@@ -160,17 +161,17 @@ function ensureSlot(k: string): Slot {
 }
 
 /** Bind a viewer to a (node, slot) stream under `token`, so several viewers of one slot collect
- * rather than evict. Re-binding with a changed `spec` reports a resize or a kind switch. */
+ * rather than evict. Re-binding with changed `specs` reports a resize or a kind switch. */
 export function bindViewer(
 	node: string,
 	slot: string,
 	token: string,
-	spec: ViewSpec | null,
+	specs: ViewSpec[] | null,
 	cb: FrameCallback
 ): () => void {
 	const k = streamKey(node, slot);
 	const s = ensureSlot(k);
-	s.viewers.set(token, { cb, spec });
+	s.viewers.set(token, { cb, specs });
 	scheduleReconcile(node, slot, k);
 	// An open stream sends nothing new for a joiner, so replay the current frame to it alone —
 	// re-marking the slot dirty would repaint every settled viewer.

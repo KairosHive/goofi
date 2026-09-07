@@ -1,17 +1,44 @@
 import { describe, it, expect } from 'vitest';
-import { viewSpecForKind, CAP_FLOOR } from './capacity';
+import { viewSpecForKind, viewSpecsForKind, CAP_FLOOR } from './capacity';
 
 describe('viewSpecForKind', () => {
-	it('line → array ≤3-D, channel subsample + sample envelope sized to width', () => {
+	it('line → the array it DRAWS (≤2-D), channel subsample + sample envelope sized to width', () => {
 		expect(viewSpecForKind('line', 1600, 300)).toEqual({
 			dtype: 'array',
-			ndim: [['le', 3]],
+			ndim: [['le', 2]],
 			dims: [],
 			reduce: [
 				{ dim: 0, max: 300, method: 'subsample' },
 				{ dim: -1, max: 1600, method: 'envelope' }
 			]
 		});
+	});
+
+	it('a kind describes what it cannot draw with an area preview, never its drawing axes', () => {
+		// A line viewer parked on an image slot renders nothing; asking for its line axes there
+		// would take the whole frame off a producer for a panel that only prints the shape.
+		const specs = viewSpecsForKind('line', 800, 600);
+		expect(specs).toHaveLength(2);
+		expect(specs[1]).toEqual({
+			dtype: 'array',
+			ndim: [
+				['ge', 3],
+				['le', 3]
+			],
+			dims: [],
+			reduce: [
+				{ dim: 0, max: 600, method: 'area' },
+				{ dim: 1, max: 800, method: 'area' }
+			],
+			depth: 'u8'
+		});
+		// The two never overlap, so one frame is only ever admitted by one of them.
+		expect(specs[0].ndim).toEqual([['le', 2]]);
+	});
+
+	it('a kind that draws everything it accepts declares once', () => {
+		expect(viewSpecsForKind('image', 640, 480)).toEqual([viewSpecForKind('image', 640, 480)]);
+		expect(viewSpecsForKind('topomap', 100, 100)).toHaveLength(1);
 	});
 
 	it('image → array 2-D..3-D, area on both pixel axes', () => {
