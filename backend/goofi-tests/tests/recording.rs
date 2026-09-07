@@ -159,4 +159,26 @@ fn an_armed_signal_slot_loses_no_tick_to_the_viewer_plane() {
     for pair in seen.windows(2) {
         assert_eq!(pair[1], pair[0] + 1, "the recording service loses no tick: {seen:?}");
     }
+
+    // Step: a frame over the recording service's ceiling is a COUNTED drop the node says, never a
+    // segment quietly grown to hold it — which is what holds an armed slot to `RECORD_BUDGET`.
+    let wide = g.add("_TestRamp");
+    let wide_out = goofi_tests::ep(&goofi_tests::hex(wide), "out");
+    g.set_param(wide, "ramp", "channels", 2);
+    g.set_param(wide, "ramp", "length", 600_000);
+    g.set_param(wide, "common", "max_frequency", 5.0);
+    g.ready(wide);
+    g.call("record arm", j!({ "output": &wide_out }));
+    let said = g.until("the node to wear what the recording cost", |g| g.error(wide));
+    assert!(said.starts_with("recording dropped"), "the drop is counted, not swallowed: {said}");
+    assert!(
+        said.contains(&goofi_transport::RECORD_SLICE.to_string()),
+        "and the ceiling it broke is named: {said}"
+    );
+
+    // A re-arm is what clears the complaint, and a frame under the ceiling records again.
+    g.set_param(wide, "ramp", "length", 512);
+    g.call("record disarm", j!({ "output": &wide_out }));
+    g.call("record arm", j!({ "output": &wide_out }));
+    g.until("the recording complaint to clear", |g| g.error(wide).is_none().then_some(()));
 }

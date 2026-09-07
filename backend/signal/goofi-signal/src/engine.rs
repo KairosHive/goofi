@@ -70,9 +70,6 @@ pub struct SignalEngine {
     pending_ready: Vec<Uid>,
     /// Sequences whose phase an ack completed; the settle that follows advances each.
     pending_advance: Vec<SlotKey>,
-    /// What each node was last TOLD is armed. The view owns the armed set; this is the record a
-    /// settle diffs against, so a batch that ends where it started sends nothing.
-    armed: HashMap<Uid, Vec<String>>,
     /// The graph's OWN iceoryx2 node, shared by every [`runtime::NodeChannel`]. Declared LAST: it
     /// must drop after every port built from it, or it leaves its own directory behind.
     graph_node: Option<goofi_transport::IoxNode>,
@@ -96,7 +93,6 @@ impl SignalEngine {
             rust_loaded: HashMap::new(),
             pending_ready: Vec::new(),
             pending_advance: Vec::new(),
-            armed: HashMap::new(),
             graph_node: None,
         }
     }
@@ -146,17 +142,11 @@ impl SignalEngine {
         keys
     }
 
-    /// Tell one node the arming its view carries, as the changes since it was last told. A rebirth
-    /// forgets the record first, so the reborn node hears the whole set again.
+    /// Tell one node which of its output slots are armed — the whole set, which the node diffs.
     fn record_slots(&mut self, view: &GraphView<'_>, uid: Uid) {
         let Some(node) = view.nodes.get(&uid).filter(|n| n.engine == self.id()) else { return };
-        let want = node.recorded.to_vec();
-        let had = self.armed.insert(uid, want.clone()).unwrap_or_default();
-        let off = had.iter().filter(|s| !want.contains(s)).map(|s| (s.clone(), false));
-        let on = want.iter().filter(|s| !had.contains(s)).map(|s| (s.clone(), true));
-        for (slot, on) in off.chain(on).collect::<Vec<_>>() {
-            self.wire.send(uid, runtime::Control::RecSlot { slot, on });
-        }
+        let slots = node.recorded.to_vec();
+        self.wire.send(uid, runtime::Control::RecSlot { slots });
     }
 
     fn replan(&mut self, view: &GraphView<'_>, key: SlotKey) {
@@ -397,7 +387,6 @@ impl Engine for SignalEngine {
         // held request go with it, so a successor at this uid starts clean.
         self.hosts.remove(&uid);
         self.wire.forget(uid);
-        self.armed.remove(&uid);
         self.pending_ready.retain(|u| *u != uid);
         self.pending_advance.retain(|(u, _)| *u != uid);
     }
@@ -406,14 +395,12 @@ impl Engine for SignalEngine {
         self.wire.forget_absent(|uid| view.nodes.contains_key(&uid));
         // Readies first: an attach re-plans from an EMPTY base, and what it begins must not be
         // clobbered by this batch's own touches.
-        self.armed.retain(|uid, _| view.nodes.contains_key(uid));
         for uid in std::mem::take(&mut self.pending_ready) {
             for key in self.keys_touching(view, uid) {
                 self.wire.forget_planned(&key);
                 self.replan(view, key);
             }
-            // A reborn node owns none of its predecessor's ports, so it is told the whole set.
-            self.armed.remove(&uid);
+            // A reborn node owns none of its predecessor's ports, so it is told the set again.
             self.record_slots(view, uid);
         }
         for t in touched {
@@ -492,7 +479,6 @@ impl Engine for SignalEngine {
         goofi_transport::wait_released(self.hosts.values().map(|h| &*h.halt), goofi_transport::SHUTDOWN_WAIT);
         self.hosts.clear();
         self.wire.reset_channels();
-        self.armed.clear();
         self.pending_ready.clear();
         self.pending_advance.clear();
     }

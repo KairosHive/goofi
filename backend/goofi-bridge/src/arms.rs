@@ -185,7 +185,64 @@ pub(crate) fn library_get(
     let ty = parse_str(payload, "type")?;
     let mount = state.mount();
     let source = flag(payload, "source", false);
-    inspect::node_source(&state.graph.lock().unwrap(), ty, &mount, &state.roots, source)
+    inspect::node_source(&state.graph.lock().unwrap(), ty, &mount, &state.node_roots(), source)
+}
+
+/// Move a node file out of the open patch and into the private library, where every later patch
+/// finds it. A MOVE, not a copy: the library is then the one source, and a save re-bundles the
+/// file into the `.gfi` from there.
+pub(crate) fn library_save(
+    state: &AppState,
+    payload: &Value,
+    _actor: &str,
+    events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let asked = parse_str(payload, "type")?;
+    let mount = state.mount();
+    let (engine, bare, from) = {
+        let g = state.graph.lock().unwrap();
+        let (engine, entry) = g.resolve_type(asked).map_err(|e| format!("library save: {e}"))?;
+        let ty = goofi_node::qualify(engine, entry.manifest.type_name);
+        if !g.is_patch_type(&ty) {
+            return Err(format!(
+                "library save: `{ty}` is not this patch's own node — only a node file in the patch workspace is saved to the library"
+            ));
+        }
+        let bare = entry.manifest.type_name;
+        let folder = mount.join(goofi_node::folder_of(engine));
+        let from = crate::node_file_in(&folder, bare, engine)
+            .ok_or_else(|| format!("library save: `{ty}` has no source file under {}", folder.display()))?;
+        (engine, bare.to_string(), from)
+    };
+    let library = state.custom.clone();
+    let name = from.file_name().ok_or("library save: the source file has no name")?.to_owned();
+    std::fs::create_dir_all(&library).map_err(|e| format!("library save: {}: {e}", library.display()))?;
+    let to = library.join(&name);
+    // The library keeps ONE file per type, whatever the old one was called: a second name for one
+    // type is two claimants on it, which is the shadowing the roots already refuse to allow.
+    if let Some(stale) = crate::node_file_in(&library, &bare, engine) {
+        if stale != to {
+            std::fs::remove_file(&stale).map_err(|e| format!("library save: {}: {e}", stale.display()))?;
+        }
+    }
+    // Copy and remove rather than rename: the mount is a temp directory, which is routinely on a
+    // different filesystem from the home a rename cannot cross.
+    std::fs::copy(&from, &to).map_err(|e| format!("library save: {}: {e}", to.display()))?;
+    std::fs::remove_file(&from).map_err(|e| format!("library save: {}: {e}", from.display()))?;
+    // The file left the mount but the `.gfi` still carries it, from the library — so the patch's
+    // saved content did not change, and the unsaved dot must not rise for a move alone.
+    if let Ok(rel) = from.strip_prefix(&mount) {
+        state.forget_baseline(rel);
+    }
+    // Rescanned but NOT restarted: the code behind every live instance is byte for byte the file
+    // that just moved.
+    {
+        let mut g = state.graph.lock().unwrap();
+        rescan(state, &mut g, &mount);
+        events.push(event("node_types", json!({ "types": schemas::catalog_types(&g, Detail::Full) })));
+    }
+    resync_and_broadcast(state);
+    Ok(json!({ "type": goofi_node::qualify(engine, &bare), "path": goofi_core::path::to_slash(&to) }))
 }
 
 /// Explicit, never watched: an agent calls it after writing a node file.
@@ -1525,7 +1582,7 @@ pub(crate) fn session_save(
     // either way, which is the direction that LOSES an edit.
     g.persist();
     let packed = goofi_graph::archive::fingerprint(&mount);
-    save_archive(std::path::Path::new(&path), &g.serialize(), &mount)?;
+    save_archive(std::path::Path::new(&path), &g.serialize(), &mount, &bundled_custom(&g, &state.custom))?;
     // Announced UNCONDITIONALLY, not on the flag's transition: a patch dirtied solely by a file
     // in the mount leaves the flag already false, so no transition comes.
     *state.workspace_baseline.lock().unwrap() = packed;
@@ -1554,7 +1611,8 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
     // so a refused load leaves the open patch untouched on both planes. Staged and built off the
     // lock: the archive's own Rust nodes may take seconds to build.
     let fresh = new_mount();
-    let (content, from_path) = stage_load(&fresh, payload).inspect_err(|_| remove_mount(&fresh))?;
+    let (content, from_path) =
+        stage_load(&fresh, &state.custom, payload).inspect_err(|_| remove_mount(&fresh))?;
     prebuild(state, &fresh);
     let result = {
         let mut g = state.graph.lock().unwrap();

@@ -48,9 +48,14 @@ const MESSAGE_READERS: usize = 1;
 pub const MESSAGE_SLICE: usize = 1024;
 /// The pool a data publisher starts with; `PowerOfTwo` grows it for a larger frame.
 pub const INITIAL_SLICE: usize = 64 * 1024;
-/// How many frames a recorder may hold unread, so a journal commit costs no tick. Buffer times
-/// [`INITIAL_SLICE`] is the segment, which puts this at about 16 MB a slot.
-const RECORD_BUFFER: usize = 256;
+/// The largest frame a recording service takes. A frame over it is REFUSED rather than allowed to
+/// grow the segment: depth and slice growth are the one place in goofi that multiply.
+pub const RECORD_SLICE: usize = 4 * 1024 * 1024;
+/// What one armed slot's segment costs, exactly and for any frame size — the publisher allocates
+/// [`RECORD_BUFFER`] slices of [`RECORD_SLICE`] and never grows.
+pub const RECORD_BUDGET: usize = 64 * 1024 * 1024;
+/// How many frames a recorder may hold unread, so a journal commit costs no tick.
+pub const RECORD_BUFFER: usize = RECORD_BUDGET / RECORD_SLICE;
 
 /// The name every service of one node is derived from: `<instance>_<uid>_<gen>`. `gen` is bumped on
 /// EVERY birth, because teardown never blocks and a rebirth would else race its predecessor.
@@ -316,6 +321,17 @@ pub fn open_output_subscriber(node: &IoxNode, service: &str) -> Result<ByteSubsc
         .map_err(|e| format!("subscriber `{service}`: {e}"))
 }
 
+/// The recording publisher: a STATIC segment of exactly [`RECORD_BUDGET`], so an outsized frame is
+/// refused at the loan instead of resizing it.
+pub fn record_publisher(service: &ByteService, what: &str) -> Result<BytePublisher, String> {
+    service
+        .publisher_builder()
+        .initial_max_slice_len(RECORD_SLICE)
+        .allocation_strategy(AllocationStrategy::Static)
+        .create()
+        .map_err(|e| format!("record publisher `{what}`: {e}"))
+}
+
 /// Open the recorder's end of an armed output slot's recording service.
 pub fn open_record_subscriber(node: &IoxNode, service: &str) -> Result<ByteSubscriber, String> {
     record_data_service(node, service)?
@@ -384,13 +400,15 @@ pub fn var_of(view: &GraphView<'_>, v: &BoundVar) -> (String, Var) {
 }
 
 /// Send one frame, then ring every bell. In that order, always: a consumer woken first drains
-/// nothing and parks. A loan failure is a shared-memory condition the next emit re-tries.
-pub fn publish<'a>(publisher: &BytePublisher, bytes: &[u8], bells: impl IntoIterator<Item = (&'a Doorbell, EventId)>) {
-    let Ok(sample) = publisher.loan_slice_uninit(bytes.len()) else { return };
+/// nothing and parks. `false` says the loan failed — no shared memory, or a frame over a static
+/// publisher's slice — which is a caller's to count.
+pub fn publish<'a>(publisher: &BytePublisher, bytes: &[u8], bells: impl IntoIterator<Item = (&'a Doorbell, EventId)>) -> bool {
+    let Ok(sample) = publisher.loan_slice_uninit(bytes.len()) else { return false };
     let _ = sample.write_from_slice(bytes).send();
     for (bell, id) in bells {
         let _ = bell.ring(id);
     }
+    true
 }
 
 /// The survivor `keep` names, taken out of what a reconcile held; what is left is what the new

@@ -267,6 +267,9 @@ pub static TREE: &[Entry] = &[
         Leaf(Op { name: "get", handler: Read(arms::library_get), args: "type:string! source:bool", positional: 1,
              doc: "ONE library entry in full: the palette fields — slots, params, availability — plus where the type came from. `--source` reads the file itself too, under `text`. Copy a node into the patch workspace to modify one.",
              result: "the `library list --full` entry plus {language, tier, provenance, path}, and `text` under `--source`" }),
+        Leaf(Op { name: "save", handler: Effect(arms::library_save), args: "type:string!", positional: 1,
+             doc: "Move a node file OUT of the open patch and into your private library — `$GOOFI_HOME/.goofi/custom/` — where every later patch finds it. Only a node of the patch's own is saved; a library node is already there and a shipped one is not yours. A move, not a copy: the library holds the one source from then on, and a `session save` re-bundles the file into the `.gfi` from there, so a patch still opens on a machine that has no such library. A library file already naming that type is REPLACED, which is how a node is updated.",
+             result: "{type, path} — the type as stored, and the library file it now lives in" }),
         Leaf(Op { name: "refresh", handler: Effect(arms::library_refresh), args: "", positional: 0,
              doc: "Re-read the shipped and patch node directories; live instances of a changed type restart onto the new code. Call after writing a node file.",
              result: "{added: [type], changed: [type], removed: [type]}" }),
@@ -406,9 +409,11 @@ pub fn find(name: &str) -> Option<&'static Op> {
 /// The rows one server serves. A mode does not REGISTER what it withholds — the one spelling of
 /// each mode, so `op list`, the phrase resolver and the MCP all shrink with it.
 pub fn table(mode: crate::Mode) -> Vec<&'static Op> {
-    // What a demo drops: the host's filesystem, the agents it would spawn, and the two ops that
-    // read or write a `.gfi` beside them. `session new` stays — it is the visitor's reset.
-    const DEMO_DROPS: [&str; 4] = ["dir", "agent", "session save", "session load"];
+    // What a demo drops: the host's filesystem, the agents it would spawn, the two ops that read
+    // or write a `.gfi` beside them, and the one that writes a node file into the host's own home
+    // — every visitor shares one process. `session new` stays: it is the visitor's reset.
+    const DEMO_DROPS: [&str; 5] =
+        ["dir", "agent", "session save", "session load", "library save"];
     let dropped = |name: &str, group: &str| {
         name == group || name.strip_prefix(group).is_some_and(|rest| rest.starts_with(' '))
     };

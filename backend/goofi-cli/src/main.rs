@@ -427,7 +427,10 @@ async fn run(
         register_evaluator(&state);
     }
     state.roots.extend(extra_nodes.iter().map(PathBuf::from));
-    ensure_packages(&state.roots, &subproc_python);
+    // Every root the scan reads, the private library included: a node saved there may name
+    // packages exactly as a bundle's does.
+    let scanned: Vec<PathBuf> = state.node_roots().into_iter().map(|(d, _)| d).collect();
+    ensure_packages(&scanned, &subproc_python);
     // Handed to the engine before anything scans, so the boot scan and every rescan share it.
     goofi_bridge::signal_engine(&mut state.graph.lock().unwrap())
         .set_python(goofi_signal::Python::new(subproc_python.clone()));
@@ -697,7 +700,8 @@ fn boot_scan(state: &AppState) {
     let (found, dirs) = {
         let mut g = state.graph.lock().unwrap();
         let patch = state.mount();
-        (goofi_bridge::rescan(state, &mut g, &patch).1, state.roots.clone())
+        let dirs: Vec<PathBuf> = state.node_roots().into_iter().map(|(d, _)| d).collect();
+        (goofi_bridge::rescan(state, &mut g, &patch).1, dirs)
     };
     let (mut n_native, mut n_in, mut n_sub, mut n_shader, mut n_bad) = (0u32, 0u32, 0u32, 0u32, 0u32);
     for t in found {
