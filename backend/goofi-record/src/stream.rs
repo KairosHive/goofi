@@ -5,6 +5,8 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::video::Video;
+
 /// What a stream's file is: GOOF frames end to end, or a video the encoder owns.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
@@ -65,12 +67,18 @@ pub struct Stream {
     pub meta: StreamMeta,
     pub t0_patch: f64,
     pub t0_utc: SystemTime,
-    pub frames: u64,
     pub dropped: u64,
     pub dropped_at: Option<f64>,
     pub fill: f32,
-    writer: BufWriter<File>,
+    frames: u64,
+    sink: Sink,
     synced: Instant,
+}
+
+/// Where a stream's frames land: the file itself, or the encoder that owns it.
+enum Sink {
+    Frames(BufWriter<File>),
+    Video(Video),
 }
 
 impl Stream {
@@ -82,8 +90,12 @@ impl Stream {
         t0_patch: f64,
         t0_utc: SystemTime,
     ) -> Result<Stream, String> {
-        let made = File::create_new(folder.join(&file)).map_err(|e| e.to_string())?;
-        let writer = BufWriter::new(made);
+        let sink = match kind {
+            Kind::Frames => {
+                Sink::Frames(BufWriter::new(File::create_new(folder.join(&file)).map_err(|e| e.to_string())?))
+            }
+            Kind::Video { size, fps } => Sink::Video(Video::spawn(folder, &file, size, fps)?),
+        };
         Ok(Stream {
             file,
             kind,
@@ -94,14 +106,44 @@ impl Stream {
             dropped: 0,
             dropped_at: None,
             fill: 0.0,
-            writer,
+            sink,
             synced: Instant::now(),
         })
     }
 
+    /// How many frames this stream holds. A video's own encoder is the one that knows, because a
+    /// frame handed to it is not yet a frame in the file.
+    pub fn frames(&self) -> u64 {
+        match &self.sink {
+            Sink::Frames(_) => self.frames,
+            Sink::Video(v) => v.encoded(),
+        }
+    }
+
+    /// Frames this stream lost. A video adds the one an encoder that died mid-write took with it,
+    /// which no caller can see from the outside.
+    pub fn lost(&self) -> u64 {
+        match &self.sink {
+            Sink::Frames(_) => self.dropped,
+            Sink::Video(v) => self.dropped + v.lost(),
+        }
+    }
+
+    /// Hand one readback to the encoder, with the instant it was rendered at. `false` is a drop
+    /// the caller counts; a video stream never stalls the engine that feeds it.
+    pub fn write_video(&mut self, texels: &[u8], at: f64) -> bool {
+        match &self.sink {
+            Sink::Video(v) => v.push(texels, at),
+            Sink::Frames(_) => false,
+        }
+    }
+
     /// Append one frame, and reach the disk on a one-second cadence so a crash costs a second.
     pub fn write(&mut self, frame: &[u8]) -> Result<(), String> {
-        self.writer.write_all(frame).map_err(|e| e.to_string())?;
+        let Sink::Frames(writer) = &mut self.sink else {
+            return Err("a video stream takes texels, never encoded frames".into());
+        };
+        writer.write_all(frame).map_err(|e| e.to_string())?;
         self.frames += 1;
         if self.synced.elapsed() >= SYNC_EVERY {
             self.sync()?;
@@ -109,9 +151,16 @@ impl Stream {
         Ok(())
     }
 
+    /// Reach the disk. For a video that is the encoder finishing, which is what closes the
+    /// container — so nothing after it may write.
     pub fn sync(&mut self) -> Result<(), String> {
-        self.writer.flush().map_err(|e| e.to_string())?;
-        self.writer.get_ref().sync_data().map_err(|e| e.to_string())?;
+        match &mut self.sink {
+            Sink::Frames(writer) => {
+                writer.flush().map_err(|e| e.to_string())?;
+                writer.get_ref().sync_data().map_err(|e| e.to_string())?;
+            }
+            Sink::Video(v) => v.finish()?,
+        }
         self.synced = Instant::now();
         Ok(())
     }

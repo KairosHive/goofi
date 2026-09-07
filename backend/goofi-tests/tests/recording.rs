@@ -155,12 +155,64 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     assert_ne!(held[0]["file"], held[1]["file"], "a rebirth never appends to the file before it");
     assert!(held[0]["frames"].as_u64().unwrap_or(0) > 0, "the file before the rebirth holds its frames");
 
+    // Step: a graphics slot records VIDEO. Arming is what puts the stage in demand — a node
+    // nobody watches renders nothing — and every encoded frame's instant goes in a sidecar,
+    // because a dropped frame makes the container's own timing unusable on its own.
+    let shader = g.add("graphics:Constant");
+    let shader_hex = goofi_tests::hex(shader);
+    g.ready(shader);
+    g.set_param(shader, "common", "width", 32);
+    g.set_param(shader, "common", "height", 16);
+    g.set_param(shader, "colour", "r", 0.5);
+    let shader_name = g.doc()["nodes"][&shader_hex]["name"].as_str().expect("a name").to_string();
+    let stages = |g: &goofi_tests::Goofi| {
+        g.call("session status", j!({}))["graphics"]["stages"].as_u64().expect("a stage count")
+    };
+    let idle = stages(&g);
+    goofi_tests::render(&g, 4);
+    assert_eq!(stages(&g), idle, "a node nobody watches renders nothing");
+    g.call("record arm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
+    g.until("the armed shader to reach the encoder", |g| {
+        goofi_tests::render(g, 1);
+        (frames(g, &shader_name) >= 4).then_some(())
+    });
+    assert!(stages(&g) > idle, "arming is what puts the stage in demand");
+    g.call("record disarm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
+
     g.call("record disarm", j!({ "output": goofi_tests::ep(&src, "out") }));
     assert_eq!(g.doc()["nodes"][&src]["record"], j!([]), "disarming empties the node's record");
 
     g.call("record stop", j!({}));
     assert_eq!(g.call("record status", j!({}))["running"], j!(false));
     assert!(std::path::Path::new(&folder).join("manifest.json").exists(), "the folder holds a manifest");
+
+    // …and the video the graphics slot left is a file, an instant per encoded frame beside it,
+    // and a manifest that says IN WORDS what the encoding cost. Never a bare "lossless".
+    let m = manifest(&folder);
+    let video = m["streams"]
+        .as_array()
+        .expect("streams")
+        .iter()
+        .find(|e| e["node"] == j!(shader_name))
+        .expect("the graphics stream is in the one manifest");
+    assert_eq!(video["engine"], j!("graphics"), "{video}");
+    assert_eq!(video["size"], j!([32, 16]), "{video}");
+    let says = video["encoding"].as_str().expect("what the encoding cost, in words");
+    assert!(says.contains("lossless within [0,1]") && says.contains("clipped"), "{says}");
+    let file = std::path::Path::new(&folder).join(video["file"].as_str().expect("a name"));
+    assert_eq!(file.extension().and_then(|e| e.to_str()), Some("mkv"), "{file:?}");
+    let written = std::fs::read(&file).expect("the video");
+    assert_eq!(&written[..4], &[0x1a, 0x45, 0xdf, 0xa3], "a Matroska file, and the encoder finished it");
+    assert!(written.len() > 512, "the encoder wrote frames, not a header: {} bytes", written.len());
+    let times = std::fs::read(file.with_extension("times")).expect("the sidecar");
+    let counted = video["frames"].as_u64().expect("a count");
+    assert!(counted >= 4, "every armed tick reached the encoder: {counted}");
+    assert_eq!(times.len() as u64, counted * 8, "one f64 per encoded frame");
+    let instants: Vec<f64> =
+        times.chunks_exact(8).map(|b| f64::from_le_bytes(b.try_into().expect("eight bytes"))).collect();
+    for pair in instants.windows(2) {
+        assert!(pair[1] > pair[0], "the instants are the patch's own seconds, in order: {instants:?}");
+    }
 
     // A recording whose folder went out from under it: the load still opens its patch, because the
     // patch the caller asked for is not the recording's disk.

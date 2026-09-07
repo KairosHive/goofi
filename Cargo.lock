@@ -1069,6 +1069,7 @@ dependencies = [
  "goofi-control",
  "goofi-core",
  "goofi-node",
+ "goofi-record",
  "goofi-transport",
  "goofi-view",
  "goofi-window",

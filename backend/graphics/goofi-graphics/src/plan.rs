@@ -43,6 +43,13 @@ pub enum Input {
     None,
 }
 
+/// A stage's armed recording, from SETTLED state: the names the recorder files it under. Whether
+/// a recording actually runs is the recorder's own, and is asked of it once per tick.
+pub struct Record {
+    pub node: String,
+    pub slot: String,
+}
+
 pub struct Stage {
     pub uid: Uid,
     pub pipeline: Built,
@@ -62,26 +69,31 @@ pub struct Stage {
     pub tap_box: Arc<AtomicU64>,
     /// Where the tick leaves the frame it read back, for the half to publish.
     pub tap: Arc<Mutex<Tap>>,
+    /// This output slot's arming, as the last settle left it.
+    pub record: Option<Record>,
 }
 
 impl Stage {
     /// What size each reader of this stage's output wants it at, or nothing where that reader is
     /// absent: a window on the machine's own screen — the one reader the transport cannot count —
     /// and a subscriber on its data service. A screen is always the frame's own size.
-    pub fn wants(&self) -> [Option<(u32, u32)>; 2] {
-        let mut wants = [None; 2];
+    pub fn wants(&self, recording: bool) -> [Option<(u32, u32)>; 3] {
+        let mut wants = [None; 3];
         wants[Want::Screen as usize] = self.window.map(|_| self.size);
         let tap = match self.tap_box.load(Ordering::Relaxed) {
             0 => self.size,
             v => goofi_view::fit(self.size, ((v >> 32) as u32, v as u32)),
         };
         wants[Want::Tap as usize] = self.readers.load(Ordering::Relaxed).then_some(tap);
+        // A recorder takes the frame at its own size: a recording is the evidence, and evidence
+        // is never fitted to a box somebody's screen happened to have.
+        wants[Want::Record as usize] = (recording && self.record.is_some()).then_some(self.size);
         wants
     }
 
     /// Whether anything reads this stage's output at all.
-    pub fn read(&self) -> bool {
-        self.wants().iter().any(|w| w.is_some())
+    pub fn read(&self, recording: bool) -> bool {
+        self.wants(recording).iter().any(|w| w.is_some())
     }
 }
 
@@ -93,9 +105,10 @@ pub struct Plan {
 impl Plan {
     /// Which stages render this tick: every stage a reader reaches backwards over the edges. A
     /// node nobody reads costs nothing, which is what makes a big idle patch free.
-    pub fn demanded(&self) -> Vec<bool> {
+    pub fn demanded(&self, recording: bool) -> Vec<bool> {
         let mut want = vec![false; self.stages.len()];
-        let mut stack: Vec<usize> = (0..self.stages.len()).filter(|&i| self.stages[i].read()).collect();
+        let mut stack: Vec<usize> =
+            (0..self.stages.len()).filter(|&i| self.stages[i].read(recording)).collect();
         while let Some(i) = stack.pop() {
             if std::mem::replace(&mut want[i], true) {
                 continue;
@@ -187,9 +200,23 @@ pub fn compile(
             tap: inst.tap.clone(),
             window: windows.get(uid).copied(),
             tap_box: inst.tap_box.clone(),
+            record: recorded(view, *uid, inst),
         });
     }
     (Plan { stages }, faults)
+}
+
+/// The armed TEXTURE output of a node, from the settled view. A slot the node does not have, or
+/// one that carries no texture, is nothing to record.
+fn recorded(view: &GraphView<'_>, uid: Uid, inst: &Instance) -> Option<Record> {
+    let nv = view.nodes.get(&uid)?;
+    let slot = inst
+        .class
+        .manifest
+        .outputs
+        .iter()
+        .find(|o| o.kind == SlotType::Texture && nv.recorded.iter().any(|r| r == o.name))?;
+    Some(Record { node: nv.name.to_string(), slot: slot.name.to_string() })
 }
 
 /// Every wire between two live nodes, by the input it lands on.

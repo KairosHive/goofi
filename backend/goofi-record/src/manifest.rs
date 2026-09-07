@@ -35,6 +35,9 @@ pub struct Entry {
     pub size: Option<(u32, u32)>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fps: Option<f64>,
+    /// What a video stream's encoding costs, in words: it is the one stream that is not exact.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<&'static str>,
     pub frames: u64,
     pub dropped: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
