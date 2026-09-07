@@ -612,6 +612,13 @@ its reasons are in the locked decisions; what survives of the two reviews that p
   `HKLM\SOFTWARE\ASIO` against a vtable goofi declares, which puts no SDK in the tree.
   **Unverified on Windows.** Nothing in this tree can build the ASIO path — `asio-sys` is
   Windows-only — so CI's `windows-latest` leg is the first thing that judges it.
+- **A sample format cpal adds is refused until a device reports it.** `SampleFormat` is
+  `#[non_exhaustive]`, so the dispatch must keep a wildcard arm and no new variant can be a compile
+  error. goofi now writes and reads every format cpal has a sample type for — DSD is the only
+  refusal left, and it is one bit per sample with no PCM conversion — and the list is ONE list that
+  the input and the output side share, which is what the drift was: `i24` reached an ASIO card
+  after `i32` reached a Focusrite, each found by a user rather than by a gate. Nothing here can be
+  tested, because no test opens a device by decree.
 - **macOS signing**, which costs nothing today and arrives with the first notarized release. Apple's
   documented answer for a process that loads foreign code is
   `com.apple.security.cs.disable-library-validation`; Ardour, Surge, VCV Rack, ossia score, Pure
