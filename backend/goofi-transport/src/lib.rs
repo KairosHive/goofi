@@ -48,6 +48,9 @@ const MESSAGE_READERS: usize = 1;
 pub const MESSAGE_SLICE: usize = 1024;
 /// The pool a data publisher starts with; `PowerOfTwo` grows it for a larger frame.
 pub const INITIAL_SLICE: usize = 64 * 1024;
+/// How many frames a recorder may hold unread, so a journal commit costs no tick. Buffer times
+/// [`INITIAL_SLICE`] is the segment, which puts this at about 16 MB a slot.
+const RECORD_BUFFER: usize = 256;
 
 /// The name every service of one node is derived from: `<instance>_<uid>_<gen>`. `gen` is bumped on
 /// EVERY birth, because teardown never blocks and a rebirth would else race its predecessor.
@@ -73,6 +76,11 @@ pub fn status_service(base: &str) -> ServiceName {
 /// One output slot's data service — the name a consumer is given in its `InSlot` set.
 pub fn output_service(base: &str, slot: &str) -> ServiceName {
     format!("goofi_{base}_out_{slot}")
+}
+
+/// One output slot's recording service — the recorder's own deep buffer, never the shared wire.
+pub fn record_service(base: &str, slot: &str) -> ServiceName {
+    format!("goofi_{base}_rec_{slot}")
 }
 
 /// A notifier onto one node's door; the ringer knows nothing else about the node it rings.
@@ -279,6 +287,22 @@ pub fn data_service(node: &IoxNode, name: &str) -> Result<ByteService, String> {
         .map_err(|e| format!("data service `{name}`: {e}"))
 }
 
+/// A recorder's own service on an output slot: one subscriber, and a buffer deep enough that a
+/// journal commit does not cost frames. Depth is a service-level property, so this can never be
+/// the shared data service — 256 subscribers times this depth is half a gigabyte a slot.
+pub fn record_data_service(node: &IoxNode, name: &str) -> Result<ByteService, String> {
+    node.service_builder(&parse_name(name)?)
+        .publish_subscribe::<[u8]>()
+        .max_nodes(MAX_NODES)
+        .enable_safe_overflow(true)
+        .history_size(0)
+        .subscriber_max_buffer_size(RECORD_BUFFER)
+        .max_publishers(1)
+        .max_subscribers(1)
+        .open_or_create()
+        .map_err(|e| format!("record service `{name}`: {e}"))
+}
+
 /// How many subscribers a data service has right now — whether anyone drinks from it.
 pub fn subscribers(service: &ByteService) -> usize {
     service.dynamic_config().number_of_subscribers()
@@ -290,6 +314,14 @@ pub fn open_output_subscriber(node: &IoxNode, service: &str) -> Result<ByteSubsc
         .subscriber_builder()
         .create()
         .map_err(|e| format!("subscriber `{service}`: {e}"))
+}
+
+/// Open the recorder's end of an armed output slot's recording service.
+pub fn open_record_subscriber(node: &IoxNode, service: &str) -> Result<ByteSubscriber, String> {
+    record_data_service(node, service)?
+        .subscriber_builder()
+        .create()
+        .map_err(|e| format!("record subscriber `{service}`: {e}"))
 }
 
 /// The stack a thread needs to OPEN an iceoryx2 service: the service's static config is parsed by
@@ -329,6 +361,12 @@ pub fn door_of(view: &GraphView<'_>, uid: Uid) -> Option<ServiceName> {
 pub fn output_of(view: &GraphView<'_>, uid: Uid, slot: &str) -> Option<ServiceName> {
     let node = view.nodes.get(&uid)?;
     Some(output_service(&service_base(view.instance, uid, node.generation), slot))
+}
+
+/// One output slot's recording service name, from the view's birth facts.
+pub fn record_of(view: &GraphView<'_>, uid: Uid, slot: &str) -> Option<ServiceName> {
+    let node = view.nodes.get(&uid)?;
+    Some(record_service(&service_base(view.instance, uid, node.generation), slot))
 }
 
 /// A resolved variable as a node receives it: a service rather than a uid, because a node

@@ -11,8 +11,8 @@ use goofi_core::Data;
 use goofi_node::NodeManifest;
 use goofi_transport::{
     control_service, data_service, door_service, event_service, iox_node, message_service,
-    output_service, publisher, service_base, status_service, ByteService, ByteSubscriber,
-    Doorbell, EventService, IoxNode, INITIAL_SLICE, MESSAGE_SLICE,
+    output_service, publisher, record_data_service, record_service, service_base, status_service,
+    ByteService, ByteSubscriber, Doorbell, EventService, IoxNode, INITIAL_SLICE, MESSAGE_SLICE,
 };
 
 use super::wire::{ControlSink, Envelope, EventId, ServiceName, Transport, WireStatus};
@@ -40,6 +40,9 @@ struct InputWire {
 
 /// A node's end of every service it owns.
 pub struct IoxTransport {
+    /// Every service of this node is named from it, and a recording service is opened long after
+    /// birth — so the base is held rather than re-derived from facts the node does not have.
+    base: String,
     door: EventService,
     listener: goofi_transport::Listener,
     control: ByteSubscriber,
@@ -48,6 +51,8 @@ pub struct IoxTransport {
     outputs: HashMap<&'static str, OutputPort>,
     /// Grown and shrunk by `InSlot`, which is why it is the one map behind a lock.
     inputs: Mutex<Vec<(String, Vec<InputWire>)>>,
+    /// The armed slots' second publishers, opened and dropped by `RecSlot`.
+    records: Mutex<HashMap<String, BytePublisher>>,
     /// Must outlive every port built from it, so it is declared LAST — Rust drops a struct's fields
     /// in declaration order, and a node dropped first cannot remove its own directory.
     node: IoxNode,
@@ -86,12 +91,14 @@ impl IoxTransport {
 
         Ok(IoxTransport {
             node,
+            base,
             door,
             listener,
             control,
             status,
             outputs,
             inputs: Mutex::new(Vec::new()),
+            records: Mutex::new(HashMap::new()),
         })
     }
 
@@ -208,10 +215,31 @@ impl Transport for IoxTransport {
         out
     }
 
+    fn record_out(&self, slot: &str, on: bool) -> Result<(), String> {
+        if !self.outputs.contains_key(slot) {
+            return Err(format!("no output slot `{slot}`"));
+        }
+        let mut records = self.records.lock().unwrap();
+        if !on {
+            records.remove(slot);
+            return Ok(());
+        }
+        if records.contains_key(slot) {
+            return Ok(());
+        }
+        let service = record_data_service(&self.node, &record_service(&self.base, slot))?;
+        records.insert(slot.to_string(), publisher(&service, slot, INITIAL_SLICE)?);
+        Ok(())
+    }
+
     fn publish(&self, slot: &str, frame: &Data) {
         let Some(port) = self.outputs.get(slot) else { return };
+        let bytes = goofi_codec::encode(frame);
         let targets = port.targets.lock().unwrap();
-        goofi_transport::publish(&port.publisher, &goofi_codec::encode(frame), targets.iter().map(|(b, id)| (b, *id)));
+        goofi_transport::publish(&port.publisher, &bytes, targets.iter().map(|(b, id)| (b, *id)));
+        if let Some(rec) = self.records.lock().unwrap().get(slot) {
+            goofi_transport::publish(rec, &bytes, std::iter::empty());
+        }
     }
 
     fn report(&self, status: WireStatus) {
