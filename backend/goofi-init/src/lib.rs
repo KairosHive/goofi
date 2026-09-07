@@ -80,6 +80,7 @@ pub fn init(root: &Path) -> Result<(), String> {
     if needs_npm {
         require_npm()?;
     }
+    require_audio_libs()?;
 
     let ft = ensure_venv(root, FT_VENV, FT_PYTHON)?;
     let gil = ensure_venv(root, GIL_VENV, GIL_PYTHON)?;
@@ -125,6 +126,53 @@ fn require_npm() -> Result<(), String> {
                 .to_string()
         })
         .and_then(|s| s.success().then_some(()).ok_or_else(|| "`npm --version` failed".into()))
+}
+
+/// The system libraries cpal's Linux hosts link, each with the Debian package that carries it.
+/// Linux only: `jack` dlopens on Windows and macOS, and cpal target-gates the rest.
+#[cfg(target_os = "linux")]
+const AUDIO_LIBS: &[(&str, &str)] = &[
+    ("alsa", "libasound2-dev"),
+    ("libpipewire-0.3", "libpipewire-0.3-dev"),
+    ("jack", "libjack-jackd2-dev"),
+    ("dbus-1", "libdbus-1-dev"),
+];
+
+#[cfg(target_os = "linux")]
+fn pkg_config(args: &[&str]) -> bool {
+    Command::new("pkg-config")
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// goofi offers every audio host the machine runs, and on Linux each links a system library. A
+/// missing one surfaces as a `pkg-config` failure deep in someone else's build script — a setup
+/// step in disguise — so they are named here together, with the command that installs them.
+#[cfg(target_os = "linux")]
+fn require_audio_libs() -> Result<(), String> {
+    if !pkg_config(&["--version"]) {
+        return Err("goofi needs `pkg-config` on PATH to find the audio libraries its hosts link. \
+                    Install it (`sudo apt install pkg-config`) and re-run."
+            .to_string());
+    }
+    let missing: Vec<&str> =
+        AUDIO_LIBS.iter().filter(|(lib, _)| !pkg_config(&["--exists", lib])).map(|(_, pkg)| *pkg).collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "goofi plays through every audio host this machine runs, and each links a system library. \
+         Install the missing ones and re-run:\n  sudo apt install {}",
+        missing.join(" ")
+    ))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn require_audio_libs() -> Result<(), String> {
+    Ok(())
 }
 
 fn require_uv() -> Result<(), String> {
