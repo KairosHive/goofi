@@ -23,22 +23,33 @@ pub trait Encoder: Send {
     fn finish(&mut self) -> Result<(), String>;
 }
 
-/// The encoder a recording uses.
-pub fn open(file: &Path, size: (u32, u32), fps: f64) -> Result<Box<dyn Encoder>, String> {
-    Ffmpeg::spawn(file, size, fps).map(|e| Box::new(e) as Box<dyn Encoder>)
+/// Where a recording's video streams come from. One implementation ships; the recorder holds it
+/// behind this so the codec is a swap and nothing above it changes.
+pub trait Encoders: Send + Sync {
+    /// Whether this machine can encode at all — the backend's own precondition, which
+    /// `record start` asks before it refuses a recording of nothing but video.
+    fn probe(&self) -> Result<(), String>;
+    fn open(&self, file: &Path, size: (u32, u32), fps: f64) -> Result<Box<dyn Encoder>, String>;
 }
 
-/// Whether this machine can encode at all — the ffmpeg backend's own precondition, which
-/// `record start` asks before it opens a folder.
-pub fn probe() -> Result<(), String> {
-    Command::new("ffmpeg")
-        .arg("-version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|_| MISSING.to_string())
-        .and_then(|s| if s.success() { Ok(()) } else { Err(MISSING.to_string()) })
+/// FFV1 in Matroska, through an `ffmpeg` child on stdin.
+pub struct FfmpegEncoders;
+
+impl Encoders for FfmpegEncoders {
+    fn probe(&self) -> Result<(), String> {
+        Command::new("ffmpeg")
+            .arg("-version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|_| MISSING.to_string())
+            .and_then(|s| if s.success() { Ok(()) } else { Err(MISSING.to_string()) })
+    }
+
+    fn open(&self, file: &Path, size: (u32, u32), fps: f64) -> Result<Box<dyn Encoder>, String> {
+        Ffmpeg::spawn(file, size, fps).map(|e| Box::new(e) as Box<dyn Encoder>)
+    }
 }
 
 /// What `record start` says when a graphics slot is armed and this machine has no encoder.
@@ -51,8 +62,8 @@ pub const MISSING: &str = "`ffmpeg` is not on PATH, and a graphics slot is armed
 pub const CLIP: &str = "FFV1 in Matroska at rgba64le: lossless within [0,1], and a value outside \
                         that range is clipped to it.";
 
-/// FFV1 in Matroska, through an `ffmpeg` child on stdin. FFV1 is lossless and Matroska is the
-/// container that carries it; MP4 cannot.
+/// One `ffmpeg` child. FFV1 is lossless and Matroska is the container that carries it; MP4
+/// cannot.
 struct Ffmpeg {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
@@ -115,11 +126,18 @@ pub struct Video {
 }
 
 impl Video {
-    /// Open the encoder onto `file`, and the `.times` sidecar beside it.
-    pub fn spawn(folder: &Path, file: &str, size: (u32, u32), fps: f64) -> Result<Video, String> {
+    /// Open the encoder onto `file`, and the `.times` sidecar beside it. The encoder FIRST, so a
+    /// machine that cannot encode leaves no half a stream behind.
+    pub fn spawn(
+        encoders: &dyn Encoders,
+        folder: &Path,
+        file: &str,
+        size: (u32, u32),
+        fps: f64,
+    ) -> Result<Video, String> {
         let out = folder.join(file);
+        let encoder = encoders.open(&out, size, fps)?;
         let times = File::create(out.with_extension("times")).map_err(|e| e.to_string())?;
-        let encoder = open(&out, size, fps)?;
         let (tx, rx) = sync_channel(QUEUE);
         let counts = Counts::default();
         let free = Free::default();

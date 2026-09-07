@@ -5,7 +5,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::video::Video;
+use crate::video::{Encoders, Video};
 
 /// What a stream's file is: GOOF frames end to end, or a video the encoder owns.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,6 +83,7 @@ enum Sink {
 
 impl Stream {
     pub fn create(
+        encoders: &dyn Encoders,
         folder: &Path,
         file: String,
         kind: Kind,
@@ -94,7 +95,7 @@ impl Stream {
             Kind::Frames => {
                 Sink::Frames(BufWriter::new(File::create_new(folder.join(&file)).map_err(|e| e.to_string())?))
             }
-            Kind::Video { size, fps } => Sink::Video(Video::spawn(folder, &file, size, fps)?),
+            Kind::Video { size, fps } => Sink::Video(Video::spawn(encoders, folder, &file, size, fps)?),
         };
         Ok(Stream {
             file,

@@ -1851,8 +1851,10 @@ pub(crate) fn record_start(
     if armed.is_empty() {
         return Err("record start: nothing is armed — `record arm <node>/<slot>` first".into());
     }
-    if armed.iter().any(|u| stream_id(&g, *u, "").engine == "graphics") {
-        goofi_record::video::probe().map_err(|e| format!("record start: {e}"))?;
+    // A recording is many streams across three engines, so a missing video encoder costs the
+    // graphics stream alone — unless every armed stream is one, which would record nothing.
+    if armed.iter().all(|u| stream_id(&g, *u, "").engine == "graphics") {
+        state.recorder.can_encode().map_err(|e| format!("record start: {e}"))?;
     }
     let root = record_arg(&g, payload, "root")
         .map(std::path::PathBuf::from)
