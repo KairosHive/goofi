@@ -15,10 +15,12 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub fn extension(&self) -> &'static str {
+    /// What names the file. A video's container is the encoder backend's to name, so only the
+    /// frame stream answers here.
+    pub fn extension(&self, encoders: &dyn Encoders) -> &'static str {
         match self {
             Kind::Frames => "goof",
-            Kind::Video { .. } => "mkv",
+            Kind::Video { .. } => encoders.extension(),
         }
     }
 }
@@ -69,7 +71,7 @@ pub struct Stream {
     pub t0_utc: SystemTime,
     pub dropped: u64,
     pub dropped_at: Option<f64>,
-    pub fill: f32,
+    fill: f32,
     frames: u64,
     sink: Sink,
     synced: Instant,
@@ -118,6 +120,21 @@ impl Stream {
         match &self.sink {
             Sink::Frames(_) => self.frames,
             Sink::Video(v) => v.encoded(),
+        }
+    }
+
+    /// How full this stream's feeding buffer is. A video's queue into the encoder knows its own.
+    pub fn fill(&self) -> f32 {
+        match &self.sink {
+            Sink::Frames(_) => self.fill,
+            Sink::Video(v) => v.fill(),
+        }
+    }
+
+    /// What a drain last saw of the buffer feeding it. A video answers from its own queue.
+    pub fn set_fill(&mut self, fill: f32) {
+        if let Sink::Frames(_) = self.sink {
+            self.fill = fill;
         }
     }
 

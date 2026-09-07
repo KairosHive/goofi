@@ -29,6 +29,8 @@ pub trait Encoders: Send + Sync {
     /// Whether this machine can encode at all — the backend's own precondition, which
     /// `record start` asks before it refuses a recording of nothing but video.
     fn probe(&self) -> Result<(), String>;
+    /// The container this backend writes, which is what names the file.
+    fn extension(&self) -> &'static str;
     fn open(&self, file: &Path, size: (u32, u32), fps: f64) -> Result<Box<dyn Encoder>, String>;
 }
 
@@ -45,6 +47,10 @@ impl Encoders for FfmpegEncoders {
             .status()
             .map_err(|_| MISSING.to_string())
             .and_then(|s| if s.success() { Ok(()) } else { Err(MISSING.to_string()) })
+    }
+
+    fn extension(&self) -> &'static str {
+        "mkv"
     }
 
     fn open(&self, file: &Path, size: (u32, u32), fps: f64) -> Result<Box<dyn Encoder>, String> {
@@ -161,13 +167,18 @@ impl Video {
         let mut buffer = self.free.lock().expect("the free frames").pop().unwrap_or_default();
         buffer.clear();
         buffer.extend_from_slice(texels);
+        self.counts.queued.fetch_add(1, Ordering::Relaxed);
         match tx.try_send((buffer, at)) {
             Ok(()) => true,
             Err(TrySendError::Full((buffer, _))) => {
+                self.counts.queued.fetch_sub(1, Ordering::Relaxed);
                 give_back(&self.free, buffer);
                 false
             }
-            Err(TrySendError::Disconnected(_)) => false,
+            Err(TrySendError::Disconnected(_)) => {
+                self.counts.queued.fetch_sub(1, Ordering::Relaxed);
+                false
+            }
         }
     }
 
@@ -176,9 +187,15 @@ impl Video {
         self.counts.encoded.load(Ordering::Relaxed)
     }
 
-    /// Frames accepted and then lost, which only an encoder that died mid-write can cost.
+    /// Frames accepted and then lost, which an encoder that died mid-write costs, and a frame
+    /// the sidecar could not account for.
     pub fn lost(&self) -> u64 {
         self.counts.lost.load(Ordering::Relaxed)
+    }
+
+    /// How full the queue into the encoder is, which is this stream's whole buffer health.
+    pub fn fill(&self) -> f32 {
+        self.counts.queued.load(Ordering::Relaxed) as f32 / QUEUE as f32
     }
 
     /// Close the queue and wait for the writer, which is what finishes the file. Idempotent.
@@ -205,6 +222,7 @@ struct Counts {
     encoded: Arc<AtomicU64>,
     lost: Arc<AtomicU64>,
     dead: Arc<AtomicBool>,
+    queued: Arc<AtomicU64>,
     error: Arc<Mutex<Option<String>>>,
 }
 
@@ -225,17 +243,22 @@ fn encode(
     free: &Free,
 ) {
     let mut flushed = Instant::now();
+    // The FIRST error is what killed the stream; `finish` on a dead encoder only says so again.
     let died = |counts: &Counts, why: String| {
         counts.dead.store(true, Ordering::Relaxed);
-        *counts.error.lock().expect("the encoder's error") = Some(why);
+        counts.error.lock().expect("the encoder's error").get_or_insert(why);
     };
     for (buffer, at) in rx {
+        counts.queued.fetch_sub(1, Ordering::Relaxed);
         if let Err(why) = encoder.write(&buffer) {
             counts.lost.fetch_add(1, Ordering::Relaxed);
             died(counts, why);
             break;
         }
+        // A frame the sidecar could not account for is a frame nothing can align, so it is LOST
+        // rather than counted — the container holds it and the manifest says it was not kept.
         if let Err(e) = times.write_all(&at.to_le_bytes()) {
+            counts.lost.fetch_add(1, Ordering::Relaxed);
             died(counts, e.to_string());
             break;
         }

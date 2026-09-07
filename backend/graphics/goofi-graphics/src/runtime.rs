@@ -390,14 +390,13 @@ impl Runtime {
             let held = self.taping.remove(&uid).expect("just read");
             self.trouble(uid, None);
             if held.live {
-                if held.missed > 0 {
-                    rec.dropped(&held.id, held.missed, t);
-                }
-                rec.close(&held.id, why);
+                rec.close_later(&held.id, why, held.missed, t);
             }
         }
         for (uid, (id, size)) in want {
-            if self.taping.contains_key(&uid) {
+            // A stream the reaper has not finished closing is opened on a later tick: opening
+            // over it would finalize the encoder HERE, which is what `close_later` exists to stop.
+            if self.taping.contains_key(&uid) || rec.is_open(&id) {
                 continue;
             }
             let kind = Kind::Video { size, fps: crate::FPS };
@@ -464,14 +463,12 @@ impl Runtime {
                         }
                     }
                     Want::Record => {
-                        let taken = self
-                            .taping
-                            .get(&uid)
-                            .filter(|tape| tape.live)
-                            .zip(self.recorder.as_ref())
-                            .is_some_and(|(tape, rec)| rec.write_video(&tape.id, &rows, t));
-                        if let Some(tape) = self.taping.get_mut(&uid) {
-                            tape.missed += u64::from(!taken);
+                        // A readback still in flight from the last size belongs to the file that
+                        // size opened, which is closed — it is nobody's drop and nobody's frame.
+                        let held = self.taping.get(&uid).filter(|tape| tape.live && tape.size == size);
+                        if let Some((tape, rec)) = held.zip(self.recorder.as_ref()) {
+                            let taken = rec.write_video(&tape.id, &rows, t);
+                            self.taping.get_mut(&uid).expect("just read").missed += u64::from(!taken);
                         }
                         give_back(&spare, rows);
                     }

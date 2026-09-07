@@ -12,6 +12,9 @@ impl goofi_record::video::Encoders for NoEncoder {
     fn probe(&self) -> Result<(), String> {
         Err(NoEncoder::WHY.into())
     }
+    fn extension(&self) -> &'static str {
+        "mkv"
+    }
     fn open(
         &self,
         _file: &std::path::Path,
@@ -199,6 +202,29 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         (frames(g, &shader_name) >= 4).then_some(())
     });
     assert!(stages(&g) > idle, "arming is what puts the stage in demand");
+
+    // Step: a resize is a NEW file — a container holds one size — and a readback still in flight
+    // from the size before it never lands in the file the new size opened.
+    let videos = |_g: &goofi_tests::Goofi| -> Vec<serde_json::Value> {
+        manifest(&folder)["streams"]
+            .as_array()
+            .expect("streams")
+            .iter()
+            .filter(|e| e["node"] == j!(shader_name) && e["engine"] == j!("graphics"))
+            .cloned()
+            .collect()
+    };
+    g.set_param(shader, "common", "width", 48);
+    g.until("the resized shader to open a second video", |g| {
+        goofi_tests::render(g, 1);
+        (videos(g).len() >= 2).then_some(())
+    });
+    assert_eq!(videos(&g)[0]["closed_because"], j!("resized"), "{:?}", videos(&g)[0]);
+    let so_far = frames(&g, &shader_name);
+    g.until("the second video to hold frames of its own", |g| {
+        goofi_tests::render(g, 1);
+        (frames(g, &shader_name) >= so_far + 4).then_some(())
+    });
     g.call("record disarm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
 
     // Step: a machine that cannot encode costs the GRAPHICS stream and nothing else. The node
@@ -253,6 +279,36 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     for pair in instants.windows(2) {
         assert!(pair[1] > pair[0], "the instants are the patch's own seconds, in order: {instants:?}");
     }
+
+    // Both videos, each with its own size and its own instants: a resize costs no correspondence.
+    for entry in m["streams"].as_array().expect("streams").iter().filter(|e| {
+        e["node"] == j!(shader_name) && e["engine"] == j!("graphics") && e["frames"] != j!(0)
+    }) {
+        let made = std::path::Path::new(&folder).join(entry["file"].as_str().expect("a name"));
+        let beside = std::fs::read(made.with_extension("times")).expect("the sidecar");
+        let held = entry["frames"].as_u64().expect("a count");
+        assert_eq!(beside.len() as u64, held * 8, "one f64 per encoded frame: {entry}");
+        assert!(held >= 4, "each file holds its own frames: {entry}");
+        // Decoded, because only the container itself says whether the frames in it line up: a
+        // readback of the wrong size makes a file that still counts but no longer decodes to it.
+        let size = entry["size"].as_array().expect("a size");
+        let texels = size[0].as_u64().expect("width") * size[1].as_u64().expect("height") * 8;
+        let read = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&made)
+            .args(["-f", "rawvideo", "-pix_fmt", "rgba64le", "-"])
+            .output()
+            .expect("ffmpeg reads back what it wrote");
+        assert_eq!(read.stdout.len() as u64, held * texels, "every frame in the file is one frame: {entry}");
+    }
+    let sizes: Vec<&serde_json::Value> = m["streams"]
+        .as_array()
+        .expect("streams")
+        .iter()
+        .filter(|e| e["node"] == j!(shader_name) && e["frames"] != j!(0))
+        .map(|e| &e["size"])
+        .collect();
+    assert_eq!(sizes, vec![&j!([32, 16]), &j!([48, 16])], "each file says the size it holds");
 
     // …and the stream that could not be encoded is an ENTRY, never a gap the folder leaves
     // unexplained.
