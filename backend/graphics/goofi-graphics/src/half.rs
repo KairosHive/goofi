@@ -5,47 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use goofi_control::{Cx, Half, Ticked};
-use goofi_core::{Data, Value};
+use goofi_core::Data;
 
-/// One arrival as the render thread takes it: `width * height * 4` f16 texels, row 0 the top.
-pub struct Upload {
-    pub width: u32,
-    pub height: u32,
-    pub texels: Vec<u16>,
-}
-
-impl Upload {
-    /// A frame as RGBA texels, unclamped. `[N]` is one row; `[H, W]` is gray; `[H, W, C]` fills
-    /// the channels it has, with alpha 1 where it has none.
-    pub fn of(frame: &Data) -> Option<Upload> {
-        let Value::Array(a) = frame.value() else { return None };
-        let (h, w, c) = match *a.shape() {
-            [n] => (1, n, 1),
-            [h, w] => (h, w, 1),
-            [h, w, c] if (1..=4).contains(&c) => (h, w, c),
-            _ => return None,
-        };
-        // A texture the device cannot make invalidates the whole frame's command buffer, so a
-        // frame past the limit is no upload at all.
-        if h == 0 || w == 0 || h > crate::plan::MAX_SIZE as usize || w > crate::plan::MAX_SIZE as usize {
-            return None;
-        }
-        let x: Vec<f32> =
-            a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes"))).collect();
-        let mut texels = Vec::with_capacity(h * w * 4);
-        for i in 0..h * w {
-            let s = &x[i * c..(i + 1) * c];
-            let rgba = match c {
-                1 => [s[0], s[0], s[0], 1.0],
-                2 => [s[0], s[0], s[0], s[1]],
-                3 => [s[0], s[1], s[2], 1.0],
-                _ => [s[0], s[1], s[2], s[3]],
-            };
-            texels.extend(rgba.iter().map(|v| half::f16::from_f32(if v.is_finite() { *v } else { 0.0 }).to_bits()));
-        }
-        Some(Upload { width: w as u32, height: h as u32, texels })
-    }
-}
+use crate::transfer::{self, Range, Upload, PER_INPUT};
 
 /// What the render thread and the control half hand each other: the frame one read back, and
 /// whether the other is ready for the next. The engine reads back for a viewer only when the
@@ -59,10 +21,23 @@ pub struct Tap {
     pub wanted: bool,
 }
 
+/// One ARRAY input between two ticks: the frame that last arrived, what the texels in its cell
+/// were made under, and the range a trajectory carries across frames.
+#[derive(Default)]
+struct Inbox {
+    frame: Option<Data>,
+    fresh: bool,
+    made: Option<([u64; PER_INPUT], (u32, u32))>,
+    range: Range,
+}
+
 pub struct GraphicsHalf {
     uploads: Vec<Arc<Mutex<Option<Upload>>>>,
+    inboxes: Vec<Inbox>,
     readers: Arc<AtomicBool>,
     tap: Arc<Mutex<Tap>>,
+    /// Where the first ARRAY input's transfer params start.
+    transfer: usize,
     /// Where the universal `common` size starts in the param atomics.
     size: usize,
     /// The size last seen there. Only a settle can re-plan a stage's target, so the half — which
@@ -75,19 +50,40 @@ impl GraphicsHalf {
         uploads: Vec<Arc<Mutex<Option<Upload>>>>,
         readers: Arc<AtomicBool>,
         tap: Arc<Mutex<Tap>>,
+        transfer: usize,
         size: usize,
     ) -> GraphicsHalf {
-        GraphicsHalf { uploads, readers, tap, size, last: (u32::MAX, u32::MAX) }
+        let inboxes = uploads.iter().map(|_| Inbox::default()).collect();
+        GraphicsHalf { uploads, inboxes, readers, tap, transfer, size, last: (u32::MAX, u32::MAX) }
+    }
+
+    /// Draw what each input holds, where this tick is the first to see that frame under those
+    /// params — a batch of arrivals between two ticks costs one drawing, and none at all costs
+    /// nothing.
+    fn transfer(&mut self, cx: &Cx<'_>, at: (u32, u32)) {
+        for (k, inbox) in self.inboxes.iter_mut().enumerate() {
+            let Some(frame) = inbox.frame.as_ref() else { continue };
+            let base = self.transfer + k * PER_INPUT;
+            let made = (transfer::bits(cx.params, base), at);
+            if !inbox.fresh && inbox.made == Some(made) {
+                continue;
+            }
+            inbox.fresh = false;
+            inbox.made = Some(made);
+            if let Some(up) = transfer::read(cx.params, base).upload(frame, at, &mut inbox.range) {
+                *self.uploads[k].lock().expect("the upload cell") = Some(up);
+            }
+        }
     }
 }
 
 impl Half for GraphicsHalf {
-    /// An arrival replaces whatever the render thread has not taken yet: latest wins, as every
+    /// An arrival replaces whatever the last tick has not drawn yet: latest wins, as every
     /// crossing into a scheduled engine is.
     fn arrive(&mut self, inbox: usize, frame: &Data) -> bool {
-        let Some(cell) = self.uploads.get(inbox) else { return false };
-        if let Some(up) = Upload::of(frame) {
-            *cell.lock().unwrap() = Some(up);
+        if let Some(slot) = self.inboxes.get_mut(inbox) {
+            slot.frame = Some(frame.clone());
+            slot.fresh = true;
         }
         false
     }
@@ -104,6 +100,7 @@ impl Half for GraphicsHalf {
         }
         self.tap.lock().expect("the tap").wanted = readers;
         let size = crate::plan::asked(cx.params, self.size);
+        self.transfer(cx, transfer::drawn_size(size));
         Ticked { errors: Vec::new(), replan: std::mem::replace(&mut self.last, size) != size }
     }
 }

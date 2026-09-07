@@ -22,6 +22,7 @@ mod plan;
 mod runtime;
 mod scan;
 mod shader;
+mod transfer;
 
 use gpu::Gpu;
 use half::GraphicsHalf;
@@ -55,7 +56,7 @@ pub struct GraphicsStatus {
 pub(crate) struct Instance {
     pub(crate) class: Arc<Class>,
     pub(crate) params: Arc<[AtomicU64]>,
-    pub(crate) uploads: Vec<Arc<Mutex<Option<half::Upload>>>>,
+    pub(crate) uploads: Vec<Arc<Mutex<Option<transfer::Upload>>>>,
     pub(crate) readers: Arc<AtomicBool>,
     pub(crate) tap: Arc<Mutex<half::Tap>>,
     /// What this node's readers want its readback fitted into: the bridge writes it, the render
@@ -68,7 +69,7 @@ impl Instance {
     /// The size this node asks for, from the one writer of its param atomics — a constant and an
     /// evaluated binding alike. 0 on an axis means follow what is wired behind it.
     pub(crate) fn asked(&self) -> (u32, u32) {
-        plan::asked(&self.params, self.class.manifest.params.len())
+        plan::asked(&self.params, bases(self.class.manifest).1)
     }
 }
 
@@ -133,10 +134,22 @@ fn common_decls(m: &NodeManifest) -> impl Iterator<Item = ParamDecl> + '_ {
     COMMON_DECLS.iter().map(move |d| d(m))
 }
 
-/// Every param a graphics node holds: the author's, then the engine's universal group. ONE order
-/// — the param atomics, the desired consts and every binding index are all read against it.
+/// The transfer group every ARRAY input carries, in the order their uploads are numbered.
+fn transfer_decls(m: &'static NodeManifest) -> impl Iterator<Item = ParamDecl> {
+    transfer::array_inputs(m).flat_map(transfer::decls)
+}
+
+/// Every param a graphics node holds: the author's, then the engine's universal groups. ONE order
+/// — the param atomics, the desired consts and every binding index are all read against it, and
+/// `common` stays last, where a palette row expects the engine's own page.
 fn decls_of(manifest: &'static NodeManifest) -> Vec<ParamDecl> {
-    manifest.params.iter().copied().chain(common_decls(manifest)).collect()
+    manifest.params.iter().copied().chain(transfer_decls(manifest)).chain(common_decls(manifest)).collect()
+}
+
+/// Where the first ARRAY input's transfer params sit, and where the `common` group starts.
+fn bases(manifest: &'static NodeManifest) -> (usize, usize) {
+    let transfer = manifest.params.len();
+    (transfer, transfer + transfer_decls(manifest).count())
 }
 
 impl GraphicsEngine {
@@ -333,8 +346,8 @@ impl GraphicsEngine {
     }
 
     /// How many ARRAY inputs a node has — one upload cell each.
-    fn uploads_of(manifest: &goofi_node::NodeManifest) -> usize {
-        manifest.inputs.iter().filter(|s| s.kind != SlotType::Texture).count()
+    fn uploads_of(manifest: &'static NodeManifest) -> usize {
+        transfer::array_inputs(manifest).count()
     }
 }
 
@@ -371,7 +384,7 @@ impl Engine for GraphicsEngine {
     }
 
     fn universal_decls(&self, manifest: &'static NodeManifest) -> Vec<ParamDecl> {
-        common_decls(manifest).collect()
+        transfer_decls(manifest).chain(common_decls(manifest)).collect()
     }
 
     fn insert(&mut self, uid: Uid, type_name: &str, generation: u64, params: &ParamGroups) -> Option<String> {
@@ -383,7 +396,7 @@ impl Engine for GraphicsEngine {
             .iter()
             .map(|d| AtomicU64::new(goofi_control::scalar_of(params, d).to_bits()))
             .collect();
-        let uploads: Vec<Arc<Mutex<Option<half::Upload>>>> =
+        let uploads: Vec<Arc<Mutex<Option<transfer::Upload>>>> =
             (0..Self::uploads_of(manifest)).map(|_| Arc::new(Mutex::new(None))).collect();
         let readers = Arc::new(AtomicBool::new(false));
         let tap = Arc::new(Mutex::new(half::Tap::default()));
@@ -397,8 +410,8 @@ impl Engine for GraphicsEngine {
             time: self.time.clone(),
         };
         let (cells, flag, out) = (uploads.clone(), readers.clone(), tap.clone());
-        let size = manifest.params.len();
-        let make = move || GraphicsHalf::new(cells, flag, out, size);
+        let (transfer, size) = bases(manifest);
+        let make = move || GraphicsHalf::new(cells, flag, out, transfer, size);
         let control = match goofi_control::spawn(spawn, self.shared.clone(), &self.bells, make) {
             Ok(handle) => handle,
             Err(e) => return Some(e),
