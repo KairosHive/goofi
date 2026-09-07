@@ -313,26 +313,31 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     });
     g.call("record stop", j!({}));
 
+    // Every block one entry's file holds: its number, its instant, and its shape.
+    let blocks_of = |folder: &str, entry: &serde_json::Value| -> Vec<(u64, f64, Vec<usize>)> {
+        let path = std::path::Path::new(folder).join(entry["file"].as_str().expect("a name"));
+        let bytes = std::fs::read(path).expect("the audio stream");
+        let mut rest = &bytes[..];
+        let mut held = Vec::new();
+        while !rest.is_empty() {
+            let (_, meta, body) = goofi_codec::split_frame(rest).expect("a whole frame");
+            let used = 14 + meta.len() + body.len();
+            let frame = goofi_codec::decode(&rest[..used]).expect("a block decodes");
+            let shape = frame.as_array().expect("an array").shape().to_vec();
+            held.push((
+                frame.meta().index().expect("every block is numbered"),
+                frame.meta().time().expect("every block is dated"),
+                shape,
+            ));
+            rest = &rest[used..];
+        }
+        held
+    };
+
     let entry = mine(&fifth, &osc_name).pop().expect("the audio stream's entry");
     assert_eq!(entry["timeline"], j!("derived"), "the sample count is the clock: {entry}");
     assert_eq!(entry["sfreq"], j!(48_000.0), "the device rate rides the frames: {entry}");
-
-    let bytes = std::fs::read(std::path::Path::new(&fifth).join(entry["file"].as_str().expect("a name")))
-        .expect("the audio stream");
-    let mut rest = &bytes[..];
-    let mut held: Vec<(u64, f64, Vec<usize>)> = Vec::new();
-    while !rest.is_empty() {
-        let (_, meta, body) = goofi_codec::split_frame(rest).expect("a whole frame");
-        let used = 14 + meta.len() + body.len();
-        let frame = goofi_codec::decode(&rest[..used]).expect("a block decodes");
-        let shape = frame.as_array().expect("an array").shape().to_vec();
-        held.push((
-            frame.meta().index().expect("every block is numbered"),
-            frame.meta().time().expect("every block is dated"),
-            shape,
-        ));
-        rest = &rest[used..];
-    }
+    let held = blocks_of(&fifth, &entry);
     assert!(held.len() >= 64, "the whole drive is on disk: {} blocks", held.len());
     assert_eq!(held[0].2, vec![1, 64], "one block of a mono output, as the engine renders it");
     // EXACT, not approximate: a per-block clock read would pass a loose assertion and prove nothing.
@@ -342,6 +347,32 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         let d = pair[1].1 - pair[0].1;
         assert!((d - step).abs() < 1e-9, "two blocks are exactly a block apart: {d} against {step}");
     }
+
+    // Step: the ANCHOR is derived from the count as well, so a stream armed after a long wait is
+    // dated by the block it begins at, not by when the drain happened to wake for it. Nothing
+    // renders through the wait below, so the second recording begins exactly the number of BLOCKS
+    // after the first that the indices say — where a t0 read off the clock at the first drain is
+    // the whole wait out.
+    g.call("record disarm", j!({ "output": goofi_tests::ep(&osc_hex, "out") }));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    g.call("record arm", j!({ "output": goofi_tests::ep(&osc_hex, "out") }));
+    let sixth = g.call("record start", j!({ "root": root.path() }))["folder"]
+        .as_str()
+        .expect("a folder")
+        .to_string();
+    g.until("the second audio recording to reach the disk", |g| {
+        goofi_tests::drive(g, 4_800);
+        (frames(g, &osc_name) >= 64).then_some(())
+    });
+    g.call("record stop", j!({}));
+    let later = blocks_of(&sixth, &mine(&sixth, &osc_name).pop().expect("the second entry"));
+    let apart = later[0].1 - held[0].1;
+    let counted = (later[0].0 - held[0].0) as f64 * step;
+    assert!(
+        (apart - counted).abs() < 1e-6,
+        "the two recordings are exactly the blocks between them apart: {apart} against {counted}, \
+         with 0.3 s of wall clock in which nothing was rendered"
+    );
 }
 
 #[test]

@@ -69,6 +69,8 @@ pub struct AudioShared {
     pub edits: Mutex<Vec<(goofi_node::Uid, u32, f64)>>,
     /// The drain's door, so an edit made on the window thread is taken without waiting for a tick.
     pub waker: Arc<goofi_node::DrainWaker>,
+    /// The block count and its one tie to the clock: what dates every recorded block.
+    pub anchor: Arc<crate::runtime::Anchor>,
 }
 
 impl AudioShared {
@@ -107,8 +109,9 @@ pub struct Birth {
     pub manifest: &'static NodeManifest,
     pub inboxes: Vec<Inbox>,
     pub taps: Vec<rtrb::Consumer<f32>>,
-    /// Per output: the recording ring's consumer, and what the audio thread's full ring lost.
-    pub recs: Vec<(rtrb::Consumer<f32>, Arc<AtomicU64>)>,
+    /// Per output: the recording ring's consumer, what a full ring lost, and which engine block
+    /// the ring's first one was.
+    pub recs: Vec<(rtrb::Consumer<f32>, Arc<AtomicU64>, Arc<AtomicU64>)>,
     pub ports: Ports,
     pub audio: Arc<AudioShared>,
 }
@@ -306,8 +309,9 @@ impl Half for AudioHalf {
             ticked.replan |= moved;
         }
         let rate = self.audio.rate();
+        let anchor = self.audio.anchor.clone();
         for (i, rec) in self.recs.iter_mut().enumerate() {
-            rec.drain(cx, i, rate);
+            rec.drain(cx, i, rate, &anchor);
         }
         for (i, tap) in self.taps.iter_mut().enumerate() {
             let Some((c, planar)) = drain_blocks(&mut tap.ring) else { continue };
@@ -428,51 +432,41 @@ fn take_block(ring: &mut rtrb::Consumer<f32>) -> Option<(usize, Vec<f32>)> {
     Some((c, planar))
 }
 
-/// One output's recording: the ring the audio thread fills, and the sample count that dates every
-/// block it holds. The COUNT is the clock — anchored to patch time once, at the arm — so two blocks
-/// are exactly `BLOCK / rate` apart and no scheduling jitter reaches the timeline.
+/// One output's recording. The block's own NUMBER dates it: the engine ties the block count to the
+/// clock once, on the audio thread, and every instant here is derived from that tie — so a drain
+/// that wakes late records the same times as one that wakes on the tick.
 struct Recording {
     ring: rtrb::Consumer<f32>,
     lost: Arc<AtomicU64>,
-    /// The lost count already folded into `blocks`.
-    lost_seen: u64,
-    /// Patch seconds at sample 0; `None` until the slot is armed.
-    t0: Option<f64>,
-    /// Blocks since the anchor, the lost ones counted — so a gap in the timeline and a gap in
-    /// `Meta::index`, which is what the recorder counts drops by, are one number.
-    blocks: u64,
+    first: Arc<AtomicU64>,
+    /// Blocks taken off this ring, armed or not: the ring's own position.
+    position: u64,
 }
 
 impl Recording {
-    fn new((ring, lost): (rtrb::Consumer<f32>, Arc<AtomicU64>)) -> Recording {
-        Recording { ring, lost, lost_seen: 0, t0: None, blocks: 0 }
+    fn new((ring, lost, first): (rtrb::Consumer<f32>, Arc<AtomicU64>, Arc<AtomicU64>)) -> Recording {
+        Recording { ring, lost, first, position: 0 }
     }
 
     /// Every whole block the audio thread left, as one frame each. An unarmed slot's blocks are
-    /// dropped here, so the ring never fills and what an arm finds is at most one tick old.
-    fn drain(&mut self, cx: &Cx<'_>, out: usize, rate: f64) {
-        if !cx.recorded[out] {
-            self.t0 = None;
-            while take_block(&mut self.ring).is_some() {}
-            return;
-        }
-        if self.t0.is_none() {
-            self.t0 = Some(cx.now);
-            self.blocks = 0;
-            self.lost_seen = self.lost.load(Ordering::Relaxed);
-        }
-        let t0 = self.t0.expect("the anchor above");
-        let lost = self.lost.load(Ordering::Relaxed);
-        self.blocks += lost - self.lost_seen;
-        self.lost_seen = lost;
+    /// dropped here, so the ring never fills and the position keeps counting.
+    fn drain(&mut self, cx: &Cx<'_>, out: usize, rate: f64, anchor: &crate::runtime::Anchor) {
+        let armed = cx.recorded[out];
         while let Some((c, planar)) = take_block(&mut self.ring) {
+            let first = self.first.load(Ordering::Relaxed);
+            // The lost ones are folded in whole: they never entered the ring, so what is known is
+            // how many there were, and a gap stated late is better than a timeline quietly short.
+            let n = first.wrapping_add(self.position).wrapping_add(self.lost.load(Ordering::Relaxed));
+            self.position += 1;
+            if !armed || first == crate::runtime::UNTIED {
+                continue;
+            }
             let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
-            let mut meta = Meta::new().with_sfreq(Some(rate)).with_index(Some(self.blocks));
-            meta.set_time(Some(t0 + (self.blocks * BLOCK as u64) as f64 / rate));
+            let mut meta = Meta::new().with_sfreq(Some(rate)).with_index(Some(n));
+            meta.set_time(Some(anchor.seconds(n, rate)));
             if let Ok(frame) = Data::array_f32(vec![c, BLOCK], bytes, meta) {
                 (cx.record)(out, &goofi_codec::encode(&frame));
             }
-            self.blocks += 1;
         }
     }
 }
