@@ -151,13 +151,15 @@ beside the recording, and no format choice can undo the buffered path.
 `Rgba16Float` and no codec takes float, so a video entry says in words that it is lossless within
 [0,1] and that a value outside that range is clipped to it. No stream claims plain "lossless".
 
-**ffmpeg is kept, and the pure-Rust alternatives were measured and rejected.** `lz4_flex` reached
-735 MB/s at 2.0x and `zstd -1` 451 MB/s at 7.9x — both faster than FFV1 and both smaller — and both
-were declined: an in-process compressor makes a container only goofi can read, where a `.mkv` opens
-in every tool a user already has. The dependency is the price, and it is bounded. A missing ffmpeg
-costs THAT STREAM alone: the node wears a standing error naming the package, the manifest holds an
-entry saying why the stream is empty, and only a recording whose every armed stream is video is
-refused.
+**Video is encoded through ffmpeg, and the owner chose it against measured alternatives.**
+In-process pure-Rust compressors were offered with numbers, and ffmpeg was kept. The numbers stand
+for whoever proposes one again: single-core, on a 1920×1080 RGBA16 frame of GRADIENT content,
+`lz4_flex` reached 735 MB/s at 2.0x and `zstd -1` 451 MB/s at 7.9x — both faster than FFV1, and
+zstd denser. Gradient content makes those ratios optimistic against real shader output. The trade,
+as a fact about the two formats: a `.mkv` opens in any player, and a goofi frame stream opens in
+goofi. The dependency is bounded — a missing ffmpeg costs THAT STREAM alone: the node wears a
+standing error naming the package, the manifest holds an entry saying why the stream is empty, and
+only a recording whose every armed stream is video is refused.
 
 **The audio engine's own take recorder is deleted.** The `record.*` params on `AudioOut`, `Rec`,
 `wav::Writer`, `take_stem` and `part_path` are gone; `wav::Reader` stays, for playback. Two

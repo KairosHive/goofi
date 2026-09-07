@@ -303,10 +303,10 @@ in the frame's own `Meta`, and a truncated file decodes to its last whole frame.
 are each lossy against a `Data` frame, so they are a LATER tool over a finished recording and never
 a format the recorder writes. Graphics is the one exception, because a texture is `Rgba16Float` and
 no codec takes float: an ffmpeg child writes FFV1 in Matroska, which the manifest states in words
-is lossless WITHIN [0,1] and clips outside it, and no stream ever claims plain "lossless"; the
-pure-Rust in-process alternatives were measured — `lz4_flex` 735 MB/s at 2.0x, `zstd -1` 451 MB/s
-at 7.9x, both beating FFV1 — and rejected for a container every tool already opens, at the price of
-one bounded dependency, so a missing ffmpeg costs THAT STREAM alone. Arming is
+is lossless WITHIN [0,1] and clips outside it, and no stream ever claims plain "lossless". The
+in-process pure-Rust alternatives were offered with measurements — `lz4_flex` 735 MB/s at 2.0x,
+`zstd -1` 451 MB/s at 7.9x, single-core on a gradient frame, both beating FFV1 — and ffmpeg was
+kept; the dependency is bounded, so a missing ffmpeg costs THAT STREAM alone. Arming is
 `doc.nodes[<uid>].record`, so it is undoable, saved, copied with the node and delivered by `settle`
 alone — never a set kept beside the recorder, which claimed an arming that had in fact failed. The
 clock is the one timing authority and its UTC is anchored ONCE at the patch origin, so a frame
