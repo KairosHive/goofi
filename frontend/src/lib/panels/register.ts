@@ -11,6 +11,7 @@ import ConsolePanel from './ConsolePanel.svelte';
 import GlobalsPanel from './GlobalsPanel.svelte';
 import ControlPanel from './ControlPanel.svelte';
 import AgentPanel from './AgentPanel.svelte';
+import RecorderPanel from './RecorderPanel.svelte';
 
 const components: Record<PanelTypeId, Component<PanelProps>> = {
 	empty: EmptyPanel,
@@ -21,7 +22,8 @@ const components: Record<PanelTypeId, Component<PanelProps>> = {
 	console: ConsolePanel,
 	globals: GlobalsPanel,
 	control: ControlPanel,
-	agent: AgentPanel
+	agent: AgentPanel,
+	recorder: RecorderPanel
 };
 
 /** Panel types that answer their own ✕: closing an agent view must not silently kill the agent. */
