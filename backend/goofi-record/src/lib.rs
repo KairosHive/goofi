@@ -3,6 +3,7 @@
 
 pub mod manifest;
 pub mod stream;
+pub mod video;
 
 use goofi_core::time::{stamp, stamp_nanos, Time};
 use goofi_node::Uid;
@@ -62,9 +63,9 @@ impl Session {
         because: Option<String>,
         error: Option<String>,
     ) -> manifest::Entry {
-        let (size, fps) = match s.kind {
-            Kind::Frames => (None, None),
-            Kind::Video { size, fps } => (Some(size), Some(fps)),
+        let (size, fps, encoding) = match s.kind {
+            Kind::Frames => (None, None, None),
+            Kind::Video { size, fps } => (Some(size), Some(fps), Some(video::CLIP)),
         };
         manifest::Entry {
             file: s.file.clone(),
@@ -79,8 +80,9 @@ impl Session {
             channels: s.meta.channels,
             size,
             fps,
-            frames: s.frames,
-            dropped: s.dropped,
+            encoding,
+            frames: s.frames(),
+            dropped: s.lost(),
             dropped_at: s.dropped_at,
             closed_because: because,
             error,
@@ -215,6 +217,19 @@ impl Recorder {
         stream.write(frame)
     }
 
+    /// Hand one video readback to that stream's encoder, with the instant it was rendered at.
+    /// `false` is a drop the caller counts — a real-time engine is never stalled by a disk.
+    pub fn write_video(&self, id: &StreamId, texels: &[u8], at: f64) -> bool {
+        let stream = {
+            let guard = self.held();
+            let Some(session) = guard.as_ref() else { return false };
+            let Some(stream) = session.open.get(id) else { return false };
+            stream.clone()
+        };
+        let mut stream = held(&stream);
+        stream.write_video(texels, at)
+    }
+
     pub fn dropped(&self, id: &StreamId, count: u64, at: f64) {
         let mut guard = self.held();
         let Some(session) = guard.as_mut() else { return };
@@ -261,8 +276,8 @@ impl Recorder {
                         slot: id.slot.clone(),
                         engine: id.engine,
                         file: s.file.clone(),
-                        frames: s.frames,
-                        dropped: s.dropped,
+                        frames: s.frames(),
+                        dropped: s.lost(),
                         fill: s.fill,
                     }
                 })

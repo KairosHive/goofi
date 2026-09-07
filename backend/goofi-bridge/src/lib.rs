@@ -173,6 +173,9 @@ impl AppState {
         let mut doc = crate::doc::GraphDoc::new();
         doc.reconcile_root(&projection::of(&graph_val));
         let recorder = Arc::new(goofi_record::Recorder::new(graph_val.time()));
+        if let Some(gfx) = try_graphics_engine(&mut graph_val) {
+            gfx.set_recorder(recorder.clone());
+        }
         let graph = Arc::new(Mutex::new(graph_val));
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
         let reducers = reducer::SlotReducers::new(graph.clone(), follow_tx);

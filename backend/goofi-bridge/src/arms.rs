@@ -1847,8 +1847,12 @@ pub(crate) fn record_start(
     events: &mut Vec<String>,
 ) -> Result<Value, String> {
     let g = state.graph.lock().unwrap();
-    if !g.all_uids().into_iter().any(|u| !g.recorded(u).unwrap_or(&[]).is_empty()) {
+    let armed: Vec<Uid> = g.all_uids().into_iter().filter(|u| !g.recorded(*u).unwrap_or(&[]).is_empty()).collect();
+    if armed.is_empty() {
         return Err("record start: nothing is armed — `record arm <node>/<slot>` first".into());
+    }
+    if armed.iter().any(|u| stream_id(&g, *u, "").engine == "graphics") {
+        goofi_record::video::probe().map_err(|e| format!("record start: {e}"))?;
     }
     let root = record_arg(&g, payload, "root")
         .map(std::path::PathBuf::from)

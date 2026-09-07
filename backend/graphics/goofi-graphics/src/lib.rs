@@ -32,6 +32,11 @@ use scan::{Class, Compiler};
 /// what a viewer can draw.
 const PERIOD: Duration = Duration::from_micros(16_667);
 
+/// The rate a recording is encoded at, which is the rate the engine's own clock renders at. A
+/// tick the clock did not pace — the harness's `render` — is why every frame's instant is written
+/// beside the video rather than trusted to the container.
+pub const FPS: f64 = 1_000_000.0 / PERIOD.as_micros() as f64;
+
 /// What drives the ticks: the harness's `render(frames)`, or a clock of the engine's own.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Clock {
@@ -194,6 +199,12 @@ impl GraphicsEngine {
             dirty: false,
             bells: goofi_transport::iox_node()?,
         })
+    }
+
+    /// The one recorder an armed stage encodes into. Without it nothing records, which is what a
+    /// harness with no recorder is.
+    pub fn set_recorder(&self, recorder: Arc<goofi_record::Recorder>) {
+        self.ask(runtime::Cmd::Recorder(recorder));
     }
 
     /// The window thread, where a `Window` node's frames go. Without one there are no windows,
