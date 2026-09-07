@@ -33,6 +33,9 @@ impl Transport for WakingTransport {
     fn wire_out(&self, slot: &str, targets: &[(ServiceName, EventId)]) -> Result<(), String> {
         self.inner.wire_out(slot, targets)
     }
+    fn record_out(&self, slot: &str, on: bool) -> Result<(), String> {
+        self.inner.record_out(slot, on)
+    }
     fn drain_inputs(&self) -> Vec<(String, usize, Data)> {
         self.inner.drain_inputs()
     }
@@ -291,6 +294,7 @@ impl NodeRuntime {
                     wired
                 }
                 Control::OutSlot { slot, targets } => transport.wire_out(&slot, &targets),
+                Control::RecSlot { slot, on } => transport.record_out(&slot, on),
                 Control::SetParam { key, value } => {
                     self.set_param(key, value);
                     Ok(())

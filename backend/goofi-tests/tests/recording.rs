@@ -115,3 +115,37 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     assert_eq!(g.call("record status", j!({}))["running"], j!(false));
     assert!(std::path::Path::new(&folder).join("manifest.json").exists(), "the folder holds a manifest");
 }
+
+#[test]
+fn an_armed_signal_slot_loses_no_tick_to_the_viewer_plane() {
+    // The recorder's own service, drained by hand where Task 5 will put the recorder. Contiguity
+    // of `index` is the oracle: a frame count alone would pass against the latest-wins wire.
+    let g = goofi_tests::Goofi::new();
+    let fast = g.add("_TestConst");
+    let hex = goofi_tests::hex(fast);
+    g.set_param(fast, "common", "max_frequency", 200.0);
+    g.ready(fast);
+    g.call("record arm", j!({ "output": goofi_tests::ep(&hex, "out") }));
+
+    let service = {
+        let graph = g.state.graph.lock().unwrap();
+        goofi_transport::record_service(
+            &goofi_transport::service_base(graph.instance(), fast, graph.node_generation(fast)),
+            "out",
+        )
+    };
+    let node = goofi_transport::iox_node().expect("an iceoryx2 node");
+    let sub = goofi_transport::open_record_subscriber(&node, &service).expect("the recorder's end");
+
+    let mut seen: Vec<u64> = Vec::new();
+    g.until("the armed slot to publish a run of frames", |_| {
+        while let Ok(Some(sample)) = sub.receive() {
+            let frame = goofi_codec::decode(sample.payload()).expect("a frame decodes");
+            seen.push(frame.meta().index().expect("the engine stamps every frame"));
+        }
+        (seen.len() >= 32).then_some(())
+    });
+    for pair in seen.windows(2) {
+        assert_eq!(pair[1], pair[0] + 1, "the recording service loses no tick: {seen:?}");
+    }
+}

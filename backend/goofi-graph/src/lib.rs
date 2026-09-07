@@ -1564,6 +1564,7 @@ impl Graph {
     pub fn set_recorded(&mut self, uid: Uid, record: Vec<String>) -> Result<(), String> {
         let e = self.nodes.get_mut(&uid).ok_or_else(|| format!("no such node {uid}"))?;
         e.record = record;
+        self.touched.push(Touched::Record(uid));
         Ok(())
     }
 
@@ -2924,6 +2925,11 @@ impl Graph {
                     let t = Touched::Param(uid, key);
                     if !touched.contains(&t) {
                         touched.push(t);
+                    }
+                }
+                Touched::Record(uid) => {
+                    if self.leaf(uid).is_some() && !touched.contains(&Touched::Record(uid)) {
+                        touched.push(Touched::Record(uid));
                     }
                 }
             }

@@ -163,6 +163,8 @@ pub enum Touched {
     Slot(Uid, &'static str),
     /// A param whose value or binding moved and must reach its node.
     Param(Uid, ParamKey),
+    /// A node whose armed output slots moved.
+    Record(Uid),
 }
 
 /// One node class an engine advertises: the shared manifest plus the display tier. The engine a
