@@ -403,7 +403,8 @@ fn a_patch_sounds_under_the_external_clock() {
     // Step: the device list is a refresh answered by the node's own thread and echoed to every
     // client, the host default first; the clock itself reports through `session status`.
     let mut ev = g.events();
-    assert_eq!(refreshed(&g, &mut ev, out, "audio", "device")[0], "default");
+    let devices = refreshed(&g, &mut ev, out, "audio", "device");
+    assert_eq!(devices[0], "default");
     let status = g.call("session status", j!({}));
     assert_eq!(status["audio"]["clock"], "external", "{status}");
     assert_eq!(status["audio"]["rate"], 48000.0, "{status}");
@@ -420,6 +421,15 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(global("system.audio_channels")["value"], status["audio"]["channels"], "the channels it published");
     assert_eq!(global("system.audio_device")["value"], j!(""), "no device under the external clock");
     assert_eq!(global("system.audio_driver")["value"], j!(""), "and no ASIO driver holds this process");
+    // The APIs this build carries are published too, and every device a refresh offers is prefixed
+    // with one of them — the name IS the host choice, so a name from an API outside the list would
+    // be one nobody can resolve. It is also the only place a whole API missing from a build says so.
+    let hosts = global("system.audio_hosts")["value"].as_str().unwrap_or_default().to_string();
+    assert!(!hosts.is_empty(), "a build carries at least one audio host");
+    for name in devices.iter().filter(|n| *n != "default") {
+        assert!(hosts.split(", ").any(|h| name.starts_with(&format!("{h}: "))),
+                "`{name}` names an audio host outside `{hosts}`");
+    }
     assert_eq!(global("system.audio_rate")["lock"]["value"], j!(true), "an ephemeral global is value-locked");
     let why = g.refuse("global entry edit", j!({ "name": "system.audio_rate", "value": 22_050.0 }));
     assert!(why.contains("ephemeral"), "the engine's own fact refuses a hand edit: {why}");

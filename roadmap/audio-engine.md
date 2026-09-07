@@ -594,6 +594,19 @@ its reasons are in the locked decisions; what survives of the two reviews that p
   period is always `GetDevicePeriod()` whatever is requested, so `BufferSize::Fixed` is a lie there
   and the floor is ~10 ms. `IAudioClient3` reaches 2.66 ms and cpal does not use it. ASIO needs the
   Steinberg SDK, which went GPLv3-or-proprietary in 2025, so it is not shippable in one binary.
+- **ASIO is absent from every build a user makes, and that is now a reported cost.** 2026-09-07, on
+  Windows: only WASAPI in the `AudioOut` and `AudioIn` lists. Nothing is broken — cpal compiles the
+  ASIO host behind a feature, `default` does not carry it, so `available_hosts()` has one entry and
+  there is nothing to list. The whole opt-in is `cargo run --features asio` with `CPAL_ASIO_DIR`
+  naming an unpacked Steinberg SDK and LLVM installed for its bindgen. The boot report and
+  `system.audio_hosts` now say which APIs a build carries and name that line where ASIO is missing,
+  so the absence is legible rather than silent — but a user who wants ASIO still has to build for
+  it, and a multi-input interface is reachable past its first stereo pair through no other API.
+  Two ways out, and both are the owner's: ship the SDK under its 2025 licence, or bind the driver
+  as the COM object it is — `CoCreateInstance` on the CLSID under `HKLM\SOFTWARE\ASIO` against a
+  vtable goofi declares — which needs no SDK in the tree and is its own legal judgement. Note the
+  third precondition either way: LLVM is a build dependency the current opt-in adds and
+  `goofi-init` does not provide, so `--features asio` breaks "two commands is the ceiling".
 - **macOS signing**, which costs nothing today and arrives with the first notarized release. Apple's
   documented answer for a process that loads foreign code is
   `com.apple.security.cs.disable-library-validation`; Ardour, Surge, VCV Rack, ossia score, Pure
