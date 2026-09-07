@@ -427,10 +427,25 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         goofi_tests::drive(g, 4_800);
         (frames(g, &osc_name) >= 64).then_some(())
     });
+
+    // A clean drive loses NOTHING: every block rendered is a block on disk, counted against what
+    // was driven rather than against the file's own numbering, which a mis-framed reader would
+    // keep self-consistent while it halved.
+    let settled = |g: &goofi_tests::Goofi| -> u64 {
+        g.until("the recorder's count to settle", |g| {
+            let a = frames(g, &osc_name);
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            (frames(g, &osc_name) == a).then_some(a)
+        })
+    };
+    let before = settled(&g);
+    goofi_tests::drive(&g, 64 * 480);
+    assert_eq!(settled(&g) - before, 480, "every block the clock rendered reached the disk");
+
     g.call("record stop", j!({}));
 
-    // Every block one entry's file holds: its number, its instant, and its shape.
-    let blocks_of = |folder: &str, entry: &serde_json::Value| -> Vec<(u64, f64, Vec<usize>)> {
+    // Every block one entry's file holds: its number, its instant, its shape and its samples.
+    let blocks_of = |folder: &str, entry: &serde_json::Value| -> Vec<(u64, f64, Vec<usize>, Vec<f32>)> {
         let path = std::path::Path::new(folder).join(entry["file"].as_str().expect("a name"));
         let bytes = std::fs::read(path).expect("the audio stream");
         let mut rest = &bytes[..];
@@ -444,6 +459,7 @@ fn arming_survives_a_rewire_and_rides_the_document() {
                 frame.meta().index().expect("every block is numbered"),
                 frame.meta().time().expect("every block is dated"),
                 shape,
+                goofi_tests::f32s(&frame),
             ));
             rest = &rest[used..];
         }
@@ -456,11 +472,20 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     let held = blocks_of(&fifth, &entry);
     assert!(held.len() >= 64, "the whole drive is on disk: {} blocks", held.len());
     assert_eq!(held[0].2, vec![1, 64], "one block of a mono output, as the engine renders it");
+
+    // …and what reached it is the OSCILLATOR: a reader off by a few samples delivers the header's
+    // own floats as audio, and the block number among them is nowhere near full scale.
+    let sound: Vec<f32> = held.iter().flat_map(|b| b.3.iter().copied()).collect();
+    let peak = sound.iter().fold(0f32, |m, x| m.max(x.abs()));
+    assert!((peak - 1.0).abs() < 0.05, "the file holds the oscillator at full scale: peak {peak}");
+    let crossings = sound.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
+    let expect = 880 * sound.len() / 48_000;
+    assert!(crossings.abs_diff(expect) <= 2, "…and it is A4: {crossings} crossings against {expect}");
     // EXACT, not approximate: a per-block clock read would pass a loose assertion and prove nothing.
     // Every kept block lies on ONE line through its own number, so a block that went missing moved
     // none of the blocks around it.
     let step = 64.0 / 48_000.0;
-    let line = |blocks: &[(u64, f64, Vec<usize>)]| {
+    let line = |blocks: &[(u64, f64, Vec<usize>, Vec<f32>)]| {
         for pair in blocks.windows(2) {
             let d = pair[1].1 - pair[0].1;
             let counted = (pair[1].0 - pair[0].0) as f64 * step;
@@ -468,11 +493,8 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         }
         blocks.windows(2).map(|p| p[1].0 - p[0].0 - 1).sum::<u64>()
     };
-    assert_eq!(
-        line(&held),
-        entry["dropped"].as_u64().expect("a count"),
-        "what the file's numbering is missing is what the manifest says was lost: {entry}"
-    );
+    assert_eq!(line(&held), 0, "an ordinary drive loses no block at all: {entry}");
+    assert_eq!(entry["dropped"], j!(0), "…and the manifest says so too: {entry}");
 
     // Step: the ANCHOR is derived from the count as well, so a stream armed after a long wait is
     // dated by the block it begins at, not by when the drain happened to wake for it. Nothing
