@@ -955,7 +955,9 @@ fn a_patch_sounds_under_the_external_clock() {
         };
         let into = dir.join(format!("{name}.vst3")).join("Contents").join(folder);
         std::fs::create_dir_all(&into).unwrap();
-        std::fs::copy(&artifact, into.join(file)).unwrap();
+        let binary = into.join(file);
+        std::fs::copy(&artifact, &binary).unwrap();
+        binary
     };
     // Every child the scan spawns leaves a line here, so what the cache saves is countable.
     let scans = keep.path().join("scans.log");
@@ -1020,7 +1022,7 @@ fn a_patch_sounds_under_the_external_clock() {
     g.link(src, "out", plug, "input");
     heard(&g, plug, "the gain the record keeps, past a restart", |x| (peak(x) - 0.5).abs() < 0.02);
 
-    bundled("Crasher", built("crash"));
+    let crasher = bundled("Crasher", built("crash"));
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Crasher"]));
     let row = g.call("library list", j!({}))["types"].as_array().unwrap().iter()
         .find(|v| v["type"] == "audio:Crasher").cloned().expect("greyed, not absent");
@@ -1039,10 +1041,14 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(scanned(), 3, "an unchanged tree spawns no scanner at all");
     assert_eq!(listed("audio:Crasher")["available"], false, "the refusal came back off the cache");
     assert_eq!(listed("audio:GoofiFixture")["available"], true, "and so did the answer");
-    // A binary re-copied is a stamp that moved, and a stamp that moved is a source that changed.
-    bundled("Crasher", built("crash"));
+    // A binary whose BYTES moved is a source that changed. Appended to rather than re-copied,
+    // because `fs::copy` keeps the source's mtime on macOS and Windows — so re-copying a fixture
+    // cargo did not rebuild moves no stamp at all, and the cache is right to answer from memory.
+    let mut appended = std::fs::OpenOptions::new().append(true).open(&crasher).unwrap();
+    std::io::Write::write_all(&mut appended, b"\0").unwrap();
+    drop(appended);
     g.call("library refresh", j!({}));
-    assert_eq!(scanned(), 4, "a changed binary is scanned again");
+    assert_eq!(scanned(), 4, "a binary whose bytes moved is scanned again");
 
     // The plugin's state is its own blob, and the record is its params: the fixture latches the
     // first time `shape` reaches its last step and halves its tone for ever after, which no param
