@@ -624,15 +624,9 @@ fn open_input(
     // `f32` for every client, so demanding it cost nothing and was never wrong there; a host that
     // hands over the device's own word — a Focusrite's is `i32` — failed outright on a format goofi
     // never asked about. Reading it and converting in the callback is the whole of the difference.
-    let open = |f| match f {
-        cpal::SampleFormat::F32 => input_stream::<f32>(&device, config, channels, producer.clone(), dead.clone()),
-        cpal::SampleFormat::I8 => input_stream::<i8>(&device, config, channels, producer.clone(), dead.clone()),
-        cpal::SampleFormat::I16 => input_stream::<i16>(&device, config, channels, producer.clone(), dead.clone()),
-        cpal::SampleFormat::I32 => input_stream::<i32>(&device, config, channels, producer.clone(), dead.clone()),
-        cpal::SampleFormat::U8 => input_stream::<u8>(&device, config, channels, producer.clone(), dead.clone()),
-        cpal::SampleFormat::U16 => input_stream::<u16>(&device, config, channels, producer.clone(), dead.clone()),
-        cpal::SampleFormat::F64 => input_stream::<f64>(&device, config, channels, producer.clone(), dead.clone()),
-        other => Err(format!("the driver's sample format {other} is one goofi does not read")),
+    let refused = |f| format!("the driver's sample format {f} is one goofi does not read");
+    let open = |f| {
+        crate::by_format!(f, input_stream, refused, &device, config, channels, producer.clone(), dead.clone())
     };
     let stream = open(format).map_err(|e| format!("`{name}`: {e}"))?;
     stream.play().map_err(|e| format!("`{name}`: {e}"))?;
