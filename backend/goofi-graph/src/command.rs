@@ -64,6 +64,8 @@ pub enum Command {
         sources: Vec<(String, String, SourceState)>,
         /// Captured viewer view-state blob to restore; `None` for a user add (defaults to empty).
         viewers: Option<serde_json::Value>,
+        /// Captured armed output slots to restore; `None` for a user add (defaults to none).
+        record: Option<Vec<String>>,
         /// The scope to create the node INSIDE (`None` = ROOT). A PORT's membership rides HERE and
         /// nowhere else: one cannot be created without a scope. Every other kind is placed by a
         /// [`Command::SetScope`] child, after every uid the capture names exists.
@@ -93,6 +95,12 @@ pub enum Command {
         /// The node's per-slot viewer state, WHOLE. The caller merges; this sets, so the inverse is
         /// the blob it replaced and a replay cannot half-apply.
         viewers: Option<serde_json::Value>,
+    },
+    /// Arm or disarm a node's output slots for recording. The WHOLE vector, so the inverse is the
+    /// vector it replaced.
+    SetRecorded {
+        uid: Uid,
+        record: Vec<String>,
     },
     /// Edit a param — its literal `value` and/or its source record. A `None` field is left
     /// untouched; the inverse restores whichever were set.
@@ -272,7 +280,7 @@ impl Command {
                 Ok((out, Command::Compound(inverses)))
             }
 
-            Command::AddNode { type_name, pos, uid, name, params, sources, viewers, scope } => {
+            Command::AddNode { type_name, pos, uid, name, params, sources, viewers, record, scope } => {
                 // A peer dissolved the scope this restore names. Tolerated HERE, because a replay
                 // that errors wedges the actor's stack for good; the fresh caller is refused by
                 // this command's precondition instead.
@@ -298,6 +306,9 @@ impl Command {
                 }
                 if let Some(v) = viewers {
                     let _ = g.set_node_viewers(u, v);
+                }
+                if let Some(r) = record {
+                    let _ = g.set_recorded(u, r);
                 }
                 Ok((Outcome::Uid(u), Command::RemoveNode { uid: u }))
             }
@@ -408,6 +419,14 @@ impl Command {
                 }
                 let out = if referrers.is_empty() { Outcome::Ok } else { Outcome::Nodes(referrers) };
                 Ok((out, Command::EditNode { uid, name: inv_name, pos: old_pos, viewers: old_viewers }))
+            }
+
+            Command::SetRecorded { uid, record } => {
+                let Some(was) = g.recorded(uid).map(<[String]>::to_vec) else {
+                    return Ok((Outcome::Ok, Command::Compound(vec![]))); // idempotent: it is gone
+                };
+                g.set_recorded(uid, record)?;
+                Ok((Outcome::Ok, Command::SetRecorded { uid, record: was }))
             }
 
             Command::EditParam { uid, group, name, value, source } => {
@@ -639,6 +658,7 @@ impl Command {
                         params: None,
                         sources: vec![],
                         viewers: g.viewers(id).cloned(),
+                        record: g.recorded(id).filter(|r| !r.is_empty()).map(<[String]>::to_vec),
                         scope: Some(scope),
                     })
                     .collect();
@@ -884,6 +904,7 @@ fn capture_subtree_restore(g: &Graph, root: Uid) -> (Command, std::collections::
             params: g.params(u).map(|p| (*p).clone()),
             sources,
             viewers: g.viewers(u).filter(|v| v.as_object().is_some_and(|m| !m.is_empty())).cloned(),
+            record: g.recorded(u).filter(|r| !r.is_empty()).map(<[String]>::to_vec),
             scope: g.stub(u).map(|(s, _)| s),
         });
     }

@@ -1,6 +1,7 @@
 //! Recording: every engine's frames, on one timeline.
 
 use goofi_core::time::{stamp, Time};
+use goofi_tests::j;
 
 #[test]
 fn utc_is_anchored_once_and_advances_monotonically() {
@@ -73,4 +74,44 @@ fn a_recording_is_a_folder_of_decodable_frames() {
         seen += 1;
     }
     assert_eq!(seen, 8, "every frame is on disk, end to end");
+}
+
+#[test]
+fn arming_survives_a_rewire_and_rides_the_document() {
+    let g = goofi_tests::Goofi::new();
+    let src = goofi_tests::hex(g.add("_TestConst"));
+    let dst = goofi_tests::hex(g.add("_TestSink"));
+
+    g.call("record arm", j!({ "output": goofi_tests::ep(&src, "out") }));
+    assert_eq!(g.doc()["nodes"][&src]["record"], j!(["out"]), "arming is the node's own record");
+
+    let status = g.call("record status", j!({}));
+    assert_eq!(status["running"], j!(false), "arming a slot does not begin a recording");
+
+    g.call("link add", j!({ "from": goofi_tests::ep(&src, "out"), "to": goofi_tests::ep(&dst, "input") }));
+    assert_eq!(g.doc()["nodes"][&src]["record"], j!(["out"]), "a re-wire cannot disarm a recording");
+
+    g.call("undo", j!({}));
+    g.call("undo", j!({}));
+    assert_eq!(g.doc()["nodes"][&src]["record"], j!([]), "arming has an exact inverse");
+
+    g.call("redo", j!({}));
+    assert_eq!(g.doc()["nodes"][&src]["record"], j!(["out"]), "and the arm comes back");
+
+    let root = tempfile::tempdir().expect("a temp root");
+    let folder = g.call("record start", j!({ "name": "walk", "root": root.path() }))["folder"]
+        .as_str()
+        .expect("a folder")
+        .to_string();
+    let status = g.call("record status", j!({}));
+    assert_eq!(status["running"], j!(true));
+    assert_eq!(status["folder"], j!(folder));
+    assert_eq!(g.refuse("record start", j!({ "root": root.path() })), "record start: a recording already runs");
+
+    g.call("record disarm", j!({ "output": goofi_tests::ep(&src, "out") }));
+    assert_eq!(g.doc()["nodes"][&src]["record"], j!([]), "disarming empties the node's record");
+
+    g.call("record stop", j!({}));
+    assert_eq!(g.call("record status", j!({}))["running"], j!(false));
+    assert!(std::path::Path::new(&folder).join("manifest.json").exists(), "the folder holds a manifest");
 }

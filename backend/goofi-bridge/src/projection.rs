@@ -53,6 +53,7 @@ pub fn of(g: &Graph) -> Value {
         if let Some(v) = g.viewers(uid).filter(|v| v.as_object().is_some_and(|m| !m.is_empty())) {
             node.insert("viewers".into(), json!(v.to_string()));
         }
+        node.insert("record".into(), json!(g.recorded(uid).unwrap_or(&[])));
         nodes.insert(uid.to_hex(), Value::Object(node));
     }
     // Membership rides the member. Absent means ROOT — never a null, which a merge patch spends on

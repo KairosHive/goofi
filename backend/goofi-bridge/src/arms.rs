@@ -289,6 +289,7 @@ pub(crate) fn node_add(
         params: None,
         sources: vec![],
         viewers: None,
+        record: None,
         scope,
     };
     let uid = match state.history.lock().unwrap().apply(&mut g, actor, cmd)? {
@@ -1540,6 +1541,9 @@ pub(crate) fn session_save(
 /// The core every patch replacement shares, so nothing after the read can drift between the
 /// sources: a `.gfi`, an inline manifest, or nothing at all — the empty patch.
 fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
+    // The load restarts the patch clock and replaces every armed node, so the recording it was
+    // writing has no timeline left to be on.
+    let _ = state.recorder.stop();
     // Read OFF the graph lock, as the hello does: the roster's config half is a disk read.
     let agents = goofi_core::home::agents();
     // Every source mounts FRESH, and the live mount is swapped only once the manifest has parsed,
@@ -1702,4 +1706,153 @@ pub(crate) fn op_complete(
         .map(|(word, doc)| format!("{word}\t{doc}"))
         .collect();
     Ok(json!({ "text": rows.join("\n") }))
+}
+
+/// The recorder's name for one armed output slot: the node's identity, plus the engine behind it.
+fn stream_id(g: &Graph, uid: Uid, slot: &str) -> goofi_record::StreamId {
+    let engine = g
+        .node_type(uid)
+        .and_then(|ty| g.type_engine(&ty))
+        .unwrap_or("signal");
+    goofi_record::StreamId { uid, node: crate::named(g, uid), slot: slot.to_string(), engine }
+}
+
+/// The armed slots of every node, in uid order — what a start opens and a status reports.
+fn armed(g: &Graph) -> Vec<(Uid, String)> {
+    let mut out: Vec<(Uid, String)> = Vec::new();
+    for uid in g.all_uids() {
+        for slot in g.recorded(uid).unwrap_or(&[]) {
+            out.push((uid, slot.clone()));
+        }
+    }
+    out
+}
+
+fn set_armed(
+    state: &AppState,
+    actor: &str,
+    op: &str,
+    payload: &Value,
+    arm: bool,
+) -> Result<Value, String> {
+    let mut g = state.graph.lock().unwrap();
+    let (uid, slot) = parse_endpoint(&g, payload, op, "output")?;
+    let slot = vocab::resolve_slot(&g, op, uid, &slot)?;
+    let mut record = g.recorded(uid).ok_or_else(|| format!("{op}: no such node"))?.to_vec();
+    let held = record.iter().position(|s| *s == slot);
+    match (arm, held) {
+        (true, None) => record.push(slot.clone()),
+        (false, Some(i)) => {
+            record.remove(i);
+        }
+        _ => return Ok(json!({ "ok": true })),
+    }
+    state.history.lock().unwrap().apply(
+        &mut g,
+        actor,
+        goofi_graph::Command::SetRecorded { uid, record },
+    )?;
+    if !arm && state.recorder.running() {
+        state.recorder.close(&stream_id(&g, uid, &slot), "disarmed");
+    }
+    Ok(json!({ "ok": true }))
+}
+
+pub(crate) fn record_arm(
+    state: &AppState,
+    payload: &Value,
+    actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    set_armed(state, actor, "record arm", payload, true)
+}
+
+pub(crate) fn record_disarm(
+    state: &AppState,
+    payload: &Value,
+    actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    set_armed(state, actor, "record disarm", payload, false)
+}
+
+/// A `record start` argument, taken from the payload and otherwise from `globals.record.<key>`.
+fn record_arg(g: &Graph, payload: &Value, key: &str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| match g.globals().get(&format!("record.{key}")) {
+            Some(goofi_core::globals::GlobalValue::Str(s)) if !s.is_empty() => Some(s.clone()),
+            _ => None,
+        })
+}
+
+pub(crate) fn record_start(
+    state: &AppState,
+    payload: &Value,
+    _actor: &str,
+    events: &mut Vec<String>,
+) -> Result<Value, String> {
+    if state.recorder.running() {
+        return Err("record start: a recording already runs".into());
+    }
+    let g = state.graph.lock().unwrap();
+    if armed(&g).is_empty() {
+        return Err("record start: nothing is armed — `record arm <node>/<slot>` first".into());
+    }
+    let root = record_arg(&g, payload, "root")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(goofi_core::home::recordings);
+    let name = record_arg(&g, payload, "name").unwrap_or_default();
+    let patch = state.save_path().map(std::path::PathBuf::from);
+    let folder = state.recorder.start(&root, &name, patch.as_deref())?;
+    drop(g);
+    events.push(record_changed(state));
+    Ok(json!({ "folder": folder.to_string_lossy() }))
+}
+
+pub(crate) fn record_stop(
+    state: &AppState,
+    _payload: &Value,
+    _actor: &str,
+    events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let folder = state.recorder.stop()?.ok_or("record stop: no recording runs")?;
+    events.push(record_changed(state));
+    Ok(json!({ "folder": folder.to_string_lossy() }))
+}
+
+pub(crate) fn record_status(
+    state: &AppState,
+    _payload: &Value,
+    _actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    Ok(record_state(state))
+}
+
+/// The session's recording state — RUNTIME, so it rides this read and the event, never the document.
+pub(crate) fn record_state(state: &AppState) -> Value {
+    let s = state.recorder.status();
+    let elapsed = s.started.map(|t0| state.graph.lock().unwrap().time().now() - t0);
+    let streams: Vec<Value> = s
+        .streams
+        .iter()
+        .map(|st| {
+            json!({ "node": st.node, "slot": st.slot, "engine": st.engine, "file": st.file,
+                    "frames": st.frames, "dropped": st.dropped, "fill": st.fill })
+        })
+        .collect();
+    json!({
+        "running": s.running,
+        "folder": s.folder.map(|f| f.to_string_lossy().into_owned()),
+        "elapsed": elapsed,
+        "streams": streams,
+    })
+}
+
+pub(crate) fn record_changed(state: &AppState) -> String {
+    crate::event("record_changed", record_state(state))
 }

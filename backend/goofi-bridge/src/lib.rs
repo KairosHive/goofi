@@ -109,6 +109,9 @@ pub struct AppState {
     bound: Arc<Mutex<std::net::SocketAddr>>,
     /// The spawned agent harnesses and their PTYs.
     pub harnesses: Arc<term::Harnesses>,
+    /// The one recorder every engine writes its armed streams to. Whether it runs is RUNTIME —
+    /// `record status` and the `record_changed` event carry it, never the document.
+    pub recorder: Arc<goofi_record::Recorder>,
 }
 
 /// How a `/data` socket detects a dead-but-not-closed peer, which a socket with no traffic cannot
@@ -162,6 +165,7 @@ impl AppState {
         graph_val.set_workspace(&mount);
         let mut doc = crate::doc::GraphDoc::new();
         doc.reconcile_root(&projection::of(&graph_val));
+        let recorder = Arc::new(goofi_record::Recorder::new(graph_val.time()));
         let graph = Arc::new(Mutex::new(graph_val));
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
         let reducers = reducer::SlotReducers::new(graph.clone(), follow_tx);
@@ -183,6 +187,7 @@ impl AppState {
             save_path: Arc::new(Mutex::new(None)),
             bound: Arc::new(Mutex::new(([127, 0, 0, 1], 8000).into())),
             harnesses: Arc::new(term::Harnesses::default()),
+            recorder,
         };
         spawn_follower(state.clone(), follow_rx);
         state

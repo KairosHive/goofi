@@ -19,6 +19,7 @@ goofi-core = { path = "../goofi-core" }
 goofi-codec = { path = "../goofi-codec" }
 goofi-node = { path = "../goofi-node" }
 goofi-graph = { path = "../goofi-graph" }
+goofi-record = { path = "../goofi-record" }
 goofi-signal = { path = "../signal/goofi-signal" }
 goofi-signal-sdk = { path = "../signal/goofi-signal-sdk" }
 goofi-transport = { path = "../goofi-transport" }
