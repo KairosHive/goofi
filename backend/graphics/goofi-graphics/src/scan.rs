@@ -19,6 +19,8 @@ pub struct Class {
     pub manifest: &'static NodeManifest,
     pub feedback: bool,
     pub window: bool,
+    /// The buffers this type carries between two ticks, in the order the prelude binds them.
+    pub state: Vec<String>,
     pub pipeline: Built,
 }
 
@@ -49,10 +51,17 @@ impl GraphicsEngine {
             return Err(reason);
         }
         let manifest = goofi_node::leak_manifest(type_name.to_string(), &intro)?;
-        let full = format!("{source}{}", shader::prelude(manifest));
+        let full = format!("{source}{}", shader::prelude(manifest, &intro.state));
         shader::validate(&full)?;
-        let pipeline = self.compiler.build(full, !manifest.params.is_empty(), manifest.inputs.len());
-        let class = Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, pipeline });
+        let job = Job {
+            source: full,
+            params: !manifest.params.is_empty(),
+            inputs: manifest.inputs.len(),
+            state: intro.state.len(),
+        };
+        let pipeline = self.compiler.build(job);
+        let class =
+            Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, pipeline });
         let displaced = self.classes.insert(type_name.to_string(), class);
         let replaced = displaced.is_some();
         crate::gpu::give_back(displaced);
@@ -60,31 +69,38 @@ impl GraphicsEngine {
     }
 }
 
-struct Job {
+/// What one pipeline is built from: the whole text naga passed, and the shape of its layout.
+pub struct Job {
     source: String,
     params: bool,
     inputs: usize,
+    state: usize,
+}
+
+/// One job on the compile thread's queue: what to build, and where to leave it.
+struct Order {
+    job: Job,
     cell: Built,
     shared: Arc<goofi_control::Shared>,
 }
 
 /// Where every pipeline in the process is built: ONE thread, beside the one device, so no op
 /// waits on a compile.
-fn compiler() -> Option<&'static mpsc::Sender<Job>> {
-    static ONE: OnceLock<Option<mpsc::Sender<Job>>> = OnceLock::new();
+fn compiler() -> Option<&'static mpsc::Sender<Order>> {
+    static ONE: OnceLock<Option<mpsc::Sender<Order>>> = OnceLock::new();
     ONE.get_or_init(|| {
         let gpu = crate::gpu::shared().ok()?;
-        let (jobs, take) = mpsc::channel::<Job>();
+        let (jobs, take) = mpsc::channel::<Order>();
         std::thread::Builder::new()
             .name("goofi-graphics-compile".into())
             .spawn(move || {
-                while let Ok(job) = take.recv() {
-                    let _ = job.cell.set(compile(&gpu, &job));
+                while let Ok(order) = take.recv() {
+                    let _ = order.cell.set(compile(&gpu, &order.job));
                     // The tick picks the cell up by itself; the settle is for a refusal, which
                     // only a plan can turn into the node's standing error.
-                    job.shared.ask_settle();
-                    // The job may hold the last handle on the pipeline it just built.
-                    crate::gpu::give_back(job);
+                    order.shared.ask_settle();
+                    // The order may hold the last handle on the pipeline it just built.
+                    crate::gpu::give_back(order);
                 }
             })
             .ok()?;
@@ -97,12 +113,12 @@ fn compiler() -> Option<&'static mpsc::Sender<Job>> {
 pub struct Compiler(pub Arc<goofi_control::Shared>);
 
 impl Compiler {
-    pub fn build(&self, source: String, params: bool, inputs: usize) -> Built {
+    pub fn build(&self, job: Job) -> Built {
         let cell: Built = Arc::new(OnceLock::new());
-        let job = Job { source, params, inputs, cell: cell.clone(), shared: self.0.clone() };
+        let order = Order { job, cell: cell.clone(), shared: self.0.clone() };
         match compiler() {
             Some(jobs) => {
-                let _ = jobs.send(job);
+                let _ = jobs.send(order);
             }
             None => {
                 let _ = cell.set(Err("no compile thread".into()));
@@ -119,7 +135,13 @@ fn compile(gpu: &Gpu, job: &Job) -> Result<Arc<wgpu::RenderPipeline>, String> {
         label: None,
         source: wgpu::ShaderSource::Wgsl(job.source.as_str().into()),
     });
-    let layout = gpu.layout(job.params, job.inputs);
+    let layout = gpu.layout(job.params, job.inputs, job.state);
+    // The output, then one target per state buffer — the order [`shader::prelude`] writes them in.
+    let targets: Vec<Option<wgpu::ColorTargetState>> = (0..1 + job.state)
+        .map(|_| {
+            Some(wgpu::ColorTargetState { format: crate::gpu::FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })
+        })
+        .collect();
     let pipeline = gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: None,
         layout: Some(&layout),
@@ -135,11 +157,7 @@ fn compile(gpu: &Gpu, job: &Job) -> Result<Arc<wgpu::RenderPipeline>, String> {
         fragment: Some(wgpu::FragmentState {
             module: &module,
             entry_point: Some("fs"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: crate::gpu::FORMAT,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets: &targets,
             compilation_options: Default::default(),
         }),
         multiview_mask: None,

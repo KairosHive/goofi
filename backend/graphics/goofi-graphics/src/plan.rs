@@ -19,10 +19,20 @@ pub fn pack(want: Option<(u32, u32)>) -> u64 {
     want.map_or(0, |(w, h)| (u64::from(w) << 32) | u64::from(h))
 }
 
-/// A generator's size, and what a chain that can follow nothing falls back to.
-pub const GENERATOR: u32 = 512;
+/// What a chain that can follow nothing falls back to. It is what the two default-size globals
+/// start at, so the floor and the patch's own default cannot drift apart.
+pub const GENERATOR: u32 = goofi_core::globals::DEFAULT_SIZE;
 /// The widest a node may ask for on either axis.
 pub const MAX_SIZE: u32 = 8192;
+
+/// The size held in a node's param atomics, whose universal `common` group starts at `base`.
+pub fn asked(params: &[AtomicU64], base: usize) -> (u32, u32) {
+    let axis = |i: usize| {
+        let held = params.get(base + i).map_or(0.0, |a| f64::from_bits(a.load(Ordering::Relaxed)));
+        held.clamp(0.0, MAX_SIZE as f64) as u32
+    };
+    (axis(0), axis(1))
+}
 
 pub enum Input {
     /// Another stage's output, by index into `Plan::stages`.
@@ -37,6 +47,8 @@ pub struct Stage {
     pub uid: Uid,
     pub pipeline: Built,
     pub inputs: Vec<Input>,
+    /// How many state buffers this stage carries between two ticks.
+    pub state: usize,
     pub size: (u32, u32),
     pub decls: &'static [ParamDecl],
     pub params: Arc<[AtomicU64]>,
@@ -166,6 +178,7 @@ pub fn compile(
             uid: *uid,
             pipeline: inst.class.pipeline.clone(),
             inputs,
+            state: inst.class.state.len(),
             size: sizes[uid],
             decls: inst.class.manifest.params,
             params: inst.params.clone(),
@@ -196,17 +209,16 @@ pub fn sizes(view: &GraphView<'_>, live: &HashMap<Uid, Instance>) -> HashMap<Uid
     let wires = texture_wires(view, live);
     let mut sizes = HashMap::new();
     for uid in live.keys() {
-        size_of(*uid, view, live, &wires, &mut sizes, &mut Vec::new());
+        size_of(*uid, live, &wires, &mut sizes, &mut Vec::new());
     }
     sizes
 }
 
-/// A node's size: what `output/width` and `output/height` say, and for a zero on an axis the
+/// A node's size: what `common/width` and `common/height` hold, and for a zero on an axis the
 /// first wired texture input's size on that axis. A chain that follows itself, or one that
 /// follows nothing, is a generator.
 fn size_of(
     uid: Uid,
-    view: &GraphView<'_>,
     live: &HashMap<Uid, Instance>,
     wires: &HashMap<(Uid, &str), Uid>,
     sizes: &mut HashMap<Uid, (u32, u32)>,
@@ -215,14 +227,7 @@ fn size_of(
     if let Some(known) = sizes.get(&uid) {
         return *known;
     }
-    let asked = |name: &str| -> u32 {
-        view.nodes
-            .get(&uid)
-            .and_then(|nv| goofi_node::param(nv.params, "output", name))
-            .and_then(|p| p.as_f64())
-            .map_or(0, |v| v.max(0.0).min(MAX_SIZE as f64) as u32)
-    };
-    let (w, h) = (asked("width"), asked("height"));
+    let (w, h) = live.get(&uid).map_or((0, 0), Instance::asked);
     let mut answer = (w, h);
     // A chain that follows ITSELF cannot answer; what it asked for on either axis still stands.
     if visiting.contains(&uid) {
@@ -239,7 +244,7 @@ fn size_of(
                 .find_map(|s| wires.get(&(uid, s.name)).copied())
         });
         let (fw, fh) = match behind {
-            Some(p) => size_of(p, view, live, wires, sizes, visiting),
+            Some(p) => size_of(p, live, wires, sizes, visiting),
             None => (GENERATOR, GENERATOR),
         };
         answer = (if w == 0 { fw } else { w }, if h == 0 { fh } else { h });

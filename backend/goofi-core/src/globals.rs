@@ -215,11 +215,27 @@ pub struct GlobalDef {
     pub ephemeral: bool,
 }
 
+/// What a texture is when nothing says otherwise: the two default-size globals start here, and a
+/// graphics chain with nothing to follow falls back to it.
+pub const DEFAULT_SIZE: u32 = 512;
+
 pub static SYSTEM_GLOBALS: &[GlobalDef] = &[
     GlobalDef {
         name: "system.default_ufreq",
         value: || GlobalValue::Float(30.0),
         doc: "Default update rate (Hz) for producer nodes that have not overridden it.",
+        ephemeral: false,
+    },
+    GlobalDef {
+        name: "system.default_width",
+        value: || GlobalValue::Int(DEFAULT_SIZE as i64),
+        doc: "Default texture width (pixels) for graphics nodes that make their own frames.",
+        ephemeral: false,
+    },
+    GlobalDef {
+        name: "system.default_height",
+        value: || GlobalValue::Int(DEFAULT_SIZE as i64),
+        doc: "Default texture height (pixels) for graphics nodes that make their own frames.",
         ephemeral: false,
     },
     GlobalDef {
@@ -656,7 +672,8 @@ impl GlobalStore {
         match value {
             Some(v) if self.values.contains_key(name) => self.set(name, v),
             Some(v) => self.add(name, v, at),
-            None => self.remove(name),
+            None if self.values.contains_key(name) => Ok(()),
+            None => Err(format!("no such global `{name}`")),
         }
     }
 }

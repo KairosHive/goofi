@@ -80,9 +80,9 @@ before they arrive.
   builds the next one. Between the two, the engine draws nothing.
 - **Settle compiles a plan**: Kahn over texture edges, ties by uid, a `feedback` node ignoring its
   in-edges and running first on its producer's previous frame, a loop with no feedback node
-  excluded and named — the audio rule. Resolution is settled state: the universal group `output`
-  holds `width` and `height`, 0 following the first wired texture input on that axis, a generator
-  with none 512. Every texture is `Rgba16Float`.
+  excluded and named — the audio rule. Resolution rides the universal group `common`: `width` and
+  `height`, 0 following the first wired texture input on that axis, and a chain that can follow
+  nothing 512. Every texture is `Rgba16Float`.
 - **The control half is shared with audio**, lifted into `goofi-control` — LANDED 2026-09-06,
   before the engine that needs it: the per-node thread on its door, `Desired`, the subscriptions,
   evaluation on arrival, pulses, refresh, reports and bells are one implementation. What an
@@ -117,6 +117,8 @@ before they arrive.
 - **The node set was agreed with the owner** (2026-09-06): `Constant`, `Ramp`, `Noise`, `Shape`,
   `Level`, `Transform`, `Blur`, `Composite`, `Displace`, `Lookup`, `Threshold`, `Feedback`,
   `ArrayIn`. `Shader` is out for now. A camera is a Python signal node feeding `ArrayIn`, later.
+  `Window` (2026-09-06) and `Life` (2026-09-07) joined it, each arriving with the engine mechanism
+  it needed rather than on its own.
 
 ### What the engine core landed (2026-09-06)
 
@@ -132,10 +134,12 @@ Three decisions were taken while building it, and each is a rule the code now st
   cell and the compile thread fills it; the plan picks it up at the tick after. A pipeline that
   just arrived sets `replan` and rings the waker, because a compile changes nothing until a settle
   plans for it.
-- **The universal group is the ENGINE's, not literally `common`.** Graphics adds `output`
-  (`width`, `height`) where signal adds `common`. The palette's page-order contract used to name
-  `common` by hand; it now reads `universal_decls` per engine, so the law is "the author's pages in
-  declared order, then the engine's own" and a fourth engine needs no new arm.
+- **The universal group is the ENGINE's**, read through `universal_decls` rather than named by
+  hand: the palette's page-order law is "the author's pages in declared order, then the engine's
+  own", and a fourth engine needs no new arm. Graphics adds `width` and `height`; it spells the
+  group `common`, as signal does — REVISED 2026-09-07, and the first spelling, `output`, was wrong
+  twice over. It was a second name for one idea, and `output` is a page the signal library already
+  declares by hand (`sfreq`, `mode`, `channels`), so one word meant two things.
 - **A shipped name may now belong to two engines.** `Constant` and `Level` name a signal and a
   graphics node, an audio and a graphics node. That is the designed behaviour — `node add` refuses
   the bare name and lists both candidates — and the cost is that the callers of those two names
@@ -145,7 +149,7 @@ Three decisions were taken while building it, and each is a rule the code now st
 answered, and the frame, stage and tick-time counters. It is null where no adapter answered.
 
 Shipped so far: `Constant` and `Level`. The suite's session is `goofi-tests/tests/graphics.rs`,
-under the external clock, and it proves the palette row, a readback of a real render, the `output`
+under the external clock, and it proves the palette row, a readback of a real render, the `common`
 resize and the size a wired input inherits, an HDR value past 1 surviving a chain, an unwired input
 as transparent black rather than a fault, a `.wgsl` that does not compile as a greyed row carrying
 naga's own line number in the FILE's numbering, an authored node loaded and reloaded through
@@ -218,7 +222,7 @@ output every graphics node has, so a viewer or another node reads the same textu
 - **The window host left the audio engine for `goofi-window`.** An audio plugin's editor and a
   graphics node's window are one screen, and a process has one main thread to give them. Neither
   engine owns it now.
-- **The window is the FRAME's size**, set by the universal `output` group, so nothing scales and no
+- **The window is the FRAME's size**, set by the universal `common` group, so nothing scales and no
   platform needs a scaler. The title is the node's own name, because a patch may open several.
 - **A screen is a READER.** `Stage::read()` is the one answer to "does anything read this stage" —
   a subscriber on its data service, or a window — and it drives both the demand walk and whether a
@@ -257,10 +261,38 @@ for, sized, fed, counted in `session status`, and closed with its node.
 - **Shadertoy compatibility is not a constraint.** naga's GLSL frontend was measured mis-hoisting
   loads out of `&&` guards; WGSL is the language.
 
+### The size, the globals and node state (2026-09-07)
+
+- **The size is a param like any other**, which REVERSES "the `output` size is settled state, so it
+  takes no reference or expression" above. The refusal was correct about the mechanism and wrong
+  about the cure: a universal param was simply never handed to the control half, so a binding on
+  one had nowhere to be evaluated. It is now — a node's param atomics run `manifest.params` then
+  the universal group, ONE order that the desired consts and every binding index read — so a
+  reference or an expression drives a texture's size like it drives any other param. The plan reads
+  the ATOMIC rather than the document, because the atomic is the one place a constant and an
+  evaluated binding both land, and the control half asks for a settle when what it holds moves.
+- **`system.default_width` and `system.default_height` are the patch's canvas**, and every graphics
+  node that makes its own frames carries them as a live expression — the shape signal's
+  `common.max_frequency` and `globals.system.default_ufreq` already had. A node is a producer when
+  no TEXTURE input stands behind it, DERIVED from the header rather than declared in it, so an
+  author cannot forget. Both start at 512, which is also what a chain that can follow nothing falls
+  back to; the two are one constant (`globals::DEFAULT_SIZE`), so the floor and the default cannot
+  drift apart.
+- **A node holds state by declaring named BUFFERS, and a buffer is another output aged by one
+  tick.** `"state": ["cells"]` in the header binds `cells` as the texture the last tick left and
+  asks the body for `fn next_cells(uv) -> vec4f`; the read and the write never name one thing. The
+  engine keeps two textures per buffer and swaps them after every render, and the whole set is one
+  render pass with several targets — which is why a buffer is the node's own size and format, since
+  the attachments of one pass share theirs. The prelude also carries `frame`, the number of renders
+  since those buffers were made: zero is a fresh state, and it is what a body seeds itself on.
+  `Life` is the shipped proof — four rules of a cellular automaton, one grid, no loop in the graph.
+- A texture never leaves the node it belongs to, so a state buffer is not a slot, not a viewer's
+  and not in the manifest. What an author can see of it is what the body draws.
+
 ## Phases
 
 1. **BUILT 2026-09-06**: the engine, the `.wgsl` contract, uploads, references, `Feedback`, the
-   tap and the uint8 hop, the thirteen nodes. Proof: `goofi-tests/tests/graphics.rs` — one session
+   tap and the uint8 hop, the node set. Proof: `goofi-tests/tests/graphics.rs` — one session
    under the external clock, and a second one under the timer clock the binary runs.
 2. **3D**: geometry, cameras, a raster pipeline, instancing. Its own spec.
 3. **Fields**: ray-marched distance fields and fractals. The exactness tag per node
@@ -284,7 +316,9 @@ for, sized, fed, counted in `session status`, and closed with its node.
   if a tick misses 16 ms.
 - The reducer's area kernel at 1080p; a GPU-side downscale needs the viewer's size to reach the
   engine, which the constraint algebra does not carry.
-- A feedback chain restarts from black at a resize.
+- A feedback chain, and a state buffer, restart from black at a resize.
+- A state buffer takes the node's own size, so a node cannot hold a handful of numbers cheaply. A
+  1x1 buffer needs a pass of its own, since one pass's targets share one size.
 - A vector-typed param (a colour as one `vec4f`) needs a layouter and a `Param` kind that does
   not exist.
 

@@ -276,7 +276,12 @@ toolchain: a text editor is the whole requirement to author one, and the engine 
 AFTER the file's text so a naga error names the line the author sees. Every texture is
 `Rgba16Float`, and `uv`, the sampler, texture memory, an upload's rows and a readback's rows all
 put row 0 at the TOP — one convention, so a pass-through body is a copy and no flip is written
-anywhere. The engine is scheduled and DEMAND-DRIVEN: a stage renders only where its output has a
+anywhere. A node HOLDS state by declaring named buffers: `cells` reads what the last tick left,
+`next_cells` writes what this one leaves, and one pass fills the output and every buffer at once —
+so a buffer is the node's own size, and `frame`, the renders since it was made, is what a body
+seeds itself on. Its size is a param like any other: `common.width` and `common.height`, 0
+following what is wired behind, and `globals.system.default_width` on a node that makes its own
+frames. The engine is scheduled and DEMAND-DRIVEN: a stage renders only where its output has a
 reader, so a node nobody watches costs nothing. Its plan is replaced whole and never edited,
 because a stage index is a name and a stage that outlives its node draws into a stranger. The
 PROCESS owns one device and one compile thread, and every operation on that device takes one gate

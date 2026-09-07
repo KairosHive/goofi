@@ -117,6 +117,7 @@ pub fn describe(
         producer,
         feedback: false,
         window: false,
+        state: Vec::new(),
         inputs: inputs
             .iter()
             .map(|s| probe::Slot {
