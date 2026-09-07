@@ -45,6 +45,9 @@ struct Slot {
     buffer: wgpu::Buffer,
     /// The map callback's: set once the bytes are there.
     ready: Arc<AtomicBool>,
+    /// Patch seconds at the tick that DREW this frame. A readback is taken one or two ticks later,
+    /// so an instant read where it is TAKEN is a tick period late against every other engine.
+    at: f64,
 }
 
 /// What a reader's frames cost to make, and the size the source was when they were made — the
@@ -214,7 +217,7 @@ impl Runtime {
         }
         let _gate = crate::gpu::gate();
         // What an earlier tick put on the device and the device has finished since.
-        self.take(t);
+        self.take();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         let mut started: Vec<(Uid, Want, Slot, (u32, u32))> = Vec::new();
         for (i, drawn) in want.iter().enumerate() {
@@ -331,7 +334,8 @@ impl Runtime {
             }
         }
         self.gpu.queue.submit([encoder.finish()]);
-        for (uid, w, slot, _from) in started {
+        for (uid, w, mut slot, _from) in started {
+            slot.at = t;
             let ready = slot.ready.clone();
             slot.buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
                 ready.store(r.is_ok(), Ordering::Release);
@@ -394,9 +398,8 @@ impl Runtime {
             }
         }
         for (uid, (id, size)) in want {
-            // A stream the reaper has not finished closing is opened on a later tick: opening
-            // over it would finalize the encoder HERE, which is what `close_later` exists to stop.
-            // A frame rendered in that window belongs to no file and is neither kept nor counted.
+            // A stream the reaper has not finished closing is opened on a LATER tick: opening over
+            // it would finalize the encoder on this thread, which is what `close_later` prevents.
             if self.taping.contains_key(&uid) || rec.is_open(&id) {
                 continue;
             }
@@ -429,7 +432,7 @@ impl Runtime {
 
     /// Every frame the device has finished, given to the reader that asked for it. The GPU wrote
     /// that reader's own format, so this is a copy of rows and never a conversion.
-    fn take(&mut self, t: f64) {
+    fn take(&mut self) {
         for i in 0..self.plan.stages.len() {
             for w in Want::ALL {
                 let uid = self.plan.stages[i].uid;
@@ -441,7 +444,7 @@ impl Runtime {
                 }
                 let slot = ring.flight.pop_front().expect("the front was ready");
                 slot.ready.store(false, Ordering::Relaxed);
-                let size = slot.texture.size;
+                let (size, at) = (slot.texture.size, slot.at);
                 let shrunk = ring.shrunk;
                 let mut rows = ring.spare.lock().expect("the spare").pop().unwrap_or_default();
                 let filled = rows_into(&mut rows, &slot.buffer, size, w);
@@ -468,7 +471,7 @@ impl Runtime {
                         // size opened, which is closed — it is nobody's drop and nobody's frame.
                         let held = self.taping.get(&uid).filter(|tape| tape.live && tape.size == size);
                         if let Some((tape, rec)) = held.zip(self.recorder.as_ref()) {
-                            let taken = rec.write_video(&tape.id, &rows, t);
+                            let taken = rec.write_video(&tape.id, &rows, at);
                             self.taping.get_mut(&uid).expect("just read").missed += u64::from(!taken);
                         }
                         give_back(&spare, rows);
@@ -597,7 +600,12 @@ impl Ring {
                     usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
-                Slot { texture: Target { texture, view, size }, buffer, ready: Arc::new(AtomicBool::new(false)) }
+                Slot {
+                    texture: Target { texture, view, size },
+                    buffer,
+                    ready: Arc::new(AtomicBool::new(false)),
+                    at: 0.0,
+                }
             })
             .collect();
         let out_size = gpu.device.create_buffer(&wgpu::BufferDescriptor {
