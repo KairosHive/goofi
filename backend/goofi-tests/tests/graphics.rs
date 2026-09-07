@@ -28,11 +28,12 @@ fn px(d: &goofi_core::Data, row: usize, col: usize) -> [f32; 4] {
 /// The row of the brightest texel in each column, and none where a column was left alone.
 fn ridge(d: &goofi_core::Data) -> Vec<Option<usize>> {
     let s = shape(d);
+    let v = f32s(d);
+    let alpha = |row: usize, col: usize| v[(row * s[1] + col) * 4 + 3];
     (0..s[1])
         .map(|col| {
-            let rows = 0..s[0];
-            let lit = rows.max_by(|a, b| px(d, *a, col)[3].total_cmp(&px(d, *b, col)[3]));
-            lit.filter(|row| px(d, *row, col)[3] > 0.5)
+            let lit = (0..s[0]).max_by(|a, b| alpha(*a, col).total_cmp(&alpha(*b, col)));
+            lit.filter(|row| alpha(*row, col) > 0.5)
         })
         .collect()
 }
@@ -64,7 +65,7 @@ fn shaders_render_on_the_gpu() {
     g.set_param(c, "colour", "g", 0.5);
     g.set_param(c, "colour", "b", 1.0);
     let frame = drawn(&g, c, "the constant's colour", |d| close(px(d, 0, 0), [0.25, 0.5, 1.0, 1.0]));
-    assert_eq!(shape(&frame), vec![512, 512, 4], "a node with nothing behind it is 512 square");
+    assert_eq!(shape(&frame), vec![1024, 1024, 4], "a node with nothing behind it is 1024 square");
     assert!(close(px(&frame, 511, 511), [0.25, 0.5, 1.0, 1.0]), "the same colour to the far corner");
 
     // Step: the universal `common` group resizes it, and what is wired behind FOLLOWS the size.
@@ -86,8 +87,11 @@ fn shaders_render_on_the_gpu() {
     // Step: an unwired texture input is transparent black — present, never an error.
     g.call("link remove", j!({ "from": ep(hex(c), "out"), "to": ep(hex(level), "input") }));
     let frame = drawn(&g, level, "the unwired level", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 0.0]));
-    assert_eq!(shape(&frame), vec![512, 512, 4], "with nothing to follow, it is a generator's size");
+    assert_eq!(shape(&frame), vec![1024, 1024, 4], "with nothing to follow, it is a generator's size");
     assert!(g.error(level).is_none(), "an unwired input is not a fault");
+    // …and wired straight back: unwired it is a 1024-square generator, which every later step
+    // would then redraw and read back on every poll of its own.
+    g.link(c, "out", level, "input");
 
     // Step: a signal frame uploads — the fixture's gradient, sampled back texel for texel and the
     // right way up. The one place the two row orders could disagree.
@@ -116,10 +120,10 @@ fn shaders_render_on_the_gpu() {
     let frame = drawn(&g, up, "the raw [1, 64] frame", |d| shape(d) == vec![32, 64, 4]);
     assert!(close(px(&frame, 0, 0), [0.0, 0.0, 0.0, 1.0]), "texture mode is the frame itself: {:?}", px(&frame, 0, 0));
 
-    g.set_param(up, "input", "mode", "line");
-    g.set_param(up, "input", "auto", false);
-    g.set_param(up, "input", "min", 0.0);
-    g.set_param(up, "input", "max", 1.0);
+    g.set_param(up, "plot", "mode", "line");
+    g.set_param(up, "plot", "autoscale", false);
+    g.set_param(up, "plot", "min", 0.0);
+    g.set_param(up, "plot", "max", 1.0);
     let plot = drawn(&g, up, "the line plot", |d| {
         px(d, 0, 0)[3] == 0.0 && ridge(d).iter().all(Option::is_some)
     });
@@ -134,8 +138,8 @@ fn shaders_render_on_the_gpu() {
 
     // …and the same frame with two channels is a trajectory: one against the other, the range
     // shared so the shape is not distorted.
-    g.set_param(up, "input", "mode", "trajectory");
-    g.set_param(up, "input", "auto", true);
+    g.set_param(up, "plot", "mode", "trajectory");
+    g.set_param(up, "plot", "autoscale", true);
     g.set_param(ramp, "ramp", "channels", 2);
     let traj = drawn(&g, up, "the trajectory", |d| {
         let lit = ridge(d).iter().filter(|c| c.is_some()).count();
@@ -147,7 +151,7 @@ fn shaders_render_on_the_gpu() {
     assert!(at_right < at_left, "channel 1 against channel 0 climbs: {at_left} to {at_right}");
     assert!(right < 63, "and both axes share one range, so it does not fill the width: {right}");
 
-    g.set_param(up, "input", "mode", "texture");
+    g.set_param(up, "plot", "mode", "texture");
     g.set_param(ramp, "ramp", "channels", 1);
     drawn(&g, up, "the raw frame again", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 1.0]));
     g.call("link remove", j!({ "from": ep(hex(ramp), "out"), "to": ep(hex(up), "input") }));
@@ -173,7 +177,6 @@ fn shaders_render_on_the_gpu() {
     g.ready(knob);
     g.set_param(knob, "control", "value", 0.5);
     let knob_name = g.name(&hex(knob));
-    g.link(c, "out", level, "input");
     g.call("node param edit", j!({ "node": hex(level), "param": "level/gain",
                                   "reference": format!("{knob_name}.out"), "mode": "reference" }));
     drawn(&g, level, "half gain by reference", |d| close(px(d, 0, 0), [0.125, 0.25, 0.5, 1.0]));
@@ -194,6 +197,10 @@ fn shaders_render_on_the_gpu() {
     // Step: a loop closes through Feedback and accumulates a tenth a tick; one without it faults.
     let fb = g.add("graphics:Feedback");
     g.ready(fb);
+    // Sized down: what a loop does is the same at any size, and the default is read back whole on
+    // every poll of it.
+    g.set_param(fb, "common", "width", 64);
+    g.set_param(fb, "common", "height", 64);
     let acc = g.add("graphics:Level");
     g.ready(acc);
     g.set_param(acc, "level", "offset", 0.1);
@@ -454,7 +461,7 @@ fn shaders_render_on_the_gpu() {
     let bound = g.doc()["nodes"][hex(gen)]["params"]["common"]["width"].clone();
     assert_eq!((&bound["expr"], &bound["mode"]), (&j!("globals.system.default_width"), &j!("expression")),
                "the declared binding was seeded live, not flattened to a literal: {bound}");
-    drawn(&g, gen, "the patch's default size", |d| shape(d) == vec![512, 512, 4]);
+    drawn(&g, gen, "the patch's default size", |d| shape(d) == vec![1024, 1024, 4]);
     g.call("global entry edit", j!({ "name": "system.default_width", "value": 96 }));
     g.call("global entry edit", j!({ "name": "system.default_height", "value": 48 }));
     drawn(&g, gen, "every producer follows the global", |d| shape(d) == vec![48, 96, 4]);

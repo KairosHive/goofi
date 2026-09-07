@@ -21,6 +21,17 @@ pub fn dir() -> PathBuf {
         .join(".goofi")
 }
 
+/// The private node library: one flat node root the user owns, scanned after every other root
+/// and before the patch's own, so a node saved here beats a shipped one and loses to the patch.
+pub fn custom_nodes() -> PathBuf {
+    dir().join("custom")
+}
+
+/// Where a recording lands, and where a bare playback name is looked for.
+pub fn recordings() -> PathBuf {
+    dir().join("recordings")
+}
+
 fn sessions_dir() -> PathBuf {
     dir().join("sessions")
 }

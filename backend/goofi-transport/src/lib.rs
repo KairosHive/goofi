@@ -48,6 +48,38 @@ const MESSAGE_READERS: usize = 1;
 pub const MESSAGE_SLICE: usize = 1024;
 /// The pool a data publisher starts with; `PowerOfTwo` grows it for a larger frame.
 pub const INITIAL_SLICE: usize = 64 * 1024;
+/// The largest frame a SIGNAL recording service takes — 1 MiB clears a 64-channel, 2500-sample
+/// frame with room. A frame over it is REFUSED rather than allowed to grow the segment: depth and
+/// slice growth are the one place in goofi that multiply.
+pub const RECORD_SLICE: usize = 1024 * 1024;
+/// The largest frame an AUDIO recording service takes: one block of the widest output, with room.
+pub const AUDIO_RECORD_SLICE: usize = 64 * 1024;
+/// What one armed slot's segment costs, exactly and for any frame size — the publisher allocates
+/// [`RecordShape::buffer`] slices of [`RecordShape::slice`] and never grows.
+pub const RECORD_BUDGET: usize = 64 * 1024 * 1024;
+
+/// How one armed slot's segment is cut. The budget is the same whatever the engine; what differs is
+/// the frame — a signal frame is large and rare, an audio block is tiny and unceasing, so the same
+/// bytes buy 64 signal frames or 1024 audio blocks. The service overflows safely, so a reader
+/// slower than that depth loses the OLDEST frame, which the recorder counts by index.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RecordShape {
+    pub slice: usize,
+    pub buffer: usize,
+}
+
+/// The shape an engine's armed slots publish with and the recorder subscribes with. Both ends
+/// derive it from the engine name, so the service they meet on has only one description.
+pub fn record_shape(engine: &str) -> RecordShape {
+    let slice = match engine {
+        "audio" => AUDIO_RECORD_SLICE,
+        _ => RECORD_SLICE,
+    };
+    RecordShape { slice, buffer: RECORD_BUDGET / slice }
+}
+
+/// The id every armed slot rings the recorder's door with; the drain ignores it, so one is enough.
+pub const RECORD_EVENT_ID: EventId = 0;
 
 /// The name every service of one node is derived from: `<instance>_<uid>_<gen>`. `gen` is bumped on
 /// EVERY birth, because teardown never blocks and a rebirth would else race its predecessor.
@@ -73,6 +105,17 @@ pub fn status_service(base: &str) -> ServiceName {
 /// One output slot's data service — the name a consumer is given in its `InSlot` set.
 pub fn output_service(base: &str, slot: &str) -> ServiceName {
     format!("goofi_{base}_out_{slot}")
+}
+
+/// One output slot's recording service — the recorder's own deep buffer, never the shared wire.
+pub fn record_service(base: &str, slot: &str) -> ServiceName {
+    format!("goofi_{base}_rec_{slot}")
+}
+
+/// The ONE door every armed slot rings once its frame is out. It is the recorder's, not a node's,
+/// so a burst across every armed slot coalesces into one sweep of every armed buffer.
+pub fn record_door_service(instance: &str) -> ServiceName {
+    format!("goofi_{instance}_recdoor")
 }
 
 /// A notifier onto one node's door; the ringer knows nothing else about the node it rings.
@@ -279,6 +322,22 @@ pub fn data_service(node: &IoxNode, name: &str) -> Result<ByteService, String> {
         .map_err(|e| format!("data service `{name}`: {e}"))
 }
 
+/// A recorder's own service on an output slot: one subscriber, and a buffer deep enough that a
+/// journal commit does not cost frames. Depth is a service-level property, so this can never be
+/// the shared data service — 256 subscribers times this depth is half a gigabyte a slot.
+pub fn record_data_service(node: &IoxNode, name: &str, shape: RecordShape) -> Result<ByteService, String> {
+    node.service_builder(&parse_name(name)?)
+        .publish_subscribe::<[u8]>()
+        .max_nodes(MAX_NODES)
+        .enable_safe_overflow(true)
+        .history_size(0)
+        .subscriber_max_buffer_size(shape.buffer)
+        .max_publishers(1)
+        .max_subscribers(1)
+        .open_or_create()
+        .map_err(|e| format!("record service `{name}`: {e}"))
+}
+
 /// How many subscribers a data service has right now — whether anyone drinks from it.
 pub fn subscribers(service: &ByteService) -> usize {
     service.dynamic_config().number_of_subscribers()
@@ -290,6 +349,25 @@ pub fn open_output_subscriber(node: &IoxNode, service: &str) -> Result<ByteSubsc
         .subscriber_builder()
         .create()
         .map_err(|e| format!("subscriber `{service}`: {e}"))
+}
+
+/// The recording publisher: a STATIC segment of exactly [`RECORD_BUDGET`], so an outsized frame is
+/// refused at the loan instead of resizing it.
+pub fn record_publisher(service: &ByteService, what: &str, shape: RecordShape) -> Result<BytePublisher, String> {
+    service
+        .publisher_builder()
+        .initial_max_slice_len(shape.slice)
+        .allocation_strategy(AllocationStrategy::Static)
+        .create()
+        .map_err(|e| format!("record publisher `{what}`: {e}"))
+}
+
+/// Open the recorder's end of an armed output slot's recording service.
+pub fn open_record_subscriber(node: &IoxNode, service: &str, shape: RecordShape) -> Result<ByteSubscriber, String> {
+    record_data_service(node, service, shape)?
+        .subscriber_builder()
+        .create()
+        .map_err(|e| format!("record subscriber `{service}`: {e}"))
 }
 
 /// The stack a thread needs to OPEN an iceoryx2 service: the service's static config is parsed by
@@ -331,6 +409,12 @@ pub fn output_of(view: &GraphView<'_>, uid: Uid, slot: &str) -> Option<ServiceNa
     Some(output_service(&service_base(view.instance, uid, node.generation), slot))
 }
 
+/// One output slot's recording service name, from the view's birth facts.
+pub fn record_of(view: &GraphView<'_>, uid: Uid, slot: &str) -> Option<ServiceName> {
+    let node = view.nodes.get(&uid)?;
+    Some(record_service(&service_base(view.instance, uid, node.generation), slot))
+}
+
 /// A resolved variable as a node receives it: a service rather than a uid, because a node
 /// addresses a producer by service and cannot resolve anything for itself.
 pub fn var_of(view: &GraphView<'_>, v: &BoundVar) -> (String, Var) {
@@ -346,13 +430,15 @@ pub fn var_of(view: &GraphView<'_>, v: &BoundVar) -> (String, Var) {
 }
 
 /// Send one frame, then ring every bell. In that order, always: a consumer woken first drains
-/// nothing and parks. A loan failure is a shared-memory condition the next emit re-tries.
-pub fn publish<'a>(publisher: &BytePublisher, bytes: &[u8], bells: impl IntoIterator<Item = (&'a Doorbell, EventId)>) {
-    let Ok(sample) = publisher.loan_slice_uninit(bytes.len()) else { return };
+/// nothing and parks. `false` says the loan failed — no shared memory, or a frame over a static
+/// publisher's slice — which is a caller's to count.
+pub fn publish<'a>(publisher: &BytePublisher, bytes: &[u8], bells: impl IntoIterator<Item = (&'a Doorbell, EventId)>) -> bool {
+    let Ok(sample) = publisher.loan_slice_uninit(bytes.len()) else { return false };
     let _ = sample.write_from_slice(bytes).send();
     for (bell, id) in bells {
         let _ = bell.ring(id);
     }
+    true
 }
 
 /// The survivor `keep` names, taken out of what a reconcile held; what is left is what the new

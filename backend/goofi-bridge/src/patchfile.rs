@@ -34,7 +34,8 @@ pub(crate) async fn download(State(state): State<AppState>) -> Response {
     // await makes the handler's future non-Send, and axum will not take it.
     let packed = {
         let g = state.graph.lock().unwrap();
-        goofi_graph::archive::write_gfi(&tmp, &g.serialize(), &mount)
+        let extra = crate::bundled_custom(&g, &state.custom);
+        goofi_graph::archive::write_gfi(&tmp, &g.serialize(), &mount, &extra)
     }
     .and_then(|()| std::fs::read(&tmp).map_err(|e| format!("{}: {e}", tmp.display())));
     let _ = std::fs::remove_file(&tmp);

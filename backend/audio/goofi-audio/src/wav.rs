@@ -1,106 +1,12 @@
-//! WAV in both directions: a 32-bit float writer whose size fields stay right while it grows, and
-//! a reader over the kinds a recording or a sample arrives in.
+//! WAV in: a reader over the kinds a sample arrives in. What goofi WRITES is the recorder's own
+//! frame format, one reader for every engine.
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-
-/// Bytes before the first sample: RIFF, `fmt ` in the 18-byte form a float file needs, `fact`,
-/// and `data`.
-const HEADER: u64 = 58;
-/// What a RIFF size field holds, less the header: the point a take takes its next part.
-const CEILING: u64 = u32::MAX as u64 - HEADER;
 
 fn why(path: &Path, e: impl std::fmt::Display) -> String {
     format!("{}: {e}", path.display())
-}
-
-pub struct Writer {
-    file: BufWriter<File>,
-    pub path: PathBuf,
-    pub rate: u32,
-    pub channels: u16,
-    bytes: u64,
-    synced: u64,
-    scratch: Vec<u8>,
-}
-
-impl Writer {
-    pub fn create(path: &Path, rate: u32, channels: u16) -> Result<Writer, String> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| why(parent, e))?;
-        }
-        let mut file = BufWriter::new(File::create(path).map_err(|e| why(path, e))?);
-        let block = u32::from(channels) * 4;
-        let mut h: Vec<u8> = Vec::with_capacity(HEADER as usize);
-        h.extend_from_slice(b"RIFF");
-        h.extend_from_slice(&(HEADER as u32 - 8).to_le_bytes());
-        h.extend_from_slice(b"WAVEfmt ");
-        h.extend_from_slice(&18u32.to_le_bytes());
-        h.extend_from_slice(&3u16.to_le_bytes());
-        h.extend_from_slice(&channels.to_le_bytes());
-        h.extend_from_slice(&rate.to_le_bytes());
-        h.extend_from_slice(&rate.saturating_mul(block).to_le_bytes());
-        h.extend_from_slice(&(block as u16).to_le_bytes());
-        h.extend_from_slice(&32u16.to_le_bytes());
-        h.extend_from_slice(&0u16.to_le_bytes());
-        h.extend_from_slice(b"fact");
-        h.extend_from_slice(&4u32.to_le_bytes());
-        h.extend_from_slice(&0u32.to_le_bytes());
-        h.extend_from_slice(b"data");
-        h.extend_from_slice(&0u32.to_le_bytes());
-        file.write_all(&h).map_err(|e| why(path, e))?;
-        let scratch = Vec::new();
-        Ok(Writer { file, path: path.to_path_buf(), rate, channels, bytes: 0, synced: 0, scratch })
-    }
-
-    /// One planar `[C, T]` chunk, interleaved into the file. `false` says it did not fit under the
-    /// RIFF ceiling, and the take carries on in its next part.
-    pub fn write(&mut self, planar: &[f32], frames: usize) -> Result<bool, String> {
-        let c = self.channels as usize;
-        let size = (frames * c * 4) as u64;
-        if self.bytes + size > CEILING {
-            return Ok(false);
-        }
-        self.scratch.clear();
-        self.scratch.reserve(size as usize);
-        for i in 0..frames {
-            for ch in 0..c {
-                self.scratch.extend_from_slice(&planar[ch * frames + i].to_le_bytes());
-            }
-        }
-        self.file.write_all(&self.scratch).map_err(|e| why(&self.path, e))?;
-        self.bytes += size;
-        Ok(true)
-    }
-
-    pub fn frames(&self) -> u64 {
-        self.bytes / (self.channels as u64 * 4)
-    }
-
-    /// Patch the three size fields. Called as the take grows too, so a goofi that dies leaves a
-    /// file that still plays.
-    pub fn sync(&mut self) -> Result<(), String> {
-        if self.synced == self.bytes {
-            return Ok(());
-        }
-        self.file.flush().map_err(|e| why(&self.path, e))?;
-        let frames = self.frames() as u32;
-        let file = self.file.get_mut();
-        for (at, v) in [(4u64, (HEADER - 8 + self.bytes) as u32), (46, frames), (54, self.bytes as u32)] {
-            file.seek(SeekFrom::Start(at)).map_err(|e| why(&self.path, e))?;
-            file.write_all(&v.to_le_bytes()).map_err(|e| why(&self.path, e))?;
-        }
-        file.seek(SeekFrom::End(0)).map_err(|e| why(&self.path, e))?;
-        self.synced = self.bytes;
-        Ok(())
-    }
-}
-
-impl Drop for Writer {
-    fn drop(&mut self) {
-        let _ = self.sync();
-    }
 }
 
 /// What a `fmt ` chunk says one sample is.

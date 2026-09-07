@@ -6,17 +6,17 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::FromSample;
-use goofi_audio_sdk::{high, BLOCK, MAX_CHANNELS};
+use goofi_audio_sdk::{BLOCK, MAX_CHANNELS};
 use goofi_control::{flag, text, Cx, Half, Ticked};
 use goofi_core::{Data, Meta, Param};
 use goofi_node::{NodeManifest, ParamKey};
 
 use crate::nodes::midi_in::{Note, NO_PORT};
 use crate::nodes::{audio_in, audio_out, audio_playback, midi_in};
+use crate::runtime::REC_HEADER;
 use crate::{wav, Clock, DEFAULT_DEVICE, NO_DEVICE, RATE};
 
 /// A tap holds this many blocks of the widest output; what does not fit is dropped, newest first.
@@ -24,12 +24,11 @@ pub const TAP_RING: usize = (1 + MAX_CHANNELS as usize * BLOCK) * 16;
 /// An inbox holds one second of the widest frame at the rate; a frame that does not fit is
 /// dropped whole.
 pub const INBOX_RING: usize = RATE as usize * MAX_CHANNELS as usize;
-/// A take's ring holds one second of the widest block, as an inbox holds one second of a frame.
-pub const REC_RING: usize = (1 + MAX_CHANNELS as usize * BLOCK) * (RATE as usize / BLOCK);
+/// A recording ring holds one second of the widest block, as an inbox holds one second of a frame:
+/// the control half drains it every tick, so a second is what a stalled thread may cost.
+pub const REC_RING: usize = (REC_HEADER + MAX_CHANNELS as usize * BLOCK) * (RATE as usize / BLOCK);
 /// Notes a port may hold between two blocks.
 pub const NOTE_RING: usize = 1024;
-/// How often a take patches its size fields, so a goofi that dies leaves a file that still plays.
-const SYNC: Duration = Duration::from_secs(1);
 /// How much of a file one read takes, in frames of the file's own rate.
 const READ_CHUNK: usize = 2048;
 
@@ -43,8 +42,6 @@ pub type Feed<T> = Arc<Mutex<rtrb::Producer<T>>>;
 pub struct Ports {
     pub audio_in: Option<(Feed<f32>, Arc<AtomicU16>)>,
     pub midi_in: Option<Feed<Note>>,
-    /// The control half's end of an `AudioOut`'s take ring.
-    pub rec: Option<rtrb::Consumer<f32>>,
     /// The ring an `AudioPlayback` fills from its file, and the width the file answered.
     pub play: Option<(rtrb::Producer<f32>, Arc<AtomicU16>)>,
 }
@@ -73,6 +70,8 @@ pub struct AudioShared {
     pub edits: Mutex<Vec<(goofi_node::Uid, u32, f64)>>,
     /// The drain's door, so an edit made on the window thread is taken without waiting for a tick.
     pub waker: Arc<goofi_node::DrainWaker>,
+    /// The block count and its one tie to the clock: what dates every recorded block.
+    pub anchor: Arc<crate::runtime::Anchor>,
 }
 
 impl AudioShared {
@@ -99,8 +98,9 @@ pub struct AudioHalf {
     taps: Vec<Tap>,
     ports: Ports,
     io: Io,
-    /// An `AudioOut`'s take, and an `AudioPlayback`'s file; every other node has neither.
-    rec: Option<Rec>,
+    /// One per output: the blocks the audio thread left, each wearing its own number.
+    recs: Vec<rtrb::Consumer<f32>>,
+    /// An `AudioPlayback`'s file; every other node has none.
     play: Option<Play>,
     audio: Arc<AudioShared>,
 }
@@ -110,6 +110,8 @@ pub struct Birth {
     pub manifest: &'static NodeManifest,
     pub inboxes: Vec<Inbox>,
     pub taps: Vec<rtrb::Consumer<f32>>,
+    /// Per output: the recording ring's consumer.
+    pub recs: Vec<rtrb::Consumer<f32>>,
     pub ports: Ports,
     pub audio: Arc<AudioShared>,
 }
@@ -127,7 +129,7 @@ impl AudioHalf {
             manifest: birth.manifest,
             inboxes: birth.inboxes,
             taps: birth.taps.into_iter().map(|ring| Tap { ring }).collect(),
-            rec: ports.rec.take().map(Rec::new),
+            recs: birth.recs,
             play: ports.play.take().map(Play::new),
             ports,
             io: Io::default(),
@@ -208,30 +210,6 @@ impl AudioHalf {
             }
         }
         replan
-    }
-
-    /// The take, driven by what the ring HOLDS: the DSP half pushes only while `record.on` is
-    /// high, so the blocks are the request themselves. A take shorter than a tick still lands,
-    /// and none loses the head a sampled level would cut. The name is read where the take opens,
-    /// and one that will not open stands as an error until the take ends or the name moves.
-    /// `record.on` is read live, so a bound gate records too.
-    fn record(&mut self, cx: &Cx<'_>) -> Option<String> {
-        let rate = self.audio.rate();
-        let on = high(f64::from_bits(cx.params[audio_out::P::ON].load(Ordering::Relaxed)) as f32);
-        let named = (text(cx.consts, audio_out::P::FILE), flag(cx.consts, audio_out::P::UNIQUE));
-        let rec = self.rec.as_mut()?;
-        if rec.named.as_ref() != Some(&named) {
-            rec.named = Some(named.clone());
-            rec.error = None;
-        }
-        rec.drain(&named, rate);
-        if !on {
-            rec.take = None;
-            rec.stem = None;
-            rec.part = 0;
-            rec.error = None;
-        }
-        rec.error.clone()
     }
 
     /// The file, driven from settled state: a name that moved is opened, a `position` that moved
@@ -324,11 +302,6 @@ impl Half for AudioHalf {
     fn tick(&mut self, cx: &Cx<'_>, publish: &mut dyn FnMut(usize, &[u8])) -> Ticked {
         let mut ticked = Ticked::default();
         ticked.replan |= self.open_io(cx.consts, &mut ticked.errors);
-        if self.rec.is_some() {
-            let error = self.record(cx);
-            let key = key_of(self.manifest, audio_out::P::ON);
-            ticked.errors.push((key, error));
-        }
         if self.play.is_some() {
             let (error, moved) = self.playback(cx);
             let key = key_of(self.manifest, audio_playback::P::FILE);
@@ -336,6 +309,10 @@ impl Half for AudioHalf {
             ticked.replan |= moved;
         }
         let rate = self.audio.rate();
+        let anchor = self.audio.anchor.clone();
+        for (i, ring) in self.recs.iter_mut().enumerate() {
+            record_out(ring, cx, i, rate, &anchor);
+        }
         for (i, tap) in self.taps.iter_mut().enumerate() {
             let Some((c, planar)) = drain_blocks(&mut tap.ring) else { continue };
             if !cx.readers[i] {
@@ -439,67 +416,43 @@ fn drain_blocks(ring: &mut rtrb::Consumer<f32>) -> Option<(usize, Vec<f32>)> {
     (chans != 0).then(|| (chans, planar.concat()))
 }
 
-/// An `AudioOut`'s take: the ring its DSP half fills, and the part being written. A break — the
-/// width moved, the rate moved, or RIFF filled — closes the part and opens the next.
-struct Rec {
-    ring: rtrb::Consumer<f32>,
-    take: Option<wav::Writer>,
-    /// The name every part is numbered from, while a take is asked for.
-    stem: Option<PathBuf>,
-    part: u32,
-    synced: Instant,
-    /// The name and `unique` last seen; a move of either lets a take that failed be tried again.
-    named: Option<(String, bool)>,
-    error: Option<String>,
+/// One block off a recording ring: its width, its own number, the tie it is read against, and its
+/// planar samples. `None` until a whole block is there.
+fn take_block(ring: &mut rtrb::Consumer<f32>) -> Option<(usize, u64, u64, Vec<f32>)> {
+    // `as_slices` rather than an iterator: iterating a chunk COMMITS what it yields, so a header
+    // read that way is eaten — and a partial block would then leave the reader between two blocks.
+    let head = {
+        let peek = ring.read_chunk(REC_HEADER).ok()?;
+        let (a, b) = peek.as_slices();
+        let at = |i: usize| if i < a.len() { a[i] } else { b[i - a.len()] };
+        [at(0), at(1), at(2), at(3)]
+    };
+    let c = head[0] as usize;
+    if c == 0 || ring.slots() < REC_HEADER + c * BLOCK {
+        return None;
+    }
+    let whole = ring.read_chunk(REC_HEADER + c * BLOCK).ok()?;
+    let (a, b) = whole.as_slices();
+    let planar: Vec<f32> = a.iter().chain(b).skip(REC_HEADER).copied().collect();
+    whole.commit_all();
+    Some((c, crate::runtime::number_in(head[1], head[2]), head[3] as u64, planar))
 }
 
-impl Rec {
-    fn new(ring: rtrb::Consumer<f32>) -> Rec {
-        Rec { ring, take: None, stem: None, part: 0, synced: Instant::now(), named: None, error: None }
-    }
-
-    fn drain(&mut self, named: &(String, bool), rate: f64) {
-        while let Some((c, planar)) = drain_blocks(&mut self.ring) {
-            if self.error.is_some() {
-                continue;
-            }
-            if self.stem.is_none() {
-                self.stem = Some(take_stem(&named.0, named.1));
-                self.part = 0;
-            }
-            if let Err(e) = self.write(c, &planar, rate) {
-                self.error = Some(e);
-                self.stem = None;
-                self.take = None;
-            }
+/// Every whole block the audio thread left, as one frame each. The BLOCK carries its own number, so
+/// a block that never reached the ring leaves a gap the recorder counts, and the blocks around it
+/// keep the instants they were rendered at. An unarmed slot's blocks are dropped here, so the ring
+/// never fills while nobody records.
+fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64, anchor: &crate::runtime::Anchor) {
+    while let Some((c, n, epoch, planar)) = take_block(ring) {
+        if !cx.recorded[out] {
+            continue;
         }
-    }
-
-    fn write(&mut self, c: usize, planar: &[f32], rate: f64) -> Result<(), String> {
-        let frames = planar.len() / c;
-        let rate = rate.round().max(1.0) as u32;
-        if self.take.as_ref().is_some_and(|w| w.channels != c as u16 || w.rate != rate) {
-            self.take = None;
+        let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let mut meta = Meta::new().with_sfreq(Some(rate)).with_index(Some(n));
+        meta.set_time(Some(anchor.seconds(n, epoch)));
+        if let Ok(frame) = Data::array_f32(vec![c, BLOCK], bytes, meta) {
+            (cx.record)(out, &goofi_codec::encode(&frame));
         }
-        // Twice at most: a part opened for this chunk is empty, so it always takes it.
-        for _ in 0..2 {
-            if self.take.is_none() {
-                self.part += 1;
-                let stem = self.stem.clone().ok_or("no take is open")?;
-                self.take = Some(wav::Writer::create(&part_path(&stem, self.part), rate, c as u16)?);
-                self.synced = Instant::now();
-            }
-            let take = self.take.as_mut().expect("the part just opened");
-            if take.write(planar, frames)? {
-                if self.synced.elapsed() >= SYNC {
-                    self.synced = Instant::now();
-                    take.sync()?;
-                }
-                return Ok(());
-            }
-            self.take = None;
-        }
-        Ok(())
     }
 }
 
@@ -538,55 +491,15 @@ fn rooted(p: &Path) -> bool {
 }
 
 /// Where a name is looked for: the recordings folder for a bare one, an absolute path as it is,
-/// and `.wav` joined on where it is not already there — the spelling a take is written under.
+/// and `.wav` joined on where it is not already there.
 fn source_path(name: &str) -> PathBuf {
     let name = name.trim();
     let name = if name.to_ascii_lowercase().ends_with(".wav") { name.to_string() } else { format!("{name}.wav") };
     if rooted(Path::new(&name)) {
         PathBuf::from(name)
     } else {
-        crate::recordings().join(name)
+        goofi_core::home::recordings().join(name)
     }
-}
-
-/// Where a take lands: a bare name under the recordings folder, an absolute path as it is, and
-/// the time joined on when the name must not be reused.
-fn take_stem(file: &str, unique: bool) -> PathBuf {
-    let name = file.trim();
-    let name = name.strip_suffix(".wav").unwrap_or(name);
-    let name = if name.is_empty() { "take" } else { name };
-    let stem = if rooted(Path::new(name)) { PathBuf::from(name) } else { crate::recordings().join(name) };
-    if !unique {
-        return stem;
-    }
-    let mut named = stem.into_os_string();
-    named.push(format!("-{}", stamp()));
-    PathBuf::from(named)
-}
-
-fn part_path(stem: &Path, part: u32) -> PathBuf {
-    let mut name = stem.to_path_buf().into_os_string();
-    if part > 1 {
-        name.push(format!("-{part}"));
-    }
-    name.push(".wav");
-    PathBuf::from(name)
-}
-
-/// UTC as `YYYYMMDD-HHMMSS`, so takes sort in the order they were played.
-fn stamp() -> String {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let (days, rest) = ((secs / 86_400) as i64, secs % 86_400);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}{month:02}{day:02}-{:02}{:02}{:02}", rest / 3600, (rest / 60) % 60, rest % 60)
 }
 
 /// The device's input stream, opened AT the clock's rate — a device that cannot is the error —
@@ -624,15 +537,9 @@ fn open_input(
     // `f32` for every client, so demanding it cost nothing and was never wrong there; a host that
     // hands over the device's own word — a Focusrite's is `i32` — failed outright on a format goofi
     // never asked about. Reading it and converting in the callback is the whole of the difference.
-    let open = |f| match f {
-        cpal::SampleFormat::F32 => input_stream::<f32>(&device, config, channels, producer.clone(), dead.clone()),
-        cpal::SampleFormat::I8 => input_stream::<i8>(&device, config, channels, producer.clone(), dead.clone()),
-        cpal::SampleFormat::I16 => input_stream::<i16>(&device, config, channels, producer.clone(), dead.clone()),
-        cpal::SampleFormat::I32 => input_stream::<i32>(&device, config, channels, producer.clone(), dead.clone()),
-        cpal::SampleFormat::U8 => input_stream::<u8>(&device, config, channels, producer.clone(), dead.clone()),
-        cpal::SampleFormat::U16 => input_stream::<u16>(&device, config, channels, producer.clone(), dead.clone()),
-        cpal::SampleFormat::F64 => input_stream::<f64>(&device, config, channels, producer.clone(), dead.clone()),
-        other => Err(format!("the driver's sample format {other} is one goofi does not read")),
+    let refused = |f| format!("the driver's sample format {f} is one goofi does not read");
+    let open = |f| {
+        crate::by_format!(f, input_stream, refused, &device, config, channels, producer.clone(), dead.clone())
     };
     let stream = open(format).map_err(|e| format!("`{name}`: {e}"))?;
     stream.play().map_err(|e| format!("`{name}`: {e}"))?;

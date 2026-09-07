@@ -119,6 +119,8 @@ pub struct NodeView<'a> {
     pub manifest: &'static NodeManifest,
     pub params: &'a ParamGroups,
     pub bindings: Vec<BindingView<'a>>,
+    /// The output slots armed for recording.
+    pub recorded: &'a [String],
 }
 
 /// The settled graph, as every engine reads it after a batch: the WHOLE graph — engines filter.
@@ -161,6 +163,8 @@ pub enum Touched {
     Slot(Uid, &'static str),
     /// A param whose value or binding moved and must reach its node.
     Param(Uid, ParamKey),
+    /// A node whose armed output slots moved.
+    Record(Uid),
 }
 
 /// One node class an engine advertises: the shared manifest plus the display tier. The engine a

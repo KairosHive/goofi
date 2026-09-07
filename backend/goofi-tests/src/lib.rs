@@ -37,6 +37,7 @@ pub struct Goofi {
 impl Drop for Goofi {
     fn drop(&mut self) {
         if self.owner {
+            self.state.stop_recording();
             self.state.graph.lock().unwrap_or_else(|e| e.into_inner()).shutdown();
             self.state.release_mount();
             // Last: every plugin was unmade on it by the shutdown above.

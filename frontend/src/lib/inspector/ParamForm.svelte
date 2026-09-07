@@ -28,6 +28,7 @@
 	import type { SourcePatch } from '$lib/api/types';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { graph } from '$lib/stores/graph.svelte';
+	import { notify } from '$lib/stores/notify.svelte';
 	import { isValidName } from '$lib/crdt/graphDoc';
 	import { formatName } from '$lib/editor/categoryColor';
 	import { bareName } from '$lib/editor/typeId';
@@ -100,6 +101,28 @@
 	function focusInput(el: HTMLInputElement): void {
 		el.focus();
 		el.select();
+	}
+
+	// Only a node the user wrote in THIS patch can move to the library: one already in the library
+	// is there, and a shipped one is not the user's to keep.
+	const savable = $derived.by(() => {
+		const n = node;
+		return n != null && (g.nodeTypes ?? []).some((t) => t.type === n.type && t.source === 'patch');
+	});
+	let saving = $state(false);
+
+	async function saveToLibrary(): Promise<void> {
+		const n = node;
+		if (!n) return;
+		saving = true;
+		try {
+			await g.saveNodeToLibrary(n.type);
+			notify().raise(`${bareName(n.type)} is in your library`);
+		} catch (e) {
+			notify().failure('Save to library', e);
+		} finally {
+			saving = false;
+		}
 	}
 
 	const groupNames = $derived(node ? Object.keys(node.params) : []);
@@ -210,6 +233,17 @@
 					</div>
 				{/snippet}
 				{#snippet end()}
+					{#if savable}
+						<IconButton
+							variant="ghost"
+							density="chrome"
+							label="Save to my library"
+							title="Move this node's file into your private library, where every patch finds it"
+							data-testid="save-to-library"
+							disabled={saving}
+							onclick={saveToLibrary}><Icon name="save" /></IconButton
+						>
+					{/if}
 					<Badge
 						tone={BADGE_TONE[health.tone]}
 						class="pf-state"

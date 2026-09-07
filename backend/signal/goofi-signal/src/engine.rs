@@ -142,6 +142,13 @@ impl SignalEngine {
         keys
     }
 
+    /// Tell one node which of its output slots are armed — the whole set, which the node diffs.
+    fn record_slots(&mut self, view: &GraphView<'_>, uid: Uid) {
+        let Some(node) = view.nodes.get(&uid).filter(|n| n.engine == self.id()) else { return };
+        let slots = node.recorded.to_vec();
+        self.wire.send(uid, runtime::Control::RecSlot { slots });
+    }
+
     fn replan(&mut self, view: &GraphView<'_>, key: SlotKey) {
         // Engines FILTER the whole-graph view: a consumer that is never rung drains its boundary
         // at its own clock, and its producers are told nothing.
@@ -393,11 +400,14 @@ impl Engine for SignalEngine {
                 self.wire.forget_planned(&key);
                 self.replan(view, key);
             }
+            // A reborn node owns none of its predecessor's ports, so it is told the set again.
+            self.record_slots(view, uid);
         }
         for t in touched {
             match t {
                 Touched::Slot(uid, slot) => self.replan(view, (*uid, Slot::In(slot))),
                 Touched::Param(uid, key) => self.replan(view, (*uid, Slot::Bind(key.clone()))),
+                Touched::Record(uid) => self.record_slots(view, *uid),
             }
         }
         for key in std::mem::take(&mut self.pending_advance) {

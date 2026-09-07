@@ -69,6 +69,8 @@ export const query = {
 			unsavedChanges: g.unsavedChanges
 		};
 	},
+	/** Every armed output slot, as the document holds it. */
+	armed: (): { uid: string; slot: string }[] => graph().armed,
 	nodeTypes: (): NodeTypeInfo[] | null => graph().nodeTypes,
 	/** Whether the replica has pulled from the manager yet; until true, `graph()` reads describe an EMPTY replica. */
 	docSynced: (): boolean => graph().docSynced,

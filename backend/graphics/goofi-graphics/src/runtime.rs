@@ -4,13 +4,14 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use goofi_core::{Data, Meta};
+use goofi_record::{Kind, Recorder, StreamId, StreamMeta};
 use goofi_node::Uid;
 
 use crate::gpu::{padded_row, target, Gpu, Want};
-use crate::transfer::Upload;
+use crate::half::Upload;
 use crate::plan::{Input, Plan};
 use crate::shader;
 
@@ -20,6 +21,7 @@ pub enum Cmd {
     Remove(Uid),
     Plan(Plan),
     Ui(Option<goofi_window::Ui>),
+    Recorder(Arc<Recorder>),
 }
 
 #[derive(Default)]
@@ -73,7 +75,7 @@ struct Ring {
 struct State {
     out: Option<Target>,
     /// One per [`Want`], sized with `out`; only a stage that reader watches has one.
-    reads: [Option<Ring>; 2],
+    reads: [Option<Ring>; 3],
     /// One declared state buffer each: the texture the last tick left, and the one this tick
     /// writes. They swap after every render, which is the whole of how a node holds state.
     buffers: Vec<[Target; 2]>,
@@ -81,6 +83,8 @@ struct State {
     /// state, which is how a body knows to seed itself.
     count: u32,
     uploads: Vec<Option<Target>>,
+    /// The range each upload spanned, in the uniform's own order.
+    ranges: Vec<[f32; 2]>,
     time: wgpu::Buffer,
     frame: wgpu::Buffer,
     resolution: wgpu::Buffer,
@@ -95,6 +99,13 @@ pub struct Runtime {
     /// The window thread, where a stage with a window on the machine's screen sends its frame.
     pub ui: Option<goofi_window::Ui>,
     presenting: HashMap<goofi_window::Id, Arc<Present>>,
+    /// The one recorder, and the video stream each armed stage has open on it.
+    recorder: Option<Arc<Recorder>>,
+    taping: HashMap<Uid, Tape>,
+    /// What an armed stage the recorder could not open a stream for wears, until it is disarmed
+    /// or the recording ends. The engine folds it into the faults it settles.
+    troubles: Troubles,
+    shared: Arc<goofi_control::Shared>,
     /// What the graph asked for since the last tick. An op appends here and never waits on a
     /// render: a tick is long, and a lock a render holds is a lock an op cannot have.
     pub inbox: Arc<Mutex<Vec<Cmd>>>,
@@ -103,7 +114,13 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    pub fn new(gpu: Arc<Gpu>, time: Arc<goofi_core::time::Time>, stats: Arc<Stats>) -> Runtime {
+    pub fn new(
+        gpu: Arc<Gpu>,
+        time: Arc<goofi_core::time::Time>,
+        stats: Arc<Stats>,
+        troubles: Troubles,
+        shared: Arc<goofi_control::Shared>,
+    ) -> Runtime {
         Runtime {
             gpu,
             plan: Plan::default(),
@@ -112,6 +129,10 @@ impl Runtime {
             stats,
             ui: None,
             presenting: HashMap::new(),
+            recorder: None,
+            taping: HashMap::new(),
+            troubles,
+            shared,
             inbox: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -130,13 +151,14 @@ impl Runtime {
         };
         let state = State {
             out: None,
-            reads: [None, None],
+            reads: [None, None, None],
             buffers: Vec::new(),
             count: 0,
             uploads: Vec::new(),
             time: uniform("time", 4),
             frame: uniform("frame", 4),
             resolution: uniform("resolution", 8),
+            ranges: Vec::new(),
             params: (params > 0).then(|| uniform("params", params as u64)),
         };
         self.states.insert(uid, state);
@@ -172,6 +194,7 @@ impl Runtime {
                 Cmd::Remove(uid) => self.remove(uid),
                 Cmd::Plan(plan) => self.set_plan(plan),
                 Cmd::Ui(ui) => self.ui = ui,
+                Cmd::Recorder(r) => self.recorder = Some(r),
             }
         }
     }
@@ -182,14 +205,16 @@ impl Runtime {
         self.drain_inbox();
         let began = Instant::now();
         let t = self.time.now();
-        let want = self.plan.demanded();
+        let recording = self.recorder.as_ref().is_some_and(|r| r.running());
+        self.follow_record(recording, t);
+        let want = self.plan.demanded(recording);
         if !want.contains(&true) {
             self.stats.frames.fetch_add(1, Ordering::Relaxed);
             return;
         }
         let _gate = crate::gpu::gate();
         // What an earlier tick put on the device and the device has finished since.
-        self.take();
+        self.take(t);
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         let mut started: Vec<(Uid, Want, Slot, (u32, u32))> = Vec::new();
         for (i, drawn) in want.iter().enumerate() {
@@ -199,7 +224,7 @@ impl Runtime {
             let stage = &self.plan.stages[i];
             let Some(Ok(pipeline)) = stage.pipeline.get() else { continue };
             let Some(state) = self.states.get_mut(&stage.uid) else { continue };
-            state.ensure_out(&self.gpu, stage.size, stage.wants(), stage.state);
+            state.ensure_out(&self.gpu, stage.size, stage.wants(recording), stage.state);
             let shrunk_from = stage.size;
             for (k, cell) in stage.uploads.iter().enumerate() {
                 if let Some(up) = cell.lock().unwrap().take() {
@@ -211,7 +236,8 @@ impl Runtime {
             let res = [(stage.size.0 as f32).to_le_bytes(), (stage.size.1 as f32).to_le_bytes()].concat();
             self.gpu.queue.write_buffer(&state.resolution, 0, &res);
             if let Some(buf) = &state.params {
-                self.gpu.queue.write_buffer(buf, 0, &shader::uniform_bytes(stage.decls, &stage.params));
+                let bytes = shader::uniform_bytes(stage.decls, &stage.params, &state.ranges);
+                self.gpu.queue.write_buffer(buf, 0, &bytes);
             }
             // Cloned handles, so reading another stage's output ends the borrow of `states`.
             let views: Vec<wgpu::TextureView> = stage
@@ -279,6 +305,10 @@ impl Runtime {
                 if w == Want::Tap && !stage.tap.lock().expect("the tap").wanted {
                     continue;
                 }
+                // A stage the recorder could not open a stream for is read back for nobody.
+                if w == Want::Record && !self.taping.get(&stage.uid).is_some_and(|t| t.live) {
+                    continue;
+                }
                 let state = self.states.get_mut(&stage.uid).expect("just borrowed");
                 let Some(ring) = state.reads[w as usize].as_mut() else { continue };
                 let out_size = ring.out_size.clone();
@@ -317,9 +347,89 @@ impl Runtime {
         self.stats.tick_max_us.fetch_max(began.elapsed().as_micros() as u64, Ordering::Relaxed);
     }
 
+    /// The video stream each armed stage should have open, opened, closed and counted to match
+    /// settled state and the recorder's own. A stage whose size moved is a NEW file: a container
+    /// holds one size, and a seam the file system shows beats one hidden inside a video.
+    fn follow_record(&mut self, recording: bool, t: f64) {
+        let Some(rec) = self.recorder.clone() else { return };
+        let mut want: HashMap<Uid, (StreamId, (u32, u32))> = HashMap::new();
+        if recording {
+            for stage in &self.plan.stages {
+                if let Some(r) = &stage.record {
+                    let id = StreamId {
+                        uid: stage.uid,
+                        node: r.node.clone(),
+                        slot: r.slot.clone(),
+                        engine: "graphics",
+                    };
+                    want.insert(stage.uid, (id, stage.size));
+                }
+            }
+        }
+        for uid in self.taping.keys().copied().collect::<Vec<_>>() {
+            let held = &self.taping[&uid];
+            // The RECORDER owns whether a stream is open: a `record disarm` closes one behind the
+            // render thread's back, and a tape kept over that would never open the next file.
+            let kept = want.get(&uid).is_some_and(|(_, size)| *size == held.size)
+                && (!held.live || rec.is_open(&held.id));
+            if kept {
+                if held.missed > 0 && held.said.elapsed() >= SAY_EVERY {
+                    rec.dropped(&held.id, held.missed, t);
+                    let held = self.taping.get_mut(&uid).expect("just read");
+                    held.missed = 0;
+                    held.said = Instant::now();
+                }
+                continue;
+            }
+            let why = match want.get(&uid) {
+                Some((_, size)) if *size != held.size => "resized",
+                Some(_) => "reopened",
+                None if recording => "disarmed",
+                None => "stopped",
+            };
+            let held = self.taping.remove(&uid).expect("just read");
+            self.trouble(uid, None);
+            if held.live {
+                rec.close_later(&held.id, why, held.missed, t);
+            }
+        }
+        for (uid, (id, size)) in want {
+            // A stream the reaper has not finished closing is opened on a later tick: opening
+            // over it would finalize the encoder HERE, which is what `close_later` exists to stop.
+            // A frame rendered in that window belongs to no file and is neither kept nor counted.
+            if self.taping.contains_key(&uid) || rec.is_open(&id) {
+                continue;
+            }
+            let kind = Kind::Video { size, fps: crate::FPS };
+            let live = match rec.open(&id, kind, t, StreamMeta::measured(Some(crate::FPS))) {
+                Ok(()) => true,
+                // A stream that will not open is this NODE's failure and nobody else's: the
+                // recording keeps every other stream, and the entry the recorder filed says why.
+                Err(why) => {
+                    self.trouble(uid, Some(format!("not recorded: {why}")));
+                    false
+                }
+            };
+            self.taping.insert(uid, Tape { id, size, missed: 0, said: Instant::now(), live });
+        }
+    }
+
+    /// Raise or clear what an armed stage wears, and ask for the settle that publishes it.
+    fn trouble(&self, uid: Uid, why: Option<String>) {
+        let mut held = self.troubles.lock().expect("the record troubles");
+        let was = match why {
+            Some(why) => held.insert(uid, why),
+            None => held.remove(&uid),
+        };
+        if was != held.get(&uid).cloned() {
+            self.shared.replan.store(true, Ordering::Release);
+            self.shared.waker.notify();
+        }
+    }
+
     /// Every frame the device has finished, given to the reader that asked for it. The GPU wrote
     /// that reader's own format, so this is a copy of rows and never a conversion.
-    fn take(&mut self) {
+    fn take(&mut self, t: f64) {
         for i in 0..self.plan.stages.len() {
             for w in Want::ALL {
                 let uid = self.plan.stages[i].uid;
@@ -341,12 +451,27 @@ impl Runtime {
                 if !filled {
                     continue;
                 }
-                let stage = &self.plan.stages[i];
+                // Read off the stage and the borrow ended, so the recorder's own counters below
+                // may take `self` mutably.
+                let (window, tap_cell) = {
+                    let stage = &self.plan.stages[i];
+                    (stage.window, stage.tap.clone())
+                };
                 match w {
                     Want::Screen => {
-                        if let (Some(id), Some(ui)) = (stage.window, &self.ui) {
+                        if let (Some(id), Some(ui)) = (window, &self.ui) {
                             present(self.presenting.entry(id).or_default(), ui, id, size, rows, spare);
                         }
+                    }
+                    Want::Record => {
+                        // A readback still in flight from the last size belongs to the file that
+                        // size opened, which is closed — it is nobody's drop and nobody's frame.
+                        let held = self.taping.get(&uid).filter(|tape| tape.live && tape.size == size);
+                        if let Some((tape, rec)) = held.zip(self.recorder.as_ref()) {
+                            let taken = rec.write_video(&tape.id, &rows, t);
+                            self.taping.get_mut(&uid).expect("just read").missed += u64::from(!taken);
+                        }
+                        give_back(&spare, rows);
                     }
                     Want::Tap => {
                         let shape = vec![size.1 as usize, size.0 as usize, 4];
@@ -360,7 +485,7 @@ impl Runtime {
                             goofi_core::reduce::note_reduced(&mut meta, &axes);
                         }
                         if let Ok(frame) = Data::array_f32(shape, rows, meta) {
-                            let mut tap = stage.tap.lock().expect("the tap");
+                            let mut tap = tap_cell.lock().expect("the tap");
                             tap.frame = Some(frame);
                             tap.wanted = false;
                         }
@@ -370,6 +495,25 @@ impl Runtime {
         }
     }
 }
+
+/// One armed stage's open video stream: what the recorder files it under, the size it was opened
+/// at, and the frames the encoder could not keep up with since the last time it was told.
+struct Tape {
+    id: StreamId,
+    size: (u32, u32),
+    missed: u64,
+    said: Instant,
+    /// Whether the recorder actually opened it. A stage that could not be encoded keeps its tape
+    /// so nothing tries again every tick, and writes nothing.
+    live: bool,
+}
+
+/// What each armed stage the recorder refused wears, shared with the engine that settles it.
+pub type Troubles = Arc<Mutex<HashMap<Uid, String>>>;
+
+/// How often a run of dropped frames reaches the manifest. Every drop is counted; a manifest
+/// rewritten per frame would be the recording's own cost.
+const SAY_EVERY: Duration = Duration::from_secs(1);
 
 /// A frame as the screen takes it: its size, and its texels in the screen's own byte order.
 type Frame = ((u32, u32), Vec<u8>);
@@ -480,7 +624,7 @@ impl State {
     /// The output texture at `size`, the state buffers beside it, and one readback per reader
     /// that is there. All are remade when the size moves, which is what loses a feedback chain
     /// and a stateful node their history.
-    fn ensure_out(&mut self, gpu: &Gpu, size: (u32, u32), wants: [Option<(u32, u32)>; 2], buffers: usize) {
+    fn ensure_out(&mut self, gpu: &Gpu, size: (u32, u32), wants: [Option<(u32, u32)>; 3], buffers: usize) {
         if self.out.as_ref().is_none_or(|t| t.size != size) || self.buffers.len() != buffers {
             let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
@@ -495,7 +639,7 @@ impl State {
             };
             self.buffers = (0..buffers).map(|_| [fresh(), fresh()]).collect();
             self.count = 0;
-            self.reads = [None, None];
+            self.reads = [None, None, None];
         }
         for w in Want::ALL {
             let held = &mut self.reads[w as usize];
@@ -513,6 +657,10 @@ impl State {
         if self.uploads.len() <= k {
             self.uploads.resize_with(k + 1, || None);
         }
+        if self.ranges.len() <= k {
+            self.ranges.resize(k + 1, [0.0, 1.0]);
+        }
+        self.ranges[k] = [up.lo, up.hi];
         let size = (up.width, up.height);
         if self.uploads[k].as_ref().is_none_or(|t| t.size != size) {
             let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
@@ -550,7 +698,8 @@ impl State {
 }
 
 /// A stage's uniform block length, measured by the writer so there is one layout.
-pub fn params_len(decls: &[goofi_node::ParamDecl]) -> usize {
-    let zeros: Vec<AtomicU64> = decls.iter().map(|_| AtomicU64::new(0)).collect();
-    shader::uniform_bytes(decls, &zeros).len()
+pub fn params_len(manifest: &goofi_node::NodeManifest) -> usize {
+    let zeros: Vec<AtomicU64> = manifest.params.iter().map(|_| AtomicU64::new(0)).collect();
+    let ranges = vec![[0.0, 1.0]; shader::array_inputs(manifest).count()];
+    shader::uniform_bytes(manifest.params, &zeros, &ranges).len()
 }

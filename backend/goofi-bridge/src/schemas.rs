@@ -165,10 +165,13 @@ fn output_slots(m: &NodeManifest) -> Value {
     slot_map(m.outputs.iter().map(|s| (s.name, s.kind.name())))
 }
 
-/// Where a palette row's type came from, for the add-menu badge: the open patch, or `builtin`.
+/// Where a palette row's type came from, for the add-menu badge: the open patch, the user's own
+/// private library, an engine's own find, or `builtin` — every other root.
 pub(crate) fn source_of(g: &Graph, type_name: &str) -> &'static str {
     if g.is_patch_type(type_name) {
         "patch"
+    } else if g.is_custom_type(type_name) {
+        "custom"
     } else if g.is_plugin_type(type_name) {
         "plugin"
     } else {

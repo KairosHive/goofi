@@ -7,6 +7,9 @@ import { nodeTypeSource } from './nodeTypeSource';
 export const ALL_TAB = 'all';
 /** The tab a plugin wears instead of its engine's, so the two never list one type twice. */
 export const VST_TAB = 'vst';
+/** …and the one the user's OWN nodes wear: the private library's and this patch's alike, so
+ *  saving a node to the library does not move it out from under the reader. */
+export const CUSTOM_TAB = 'custom';
 
 /** Match quality, best first. */
 const TIER = {
@@ -81,9 +84,12 @@ export function rankNodeTypes(types: NodeTypeInfo[], rawQuery: string): NodeType
 	return scored.map((s) => s.t);
 }
 
-/** The tab `t` belongs to: its engine, or `vst` where an engine found it on its own account. */
+/** The tab `t` belongs to: `vst` where an engine found it on its own account, `custom` where the
+ *  user wrote it, else its engine. */
 export function tabOf(t: NodeTypeInfo): string | null {
-	return t.source === 'plugin' ? VST_TAB : engineOf(t.type);
+	if (t.source === 'plugin') return VST_TAB;
+	if (t.source === 'custom' || t.source === 'patch') return CUSTOM_TAB;
+	return engineOf(t.type);
 }
 
 /** The tabs `types` offer, `all` first. A structural type has no engine and so no tab of its own. */
@@ -93,8 +99,10 @@ export function paletteTabs(types: NodeTypeInfo[]): string[] {
 		const tab = tabOf(t);
 		if (tab && !tabs.includes(tab)) tabs.push(tab);
 	}
-	// A plugin format is not an engine, so its tab sits after every engine's.
-	return [ALL_TAB, ...tabs.filter((t) => t !== VST_TAB), ...tabs.filter((t) => t === VST_TAB)];
+	// Neither a plugin format nor the user's own folder is an engine, so both sit after every
+	// engine's tab. `sort` is stable, so the engines keep the order they were met in.
+	const rank = (t: string): number => (t === VST_TAB ? 2 : t === CUSTOM_TAB ? 1 : 0);
+	return [ALL_TAB, ...tabs.sort((a, b) => rank(a) - rank(b))];
 }
 
 /** The tab a fresh menu opens on: the engine of the node a slot click seeded it from, else the tab

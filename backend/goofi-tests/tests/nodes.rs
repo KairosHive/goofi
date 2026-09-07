@@ -58,6 +58,15 @@ fn rescan(g: &Goofi) -> serde_json::Value {
     g.call("library refresh", j!({}))
 }
 
+/// Add a producer with a modest rate cap. An uncapped one free-runs at whatever the machine
+/// allows, and a scenario keeping several alive at once would spend the box on them.
+fn add_capped(g: &Goofi, type_name: &str) -> goofi_tests::Uid {
+    let uid = g.add(type_name);
+    g.call("node param edit",
+           j!({ "node": uid.to_string(), "param": "common/max_frequency", "value": "20" }));
+    uid
+}
+
 #[test]
 fn a_node_file_in_the_workspace_is_live_after_a_rescan_and_follows_its_edits() {
     let _py = require_python();
@@ -378,4 +387,88 @@ fn an_audio_node_file_builds_loads_follows_its_edits_and_rides_an_archive() {
     opened.call("session load", j!({ "path": target.to_string_lossy() }));
     let uid = opened.state.graph.lock().unwrap().node_uids()[0];
     holds(&opened, uid, 0.5);
+}
+
+/// The private library: `$GOOFI_HOME/.goofi/custom/`, the one root goofi writes into. A node
+/// written in a patch is MOVED there, the patch stops holding it, a `.gfi` still carries it, and
+/// a machine that already has it runs the library's copy — which is what lets an edit there
+/// reach every patch that uses it.
+#[test]
+fn a_node_saved_to_the_private_library_leaves_the_patch_rides_the_archive_and_stays_one_file() {
+    let _py = require_python();
+    let library = tempfile::tempdir().unwrap();
+    let mut g = Goofi::new();
+    g.state.custom = library.path().to_path_buf();
+    let mount = g.state.mount();
+    let workspace = mount.join("nodes_signal");
+    write_node(&workspace, "my_kept.py", "1.0");
+    assert_eq!(rescan(&g)["added"], j!(["signal:MyKept"]), "the patch's own file becomes a type");
+
+    let live = add_capped(&g, "MyKept");
+    emits(&g, live, 1.0);
+    let source = |g: &Goofi, ty: &str| {
+        g.call("library list", j!({ "full": true }))["types"].as_array().unwrap().iter()
+            .find(|v| v["type"] == ty).unwrap()["source"].clone()
+    };
+    assert_eq!(source(&g, "signal:MyKept"), "patch");
+    // Nothing but the patch's own may be saved: the library's is already there, a shipped one is
+    // not the user's to keep.
+    assert!(g.refuse("library save", j!({ "type": "LFO" })).contains("not this patch's own"));
+
+    // Saved first, so the dot below is about the MOVE and not about the node just added.
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("kept.gfi");
+    g.call("session save", j!({ "path": target.to_string_lossy() }));
+    assert_eq!(g.call("session status", j!({}))["dirty"], false);
+
+    let saved = g.call("library save", j!({ "type": "MyKept" }));
+    assert_eq!(saved["type"], "signal:MyKept", "{saved}");
+    assert!(!workspace.join("my_kept.py").exists(), "the file LEFT the patch: a move, not a copy");
+    assert!(library.path().join("my_kept.py").exists(), "…and landed in the library");
+    assert_eq!(source(&g, "signal:MyKept"), "custom", "…which is where the palette now says it is");
+    assert_eq!(g.call("library get", j!({ "type": "MyKept" }))["provenance"], "custom");
+    // A move is not an edit: the `.gfi` still carries the file, so the unsaved dot must not rise.
+    assert_eq!(g.call("session status", j!({}))["dirty"], false, "a move alone does not dirty the patch");
+    emits(&g, live, 1.0); // …and the instance was never restarted out from under the patch
+    let second = add_capped(&g, "MyKept");
+    emits(&g, second, 1.0); // …and the type is still addable, now from the library
+    g.call("node remove", j!({ "node": second.to_string() }));
+
+    // The archive carries the library's copy, so the patch opens on a machine that has no library.
+    g.call("session save", j!({}));
+    let unpacked = tempfile::tempdir().unwrap();
+    goofi_graph::archive::read_gfi(&target, &unpacked.path().join("workspace")).unwrap();
+    assert!(unpacked.path().join("workspace/nodes_signal/my_kept.py").exists(),
+            "the `.gfi` holds the node the patch uses, from the library");
+
+    // A machine that HAS the node runs the library's file, and the copy the archive brought is
+    // dropped — one file, so an edit to it reaches this patch too.
+    let mut opened = Goofi::new();
+    opened.state.custom = library.path().to_path_buf();
+    opened.call("session load", j!({ "path": target.to_string_lossy() }));
+    assert!(!opened.state.mount().join("nodes_signal/my_kept.py").exists(),
+            "the archive's copy is dropped where the library already holds it, byte for byte");
+    assert_eq!(source(&opened, "signal:MyKept"), "custom");
+    assert_eq!(opened.call("session status", j!({}))["dirty"], false, "…and dropping it is not an edit");
+    let running = |g: &Goofi| g.state.graph.lock().unwrap().node_uids()[0];
+    emits(&opened, running(&opened), 1.0);
+
+    // The library is the ONE source: an edit there reaches the patch that was saved before it.
+    write_node(library.path(), "my_kept.py", "3.0");
+    assert_eq!(rescan(&opened)["changed"], j!(["signal:MyKept"]));
+    emits(&opened, running(&opened), 3.0);
+
+    // A machine with NO such library keeps the archive's own copy, as the patch's own file — and
+    // so does one whose library holds a DIFFERENT file of that name, which is not the same node.
+    let empty = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    write_node(other.path(), "my_kept.py", "8.0");
+    for elsewhere in [empty.path(), other.path()] {
+        opened.state.custom = elsewhere.to_path_buf();
+        opened.call("session load", j!({ "path": target.to_string_lossy() }));
+        assert!(opened.state.mount().join("nodes_signal/my_kept.py").exists(),
+                "nothing here is that node, so the archive's own copy stands: {}", elsewhere.display());
+        assert_eq!(source(&opened, "signal:MyKept"), "patch", "…and the patch's own wins the name");
+        emits(&opened, running(&opened), 1.0);
+    }
 }
