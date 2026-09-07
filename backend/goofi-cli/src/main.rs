@@ -468,6 +468,7 @@ async fn run(
         match tokio::net::TcpListener::bind((bind.as_str(), port)).await {
             Err(e) => {
                 eprintln!("failed to bind {bind}:{port}: {e}");
+                eprintln!("  A goofi that already runs holds it: `goofi session list` names them, and `--port` picks another.");
                 1
             }
             Ok(listener) => {
