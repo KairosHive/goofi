@@ -93,14 +93,80 @@ left the dead child's node directories standing ONCE in a full `transport` targe
 when run alone — the sweep enumerating under a sibling test's concurrent node churn, which is the
 same shape as the PAL race above with a quieter failure. Flake-grade; undiagnosed past that.
 
-## Open
+## The whole of the Windows red, 2026-09-06
+
+Runs 34047760400 and 34048378434: EIGHT tests fail on `windows-latest` and every one of them is this
+file. Nothing else on that job is red, and neither ubuntu nor macOS fails any of them.
+
+**One correction, 2026-09-06.** A LATER run added `an_expression_reads_a_port_and_follows_the_wire_behind_it`
+to that list and it was filed here with the rest. It does not belong: it compared two `node state`
+dumps of a node with a standing error, and the dump carries how long that error has stood to a
+tenth of a second — `for 0.0s` against `for 0.1s`. Platform-agnostic, and it went on to fail on
+macOS, which is what gave it away. Fixed at b4ddbed8. The lesson is the one this whole file is for,
+turned around: a red Windows job is usually this family, and "usually" is not "always" — read the
+assertion before filing it.
+
+| test | what it wore |
+|---|---|
+| `a_slot_feeds_more_consumers_than_the_iceoryx2_defaults_allow` | `PublisherCreateError::UnableToCreateDataSegment` |
+| `a_multi_input_keeps_one_cell_per_wire_in_the_order_it_was_given` | the same |
+| `the_analysis_nodes_read_a_known_sine_and_say_what_it_is` | `NodeCreationFailure::InternalError` |
+| `a_patch_sounds_under_the_external_clock` | the `Directory::new` PANIC |
+| four `signals` scenarios | `timed out waiting for …` |
+
+The next run, on 2026-09-06 with the audio defect fixed, put the same eight up again with one
+NEW signature that is worth more than the other seven: `a_complexity_node_reads_a_real_signal…`
+failed on ARITHMETIC — Hjorth complexity of an 8 Hz sine read 1.2204651 against 0.9..1.1, where a
+pure sine is exactly 1. A full 256-sample window that is not a sine is a window that LOST A BLOCK
+and was stitched across the gap, and the PAL's `dirent` errors bracket that panic in its own
+stdout. So on Windows this family is not only "a node will not start": it delivered quietly
+wrong DATA, and it took a numeric oracle to see it. ONCE, though — the two Windows runs after it
+ran that same test and passed, so it is flake-grade like the rest of the family rather than a
+standing property. It is recorded because a lost block that nothing reports is a worse failure
+than a node that refuses to start, not because it is common. The same run's `Directory::new` panic
+landed on the audio test again, so the thrash theory below is answered: no.
+
+The two transport ones are the burst again — 24 and 40 iceoryx2 nodes in a loop — and the four
+timeouts are nodes whose services never came up, which is the create failure worn quietly.
+
+Two things this adds to what is above:
+
+- **The leak FEEDS the race.** Every stranded node directory stays in `<root>/nodes`, and that is
+  the directory `FindNextFileA` walks and `Directory::new` opens. One run strands enough of them to
+  make every later enumeration longer, so the window a concurrent create must miss widens as the run
+  goes on — which is why the burst tests and the late targets are where it lands.
+- **A panic under the graph lock takes the status thread with it.** `Directory::new` unwinds through
+  a caller holding `state.graph`, and `lib.rs:421`'s `graph.lock().unwrap()` then dies on the
+  `PoisonError`. Secondary, and it costs nothing while goofi does not panic — but it is why one
+  upstream flake prints as two unrelated panics.
+
+## The owner's call, 2026-09-06: ACCEPTED, and nothing here is taken
+
+The iceoryx2 team knows and is working on a fix, so goofi waits for it. **Windows is expected red on
+this family and nobody should re-diagnose it.** None of the levers below is taken — not the startup
+reclaim, not the per-instance root, not the retry — because each one is goofi working around a
+defect whose owner is already fixing it, and a workaround outlives the thing it works around. They
+stay written down for the day the wait stops being the right answer.
+
+The three PR branches and `rust-rewrite` are GREEN on ubuntu and macOS as of this date, so a red
+Windows job on any of them is this file and needs no reading past this line.
+
+## Open — parked on that call, not being worked
 
 - Whether goofi should reclaim the leak itself at startup rather than wait for upstream. It
   already pre-creates `<root>/nodes` and `<root>/services`, so it has an opinion about that
   directory — but sweeping another library's bookkeeping is exactly the mirror this file's
   neighbours warn about, and a stale entry from a LIVE peer must never be swept.
+- **Whether an instance gets a ROOT of its own**, which is the one lever nobody has tried and the
+  only one that does not sweep: it isolates instead, so it has none of the failure mode that severed
+  every other goofi on the machine. It would keep `<root>/nodes` down to one instance's entries, so
+  the leak could not compound across a run. What it needs judging against is the rendezvous — the
+  root is process-global to iceoryx2, and two goofis meant to see each other must share one — so it
+  is a real decision about what an instance IS, not a test-only knob. The owner's call.
 - Whether the noise deserves any local mitigation before a release lands. Stderr filtering is
   ruled out: a pipe-based filter DEADLOCKS the Python subprocess tier, which was measured.
 - Whether a bounded retry on service CREATE (any platform, no `cfg`) is boundary tolerance or
-  symptom-hiding. It would absorb the first signature and cannot absorb the second (a panic has
-  no retry), so it buys half a fix at most — parked until the upstream report lands an answer.
+  symptom-hiding. Still parked, but the 2026-09-06 run prices it: SEVEN of the eight failures wear a
+  create-time `Err` a retry could absorb, and the eighth is the `panic!`, which nothing can. So it is
+  not "half a fix" — it is most of the job, against the one signature it can never reach.
+  It also cannot reach the spliced window above, which is the signature that matters most.
