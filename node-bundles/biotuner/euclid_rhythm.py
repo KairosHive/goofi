@@ -66,9 +66,10 @@ class EuclidRhythm(goofi.Node):
                 pats[i, k, : len(pat)] = pat
                 spans[i, k] = len(pat)
 
+        meta = input.drop_axis(-1)
         return {
-            "patterns": pats.reshape(lead + (deep, wide)).astype(np.float32),
-            "steps": spans.reshape(lead + (deep,)).astype(np.float32),
+            "patterns": (pats.reshape(lead + (deep, wide)).astype(np.float32), meta),
+            "steps": (spans.reshape(lead + (deep,)).astype(np.float32), meta),
         }
 
     def _rhythms(self, row, p):

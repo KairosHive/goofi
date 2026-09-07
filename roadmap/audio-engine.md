@@ -592,8 +592,26 @@ its reasons are in the locked decisions; what survives of the two reviews that p
   port's timestamps correlated with the device clock; built when a measurement asks.
 - **Windows latency.** cpal's WASAPI backend is shared-mode only and its own source says the callback
   period is always `GetDevicePeriod()` whatever is requested, so `BufferSize::Fixed` is a lie there
-  and the floor is ~10 ms. `IAudioClient3` reaches 2.66 ms and cpal does not use it. ASIO needs the
-  Steinberg SDK, which went GPLv3-or-proprietary in 2025, so it is not shippable in one binary.
+  and the floor is ~10 ms. `IAudioClient3` reaches 2.66 ms and cpal does not use it. ASIO is
+  compiled in and is the way past that floor; what its SDK's licence bars is a REDISTRIBUTED
+  binary, which is a question for a release rather than for a build.
+- **ASIO is compiled in by default as of 2026-09-07, and the premise that kept it out was wrong.**
+  Reported that day on Windows: only WASAPI in the `AudioOut` and `AudioIn` lists, on a machine
+  whose interface has an ASIO driver. The cause was the feature being off, and the reason it was
+  off does not survive reading `asio-sys`: its build script downloads the Steinberg SDK ITSELF from
+  `steinberg.net/asiosdk` when `CPAL_ASIO_DIR` names no copy, so "whoever turns it on supplies the
+  SDK" was never true. cpal also target-gates `asio-sys` to Windows, so the feature is inert on
+  Linux and macOS and costs those builds nothing.
+  What it does cost is **libclang**, since asio-sys generates its binding with bindgen. That is a
+  precondition, so it belongs where the others are: `goofi-init` asks for it on Windows beside the
+  Linux audio libraries, names `winget install LLVM.LLVM`, and names the opt-out. A first build
+  also reaches the network for the SDK.
+  What the SDK's licence still bars is a goofi BINARY someone else redistributes, which is a
+  question for a release and not for a build. Revisit it there — and note the way out if the answer
+  is no: bind the driver as the COM object it is, `CoCreateInstance` on the CLSID under
+  `HKLM\SOFTWARE\ASIO` against a vtable goofi declares, which puts no SDK in the tree.
+  **Unverified on Windows.** Nothing in this tree can build the ASIO path — `asio-sys` is
+  Windows-only — so CI's `windows-latest` leg is the first thing that judges it.
 - **macOS signing**, which costs nothing today and arrives with the first notarized release. Apple's
   documented answer for a process that loads foreign code is
   `com.apple.security.cs.disable-library-validation`; Ardour, Surge, VCV Rack, ossia score, Pure

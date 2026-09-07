@@ -1144,6 +1144,36 @@ pub(crate) fn control_remove(
     Ok(json!({ "removed": true }))
 }
 
+/// Turtle steps as the strokes a pad makes. The op PARSES — so a refusal names the line — and the
+/// widget draws, through the very code a hand at the pad reaches: the CLI is another hand on the
+/// same canvas, never a second painter. Nothing is written here; what the widget then commits is
+/// the drawing's one write.
+pub(crate) fn control_draw(
+    state: &AppState,
+    payload: &Value,
+    _actor: &str,
+    events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let name = {
+        let g = state.graph.lock().unwrap();
+        let (_, _, name) = element_of(&g, "control draw", payload)?;
+        match g.globals().control(&name).map(|c| c.kind) {
+            Some(goofi_core::globals::ControlKind::Draw) => name,
+            Some(other) => {
+                return Err(format!("control draw: `{name}` is a {} widget; only a `draw` one takes steps", other.as_str()))
+            }
+            None => return Err(format!("control draw: `{name}` is not a control element")),
+        }
+    };
+    let steps = goofi_core::turtle::parse(parse_str(payload, "steps")?)
+        .map_err(|e| format!("control draw: {e}"))?;
+    let marks = goofi_core::turtle::marks(&steps);
+    events.push(event("control_draw", json!({ "name": name, "marks": marks })));
+    // A pad is drawn on by whoever has it OPEN, so what the caller needs to know is whether anyone
+    // was listening. Zero clients is a script that went nowhere, and saying so beats a bare `ok`.
+    Ok(json!({ "steps": steps.len(), "marks": marks.len(), "clients": state.events.receiver_count() }))
+}
+
 pub(crate) fn control_source(
     state: &AppState,
     payload: &Value,

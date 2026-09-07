@@ -122,9 +122,11 @@ class BioElements(goofi.Node):
         scores = np.array([[r.get(n, (0.0, ""))[0] for n in names] for r in ranked]) if names else np.zeros((rows.shape[0], 1))
         kinds = [next((r[n][1] for r in ranked if n in r), "") for n in names]
 
+        # Pooled folded every channel into one row, so the channel labels no longer describe it.
+        meta = {} if p.scope == "pooled" else input.drop_axis(-1)
         return {
             "elements": {n: np.asarray(scores[:, k], dtype=np.float32) for k, n in enumerate(names)},
-            "scores": scores.reshape(lead + (scores.shape[-1],)).astype(np.float32),
+            "scores": (scores.reshape(lead + (scores.shape[-1],)).astype(np.float32), meta),
             "ranked": ", ".join(names),
             "categories": ", ".join(kinds),
         }

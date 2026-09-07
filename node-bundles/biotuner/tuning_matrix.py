@@ -87,8 +87,9 @@ class TuningMatrix(goofi.Node):
                 mats[i, :n, :n] = m[:n, :n]
             steps[i, : s.size] = s[:width]
             whole[i] = v
+        meta = input.drop_axis(-1)
         return {
-            "matrix": mats.reshape(lead + (width, width)).astype(np.float32),
-            "metricPerStep": steps.reshape(lead + (width,)).astype(np.float32),
-            "metric": whole.reshape(lead if lead else (1,)).astype(np.float32),
+            "matrix": (mats.reshape(lead + (width, width)).astype(np.float32), meta),
+            "metricPerStep": (steps.reshape(lead + (width,)).astype(np.float32), meta),
+            "metric": (whole.reshape(lead if lead else (1,)).astype(np.float32), meta),
         }
