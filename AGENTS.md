@@ -311,8 +311,11 @@ kept; the dependency is bounded, so a missing ffmpeg costs THAT STREAM alone. Ar
 alone — never a set kept beside the recorder, which claimed an arming that had in fact failed. The
 clock is the one timing authority and its UTC is anchored ONCE at the patch origin, so a frame
 carries patch seconds, the manifest carries the anchor, and an NTP step cannot bend a recording;
-a rate-locked stream derives its timeline from the SAMPLE COUNT, tied to the clock on the audio
-thread so the count and the instant are one. What the shape cost, four times: a re-arm at the same
+a rate-locked stream derives its timeline from the SAMPLE COUNT, tied to the clock ONCE under the
+runtime lock — where no block can be rendered between reading the count and reading the clock, which
+is why the audio thread reads no clock at all. The device's rate error then walks that timeline away
+from patch time, and the manifest carries the measured drift rather than a re-tie that would put a
+seam in the exact block spacing. What the shape cost, four times: a re-arm at the same
 instant truncated the file it had just closed; a running drop counter applied to already-queued
 blocks made the loss invisible AND dated the survivors 1.33 ms late; finalizing a video held the
 session mutex and stalled every other engine's drain; and every second holder of "is this stream

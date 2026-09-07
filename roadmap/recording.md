@@ -34,11 +34,19 @@ timeline. `measured` and `derived` are the ENGINE's word rather than a guess off
 alone cannot say whether the times were counted or read — because a derived timeline and a measured
 one are not the same evidence.
 
-**The audio anchor is tied on the AUDIO thread.** The count and the clock are read at the same
-instant, inside `render_block`, and every block after is a function of its number alone. Reading the
-clock at the drain instead was built first: the differences were exact, so the stream was internally
-consistent and up to one control tick — 10 ms — late against every EEG stream it exists to be lined
-up with, with nothing in the file to say the anchor had been guessed.
+**The audio anchor is tied under the RUNTIME LOCK, and the audio thread reads no clock.** `retune`
+holds that lock, so no block is rendered between reading the count and reading the clock, and every
+block after is a function of its number alone. Reading the clock at the drain instead was built
+first: the differences were exact, so the stream was internally consistent and up to one control
+tick — 10 ms — late against every EEG stream it exists to be lined up with, with nothing in the file
+to say the anchor had been guessed.
+
+**The tie is taken ONCE, so the manifest carries the drift.** A derived timeline counts the device's
+samples and patch time is the monotonic clock; at a routine 100 ppm the two walk about 360 ms apart
+per hour. Re-tying periodically was the alternative and it was rejected: it puts a seam in the exact
+block spacing that makes the timeline derived at all. So the engine MEASURES the gap instead, the
+frame carries it in `Meta`, and each stream's manifest entry holds the last word as `drift` —
+seconds the stream stands ahead of patch time, which an analyst subtracts.
 
 ## The recording
 
@@ -174,4 +182,5 @@ recorders cannot own one timeline.
 - **An audio stream has no channel labels**, so the manifest's `channels` is null for one and the
   count is in every frame's shape.
 - **A rate change mid-recording** re-ties the audio anchor, so the frames either side of it derive
-  from different ties. That is a real discontinuity and the manifest does not name it as one.
+  from different ties. That is a real discontinuity and the manifest does not name it as one — only
+  the `drift` either side of it moves.
