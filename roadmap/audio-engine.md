@@ -132,6 +132,13 @@ apply and the device list was thirty ALSA aliases, nine of them filter plugins a
 one jack under one name. The list is now the server's sinks. The `pulseaudio` crate is pure Rust,
 so this costs no system package; the `pipewire` host would need `libpipewire-0.3-dev` and clang at
 build time, which the one-command setup will not pay for a result pipewire-pulse already gives.
+**That last clause is true of the device list and the mixer, and false of PRIORITY.** cpal's
+`realtime` feature promotes the callback thread, and its `pulseaudio` host has no call to it —
+the alsa, pipewire and jack hosts do. So while Linux runs on the pulse host there is no real-time
+audio thread and no way to ask for one, and `audio_thread_priority` without dbus is a no-op that
+answers Ok, so the feature alone reads as success and changes nothing. Windows takes MMCSS from
+the same feature for free. Linux priority is unbuilt, and its price is the two packages above
+plus `libdbus-1-dev` for rtkit.
 Landed 2026-09-02: the clock is a constructor
 choice (`Clock::External` for the harness, `Clock::Device` for the CLI); the output stream lives on
 a thread of its own, because
