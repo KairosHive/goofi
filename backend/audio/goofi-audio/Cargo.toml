@@ -22,7 +22,6 @@ goofi-control = { path = "../../goofi-control" }
 goofi-window = { path = "../../goofi-window" }
 goofi-audio-sdk = { path = "../goofi-audio-sdk", features = ["host"] }
 goofi-build = { path = "../../goofi-build" }
-sha2 = "0.10"
 indexmap = "2"
 rtrb = "0.3"
 # Every host cpal can build, so `available_hosts()` answers what the machine actually runs and the

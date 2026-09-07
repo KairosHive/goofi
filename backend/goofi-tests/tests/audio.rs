@@ -947,6 +947,10 @@ fn a_patch_sounds_under_the_external_clock() {
         std::fs::create_dir_all(&into).unwrap();
         std::fs::copy(&artifact, into.join(file)).unwrap();
     };
+    // Every child the scan spawns leaves a line here, so what the cache saves is countable.
+    let scans = keep.path().join("scans.log");
+    std::env::set_var("GOOFI_VST3_SCAN_LOG", &scans);
+    let scanned = || std::fs::read_to_string(&scans).unwrap_or_default().lines().count();
     bundled("GoofiFixture", built(""));
     // Two audio classes in the one bundle: an effect, and a synth whose subcategories say so.
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:GoofiFixture", "audio:GoofiSynth"]));
@@ -1014,6 +1018,21 @@ fn a_patch_sounds_under_the_external_clock() {
     assert!(row["doc"].as_str().is_some_and(|d| d.contains("scanner")), "the scanner's death is the reason: {row}");
     assert!(g.refuse("node add", j!({ "type": "Crasher" })).contains("unavailable"));
     heard(&g, plug, "the server answers on", |x| (peak(x) - 0.5).abs() < 0.02);
+
+    // The scanner's verdict is remembered by the binary's own stamp, its REFUSAL included: a
+    // refresh that finds nothing changed runs no child at all, and the crasher comes back greyed
+    // without being asked again. This is what a machine full of plugins pays at every patch load.
+    let listed = |ty: &str| g.call("library list", j!({ "full": true }))["types"].as_array().unwrap().iter()
+        .find(|v| v["type"] == ty).cloned().unwrap_or_else(|| panic!("{ty} is in the palette"));
+    assert_eq!(scanned(), 3, "one child per bundle: the fixture, the deaf one, the crasher");
+    g.call("library refresh", j!({}));
+    assert_eq!(scanned(), 3, "an unchanged tree spawns no scanner at all");
+    assert_eq!(listed("audio:Crasher")["available"], false, "the refusal came back off the cache");
+    assert_eq!(listed("audio:GoofiFixture")["available"], true, "and so did the answer");
+    // A binary re-copied is a stamp that moved, and a stamp that moved is a source that changed.
+    bundled("Crasher", built("crash"));
+    g.call("library refresh", j!({}));
+    assert_eq!(scanned(), 4, "a changed binary is scanned again");
 
     // The plugin's state is its own blob, and the record is its params: the fixture latches the
     // first time `shape` reaches its last step and halves its tone for ever after, which no param
