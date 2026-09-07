@@ -120,13 +120,22 @@ impl Drain {
                     feed.opened = true;
                     feed.last = None;
                 }
-                if let (Some(index), Some(last)) = (meta.as_ref().and_then(|m| m.index()), feed.last) {
-                    if index > last + 1 {
-                        recorder.dropped(&feed.id, index - last - 1, at);
-                    }
+                let index = meta.as_ref().and_then(|m| m.index());
+                // The subscriber overflows the OLDEST frame and says nothing, so the indices are
+                // the only witness. An index that RESETS is a rebirth, never a loss.
+                let missed = match (index, feed.last) {
+                    (Some(i), Some(last)) if i > last + 1 => i - last - 1,
+                    _ => 0,
+                };
+                feed.last = index;
+                if recorder.write(&feed.id, bytes).is_err() {
+                    break;
                 }
-                feed.last = meta.as_ref().and_then(|m| m.index());
-                let _ = recorder.write(&feed.id, bytes);
+                // Counted AFTER the frame that revealed the gap is on disk, so the manifest can
+                // never claim a loss the file does not show.
+                if missed > 0 {
+                    recorder.dropped(&feed.id, missed, at);
+                }
                 taken += 1;
             }
             if taken > 0 {
