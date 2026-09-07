@@ -283,7 +283,7 @@ pub(crate) struct Instance {
 
 pub struct AudioEngine {
     instance: String,
-    started: Instant,
+    time: Arc<goofi_core::time::Time>,
     clock: Clock,
     device: Option<DeviceClock>,
     /// The name last tried and what it answered: a name that failed is not tried again until it
@@ -325,7 +325,7 @@ const SLAB: usize = 64;
 const QUEUE: usize = 4096;
 
 impl AudioEngine {
-    pub fn new(instance: String, started: Instant, waker: Arc<DrainWaker>, clock: Clock) -> AudioEngine {
+    pub fn new(instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>, clock: Clock) -> AudioEngine {
         let classes: HashMap<&'static str, Class> = nodes::BUILT_IN
             .iter()
             .map(|(type_name, m, make)| {
@@ -345,7 +345,7 @@ impl AudioEngine {
         let (from_audio, outbox) = rtrb::RingBuffer::new(QUEUE);
         AudioEngine {
             instance,
-            started,
+            time,
             clock,
             device: None,
             tried: None,
@@ -749,7 +749,7 @@ impl Engine for AudioEngine {
             base: goofi_transport::service_base(&self.instance, uid, generation),
             manifest,
             params: atomics.clone(),
-            started: self.started,
+            time: self.time.clone(),
         };
         let control = match goofi_control::spawn(spawn, self.shared.clone(), &self.bells, move || AudioHalf::new(birth)) {
             Ok(handle) => handle,
@@ -840,7 +840,7 @@ impl Engine for AudioEngine {
         faults.extend(self.disabled.iter().map(|(u, m)| (*u, m.clone())));
         let (plan, looped) = plan::compile(view, &self.live, &silent, &self.disabled);
         faults.extend(looped);
-        let since = self.started.elapsed().as_secs_f64();
+        let since = self.time.now();
         self.pending.extend(self.faults.settle(faults, since));
         if plan != self.last {
             let arena = vec![0.0; plan.arena_len];
@@ -933,11 +933,6 @@ impl Engine for AudioEngine {
             edits.push(Edit { uid, key, value });
         }
         edits
-    }
-
-    /// Every control half born after computes `t` from the new origin.
-    fn reset_clock(&mut self, origin: Instant) {
-        self.started = origin;
     }
 
     fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_node::ExprEvaluator>) {

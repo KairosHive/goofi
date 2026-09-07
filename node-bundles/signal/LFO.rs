@@ -1,5 +1,6 @@
 //! LFO — one oscillator for both planes: a sample per update to modulate a param, or the block of
-//! samples real time advanced by, carrying phase across frames so blocks join without a click.
+//! samples real time advanced by. Phase is a function of PATCH TIME, so two LFOs of one frequency
+//! run together whenever each was made.
 
 use goofi_core::{Data, Meta, SlotType};
 use goofi_signal_sdk::{ExprDecl, ExprMode, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Tag};
@@ -30,14 +31,32 @@ fn wave(kind: &str, t: f64, duty: f64) -> f64 {
 
 #[derive(Default)]
 struct LFO {
-    /// Cycles accumulated since the last reset; bounded to `[0, 1)`.
-    phase: f64,
+    /// Cycles added to `frequency * now`. Zero unless a pulse re-phased this LFO — a frequency
+    /// change does NOT re-solve it, because holding the wave continuous there is what would put
+    /// two LFOs of one frequency out of phase.
+    phase_offset: f64,
+    /// A pulse asked for phase zero, applied at the next process where `now` is known.
+    rezero: bool,
     /// `ctx.now` at the first emit — block pacing is measured from here.
     start: Option<f64>,
-    /// `ctx.now` at the last emit, which paces the value mode.
-    last: Option<f64>,
     /// Samples emitted since `start`; counting keeps the block size drift-free.
     emitted: u64,
+}
+
+impl LFO {
+    /// Cycles at patch second `now` — a pure function of the patch's time and this frequency.
+    fn phase_at(&self, freq: f64, now: f64) -> f64 {
+        (freq * now + self.phase_offset).rem_euclid(1.0)
+    }
+
+    /// A pulse asked for phase zero here, which is the one thing that takes an LFO off the shared
+    /// phase, and only until the next one.
+    fn anchor(&mut self, freq: f64, now: f64) {
+        if self.rezero {
+            self.phase_offset = -freq * now;
+            self.rezero = false;
+        }
+    }
 }
 
 impl Node for LFO {
@@ -61,6 +80,7 @@ impl Node for LFO {
         let sfreq = p.f64("output", "sfreq").unwrap_or(250.0).max(1.0);
         let block = p.str("output", "mode").unwrap_or("value") == "block";
 
+        self.anchor(freq, c.now);
         let mut sample = |phase: f64| ((wave(kind, (phase + skew).rem_euclid(1.0), duty) * amp + offset) as f32).to_le_bytes();
 
         let (shape, buf, meta) = if block {
@@ -70,20 +90,18 @@ impl Node for LFO {
             if n == 0 {
                 return Ok(());
             }
+            let first = self.emitted;
             self.emitted = total;
-            let step = freq / sfreq;
             let mut buf = Vec::with_capacity(n * 4);
-            for _ in 0..n {
-                buf.extend_from_slice(&sample(self.phase));
-                self.phase = (self.phase + step).rem_euclid(1.0);
+            for k in 0..n {
+                // Each sample sits at its OWN patch second, so a block draws the same wave the
+                // value mode would at those instants.
+                buf.extend_from_slice(&sample(self.phase_at(freq, start + (first + k as u64) as f64 / sfreq)));
             }
             (vec![n], buf, Meta::new().with_sfreq(Some(sfreq)))
         } else {
-            let elapsed = c.now - self.last.unwrap_or(c.now);
-            self.phase = (self.phase + freq * elapsed).rem_euclid(1.0);
-            (vec![1], sample(self.phase).to_vec(), Meta::new())
+            (vec![1], sample(self.phase_at(freq, c.now)).to_vec(), Meta::new())
         };
-        self.last = Some(c.now);
         out.set("out", Data::array_f32(shape, buf, meta).map_err(|e| e.to_string())?);
         Ok(())
     }
@@ -98,7 +116,7 @@ impl Node for LFO {
     }
 
     fn on_pulse(&mut self, _key: &ParamKey, _p: &Params<'_>) -> NodeResult {
-        self.phase = 0.0;
+        self.rezero = true;
         Ok(())
     }
 }

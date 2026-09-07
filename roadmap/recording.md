@@ -1,28 +1,29 @@
 # Recording: every engine's frames, on one timeline
 
-Any node's output, captured losslessly, across every engine, onto one clock. The clock is half of
-this item, because two nodes' frames cannot be aligned today: `Meta` carries `sfreq`, `ufreq`,
-`index`, `channels` and `reduced`, `goofi-transport` carries no time at all, and nothing says WHEN a
-frame was produced. Recording is the first tenant of the panel add-on door in `library.md`.
+Any node's output, captured losslessly, across every engine, onto one timeline. Recording is the
+first tenant of the panel add-on door in `library.md`.
 
-## The clock
+## Time
 
-**One clock, and it already exists.** `Graph::patch_start()` is handed to every engine through
-`Engine::reset_clock`, and `NodeCtx::now` is computed from it. No second clock is minted anywhere.
+**Time is built.** `goofi_core::time::Time` is the patch's one origin, held once and shared by
+reference; `NodeCtx::now`, `t` in a param expression, and `meta["time"]` all read it. A frame
+carries its node's PROCESS TICK and its emit `index`. What remains here is what recording still
+needs from it.
 
-**A frame carries its node's PROCESS TICK, not a lineage.** The patch time at which this node ran.
-Nothing is inherited from an input, so a node with four triggering inputs is not a special case,
-and there is no join rule, no span and no per-frame provenance to keep in step.
+**Time is only time.** It measures, and it decides nothing. Grid scheduling — a rate that is a grid
+rather than a drift, and rhythm on top of it — is a LATER item and it is what will be called the
+CLOCK. A clock measures time; it has no causal power over it, so the two must not share a name.
 
 **Sample times are DERIVED, never stored.** `sfreq` and the shape are already in `Meta`, so sample 0
 of a 256-sample window at 256 Hz emitted at t sits at t − 1. A `Buffer` is correct for free. Where a
 derived stream's provenance matters, the answer is to record its source too and measure the offset
 from the two recordings.
 
-**The stamp is the RUNTIME's, never the node's.** `stamp_meta` already runs after `process()`, reads
-the triggering inputs, and is documented as the one stamping site. A node author writes nothing and
-cannot break alignment — which is also what keeps the subprocess tier correct, since its `Instant`
-has a different origin and it must never mint one.
+**The stamp is the RUNTIME's, never the node's.** `stamp_meta` runs after `process()` and is the one
+stamping site. A node author writes nothing and cannot break alignment — which is also what keeps
+the subprocess tier correct, since its `Instant` has a different origin and it must never mint one.
+A node that KNOWS a device time — LSL carries one — puts that in `Meta` itself, as a convenience
+entry for later analysis. goofi time stays what everything aligns on.
 
 **A rate-locked stream derives its timeline from the SAMPLE COUNT.** For audio the count IS the
 clock and it is exact; a clock read per block adds scheduling jitter to a timeline that had none.
@@ -30,7 +31,7 @@ Anchor the counter to patch time once at stream start and derive every later blo
 signal node has no anchor, so its tick read is its timeline. A recording records WHICH of the two a
 stream used — a derived timeline and a measured one are not the same evidence.
 
-**Wall time is recorded ONCE**, as the UTC time of `patch_start()`, in the recording's manifest.
+**Wall time is recorded ONCE**, as `Time::wall()` — the UTC the patch began at — in the manifest.
 Never per frame: an NTP step is then a header question rather than a per-frame lie.
 
 ## Decisions
@@ -77,16 +78,22 @@ the node and a record in the manifest with its tick time. The requirement is "ne
 
 **A recording is a DIRECTORY, not an archive.** Unlike a `.gfi` it is written incrementally and can
 be enormous, so packing is a later action rather than the format. `manifest.json` beside one file
-per stream, in a folder the file manager makes.
+per stream, in a folder named for the moment `record` was pressed.
+
+**A recording is SINGULAR: one patch, one session.** A `session load` ends it. A load swaps the
+graph whole and mints new service names, so a recording that survived one would hold two patches in
+one folder.
 
 **A rebirth is a gap, and it is recorded.** `service_base` carries `gen`, bumped on EVERY birth, so
 a param change that restarts a node mints a new service name. The recorder re-resolves and writes
 the discontinuity; a recording that smooths over a real gap is worse than one that stops.
 
-**One lossless container per stream is always written; WAV, MP4 and CSV are EXPORTS.** Each is lossy
-against a `Data` frame — WAV loses anything not audio-shaped, CSV loses f32 below nine digits, MP4
-by construction — and a format choice must not be able to undo the buffered path. Graphics is the
-stated exception: at 1 GB/s there is no lossless option, and the manifest says so.
+**A recording is LOSSLESS and nothing else** — a raw frame stream beside a JSON sidecar, per stream.
+WAV, MP4 and CSV are each lossy against a `Data` frame: WAV loses anything not audio-shaped, CSV
+loses f32 below nine digits, MP4 by construction. So they are CONVERSIONS of the written file, made
+later and by a separate action; nothing is written beside the recording, and no format choice can
+undo the buffered path. Graphics is the stated exception: at 1 GB/s there is no lossless option, and
+the manifest says so.
 
 **The panel arms by drag, and the drag raises an op.** `record arm <node>/<slot>` like every other
 intent, so the CLI, an agent and a test reach the same door. A drag is a gesture and needs its own
@@ -94,7 +101,7 @@ touch door.
 
 ## Order of work
 
-1. The tick stamp, which every stream's timeline reads.
+1. ~~The tick stamp, which every stream's timeline reads.~~ Built: `Meta` carries `time` and `index`.
 2. The `Engine` door, the armed set through `settle`, and the signal half.
 3. The central file manager: buffers, writers, the folder, the manifest.
 4. The audio ring.
@@ -105,18 +112,5 @@ touch door.
 
 ## Open
 
-### The clock
-
-- Whether the tick is a typed field on `Data` beside `index`, or a `Meta` key.
-- What a node that KNOWS its device acquisition time declares — LSL carries one. It is the only
-  case where a node body would touch time, and it wants a typed field rather than a free key.
-- `stamp_meta` inherits `index` today by matching frame counts, and falls back to a fresh counter
-  when two triggering inputs are the same length. The tick makes that ambiguity visible; whether
-  `index` keeps the heuristic is a separate question.
-
-### Recording
-
-- Which lossless container. A raw frame stream beside a JSON sidecar is the least that works.
-- Whether an export is written in parallel or produced from the lossless file afterwards.
-- The hardware encoder per platform, and what a machine with none does.
-- Whether a recording survives a `session load`, or a load ends it.
+- The shape of the raw frame stream and its JSON sidecar, in detail.
+- The graphics encoder, which step 6 carries alone.
