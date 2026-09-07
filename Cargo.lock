@@ -1122,6 +1122,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "goofi-record"
+version = "3.1.0"
+dependencies = [
+ "goofi-codec",
+ "goofi-core",
+ "goofi-node",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "goofi-signal"
 version = "3.1.0"
 dependencies = [
@@ -1169,6 +1180,7 @@ dependencies = [
  "goofi-init",
  "goofi-node",
  "goofi-python",
+ "goofi-record",
  "goofi-signal",
  "goofi-signal-sdk",
  "goofi-transport",
