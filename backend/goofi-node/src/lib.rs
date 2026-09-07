@@ -22,7 +22,7 @@ pub use tags::Tag;
 pub use type_id::{bare, qualify, split as split_type_id};
 
 /// A `u64` internally, a 12-hex string in the `.gfi` and on the wire.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Uid(pub u64);
 
 impl Uid {
