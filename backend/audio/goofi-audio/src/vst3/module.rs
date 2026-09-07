@@ -89,14 +89,33 @@ fn entry_of(_binary: &Path, handle: *mut c_void) -> (&'static [u8], *mut c_void)
 
 #[cfg(windows)]
 fn load(path: &Path) -> Result<&'static libloading::Library, String> {
-    let library = unsafe { libloading::Library::new(path) }.map_err(|e| format!("could not load: {e}"))?;
-    let library: &'static libloading::Library = Box::leak(Box::new(library));
+    use libloading::os::windows::{Library, LOAD_WITH_ALTERED_SEARCH_PATH};
+    // The binary's OWN folder first: a plugin ships its dependencies beside it inside the bundle,
+    // and the default order looks in goofi's folder instead. The flag is defined for an absolute
+    // path alone, which is why one is made rather than assumed.
+    let path = std::path::absolute(path).map_err(|e| format!("could not resolve: {e}"))?;
+    let opened = unsafe { Library::load_with_flags(&path, LOAD_WITH_ALTERED_SEARCH_PATH) };
+    let library = opened.map_err(|e| format!("could not load: {}", because(&e)))?;
+    let library: &'static libloading::Library = Box::leak(Box::new(library.into()));
     if let Ok(init) = unsafe { library.get::<unsafe extern "system" fn() -> bool>(b"InitDll\0") } {
         if !unsafe { init() } {
             return Err("`InitDll` refused".into());
         }
     }
     Ok(library)
+}
+
+/// An error and every cause under it: libloading's Windows arm Displays its own name alone and
+/// keeps the OS error — "The specified module could not be found" — in the source beneath it.
+#[cfg(windows)]
+fn because(error: &dyn std::error::Error) -> String {
+    let mut said = error.to_string();
+    let mut under = error.source();
+    while let Some(cause) = under {
+        said = format!("{said}: {cause}");
+        under = cause.source();
+    }
+    said
 }
 
 #[cfg(unix)]

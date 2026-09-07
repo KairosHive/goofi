@@ -4,6 +4,15 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# ASIO is a build the USER makes, never one that ships. WASAPI publishes an interface as one stereo
+# endpoint per pair the driver exposes, so a multi-input card is reachable past its first pair only
+# through the driver's own ASIO view. The Steinberg SDK that binding needs went
+# GPLv3-or-proprietary in 2025 and cannot travel inside this binary — `roadmap/audio-engine.md`
+# carries that decision — so the flag is off, and whoever turns it on supplies the SDK themselves:
+# `CPAL_ASIO_DIR` names the unpacked copy, and LLVM must be installed for its bindgen to run.
+asio = ["cpal/asio"]
+
 [dependencies]
 goofi-core = { path = "../../goofi-core" }
 goofi-node = { path = "../../goofi-node" }
@@ -13,12 +22,13 @@ goofi-control = { path = "../../goofi-control" }
 goofi-window = { path = "../../goofi-window" }
 goofi-audio-sdk = { path = "../goofi-audio-sdk", features = ["host"] }
 goofi-build = { path = "../../goofi-build" }
-sha2 = "0.10"
 indexmap = "2"
 rtrb = "0.3"
-# The sound SERVER, never the card: ALSA's `default` is the hardware, so a stream on it bypasses
-# the OS mixer. Pure Rust, probed at runtime, and ALSA still answers a machine with no server.
-cpal = { version = "0.18", features = ["pulseaudio"] }
+# Every host cpal can build, so `available_hosts()` answers what the machine actually runs and the
+# choice between them is the user's. cpal target-gates each one, so a feature named here that the
+# platform has no host for costs nothing. `realtime` promotes the callback thread — MMCSS on
+# Windows, rtkit on Linux, and rtkit is what `realtime-dbus` reaches.
+cpal = { version = "0.18", features = ["pipewire", "pulseaudio", "jack", "realtime", "realtime-dbus"] }
 midir = "0.11"
 vst3 = "0.3.0"
 libloading = "0.8"

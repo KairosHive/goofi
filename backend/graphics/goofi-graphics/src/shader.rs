@@ -8,7 +8,8 @@ use goofi_core::SlotType;
 use goofi_node::{NodeManifest, ParamDecl, ParamSpec};
 
 /// The names the prelude declares. A header that takes one is refused, rather than shadowing it.
-const RESERVED: &[&str] = &["time", "resolution", "samp", "p", "Params", "Vs", "vs", "fs", "shade"];
+const RESERVED: &[&str] =
+    &["time", "frame", "resolution", "samp", "p", "Params", "Vs", "vs", "fs", "shade", "Frag"];
 
 /// The one output every graphics node has.
 const OUT: &str = "out";
@@ -31,16 +32,36 @@ pub fn header(source: &str) -> Result<Introspection, String> {
             _ => return Err(format!("input `{}` is `{}`; a graphics input is TEXTURE or ARRAY", s.name, s.kind)),
         }
     }
-    let taken = intro
+    let mut taken: Vec<String> = RESERVED.iter().map(|s| (*s).to_string()).collect();
+    for buffer in &intro.state {
+        if !goofi_core::globals::is_valid_name(buffer) {
+            return Err(format!("state buffer `{buffer}`: a letter, then letters or digits"));
+        }
+        if taken.contains(buffer) {
+            return Err(format!("state buffer `{buffer}` is already a name in this file"));
+        }
+        taken.push(buffer.clone());
+        taken.push(writer(buffer));
+    }
+    let clash = intro
         .inputs
         .iter()
-        .map(|s| s.name.as_str())
-        .chain(intro.params.iter().map(|p| p.name.as_str()))
-        .find(|n| RESERVED.contains(n));
-    if let Some(name) = taken {
+        .map(|s| &s.name)
+        .chain(intro.params.iter().map(|p| &p.name))
+        .find(|n| taken.contains(n));
+    if let Some(name) = clash {
         return Err(format!("`{name}` is the prelude's; choose another name"));
     }
+    // A graphics node with no texture behind it makes its own frames, so it takes the patch's
+    // default size rather than following anything.
+    intro.producer = !intro.inputs.iter().any(|s| SlotType::from_name(&s.kind) == Some(SlotType::Texture));
     Ok(intro)
+}
+
+/// The function a body writes to fill one state buffer; the buffer's own name reads what the last
+/// tick left there.
+pub fn writer(buffer: &str) -> String {
+    format!("next_{buffer}")
 }
 
 fn wgsl_type(spec: &ParamSpec) -> &'static str {
@@ -53,7 +74,7 @@ fn wgsl_type(spec: &ParamSpec) -> &'static str {
 
 /// What the engine appends after the file: the bindings a body reads, and the stages that call it.
 /// `uv` is (0, 0) at the TOP-left, WGSL's own texture space.
-pub fn prelude(manifest: &NodeManifest) -> String {
+pub fn prelude(manifest: &NodeManifest, state: &[String]) -> String {
     let mut s = String::from(
         "\n@group(0) @binding(0) var<uniform> time: f32;\n\
          @group(0) @binding(1) var<uniform> resolution: vec2f;\n\
@@ -66,11 +87,22 @@ pub fn prelude(manifest: &NodeManifest) -> String {
         }
         s.push_str("}\n@group(0) @binding(3) var<uniform> p: Params;\n");
     }
+    s.push_str("@group(0) @binding(4) var<uniform> frame: u32;\n");
     for (i, input) in manifest.inputs.iter().enumerate() {
         s.push_str(&format!("@group(1) @binding({i}) var {}: texture_2d<f32>;\n", input.name));
     }
+    // A state buffer reads as the LAST tick left it and is written through its own function, so
+    // the two never name one thing.
+    for (i, buffer) in state.iter().enumerate() {
+        s.push_str(&format!("@group(2) @binding({i}) var {buffer}: texture_2d<f32>;\n"));
+    }
+    s.push_str("struct Frag {\n    @location(0) colour: vec4f,\n");
+    for (i, buffer) in state.iter().enumerate() {
+        s.push_str(&format!("    @location({}) {buffer}: vec4f,\n", i + 1));
+    }
     s.push_str(
-        "struct Vs { @builtin(position) pos: vec4f, @location(0) uv: vec2f }\n\
+        "}\n\
+         struct Vs { @builtin(position) pos: vec4f, @location(0) uv: vec2f }\n\
          @vertex fn vs(@builtin(vertex_index) i: u32) -> Vs {\n\
          \x20   let x = f32(i32(i & 1u) * 4 - 1);\n\
          \x20   let y = f32(i32(i & 2u) * 2 - 1);\n\
@@ -79,8 +111,14 @@ pub fn prelude(manifest: &NodeManifest) -> String {
          \x20   o.uv = vec2f((x + 1.0) * 0.5, (1.0 - y) * 0.5);\n\
          \x20   return o;\n\
          }\n\
-         @fragment fn fs(v: Vs) -> @location(0) vec4f { return shade(v.uv); }\n",
+         @fragment fn fs(v: Vs) -> Frag {\n\
+         \x20   var o: Frag;\n\
+         \x20   o.colour = shade(v.uv);\n",
     );
+    for buffer in state {
+        s.push_str(&format!("    o.{buffer} = {}(v.uv);\n", writer(buffer)));
+    }
+    s.push_str("    return o;\n}\n");
     s
 }
 

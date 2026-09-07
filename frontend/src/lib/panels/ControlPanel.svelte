@@ -1,8 +1,8 @@
-<!-- Control panel — knobs, sliders and fields over ONE group of globals. Edit mode is the group's
-     config lock, inverted: out of it a drag turns a widget; in it the same drag moves it, the
+<!-- Control panel — knobs, sliders and fields over ONE group of globals. Edit mode is this panel's
+     own view and nothing else: out of it a drag turns a widget; in it the same drag moves it, the
      corner resizes it, a strip above the board holds the name and the palette, and the picked
-     widget's form opens beside the widget itself. Every change is a globals op, so the manager
-     owns the state and this panel owns only the drawing and the gesture in flight. -->
+     widget's form opens beside the widget itself. Every change it makes is a globals op, so the
+     manager owns the state and this panel owns only the drawing and the gesture in flight. -->
 <script lang="ts">
 	import { onDestroy, tick } from 'svelte';
 	import type { PanelProps } from 'panelty';
@@ -63,8 +63,11 @@
 	const group = $derived(st.group ?? '');
 	const named = $derived(group !== '');
 	const groupLock = $derived<LockView>(g.globalGroups[group] ?? { config: false, value: false });
-	const edit = $derived(named && !groupLock.config);
 	const elements = $derived(g.globals.filter((gv) => gv.group === group && gv.control));
+	// A panel opens ready to USE, whatever its group holds and whatever another panel over the same
+	// group is doing: the mode is this one's own view.
+	let editing = $state(false);
+	const edit = $derived(named && editing);
 
 	let board: HTMLDivElement | null = $state(null);
 	let picked = $state<string | null>(null);
@@ -152,7 +155,7 @@
 		picked = null;
 		renaming = null;
 		stopLearning();
-		void g.lockGlobalGroup(group, { config: !on }).catch(() => {});
+		editing = on;
 	}
 
 	function setControl(gv: GlobalView, patch: Partial<ControlView>): void {
@@ -339,7 +342,7 @@
 		const { element, name } = gv;
 		let baseline: number[] | null = null;
 		learning = name;
-		unbind = bindViewer(uid, slot, `learn:${name}`, viewSpecForKind('line', 4096, 64), (f: DataFrame) => {
+		unbind = bindViewer(uid, slot, `learn:${name}`, [viewSpecForKind('line', 4096, 64)], (f: DataFrame) => {
 			const values = (f.data as ArrayData).values;
 			if (!values || typeof values.length !== 'number') return;
 			if (!baseline) {
@@ -554,6 +557,7 @@
 	{#if edit && pickedView}
 		{@const pv = pickedView}
 		{@const pc = pv.control as ControlView}
+		{@const pheld = effectiveLock(pv, groupLock)}
 		{#key `${pv.name}:${placed(pv).x},${placed(pv).y}`}
 			<Popover
 				{anchor}
@@ -565,7 +569,7 @@
 				style="--popover-min-width: 18rem"
 				data-testid="control-props"
 			>
-				{#if pv.lock.config}
+				{#if pheld.config}
 					<EmptyState>
 						{#snippet hint()}This widget is config-locked.{/snippet}
 					</EmptyState>

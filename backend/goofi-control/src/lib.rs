@@ -201,7 +201,7 @@ pub struct Spawn {
     pub base: String,
     pub manifest: &'static NodeManifest,
     pub params: Arc<[AtomicU64]>,
-    pub started: Instant,
+    pub time: Arc<goofi_core::time::Time>,
 }
 
 /// Create the node's services on the caller's thread, where a failure can still be reported, and
@@ -226,8 +226,7 @@ pub fn spawn<H: Half + 'static>(
     let mail = Arc::new(Mutex::new(Mail::default()));
     let halt = Arc::new(Halt::default());
     let (thread_mail, thread_halt) = (mail.clone(), halt.clone());
-    std::thread::Builder::new()
-        .name(format!("goofi-{}-{}", spawn.engine, spawn.manifest.type_name))
+    goofi_transport::thread(format!("goofi-{}-{}", spawn.engine, spawn.manifest.type_name))
         .spawn(move || {
             // The half is BUILT in here too: a factory that panics must still release the halt,
             // or the exit waits its whole ceiling on a node that never started.
@@ -236,7 +235,7 @@ pub fn spawn<H: Half + 'static>(
                 let control = Control {
                     uid: spawn.uid,
                     manifest: spawn.manifest,
-                    started: spawn.started,
+                    time: spawn.time.clone(),
                     params: spawn.params,
                     consts: Vec::new(),
                     outs,
@@ -286,7 +285,7 @@ struct Bind {
 struct Control<H: Half> {
     uid: Uid,
     manifest: &'static NodeManifest,
-    started: Instant,
+    time: Arc<goofi_core::time::Time>,
     params: Arc<[AtomicU64]>,
     consts: Vec<Param>,
     outs: Vec<Out>,
@@ -539,7 +538,7 @@ impl<H: Half> Control<H> {
         let param = b.param;
         let target = &self.consts[param];
         let evaluator = self.shared.evaluator.lock().unwrap().clone();
-        let t = self.started.elapsed().as_secs_f64();
+        let t = self.time.now();
         let (value, error) = match b.expr.evaluate(evaluator.as_deref(), t, target) {
             Ok(Some(v)) if !scalar(&v).is_finite() => (None, Some(format!("evaluated to {}", scalar(&v)))),
             Ok(v) => (v, None),
@@ -609,3 +608,4 @@ pub fn text(consts: &[Param], param: usize) -> String {
 pub fn flag(consts: &[Param], param: usize) -> bool {
     consts.get(param).and_then(|p| p.as_bool()).unwrap_or(false)
 }
+

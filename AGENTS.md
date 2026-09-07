@@ -276,7 +276,12 @@ toolchain: a text editor is the whole requirement to author one, and the engine 
 AFTER the file's text so a naga error names the line the author sees. Every texture is
 `Rgba16Float`, and `uv`, the sampler, texture memory, an upload's rows and a readback's rows all
 put row 0 at the TOP — one convention, so a pass-through body is a copy and no flip is written
-anywhere. The engine is scheduled and DEMAND-DRIVEN: a stage renders only where its output has a
+anywhere. A node HOLDS state by declaring named buffers: `cells` reads what the last tick left,
+`next_cells` writes what this one leaves, and one pass fills the output and every buffer at once —
+so a buffer is the node's own size, and `frame`, the renders since it was made, is what a body
+seeds itself on. Its size is a param like any other: `common.width` and `common.height`, 0
+following what is wired behind, and `globals.system.default_width` on a node that makes its own
+frames. The engine is scheduled and DEMAND-DRIVEN: a stage renders only where its output has a
 reader, so a node nobody watches costs nothing. Its plan is replaced whole and never edited,
 because a stage index is a name and a stage that outlives its node draws into a stranger. The
 PROCESS owns one device and one compile thread, and every operation on that device takes one gate
@@ -294,6 +299,22 @@ ready; pub/sub has no history, so anything said before that is queued or re-plan
 **One data stream per (node, slot), whatever the viewer count.** Viewers publish a payload-free
 constraint algebra; the bridge folds every viewer's constraints against the real frame and
 reduces ONCE, on its own subscription — so no number of viewers can slow a `process()` down.
+
+**An accessory never reaches an engine's scheduling, and never widens what it makes.** A viewer's
+box — what it asks a producer to fit its readback into — is a LIVE CELL the render thread reads,
+never plan state: a viewer appearing, resizing or leaving must not be able to re-plan an engine.
+And a reader that declared nothing has asked for no pixels, so its readback is ONE TEXEL — the
+cheapest frame that is still a frame, whose metadata is the whole product. A viewer declares what
+it DRAWS; a frame it accepts but cannot draw is one it can only DESCRIBE, and that is a second,
+cheaper declaration rather than its drawing axes stretched over a frame it renders nothing of. A
+frame NO declaration admits is not a declaration either — it takes the same one texel, never the
+passthrough that "no axes" would otherwise mean. Only a reader of RAW pixels widens a readback at
+all — a global
+following the slot, or a snapshot — because widening is the most expensive thing an engine can be
+told to do. What it cost, at 1920 square: an open metadata panel, which reads no pixels, held the
+engine at 30 fps for as long as it was open; six viewers closing at once — one pan of the node
+editor — took it to 10; and a line viewer parked on a texture, drawing nothing but a shape
+readout, took it to 12 on 9 MB frames.
 
 **Every out-of-crate node runs one contract.** In-process free-threaded and subprocess GIL-bound
 Python nodes share one marshalling seam, so they cannot drift; neither the tier nor the

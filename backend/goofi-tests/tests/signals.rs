@@ -218,7 +218,36 @@ fn the_generators_answer_on_their_own_and_a_settled_one_answers_when_asked() {
     set(words, "text", "value", j!("hello"));
     let said = g.until("the text to answer its edit", |_| pt.latest().filter(|d| text(d) == Some("hello")));
     assert_eq!(text(&said), Some("hello"));
-    for n in [lfo, noise, konst, words] {
+
+    // A Clock is the tick the rest of the patch shares. `count` is the reading that never skips
+    // one, where `pulse` can only say that a tick landed in this update and not that two did.
+    let clock = g.add("Clock");
+    set(clock, "clock", "unit", j!("hz"));
+    set(clock, "clock", "rate", j!(20.0));
+    let pcl = g.probe(clock, "count");
+    g.until("the clock to count several ticks", |_| pcl.latest().filter(|d| f32s(d)[0] >= 3.0));
+    g.call("node param pulse", j!({ "node": hex(clock), "param": "clock/reset" }));
+    g.until("the count to start again from zero", |_| pcl.latest().filter(|d| f32s(d)[0] < 3.0));
+
+    // Stopping holds the place it had reached rather than rewinding it, so starting again
+    // resumes: the count carries on from where the stop left it.
+    set(clock, "clock", "running", j!(false));
+    let mut steady: Option<(u64, f32)> = None;
+    let frozen = g.until("the count to settle once the clock is stopped", |_| {
+        let (seen, value) = (pcl.count(), pcl.latest().map(|d| f32s(&d)[0])?);
+        match steady {
+            // Frames kept arriving and the reading did not move: the stop has landed.
+            Some((first, held)) if held == value => (seen >= first + 3).then_some(value),
+            _ => {
+                steady = Some((seen, value));
+                None
+            }
+        }
+    });
+    set(clock, "clock", "running", j!(true));
+    g.until("the count to carry on from where it stopped", |_| pcl.latest().filter(|d| f32s(d)[0] > frozen));
+
+    for n in [lfo, noise, konst, words, clock] {
         assert!(g.error(n).is_none(), "a generator carries no error");
     }
 }
@@ -241,6 +270,23 @@ fn the_array_nodes_reshape_a_grid_and_the_rate_follows_the_time_axis() {
     g.link(src, "out", math, "input");
     let scaled = g.until("the scaled grid", |_| pm.latest().filter(|d| shape(d) == vec![3, 4]));
     assert_eq!(scaled.meta().sfreq(), Some(256.0), "elementwise work leaves the rate alone");
+
+    // `bound` is what happens to a value the range cannot hold. The remap is an identity here —
+    // the same range in and out — so each reading is the bound alone, over a flat 300.
+    set(math, "math", "multiply", j!(0.0));
+    set(math, "math", "post_add", j!(300.0));
+    set(math, "range", "from_low", j!(20.0));
+    set(math, "range", "from_high", j!(40.0));
+    set(math, "range", "to_low", j!(20.0));
+    set(math, "range", "to_high", j!(40.0));
+    // clamp holds at the edge; wrap carries round, and 300 is a whole number of spans past 20;
+    // fold halves until it lands, which is the octave a spectral peak needs to be audible.
+    for (bound, want) in [("clamp", 40.0), ("wrap", 20.0), ("fold", 37.5), ("none", 300.0)] {
+        set(math, "range", "bound", j!(bound));
+        g.until(bound, |_| pm.latest().filter(|d| f32s(d).iter().all(|v| (*v - want).abs() < 1e-4)));
+    }
+    set(math, "math", "multiply", j!(2.0));
+    set(math, "math", "post_add", j!(1.0));
 
     let func = g.add("Function");
     set(func, "function", "function", j!("negate"));
@@ -392,7 +438,72 @@ fn the_control_nodes_turn_a_signal_into_a_decision_a_route_and_a_label() {
     let labels = stamped.meta().channels().get(0).and_then(|x| x.coords.clone()).expect("the written label");
     assert_eq!(labels[0], goofi_core::Coord::Str("alpha".into()), "the name the node was told to write");
 
-    for n in [over, under, route, named] {
+    // Dwell is the third leg beside hysteresis and hold: the comparison has to keep saying the
+    // same thing before the decision follows it, so a brief excursion past the level is not a
+    // state. The signal leaves the level here and the decision does not.
+    set(over, "threshold", "dwell", j!(5.0));
+    set(level, "constant", "value", j!(0.0));
+    assert!(g.stays(|_| po.latest().is_some_and(|d| f32s(&d).iter().all(|v| *v == 1.0))),
+            "the signal left the level, and the dwell has not elapsed");
+    set(over, "threshold", "dwell", j!(0.0));
+    g.until("the decision to follow once nothing holds it back", |_| {
+        po.latest().filter(|d| f32s(d).iter().all(|v| *v == 0.0))
+    });
+
+    // Hold takes the first frame unasked, so a fresh one answers with the signal rather than with
+    // zero — and after that only what a `take` catches.
+    let latch = g.add("Hold");
+    let pl = g.probe(latch, "out");
+    g.link(level, "out", latch, "input");
+    g.until("the first frame, taken unasked", |_| {
+        pl.latest().filter(|d| shape(d) == vec![3, 4] && f32s(d).iter().all(|v| *v == 0.0))
+    });
+    set(level, "constant", "value", j!(7.0));
+    assert!(g.stays(|_| pl.latest().is_some_and(|d| f32s(&d).iter().all(|v| *v == 0.0))),
+            "a held value does not follow its input");
+    g.call("node param pulse", j!({ "node": hex(latch), "param": "hold/take" }));
+    let caught = g.until("the value the take caught", |_| {
+        pl.latest().filter(|d| f32s(d).iter().all(|v| *v == 7.0))
+    });
+    assert_eq!(shape(&caught), vec![3, 4], "a latch keeps the shape it was given");
+
+    // Quantize counts its allowed values out: five from zero to one puts 0.7 on 0.75, the fourth.
+    let steps = g.add("signal:Quantize");
+    set(steps, "quantize", "count", j!(5));
+    set(level, "constant", "value", j!(0.7));
+    let (pq, pi) = (g.probe(steps, "out"), g.probe(steps, "index"));
+    g.link(level, "out", steps, "input");
+    g.until("the nearest of five counted values", |_| {
+        pq.latest().filter(|d| f32s(d).iter().all(|v| (*v - 0.75).abs() < 1e-6))
+    });
+    g.until("which of them it landed on", |_| pi.latest().filter(|d| f32s(d).iter().all(|v| *v == 3.0)));
+
+    // The same node against a WIRED set, which is how a tuning's own ratios become the only
+    // numbers a signal may take. `period` folds a value into one octave of the scale, matches it
+    // there, and puts the register back: 4.9 reads as 1.225, lands on 1.25, and comes out at 5.
+    let written = g.add("Text");
+    set(written, "text", "value", j!(r#"{"scale": [1.0, 1.25, 1.5]}"#));
+    let parsed = g.add("FromJson");
+    let ratios = g.add("TableSelect");
+    set(ratios, "table", "key", j!("scale"));
+    g.link(written, "out", parsed, "input");
+    g.link(parsed, "out", ratios, "input");
+    let pr = g.probe(ratios, "array");
+    g.until("the scale read out of its own text", |_| pr.latest().filter(|d| f32s(d).len() == 3));
+    // The set is wired before the signal is, because a levels-mode quantizer with no set to land
+    // on has nothing to answer and says so.
+    let tuned = g.add("signal:Quantize");
+    set(tuned, "quantize", "mode", j!("levels"));
+    set(tuned, "quantize", "period", j!(2.0));
+    let pv = g.probe(tuned, "out");
+    g.link(ratios, "array", tuned, "levels");
+    set(level, "constant", "value", j!(4.9));
+    g.link(level, "out", tuned, "input");
+    g.until("the value pulled onto the scale, in the octave it came from", |_| {
+        pv.latest().filter(|d| f32s(d).iter().all(|v| (*v - 5.0).abs() < 1e-5))
+    });
+
+    for n in [over, under, route, named, latch, steps, tuned] {
         assert!(g.error(n).is_none(), "a control node carries no error: {:?}", g.error(n));
     }
 }

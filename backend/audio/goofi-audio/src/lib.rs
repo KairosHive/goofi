@@ -9,9 +9,9 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use goofi_audio_sdk::host::Loaded;
-use goofi_audio_sdk::{AudioNode, BLOCK, MAX_PORTS};
+use goofi_audio_sdk::{AudioNode, BLOCK, MAX_CHANNELS, MAX_PORTS};
 use goofi_core::{Param, SlotType};
 use goofi_node::{
     DrainWaker, Edit, EditorAction, Engine, GraphView, LibraryEntry, NodeManifest, NodeStage, NodeView,
@@ -19,6 +19,7 @@ use goofi_node::{
 };
 
 mod control;
+mod host;
 pub(crate) mod nodes;
 mod plan;
 mod runtime;
@@ -28,7 +29,7 @@ pub mod vst3;
 
 use control::{AudioHalf, AudioShared};
 use goofi_control::{Desired, Handle, Shared, Sub};
-use nodes::{audio_out, Class};
+use nodes::{audio_in, audio_out, Class};
 use plan::Plan;
 use runtime::{Fault, Inbox, Msg, Retired, Runtime, Slot, OVERRUNS};
 
@@ -38,6 +39,9 @@ pub(crate) const RATE: f64 = 48_000.0;
 /// A ceiling on a device open, which runs under the graph lock: a sound server that does not
 /// answer must not wedge every op.
 const OPEN_WAIT: Duration = Duration::from_secs(2);
+
+/// The same ceiling for an ASIO driver, which loads a vendor runtime before it answers.
+const ASIO_OPEN_WAIT: Duration = Duration::from_secs(10);
 
 /// What drives the blocks: the harness's `drive(frames)`, or the device the `AudioOut` nodes name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,9 +118,13 @@ impl DeviceClock {
                 let _ = done.send(());
             })
             .map_err(|e| format!("could not start the clock thread: {e}"))?;
+        // An ASIO driver loads the vendor's whole runtime before it answers, which routinely
+        // outlasts the ceiling a sound server needs; the ceiling exists so a host that never
+        // answers cannot wedge every op, and that is still true at the longer one.
+        let wait = if crate::host::asio_driver(name).is_some() { ASIO_OPEN_WAIT } else { OPEN_WAIT };
         let (rate, channels) = on_open
-            .recv_timeout(OPEN_WAIT)
-            .map_err(|_| format!("`{name}` did not open within {} s", OPEN_WAIT.as_secs()))??;
+            .recv_timeout(wait)
+            .map_err(|_| format!("`{name}` did not open within {} s", wait.as_secs()))??;
         Ok((DeviceClock { name: name.to_string(), channels, go: Some(go), done: on_done }, rate))
     }
 
@@ -147,44 +155,86 @@ pub fn recordings() -> std::path::PathBuf {
 pub(crate) const NO_DEVICE: &str = "the external clock owns no device";
 
 fn open_output(name: &str, runtime: Arc<Mutex<Runtime>>, stats: Arc<Stats>, waker: Arc<DrainWaker>) -> Result<(cpal::Stream, f64, u16), String> {
-    let host = cpal::default_host();
-    let device = control::device("output", name, host.default_output_device(), host.output_devices())?;
+    let device = host::device(host::Kind::Output, name)?;
     let supported = device.default_output_config().map_err(|e| format!("`{name}`: {e}"))?;
+    let format = supported.sample_format();
     // The host's own buffer, never a size of ours: `render_into` is size-agnostic, and a request of
     // ours underran while the client was unoptimized. The 2 s this costs is a roadmap item.
-    let config = supported.config();
+    let mut config = supported.config();
+    config.channels = config.channels.min(MAX_CHANNELS);
     let rate = f64::from(config.sample_rate);
     let channels = config.channels;
+    // The word the DEVICE speaks, as on the input side: a shared-mode host takes `f32` from every
+    // client, and a host that hands over the device's own — a Focusrite's is `i32` — refused the
+    // stream outright. The runtime still renders `f32` and knows nothing of this.
+    let open = |f| match f {
+        cpal::SampleFormat::F32 => output_stream::<f32>(&device, config, runtime.clone(), stats.clone(), waker.clone()),
+        cpal::SampleFormat::I8 => output_stream::<i8>(&device, config, runtime.clone(), stats.clone(), waker.clone()),
+        cpal::SampleFormat::I16 => output_stream::<i16>(&device, config, runtime.clone(), stats.clone(), waker.clone()),
+        cpal::SampleFormat::I32 => output_stream::<i32>(&device, config, runtime.clone(), stats.clone(), waker.clone()),
+        cpal::SampleFormat::U8 => output_stream::<u8>(&device, config, runtime.clone(), stats.clone(), waker.clone()),
+        cpal::SampleFormat::U16 => output_stream::<u16>(&device, config, runtime.clone(), stats.clone(), waker.clone()),
+        cpal::SampleFormat::F64 => output_stream::<f64>(&device, config, runtime.clone(), stats.clone(), waker.clone()),
+        other => Err(format!("the device's sample format {other} is one goofi does not write")),
+    };
+    let stream = open(format).map_err(|e| format!("`{name}`: {e}"))?;
+    Ok((stream, rate, channels))
+}
+
+/// The clock's callback, rendering `f32` and handing the device whatever word it speaks.
+///
+/// `render_into` writes `f32` and nothing else — the whole engine is `f32` — so a device of another
+/// word is served through a scratch buffer that grows once to the host's period and is then reused.
+/// Allocating in the callback would be a xrun waiting to happen; `resize` past the first block is
+/// not an allocation.
+fn output_stream<T>(
+    device: &cpal::Device,
+    config: cpal::StreamConfig,
+    runtime: Arc<Mutex<Runtime>>,
+    stats: Arc<Stats>,
+    waker: Arc<DrainWaker>,
+) -> Result<cpal::Stream, String>
+where
+    T: cpal::SizedSample + cpal::FromSample<f32>,
+{
     let died = stats.clone();
-    let stream = device
-        .build_output_stream::<f32, _, _>(
+    let mut scratch: Vec<f32> = Vec::new();
+    device
+        .build_output_stream::<T, _, _>(
             config,
-            move |data, _| {
+            move |data: &mut [T], _| {
                 stats.callbacks.fetch_add(1, Ordering::Relaxed);
                 let started = Instant::now();
+                scratch.resize(data.len(), 0.0);
                 match runtime.try_lock() {
-                    Ok(mut rt) => rt.render_into(data),
+                    Ok(mut rt) => rt.render_into(&mut scratch),
                     Err(_) => {
-                        data.fill(0.0);
+                        scratch.fill(0.0);
                         stats.xruns.fetch_add(1, Ordering::Relaxed);
                     }
+                }
+                for (out, v) in data.iter_mut().zip(scratch.iter()) {
+                    *out = T::from_sample_(*v);
                 }
                 stats.render_max_us.fetch_max(started.elapsed().as_micros() as u64, Ordering::Relaxed);
             },
             // An underrun the backend reports recovers on its own and is an xrun; only a device
             // that is gone is death.
-            move |e| {
-                if matches!(e.kind(), cpal::ErrorKind::DeviceNotAvailable) {
+            move |e| match e.kind() {
+                cpal::ErrorKind::DeviceNotAvailable => {
                     died.dead.store(true, Ordering::Release);
                     waker.notify();
-                } else {
+                }
+                // The stream plays on at ordinary priority, so this is the deadline lost rather
+                // than a period missed: counting it as an xrun would hide the very thing to read.
+                cpal::ErrorKind::RealtimeDenied => eprintln!("audio: {e}"),
+                _ => {
                     died.xruns.fetch_add(1, Ordering::Relaxed);
                 }
             },
             None,
         )
-        .map_err(|e| format!("`{name}`: {e}"))?;
-    Ok((stream, rate, channels))
+        .map_err(|e| e.to_string())
 }
 
 /// The rings a device or a port fills, minted per instance: the DSP half's ends in the birth,
@@ -233,7 +283,7 @@ pub(crate) struct Instance {
 
 pub struct AudioEngine {
     instance: String,
-    started: Instant,
+    time: Arc<goofi_core::time::Time>,
     clock: Clock,
     device: Option<DeviceClock>,
     /// The name last tried and what it answered: a name that failed is not tried again until it
@@ -275,7 +325,7 @@ const SLAB: usize = 64;
 const QUEUE: usize = 4096;
 
 impl AudioEngine {
-    pub fn new(instance: String, started: Instant, waker: Arc<DrainWaker>, clock: Clock) -> AudioEngine {
+    pub fn new(instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>, clock: Clock) -> AudioEngine {
         let classes: HashMap<&'static str, Class> = nodes::BUILT_IN
             .iter()
             .map(|(type_name, m, make)| {
@@ -295,7 +345,7 @@ impl AudioEngine {
         let (from_audio, outbox) = rtrb::RingBuffer::new(QUEUE);
         AudioEngine {
             instance,
-            started,
+            time,
             clock,
             device: None,
             tried: None,
@@ -533,6 +583,24 @@ impl AudioEngine {
         outs
     }
 
+    /// Every `AudioIn` with the device it names, by uid. Unlike the outs these do not have to
+    /// agree — a capture endpoint is genuinely its own device — so this exists for the ASIO rule
+    /// alone, which is about the DRIVER and not about the device.
+    fn audio_ins(&self, view: &GraphView<'_>) -> Vec<(Uid, String)> {
+        let mut ins: Vec<(Uid, String)> = self
+            .live
+            .iter()
+            .filter(|(uid, inst)| inst.manifest.type_name == audio_in::TYPE && !self.disabled.contains_key(uid))
+            .filter_map(|(uid, inst)| {
+                let nv = view.nodes.get(uid)?;
+                let Param::Str { value, .. } = goofi_control::param_of(nv.params, &inst.manifest.params[audio_in::P::DEVICE]) else { return None };
+                Some((*uid, value))
+            })
+            .collect();
+        ins.sort_by_key(|(uid, _)| uid.0);
+        ins
+    }
+
     /// Open, close or switch the output stream to `wanted`, and the error a device that will not
     /// open answers with. A name is tried ONCE: the previous clock is reopened and stands, and the
     /// error stands with it until the name moves. The old stream stops before the new one opens,
@@ -681,7 +749,7 @@ impl Engine for AudioEngine {
             base: goofi_transport::service_base(&self.instance, uid, generation),
             manifest,
             params: atomics.clone(),
-            started: self.started,
+            time: self.time.clone(),
         };
         let control = match goofi_control::spawn(spawn, self.shared.clone(), &self.bells, move || AudioHalf::new(birth)) {
             Ok(handle) => handle,
@@ -751,6 +819,18 @@ impl Engine for AudioEngine {
             .filter(|(_, device)| !agrees(device))
             .map(|(uid, _)| (*uid, format!("the clock is on `{}`", clock.as_deref().unwrap_or_default())))
             .collect();
+        // ASIO loads ONE driver per process — the SDK's rule, not cpal's — and a second load
+        // answers `DriverAlreadyExists` rather than degrading. The clock's driver wins, because
+        // the clock is what the engine cannot run without; anything else naming a DIFFERENT one is
+        // refused here, where the refusal can say which driver holds the process. A patch that
+        // mixes hosts is left alone: a WASAPI capture endpoint beside an ASIO output is a real
+        // setup, and the only thing it costs is the drift `roadmap/audio-engine.md` already tracks.
+        let ins = self.audio_ins(view);
+        let held = outs.iter().chain(ins.iter()).find_map(|(_, d)| host::asio_driver(d));
+        if let Some(held) = held {
+            let strays = outs.iter().chain(ins.iter()).filter(|(_, d)| host::asio_driver(d).is_some_and(|k| k != held));
+            faults.extend(strays.map(|(uid, _)| (*uid, format!("the ASIO driver is `{held}`, and only one loads at a time"))));
+        }
         if self.clock.owns_devices() {
             if let Some(why) = self.follow(clock.as_deref()) {
                 faults.extend(outs.iter().filter(|(_, device)| agrees(device)).map(|(uid, _)| (*uid, why.clone())));
@@ -760,7 +840,7 @@ impl Engine for AudioEngine {
         faults.extend(self.disabled.iter().map(|(u, m)| (*u, m.clone())));
         let (plan, looped) = plan::compile(view, &self.live, &silent, &self.disabled);
         faults.extend(looped);
-        let since = self.started.elapsed().as_secs_f64();
+        let since = self.time.now();
         self.pending.extend(self.faults.settle(faults, since));
         if plan != self.last {
             let arena = vec![0.0; plan.arena_len];
@@ -770,6 +850,22 @@ impl Engine for AudioEngine {
         if !self.pending.is_empty() {
             self.shared.waker.notify();
         }
+    }
+
+    /// What the audio plane alone decides, off the same `status()` the report reads — so the
+    /// globals and `session status` cannot drift, and a node in any engine can bind to the rate
+    /// or the driver without a door of its own.
+    fn published(&self) -> Vec<(&'static str, goofi_core::globals::GlobalValue)> {
+        use goofi_core::globals::GlobalValue;
+        let s = self.status();
+        let device = s.device.unwrap_or_default();
+        let driver = host::asio_driver(&device).unwrap_or_default().to_string();
+        vec![
+            ("system.audio_rate", GlobalValue::Float(s.rate)),
+            ("system.audio_channels", GlobalValue::Int(i64::from(s.channels))),
+            ("system.audio_driver", GlobalValue::Str(driver)),
+            ("system.audio_device", GlobalValue::Str(device)),
+        ]
     }
 
     fn drain(&mut self, apply: &mut dyn FnMut(Uid, Status)) -> usize {
@@ -837,11 +933,6 @@ impl Engine for AudioEngine {
             edits.push(Edit { uid, key, value });
         }
         edits
-    }
-
-    /// Every control half born after computes `t` from the new origin.
-    fn reset_clock(&mut self, origin: Instant) {
-        self.started = origin;
     }
 
     fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_node::ExprEvaluator>) {

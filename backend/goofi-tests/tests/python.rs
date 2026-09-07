@@ -599,12 +599,16 @@ class Sleeper(goofi.Node):
         }), &SLEEPY_TIER);
         let src = g.add("_TestCounter");
 
-        // ONE sleeper first, to learn what a single 150 ms run costs on THIS machine.
+        // A LOAD is serialized on purpose — one module body at a time, process-wide, so a cyclic
+        // package cannot deadlock — so every window here opens on a node that has already emitted.
         let solo = g.add("Sleeper");
         let solo_probe = g.probe(solo, "out");
         g.link(src, "out", solo, "data");
+        g.until("the lone sleeper to load and emit", |_| solo_probe.latest());
+        // ONE sleeper first, to learn what a single 150 ms run costs on THIS machine.
+        let base = solo_probe.count();
         let t0 = Instant::now();
-        g.until("the lone sleeper to emit", |_| solo_probe.latest());
+        g.until("the lone sleeper to run again", |_| (solo_probe.count() > base).then_some(()));
         let one = t0.elapsed();
         g.call("node remove", j!({ "node": hex(solo) }));
 
@@ -613,9 +617,13 @@ class Sleeper(goofi.Node):
         for u in &sleepers {
             g.link(src, "out", *u, "data");
         }
-        let t0 = Instant::now();
         for p in &probes {
-            g.until("every sleeper to emit", |_| p.latest());
+            g.until("every sleeper to load and emit", |_| p.latest());
+        }
+        let bases: Vec<u64> = probes.iter().map(|p| p.count()).collect();
+        let t0 = Instant::now();
+        for (p, base) in probes.iter().zip(&bases) {
+            g.until("every sleeper to run again", |_| (p.count() > *base).then_some(()));
         }
         let four = t0.elapsed();
         // Overlapping, four cost about one; serialized they cost four. Two is the only bar between.
