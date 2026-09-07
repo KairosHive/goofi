@@ -550,7 +550,7 @@
 		return null;
 	}
 
-	/** The control widget under a screen point, in a panel whose group is in edit mode. */
+	/** The control widget under a screen point, in a control panel that is in edit mode. */
 	function widgetUnder(x: number, y: number): string | null {
 		for (const el of document.querySelectorAll<HTMLElement>('[data-node-drop]')) {
 			const r = el.getBoundingClientRect();

@@ -540,9 +540,9 @@ impl Graph {
         &self.globals
     }
 
-    /// Apply one global change (`None` = remove; a system delete is refused; a NEW global lands at
-    /// ordered position `at` — a delete/rename undo re-adds at the original slot). Every binding
-    /// that READS this global is re-resolved and re-sent — a global's value is shipped inline.
+    /// Apply one global change (a NEW global lands at ordered position `at` — a delete/rename undo
+    /// re-adds at the original slot; `None` leaves the value alone). Every binding that READS this
+    /// global is re-resolved and re-sent — a global's value is shipped inline.
     pub fn apply_global_change(
         &mut self,
         name: &str,
@@ -550,12 +550,18 @@ impl Graph {
         at: Option<usize>,
         control: Option<Option<goofi_core::globals::Control>>,
     ) -> Result<(), String> {
-        let removing = value.is_none();
         self.globals.apply_change(name, value, at)?;
-        // A remove takes the record with it, so a `control` beside one has nothing to land on.
-        if let (false, Some(c)) = (removing, control) {
+        if let Some(c) = control {
             self.globals.set_control(name, c)?;
         }
+        self.invalidate_bindings_reading(name);
+        Ok(())
+    }
+
+    /// Delete a global, and with it the widget, the source and the lock that rode on it. A system
+    /// one is refused.
+    pub fn remove_global(&mut self, name: &str) -> Result<(), String> {
+        self.globals.remove(name)?;
         self.invalidate_bindings_reading(name);
         Ok(())
     }

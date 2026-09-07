@@ -645,7 +645,8 @@ impl GlobalStore {
         self.group_locks.contains_key(group) || self.values.keys().any(|k| group_of(k) == group)
     }
 
-    /// Apply one change: `Some(v)` sets or adds (a NEW global lands at `at`), `None` removes.
+    /// Apply one change: `Some(v)` sets or adds (a NEW global lands at `at`); `None` leaves the
+    /// value alone, which is what an edit to the widget beside it means.
     pub fn apply_change(
         &mut self,
         name: &str,
