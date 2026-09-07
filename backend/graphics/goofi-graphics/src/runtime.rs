@@ -1,7 +1,7 @@
 //! What the render thread owns: the plan, one GPU state per live node, and the tick that draws
 //! every demanded stage once and reads back the ones somebody is watching.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -9,7 +9,7 @@ use std::time::Instant;
 use goofi_core::{Data, Meta};
 use goofi_node::Uid;
 
-use crate::gpu::{padded_row, target, Gpu};
+use crate::gpu::{padded_row, target, Gpu, Want};
 use crate::half::Upload;
 use crate::plan::{Input, Plan};
 use crate::shader;
@@ -36,11 +36,44 @@ struct Target {
     size: (u32, u32),
 }
 
+/// One frame on its way off the GPU: the texture the blit converts into and the buffer the copy
+/// lands in.
+struct Slot {
+    texture: Target,
+    buffer: wgpu::Buffer,
+    /// The map callback's: set once the bytes are there.
+    ready: Arc<AtomicBool>,
+}
+
+/// What a reader's frames cost to make, and the size the source was when they were made — the
+/// frame says so itself, because a viewer that reduced it must still know where a texel came from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Shrunk {
+    from: (u32, u32),
+    to: (u32, u32),
+}
+
+/// The frames one reader has in flight. A copy started in one tick is taken a tick or two later,
+/// so the render thread never waits on the device; a slot's LIST is its whole state, so there is
+/// no flag to keep in step.
+struct Ring {
+    /// Nothing of theirs is on the device, so these are what a new copy goes into.
+    free: Vec<Slot>,
+    /// A copy is on the device or mapped, oldest first — so frames leave in the order asked for.
+    flight: VecDeque<Slot>,
+    /// What the last frames were copied into, handed back by whoever finished with them.
+    spare: Spare,
+    /// The destination size the pass reads, on the device.
+    out_size: wgpu::Buffer,
+    /// The source and target this ring was built for; a move in either remakes it.
+    shrunk: Shrunk,
+}
+
 /// One node's GPU state, kept across plans so a topology edit costs no allocation.
 struct State {
     out: Option<Target>,
-    /// The readback, sized with `out`; only a stage somebody watches has one.
-    staging: Option<wgpu::Buffer>,
+    /// One per [`Want`], sized with `out`; only a stage that reader watches has one.
+    reads: [Option<Ring>; 2],
     uploads: Vec<Option<Target>>,
     time: wgpu::Buffer,
     resolution: wgpu::Buffer,
@@ -90,7 +123,7 @@ impl Runtime {
         };
         let state = State {
             out: None,
-            staging: None,
+            reads: [None, None],
             uploads: Vec::new(),
             time: uniform("time", 4),
             resolution: uniform("resolution", 8),
@@ -145,8 +178,10 @@ impl Runtime {
             return;
         }
         let _gate = crate::gpu::gate();
+        // What an earlier tick put on the device and the device has finished since.
+        self.take();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
-        let mut readbacks: Vec<usize> = Vec::new();
+        let mut started: Vec<(Uid, Want, Slot, (u32, u32))> = Vec::new();
         for (i, drawn) in want.iter().enumerate() {
             if !drawn {
                 continue;
@@ -154,7 +189,8 @@ impl Runtime {
             let stage = &self.plan.stages[i];
             let Some(Ok(pipeline)) = stage.pipeline.get() else { continue };
             let Some(state) = self.states.get_mut(&stage.uid) else { continue };
-            state.ensure_out(&self.gpu, stage.size, stage.read());
+            state.ensure_out(&self.gpu, stage.size, stage.wants());
+            let shrunk_from = stage.size;
             for (k, cell) in stage.uploads.iter().enumerate() {
                 if let Some(up) = cell.lock().unwrap().take() {
                     state.upload(&self.gpu, k, &up);
@@ -212,50 +248,107 @@ impl Runtime {
                 pass.draw(0..3, 0..1);
             }
             self.stats.stages.fetch_add(1, Ordering::Relaxed);
-            if let Some(buffer) = &state.staging {
-                let (w, h) = out.size;
+            // Cloned, so the readback below may take `states` mutably.
+            let out_view = out.view.clone();
+            for w in Want::ALL {
+                // A viewer is read back for only once it has FINISHED with the last frame, so it
+                // paces itself and can never pace the engine. A screen never waits its turn.
+                if w == Want::Tap && !stage.tap.lock().expect("the tap").wanted {
+                    continue;
+                }
+                let state = self.states.get_mut(&stage.uid).expect("just borrowed");
+                let Some(ring) = state.reads[w as usize].as_mut() else { continue };
+                let out_size = ring.out_size.clone();
+                let Some(slot) = ring.free.pop() else { continue };
+                let (width, height) = slot.texture.size;
+                self.gpu.blit(&mut encoder, w, &out_view, &slot.texture.view, &out_size);
                 encoder.copy_texture_to_buffer(
-                    out.texture.as_image_copy(),
+                    slot.texture.texture.as_image_copy(),
                     wgpu::TexelCopyBufferInfo {
-                        buffer,
+                        buffer: &slot.buffer,
                         layout: wgpu::TexelCopyBufferLayout {
                             offset: 0,
-                            bytes_per_row: Some(padded_row(w)),
+                            bytes_per_row: Some(padded_row(width, w.texel())),
                             rows_per_image: None,
                         },
                     },
-                    wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                    wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
                 );
-                readbacks.push(i);
+                started.push((stage.uid, w, slot, shrunk_from));
             }
         }
         self.gpu.queue.submit([encoder.finish()]);
-        for &i in &readbacks {
-            let uid = self.plan.stages[i].uid;
-            if let Some(b) = self.states[&uid].staging.as_ref() {
-                b.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        for (uid, w, slot, _from) in started {
+            let ready = slot.ready.clone();
+            slot.buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                ready.store(r.is_ok(), Ordering::Release);
+            });
+            if let Some(ring) = self.states.get_mut(&uid).and_then(|s| s.reads[w as usize].as_mut()) {
+                ring.flight.push_back(slot);
             }
         }
-        let _ = self.gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-        for &i in &readbacks {
-            let stage = &self.plan.stages[i];
-            let state = &self.states[&stage.uid];
-            let (Some(buffer), Some(out)) = (state.staging.as_ref(), state.out.as_ref()) else { continue };
-            let frame = read_back(buffer, out.size);
-            buffer.unmap();
-            let Some(frame) = frame else { continue };
-            if let (Some(id), Some(ui)) = (stage.window, &self.ui) {
-                present(self.presenting.entry(id).or_default(), ui, id, out.size, texels(&frame));
-            }
-            *stage.tap.lock().unwrap() = Some(frame);
-        }
+        // Never `Wait`: this runs the callback for a copy the device has already finished, and the
+        // rest are picked up at a later tick. The engine's clock paces it, never the device's.
+        let _ = self.gpu.device.poll(wgpu::PollType::Poll);
         self.stats.frames.fetch_add(1, Ordering::Relaxed);
         self.stats.tick_max_us.fetch_max(began.elapsed().as_micros() as u64, Ordering::Relaxed);
     }
+
+    /// Every frame the device has finished, given to the reader that asked for it. The GPU wrote
+    /// that reader's own format, so this is a copy of rows and never a conversion.
+    fn take(&mut self) {
+        for i in 0..self.plan.stages.len() {
+            for w in Want::ALL {
+                let uid = self.plan.stages[i].uid;
+                let Some(ring) = self.states.get_mut(&uid).and_then(|s| s.reads[w as usize].as_mut()) else {
+                    continue;
+                };
+                if !ring.flight.front().is_some_and(|slot| slot.ready.load(Ordering::Acquire)) {
+                    continue;
+                }
+                let slot = ring.flight.pop_front().expect("the front was ready");
+                slot.ready.store(false, Ordering::Relaxed);
+                let size = slot.texture.size;
+                let shrunk = ring.shrunk;
+                let mut rows = ring.spare.lock().expect("the spare").pop().unwrap_or_default();
+                let filled = rows_into(&mut rows, &slot.buffer, size, w);
+                slot.buffer.unmap();
+                let spare = ring.spare.clone();
+                ring.free.push(slot);
+                if !filled {
+                    continue;
+                }
+                let stage = &self.plan.stages[i];
+                match w {
+                    Want::Screen => {
+                        if let (Some(id), Some(ui)) = (stage.window, &self.ui) {
+                            present(self.presenting.entry(id).or_default(), ui, id, size, rows, spare);
+                        }
+                    }
+                    Want::Tap => {
+                        let shape = vec![size.1 as usize, size.0 as usize, 4];
+                        // A frame that was shrunk on the way out says so, in the words
+                        // `reduce_for_view` uses — otherwise it would understate its own origin
+                        // and a viewer could not map a texel back to the pixel it came from.
+                        let mut meta = Meta::new();
+                        if shrunk.from != shrunk.to {
+                            let area = goofi_view::ReduceMethod::Area;
+                            let axes = [(0, shrunk.from.1 as usize, area), (1, shrunk.from.0 as usize, area)];
+                            goofi_core::reduce::note_reduced(&mut meta, &axes);
+                        }
+                        if let Ok(frame) = Data::array_f32(shape, rows, meta) {
+                            let mut tap = stage.tap.lock().expect("the tap");
+                            tap.frame = Some(frame);
+                            tap.wanted = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
-/// The mapped rows as one `[H, W, 4]` f32 frame, the padding each row carries dropped.
-/// A frame as the screen takes it: its size, and its RGBA bytes.
+/// A frame as the screen takes it: its size, and its texels in the screen's own byte order.
 type Frame = ((u32, u32), Vec<u8>);
 
 /// One window's frame in flight.
@@ -267,16 +360,27 @@ struct Present {
 
 /// Hand the screen the newest frame, latest-wins, with at most ONE job outstanding. A job per
 /// frame on an unbounded queue starved every other job the window thread had — an op among them,
-/// because the clock always posted the next frame before the screen had finished the last.
-fn present(cell: &Arc<Present>, ui: &goofi_window::Ui, id: goofi_window::Id, size: (u32, u32), rgba: Vec<u8>) {
-    *cell.pending.lock().expect("the pending frame") = Some((size, rgba));
+/// because the clock always posted the next frame before the screen had finished the last. The
+/// drawn buffer goes back to `spare` rather than being freed.
+fn present(
+    cell: &Arc<Present>,
+    ui: &goofi_window::Ui,
+    id: goofi_window::Id,
+    size: (u32, u32),
+    texels: Vec<u8>,
+    spare: Spare,
+) {
+    if let Some((_, dropped)) = cell.pending.lock().expect("the pending frame").replace((size, texels)) {
+        give_back(&spare, dropped);
+    }
     if cell.posted.swap(true, Ordering::AcqRel) {
         return;
     }
     let cell = cell.clone();
     ui.post(move |host| {
-        if let Some((size, rgba)) = cell.pending.lock().expect("the pending frame").take() {
-            host.present(id, size, &rgba);
+        if let Some((size, texels)) = cell.pending.lock().expect("the pending frame").take() {
+            host.present(id, size, &texels);
+            give_back(&spare, texels);
         }
         // Cleared LAST, so the queue empties between two frames and the loop reaches its
         // other jobs. What arrived while this drew is picked up by the next tick's post.
@@ -284,65 +388,84 @@ fn present(cell: &Arc<Present>, ui: &goofi_window::Ui, id: goofi_window::Id, siz
     });
 }
 
-/// The frame as the screen takes it: RGBA bytes, row 0 the top, the HDR range clamped to what a
-/// display can show.
-fn texels(frame: &Data) -> Vec<u8> {
-    let goofi_core::Value::Array(a) = frame.value() else { return Vec::new() };
-    a.as_bytes()
-        .chunks_exact(4)
-        .enumerate()
-        .map(|(i, b)| {
-            // A window is OPAQUE. X11 and Win32 drop the fourth byte and macOS composites it, so
-            // a shader's own alpha would show through on one screen of three.
-            if i % 4 == 3 {
-                return 255;
-            }
-            let v = f32::from_le_bytes(b.try_into().expect("four bytes"));
-            (v.clamp(0.0, 1.0) * 255.0).round() as u8
-        })
-        .collect()
+/// Buffers a reader has finished with, kept for the next frame. A fresh 30 MB allocation costs
+/// four times the copy into it, because the kernel must zero every page.
+type Spare = Arc<Mutex<Vec<Vec<u8>>>>;
+
+/// Two is every buffer this path can have in hand at once; a third would only be held.
+fn give_back(spare: &Spare, buffer: Vec<u8>) {
+    let mut held = spare.lock().expect("the spare");
+    if held.len() < 2 {
+        held.push(buffer);
+    }
 }
 
-fn read_back(buffer: &wgpu::Buffer, (w, h): (u32, u32)) -> Option<Data> {
-    let mapped = buffer.slice(..).get_mapped_range().ok()?;
-    let pitch = padded_row(w) as usize;
-    let row = w as usize * 8;
-    let mut bytes = Vec::with_capacity(w as usize * h as usize * 16);
+/// The mapped rows into `bytes` as one tight frame, the 256-byte padding each row carries
+/// dropped, and whether it holds one.
+fn rows_into(bytes: &mut Vec<u8>, buffer: &wgpu::Buffer, (w, h): (u32, u32), want: Want) -> bool {
+    let Ok(mapped) = buffer.slice(..).get_mapped_range() else { return false };
+    let row = (w * want.texel()) as usize;
+    let pitch = padded_row(w, want.texel()) as usize;
+    bytes.resize(row * h as usize, 0);
     for y in 0..h as usize {
-        let line = mapped.get(y * pitch..y * pitch + row)?;
-        for texel in line.chunks_exact(2) {
-            let v = half::f16::from_bits(u16::from_le_bytes([texel[0], texel[1]])).to_f32();
-            bytes.extend_from_slice(&v.to_le_bytes());
+        match mapped.get(y * pitch..y * pitch + row) {
+            Some(line) => bytes[y * row..(y + 1) * row].copy_from_slice(line),
+            None => return false,
         }
     }
-    drop(mapped);
-    Data::array_f32(vec![h as usize, w as usize, 4], bytes, Meta::new()).ok()
+    true
+}
+
+impl Ring {
+    fn new(gpu: &Gpu, want: Want, shrunk: Shrunk) -> Ring {
+        let size = shrunk.to;
+        let slots = (0..want.depth())
+            .map(|_| {
+                let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC;
+                let texture = target(gpu, "readback", size, want.format(), usage);
+                let view = texture.create_view(&Default::default());
+                let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("readback"),
+                    size: u64::from(padded_row(size.0, want.texel())) * u64::from(size.1),
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                Slot { texture: Target { texture, view, size }, buffer, ready: Arc::new(AtomicBool::new(false)) }
+            })
+            .collect();
+        let out_size = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("out_size"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bytes = [(size.0 as f32).to_le_bytes(), (size.1 as f32).to_le_bytes()].concat();
+        gpu.queue.write_buffer(&out_size, 0, &bytes);
+        Ring { free: slots, flight: VecDeque::new(), spare: Spare::default(), out_size, shrunk }
+    }
 }
 
 impl State {
-    /// The output texture at `size`, and its staging buffer while somebody reads it. Both are
-    /// remade when the size moves, which is what loses a feedback chain its history.
-    fn ensure_out(&mut self, gpu: &Gpu, size: (u32, u32), readers: bool) {
+    /// The output texture at `size`, and one readback per reader that is there. All are remade
+    /// when the size moves, which is what loses a feedback chain its history.
+    fn ensure_out(&mut self, gpu: &Gpu, size: (u32, u32), wants: [Option<(u32, u32)>; 2]) {
         if self.out.as_ref().is_none_or(|t| t.size != size) {
             let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC;
-            let texture = target(gpu, "out", size, usage);
+            let texture = target(gpu, "out", size, crate::gpu::FORMAT, usage);
             let view = texture.create_view(&Default::default());
             self.out = Some(Target { texture, view, size });
-            self.staging = None;
+            self.reads = [None, None];
         }
-        match (readers, self.staging.is_some()) {
-            (true, false) => {
-                self.staging = Some(gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("readback"),
-                    size: u64::from(padded_row(size.0)) * u64::from(size.1),
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
+        for w in Want::ALL {
+            let held = &mut self.reads[w as usize];
+            let want = wants[w as usize].map(|to| Shrunk { from: size, to });
+            match (want, held.as_ref().map(|r| r.shrunk)) {
+                (Some(a), Some(b)) if a == b => {}
+                (Some(a), _) => *held = Some(Ring::new(gpu, w, a)),
+                (None, _) => *held = None,
             }
-            (false, true) => self.staging = None,
-            _ => {}
         }
     }
 
@@ -354,7 +477,7 @@ impl State {
         let size = (up.width, up.height);
         if self.uploads[k].as_ref().is_none_or(|t| t.size != size) {
             let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
-            let texture = target(gpu, "upload", size, usage);
+            let texture = target(gpu, "upload", size, crate::gpu::FORMAT, usage);
             let view = texture.create_view(&Default::default());
             self.uploads[k] = Some(Target { texture, view, size });
         }

@@ -47,10 +47,22 @@ impl Upload {
     }
 }
 
+/// What the render thread and the control half hand each other: the frame one read back, and
+/// whether the other is ready for the next. The engine reads back for a viewer only when the
+/// viewer has FINISHED with the last frame, so an accessory can never pace the engine — and
+/// never has to be waited for either.
+#[derive(Default)]
+pub struct Tap {
+    /// The render thread's: the frame it left, until the half takes it.
+    pub frame: Option<Data>,
+    /// The half's: it has published what it had and will take another.
+    pub wanted: bool,
+}
+
 pub struct GraphicsHalf {
     pub uploads: Vec<Arc<Mutex<Option<Upload>>>>,
     pub readers: Arc<AtomicBool>,
-    pub tap: Arc<Mutex<Option<Data>>>,
+    pub tap: Arc<Mutex<Tap>>,
 }
 
 impl Half for GraphicsHalf {
@@ -68,11 +80,13 @@ impl Half for GraphicsHalf {
         // What the render thread reads to decide whether this node runs at all.
         let readers = cx.readers.first().copied().unwrap_or(false);
         self.readers.store(readers, Ordering::Relaxed);
-        if readers {
-            if let Some(frame) = self.tap.lock().unwrap().take() {
-                publish(0, &goofi_codec::encode(&frame));
-            }
+        // Taken from UNDER the lock and encoded outside it: the render thread waits on this
+        // mutex, so an encode held across it is the frontend stalling a node tick.
+        let taken = self.tap.lock().expect("the tap").frame.take();
+        if let Some(frame) = taken {
+            publish(0, &goofi_codec::encode(&frame));
         }
+        self.tap.lock().expect("the tap").wanted = readers;
         Ticked::default()
     }
 }

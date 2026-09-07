@@ -285,6 +285,12 @@ pub trait Engine: Send {
     fn take_edits(&mut self) -> Vec<Edit> {
         Vec::new()
     }
+    /// What a slot's readers want of its frames: the `(width, height)` every reader is a viewer
+    /// of and would reduce to anyway, or `None` for full resolution — which is what a global
+    /// following the slot, or a snapshot, requires. A producer that can render the smaller size
+    /// itself makes the reduction free; one that cannot ignores this. A strictly one-way
+    /// projection of the bridge's own plan, never a second owner of it.
+    fn view_demand(&mut self, _uid: Uid, _slot: &str, _want: Option<(u32, u32)>) {}
     /// The graph's expression evaluator, shared with every engine that evaluates `nd()` bindings
     /// on its own thread. No-op for an engine that never does.
     fn set_evaluator(&mut self, _evaluator: Arc<dyn ExprEvaluator>) {}

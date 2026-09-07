@@ -25,9 +25,8 @@ pub struct Platform {
     /// A pipe: any thread writes to wake the pump out of its `poll`.
     wake: [i32; 2],
     depth: u8,
-    /// One graphics context per presented window, and the scratch the swizzle reuses.
+    /// One graphics context per presented window.
     gcs: std::collections::HashMap<Window, Gcontext>,
-    scratch: Vec<u8>,
 }
 
 pub struct Waker(i32);
@@ -64,7 +63,6 @@ impl Platform {
             wake,
             depth,
             gcs: std::collections::HashMap::new(),
-            scratch: Vec::new(),
         })
     }
 
@@ -98,6 +96,17 @@ impl Screen for Platform {
         Ok((id as Id, id as usize as *mut c_void))
     }
 
+    fn retitle(&mut self, id: Id, title: &str) {
+        let _ = self.conn.change_property8(
+            PropMode::REPLACE,
+            id as Window,
+            AtomEnum::WM_NAME,
+            AtomEnum::STRING,
+            title.as_bytes(),
+        );
+        let _ = self.conn.flush();
+    }
+
     fn resize(&mut self, id: Id, (w, h): (u32, u32)) {
         let id = id as Window;
         let (w, h) = (w.clamp(1, u16::MAX as u32) as u16, h.clamp(1, u16::MAX as u32) as u16);
@@ -116,8 +125,8 @@ impl Screen for Platform {
 
     /// `PutImage`, in bands: one request carries at most the server's maximum, and a frame is
     /// far larger than the 256 KB a server without BIG-REQUESTS accepts.
-    fn present(&mut self, id: Id, (w, h): (u32, u32), rgba: &[u8]) {
-        // Four bytes a pixel in BGRX, which is what a TrueColor visual reads at these depths and
+    fn present(&mut self, id: Id, (w, h): (u32, u32), texels: &[u8]) {
+        // Four bytes a pixel in BGRA, which is what a TrueColor visual reads at these depths and
         // nothing else does. A `PutImage` of the wrong length is an ASYNCHRONOUS error the pump
         // discards, so the window would simply stay blank.
         if !matches!(self.depth, 24 | 32) {
@@ -135,14 +144,13 @@ impl Screen for Platform {
                 gc
             }
         };
-        super::bgra_into(rgba, &mut self.scratch);
         let stride = w as usize * 4;
         let cap = RequestConnection::maximum_request_bytes(&self.conn).saturating_sub(64);
         let per = (cap / stride.max(1)).max(1);
         let mut y = 0usize;
         while y < h as usize {
             let rows = per.min(h as usize - y);
-            let band = &self.scratch[y * stride..(y + rows) * stride];
+            let band = &texels[y * stride..(y + rows) * stride];
             let put = self.conn.put_image(
                 ImageFormat::Z_PIXMAP,
                 win,

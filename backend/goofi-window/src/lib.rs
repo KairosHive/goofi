@@ -42,23 +42,15 @@ trait Screen {
     fn waker(&self) -> Arc<dyn Wake>;
     fn create(&mut self, title: &str, size: (u32, u32)) -> Result<(Id, *mut c_void), String>;
     fn resize(&mut self, id: Id, size: (u32, u32));
+    /// The window's name on the desktop, replaced. A screen with no desktop has nothing to say.
+    fn retitle(&mut self, _id: Id, _title: &str) {}
     fn destroy(&mut self, id: Id);
     /// Park until a window event, a wake, a readable plugin descriptor or `until`.
     fn pump(&mut self, until: Option<Instant>, fds: &[i32]) -> Pumped;
-    /// Draw one frame into the window, one texel to one pixel from the top-left. `rgba` is
-    /// `w * h * 4` bytes, row 0 the top.
-    fn present(&mut self, _id: Id, _size: (u32, u32), _rgba: &[u8]) {}
-}
-
-/// RGBA into the BGRA byte order an X11 TrueColor visual and a Win32 DIB both read on a
-/// little-endian machine. Reuses `out`, because this runs once a frame. macOS takes RGBA as it is.
-#[cfg(not(target_os = "macos"))]
-fn bgra_into(rgba: &[u8], out: &mut Vec<u8>) {
-    out.clear();
-    out.reserve(rgba.len());
-    for p in rgba.chunks_exact(4) {
-        out.extend_from_slice(&[p[2], p[1], p[0], p[3]]);
-    }
+    /// Draw one frame into the window, one texel to one pixel from the top-left. `texels` is
+    /// `w * h * 4` bytes, row 0 the top, in the byte order THIS screen reads — BGRA on X11 and
+    /// Win32, RGBA on macOS. Whoever renders the frame writes that order; nothing swizzles here.
+    fn present(&mut self, _id: Id, _size: (u32, u32), _texels: &[u8]) {}
 }
 
 /// Wakes the pump from any thread.
@@ -131,6 +123,7 @@ impl Loop {
             runloop: Rc::new(RefCell::new(Runloop::default())),
             on_close: HashMap::new(),
             presents: HashMap::new(),
+            titles: HashMap::new(),
             dead: false,
             stopped: false,
         };
@@ -201,9 +194,22 @@ pub struct Host {
     /// Frames drawn per window. Counted HERE rather than per screen, so a headless run still
     /// proves the seam a display would.
     presents: HashMap<Id, u64>,
+    /// What each window is called, and the rate its title last reported.
+    titles: HashMap<Id, Title>,
     dead: bool,
     stopped: bool,
 }
+
+/// A window's name, and what the frames it drew since the last report say its rate is.
+struct Title {
+    name: String,
+    drawn: u64,
+    since: Instant,
+}
+
+/// How often a window's title restates its rate. Long enough to read, short enough to answer a
+/// param the moment it is turned.
+const RETITLE: Duration = Duration::from_millis(500);
 
 /// One native window, and the handle a plugin's view is attached to.
 #[derive(Clone, Copy)]
@@ -235,6 +241,7 @@ impl Host {
         }
         let (id, parent) = self.screen.create(title, size)?;
         self.on_close.insert(id, on_close);
+        self.titles.insert(id, Title { name: title.to_string(), drawn: 0, since: Instant::now() });
         Ok(Window { id, parent })
     }
 
@@ -247,16 +254,33 @@ impl Host {
     pub fn close_window(&mut self, id: Id) {
         self.on_close.remove(&id);
         self.presents.remove(&id);
+        self.titles.remove(&id);
         self.screen.destroy(id);
     }
 
     /// Draw one frame into a window, at the size it was opened or last resized to.
-    pub fn present(&mut self, id: Id, size: (u32, u32), rgba: &[u8]) {
-        if self.dead || rgba.len() < size.0 as usize * size.1 as usize * 4 {
+    pub fn present(&mut self, id: Id, size: (u32, u32), texels: &[u8]) {
+        if self.dead || texels.len() < size.0 as usize * size.1 as usize * 4 {
             return;
         }
-        self.screen.present(id, size, rgba);
+        self.screen.present(id, size, texels);
         *self.presents.entry(id).or_default() += 1;
+        self.retitle(id);
+    }
+
+    /// The window's own frame rate, in its title — what a viewer of the screen actually gets,
+    /// counted where the frames are drawn rather than where they are asked for.
+    fn retitle(&mut self, id: Id) {
+        let Some(title) = self.titles.get_mut(&id) else { return };
+        title.drawn += 1;
+        let elapsed = title.since.elapsed();
+        if elapsed < RETITLE {
+            return;
+        }
+        let said = format!("{} — {:.0} fps", title.name, title.drawn as f64 / elapsed.as_secs_f64());
+        title.drawn = 0;
+        title.since = Instant::now();
+        self.screen.retitle(id, &said);
     }
 
     /// How many frames a window has been given.

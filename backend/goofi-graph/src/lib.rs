@@ -789,6 +789,14 @@ impl Graph {
 
     /// One registered engine, by id — how the composition root reaches a concrete door through
     /// [`Engine::as_any_mut`].
+    /// Tell whichever engine owns `uid` what its readers want of `slot`. Offered to every engine
+    /// rather than routed: an engine that does not hold the uid, or cannot render to size, no-ops.
+    pub fn set_view_demand(&mut self, uid: Uid, slot: &str, want: Option<(u32, u32)>) {
+        for e in self.engines_mut() {
+            e.view_demand(uid, slot, want);
+        }
+    }
+
     pub fn engine_mut(&mut self, id: &str) -> Option<&mut dyn Engine> {
         self.engines.iter_mut().map(|e| e.as_mut() as &mut dyn Engine).find(|e| e.id() == id)
     }

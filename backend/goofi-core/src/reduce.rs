@@ -1,7 +1,7 @@
 //! Axis reduction kernels — subsample, envelope (interleaved `min,max` per bin) and area — over
 //! a frame's f32 LE bytes. Each returns `None` when it would not shrink the axis.
 
-use crate::{Coord, Data, MetaValue, Value};
+use crate::{Coord, Data, Meta, MetaValue, Value};
 use goofi_view::{MergedViewSpec, ReduceMethod};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -44,9 +44,7 @@ pub fn reduce_for_view(frame: &Data, plan: &MergedViewSpec) -> Data {
         bytes = Cow::Owned(r.bytes);
         shape[ax.dim] = r.new_len;
         axes = axes.sliced(ax.dim, &r.centers);
-        let mut entry = BTreeMap::new();
-        entry.insert("orig_len".to_string(), MetaValue::Uint(orig_len as u64));
-        entry.insert("method".to_string(), MetaValue::Str(method_name(ax.method).to_string()));
+        let mut entry = axis_record(orig_len, ax.method);
         if let Some(coords) = verbatim {
             let list = coords
                 .iter()
@@ -66,6 +64,27 @@ pub fn reduce_for_view(frame: &Data, plan: &MergedViewSpec) -> Data {
     meta.set_channels(axes);
     meta.set_reduced(Some(MetaValue::Map(reduced)));
     Data::array_f32(shape, bytes.into_owned(), meta).unwrap_or_else(|_| frame.clone())
+}
+
+/// One axis's reduction, as `meta.reduced` records it. The ONE writer of that shape, so a
+/// producer that reduced a frame itself says it the same way this module does.
+fn axis_record(orig_len: usize, method: ReduceMethod) -> BTreeMap<String, MetaValue> {
+    let mut entry = BTreeMap::new();
+    entry.insert("orig_len".to_string(), MetaValue::Uint(orig_len as u64));
+    entry.insert("method".to_string(), MetaValue::Str(method_name(method).to_string()));
+    entry
+}
+
+/// Say that `dims` were already reduced — for a producer that rendered the reduced size rather
+/// than making a frame only to shrink it. Without this the frame would understate its own origin.
+pub fn note_reduced(meta: &mut Meta, dims: &[(usize, usize, ReduceMethod)]) {
+    let mut reduced: BTreeMap<String, MetaValue> = BTreeMap::new();
+    for &(dim, orig_len, method) in dims {
+        reduced.insert(dim.to_string(), MetaValue::Map(axis_record(orig_len, method)));
+    }
+    if !reduced.is_empty() {
+        meta.set_reduced(Some(MetaValue::Map(reduced)));
+    }
 }
 
 /// A frame as 8-bit texels for the browser hop: a quarter of the bytes. Three or four channels
