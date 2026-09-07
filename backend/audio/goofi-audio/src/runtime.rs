@@ -31,6 +31,8 @@ pub struct Slot {
     pub inboxes: Vec<Inbox>,
     /// One per output: what the control half publishes to whoever subscribes.
     pub taps: Vec<rtrb::Producer<f32>>,
+    /// One per output: every block, whole, for the recorder.
+    pub recs: Vec<Rec>,
     /// Out of the plan: it panicked or the watchdog took it, and its outputs are zero until the
     /// settle that re-plans without it.
     pub dead: bool,
@@ -125,6 +127,13 @@ impl Inbox {
             }
         }
     }
+}
+
+/// One output's recording ring, and the blocks a full one lost — which the control half turns into
+/// the gap the manifest states rather than a silence.
+pub struct Rec {
+    pub ring: rtrb::Producer<f32>,
+    pub lost: Arc<AtomicU64>,
 }
 
 pub enum Msg {
@@ -329,10 +338,21 @@ impl Runtime {
                 }
             }
             for (k, (at, channels)) in stage.outs.iter().enumerate() {
-                let Some(tap) = slot.taps.get_mut(k) else { continue };
                 let out = unsafe { region(base, len, *at, *channels) };
-                if let Ok(chunk) = tap.write_chunk_uninit(1 + out.len()) {
-                    chunk.fill_from_iter(std::iter::once(*channels as f32).chain(out.iter().copied()));
+                if let Some(tap) = slot.taps.get_mut(k) {
+                    if let Ok(chunk) = tap.write_chunk_uninit(1 + out.len()) {
+                        chunk.fill_from_iter(std::iter::once(*channels as f32).chain(out.iter().copied()));
+                    }
+                }
+                if let Some(rec) = slot.recs.get_mut(k) {
+                    match rec.ring.write_chunk_uninit(1 + out.len()) {
+                        Ok(chunk) => {
+                            chunk.fill_from_iter(std::iter::once(*channels as f32).chain(out.iter().copied()));
+                        }
+                        Err(_) => {
+                            rec.lost.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
                 }
             }
         }

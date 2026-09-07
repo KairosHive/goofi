@@ -281,7 +281,9 @@ impl GraphicsEngine {
                     .collect()
             })
             .collect();
-        Desired { consts, subs, targets }
+        // No recording door yet: a graphics frame is a texture, and what a recorder takes off one
+        // is the readback the tap already makes.
+        Desired { consts, subs, targets, record: Vec::new() }
     }
 
     /// Whether a ring would wake a same-engine consumer for what the plan already carries.
@@ -402,6 +404,7 @@ impl Engine for GraphicsEngine {
         let spawn = goofi_control::Spawn {
             engine: "graphics",
             uid,
+            instance: self.instance.clone(),
             base: goofi_transport::service_base(&self.instance, uid, generation),
             manifest,
             params: atomics.clone(),

@@ -20,8 +20,6 @@ use crate::runtime::Inbox;
 #[derive(Default)]
 pub struct Birth {
     pub inbox: Option<rtrb::Consumer<f32>>,
-    /// The take's ring, which only `AudioOut` fills: the DSP half's end of it.
-    pub rec: Option<rtrb::Producer<f32>>,
     pub notes: Option<rtrb::Consumer<midi_in::Note>>,
     pub chans: Arc<AtomicU16>,
     /// The window thread, where a plugin is made and unmade; none where the machine has no display.

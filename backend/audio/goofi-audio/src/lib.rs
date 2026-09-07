@@ -268,11 +268,6 @@ fn rings_for(type_name: &str, chans: Arc<AtomicU16>, uid: Uid, ui: Option<goofi_
             birth.inbox = Some(consumer);
             ports.play = Some((producer, chans));
         }
-        nodes::audio_out::TYPE => {
-            let (producer, consumer) = rtrb::RingBuffer::new(control::REC_RING);
-            birth.rec = Some(producer);
-            ports.rec = Some(consumer);
-        }
         nodes::midi_in::TYPE => {
             let (producer, consumer) = rtrb::RingBuffer::new(control::NOTE_RING);
             birth.notes = Some(consumer);
@@ -546,7 +541,7 @@ impl AudioEngine {
                     .collect()
             })
             .collect();
-        Desired { consts, subs, targets }
+        Desired { consts, subs, targets, record: nv.recorded.to_vec() }
     }
 
     /// A plugin's params as its controller counts them — normalized, in the plugin's own order —
@@ -753,14 +748,26 @@ impl Engine for AudioEngine {
             .unzip();
         let (tap_in, tap_out): (Vec<_>, Vec<_>) =
             manifest.outputs.iter().map(|_| rtrb::RingBuffer::<f32>::new(control::TAP_RING)).unzip();
+        // Beside the tap and never in `rings_for`: a recording ring belongs to an OUTPUT, and the
+        // rings there belong to a TYPE's OS handle.
+        let (rec_in, rec_out): (Vec<_>, Vec<_>) = manifest
+            .outputs
+            .iter()
+            .map(|_| {
+                let (producer, consumer) = rtrb::RingBuffer::<f32>::new(control::REC_RING);
+                let lost = Arc::new(AtomicU64::new(0));
+                (runtime::Rec { ring: producer, lost: lost.clone() }, (consumer, lost))
+            })
+            .unzip();
         // The inboxes are built here so the plan can read their channel cells; the half itself is
         // made on its own thread, where an OS handle it opens never has to cross one.
         let inboxes: Vec<control::Inbox> = inbox_in.into_iter().map(control::Inbox::new).collect();
         let inbox_chans = AudioHalf::channels(&inboxes);
-        let birth = control::Birth { manifest, inboxes, taps: tap_out, ports, audio: self.audio.clone() };
+        let birth = control::Birth { manifest, inboxes, taps: tap_out, recs: rec_out, ports, audio: self.audio.clone() };
         let spawn = goofi_control::Spawn {
             engine: "audio",
             uid,
+            instance: self.instance.clone(),
             base: goofi_transport::service_base(&self.instance, uid, generation),
             manifest,
             params: atomics.clone(),
@@ -781,6 +788,7 @@ impl Engine for AudioEngine {
             params: atomics,
             inboxes: inbox_out.into_iter().map(|ring| Inbox::new(ring, true)).collect(),
             taps: tap_in,
+            recs: rec_in,
             dead: false,
             overruns: 0,
         };

@@ -18,7 +18,9 @@ use goofi_node::{
 };
 use goofi_transport::{
     data_service, door_service, event_service, iox_node, open_output_subscriber, output_service, publisher,
-    take_where, ByteService, BytePublisher, ByteSubscriber, Doorbell, Halt, IoxNode, Listener, INITIAL_SLICE,
+    record_data_service, record_door_service, record_publisher, record_service, record_shape, take_where,
+    ByteService, BytePublisher, ByteSubscriber, Doorbell, Halt, IoxNode, Listener, ServiceName, INITIAL_SLICE,
+    RECORD_EVENT_ID,
 };
 use indexmap::IndexMap;
 
@@ -34,6 +36,8 @@ pub struct Desired {
     pub subs: Vec<Sub>,
     /// Per output: the doors it rings, by name, once something is published on it.
     pub targets: Vec<Vec<(String, EventId)>>,
+    /// The output slots armed for recording, by name.
+    pub record: Vec<String>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -118,6 +122,13 @@ pub struct Cx<'a> {
     pub pulses: &'a [usize],
     /// Per output: whether anyone subscribes to its data service right now.
     pub readers: &'a [bool],
+    /// Per output: whether the recorder holds this slot armed.
+    pub recorded: &'a [bool],
+    /// Patch seconds at this tick — the one clock read a derived timeline is anchored on.
+    pub now: f64,
+    /// One frame onto an armed output's recording service; nothing where it is not armed. A frame
+    /// the segment refuses is a gap in `Meta::index`, which is what the recorder counts drops by.
+    pub record: &'a dyn Fn(usize, &[u8]),
 }
 
 /// What one tick of a [`Half`] changed. The errors are the WHOLE current set for the keys the
@@ -195,9 +206,12 @@ impl Handle {
 }
 
 pub struct Spawn {
-    /// The engine this node belongs to; the control thread wears it.
+    /// The engine this node belongs to; the control thread wears it, and it is what cuts the
+    /// recorder's segment.
     pub engine: &'static str,
     pub uid: Uid,
+    /// The instance, which names the recorder's one door.
+    pub instance: String,
     pub base: String,
     pub manifest: &'static NodeManifest,
     pub params: Arc<[AtomicU64]>,
@@ -221,7 +235,7 @@ pub fn spawn<H: Half + 'static>(
     for out in spawn.manifest.outputs {
         let service = data_service(&node, &output_service(&spawn.base, out.name))?;
         let publisher = publisher(&service, out.name, INITIAL_SLICE)?;
-        outs.push(Out { service, publisher, bells: Vec::new() });
+        outs.push(Out { service, publisher, bells: Vec::new(), record: None });
     }
     let mail = Arc::new(Mutex::new(Mail::default()));
     let halt = Arc::new(Halt::default());
@@ -234,6 +248,9 @@ pub fn spawn<H: Half + 'static>(
             let run = AssertUnwindSafe(move || {
                 let control = Control {
                     uid: spawn.uid,
+                    engine: spawn.engine,
+                    base: spawn.base,
+                    record_door: record_door_service(&spawn.instance),
                     manifest: spawn.manifest,
                     time: spawn.time.clone(),
                     params: spawn.params,
@@ -261,11 +278,13 @@ pub fn spawn<H: Half + 'static>(
     Ok(Handle { mail, halt, bell, last: Mutex::new(None) })
 }
 
-/// One output's door out: who drinks from it, and who to wake once something is on it.
+/// One output's door out: who drinks from it, who to wake once something is on it, and — while the
+/// slot is armed — the recorder's own deep-buffered second publisher.
 struct Out {
     service: ByteService,
     publisher: BytePublisher,
     bells: Vec<(String, Doorbell, EventId)>,
+    record: Option<(BytePublisher, Doorbell)>,
 }
 
 struct SlotSub {
@@ -284,6 +303,9 @@ struct Bind {
 
 struct Control<H: Half> {
     uid: Uid,
+    engine: &'static str,
+    base: String,
+    record_door: ServiceName,
     manifest: &'static NodeManifest,
     time: Arc<goofi_core::time::Time>,
     params: Arc<[AtomicU64]>,
@@ -348,6 +370,7 @@ impl<H: Half> Control<H> {
         self.apply_slots(slots);
         self.apply_binds(binds);
         self.apply_bells(d.targets);
+        self.apply_records(&d.record);
         for (i, c) in self.consts.iter().enumerate() {
             let bound = self.binds.iter().any(|b| b.param == i);
             let raised = self.pulsed.iter().any(|(p, _)| *p == i);
@@ -431,6 +454,29 @@ impl<H: Half> Control<H> {
         }
     }
 
+    /// The recorder's second publisher on every armed output, and none on the rest. It is opened
+    /// here rather than at birth because the segment is a whole budget and an unarmed slot owes
+    /// none of it.
+    fn apply_records(&mut self, armed: &[String]) {
+        let shape = record_shape(self.engine);
+        for (out, decl) in self.outs.iter_mut().zip(self.manifest.outputs) {
+            if !armed.iter().any(|s| s == decl.name) {
+                out.record = None;
+                continue;
+            }
+            if out.record.is_some() {
+                continue;
+            }
+            let opened = record_data_service(&self.node, &record_service(&self.base, decl.name), shape)
+                .and_then(|service| record_publisher(&service, decl.name, shape))
+                .and_then(|port| Doorbell::open(&self.node, &self.record_door).map(|bell| (port, bell)));
+            match opened {
+                Ok(port) => out.record = Some(port),
+                Err(e) => eprintln!("{}: could not arm `{}`: {e}", self.engine, decl.name),
+            }
+        }
+    }
+
     fn index_of(&self, key: &ParamKey) -> Option<usize> {
         self.manifest.params.iter().position(|d| d.group == key.group && d.name == key.name)
     }
@@ -504,13 +550,21 @@ impl<H: Half> Control<H> {
             }
         }
         let readers: Vec<bool> = self.outs.iter().map(|o| goofi_transport::subscribers(&o.service) > 0).collect();
+        let recorded: Vec<bool> = self.outs.iter().map(|o| o.record.is_some()).collect();
+        let outs = &self.outs;
+        let record = |i: usize, bytes: &[u8]| {
+            let Some((port, bell)) = outs[i].record.as_ref() else { return };
+            goofi_transport::publish(port, bytes, std::iter::once((bell, RECORD_EVENT_ID)));
+        };
         let cx = Cx {
             consts: &self.consts,
             params: &self.params,
             pulses: &pulses,
             readers: &readers,
+            recorded: &recorded,
+            now: self.time.now(),
+            record: &record,
         };
-        let outs = &self.outs;
         let ticked = self.half.tick(&cx, &mut |i, bytes| {
             let out = &outs[i];
             goofi_transport::publish(&out.publisher, bytes, out.bells.iter().map(|(_, bell, id)| (bell, *id)));
