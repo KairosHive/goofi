@@ -14,6 +14,18 @@ const RESERVED: &[&str] =
 /// The one output every graphics node has.
 const OUT: &str = "out";
 
+/// Every ARRAY input, in the order their uploads are numbered. What a frame's own range is
+/// carried against.
+pub fn array_inputs(m: &NodeManifest) -> impl Iterator<Item = &'static str> + '_ {
+    m.inputs.iter().filter(|s| s.kind != SlotType::Texture).map(|s| s.name)
+}
+
+/// The two fields the engine adds to `Params` for one ARRAY input: the range its last frame
+/// spanned. A body cannot work that out for itself — a reduction over every texel, at every texel.
+fn range_fields(input: &str) -> [String; 2] {
+    [format!("{input}_lo"), format!("{input}_hi")]
+}
+
 /// The header's manifest, with the one output added. The file's WHOLE text stays the source that
 /// naga reads, so a line number it reports is the line an author sees.
 pub fn header(source: &str) -> Result<Introspection, String> {
@@ -42,6 +54,11 @@ pub fn header(source: &str) -> Result<Introspection, String> {
         }
         taken.push(buffer.clone());
         taken.push(writer(buffer));
+    }
+    for input in &intro.inputs {
+        if SlotType::from_name(&input.kind) != Some(SlotType::Texture) {
+            taken.extend(range_fields(&input.name));
+        }
     }
     let clash = intro
         .inputs
@@ -80,10 +97,14 @@ pub fn prelude(manifest: &NodeManifest, state: &[String]) -> String {
          @group(0) @binding(1) var<uniform> resolution: vec2f;\n\
          @group(0) @binding(2) var samp: sampler;\n",
     );
-    if !manifest.params.is_empty() {
+    let ranges: Vec<String> = array_inputs(manifest).flat_map(range_fields).collect();
+    if !manifest.params.is_empty() || !ranges.is_empty() {
         s.push_str("struct Params {\n");
         for d in manifest.params {
             s.push_str(&format!("    {}: {},\n", d.name, wgsl_type(&d.spec)));
+        }
+        for field in &ranges {
+            s.push_str(&format!("    {field}: f32,\n"));
         }
         s.push_str("}\n@group(0) @binding(3) var<uniform> p: Params;\n");
     }
@@ -131,10 +152,11 @@ pub fn validate(full: &str) -> Result<(), String> {
         .map_err(|e| e.emit_to_string(full))
 }
 
-/// One stage's `Params` buffer: a 4-byte scalar per declared param, padded to 16. Every field is
-/// a scalar, so the layout needs no layouter.
-pub fn uniform_bytes(decls: &[ParamDecl], atomics: &[AtomicU64]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(decls.len() * 4 + 16);
+/// One stage's `Params` buffer: a 4-byte scalar per declared param, then the range each ARRAY
+/// input's last frame spanned, padded to 16. Every field is a scalar, so the layout needs no
+/// layouter.
+pub fn uniform_bytes(decls: &[ParamDecl], atomics: &[AtomicU64], ranges: &[[f32; 2]]) -> Vec<u8> {
+    let mut out = Vec::with_capacity((decls.len() + ranges.len() * 2) * 4 + 16);
     for (d, a) in decls.iter().zip(atomics) {
         let v = f64::from_bits(a.load(Ordering::Relaxed));
         match d.spec {
@@ -142,6 +164,10 @@ pub fn uniform_bytes(decls: &[ParamDecl], atomics: &[AtomicU64]) -> Vec<u8> {
             ParamSpec::Int { .. } => out.extend_from_slice(&(v.round() as i32).to_le_bytes()),
             _ => out.extend_from_slice(&(v.round().max(0.0) as u32).to_le_bytes()),
         }
+    }
+    for [lo, hi] in ranges {
+        out.extend_from_slice(&lo.to_le_bytes());
+        out.extend_from_slice(&hi.to_le_bytes());
     }
     out.resize(out.len().next_multiple_of(16), 0);
     out

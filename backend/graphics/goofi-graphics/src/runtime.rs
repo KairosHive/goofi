@@ -10,7 +10,7 @@ use goofi_core::{Data, Meta};
 use goofi_node::Uid;
 
 use crate::gpu::{padded_row, target, Gpu, Want};
-use crate::transfer::Upload;
+use crate::half::Upload;
 use crate::plan::{Input, Plan};
 use crate::shader;
 
@@ -81,6 +81,8 @@ struct State {
     /// state, which is how a body knows to seed itself.
     count: u32,
     uploads: Vec<Option<Target>>,
+    /// The range each upload spanned, in the uniform's own order.
+    ranges: Vec<[f32; 2]>,
     time: wgpu::Buffer,
     frame: wgpu::Buffer,
     resolution: wgpu::Buffer,
@@ -137,6 +139,7 @@ impl Runtime {
             time: uniform("time", 4),
             frame: uniform("frame", 4),
             resolution: uniform("resolution", 8),
+            ranges: Vec::new(),
             params: (params > 0).then(|| uniform("params", params as u64)),
         };
         self.states.insert(uid, state);
@@ -211,7 +214,8 @@ impl Runtime {
             let res = [(stage.size.0 as f32).to_le_bytes(), (stage.size.1 as f32).to_le_bytes()].concat();
             self.gpu.queue.write_buffer(&state.resolution, 0, &res);
             if let Some(buf) = &state.params {
-                self.gpu.queue.write_buffer(buf, 0, &shader::uniform_bytes(stage.decls, &stage.params));
+                let bytes = shader::uniform_bytes(stage.decls, &stage.params, &state.ranges);
+                self.gpu.queue.write_buffer(buf, 0, &bytes);
             }
             // Cloned handles, so reading another stage's output ends the borrow of `states`.
             let views: Vec<wgpu::TextureView> = stage
@@ -513,6 +517,10 @@ impl State {
         if self.uploads.len() <= k {
             self.uploads.resize_with(k + 1, || None);
         }
+        if self.ranges.len() <= k {
+            self.ranges.resize(k + 1, [0.0, 1.0]);
+        }
+        self.ranges[k] = [up.lo, up.hi];
         let size = (up.width, up.height);
         if self.uploads[k].as_ref().is_none_or(|t| t.size != size) {
             let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
@@ -550,7 +558,8 @@ impl State {
 }
 
 /// A stage's uniform block length, measured by the writer so there is one layout.
-pub fn params_len(decls: &[goofi_node::ParamDecl]) -> usize {
-    let zeros: Vec<AtomicU64> = decls.iter().map(|_| AtomicU64::new(0)).collect();
-    shader::uniform_bytes(decls, &zeros).len()
+pub fn params_len(manifest: &goofi_node::NodeManifest) -> usize {
+    let zeros: Vec<AtomicU64> = manifest.params.iter().map(|_| AtomicU64::new(0)).collect();
+    let ranges = vec![[0.0, 1.0]; shader::array_inputs(manifest).count()];
+    shader::uniform_bytes(manifest.params, &zeros, &ranges).len()
 }

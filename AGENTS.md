@@ -279,10 +279,12 @@ put row 0 at the TOP — one convention, so a pass-through body is a copy and no
 anywhere. A node HOLDS state by declaring named buffers: `cells` reads what the last tick left,
 `next_cells` writes what this one leaves, and one pass fills the output and every buffer at once —
 so a buffer is the node's own size, and `frame`, the renders since it was made, is what a body
-seeds itself on. An ARRAY input's TRANSFER has modes — the frame's own texels, or the line or
-trajectory a viewer would draw of it, under the viewers' own options — and they are the ENGINE's
-universal params rather than the file's, because what a frame becomes belongs to the crossing and
-not to the shader that samples what came across. Its size is a param like any other:
+seeds itself on. An ARRAY input's transfer is the frame's own texels, and a PLOT of one is the
+SHADER's work: `ArrayIn` draws the line and the trajectory a viewer draws, in WGSL, under params of
+its own — a graphics node is a shader, and a CPU rasteriser in the transfer path was built, measured
+and thrown away. What the engine adds is the one thing a body cannot work out for itself: the range
+the frame's values spanned, carried into `p` beside the params, since finding it in the shader is a
+reduction over every texel AT every texel. Its size is a param like any other:
 `common.width` and `common.height`, 0 following what is wired behind, and
 `globals.system.default_width` on a node that makes its own frames. The engine is scheduled and
 DEMAND-DRIVEN: a stage renders only where its output has a reader, so a node nobody watches costs

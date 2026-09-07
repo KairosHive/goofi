@@ -55,7 +55,7 @@ impl GraphicsEngine {
         shader::validate(&full)?;
         let job = Job {
             source: full,
-            params: !manifest.params.is_empty(),
+            params: !manifest.params.is_empty() || shader::array_inputs(manifest).next().is_some(),
             inputs: manifest.inputs.len(),
             state: intro.state.len(),
         };
