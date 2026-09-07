@@ -9,6 +9,7 @@ import {
 	type LinkInfo,
 	type NodeInstanceInfo,
 	type NodeTypeInfo,
+	type RecordStatus,
 	type ScanDiff
 } from '$lib/api/control';
 import { boundaryType, feeds, type SlotDtype } from '$lib/api/vocab';
@@ -27,6 +28,7 @@ import {
 	facadeFaces,
 	docParams,
 	viewersJson,
+	recordedSlots,
 	globalViews,
 	globalGroupLocks,
 	arrangementTabs,
@@ -75,6 +77,14 @@ function linkEndpoints(link: LinkInfo): { from: string; to: string } {
 	};
 }
 
+const IDLE_RECORD: RecordStatus = {
+	running: false,
+	folder: null,
+	elapsed: null,
+	streams: [],
+	error: null
+};
+
 export class GraphStore {
 	nodes = $state<NodeInstanceInfo[]>([]);
 	links = $state<LinkInfo[]>([]);
@@ -87,6 +97,18 @@ export class GraphStore {
 	/** Latches on the first connect and never clears — see {@link disconnected}. */
 	private _everConnected = $state(false);
 	hadHello = $state(false);
+
+	/** Every armed output slot, doc-authoritative: the document is the one owner of what is armed. */
+	armed = $state<{ uid: string; slot: string }[]>([]);
+
+	/** The recording SESSION, as the backend last reported it. Pushed, never derived here. */
+	record = $state<RecordStatus>(IDLE_RECORD);
+
+	/** The streams whose drop count MOVED on the last report, keyed `node/slot`. */
+	dropping = $state.raw<ReadonlySet<string>>(new Set());
+
+	/** What each stream's cumulative `dropped` was on the last report. */
+	private _droppedCounts: Record<string, number> = {};
 
 	/** Patch globals (system + user), doc-authoritative, in system-first/creation order. */
 	globals = $state<GlobalView[]>([]);
@@ -157,6 +179,7 @@ export class GraphStore {
 		this.links = linkViews(doc);
 		this.globals = globalViews(doc);
 		this.globalGroups = globalGroupLocks(doc);
+		this.armed = recordedSlots(doc);
 		// The workspace store rebuilds its tree from this; the client holds no second copy.
 		workspace().syncFromDoc(arrangementTabs(doc));
 		// No-ops until the catalog lands, then rebuilds from the doc.
@@ -199,6 +222,7 @@ export class GraphStore {
 		this.links = [];
 		this.globals = [];
 		this.globalGroups = {};
+		this.armed = [];
 		// `_snapshotRuntime` is NOT cleared: `_replaceSnapshot` ran first, so it already holds the
 		// INCOMING session's overlay. The arrangement store is a separate singleton, so it is here.
 		workspace().syncFromDoc([]);
@@ -317,6 +341,9 @@ export class GraphStore {
 			case 'unsaved_changes':
 				this.unsavedChanges = ev.payload.unsaved_changes;
 				break;
+			case 'record_changed':
+				this._setRecord(ev.payload);
+				break;
 			case 'save_path_changed':
 				this.savePath = ev.payload.save_path;
 				break;
@@ -338,6 +365,12 @@ export class GraphStore {
 		return this.ctl.call<ScanDiff>('library refresh', {});
 	}
 
+	/** Move one of the patch's own node files into the private library, where every later patch
+	 * finds it. The fresh catalog arrives as a `node_types` event in every open tab. */
+	async saveNodeToLibrary(type: string): Promise<{ type: string; path: string }> {
+		return this.ctl.call<{ type: string; path: string }>('library save', { type });
+	}
+
 	/** Where this patch's workspace files live — a per-run temp directory under a random name. It
 	 * rides `session status` beside the save path, because both answer "where does this patch live". */
 	async openWorkspace(): Promise<string> {
@@ -353,6 +386,49 @@ export class GraphStore {
 	/** Record ONE graph command. The manager owns the exact inverse, so this only marks the step. */
 	private _recordGraphCmd(label: string): void {
 		this._record({ kind: 'graph_cmd', domain: 'graph', label, context: captureNavContext() });
+	}
+
+	/** Adopt a recording report. Which streams are DROPPING is the counts that moved since the
+	 * last one: `dropped` is cumulative, so it never falls and cannot answer that on its own. */
+	private _setRecord(status: RecordStatus): void {
+		const before = this._droppedCounts;
+		const now: Record<string, number> = {};
+		const moved = new Set<string>();
+		for (const s of status.streams) {
+			const key = `${s.node}/${s.slot}`;
+			now[key] = s.dropped;
+			if (s.dropped > (before[key] ?? s.dropped)) moved.add(key);
+		}
+		this._droppedCounts = now;
+		this.dropping = moved;
+		this.record = status;
+	}
+
+	/** Arm one output slot, as `node/slot`. It works while a recording runs. The manager records
+	 * no command when the slot is already armed, so neither does the history. */
+	async armSlot(node: string, slot: string): Promise<void> {
+		const r = await this.ctl.call<{ changed?: boolean }>('record arm', {
+			output: `${node}/${slot}`
+		});
+		if (r?.changed) this._recordGraphCmd(`Arm ${slot}`);
+	}
+
+	async disarmSlot(node: string, slot: string): Promise<void> {
+		const r = await this.ctl.call<{ changed?: boolean }>('record disarm', {
+			output: `${node}/${slot}`
+		});
+		if (r?.changed) this._recordGraphCmd(`Disarm ${slot}`);
+	}
+
+	/** Start a recording. Both fields fall back to the `record.*` globals in the backend. */
+	async startRecording(name: string, root: string): Promise<string> {
+		const r = await this.ctl.call<{ folder: string }>('record start', { name, root });
+		return r?.folder ?? '';
+	}
+
+	async stopRecording(): Promise<string> {
+		const r = await this.ctl.call<{ folder: string }>('record stop', {});
+		return r?.folder ?? '';
 	}
 
 	async addNode(type: string, pos: [number, number], instId?: string): Promise<string> {

@@ -21,6 +21,31 @@ use goofi_node::{
 mod control;
 mod host;
 pub use host::{hosts, NO_ASIO_NOTE};
+
+/// Open a stream through `$stream` in the word the DEVICE speaks — every sample format cpal has a
+/// type for. One list, used by the input side and the output side both: two lists disagree, and a
+/// device that records but cannot play is what that disagreement looks like. Only DSD is left out,
+/// since it is one bit per sample and no PCM conversion exists; `$refused` words that.
+macro_rules! by_format {
+    ($format:expr, $stream:ident, $refused:expr $(, $arg:expr)* $(,)?) => {
+        match $format {
+            cpal::SampleFormat::I8 => $stream::<i8>($($arg),*),
+            cpal::SampleFormat::I16 => $stream::<i16>($($arg),*),
+            cpal::SampleFormat::I24 => $stream::<cpal::I24>($($arg),*),
+            cpal::SampleFormat::I32 => $stream::<i32>($($arg),*),
+            cpal::SampleFormat::I64 => $stream::<i64>($($arg),*),
+            cpal::SampleFormat::U8 => $stream::<u8>($($arg),*),
+            cpal::SampleFormat::U16 => $stream::<u16>($($arg),*),
+            cpal::SampleFormat::U24 => $stream::<cpal::U24>($($arg),*),
+            cpal::SampleFormat::U32 => $stream::<u32>($($arg),*),
+            cpal::SampleFormat::U64 => $stream::<u64>($($arg),*),
+            cpal::SampleFormat::F32 => $stream::<f32>($($arg),*),
+            cpal::SampleFormat::F64 => $stream::<f64>($($arg),*),
+            other => Err($refused(other)),
+        }
+    };
+}
+pub(crate) use by_format;
 pub(crate) mod nodes;
 mod plan;
 mod runtime;
@@ -147,11 +172,6 @@ impl Drop for DeviceClock {
 /// The host default is what a `default` name means.
 pub(crate) const DEFAULT_DEVICE: &str = "default";
 
-/// Where a take lands, and where a playback name is looked for, when it is a bare one.
-pub fn recordings() -> std::path::PathBuf {
-    goofi_core::home::dir().join("recordings")
-}
-
 /// What an input names its device to say the name resolved and nothing was opened.
 pub(crate) const NO_DEVICE: &str = "the external clock owns no device";
 
@@ -168,15 +188,9 @@ fn open_output(name: &str, runtime: Arc<Mutex<Runtime>>, stats: Arc<Stats>, wake
     // The word the DEVICE speaks, as on the input side: a shared-mode host takes `f32` from every
     // client, and a host that hands over the device's own — a Focusrite's is `i32` — refused the
     // stream outright. The runtime still renders `f32` and knows nothing of this.
-    let open = |f| match f {
-        cpal::SampleFormat::F32 => output_stream::<f32>(&device, config, runtime.clone(), stats.clone(), waker.clone()),
-        cpal::SampleFormat::I8 => output_stream::<i8>(&device, config, runtime.clone(), stats.clone(), waker.clone()),
-        cpal::SampleFormat::I16 => output_stream::<i16>(&device, config, runtime.clone(), stats.clone(), waker.clone()),
-        cpal::SampleFormat::I32 => output_stream::<i32>(&device, config, runtime.clone(), stats.clone(), waker.clone()),
-        cpal::SampleFormat::U8 => output_stream::<u8>(&device, config, runtime.clone(), stats.clone(), waker.clone()),
-        cpal::SampleFormat::U16 => output_stream::<u16>(&device, config, runtime.clone(), stats.clone(), waker.clone()),
-        cpal::SampleFormat::F64 => output_stream::<f64>(&device, config, runtime.clone(), stats.clone(), waker.clone()),
-        other => Err(format!("the device's sample format {other} is one goofi does not write")),
+    let refused = |f| format!("the device's sample format {f} is one goofi does not write");
+    let open = |f| {
+        crate::by_format!(f, output_stream, refused, &device, config, runtime.clone(), stats.clone(), waker.clone())
     };
     let stream = open(format).map_err(|e| format!("`{name}`: {e}"))?;
     Ok((stream, rate, channels))
@@ -253,11 +267,6 @@ fn rings_for(type_name: &str, chans: Arc<AtomicU16>, uid: Uid, ui: Option<goofi_
             let (producer, consumer) = rtrb::RingBuffer::new(control::INBOX_RING);
             birth.inbox = Some(consumer);
             ports.play = Some((producer, chans));
-        }
-        nodes::audio_out::TYPE => {
-            let (producer, consumer) = rtrb::RingBuffer::new(control::REC_RING);
-            birth.rec = Some(producer);
-            ports.rec = Some(consumer);
         }
         nodes::midi_in::TYPE => {
             let (producer, consumer) = rtrb::RingBuffer::new(control::NOTE_RING);
@@ -344,6 +353,7 @@ impl AudioEngine {
             .collect();
         let (inbox, to_audio) = rtrb::RingBuffer::new(QUEUE);
         let (from_audio, outbox) = rtrb::RingBuffer::new(QUEUE);
+        let anchor = Arc::new(runtime::Anchor::new(time.now()));
         AudioEngine {
             instance,
             time,
@@ -357,12 +367,13 @@ impl AudioEngine {
                 clock,
                 edits: Mutex::new(Vec::new()),
                 waker,
+                anchor: anchor.clone(),
             }),
             classes,
             rust_loaded: HashMap::new(),
             vst3: None,
             ui: None,
-            runtime: Arc::new(Mutex::new(Runtime::new(SLAB, to_audio, from_audio))),
+            runtime: Arc::new(Mutex::new(Runtime::new(SLAB, to_audio, from_audio, anchor))),
             inbox,
             outbox,
             free: (0..SLAB).rev().collect(),
@@ -532,7 +543,7 @@ impl AudioEngine {
                     .collect()
             })
             .collect();
-        Desired { consts, subs, targets }
+        Desired { consts, subs, targets, record: nv.recorded.to_vec() }
     }
 
     /// A plugin's params as its controller counts them — normalized, in the plugin's own order —
@@ -658,6 +669,9 @@ impl AudioEngine {
             self.audio.rate.store(rate.to_bits(), Ordering::Relaxed);
             rt.budget = Duration::from_secs_f64(BLOCK as f64 / rate) * runtime::BUDGET;
         }
+        // Under the runtime lock, so the count and the clock name the same instant: what a block is
+        // worth moved, and every block after this one is read against this tie.
+        self.audio.anchor.tie(self.time.now(), rate);
         rt.set_device(Some(channels));
     }
 }
@@ -739,14 +753,22 @@ impl Engine for AudioEngine {
             .unzip();
         let (tap_in, tap_out): (Vec<_>, Vec<_>) =
             manifest.outputs.iter().map(|_| rtrb::RingBuffer::<f32>::new(control::TAP_RING)).unzip();
+        // Beside the tap and never in `rings_for`: a recording ring belongs to an OUTPUT, and the
+        // rings there belong to a TYPE's OS handle.
+        let (rec_in, rec_out): (Vec<_>, Vec<_>) = manifest
+            .outputs
+            .iter()
+            .map(|_| rtrb::RingBuffer::<f32>::new(control::REC_RING))
+            .unzip();
         // The inboxes are built here so the plan can read their channel cells; the half itself is
         // made on its own thread, where an OS handle it opens never has to cross one.
         let inboxes: Vec<control::Inbox> = inbox_in.into_iter().map(control::Inbox::new).collect();
         let inbox_chans = AudioHalf::channels(&inboxes);
-        let birth = control::Birth { manifest, inboxes, taps: tap_out, ports, audio: self.audio.clone() };
+        let birth = control::Birth { manifest, inboxes, taps: tap_out, recs: rec_out, ports, audio: self.audio.clone() };
         let spawn = goofi_control::Spawn {
             engine: "audio",
             uid,
+            instance: self.instance.clone(),
             base: goofi_transport::service_base(&self.instance, uid, generation),
             manifest,
             params: atomics.clone(),
@@ -767,6 +789,7 @@ impl Engine for AudioEngine {
             params: atomics,
             inboxes: inbox_out.into_iter().map(|ring| Inbox::new(ring, true)).collect(),
             taps: tap_in,
+            recs: rec_in,
             dead: false,
             overruns: 0,
         };

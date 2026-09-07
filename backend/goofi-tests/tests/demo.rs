@@ -6,7 +6,8 @@ use goofi_bridge::phrase;
 use goofi_tests::{host, http, j, Goofi};
 
 /// Every op a demo drops, and the one it keeps because a visitor needs a reset.
-const DROPPED: [&str; 4] = ["dir list", "agent list", "session save", "session load"];
+const DROPPED: [&str; 5] =
+    ["dir list", "agent list", "session save", "session load", "library save"];
 
 #[tokio::test]
 async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
@@ -25,6 +26,8 @@ async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
         assert!(!names.iter().any(|n| n == dropped), "`{dropped}` is served: {names:?}");
     }
     assert!(names.iter().any(|n| n == "session new"), "the visitor's reset stays: {names:?}");
+    // The REST of the group stays: a visitor still reads the library it cannot write into.
+    assert!(names.iter().any(|n| n == "library list"), "{names:?}");
     assert!(names.iter().any(|n| n == "node add"), "the graph is the whole point: {names:?}");
 
     // A refusal teaches what is missing rather than naming the mode, because several modes

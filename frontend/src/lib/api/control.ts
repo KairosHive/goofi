@@ -22,11 +22,12 @@ export interface NodeTypeInfo {
 	/** The qualified `engine:Name` id; a structural type is bare. `engineOf` reads the engine. */
 	type: string;
 	tags: (typeof TAGS)[number][];
-	/** Which tree the type came from; an `--extra-nodes` directory reads as `builtin`. `plugin` is
-	 * an engine's own find rather than any tree's — a VST3 class, window or no window. */
-	source: 'builtin' | 'patch' | 'plugin';
+	/** Which tree the type came from; an `--extra-nodes` directory reads as `builtin`. `custom` is
+	 * the user's own private library, `patch` the open patch's workspace, and `plugin` an engine's
+	 * own find rather than any tree's — a VST3 class, window or no window. */
+	source: 'builtin' | 'custom' | 'patch' | 'plugin';
 	/** The node root the type was scanned from, by directory name — a shipped bundle, or an
-	 * `--extra-nodes` root. Absent for `patch` and `plugin`, which come from no root. */
+	 * `--extra-nodes` root. Absent for `custom`, `patch` and `plugin`, which name no root. */
 	bundle?: string;
 	doc: string;
 	/** Whether this machine resolves the type's unconditional top-level deps. */
@@ -166,6 +167,27 @@ export interface HarnessRoster {
 	config_error?: string | null;
 }
 
+/** One armed stream, as the recorder reports it. `fill` is the buffer's occupancy, 0…1. */
+export interface RecordStreamStatus {
+	node: string;
+	slot: string;
+	engine: string;
+	file: string;
+	frames: number;
+	dropped: number;
+	fill: number;
+}
+
+/** The recording SESSION — runtime, so it rides `record status` and `record_changed`, never the
+ * document, which owns what is armed. */
+export interface RecordStatus {
+	running: boolean;
+	folder: string | null;
+	elapsed: number | null;
+	streams: RecordStreamStatus[];
+	error: string | null;
+}
+
 export type ControlEvent =
 	| { event: 'hello'; payload: GraphSnapshot }
 	// The node itself arrives via the doc; this carries no projection of it.
@@ -200,6 +222,8 @@ export type ControlEvent =
 	  }
 	| { event: 'unsaved_changes'; payload: { unsaved_changes: boolean } }
 	| { event: 'save_path_changed'; payload: { save_path: string | null } }
+	// The whole recording state, so a client never has to diff transitions.
+	| { event: 'record_changed'; payload: RecordStatus }
 	// The palette changed under an already-connected client; `hello` carries it to an arriving one.
 	| { event: 'node_types'; payload: { types: NodeTypeInfo[] } }
 	// Carries the WHOLE roster, so a client never has to diff transitions.

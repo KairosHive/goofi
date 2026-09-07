@@ -253,21 +253,8 @@ is dropped whole, and an inbox the plan stops reading is flushed at the swap, so
 plays when the input is wired again. Latency is one source frame. `SignalIn` is a copy, and a new
 channel count re-plans through `dirty()`.
 
-**Recording and playback are one file's two directions, and neither is a new mechanism.** Landed
-2026-09-06. **A take is params on `AudioOut` rather than a node of its own**, because the clock IS
-an `AudioOut`: a `Record` node in a patch with no device node would have no clock, write an empty
-file and report nothing wrong, and that state cannot exist here. While `record.on` is high the DSP
-half pushes its input into a ring in the framing a tap already uses, and the node's own control
-half drains it each tick into a 32-bit float WAV. **The blocks ARE the request** — a take opens
-because the ring HOLDS something, never because the tick sampled the toggle, since a sampled level
-cuts the head off every take and loses one shorter than a tick outright. Recording is PRE-gain,
-because `gain` is the monitor level and a take must not change with how loud it was played; `gain
-0` is therefore "keep this, do not play it". A take is a SEQUENCE of parts: whatever would make
-the file wrong — the width moved, the rate moved, or RIFF's 4 GB filled — closes the part and
-opens the next as `-2`, `-3`. The size fields are patched once a second as well as at the close,
-so a goofi that dies leaves a file that still plays. A bare name lands in
-`$GOOFI_HOME/.goofi/recordings/` and an absolute path is taken as it is; `unique` joins the UTC
-time on, so a take never replaces the one before it.
+**Recording is the one recorder's, not the audio engine's**: the take recorder was deleted
+2026-09-07, and `roadmap/recording.md` holds the design.
 
 **`AudioPlayback` is built into the engine because a `Str` param's TEXT reaches no loaded node** —
 free text arrives at the audio thread as silence, so only a control half that sees
@@ -612,6 +599,13 @@ its reasons are in the locked decisions; what survives of the two reviews that p
   `HKLM\SOFTWARE\ASIO` against a vtable goofi declares, which puts no SDK in the tree.
   **Unverified on Windows.** Nothing in this tree can build the ASIO path — `asio-sys` is
   Windows-only — so CI's `windows-latest` leg is the first thing that judges it.
+- **A sample format cpal adds is refused until a device reports it.** `SampleFormat` is
+  `#[non_exhaustive]`, so the dispatch must keep a wildcard arm and no new variant can be a compile
+  error. goofi now writes and reads every format cpal has a sample type for — DSD is the only
+  refusal left, and it is one bit per sample with no PCM conversion — and the list is ONE list that
+  the input and the output side share, which is what the drift was: `i24` reached an ASIO card
+  after `i32` reached a Focusrite, each found by a user rather than by a gate. Nothing here can be
+  tested, because no test opens a device by decree.
 - **macOS signing**, which costs nothing today and arrives with the first notarized release. Apple's
   documented answer for a process that loads foreign code is
   `com.apple.security.cs.disable-library-validation`; Ardour, Surge, VCV Rack, ossia score, Pure

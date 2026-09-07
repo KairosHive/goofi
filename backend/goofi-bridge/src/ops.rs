@@ -267,6 +267,9 @@ pub static TREE: &[Entry] = &[
         Leaf(Op { name: "get", handler: Read(arms::library_get), args: "type:string! source:bool", positional: 1,
              doc: "ONE library entry in full: the palette fields — slots, params, availability — plus where the type came from. `--source` reads the file itself too, under `text`. Copy a node into the patch workspace to modify one.",
              result: "the `library list --full` entry plus {language, tier, provenance, path}, and `text` under `--source`" }),
+        Leaf(Op { name: "save", handler: Effect(arms::library_save), args: "type:string!", positional: 1,
+             doc: "Move a node file OUT of the open patch and into your private library — `$GOOFI_HOME/.goofi/custom/` — where every later patch finds it. Only a node of the patch's own is saved; a library node is already there and a shipped one is not yours. A move, not a copy: the library holds the one source from then on, and a `session save` re-bundles the file into the `.gfi` from there, so a patch still opens on a machine that has no such library. A library file already naming that type is REPLACED, which is how a node is updated.",
+             result: "{type, path} — the type as stored, and the library file it now lives in" }),
         Leaf(Op { name: "refresh", handler: Effect(arms::library_refresh), args: "", positional: 0,
              doc: "Re-read the shipped and patch node directories; live instances of a changed type restart onto the new code. Call after writing a node file.",
              result: "{added: [type], changed: [type], removed: [type]}" }),
@@ -294,6 +297,23 @@ pub static TREE: &[Entry] = &[
         Leaf(Op { name: "stop", handler: Effect(arms::agent_stop), args: "instance:string!", positional: 1,
              doc: "Stop a running agent (SIGTERM, then SIGKILL), or dismiss one that already exited. The shell's undo stack dies with it; the exit code arrives on harness_changed.",
              result: "{ok: true}" }),
+    ]),
+    Group("record", "capture any node's output to disk, on one clock", &[
+        Leaf(Op { name: "status", handler: Read(arms::record_status), args: "", positional: 0,
+             doc: "Whether a recording runs, where it writes, and every armed stream's health: frames written, frames dropped, and how full its buffer is. The one read a panel, an agent and a test all use.",
+             result: "{running: bool, folder: string | null, elapsed: number | null, streams: [{node, slot, engine, file, frames, dropped, fill}], error: null} — `error` is what the `record_changed` event puts a failed finalize in; a status read always answers null" }),
+        Leaf(Op { name: "arm", handler: Write(arms::record_arm), args: "output:endpoint!", positional: 1,
+             doc: "Capture this output slot, addressed `node/slot`. Arming rides the node's own record, so it is undone, saved and copied with the node, and a re-wire elsewhere cannot disarm it. Arming while a recording runs opens a new file for that stream at once. `changed` is false when the slot was already armed, which records no command.",
+             result: "{ok: true, changed: bool}" }),
+        Leaf(Op { name: "disarm", handler: Write(arms::record_disarm), args: "output:endpoint!", positional: 1,
+             doc: "Stop capturing this output slot. A file open for it is closed and named in the manifest. `changed` is false when the slot was not armed, which records no command.",
+             result: "{ok: true, changed: bool}" }),
+        Leaf(Op { name: "start", handler: Effect(arms::record_start), args: "name:string root:string", positional: 1,
+             doc: "Begin a recording. `name` names the folder, which otherwise carries the UTC of this moment; `root` overrides the recordings folder for this one recording. Either one absent is read from `globals.record.name` and `globals.record.root`. Refused when nothing is armed, and refused when one already runs.",
+             result: "{folder: string}" }),
+        Leaf(Op { name: "stop", handler: Effect(arms::record_stop), args: "", positional: 0,
+             doc: "End the recording: every file is closed and the manifest is finalized.",
+             result: "{folder: string}" }),
     ]),
     Leaf(Op { name: "undo", handler: Effect(arms::undo), args: "", positional: 0,
          doc: "Undo this actor's last graph command. Each actor — a browser tab, a shell, the MCP — has its own stack.",
@@ -389,9 +409,11 @@ pub fn find(name: &str) -> Option<&'static Op> {
 /// The rows one server serves. A mode does not REGISTER what it withholds — the one spelling of
 /// each mode, so `op list`, the phrase resolver and the MCP all shrink with it.
 pub fn table(mode: crate::Mode) -> Vec<&'static Op> {
-    // What a demo drops: the host's filesystem, the agents it would spawn, and the two ops that
-    // read or write a `.gfi` beside them. `session new` stays — it is the visitor's reset.
-    const DEMO_DROPS: [&str; 4] = ["dir", "agent", "session save", "session load"];
+    // What a demo drops: the host's filesystem, the agents it would spawn, the two ops that read
+    // or write a `.gfi` beside them, and the one that writes a node file into the host's own home
+    // — every visitor shares one process. `session new` stays: it is the visitor's reset.
+    const DEMO_DROPS: [&str; 5] =
+        ["dir", "agent", "session save", "session load", "library save"];
     let dropped = |name: &str, group: &str| {
         name == group || name.strip_prefix(group).is_some_and(|rest| rest.starts_with(' '))
     };

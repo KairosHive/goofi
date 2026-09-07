@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { ALL_TAB, VST_TAB, byTab, openingTab, paletteTabs, rankNodeTypes } from './nodeSearch';
+import {
+	ALL_TAB,
+	CUSTOM_TAB,
+	VST_TAB,
+	byTab,
+	openingTab,
+	paletteTabs,
+	rankNodeTypes
+} from './nodeSearch';
 import type { NodeTypeInfo } from '$lib/api/control';
 import { typeInfo } from '$lib/test/typeInfo';
 import { nodeTypeSource } from './nodeTypeSource';
@@ -118,22 +126,38 @@ describe('search reaches the tree a node came from', () => {
 
 describe('the palette tab', () => {
 	const reverb = typeInfo({ type: 'audio:Reverb', source: 'plugin' });
+	const mine = typeInfo({ type: 'signal:MyThing', source: 'custom' });
+	const theirs = typeInfo({ type: 'graphics:Doodle', source: 'patch' });
 	const types = [
 		node('signal:Lsl', ['input', 'eeg']),
 		node('audio:Osc', ['generator']),
 		reverb,
+		mine,
+		theirs,
 		node('signal:Filter', ['transform']),
 		node('InArray', [])
 	];
 
-	it('lists `all` first, every engine once, and the plugin tab after them', () => {
-		expect(paletteTabs(types)).toEqual([ALL_TAB, 'signal', 'audio', VST_TAB]);
+	it('lists `all` first, every engine once, then the ones no engine claims', () => {
+		expect(paletteTabs(types)).toEqual([ALL_TAB, 'signal', 'audio', CUSTOM_TAB, VST_TAB]);
 		expect(paletteTabs([node('signal:Lsl', [])])).toEqual([ALL_TAB, 'signal']);
+	});
+
+	// The library and the open patch are one facet: `library save` moves a node between the two,
+	// and a tab that moved under the reader at that moment would be the wrong facet.
+	it('gathers the nodes the USER wrote — the library and this patch — under one tab', () => {
+		expect(byTab(types, CUSTOM_TAB).map((t) => t.type)).toEqual([
+			'signal:MyThing',
+			'graphics:Doodle'
+		]);
+		expect(byTab(types, 'signal').map((t) => t.type)).toEqual(['signal:Lsl', 'signal:Filter']);
+		// …and a patch node offers no engine tab of its own.
+		expect(paletteTabs([theirs])).toEqual([ALL_TAB, CUSTOM_TAB]);
 	});
 
 	it('keeps a structural type on `all`, which no tab of its own claims', () => {
 		expect(byTab(types, ALL_TAB)).toBe(types);
-		expect(byTab(types, 'signal').map((t) => t.type)).toEqual(['signal:Lsl', 'signal:Filter']);
+		expect(byTab(types, ALL_TAB).map((t) => t.type)).toContain('InArray');
 	});
 
 	// A plugin's engine IS audio, so without this the two tabs would list it twice.

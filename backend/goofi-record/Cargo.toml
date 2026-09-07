@@ -1,0 +1,13 @@
+[package]
+name = "goofi-record"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The recorder owns no engine and no engine owns it: the model types and the wire codec only.
+[dependencies]
+goofi-core = { path = "../goofi-core" }
+goofi-codec = { path = "../goofi-codec" }
+goofi-node = { path = "../goofi-node" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

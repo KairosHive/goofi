@@ -40,6 +40,20 @@ pub(crate) enum Probed {
     Unavailable(String),
 }
 
+impl Probed {
+    /// The same answer, against the file at `path`. A probe's answer depends on the BYTES, so it
+    /// is memoised across paths — where the file is does not, and the source is read from there
+    /// at registration.
+    fn at(self, path: &Path) -> Probed {
+        let moved = |d: Discovered| Discovered { source: path.to_path_buf(), ..d };
+        match self {
+            Probed::InProcess(d) => Probed::InProcess(moved(d)),
+            Probed::Subprocess(d) => Probed::Subprocess(moved(d)),
+            Probed::Unavailable(reason) => Probed::Unavailable(reason),
+        }
+    }
+}
+
 impl SignalEngine {
     pub fn set_python(&mut self, python: Python) {
         self.python = Some(python);
@@ -67,7 +81,7 @@ pub(crate) fn scan(engine: &mut SignalEngine, dir: &Path) -> Vec<ScannedType> {
                 .zip(&cached)
                 .map(|((p, _, _), hit)| {
                     let python = python.as_ref();
-                    s.spawn(move || hit.clone().unwrap_or_else(|| probe(p, python)))
+                    s.spawn(move || hit.clone().unwrap_or_else(|| probe(p, python)).at(p))
                 })
                 .collect();
             handles.into_iter().map(|h| h.join().ok()).collect()

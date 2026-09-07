@@ -46,20 +46,23 @@ before they arrive.
   the wire. The viewer kind a slot OPENS with is now a table too (`vocab::default_kind`,
   projected as `DEFAULT_KIND`): a texture draws as an image, an array and audio as a line. The
   suite's graphics-shaped skeleton was renamed `skelgfx`, because `graphics` is the real engine's.
-- **An ARRAY input's TRANSFER has modes, and they belong to the engine rather than to the file** —
-  BUILT 2026-09-07. What a frame BECOMES is a property of the crossing, not of the shader that
-  samples what came across, so every ARRAY input carries a universal param group named after the
-  input, the way `common` is universal for the size. `texture` is the default and is the frame's own
-  texels, unchanged. `line` and `trajectory` DRAW the frame, under the options goofi's own viewers
-  offer — `auto`, `min`, `max`, `log_x`, `log_y`, `points` — so one vocabulary answers for a plot in
-  a panel and a plot on a texture, and the line's `yAuto/yMin/yMax` and the trajectory's `auto` are
-  ONE range rather than two copies of one idea. The drawing is the control thread's, made once per
-  tick from the frame and the params that stand at that moment: a fragment shader cannot draw a
-  polyline without testing every segment at every texel, which is the pixel count times the sample
-  count and is out of reach on the suite's software adapter, where a CPU rasteriser costs the ink
-  alone. A plot is drawn at the node's own size on TRANSPARENT ground, so it composites like any
-  other texture, and it carries no axes, grid or labels — a texture is the picture of the data, and
-  the panel is where a reading is named.
+- **A plot of an ARRAY input is drawn in the SHADER, and the engine's whole part in it is the
+  frame's RANGE** — BUILT 2026-09-07, and the first build of it was wrong. `ArrayIn` carries a
+  `plot` group of its own — `mode` (`texture`, `line`, `trajectory`), `autoscale`, `min`, `max`,
+  `log_x`, `log_y`, `points`, `thickness` — and its body draws them: a line is the band this column
+  of texels spans, which is its two edges and every sample between them, so the min/max fold a
+  viewer does per column falls out per texel; a trajectory is the distance to a path walked at a
+  bounded stride. Both are close in spirit to the viewers rather than identical to them, on
+  transparent ground, in the viewers' own series colours.
+  What was built first and REPLACED: the modes as an engine-universal param group per ARRAY input,
+  rasterised on the node's control thread. It drew the right picture and tanked the frame rate —
+  a CPU that redraws a 1024-square canvas on every arrival is not what a graphics engine is for.
+  The lesson is the file's: a graphics node is a SHADER, and work that belongs in the fragment
+  stage does not go in the engine because the fragment stage is awkward.
+  The one thing a body cannot do for itself is the range: `autoscale` needs the frame's min and
+  max, and finding those in the shader is a reduction over every texel AT every texel. So the
+  upload carries them, and the prelude adds `<input>_lo` and `<input>_hi` to `Params` for every
+  ARRAY input — no new binding, and any shader that wants to scale what it was handed now can.
 
 - **`uv` is `(0, 0)` at the TOP-left — WGSL's own texture space — and so is every row order in the
   engine.** REVISED 2026-09-06, and the first design of this rule was wrong. It said `uv` was
@@ -97,7 +100,7 @@ before they arrive.
   in-edges and running first on its producer's previous frame, a loop with no feedback node
   excluded and named — the audio rule. Resolution rides the universal group `common`: `width` and
   `height`, 0 following the first wired texture input on that axis, and a chain that can follow
-  nothing 512. Every texture is `Rgba16Float`.
+  nothing 1024. Every texture is `Rgba16Float`.
 - **The control half is shared with audio**, lifted into `goofi-control` — LANDED 2026-09-06,
   before the engine that needs it: the per-node thread on its door, `Desired`, the subscriptions,
   evaluation on arrival, pulses, refresh, reports and bells are one implementation. What an
@@ -195,7 +198,7 @@ The audit of the engine core found seven defects, and each is now a rule rather 
   node green, and every node dead.
 - An idle tick returns before it submits. It was submitting an empty command buffer and blocking
   on it at 60 Hz on every machine with a GPU.
-- A loop head keeps the axis it asked for instead of falling back to 512 on both.
+- A loop head keeps the axis it asked for instead of falling back to the default size on both.
 
 The duplication with the audio engine went into `goofi-control` rather than being noted: `Faults`
 answers what moved between two settles, `Shared::drain` hands the reports over, and `Handle` holds
@@ -290,7 +293,7 @@ for, sized, fed, counted in `session status`, and closed with its node.
   node that makes its own frames carries them as a live expression — the shape signal's
   `common.max_frequency` and `globals.system.default_ufreq` already had. A node is a producer when
   no TEXTURE input stands behind it, DERIVED from the header rather than declared in it, so an
-  author cannot forget. Both start at 512, which is also what a chain that can follow nothing falls
+  author cannot forget. Both start at 1024, which is also what a chain that can follow nothing falls
   back to; the two are one constant (`globals::DEFAULT_SIZE`), so the floor and the default cannot
   drift apart.
 - **A node holds state by declaring named BUFFERS, and a buffer is another output aged by one
@@ -356,11 +359,14 @@ for, sized, fed, counted in `session status`, and closed with its node.
   1x1 buffer needs a pass of its own, since one pass's targets share one size.
 - A vector-typed param (a colour as one `vec4f`) needs a layouter and a `Param` kind that does
   not exist.
-- The transfer draws the line and the trajectory; the IMAGE viewer's colormap and the topomap are
-  not modes. A colormap is `Lookup` with a palette behind it, and the palette a viewer offers —
-  viridis, coolwarm — is a table this side does not hold, so either a node that MAKES one or a
-  colormap mode has to carry it. A topomap needs the electrode positions the frame's own metadata
-  carries, which no transfer reads yet.
+- `ArrayIn` plots the line and the trajectory; the IMAGE viewer's colormap and the topomap are not
+  modes. A colormap is `Lookup` with a palette behind it, and the palette a viewer offers —
+  viridis, coolwarm — is a table no node makes, so either a `Colormap` generator or a mode has to
+  carry it. A topomap needs the electrode positions the frame's own METADATA carries, and nothing
+  of a frame's metadata reaches a shader.
+- A plot's caps are the file's constants: a column folds at most 48 samples, a path walks at most
+  192 points and 8 channel pairs. They are what keeps a million-sample frame from costing a
+  million texel reads at every texel; nothing measures whether they are the right numbers.
 
 ## Traps worth not rediscovering (wgpu 30, verified 2026-08-09 and 2026-09-06)
 

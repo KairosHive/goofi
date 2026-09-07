@@ -15,6 +15,7 @@ pub mod ops;
 mod origin;
 mod patchfile;
 mod proc;
+mod record;
 pub mod reducer;
 pub mod schemas;
 pub mod term;
@@ -92,6 +93,10 @@ pub struct AppState {
     /// first, in name order, then each `--extra-nodes` — each holding a `nodes_<engine>/` per
     /// engine. The patch's workspace is scanned last, and wins a name.
     pub roots: Vec<PathBuf>,
+    /// The private node library — `$GOOFI_HOME/.goofi/custom/`, the ONE root goofi writes into.
+    /// Scanned after every other root and before the patch's own, so a node saved here beats a
+    /// shipped one and loses to the open patch's own file.
+    pub custom: PathBuf,
     /// What the last scan found, by type name → the file's stamp: the baseline the next [`rescan`]
     /// diffs against, and the only list it removes from.
     node_index: Arc<Mutex<std::collections::BTreeMap<String, Seen>>>,
@@ -109,6 +114,11 @@ pub struct AppState {
     bound: Arc<Mutex<std::net::SocketAddr>>,
     /// The spawned agent harnesses and their PTYs.
     pub harnesses: Arc<term::Harnesses>,
+    /// The one recorder every engine writes its armed streams to. Whether it runs is RUNTIME —
+    /// `record status` and the `record_changed` event carry it, never the document.
+    pub recorder: Arc<goofi_record::Recorder>,
+    /// The drain thread's stop flag, and what [`AppState::stop_recording`] waits on.
+    record_drain: Arc<goofi_transport::Halt>,
 }
 
 /// How a `/data` socket detects a dead-but-not-closed peer, which a socket with no traffic cannot
@@ -162,6 +172,10 @@ impl AppState {
         graph_val.set_workspace(&mount);
         let mut doc = crate::doc::GraphDoc::new();
         doc.reconcile_root(&projection::of(&graph_val));
+        let recorder = Arc::new(goofi_record::Recorder::new(graph_val.time()));
+        if let Some(gfx) = try_graphics_engine(&mut graph_val) {
+            gfx.set_recorder(recorder.clone());
+        }
         let graph = Arc::new(Mutex::new(graph_val));
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
         let reducers = reducer::SlotReducers::new(graph.clone(), follow_tx);
@@ -177,15 +191,30 @@ impl AppState {
             history: Arc::new(Mutex::new(goofi_graph::CommandHistory::new())),
             data_liveness: DataLiveness::DEFAULT,
             roots: materialise_shipped(),
+            custom: goofi_core::home::custom_nodes(),
             node_index: Arc::new(Mutex::new(Default::default())),
             mount: Arc::new(Mutex::new(mount)),
             workspace_baseline: Arc::new(Mutex::new(workspace_baseline)),
             save_path: Arc::new(Mutex::new(None)),
             bound: Arc::new(Mutex::new(([127, 0, 0, 1], 8000).into())),
             harnesses: Arc::new(term::Harnesses::default()),
+            recorder,
+            record_drain: Arc::new(goofi_transport::Halt::default()),
         };
         spawn_follower(state.clone(), follow_rx);
+        record::spawn(state.graph.clone(), state.recorder.clone(), state.record_drain.clone());
         state
+    }
+
+    /// End the recording as a teardown does: the drain stops and is waited for to a CEILING — a
+    /// wedged drain must not wedge the exit — and only then is the manifest finalized.
+    pub fn stop_recording(&self) {
+        self.record_drain.stop();
+        goofi_transport::wait_released(
+            std::iter::once(&*self.record_drain),
+            goofi_transport::SHUTDOWN_WAIT,
+        );
+        let _ = self.recorder.stop();
     }
 
     /// Record the address this server actually bound — what `local_url` derives from.
@@ -214,6 +243,26 @@ impl AppState {
     /// filesystem walk may run while holding the lock.
     pub fn mount(&self) -> PathBuf {
         self.mount.lock().unwrap().clone()
+    }
+
+    /// Every node root OUTSIDE the open patch, in precedence order and each with the origin a
+    /// type found there wears — the one place that order is stated. The patch's own workspace is
+    /// scanned after these and wins a shared name.
+    pub fn node_roots(&self) -> Vec<(PathBuf, goofi_graph::Origin)> {
+        let named = |d: &PathBuf| {
+            goofi_graph::Origin::Root(d.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+        };
+        let mut roots: Vec<(PathBuf, goofi_graph::Origin)> =
+            self.roots.iter().map(|d| (d.clone(), named(d))).collect();
+        roots.push((self.custom.clone(), goofi_graph::Origin::Custom));
+        roots
+    }
+
+    /// Forget one workspace file in the unsaved-changes baseline — what a MOVE out of the mount
+    /// leaves behind. A `.gfi` still carries the file, from the library, so the patch's saved
+    /// content did not change and the unsaved dot must not rise for it.
+    fn forget_baseline(&self, rel: &std::path::Path) {
+        self.workspace_baseline.lock().unwrap().remove(rel);
     }
 
     /// Drop the workspace mount, nonce directory and all, waiting HERE — what teardown wants,
@@ -265,7 +314,12 @@ pub(crate) fn nonce_hex() -> String {
 
 /// Pack the patch to `target`: `manifest` beside the live workspace `mount`. Written to a temp
 /// sibling and RENAMED, so a write that dies part-way leaves the previous `.gfi` standing.
-pub fn save_archive(target: &std::path::Path, manifest: &str, mount: &std::path::Path) -> Result<(), String> {
+pub fn save_archive(
+    target: &std::path::Path,
+    manifest: &str,
+    mount: &std::path::Path,
+    extra: &[(String, PathBuf)],
+) -> Result<(), String> {
     // The mount's nonce directory is deleted when the patch closes, so a save into it saves into
     // nothing. Both sides go through `resolve`, or they disagree on what a path means.
     let owned = fsbrowse::resolve(&mount.parent().unwrap_or(mount).to_string_lossy());
@@ -278,7 +332,7 @@ pub fn save_archive(target: &std::path::Path, manifest: &str, mount: &std::path:
         s.push(format!(".tmp-{}", nonce_hex()));
         s
     });
-    let packed = goofi_graph::archive::write_gfi(&tmp, manifest, mount)
+    let packed = goofi_graph::archive::write_gfi(&tmp, manifest, mount, extra)
         .and_then(|()| std::fs::rename(&tmp, target).map_err(|e| format!("{}: {e}", target.display())));
     if packed.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -288,7 +342,11 @@ pub fn save_archive(target: &std::path::Path, manifest: &str, mount: &std::path:
 
 /// The front half of a load, against a mount that is not yet live. It stops AT the manifest,
 /// because the patch's own node types must be registered before `load_doc` resolves the graph.
-fn stage_load(mount: &std::path::Path, payload: &Value) -> Result<(String, Option<String>), String> {
+fn stage_load(
+    mount: &std::path::Path,
+    custom: &std::path::Path,
+    payload: &Value,
+) -> Result<(String, Option<String>), String> {
     let from_file = payload.get("path").and_then(|v| v.as_str()).filter(|p| !p.is_empty());
     let inline = payload.get("content").and_then(|v| v.as_str());
     let (content, from_path, unpacked) = if let Some(p) = from_file {
@@ -310,7 +368,9 @@ fn stage_load(mount: &std::path::Path, payload: &Value) -> Result<(String, Optio
     };
     // Only a workspace goofi minted empty is seeded: an archive has just unpacked the patch's OWN
     // workspace into `mount`, and goofi does not write into someone's patch.
-    if !unpacked {
+    if unpacked {
+        adopt_custom(mount, custom);
+    } else {
         term::seed_orientation(mount);
     }
     Ok((content, from_path))
@@ -605,6 +665,56 @@ fn materialise_shipped() -> Vec<PathBuf> {
     roots
 }
 
+/// The file in `dir` that names `bare` for `engine`. The type name IS the stem, so a path
+/// re-derives with no registry — the ONE resolver a save, a pack, a load and `library get` share.
+pub(crate) fn node_file_in(dir: &std::path::Path, bare: &str, engine: &str) -> Option<PathBuf> {
+    std::fs::read_dir(dir).ok()?.filter_map(Result::ok).map(|e| e.path()).find(|p| {
+        goofi_node::type_name_of(p).as_deref() == Some(bare)
+            && goofi_node::engine_of(p).as_deref() == Some(engine)
+    })
+}
+
+/// Every private-library file the patch's own nodes need, as a workspace-relative slash path and
+/// the file behind it — what a `.gfi` carries, so it opens where no such library exists.
+pub fn bundled_custom(g: &Graph, custom: &std::path::Path) -> Vec<(String, PathBuf)> {
+    let mut out: Vec<(String, PathBuf)> = Vec::new();
+    for uid in g.node_uids() {
+        let Some(ty) = g.node_type(uid) else { continue };
+        if !g.is_custom_type(&ty) {
+            continue;
+        }
+        let (Some(engine), bare) = goofi_node::split_type_id(&ty) else { continue };
+        let Some(path) = node_file_in(custom, bare, engine) else { continue };
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        let rel = format!("{}/{name}", goofi_node::folder_of(engine));
+        if !out.iter().any(|(at, _)| *at == rel) {
+            out.push((rel, path));
+        }
+    }
+    out
+}
+
+/// Drop the copies a `.gfi` carried that the private library already holds BYTE FOR BYTE, so the
+/// library keeps the one copy. One that DIFFERS stays, and wins the name as any patch file does.
+fn adopt_custom(mount: &std::path::Path, custom: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(custom) else { return };
+    for lib in entries.filter_map(Result::ok).map(|e| e.path()) {
+        let (Some(ty), Some(engine)) = (goofi_node::type_name_of(&lib), goofi_node::engine_of(&lib))
+        else {
+            continue;
+        };
+        let Some(theirs) = node_file_in(&mount.join(goofi_node::folder_of(&engine)), &ty, &engine)
+        else {
+            continue;
+        };
+        if let (Ok(a), Ok(b)) = (std::fs::read(&lib), std::fs::read(&theirs)) {
+            if a == b {
+                let _ = std::fs::remove_file(&theirs);
+            }
+        }
+    }
+}
+
 /// Build every `.rs` node file under every root and the workspace's engine folders BEFORE the
 /// graph lock is taken: a build takes seconds, and only the caller who asked should wait for it.
 /// The scan that follows finds each artifact made, or the memo of why it was not.
@@ -618,7 +728,8 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
         .filter_map(|(id, sdk)| goofi_build::sdk(sdk).map(|s| (id, s)))
         .collect();
     let base = goofi_build::base_dir(&goofi_core::home::dir());
-    let dirs = state.roots.iter().cloned().chain(sdks.iter().map(|(id, _)| patch.join(goofi_node::folder_of(id))));
+    let dirs = (state.node_roots().into_iter().map(|(d, _)| d))
+        .chain(sdks.iter().map(|(id, _)| patch.join(goofi_node::folder_of(id))));
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(dir) else { continue };
         for path in entries.filter_map(Result::ok).map(|e| e.path()) {
@@ -745,12 +856,11 @@ pub fn rescan(
     let mut origins: std::collections::HashMap<String, goofi_graph::Origin> = Default::default();
     let mut outcomes = Vec::new();
     let workspace: Vec<PathBuf> = g.engine_ids().into_iter().map(|id| patch.join(goofi_node::folder_of(id))).collect();
-    let roots = (state.roots.iter().map(|d| (d.clone(), false))).chain(workspace.into_iter().map(|d| (d, true)));
-    for (root, is_patch) in roots {
-        let bundle = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let roots = (state.node_roots().into_iter())
+        .chain(workspace.into_iter().map(|d| (d, goofi_graph::Origin::Patch)));
+    for (root, origin) in roots {
         for t in g.scan_root(&root) {
-            let origin = if is_patch { goofi_graph::Origin::Patch } else { goofi_graph::Origin::Root(bundle.clone()) };
-            origins.insert(t.type_name.clone(), origin);
+            origins.insert(t.type_name.clone(), origin.clone());
             found.insert(t.type_name.clone(), (Some(root.clone()), t.stamp));
             outcomes.push(t);
         }

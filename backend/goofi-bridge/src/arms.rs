@@ -185,7 +185,64 @@ pub(crate) fn library_get(
     let ty = parse_str(payload, "type")?;
     let mount = state.mount();
     let source = flag(payload, "source", false);
-    inspect::node_source(&state.graph.lock().unwrap(), ty, &mount, &state.roots, source)
+    inspect::node_source(&state.graph.lock().unwrap(), ty, &mount, &state.node_roots(), source)
+}
+
+/// Move a node file out of the open patch and into the private library, where every later patch
+/// finds it. A MOVE, not a copy: the library is then the one source, and a save re-bundles the
+/// file into the `.gfi` from there.
+pub(crate) fn library_save(
+    state: &AppState,
+    payload: &Value,
+    _actor: &str,
+    events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let asked = parse_str(payload, "type")?;
+    let mount = state.mount();
+    let (engine, bare, from) = {
+        let g = state.graph.lock().unwrap();
+        let (engine, entry) = g.resolve_type(asked).map_err(|e| format!("library save: {e}"))?;
+        let ty = goofi_node::qualify(engine, entry.manifest.type_name);
+        if !g.is_patch_type(&ty) {
+            return Err(format!(
+                "library save: `{ty}` is not this patch's own node — only a node file in the patch workspace is saved to the library"
+            ));
+        }
+        let bare = entry.manifest.type_name;
+        let folder = mount.join(goofi_node::folder_of(engine));
+        let from = crate::node_file_in(&folder, bare, engine)
+            .ok_or_else(|| format!("library save: `{ty}` has no source file under {}", folder.display()))?;
+        (engine, bare.to_string(), from)
+    };
+    let library = state.custom.clone();
+    let name = from.file_name().ok_or("library save: the source file has no name")?.to_owned();
+    std::fs::create_dir_all(&library).map_err(|e| format!("library save: {}: {e}", library.display()))?;
+    let to = library.join(&name);
+    // The library keeps ONE file per type, whatever the old one was called: a second name for one
+    // type is two claimants on it, which is the shadowing the roots already refuse to allow.
+    if let Some(stale) = crate::node_file_in(&library, &bare, engine) {
+        if stale != to {
+            std::fs::remove_file(&stale).map_err(|e| format!("library save: {}: {e}", stale.display()))?;
+        }
+    }
+    // Copy and remove rather than rename: the mount is a temp directory, which is routinely on a
+    // different filesystem from the home a rename cannot cross.
+    std::fs::copy(&from, &to).map_err(|e| format!("library save: {}: {e}", to.display()))?;
+    std::fs::remove_file(&from).map_err(|e| format!("library save: {}: {e}", from.display()))?;
+    // The file left the mount but the `.gfi` still carries it, from the library — so the patch's
+    // saved content did not change, and the unsaved dot must not rise for a move alone.
+    if let Ok(rel) = from.strip_prefix(&mount) {
+        state.forget_baseline(rel);
+    }
+    // Rescanned but NOT restarted: the code behind every live instance is byte for byte the file
+    // that just moved.
+    {
+        let mut g = state.graph.lock().unwrap();
+        rescan(state, &mut g, &mount);
+        events.push(event("node_types", json!({ "types": schemas::catalog_types(&g, Detail::Full) })));
+    }
+    resync_and_broadcast(state);
+    Ok(json!({ "type": goofi_node::qualify(engine, &bare), "path": goofi_core::path::to_slash(&to) }))
 }
 
 /// Explicit, never watched: an agent calls it after writing a node file.
@@ -289,6 +346,7 @@ pub(crate) fn node_add(
         params: None,
         sources: vec![],
         viewers: None,
+        record: None,
         scope,
     };
     let uid = match state.history.lock().unwrap().apply(&mut g, actor, cmd)? {
@@ -1524,7 +1582,7 @@ pub(crate) fn session_save(
     // either way, which is the direction that LOSES an edit.
     g.persist();
     let packed = goofi_graph::archive::fingerprint(&mount);
-    save_archive(std::path::Path::new(&path), &g.serialize(), &mount)?;
+    save_archive(std::path::Path::new(&path), &g.serialize(), &mount, &bundled_custom(&g, &state.custom))?;
     // Announced UNCONDITIONALLY, not on the flag's transition: a patch dirtied solely by a file
     // in the mount leaves the flag already false, so no transition comes.
     *state.workspace_baseline.lock().unwrap() = packed;
@@ -1540,13 +1598,21 @@ pub(crate) fn session_save(
 /// The core every patch replacement shares, so nothing after the read can drift between the
 /// sources: a `.gfi`, an inline manifest, or nothing at all — the empty patch.
 fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
+    // The load restarts the clock, so the recording has no timeline left; a manifest that could
+    // not be finalized is SAID, because the patch asked for is not the recording's disk.
+    if let Err(e) = state.recorder.stop() {
+        let mut ended = record_state(state);
+        ended["error"] = json!(format!("the recording could not be finalized: {e}"));
+        let _ = state.events.send(event("record_changed", ended));
+    }
     // Read OFF the graph lock, as the hello does: the roster's config half is a disk read.
     let agents = goofi_core::home::agents();
     // Every source mounts FRESH, and the live mount is swapped only once the manifest has parsed,
     // so a refused load leaves the open patch untouched on both planes. Staged and built off the
     // lock: the archive's own Rust nodes may take seconds to build.
     let fresh = new_mount();
-    let (content, from_path) = stage_load(&fresh, payload).inspect_err(|_| remove_mount(&fresh))?;
+    let (content, from_path) =
+        stage_load(&fresh, &state.custom, payload).inspect_err(|_| remove_mount(&fresh))?;
     prebuild(state, &fresh);
     let result = {
         let mut g = state.graph.lock().unwrap();
@@ -1702,4 +1768,174 @@ pub(crate) fn op_complete(
         .map(|(word, doc)| format!("{word}\t{doc}"))
         .collect();
     Ok(json!({ "text": rows.join("\n") }))
+}
+
+/// The recorder's name for one armed output slot: the node's identity, plus the engine behind it.
+pub(crate) fn stream_id(g: &Graph, uid: Uid, slot: &str) -> goofi_record::StreamId {
+    let engine = g
+        .node_type(uid)
+        .and_then(|ty| g.type_engine(&ty))
+        .unwrap_or("signal");
+    goofi_record::StreamId { uid, node: crate::named(g, uid), slot: slot.to_string(), engine }
+}
+
+fn set_armed(
+    state: &AppState,
+    actor: &str,
+    op: &str,
+    payload: &Value,
+    arm: bool,
+) -> Result<Value, String> {
+    let mut g = state.graph.lock().unwrap();
+    let (uid, slot) = parse_endpoint(&g, payload, op, "output")?;
+    let slot = vocab::resolve_slot(&g, op, uid, &slot)?;
+    let mut record = g.recorded(uid).unwrap_or(&[]).to_vec();
+    let held = record.iter().position(|s| *s == slot);
+    match (arm, held) {
+        (true, None) => record.push(slot.clone()),
+        (false, Some(i)) => {
+            record.remove(i);
+        }
+        _ => return Ok(json!({ "ok": true, "changed": false })),
+    }
+    state.history.lock().unwrap().apply(
+        &mut g,
+        actor,
+        goofi_graph::Command::SetRecorded { uid, record },
+    )?;
+    let closing = (!arm && state.recorder.running()).then(|| stream_id(&g, uid, &slot));
+    // The graph lock goes FIRST: closing a video waits for its encoder, and no op may hold the
+    // one graph mutex across a child process.
+    drop(g);
+    if let Some(id) = closing {
+        state.recorder.close(&id, "disarmed");
+    }
+    Ok(json!({ "ok": true, "changed": true }))
+}
+
+pub(crate) fn record_arm(
+    state: &AppState,
+    payload: &Value,
+    actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    set_armed(state, actor, "record arm", payload, true)
+}
+
+pub(crate) fn record_disarm(
+    state: &AppState,
+    payload: &Value,
+    actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    set_armed(state, actor, "record disarm", payload, false)
+}
+
+/// A `record start` argument, taken from the payload and otherwise from `globals.record.<key>`.
+fn record_arg(g: &Graph, payload: &Value, key: &str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| match g.globals().get(&format!("record.{key}")) {
+            Some(goofi_core::globals::GlobalValue::Str(s)) if !s.is_empty() => Some(s.clone()),
+            _ => None,
+        })
+}
+
+pub(crate) fn record_start(
+    state: &AppState,
+    payload: &Value,
+    _actor: &str,
+    events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let g = state.graph.lock().unwrap();
+    let armed: Vec<Uid> = g.all_uids().into_iter().filter(|u| !g.recorded(*u).unwrap_or(&[]).is_empty()).collect();
+    if armed.is_empty() {
+        return Err("record start: nothing is armed — `record arm <node>/<slot>` first".into());
+    }
+    // A recording is many streams across three engines, so a missing video encoder costs the
+    // graphics stream alone — unless every armed stream is one, which would record nothing.
+    if armed.iter().all(|u| stream_id(&g, *u, "").engine == "graphics") {
+        state.recorder.can_encode().map_err(|e| format!("record start: {e}"))?;
+    }
+    let root = record_arg(&g, payload, "root")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(goofi_core::home::recordings);
+    let name = record_arg(&g, payload, "name").unwrap_or_default();
+    let patch = state.save_path().map(std::path::PathBuf::from);
+    let folder = state
+        .recorder
+        .start(&root, &name, patch.as_deref())
+        .map_err(|e| format!("record start: {e}"))?;
+    drop(g);
+    spawn_record_beat(state, folder.clone());
+    events.push(record_changed(state));
+    Ok(json!({ "folder": folder.to_string_lossy() }))
+}
+
+/// How often a RUNNING recording re-announces itself. The elapsed time and the buffer health
+/// advance with no op to ride on, and every client reads the one broadcast.
+const RECORD_BEAT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Re-announce the session on its own beat, for as long as THIS recording runs: the folder names
+/// it, so a stop and a fresh start inside one beat cannot leave two threads talking.
+fn spawn_record_beat(state: &AppState, folder: std::path::PathBuf) {
+    let state = state.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(RECORD_BEAT);
+            let s = state.recorder.status();
+            if !s.running || s.folder.as_deref() != Some(folder.as_path()) {
+                return;
+            }
+            let _ = state.events.send(record_changed(&state));
+        }
+    });
+}
+
+pub(crate) fn record_stop(
+    state: &AppState,
+    _payload: &Value,
+    _actor: &str,
+    events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let folder = state.recorder.stop()?.ok_or("record stop: no recording runs")?;
+    events.push(record_changed(state));
+    Ok(json!({ "folder": folder.to_string_lossy() }))
+}
+
+pub(crate) fn record_status(
+    state: &AppState,
+    _payload: &Value,
+    _actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    Ok(record_state(state))
+}
+
+/// The session's recording state — RUNTIME, so it rides this read and the event, never the document.
+pub(crate) fn record_state(state: &AppState) -> Value {
+    let s = state.recorder.status();
+    let elapsed = s.started.map(|t0| state.graph.lock().unwrap().time().now() - t0);
+    let streams: Vec<Value> = s
+        .streams
+        .iter()
+        .map(|st| {
+            json!({ "node": st.node, "slot": st.slot, "engine": st.engine, "file": st.file,
+                    "frames": st.frames, "dropped": st.dropped, "fill": st.fill })
+        })
+        .collect();
+    json!({
+        "running": s.running,
+        "folder": s.folder.map(|f| f.to_string_lossy().into_owned()),
+        "elapsed": elapsed,
+        "streams": streams,
+        "error": Value::Null,
+    })
+}
+
+pub(crate) fn record_changed(state: &AppState) -> String {
+    crate::event("record_changed", record_state(state))
 }

@@ -279,10 +279,12 @@ put row 0 at the TOP — one convention, so a pass-through body is a copy and no
 anywhere. A node HOLDS state by declaring named buffers: `cells` reads what the last tick left,
 `next_cells` writes what this one leaves, and one pass fills the output and every buffer at once —
 so a buffer is the node's own size, and `frame`, the renders since it was made, is what a body
-seeds itself on. An ARRAY input's TRANSFER has modes — the frame's own texels, or the line or
-trajectory a viewer would draw of it, under the viewers' own options — and they are the ENGINE's
-universal params rather than the file's, because what a frame becomes belongs to the crossing and
-not to the shader that samples what came across. Its size is a param like any other:
+seeds itself on. An ARRAY input's transfer is the frame's own texels, and a PLOT of one is the
+SHADER's work: `ArrayIn` draws the line and the trajectory a viewer draws, in WGSL, under params of
+its own — a graphics node is a shader, and a CPU rasteriser in the transfer path was built, measured
+and thrown away. What the engine adds is the one thing a body cannot work out for itself: the range
+the frame's values spanned, carried into `p` beside the params, since finding it in the shader is a
+reduction over every texel AT every texel. Its size is a param like any other:
 `common.width` and `common.height`, 0 following what is wired behind, and
 `globals.system.default_width` on a node that makes its own frames. The engine is scheduled and
 DEMAND-DRIVEN: a stage renders only where its output has a reader, so a node nobody watches costs
@@ -293,6 +295,28 @@ PROCESS owns one device and one compile thread, and every operation on that devi
 The control half is `goofi-control`, shared with audio rather than copied. A texture never crosses
 the wire: the tap reads back an f32 frame like any other, and `roadmap/graphics-engine.md` holds
 the design.
+
+**A recording is LOSSLESS RAW, and the node's own record is what arms it.** `goofi-record` owns the
+folder, the manifest and one writer per stream; a signal or audio stream is CONCATENATED GOOF
+FRAMES — the wire format itself — so nothing is re-encoded, the metadata rides beside every sample
+in the frame's own `Meta`, and a truncated file decodes to its last whole frame. WAV, CSV and MP4
+are each lossy against a `Data` frame, so they are a LATER tool over a finished recording and never
+a format the recorder writes. Graphics is the one exception, because a texture is `Rgba16Float` and
+no codec takes float: an ffmpeg child writes FFV1 in Matroska, which the manifest states in words
+is lossless WITHIN [0,1] and clips outside it, and no stream ever claims plain "lossless". The
+in-process pure-Rust alternatives were offered with measurements — `lz4_flex` 735 MB/s at 2.0x,
+`zstd -1` 451 MB/s at 7.9x, single-core on a gradient frame, both beating FFV1 — and ffmpeg was
+kept; the dependency is bounded, so a missing ffmpeg costs THAT STREAM alone. Arming is
+`doc.nodes[<uid>].record`, so it is undoable, saved, copied with the node and delivered by `settle`
+alone — never a set kept beside the recorder, which claimed an arming that had in fact failed. The
+clock is the one timing authority and its UTC is anchored ONCE at the patch origin, so a frame
+carries patch seconds, the manifest carries the anchor, and an NTP step cannot bend a recording;
+a rate-locked stream derives its timeline from the SAMPLE COUNT, tied to the clock on the audio
+thread so the count and the instant are one. What the shape cost, four times: a re-arm at the same
+instant truncated the file it had just closed; a running drop counter applied to already-queued
+blocks made the loss invisible AND dated the survivors 1.33 ms late; finalizing a video held the
+session mutex and stalled every other engine's drain; and every second holder of "is this stream
+open" wrote at a stream the recorder had closed. `roadmap/recording.md` holds the design.
 
 **There is no tick.** Every node owns one thread and schedules itself, waking for a control
 message, a frame on an input, or its own rate cap elapsing. Frames travel node to node over
@@ -333,6 +357,16 @@ is memory the plan laid out, not a frame in flight. There is no static registrat
 `node-bundles/<bundle>/` is shipped — prebuilt at goofi's build time and embedded, each bundle a
 root of its own — so `cargo run` carries them all, and a toolchain is needed to author and never
 to run; `--extra-nodes` adds a root at run time.
+
+**A node the user wrote has a home outside the patch.** `$GOOFI_HOME/.goofi/custom/` is the private
+library — the ONE node root goofi writes into — scanned after every other root and before the
+patch's own, so it beats a shipped node and loses to the open patch. `library save <type>` MOVES a
+patch's node file into it, because two copies of one node are two claimants on its name. A `.gfi`
+still carries every library file the patch's nodes use, packed straight into the archive and never
+into the mount, so a patch opens on a machine that has no such library. A load then DROPS the copy
+the archive brought wherever the library already holds it BYTE FOR BYTE: one file, so an edit there
+reaches every patch that uses it. A copy that DIFFERS stays and wins the name, exactly as any patch
+file wins one.
 
 **Exit is a real teardown.** Every node is stopped and waited for — to a CEILING, not a join,
 because a wedged node must not wedge the exit. That wait is what releases shared memory; what a

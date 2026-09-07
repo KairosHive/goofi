@@ -958,6 +958,7 @@ dependencies = [
  "goofi-graphics",
  "goofi-init",
  "goofi-node",
+ "goofi-record",
  "goofi-signal",
  "goofi-signal-sdk",
  "goofi-transport",
@@ -1068,6 +1069,7 @@ dependencies = [
  "goofi-control",
  "goofi-core",
  "goofi-node",
+ "goofi-record",
  "goofi-transport",
  "goofi-view",
  "goofi-window",
@@ -1122,6 +1124,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "goofi-record"
+version = "3.1.0"
+dependencies = [
+ "goofi-codec",
+ "goofi-core",
+ "goofi-node",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "goofi-signal"
 version = "3.1.0"
 dependencies = [
@@ -1169,6 +1182,7 @@ dependencies = [
  "goofi-init",
  "goofi-node",
  "goofi-python",
+ "goofi-record",
  "goofi-signal",
  "goofi-signal-sdk",
  "goofi-transport",
