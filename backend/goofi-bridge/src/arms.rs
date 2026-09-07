@@ -1543,7 +1543,7 @@ pub(crate) fn session_save(
 fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
     // The load restarts the patch clock and replaces every armed node, so the recording it was
     // writing has no timeline left to be on.
-    let _ = state.recorder.stop();
+    state.recorder.stop().map_err(|e| format!("session load: the recording could not be finalized: {e}"))?;
     // Read OFF the graph lock, as the hello does: the roster's config half is a disk read.
     let agents = goofi_core::home::agents();
     // Every source mounts FRESH, and the live mount is swapped only once the manifest has parsed,
@@ -1717,17 +1717,6 @@ fn stream_id(g: &Graph, uid: Uid, slot: &str) -> goofi_record::StreamId {
     goofi_record::StreamId { uid, node: crate::named(g, uid), slot: slot.to_string(), engine }
 }
 
-/// The armed slots of every node, in uid order — what a start opens and a status reports.
-fn armed(g: &Graph) -> Vec<(Uid, String)> {
-    let mut out: Vec<(Uid, String)> = Vec::new();
-    for uid in g.all_uids() {
-        for slot in g.recorded(uid).unwrap_or(&[]) {
-            out.push((uid, slot.clone()));
-        }
-    }
-    out
-}
-
 fn set_armed(
     state: &AppState,
     actor: &str,
@@ -1738,7 +1727,7 @@ fn set_armed(
     let mut g = state.graph.lock().unwrap();
     let (uid, slot) = parse_endpoint(&g, payload, op, "output")?;
     let slot = vocab::resolve_slot(&g, op, uid, &slot)?;
-    let mut record = g.recorded(uid).ok_or_else(|| format!("{op}: no such node"))?.to_vec();
+    let mut record = g.recorded(uid).unwrap_or(&[]).to_vec();
     let held = record.iter().position(|s| *s == slot);
     match (arm, held) {
         (true, None) => record.push(slot.clone()),
@@ -1795,11 +1784,8 @@ pub(crate) fn record_start(
     _actor: &str,
     events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    if state.recorder.running() {
-        return Err("record start: a recording already runs".into());
-    }
     let g = state.graph.lock().unwrap();
-    if armed(&g).is_empty() {
+    if !g.all_uids().into_iter().any(|u| !g.recorded(u).unwrap_or(&[]).is_empty()) {
         return Err("record start: nothing is armed — `record arm <node>/<slot>` first".into());
     }
     let root = record_arg(&g, payload, "root")
@@ -1807,7 +1793,10 @@ pub(crate) fn record_start(
         .unwrap_or_else(goofi_core::home::recordings);
     let name = record_arg(&g, payload, "name").unwrap_or_default();
     let patch = state.save_path().map(std::path::PathBuf::from);
-    let folder = state.recorder.start(&root, &name, patch.as_deref())?;
+    let folder = state
+        .recorder
+        .start(&root, &name, patch.as_deref())
+        .map_err(|e| format!("record start: {e}"))?;
     drop(g);
     events.push(record_changed(state));
     Ok(json!({ "folder": folder.to_string_lossy() }))
