@@ -237,7 +237,7 @@
 						<IconButton
 							variant="ghost"
 							density="chrome"
-							label="Save to my library"
+							label="Save to custom library"
 							title="Move this node's file into your private library, where every patch finds it"
 							data-testid="save-to-library"
 							disabled={saving}

@@ -4,7 +4,7 @@ import type { NodeTypeInfo } from '$lib/api/control';
 
 const WORD = {
 	patch: 'this patch',
-	custom: 'my library',
+	custom: 'custom',
 	plugin: 'plugin',
 	builtin: 'builtin'
 } as const;
