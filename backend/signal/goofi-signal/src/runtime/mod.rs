@@ -793,8 +793,7 @@ pub fn spawn(
     env: NodeEnv,
     halt: Arc<Halt>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
-    std::thread::Builder::new()
-        .name(format!("goofi-{}", manifest.type_name))
+    goofi_transport::thread(format!("goofi-{}", manifest.type_name))
         .spawn(move || {
             // A node removed inside its own build window never runs `setup()` — which may open a
             // device — and releases at once rather than after the import it no longer needs.

@@ -226,8 +226,7 @@ pub fn spawn<H: Half + 'static>(
     let mail = Arc::new(Mutex::new(Mail::default()));
     let halt = Arc::new(Halt::default());
     let (thread_mail, thread_halt) = (mail.clone(), halt.clone());
-    std::thread::Builder::new()
-        .name(format!("goofi-{}-{}", spawn.engine, spawn.manifest.type_name))
+    goofi_transport::thread(format!("goofi-{}-{}", spawn.engine, spawn.manifest.type_name))
         .spawn(move || {
             // The half is BUILT in here too: a factory that panics must still release the halt,
             // or the exit waits its whole ceiling on a node that never started.
@@ -609,3 +608,4 @@ pub fn text(consts: &[Param], param: usize) -> String {
 pub fn flag(consts: &[Param], param: usize) -> bool {
     consts.get(param).and_then(|p| p.as_bool()).unwrap_or(false)
 }
+
