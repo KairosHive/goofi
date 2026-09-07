@@ -102,6 +102,7 @@ pub fn platform_dirs() -> Vec<PathBuf> {
 /// `goofi vst3-scan <bundle> <answer>`: the child half, which writes the bundle's classes to
 /// `answer` as JSON — never to stdout, which the plugin it just loaded also owns.
 pub fn scan_main(args: &[String]) -> i32 {
+    goofi_window::open_com_apartment();
     let (Some(bundle), Some(answer)) = (args.first(), args.get(1)) else {
         eprintln!("usage: goofi vst3-scan <bundle> <answer>");
         return 2;

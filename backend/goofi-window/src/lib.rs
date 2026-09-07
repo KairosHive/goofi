@@ -33,6 +33,15 @@ type OnClose = Box<dyn FnMut(&mut Host)>;
 /// A window as the loop names it, whatever the screen calls it.
 pub type Id = u64;
 
+/// The COM apartment a plugin needs, opened on THIS thread. A Windows plugin is COM code, and one
+/// that reaches an apartment nobody opened crashes rather than refusing — so every thread that
+/// loads or hosts a plugin takes this first: the window loop's own, and the scanner child's. OLE
+/// rather than plain COM, because an editor is a window and reaches for the clipboard and drops.
+pub fn open_com_apartment() {
+    #[cfg(windows)]
+    let _ = unsafe { windows_sys::Win32::System::Ole::OleInitialize(std::ptr::null()) };
+}
+
 thread_local! {
     static RESIZES: RefCell<Vec<(Id, (u32, u32))>> = const { RefCell::new(Vec::new()) };
 }
@@ -115,6 +124,7 @@ impl Loop {
     }
 
     fn on(screen: Box<dyn Screen>) -> (Loop, Ui) {
+        open_com_apartment();
         let waker = screen.waker();
         let (jobs, rx) = mpsc::channel();
         let ui = Ui { jobs, waker, thread: std::thread::current().id() };

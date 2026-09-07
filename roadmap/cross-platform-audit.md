@@ -28,6 +28,35 @@ platform bodies and the swizzle — has never executed anywhere. CI compiles it 
   filename into `Content-Disposition` — now sanitized, but the header still has no `filename*`
   form, so a non-ASCII patch name reaches the browser mangled.
 
+## Windows plugin hosting, from a user's report 2026-09-07
+
+31 of a user's VST3 bundles were unavailable at once, in three shapes: `LoadLibraryExW failed`, the
+scanner exiting `-1073741819` (`0xC0000005`, an access violation), and the scanner not answering in
+20 s. Three causes were found by reading and are now fixed, none of them yet judged on a Windows
+machine — the suite's own fixture plugin is a goofi `cdylib` with no dependency beside it and no COM
+in it, so CI compiles these paths and proves nothing about them.
+
+- **The plugin was loaded with no `LOAD_WITH_ALTERED_SEARCH_PATH`**, so a bundle whose dependency
+  DLLs sit beside its binary could not find them: the default order searches goofi's OWN folder.
+  The unix arm has always named its flags; the Windows arm took libloading's plain `Library::new`.
+- **libloading's Windows error Displays "LoadLibraryExW failed" and nothing else** — the OS error is
+  in the `source()` beneath it, which is why the report could not say whether the module was missing
+  or the image was the wrong architecture. The cause chain is now rendered. The unix arm never had
+  this: `DlOpen` Displays the `dlerror` string.
+- **No thread that loads a plugin opened a COM apartment.** A Windows plugin that reaches COM on an
+  uninitialized thread gets a null interface back from a call whose HRESULT it does not read, and
+  dereferences it — which is what an access violation inside a plugin's own `initialize` looks like.
+  `goofi_window::open_com_apartment` now runs on the window loop's thread and in the scanner child.
+
+Open:
+
+- **The scanner pumps no messages.** A plugin whose `initialize` creates a window or a timer and
+  waits on it blocks until the 20 s ceiling. That is a candidate cause of the two Steinberg
+  instruments that timed out, and it is not cheap to fix: the scan is one blocking call, so a pump
+  means the describe runs off the loop thread that a JUCE plugin refuses to be loaded from.
+- **The IK T-RackS silence** (`vst3-commercial-silence.md`) was measured before any of this. If that
+  measurement was on Windows, it is worth re-taking now that an apartment is open.
+
 ## Judged and NOT a defect
 
 - **Byte order.** `goofi-codec` states little-endian and writes `to_le_bytes`; the numpy ingest
