@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ALL_TAB, VST_TAB, byTab, paletteTabs, rankNodeTypes } from './nodeSearch';
+import { ALL_TAB, VST_TAB, byTab, openingTab, paletteTabs, rankNodeTypes } from './nodeSearch';
 import type { NodeTypeInfo } from '$lib/api/control';
 import { typeInfo } from '$lib/test/typeInfo';
 import { nodeTypeSource } from './nodeTypeSource';
@@ -140,5 +140,28 @@ describe('the palette tab', () => {
 	it('partitions the audio types: a plugin is under vst and nowhere else', () => {
 		expect(byTab(types, 'audio').map((t) => t.type)).toEqual(['audio:Osc']);
 		expect(byTab(types, VST_TAB).map((t) => t.type)).toEqual(['audio:Reverb']);
+	});
+});
+
+describe('the tab a fresh add-menu opens on', () => {
+	it('follows the engine of the node a slot click seeded it from', () => {
+		expect(openingTab('audio:Osc', ALL_TAB)).toBe('audio');
+		expect(openingTab('graphics:Noise', 'audio')).toBe('graphics');
+	});
+
+	// A plugin instance is an AUDIO node the user clicked, not a plugin format to browse.
+	it('sends a plugin instance to its engine, never to the vst facet', () => {
+		expect(openingTab('audio:Reverb', ALL_TAB)).not.toBe(VST_TAB);
+	});
+
+	it('opens where the user last was when no slot seeded it', () => {
+		expect(openingTab(null, 'audio')).toBe('audio');
+		expect(openingTab(null, ALL_TAB)).toBe(ALL_TAB);
+	});
+
+	// A boundary port and a sub-patch facade are structural: no engine to prefer, so the memory
+	// stands.
+	it('keeps the remembered tab for a structural node, which has no engine', () => {
+		expect(openingTab('Sub', 'graphics')).toBe('graphics');
 	});
 });
