@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::FromSample;
 use goofi_audio_sdk::{high, BLOCK, MAX_CHANNELS};
 use goofi_control::{flag, text, Cx, Half, Ticked};
@@ -81,25 +81,6 @@ impl AudioShared {
     }
 }
 
-/// The device `name` names among `all`, `default` being the host's; `kind` words a refusal.
-pub(crate) fn device(
-    kind: &str,
-    name: &str,
-    default: Option<cpal::Device>,
-    all: Result<impl Iterator<Item = cpal::Device>, impl std::fmt::Display>,
-) -> Result<cpal::Device, String> {
-    if name == DEFAULT_DEVICE {
-        return default.ok_or_else(|| format!("no default {kind} device"));
-    }
-    all.map_err(|e| format!("{kind} devices: {e}"))?
-        .find(|d| name_of(d).as_deref() == Some(name))
-        .ok_or_else(|| format!("no {kind} device `{name}`"))
-}
-
-fn name_of(d: &cpal::Device) -> Option<String> {
-    d.description().ok().map(|d| d.name().to_string())
-}
-
 /// The key of one declared param, off the `'static` manifest — never off `&self`, which a caller
 /// mid-borrow of its own fields cannot take.
 fn key_of(manifest: &NodeManifest, param: usize) -> ParamKey {
@@ -158,15 +139,14 @@ impl AudioHalf {
     /// enumerated here rather than under the graph lock: the devices behind the host default, or
     /// the MIDI ports behind `none`.
     fn enumerate(&self) -> Option<Vec<String>> {
-        let named = |devices: Option<Vec<cpal::Device>>| {
+        let named = |kind: crate::host::Kind| {
             let mut names = vec![DEFAULT_DEVICE.to_string()];
-            names.extend(devices.into_iter().flatten().filter_map(|d| name_of(&d)).filter(|n| n != DEFAULT_DEVICE));
+            names.extend(crate::host::named(kind).into_iter().map(|(n, _)| n).filter(|n| n != DEFAULT_DEVICE));
             names
         };
-        let host = cpal::default_host();
         match self.manifest.type_name {
-            audio_out::TYPE => Some(named(host.output_devices().ok().map(|d| d.collect()))),
-            audio_in::TYPE => Some(named(host.input_devices().ok().map(|d| d.collect()))),
+            audio_out::TYPE => Some(named(crate::host::Kind::Output)),
+            audio_in::TYPE => Some(named(crate::host::Kind::Input)),
             midi_in::TYPE => {
                 let mut names = vec![NO_PORT.to_string()];
                 if let Ok(input) = midir::MidiInput::new("goofi") {
@@ -620,8 +600,7 @@ fn open_input(
     dead: Arc<AtomicBool>,
     clock: Clock,
 ) -> Result<Option<(cpal::Stream, u16)>, String> {
-    let host = cpal::default_host();
-    let device = device("input", name, host.default_input_device(), host.input_devices())?;
+    let device = crate::host::device(crate::host::Kind::Input, name)?;
     if !clock.owns_devices() {
         return Ok(None);
     }
@@ -629,6 +608,11 @@ fn open_input(
     let format = supported.sample_format();
     let mut config = supported.config();
     config.sample_rate = rate as u32;
+    // The engine carries `MAX_CHANNELS`, and a device may be wider: an ASIO card answers with every
+    // channel the interface has — eighteen on a Scarlett 4pre — where WASAPI answers with the pair
+    // an endpoint is. Ask for what can be carried rather than for everything, so the extra channels
+    // are never opened instead of being read and dropped.
+    config.channels = config.channels.min(MAX_CHANNELS);
     let channels = config.channels;
     if let Ok(configs) = device.supported_input_configs() {
         let ranges: Vec<(u32, u32)> = configs.map(|c| (c.min_sample_rate(), c.max_sample_rate())).collect();
