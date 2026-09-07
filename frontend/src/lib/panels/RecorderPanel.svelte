@@ -3,6 +3,7 @@
 <script lang="ts">
 	import type { PanelProps } from 'panelty';
 	import { graph } from '$lib/stores/graph.svelte';
+	import { history } from '$lib/stores/history.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { Bar, Button, Field, Icon, IconButton, ScrollArea, StatusDot, TextInput } from '$lib/ui';
 
@@ -24,9 +25,15 @@
 	function armDropped(uid: string): void {
 		const node = g.nodeById(uid);
 		if (!node) return;
-		for (const slot of Object.keys(node.output_slots ?? {})) {
-			void g.armSlot(uid, slot).catch((e: unknown) => (failure = String(e)));
-		}
+		const slots = Object.keys(node.output_slots ?? {});
+		if (slots.length === 0) return;
+		// One gesture is one undo step, as a multi-node move is; each arm must be AWAITED inside
+		// the transaction or the buffer is empty at flush.
+		void history()
+			.transaction(`Arm ${node.name}`, async () => {
+				for (const slot of slots) await g.armSlot(uid, slot);
+			})
+			.catch((e: unknown) => (failure = String(e)));
 	}
 
 	$effect(() => uiStore.onNodeDrop(panelId, armDropped));
@@ -37,6 +44,8 @@
 		label: string;
 		frames: number;
 		dropped: number;
+		/** Dropping NOW: the count moved on the last report, which the cumulative one cannot say. */
+		losing: boolean;
 		fill: number;
 	};
 
@@ -53,12 +62,13 @@
 				label,
 				frames: st?.frames ?? 0,
 				dropped: st?.dropped ?? 0,
+				losing: g.dropping.has(`${st?.node ?? label}/${a.slot}`),
 				fill: st?.fill ?? 0
 			};
 		})
 	);
 
-	const dropping = $derived(rows.some((r) => r.dropped > 0));
+	const dropping = $derived(rows.some((r) => r.losing));
 
 	function clock(seconds: number | null): string {
 		const t = Math.max(0, Math.floor(seconds ?? 0));
@@ -132,13 +142,15 @@
 				{#each rows as r (r.uid + '/' + r.slot)}
 					<li class="row" data-testid="recorder-stream">
 						<StatusDot
-							tone={r.dropped > 0 ? 'warn' : 'ok'}
+							tone={r.losing ? 'warn' : 'ok'}
 							size="sm"
-							title={r.dropped > 0 ? `${r.dropped} frames dropped` : 'No frame is dropped'}
+							title={r.losing
+								? `Dropping frames — ${r.dropped} lost`
+								: `${r.dropped} frames lost`}
 						/>
 						<span class="who">{r.label}/{r.slot}</span>
 						<span class="num" title="Frames written">{r.frames}</span>
-						<span class="num drops" class:bad={r.dropped > 0} title="Frames dropped"
+						<span class="num drops" class:bad={r.losing} title="Frames dropped"
 							>{r.dropped}</span
 						>
 						<span class="fill" title="Buffer fill">
