@@ -64,7 +64,7 @@ fn shaders_render_on_the_gpu() {
     g.set_param(c, "colour", "g", 0.5);
     g.set_param(c, "colour", "b", 1.0);
     let frame = drawn(&g, c, "the constant's colour", |d| close(px(d, 0, 0), [0.25, 0.5, 1.0, 1.0]));
-    assert_eq!(shape(&frame), vec![512, 512, 4], "a node with nothing behind it is 512 square");
+    assert_eq!(shape(&frame), vec![1024, 1024, 4], "a node with nothing behind it is 1024 square");
     assert!(close(px(&frame, 511, 511), [0.25, 0.5, 1.0, 1.0]), "the same colour to the far corner");
 
     // Step: the universal `common` group resizes it, and what is wired behind FOLLOWS the size.
@@ -86,7 +86,7 @@ fn shaders_render_on_the_gpu() {
     // Step: an unwired texture input is transparent black — present, never an error.
     g.call("link remove", j!({ "from": ep(hex(c), "out"), "to": ep(hex(level), "input") }));
     let frame = drawn(&g, level, "the unwired level", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 0.0]));
-    assert_eq!(shape(&frame), vec![512, 512, 4], "with nothing to follow, it is a generator's size");
+    assert_eq!(shape(&frame), vec![1024, 1024, 4], "with nothing to follow, it is a generator's size");
     assert!(g.error(level).is_none(), "an unwired input is not a fault");
 
     // Step: a signal frame uploads — the fixture's gradient, sampled back texel for texel and the
@@ -194,6 +194,10 @@ fn shaders_render_on_the_gpu() {
     // Step: a loop closes through Feedback and accumulates a tenth a tick; one without it faults.
     let fb = g.add("graphics:Feedback");
     g.ready(fb);
+    // Sized down: what a loop does is the same at any size, and the default is read back whole on
+    // every poll of it.
+    g.set_param(fb, "common", "width", 64);
+    g.set_param(fb, "common", "height", 64);
     let acc = g.add("graphics:Level");
     g.ready(acc);
     g.set_param(acc, "level", "offset", 0.1);
@@ -454,7 +458,7 @@ fn shaders_render_on_the_gpu() {
     let bound = g.doc()["nodes"][hex(gen)]["params"]["common"]["width"].clone();
     assert_eq!((&bound["expr"], &bound["mode"]), (&j!("globals.system.default_width"), &j!("expression")),
                "the declared binding was seeded live, not flattened to a literal: {bound}");
-    drawn(&g, gen, "the patch's default size", |d| shape(d) == vec![512, 512, 4]);
+    drawn(&g, gen, "the patch's default size", |d| shape(d) == vec![1024, 1024, 4]);
     g.call("global entry edit", j!({ "name": "system.default_width", "value": 96 }));
     g.call("global entry edit", j!({ "name": "system.default_height", "value": 48 }));
     drawn(&g, gen, "every producer follows the global", |d| shape(d) == vec![48, 96, 4]);

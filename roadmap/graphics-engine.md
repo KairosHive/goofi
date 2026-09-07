@@ -97,7 +97,7 @@ before they arrive.
   in-edges and running first on its producer's previous frame, a loop with no feedback node
   excluded and named — the audio rule. Resolution rides the universal group `common`: `width` and
   `height`, 0 following the first wired texture input on that axis, and a chain that can follow
-  nothing 512. Every texture is `Rgba16Float`.
+  nothing 1024. Every texture is `Rgba16Float`.
 - **The control half is shared with audio**, lifted into `goofi-control` — LANDED 2026-09-06,
   before the engine that needs it: the per-node thread on its door, `Desired`, the subscriptions,
   evaluation on arrival, pulses, refresh, reports and bells are one implementation. What an
@@ -195,7 +195,7 @@ The audit of the engine core found seven defects, and each is now a rule rather 
   node green, and every node dead.
 - An idle tick returns before it submits. It was submitting an empty command buffer and blocking
   on it at 60 Hz on every machine with a GPU.
-- A loop head keeps the axis it asked for instead of falling back to 512 on both.
+- A loop head keeps the axis it asked for instead of falling back to the default size on both.
 
 The duplication with the audio engine went into `goofi-control` rather than being noted: `Faults`
 answers what moved between two settles, `Shared::drain` hands the reports over, and `Handle` holds
@@ -290,7 +290,7 @@ for, sized, fed, counted in `session status`, and closed with its node.
   node that makes its own frames carries them as a live expression — the shape signal's
   `common.max_frequency` and `globals.system.default_ufreq` already had. A node is a producer when
   no TEXTURE input stands behind it, DERIVED from the header rather than declared in it, so an
-  author cannot forget. Both start at 512, which is also what a chain that can follow nothing falls
+  author cannot forget. Both start at 1024, which is also what a chain that can follow nothing falls
   back to; the two are one constant (`globals::DEFAULT_SIZE`), so the floor and the default cannot
   drift apart.
 - **A node holds state by declaring named BUFFERS, and a buffer is another output aged by one

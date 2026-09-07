@@ -217,7 +217,7 @@ pub struct GlobalDef {
 
 /// What a texture is when nothing says otherwise: the two default-size globals start here, and a
 /// graphics chain with nothing to follow falls back to it.
-pub const DEFAULT_SIZE: u32 = 512;
+pub const DEFAULT_SIZE: u32 = 1024;
 
 pub static SYSTEM_GLOBALS: &[GlobalDef] = &[
     GlobalDef {
