@@ -12,6 +12,13 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("in `harmonic`, what the bands stand on, in volts per octave; an audio reference is one voice per channel"),
     },
+    GATE = ParamDecl {
+        group: "band",
+        name: "gate",
+        spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 1.0 },
+        expression: None,
+        doc: Some("in `harmonic`, what one voice's partials are worth — a released note keeps its pitch, so this is what lets it go; `MidiIn.gate` drops it at once and an `Env` fades it"),
+    },
     BANDS = ParamDecl {
         group: "band",
         name: "bands",
@@ -101,7 +108,7 @@ impl AudioNode for BandFollow {
     }
 
     fn audio_params(&self, _declared: usize) -> usize {
-        1
+        2
     }
 
     fn prepare(&mut self, rate: f64) {
@@ -123,7 +130,7 @@ impl AudioNode for BandFollow {
             }
         }
 
-        let pitch = &b.params[P::PITCH];
+        let (pitch, gate) = (&b.params[P::PITCH], &b.params[P::GATE]);
         let harmonic = b.scalars[P::LAYOUT] as u8 == 1;
         let voices = pitch.channels() as usize;
         let out = &mut b.outs[0];
@@ -131,12 +138,12 @@ impl AudioNode for BandFollow {
         for band in 0..bands {
             // The bank re-tunes once a block: a note lands on a block edge, and a tan per sample
             // per band buys nothing for it.
-            let volts = match harmonic {
+            let (volts, voiced) = match harmonic {
                 true => {
                     let (voice, partial) = band_partial(band, voices);
-                    pitch.chan(voice)[0] + partial
+                    (pitch.chan(voice)[0] + partial, gate.chan(voice)[0])
                 }
-                false => band_volts(band, bands, low, high),
+                false => (band_volts(band, bands, low, high), 1.0),
             };
             let f = hz_of(volts).clamp(1.0, 0.45 * rate);
             let g = (std::f32::consts::PI * f / rate).tan();
@@ -153,7 +160,7 @@ impl AudioNode for BandFollow {
                 // `k * v1` is the band at unity, where `Filter`'s own band output peaks at `q`.
                 let magnitude = (k * v1).abs();
                 *level += (magnitude - *level) * if magnitude > *level { attack } else { release };
-                y[i] = *level;
+                y[i] = *level * voiced;
             }
         }
     }

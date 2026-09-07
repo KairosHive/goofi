@@ -19,12 +19,19 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("in `harmonic`, what the bands stand on, in volts per octave; an audio reference is one voice per channel"),
     },
+    GATE = ParamDecl {
+        group: "band",
+        name: "gate",
+        spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 1.0 },
+        expression: None,
+        doc: Some("in `harmonic`, what one voice's partials are worth — a released note keeps its pitch, so this is what lets it go; `MidiIn.gate` drops it at once and an `Env` fades it"),
+    },
     BANDS = ParamDecl {
         group: "band",
         name: "bands",
         spec: ParamSpec::Int { default: 16, min: 2, max: MAX_CHANNELS as i64 },
         expression: None,
-        doc: Some("how many bands the input is split into; `BandFollow` needs the same count"),
+        doc: Some("how many bands the input is split into, while nothing drives `gains`; a shape that does is as wide as it is"),
     },
     LOW = ParamDecl {
         group: "band",
@@ -64,9 +71,10 @@ static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Transform],
     doc: "Its input split into bands, each one at its own gain, added back up.\n\
           The half of a vocoder that speaks: `gains` from a `BandFollow` puts that signal's shape \
-          on this one. With nothing behind `gains` every band is open, which is a few dB louder \
-          than the input rather than equal to it, because neighbouring bands overlap and add. \
-          One voice per channel of \
+          on this one, and a shape is as many bands wide as it says, so the two banks cannot \
+          disagree about the count. With nothing behind `gains` every band is open, which is a \
+          few dB louder than the input rather than equal to it, because neighbouring bands \
+          overlap and add. One voice per channel of \
           the input, so a chord goes through as a chord. In `harmonic` the bands stand on the \
           partials of `pitch` and take its voices in turn, so what passes is a chord rather than \
           a spread.",
@@ -89,7 +97,7 @@ impl AudioNode for BandFilter {
     }
 
     fn audio_params(&self, _declared: usize) -> usize {
-        2
+        3
     }
 
     fn prepare(&mut self, rate: f64) {
@@ -100,9 +108,13 @@ impl AudioNode for BandFilter {
         let rate = self.rate;
         let (low, high) = (b.scalars[P::LOW], b.scalars[P::HIGH]);
         let k = 1.0 / b.scalars[P::Q].max(0.5);
-        let bands = (b.scalars[P::BANDS] as usize).clamp(2, MAX_CHANNELS as usize);
-
         let (input, gains, pitch) = (&b.ins[0], &b.params[P::GAINS], &b.params[P::PITCH]);
+        let gate = &b.params[P::GATE];
+        // A shape says how many bands it holds, so a driven bank cannot disagree with its follower.
+        let bands = match gains.channels() > 1 {
+            true => gains.channels() as usize,
+            false => (b.scalars[P::BANDS] as usize).clamp(2, MAX_CHANNELS as usize),
+        };
         let harmonic = b.scalars[P::LAYOUT] as u8 == 1;
         let voices = pitch.channels() as usize;
         let out = &mut b.outs[0];
@@ -114,12 +126,12 @@ impl AudioNode for BandFilter {
             for band in 0..bands {
                 // The bank re-tunes once a block: a note lands on a block edge, and a tan per
                 // sample per band buys nothing for it.
-                let volts = match harmonic {
+                let (volts, voiced) = match harmonic {
                     true => {
                         let (voice, partial) = band_partial(band, voices);
-                        pitch.chan(voice)[0] + partial
+                        (pitch.chan(voice)[0] + partial, gate.chan(voice)[0])
                     }
-                    false => band_volts(band, bands, low, high),
+                    false => (band_volts(band, bands, low, high), 1.0),
                 };
                 let f = hz_of(volts).clamp(1.0, 0.45 * rate);
                 let g = (std::f32::consts::PI * f / rate).tan();
@@ -133,7 +145,7 @@ impl AudioNode for BandFilter {
                     *ic1 = 2.0 * v1 - *ic1;
                     *ic2 = 2.0 * v2 - *ic2;
                     // `k * v1` is the band at unity, where `Filter`'s own band output peaks at `q`.
-                    y[i] += k * v1 * gain[i];
+                    y[i] += k * v1 * gain[i] * voiced;
                 }
             }
         }
