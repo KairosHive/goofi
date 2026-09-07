@@ -48,13 +48,15 @@ const MESSAGE_READERS: usize = 1;
 pub const MESSAGE_SLICE: usize = 1024;
 /// The pool a data publisher starts with; `PowerOfTwo` grows it for a larger frame.
 pub const INITIAL_SLICE: usize = 64 * 1024;
-/// The largest frame a recording service takes. A frame over it is REFUSED rather than allowed to
-/// grow the segment: depth and slice growth are the one place in goofi that multiply.
-pub const RECORD_SLICE: usize = 4 * 1024 * 1024;
+/// The largest frame a SIGNAL recording service takes — 1 MiB clears a 64-channel, 2500-sample
+/// frame with room. A frame over it is REFUSED rather than allowed to grow the segment: depth and
+/// slice growth are the one place in goofi that multiply.
+pub const RECORD_SLICE: usize = 1024 * 1024;
 /// What one armed slot's segment costs, exactly and for any frame size — the publisher allocates
 /// [`RECORD_BUFFER`] slices of [`RECORD_SLICE`] and never grows.
 pub const RECORD_BUDGET: usize = 64 * 1024 * 1024;
-/// How many frames a recorder may hold unread, so a journal commit costs no tick.
+/// How many frames a recorder may hold unread: 64, which is 256 ms at 250 Hz, so a journal commit
+/// costs no tick. The service overflows safely, so a reader slower than that loses the OLDEST.
 pub const RECORD_BUFFER: usize = RECORD_BUDGET / RECORD_SLICE;
 
 /// The name every service of one node is derived from: `<instance>_<uid>_<gen>`. `gen` is bumped on
