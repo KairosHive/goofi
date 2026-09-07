@@ -125,9 +125,10 @@ fn a_patch_sounds_under_the_external_clock() {
     let mut audio: Vec<&str> = types["types"].as_array().unwrap().iter()
         .filter_map(|r| r["type"].as_str()).filter(|t| t.starts_with("audio:")).collect();
     audio.sort_unstable();
-    // The shipped set, whole: three built in because their control halves own OS handles, and
-    // seven files built by the same pipeline an authored node takes.
-    assert_eq!(audio, ["audio:AudioIn", "audio:AudioOut", "audio:AudioPlayback", "audio:Delay", "audio:Env", "audio:Feedback",
+    // The shipped set, whole: four built in because their control halves own OS handles, and
+    // sixteen files built by the same pipeline an authored node takes.
+    assert_eq!(audio, ["audio:AudioIn", "audio:AudioOut", "audio:AudioPlayback", "audio:BandFilter", "audio:BandFollow",
+                       "audio:Delay", "audio:Env", "audio:Feedback",
                        "audio:Filter", "audio:FreqShift", "audio:Gain", "audio:Limiter", "audio:MidiIn",
                        "audio:Mixdown", "audio:Noise", "audio:Osc", "audio:Quantize", "audio:Reverb",
                        "audio:SignalIn", "audio:Slew"]);
@@ -1060,4 +1061,90 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(g.call("node editor", j!({ "node": hex(plug) }))["changed"], true, "opens again");
     g.call("node remove", j!({ "node": hex(plug) }));
     assert!(g.refuse("node editor", j!({ "node": hex(plug) })).contains("no such node"), "the window went with the node");
+}
+
+/// The last sample of every channel of a node's own output — the shape a band bank is holding.
+fn shape_held(probe: &goofi_tests::OutputProbe) -> Option<Vec<f32>> {
+    let d = probe.latest()?;
+    let (channels, frames) = (shape(&d)[0], shape(&d)[1]);
+    let x = f32s(&d);
+    Some((0..channels).map(|c| x[c * frames + frames - 1]).collect())
+}
+
+fn loudest(levels: &[f32]) -> usize {
+    (0..levels.len()).max_by(|a, b| levels[*a].total_cmp(&levels[*b])).expect("a band")
+}
+
+#[test]
+fn one_signal_speaks_through_another_band_by_band() {
+    let g = Goofi::new();
+    g.state.graph.lock().unwrap().set_evaluator(Arc::new(FirstVar));
+
+    // Step: with nothing behind `gains` every band is open, so the bank is a wire — a tone
+    // through it is still that tone, at that pitch.
+    let carrier = g.add("Osc");
+    let bank = g.add("BandFilter");
+    g.link(carrier, "out", bank, "input");
+    let open = heard(&g, bank, "a tone through a bank with every band open", |x| peak(x) > 0.3);
+    assert!(near(per_tenth(&open), 88), "A4 leaves as A4: {} crossings", per_tenth(&open));
+
+    // Step: the follower hears WHERE a signal is. A4 lands in the bands around 440 Hz, and the
+    // same tone three octaves up moves the loudest band up the bank with it.
+    let voice = g.add("Osc");
+    let hush = g.add("Gain");
+    let follow = g.add("BandFollow");
+    g.link(voice, "out", hush, "input");
+    g.link(hush, "out", follow, "input");
+    let levels = g.probe(follow, "out");
+    let low = g.until("the bands to settle on A4", |g| {
+        drive(g, TENTH);
+        shape_held(&levels).filter(|l| l.iter().any(|x| *x > 0.05))
+    });
+    assert_eq!(low.len(), 16, "sixteen bands are sixteen channels");
+    assert!((5..=6).contains(&loudest(&low)), "A4 is band 5 or 6 of the default bank: {low:?}");
+    g.set_param(voice, "osc", "pitch", 3.75);
+    let high = g.until("the bands to follow the tone up", |g| {
+        drive(g, TENTH);
+        shape_held(&levels).filter(|l| loudest(l) != loudest(&low))
+    });
+    assert!(loudest(&high) >= 12, "three octaves up is high in the bank: {} of 16", loudest(&high));
+
+    // Step: the two halves are a vocoder. The carrier becomes noise, and `gains` reads the
+    // follower — so the noise is only ever as loud as the tone's own bands are.
+    let noise = g.add("audio:Noise");
+    g.call("link remove", j!({ "from": ep(hex(carrier), "out"), "to": ep(hex(bank), "input") }));
+    g.link(noise, "out", bank, "input");
+    let follow_name = g.doc()["nodes"][hex(follow)]["name"].as_str().unwrap().to_string();
+    let bound = g.call(
+        "node param edit",
+        j!({ "node": hex(bank), "param": "band/gains", "reference": format!("{follow_name}.out"), "mode": "reference" }),
+    );
+    assert!(bound["error"].is_null(), "{bound}");
+
+    // A modulator that says nothing shuts the carrier up: every band falls to its own silence.
+    g.set_param(hush, "gain", "gain", 0.0);
+    heard(&g, bank, "the carrier to fall silent behind a silent modulator", |x| peak(x) < 0.01);
+
+    // And the shape it does say is the shape that lands: noise gated open around 260 Hz crosses
+    // zero far less often than the same noise gated open around 3 kHz.
+    g.set_param(hush, "gain", "gain", 1.0);
+    g.set_param(voice, "osc", "pitch", 0.0);
+    let dark = heard(&g, bank, "noise shaped by a low tone", |x| peak(x) > 0.02);
+    g.set_param(voice, "osc", "pitch", 3.5);
+    let bright = heard(&g, bank, "noise shaped by a high tone", |x| peak(x) > 0.02);
+    assert!(
+        per_tenth(&bright) > 2 * per_tenth(&dark),
+        "the carrier speaks in the modulator's own band: {} crossings against {}",
+        per_tenth(&bright),
+        per_tenth(&dark)
+    );
+
+    // Step: the bands are the gains' axis and never the output's — a two-channel carrier leaves
+    // as two channels, with the same sixteen-channel shape on both.
+    g.set_param(noise, "noise", "channels", 2);
+    let out = g.probe(bank, "out");
+    g.until("a two-channel carrier to leave in two channels", |g| {
+        drive(g, TENTH);
+        out.latest().filter(|d| shape(d)[0] == 2)
+    });
 }

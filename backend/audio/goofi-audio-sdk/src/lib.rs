@@ -165,6 +165,15 @@ pub fn hz_of(pitch: f32) -> f32 {
     C4_HZ * 2f32.powf(pitch)
 }
 
+/// The centre of band `b` of `bands`, in volts, spread evenly from `low` to `high` — the one
+/// layout a bank that measures and a bank that applies both read, so their channels line up.
+pub fn band_volts(b: usize, bands: usize, low: f32, high: f32) -> f32 {
+    match bands > 1 {
+        true => low + (high - low) * b as f32 / (bands - 1) as f32,
+        false => low,
+    }
+}
+
 
 /// A rising-edge detector over a gate: `true` on the sample the gate goes HIGH.
 #[derive(Default)]
