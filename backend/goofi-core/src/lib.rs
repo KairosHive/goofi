@@ -13,6 +13,7 @@ pub mod probe;
 pub mod reduce;
 pub mod stream;
 pub mod time;
+pub mod turtle;
 
 pub use indexmap;
 pub use stream::Stream;
