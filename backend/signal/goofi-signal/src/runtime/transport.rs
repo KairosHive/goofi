@@ -11,7 +11,8 @@ use goofi_core::Data;
 use goofi_node::NodeManifest;
 use goofi_transport::{
     control_service, data_service, door_service, event_service, iox_node, message_service,
-    output_service, publisher, record_data_service, record_publisher, record_service, service_base,
+    output_service, publisher, record_data_service, record_door_service, record_publisher,
+    record_service, service_base,
     status_service, ByteService, ByteSubscriber, Doorbell, EventService, IoxNode, INITIAL_SLICE,
     MESSAGE_SLICE, RECORD_SLICE,
 };
@@ -23,6 +24,8 @@ type BytePublisher = goofi_transport::BytePublisher;
 
 /// The one id the graph itself rings with — every `Control`, whatever it says.
 const CONTROL_EVENT_ID: EventId = 0;
+/// The one id the recorder's door is rung with: it sweeps every armed slot, so the id says nothing.
+const RECORD_EVENT_ID: EventId = 0;
 
 /// One output slot: its publisher, and the doorbells to ring once a frame is out.
 struct OutputPort {
@@ -51,8 +54,10 @@ pub struct IoxTransport {
     outputs: HashMap<&'static str, OutputPort>,
     /// Grown and shrunk by `InSlot`, which is why it is the one map behind a lock.
     inputs: Mutex<Vec<(String, Vec<InputWire>)>>,
-    /// The armed slots' second publishers, reconciled by `RecSlot`.
-    records: Mutex<HashMap<String, BytePublisher>>,
+    /// The recorder's one door, by name; a bell onto it is opened with the slot that rings it.
+    record_door: ServiceName,
+    /// The armed slots' second publishers and their bells, reconciled by `RecSlot`.
+    records: Mutex<HashMap<String, (BytePublisher, Doorbell)>>,
     /// What the recording last cost and why — the count and the cause a node wears as a fault.
     trouble: Mutex<Option<(u64, String)>>,
     /// Must outlive every port built from it, so it is declared LAST — Rust drops a struct's fields
@@ -70,6 +75,7 @@ impl IoxTransport {
         manifest: &NodeManifest,
     ) -> Result<IoxTransport, String> {
         let base = service_base(instance, uid, gen);
+        let record_door = record_door_service(instance);
         let node = iox_node()?;
 
         let door = event_service(&node, &door_service(&base))?;
@@ -100,6 +106,7 @@ impl IoxTransport {
             status,
             outputs,
             inputs: Mutex::new(Vec::new()),
+            record_door,
             records: Mutex::new(HashMap::new()),
             trouble: Mutex::new(None),
         })
@@ -238,6 +245,7 @@ impl Transport for IoxTransport {
             }
             match record_data_service(&self.node, &record_service(&self.base, slot))
                 .and_then(|service| record_publisher(&service, slot))
+                .and_then(|port| Doorbell::open(&self.node, &self.record_door).map(|b| (port, b)))
             {
                 Ok(port) => {
                     records.insert(slot.clone(), port);
@@ -269,8 +277,8 @@ impl Transport for IoxTransport {
         let bytes = goofi_codec::encode(frame);
         let targets = port.targets.lock().unwrap();
         goofi_transport::publish(&port.publisher, &bytes, targets.iter().map(|(b, id)| (b, *id)));
-        if let Some(rec) = self.records.lock().unwrap().get(slot) {
-            if !goofi_transport::publish(rec, &bytes, std::iter::empty()) {
+        if let Some((rec, bell)) = self.records.lock().unwrap().get(slot) {
+            if !goofi_transport::publish(rec, &bytes, std::iter::once((bell, RECORD_EVENT_ID))) {
                 let mut trouble = self.trouble.lock().unwrap();
                 let (dropped, _) = trouble.get_or_insert_with(|| (0, self.loan_refused(&bytes)));
                 *dropped += 1;

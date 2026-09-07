@@ -15,6 +15,7 @@ pub mod ops;
 mod origin;
 mod patchfile;
 mod proc;
+mod record;
 pub mod reducer;
 pub mod schemas;
 pub mod term;
@@ -116,6 +117,8 @@ pub struct AppState {
     /// The one recorder every engine writes its armed streams to. Whether it runs is RUNTIME —
     /// `record status` and the `record_changed` event carry it, never the document.
     pub recorder: Arc<goofi_record::Recorder>,
+    /// The drain thread's stop flag, and what [`AppState::stop_recording`] waits on.
+    record_drain: Arc<goofi_transport::Halt>,
 }
 
 /// How a `/data` socket detects a dead-but-not-closed peer, which a socket with no traffic cannot
@@ -193,9 +196,22 @@ impl AppState {
             bound: Arc::new(Mutex::new(([127, 0, 0, 1], 8000).into())),
             harnesses: Arc::new(term::Harnesses::default()),
             recorder,
+            record_drain: Arc::new(goofi_transport::Halt::default()),
         };
         spawn_follower(state.clone(), follow_rx);
+        record::spawn(state.graph.clone(), state.recorder.clone(), state.record_drain.clone());
         state
+    }
+
+    /// End the recording as a teardown does: the drain stops and is waited for to a CEILING — a
+    /// wedged drain must not wedge the exit — and only then is the manifest finalized.
+    pub fn stop_recording(&self) {
+        self.record_drain.stop();
+        goofi_transport::wait_released(
+            std::iter::once(&*self.record_drain),
+            goofi_transport::SHUTDOWN_WAIT,
+        );
+        let _ = self.recorder.stop();
     }
 
     /// Record the address this server actually bound — what `local_url` derives from.

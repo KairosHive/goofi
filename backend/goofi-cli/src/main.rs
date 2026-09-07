@@ -527,6 +527,7 @@ async fn run(
     if let Some(insist) = state.harnesses.reap_all() {
         insist();
     }
+    state.stop_recording();
     state.graph.lock().unwrap().shutdown();
     state.release_mount();
     code

@@ -79,7 +79,8 @@ fn a_recording_is_a_folder_of_decodable_frames() {
 #[test]
 fn arming_survives_a_rewire_and_rides_the_document() {
     let g = goofi_tests::Goofi::new();
-    let src = goofi_tests::hex(g.add("_TestConst"));
+    let src_uid = g.add("_TestConst");
+    let src = goofi_tests::hex(src_uid);
     let dst = goofi_tests::hex(g.add("_TestSink"));
 
     g.call("record arm", j!({ "output": goofi_tests::ep(&src, "out") }));
@@ -107,6 +108,52 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     assert_eq!(status["running"], j!(true));
     assert_eq!(status["folder"], j!(folder));
     assert_eq!(g.refuse("record start", j!({ "root": root.path() })), "record start: a recording already runs");
+
+    // The drain is what makes an armed slot reach the disk: nothing here writes a frame by hand.
+    let name_of = |g: &goofi_tests::Goofi, hex: &str| -> String {
+        g.doc()["nodes"][hex]["name"].as_str().expect("a name").to_string()
+    };
+    let frames = |g: &goofi_tests::Goofi, node: &str| -> u64 {
+        g.call("record status", j!({}))["streams"]
+            .as_array()
+            .map(|s| s.iter().filter(|e| e["node"] == j!(node)).filter_map(|e| e["frames"].as_u64()).sum())
+            .unwrap_or(0)
+    };
+    let manifest = |folder: &str| -> serde_json::Value {
+        let path = std::path::Path::new(folder).join("manifest.json");
+        serde_json::from_slice(&std::fs::read(path).expect("a manifest")).expect("json")
+    };
+    let src_name = name_of(&g, &src);
+    g.until("the armed slot to reach the disk", |g| (frames(g, &src_name) > 0).then_some(()));
+
+    // Step: a slot armed while the recording ALREADY runs opens a file of its own.
+    let late = g.add("_TestConst");
+    let late_hex = goofi_tests::hex(late);
+    g.ready(late);
+    g.call("record arm", j!({ "output": goofi_tests::ep(&late_hex, "out") }));
+    let late_name = name_of(&g, &late_hex);
+    g.until("the late arm to reach the disk", |g| (frames(g, &late_name) > 0).then_some(()));
+
+    // Step: a rebirth is a real discontinuity, so it is a NEW file and the manifest says why.
+    let mine = |folder: &str, node: &str| -> Vec<serde_json::Value> {
+        manifest(folder)["streams"]
+            .as_array()
+            .expect("streams")
+            .iter()
+            .filter(|e| e["node"] == j!(node))
+            .cloned()
+            .collect()
+    };
+    g.call("node restart", j!({ "node": &src }));
+    g.ready(src_uid);
+    g.until("the reborn slot to write a second file", |g| {
+        let held = mine(&folder, &src_name);
+        (held.len() >= 2 && frames(g, &src_name) > 0).then_some(())
+    });
+    let held = mine(&folder, &src_name);
+    assert_eq!(held[0]["closed_because"], j!("reborn"), "the manifest names why the second file began");
+    assert_ne!(held[0]["file"], held[1]["file"], "a rebirth never appends to the file before it");
+    assert!(held[0]["frames"].as_u64().unwrap_or(0) > 0, "the file before the rebirth holds its frames");
 
     g.call("record disarm", j!({ "output": goofi_tests::ep(&src, "out") }));
     assert_eq!(g.doc()["nodes"][&src]["record"], j!([]), "disarming empties the node's record");
@@ -163,7 +210,7 @@ fn an_armed_signal_slot_loses_no_tick_to_the_viewer_plane() {
     // Step: a frame over the recording service's ceiling is a COUNTED drop the node says, never a
     // segment quietly grown to hold it — which is what holds an armed slot to `RECORD_BUDGET`.
     let wide = g.add("_TestRamp");
-    let wide_out = goofi_tests::ep(&goofi_tests::hex(wide), "out");
+    let wide_out = goofi_tests::ep(goofi_tests::hex(wide), "out");
     g.set_param(wide, "ramp", "channels", 2);
     g.set_param(wide, "ramp", "length", 600_000);
     g.set_param(wide, "common", "max_frequency", 5.0);

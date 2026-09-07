@@ -228,6 +228,12 @@ impl Recorder {
         let _ = session.manifest(&self.time).write_atomic(&folder);
     }
 
+    /// Whether this stream has a file open right now — what a drain asks so it opens one exactly
+    /// where the recorder holds none, rather than keeping a second belief about it.
+    pub fn is_open(&self, id: &StreamId) -> bool {
+        self.held().as_ref().is_some_and(|s| s.open.contains_key(id))
+    }
+
     /// How full the stream's feeding buffer is, as its drain last saw it.
     pub fn fill(&self, id: &StreamId, fill: f32) {
         let guard = self.held();
