@@ -216,15 +216,18 @@ pub(crate) fn library_save(
     };
     let library = state.custom.clone();
     let name = from.file_name().ok_or("library save: the source file has no name")?.to_owned();
-    std::fs::create_dir_all(&library).map_err(|e| format!("library save: {}: {e}", library.display()))?;
     let to = library.join(&name);
-    // The library keeps ONE file per type, whatever the old one was called: a second name for one
-    // type is two claimants on it, which is the shadowing the roots already refuse to allow.
-    if let Some(stale) = crate::node_file_in(&library, &bare, engine) {
-        if stale != to {
-            std::fs::remove_file(&stale).map_err(|e| format!("library save: {}: {e}", stale.display()))?;
-        }
+    // A save NEVER overwrites. The library holds one file per name, so a node that would land on
+    // one already there is refused with that file named — never replaced under the node it is for.
+    let held = (crate::node_file_in(&library, &bare, engine))
+        .or_else(|| to.exists().then(|| to.clone()));
+    if let Some(held) = held {
+        return Err(format!(
+            "library save: the library already holds {} — rename this node, or delete that file first",
+            goofi_core::path::to_slash(&held)
+        ));
     }
+    std::fs::create_dir_all(&library).map_err(|e| format!("library save: {}: {e}", library.display()))?;
     // Copy and remove rather than rename: the mount is a temp directory, which is routinely on a
     // different filesystem from the home a rename cannot cross.
     std::fs::copy(&from, &to).map_err(|e| format!("library save: {}: {e}", to.display()))?;
