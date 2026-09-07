@@ -12,9 +12,9 @@ use goofi_node::NodeManifest;
 use goofi_transport::{
     control_service, data_service, door_service, event_service, iox_node, message_service,
     output_service, publisher, record_data_service, record_door_service, record_publisher,
-    record_service, service_base,
+    record_service, record_shape, service_base,
     status_service, ByteService, ByteSubscriber, Doorbell, EventService, IoxNode, INITIAL_SLICE,
-    MESSAGE_SLICE, RECORD_SLICE,
+    MESSAGE_SLICE,
 };
 
 use super::wire::{ControlSink, Envelope, EventId, ServiceName, Transport, WireStatus};
@@ -24,9 +24,6 @@ type BytePublisher = goofi_transport::BytePublisher;
 
 /// The one id the graph itself rings with — every `Control`, whatever it says.
 const CONTROL_EVENT_ID: EventId = 0;
-/// The one id the recorder's door is rung with: it sweeps every armed slot, so the id says nothing.
-const RECORD_EVENT_ID: EventId = 0;
-
 /// One output slot: its publisher, and the doorbells to ring once a frame is out.
 struct OutputPort {
     service: ByteService,
@@ -128,8 +125,9 @@ impl IoxTransport {
 
     /// Why a recording loan was refused: an outsized frame, or shared memory that ran out.
     fn loan_refused(&self, bytes: &[u8]) -> String {
-        match bytes.len() > RECORD_SLICE {
-            true => format!("a {} byte frame is over the {RECORD_SLICE} byte ceiling", bytes.len()),
+        let ceiling = record_shape("signal").slice;
+        match bytes.len() > ceiling {
+            true => format!("a {} byte frame is over the {ceiling} byte ceiling", bytes.len()),
             false => "no shared memory left".to_string(),
         }
     }
@@ -243,8 +241,9 @@ impl Transport for IoxTransport {
                 failed.push(format!("no output slot `{slot}`"));
                 continue;
             }
-            match record_data_service(&self.node, &record_service(&self.base, slot))
-                .and_then(|service| record_publisher(&service, slot))
+            let shape = record_shape("signal");
+            match record_data_service(&self.node, &record_service(&self.base, slot), shape)
+                .and_then(|service| record_publisher(&service, slot, shape))
                 .and_then(|port| Doorbell::open(&self.node, &self.record_door).map(|b| (port, b)))
             {
                 Ok(port) => {
@@ -278,7 +277,7 @@ impl Transport for IoxTransport {
         let targets = port.targets.lock().unwrap();
         goofi_transport::publish(&port.publisher, &bytes, targets.iter().map(|(b, id)| (b, *id)));
         if let Some((rec, bell)) = self.records.lock().unwrap().get(slot) {
-            if !goofi_transport::publish(rec, &bytes, std::iter::once((bell, RECORD_EVENT_ID))) {
+            if !goofi_transport::publish(rec, &bytes, std::iter::once((bell, goofi_transport::RECORD_EVENT_ID))) {
                 let mut trouble = self.trouble.lock().unwrap();
                 let (dropped, _) = trouble.get_or_insert_with(|| (0, self.loan_refused(&bytes)));
                 *dropped += 1;

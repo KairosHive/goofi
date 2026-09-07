@@ -295,6 +295,53 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         landed >= frozen + 32,
         "the frames in flight at the disarm reached the file: {frozen} written under the hold, {landed} in the manifest"
     );
+    // Step: the audio engine records through the same recorder, one block a frame, on a timeline
+    // the SAMPLE COUNT makes rather than a clock read — so two frames are exactly a block apart
+    // whatever the drain's scheduling did, and the manifest says the timeline is derived.
+    let osc = g.add("Osc");
+    let osc_hex = goofi_tests::hex(osc);
+    g.ready(osc);
+    g.call("record arm", j!({ "output": goofi_tests::ep(&osc_hex, "out") }));
+    let fifth = g.call("record start", j!({ "root": root.path() }))["folder"]
+        .as_str()
+        .expect("a folder")
+        .to_string();
+    let osc_name = name_of(&g, &osc_hex);
+    g.until("the audio engine's blocks to reach the disk", |g| {
+        goofi_tests::drive(g, 4_800);
+        (frames(g, &osc_name) >= 64).then_some(())
+    });
+    g.call("record stop", j!({}));
+
+    let entry = mine(&fifth, &osc_name).pop().expect("the audio stream's entry");
+    assert_eq!(entry["timeline"], j!("derived"), "the sample count is the clock: {entry}");
+    assert_eq!(entry["sfreq"], j!(48_000.0), "the device rate rides the frames: {entry}");
+
+    let bytes = std::fs::read(std::path::Path::new(&fifth).join(entry["file"].as_str().expect("a name")))
+        .expect("the audio stream");
+    let mut rest = &bytes[..];
+    let mut held: Vec<(u64, f64, Vec<usize>)> = Vec::new();
+    while !rest.is_empty() {
+        let (_, meta, body) = goofi_codec::split_frame(rest).expect("a whole frame");
+        let used = 14 + meta.len() + body.len();
+        let frame = goofi_codec::decode(&rest[..used]).expect("a block decodes");
+        let shape = frame.as_array().expect("an array").shape().to_vec();
+        held.push((
+            frame.meta().index().expect("every block is numbered"),
+            frame.meta().time().expect("every block is dated"),
+            shape,
+        ));
+        rest = &rest[used..];
+    }
+    assert!(held.len() >= 64, "the whole drive is on disk: {} blocks", held.len());
+    assert_eq!(held[0].2, vec![1, 64], "one block of a mono output, as the engine renders it");
+    // EXACT, not approximate: a per-block clock read would pass a loose assertion and prove nothing.
+    let step = 64.0 / 48_000.0;
+    for pair in held.windows(2) {
+        assert_eq!(pair[1].0, pair[0].0 + 1, "no block is lost: {} then {}", pair[0].0, pair[1].0);
+        let d = pair[1].1 - pair[0].1;
+        assert!((d - step).abs() < 1e-9, "two blocks are exactly a block apart: {d} against {step}");
+    }
 }
 
 #[test]
@@ -316,7 +363,8 @@ fn an_armed_signal_slot_loses_no_tick_to_the_viewer_plane() {
         )
     };
     let node = goofi_transport::iox_node().expect("an iceoryx2 node");
-    let sub = goofi_transport::open_record_subscriber(&node, &service).expect("the recorder's end");
+    let sub = goofi_transport::open_record_subscriber(&node, &service, goofi_transport::record_shape("signal"))
+        .expect("the recorder's end");
 
     let mut seen: Vec<u64> = Vec::new();
     g.until("the armed slot to publish a run of frames", |_| {

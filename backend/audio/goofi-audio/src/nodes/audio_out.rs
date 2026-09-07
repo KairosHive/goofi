@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
+use goofi_audio_sdk::{AudioNode, Block, Manifest, ParamDecl, ParamSpec, SlotDecl, Tag};
 
 use crate::nodes::Birth;
 
@@ -20,27 +20,6 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: None,
     },
-    ON = ParamDecl {
-        group: "record",
-        name: "on",
-        spec: ParamSpec::Bool { default: false },
-        expression: None,
-        doc: Some("write the input to the file while this is high, before gain: gain is what you hear"),
-    },
-    FILE = ParamDecl {
-        group: "record",
-        name: "file",
-        spec: ParamSpec::Str { default: "take", options: &[], refresh: false },
-        expression: None,
-        doc: Some("a bare name lands in the recordings folder; an absolute path is taken as it is"),
-    },
-    UNIQUE = ParamDecl {
-        group: "record",
-        name: "unique",
-        spec: ParamSpec::Bool { default: true },
-        expression: None,
-        doc: Some("join the time to the name, so a take never replaces the one before it"),
-    },
 }
 
 static INS: &[SlotDecl] =
@@ -49,21 +28,18 @@ static INS: &[SlotDecl] =
 pub static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Output],
     doc: "The sound device: what reaches `input` is heard, times `gain`.\n\
-          Every AudioOut on the device sums. `record.on` writes the same input to a WAV file, \
-          before gain.",
+          Every AudioOut on the device sums.",
     inputs: INS,
     outputs: &[],
     params: PARAMS,
 };
 
-/// The DSP half only fills the take's ring; the control half owns the file.
-pub struct AudioOut {
-    rec: Option<rtrb::Producer<f32>>,
-}
+/// The device is the clock and the sum; the node itself holds nothing.
+pub struct AudioOut;
 
 impl AudioOut {
-    pub fn new(birth: Birth) -> AudioOut {
-        AudioOut { rec: birth.rec }
+    pub fn new(_birth: Birth) -> AudioOut {
+        AudioOut
     }
 }
 
@@ -74,16 +50,5 @@ impl AudioNode for AudioOut {
 
     fn prepare(&mut self, _rate: f64) {}
 
-    fn process(&mut self, b: &mut Block<'_>) {
-        let Some(rec) = &mut self.rec else { return };
-        if !goofi_audio_sdk::high(b.scalars[P::ON]) {
-            return;
-        }
-        let input = &b.ins[0];
-        let c = input.channels();
-        if let Ok(chunk) = rec.write_chunk_uninit(1 + c as usize * BLOCK) {
-            let samples = (0..c as usize).flat_map(|ch| input.chan(ch).iter().copied());
-            chunk.fill_from_iter(std::iter::once(c as f32).chain(samples));
-        }
-    }
+    fn process(&mut self, _b: &mut Block<'_>) {}
 }

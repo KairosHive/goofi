@@ -72,6 +72,45 @@ fn held_one(g: &Goofi) -> Uid {
 /// A tenth of a second at the engine's rate: 44 cycles of 440 Hz, 88 zero crossings.
 const TENTH: usize = 4800;
 
+/// What `AudioPlayback` is driven with: eight tenths of A4, two of the octave above it, and three
+/// of a SQUARE at that octave — a file that ends on a value far from zero, which is what a player
+/// wrongly believing it has already ended would then hold for ever.
+fn sweep_samples() -> Vec<f32> {
+    let tone = |n: usize, hz: f64, square: bool| {
+        (0..n * TENTH).map(move |i| {
+            let phase = (i as f64 * hz / 48_000.0).fract();
+            let v = (phase * std::f64::consts::TAU).sin();
+            if square {
+                v.signum() as f32
+            } else {
+                v as f32
+            }
+        })
+    };
+    tone(8, 440.0, false).chain(tone(2, 880.0, false)).chain(tone(3, 880.0, true)).collect()
+}
+
+/// One mono 32-bit float WAV: the fixture a playback step reads, written where a name resolves.
+fn write_wav(path: &Path, rate: u32, samples: &[f32]) {
+    let data: Vec<u8> = samples.iter().flat_map(|v| v.to_le_bytes()).collect();
+    let mut w: Vec<u8> = Vec::new();
+    w.extend_from_slice(b"RIFF");
+    w.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    w.extend_from_slice(b"WAVEfmt ");
+    w.extend_from_slice(&16u32.to_le_bytes());
+    w.extend_from_slice(&3u16.to_le_bytes());
+    w.extend_from_slice(&1u16.to_le_bytes());
+    w.extend_from_slice(&rate.to_le_bytes());
+    w.extend_from_slice(&(rate * 4).to_le_bytes());
+    w.extend_from_slice(&4u16.to_le_bytes());
+    w.extend_from_slice(&32u16.to_le_bytes());
+    w.extend_from_slice(b"data");
+    w.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    w.extend_from_slice(&data);
+    std::fs::create_dir_all(path.parent().expect("a fixture has a directory")).expect("the recordings folder");
+    std::fs::write(path, w).expect("the fixture is written");
+}
+
 fn near(a: usize, b: usize) -> bool {
     a.abs_diff(b) <= 2
 }
@@ -308,77 +347,13 @@ fn a_patch_sounds_under_the_external_clock() {
     sounds(&g, "…and to rejoin", |x| (peak(x) - 1.5).abs() < 0.02);
     g.call("node remove", j!({ "node": hex(out2) }));
 
-    // Step: `record.on` writes what reaches the AudioOut to a WAV file, BEFORE gain — so the
-    // monitor level moves what is heard and never what is kept. Three takes: a plain one, a
-    // second under `unique` that cannot replace it, and a name that will not open, which stands
-    // as an error on the param until one of the three moves.
-    let takes = goofi_core::home::recordings();
-    let opened = |p: &Path| goofi_audio::wav::Reader::open(p).ok().filter(|r| r.frames > 0);
-    g.set_param(out, "record", "file", "scenario");
-    g.set_param(out, "record", "unique", false);
-    g.set_param(out, "audio", "gain", 0.25);
-    sounds(&g, "a quarter of it is heard", |x| (peak(x) - 0.25).abs() < 0.02);
-    g.set_param(out, "record", "on", true);
-    for _ in 0..3 {
-        drive(&g, TENTH);
-    }
-    g.set_param(out, "record", "on", false);
-    let one = takes.join("scenario.wav");
-    let mut kept = g.until("the take closed and its header patched", |_| opened(&one));
-    assert_eq!((kept.channels, kept.rate), (1, 48_000), "the chain's width, and the clock's rate");
-    assert!(kept.frames >= 2 * TENTH as u64, "no block was dropped: {} frames of {}", kept.frames, 3 * TENTH);
-    let (_, x) = kept.read(TENTH).expect("the take reads back");
-    assert!((peak(&x) - 1.0).abs() < 0.02, "kept before gain, at full scale: peak {}", peak(&x));
-    assert!(near(crossings(&x), 88), "the tone that was playing: {} crossings", crossings(&x));
-
-    g.set_param(out, "record", "unique", true);
-    g.set_param(out, "record", "on", true);
-    drive(&g, TENTH);
-    g.set_param(out, "record", "on", false);
-    let stamped = g.until("the stamped take beside the first", |_| {
-        let mut wavs: Vec<PathBuf> = std::fs::read_dir(&takes).ok()?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| *p != one && p.extension().is_some_and(|e| e == "wav"))
-            .collect();
-        wavs.sort();
-        wavs.pop().filter(|p| opened(p).is_some())
-    });
-    assert!(opened(&one).is_some(), "the first take still stands: {}", one.display());
-    let name = stamped.file_stem().unwrap_or_default().to_string_lossy().to_string();
-    assert!(name.starts_with("scenario-") && name.len() == "scenario-20260906-141233.456".len(), "the time joined the name: {name}");
-
-    let blocked = takes.join("blocked.wav");
-    std::fs::create_dir_all(&blocked).expect("a directory where the take wants its file");
-    g.set_param(out, "record", "unique", false);
-    g.set_param(out, "record", "file", takes.join("blocked").to_string_lossy().to_string());
-    g.set_param(out, "record", "on", true);
-    drive(&g, TENTH);
-    let why = g.until("the take that will not open to say why", |g| g.error(out));
-    assert!(why.contains("blocked.wav"), "the path it could not open: {why}");
-    g.set_param(out, "record", "on", false);
-    g.until("the error to clear once the param moves", |g| g.error(out).is_none().then_some(()));
-    g.set_param(out, "record", "file", "scenario");
-    g.set_param(out, "audio", "gain", 1.0);
-    sounds(&g, "the monitor level back where the scenario left it", |x| (peak(x) - 1.0).abs() < 0.02);
-
-    // Step: a WAV file plays back at the engine's rate, as wide as it is. The take made here
-    // changes tone halfway, so WHERE playback starts is audible: it plays from the head, skips,
-    // runs out, loops, and resets — and a name that is not there says so.
-    g.set_param(out, "record", "file", "sweep");
-    g.set_param(out, "record", "on", true);
-    // A long HEAD: three steps below wait for the A this records, and what the file plays past it
-    // never comes back — so the window has to outlast a command that lands a tenth or two late.
-    drive(&g, 8 * TENTH);
-    g.set_param(osc3, "osc", "pitch", 1.75);
-    sounds(&g, "an octave up, into the same take", |x| near(crossings(x), 176));
-    // A square into the TAIL of the take, and the sine back after it: what a file ends on is what
-    // a player that wrongly believes it has already ended holds forever, and a sine can end near zero.
-    g.set_param(osc3, "osc", "waveform", "square");
-    drive(&g, 3 * TENTH);
-    g.set_param(out, "record", "on", false);
-    g.set_param(osc3, "osc", "waveform", "sine");
-    g.call("link remove", j!({ "from": ep(hex(gain3), "out"), "to": ep(hex(out), "input") }));
+    // Step: a WAV file plays back at the engine's rate, as wide as it is. The file changes tone
+    // halfway, so WHERE playback starts is audible: it plays from the head, skips, runs out,
+    // loops, and resets — and a name that is not there says so.
+    let sweep = goofi_core::home::recordings().join("sweep.wav");
+    write_wav(&sweep, 48_000, &sweep_samples());
     let player = g.add("AudioPlayback");
+    g.call("link remove", j!({ "from": ep(hex(gain3), "out"), "to": ep(hex(out), "input") }));
     g.link(player, "out", out, "input");
     g.set_param(player, "play", "file", "sweep");
     sounds(&g, "the take plays back from its head", |x| near(crossings(x), 88) && peak(x) > 0.5);

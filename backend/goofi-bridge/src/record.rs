@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use goofi_core::time::Time;
 use goofi_graph::{Graph, Uid};
-use goofi_record::{Kind, Recorder, StreamId, StreamMeta};
-use goofi_transport::{Halt, RECORD_BUFFER};
+use goofi_record::{Kind, Recorder, StreamId, StreamMeta, Timeline};
+use goofi_transport::{record_shape, Halt};
 
 /// The longest a sweep waits on the door — a CEILING on the park, never a cadence.
 const WAKE: Duration = Duration::from_millis(20);
@@ -18,8 +18,14 @@ const WAKE: Duration = Duration::from_millis(20);
 /// the PUBLISH rate, and resolving there would hold the graph lock in a 32 kHz loop.
 const RESOLVE: Duration = Duration::from_millis(25);
 
-/// The engines whose armed slots publish GOOF frames on a record service.
-const DRAINED: &str = "signal";
+/// The engines whose armed slots publish GOOF frames on a record service, and how each one dates a
+/// frame: a signal node reads the clock at its `process`, and the audio engine counts samples — so
+/// one timeline carries the scheduler's jitter and the other cannot. Graphics has its door to come.
+const DRAINED: &[(&str, Timeline)] = &[("signal", Timeline::Measured), ("audio", Timeline::Derived)];
+
+fn timeline(engine: &str) -> Option<Timeline> {
+    DRAINED.iter().find(|(e, _)| *e == engine).map(|(_, t)| *t)
+}
 
 struct Feed {
     id: StreamId,
@@ -29,6 +35,9 @@ struct Feed {
     /// A failed open or write has been said on the stream and the feed is dead. Re-opening a file
     /// per frame against a full disk is worse than stopping.
     failed: bool,
+    /// How this engine dates a frame, and how deep the recorder's end of its service is.
+    timeline: Timeline,
+    buffer: usize,
 }
 
 struct Drain {
@@ -49,7 +58,7 @@ fn armed(g: &Graph) -> HashMap<(Uid, String), (String, StreamId)> {
     for uid in g.all_uids() {
         for slot in g.recorded(uid).unwrap_or(&[]) {
             let id = crate::arms::stream_id(g, uid, slot);
-            if id.engine != DRAINED {
+            if timeline(id.engine).is_none() {
                 continue;
             }
             let base = goofi_transport::service_base(g.instance(), uid, g.node_generation(uid));
@@ -59,11 +68,13 @@ fn armed(g: &Graph) -> HashMap<(Uid, String), (String, StreamId)> {
     out
 }
 
-/// What one frame's meta says the stream it belongs to is.
-fn stream_meta(meta: Option<&goofi_core::Meta>) -> StreamMeta {
-    let held = match meta.and_then(|m| m.sfreq()) {
-        Some(sfreq) => StreamMeta::measured(Some(sfreq)),
-        None => StreamMeta::derived(None),
+/// What one frame's meta says the stream it belongs to is. The timeline is the ENGINE's word, not
+/// the frame's: a rate alone says nothing about whether the times were counted or read.
+fn stream_meta(meta: Option<&goofi_core::Meta>, timeline: Timeline) -> StreamMeta {
+    let sfreq = meta.and_then(|m| m.sfreq());
+    let held = match timeline {
+        Timeline::Measured => StreamMeta::measured(sfreq),
+        Timeline::Derived => StreamMeta::derived(sfreq),
     };
     match meta.and_then(|m| m.channels().dims().next().map(|(_, c)| c.len())) {
         Some(n) => held.with_channels(n),
@@ -83,7 +94,7 @@ fn drain_feed(recorder: &Recorder, time: &Time, feed: &mut Feed) {
         let meta = goofi_codec::frame_meta(bytes).ok();
         let at = meta.as_ref().and_then(|m| m.time()).unwrap_or_else(|| time.now());
         if !recorder.is_open(&feed.id) {
-            if recorder.open(&feed.id, Kind::Frames, at, stream_meta(meta.as_ref())).is_err() {
+            if recorder.open(&feed.id, Kind::Frames, at, stream_meta(meta.as_ref(), feed.timeline)).is_err() {
                 feed.failed = true;
                 break;
             }
@@ -111,7 +122,7 @@ fn drain_feed(recorder: &Recorder, time: &Time, feed: &mut Feed) {
         recorder.dropped(&feed.id, missed, time.now());
     }
     if taken > 0 {
-        recorder.fill(&feed.id, taken as f32 / RECORD_BUFFER as f32);
+        recorder.fill(&feed.id, taken as f32 / feed.buffer as f32);
     }
 }
 
@@ -135,8 +146,12 @@ impl Drain {
             if self.feeds.contains_key(&key) {
                 continue;
             }
-            if let Ok(subscriber) = goofi_transport::open_record_subscriber(&self.node, &service) {
-                self.feeds.insert(key, Feed { id, service, subscriber, last: None, failed: false });
+            let shape = record_shape(id.engine);
+            let timeline = timeline(id.engine).expect("armed filtered the engines above");
+            if let Ok(subscriber) = goofi_transport::open_record_subscriber(&self.node, &service, shape) {
+                let feed =
+                    Feed { id, service, subscriber, last: None, failed: false, timeline, buffer: shape.buffer };
+                self.feeds.insert(key, feed);
             }
         }
     }
