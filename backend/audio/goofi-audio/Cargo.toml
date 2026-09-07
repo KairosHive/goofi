@@ -27,7 +27,9 @@ indexmap = "2"
 rtrb = "0.3"
 # The sound SERVER, never the card: ALSA's `default` is the hardware, so a stream on it bypasses
 # the OS mixer. Pure Rust, probed at runtime, and ALSA still answers a machine with no server.
-cpal = { version = "0.18", features = ["pulseaudio"] }
+# `realtime` is what promotes the callback thread: MMCSS on Windows, rtkit on Linux. It costs no
+# system package — `audio_thread_priority` is winapi and mach, and `alsa-sys` is already here.
+cpal = { version = "0.18", features = ["pulseaudio", "realtime"] }
 midir = "0.11"
 vst3 = "0.3.0"
 libloading = "0.8"

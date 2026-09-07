@@ -220,11 +220,15 @@ where
             },
             // An underrun the backend reports recovers on its own and is an xrun; only a device
             // that is gone is death.
-            move |e| {
-                if matches!(e.kind(), cpal::ErrorKind::DeviceNotAvailable) {
+            move |e| match e.kind() {
+                cpal::ErrorKind::DeviceNotAvailable => {
                     died.dead.store(true, Ordering::Release);
                     waker.notify();
-                } else {
+                }
+                // The stream plays on at ordinary priority, so this is the deadline lost rather
+                // than a period missed: counting it as an xrun would hide the very thing to read.
+                cpal::ErrorKind::RealtimeDenied => eprintln!("audio: {e}"),
+                _ => {
                     died.xruns.fetch_add(1, Ordering::Relaxed);
                 }
             },
