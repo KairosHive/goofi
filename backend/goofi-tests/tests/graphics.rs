@@ -399,6 +399,58 @@ fn shaders_render_on_the_gpu() {
     g.call("global entry edit", j!({ "name": "system.default_width", "value": 96 }));
     g.call("global entry edit", j!({ "name": "system.default_height", "value": 48 }));
     drawn(&g, gen, "every producer follows the global", |d| shape(d) == vec![48, 96, 4]);
+
+    // Step: the noise itself, walked one param at a time on the small frame the global just made.
+    // Speed 0 stops the drift, which is the only thing that lets one frame be compared with the
+    // next at all — every reading after this one rests on it.
+    let probe = g.probe(gen, "out");
+    let reds = |d: &goofi_core::Data| f32s(d).chunks(4).map(|t| t[0]).collect::<Vec<f32>>();
+    let span = |d: &goofi_core::Data| {
+        let v = reds(d);
+        v.iter().fold(f32::MIN, |a, b| a.max(*b)) - v.iter().fold(f32::MAX, |a, b| a.min(*b))
+    };
+    let settle = |what: &str, want: &dyn Fn(&goofi_core::Data) -> bool| {
+        g.until(what, |g| {
+            render(g, 1);
+            probe.latest().filter(|d| want(d))
+        })
+    };
+    g.set_param(gen, "move", "speed", 0.0);
+    let still = g.until("a still field", |g| {
+        render(g, 2);
+        let was = probe.latest()?;
+        render(g, 2);
+        probe.latest().filter(|d| shape(d) == vec![48, 96, 4] && reds(d) == reds(&was))
+    });
+    assert!(span(&still) > 0.1, "the default field varies across the frame: {}", span(&still));
+    assert!(f32s(&still).chunks(4).all(|t| (t[0] - t[1]).abs() < 1e-3),
+            "monochrome noise writes one value to every channel");
+
+    // Step: the exponent works on the SIGNED field, so a high one pulls BOTH ends towards the
+    // midpoint. That is what no gamma on a 0..1 image can do, and the reason this param is here
+    // while brightness and contrast are left to `Level`.
+    g.set_param(gen, "noise", "exponent", 8.0);
+    settle("the field pulled in towards its midpoint", &|d| span(d) < span(&still) / 2.0);
+    g.set_param(gen, "noise", "exponent", 1.0);
+
+    // Step: harmonics, then period. Dropping the finer layers changes the field; a period wider
+    // than the frame leaves almost nothing for it to vary across.
+    g.set_param(gen, "noise", "harmonics", 0);
+    let plain = settle("the base frequency alone", &|d| reds(d) != reds(&still));
+    g.set_param(gen, "noise", "period", 4.0);
+    settle("a period wider than the frame", &|d| span(d) < span(&still) / 2.0);
+
+    // Step: the kind menu picks a different function rather than a different look at one.
+    g.set_param(gen, "noise", "period", 0.25);
+    g.set_param(gen, "noise", "kind", "perlin");
+    let lattice = settle("perlin's own field", &|d| span(d) > 0.1 && reds(d) != reds(&plain));
+    g.set_param(gen, "noise", "kind", "worley");
+    settle("worley's cells", &|d| span(d) > 0.1 && reds(d) != reds(&lattice));
+
+    // Step: mono off is three decorrelated fields — what `Displace` needs, since it reads red and
+    // green as two directions and one field would push every texel the same way.
+    g.set_param(gen, "noise", "mono", false);
+    settle("three fields, not one", &|d| f32s(d).chunks(4).any(|t| (t[0] - t[1]).abs() > 0.05));
 }
 
 /// The clock the binary actually runs on: nobody calls `render()`, and the engine draws anyway.

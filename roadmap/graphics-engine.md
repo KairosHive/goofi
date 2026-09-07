@@ -289,6 +289,26 @@ for, sized, fed, counted in `session status`, and closed with its node.
 - A texture never leaves the node it belongs to, so a state buffer is not a slot, not a viewer's
   and not in the manifest. What an author can see of it is what the body draws.
 
+### Refining the node set (2026-09-07)
+
+- **`Noise` speaks TouchDesigner's vocabulary** — `period`, `harmonics`, `spread`, `rough`,
+  `exponent`, `seed`, `mono` — because that is the vocabulary someone arriving from a visual
+  toolchain already holds, not because it is the only sound one. `kind` picks one of four
+  functions: simplex, perlin, worley, random. Four functions behind one menu, never four nodes.
+- **Brightness and contrast stayed OFF it.** TouchDesigner's Amplitude and Offset are `Level`'s
+  gain and offset exactly, and a second owner of one operation is the thing this file exists to
+  refuse. `exponent` stayed, because it acts on the SIGNED field and pushes symmetrically about
+  the midpoint — which a gamma on a 0..1 image cannot reproduce at all.
+- **Aspect correction is a behaviour, not a toggle.** TouchDesigner asks; goofi does it. A field
+  stretched by a non-square frame is never what anyone wanted.
+- **The seed SALTS the hash** rather than sliding along the third axis, so each seed is a whole
+  new pattern instead of a later moment of one. Drift is what `speed` is for, and every axis is
+  in FRAME units before the period divides them, so `speed` means one thing at every period.
+- **The harmonic sum is divided by its own amplitudes**, which makes `rough` a change of
+  character and never of brightness.
+- **`mono` off is three decorrelated fields**, and what earns it is `Displace`: that node reads
+  red and green as two directions, and one field behind both pushes every texel the same way.
+
 ## Phases
 
 1. **BUILT 2026-09-06**: the engine, the `.wgsl` contract, uploads, references, `Feedback`, the
