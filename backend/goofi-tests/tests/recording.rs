@@ -114,6 +114,17 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     g.call("record stop", j!({}));
     assert_eq!(g.call("record status", j!({}))["running"], j!(false));
     assert!(std::path::Path::new(&folder).join("manifest.json").exists(), "the folder holds a manifest");
+
+    // A recording whose folder went out from under it: the load still opens its patch, because the
+    // patch the caller asked for is not the recording's disk.
+    g.call("record arm", j!({ "output": goofi_tests::ep(&src, "out") }));
+    let second = g.call("record start", j!({ "root": root.path() }))["folder"]
+        .as_str()
+        .expect("a folder")
+        .to_string();
+    std::fs::remove_dir_all(&second).expect("the folder goes away");
+    g.call("session new", j!({}));
+    assert_eq!(g.call("record status", j!({}))["running"], j!(false), "a new patch ends the recording");
 }
 
 #[test]

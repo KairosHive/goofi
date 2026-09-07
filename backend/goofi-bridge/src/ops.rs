@@ -298,7 +298,7 @@ pub static TREE: &[Entry] = &[
     Group("record", "capture any node's output to disk, on one clock", &[
         Leaf(Op { name: "status", handler: Read(arms::record_status), args: "", positional: 0,
              doc: "Whether a recording runs, where it writes, and every armed stream's health: frames written, frames dropped, and how full its buffer is. The one read a panel, an agent and a test all use.",
-             result: "{running: bool, folder: string | null, elapsed: number | null, streams: [{node, slot, engine, file, frames, dropped, fill}]}" }),
+             result: "{running: bool, folder: string | null, elapsed: number | null, streams: [{node, slot, engine, file, frames, dropped, fill}], error: null} — `error` is what the `record_changed` event puts a failed finalize in; a status read always answers null" }),
         Leaf(Op { name: "arm", handler: Write(arms::record_arm), args: "output:endpoint!", positional: 1,
              doc: "Capture this output slot, addressed `node/slot`. Arming rides the node's own record, so it is undone, saved and copied with the node, and a re-wire elsewhere cannot disarm it. Arming while a recording runs opens a new file for that stream at once.",
              result: "{ok: true}" }),

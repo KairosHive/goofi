@@ -1542,8 +1542,13 @@ pub(crate) fn session_save(
 /// sources: a `.gfi`, an inline manifest, or nothing at all — the empty patch.
 fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
     // The load restarts the patch clock and replaces every armed node, so the recording it was
-    // writing has no timeline left to be on.
-    state.recorder.stop().map_err(|e| format!("session load: the recording could not be finalized: {e}"))?;
+    // writing has no timeline left to be on. A manifest that could not be finalized is SAID and
+    // never refuses the load — the patch the caller asked for is not the recording's disk.
+    if let Err(e) = state.recorder.stop() {
+        let mut ended = record_state(state);
+        ended["error"] = json!(format!("the recording could not be finalized: {e}"));
+        let _ = state.events.send(event("record_changed", ended));
+    }
     // Read OFF the graph lock, as the hello does: the roster's config half is a disk read.
     let agents = goofi_core::home::agents();
     // Every source mounts FRESH, and the live mount is swapped only once the manifest has parsed,
@@ -1839,6 +1844,7 @@ pub(crate) fn record_state(state: &AppState) -> Value {
         "folder": s.folder.map(|f| f.to_string_lossy().into_owned()),
         "elapsed": elapsed,
         "streams": streams,
+        "error": Value::Null,
     })
 }
 
