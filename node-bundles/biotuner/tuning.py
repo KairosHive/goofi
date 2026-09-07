@@ -87,7 +87,7 @@ class Tuning(goofi.Node):
         out = np.full((rows.shape[0], width), np.nan)
         for i, r in enumerate(found):
             out[i, : r.size] = r
-        return out.reshape(lead + (width,)).astype(np.float32)
+        return out.reshape(lead + (width,)).astype(np.float32), input.drop_axis(-1)
 
     def _scale(self, row, row_amps, p):
         peaks = np.asarray([v for v in row if np.isfinite(v)], dtype=np.float64)

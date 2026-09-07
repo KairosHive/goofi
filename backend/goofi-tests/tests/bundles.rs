@@ -69,9 +69,12 @@ fn the_complexity_bundle_reduces_the_time_axis_and_leaves_the_channels_alone() {
     let _py = require_python();
     let g = Goofi::new();
     let src = g.add("_TestGrid");
+    let named = g.add("Meta");
+    g.set_param(named, "meta", "labels", "Fz,Cz,Pz");
     let buf = g.add("Buffer");
     g.set_param(buf, "buffer", "size", 256);
-    g.link(src, "out", buf, "input");
+    g.link(src, "out", named, "input");
+    g.link(named, "out", buf, "input");
     // The window fills BEFORE a node is wired: a growing one answers, and answers differently.
     let window = g.probe(buf, "out");
     g.until("a full window", |_| window.latest().filter(|d| shape(d) == vec![3, 256]));
@@ -109,6 +112,8 @@ fn the_complexity_bundle_reduces_the_time_axis_and_leaves_the_channels_alone() {
             v.iter().all(|x| (x - v[0]).abs() <= v[0].abs() * 1e-3 + 1e-4),
             "{ty} read the three channels as three different signals: {v:?}",
         );
+        // A value per channel is only a topomap while the channels are still named.
+        assert_eq!(labels(&d, "dim0"), ["Fz", "Cz", "Pz"], "{ty} kept the channel names");
         assert!(g.error(node).is_none(), "{ty} carries no error: {:?}", g.error(node));
     }
 }
@@ -297,19 +302,28 @@ fn the_eeg_bundle_plays_a_recording_reads_its_spectrum_and_receives_a_live_strea
 
 }
 
-/// The bundle's first two stages, which every scenario below stands on: an 8 Hz sine, the peaks
-/// it has, and the scale those peaks fold into. `also` is installed in the SAME scan, so a
-/// scenario pays for one round of biotuner imports rather than two.
+/// The bundle's first two stages, which every scenario below stands on: TWO NAMED channels of an
+/// 8 Hz sine, the peaks they have, and the scale those peaks fold into. The names are the point of
+/// the second channel: a measure per channel is only a topomap while the names reach it. `also` is
+/// installed in the SAME scan, so a scenario pays for one round of biotuner imports rather than two.
 fn a_scale_from_a_sine(g: &Goofi, also: &[&str]) -> (goofi_tests::Uid, goofi_tests::Uid, Vec<String>) {
     let osc = g.add("LFO");
     let buf = g.add("Buffer");
+    let cut = g.add("Reshape");
+    let named = g.add("Meta");
     g.set_param(osc, "output", "sfreq", 256.0);
     g.set_param(osc, "output", "mode", "block");
     g.set_param(osc, "lfo", "frequency", 8.0);
-    g.set_param(buf, "buffer", "size", 256);
+    g.set_param(buf, "buffer", "size", 512);
+    // Two windows of eight whole cycles each, so the second channel holds the SAME spectrum.
+    g.set_param(cut, "reshape", "shape", "2,256");
+    g.set_param(named, "meta", "sfreq", 256.0);
+    g.set_param(named, "meta", "labels", "Fz,Cz");
     g.link(osc, "out", buf, "input");
-    let window = g.probe(buf, "out");
-    g.until("a full window", |_| window.latest().filter(|d| shape(d) == vec![256]));
+    g.link(buf, "out", cut, "input");
+    g.link(cut, "out", named, "input");
+    let window = g.probe(named, "out");
+    g.until("a full window", |_| window.latest().filter(|d| shape(d) == vec![2, 256]));
 
     let mut files = vec!["peaks.py", "tuning.py"];
     files.extend_from_slice(also);
@@ -320,8 +334,9 @@ fn a_scale_from_a_sine(g: &Goofi, also: &[&str]) -> (goofi_tests::Uid, goofi_tes
     // The extraction stands alone, and everything after it reads ITS answer rather than the signal.
     let peaks = g.add(&peaks_ty);
     let found = g.probe(peaks, "peaks");
-    g.link(buf, "out", peaks, "input");
-    let d = first_frame(g, &peaks_ty, peaks, &found, |d| shape(d) == vec![5]);
+    g.link(named, "out", peaks, "input");
+    let d = first_frame(g, &peaks_ty, peaks, &found, |d| shape(d) == vec![2, 5]);
+    assert_eq!(labels(&d, "dim0"), ["Fz", "Cz"], "the extraction keeps the channel names");
     let hz = f32s(&d);
     // Half a `precision` step of the frequency the LFO was set to: the grid is 0.5 Hz and 8 Hz over
     // a 256-sample window at 256 Hz is a whole number of cycles, so the peak is exact. The peaks
@@ -338,6 +353,7 @@ fn a_scale_from_a_sine(g: &Goofi, also: &[&str]) -> (goofi_tests::Uid, goofi_tes
     g.link(peaks, "amps", tuning, "amps");
     // A scale is ratios inside ONE octave: that is what folding the peaks over the lowest means.
     let d = first_frame(g, &tuning_ty, tuning, &scale, |d| !f32s(d).is_empty());
+    assert_eq!(labels(&d, "dim0"), ["Fz", "Cz"], "and so does the scale built from them");
     let ratios = f32s(&d);
     assert!(
         ratios.iter().all(|r| r.is_nan() || (1.0..=2.0).contains(r)),
@@ -371,11 +387,15 @@ fn the_biotuner_bundle_reads_a_scale_out_of_a_signal_and_measures_it() {
 
     let d = first_frame(&g, &harm_ty, harm, &harmsim, |d| !f32s(d).is_empty());
     assert!(f32s(&d).iter().all(|x| x.is_finite() && *x >= 0.0), "harmonic similarity is a score: {:?}", f32s(&d));
-    let d = first_frame(&g, &reduce_ty, reduced, &mode, |d| shape(d) == vec![5]);
+    assert_eq!(labels(&d, "dim0"), ["Fz", "Cz"], "a score per channel says WHICH channel");
+    let d = first_frame(&g, &reduce_ty, reduced, &mode, |d| shape(d) == vec![2, 5]);
     assert!(f32s(&d).iter().all(|r| r.is_nan() || (1.0..=2.0).contains(r)), "the mode is a subset of the scale");
+    assert_eq!(labels(&d, "dim0"), ["Fz", "Cz"]);
     let d = first_frame(&g, &matrix_ty, matrix, &metric, |d| !f32s(d).is_empty());
     assert!(f32s(&d).iter().all(|x| x.is_finite()), "the matrix answers one number for the whole scale");
+    assert_eq!(labels(&d, "dim0"), ["Fz", "Cz"]);
     let d = first_frame(&g, &timbre_ty, timbre, &brightness, |d| !f32s(d).is_empty());
+    assert_eq!(labels(&d, "dim0"), ["Fz", "Cz"]);
     assert!(
         f32s(&d).iter().all(|x| (0.0..=1.0).contains(x)),
         "brightness is a plain scalar in a plain range, which is what binding it to a plugin needs: {:?}",
@@ -422,8 +442,11 @@ fn a_scale_is_also_a_palette_and_a_rhythm_a_synth_can_play() {
         "a colour channel is a fraction, or it is padding: {:?}",
         f32s(&d),
     );
+    assert_eq!(labels(&d, "dim0"), ["Fz", "Cz"], "a palette per channel says which channel");
     let d = first_frame(&g, &elements_ty, elements, &scores, |d| !f32s(d).is_empty());
     assert!(f32s(&d).iter().all(|x| x.is_nan() || x.is_finite()), "an element's score is a number");
+    // `pooled` folded both channels into one row, so a channel name would name the wrong thing.
+    assert!(labels(&d, "dim0").is_empty(), "a pooled answer carries no channel names");
     // A euclidean pattern is onsets: a step either carries one or it does not.
     let d = first_frame(&g, &euclid_ty, euclid, &patterns, |d| !f32s(d).is_empty());
     assert!(
@@ -431,6 +454,7 @@ fn a_scale_is_also_a_palette_and_a_rhythm_a_synth_can_play() {
         "a step is an onset or it is not: {:?}",
         f32s(&d),
     );
+    assert_eq!(labels(&d, "dim0"), ["Fz", "Cz"]);
     // The grid is bounded BY DESIGN — a measured tuning wanted 18018 positions — and `cycle` says
     // what the node settled on, so a cap that stopped working shows up here rather than in a crash.
     let d = first_frame(&g, &poly_ty, poly, &cycle, |d| !f32s(d).is_empty());

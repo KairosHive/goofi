@@ -22,9 +22,7 @@ class ZeroCrossings(goofi.Node):
     }
 
     def process(self, data):
-        return np.asarray(
-            antropy.num_zerocross(
-                np.asarray(data.data, dtype=np.float64), normalize=self.params.zero.normalize, axis=-1
-            ),
-            dtype=np.float32,
+        out = antropy.num_zerocross(
+            np.asarray(data.data, dtype=np.float64), normalize=self.params.zero.normalize, axis=-1
         )
+        return np.asarray(out, dtype=np.float32), data.drop_axis(-1)

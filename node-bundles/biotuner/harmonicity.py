@@ -79,9 +79,10 @@ class Harmonicity(goofi.Node):
             )
 
         cols = out.reshape(lead + (4,)).astype(np.float32)
+        meta = input.drop_axis(-1)
         return {
-            "harmsim": cols[..., 0],
-            "tenney": cols[..., 1],
-            "cons": cols[..., 2],
-            "subharmTension": cols[..., 3],
+            "harmsim": (cols[..., 0], meta),
+            "tenney": (cols[..., 1], meta),
+            "cons": (cols[..., 2], meta),
+            "subharmTension": (cols[..., 3], meta),
         }

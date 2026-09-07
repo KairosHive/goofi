@@ -52,8 +52,9 @@ class Eigen(goofi.Node):
         if p.order == "descending":
             values, vectors = values[::-1], vectors[:, ::-1]
 
-        axes = input.meta.get("channels", {})
+        # dim1 counts eigenvectors rather than channels, so only the rows keep their labels.
+        rows = {k: v for k, v in input.meta.get("channels", {}).items() if k == "dim0"}
         return {
             "values": (values.astype(np.float32), {}),
-            "vectors": (np.ascontiguousarray(vectors, dtype=np.float32), {"channels": axes}),
+            "vectors": (np.ascontiguousarray(vectors, dtype=np.float32), {"channels": rows}),
         }
