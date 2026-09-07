@@ -6,6 +6,10 @@ license.workspace = true
 
 [dependencies]
 indexmap = "2"
+# A drawing widget's value is a `data:image/png;base64,…` URL and a node has to read the pixels out
+# of it; `src/png.rs` is that door, and these are the two halves it does not hand-roll.
+base64 = "0.22"
+flate2 = "1"
 # Canonicalisation WITHOUT the `\\?\` verbatim prefix that `std::fs::canonicalize` always returns
 # on Windows — see `src/path.rs`. It keeps the prefix on the paths that genuinely need it (past
 # MAX_PATH), which is the part a hand-rolled strip gets wrong.

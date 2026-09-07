@@ -744,3 +744,52 @@ fn the_text_and_table_nodes_carry_a_value_out_to_json_and_back() {
         assert!(g.error(n).is_none(), "a text node carries no error: {:?}", g.error(n));
     }
 }
+
+/// A GOLDEN pad: 4x5 RGBA, and its five rows are written with the five filters PNG has, so a
+/// decoder that handles only the plain one cannot pass. Row 0 is `(10, 5, 255, 255)`, and each
+/// step right and down moves the channels by a fixed amount.
+const PAD: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAFCAYAAABirU3bAAAAO0lEQVR42mPgYv3/34314f8m1sP/97Eu/c/IZf7/ug3DIwYYZmIwYriBjJlZ0xsM5CQ/voFhFrAMEgAAVZMa7s1Ls7gAAAAASUVORK5CYII=";
+
+/// The texel at `(row, col)`, in the 0..1 a colour frame spans.
+fn texel(d: &Data, row: usize, col: usize) -> [f32; 4] {
+    let s = shape(d);
+    let at = (row * s[1] + col) * 4;
+    f32s(d)[at..at + 4].try_into().expect("four channels")
+}
+
+/// What a hand leaves on a drawing widget, and what `control draw` leaves beside it, is a frame
+/// like any other: the node reads the global the widget IS — the way a knob's value is read — and
+/// answers pixels, which is what `graphics:ArrayIn` then puts on the GPU.
+#[test]
+fn a_drawing_widget_reaches_the_patch_as_a_frame() {
+    let g = Goofi::new();
+    // Binding an expression COMPILES it, which wants an evaluator present; reading a bare global
+    // does not, so this one is never asked what `globals.pad.sketch` means.
+    g.state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(goofi_tests::FirstVar));
+    g.call("control add", j!({ "group": "pad", "kind": "draw", "element": "sketch" }));
+    let node = g.add("Drawing");
+    let bound = g.call("node param edit", j!({ "node": hex(node), "param": "drawing/image",
+                                               "expression": "globals.pad.sketch" }));
+    assert!(bound["error"].is_null(), "the pad is pointed at the way a knob's value is: {bound}");
+    let probe = g.probe(node, "out");
+    g.ready(node);
+
+    // Step: a pad nobody has drawn on has no picture, and the node says nothing rather than
+    // inventing a blank one.
+    assert!(g.stays(|_| probe.latest().is_none()), "an empty pad emitted a frame");
+
+    // Step: the pad takes a drawing, and its pixels arrive — [H, W, 4], row 0 the top.
+    g.call("global entry edit", j!({ "name": "pad.sketch", "value": PAD }));
+    let frame = g.until("the drawing as a frame", |_| probe.latest().filter(|d| shape(d) == vec![5, 4, 4]));
+    let close = |got: [f32; 4], want: [f32; 4]| got.iter().zip(want).all(|(a, b)| (a - b).abs() < 2e-3);
+    let by = |r: f32, gr: f32, b: f32, a: f32| [r / 255.0, gr / 255.0, b / 255.0, a / 255.0];
+    assert!(close(texel(&frame, 0, 0), by(10.0, 5.0, 255.0, 255.0)), "{:?}", texel(&frame, 0, 0));
+    assert!(close(texel(&frame, 4, 3), by(190.0, 205.0, 165.0, 95.0)), "{:?}", texel(&frame, 4, 3));
+    assert!(close(texel(&frame, 2, 1), by(70.0, 105.0, 225.0, 175.0)), "{:?}", texel(&frame, 2, 1));
+    assert!(g.error(node).is_none(), "a decoded pad is not a fault");
+
+    // Step: what is not a picture is the NODE's error, in words, and never a panic.
+    g.call("global entry edit", j!({ "name": "pad.sketch", "value": "data:image/png;base64,bm90YXBuZw==" }));
+    let why = g.until("the node says what it could not read", |_| g.error(node));
+    assert!(why.contains("PNG"), "{why}");
+}
