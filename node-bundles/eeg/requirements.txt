@@ -1,2 +1,4 @@
 mne
 specparam
+scipy
+networkx
