@@ -24,9 +24,8 @@ describe('GraphStore.newPatch — the reset door', () => {
 
 		await g.newPatch();
 
-		// The catalog and the recording state are what a hello reads for itself — not ours.
-		const boot = ['library list', 'record status'];
-		const mine = fc.recordedCalls().filter((c) => !boot.includes(c.op));
+		// `list_nodes` is the boot catalog fetch a hello with no `node_types` triggers — not ours.
+		const mine = fc.recordedCalls().filter((c) => c.op !== 'library list');
 		expect(mine).toEqual([{ op: 'session new', payload: {} }]);
 		expect(history().canUndo, 'a New is not undoable — the manager dropped its history').toBe(
 			false

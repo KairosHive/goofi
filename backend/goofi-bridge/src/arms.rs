@@ -1796,7 +1796,7 @@ fn set_armed(
         (false, Some(i)) => {
             record.remove(i);
         }
-        _ => return Ok(json!({ "ok": true })),
+        _ => return Ok(json!({ "ok": true, "changed": false })),
     }
     state.history.lock().unwrap().apply(
         &mut g,
@@ -1806,7 +1806,7 @@ fn set_armed(
     if !arm && state.recorder.running() {
         state.recorder.close(&stream_id(&g, uid, &slot), "disarmed");
     }
-    Ok(json!({ "ok": true }))
+    Ok(json!({ "ok": true, "changed": true }))
 }
 
 pub(crate) fn record_arm(
@@ -1866,8 +1866,29 @@ pub(crate) fn record_start(
         .start(&root, &name, patch.as_deref())
         .map_err(|e| format!("record start: {e}"))?;
     drop(g);
+    spawn_record_beat(state, folder.clone());
     events.push(record_changed(state));
     Ok(json!({ "folder": folder.to_string_lossy() }))
+}
+
+/// How often a RUNNING recording re-announces itself. The elapsed time and the buffer health
+/// advance with no op to ride on, and every client reads the one broadcast.
+const RECORD_BEAT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Re-announce the session on its own beat, for as long as THIS recording runs: the folder names
+/// it, so a stop and a fresh start inside one beat cannot leave two threads talking.
+fn spawn_record_beat(state: &AppState, folder: std::path::PathBuf) {
+    let state = state.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(RECORD_BEAT);
+            let s = state.recorder.status();
+            if !s.running || s.folder.as_deref() != Some(folder.as_path()) {
+                return;
+            }
+            let _ = state.events.send(record_changed(&state));
+        }
+    });
 }
 
 pub(crate) fn record_stop(

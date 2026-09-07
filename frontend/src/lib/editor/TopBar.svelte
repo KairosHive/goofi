@@ -33,7 +33,7 @@
 
 	// The recording, as the backend last pushed it — the elapsed time is READ, never counted here.
 	const rec = $derived(g.record);
-	const dropping = $derived(rec.streams.some((s) => s.dropped > 0));
+	const dropping = $derived(g.dropping.size > 0);
 
 	function clock(seconds: number | null): string {
 		const t = Math.max(0, Math.floor(seconds ?? 0));
@@ -339,6 +339,7 @@
 					class:spilled={isSpilled('topbar-record')}
 					data-testid="topbar-record"
 					title={dropping ? 'Recording — frames are dropping' : 'Recording'}
+					aria-label={dropping ? 'Recording — frames are dropping' : 'Recording'}
 				>
 					<span class="record-dot"></span>
 					<span class="record-time">{clock(rec.elapsed)}</span>
