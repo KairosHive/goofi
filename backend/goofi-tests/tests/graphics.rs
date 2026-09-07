@@ -2,7 +2,7 @@
 //! vocabulary, every probe a subscriber on the derived name of a texture slot — the door `/data`
 //! opens — and every frame a readback the GPU actually made.
 
-use goofi_tests::{ep, f32s, hex, j, render, shape, Goofi, Uid};
+use goofi_tests::{ep, f32s, hex, j, render, shape, Goofi, Uid, Viewer};
 
 const NO_GPU: &str = "no graphics engine here. The suite needs a GPU adapter: install a Vulkan \
                       driver, or Mesa's lavapipe (`mesa-vulkan-drivers`)";
@@ -364,6 +364,119 @@ fn the_engine_draws_on_its_own_clock() {
     let ran = idle(&g);
     assert!(ran["frames"].as_u64().is_some_and(|f| f > start), "{ran}");
     assert!(ran["stages"].as_u64().is_some_and(|s| s > 0), "{ran}");
+}
+
+/// A viewer asks for the box it can draw, and the ENGINE renders that — a 4K frame is never read
+/// off the GPU only to be averaged down on a CPU. The oracle is a probe on the node's OWN service,
+/// upstream of the reducer: only the engine can make what it sees small. What must still hold
+/// while it does: a snapshot asks for the frame itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
+    let g = Goofi::timed();
+    let base = g.serve().await;
+    let big = g.add("graphics:Ramp");
+    g.ready(big);
+    g.set_param(big, "output", "width", 1024);
+    g.set_param(big, "output", "height", 512);
+
+    // Upstream of the reducer: what the ENGINE published, before anything on a CPU shrank it.
+    let engine = g.probe(big, "out");
+    let made = |want: Vec<usize>| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(d) = engine.latest().filter(|d| shape(d) == want) {
+                return d;
+            }
+            assert!(std::time::Instant::now() < deadline, "the engine never published {want:?}");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    };
+    made(vec![512, 1024, 4]);
+
+    // Step: a viewer declares the box it can draw, and the ENGINE starts rendering that — with the
+    // aspect kept, so 1024x512 into 128x128 is 128x64 rather than a squashed square.
+    let mut viewer = Viewer::open(&base, &hex(big), "out").await;
+    viewer
+        .view(j!([{ "dtype": "array", "ndim": [["ge", 2], ["le", 3]], "dims": [],
+                    "reduce": [{ "dim": 0, "max": 128, "method": "area" },
+                               { "dim": 1, "max": 128, "method": "area" }] }]))
+        .await;
+    let small = made(vec![64, 128, 4]);
+    let reduced = small.meta().reduced().cloned().expect("a frame shrunk on the way out says so");
+    assert!(format!("{reduced:?}").contains("1024"), "it names the width it came from: {reduced:?}");
+    let drawn = viewer.until(|d| shape(d) == vec![64, 128, 4]).await;
+    assert_eq!(shape(&drawn), vec![64, 128, 4], "and that is what the viewer draws");
+
+    // Step: a snapshot asks for the frame ITSELF. The two-call protocol the op documents: the ask
+    // widens the demand, and the answer is the frame the producer then made for it.
+    let key = (big, "out".to_string());
+    let mut full = None;
+    for _ in 0..400 {
+        full = g.state.reducers.latest(key.clone()).filter(|d| shape(d) == vec![512, 1024, 4]);
+        if full.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let full = full.expect("a snapshot reads real pixels, not the viewer's preview");
+    assert!(full.meta().reduced().is_none(), "and the frame it answers with is not a reduction");
+
+    // Step: the viewer's box returns — one full frame was the cost of the ask, not a new mode.
+    made(vec![64, 128, 4]);
+
+    // Every reader from here on declares NOTHING, and none of them may widen the readback.
+    let holds_at = |want: Vec<usize>, why: &str| {
+        let tick = std::time::Duration::from_millis(20);
+        // Settled first: a snapshot is answered with one full frame, and a negative measured
+        // across that answer would name the wrong cause.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut run = 0;
+        while run < 10 {
+            assert!(std::time::Instant::now() < deadline, "the readback never settled at {want:?}: {why}");
+            run = if engine.latest().is_some_and(|d| shape(&d) == want) { run + 1 } else { 0 };
+            std::thread::sleep(tick);
+        }
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < until {
+            assert!(engine.latest().is_none_or(|d| shape(&d) == want), "{why}");
+            std::thread::sleep(tick);
+        }
+    };
+
+    // Step: a second reader wants the frame but no pixels of its own — the metadata panel, and
+    // every viewer between its socket opening and its first `view` op landing. It declares
+    // nothing, so it dilutes nothing: the box the viewer beside it asked for still stands.
+    let mut bare = Viewer::open(&base, &hex(big), "out").await;
+    bare.view(j!([])).await;
+    holds_at(vec![64, 128, 4], "a reader that declared nothing moved another viewer's box");
+
+    // Step: the declaring viewer leaves, as a pan carrying its node off screen does. Nothing asks
+    // for pixels now, so the readback falls to one texel — never up to the whole frame.
+    drop(viewer);
+    holds_at(vec![1, 1, 4], "a viewer leaving widened the readback");
+    drop(bare);
+    holds_at(vec![1, 1, 4], "the last reader leaving widened the readback");
+
+    // Step: a viewer that cannot draw this frame parks on the slot — a line panel on a texture,
+    // which prints a summary and renders nothing. Nothing admits the frame, so nothing has asked
+    // for pixels, and a declaration that draws nothing must not cost the whole frame.
+    let mut cannot = Viewer::open(&base, &hex(big), "out").await;
+    cannot
+        .view(j!([{ "dtype": "array", "ndim": [["le", 2]], "dims": [],
+                    "reduce": [{ "dim": 0, "max": 300, "method": "subsample" },
+                               { "dim": -1, "max": 800, "method": "envelope" }] }]))
+        .await;
+    holds_at(vec![1, 1, 4], "a viewer that cannot draw the frame widened the readback");
+
+    // Step: and beside one that CAN draw it, the fold takes the largest box per dim rather than
+    // falling out to the whole frame — the line panel drops out, it does not degrade the kernel.
+    let mut draws = Viewer::open(&base, &hex(big), "out").await;
+    draws
+        .view(j!([{ "dtype": "array", "ndim": [["ge", 2], ["le", 3]], "dims": [],
+                    "reduce": [{ "dim": 0, "max": 128, "method": "area" },
+                               { "dim": 1, "max": 128, "method": "area" }] }]))
+        .await;
+    holds_at(vec![64, 128, 4], "a viewer that cannot draw the frame shrank one that can");
 }
 
 const FOREIGN: &str = "/* goofi\n{ \"doc\": \"claims an audio slot\", \"inputs\": [{\"name\": \"input\", \"kind\": \"AUDIO\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";

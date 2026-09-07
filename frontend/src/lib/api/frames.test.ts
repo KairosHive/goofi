@@ -194,8 +194,8 @@ describe('what the registry tells the backend', () => {
 		// The failure this replaces: the node's own viewer closing tore down the stream a panel
 		// bound to the same slot was drawing from. Nothing about what the backend should serve
 		// changed, so nothing should reach it — not an unsub, not a re-sub, not a spec.
-		const offA = bindViewer('osc', 'out', 'a', line(256), () => {});
-		bindViewer('osc', 'out', 'b', line(256), () => {});
+		const offA = bindViewer('osc', 'out', 'a', [line(256)], () => {});
+		bindViewer('osc', 'out', 'b', [line(256)], () => {});
 		await settle();
 		const w = MockWorker.instances[0];
 		const before = w.posted.length;
@@ -210,19 +210,19 @@ describe('what the registry tells the backend', () => {
 	it('says nothing when a viewer detaches and re-attaches inside one tick', async () => {
 		// What a re-render does. The registry ends the tick exactly as it started, so the reconcile
 		// finds nothing to say — no socket churn, and no cached frame thrown away.
-		const off = bindViewer('osc', 'out', 'a', line(256), () => {});
+		const off = bindViewer('osc', 'out', 'a', [line(256)], () => {});
 		await settle();
 		const w = MockWorker.instances[0];
 		const before = w.posted.length;
 
 		off();
-		bindViewer('osc', 'out', 'a', line(256), () => {});
+		bindViewer('osc', 'out', 'a', [line(256)], () => {});
 		await settle();
 		expect(w.posted.length, 'a detach and re-attach is not an event').toBe(before);
 	});
 
 	it('sends the specs only when the list actually changes', async () => {
-		bindViewer('osc', 'out', 'a', line(150), () => {});
+		bindViewer('osc', 'out', 'a', [line(150)], () => {});
 		await settle();
 		const w = MockWorker.instances[0];
 		expect(opsOf(w, 'spec')).toEqual([
@@ -230,12 +230,12 @@ describe('what the registry tells the backend', () => {
 		]);
 
 		// Re-binding the same viewer with the same need — a re-render — says nothing.
-		bindViewer('osc', 'out', 'a', line(150), () => {});
+		bindViewer('osc', 'out', 'a', [line(150)], () => {});
 		await settle();
 		expect(opsOf(w, 'spec'), 'an unchanged need is not renegotiated').toHaveLength(1);
 
 		// A resize is a real change, and it is sent.
-		bindViewer('osc', 'out', 'a', line(320), () => {});
+		bindViewer('osc', 'out', 'a', [line(320)], () => {});
 		await settle();
 		expect(opsOf(w, 'spec')).toHaveLength(2);
 		expect((opsOf(w, 'spec').at(-1) as { specs: unknown[] }).specs).toEqual([line(320)]);
@@ -245,8 +245,8 @@ describe('what the registry tells the backend', () => {
 		// Sent verbatim as a LIST: the bridge folds them, because only it has the real frame to
 		// drop the ones a shape rules out. A null-spec viewer (the metadata panel) reads the same
 		// stream without narrowing it to a budget it never asked for.
-		bindViewer('osc', 'out', 'wide', line(2000), () => {});
-		bindViewer('osc', 'out', 'narrow', line(150), () => {});
+		bindViewer('osc', 'out', 'wide', [line(2000)], () => {});
+		bindViewer('osc', 'out', 'narrow', [line(150)], () => {});
 		bindViewer('osc', 'out', 'reader', null, () => {});
 		await settle();
 		const w = MockWorker.instances[0];

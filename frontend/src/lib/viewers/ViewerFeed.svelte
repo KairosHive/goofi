@@ -1,7 +1,7 @@
 <!-- The viewer body: a lazily-subscribed Data frame fed into ViewerSurface. Padding is the caller's. -->
 <script lang="ts">
 	import { bindViewer } from '$lib/api/frames';
-	import { viewSpecForKind } from './capacity';
+	import { viewSpecsForKind } from './capacity';
 	import type { DataFrame } from '$lib/codec/decode';
 	import ViewerSurface from './ViewerSurface.svelte';
 	import type { ViewBinding } from './viewBinding';
@@ -57,8 +57,8 @@
 		frame = null;
 		if (!visible || !slot) return;
 		// Kind is not part of the stream's identity, but it IS part of what this viewer needs.
-		const spec = capW > 0 && capH > 0 ? viewSpecForKind(kind, capW, capH) : null;
-		return bindViewer(node, slot, token, spec, (f: DataFrame) => (frame = f));
+		const specs = capW > 0 && capH > 0 ? viewSpecsForKind(kind, capW, capH) : null;
+		return bindViewer(node, slot, token, specs, (f: DataFrame) => (frame = f));
 	});
 </script>
 
