@@ -25,6 +25,18 @@ fn px(d: &goofi_core::Data, row: usize, col: usize) -> [f32; 4] {
     f32s(d)[at..at + 4].try_into().expect("four channels")
 }
 
+/// The row of the brightest texel in each column, and none where a column was left alone.
+fn ridge(d: &goofi_core::Data) -> Vec<Option<usize>> {
+    let s = shape(d);
+    (0..s[1])
+        .map(|col| {
+            let rows = 0..s[0];
+            let lit = rows.max_by(|a, b| px(d, *a, col)[3].total_cmp(&px(d, *b, col)[3]));
+            lit.filter(|row| px(d, *row, col)[3] > 0.5)
+        })
+        .collect()
+}
+
 fn close(a: [f32; 4], b: [f32; 4]) -> bool {
     a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3)
 }
@@ -92,6 +104,53 @@ fn shaders_render_on_the_gpu() {
 
     g.call("link remove", j!({ "from": ep(hex(img), "out"), "to": ep(hex(up), "input") }));
     drawn(&g, up, "the unlinked upload", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 0.0]));
+
+    // Step: the transfer has MODES. The frame's own texels is one of them and the default; the
+    // others draw the frame the way goofi's viewers draw it, at the node's own size.
+    let ramp = g.add("_TestRamp");
+    g.ready(ramp);
+    g.set_param(ramp, "ramp", "length", 64);
+    g.link(ramp, "out", up, "input");
+    g.set_param(up, "common", "width", 64);
+    g.set_param(up, "common", "height", 32);
+    let frame = drawn(&g, up, "the raw [1, 64] frame", |d| shape(d) == vec![32, 64, 4]);
+    assert!(close(px(&frame, 0, 0), [0.0, 0.0, 0.0, 1.0]), "texture mode is the frame itself: {:?}", px(&frame, 0, 0));
+
+    g.set_param(up, "input", "mode", "line");
+    g.set_param(up, "input", "auto", false);
+    g.set_param(up, "input", "min", 0.0);
+    g.set_param(up, "input", "max", 1.0);
+    let plot = drawn(&g, up, "the line plot", |d| {
+        px(d, 0, 0)[3] == 0.0 && ridge(d).iter().all(Option::is_some)
+    });
+    assert_eq!(shape(&plot), vec![32, 64, 4], "a drawing is made at the node's own size");
+    let path = ridge(&plot);
+    let (first, last) = (path[0].expect("ink"), path[63].expect("ink"));
+    assert!(first > 28 && last < 3, "the ramp rises from the floor to the ceiling: {first} to {last}");
+    assert!(path.windows(2).all(|w| w[1] <= w[0]), "and never turns back down: {path:?}");
+    assert!(close(px(&plot, 0, 0), [0.0, 0.0, 0.0, 0.0]), "on transparent ground: {:?}", px(&plot, 0, 0));
+    let ink = px(&plot, last, 63);
+    assert!(ink[2] > ink[1] && ink[1] > ink[0], "drawn in the viewers' first series colour: {ink:?}");
+
+    // …and the same frame with two channels is a trajectory: one against the other, the range
+    // shared so the shape is not distorted.
+    g.set_param(up, "input", "mode", "trajectory");
+    g.set_param(up, "input", "auto", true);
+    g.set_param(ramp, "ramp", "channels", 2);
+    let traj = drawn(&g, up, "the trajectory", |d| {
+        let lit = ridge(d).iter().filter(|c| c.is_some()).count();
+        px(d, 0, 0)[3] == 0.0 && (8..60).contains(&lit)
+    });
+    let drawn_cols: Vec<usize> = ridge(&traj).iter().enumerate().filter(|(_, c)| c.is_some()).map(|(i, _)| i).collect();
+    let (left, right) = (drawn_cols[0], drawn_cols[drawn_cols.len() - 1]);
+    let (at_left, at_right) = (ridge(&traj)[left].expect("ink"), ridge(&traj)[right].expect("ink"));
+    assert!(at_right < at_left, "channel 1 against channel 0 climbs: {at_left} to {at_right}");
+    assert!(right < 63, "and both axes share one range, so it does not fill the width: {right}");
+
+    g.set_param(up, "input", "mode", "texture");
+    g.set_param(ramp, "ramp", "channels", 1);
+    drawn(&g, up, "the raw frame again", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 1.0]));
+    g.call("link remove", j!({ "from": ep(hex(ramp), "out"), "to": ep(hex(up), "input") }));
 
     // Step: a texture chain does not flip either. A gradient down the frame, copied by a Level,
     // still runs the same way — the half of the orientation rule an upload cannot see.

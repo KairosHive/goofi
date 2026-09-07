@@ -46,6 +46,21 @@ before they arrive.
   the wire. The viewer kind a slot OPENS with is now a table too (`vocab::default_kind`,
   projected as `DEFAULT_KIND`): a texture draws as an image, an array and audio as a line. The
   suite's graphics-shaped skeleton was renamed `skelgfx`, because `graphics` is the real engine's.
+- **An ARRAY input's TRANSFER has modes, and they belong to the engine rather than to the file** —
+  BUILT 2026-09-07. What a frame BECOMES is a property of the crossing, not of the shader that
+  samples what came across, so every ARRAY input carries a universal param group named after the
+  input, the way `common` is universal for the size. `texture` is the default and is the frame's own
+  texels, unchanged. `line` and `trajectory` DRAW the frame, under the options goofi's own viewers
+  offer — `auto`, `min`, `max`, `log_x`, `log_y`, `points` — so one vocabulary answers for a plot in
+  a panel and a plot on a texture, and the line's `yAuto/yMin/yMax` and the trajectory's `auto` are
+  ONE range rather than two copies of one idea. The drawing is the control thread's, made once per
+  tick from the frame and the params that stand at that moment: a fragment shader cannot draw a
+  polyline without testing every segment at every texel, which is the pixel count times the sample
+  count and is out of reach on the suite's software adapter, where a CPU rasteriser costs the ink
+  alone. A plot is drawn at the node's own size on TRANSPARENT ground, so it composites like any
+  other texture, and it carries no axes, grid or labels — a texture is the picture of the data, and
+  the panel is where a reading is named.
+
 - **`uv` is `(0, 0)` at the TOP-left — WGSL's own texture space — and so is every row order in the
   engine.** REVISED 2026-09-06, and the first design of this rule was wrong. It said `uv` was
   bottom-left, the OpenGL convention, with the vertex stage reconciling the two; the two cannot be
@@ -341,6 +356,11 @@ for, sized, fed, counted in `session status`, and closed with its node.
   1x1 buffer needs a pass of its own, since one pass's targets share one size.
 - A vector-typed param (a colour as one `vec4f`) needs a layouter and a `Param` kind that does
   not exist.
+- The transfer draws the line and the trajectory; the IMAGE viewer's colormap and the topomap are
+  not modes. A colormap is `Lookup` with a palette behind it, and the palette a viewer offers —
+  viridis, coolwarm — is a table this side does not hold, so either a node that MAKES one or a
+  colormap mode has to carry it. A topomap needs the electrode positions the frame's own metadata
+  carries, which no transfer reads yet.
 
 ## Traps worth not rediscovering (wgpu 30, verified 2026-08-09 and 2026-09-06)
 

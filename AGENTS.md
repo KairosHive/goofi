@@ -279,10 +279,14 @@ put row 0 at the TOP — one convention, so a pass-through body is a copy and no
 anywhere. A node HOLDS state by declaring named buffers: `cells` reads what the last tick left,
 `next_cells` writes what this one leaves, and one pass fills the output and every buffer at once —
 so a buffer is the node's own size, and `frame`, the renders since it was made, is what a body
-seeds itself on. Its size is a param like any other: `common.width` and `common.height`, 0
-following what is wired behind, and `globals.system.default_width` on a node that makes its own
-frames. The engine is scheduled and DEMAND-DRIVEN: a stage renders only where its output has a
-reader, so a node nobody watches costs nothing. Its plan is replaced whole and never edited,
+seeds itself on. An ARRAY input's TRANSFER has modes — the frame's own texels, or the line or
+trajectory a viewer would draw of it, under the viewers' own options — and they are the ENGINE's
+universal params rather than the file's, because what a frame becomes belongs to the crossing and
+not to the shader that samples what came across. Its size is a param like any other:
+`common.width` and `common.height`, 0 following what is wired behind, and
+`globals.system.default_width` on a node that makes its own frames. The engine is scheduled and
+DEMAND-DRIVEN: a stage renders only where its output has a reader, so a node nobody watches costs
+nothing. Its plan is replaced whole and never edited,
 because a stage index is a name and a stage that outlives its node draws into a stranger. The
 PROCESS owns one device and one compile thread, and every operation on that device takes one gate
 — a driver crashed inside its own shader compiler when two threads touched the device at once.
