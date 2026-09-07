@@ -125,20 +125,30 @@ meet. The output half was gated from the start; the INPUT half was not, so a tes
 added an `AudioIn` opened the machine's real microphone. A name is still resolved whatever the
 clock — an absent device is named as before — and only the resolved device is opened; under the
 external clock the input says so on the param that named it. **And goofi asks the machine's sound
-SERVER, never its card**: cpal's `pulseaudio` host is compiled in, so `default_host()` probes for a
-server socket at run time and only a machine with none falls back to ALSA. ALSA's own `default` is
-the hardware — a stream on it never reaches PipeWire, so the OS volume and the OS mute did not
-apply and the device list was thirty ALSA aliases, nine of them filter plugins and eleven of them
-one jack under one name. The list is now the server's sinks. The `pulseaudio` crate is pure Rust,
-so this costs no system package; the `pipewire` host would need `libpipewire-0.3-dev` and clang at
-build time, which the one-command setup will not pay for a result pipewire-pulse already gives.
-**That last clause is true of the device list and the mixer, and false of PRIORITY.** cpal's
-`realtime` feature promotes the callback thread, and its `pulseaudio` host has no call to it —
-the alsa, pipewire and jack hosts do. So while Linux runs on the pulse host there is no real-time
-audio thread and no way to ask for one, and `audio_thread_priority` without dbus is a no-op that
-answers Ok, so the feature alone reads as success and changes nothing. Windows takes MMCSS from
-the same feature for free. Linux priority is unbuilt, and its price is the two packages above
-plus `libdbus-1-dev` for rtkit.
+SERVER by default, and the user picks any other**. ALSA's own `default` is the hardware — a stream
+on it never reaches PipeWire, so the OS volume and the OS mute did not apply and the device list was
+thirty ALSA aliases, nine of them filter plugins and eleven of them one jack under one name. That
+was solved once by compiling in `pulseaudio` alone and letting `default_host()` choose, and the
+answer was too small: it made goofi pick the host, and a host is not goofi's to pick.
+
+**Every cpal host the machine runs is offered, and the device NAME carries which.** `available_hosts()`
+is the whole of the list — `PipeWire: Built-in Audio Analog Stereo` beside `PulseAudio: …`, `JACK: …`
+and `ALSA: …` — so a host is chosen by choosing a device, and no second param can fall out of step
+with the first. `default` stays the platform host's own default and is what a fresh `AudioOut` uses.
+A host that lists one card many times under one name is deduplicated, because a name resolves to the
+first and the rest are entries nobody can pick: ALSA listed this machine's card eight times.
+The `ASIO: ` prefix that shipped first was this idea for one host; it is now the general rule, and
+what stays ASIO's alone is the SDK's — one driver per process, a ten-second open, and a list that
+empties once a stream holds a driver.
+
+**Priority is why the host choice is not cosmetic.** cpal's `realtime` feature promotes the callback
+thread, and the `pulseaudio` host has no call to it, where alsa, pipewire and jack do. So the pulse
+shim can give the device list and the mixer and can never give a real-time thread, and
+`audio_thread_priority` without dbus is a no-op that answers Ok — the feature alone reads as success
+and changes nothing on Linux. Windows takes MMCSS from the same feature and needs no package.
+Linux pays `libpipewire-0.3-dev`, `libjack-jackd2-dev` and `libdbus-1-dev` beside the `libasound2-dev`
+it already needed, and CI installs them on the Linux runner alone: `jack` dlopens on Windows and
+macOS, and cpal target-gates the rest.
 Landed 2026-09-02: the clock is a constructor
 choice (`Clock::External` for the harness, `Clock::Device` for the CLI); the output stream lives on
 a thread of its own, because
