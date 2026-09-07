@@ -60,7 +60,7 @@ impl Time {
     }
 }
 
-/// UTC as `YYYYMMDD-HHMMSS`, plus the seconds it is short of.
+/// UTC as `YYYYMMDD-HHMMSS`, plus the part of a second past that whole second.
 fn civil(t: SystemTime) -> (String, Duration) {
     let d = t.duration_since(UNIX_EPOCH).unwrap_or_default();
     let (secs, rest) = (d.as_secs(), d.subsec_nanos());

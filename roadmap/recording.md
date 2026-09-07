@@ -1,23 +1,20 @@
 # Recording: every engine's frames, on one timeline
 
-Any node's output, captured losslessly, across every engine, onto one timeline. Recording is the
-first tenant of the panel add-on door in `library.md`.
+Any node's output, captured across every engine onto one timeline. Built 2026-09-07. `goofi-record`
+owns the folder, the manifest and one writer per stream; each engine hands it frames through a door
+of its own shape, and nothing else in the tree opens a recording file. What is left here is the
+decisions — what the shape IS, and what was tried and rejected — and the few things still open.
 
 ## Time
-
-**Time is built.** `goofi_core::time::Time` is the patch's one origin, held once and shared by
-reference; `NodeCtx::now`, `t` in a param expression, and `meta["time"]` all read it. A frame
-carries its node's PROCESS TICK and its emit `index`. What remains here is what recording still
-needs from it.
 
 **Time is only time.** It measures, and it decides nothing. Grid scheduling — a rate that is a grid
 rather than a drift, and rhythm on top of it — is a LATER item and it is what will be called the
 CLOCK. A clock measures time; it has no causal power over it, so the two must not share a name.
 
-**Sample times are DERIVED, never stored.** `sfreq` and the shape are already in `Meta`, so sample 0
-of a 256-sample window at 256 Hz emitted at t sits at t − 1. A `Buffer` is correct for free. Where a
-derived stream's provenance matters, the answer is to record its source too and measure the offset
-from the two recordings.
+**A frame carries patch seconds, and the manifest carries the one UTC.** `Time::utc` is anchored
+ONCE at the patch origin and advanced by the monotonic clock, so an NTP step cannot bend a
+recording; `utc_at` dates any patch second against that anchor. A reader adds the two. Wall time per
+frame was the alternative, and it makes every frame a place the step can lie.
 
 **The stamp is the RUNTIME's, never the node's.** `stamp_meta` runs after `process()` and is the one
 stamping site. A node author writes nothing and cannot break alignment — which is also what keeps
@@ -25,92 +22,154 @@ the subprocess tier correct, since its `Instant` has a different origin and it m
 A node that KNOWS a device time — LSL carries one — puts that in `Meta` itself, as a convenience
 entry for later analysis. goofi time stays what everything aligns on.
 
-**A rate-locked stream derives its timeline from the SAMPLE COUNT.** For audio the count IS the
-clock and it is exact; a clock read per block adds scheduling jitter to a timeline that had none.
-Anchor the counter to patch time once at stream start and derive every later block. A self-paced
-signal node has no anchor, so its tick read is its timeline. A recording records WHICH of the two a
-stream used — a derived timeline and a measured one are not the same evidence.
+**Sample times are DERIVED, never stored.** `sfreq` and the shape are already in `Meta`, so sample 0
+of a 256-sample window at 256 Hz emitted at t sits at t − 1. A `Buffer` is correct for free. Where a
+derived stream's provenance matters, the answer is to record its source too and measure the offset
+from the two recordings.
 
-**Wall time is recorded ONCE**, as `Time::wall()` — the UTC the patch began at — in the manifest.
-Never per frame: an NTP step is then a header question rather than a per-frame lie.
+**A rate-locked stream derives its timeline from the SAMPLE COUNT, and the manifest says which it
+used.** For audio the count IS the clock and it is exact; a clock read per block adds scheduling
+jitter to a timeline that had none. A self-paced signal node has no counter, so its tick read is its
+timeline. `measured` and `derived` are the ENGINE's word rather than a guess off `sfreq` — a rate
+alone cannot say whether the times were counted or read — because a derived timeline and a measured
+one are not the same evidence.
 
-## Decisions
+**The audio anchor is tied on the AUDIO thread.** The count and the clock are read at the same
+instant, inside `render_block`, and every block after is a function of its number alone. Reading the
+clock at the drain instead was built first: the differences were exact, so the stream was internally
+consistent and up to one control tick — 10 ms — late against every EEG stream it exists to be lined
+up with, with nothing in the file to say the anchor had been guessed.
 
-**Never the `/data` plane.** The reducer serves at `MAX_VIEWER_FPS`, latest-wins, and REDUCES the
-frame; `drain_inputs` keeps only a wire's newest. The viewer plane is lossy by design at every hop
-and no recorder may touch it.
-
-**A dedicated iceoryx2 service per armed slot.** Every data service is built with
-`subscriber_max_buffer_size(1)` and safe overflow, so a subscriber late by one inter-frame gap
-loses a frame silently — a journal commit against a 250 Hz node costs five. Depth is a
-service-level property and raising the shared one MULTIPLIES: 256 subscribers × 64 KB a chunk makes
-a depth of 32 half a gigabyte per slot. So an armed slot opens `goofi_<base>_rec_<slot>` with
-`max_subscribers(1)`, `max_publishers(1)` and a deep buffer — 16 MB, and only while armed. The
-producer encodes ONCE and publishes the same bytes to both.
-
-**The plan owns the recorder's bell.** `wire_out` replaces an output's target set WHOLE, so a bell
-the recorder opened for itself is disarmed by the next re-wire: a cable three nodes away stops the
-recording, with no error anywhere. The armed set is settled state, delivered through `settle`, and
-the plan computes the recording bell beside the consumer bells.
-
-**One door, and the event id is ignored.** The recorder holds a single event service; any producer
-rings it and the recorder sweeps EVERY armed buffer on wake. That spends none of the `EventId`
-budget — 0 control, 1..=64 input slots, 65..=128 `nd()` channels, 255 the ceiling — and a burst of
-rings coalesces into one sweep.
-
-**Recording is a door on `Engine`.** Each engine transfers its own frames losslessly; one central
-file manager owns the buffers, the writers and the folder. The three do not share a problem:
-
-- **Signal** already encodes once in `publish`, so an armed slot publishes those bytes twice. A
-  64-channel 1 kHz stream is 256 KB/s.
-- **Audio** has no iceoryx2 on its path and a block is the arena's own memory. The door is a
-  PRE-ALLOCATED lock-free SPSC ring written on the callback thread — no allocation, no lock, no
-  syscall — drained by a non-RT thread. 48 kHz stereo f32 is 384 KB/s, so a few hundred
-  milliseconds of ring makes a drop practically impossible while keeping the callback honest.
-- **Graphics** is not like the other two. `Rgba16Float` at 1920×1080 is 16.6 MB a frame and 60 fps
-  is 995 MB/s; the uint8 hop halves it. There is no buffered writer at that rate, so the graphics
-  door ENCODES in the loop, and a hardware encoder is a dependency with a platform matrix of its
-  own. Arming also registers demand, since a stage with no reader does not render.
-
-**A real-time node is never stalled.** Every engine drops and counts. A drop is a standing error on
-the node and a record in the manifest with its tick time. The requirement is "never SILENTLY", not
-"never": a disk that cannot keep up loses data in any design, and the recording says where.
+## The recording
 
 **A recording is a DIRECTORY, not an archive.** Unlike a `.gfi` it is written incrementally and can
-be enormous, so packing is a later action rather than the format. `manifest.json` beside one file
-per stream, in a folder named for the moment `record` was pressed.
+be enormous, so packing is a later action rather than the format. The folder is named for the UTC it
+began at; `manifest.json` sits beside one file per stream, named
+`<node>-<slot>__<UTC of its first sample>`. The root is `globals.record.root`, else
+`~/.goofi/recordings`.
 
-**A recording is SINGULAR: one patch, one session.** A `session load` ends it. A load swaps the
-graph whole and mints new service names, so a recording that survived one would hold two patches in
-one folder.
+**A stream file is CONCATENATED GOOF FRAMES — the wire format itself.** Nothing is re-encoded and
+nothing is re-framed: the signal engine's `publish` already encodes once, and the recorder writes
+those bytes. Metadata rides beside every sample in the frame's own `Meta`, so a truncated file
+decodes to its last whole frame and needs no header to be read at all.
 
-**A rebirth is a gap, and it is recorded.** `service_base` carries `gen`, bumped on EVERY birth, so
-a param change that restarts a node mints a new service name. The recorder re-resolves and writes
-the discontinuity; a recording that smooths over a real gap is worse than one that stops.
+**The manifest is a PROJECTION, minted at every rewrite** from the closed streams' entries and the
+open streams' own state, then written beside and renamed. No count lives both on a stream and in a
+record of it.
 
-**A recording is LOSSLESS and nothing else** — a raw frame stream beside a JSON sidecar, per stream.
-WAV, MP4 and CSV are each lossy against a `Data` frame: WAV loses anything not audio-shaped, CSV
-loses f32 below nine digits, MP4 by construction. So they are CONVERSIONS of the written file, made
-later and by a separate action; nothing is written beside the recording, and no format choice can
-undo the buffered path. Graphics is the stated exception: at 1 GB/s there is no lossless option, and
-the manifest says so.
+**A re-arm mints a new file.** `free_name` takes the first name the folder does not hold and the file
+is opened with `create_new`, so truncation is not a thing the type can do. It cost a take: a disarm
+and a re-arm at the same UTC instant re-opened the name just closed and wrote over the eight frames
+already in it.
+
+**A rebirth is a gap, and it is recorded.** `service_base` carries `gen`, bumped on every birth, so a
+param change that restarts a node mints a name the drain has never opened. It closes the old stream
+as `reborn` and opens a new file. A recording that smooths over a real gap is worse than one that
+stops.
+
+**A real-time node is never stalled: every engine drops and counts.** The requirement is "never
+SILENTLY", not "never" — a disk that cannot keep up loses data in any design, and the recording says
+where. A drop is a count and an instant in the manifest, and a standing error where the engine has a
+fault path to raise one on.
+
+**A recording is SINGULAR: one patch, one session.** A `session load` ends it, because a load swaps
+the graph whole and mints new service names, and a recording that survived one would hold two
+patches in one folder.
+
+## Arming
+
+**Arming is the NODE'S OWN RECORD** — `doc.nodes[<uid hex>].record`, the armed output slots as a
+`string[]`, always present. So it is undoable, saved in the `.gfi`, copied and pasted with the node,
+and restored by a load, with no second holder anywhere. It reaches the engines only through
+`settle`, as every other settled fact does: `Touched::Record` on the write, `NodeView::recorded` on
+the read.
+
+**The plan owns the recorder's bell.** `wire_out` replaces an output's target set WHOLE, so a bell
+the recorder opened for itself would be disarmed by the next re-wire — a cable three nodes away
+stopping the recording, with no error anywhere.
+
+**Nothing keeps a second armed set.** Each holder of one cost a defect: the signal drain's
+`Feed::opened` mirror could only ever clear and never restore, and the graphics runtime believed its
+own tape, so a disarm and a re-arm between two ticks left it writing at a stream the recorder had
+closed and no new file ever opened. `Recorder::is_open` is the owner, and it is asked.
 
 **The panel arms by drag, and the drag raises an op.** `record arm <node>/<slot>` like every other
-intent, so the CLI, an agent and a test reach the same door. A drag is a gesture and needs its own
-touch door.
+intent, so the CLI, an agent and a test reach the same door. The drop is a generic
+`UIStore.onNodeDrop` registration rather than a branch on panel type. Whether a recording runs is
+runtime and not document: `record status` reads it, and a backend beat broadcasts `record_changed`
+once a second while one runs, so the header's indicator counts up with the browser polling nothing.
 
-## Order of work
+## The three engines
 
-1. ~~The tick stamp, which every stream's timeline reads.~~ Built: `Meta` carries `time` and `index`.
-2. The `Engine` door, the armed set through `settle`, and the signal half.
-3. The central file manager: buffers, writers, the folder, the manifest.
-4. The audio ring.
-5. The panel, through `library.md`'s add-on door.
-6. Graphics, with its encoder — last, and separately. Signal and audio together are 640 KB/s;
-   graphics alone is two thousand times that, and making one feature of them makes the easy part
-   wait on the hard one.
+Recording is a door on each engine and one central recorder behind them. The three do not share a
+problem.
+
+**Signal publishes the same encoded bytes twice.** An armed slot opens a dedicated iceoryx2 service
+and `publish` sends to both. The budget is STATED and FIXED: `RECORD_BUDGET` is 64 MiB for an armed
+slot, cut by `record_shape(engine)` into 1 MiB × 64 for signal and 64 KiB × 1024 for audio, with
+`AllocationStrategy::Static`, so an outsized frame is refused rather than growing the segment.
+Raising the shared data plane's depth was the alternative and it MULTIPLIES: depth is a
+service-level property, so 256 subscribers of a 64 KB chunk make a depth of 32 half a gigabyte a
+slot. Never the `/data` plane, which is lossy by design at every hop.
+
+**The service overflows safely, so `Meta::index` is the one witness of a loss.** The oldest frame is
+dropped at the SUBSCRIBER, which the publisher's own counter cannot see, so the drain counts the
+gaps in the indices instead. An index that RESETS is a rebirth and is never counted as a loss.
+
+**One door, and the event id is ignored.** The recorder holds a single event service; any producer
+rings it and the drain sweeps EVERY armed feed on wake. That spends none of the `EventId` budget,
+and a burst of rings coalesces into one sweep.
+
+**Audio writes a PRE-ALLOCATED lock-free ring on the callback thread**, one per output and beside
+the tap — no allocation, no lock, no syscall — drained on the control half, which publishes onto the
+recorder's own service as the signal engine does. So the audio engine holds no recorder of its own.
+A block's number is the AUDIO thread's: a drop counter read at the drain and applied to blocks
+already queued was what it cost, because the index run then stayed contiguous, so the loss was
+invisible and every surviving block was dated 1.33 ms late.
+
+**Graphics is a third `Want`, and arming registers demand.** A stage renders only where its output
+has a reader, so an armed stage is one — at its OWN size, because a recording is evidence and is
+never fitted to somebody's viewport. Frames leave through an `Encoders` seam; the one implementation
+is an ffmpeg child writing FFV1 in Matroska from `rgba64le`, beside a `.times` sidecar of one f64
+patch-second per ENCODED frame. Encoding runs off the render thread behind a two-deep queue, and a
+frame the queue refuses is a counted drop rather than a stalled engine.
+
+**Finalizing never runs on the render thread.** `Recorder::close_later` reaps on a thread of its own
+for every close the render thread causes. Closing in place held the session mutex across
+`finish` → join → `child.wait()`, so a disarm or a resize of one video stalled every window, every
+viewer and both other engines' drains until ffmpeg had finished; and a manifest rewrite under that
+same lock parked the render thread — and with it the one process-wide GPU gate — on a disk write.
+
+## What was decided against
+
+**A recording is LOSSLESS raw and nothing else.** WAV, MP4 and CSV are each lossy against a `Data`
+frame: WAV loses anything not audio-shaped, CSV loses f32 below nine digits, MP4 by construction.
+They are CONVERSIONS of the written file, made later and by a separate tool; nothing is written
+beside the recording, and no format choice can undo the buffered path.
+
+**Graphics is the stated exception, and it is stated in the manifest.** Every texture is
+`Rgba16Float` and no codec takes float, so a video entry says in words that it is lossless within
+[0,1] and that a value outside that range is clipped to it. No stream claims plain "lossless".
+
+**ffmpeg is kept, and the pure-Rust alternatives were measured and rejected.** `lz4_flex` reached
+735 MB/s at 2.0x and `zstd -1` 451 MB/s at 7.9x — both faster than FFV1 and both smaller — and both
+were declined: an in-process compressor makes a container only goofi can read, where a `.mkv` opens
+in every tool a user already has. The dependency is the price, and it is bounded. A missing ffmpeg
+costs THAT STREAM alone: the node wears a standing error naming the package, the manifest holds an
+entry saying why the stream is empty, and only a recording whose every armed stream is video is
+refused.
+
+**The audio engine's own take recorder is deleted.** The `record.*` params on `AudioOut`, `Rec`,
+`wav::Writer`, `take_stem` and `part_path` are gone; `wav::Reader` stays, for playback. Two
+recorders cannot own one timeline.
 
 ## Open
 
-- The shape of the raw frame stream and its JSON sidecar, in detail.
-- The graphics encoder, which step 6 carries alone.
+- **Export.** WAV, CSV and MP4 out of a finished recording, as a separate tool over the folder.
+- **Packing.** A recording is a directory; making one file of it is an action, and it has no op.
+- **The panel add-on loader.** The recorder panel is compiled in, as `library.md`'s first tenant
+  says; the loader itself is that file's item.
+- **An audio stream has no channel labels**, so the manifest's `channels` is null for one and the
+  count is in every frame's shape.
+- **A rate change mid-recording** re-ties the audio anchor, so the frames either side of it derive
+  from different ties. That is a real discontinuity and the manifest does not name it as one.

@@ -253,11 +253,8 @@ is dropped whole, and an inbox the plan stops reading is flushed at the swap, so
 plays when the input is wired again. Latency is one source frame. `SignalIn` is a copy, and a new
 channel count re-plans through `dirty()`.
 
-**Recording is the one recorder's, not the audio engine's.** The take recorder — `record.*` params
-on `AudioOut`, a WAV writer, a sequence of parts — was deleted 2026-09-07: every armed output now
-publishes one block a frame on the recorder's own service, and `roadmap/recording.md` holds the
-design. What stays here is the audio side of that door: a ring per output beside its tap, drained
-on the control half, and a timeline the SAMPLE COUNT makes rather than a clock read.
+**Recording is the one recorder's, not the audio engine's**: the take recorder was deleted
+2026-09-07, and `roadmap/recording.md` holds the design.
 
 **`AudioPlayback` is built into the engine because a `Str` param's TEXT reaches no loaded node** —
 free text arrives at the audio thread as silence, so only a control half that sees

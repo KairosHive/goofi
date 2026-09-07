@@ -296,6 +296,28 @@ The control half is `goofi-control`, shared with audio rather than copied. A tex
 the wire: the tap reads back an f32 frame like any other, and `roadmap/graphics-engine.md` holds
 the design.
 
+**A recording is LOSSLESS RAW, and the node's own record is what arms it.** `goofi-record` owns the
+folder, the manifest and one writer per stream; a signal or audio stream is CONCATENATED GOOF
+FRAMES — the wire format itself — so nothing is re-encoded, the metadata rides beside every sample
+in the frame's own `Meta`, and a truncated file decodes to its last whole frame. WAV, CSV and MP4
+are each lossy against a `Data` frame, so they are a LATER tool over a finished recording and never
+a format the recorder writes. Graphics is the one exception, because a texture is `Rgba16Float` and
+no codec takes float: an ffmpeg child writes FFV1 in Matroska, which the manifest states in words
+is lossless WITHIN [0,1] and clips outside it, and no stream ever claims plain "lossless"; the
+pure-Rust in-process alternatives were measured — `lz4_flex` 735 MB/s at 2.0x, `zstd -1` 451 MB/s
+at 7.9x, both beating FFV1 — and rejected for a container every tool already opens, at the price of
+one bounded dependency, so a missing ffmpeg costs THAT STREAM alone. Arming is
+`doc.nodes[<uid>].record`, so it is undoable, saved, copied with the node and delivered by `settle`
+alone — never a set kept beside the recorder, which claimed an arming that had in fact failed. The
+clock is the one timing authority and its UTC is anchored ONCE at the patch origin, so a frame
+carries patch seconds, the manifest carries the anchor, and an NTP step cannot bend a recording;
+a rate-locked stream derives its timeline from the SAMPLE COUNT, tied to the clock on the audio
+thread so the count and the instant are one. What the shape cost, four times: a re-arm at the same
+instant truncated the file it had just closed; a running drop counter applied to already-queued
+blocks made the loss invisible AND dated the survivors 1.33 ms late; finalizing a video held the
+session mutex and stalled every other engine's drain; and every second holder of "is this stream
+open" wrote at a stream the recorder had closed. `roadmap/recording.md` holds the design.
+
 **There is no tick.** Every node owns one thread and schedules itself, waking for a control
 message, a frame on an input, or its own rate cap elapsing. Frames travel node to node over
 shared memory, never through the graph — so no node runs under the graph mutex and no user action
