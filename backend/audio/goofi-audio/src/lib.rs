@@ -353,7 +353,7 @@ impl AudioEngine {
             .collect();
         let (inbox, to_audio) = rtrb::RingBuffer::new(QUEUE);
         let (from_audio, outbox) = rtrb::RingBuffer::new(QUEUE);
-        let anchor = Arc::new(runtime::Anchor::new(time.clone()));
+        let anchor = Arc::new(runtime::Anchor::new(time.now()));
         AudioEngine {
             instance,
             time,
@@ -667,9 +667,11 @@ impl AudioEngine {
                 slot.node.prepare(rate);
             }
             self.audio.rate.store(rate.to_bits(), Ordering::Relaxed);
-            self.audio.anchor.rate_moved();
             rt.budget = Duration::from_secs_f64(BLOCK as f64 / rate) * runtime::BUDGET;
         }
+        // Under the runtime lock, so the count and the clock name the same instant: what a block is
+        // worth moved, and every block after this one is read against this tie.
+        self.audio.anchor.tie(self.time.now(), rate);
         rt.set_device(Some(channels));
     }
 }
@@ -756,12 +758,7 @@ impl Engine for AudioEngine {
         let (rec_in, rec_out): (Vec<_>, Vec<_>) = manifest
             .outputs
             .iter()
-            .map(|_| {
-                let (producer, consumer) = rtrb::RingBuffer::<f32>::new(control::REC_RING);
-                let lost = Arc::new(AtomicU64::new(0));
-                let first = Arc::new(AtomicU64::new(runtime::UNTIED));
-                (runtime::Rec { ring: producer, lost: lost.clone(), first: first.clone() }, (consumer, lost, first))
-            })
+            .map(|_| rtrb::RingBuffer::<f32>::new(control::REC_RING))
             .unzip();
         // The inboxes are built here so the plan can read their channel cells; the half itself is
         // made on its own thread, where an OS handle it opens never has to cross one.

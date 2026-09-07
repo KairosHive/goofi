@@ -2,8 +2,8 @@
 //! every message is a pointer move, every port is a view into the arena the plan laid out.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use goofi_audio_sdk::{AudioNode, Block, Port, PortMut, BLOCK, MAX_CHANNELS, MAX_PORTS};
@@ -32,7 +32,7 @@ pub struct Slot {
     /// One per output: what the control half publishes to whoever subscribes.
     pub taps: Vec<rtrb::Producer<f32>>,
     /// One per output: every block, whole, for the recorder.
-    pub recs: Vec<Rec>,
+    pub recs: Vec<rtrb::Producer<f32>>,
     /// Out of the plan: it panicked or the watchdog took it, and its outputs are zero until the
     /// settle that re-plans without it.
     pub dead: bool,
@@ -129,64 +129,83 @@ impl Inbox {
     }
 }
 
-/// One output's recording ring, and the blocks a full one lost — which the control half turns into
-/// the gap the manifest states rather than a silence.
-pub struct Rec {
-    pub ring: rtrb::Producer<f32>,
-    pub lost: Arc<AtomicU64>,
-    /// Which engine block this ring's FIRST one was; `UNTIED` until it holds one. A node born late
-    /// is what makes this a number rather than zero, and it is what dates every block after it.
-    pub first: Arc<AtomicU64>,
+/// The header a recording ring's block wears: its width, its NUMBER in two exact halves, and the
+/// tie its number is read against. A block that never reaches the ring takes its number with it,
+/// which is what makes a lost one a gap the recorder counts rather than a silence.
+pub const REC_HEADER: usize = 4;
+
+/// One tie between the rendered block count and the patch clock, and what a block is worth after
+/// it. Made only where the runtime lock is HELD, so no block can be rendered between the two reads.
+#[derive(Clone, Copy)]
+struct Tie {
+    at: u64,
+    time: f64,
+    rate: f64,
 }
 
-/// A block count with no tie to the clock yet.
-pub const UNTIED: u64 = u64::MAX;
+/// Ties kept, so a block still in a ring when the device moved is read against the tie it was
+/// rendered under. Eight is more device changes than a one-second ring can outlive.
+const TIES: usize = 8;
 
-/// The ONE point where the rendered block count and the patch clock are tied together, made on the
-/// AUDIO thread so the two are the same instant. Every recorded block's time is derived from it, so
-/// when a control half happens to wake cannot move a timeline by one sample.
+/// The block count, and the ties that turn a number into an instant. The count is the CLOCK: no
+/// clock is read on the audio thread, and none is read where a block is drained.
 pub struct Anchor {
     /// Blocks rendered since the engine began.
     pub blocks: AtomicU64,
-    /// Patch seconds, `f64` bits, at block `tied_at`.
-    tied_time: AtomicU64,
-    tied_at: AtomicU64,
-    /// Raised where the tie must be made again: at the first block, and after a rate change, which
-    /// is the one thing that moves what a block is worth.
-    retie: AtomicBool,
-    clock: Arc<goofi_core::time::Time>,
+    /// What the audio thread stamps into every block; a new tie is a new epoch.
+    epoch: AtomicU64,
+    ties: Mutex<Vec<(u64, Tie)>>,
 }
 
 impl Anchor {
-    pub fn new(clock: Arc<goofi_core::time::Time>) -> Anchor {
-        Anchor {
-            blocks: AtomicU64::new(0),
-            tied_time: AtomicU64::new(0.0f64.to_bits()),
-            tied_at: AtomicU64::new(UNTIED),
-            retie: AtomicBool::new(true),
-            clock,
+    pub fn new(time: f64) -> Anchor {
+        let tie = Tie { at: 0, time, rate: crate::RATE };
+        Anchor { blocks: AtomicU64::new(0), epoch: AtomicU64::new(0), ties: Mutex::new(vec![(0, tie)]) }
+    }
+
+    fn held(&self) -> std::sync::MutexGuard<'_, Vec<(u64, Tie)>> {
+        self.ties.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Tie the clock to the block that will be rendered NEXT. The caller holds the runtime lock, so
+    /// no block is rendered between reading the count and reading the clock.
+    pub fn tie(&self, time: f64, rate: f64) {
+        let tie = Tie { at: self.blocks.load(Ordering::Relaxed), time, rate };
+        let epoch = self.epoch.load(Ordering::Relaxed) + 1;
+        let mut ties = self.held();
+        ties.push((epoch, tie));
+        if ties.len() > TIES {
+            ties.remove(0);
         }
+        drop(ties);
+        self.epoch.store(epoch, Ordering::Release);
     }
 
-    /// Tie the clock to the block being rendered, where one is owed.
-    fn tie(&self, n: u64) {
-        if self.retie.swap(false, Ordering::Acquire) {
-            self.tied_time.store(self.clock.now().to_bits(), Ordering::Relaxed);
-            self.tied_at.store(n, Ordering::Release);
-        }
+    pub fn epoch(&self) -> u64 {
+        self.epoch.load(Ordering::Acquire)
     }
 
-    /// A block is worth a different number of seconds at a new rate, so the tie is made again.
-    pub fn rate_moved(&self) {
-        self.retie.store(true, Ordering::Release);
+    /// Patch seconds at engine block `n`, read against the tie `epoch` names — the one the block
+    /// was rendered under, never whichever is newest. An epoch older than what is held falls to the
+    /// oldest, which is a block that outlived eight device changes in a one-second ring.
+    pub fn seconds(&self, n: u64, epoch: u64) -> f64 {
+        let ties = self.held();
+        let tie = ties.iter().find(|(e, _)| *e == epoch).or_else(|| ties.first()).map(|(_, t)| *t);
+        let Some(tie) = tie else { return 0.0 };
+        tie.time + (n as f64 - tie.at as f64) * BLOCK as f64 / tie.rate
     }
+}
 
-    /// Patch seconds at engine block `n` — derived from the tie, never from when this was asked.
-    pub fn seconds(&self, n: u64, rate: f64) -> f64 {
-        let tied_at = self.tied_at.load(Ordering::Acquire);
-        let tied_time = f64::from_bits(self.tied_time.load(Ordering::Relaxed));
-        tied_time + (n as f64 - tied_at as f64) * BLOCK as f64 / rate
-    }
+/// A block's number, split so both halves are exact in an `f32`: 48 bits, which is more blocks than
+/// a machine renders in a lifetime.
+const HALF: u64 = 1 << 24;
+
+pub fn number_out(n: u64) -> (f32, f32) {
+    ((n % HALF) as f32, (n / HALF) as f32)
+}
+
+pub fn number_in(lo: f32, hi: f32) -> u64 {
+    hi as u64 * HALF + lo as u64
 }
 
 pub enum Msg {
@@ -307,7 +326,7 @@ impl Runtime {
     pub fn render_block(&mut self) {
         self.apply_pending();
         let n = self.anchor.blocks.load(Ordering::Relaxed);
-        self.anchor.tie(n);
+        let epoch = self.anchor.epoch();
         let base = self.arena.as_mut_ptr();
         let len = self.arena.len();
         for stage in &self.plan.stages {
@@ -403,14 +422,12 @@ impl Runtime {
                     }
                 }
                 if let Some(rec) = slot.recs.get_mut(k) {
-                    let _ = rec.first.compare_exchange(UNTIED, n, Ordering::Relaxed, Ordering::Relaxed);
-                    match rec.ring.write_chunk_uninit(1 + out.len()) {
-                        Ok(chunk) => {
-                            chunk.fill_from_iter(std::iter::once(*channels as f32).chain(out.iter().copied()));
-                        }
-                        Err(_) => {
-                            rec.lost.fetch_add(1, Ordering::Relaxed);
-                        }
+                    // A block that does not fit is simply not there: its NUMBER is the gap the
+                    // recorder counts, so nothing here has to remember that it was lost.
+                    if let Ok(chunk) = rec.write_chunk_uninit(REC_HEADER + out.len()) {
+                        let (lo, hi) = number_out(n);
+                        let head = [*channels as f32, lo, hi, epoch as f32];
+                        chunk.fill_from_iter(head.into_iter().chain(out.iter().copied()));
                     }
                 }
             }

@@ -16,6 +16,7 @@ use goofi_node::{NodeManifest, ParamKey};
 
 use crate::nodes::midi_in::{Note, NO_PORT};
 use crate::nodes::{audio_in, audio_out, audio_playback, midi_in};
+use crate::runtime::REC_HEADER;
 use crate::{wav, Clock, DEFAULT_DEVICE, NO_DEVICE, RATE};
 
 /// A tap holds this many blocks of the widest output; what does not fit is dropped, newest first.
@@ -25,7 +26,7 @@ pub const TAP_RING: usize = (1 + MAX_CHANNELS as usize * BLOCK) * 16;
 pub const INBOX_RING: usize = RATE as usize * MAX_CHANNELS as usize;
 /// A recording ring holds one second of the widest block, as an inbox holds one second of a frame:
 /// the control half drains it every tick, so a second is what a stalled thread may cost.
-pub const REC_RING: usize = (1 + MAX_CHANNELS as usize * BLOCK) * (RATE as usize / BLOCK);
+pub const REC_RING: usize = (REC_HEADER + MAX_CHANNELS as usize * BLOCK) * (RATE as usize / BLOCK);
 /// Notes a port may hold between two blocks.
 pub const NOTE_RING: usize = 1024;
 /// How much of a file one read takes, in frames of the file's own rate.
@@ -97,8 +98,8 @@ pub struct AudioHalf {
     taps: Vec<Tap>,
     ports: Ports,
     io: Io,
-    /// One per output: the blocks the audio thread left, and the sample count that dates them.
-    recs: Vec<Recording>,
+    /// One per output: the blocks the audio thread left, each wearing its own number.
+    recs: Vec<rtrb::Consumer<f32>>,
     /// An `AudioPlayback`'s file; every other node has none.
     play: Option<Play>,
     audio: Arc<AudioShared>,
@@ -109,9 +110,8 @@ pub struct Birth {
     pub manifest: &'static NodeManifest,
     pub inboxes: Vec<Inbox>,
     pub taps: Vec<rtrb::Consumer<f32>>,
-    /// Per output: the recording ring's consumer, what a full ring lost, and which engine block
-    /// the ring's first one was.
-    pub recs: Vec<(rtrb::Consumer<f32>, Arc<AtomicU64>, Arc<AtomicU64>)>,
+    /// Per output: the recording ring's consumer.
+    pub recs: Vec<rtrb::Consumer<f32>>,
     pub ports: Ports,
     pub audio: Arc<AudioShared>,
 }
@@ -129,7 +129,7 @@ impl AudioHalf {
             manifest: birth.manifest,
             inboxes: birth.inboxes,
             taps: birth.taps.into_iter().map(|ring| Tap { ring }).collect(),
-            recs: birth.recs.into_iter().map(Recording::new).collect(),
+            recs: birth.recs,
             play: ports.play.take().map(Play::new),
             ports,
             io: Io::default(),
@@ -310,8 +310,8 @@ impl Half for AudioHalf {
         }
         let rate = self.audio.rate();
         let anchor = self.audio.anchor.clone();
-        for (i, rec) in self.recs.iter_mut().enumerate() {
-            rec.drain(cx, i, rate, &anchor);
+        for (i, ring) in self.recs.iter_mut().enumerate() {
+            record_out(ring, cx, i, rate, &anchor);
         }
         for (i, tap) in self.taps.iter_mut().enumerate() {
             let Some((c, planar)) = drain_blocks(&mut tap.ring) else { continue };
@@ -416,57 +416,37 @@ fn drain_blocks(ring: &mut rtrb::Consumer<f32>) -> Option<(usize, Vec<f32>)> {
     (chans != 0).then(|| (chans, planar.concat()))
 }
 
-/// One block off a recording ring: its channel count, and its planar samples. `None` until a whole
-/// block is there.
-fn take_block(ring: &mut rtrb::Consumer<f32>) -> Option<(usize, Vec<f32>)> {
+/// One block off a recording ring: its width, its own number, the tie it is read against, and its
+/// planar samples. `None` until a whole block is there.
+fn take_block(ring: &mut rtrb::Consumer<f32>) -> Option<(usize, u64, u64, Vec<f32>)> {
     let available = ring.slots();
-    let c = ring.read_chunk(1).ok()?.as_slices().0.first().copied().unwrap_or(0.0) as usize;
-    if c == 0 || available < 1 + c * BLOCK {
+    let head: Vec<f32> = ring.read_chunk(REC_HEADER).ok()?.into_iter().collect();
+    let c = head[0] as usize;
+    if c == 0 || available < REC_HEADER + c * BLOCK {
         return None;
     }
-    ring.read_chunk(1).ok()?.commit_all();
+    ring.read_chunk(REC_HEADER).ok()?.commit_all();
     let block = ring.read_chunk(c * BLOCK).ok()?;
     let (a, b) = block.as_slices();
     let planar: Vec<f32> = a.iter().chain(b).copied().collect();
     block.commit_all();
-    Some((c, planar))
+    Some((c, crate::runtime::number_in(head[1], head[2]), head[3] as u64, planar))
 }
 
-/// One output's recording. The block's own NUMBER dates it: the engine ties the block count to the
-/// clock once, on the audio thread, and every instant here is derived from that tie — so a drain
-/// that wakes late records the same times as one that wakes on the tick.
-struct Recording {
-    ring: rtrb::Consumer<f32>,
-    lost: Arc<AtomicU64>,
-    first: Arc<AtomicU64>,
-    /// Blocks taken off this ring, armed or not: the ring's own position.
-    position: u64,
-}
-
-impl Recording {
-    fn new((ring, lost, first): (rtrb::Consumer<f32>, Arc<AtomicU64>, Arc<AtomicU64>)) -> Recording {
-        Recording { ring, lost, first, position: 0 }
-    }
-
-    /// Every whole block the audio thread left, as one frame each. An unarmed slot's blocks are
-    /// dropped here, so the ring never fills and the position keeps counting.
-    fn drain(&mut self, cx: &Cx<'_>, out: usize, rate: f64, anchor: &crate::runtime::Anchor) {
-        let armed = cx.recorded[out];
-        while let Some((c, planar)) = take_block(&mut self.ring) {
-            let first = self.first.load(Ordering::Relaxed);
-            // The lost ones are folded in whole: they never entered the ring, so what is known is
-            // how many there were, and a gap stated late is better than a timeline quietly short.
-            let n = first.wrapping_add(self.position).wrapping_add(self.lost.load(Ordering::Relaxed));
-            self.position += 1;
-            if !armed || first == crate::runtime::UNTIED {
-                continue;
-            }
-            let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
-            let mut meta = Meta::new().with_sfreq(Some(rate)).with_index(Some(n));
-            meta.set_time(Some(anchor.seconds(n, rate)));
-            if let Ok(frame) = Data::array_f32(vec![c, BLOCK], bytes, meta) {
-                (cx.record)(out, &goofi_codec::encode(&frame));
-            }
+/// Every whole block the audio thread left, as one frame each. The BLOCK carries its own number, so
+/// a block that never reached the ring leaves a gap the recorder counts, and the blocks around it
+/// keep the instants they were rendered at. An unarmed slot's blocks are dropped here, so the ring
+/// never fills while nobody records.
+fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64, anchor: &crate::runtime::Anchor) {
+    while let Some((c, n, epoch, planar)) = take_block(ring) {
+        if !cx.recorded[out] {
+            continue;
+        }
+        let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let mut meta = Meta::new().with_sfreq(Some(rate)).with_index(Some(n));
+        meta.set_time(Some(anchor.seconds(n, epoch)));
+        if let Ok(frame) = Data::array_f32(vec![c, BLOCK], bytes, meta) {
+            (cx.record)(out, &goofi_codec::encode(&frame));
         }
     }
 }
