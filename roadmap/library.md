@@ -137,10 +137,12 @@ then cost is real — a CSS custom property does not cross a frame, so the token
 bridge, and focus, keyboard and touch each need one too. A custom element is a platform primitive
 with no version to keep in step, tokens cascade into it, and any framework or none compiles to one.
 
-**The first add-on is COMPILED IN, and the loader comes second.** A folder in the tree whose panel
-the build script bundles proves the owned op row and the run-time panel type with no loader and no
-version question. The recorder panel (`recording.md`) is that first tenant, and it has a backend
-half already, so the door is proved against something real rather than a stub.
+**The first add-on is COMPILED IN, and the loader comes second.** The recorder panel
+(`recording.md`) is that first tenant and it LANDED 2026-09-07, with its own backend half, its own
+`record` ops and its own drop behaviour, so the door is measured against something real rather than
+a stub. It took a `&'static` op row and a `&'static` `PANEL_TYPES` row like every built-in panel, so
+what it proves is the SHAPE an add-on needs and not the door itself: the owned op row, the run-time
+panel type and the custom-element boundary are each still unbuilt.
 
 **The op row is the first thing to build, and it is more than one field.** `Op` is `&'static` in
 its name, args, doc and result; `Handler` holds a bare `fn` pointer, so an add-on handler carrying
