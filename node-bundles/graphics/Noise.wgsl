@@ -4,6 +4,9 @@
   "params": [
     {"group": "noise", "name": "kind", "kind": "str", "default": "simplex",
      "options": ["simplex", "perlin", "worley", "random"]},
+    {"group": "noise", "name": "fractal", "kind": "str", "default": "fbm",
+     "options": ["fbm", "ridged", "billow", "warped", "multifractal", "multifractional"]},
+    {"group": "noise", "name": "amount", "kind": "float", "default": 1.0, "min": 0.0, "max": 3.0},
     {"group": "noise", "name": "period", "kind": "float", "default": 0.25, "min": 0.002, "max": 4.0},
     {"group": "noise", "name": "harmonics", "kind": "int", "default": 3, "min": 0, "max": 8},
     {"group": "noise", "name": "spread", "kind": "float", "default": 2.0, "min": 1.0, "max": 8.0},
@@ -17,6 +20,12 @@
 */
 // Integer bit-mixing, not `fract(sin(dot(..)) * 43758)`: that hash turns a one-ulp difference in
 // its argument into a wholly different value, so every lattice boundary showed as a hard seam.
+// `one()` is not unit variance, so the cascade's exponent is scaled by a MEASURED constant rather
+// than an assumed one — without it `amount` would not mean the sigma the literature means.
+// Measured against mfractal's own wavelet-leaders c2: at gain 1 this node's `amount` was about
+// half the sigma the literature means, so the knob is scaled to agree with it.
+const VOL_GAIN: f32 = 2.0;
+
 fn mix32(cell: vec3i, salt: u32) -> u32 {
     let q = vec3u(cell + 65536);
     var h = q.x * 1597334673u ^ q.y * 3812015801u ^ q.z * 2654435761u ^ salt;
@@ -96,27 +105,90 @@ fn one(v: vec3f) -> f32 {
     }
 }
 
-fn field(v: vec3f) -> f32 {
+// One octave, folded the way `fractal` asks. Ridging and billowing fold the SAME grain, which is
+// why they sit beside `fbm` and not beside `simplex`.
+fn folded(v: vec3f) -> f32 {
+    let n = one(v);
+    switch p.fractal {
+        case 1u: { return 1.0 - 2.0 * abs(n); }
+        case 2u: { return 2.0 * abs(n) - 1.0; }
+        default: { return n; }
+    }
+}
+
+fn octaves(v: vec3f, rough: f32) -> f32 {
     var sum = 0.0;
     var norm = 0.0;
     var amp = 1.0;
     var freq = 1.0;
     for (var h = 0; h <= p.harmonics; h++) {
-        sum = sum + amp * one(v * freq);
+        sum = sum + amp * folded(v * freq);
         norm = norm + amp;
-        amp = amp * p.rough;
+        amp = amp * rough;
         freq = freq * p.spread;
     }
     // Dividing by the amplitudes makes roughness a change of character, never of brightness.
     return clamp(sum / max(norm, 1e-6), -1.0, 1.0);
 }
 
+fn field(v: vec3f) -> f32 {
+    return octaves(v, p.rough);
+}
+
+// The same octaves with the amplitude held CONSTANT — the H approaching 0 limit, which is what a
+// log-correlated field is, and what a lognormal cascade needs for its exponent. Independent
+// octaves add in quadrature, so the count's square root is what brings it back to unit-ish.
+fn volatility(v: vec3f) -> f32 {
+    var sum = 0.0;
+    var count = 0.0;
+    var freq = 1.0;
+    for (var h = 0; h <= p.harmonics; h++) {
+        sum = sum + one(v * freq);
+        count = count + 1.0;
+        freq = freq * p.spread;
+    }
+    return VOL_GAIN * sum / sqrt(max(count, 1.0));
+}
+
+// What one sample of the whole pattern is, before colour and the exponent.
+fn pattern(v: vec3f) -> f32 {
+    switch p.fractal {
+        // The field displaced by another reading of itself: the fold that makes veins and swirls.
+        case 3u: {
+            let w = vec3f(field(v + vec3f(17.3, 5.1, 0.0)), field(v + vec3f(9.7, 41.2, 0.0)), 0.0);
+            return field(v + p.amount * w);
+        }
+        // A lognormal cascade. Holding the MEAN of `exp(sigma*omega)` at 1 would drive its median
+        // to `exp(-sigma^2/2)`, squashing almost every pixel towards grey so a few clipped spikes
+        // carry the picture — measured: the spread fell twelvefold by sigma 2.5. The median is the
+        // invariant a picture wants — but holding it exactly lets `tanh` saturate, and a saturating
+        // clip flattens the very intermittency this mode exists for: measured, c2 stopped at -0.17
+        // and then came back. Half the mean correction sits between the two, and `tanh` takes only
+        // the tails it must, which is monotonic and keeps the rest.
+        case 4u: {
+            let omega = volatility(v + vec3f(101.0, 57.0, 0.0));
+            let s = p.amount;
+            return tanh(field(v) * exp(s * omega - 0.25 * s * s));
+        }
+        // Two roughnesses mixed by a slow map, so the local dimension VARIES across the frame.
+        case 5u: {
+            let m = 0.5 + 0.5 * one(v * 0.2 + vec3f(53.0, 11.0, 0.0));
+            let lo = clamp(p.rough * (1.0 - 0.45 * p.amount), 0.05, 0.98);
+            let hi = clamp(p.rough * (1.0 + 0.45 * p.amount), 0.05, 0.98);
+            return mix(octaves(v, lo), octaves(v, hi), m);
+        }
+        default: {
+            return field(v);
+        }
+    }
+}
+
 fn shade(uv: vec2f) -> vec4f {
     let aspect = vec2f(resolution.x / max(resolution.y, 1.0), 1.0);
     let at = vec3f((uv + vec2f(p.x, p.y)) * aspect, time * p.speed) / max(p.period, 1e-4);
-    var rgb = vec3f(field(at));
+    var rgb = vec3f(pattern(at));
     if p.mono == 0u {
-        rgb = vec3f(rgb.r, field(at + vec3f(0.0, 0.0, 71.0)), field(at + vec3f(0.0, 0.0, 149.0)));
+        rgb = vec3f(rgb.r, pattern(at + vec3f(0.0, 0.0, 71.0)), pattern(at + vec3f(0.0, 0.0, 149.0)));
     }
     rgb = sign(rgb) * pow(abs(rgb), vec3f(p.exponent));
     return vec4f(rgb * 0.5 + 0.5, 1.0);
