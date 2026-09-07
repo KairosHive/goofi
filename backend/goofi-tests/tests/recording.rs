@@ -104,14 +104,14 @@ fn a_recording_is_a_folder_of_decodable_frames() {
         meta.set_time(Some(i as f64 / 256.0));
         meta.set_index(Some(i));
         let frame = goofi_core::Data::array_f32(vec![4], vec![0u8; 16], meta).expect("a frame");
-        rec.write(&id, &goofi_codec::encode(&frame)).expect("written");
+        rec.write(&id, &goofi_codec::encode(&frame), 0, 0.0).expect("written");
     }
     // Step: a re-arm at the very same patch instant is a NEW file, never the last one truncated.
     rec.open(&id, goofi_record::Kind::Frames, 0.0, goofi_record::StreamMeta::measured(Some(256.0)))
         .expect("re-opened at the same patch instant");
     let frame = goofi_core::Data::array_f32(vec![4], vec![0u8; 16], goofi_core::Meta::empty())
         .expect("a frame");
-    rec.write(&id, &goofi_codec::encode(&frame)).expect("written to the second file");
+    rec.write(&id, &goofi_codec::encode(&frame), 0, 0.0).expect("written to the second file");
     let folder = rec.stop().expect("the manifest written").expect("a folder");
 
     let manifest: serde_json::Value =
