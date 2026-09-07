@@ -19,8 +19,6 @@ use super::{Id, Pumped, Screen, Wake};
 pub struct Platform {
     class: Vec<u16>,
     event: HANDLE,
-    /// The scratch the swizzle reuses, because this runs once a frame.
-    scratch: Vec<u8>,
 }
 
 /// An auto-reset event the pump waits on beside the queue; setting it is thread-safe.
@@ -77,7 +75,7 @@ impl Platform {
             if event.is_null() {
                 return Err("no wake event".into());
             }
-            Ok(Platform { class, event, scratch: Vec::new() })
+            Ok(Platform { class, event })
         }
     }
 
@@ -117,6 +115,10 @@ impl Screen for Platform {
         Ok((hwnd as usize as Id, hwnd))
     }
 
+    fn retitle(&mut self, id: Id, title: &str) {
+        unsafe { SetWindowTextW(id as usize as HWND, wide(title).as_ptr()) };
+    }
+
     fn resize(&mut self, id: Id, size: (u32, u32)) {
         let (w, h) = framed(size);
         unsafe { SetWindowPos(id as usize as HWND, std::ptr::null_mut(), 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER) };
@@ -128,8 +130,7 @@ impl Screen for Platform {
 
     /// One `SetDIBitsToDevice` a frame. `biHeight` is NEGATIVE, which is how a DIB says its first
     /// row is the top one; a positive height would show the frame upside down.
-    fn present(&mut self, id: Id, (w, h): (u32, u32), rgba: &[u8]) {
-        super::bgra_into(rgba, &mut self.scratch);
+    fn present(&mut self, id: Id, (w, h): (u32, u32), texels: &[u8]) {
         let hwnd = id as usize as HWND;
         let mut info: BITMAPINFO = unsafe { std::mem::zeroed() };
         info.bmiHeader = BITMAPINFOHEADER {
@@ -160,7 +161,7 @@ impl Screen for Platform {
                 0,
                 0,
                 h,
-                self.scratch.as_ptr() as *const std::ffi::c_void,
+                texels.as_ptr() as *const std::ffi::c_void,
                 &info,
                 DIB_RGB_COLORS,
             );

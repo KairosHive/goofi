@@ -423,9 +423,8 @@ pub struct Graph {
     /// Where each scanned type came from — the one thing about a type that only the scan can
     /// know. Re-derived wholesale by each scan.
     origins: std::collections::HashMap<String, Origin>,
-    /// One clock across every node thread rather than one per birth: `NodeCtx::now` is
-    /// seconds-since-patch-start.
-    start: Instant,
+    /// The patch's time, shared with every engine — one object, never a copy of what it says.
+    time: Arc<goofi_core::time::Time>,
     /// `None` ⇒ bindings are stored and round-trip but never evaluate; the literal stands.
     evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>>,
     /// uid → parent scope (absent = ROOT). The ONE source of truth for parentage and membership.
@@ -502,7 +501,6 @@ fn next_event_id(taken: &[EventId]) -> Option<EventId> {
 impl Graph {
     pub fn new() -> Graph {
         let waker = Arc::new(DrainWaker::default());
-        let start = Instant::now();
         Graph {
             engines: Vec::new(),
             waker,
@@ -514,7 +512,7 @@ impl Graph {
             arrangement: layout::Layout::default(),
             arrangement_warning: None,
             viewpoint: serde_json::Value::Null,
-            start,
+            time: Arc::new(goofi_core::time::Time::new()),
             evaluator: None,
             scope_of: HashMap::new(),
             globals: goofi_core::globals::GlobalStore::new(),
@@ -542,9 +540,9 @@ impl Graph {
         &self.globals
     }
 
-    /// Apply one global change (`None` = remove; a system delete is refused; a NEW global lands at
-    /// ordered position `at` — a delete/rename undo re-adds at the original slot). Every binding
-    /// that READS this global is re-resolved and re-sent — a global's value is shipped inline.
+    /// Apply one global change (a NEW global lands at ordered position `at` — a delete/rename undo
+    /// re-adds at the original slot; `None` leaves the value alone). Every binding that READS this
+    /// global is re-resolved and re-sent — a global's value is shipped inline.
     pub fn apply_global_change(
         &mut self,
         name: &str,
@@ -552,12 +550,18 @@ impl Graph {
         at: Option<usize>,
         control: Option<Option<goofi_core::globals::Control>>,
     ) -> Result<(), String> {
-        let removing = value.is_none();
         self.globals.apply_change(name, value, at)?;
-        // A remove takes the record with it, so a `control` beside one has nothing to land on.
-        if let (false, Some(c)) = (removing, control) {
+        if let Some(c) = control {
             self.globals.set_control(name, c)?;
         }
+        self.invalidate_bindings_reading(name);
+        Ok(())
+    }
+
+    /// Delete a global, and with it the widget, the source and the lock that rode on it. A system
+    /// one is refused.
+    pub fn remove_global(&mut self, name: &str) -> Result<(), String> {
+        self.globals.remove(name)?;
         self.invalidate_bindings_reading(name);
         Ok(())
     }
@@ -791,6 +795,14 @@ impl Graph {
 
     /// One registered engine, by id — how the composition root reaches a concrete door through
     /// [`Engine::as_any_mut`].
+    /// Tell whichever engine owns `uid` what its readers want of `slot`. Offered to every engine
+    /// rather than routed: an engine that does not hold the uid, or cannot render to size, no-ops.
+    pub fn set_view_demand(&mut self, uid: Uid, slot: &str, want: Option<(u32, u32)>) {
+        for e in self.engines_mut() {
+            e.view_demand(uid, slot, want);
+        }
+    }
+
     pub fn engine_mut(&mut self, id: &str) -> Option<&mut dyn Engine> {
         self.engines.iter_mut().map(|e| e.as_mut() as &mut dyn Engine).find(|e| e.id() == id)
     }
@@ -2834,9 +2846,9 @@ impl Graph {
         &self.instance
     }
 
-    /// The patch clock origin engines compute `NodeCtx::now` from.
-    pub fn patch_start(&self) -> Instant {
-        self.start
+    /// The patch's time. An engine holds this handle; there is no second origin anywhere.
+    pub fn time(&self) -> Arc<goofi_core::time::Time> {
+        self.time.clone()
     }
     /// The generation of the node about to be born at `uid`: 0 for a first birth, one more than
     /// the last for every rebirth.
@@ -2902,10 +2914,21 @@ impl Graph {
         let edges = self.resolved_edges();
         let rings: HashMap<&'static str, bool> =
             self.engines().map(|e| (e.id(), e.doorbell_driven())).collect();
-        let Graph { nodes, generations, instance, engines, .. } = self;
-        let view = build_view(nodes, generations, instance, &edges, &rings);
-        for e in engines.iter_mut() {
-            e.settle(&view, &touched);
+        let published = {
+            let Graph { nodes, generations, instance, engines, .. } = self;
+            let view = build_view(nodes, generations, instance, &edges, &rings);
+            for e in engines.iter_mut() {
+                e.settle(&view, &touched);
+            }
+            engines.iter().flat_map(|e| e.published()).collect::<Vec<_>>()
+        };
+        // The engines' own facts into `system.*`, from the state this settle just reached. It
+        // not a command and never becomes one: the user's undoable act is the param they moved,
+        // and this is what that param MEANS once the engine has answered.
+        for (name, value) in published {
+            if self.globals.publish(name, value) {
+                self.invalidate_bindings_reading(name);
+            }
         }
     }
 
@@ -2980,13 +3003,9 @@ impl Graph {
         // Globals are patch CONTENT, so a load starts from a fresh seeded store; `dyn_types` is
         // catalog and stays.
         self.globals = goofi_core::globals::GlobalStore::new();
-        // The node clock belongs to the PATCH: one loaded an hour in must compute what it would
-        // have at boot. Safe only because every reader of this clock was dropped just above.
-        self.start = Instant::now();
-        let start = self.start;
-        for e in self.engines_mut() {
-            e.reset_clock(start);
-        }
+        // Time belongs to the PATCH: one loaded an hour in must read what it would at boot. Every
+        // engine holds this same object, so there is nothing to push.
+        self.time.restart();
     }
 
     /// Take the name a RESTORE asks for. It goes through the same gate a create does, so an
@@ -3233,9 +3252,9 @@ impl Graph {
         let globals: Vec<Value> = self
             .globals
             .entries()
-            // A machine global's value is this machine's; writing it into a patch would carry one
-            // machine's path onto another.
-            .filter(|(name, ..)| !self.globals.is_machine(name))
+            // An ephemeral global is goofi's own to say; writing it into a patch would carry one
+            // machine's answer onto another.
+            .filter(|(name, ..)| !self.globals.is_ephemeral(name))
             .map(|(name, value, lock, control, source)| {
                 let mut e = global_to_json(value); // {value, type}
                 if let Value::Object(ref mut m) = e {

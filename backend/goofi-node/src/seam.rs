@@ -6,7 +6,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use goofi_core::Param;
 use indexmap::IndexMap;
@@ -259,6 +259,13 @@ pub trait Engine: Send {
     fn settle(&mut self, view: &GraphView<'_>, touched: &[Touched]);
     /// Hand over every queued health report. A pull: the caller owns the pace.
     fn drain(&mut self, apply: &mut dyn FnMut(Uid, Status)) -> usize;
+    /// The facts this engine ALONE decides, for the `system.*` globals to carry — a rate, a
+    /// a driver. A pull like the drain, and the graph is the only writer, so an engine never needs
+    /// a store of its own for what the whole patch may read. Every name must be an ephemeral
+    /// global: goofi says what it holds and no patch carries it.
+    fn published(&self) -> Vec<(&'static str, goofi_core::globals::GlobalValue)> {
+        Vec::new()
+    }
     /// Re-enumerate a `Str` param's options on the node's own thread — the one imperative
     /// settled state cannot express.
     fn refresh_param(&mut self, uid: Uid, key: ParamKey);
@@ -278,8 +285,12 @@ pub trait Engine: Send {
     fn take_edits(&mut self) -> Vec<Edit> {
         Vec::new()
     }
-    /// The patch clock origin moved — a clear reset it. No-op for an engine with no patch time.
-    fn reset_clock(&mut self, _origin: Instant) {}
+    /// What a slot's readers want of its frames: the `(width, height)` every reader is a viewer
+    /// of and would reduce to anyway, or `None` for full resolution — which is what a global
+    /// following the slot, or a snapshot, requires. A producer that can render the smaller size
+    /// itself makes the reduction free; one that cannot ignores this. A strictly one-way
+    /// projection of the bridge's own plan, never a second owner of it.
+    fn view_demand(&mut self, _uid: Uid, _slot: &str, _want: Option<(u32, u32)>) {}
     /// The graph's expression evaluator, shared with every engine that evaluates `nd()` bindings
     /// on its own thread. No-op for an engine that never does.
     fn set_evaluator(&mut self, _evaluator: Arc<dyn ExprEvaluator>) {}

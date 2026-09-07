@@ -970,23 +970,6 @@ fn parse_control(payload: &Value) -> Result<Option<Option<goofi_core::globals::C
     }
 }
 
-/// `cmds`, lifted past the group's config lock for their one command: a control panel owns its
-/// group, so its door edits a locked group and leaves it locked — the undo of the whole is one step.
-fn through_the_lock(g: &goofi_graph::Graph, group: &str, cmds: Vec<goofi_graph::Command>) -> goofi_graph::Command {
-    use goofi_graph::Command;
-    let held = g.globals().group_lock(group);
-    if !held.config {
-        return Command::Compound(cmds);
-    }
-    let mut all = vec![Command::LockGlobalGroup {
-        group: group.to_string(),
-        lock: goofi_core::globals::Lock { config: false, value: held.value },
-    }];
-    all.extend(cmds);
-    all.push(Command::LockGlobalGroup { group: group.to_string(), lock: held });
-    Command::Compound(all)
-}
-
 fn parse_kind(v: &Value) -> Result<goofi_core::globals::ControlKind, String> {
     serde_json::from_value(v.clone()).map_err(|_| {
         let kinds = goofi_core::globals::ControlKind::ALL.iter().map(|k| k.as_str()).collect::<Vec<_>>().join("/");
@@ -1106,11 +1089,7 @@ pub(crate) fn control_add(
         }
     }
     let control: goofi_core::globals::Control = serde_json::from_value(record.clone()).map_err(|e| format!("control add: {e}"))?;
-    let cmd = through_the_lock(
-        &g,
-        &group,
-        vec![goofi_graph::Command::EditGlobal { name: name.clone(), value: Some(value), at: None, control: Some(Some(control)) }],
-    );
+    let cmd = goofi_graph::Command::EditGlobal { name: name.clone(), value: Some(value), at: None, control: Some(Some(control)) };
     state.history.lock().unwrap().apply(&mut g, actor, cmd)?;
     Ok(json!({ "name": name, "control": record }))
 }
@@ -1144,15 +1123,12 @@ pub(crate) fn control_edit(
     }
     if touched {
         let control: goofi_core::globals::Control = serde_json::from_value(record).map_err(|e| format!("control edit: {e}"))?;
-        // The value it holds rides along under the new name: `None` would be a remove.
-        let value = g.globals().get(&name).cloned();
-        cmds.push(goofi_graph::Command::EditGlobal { name: target.clone(), value, at: None, control: Some(Some(control)) });
+        cmds.push(goofi_graph::Command::EditGlobal { name: target.clone(), value: None, at: None, control: Some(Some(control)) });
     }
     if cmds.is_empty() {
         return Err("control edit: nothing to change — give a name, a kind, a range, options or a cell".into());
     }
-    let cmd = through_the_lock(&g, &group, cmds);
-    state.history.lock().unwrap().apply(&mut g, actor, cmd)?;
+    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::Compound(cmds))?;
     Ok(json!({ "name": target }))
 }
 
@@ -1163,9 +1139,8 @@ pub(crate) fn control_remove(
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
     let mut g = state.graph.lock().unwrap();
-    let (group, _, name) = element_of(&g, "control remove", payload)?;
-    let cmd = through_the_lock(&g, &group, vec![goofi_graph::Command::EditGlobal { name, value: None, at: None, control: None }]);
-    state.history.lock().unwrap().apply(&mut g, actor, cmd)?;
+    let (_, _, name) = element_of(&g, "control remove", payload)?;
+    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::RemoveGlobal { name })?;
     Ok(json!({ "removed": true }))
 }
 
@@ -1176,14 +1151,14 @@ pub(crate) fn control_source(
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
     let mut g = state.graph.lock().unwrap();
-    let (group, _, name) = element_of(&g, "control source", payload)?;
+    let (_, _, name) = element_of(&g, "control source", payload)?;
     let reference = parse_str(payload, "reference")?.trim().to_string();
     let index = match payload.get("index") {
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_u64().map(|i| i as usize).ok_or_else(|| format!("control source: `index` is a whole number, not `{v}`"))?),
     };
     let source = (!reference.is_empty()).then_some(goofi_core::globals::GlobalSource { reference, index });
-    let cmd = through_the_lock(&g, &group, vec![goofi_graph::Command::SourceGlobal { name, source: source.clone() }]);
+    let cmd = goofi_graph::Command::SourceGlobal { name, source: source.clone() };
     state.history.lock().unwrap().apply(&mut g, actor, cmd)?;
     Ok(json!({ "source": source }))
 }
@@ -1229,22 +1204,26 @@ pub(crate) fn global_edit(
     };
     let ty = held["type"].as_str().unwrap_or_default().to_string();
     let control = parse_control(payload)?;
-    let val = payload.get("value").filter(|v| !v.is_null());
     // A control-only edit is what the panel sends when it moves a widget, so the value is optional
-    // once a `control` is given.
-    let val = match (val, &control) {
-        (Some(v), _) => v,
-        (None, Some(_)) => &held["value"],
-        (None, None) => return Err("global entry edit: missing value".to_string()),
+    // once a `control` is given — and the entry keeps the one it holds, followed or locked as it may be.
+    let value = match payload.get("value").filter(|v| !v.is_null()) {
+        Some(val) => Some(
+            goofi_graph::global_from_json(&json!({ "value": val, "type": ty }))
+                .ok_or_else(|| format!("global entry edit: `{val}` is not a {ty}"))?,
+        ),
+        None if control.is_some() => None,
+        None => return Err("global entry edit: missing value".to_string()),
     };
-    let value = goofi_graph::global_from_json(&json!({ "value": val, "type": ty }))
-        .ok_or_else(|| format!("global entry edit: `{val}` is not a {ty}"))?;
+    let stored = match &value {
+        Some(v) => goofi_graph::global_to_json(v)["value"].clone(),
+        None => held["value"].clone(),
+    };
     state.history.lock().unwrap().apply(
         &mut g,
         actor,
-        goofi_graph::Command::EditGlobal { name, value: Some(value.clone()), at: None, control },
+        goofi_graph::Command::EditGlobal { name, value, at: None, control },
     )?;
-    Ok(json!({ "value": goofi_graph::global_to_json(&value)["value"] }))
+    Ok(json!({ "value": stored }))
 }
 
 pub(crate) fn global_remove(
@@ -1258,11 +1237,7 @@ pub(crate) fn global_remove(
     if g.globals().get(&name).is_none() {
         return Err(format!("global entry remove: no global `{name}`"));
     }
-    state.history.lock().unwrap().apply(
-        &mut g,
-        actor,
-        goofi_graph::Command::EditGlobal { name, value: None, at: None, control: None },
-    )?;
+    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::RemoveGlobal { name })?;
     Ok(json!({ "removed": true }))
 }
 

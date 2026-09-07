@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use goofi_control::{Desired, Handle, Shared, Sub};
 use goofi_core::SlotType;
 use goofi_node::{
-    DrainWaker, Engine, GraphView, LibraryEntry, NodeStage, NodeView, ParamDecl, ParamGroups, ParamKey,
-    ParamSpec, ScannedType, Status, Touched, Uid,
+    DrainWaker, Engine, ExprDecl, ExprMode, GraphView, LibraryEntry, NodeManifest, NodeStage, NodeView,
+    ParamDecl, ParamGroups, ParamKey, ParamSpec, ScannedType, Status, Touched, Uid,
 };
 
 mod gpu;
@@ -57,13 +57,24 @@ pub(crate) struct Instance {
     pub(crate) params: Arc<[AtomicU64]>,
     pub(crate) uploads: Vec<Arc<Mutex<Option<half::Upload>>>>,
     pub(crate) readers: Arc<AtomicBool>,
-    pub(crate) tap: Arc<Mutex<Option<goofi_core::Data>>>,
+    pub(crate) tap: Arc<Mutex<half::Tap>>,
+    /// What this node's readers want its readback fitted into: the bridge writes it, the render
+    /// thread reads it, and nothing between the two holds a copy.
+    pub(crate) tap_box: Arc<AtomicU64>,
     control: Handle,
+}
+
+impl Instance {
+    /// The size this node asks for, from the one writer of its param atomics — a constant and an
+    /// evaluated binding alike. 0 on an axis means follow what is wired behind it.
+    pub(crate) fn asked(&self) -> (u32, u32) {
+        plan::asked(&self.params, self.class.manifest.params.len())
+    }
 }
 
 pub struct GraphicsEngine {
     instance: String,
-    started: Instant,
+    time: Arc<goofi_core::time::Time>,
     clock: Clock,
     shared: Arc<Shared>,
     pub(crate) compiler: Compiler,
@@ -85,36 +96,61 @@ pub struct GraphicsEngine {
     bells: goofi_transport::IoxNode,
 }
 
-/// The universal group every graphics node carries: 0 follows what is wired behind it.
-static OUTPUT_DECLS: &[ParamDecl] = &[
+/// One universal `common` param, as a function of the manifest it is added to — the signal
+/// engine's shape, because the answer depends on whether the node makes its own frames.
+type CommonDecl = fn(&NodeManifest) -> ParamDecl;
+
+fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> ParamDecl {
     ParamDecl {
-        group: "output",
-        name: "width",
+        group: "common",
+        name,
         spec: ParamSpec::Int { default: 0, min: 0, max: plan::MAX_SIZE as i64 },
-        doc: Some("Texture width in pixels; 0 follows the first wired texture input."),
-        expression: None,
-    },
-    ParamDecl {
-        group: "output",
-        name: "height",
-        spec: ParamSpec::Int { default: 0, min: 0, max: plan::MAX_SIZE as i64 },
-        doc: Some("Texture height in pixels; 0 follows the first wired texture input."),
-        expression: None,
-    },
-];
+        expression: Some(ExprDecl {
+            source,
+            mode: if m.producer { ExprMode::On } else { ExprMode::Off },
+            trigger: false,
+        }),
+        doc: Some(
+            "Texture size in pixels; 0 follows the first wired texture input. A node that makes \
+             its own frames follows the patch's default instead.",
+        ),
+    }
+}
+
+fn width(m: &NodeManifest) -> ParamDecl {
+    size_decl("width", "globals.system.default_width", m)
+}
+
+fn height(m: &NodeManifest) -> ParamDecl {
+    size_decl("height", "globals.system.default_height", m)
+}
+
+/// The universal `common` group every graphics node carries; a third param is added here and
+/// nowhere else.
+static COMMON_DECLS: &[CommonDecl] = &[width, height];
+
+fn common_decls(m: &NodeManifest) -> impl Iterator<Item = ParamDecl> + '_ {
+    COMMON_DECLS.iter().map(move |d| d(m))
+}
+
+/// Every param a graphics node holds: the author's, then the engine's universal group. ONE order
+/// — the param atomics, the desired consts and every binding index are all read against it.
+fn decls_of(manifest: &'static NodeManifest) -> Vec<ParamDecl> {
+    manifest.params.iter().copied().chain(common_decls(manifest)).collect()
+}
 
 impl GraphicsEngine {
     /// Open the device and start the engine, or say why this machine has none.
     pub fn open(
         instance: String,
-        started: Instant,
+        time: Arc<goofi_core::time::Time>,
         waker: Arc<DrainWaker>,
         clock: Clock,
     ) -> Result<GraphicsEngine, String> {
         let gpu = gpu::shared()?;
         let shared = Arc::new(Shared::new(waker));
         let stats = Arc::new(Stats::default());
-        let runtime = Arc::new(Mutex::new(Runtime::new(gpu.clone(), started, stats.clone())));
+        let runtime = Arc::new(Mutex::new(Runtime::new(gpu.clone(), time.clone(), stats.clone())));
         let inbox = runtime.lock().expect("the runtime").inbox.clone();
         let ticker = (clock == Clock::Timer).then(|| {
             let stop = Arc::new(AtomicBool::new(false));
@@ -140,7 +176,7 @@ impl GraphicsEngine {
         });
         Ok(GraphicsEngine {
             instance,
-            started,
+            time,
             clock,
             compiler: Compiler(shared.clone()),
             gpu,
@@ -201,16 +237,10 @@ impl GraphicsEngine {
     }
 
     /// Everything one node's control half holds, read off the settled view.
-    /// The desired state, and the verdict on every universal param: the `output` size is settled
-    /// state, so a binding on it is refused in words rather than quietly ignored.
-    fn desired_of(
-        &self,
-        view: &GraphView<'_>,
-        uid: Uid,
-        nv: &NodeView<'_>,
-    ) -> (Desired, Vec<(goofi_node::ParamKey, Option<String>)>) {
+    fn desired_of(&self, view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>) -> Desired {
         let manifest = self.live[&uid].class.manifest;
-        let consts = manifest.params.iter().map(|d| goofi_control::param_of(nv.params, d)).collect();
+        let decls = decls_of(manifest);
+        let consts = decls.iter().map(|d| goofi_control::param_of(nv.params, d)).collect();
         let mut subs = Vec::new();
         let mut inbox = 0;
         for s in manifest.inputs {
@@ -223,26 +253,12 @@ impl GraphicsEngine {
                 subs.push(Sub::Slot { inbox: k, service });
             }
         }
-        for (param, d) in manifest.params.iter().enumerate() {
+        for (param, d) in decls.iter().enumerate() {
             let bound = nv.bindings.iter().find(|b| b.live && b.key.group == d.group && b.key.name == d.name);
             let Some(b) = bound else { continue };
             let vars = b.vars.iter().map(|v| goofi_transport::var_of(view, v)).collect();
             subs.push(Sub::Bind { param, key: b.key.clone(), source: b.rewritten.to_string(), id: b.id, vars });
         }
-        // The whole universal set every settle, so the answer is stateless: a key a live binding
-        // names carries the refusal, and every other one clears.
-        let undrivable = OUTPUT_DECLS
-            .iter()
-            .map(|d| {
-                let key = goofi_node::ParamKey::new(d.group, d.name);
-                let bound = nv.bindings.iter().any(|b| b.live && *b.key == key);
-                let why = bound.then(|| {
-                    "the `output` size is settled state: it takes a value, never a reference or an expression"
-                        .to_string()
-                });
-                (key, why)
-            })
-            .collect();
         let targets = manifest
             .outputs
             .iter()
@@ -254,7 +270,7 @@ impl GraphicsEngine {
                     .collect()
             })
             .collect();
-        (Desired { consts, subs, targets }, undrivable)
+        Desired { consts, subs, targets }
     }
 
     /// Whether a ring would wake a same-engine consumer for what the plan already carries.
@@ -306,7 +322,7 @@ impl GraphicsEngine {
                             Status::Fault {
                                 fault: Some(goofi_node::NodeFault::Process {
                                     msg: format!("no window: {why}"),
-                                    since: self.started.elapsed().as_secs_f64(),
+                                    since: self.time.now(),
                                 }),
                             },
                         )),
@@ -354,8 +370,8 @@ impl Engine for GraphicsEngine {
         held
     }
 
-    fn universal_decls(&self, _manifest: &'static goofi_node::NodeManifest) -> Vec<ParamDecl> {
-        OUTPUT_DECLS.to_vec()
+    fn universal_decls(&self, manifest: &'static NodeManifest) -> Vec<ParamDecl> {
+        common_decls(manifest).collect()
     }
 
     fn insert(&mut self, uid: Uid, type_name: &str, generation: u64, params: &ParamGroups) -> Option<String> {
@@ -363,31 +379,32 @@ impl Engine for GraphicsEngine {
             return Some(format!("no graphics node type `{type_name}`"));
         };
         let manifest = class.manifest;
-        let atomics: Arc<[AtomicU64]> = manifest
-            .params
+        let atomics: Arc<[AtomicU64]> = decls_of(manifest)
             .iter()
             .map(|d| AtomicU64::new(goofi_control::scalar_of(params, d).to_bits()))
             .collect();
         let uploads: Vec<Arc<Mutex<Option<half::Upload>>>> =
             (0..Self::uploads_of(manifest)).map(|_| Arc::new(Mutex::new(None))).collect();
         let readers = Arc::new(AtomicBool::new(false));
-        let tap = Arc::new(Mutex::new(None));
+        let tap = Arc::new(Mutex::new(half::Tap::default()));
+        let tap_box = Arc::new(AtomicU64::new(0));
         let spawn = goofi_control::Spawn {
             engine: "graphics",
             uid,
             base: goofi_transport::service_base(&self.instance, uid, generation),
             manifest,
             params: atomics.clone(),
-            started: self.started,
+            time: self.time.clone(),
         };
         let (cells, flag, out) = (uploads.clone(), readers.clone(), tap.clone());
-        let make = move || GraphicsHalf { uploads: cells, readers: flag, tap: out };
+        let size = manifest.params.len();
+        let make = move || GraphicsHalf::new(cells, flag, out, size);
         let control = match goofi_control::spawn(spawn, self.shared.clone(), &self.bells, make) {
             Ok(handle) => handle,
             Err(e) => return Some(e),
         };
         self.ask(runtime::Cmd::Insert(uid, runtime::params_len(manifest.params)));
-        self.live.insert(uid, Instance { class, params: atomics, uploads, readers, tap, control });
+        self.live.insert(uid, Instance { class, params: atomics, uploads, readers, tap, tap_box, control });
         // A synchronous engine is ready the moment its insert answers.
         self.pending.push((uid, Status::Stage { stage: NodeStage::Ready }));
         self.dirty = true;
@@ -411,15 +428,14 @@ impl Engine for GraphicsEngine {
         self.shared.replan.store(false, Ordering::Release);
         for uid in self.live.keys().copied().collect::<Vec<_>>() {
             let Some(nv) = view.nodes.get(&uid) else { continue };
-            let (desired, errors) = self.desired_of(view, uid, nv);
+            let desired = self.desired_of(view, uid, nv);
             self.live[&uid].control.send_if_changed(desired);
-            self.pending.push((uid, Status::BindingErrors { errors }));
         }
         // Windows first: a screen is a reader, so one opened here must be in THIS plan's demand.
         self.follow_windows(view, &plan::sizes(view, &self.live));
         let open: HashMap<Uid, goofi_window::Id> = self.windows.iter().map(|(u, (id, _))| (*u, *id)).collect();
         let (plan, faults) = plan::compile(view, &self.live, &open);
-        let since = self.started.elapsed().as_secs_f64();
+        let since = self.time.now();
         self.pending.extend(self.faults.settle(faults, since));
         self.ask(runtime::Cmd::Plan(plan));
         if !self.pending.is_empty() {
@@ -443,9 +459,15 @@ impl Engine for GraphicsEngine {
         }
     }
 
-    fn reset_clock(&mut self, origin: Instant) {
-        self.started = origin;
-        self.ask(runtime::Cmd::Clock(origin));
+    /// The tap renders at the size its viewers will reduce it to anyway, so a 4K frame is not
+    /// read back only to be averaged down on a CPU. Only the READBACK shrinks: the stage still
+    /// renders at its authored `output` size, which is what a window on the screen shows.
+    /// It is one cell rather than plan state, because a viewer appearing or leaving must not be
+    /// able to re-plan an engine — an accessory never reaches the engine's own scheduling.
+    fn view_demand(&mut self, uid: Uid, _slot: &str, want: Option<(u32, u32)>) {
+        if let Some(inst) = self.live.get(&uid) {
+            inst.tap_box.store(plan::pack(want), Ordering::Relaxed);
+        }
     }
 
     fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_node::ExprEvaluator>) {

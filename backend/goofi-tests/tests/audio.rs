@@ -410,6 +410,22 @@ fn a_patch_sounds_under_the_external_clock() {
     assert!(status["audio"]["device"].is_null(), "no device under the external clock: {status}");
     assert!(status["audio"]["channels"].as_u64().is_some_and(|c| c >= 1), "{status}");
     assert_eq!((status["audio"]["callbacks"].as_u64(), status["audio"]["xruns"].as_u64()), (Some(0), Some(0)), "{status}");
+
+    // Step: the engine PUBLISHES what it decided into `system.*`, off the same read the status
+    // answers from — so the two cannot drift, and an expression in any engine reads the rate with
+    // no door of its own. It is goofi's to say: a hand edit is refused, and no patch carries it.
+    let listed = g.call("global list", j!({}))["globals"].as_array().unwrap().clone();
+    let global = |name: &str| listed.iter().find(|e| e["name"] == name).unwrap_or_else(|| panic!("{name} is seeded")).clone();
+    assert_eq!(global("system.audio_rate")["value"], status["audio"]["rate"], "the rate the engine published");
+    assert_eq!(global("system.audio_channels")["value"], status["audio"]["channels"], "the channels it published");
+    assert_eq!(global("system.audio_device")["value"], j!(""), "no device under the external clock");
+    assert_eq!(global("system.audio_driver")["value"], j!(""), "and no ASIO driver holds this process");
+    assert_eq!(global("system.audio_rate")["lock"]["value"], j!(true), "an ephemeral global is value-locked");
+    let why = g.refuse("global entry edit", j!({ "name": "system.audio_rate", "value": 22_050.0 }));
+    assert!(why.contains("ephemeral"), "the engine's own fact refuses a hand edit: {why}");
+    assert!(!g.call("session manifest", j!({}))["yaml"].as_str().unwrap().contains("audio_rate"),
+            "and a patch never carries it");
+
     // A pulse is refused on a param that is not one; no shipped audio node declares a pulse yet.
     let why = g.refuse("node param pulse", j!({ "node": hex(gain3), "param": "gain/gain" }));
     assert!(why.contains("not a pulse"), "{why}");
@@ -905,11 +921,11 @@ fn a_patch_sounds_under_the_external_clock() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures").join("vst3");
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let nested = PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").expect("the harness names the nested target"));
-    let built = |crash: bool| -> PathBuf {
+    let built = |features: &str| -> PathBuf {
         let mut cmd = std::process::Command::new(&cargo);
         cmd.arg("build").arg("--manifest-path").arg(fixture.join("Cargo.toml"));
-        if crash {
-            cmd.arg("--features").arg("crash");
+        if !features.is_empty() {
+            cmd.arg("--features").arg(features);
         }
         let out = cmd.output().expect("cargo runs");
         assert!(out.status.success(), "the fixture plugin builds: {}", String::from_utf8_lossy(&out.stderr));
@@ -931,7 +947,11 @@ fn a_patch_sounds_under_the_external_clock() {
         std::fs::create_dir_all(&into).unwrap();
         std::fs::copy(&artifact, into.join(file)).unwrap();
     };
-    bundled("GoofiFixture", built(false));
+    // Every child the scan spawns leaves a line here, so what the cache saves is countable.
+    let scans = keep.path().join("scans.log");
+    std::env::set_var("GOOFI_VST3_SCAN_LOG", &scans);
+    let scanned = || std::fs::read_to_string(&scans).unwrap_or_default().lines().count();
+    bundled("GoofiFixture", built(""));
     // Two audio classes in the one bundle: an effect, and a synth whose subcategories say so.
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:GoofiFixture", "audio:GoofiSynth"]));
     let plug = g.add("GoofiFixture");
@@ -961,13 +981,36 @@ fn a_patch_sounds_under_the_external_clock() {
     g.call("link remove", j!({ "from": ep(hex(src), "out"), "to": ep(hex(plug), "input") }));
     g.set_param(plug, "voice", "gate", true);
     heard(&g, plug, "a C4 from a rising gate at pitch zero", |x| (peak(x) - 0.5).abs() < 0.02 && near(per_tenth(x), 52));
+
+    // The note is the round and the residual is carried beside it: C7 and 40 cents reads 428
+    // crossings a tenth where the round alone reads 418, so a dropped residual fails here.
+    let detuned = |g: &Goofi, plug, what| {
+        // A voice already held is not asked its pitch again, so the note is re-taken — and the
+        // release has to be RENDERED, since the gate's fall is a state nothing sees undriven.
+        g.set_param(plug, "voice", "gate", false);
+        heard(g, plug, "the voice let go before it is re-taken", |x| peak(x) < 1e-3);
+        g.set_param(plug, "voice", "pitch", 3.0 + 0.4 / 12.0);
+        g.set_param(plug, "voice", "gate", true);
+        heard(g, plug, what, |x| near(per_tenth(x), 428));
+    };
+    detuned(&g, plug, "40 cents above C7, carried by the channel's pitch wheel");
+
+    // The same 40 cents into a plugin that maps no controller at all: with no wheel to ride, the
+    // residual travels in the note's own `tuning`, and it has to land on the very same pitch.
+    bundled("GoofiDeaf", built("deaf"));
+    assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:GoofiDeaf", "audio:GoofiDeafSynth"]));
+    let deaf = g.add("GoofiDeaf");
+    detuned(&g, deaf, "the same 40 cents, carried by the note's own tuning");
+    g.set_param(deaf, "voice", "gate", false);
+
+    g.set_param(plug, "voice", "pitch", 0.0);
     g.set_param(plug, "voice", "gate", false);
     heard(&g, plug, "silence after the fall", |x| peak(x) < 1e-3);
     g.call("node restart", j!({ "node": hex(plug) }));
     g.link(src, "out", plug, "input");
     heard(&g, plug, "the gain the record keeps, past a restart", |x| (peak(x) - 0.5).abs() < 0.02);
 
-    bundled("Crasher", built(true));
+    bundled("Crasher", built("crash"));
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Crasher"]));
     let row = g.call("library list", j!({}))["types"].as_array().unwrap().iter()
         .find(|v| v["type"] == "audio:Crasher").cloned().expect("greyed, not absent");
@@ -975,6 +1018,21 @@ fn a_patch_sounds_under_the_external_clock() {
     assert!(row["doc"].as_str().is_some_and(|d| d.contains("scanner")), "the scanner's death is the reason: {row}");
     assert!(g.refuse("node add", j!({ "type": "Crasher" })).contains("unavailable"));
     heard(&g, plug, "the server answers on", |x| (peak(x) - 0.5).abs() < 0.02);
+
+    // The scanner's verdict is remembered by the binary's own stamp, its REFUSAL included: a
+    // refresh that finds nothing changed runs no child at all, and the crasher comes back greyed
+    // without being asked again. This is what a machine full of plugins pays at every patch load.
+    let listed = |ty: &str| g.call("library list", j!({ "full": true }))["types"].as_array().unwrap().iter()
+        .find(|v| v["type"] == ty).cloned().unwrap_or_else(|| panic!("{ty} is in the palette"));
+    assert_eq!(scanned(), 3, "one child per bundle: the fixture, the deaf one, the crasher");
+    g.call("library refresh", j!({}));
+    assert_eq!(scanned(), 3, "an unchanged tree spawns no scanner at all");
+    assert_eq!(listed("audio:Crasher")["available"], false, "the refusal came back off the cache");
+    assert_eq!(listed("audio:GoofiFixture")["available"], true, "and so did the answer");
+    // A binary re-copied is a stamp that moved, and a stamp that moved is a source that changed.
+    bundled("Crasher", built("crash"));
+    g.call("library refresh", j!({}));
+    assert_eq!(scanned(), 4, "a changed binary is scanned again");
 
     // The plugin's state is its own blob, and the record is its params: the fixture latches the
     // first time `shape` reaches its last step and halves its tone for ever after, which no param

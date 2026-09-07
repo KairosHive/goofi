@@ -12,6 +12,7 @@ pub mod path;
 pub mod probe;
 pub mod reduce;
 pub mod stream;
+pub mod time;
 
 pub use indexmap;
 pub use stream::Stream;
@@ -314,10 +315,11 @@ pub enum MetaValue {
 /// Reserved builtin meta keys — always present in a [`Meta`], `Null`/empty when unset.
 pub const META_SFREQ: &str = "sfreq";
 pub const META_UFREQ: &str = "ufreq";
+pub const META_TIME: &str = "time";
 pub const META_INDEX: &str = "index";
 pub const META_CHANNELS: &str = "channels";
 pub const META_REDUCED: &str = "reduced";
-const BUILTIN_KEYS: [&str; 5] = [META_SFREQ, META_UFREQ, META_INDEX, META_CHANNELS, META_REDUCED];
+const BUILTIN_KEYS: [&str; 6] = [META_SFREQ, META_UFREQ, META_TIME, META_INDEX, META_CHANNELS, META_REDUCED];
 
 static EMPTY_AXES: Axes = Axes(Vec::new());
 
@@ -337,6 +339,7 @@ impl Meta {
         let mut m = IndexMap::with_capacity(BUILTIN_KEYS.len());
         m.insert(META_SFREQ.to_string(), MetaValue::Null);
         m.insert(META_UFREQ.to_string(), MetaValue::Null);
+        m.insert(META_TIME.to_string(), MetaValue::Null);
         m.insert(META_INDEX.to_string(), MetaValue::Null);
         m.insert(META_CHANNELS.to_string(), MetaValue::Axes(Axes::new()));
         m.insert(META_REDUCED.to_string(), MetaValue::Null);
@@ -366,6 +369,13 @@ impl Meta {
     }
     pub fn set_ufreq(&mut self, v: Option<f64>) {
         self.set(META_UFREQ, v.map_or(MetaValue::Null, MetaValue::Float));
+    }
+    /// Patch seconds at the process tick that produced this frame.
+    pub fn time(&self) -> Option<f64> {
+        as_f64(self.0.get(META_TIME))
+    }
+    pub fn set_time(&mut self, v: Option<f64>) {
+        self.set(META_TIME, v.map_or(MetaValue::Null, MetaValue::Float));
     }
     pub fn index(&self) -> Option<u64> {
         match self.0.get(META_INDEX) {
@@ -521,8 +531,9 @@ impl Data {
     }
 
     /// A copy with the engine-owned `index` and `ufreq` stamped on — overwritten, never inherited.
-    pub fn with_stamps(&self, index: u64, ufreq: Option<f64>) -> Data {
+    pub fn with_stamps(&self, time: f64, index: u64, ufreq: Option<f64>) -> Data {
         let mut meta = self.0.meta.clone();
+        meta.set_time(Some(time));
         meta.set_index(Some(index));
         meta.set_ufreq(ufreq);
         Data(Arc::new(DataInner {

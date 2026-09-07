@@ -33,6 +33,7 @@ pub fn introspect(py: Python<'_>, path: &str) -> PyResult<String> {
         // A Python node is the signal plane's, and no signal node closes a loop.
         feedback: false,
         window: false,
+        state: Vec::new(),
         tags: cls.getattr("TAGS")?.extract()?,
         inputs: slots(&cls.getattr("INPUTS")?)?,
         outputs: out_slots(&cls.getattr("OUTPUTS")?)?,

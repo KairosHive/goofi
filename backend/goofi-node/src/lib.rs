@@ -210,7 +210,7 @@ pub struct EvalCtx<'a> {
     /// The expression's variables, keyed by the generated name the rewrite minted; `None` has not
     /// arrived yet, and the expression sees it as absent.
     pub locals: &'a std::collections::HashMap<String, Option<Local>>,
-    /// Engine wall-clock seconds (`NodeCtx::now`) — for time-based (variable-less) expressions.
+    /// Patch seconds (`NodeCtx::now`), off the one patch time — for time-based expressions.
     pub t: f64,
     /// The param being driven, a type template the evaluator coerces its result to.
     pub target: &'a Param,

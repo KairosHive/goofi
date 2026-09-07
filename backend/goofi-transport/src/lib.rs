@@ -292,6 +292,18 @@ pub fn open_output_subscriber(node: &IoxNode, service: &str) -> Result<ByteSubsc
         .map_err(|e| format!("subscriber `{service}`: {e}"))
 }
 
+/// The stack a thread needs to OPEN an iceoryx2 service: the service's static config is parsed by
+/// serde and toml, whose debug-build frames overflow a platform default. `AGENTS.md` says what it
+/// cost. It is the main thread's own size, so a node thread is no more constrained than the
+/// process around it.
+pub const STACK: usize = 8 * 1024 * 1024;
+
+/// A named thread with the stack [`STACK`] states. Every goofi thread that can reach this crate is
+/// built here, so the platform default never decides.
+pub fn thread(name: impl Into<String>) -> std::thread::Builder {
+    std::thread::Builder::new().name(name.into()).stack_size(STACK)
+}
+
 /// A publisher that can grow past its initial pool: a GOOF frame is variable-size, and `Static`
 /// would refuse the first one larger than `initial` instead of reallocating.
 pub fn publisher(service: &ByteService, what: &str, initial: usize) -> Result<BytePublisher, String> {

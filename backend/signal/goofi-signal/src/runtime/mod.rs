@@ -108,9 +108,9 @@ pub struct NodeRuntime {
     /// Shared with the graph: the node EVALUATES, the graph COMPILES, so the authoring RPC can
     /// answer with a real compile error. `None` ⇒ every bound param falls back to its literal.
     evaluator: Option<Arc<dyn ExprEvaluator>>,
-    /// The graph's clock origin, so `NodeCtx::now` is seconds-since-start on every node's thread
-    /// rather than seconds-since-this-node's-birth.
-    started: Instant,
+    /// The patch's time, so `NodeCtx::now` is seconds-since-patch on every node's thread rather
+    /// than seconds-since-this-node's-birth.
+    time: Arc<goofi_core::time::Time>,
 
     /// Something asked this node to run and it has not run since. Autotrigger is not here — it
     /// lives in `run_policy`, beside the cap that paces it.
@@ -139,8 +139,9 @@ pub struct NodeRuntime {
     /// the order the last `InSlot` set named — which IS `Inputs::get_multi`'s connection order.
     pub(crate) multi_wires: IndexMap<&'static str, MultiCells>,
     pub(crate) ctx: NodeCtx,
-    /// Per-output-slot emit counter for `meta["index"]` — engine-owned, the node never sees it.
-    index_counters: HashMap<&'static str, u64>,
+    /// The node's emit counter for `meta["index"]` — engine-owned, the node never sees it. One per
+    /// NODE, like the meter below: a tick stamps every slot it emitted with the same count.
+    emits: u64,
     /// Per-NODE measured update rate for `meta["ufreq"]`: one meter, stamped onto every slot this
     /// node emits, because ufreq describes the node rather than a slot.
     ufreq_meter: UfreqMeter,
@@ -157,14 +158,14 @@ pub struct NodeRuntime {
 /// Everything a node's thread needs that is the GRAPH's rather than the node's.
 pub struct NodeEnv {
     pub evaluator: Option<Arc<dyn ExprEvaluator>>,
-    pub started: Instant,
+    pub time: Arc<goofi_core::time::Time>,
 }
 
 impl NodeEnv {
     /// The environment of a node that belongs to no graph — what a test driving a [`NodeRuntime`]
     /// directly gets.
     pub fn detached() -> NodeEnv {
-        NodeEnv { evaluator: None, started: Instant::now() }
+        NodeEnv { evaluator: None, time: Arc::new(goofi_core::time::Time::new()) }
     }
 }
 
@@ -185,7 +186,7 @@ impl NodeRuntime {
             node,
             transport,
             evaluator: env.evaluator,
-            started: env.started,
+            time: env.time,
             trigger_pending: false,
             run_policy,
             last_run: None,
@@ -197,7 +198,7 @@ impl NodeRuntime {
             inputs: manifest.inputs.iter().filter(|s| !s.multi).map(|s| (s.name, None)).collect(),
             multi_wires: manifest.inputs.iter().filter(|s| s.multi).map(|s| (s.name, Vec::new())).collect(),
             ctx: NodeCtx::new(),
-            index_counters: HashMap::new(),
+            emits: 0,
             ufreq_meter: UfreqMeter::default(),
             last_ufreq_report: None,
             stage: NodeStage::Setup,
@@ -620,7 +621,7 @@ impl NodeRuntime {
             }));
             return;
         }
-        self.ctx.now = self.started.elapsed().as_secs_f64();
+        self.ctx.now = self.time.now();
         let multis = self.materialize_multis();
         let mut outputs = self.manifest.output_buffer();
         let result = {
@@ -637,14 +638,7 @@ impl NodeRuntime {
                 self.set_fault(None);
                 // The engine's own meta goes on before anything leaves the node — there is no
                 // second stamping site.
-                let ufreq = stamp_meta(
-                    self.manifest,
-                    &self.inputs,
-                    &mut outputs,
-                    self.ctx.now,
-                    &mut self.index_counters,
-                    &mut self.ufreq_meter,
-                );
+                let ufreq = stamp_meta(&mut outputs, self.ctx.now, &mut self.emits, &mut self.ufreq_meter);
                 for (slot, frame) in outputs.iter() {
                     if let Some(frame) = frame {
                         self.transport.publish(slot, frame);
@@ -799,8 +793,7 @@ pub fn spawn(
     env: NodeEnv,
     halt: Arc<Halt>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
-    std::thread::Builder::new()
-        .name(format!("goofi-{}", manifest.type_name))
+    goofi_transport::thread(format!("goofi-{}", manifest.type_name))
         .spawn(move || {
             // A node removed inside its own build window never runs `setup()` — which may open a
             // device — and releases at once rather than after the import it no longer needs.
@@ -814,40 +807,19 @@ pub fn spawn(
         })
 }
 
-/// A `Data`'s total element count — the timeline discriminator, rather than a static per-slot
-/// flag: a length-preserving transform's output matches its input's count, and nothing else does.
-fn frame_count(d: &Data) -> usize {
-    match d.value() {
-        goofi_core::Value::Array(s) => s.shape().iter().product(),
-        goofi_core::Value::Str(s) => s.chars().count(),
-        goofi_core::Value::Table(m) => m.len(),
-    }
-}
-
 /// Stamp the engine-owned meta on every frame just emitted, and answer the node's measured rate.
-/// `index` follows the one matching TRIGGERING input, else a fresh per-slot counter; `ufreq` is the
-/// node's own EMA, never inherited from upstream.
+/// `time` and `index` are this process tick's — patch seconds, and the node's count of emits, so a
+/// gap in the index means a frame was LOST. `ufreq` is the node's own EMA, never inherited.
 fn stamp_meta(
-    manifest: &'static NodeManifest,
-    inputs: &IndexMap<&'static str, Option<Data>>,
     outputs: &mut IndexMap<&'static str, Option<Data>>,
     now: f64,
-    counters: &mut HashMap<&'static str, u64>,
+    emits: &mut u64,
     meter: &mut UfreqMeter,
 ) -> Option<f64> {
     // Nothing emitted → no meta to stamp, and the meter only advances on a productive emit.
     if outputs.values().all(|o| o.is_none()) {
         return None;
     }
-    // Only triggering inputs carry the data timeline; control inputs are excluded.
-    let triggering: std::collections::HashSet<&str> =
-        manifest.inputs.iter().filter(|s| s.trigger_process).map(|s| s.name).collect();
-    let input_frames: Vec<(u64, usize)> = inputs
-        .iter()
-        .filter(|(name, _)| triggering.contains(*name))
-        .filter_map(|(_, o)| o.as_ref())
-        .filter_map(|d| d.meta().index().map(|i| (i, frame_count(d))))
-        .collect();
     // EMA of the inter-emit interval, inverted. `None` until the second emit; a non-advancing
     // clock (`dt <= 0`) keeps the prior estimate.
     let node_ufreq = match meter.last_emit {
@@ -867,19 +839,11 @@ fn stamp_meta(
             }
         }
     };
-    for (slot, slot_opt) in outputs.iter_mut() {
+    let index = *emits;
+    *emits += 1;
+    for slot_opt in outputs.values_mut() {
         let Some(d) = slot_opt else { continue };
-        let of = frame_count(d);
-        let mut matches = input_frames.iter().filter(|(_, f)| *f == of).map(|(i, _)| *i);
-        let counter = counters.entry(*slot).or_insert(0);
-        let index = match (matches.next(), matches.next()) {
-            (Some(i), None) => i,
-            _ => *counter,
-        };
-        // Keep the fresh counter past whatever was emitted: a slot that MATCHES on one frame and
-        // then goes fresh would otherwise restart at 0 and regress the index at stream start.
-        *counter = index + 1;
-        *d = d.with_stamps(index, node_ufreq);
+        *d = d.with_stamps(now, index, node_ufreq);
     }
     node_ufreq
 }

@@ -2,7 +2,9 @@
 //! vocabulary, every probe a subscriber on the derived name of a texture slot — the door `/data`
 //! opens — and every frame a readback the GPU actually made.
 
-use goofi_tests::{ep, f32s, hex, j, render, shape, Goofi, Uid};
+use std::sync::Arc;
+
+use goofi_tests::{ep, f32s, hex, j, render, shape, Goofi, Uid, Viewer};
 
 const NO_GPU: &str = "no graphics engine here. The suite needs a GPU adapter: install a Vulkan \
                       driver, or Mesa's lavapipe (`mesa-vulkan-drivers`)";
@@ -53,9 +55,9 @@ fn shaders_render_on_the_gpu() {
     assert_eq!(shape(&frame), vec![512, 512, 4], "a node with nothing behind it is 512 square");
     assert!(close(px(&frame, 511, 511), [0.25, 0.5, 1.0, 1.0]), "the same colour to the far corner");
 
-    // Step: the universal `output` group resizes it, and what is wired behind FOLLOWS the size.
-    g.set_param(c, "output", "width", 64);
-    g.set_param(c, "output", "height", 32);
+    // Step: the universal `common` group resizes it, and what is wired behind FOLLOWS the size.
+    g.set_param(c, "common", "width", 64);
+    g.set_param(c, "common", "height", 32);
     let frame = drawn(&g, c, "the resized frame", |d| shape(d) == vec![32, 64, 4]);
     assert!(close(px(&frame, 31, 63), [0.25, 0.5, 1.0, 1.0]));
     let level = g.add("graphics:Level");
@@ -81,8 +83,8 @@ fn shaders_render_on_the_gpu() {
     g.ready(img);
     let up = g.add("graphics:ArrayIn");
     g.ready(up);
-    g.set_param(up, "output", "width", 4);
-    g.set_param(up, "output", "height", 4);
+    g.set_param(up, "common", "width", 4);
+    g.set_param(up, "common", "height", 4);
     g.link(img, "out", up, "input");
     let frame = drawn(&g, up, "the uploaded image", |d| shape(d) == vec![4, 4, 4]);
     assert!(close(px(&frame, 0, 0), [0.0, 1.0, 0.5, 1.0]), "row 0 is the top: {:?}", px(&frame, 0, 0));
@@ -96,8 +98,8 @@ fn shaders_render_on_the_gpu() {
     let vert = g.add("graphics:Ramp");
     g.ready(vert);
     g.set_param(vert, "ramp", "angle", 90.0);
-    g.set_param(vert, "output", "width", 8);
-    g.set_param(vert, "output", "height", 8);
+    g.set_param(vert, "common", "width", 8);
+    g.set_param(vert, "common", "height", 8);
     let copy = g.add("graphics:Level");
     g.ready(copy);
     g.link(vert, "out", copy, "input");
@@ -119,20 +121,16 @@ fn shaders_render_on_the_gpu() {
     g.set_param(knob, "control", "value", 2.0);
     drawn(&g, level, "double gain by reference", |d| close(px(d, 0, 0), [0.5, 1.0, 2.0, 1.0]));
 
-    // Step: the `output` size is settled state, so a reference on it is refused in words rather
-    // than accepted and quietly ignored.
-    g.call("node param edit", j!({ "node": hex(level), "param": "output/width",
+    // Step: the size is a param like any other, so a reference DRIVES it — a signal decides how
+    // many texels a stage has, and the engine re-plans around what the reference last said.
+    g.set_param(knob, "control", "value", 96.0);
+    g.call("node param edit", j!({ "node": hex(level), "param": "common/width",
                                    "reference": format!("{knob_name}.out"), "mode": "reference" }));
-    let why = g.until("the engine says the size takes no reference", |g| {
-        render(g, 1);
-        g.error(level)
-    });
-    assert!(why.contains("settled state"), "{why}");
-    g.call("node param edit", j!({ "node": hex(level), "param": "output/width", "mode": "constant" }));
-    g.until("and it clears when the reference goes", |g| {
-        render(g, 1);
-        g.error(level).is_none().then_some(())
-    });
+    drawn(&g, level, "the referenced width", |d| shape(d) == vec![32, 96, 4]);
+    assert!(g.error(level).is_none(), "a reference on the size is not a fault");
+    g.call("node param edit", j!({ "node": hex(level), "param": "common/width", "mode": "constant" }));
+    g.call("node param edit", j!({ "node": hex(level), "param": "level/gain", "mode": "constant" }));
+    drawn(&g, level, "and it follows its input again", |d| shape(d) == vec![32, 64, 4]);
 
     // Step: a loop closes through Feedback and accumulates a tenth a tick; one without it faults.
     let fb = g.add("graphics:Feedback");
@@ -255,6 +253,54 @@ fn shaders_render_on_the_gpu() {
     assert_eq!(row["available"], false, "{row}");
     assert!(row["doc"].as_str().unwrap_or_default().contains("TEXTURE or ARRAY"), "{row}");
 
+    // Step: a node holds its own state between two ticks. A state buffer starts empty, so a body
+    // seeds itself on `frame == 0` and reads what the last tick wrote from then on.
+    std::fs::write(dir.join("Count.wgsl"), COUNT).unwrap();
+    assert_eq!(g.call("library refresh", j!({}))["added"], j!(["graphics:Count"]));
+    let counter = g.add("graphics:Count");
+    g.ready(counter);
+    let counted = g.probe(counter, "out");
+    let read = || counted.latest().map(|d| px(&d, 0, 0));
+    let opened = g.until("a frame off the node's own buffer", |g| {
+        render(g, 1);
+        read().filter(|t| t[0] > 0.0)
+    });
+    let mut held = opened;
+    for _ in 0..40 {
+        render(&g, 1);
+        let Some(now) = read() else { continue };
+        // Green is what the seed wrote and nothing since has touched; red is what each tick adds
+        // to what the last one left. A buffer remade under the node loses both.
+        assert!((now[1] - 0.75).abs() < 1e-3, "the seed the first tick wrote is gone: {now:?}");
+        assert!(now[0] + 1e-3 >= held[0], "the buffer went backwards: {held:?} then {now:?}");
+        held = now;
+    }
+    assert!(held[0] > opened[0], "nothing accumulated: {opened:?} then {held:?}");
+    assert!(g.error(counter).is_none(), "a node with state is not a fault");
+    g.call("node remove", j!({ "node": hex(counter) }));
+
+    // Step: the shipped automaton is that buffer in use — it seeds itself on the first tick and
+    // reads every generation off the last. Conway thins a random field to a few percent and stops
+    // there, which no frozen grid and no runaway rule can do.
+    let life = g.add("graphics:Life");
+    g.ready(life);
+    g.set_param(life, "common", "width", 64);
+    g.set_param(life, "common", "height", 64);
+    let grid = g.probe(life, "out");
+    let alive = || grid.latest().filter(|d| shape(d) == vec![64, 64, 4])
+        .map(|d| f32s(&d).chunks_exact(4).map(|t| t[0]).sum::<f32>() / 4096.0);
+    let sown = g.until("a generation off the grid", |g| {
+        render(g, 1);
+        alive().filter(|v| *v > 0.0)
+    });
+    assert!(sown < 0.5, "a 35% seed, not a grid that came up full: {sown}");
+    let settled = g.until("the population thins and holds", |g| {
+        render(g, 20);
+        alive().filter(|v| *v < 0.15)
+    });
+    assert!(settled > 0.0, "the rule emptied the grid: {settled}");
+    g.call("node remove", j!({ "node": hex(life) }));
+
     // Step: a node nobody reads renders nothing — which is what makes an idle patch free.
     let stages = |g: &Goofi| g.call("session status", j!({}))["graphics"]["stages"].as_u64().unwrap();
     let lonely = g.add("graphics:Constant");
@@ -298,8 +344,8 @@ fn shaders_render_on_the_gpu() {
     // closed — and never a desktop.
     let win = g.add("graphics:Window");
     g.ready(win);
-    g.set_param(win, "output", "width", 64);
-    g.set_param(win, "output", "height", 32);
+    g.set_param(win, "common", "width", 64);
+    g.set_param(win, "common", "height", 32);
     g.link(c, "out", win, "input");
     let ui = g.ui();
     let opened = |g: &Goofi| goofi_bridge::graphics_engine(&mut g.state.graph.lock().unwrap()).window_of(win);
@@ -339,6 +385,20 @@ fn shaders_render_on_the_gpu() {
     g.call("node remove", j!({ "node": hex(lonely) }));
     assert!(!g.nodes().contains(&hex(lonely)));
     drawn(&g, c, "the constant still renders", |d| close(px(d, 0, 0), [0.25, 0.5, 1.0, 1.0]));
+
+    // Step: a node that makes its own frames carries the patch's default size as a live
+    // expression, so ONE global re-sizes every producer at once. The seeding wants an evaluator
+    // present; reading a bare global does not, which is why this one needs no interpreter.
+    g.state.graph.lock().unwrap().set_evaluator(Arc::new(goofi_tests::FirstVar));
+    let gen = g.add("graphics:Noise");
+    g.ready(gen);
+    let bound = g.doc()["nodes"][hex(gen)]["params"]["common"]["width"].clone();
+    assert_eq!((&bound["expr"], &bound["mode"]), (&j!("globals.system.default_width"), &j!("expression")),
+               "the declared binding was seeded live, not flattened to a literal: {bound}");
+    drawn(&g, gen, "the patch's default size", |d| shape(d) == vec![512, 512, 4]);
+    g.call("global entry edit", j!({ "name": "system.default_width", "value": 96 }));
+    g.call("global entry edit", j!({ "name": "system.default_height", "value": 48 }));
+    drawn(&g, gen, "every producer follows the global", |d| shape(d) == vec![48, 96, 4]);
 }
 
 /// The clock the binary actually runs on: nobody calls `render()`, and the engine draws anyway.
@@ -366,7 +426,121 @@ fn the_engine_draws_on_its_own_clock() {
     assert!(ran["stages"].as_u64().is_some_and(|s| s > 0), "{ran}");
 }
 
+/// A viewer asks for the box it can draw, and the ENGINE renders that — a 4K frame is never read
+/// off the GPU only to be averaged down on a CPU. The oracle is a probe on the node's OWN service,
+/// upstream of the reducer: only the engine can make what it sees small. What must still hold
+/// while it does: a snapshot asks for the frame itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
+    let g = Goofi::timed();
+    let base = g.serve().await;
+    let big = g.add("graphics:Ramp");
+    g.ready(big);
+    g.set_param(big, "common", "width", 1024);
+    g.set_param(big, "common", "height", 512);
+
+    // Upstream of the reducer: what the ENGINE published, before anything on a CPU shrank it.
+    let engine = g.probe(big, "out");
+    let made = |want: Vec<usize>| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(d) = engine.latest().filter(|d| shape(d) == want) {
+                return d;
+            }
+            assert!(std::time::Instant::now() < deadline, "the engine never published {want:?}");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    };
+    made(vec![512, 1024, 4]);
+
+    // Step: a viewer declares the box it can draw, and the ENGINE starts rendering that — with the
+    // aspect kept, so 1024x512 into 128x128 is 128x64 rather than a squashed square.
+    let mut viewer = Viewer::open(&base, &hex(big), "out").await;
+    viewer
+        .view(j!([{ "dtype": "array", "ndim": [["ge", 2], ["le", 3]], "dims": [],
+                    "reduce": [{ "dim": 0, "max": 128, "method": "area" },
+                               { "dim": 1, "max": 128, "method": "area" }] }]))
+        .await;
+    let small = made(vec![64, 128, 4]);
+    let reduced = small.meta().reduced().cloned().expect("a frame shrunk on the way out says so");
+    assert!(format!("{reduced:?}").contains("1024"), "it names the width it came from: {reduced:?}");
+    let drawn = viewer.until(|d| shape(d) == vec![64, 128, 4]).await;
+    assert_eq!(shape(&drawn), vec![64, 128, 4], "and that is what the viewer draws");
+
+    // Step: a snapshot asks for the frame ITSELF. The two-call protocol the op documents: the ask
+    // widens the demand, and the answer is the frame the producer then made for it.
+    let key = (big, "out".to_string());
+    let mut full = None;
+    for _ in 0..400 {
+        full = g.state.reducers.latest(key.clone()).filter(|d| shape(d) == vec![512, 1024, 4]);
+        if full.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let full = full.expect("a snapshot reads real pixels, not the viewer's preview");
+    assert!(full.meta().reduced().is_none(), "and the frame it answers with is not a reduction");
+
+    // Step: the viewer's box returns — one full frame was the cost of the ask, not a new mode.
+    made(vec![64, 128, 4]);
+
+    // Every reader from here on declares NOTHING, and none of them may widen the readback.
+    let holds_at = |want: Vec<usize>, why: &str| {
+        let tick = std::time::Duration::from_millis(20);
+        // Settled first: a snapshot is answered with one full frame, and a negative measured
+        // across that answer would name the wrong cause.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut run = 0;
+        while run < 10 {
+            assert!(std::time::Instant::now() < deadline, "the readback never settled at {want:?}: {why}");
+            run = if engine.latest().is_some_and(|d| shape(&d) == want) { run + 1 } else { 0 };
+            std::thread::sleep(tick);
+        }
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < until {
+            assert!(engine.latest().is_none_or(|d| shape(&d) == want), "{why}");
+            std::thread::sleep(tick);
+        }
+    };
+
+    // Step: a second reader wants the frame but no pixels of its own — the metadata panel, and
+    // every viewer between its socket opening and its first `view` op landing. It declares
+    // nothing, so it dilutes nothing: the box the viewer beside it asked for still stands.
+    let mut bare = Viewer::open(&base, &hex(big), "out").await;
+    bare.view(j!([])).await;
+    holds_at(vec![64, 128, 4], "a reader that declared nothing moved another viewer's box");
+
+    // Step: the declaring viewer leaves, as a pan carrying its node off screen does. Nothing asks
+    // for pixels now, so the readback falls to one texel — never up to the whole frame.
+    drop(viewer);
+    holds_at(vec![1, 1, 4], "a viewer leaving widened the readback");
+    drop(bare);
+    holds_at(vec![1, 1, 4], "the last reader leaving widened the readback");
+
+    // Step: a viewer that cannot draw this frame parks on the slot — a line panel on a texture,
+    // which prints a summary and renders nothing. Nothing admits the frame, so nothing has asked
+    // for pixels, and a declaration that draws nothing must not cost the whole frame.
+    let mut cannot = Viewer::open(&base, &hex(big), "out").await;
+    cannot
+        .view(j!([{ "dtype": "array", "ndim": [["le", 2]], "dims": [],
+                    "reduce": [{ "dim": 0, "max": 300, "method": "subsample" },
+                               { "dim": -1, "max": 800, "method": "envelope" }] }]))
+        .await;
+    holds_at(vec![1, 1, 4], "a viewer that cannot draw the frame widened the readback");
+
+    // Step: and beside one that CAN draw it, the fold takes the largest box per dim rather than
+    // falling out to the whole frame — the line panel drops out, it does not degrade the kernel.
+    let mut draws = Viewer::open(&base, &hex(big), "out").await;
+    draws
+        .view(j!([{ "dtype": "array", "ndim": [["ge", 2], ["le", 3]], "dims": [],
+                    "reduce": [{ "dim": 0, "max": 128, "method": "area" },
+                               { "dim": 1, "max": 128, "method": "area" }] }]))
+        .await;
+    holds_at(vec![64, 128, 4], "a viewer that cannot draw the frame shrank one that can");
+}
+
 const FOREIGN: &str = "/* goofi\n{ \"doc\": \"claims an audio slot\", \"inputs\": [{\"name\": \"input\", \"kind\": \"AUDIO\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
 const BROKEN: &str = "/* goofi\n{ \"doc\": \"does not compile\" }\n*/\nfn shade(uv: vec2f) -> vec4f { return nothing(uv); }\n";
+const COUNT: &str = "/* goofi\n{ \"doc\": \"counts a tenth a tick in a buffer of its own\", \"state\": [\"acc\"] }\n*/\nfn at(uv: vec2f) -> vec2i { return vec2i(floor(uv * resolution)); }\nfn next_acc(uv: vec2f) -> vec4f {\n    if frame == 0u { return vec4f(0.1, 0.75, 0.0, 1.0); }\n    let held = textureLoad(acc, at(uv), 0);\n    return vec4f(held.r + 0.1, held.g, 0.0, 1.0);\n}\nfn shade(uv: vec2f) -> vec4f { return vec4f(textureLoad(acc, at(uv), 0).rgb, 1.0); }\n";
 const HALF: &str = "/* goofi\n{ \"doc\": \"half of the input\", \"inputs\": [{\"name\": \"input\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let c = textureSample(input, samp, uv); return vec4f(c.rgb * 0.5, c.a); }\n";
 const QUARTER: &str = "/* goofi\n{ \"doc\": \"a quarter of the input\", \"inputs\": [{\"name\": \"input\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let c = textureSample(input, samp, uv); return vec4f(c.rgb * 0.25, c.a); }\n";

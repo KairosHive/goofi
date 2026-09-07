@@ -103,14 +103,19 @@ pub enum Command {
         value: Option<Param>,
         source: Option<SourceState>,
     },
-    /// Add / edit / remove a global: `Some(value)` upserts, `None` removes. `at` is the ordered
-    /// slot to re-add at — only a delete's captured inverse carries one, since order is observable.
+    /// Add or edit a global: `Some(value)` upserts, `None` leaves the value alone — an edit to the
+    /// widget beside it. `at` is the ordered slot to re-add at — only a delete's captured inverse
+    /// carries one, since order is observable.
     EditGlobal {
         name: String,
         value: Option<GlobalValue>,
         at: Option<usize>,
         /// The control record: outer `None` leaves it alone, inner `None` clears it.
         control: Option<Option<Control>>,
+    },
+    /// Delete a global, and with it everything that rode on the entry.
+    RemoveGlobal {
+        name: String,
     },
     /// Rename a global, or a whole group of them. Each inverts as the reverse rename, planned
     /// forward, so nothing puts back raw state.
@@ -436,18 +441,24 @@ impl Command {
 
             Command::EditGlobal { name, value, at, control } => {
                 let old = g.globals().get(&name).cloned();
-                let removing = value.is_none();
-                let old_control = (removing || control.is_some()).then(|| g.globals().control(&name).cloned());
-                // A delete's inverse re-adds at the removed index, with everything that rode on the
-                // entry — its widget, what it followed, its own lock; add/edit inverses carry no slot.
-                let inv_at = if removing { g.globals().index_of(&name) } else { None };
-                let (old_source, old_lock) = (g.globals().source(&name).cloned(), g.globals().own_lock(&name));
+                let old_control = control.is_some().then(|| g.globals().control(&name).cloned());
+                let set_value = value.is_some();
                 g.apply_global_change(&name, value, at, control)?;
-                let re_add = Command::EditGlobal { name: name.clone(), value: old, at: inv_at, control: old_control };
-                if !removing {
-                    return Ok((Outcome::Ok, re_add));
-                }
-                let mut inverse = vec![re_add];
+                Ok((Outcome::Ok, match old {
+                    None => Command::RemoveGlobal { name },
+                    Some(held) => Command::EditGlobal { name, value: set_value.then_some(held), at: None, control: old_control },
+                }))
+            }
+
+            Command::RemoveGlobal { name } => {
+                // The inverse re-adds at the removed index, with everything that rode on the entry
+                // — its widget, what it followed, its own lock.
+                let old = g.globals().get(&name).cloned();
+                let at = g.globals().index_of(&name);
+                let old_control = Some(g.globals().control(&name).cloned());
+                let (old_source, old_lock) = (g.globals().source(&name).cloned(), g.globals().own_lock(&name));
+                g.remove_global(&name)?;
+                let mut inverse = vec![Command::EditGlobal { name: name.clone(), value: old, at, control: old_control }];
                 if old_source.is_some() {
                     inverse.push(Command::SourceGlobal { name: name.clone(), source: old_source });
                 }

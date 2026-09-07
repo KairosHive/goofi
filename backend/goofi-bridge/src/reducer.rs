@@ -47,9 +47,16 @@ struct SlotReducer {
     /// Serve generation: bumped on every spec change and subscriber join, so the loop re-serves
     /// the current frame once even when the producer has not emitted.
     gen: Arc<AtomicU64>,
-    /// The latest RAW frame, pre-reduction — what serves a re-attaching viewer and `node snapshot`.
+    /// The latest frame as it arrived — what serves a re-attaching viewer, and what the globals
+    /// following this slot read. Reduced only where nothing but viewers is watching.
     latest: Arc<Mutex<Option<goofi_core::Data>>>,
-    /// Somebody read `latest` — a `node snapshot` — so the feed is wanted even with no viewer.
+    /// The last frame that arrived at FULL resolution. A producer that shrinks its output for the
+    /// viewers watching it would otherwise leave `latest` holding a preview, and `node snapshot`
+    /// asks for the frame itself. `Data` is an `Arc`, so holding it costs a refcount.
+    full: Arc<Mutex<Option<goofi_core::Data>>>,
+    /// Somebody read `latest` — a `node snapshot` — so the feed is wanted even with no viewer, and
+    /// wanted RAW. Never set at birth: warming a fresh reducer is `asked_at`'s job, and starting
+    /// here would spend one full-resolution frame on every slot the first time it is watched.
     asked: Arc<AtomicBool>,
 }
 
@@ -117,7 +124,8 @@ impl SlotReducers {
                 reductions: Arc::new(AtomicU64::new(0)),
                 gen: Arc::new(AtomicU64::new(0)),
                 latest: Arc::new(Mutex::new(None)),
-                asked: Arc::new(AtomicBool::new(true)),
+                full: Arc::new(Mutex::new(None)),
+                asked: Arc::new(AtomicBool::new(false)),
             };
             spawn_reducer(key.clone(), &reducer, self.graph.clone(), slots, self.follow.clone());
             reducer
@@ -140,14 +148,14 @@ impl SlotReducers {
     /// sure the slot's reducer runs, so a never-watched slot starts warming on the first ask.
     pub fn latest(&self, key: SlotKey) -> Option<goofi_core::Data> {
         // The `inner` guard is released before `latest` is taken, mirroring the reducer's order.
-        let latest = {
+        let (full, latest) = {
             let mut map = self.inner.lock().unwrap();
             let r = self.ensure(&mut map, &key);
             r.asked.store(true, Ordering::Release);
-            r.latest.clone()
+            (r.full.clone(), r.latest.clone())
         };
-        let frame = latest.lock().unwrap().clone();
-        frame
+        let frame = full.lock().unwrap().clone();
+        frame.or_else(|| latest.lock().unwrap().clone())
     }
 
     /// Replace `conn`'s declared specs for `key` (latest-wins). No-op if the slot is gone.
@@ -233,9 +241,10 @@ fn spawn_reducer(
     let (specs, tx, taps) = (reducer.specs.clone(), reducer.tx.clone(), reducer.taps.clone());
     let (reductions, gen) = (reducer.reductions.clone(), reducer.gen.clone());
     let (latest, stop) = (reducer.latest.clone(), reducer.stop.clone());
+    let full = reducer.full.clone();
     let asked = reducer.asked.clone();
     let (uid, slot) = key.clone();
-    std::thread::spawn(move || {
+    goofi_transport::thread(format!("goofi-reduce-{slot}")).spawn(move || {
         let mut feed = open_feed(&graph, uid, &slot);
         let mut rehomed = std::time::Instant::now();
         // An attached subscriber is what a scheduled engine reads as demand, so a feed nobody
@@ -244,14 +253,26 @@ fn spawn_reducer(
         // `served: None` means "never broadcast", which is what sends the first frame without a bump.
         let mut served: Option<u64> = None;
         let mut next_serve = std::time::Instant::now();
+        // What the producer was last told its readers want. Pushed only on a CHANGE: it takes the
+        // graph lock, and a viewer's box moves rarely — the frontend quantizes it to 32-px steps.
+        let mut demanded: Option<Option<(u32, u32)>> = None;
+        // A snapshot needs ONE full-resolution frame, so the demand is held wide until one lands
+        // rather than for the single sweep the ask was seen on — the producer needs a tick to answer.
+        let mut full_res = false;
         loop {
             std::thread::sleep(crate::vocab::REDUCER_TICK);
             if stop.load(Ordering::Relaxed) {
                 return;
             }
-            let wanted = asked.swap(false, Ordering::Acquire)
-                || !specs.lock().unwrap().is_empty()
-                || !taps.lock().unwrap().is_empty();
+            // Read ONCE: the swap consumes it, so a second reader downstream would always miss.
+            let snapshot = asked.swap(false, Ordering::Acquire);
+            // A slot being narrowed holds a full frame from before the ask, and answering with it
+            // would answer a question nobody asked. Cleared, so the ask waits for its own frame.
+            if snapshot && demanded.is_some_and(|w| w.is_some()) {
+                *full.lock().unwrap() = None;
+            }
+            full_res |= snapshot;
+            let wanted = snapshot || !specs.lock().unwrap().is_empty() || !taps.lock().unwrap().is_empty();
             if wanted {
                 asked_at = std::time::Instant::now();
             }
@@ -276,6 +297,11 @@ fn spawn_reducer(
                     }
                     return;
                 };
+                if feed.as_ref().is_some_and(|f| f.service != current) {
+                    // A new generation is a new producer, and its readback starts at the frame's
+                    // own size — so what this loop believes it asked for holds nowhere any more.
+                    demanded = None;
+                }
                 if asked_at.elapsed() <= IDLE && feed.as_ref().is_none_or(|f| f.service != current) {
                     feed = open_feed(&graph, uid, &slot);
                 }
@@ -287,6 +313,9 @@ fn spawn_reducer(
             if let Some(f) = &feed {
                 while let Ok(Some(sample)) = f.subscriber.receive() {
                     if let Ok(frame) = goofi_codec::decode(sample.payload()) {
+                        if !is_reduced(&frame) {
+                            *full.lock().unwrap() = Some(frame.clone());
+                        }
                         *latest.lock().unwrap() = Some(frame);
                         fresh = true;
                     }
@@ -301,6 +330,34 @@ fn spawn_reducer(
                         }
                     }
                 }
+            }
+            // The full-resolution frame a snapshot asked for has landed — which the FRAME says,
+            // not the demand: the frame already in flight when the demand widened is a reduced one,
+            // and taking it for the answer would end the ask before the producer had answered it.
+            if fresh && full.lock().unwrap().is_some() {
+                full_res = false;
+            }
+            // A demand is what a reader ASKED for: the raw frame for a global or a snapshot, and a
+            // box for a declared viewer. A reader that declared nothing asked for no pixels, so it
+            // gets one texel — never the whole frame, which is the most expensive thing an engine
+            // can be told to make.
+            let want = if full_res || !taps.lock().unwrap().is_empty() {
+                None
+            } else {
+                let held = specs.lock().unwrap();
+                match latest.lock().unwrap().as_ref() {
+                    Some(d) if !held.values().all(|v| v.is_empty()) => {
+                        goofi_view::image_box(&union_specs(&held), d)
+                    }
+                    // Nothing declared, or nothing produced yet to measure a declaration against.
+                    _ => Some(goofi_view::UNDECLARED_BOX),
+                }
+            };
+            // Only while subscribed — the producer this names is the one the feed is open on — and
+            // on a change alone, because it takes the graph lock.
+            if feed.is_some() && demanded != Some(want) {
+                demanded = Some(want);
+                graph.lock().unwrap().set_view_demand(uid, &slot, want);
             }
             // Nobody is watching: the cache holds the last frame for whoever returns.
             if specs.lock().unwrap().is_empty() {
@@ -335,7 +392,13 @@ fn spawn_reducer(
             let _ = tx.send(bytes); // Err only if all receivers are momentarily gone — harmless.
             served = Some(g_now);
         }
-    });
+    })
+    .expect("the slot reducer thread");
+}
+
+/// Whether a producer shrank this frame on the way out, as its own meta records.
+fn is_reduced(d: &goofi_core::Data) -> bool {
+    !matches!(d.meta().reduced(), None | Some(goofi_core::MetaValue::Null))
 }
 
 /// The one number a tap reads out of a frame: the indexed element of an array, the only element

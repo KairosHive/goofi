@@ -112,12 +112,12 @@ fn main() {
     };
     // Where a display answers, the main thread is the window thread — a plugin's editor lives
     // there — and the server runs beside it; where none does, it serves as it always did.
+    // Always a goofi thread, never the process's own: a main-thread stack is the PE header's on
+    // Windows, and opening a service needs more than that.
+    let served = goofi_transport::thread("goofi-serve").spawn(serve).expect("the serve thread");
     match windows {
-        Some(windows) => {
-            std::thread::Builder::new().name("goofi-serve".into()).spawn(serve).expect("the serve thread");
-            windows.run();
-        }
-        None => serve(),
+        Some(windows) => windows.run(),
+        None => served.join().expect("the serve thread"),
     }
 }
 
@@ -468,6 +468,7 @@ async fn run(
         match tokio::net::TcpListener::bind((bind.as_str(), port)).await {
             Err(e) => {
                 eprintln!("failed to bind {bind}:{port}: {e}");
+                eprintln!("  A goofi that already runs holds it: `goofi session list` names them, and `--port` picks another.");
                 1
             }
             Ok(listener) => {

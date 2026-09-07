@@ -132,8 +132,10 @@ Edit the file and refresh again: it returns under `changed`, and every live inst
 **restarts onto the new code** — `setup()` runs again, so a buffer empties and a device reopens.
 A node whose imports are missing registers as unavailable and names the module; a node that
 raises inside `process()` becomes that node's error, not a crash.
-`goofi library get <type> --source` gives you a shipped node to copy from, in either language: a
-`.rs` file in the same folder is a Rust node, built on refresh where `cargo` exists.
+`goofi library get <type> --source` gives you a shipped node to copy from, in any of the three
+languages: a `.rs` file beside it is a Rust node, built on refresh where `cargo` exists, and a
+`.wgsl` in `nodes_graphics/` is a shader node on the GPU — read `graphics:Life` for one that
+keeps state between ticks.
 
 ## The workspace
 
