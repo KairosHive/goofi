@@ -1541,9 +1541,8 @@ pub(crate) fn session_save(
 /// The core every patch replacement shares, so nothing after the read can drift between the
 /// sources: a `.gfi`, an inline manifest, or nothing at all — the empty patch.
 fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
-    // The load restarts the patch clock and replaces every armed node, so the recording it was
-    // writing has no timeline left to be on. A manifest that could not be finalized is SAID and
-    // never refuses the load — the patch the caller asked for is not the recording's disk.
+    // The load restarts the clock, so the recording has no timeline left; a manifest that could
+    // not be finalized is SAID, because the patch asked for is not the recording's disk.
     if let Err(e) = state.recorder.stop() {
         let mut ended = record_state(state);
         ended["error"] = json!(format!("the recording could not be finalized: {e}"));
