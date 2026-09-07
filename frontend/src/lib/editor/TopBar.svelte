@@ -31,6 +31,15 @@
 	const p = perfStats();
 	const hs = harnesses();
 
+	// The recording, as the backend last pushed it — the elapsed time is READ, never counted here.
+	const rec = $derived(g.record);
+	const dropping = $derived(rec.streams.some((s) => s.dropped > 0));
+
+	function clock(seconds: number | null): string {
+		const t = Math.max(0, Math.floor(seconds ?? 0));
+		return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+	}
+
 	// A boolean, never raw `p.fps`: fps ticks at 4Hz and would re-fire everything tracking it.
 	const hudActive = $derived(p.fps > 0.05);
 
@@ -82,6 +91,7 @@
 	/** Lowest priority first: the order the bar gives its residents up. */
 	const SPILL_ORDER = [
 		'topbar-hud',
+		'topbar-record',
 		'topbar-path',
 		'topbar-save-caret',
 		'topbar-load',
@@ -204,6 +214,8 @@
 		void g.savePath;
 		void g.unsavedChanges;
 		void hudActive;
+		void rec.running;
+		void dropping;
 		void hs.running;
 		void ws.state.workspaces;
 		widthCache.invalidate();
@@ -244,6 +256,13 @@
 		const items: MenuItem[] = [];
 		if (isSpilled('topbar-hud') && hudActive)
 			items.push({ label: `${p.fps.toFixed(0)} fps`, disabled: true, action: () => {} });
+		if (isSpilled('topbar-record') && rec.running)
+			items.push({
+				label: `Recording ${clock(rec.elapsed)}${dropping ? ' — dropping frames' : ''}`,
+				icon: 'circle-dot',
+				disabled: true,
+				action: () => {}
+			});
 		if (isSpilled('topbar-path') && (g.savePath || g.unsavedChanges)) {
 			// The chip's own 32ch cap, applied to the DATA: a menu row does not ellipsize.
 			const name = g.savePath?.split('/').pop() ?? 'untitled';
@@ -313,6 +332,18 @@
 		{/if}
 		<div class="actions" bind:this={actionsEl}>
 			<!-- Identity and actions are ONE overflow group with ONE gap. -->
+			{#if rec.running}
+				<span
+					class="info record"
+					class:dropping
+					class:spilled={isSpilled('topbar-record')}
+					data-testid="topbar-record"
+					title={dropping ? 'Recording — frames are dropping' : 'Recording'}
+				>
+					<span class="record-dot"></span>
+					<span class="record-time">{clock(rec.elapsed)}</span>
+				</span>
+			{/if}
 			<span
 				class="info hud-info"
 				class:active={hudActive}
@@ -459,6 +490,38 @@
 	/* PerfHud owns the timer behind `hudActive`, so its host stays mounted; hide it while empty. */
 	.hud-info:not(.active) {
 		display: none;
+	}
+	.record {
+		gap: var(--space-2);
+		color: var(--text);
+		font-variant-numeric: tabular-nums;
+		border-radius: var(--radius-sm);
+		outline: 2px solid transparent;
+		outline-offset: -2px;
+	}
+	.record-dot {
+		width: 0.5em;
+		height: 0.5em;
+		border-radius: 50%;
+		background: var(--danger);
+	}
+	/* The one thing that must be seen from across a room, so it is motion, not colour alone. */
+	.record.dropping {
+		animation: record-alarm 700ms steps(1, end) infinite alternate;
+	}
+	@keyframes record-alarm {
+		from {
+			outline-color: transparent;
+		}
+		to {
+			outline-color: var(--warning);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.record.dropping {
+			animation: none;
+			outline-color: var(--warning);
+		}
 	}
 	.path {
 		color: var(--text-dim);

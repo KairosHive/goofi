@@ -68,6 +68,8 @@ pub static PANEL_TYPES: &[PanelType] = &[
                 doc: "knobs, sliders and fields over one group of globals" },
     PanelType { id: "agent", title: "Agent", icon: "bot", accepts_node: false,
                 doc: "a terminal on an agent harness, running in the patch workspace" },
+    PanelType { id: "recorder", title: "Recorder", icon: "circle-dot", accepts_node: true,
+                doc: "capture the output slots of any node to disk, on one clock" },
 ];
 
 /// The ARRAY kinds first, in the order the viewer's dropdown offers them; the pinned ones after.

@@ -9,6 +9,7 @@ import {
 	type LinkInfo,
 	type NodeInstanceInfo,
 	type NodeTypeInfo,
+	type RecordStatus,
 	type ScanDiff
 } from '$lib/api/control';
 import { boundaryType, feeds, type SlotDtype } from '$lib/api/vocab';
@@ -27,6 +28,7 @@ import {
 	facadeFaces,
 	docParams,
 	viewersJson,
+	recordedSlots,
 	globalViews,
 	globalGroupLocks,
 	arrangementTabs,
@@ -75,6 +77,18 @@ function linkEndpoints(link: LinkInfo): { from: string; to: string } {
 	};
 }
 
+const IDLE_RECORD: RecordStatus = {
+	running: false,
+	folder: null,
+	elapsed: null,
+	streams: [],
+	error: null
+};
+
+/** How often a RUNNING recording is re-read. The event announces every transition; the elapsed
+ * time and the buffer health advance between them, and only the backend knows them. */
+const RECORD_POLL_MS = 1000;
+
 export class GraphStore {
 	nodes = $state<NodeInstanceInfo[]>([]);
 	links = $state<LinkInfo[]>([]);
@@ -87,6 +101,12 @@ export class GraphStore {
 	/** Latches on the first connect and never clears — see {@link disconnected}. */
 	private _everConnected = $state(false);
 	hadHello = $state(false);
+
+	/** Every armed output slot, doc-authoritative: the document is the one owner of what is armed. */
+	armed = $state<{ uid: string; slot: string }[]>([]);
+
+	/** The recording SESSION, as the backend last reported it. Pushed, never derived here. */
+	record = $state<RecordStatus>(IDLE_RECORD);
 
 	/** Patch globals (system + user), doc-authoritative, in system-first/creation order. */
 	globals = $state<GlobalView[]>([]);
@@ -115,6 +135,9 @@ export class GraphStore {
 	private _stashRuntime(uid: string, rt: GraphSnapshot['runtime'][string]): void {
 		this._snapshotRuntime[uid] = { ...this._snapshotRuntime[uid], ...rt };
 	}
+
+	/** Open while a recording runs; see {@link RECORD_POLL_MS}. */
+	private _recordPoll: ReturnType<typeof setInterval> | null = null;
 
 	/** The control client (injectable for tests; defaults to the live WS one). */
 	private ctl: Control;
@@ -157,6 +180,7 @@ export class GraphStore {
 		this.links = linkViews(doc);
 		this.globals = globalViews(doc);
 		this.globalGroups = globalGroupLocks(doc);
+		this.armed = recordedSlots(doc);
 		// The workspace store rebuilds its tree from this; the client holds no second copy.
 		workspace().syncFromDoc(arrangementTabs(doc));
 		// No-ops until the catalog lands, then rebuilds from the doc.
@@ -199,6 +223,7 @@ export class GraphStore {
 		this.links = [];
 		this.globals = [];
 		this.globalGroups = {};
+		this.armed = [];
 		// `_snapshotRuntime` is NOT cleared: `_replaceSnapshot` ran first, so it already holds the
 		// INCOMING session's overlay. The arrangement store is a separate singleton, so it is here.
 		workspace().syncFromDoc([]);
@@ -232,6 +257,7 @@ export class GraphStore {
 				// Not wholesale: a `hello` is also what a transient reconnect delivers.
 				const fresh = this._replaceSnapshot(ev.payload);
 				this.hadHello = true;
+				this.refreshRecord();
 				if (fresh) {
 					// A NEW session mints uids from 1 again, so the stale replica must fall NOW,
 					// synchronously, before this connection answers the server's binary hello SV.
@@ -317,6 +343,9 @@ export class GraphStore {
 			case 'unsaved_changes':
 				this.unsavedChanges = ev.payload.unsaved_changes;
 				break;
+			case 'record_changed':
+				this._setRecord(ev.payload);
+				break;
 			case 'save_path_changed':
 				this.savePath = ev.payload.save_path;
 				break;
@@ -359,6 +388,47 @@ export class GraphStore {
 	/** Record ONE graph command. The manager owns the exact inverse, so this only marks the step. */
 	private _recordGraphCmd(label: string): void {
 		this._record({ kind: 'graph_cmd', domain: 'graph', label, context: captureNavContext() });
+	}
+
+	/** Adopt a recording report, and hold the poll open for exactly as long as one runs. */
+	private _setRecord(status: RecordStatus): void {
+		this.record = status;
+		if (status.running && this._recordPoll === null) {
+			this._recordPoll = setInterval(() => this.refreshRecord(), RECORD_POLL_MS);
+		} else if (!status.running && this._recordPoll !== null) {
+			clearInterval(this._recordPoll);
+			this._recordPoll = null;
+		}
+	}
+
+	/** Read the recording state. A disconnected client keeps what it last heard. */
+	refreshRecord(): void {
+		void this.ctl
+			.call<RecordStatus>('record status', {})
+			.then((s) => this._setRecord(s))
+			.catch(() => {});
+	}
+
+	/** Arm one output slot, as `node/slot`. It works while a recording runs. */
+	async armSlot(node: string, slot: string): Promise<void> {
+		await this.ctl.call('record arm', { output: `${node}/${slot}` });
+		this._recordGraphCmd(`Arm ${slot}`);
+	}
+
+	async disarmSlot(node: string, slot: string): Promise<void> {
+		await this.ctl.call('record disarm', { output: `${node}/${slot}` });
+		this._recordGraphCmd(`Disarm ${slot}`);
+	}
+
+	/** Start a recording. Both fields fall back to the `record.*` globals in the backend. */
+	async startRecording(name: string, root: string): Promise<string> {
+		const r = await this.ctl.call<{ folder: string }>('record start', { name, root });
+		return r?.folder ?? '';
+	}
+
+	async stopRecording(): Promise<string> {
+		const r = await this.ctl.call<{ folder: string }>('record stop', {});
+		return r?.folder ?? '';
 	}
 
 	async addNode(type: string, pos: [number, number], instId?: string): Promise<string> {

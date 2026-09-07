@@ -167,6 +167,27 @@ export interface HarnessRoster {
 	config_error?: string | null;
 }
 
+/** One armed stream, as the recorder reports it. `fill` is the buffer's occupancy, 0…1. */
+export interface RecordStreamStatus {
+	node: string;
+	slot: string;
+	engine: string;
+	file: string;
+	frames: number;
+	dropped: number;
+	fill: number;
+}
+
+/** The recording SESSION — runtime, so it rides `record status` and `record_changed`, never the
+ * document, which owns what is armed. */
+export interface RecordStatus {
+	running: boolean;
+	folder: string | null;
+	elapsed: number | null;
+	streams: RecordStreamStatus[];
+	error: string | null;
+}
+
 export type ControlEvent =
 	| { event: 'hello'; payload: GraphSnapshot }
 	// The node itself arrives via the doc; this carries no projection of it.
@@ -201,6 +222,8 @@ export type ControlEvent =
 	  }
 	| { event: 'unsaved_changes'; payload: { unsaved_changes: boolean } }
 	| { event: 'save_path_changed'; payload: { save_path: string | null } }
+	// The whole recording state, so a client never has to diff transitions.
+	| { event: 'record_changed'; payload: RecordStatus }
 	// The palette changed under an already-connected client; `hello` carries it to an arriving one.
 	| { event: 'node_types'; payload: { types: NodeTypeInfo[] } }
 	// Carries the WHOLE roster, so a client never has to diff transitions.

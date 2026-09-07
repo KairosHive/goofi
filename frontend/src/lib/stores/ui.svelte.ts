@@ -54,6 +54,23 @@ export class UIStore {
 		return this.cableNear.has(slotKey(node, slot));
 	}
 
+	/** What a node dropped on a panel MEANS, by panel id. A panel that wants a drop to do something
+	 * other than bind the node registers here; the editor asks before it links. Not `$state`: it is
+	 * read by an event handler, never rendered. */
+	#nodeDrops = new Map<string, (uid: string) => void>();
+
+	/** Take a panel's drop meaning, and give back the undo of that registration. */
+	onNodeDrop(panelId: string, drop: (uid: string) => void): () => void {
+		this.#nodeDrops.set(panelId, drop);
+		return () => {
+			if (this.#nodeDrops.get(panelId) === drop) this.#nodeDrops.delete(panelId);
+		};
+	}
+
+	nodeDropFor(panelId: string): ((uid: string) => void) | null {
+		return this.#nodeDrops.get(panelId) ?? null;
+	}
+
 	/** Register an open in-panel editor by a stable id (idempotent). */
 	openEditor(id: string): void {
 		if (this.#editors.has(id)) return;
