@@ -740,7 +740,26 @@ fn the_text_and_table_nodes_carry_a_value_out_to_json_and_back() {
         ps.latest().filter(|d| text(d) == Some("beta:  alpha"))
     });
 
-    for n in [fmt, table, json, back, pick] {
+    // A table's members are features in unrelated units, so the only axis a normalizer can use is
+    // TIME: each member is scaled against its own past, not against its neighbours in the frame.
+    // A constant one has never varied, and a spread of zero is what puts it at its own centre.
+    let scale = g.add("TableNormalize");
+    let pn = g.probe(scale, "out");
+    g.link(table, "out", scale, "input");
+    let steady = g.until("the normalized table", |_| {
+        pn.latest().filter(|d| d.as_table().is_ok_and(|t| t.contains_key("level")))
+    });
+    let members = steady.as_table().expect("a table out of a table");
+    assert_eq!(members.len(), 2, "every member survives, whatever its kind");
+    let levels = f32s(members.get("level").expect("the array member"));
+    assert_eq!(levels, vec![0.0, 0.0], "a member that never varies sits at its own centre");
+    assert_eq!(
+        text(members.get("name").expect("the string member")),
+        Some("beta:  alpha"),
+        "a member that is not an array passes through whole",
+    );
+
+    for n in [fmt, table, json, back, pick, scale] {
         assert!(g.error(n).is_none(), "a text node carries no error: {:?}", g.error(n));
     }
 }
