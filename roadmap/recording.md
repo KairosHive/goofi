@@ -184,3 +184,8 @@ recorders cannot own one timeline.
 - **A rate change mid-recording** re-ties the audio anchor, so the frames either side of it derive
   from different ties. That is a real discontinuity and the manifest does not name it as one — only
   the `drift` either side of it moves.
+- **A reaper that races a stop loses that stream's manifest row.** The file is still finalized, so
+  the recording keeps the video and loses only what describes it. The fix was built and WITHDRAWN:
+  making `stop` wait for `close_later` parks it inside a blocking ffmpeg `finish`, which is the
+  stall `close_later` exists to prevent. A rare lost row is the better trade until the row can be
+  filed without the wait.
