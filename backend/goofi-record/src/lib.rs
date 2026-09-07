@@ -132,9 +132,13 @@ impl Recorder {
         held(&self.session)
     }
 
-    /// Mint the folder. A recording already running is stopped first, so a start is total.
+    /// Mint the folder. Refused when a recording already runs — the session lock is the ONE
+    /// authority on that, so no caller can check and then act past it.
     pub fn start(&self, root: &Path, name: &str, patch: Option<&Path>) -> Result<PathBuf, String> {
-        self.stop()?;
+        let mut held = self.held();
+        if held.is_some() {
+            return Err("a recording already runs".into());
+        }
         let started = self.time.now();
         let stamped = format!("{}Z", stamp(self.time.utc_at(started)));
         let folder = root.join(if name.is_empty() { stamped } else { format!("{stamped}-{name}") });
@@ -149,7 +153,7 @@ impl Recorder {
             closed: Vec::new(),
         };
         session.manifest(&self.time).write_atomic(&folder)?;
-        *self.held() = Some(session);
+        *held = Some(session);
         Ok(folder)
     }
 

@@ -3544,9 +3544,6 @@ pub fn name_base(type_name: &str) -> String {
     }
 }
 
-/// A viewer blob under the uids a paste minted. A facade keys its blob by PORT UID, so a copy that
-/// kept the original's keys would point at slots it does not have; a leaf keys its by slot NAME,
-/// which no remap names, so it rides through unchanged.
 /// A record's armed output slots, as a `.gfi` and a copied fragment carry them.
 fn read_record(rec: &serde_json::Value) -> Vec<String> {
     rec.get("record")
@@ -3555,6 +3552,9 @@ fn read_record(rec: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// A viewer blob under the uids a paste minted. A facade keys its blob by PORT UID, so a copy that
+/// kept the original's keys would point at slots it does not have; a leaf keys its by slot NAME,
+/// which no remap names, so it rides through unchanged.
 fn remap_slots(viewers: &serde_json::Value, idmap: &HashMap<String, Uid>) -> serde_json::Value {
     match viewers.as_object() {
         None => viewers.clone(),
