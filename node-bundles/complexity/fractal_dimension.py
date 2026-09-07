@@ -35,6 +35,8 @@ class FractalDimension(goofi.Node):
         p = self.params.fractal
         x = np.asarray(data.data, dtype=np.float64)
         if p.method == "higuchi":
-            return np.apply_along_axis(antropy.higuchi_fd, -1, x, kmax=p.kmax).astype(np.float32)
-        measure = antropy.katz_fd if p.method == "katz" else antropy.petrosian_fd
-        return np.asarray(measure(x, axis=-1), dtype=np.float32)
+            out = np.apply_along_axis(antropy.higuchi_fd, -1, x, kmax=p.kmax)
+        else:
+            measure = antropy.katz_fd if p.method == "katz" else antropy.petrosian_fd
+            out = measure(x, axis=-1)
+        return np.asarray(out, dtype=np.float32), data.drop_axis(-1)

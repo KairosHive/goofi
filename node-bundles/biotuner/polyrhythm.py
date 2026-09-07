@@ -100,11 +100,12 @@ class Polyrhythm(goofi.Node):
             cycles[i] = v.shape[1]
             words.append(label)
 
+        meta = input.drop_axis(-1)
         return {
-            "voices": voices.reshape(lead + (deep, wide)).astype(np.float32),
-            "coincidences": coinc.reshape(lead + (wide,)).astype(np.float32),
+            "voices": (voices.reshape(lead + (deep, wide)).astype(np.float32), meta),
+            "coincidences": (coinc.reshape(lead + (wide,)).astype(np.float32), meta),
             "labels": "; ".join(w for w in words if w),
-            "cycle": cycles.reshape(lead + (1,)).astype(np.float32),
+            "cycle": (cycles.reshape(lead + (1,)).astype(np.float32), meta),
         }
 
     def _grid(self, row, p):

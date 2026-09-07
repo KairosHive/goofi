@@ -19,7 +19,8 @@ class Hjorth(goofi.Node):
 
     def process(self, data):
         mobility, complexity = antropy.hjorth_params(np.asarray(data.data, dtype=np.float64), axis=-1)
+        meta = data.drop_axis(-1)
         return {
-            "mobility": np.asarray(mobility, dtype=np.float32),
-            "complexity": np.asarray(complexity, dtype=np.float32),
+            "mobility": (np.asarray(mobility, dtype=np.float32), meta),
+            "complexity": (np.asarray(complexity, dtype=np.float32), meta),
         }

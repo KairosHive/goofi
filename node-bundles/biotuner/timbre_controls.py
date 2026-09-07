@@ -118,11 +118,12 @@ class TimbreControls(goofi.Node):
 
         f32 = lambda v, shape: v.reshape(shape).astype(np.float32)
         s = scal.reshape(lead + (3,)).astype(np.float32)
+        meta = input.drop_axis(-1)
         return {
-            "partials": f32(part, lead + (width,)),
-            "amplitudes": f32(amp, lead + (width,)),
-            "weights": f32(wgt, lead + (width,)),
-            "brightness": s[..., 0],
-            "spread": s[..., 1],
-            "harmonicity": s[..., 2],
+            "partials": (f32(part, lead + (width,)), meta),
+            "amplitudes": (f32(amp, lead + (width,)), meta),
+            "weights": (f32(wgt, lead + (width,)), meta),
+            "brightness": (s[..., 0], meta),
+            "spread": (s[..., 1], meta),
+            "harmonicity": (s[..., 2], meta),
         }

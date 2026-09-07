@@ -30,6 +30,7 @@ class SampleEntropy(goofi.Node):
     def process(self, data):
         p = self.params.sample
         measure = antropy.app_entropy if p.approximate else antropy.sample_entropy
-        return np.apply_along_axis(
+        out = np.apply_along_axis(
             measure, -1, np.asarray(data.data, dtype=np.float64), order=p.order, metric=p.metric
-        ).astype(np.float32)
+        )
+        return out.astype(np.float32), data.drop_axis(-1)
