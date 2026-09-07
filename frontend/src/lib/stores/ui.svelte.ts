@@ -1,4 +1,6 @@
 /** Cross-component UI state, kept out of the graph store so re-renders stay scoped. */
+import { ALL_TAB } from '$lib/editor/nodeSearch';
+
 export type SlotClickSeed = {
 	node: string;
 	slot: string;
@@ -24,6 +26,10 @@ export class UIStore {
 	get modalOpen(): boolean {
 		return this.#openCount > 0;
 	}
+
+	/** The add-node menu's facet, kept across openings so a menu opens where the user left it. A
+	 * slot click overrides it with that node's engine, and never writes it. */
+	paletteTab = $state(ALL_TAB);
 
 	/** Bubbled-up "user clicked an unconnected port" intent, cleared by the consumer. */
 	pendingSlotClick = $state<SlotClickSeed | null>(null);

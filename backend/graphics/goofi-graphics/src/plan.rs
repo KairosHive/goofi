@@ -10,7 +10,8 @@ use goofi_core::SlotType;
 use goofi_node::{GraphView, ParamDecl, Uid};
 
 use crate::gpu::Want;
-use crate::half::{Tap, Upload};
+use crate::half::Tap;
+use crate::transfer::Upload;
 use crate::scan::Built;
 use crate::Instance;
 
