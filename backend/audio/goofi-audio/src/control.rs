@@ -419,17 +419,22 @@ fn drain_blocks(ring: &mut rtrb::Consumer<f32>) -> Option<(usize, Vec<f32>)> {
 /// One block off a recording ring: its width, its own number, the tie it is read against, and its
 /// planar samples. `None` until a whole block is there.
 fn take_block(ring: &mut rtrb::Consumer<f32>) -> Option<(usize, u64, u64, Vec<f32>)> {
-    let available = ring.slots();
-    let head: Vec<f32> = ring.read_chunk(REC_HEADER).ok()?.into_iter().collect();
+    // `as_slices` rather than an iterator: iterating a chunk COMMITS what it yields, so a header
+    // read that way is eaten — and a partial block would then leave the reader between two blocks.
+    let head = {
+        let peek = ring.read_chunk(REC_HEADER).ok()?;
+        let (a, b) = peek.as_slices();
+        let at = |i: usize| if i < a.len() { a[i] } else { b[i - a.len()] };
+        [at(0), at(1), at(2), at(3)]
+    };
     let c = head[0] as usize;
-    if c == 0 || available < REC_HEADER + c * BLOCK {
+    if c == 0 || ring.slots() < REC_HEADER + c * BLOCK {
         return None;
     }
-    ring.read_chunk(REC_HEADER).ok()?.commit_all();
-    let block = ring.read_chunk(c * BLOCK).ok()?;
-    let (a, b) = block.as_slices();
-    let planar: Vec<f32> = a.iter().chain(b).copied().collect();
-    block.commit_all();
+    let whole = ring.read_chunk(REC_HEADER + c * BLOCK).ok()?;
+    let (a, b) = whole.as_slices();
+    let planar: Vec<f32> = a.iter().chain(b).skip(REC_HEADER).copied().collect();
+    whole.commit_all();
     Some((c, crate::runtime::number_in(head[1], head[2]), head[3] as u64, planar))
 }
 
