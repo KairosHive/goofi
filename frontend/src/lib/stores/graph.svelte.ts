@@ -85,10 +85,6 @@ const IDLE_RECORD: RecordStatus = {
 	error: null
 };
 
-/** How often a RUNNING recording is re-read. The event announces every transition; the elapsed
- * time and the buffer health advance between them, and only the backend knows them. */
-const RECORD_POLL_MS = 1000;
-
 export class GraphStore {
 	nodes = $state<NodeInstanceInfo[]>([]);
 	links = $state<LinkInfo[]>([]);
@@ -107,6 +103,12 @@ export class GraphStore {
 
 	/** The recording SESSION, as the backend last reported it. Pushed, never derived here. */
 	record = $state<RecordStatus>(IDLE_RECORD);
+
+	/** The streams whose drop count MOVED on the last report, keyed `node/slot`. */
+	dropping = $state.raw<ReadonlySet<string>>(new Set());
+
+	/** What each stream's cumulative `dropped` was on the last report. */
+	private _droppedCounts: Record<string, number> = {};
 
 	/** Patch globals (system + user), doc-authoritative, in system-first/creation order. */
 	globals = $state<GlobalView[]>([]);
@@ -135,9 +137,6 @@ export class GraphStore {
 	private _stashRuntime(uid: string, rt: GraphSnapshot['runtime'][string]): void {
 		this._snapshotRuntime[uid] = { ...this._snapshotRuntime[uid], ...rt };
 	}
-
-	/** Open while a recording runs; see {@link RECORD_POLL_MS}. */
-	private _recordPoll: ReturnType<typeof setInterval> | null = null;
 
 	/** The control client (injectable for tests; defaults to the live WS one). */
 	private ctl: Control;
@@ -257,7 +256,6 @@ export class GraphStore {
 				// Not wholesale: a `hello` is also what a transient reconnect delivers.
 				const fresh = this._replaceSnapshot(ev.payload);
 				this.hadHello = true;
-				this.refreshRecord();
 				if (fresh) {
 					// A NEW session mints uids from 1 again, so the stale replica must fall NOW,
 					// synchronously, before this connection answers the server's binary hello SV.
@@ -390,34 +388,36 @@ export class GraphStore {
 		this._record({ kind: 'graph_cmd', domain: 'graph', label, context: captureNavContext() });
 	}
 
-	/** Adopt a recording report, and hold the poll open for exactly as long as one runs. */
+	/** Adopt a recording report. Which streams are DROPPING is the counts that moved since the
+	 * last one: `dropped` is cumulative, so it never falls and cannot answer that on its own. */
 	private _setRecord(status: RecordStatus): void {
-		this.record = status;
-		if (status.running && this._recordPoll === null) {
-			this._recordPoll = setInterval(() => this.refreshRecord(), RECORD_POLL_MS);
-		} else if (!status.running && this._recordPoll !== null) {
-			clearInterval(this._recordPoll);
-			this._recordPoll = null;
+		const before = this._droppedCounts;
+		const now: Record<string, number> = {};
+		const moved = new Set<string>();
+		for (const s of status.streams) {
+			const key = `${s.node}/${s.slot}`;
+			now[key] = s.dropped;
+			if (s.dropped > (before[key] ?? s.dropped)) moved.add(key);
 		}
+		this._droppedCounts = now;
+		this.dropping = moved;
+		this.record = status;
 	}
 
-	/** Read the recording state. A disconnected client keeps what it last heard. */
-	refreshRecord(): void {
-		void this.ctl
-			.call<RecordStatus>('record status', {})
-			.then((s) => this._setRecord(s))
-			.catch(() => {});
-	}
-
-	/** Arm one output slot, as `node/slot`. It works while a recording runs. */
+	/** Arm one output slot, as `node/slot`. It works while a recording runs. The manager records
+	 * no command when the slot is already armed, so neither does the history. */
 	async armSlot(node: string, slot: string): Promise<void> {
-		await this.ctl.call('record arm', { output: `${node}/${slot}` });
-		this._recordGraphCmd(`Arm ${slot}`);
+		const r = await this.ctl.call<{ changed?: boolean }>('record arm', {
+			output: `${node}/${slot}`
+		});
+		if (r?.changed) this._recordGraphCmd(`Arm ${slot}`);
 	}
 
 	async disarmSlot(node: string, slot: string): Promise<void> {
-		await this.ctl.call('record disarm', { output: `${node}/${slot}` });
-		this._recordGraphCmd(`Disarm ${slot}`);
+		const r = await this.ctl.call<{ changed?: boolean }>('record disarm', {
+			output: `${node}/${slot}`
+		});
+		if (r?.changed) this._recordGraphCmd(`Disarm ${slot}`);
 	}
 
 	/** Start a recording. Both fields fall back to the `record.*` globals in the backend. */
