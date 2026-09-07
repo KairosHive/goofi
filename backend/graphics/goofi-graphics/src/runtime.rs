@@ -74,8 +74,15 @@ struct State {
     out: Option<Target>,
     /// One per [`Want`], sized with `out`; only a stage that reader watches has one.
     reads: [Option<Ring>; 2],
+    /// One declared state buffer each: the texture the last tick left, and the one this tick
+    /// writes. They swap after every render, which is the whole of how a node holds state.
+    buffers: Vec<[Target; 2]>,
+    /// How many times this node has rendered since those buffers were made — zero is a fresh
+    /// state, which is how a body knows to seed itself.
+    count: u32,
     uploads: Vec<Option<Target>>,
     time: wgpu::Buffer,
+    frame: wgpu::Buffer,
     resolution: wgpu::Buffer,
     params: Option<wgpu::Buffer>,
 }
@@ -124,8 +131,11 @@ impl Runtime {
         let state = State {
             out: None,
             reads: [None, None],
+            buffers: Vec::new(),
+            count: 0,
             uploads: Vec::new(),
             time: uniform("time", 4),
+            frame: uniform("frame", 4),
             resolution: uniform("resolution", 8),
             params: (params > 0).then(|| uniform("params", params as u64)),
         };
@@ -189,7 +199,7 @@ impl Runtime {
             let stage = &self.plan.stages[i];
             let Some(Ok(pipeline)) = stage.pipeline.get() else { continue };
             let Some(state) = self.states.get_mut(&stage.uid) else { continue };
-            state.ensure_out(&self.gpu, stage.size, stage.wants());
+            state.ensure_out(&self.gpu, stage.size, stage.wants(), stage.state);
             let shrunk_from = stage.size;
             for (k, cell) in stage.uploads.iter().enumerate() {
                 if let Some(up) = cell.lock().unwrap().take() {
@@ -197,6 +207,7 @@ impl Runtime {
                 }
             }
             self.gpu.queue.write_buffer(&state.time, 0, &(t as f32).to_le_bytes());
+            self.gpu.queue.write_buffer(&state.frame, 0, &state.count.to_le_bytes());
             let res = [(stage.size.0 as f32).to_le_bytes(), (stage.size.1 as f32).to_le_bytes()].concat();
             self.gpu.queue.write_buffer(&state.resolution, 0, &res);
             if let Some(buf) = &state.params {
@@ -223,20 +234,32 @@ impl Runtime {
                 .collect();
             let state = &self.states[&stage.uid];
             let group0 = state.group0(&self.gpu);
-            let group1 = state.group1(&self.gpu, &views);
-            let out = state.out.as_ref().expect("ensure_out made it");
+            let group1 = self.gpu.texture_group(&views);
+            let held: Vec<wgpu::TextureView> = state.buffers.iter().map(|b| b[0].view.clone()).collect();
+            let group2 = self.gpu.texture_group(&held);
+            // Cloned, so the readback below may take `states` mutably.
+            let out_view = state.out.as_ref().expect("ensure_out made it").view.clone();
+            // The output, then one target per state buffer — the order the prelude writes them in.
+            let targets: Vec<wgpu::TextureView> =
+                std::iter::once(out_view.clone()).chain(state.buffers.iter().map(|b| b[1].view.clone())).collect();
             {
+                let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = targets
+                    .iter()
+                    .map(|view| {
+                        Some(wgpu::RenderPassColorAttachment {
+                            view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })
+                    })
+                    .collect();
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: None,
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &out.view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
+                    color_attachments: &attachments,
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
@@ -245,11 +268,11 @@ impl Runtime {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &group0, &[]);
                 pass.set_bind_group(1, &group1, &[]);
+                pass.set_bind_group(2, &group2, &[]);
                 pass.draw(0..3, 0..1);
             }
             self.stats.stages.fetch_add(1, Ordering::Relaxed);
-            // Cloned, so the readback below may take `states` mutably.
-            let out_view = out.view.clone();
+            self.states.get_mut(&stage.uid).expect("just borrowed").advance();
             for w in Want::ALL {
                 // A viewer is read back for only once it has FINISHED with the last frame, so it
                 // paces itself and can never pace the engine. A screen never waits its turn.
@@ -446,16 +469,32 @@ impl Ring {
 }
 
 impl State {
-    /// The output texture at `size`, and one readback per reader that is there. All are remade
-    /// when the size moves, which is what loses a feedback chain its history.
-    fn ensure_out(&mut self, gpu: &Gpu, size: (u32, u32), wants: [Option<(u32, u32)>; 2]) {
-        if self.out.as_ref().is_none_or(|t| t.size != size) {
+    /// One tick done: what this tick wrote is what the next one reads.
+    fn advance(&mut self) {
+        for buffer in &mut self.buffers {
+            buffer.swap(0, 1);
+        }
+        self.count = self.count.wrapping_add(1);
+    }
+
+    /// The output texture at `size`, the state buffers beside it, and one readback per reader
+    /// that is there. All are remade when the size moves, which is what loses a feedback chain
+    /// and a stateful node their history.
+    fn ensure_out(&mut self, gpu: &Gpu, size: (u32, u32), wants: [Option<(u32, u32)>; 2], buffers: usize) {
+        if self.out.as_ref().is_none_or(|t| t.size != size) || self.buffers.len() != buffers {
             let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC;
             let texture = target(gpu, "out", size, crate::gpu::FORMAT, usage);
             let view = texture.create_view(&Default::default());
             self.out = Some(Target { texture, view, size });
+            let fresh = || {
+                let texture = target(gpu, "state", size, crate::gpu::FORMAT, usage);
+                let view = texture.create_view(&Default::default());
+                Target { texture, view, size }
+            };
+            self.buffers = (0..buffers).map(|_| [fresh(), fresh()]).collect();
+            self.count = 0;
             self.reads = [None, None];
         }
         for w in Want::ALL {
@@ -496,6 +535,7 @@ impl State {
             wgpu::BindGroupEntry { binding: 0, resource: self.time.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: self.resolution.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&gpu.sampler) },
+            wgpu::BindGroupEntry { binding: 4, resource: self.frame.as_entire_binding() },
         ];
         if let Some(p) = &self.params {
             entries.push(wgpu::BindGroupEntry { binding: 3, resource: p.as_entire_binding() });
@@ -507,18 +547,6 @@ impl State {
         })
     }
 
-    fn group1(&self, gpu: &Gpu, views: &[wgpu::TextureView]) -> wgpu::BindGroup {
-        let entries: Vec<wgpu::BindGroupEntry> = views
-            .iter()
-            .enumerate()
-            .map(|(i, v)| wgpu::BindGroupEntry { binding: i as u32, resource: wgpu::BindingResource::TextureView(v) })
-            .collect();
-        gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &gpu.group1(views.len()),
-            entries: &entries,
-        })
-    }
 }
 
 /// A stage's uniform block length, measured by the writer so there is one layout.

@@ -102,8 +102,8 @@ pub struct Gpu {
     blits: [wgpu::RenderPipeline; 2],
     blit_group: wgpu::BindGroupLayout,
     group0: [wgpu::BindGroupLayout; 2],
-    group1: Mutex<HashMap<usize, Arc<wgpu::BindGroupLayout>>>,
-    layouts: Mutex<HashMap<(bool, usize), Arc<wgpu::PipelineLayout>>>,
+    textures: Mutex<HashMap<usize, Arc<wgpu::BindGroupLayout>>>,
+    layouts: Mutex<HashMap<(bool, usize, usize), Arc<wgpu::PipelineLayout>>>,
     pub queue: wgpu::Queue,
     /// LAST, here and in every struct that holds one: fields drop in declaration order, and a
     /// resource outliving its device is a driver crash rather than an error.
@@ -209,8 +209,8 @@ impl Gpu {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries })
         };
         let group0 = [
-            layout(&[uniform(0), uniform(1), sampler_entry]),
-            layout(&[uniform(0), uniform(1), sampler_entry, uniform(3)]),
+            layout(&[uniform(0), uniform(1), sampler_entry, uniform(4)]),
+            layout(&[uniform(0), uniform(1), sampler_entry, uniform(3), uniform(4)]),
         ];
         let blit_group = layout(&[
             wgpu::BindGroupLayoutEntry {
@@ -276,7 +276,7 @@ impl Gpu {
             blits,
             blit_group,
             group0,
-            group1: Mutex::new(HashMap::new()),
+            textures: Mutex::new(HashMap::new()),
             layouts: Mutex::new(HashMap::new()),
         })
     }
@@ -317,20 +317,21 @@ impl Gpu {
         pass.draw(0..3, 0..1);
     }
 
-    /// Group 0 is the frame's own: time, resolution, the sampler, and the params when there are any.
+    /// Group 0 is the frame's own: time, the frame count, resolution, the sampler, and the params
+    /// when there are any.
     pub fn group0(&self, params: bool) -> &wgpu::BindGroupLayout {
         &self.group0[usize::from(params)]
     }
 
-    /// Group 1 is the input textures, one layout per count; zero inputs is an empty group, so
-    /// every stage binds both groups.
-    pub fn group1(&self, inputs: usize) -> Arc<wgpu::BindGroupLayout> {
-        self.group1
+    /// A group of sampled textures, one layout per count: group 1 is a stage's inputs and group 2
+    /// its state buffers. Zero is an empty group, so every stage binds all three.
+    pub fn textures(&self, count: usize) -> Arc<wgpu::BindGroupLayout> {
+        self.textures
             .lock()
             .unwrap()
-            .entry(inputs)
+            .entry(count)
             .or_insert_with(|| {
-                let entries: Vec<wgpu::BindGroupLayoutEntry> = (0..inputs as u32)
+                let entries: Vec<wgpu::BindGroupLayoutEntry> = (0..count as u32)
                     .map(|binding| wgpu::BindGroupLayoutEntry {
                         binding,
                         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -350,17 +351,31 @@ impl Gpu {
             .clone()
     }
 
-    pub fn layout(&self, params: bool, inputs: usize) -> Arc<wgpu::PipelineLayout> {
-        if let Some(held) = self.layouts.lock().unwrap().get(&(params, inputs)) {
+    /// One group of sampled textures, bound: a stage's inputs, or the state its last tick left.
+    pub fn texture_group(&self, views: &[wgpu::TextureView]) -> wgpu::BindGroup {
+        let entries: Vec<wgpu::BindGroupEntry> = views
+            .iter()
+            .enumerate()
+            .map(|(i, v)| wgpu::BindGroupEntry { binding: i as u32, resource: wgpu::BindingResource::TextureView(v) })
+            .collect();
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.textures(views.len()),
+            entries: &entries,
+        })
+    }
+
+    pub fn layout(&self, params: bool, inputs: usize, state: usize) -> Arc<wgpu::PipelineLayout> {
+        if let Some(held) = self.layouts.lock().unwrap().get(&(params, inputs, state)) {
             return held.clone();
         }
-        let group1 = self.group1(inputs);
+        let (group1, group2) = (self.textures(inputs), self.textures(state));
         let made = Arc::new(self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[Some(self.group0(params)), Some(&group1)],
+            bind_group_layouts: &[Some(self.group0(params)), Some(&group1), Some(&group2)],
             immediate_size: 0,
         }));
-        self.layouts.lock().unwrap().insert((params, inputs), made.clone());
+        self.layouts.lock().unwrap().insert((params, inputs, state), made.clone());
         made
     }
 }

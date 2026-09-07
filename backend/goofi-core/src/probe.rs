@@ -24,6 +24,10 @@ pub struct Introspection {
     /// `serde(default)`: only the graphics engine asks.
     #[serde(default)]
     pub window: bool,
+    /// The named buffers the node writes beside its output and reads as the last tick left them.
+    /// `serde(default)`: only the graphics engine asks.
+    #[serde(default)]
+    pub state: Vec<String>,
     #[serde(default)]
     pub inputs: Vec<Slot>,
     #[serde(default)]
