@@ -368,17 +368,22 @@ impl Runtime {
         }
         for uid in self.taping.keys().copied().collect::<Vec<_>>() {
             let held = &self.taping[&uid];
-            let why = match want.get(&uid) {
-                Some((_, size)) if *size == held.size => {
-                    if held.missed > 0 && held.said.elapsed() >= SAY_EVERY {
-                        rec.dropped(&held.id, held.missed, t);
-                        let held = self.taping.get_mut(&uid).expect("just read");
-                        held.missed = 0;
-                        held.said = Instant::now();
-                    }
-                    continue;
+            // The RECORDER owns whether a stream is open: a `record disarm` closes one behind the
+            // render thread's back, and a tape kept over that would never open the next file.
+            let kept = want.get(&uid).is_some_and(|(_, size)| *size == held.size)
+                && (!held.live || rec.is_open(&held.id));
+            if kept {
+                if held.missed > 0 && held.said.elapsed() >= SAY_EVERY {
+                    rec.dropped(&held.id, held.missed, t);
+                    let held = self.taping.get_mut(&uid).expect("just read");
+                    held.missed = 0;
+                    held.said = Instant::now();
                 }
-                Some(_) => "resized",
+                continue;
+            }
+            let why = match want.get(&uid) {
+                Some((_, size)) if *size != held.size => "resized",
+                Some(_) => "reopened",
                 None if recording => "disarmed",
                 None => "stopped",
             };
