@@ -54,6 +54,11 @@ export const commands = {
 	lockGlobalGroup: (group: string, lock: Partial<LockView>): Promise<void> =>
 		graph().lockGlobalGroup(group, lock),
 
+	armSlot: (node: string, slot: string): Promise<void> => graph().armSlot(node, slot),
+	disarmSlot: (node: string, slot: string): Promise<void> => graph().disarmSlot(node, slot),
+	startRecording: (name = '', root = ''): Promise<string> => graph().startRecording(name, root),
+	stopRecording: (): Promise<string> => graph().stopRecording(),
+
 	save: (path: string): Promise<{ path: string }> => graph().save(path),
 	newPatch: (): Promise<void> => graph().newPatch(),
 
