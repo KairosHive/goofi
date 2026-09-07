@@ -274,7 +274,7 @@ pub fn node_source(
     g: &Graph,
     ty: &str,
     mount: &Path,
-    roots: &[PathBuf],
+    roots: &[(PathBuf, goofi_graph::Origin)],
     source: bool,
 ) -> Result<Value, String> {
     let (engine, entry) = g.resolve_type(ty).map_err(|e| format!("library get: {e}"))?;
@@ -283,20 +283,20 @@ pub fn node_source(
     // `.rev()` is load-bearing: `rescan` scans the roots forwards and lets each overwrite the
     // last, so a first-match search walks them backwards.
     let workspace: Vec<PathBuf> = g.engine_ids().into_iter().map(|id| mount.join(goofi_node::folder_of(id))).collect();
+    let word = |o: &goofi_graph::Origin| match o {
+        goofi_graph::Origin::Patch => "patch",
+        goofi_graph::Origin::Custom => "custom",
+        goofi_graph::Origin::Root(_) | goofi_graph::Origin::Plugin => "shipped",
+    };
     let dirs = workspace
         .into_iter()
         .filter(|_| g.is_patch_type(ty))
         .map(|d| (d, "patch"))
-        .chain(roots.iter().rev().map(|d| (d.clone(), "shipped")));
+        .chain(roots.iter().rev().map(|(d, o)| (d.clone(), word(o))));
     // The file names the type, so the path re-derives without a registry; the registry says only
     // whether the patch's folder is where it lives.
     let found = dirs.into_iter().find_map(|(dir, provenance)| {
-        let entries = std::fs::read_dir(dir).ok()?;
-        let path = entries
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .find(|p| goofi_node::type_name_of(p).as_deref() == Some(goofi_node::bare(ty)) && goofi_node::engine_of(p).as_deref() == Some(engine))?;
-        Some((path, provenance))
+        Some((crate::node_file_in(&dir, goofi_node::bare(ty), engine)?, provenance))
     });
     let tier = g.type_tier(ty);
     info["language"] = json!(tier.map(goofi_node::Isolation::language));

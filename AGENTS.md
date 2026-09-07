@@ -336,6 +336,16 @@ is memory the plan laid out, not a frame in flight. There is no static registrat
 root of its own — so `cargo run` carries them all, and a toolchain is needed to author and never
 to run; `--extra-nodes` adds a root at run time.
 
+**A node the user wrote has a home outside the patch.** `$GOOFI_HOME/.goofi/custom/` is the private
+library — the ONE node root goofi writes into — scanned after every other root and before the
+patch's own, so it beats a shipped node and loses to the open patch. `library save <type>` MOVES a
+patch's node file into it, because two copies of one node are two claimants on its name. A `.gfi`
+still carries every library file the patch's nodes use, packed straight into the archive and never
+into the mount, so a patch opens on a machine that has no such library. A load then DROPS the copy
+the archive brought wherever the library already holds it BYTE FOR BYTE: one file, so an edit there
+reaches every patch that uses it. A copy that DIFFERS stays and wins the name, exactly as any patch
+file wins one.
+
 **Exit is a real teardown.** Every node is stopped and waited for — to a CEILING, not a join,
 because a wedged node must not wedge the exit. That wait is what releases shared memory; what a
 crash leaves behind is reclaimed by the next start's sweep.

@@ -22,11 +22,12 @@ export interface NodeTypeInfo {
 	/** The qualified `engine:Name` id; a structural type is bare. `engineOf` reads the engine. */
 	type: string;
 	tags: (typeof TAGS)[number][];
-	/** Which tree the type came from; an `--extra-nodes` directory reads as `builtin`. `plugin` is
-	 * an engine's own find rather than any tree's — a VST3 class, window or no window. */
-	source: 'builtin' | 'patch' | 'plugin';
+	/** Which tree the type came from; an `--extra-nodes` directory reads as `builtin`. `custom` is
+	 * the user's own private library, `patch` the open patch's workspace, and `plugin` an engine's
+	 * own find rather than any tree's — a VST3 class, window or no window. */
+	source: 'builtin' | 'custom' | 'patch' | 'plugin';
 	/** The node root the type was scanned from, by directory name — a shipped bundle, or an
-	 * `--extra-nodes` root. Absent for `patch` and `plugin`, which come from no root. */
+	 * `--extra-nodes` root. Absent for `custom`, `patch` and `plugin`, which name no root. */
 	bundle?: string;
 	doc: string;
 	/** Whether this machine resolves the type's unconditional top-level deps. */

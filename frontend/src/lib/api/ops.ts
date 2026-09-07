@@ -43,6 +43,7 @@ export type OpName =
 	| 'control source'
 	| 'library list'
 	| 'library get'
+	| 'library save'
 	| 'library refresh'
 	| 'dir list'
 	| 'op list'

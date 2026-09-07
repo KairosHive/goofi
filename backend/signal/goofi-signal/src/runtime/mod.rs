@@ -33,8 +33,11 @@ impl Transport for WakingTransport {
     fn wire_out(&self, slot: &str, targets: &[(ServiceName, EventId)]) -> Result<(), String> {
         self.inner.wire_out(slot, targets)
     }
-    fn record_out(&self, slot: &str, on: bool) -> Result<(), String> {
-        self.inner.record_out(slot, on)
+    fn record_out(&self, slots: &[String]) -> Result<(), String> {
+        self.inner.record_out(slots)
+    }
+    fn record_trouble(&self) -> Option<String> {
+        self.inner.record_trouble()
     }
     fn drain_inputs(&self) -> Vec<(String, usize, Data)> {
         self.inner.drain_inputs()
@@ -153,6 +156,8 @@ pub struct NodeRuntime {
     stage: NodeStage,
 
     pub(crate) fault: Option<NodeFault>,
+    /// The recording's own standing complaint, which a successful `process()` does not clear.
+    record_trouble: Option<String>,
     /// A MAP, not a fault variant: several bindings can be errored at once, each on its own field.
     pub(crate) binding_errors: HashMap<ParamKey, String>,
     initialized: bool,
@@ -206,6 +211,7 @@ impl NodeRuntime {
             last_ufreq_report: None,
             stage: NodeStage::Setup,
             fault: None,
+            record_trouble: None,
             binding_errors: HashMap::new(),
             initialized: false,
         };
@@ -276,6 +282,7 @@ impl NodeRuntime {
             // §2.1 — the non-common bindings, in the same breath as the run that reads them.
             self.eval_bindings();
             self.run();
+            self.wear_record_trouble();
         }
     }
 
@@ -294,7 +301,11 @@ impl NodeRuntime {
                     wired
                 }
                 Control::OutSlot { slot, targets } => transport.wire_out(&slot, &targets),
-                Control::RecSlot { slot, on } => transport.record_out(&slot, on),
+                Control::RecSlot { slots } => {
+                    let armed = transport.record_out(&slots);
+                    self.wear_record_trouble();
+                    armed
+                }
                 Control::SetParam { key, value } => {
                     self.set_param(key, value);
                     Ok(())
@@ -730,9 +741,24 @@ impl NodeRuntime {
         }
     }
 
+    /// Wear what the recording costs. It is a fault of its OWN standing: a run that succeeds
+    /// clears the process fault, and this one must survive that.
+    fn wear_record_trouble(&mut self) {
+        let next = self.transport.record_trouble();
+        if next != self.record_trouble {
+            self.record_trouble = next;
+            self.set_fault(self.fault.clone().filter(|_| self.record_trouble.is_none()));
+        }
+    }
+
     /// Install a fault, keeping `since` when nothing changed — the node reports only TRANSITIONS.
     /// An unchanged fault still moves `last_attempt`, or the backoff turns off entirely.
     fn set_fault(&mut self, next: Option<NodeFault>) {
+        let next = next.or_else(|| {
+            self.record_trouble
+                .as_ref()
+                .map(|msg| NodeFault::Process { msg: msg.clone(), since: now_ms() })
+        });
         let unchanged = match (&self.fault, &next) {
             (Some(current), Some(next)) => {
                 std::mem::discriminant(current) == std::mem::discriminant(next)

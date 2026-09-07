@@ -397,11 +397,12 @@ struct Greyed {
     last: Option<(&'static str, &'static NodeManifest)>,
 }
 
-/// Where a scanned type came from: the open patch's workspace, a node root by directory name, or
-/// an engine's own find — a plugin, which belongs to no tree at all.
+/// Where a scanned type came from: the open patch's workspace, the user's own private library, a
+/// node root by directory name, or an engine's own find — a plugin, which belongs to no tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Origin {
     Patch,
+    Custom,
     Root(String),
     Plugin,
 }
@@ -1095,8 +1096,13 @@ impl Graph {
         matches!(self.origins.get(type_name), Some(Origin::Patch))
     }
 
+    /// Whether `type_name` came from the private library — the root `library save` writes into.
+    pub fn is_custom_type(&self, type_name: &str) -> bool {
+        matches!(self.origins.get(type_name), Some(Origin::Custom))
+    }
+
     /// The node root `type_name` was scanned from, by its directory name — none for the patch's
-    /// own, and for a plugin.
+    /// own, the private library's and a plugin's.
     pub fn bundle_of(&self, type_name: &str) -> Option<&str> {
         match self.origins.get(type_name) {
             Some(Origin::Root(bundle)) => Some(bundle),

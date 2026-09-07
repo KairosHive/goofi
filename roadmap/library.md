@@ -23,6 +23,9 @@ anyone can install.
 - A node that cannot load is registered UNAVAILABLE with its missing dependency named, so a bundle
   with unmet requirements degrades legibly instead of vanishing.
 - `$GOOFI_HOME/.goofi/` exists (`goofi_core::home`), which is where an installed bundle lands.
+  The **private library** already lives there — `.goofi/custom/`, a flat root with `library save`
+  behind it — so the middle slot's precedence, the palette facet and the `.gfi`'s carrying of a
+  non-shipped node are all worked examples rather than open questions.
 - The `library` op group exists — `list`, `get`, `refresh` — and every op is on every transport, so
   the CLI, an agent, the panel and a test reach the same door.
 - `registerPanel` exists, and the layout stores `panel_type` as a STRING: a panel add-on's type
@@ -39,8 +42,8 @@ files, each naming its own engine — `node-sources.md`'s rule — and, later, `
 A bundle is the only thing that is installed, published or updated. There is no per-node install.
 
 **Installed bundles live in `$GOOFI_HOME/.goofi/bundles/<name>/`**, one directory each, and the
-scan order becomes: the shipped tree, then each installed bundle, then this patch's own
-`workspace/nodes_*/`. The precedence `node-sources.md` states is unchanged; this fills the middle
+scan order becomes: the shipped tree, then each installed bundle, then the private library
+(`.goofi/custom/`, which is built), then this patch's own `workspace/nodes_*/`. The precedence `node-sources.md` states is unchanged; this fills the middle
 slot it left open. A bundle's name is a palette facet the palette derives from where a node came from.
 
 **The repo's own bundles live in `node-bundles/<name>/`**, and they publish through the same door a

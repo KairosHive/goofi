@@ -11,8 +11,9 @@ use goofi_core::Data;
 use goofi_node::NodeManifest;
 use goofi_transport::{
     control_service, data_service, door_service, event_service, iox_node, message_service,
-    output_service, publisher, record_data_service, record_service, service_base, status_service,
-    ByteService, ByteSubscriber, Doorbell, EventService, IoxNode, INITIAL_SLICE, MESSAGE_SLICE,
+    output_service, publisher, record_data_service, record_publisher, record_service, service_base,
+    status_service, ByteService, ByteSubscriber, Doorbell, EventService, IoxNode, INITIAL_SLICE,
+    MESSAGE_SLICE, RECORD_SLICE,
 };
 
 use super::wire::{ControlSink, Envelope, EventId, ServiceName, Transport, WireStatus};
@@ -40,8 +41,7 @@ struct InputWire {
 
 /// A node's end of every service it owns.
 pub struct IoxTransport {
-    /// Every service of this node is named from it, and a recording service is opened long after
-    /// birth — so the base is held rather than re-derived from facts the node does not have.
+    /// The name every service of this node is derived from.
     base: String,
     door: EventService,
     listener: goofi_transport::Listener,
@@ -51,8 +51,10 @@ pub struct IoxTransport {
     outputs: HashMap<&'static str, OutputPort>,
     /// Grown and shrunk by `InSlot`, which is why it is the one map behind a lock.
     inputs: Mutex<Vec<(String, Vec<InputWire>)>>,
-    /// The armed slots' second publishers, opened and dropped by `RecSlot`.
+    /// The armed slots' second publishers, reconciled by `RecSlot`.
     records: Mutex<HashMap<String, BytePublisher>>,
+    /// What the recording last cost and why — the count and the cause a node wears as a fault.
+    trouble: Mutex<Option<(u64, String)>>,
     /// Must outlive every port built from it, so it is declared LAST — Rust drops a struct's fields
     /// in declaration order, and a node dropped first cannot remove its own directory.
     node: IoxNode,
@@ -99,6 +101,7 @@ impl IoxTransport {
             outputs,
             inputs: Mutex::new(Vec::new()),
             records: Mutex::new(HashMap::new()),
+            trouble: Mutex::new(None),
         })
     }
 
@@ -114,6 +117,14 @@ impl IoxTransport {
         slot: &str,
     ) -> Option<iceoryx2::service::static_config::publish_subscribe::StaticConfig> {
         self.outputs.get(slot).map(|o| *o.service.static_config())
+    }
+
+    /// Why a recording loan was refused: an outsized frame, or shared memory that ran out.
+    fn loan_refused(&self, bytes: &[u8]) -> String {
+        match bytes.len() > RECORD_SLICE {
+            true => format!("a {} byte frame is over the {RECORD_SLICE} byte ceiling", bytes.len()),
+            false => "no shared memory left".to_string(),
+        }
     }
 
     /// Open this end of one wire, by the name that IS the wire's identity. `open_or_create` because
@@ -215,21 +226,42 @@ impl Transport for IoxTransport {
         out
     }
 
-    fn record_out(&self, slot: &str, on: bool) -> Result<(), String> {
-        if !self.outputs.contains_key(slot) {
-            return Err(format!("no output slot `{slot}`"));
-        }
+    fn record_out(&self, slots: &[String]) -> Result<(), String> {
         let mut records = self.records.lock().unwrap();
-        if !on {
-            records.remove(slot);
+        records.retain(|slot, _| slots.contains(slot));
+        let mut failed = Vec::new();
+        let wanted: Vec<&String> = slots.iter().filter(|s| !records.contains_key(*s)).collect();
+        for slot in wanted {
+            if !self.outputs.contains_key(slot.as_str()) {
+                failed.push(format!("no output slot `{slot}`"));
+                continue;
+            }
+            match record_data_service(&self.node, &record_service(&self.base, slot))
+                .and_then(|service| record_publisher(&service, slot))
+            {
+                Ok(port) => {
+                    records.insert(slot.clone(), port);
+                }
+                Err(e) => failed.push(e),
+            }
+        }
+        drop(records);
+        if failed.is_empty() {
+            *self.trouble.lock().unwrap() = None;
             return Ok(());
         }
-        if records.contains_key(slot) {
-            return Ok(());
-        }
-        let service = record_data_service(&self.node, &record_service(&self.base, slot))?;
-        records.insert(slot.to_string(), publisher(&service, slot, INITIAL_SLICE)?);
-        Ok(())
+        let why = failed.join("; ");
+        *self.trouble.lock().unwrap() = Some((0, why.clone()));
+        Err(why)
+    }
+
+    fn record_trouble(&self) -> Option<String> {
+        let trouble = self.trouble.lock().unwrap();
+        let (dropped, why) = trouble.as_ref()?;
+        Some(match dropped {
+            0 => format!("recording: {why}"),
+            n => format!("recording dropped {n} frames: {why}"),
+        })
     }
 
     fn publish(&self, slot: &str, frame: &Data) {
@@ -238,7 +270,11 @@ impl Transport for IoxTransport {
         let targets = port.targets.lock().unwrap();
         goofi_transport::publish(&port.publisher, &bytes, targets.iter().map(|(b, id)| (b, *id)));
         if let Some(rec) = self.records.lock().unwrap().get(slot) {
-            goofi_transport::publish(rec, &bytes, std::iter::empty());
+            if !goofi_transport::publish(rec, &bytes, std::iter::empty()) {
+                let mut trouble = self.trouble.lock().unwrap();
+                let (dropped, _) = trouble.get_or_insert_with(|| (0, self.loan_refused(&bytes)));
+                *dropped += 1;
+            }
         }
     }
 

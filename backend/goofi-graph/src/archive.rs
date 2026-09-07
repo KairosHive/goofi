@@ -131,8 +131,15 @@ fn case_clash<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<String> {
 }
 
 /// Pack `manifest` plus every regular file under `workspace_dir` into a `.gfi` at `out`. The walk
-/// is sorted so an unchanged tree packs byte-identically.
-pub fn write_gfi(out: &Path, manifest: &str, workspace_dir: &Path) -> Result<(), String> {
+/// is sorted so an unchanged tree packs byte-identically. `extra` carries files packed AS IF they
+/// were in the workspace — a private-library node the patch uses — each a workspace-relative
+/// slash path and the file behind it; one the mount already holds is left to the mount.
+pub fn write_gfi(
+    out: &Path,
+    manifest: &str,
+    workspace_dir: &Path,
+    extra: &[(String, PathBuf)],
+) -> Result<(), String> {
     let at = |p: &Path, e: &dyn std::fmt::Display| format!("{}: {e}", p.display());
     let mut zip = ZipWriter::new(File::create(out).map_err(|e| at(out, &e))?);
     let opts = SimpleFileOptions::default();
@@ -148,6 +155,12 @@ pub fn write_gfi(out: &Path, manifest: &str, workspace_dir: &Path) -> Result<(),
         // keeps a unix file genuinely called `a\b` intact.
         packed.push((rel.replace(std::path::MAIN_SEPARATOR, "/"), entry.into_path()));
     }
+    // Appended rather than merged into the walk's order, so a tree with no extras packs exactly
+    // as it did; sorted among themselves, so a pack stays byte-identical run to run.
+    let mut added: Vec<&(String, PathBuf)> =
+        extra.iter().filter(|(rel, _)| !packed.iter().any(|(at, _)| at == rel)).collect();
+    added.sort_by(|(a, _), (b, _)| a.cmp(b));
+    packed.extend(added.into_iter().cloned());
     if let Some(clash) = case_clash(packed.iter().map(|(rel, _)| rel.as_str())) {
         return Err(at(workspace_dir, &clash));
     }

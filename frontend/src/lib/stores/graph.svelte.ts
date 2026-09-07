@@ -338,6 +338,12 @@ export class GraphStore {
 		return this.ctl.call<ScanDiff>('library refresh', {});
 	}
 
+	/** Move one of the patch's own node files into the private library, where every later patch
+	 * finds it. The fresh catalog arrives as a `node_types` event in every open tab. */
+	async saveNodeToLibrary(type: string): Promise<{ type: string; path: string }> {
+		return this.ctl.call<{ type: string; path: string }>('library save', { type });
+	}
+
 	/** Where this patch's workspace files live — a per-run temp directory under a random name. It
 	 * rides `session status` beside the save path, because both answer "where does this patch live". */
 	async openWorkspace(): Promise<string> {
