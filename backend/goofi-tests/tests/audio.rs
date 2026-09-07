@@ -312,7 +312,7 @@ fn a_patch_sounds_under_the_external_clock() {
     // monitor level moves what is heard and never what is kept. Three takes: a plain one, a
     // second under `unique` that cannot replace it, and a name that will not open, which stands
     // as an error on the param until one of the three moves.
-    let takes = goofi_audio::recordings();
+    let takes = goofi_core::home::recordings();
     let opened = |p: &Path| goofi_audio::wav::Reader::open(p).ok().filter(|r| r.frames > 0);
     g.set_param(out, "record", "file", "scenario");
     g.set_param(out, "record", "unique", false);
@@ -345,7 +345,7 @@ fn a_patch_sounds_under_the_external_clock() {
     });
     assert!(opened(&one).is_some(), "the first take still stands: {}", one.display());
     let name = stamped.file_stem().unwrap_or_default().to_string_lossy().to_string();
-    assert!(name.starts_with("scenario-") && name.len() == "scenario-20260906-141233".len(), "the time joined the name: {name}");
+    assert!(name.starts_with("scenario-") && name.len() == "scenario-20260906-141233.456".len(), "the time joined the name: {name}");
 
     let blocked = takes.join("blocked.wav");
     std::fs::create_dir_all(&blocked).expect("a directory where the take wants its file");

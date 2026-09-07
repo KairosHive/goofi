@@ -21,6 +21,11 @@ pub fn dir() -> PathBuf {
         .join(".goofi")
 }
 
+/// Where a recording lands, and where a bare playback name is looked for.
+pub fn recordings() -> PathBuf {
+    dir().join("recordings")
+}
+
 fn sessions_dir() -> PathBuf {
     dir().join("sessions")
 }
