@@ -1,5 +1,27 @@
 //! Recording: every engine's frames, on one timeline.
 
+/// A machine with no video encoder, which is what a machine without ffmpeg is. The recorder holds
+/// its encoders behind one trait, so this needs no `PATH` and no second door through the product.
+struct NoEncoder;
+
+impl NoEncoder {
+    const WHY: &'static str = "install the `ffmpeg` package";
+}
+
+impl goofi_record::video::Encoders for NoEncoder {
+    fn probe(&self) -> Result<(), String> {
+        Err(NoEncoder::WHY.into())
+    }
+    fn open(
+        &self,
+        _file: &std::path::Path,
+        _size: (u32, u32),
+        _fps: f64,
+    ) -> Result<Box<dyn goofi_record::video::Encoder>, String> {
+        Err(NoEncoder::WHY.into())
+    }
+}
+
 use goofi_core::time::{stamp, Time};
 use goofi_tests::j;
 
@@ -179,6 +201,24 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     assert!(stages(&g) > idle, "arming is what puts the stage in demand");
     g.call("record disarm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
 
+    // Step: a machine that cannot encode costs the GRAPHICS stream and nothing else. The node
+    // wears the standing error every other node failure is worn as, and the recording carries on.
+    g.state.recorder.set_encoders(std::sync::Arc::new(NoEncoder));
+    let before = frames(&g, &src_name);
+    g.call("record arm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
+    let said = g.until("the shader to wear what it could not record", |g| {
+        goofi_tests::render(g, 1);
+        g.error(shader)
+    });
+    assert!(said.contains(NoEncoder::WHY), "the error names the package to install: {said}");
+    assert_eq!(g.call("record status", j!({}))["running"], j!(true), "one stream's failure ends nothing");
+    g.until("the signal streams to keep recording through it", |g| (frames(g, &src_name) > before).then_some(()));
+    g.call("record disarm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
+    g.until("the error to clear with the arming that caused it", |g| {
+        goofi_tests::render(g, 1);
+        g.error(shader).is_none().then_some(())
+    });
+
     g.call("record disarm", j!({ "output": goofi_tests::ep(&src, "out") }));
     assert_eq!(g.doc()["nodes"][&src]["record"], j!([]), "disarming empties the node's record");
 
@@ -213,6 +253,26 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     for pair in instants.windows(2) {
         assert!(pair[1] > pair[0], "the instants are the patch's own seconds, in order: {instants:?}");
     }
+
+    // …and the stream that could not be encoded is an ENTRY, never a gap the folder leaves
+    // unexplained.
+    let refused = m["streams"]
+        .as_array()
+        .expect("streams")
+        .iter()
+        .find(|e| e["node"] == j!(shader_name) && e["frames"] == j!(0))
+        .expect("the stream that never opened is in the manifest too");
+    assert_eq!(refused["closed_because"], j!("never opened"), "{refused}");
+    assert!(refused["error"].as_str().is_some_and(|e| e.contains(NoEncoder::WHY)), "{refused}");
+
+    // Step: a recording of NOTHING but video, on a machine that cannot encode, is the one case
+    // where refusing is the honest answer.
+    g.call("record disarm", j!({ "output": goofi_tests::ep(&late_hex, "out") }));
+    g.call("record arm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
+    let refusal = g.refuse("record start", j!({ "root": root.path() }));
+    assert!(refusal.contains(NoEncoder::WHY), "the refusal names the package: {refusal}");
+    g.call("record disarm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
+    g.state.recorder.set_encoders(std::sync::Arc::new(goofi_record::video::FfmpegEncoders));
 
     // A recording whose folder went out from under it: the load still opens its patch, because the
     // patch the caller asked for is not the recording's disk.
