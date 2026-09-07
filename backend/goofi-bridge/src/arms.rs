@@ -1771,7 +1771,7 @@ pub(crate) fn op_complete(
 }
 
 /// The recorder's name for one armed output slot: the node's identity, plus the engine behind it.
-fn stream_id(g: &Graph, uid: Uid, slot: &str) -> goofi_record::StreamId {
+pub(crate) fn stream_id(g: &Graph, uid: Uid, slot: &str) -> goofi_record::StreamId {
     let engine = g
         .node_type(uid)
         .and_then(|ty| g.type_engine(&ty))

@@ -88,6 +88,12 @@ pub fn record_service(base: &str, slot: &str) -> ServiceName {
     format!("goofi_{base}_rec_{slot}")
 }
 
+/// The ONE door every armed slot rings once its frame is out. It is the recorder's, not a node's,
+/// so a burst across every armed slot coalesces into one sweep of every armed buffer.
+pub fn record_door_service(instance: &str) -> ServiceName {
+    format!("goofi_{instance}_recdoor")
+}
+
 /// A notifier onto one node's door; the ringer knows nothing else about the node it rings.
 pub struct Doorbell {
     notifier: iceoryx2::port::notifier::Notifier<Svc>,

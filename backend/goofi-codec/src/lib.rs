@@ -177,6 +177,13 @@ pub fn split_frame(frame: &[u8]) -> std::result::Result<(u8, &[u8], &[u8]), Stri
     Ok((tag, &frame[HEADER_SIZE..meta_end], &frame[meta_end..body_end]))
 }
 
+/// A frame's META alone — what a recorder reads to name a file and to count a gap, without
+/// paying for the body it is about to write through untouched.
+pub fn frame_meta(frame: &[u8]) -> std::result::Result<goofi_core::Meta, String> {
+    let (_, meta, _) = split_frame(frame)?;
+    parse_meta(meta)
+}
+
 /// Decode a GOOF v2 frame into a `Data`. The inverse of [`encode`].
 pub fn decode(frame: &[u8]) -> std::result::Result<Data, String> {
     let (tag, meta_bytes, body) = split_frame(frame)?;
