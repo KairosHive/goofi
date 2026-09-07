@@ -172,6 +172,48 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     std::fs::remove_dir_all(&second).expect("the folder goes away");
     g.call("session new", j!({}));
     assert_eq!(g.call("record status", j!({}))["running"], j!(false), "a new patch ends the recording");
+
+    // Step: the record service overflows the OLDEST frame at the subscriber, which nothing on the
+    // publishing side can see. Every lost frame is still counted, from the indices themselves.
+    let fast = g.add("_TestConst");
+    let fast_hex = goofi_tests::hex(fast);
+    g.set_param(fast, "constant", "length", 1);
+    g.set_param(fast, "common", "max_frequency", 100000.0);
+    g.ready(fast);
+    g.call("record arm", j!({ "output": goofi_tests::ep(&fast_hex, "out") }));
+    let third = g.call("record start", j!({ "root": root.path() }))["folder"]
+        .as_str()
+        .expect("a folder")
+        .to_string();
+    let fast_name = name_of(&g, &fast_hex);
+    let lost = g.until("the drain to fall behind and say so", |g| {
+        let status = g.call("record status", j!({}));
+        let n: u64 = status["streams"]
+            .as_array()
+            .map(|s| s.iter().filter(|e| e["node"] == j!(fast_name)).filter_map(|e| e["dropped"].as_u64()).sum())
+            .unwrap_or(0);
+        (n > 0).then_some(n)
+    });
+    g.call("record stop", j!({}));
+
+    let entry = mine(&third, &fast_name).pop().expect("one stream");
+    let bytes = std::fs::read(std::path::Path::new(&third).join(entry["file"].as_str().expect("a name")))
+        .expect("the stream");
+    let mut rest = &bytes[..];
+    let mut indices: Vec<u64> = Vec::new();
+    while !rest.is_empty() {
+        let (_, meta, body) = goofi_codec::split_frame(rest).expect("a whole frame");
+        let used = 14 + meta.len() + body.len();
+        indices.push(goofi_codec::decode(&rest[..used]).expect("a frame").meta().index().expect("an index"));
+        rest = &rest[used..];
+    }
+    let gaps: u64 = indices.windows(2).map(|p| p[1] - p[0] - 1).sum();
+    assert!(gaps > 0, "the file itself is missing frames: {} written", indices.len());
+    assert_eq!(
+        entry["dropped"].as_u64().expect("a count"),
+        gaps,
+        "every frame the subscriber overflowed is counted, and never silently: {lost} said at the stop"
+    );
 }
 
 #[test]
