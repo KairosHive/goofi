@@ -430,6 +430,19 @@ fn a_node_saved_to_the_private_library_leaves_the_patch_rides_the_archive_and_st
     // A move is not an edit: the `.gfi` still carries the file, so the unsaved dot must not rise.
     assert_eq!(g.call("session status", j!({}))["dirty"], false, "a move alone does not dirty the patch");
     emits(&g, live, 1.0); // …and the instance was never restarted out from under the patch
+
+    // A save NEVER overwrites: a second node of that name is refused, and the library's own file
+    // stands. The workspace file wins the name while it is there, which is what makes it savable.
+    write_node(&workspace, "my_kept.py", "5.0");
+    rescan(&g);
+    let why = g.refuse("library save", j!({ "type": "MyKept" }));
+    assert!(why.contains("already holds"), "{why}");
+    let kept = std::fs::read_to_string(library.path().join("my_kept.py")).unwrap();
+    assert!(kept.contains("[1.0]"), "the library's own file is untouched: {kept}");
+    std::fs::remove_file(workspace.join("my_kept.py")).unwrap();
+    rescan(&g);
+    emits(&g, live, 1.0);
+
     let second = add_capped(&g, "MyKept");
     emits(&g, second, 1.0); // …and the type is still addable, now from the library
     g.call("node remove", j!({ "node": second.to_string() }));
