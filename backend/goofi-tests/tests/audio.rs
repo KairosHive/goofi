@@ -1212,4 +1212,91 @@ fn one_signal_speaks_through_another_band_by_band() {
         drive(g, TENTH);
         out.latest().filter(|d| shape(d)[0] == 2)
     });
+
+    // Step: a chord, which is what `harmonic` is for. Four voices at C4, F#4, C5 and F#5 stand a
+    // bank of eight on two partials each, and the two frequencies where a lower voice's second
+    // partial meets a higher voice's first are the ones that carry TWICE as much.
+    let chord = g.add("_TestRamp");
+    g.set_param(chord, "ramp", "channels", 4);
+    // One sample long, so channel c is exactly c rather than a ramp from c to c + 1.
+    g.set_param(chord, "ramp", "length", 1);
+    let half = g.add("Math");
+    g.set_param(half, "math", "multiply", 0.5);
+    let voices = g.add("SignalIn");
+    g.link(chord, "out", half, "input");
+    g.link(half, "out", voices, "input");
+    let heard_voices = g.probe(voices, "out");
+    // `drive` moves the audio clock alone; the signal plane runs on wall time, so this waits on it.
+    let pitches = g.until("four voices to cross into the audio plane", |g| {
+        drive(g, TENTH);
+        shape_held(&heard_voices).filter(|v| v.len() == 4)
+    });
+    assert_eq!(pitches, vec![0.0, 0.5, 1.0, 1.5], "C4, F#4, C5 and F#5 in volts");
+
+    let tone = g.add("Osc");
+    let chord_bank = g.add("BandFilter");
+    g.link(tone, "out", chord_bank, "input");
+    g.set_param(chord_bank, "band", "layout", "harmonic");
+    g.set_param(chord_bank, "band", "bands", 8);
+    g.set_param(chord_bank, "band", "q", 20.0);
+    let voices_name = g.doc()["nodes"][hex(voices)]["name"].as_str().unwrap().to_string();
+    let bound = g.call(
+        "node param edit",
+        j!({ "node": hex(chord_bank), "param": "band/pitch",
+             "reference": format!("{voices_name}.out"), "mode": "reference" }),
+    );
+    assert!(bound["error"].is_null(), "{bound}");
+
+    g.set_param(tone, "osc", "pitch", 0.5);
+    let single = settled(&g, chord_bank, "a tone on one voice's own first partial");
+    g.set_param(tone, "osc", "pitch", 1.5);
+    let shared = settled(&g, chord_bank, "a tone where two voices' partials meet");
+    g.set_param(tone, "osc", "pitch", (629.0f32 / 261.63).log2());
+    let nobody = settled(&g, chord_bank, "a tone no voice of the chord stands on");
+    assert!(
+        peak(&shared) > 1.5 * peak(&single),
+        "two voices on one frequency carry more than one does: {} against {}",
+        peak(&shared),
+        peak(&single)
+    );
+    assert!(
+        peak(&single) > 3.0 * peak(&nobody),
+        "and a frequency the chord does not name carries little: {} against {}",
+        peak(&single),
+        peak(&nobody)
+    );
+
+    // A released note keeps its pitch, so `gate` is what drops one voice out of the chord. The
+    // same ramp mapped to nothing-then-everything shuts the first voice and leaves the other three.
+    g.set_param(tone, "osc", "pitch", 0.0);
+    let sounding = settled(&g, chord_bank, "the first voice's own partial while it is held");
+    let shut = g.add("Math");
+    g.set_param(shut, "range", "from_low", 0.5);
+    g.set_param(shut, "range", "bound", "clamp");
+    let gates = g.add("SignalIn");
+    g.link(chord, "out", shut, "input");
+    g.link(shut, "out", gates, "input");
+    let heard_gates = g.probe(gates, "out");
+    let levels = g.until("a gate per voice, the first one shut", |g| {
+        drive(g, TENTH);
+        shape_held(&heard_gates).filter(|v| v.len() == 4)
+    });
+    assert_eq!(levels, vec![0.0, 1.0, 1.0, 1.0], "one voice let go, three held");
+    let gates_name = g.doc()["nodes"][hex(gates)]["name"].as_str().unwrap().to_string();
+    let bound = g.call(
+        "node param edit",
+        j!({ "node": hex(chord_bank), "param": "band/gate",
+             "reference": format!("{gates_name}.out"), "mode": "reference" }),
+    );
+    assert!(bound["error"].is_null(), "{bound}");
+    let released = settled(&g, chord_bank, "and the same partial once that voice is let go");
+    assert!(
+        peak(&sounding) > 3.0 * peak(&released),
+        "the voice that was let go took its partials with it: {} against {}",
+        peak(&sounding),
+        peak(&released)
+    );
+    g.set_param(tone, "osc", "pitch", 1.5);
+    let others = settled(&g, chord_bank, "while the voices still held carry as they did");
+    assert!(peak(&others) > peak(&single), "the rest of the chord stands: {}", peak(&others));
 }
