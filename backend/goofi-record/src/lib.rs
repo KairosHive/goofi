@@ -162,6 +162,9 @@ pub struct Recorder {
     time: Arc<Time>,
     session: Mutex<Option<Session>>,
     encoders: Mutex<Arc<dyn video::Encoders>>,
+    /// Held while a manifest reaches the disk, so two rewrites cannot land out of order. It is
+    /// NOT the session lock: a writer parked on a disk must not park a stream's own frames.
+    writing: Mutex<()>,
 }
 
 impl Recorder {
@@ -170,6 +173,7 @@ impl Recorder {
             time,
             session: Mutex::new(None),
             encoders: Mutex::new(Arc::new(video::FfmpegEncoders)),
+            writing: Mutex::new(()),
         }
     }
 
@@ -188,6 +192,19 @@ impl Recorder {
 
     fn held(&self) -> MutexGuard<'_, Option<Session>> {
         held(&self.session)
+    }
+
+    /// The manifest as the session stands, written with the session UNLOCKED — a disk that is
+    /// slow must never park the engine writing frames through it. Ordering is the writing lock's.
+    fn publish(&self, guard: MutexGuard<'_, Option<Session>>) -> Result<(), String> {
+        let Some(session) = guard.as_ref() else { return Ok(()) };
+        let manifest = session.manifest(&self.time);
+        let folder = session.folder.clone();
+        let writing = held(&self.writing);
+        drop(guard);
+        let done = manifest.write_atomic(&folder);
+        drop(writing);
+        done
     }
 
     /// Mint the folder. Refused when a recording already runs — the session lock is the ONE
@@ -246,10 +263,9 @@ impl Recorder {
         session.close(id, "reopened");
         let t0_utc = self.time.utc_at(t0_patch);
         let base = format!("{}-{}__{}Z", id.node, id.slot, stamp_nanos(t0_utc));
-        let file = session.free_name(&base, kind.extension());
         let encoders = held(&self.encoders).clone();
+        let file = session.free_name(&base, kind.extension(&*encoders));
         let made = Stream::create(&*encoders, &session.folder, file.clone(), kind, meta.clone(), t0_patch, t0_utc);
-        let folder = session.folder.clone();
         // A stream that could not open is an ENTRY, not an absence: a recording says what it was
         // asked for and did not get, or nobody reading it later can tell.
         let opened = match made {
@@ -262,16 +278,36 @@ impl Recorder {
                 Err(why)
             }
         };
-        session.manifest(&self.time).write_atomic(&folder)?;
+        self.publish(guard)?;
         opened
     }
 
+    /// Count what a stream lost and close it, on a thread of its own. Finalizing a video waits
+    /// for its encoder, and a thread that renders must never wait for one.
+    pub fn close_later(self: &Arc<Self>, id: &StreamId, why: &str, missed: u64, at: f64) {
+        let (rec, mine, said) = (self.clone(), id.clone(), why.to_string());
+        let closing = std::thread::Builder::new().name("goofi-record-close".into()).spawn(move || {
+            if missed > 0 {
+                rec.dropped(&mine, missed, at);
+            }
+            rec.close(&mine, &said);
+        });
+        // No thread to spare is no reason to leak the encoder: close it here instead.
+        if closing.is_err() {
+            if missed > 0 {
+                self.dropped(id, missed, at);
+            }
+            self.close(id, why);
+        }
+    }
+
+    /// Close a stream and finalize its file. A VIDEO's encoder is waited for here, so this is
+    /// never called from a thread that renders — [`Recorder::close_later`] is that door.
     pub fn close(&self, id: &StreamId, why: &str) {
         let mut guard = self.held();
         let Some(session) = guard.as_mut() else { return };
         session.close(id, why);
-        let folder = session.folder.clone();
-        let _ = session.manifest(&self.time).write_atomic(&folder);
+        let _ = self.publish(guard);
     }
 
     /// Write one already-encoded frame. The session is unlocked before the disk is touched, so a
@@ -300,16 +336,15 @@ impl Recorder {
     }
 
     pub fn dropped(&self, id: &StreamId, count: u64, at: f64) {
-        let mut guard = self.held();
-        let Some(session) = guard.as_mut() else { return };
+        let guard = self.held();
+        let Some(session) = guard.as_ref() else { return };
         let Some(stream) = session.open.get(id) else { return };
         {
             let mut stream = held(stream);
             stream.dropped += count;
             stream.dropped_at = Some(at);
         }
-        let folder = session.folder.clone();
-        let _ = session.manifest(&self.time).write_atomic(&folder);
+        let _ = self.publish(guard);
     }
 
     /// Whether this stream has a file open right now — what a drain asks so it opens one exactly
@@ -322,7 +357,7 @@ impl Recorder {
     pub fn fill(&self, id: &StreamId, fill: f32) {
         let guard = self.held();
         if let Some(stream) = guard.as_ref().and_then(|s| s.open.get(id)) {
-            held(stream).fill = fill;
+            held(stream).set_fill(fill);
         }
     }
 
@@ -347,7 +382,7 @@ impl Recorder {
                         file: s.file.clone(),
                         frames: s.frames(),
                         dropped: s.lost(),
-                        fill: s.fill,
+                        fill: s.fill(),
                     }
                 })
                 .collect(),
