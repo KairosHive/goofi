@@ -1114,6 +1114,15 @@ fn one_signal_speaks_through_another_band_by_band() {
         peak(&partial),
         peak(&between)
     );
+    // A released note keeps the pitch it was playing, so `gate` is the only thing that lets a
+    // voice's partials go. Shut at zero, and the tone standing on one has nothing left to pass.
+    g.set_param(carrier, "osc", "pitch", 3f32.log2());
+    g.set_param(bank, "band", "gate", 0.0);
+    heard(&g, bank, "a voice let go takes its partials with it", |x| peak(x) < 0.01);
+    g.set_param(bank, "band", "gate", 1.0);
+    let reopened = settled(&g, bank, "and the same voice opened again brings them back");
+    assert!(peak(&reopened) > 3.0 * peak(&between), "the partial is back: {}", peak(&reopened));
+
     g.set_param(bank, "band", "layout", "spread");
     g.set_param(bank, "band", "q", 4.0);
     g.set_param(carrier, "osc", "pitch", 0.75);
@@ -1179,6 +1188,21 @@ fn one_signal_speaks_through_another_band_by_band() {
         per_tenth(&bright),
         per_tenth(&dark)
     );
+
+    // Step: the shape's own width IS the band count. The follower drops to eight bands while the
+    // filter's own `bands` still says sixteen, and the two still line up — where a filter holding
+    // its own count would have shut the half of its bank the narrower shape never reaches.
+    g.set_param(follow, "band", "bands", 8);
+    let narrow = settled(&g, bank, "eight bands shaped by that same high tone");
+    // Against the SAME tone the sixteen-band bank just answered: a filter keeping its own count
+    // would read the shape's band 6 into its own band 6, which stands six times lower down.
+    assert!(
+        2 * per_tenth(&narrow) > per_tenth(&bright),
+        "a narrower shape lands where the wider one did: {} crossings against {}",
+        per_tenth(&narrow),
+        per_tenth(&bright)
+    );
+    g.set_param(follow, "band", "bands", 16);
 
     // Step: the bands are the gains' axis and never the output's — a two-channel carrier leaves
     // as two channels, with the same sixteen-channel shape on both.
