@@ -20,14 +20,18 @@ use crate::node::Node;
 fn one_at_a_time(py: Python<'_>) -> std::sync::MutexGuard<'static, ()> {
     static BODIES: std::sync::Mutex<()> = std::sync::Mutex::new(());
     loop {
-        if let Ok(held) = BODIES.try_lock() {
-            return held;
+        match BODIES.try_lock() {
+            Ok(held) => return held,
+            // A panic under this lock poisons it, and there is nothing behind it to protect: the
+            // guard IS the critical section. Taking it anyway is what keeps one panic from
+            // leaving every later load spinning here for the life of the process.
+            Err(std::sync::TryLockError::Poisoned(held)) => return held.into_inner(),
+            // A guard cannot cross `detach`, so waiting and holding are two steps: block DETACHED
+            // until it is free, then race for it attached. Waiting attached is what must not
+            // happen — the GIL tripwire can turn the GIL back on, and a waiter holding it would
+            // stop the very thread it waits for.
+            Err(std::sync::TryLockError::WouldBlock) => py.detach(|| drop(BODIES.lock())),
         }
-        // A guard cannot cross `detach`, so waiting and holding are two steps: block DETACHED
-        // until it is free, then race for it attached. Waiting attached is what must not happen —
-        // the GIL tripwire can turn the GIL back on, and a waiter holding it would stop the very
-        // thread it waits for.
-        py.detach(|| drop(BODIES.lock()));
     }
 }
 
