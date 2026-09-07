@@ -29,6 +29,10 @@ pub struct Entry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sfreq: Option<f64>,
     pub timeline: &'static str,
+    /// Seconds a DERIVED timeline last stood ahead of patch time — what an analyst subtracts to
+    /// line it up with a measured one. Absent on a stream that reads the clock itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drift: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channels: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]

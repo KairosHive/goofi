@@ -222,9 +222,8 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     assert_ne!(held[0]["file"], held[1]["file"], "a rebirth never appends to the file before it");
     assert!(held[0]["frames"].as_u64().unwrap_or(0) > 0, "the file before the rebirth holds its frames");
 
-    // Step: a graphics slot records VIDEO. Arming is what puts the stage in demand — a node
-    // nobody watches renders nothing — and every encoded frame's instant goes in a sidecar,
-    // because a dropped frame makes the container's own timing unusable on its own.
+    // Step: a graphics slot records VIDEO. Arming is what puts the stage in demand, and every
+    // encoded frame's instant goes in a sidecar, which a dropped frame makes the only timing.
     let shader = g.add("graphics:Constant");
     let shader_hex = goofi_tests::hex(shader);
     g.ready(shader);
@@ -268,6 +267,12 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         (frames(g, &shader_name) >= so_far + 4).then_some(())
     });
     g.call("record disarm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
+    // The ENGINE closes what a disarm departed, so the re-arm below is a new file rather than a
+    // pair that cancels inside one tick and leaves the old encoder open.
+    g.until("the disarmed video to be closed", |g| {
+        goofi_tests::render(g, 1);
+        videos(g).iter().any(|e| e["closed_because"] == j!("disarmed")).then_some(())
+    });
 
     // Step: a machine that cannot encode costs the GRAPHICS stream and nothing else. The node
     // wears the standing error every other node failure is worn as, and the recording carries on.
@@ -371,9 +376,8 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     assert!(refusal.contains(NoEncoder::WHY), "the refusal names the package: {refusal}");
     g.call("record disarm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
 
-    // Step: finalizing a video holds NO lock anyone else needs. With an encoder whose `finish`
-    // blocks, a `record disarm` sits inside it while an op that takes the graph and a signal
-    // stream's own drain both go through.
+    // Step: finalizing a video holds NO lock anyone else needs. With a `finish` that blocks, an op
+    // that takes the graph and a signal stream's own drain both go through while it does.
     use std::sync::atomic::{AtomicBool, Ordering};
     let inside = std::sync::Arc::new(AtomicBool::new(false));
     let release = std::sync::Arc::new(AtomicBool::new(false));
@@ -396,8 +400,14 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         let (inside, flag, probe, node) = (inside.clone(), went.clone(), &g, src.clone());
         let took = waited.clone();
         scope.spawn(move || {
-            while !inside.load(Ordering::Relaxed) {
+            // BOUNDED: the close is the render thread's, so a finalize that never begins is an
+            // assertion below rather than a scope that never joins.
+            let entered = std::time::Instant::now() + std::time::Duration::from_secs(8);
+            while !inside.load(Ordering::Relaxed) && std::time::Instant::now() < entered {
                 std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            if !inside.load(Ordering::Relaxed) {
+                return;
             }
             // The graph mutex, then the recorder's own session — how long they take IS the
             // finding: 8 s while a finalize held them, against microseconds when it holds none.
@@ -412,8 +422,11 @@ fn arming_survives_a_rewire_and_rides_the_document() {
             let moved = frames(probe, &src_name) > seen;
             flag.store(moved, Ordering::Relaxed);
         });
+        // The ENGINE closes what a disarm departed, so the finalize begins on a tick: nothing in
+        // this scope reaches `finish` unless something keeps the graphics engine running.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
         while !went.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
+            goofi_tests::render(&g, 1);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         release.store(true, Ordering::Relaxed);
@@ -444,26 +457,32 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     g.set_param(fast, "common", "max_frequency", 100000.0);
     g.ready(fast);
     g.call("record arm", j!({ "output": goofi_tests::ep(&fast_hex, "out") }));
-    // ONE drain thread serves every armed stream, so the way to make it fall behind is to give
-    // it more of them than it can take: a single producer alone leaves it idle at 1/64 full.
+    // ONE drain thread serves every armed stream, and the load these put on it is what the audio
+    // ring's own overflow step later needs to outrun a drain that is keeping up.
     for _ in 0..5 {
         let other = g.add("_TestConst");
         g.set_param(other, "constant", "length", 1);
         g.set_param(other, "common", "max_frequency", 100000.0);
         g.ready(other);
-        g.call("record arm", j!({ "output": goofi_tests::ep(&goofi_tests::hex(other), "out") }));
+        g.call("record arm", j!({ "output": goofi_tests::ep(goofi_tests::hex(other), "out") }));
     }
     let third = g.call("record start", j!({ "root": root.path() }))["folder"]
         .as_str()
         .expect("a folder")
         .to_string();
     let fast_name = name_of(&g, &fast_hex);
-    let lost = g.until("the drain to fall behind and say so", |g| {
-        let status = g.call("record status", j!({}));
-        let n: u64 = status["streams"]
-            .as_array()
-            .map(|s| s.iter().filter(|e| e["node"] == j!(fast_name)).filter_map(|e| e["dropped"].as_u64()).sum())
-            .unwrap_or(0);
+    g.until("the third recording to be writing", |g| (frames(g, &fast_name) > 0).then_some(()));
+    let dropped = |g: &goofi_tests::Goofi| -> u64 {
+        g.state.recorder.status().streams.iter().filter(|s| s.node == fast_name).map(|s| s.dropped).sum()
+    };
+    // The drain resolves under the GRAPH lock, so holding it stalls every sweep while the producer
+    // publishes far past the 64 the service holds. The overflow is arithmetic, never a rate race.
+    {
+        let _graph = g.state.graph.lock().expect("the graph");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    let lost = g.until("the drain to count what overflowed", |g| {
+        let n = dropped(g);
         (n > 0).then_some(n)
     });
     g.call("record stop", j!({}));
@@ -499,13 +518,18 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     };
     // The drain resolves under the GRAPH lock, so holding it freezes the drain while the producer
     // fills the record service's buffer behind it.
-    let mut graph = g.state.graph.lock().expect("the graph");
+    let graph = g.state.graph.lock().expect("the graph");
     std::thread::sleep(std::time::Duration::from_millis(200));
     let frozen = written(&g);
     std::thread::sleep(std::time::Duration::from_millis(80));
     assert_eq!(written(&g), frozen, "a held drain writes nothing, which is what makes this a probe");
-    graph.set_recorded(fast, Vec::new()).expect("the armed set is emptied under the hold");
-    drop(graph);
+    // The REAL op, parked on the lock this test holds, so it lands with the feed's buffer full —
+    // the one state that tells a drain-then-close from a close.
+    std::thread::scope(|scope| {
+        scope.spawn(|| g.call("record disarm", j!({ "output": goofi_tests::ep(&fast_hex, "out") })));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        drop(graph);
+    });
 
     g.until("the departing feed to be drained and closed", |g| (written(g) == 0).then_some(()));
     g.call("record stop", j!({}));
@@ -516,8 +540,7 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         "the frames in flight at the disarm reached the file: {frozen} written under the hold, {landed} in the manifest"
     );
     // Step: the audio engine records through the same recorder, one block a frame, on a timeline
-    // the SAMPLE COUNT makes rather than a clock read — so two frames are exactly a block apart
-    // whatever the drain's scheduling did, and the manifest says the timeline is derived.
+    // the SAMPLE COUNT makes — so two frames are a block apart whatever the drain's scheduling did.
     let osc = g.add("Osc");
     let osc_hex = goofi_tests::hex(osc);
     g.ready(osc);
@@ -532,9 +555,8 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         (frames(g, &osc_name) >= 64).then_some(())
     });
 
-    // A clean drive loses NOTHING: every block rendered is a block on disk, counted against what
-    // was driven rather than against the file's own numbering, which a mis-framed reader would
-    // keep self-consistent while it halved.
+    // A clean drive loses NOTHING, counted against what was DRIVEN rather than the file's own
+    // numbering — which a mis-framed reader would keep self-consistent while it halved.
     let settled = |g: &goofi_tests::Goofi| -> u64 {
         g.until("the recorder's count to settle", |g| {
             let a = frames(g, &osc_name);
@@ -585,9 +607,8 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     let crossings = sound.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
     let expect = 880 * sound.len() / 48_000;
     assert!(crossings.abs_diff(expect) <= 2, "…and it is A4: {crossings} crossings against {expect}");
-    // EXACT, not approximate: a per-block clock read would pass a loose assertion and prove nothing.
-    // Every kept block lies on ONE line through its own number, so a block that went missing moved
-    // none of the blocks around it.
+    // EXACT, not approximate: every kept block lies on ONE line through its own number, so a block
+    // that went missing moved none of the blocks around it. A loose assertion would prove nothing.
     let step = 64.0 / 48_000.0;
     let line = |blocks: &[(u64, f64, Vec<usize>, Vec<f32>)]| {
         for pair in blocks.windows(2) {
@@ -600,11 +621,8 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     assert_eq!(line(&held), 0, "an ordinary drive loses no block at all: {entry}");
     assert_eq!(entry["dropped"], j!(0), "…and the manifest says so too: {entry}");
 
-    // Step: the ANCHOR is derived from the count as well, so a stream armed after a long wait is
-    // dated by the block it begins at, not by when the drain happened to wake for it. Nothing
-    // renders through the wait below, so the second recording begins exactly the number of BLOCKS
-    // after the first that the indices say — where a t0 read off the clock at the first drain is
-    // the whole wait out.
+    // Step: the ANCHOR is derived from the count too, so a stream armed after a long wait is dated
+    // by the block it begins at — where a t0 read at the first drain is the whole wait out.
     g.call("record disarm", j!({ "output": goofi_tests::ep(&osc_hex, "out") }));
     std::thread::sleep(std::time::Duration::from_millis(300));
     g.call("record arm", j!({ "output": goofi_tests::ep(&osc_hex, "out") }));
@@ -626,18 +644,16 @@ fn arming_survives_a_rewire_and_rides_the_document() {
          with 0.3 s of wall clock in which nothing was rendered"
     );
 
-    // …and the tie itself is pinned to the patch clock, not merely self-consistent: what the file
-    // says MINUS what the count says is when the engine began, which is the top of the session —
-    // where a tie made at a drain would be the many seconds of walking above.
+    // …and the tie is pinned to the patch clock, not merely self-consistent: the file MINUS the
+    // count is when the engine began — where a tie made at a drain is the walking above.
     let began = held[0].1 - held[0].0 as f64 * step;
     assert!(
         (0.0..0.5).contains(&began),
         "the block count is tied to the engine's own beginning: {began} s into the patch"
     );
 
-    // Step: a block that does not fit the ring is a block the recorder COUNTS. It carries its own
-    // number, so the survivors keep the instants they were rendered at and the gap says how many
-    // went — where a number reconstructed at the drain would close the gap and report nothing.
+    // Step: a block that does not fit the ring is one the recorder COUNTS. It carries its own
+    // number, so the gap says how many went — one rebuilt at the drain would close it silently.
     let seventh = g.call("record start", j!({ "root": root.path() }))["folder"]
         .as_str()
         .expect("a folder")

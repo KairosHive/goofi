@@ -20,7 +20,8 @@ const RESOLVE: Duration = Duration::from_millis(25);
 
 /// The engines whose armed slots publish GOOF frames on a record service, and how each one dates a
 /// frame: a signal node reads the clock at its `process`, and the audio engine counts samples — so
-/// one timeline carries the scheduler's jitter and the other cannot. Graphics has its door to come.
+/// one timeline carries the scheduler's jitter and the other cannot. Graphics is not here: it
+/// writes to the recorder from its own render thread rather than over a service.
 const DRAINED: &[(&str, Timeline)] = &[("signal", Timeline::Measured), ("audio", Timeline::Derived)];
 
 fn timeline(engine: &str) -> Option<Timeline> {
@@ -89,6 +90,7 @@ fn drain_feed(recorder: &Recorder, time: &Time, feed: &mut Feed) {
         return;
     }
     let (mut taken, mut missed) = (0usize, 0u64);
+    let mut drift: Option<f64> = None;
     while let Ok(Some(sample)) = feed.subscriber.receive() {
         let bytes = sample.payload();
         let meta = goofi_codec::frame_meta(bytes).ok();
@@ -99,6 +101,9 @@ fn drain_feed(recorder: &Recorder, time: &Time, feed: &mut Feed) {
                 break;
             }
             feed.last = None;
+        }
+        if let Some(goofi_core::MetaValue::Float(d)) = meta.as_ref().and_then(|m| m.get(goofi_core::META_DRIFT)) {
+            drift = Some(*d);
         }
         let index = meta.as_ref().and_then(|m| m.index());
         // The subscriber overflows the OLDEST frame and says nothing, so the indices are the only
@@ -123,6 +128,11 @@ fn drain_feed(recorder: &Recorder, time: &Time, feed: &mut Feed) {
     }
     if taken > 0 {
         recorder.fill(&feed.id, taken as f32 / feed.buffer as f32);
+    }
+    // Once per sweep, like the counts above: a derived timeline says how far it has walked from
+    // patch time, and the manifest carries the last word.
+    if let Some(d) = drift {
+        recorder.drift(&feed.id, d);
     }
 }
 
@@ -161,6 +171,14 @@ impl Drain {
             drain_feed(&self.recorder, &self.time, feed);
         }
     }
+
+    /// Every feed drained to exhaustion and let go. A stop asks for this before it closes a file,
+    /// so the frames the last sweep did not reach are not the tail this recording loses.
+    fn release(&mut self) {
+        for (_, mut feed) in self.feeds.drain().collect::<Vec<_>>() {
+            drain_feed(&self.recorder, &self.time, &mut feed);
+        }
+    }
 }
 
 /// Start the one drain. `halt` is what stops it, and what a teardown waits on to a ceiling.
@@ -187,8 +205,12 @@ pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>)
             // The event id is ignored, which spends none of the id budget: a burst across every
             // armed slot coalesces into one sweep.
             let _ = drain.listener.timed_wait_all(|_| {}, WAKE);
+            // Read BEFORE the sweep: a sweep already under way when a stop asked is not an answer
+            // to it.
+            let mark = drain.recorder.sweeping();
             if !drain.recorder.running() {
-                drain.feeds.clear();
+                drain.release();
+                drain.recorder.swept(mark);
                 continue;
             }
             if resolved.elapsed() >= RESOLVE || drain.feeds.is_empty() {
@@ -196,6 +218,7 @@ pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>)
                 resolved = Instant::now();
             }
             drain.sweep();
+            drain.recorder.swept(mark);
         }
         drop(drain);
         halt.release();

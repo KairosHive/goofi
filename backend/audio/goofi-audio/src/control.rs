@@ -443,6 +443,7 @@ fn take_block(ring: &mut rtrb::Consumer<f32>) -> Option<(usize, u64, u64, Vec<f3
 /// keep the instants they were rendered at. An unarmed slot's blocks are dropped here, so the ring
 /// never fills while nobody records.
 fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64, anchor: &crate::runtime::Anchor) {
+    let drift = anchor.drift();
     while let Some((c, n, epoch, planar)) = take_block(ring) {
         if !cx.recorded[out] {
             continue;
@@ -450,6 +451,7 @@ fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64
         let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
         let mut meta = Meta::new().with_sfreq(Some(rate)).with_index(Some(n));
         meta.set_time(Some(anchor.seconds(n, epoch)));
+        meta.set(goofi_core::META_DRIFT, goofi_core::MetaValue::Float(drift));
         if let Ok(frame) = Data::array_f32(vec![c, BLOCK], bytes, meta) {
             (cx.record)(out, &goofi_codec::encode(&frame));
         }

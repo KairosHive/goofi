@@ -248,7 +248,7 @@ fn encode(
         counts.dead.store(true, Ordering::Relaxed);
         counts.error.lock().expect("the encoder's error").get_or_insert(why);
     };
-    for (buffer, at) in rx {
+    for (buffer, at) in rx.iter() {
         counts.queued.fetch_sub(1, Ordering::Relaxed);
         if let Err(why) = encoder.write(&buffer) {
             counts.lost.fetch_add(1, Ordering::Relaxed);
@@ -268,6 +268,13 @@ fn encode(
             let _ = times.flush();
             flushed = Instant::now();
         }
+    }
+    // A dead encoder still owes its counters: what the queue holds is LOST, never forgotten, or
+    // `fill` reads a queue that never empties.
+    for (buffer, _) in rx.try_iter() {
+        counts.queued.fetch_sub(1, Ordering::Relaxed);
+        counts.lost.fetch_add(1, Ordering::Relaxed);
+        give_back(free, buffer);
     }
     let _ = times.flush();
     let _ = times.get_ref().sync_data();

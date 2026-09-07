@@ -320,6 +320,9 @@ pub const META_UFREQ: &str = "ufreq";
 pub const META_TIME: &str = "time";
 pub const META_INDEX: &str = "index";
 pub const META_CHANNELS: &str = "channels";
+/// How far a DERIVED timeline stands ahead of patch time, in seconds, as the engine last measured
+/// it. Only an engine that counts rather than reads sets it.
+pub const META_DRIFT: &str = "drift";
 pub const META_REDUCED: &str = "reduced";
 const BUILTIN_KEYS: [&str; 6] = [META_SFREQ, META_UFREQ, META_TIME, META_INDEX, META_CHANNELS, META_REDUCED];
 

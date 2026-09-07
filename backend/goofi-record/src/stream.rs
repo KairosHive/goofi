@@ -71,6 +71,8 @@ pub struct Stream {
     pub t0_utc: SystemTime,
     pub dropped: u64,
     pub dropped_at: Option<f64>,
+    /// What a derived timeline last measured itself against patch time.
+    pub drift: Option<f64>,
     fill: f32,
     frames: u64,
     sink: Sink,
@@ -108,6 +110,7 @@ impl Stream {
             frames: 0,
             dropped: 0,
             dropped_at: None,
+            drift: None,
             fill: 0.0,
             sink,
             synced: Instant::now(),

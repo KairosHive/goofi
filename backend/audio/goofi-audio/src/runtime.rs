@@ -155,12 +155,18 @@ pub struct Anchor {
     /// What the audio thread stamps into every block; a new tie is a new epoch.
     epoch: AtomicU64,
     ties: Mutex<Vec<(u64, Tie)>>,
+    time: Arc<goofi_core::time::Time>,
 }
 
 impl Anchor {
-    pub fn new(time: f64) -> Anchor {
-        let tie = Tie { at: 0, time, rate: crate::RATE };
-        Anchor { blocks: AtomicU64::new(0), epoch: AtomicU64::new(0), ties: Mutex::new(vec![(0, tie)]) }
+    pub fn new(time: Arc<goofi_core::time::Time>) -> Anchor {
+        let tie = Tie { at: 0, time: time.now(), rate: crate::RATE };
+        Anchor {
+            blocks: AtomicU64::new(0),
+            epoch: AtomicU64::new(0),
+            ties: Mutex::new(vec![(0, tie)]),
+            time,
+        }
     }
 
     fn held(&self) -> std::sync::MutexGuard<'_, Vec<(u64, Tie)>> {
@@ -193,6 +199,14 @@ impl Anchor {
         let tie = ties.iter().find(|(e, _)| *e == epoch).or_else(|| ties.first()).map(|(_, t)| *t);
         let Some(tie) = tie else { return 0.0 };
         tie.time + (n as f64 - tie.at as f64) * BLOCK as f64 / tie.rate
+    }
+
+    /// How far this timeline stands ahead of patch time right now. The tie is taken ONCE, so the
+    /// device's rate error walks the two apart; the manifest carries this so an analyst can
+    /// correct it, rather than a re-tie that would put a seam in the exact block spacing.
+    pub fn drift(&self) -> f64 {
+        let n = self.blocks.load(Ordering::Relaxed);
+        self.seconds(n, self.epoch()) - self.time.now()
     }
 }
 
