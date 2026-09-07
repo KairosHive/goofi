@@ -63,7 +63,7 @@ pub(crate) struct Instance {
 
 pub struct GraphicsEngine {
     instance: String,
-    started: Instant,
+    time: Arc<goofi_core::time::Time>,
     clock: Clock,
     shared: Arc<Shared>,
     pub(crate) compiler: Compiler,
@@ -107,14 +107,14 @@ impl GraphicsEngine {
     /// Open the device and start the engine, or say why this machine has none.
     pub fn open(
         instance: String,
-        started: Instant,
+        time: Arc<goofi_core::time::Time>,
         waker: Arc<DrainWaker>,
         clock: Clock,
     ) -> Result<GraphicsEngine, String> {
         let gpu = gpu::shared()?;
         let shared = Arc::new(Shared::new(waker));
         let stats = Arc::new(Stats::default());
-        let runtime = Arc::new(Mutex::new(Runtime::new(gpu.clone(), started, stats.clone())));
+        let runtime = Arc::new(Mutex::new(Runtime::new(gpu.clone(), time.clone(), stats.clone())));
         let inbox = runtime.lock().expect("the runtime").inbox.clone();
         let ticker = (clock == Clock::Timer).then(|| {
             let stop = Arc::new(AtomicBool::new(false));
@@ -140,7 +140,7 @@ impl GraphicsEngine {
         });
         Ok(GraphicsEngine {
             instance,
-            started,
+            time,
             clock,
             compiler: Compiler(shared.clone()),
             gpu,
@@ -306,7 +306,7 @@ impl GraphicsEngine {
                             Status::Fault {
                                 fault: Some(goofi_node::NodeFault::Process {
                                     msg: format!("no window: {why}"),
-                                    since: self.started.elapsed().as_secs_f64(),
+                                    since: self.time.now(),
                                 }),
                             },
                         )),
@@ -378,7 +378,7 @@ impl Engine for GraphicsEngine {
             base: goofi_transport::service_base(&self.instance, uid, generation),
             manifest,
             params: atomics.clone(),
-            started: self.started,
+            time: self.time.clone(),
         };
         let (cells, flag, out) = (uploads.clone(), readers.clone(), tap.clone());
         let make = move || GraphicsHalf { uploads: cells, readers: flag, tap: out };
@@ -419,7 +419,7 @@ impl Engine for GraphicsEngine {
         self.follow_windows(view, &plan::sizes(view, &self.live));
         let open: HashMap<Uid, goofi_window::Id> = self.windows.iter().map(|(u, (id, _))| (*u, *id)).collect();
         let (plan, faults) = plan::compile(view, &self.live, &open);
-        let since = self.started.elapsed().as_secs_f64();
+        let since = self.time.now();
         self.pending.extend(self.faults.settle(faults, since));
         self.ask(runtime::Cmd::Plan(plan));
         if !self.pending.is_empty() {
@@ -441,11 +441,6 @@ impl Engine for GraphicsEngine {
         if let Some(inst) = self.live.get(&uid) {
             inst.control.pulse(key);
         }
-    }
-
-    fn reset_clock(&mut self, origin: Instant) {
-        self.started = origin;
-        self.ask(runtime::Cmd::Clock(origin));
     }
 
     fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_node::ExprEvaluator>) {

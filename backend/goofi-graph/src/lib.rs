@@ -423,9 +423,8 @@ pub struct Graph {
     /// Where each scanned type came from — the one thing about a type that only the scan can
     /// know. Re-derived wholesale by each scan.
     origins: std::collections::HashMap<String, Origin>,
-    /// One clock across every node thread rather than one per birth: `NodeCtx::now` is
-    /// seconds-since-patch-start.
-    start: Instant,
+    /// The patch's time, shared with every engine — one object, never a copy of what it says.
+    time: Arc<goofi_core::time::Time>,
     /// `None` ⇒ bindings are stored and round-trip but never evaluate; the literal stands.
     evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>>,
     /// uid → parent scope (absent = ROOT). The ONE source of truth for parentage and membership.
@@ -502,7 +501,6 @@ fn next_event_id(taken: &[EventId]) -> Option<EventId> {
 impl Graph {
     pub fn new() -> Graph {
         let waker = Arc::new(DrainWaker::default());
-        let start = Instant::now();
         Graph {
             engines: Vec::new(),
             waker,
@@ -514,7 +512,7 @@ impl Graph {
             arrangement: layout::Layout::default(),
             arrangement_warning: None,
             viewpoint: serde_json::Value::Null,
-            start,
+            time: Arc::new(goofi_core::time::Time::new()),
             evaluator: None,
             scope_of: HashMap::new(),
             globals: goofi_core::globals::GlobalStore::new(),
@@ -2834,9 +2832,9 @@ impl Graph {
         &self.instance
     }
 
-    /// The patch clock origin engines compute `NodeCtx::now` from.
-    pub fn patch_start(&self) -> Instant {
-        self.start
+    /// The patch's time. An engine holds this handle; there is no second origin anywhere.
+    pub fn time(&self) -> Arc<goofi_core::time::Time> {
+        self.time.clone()
     }
     /// The generation of the node about to be born at `uid`: 0 for a first birth, one more than
     /// the last for every rebirth.
@@ -2991,13 +2989,9 @@ impl Graph {
         // Globals are patch CONTENT, so a load starts from a fresh seeded store; `dyn_types` is
         // catalog and stays.
         self.globals = goofi_core::globals::GlobalStore::new();
-        // The node clock belongs to the PATCH: one loaded an hour in must compute what it would
-        // have at boot. Safe only because every reader of this clock was dropped just above.
-        self.start = Instant::now();
-        let start = self.start;
-        for e in self.engines_mut() {
-            e.reset_clock(start);
-        }
+        // Time belongs to the PATCH: one loaded an hour in must read what it would at boot. Every
+        // engine holds this same object, so there is nothing to push.
+        self.time.restart();
     }
 
     /// Take the name a RESTORE asks for. It goes through the same gate a create does, so an

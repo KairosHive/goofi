@@ -640,14 +640,14 @@ pub fn fresh_graph(clock: Option<Clock>, render: RenderClock) -> Graph {
     let mut g = Graph::new();
     let signal = goofi_signal::SignalEngine::new(
         g.instance().to_string(),
-        g.patch_start(),
+        g.time(),
         g.drain_waker(),
     );
     g.register_engine(Box::new(signal));
     if let Some(clock) = clock {
-        g.register_engine(Box::new(goofi_audio::AudioEngine::new(g.instance().to_string(), g.patch_start(), g.drain_waker(), clock)));
+        g.register_engine(Box::new(goofi_audio::AudioEngine::new(g.instance().to_string(), g.time(), g.drain_waker(), clock)));
     }
-    match goofi_graphics::GraphicsEngine::open(g.instance().to_string(), g.patch_start(), g.drain_waker(), render) {
+    match goofi_graphics::GraphicsEngine::open(g.instance().to_string(), g.time(), g.drain_waker(), render) {
         Ok(engine) => g.register_engine(Box::new(engine)),
         Err(why) => eprintln!("graphics: {why}; this machine renders no shaders"),
     }

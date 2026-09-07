@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
 
 use goofi_node::{BoundVar, DrainWaker, Engine, EventId, GraphView, IsolationCell, LibraryEntry, NodeManifest, ParamGroups, ParamKey, Status, Touched, Uid, Via};
 
@@ -56,7 +55,7 @@ pub struct SignalEngine {
     /// What service names are scoped by — handed down from the graph, whose resolver inputs it is.
     instance: String,
     evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>>,
-    started: Instant,
+    time: Arc<goofi_core::time::Time>,
     waker: Arc<DrainWaker>,
     wire: WirePlanner,
     hosts: HashMap<Uid, NodeHost>,
@@ -77,14 +76,14 @@ pub struct SignalEngine {
 }
 
 impl SignalEngine {
-    pub fn new(instance: String, started: Instant, waker: Arc<DrainWaker>) -> SignalEngine {
+    pub fn new(instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>) -> SignalEngine {
         // What a crashed run left, reclaimed at engine construction rather than by whoever opens
         // the first port — which used to be the user's first add.
         goofi_transport::sweep_once();
         SignalEngine {
             instance,
             evaluator: None,
-            started,
+            time,
             waker,
             wire: WirePlanner::default(),
             hosts: HashMap::new(),
@@ -356,7 +355,7 @@ impl Engine for SignalEngine {
             .and_then(|(transport, channel)| {
                 let env = runtime::NodeEnv {
                     evaluator: self.evaluator.clone(),
-                    started: self.started,
+                    time: self.time.clone(),
                 };
                 let transport = Arc::new(runtime::WakingTransport {
                     inner: Arc::new(transport),
@@ -448,10 +447,6 @@ impl Engine for SignalEngine {
     }
 
     /// Every node born after computes from the new origin.
-    fn reset_clock(&mut self, origin: Instant) {
-        self.started = origin;
-    }
-
     fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_node::ExprEvaluator>) {
         self.evaluator = Some(evaluator);
     }

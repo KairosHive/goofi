@@ -6,7 +6,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use goofi_core::Param;
 use indexmap::IndexMap;
@@ -285,8 +285,6 @@ pub trait Engine: Send {
     fn take_edits(&mut self) -> Vec<Edit> {
         Vec::new()
     }
-    /// The patch clock origin moved — a clear reset it. No-op for an engine with no patch time.
-    fn reset_clock(&mut self, _origin: Instant) {}
     /// The graph's expression evaluator, shared with every engine that evaluates `nd()` bindings
     /// on its own thread. No-op for an engine that never does.
     fn set_evaluator(&mut self, _evaluator: Arc<dyn ExprEvaluator>) {}

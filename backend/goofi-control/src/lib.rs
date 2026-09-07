@@ -201,7 +201,7 @@ pub struct Spawn {
     pub base: String,
     pub manifest: &'static NodeManifest,
     pub params: Arc<[AtomicU64]>,
-    pub started: Instant,
+    pub time: Arc<goofi_core::time::Time>,
 }
 
 /// Create the node's services on the caller's thread, where a failure can still be reported, and
@@ -236,7 +236,7 @@ pub fn spawn<H: Half + 'static>(
                 let control = Control {
                     uid: spawn.uid,
                     manifest: spawn.manifest,
-                    started: spawn.started,
+                    time: spawn.time.clone(),
                     params: spawn.params,
                     consts: Vec::new(),
                     outs,
@@ -286,7 +286,7 @@ struct Bind {
 struct Control<H: Half> {
     uid: Uid,
     manifest: &'static NodeManifest,
-    started: Instant,
+    time: Arc<goofi_core::time::Time>,
     params: Arc<[AtomicU64]>,
     consts: Vec<Param>,
     outs: Vec<Out>,
@@ -539,7 +539,7 @@ impl<H: Half> Control<H> {
         let param = b.param;
         let target = &self.consts[param];
         let evaluator = self.shared.evaluator.lock().unwrap().clone();
-        let t = self.started.elapsed().as_secs_f64();
+        let t = self.time.now();
         let (value, error) = match b.expr.evaluate(evaluator.as_deref(), t, target) {
             Ok(Some(v)) if !scalar(&v).is_finite() => (None, Some(format!("evaluated to {}", scalar(&v)))),
             Ok(v) => (v, None),
