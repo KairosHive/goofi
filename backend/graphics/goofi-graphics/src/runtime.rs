@@ -396,6 +396,7 @@ impl Runtime {
         for (uid, (id, size)) in want {
             // A stream the reaper has not finished closing is opened on a later tick: opening
             // over it would finalize the encoder HERE, which is what `close_later` exists to stop.
+            // A frame rendered in that window belongs to no file and is neither kept nor counted.
             if self.taping.contains_key(&uid) || rec.is_open(&id) {
                 continue;
             }

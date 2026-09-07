@@ -46,6 +46,13 @@ pub struct StreamStatus {
     pub fill: f32,
 }
 
+/// Finalize a detached stream — the wait for its encoder — and the entry it leaves behind.
+fn finished(id: &StreamId, stream: &Arc<Mutex<Stream>>, why: &str) -> manifest::Entry {
+    let mut s = held(stream);
+    let error = s.sync().err();
+    Session::entry(id, &s, Some(why.to_string()), error)
+}
+
 /// What a stream's kind puts in its manifest entry — and, for a video, what its encoding costs.
 fn shape_of(kind: Kind) -> (Option<(u32, u32)>, Option<f64>, Option<&'static str>) {
     match kind {
@@ -149,11 +156,16 @@ impl Session {
             .expect("a free name, of endlessly many")
     }
 
+    /// Take a stream out. Nothing else can reach it once it is out of the map, which is what
+    /// lets the caller finalize it with no lock held.
+    fn detach(&mut self, id: &StreamId) -> Option<Arc<Mutex<Stream>>> {
+        self.open.remove(id)
+    }
+
+    /// Close a stream this session OWNS outright — the caller holds no lock anyone else needs.
     fn close(&mut self, id: &StreamId, why: &str) {
-        if let Some(s) = self.open.remove(id) {
-            let mut s = held(&s);
-            let error = s.sync().err();
-            self.closed.push(Session::entry(id, &s, Some(why.to_string()), error));
+        if let Some(s) = self.detach(id) {
+            self.closed.push(finished(id, &s, why));
         }
     }
 }
@@ -162,9 +174,11 @@ pub struct Recorder {
     time: Arc<Time>,
     session: Mutex<Option<Session>>,
     encoders: Mutex<Arc<dyn video::Encoders>>,
-    /// Held while a manifest reaches the disk, so two rewrites cannot land out of order. It is
-    /// NOT the session lock: a writer parked on a disk must not park a stream's own frames.
-    writing: Mutex<()>,
+    /// Every manifest snapshot is numbered under the session lock and lands in that order: a
+    /// slow write is SKIPPED where a newer one already reached the disk. Nothing holds the
+    /// session while writing, so a slow disk cannot park a stream's own frames.
+    version: std::sync::atomic::AtomicU64,
+    landed: Mutex<u64>,
 }
 
 impl Recorder {
@@ -173,7 +187,8 @@ impl Recorder {
             time,
             session: Mutex::new(None),
             encoders: Mutex::new(Arc::new(video::FfmpegEncoders)),
-            writing: Mutex::new(()),
+            version: std::sync::atomic::AtomicU64::new(0),
+            landed: Mutex::new(0),
         }
     }
 
@@ -200,10 +215,14 @@ impl Recorder {
         let Some(session) = guard.as_ref() else { return Ok(()) };
         let manifest = session.manifest(&self.time);
         let folder = session.folder.clone();
-        let writing = held(&self.writing);
+        let version = self.version.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         drop(guard);
+        let mut landed = held(&self.landed);
+        if *landed > version {
+            return Ok(());
+        }
         let done = manifest.write_atomic(&folder);
-        drop(writing);
+        *landed = version;
         done
     }
 
@@ -304,9 +323,15 @@ impl Recorder {
     /// Close a stream and finalize its file. A VIDEO's encoder is waited for here, so this is
     /// never called from a thread that renders — [`Recorder::close_later`] is that door.
     pub fn close(&self, id: &StreamId, why: &str) {
+        let detached = self.held().as_mut().and_then(|s| s.detach(id));
+        let Some(stream) = detached else { return };
+        // NO lock is held here: finalizing a video waits for its encoder, and every other stream
+        // and every other op must go through while it does.
+        let entry = finished(id, &stream, why);
         let mut guard = self.held();
-        let Some(session) = guard.as_mut() else { return };
-        session.close(id, why);
+        if let Some(session) = guard.as_mut() {
+            session.closed.push(entry);
+        }
         let _ = self.publish(guard);
     }
 
