@@ -196,33 +196,31 @@ impl Harnesses {
         begin_stop(inst)
     }
 
-    /// Stop every instance and clear the roster — what opening another patch does. The roster is
-    /// cleared at once, so a doomed child lives briefly on a deleted cwd rather than holding it.
-    pub fn stop_all(&self) {
-        for (_, inst) in std::mem::take(&mut *self.instances.lock().unwrap()) {
-            if inst.exit_code().is_none() {
-                let _ = begin_stop(inst);
-            }
-        }
-    }
-
-    /// Exit's teardown: ask every instance, wait to a CEILING, then insist — synchronously,
-    /// because `process::exit` destroys the grace threads `stop_all` would lean on.
-    pub fn reap_all(&self, ceiling: std::time::Duration) {
+    /// Ask every instance to leave and clear the roster. The roster is cleared and every child is
+    /// signalled HERE, so a harness started after this call is never caught by it; the returned
+    /// closure waits out the grace and then insists, and the caller decides which thread pays.
+    /// `None` when nothing was running, which is the case with nothing to wait for.
+    #[must_use]
+    pub fn reap_all(&self) -> Option<impl FnOnce() + Send + 'static> {
         let taken = std::mem::take(&mut *self.instances.lock().unwrap());
+        if taken.is_empty() {
+            return None;
+        }
         for (_, inst) in &taken {
             inst.stopping.store(true, Ordering::Relaxed);
             let _ = signal(inst, crate::proc::request_stop);
         }
-        let deadline = std::time::Instant::now() + ceiling;
-        while taken.iter().any(|(_, i)| i.exit_code().is_none())
-            && std::time::Instant::now() < deadline
-        {
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        }
-        for (_, inst) in &taken {
-            let _ = signal(inst, crate::proc::force_kill);
-        }
+        Some(move || {
+            let deadline = std::time::Instant::now() + GRACE;
+            while taken.iter().any(|(_, i)| i.exit_code().is_none())
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            for (_, inst) in &taken {
+                let _ = signal(inst, crate::proc::force_kill);
+            }
+        })
     }
 }
 
