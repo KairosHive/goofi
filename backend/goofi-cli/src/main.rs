@@ -446,6 +446,9 @@ async fn run(
         }
     }
     boot_scan(&state);
+    if !demo {
+        println!("  audio hosts: {}{}", goofi_audio::hosts(), goofi_audio::NO_ASIO_NOTE);
+    }
 
     let code = if list_nodes {
         let names = goofi_bridge::catalog_type_names(&state.graph.lock().unwrap());

@@ -60,6 +60,24 @@ impl Kind {
     }
 }
 
+/// The audio hosts this build carries, comma separated — every prefix a device name can have.
+/// Asked fresh, as [`named`] asks it: a daemon that starts while goofi runs is a host that appears,
+/// and a list kept beside the one the devices come from would be the half that goes stale.
+pub fn hosts() -> String {
+    cpal::available_hosts().iter().map(|id| id.name()).collect::<Vec<_>>().join(", ")
+}
+
+/// What a Windows build without `--features asio` owes the reader. cpal compiles ASIO behind a
+/// feature because the Steinberg SDK it binds went GPLv3-or-proprietary in 2025 and cannot travel
+/// inside this binary, so a machine holding an ASIO card lists its WASAPI endpoints and nothing at
+/// all says why the driver's own view is absent.
+#[cfg(all(windows, not(feature = "asio")))]
+pub const NO_ASIO_NOTE: &str =
+    " — no ASIO in this build: `cargo run --features asio`, with CPAL_ASIO_DIR naming an unpacked \
+Steinberg SDK and LLVM installed, is what adds it";
+#[cfg(not(all(windows, not(feature = "asio"))))]
+pub const NO_ASIO_NOTE: &str = "";
+
 /// The name a patch stores for one device of one host.
 fn qualified(host: cpal::HostId, device: &str) -> String {
     format!("{}: {device}", host.name())

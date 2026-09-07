@@ -20,6 +20,7 @@ use goofi_node::{
 
 mod control;
 mod host;
+pub use host::{hosts, NO_ASIO_NOTE};
 pub(crate) mod nodes;
 mod plan;
 mod runtime;
@@ -865,6 +866,7 @@ impl Engine for AudioEngine {
             ("system.audio_channels", GlobalValue::Int(i64::from(s.channels))),
             ("system.audio_driver", GlobalValue::Str(driver)),
             ("system.audio_device", GlobalValue::Str(device)),
+            ("system.audio_hosts", GlobalValue::Str(host::hosts())),
         ]
     }
 
