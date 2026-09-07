@@ -57,7 +57,10 @@ pub(crate) struct Instance {
     pub(crate) params: Arc<[AtomicU64]>,
     pub(crate) uploads: Vec<Arc<Mutex<Option<half::Upload>>>>,
     pub(crate) readers: Arc<AtomicBool>,
-    pub(crate) tap: Arc<Mutex<Option<goofi_core::Data>>>,
+    pub(crate) tap: Arc<Mutex<half::Tap>>,
+    /// What this node's readers want its readback fitted into: the bridge writes it, the render
+    /// thread reads it, and nothing between the two holds a copy.
+    pub(crate) tap_box: Arc<AtomicU64>,
     control: Handle,
 }
 
@@ -371,7 +374,8 @@ impl Engine for GraphicsEngine {
         let uploads: Vec<Arc<Mutex<Option<half::Upload>>>> =
             (0..Self::uploads_of(manifest)).map(|_| Arc::new(Mutex::new(None))).collect();
         let readers = Arc::new(AtomicBool::new(false));
-        let tap = Arc::new(Mutex::new(None));
+        let tap = Arc::new(Mutex::new(half::Tap::default()));
+        let tap_box = Arc::new(AtomicU64::new(0));
         let spawn = goofi_control::Spawn {
             engine: "graphics",
             uid,
@@ -387,7 +391,7 @@ impl Engine for GraphicsEngine {
             Err(e) => return Some(e),
         };
         self.ask(runtime::Cmd::Insert(uid, runtime::params_len(manifest.params)));
-        self.live.insert(uid, Instance { class, params: atomics, uploads, readers, tap, control });
+        self.live.insert(uid, Instance { class, params: atomics, uploads, readers, tap, tap_box, control });
         // A synchronous engine is ready the moment its insert answers.
         self.pending.push((uid, Status::Stage { stage: NodeStage::Ready }));
         self.dirty = true;
@@ -440,6 +444,17 @@ impl Engine for GraphicsEngine {
     fn pulse_param(&mut self, uid: Uid, key: ParamKey) {
         if let Some(inst) = self.live.get(&uid) {
             inst.control.pulse(key);
+        }
+    }
+
+    /// The tap renders at the size its viewers will reduce it to anyway, so a 4K frame is not
+    /// read back only to be averaged down on a CPU. Only the READBACK shrinks: the stage still
+    /// renders at its authored `output` size, which is what a window on the screen shows.
+    /// It is one cell rather than plan state, because a viewer appearing or leaving must not be
+    /// able to re-plan an engine — an accessory never reaches the engine's own scheduling.
+    fn view_demand(&mut self, uid: Uid, _slot: &str, want: Option<(u32, u32)>) {
+        if let Some(inst) = self.live.get(&uid) {
+            inst.tap_box.store(plan::pack(want), Ordering::Relaxed);
         }
     }
 

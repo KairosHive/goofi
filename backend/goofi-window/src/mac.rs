@@ -103,6 +103,12 @@ impl Screen for Platform {
         }
     }
 
+    fn retitle(&mut self, id: Id, title: &str) {
+        if let Some((_, window, _)) = self.windows.iter().find(|(i, ..)| *i == id) {
+            let _: () = unsafe { msg_send![&**window, setTitle: &*NSString::from_str(title)] };
+        }
+    }
+
     fn resize(&mut self, id: Id, (w, h): (u32, u32)) {
         if let Some((_, window, _)) = self.windows.iter().find(|(i, ..)| *i == id) {
             let _: () = unsafe { msg_send![&**window, setContentSize: NSSize::new(w as f64, h as f64)] };
@@ -120,7 +126,7 @@ impl Screen for Platform {
     /// An `NSImageView` holding one `NSBitmapImageRep` a frame. The rep is allocated with NULL
     /// planes and filled after, so IT owns the pixels — passing our own pointer would hand AppKit
     /// a buffer the next frame overwrites.
-    fn present(&mut self, id: Id, (w, h): (u32, u32), rgba: &[u8]) {
+    fn present(&mut self, id: Id, (w, h): (u32, u32), texels: &[u8]) {
         unsafe {
             let view = match self.views.iter().find(|(i, _)| *i == id) {
                 Some((_, v)) => v.clone(),
@@ -162,7 +168,7 @@ impl Screen for Platform {
             if data.is_null() {
                 return;
             }
-            std::ptr::copy_nonoverlapping(rgba.as_ptr(), data, w as usize * h as usize * 4);
+            std::ptr::copy_nonoverlapping(texels.as_ptr(), data, w as usize * h as usize * 4);
             let image: Allocated<AnyObject> = msg_send![class!(NSImage), alloc];
             let image: Retained<AnyObject> = msg_send![image, initWithSize: NSSize::new(w as f64, h as f64)];
             let _: () = msg_send![&*image, addRepresentation: &*rep];

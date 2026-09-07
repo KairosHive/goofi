@@ -113,6 +113,11 @@ pub struct AxisReduce {
 /// the one kernel every viewer family can draw.
 pub const UNDECLARED_MAX: usize = 512;
 
+/// What a producer is asked to fit its readback into for a reader that declared nothing: ONE
+/// texel, the cheapest frame that is still a frame. No pixels were asked for, so the metadata is
+/// the whole product.
+pub const UNDECLARED_BOX: (u32, u32) = (1, 1);
+
 /// The sample depth a viewer can draw: the wire's f32, or 8-bit texels, which cost a quarter of
 /// the bytes and are all an image viewer can show.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,6 +223,18 @@ pub struct MergedViewSpec {
 /// Merge N viewers' specs into ONE concrete plan for THIS frame: specs that do not admit the
 /// frame drop out, and each canonical dim folds to `max(max)` plus the union of the kernels.
 pub fn plan<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> MergedViewSpec {
+    // Nothing here can draw this frame, so nothing here has asked for it: the undeclared cap
+    // stands in, exactly as it does for a reader that declared nothing at all.
+    let (mut axes, depth) =
+        fold_axes(specs, frame).or_else(|| fold_axes(&[ViewSpec::undeclared()], frame)).unwrap_or_default();
+    aspect_preserve_area(&mut axes, frame.shape());
+    MergedViewSpec { axes, depth }
+}
+
+/// Every admitted viewer's asks, folded per dim: `max(max)` and the union of the kernels. What a
+/// frame is then actually reduced to is [`plan`]'s business — this is the ask alone. `None` where
+/// NOTHING admits the frame: no viewer here can draw it, so none of them has asked for anything.
+fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<(Vec<PlannedAxis>, Depth)> {
     let ndim = frame.ndim();
     let mut order: Vec<usize> = Vec::new(); // first-seen dim order → stable output
     let mut folded: HashMap<usize, (usize, MethodSet)> = HashMap::new();
@@ -241,16 +258,50 @@ pub fn plan<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> MergedViewS
             entry.1.add(r.method);
         }
     }
-    let mut axes: Vec<PlannedAxis> = order
+    let axes: Vec<PlannedAxis> = order
         .iter()
         .map(|&d| {
             let (mx, set) = folded[&d];
             PlannedAxis { dim: d, max: mx, method: set.resolve() }
         })
         .collect();
-    aspect_preserve_area(&mut axes, frame.shape());
-    let depth = if admitted > 0 && every_u8 { Depth::U8 } else { Depth::F32 };
-    MergedViewSpec { axes, depth }
+    (admitted > 0).then_some((axes, if every_u8 { Depth::U8 } else { Depth::F32 }))
+}
+
+/// The box every admitted viewer would reduce both image axes to with an area kernel — the size
+/// a PRODUCER could render instead, making the reduction downstream free. This is what the
+/// viewers ASKED for, not the fit for one frame, so it does not move when the producer answers
+/// it. `None` unless both axes resolve to an area kernel: a plan that subsamples means something
+/// else, and a producer must not answer it with an average.
+pub fn image_box<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<(u32, u32)> {
+    // Nothing admits it, so nobody here is drawing it — and a frame nobody draws needs no pixels.
+    let Some((axes, _)) = fold_axes(specs, frame) else { return Some(UNDECLARED_BOX) };
+    let axis = |d: usize| axes.iter().find(|a| a.dim == d).filter(|a| a.method == ReduceMethod::Area);
+    let (h, w) = (axis(0)?, axis(1)?);
+    Some((w.max as u32, h.max as u32))
+}
+
+/// `src` scaled into `box_` with its aspect kept, never enlarged — the one place that rule is
+/// stated, so a producer answering [`image_box`] lands exactly where the reduction expected.
+pub fn fit(src: (u32, u32), box_: (u32, u32)) -> (u32, u32) {
+    let factor = shrink_factor([(box_.0 as usize, src.0 as usize), (box_.1 as usize, src.1 as usize)]);
+    if factor >= 1.0 {
+        return src;
+    }
+    (((src.0 as f64 * factor).round() as u32).max(1), ((src.1 as f64 * factor).round() as u32).max(1))
+}
+
+/// The one shared factor that keeps an aspect ratio: the tightest of `max / len`, never above 1.
+fn shrink_factor(pairs: impl IntoIterator<Item = (usize, usize)>) -> f64 {
+    let factor = pairs
+        .into_iter()
+        .map(|(max, len)| max as f64 / len.max(1) as f64)
+        .fold(f64::INFINITY, f64::min);
+    if factor.is_finite() {
+        factor
+    } else {
+        1.0
+    }
 }
 
 /// Scale every `Area` axis by one shared factor, so a non-square image keeps its aspect ratio.
@@ -261,11 +312,8 @@ fn aspect_preserve_area(axes: &mut [PlannedAxis], shape: &[usize]) {
     if area.len() < 2 {
         return;
     }
-    let factor = area
-        .iter()
-        .map(|&i| axes[i].max as f64 / shape[axes[i].dim].max(1) as f64)
-        .fold(f64::INFINITY, f64::min);
-    if !factor.is_finite() || factor >= 1.0 {
+    let factor = shrink_factor(area.iter().map(|&i| (axes[i].max, shape[axes[i].dim])));
+    if factor >= 1.0 {
         return;
     }
     for &i in &area {

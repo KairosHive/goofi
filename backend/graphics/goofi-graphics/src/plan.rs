@@ -6,12 +6,18 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use goofi_core::{Data, SlotType};
+use goofi_core::SlotType;
 use goofi_node::{GraphView, ParamDecl, Uid};
 
-use crate::half::Upload;
+use crate::gpu::Want;
+use crate::half::{Tap, Upload};
 use crate::scan::Built;
 use crate::Instance;
+
+/// The readback box packed into the one cell [`Stage::wants`] reads; zero is the stage's own size.
+pub fn pack(want: Option<(u32, u32)>) -> u64 {
+    want.map_or(0, |(w, h)| (u64::from(w) << 32) | u64::from(h))
+}
 
 /// A generator's size, and what a chain that can follow nothing falls back to.
 pub const GENERATOR: u32 = 512;
@@ -39,15 +45,31 @@ pub struct Stage {
     pub readers: Arc<AtomicBool>,
     /// The window on the machine's own screen this stage draws into, once one is open.
     pub window: Option<goofi_window::Id>,
+    /// The box this stage's readers asked its readback to fit in, LIVE: a viewer appearing,
+    /// resizing or leaving writes this cell and never a plan.
+    pub tap_box: Arc<AtomicU64>,
     /// Where the tick leaves the frame it read back, for the half to publish.
-    pub tap: Arc<Mutex<Option<Data>>>,
+    pub tap: Arc<Mutex<Tap>>,
 }
 
 impl Stage {
-    /// Whether anything reads this stage's output: a subscriber on its data service, or a window
-    /// on the machine's own screen — the one reader the transport cannot count.
+    /// What size each reader of this stage's output wants it at, or nothing where that reader is
+    /// absent: a window on the machine's own screen — the one reader the transport cannot count —
+    /// and a subscriber on its data service. A screen is always the frame's own size.
+    pub fn wants(&self) -> [Option<(u32, u32)>; 2] {
+        let mut wants = [None; 2];
+        wants[Want::Screen as usize] = self.window.map(|_| self.size);
+        let tap = match self.tap_box.load(Ordering::Relaxed) {
+            0 => self.size,
+            v => goofi_view::fit(self.size, ((v >> 32) as u32, v as u32)),
+        };
+        wants[Want::Tap as usize] = self.readers.load(Ordering::Relaxed).then_some(tap);
+        wants
+    }
+
+    /// Whether anything reads this stage's output at all.
     pub fn read(&self) -> bool {
-        self.readers.load(Ordering::Relaxed) || self.window.is_some()
+        self.wants().iter().any(|w| w.is_some())
     }
 }
 
@@ -151,6 +173,7 @@ pub fn compile(
             readers: inst.readers.clone(),
             tap: inst.tap.clone(),
             window: windows.get(uid).copied(),
+            tap_box: inst.tap_box.clone(),
         });
     }
     (Plan { stages }, faults)
