@@ -64,7 +64,9 @@ static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Transform],
     doc: "Its input split into bands, each one at its own gain, added back up.\n\
           The half of a vocoder that speaks: `gains` from a `BandFollow` puts that signal's shape \
-          on this one. With nothing behind `gains` every band is open. One voice per channel of \
+          on this one. With nothing behind `gains` every band is open, which is a few dB louder \
+          than the input rather than equal to it, because neighbouring bands overlap and add. \
+          One voice per channel of \
           the input, so a chord goes through as a chord. In `harmonic` the bands stand on the \
           partials of `pitch` and take its voices in turn, so what passes is a chord rather than \
           a spread.",
