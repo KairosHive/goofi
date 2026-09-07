@@ -214,6 +214,35 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         gaps,
         "every frame the subscriber overflowed is counted, and never silently: {lost} said at the stop"
     );
+
+    // Step: what the service already DELIVERED is transported data. A disarm that dropped the
+    // subscriber before reading it would lose it where no gap and no count could ever show it.
+    let fourth = g.call("record start", j!({ "root": root.path() }))["folder"]
+        .as_str()
+        .expect("a folder")
+        .to_string();
+    g.until("the fourth recording to be writing", |g| (frames(g, &fast_name) > 0).then_some(()));
+    let written = |g: &goofi_tests::Goofi| -> u64 {
+        g.state.recorder.status().streams.iter().filter(|s| s.node == fast_name).map(|s| s.frames).sum()
+    };
+    // The drain resolves under the GRAPH lock, so holding it freezes the drain while the producer
+    // fills the record service's buffer behind it.
+    let mut graph = g.state.graph.lock().expect("the graph");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let frozen = written(&g);
+    std::thread::sleep(std::time::Duration::from_millis(80));
+    assert_eq!(written(&g), frozen, "a held drain writes nothing, which is what makes this a probe");
+    graph.set_recorded(fast, Vec::new()).expect("the armed set is emptied under the hold");
+    drop(graph);
+
+    g.until("the departing feed to be drained and closed", |g| (written(g) == 0).then_some(()));
+    g.call("record stop", j!({}));
+    let entry = mine(&fourth, &fast_name).pop().expect("one stream");
+    let landed = entry["frames"].as_u64().expect("a count");
+    assert!(
+        landed >= frozen + 32,
+        "the frames in flight at the disarm reached the file: {frozen} written under the hold, {landed} in the manifest"
+    );
 }
 
 #[test]
