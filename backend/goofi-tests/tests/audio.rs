@@ -1091,8 +1091,8 @@ fn one_signal_speaks_through_another_band_by_band() {
     let g = Goofi::new();
     g.state.graph.lock().unwrap().set_evaluator(Arc::new(FirstVar));
 
-    // Step: with nothing behind `gains` every band is open, so the bank is a wire — a tone
-    // through it is still that tone, at that pitch.
+    // Step: with nothing behind `gains` every band is open, so a tone through the bank is still
+    // that tone, at that pitch — louder, because neighbouring bands overlap and add.
     let carrier = g.add("Osc");
     let bank = g.add("BandFilter");
     g.link(carrier, "out", bank, "input");
@@ -1101,16 +1101,16 @@ fn one_signal_speaks_through_another_band_by_band() {
 
     // Step: `harmonic` stands the bands on the partials of `pitch` rather than spreading them.
     // Narrow bands on a bank standing at C4: a tone three times C4 is the third partial and goes
-    // through, and one two and a half times C4 falls between two partials and does not.
+    // through, and one half again above C4 sits in the gap under the second and does not.
     g.set_param(bank, "band", "layout", "harmonic");
     g.set_param(bank, "band", "q", 20.0);
     g.set_param(carrier, "osc", "pitch", 3f32.log2());
-    let partial = heard(&g, bank, "a tone on a partial of the bank's own pitch", |x| peak(x) > 0.5);
-    g.set_param(carrier, "osc", "pitch", 2.5f32.log2());
-    let between = heard(&g, bank, "a tone between two partials", |x| peak(x) < 0.5);
+    let partial = settled(&g, bank, "a tone on a partial of the bank's own pitch");
+    g.set_param(carrier, "osc", "pitch", 1.5f32.log2());
+    let between = settled(&g, bank, "a tone in the gap between two partials");
     assert!(
         peak(&partial) > 3.0 * peak(&between),
-        "a partial passes where its neighbour's gap does not: {} against {}",
+        "a partial passes where the gap beside it does not: {} against {}",
         peak(&partial),
         peak(&between)
     );
