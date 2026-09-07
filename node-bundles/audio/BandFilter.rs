@@ -1,0 +1,113 @@
+use goofi_audio_sdk::goofi_core::SlotType;
+use goofi_audio_sdk::{
+    band_volts, hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK, MAX_CHANNELS,
+};
+
+goofi_audio_sdk::params! {
+    GAINS = ParamDecl {
+        group: "band",
+        name: "gains",
+        spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 4.0 },
+        expression: None,
+        doc: Some("what each band is worth; an audio reference is one band per channel, and one number opens them all"),
+    },
+    BANDS = ParamDecl {
+        group: "band",
+        name: "bands",
+        spec: ParamSpec::Int { default: 16, min: 2, max: MAX_CHANNELS as i64 },
+        expression: None,
+        doc: Some("how many bands the input is split into; `BandFollow` needs the same count"),
+    },
+    LOW = ParamDecl {
+        group: "band",
+        name: "low",
+        spec: ParamSpec::Float { default: -1.5, min: -6.0, max: 6.5 },
+        expression: None,
+        doc: Some("the lowest band's centre in volts per octave, 0 at C4 — the same units as `Osc.pitch`"),
+    },
+    HIGH = ParamDecl {
+        group: "band",
+        name: "high",
+        spec: ParamSpec::Float { default: 4.25, min: -6.0, max: 6.5 },
+        expression: None,
+        doc: Some("the highest band's centre; the rest sit evenly between, so a band is a fixed interval"),
+    },
+    Q = ParamDecl {
+        group: "band",
+        name: "q",
+        spec: ParamSpec::Float { default: 4.0, min: 0.5, max: 20.0 },
+        expression: None,
+        doc: Some("how narrow one band is; near 4 the default sixteen meet without a gap"),
+    },
+}
+
+static INS: &[SlotDecl] =
+    &[SlotDecl { name: "input", kind: SlotType::Audio, trigger_process: false, multi: true, required: false }];
+static OUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Audio }];
+
+static MANIFEST: Manifest = Manifest {
+    tags: &[Tag::Transform],
+    doc: "Its input split into bands, each one at its own gain, added back up.\n\
+          The half of a vocoder that speaks: `gains` from a `BandFollow` puts that signal's shape \
+          on this one. With nothing behind `gains` every band is open. One voice per channel of \
+          the input, so a chord goes through as a chord.",
+    inputs: INS,
+    outputs: OUTS,
+    params: PARAMS,
+};
+
+#[derive(Default)]
+struct BandFilter {
+    rate: f32,
+    ic1: [[f32; MAX_CHANNELS as usize]; MAX_CHANNELS as usize],
+    ic2: [[f32; MAX_CHANNELS as usize]; MAX_CHANNELS as usize],
+}
+
+impl AudioNode for BandFilter {
+    /// The bands are the gains' axis, never the output's: what leaves is what arrived, per voice.
+    fn channels(&self, ins: &[u16], _params: &[f64], outs: usize) -> Vec<u16> {
+        vec![ins.first().copied().unwrap_or(1).max(1); outs]
+    }
+
+    fn audio_params(&self, _declared: usize) -> usize {
+        1
+    }
+
+    fn prepare(&mut self, rate: f64) {
+        self.rate = rate as f32;
+    }
+
+    fn process(&mut self, b: &mut Block<'_>) {
+        let rate = self.rate;
+        let (low, high) = (b.scalars[P::LOW], b.scalars[P::HIGH]);
+        let k = 1.0 / b.scalars[P::Q].max(0.5);
+        let bands = (b.scalars[P::BANDS] as usize).clamp(2, MAX_CHANNELS as usize);
+
+        let (input, gains) = (&b.ins[0], &b.params[P::GAINS]);
+        let out = &mut b.outs[0];
+        for c in 0..out.channels() as usize {
+            let x = input.chan(c);
+            let (ic1s, ic2s) = (&mut self.ic1[c], &mut self.ic2[c]);
+            let y = out.chan_mut(c);
+            y.fill(0.0);
+            for band in 0..bands {
+                let f = hz_of(band_volts(band, bands, low, high)).clamp(1.0, 0.45 * rate);
+                let g = (std::f32::consts::PI * f / rate).tan();
+                let a1 = 1.0 / (1.0 + g * (g + k));
+                let (a2, a3) = (g * a1, g * g * a1);
+                let (ic1, ic2, gain) = (&mut ic1s[band], &mut ic2s[band], gains.chan(band));
+                for i in 0..BLOCK {
+                    let v3 = x[i] - *ic2;
+                    let v1 = a1 * *ic1 + a2 * v3;
+                    let v2 = *ic2 + a2 * *ic1 + a3 * v3;
+                    *ic1 = 2.0 * v1 - *ic1;
+                    *ic2 = 2.0 * v2 - *ic2;
+                    // `k * v1` is the band at unity, where `Filter`'s own band output peaks at `q`.
+                    y[i] += k * v1 * gain[i];
+                }
+            }
+        }
+    }
+}
+
+goofi_audio_sdk::export!(BandFilter, MANIFEST);
