@@ -10,7 +10,7 @@ use goofi_core::{Data, Meta};
 use goofi_node::Uid;
 
 use crate::gpu::{padded_row, target, Gpu, Want};
-use crate::half::Upload;
+use crate::transfer::Upload;
 use crate::plan::{Input, Plan};
 use crate::shader;
 
