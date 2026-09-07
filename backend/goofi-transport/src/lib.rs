@@ -48,9 +48,8 @@ const MESSAGE_READERS: usize = 1;
 pub const MESSAGE_SLICE: usize = 1024;
 /// The pool a data publisher starts with; `PowerOfTwo` grows it for a larger frame.
 pub const INITIAL_SLICE: usize = 64 * 1024;
-/// The largest frame a SIGNAL recording service takes — 1 MiB clears a 64-channel, 2500-sample
-/// frame with room. A frame over it is REFUSED rather than allowed to grow the segment: depth and
-/// slice growth are the one place in goofi that multiply.
+/// The largest frame a SIGNAL recording service takes: 1 MiB clears a 64-channel, 2500-sample
+/// frame with room, and a frame over it is refused rather than grown into.
 pub const RECORD_SLICE: usize = 1024 * 1024;
 /// The largest frame an AUDIO recording service takes: one block of the widest output, with room.
 pub const AUDIO_RECORD_SLICE: usize = 64 * 1024;

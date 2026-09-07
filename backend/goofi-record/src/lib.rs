@@ -9,8 +9,9 @@ use goofi_core::time::{stamp, stamp_nanos, Time};
 use goofi_node::Uid;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 pub use manifest::Manifest;
 pub use stream::{Kind, Stream, StreamMeta, Timeline};
@@ -20,6 +21,9 @@ pub use stream::{Kind, Stream, StreamMeta, Timeline};
 fn held<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
+
+/// The longest a stop waits for its drains and reapers.
+const SETTLE: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StreamId {
@@ -89,6 +93,7 @@ impl Session {
             t0_patch: s.t0_patch,
             sfreq: s.meta.sfreq,
             timeline: s.meta.timeline.name(),
+            drift: s.drift,
             channels: s.meta.channels,
             size,
             fps,
@@ -122,6 +127,7 @@ impl Session {
             t0_patch,
             sfreq: meta.sfreq,
             timeline: meta.timeline.name(),
+            drift: None,
             channels: meta.channels,
             size,
             fps,
@@ -177,8 +183,12 @@ pub struct Recorder {
     /// Every manifest snapshot is numbered under the session lock and lands in that order: a
     /// slow write is SKIPPED where a newer one already reached the disk. Nothing holds the
     /// session while writing, so a slow disk cannot park a stream's own frames.
-    version: std::sync::atomic::AtomicU64,
+    version: AtomicU64,
     landed: Mutex<u64>,
+    /// The sweeps a stop has asked its drains for, and the ones they have finished. A stop waits
+    /// for the second to reach the first, so no file is closed over a frame already delivered.
+    asked: AtomicU64,
+    swept: AtomicU64,
 }
 
 impl Recorder {
@@ -187,8 +197,10 @@ impl Recorder {
             time,
             session: Mutex::new(None),
             encoders: Mutex::new(Arc::new(video::FfmpegEncoders)),
-            version: std::sync::atomic::AtomicU64::new(0),
+            version: AtomicU64::new(0),
             landed: Mutex::new(0),
+            asked: AtomicU64::new(0),
+            swept: AtomicU64::new(0),
         }
     }
 
@@ -210,20 +222,48 @@ impl Recorder {
     }
 
     /// The manifest as the session stands, written with the session UNLOCKED — a disk that is
-    /// slow must never park the engine writing frames through it. Ordering is the writing lock's.
+    /// slow must never park the engine writing frames through it. The snapshot is numbered under
+    /// the session lock, and [`Recorder::land`] is what keeps the writes in that order.
     fn publish(&self, guard: MutexGuard<'_, Option<Session>>) -> Result<(), String> {
         let Some(session) = guard.as_ref() else { return Ok(()) };
         let manifest = session.manifest(&self.time);
         let folder = session.folder.clone();
-        let version = self.version.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let version = self.version.fetch_add(1, Ordering::SeqCst) + 1;
         drop(guard);
+        self.land(&manifest, &folder, version)
+    }
+
+    /// Write one numbered snapshot, SKIPPING it where a newer one already reached the disk. Every
+    /// manifest write goes through here, so no path can land out of order.
+    fn land(&self, manifest: &Manifest, folder: &Path, version: u64) -> Result<(), String> {
         let mut landed = held(&self.landed);
         if *landed > version {
             return Ok(());
         }
-        let done = manifest.write_atomic(&folder);
+        let done = manifest.write_atomic(folder);
         *landed = version;
         done
+    }
+
+    /// A sweep a stop is waiting for. The drain reads this before it sweeps and reports it after,
+    /// so a sweep that began before the ask never counts as the answer to it.
+    pub fn sweeping(&self) -> u64 {
+        self.asked.load(Ordering::SeqCst)
+    }
+
+    /// One sweep of every feed, to exhaustion, has finished.
+    pub fn swept(&self, mark: u64) {
+        self.swept.fetch_max(mark, Ordering::SeqCst);
+    }
+
+    /// Ask every drain for one more sweep and wait for it, to a CEILING — a wedged drain must
+    /// never wedge a stop. What it buys is the tail: the frames the last sweep did not reach.
+    fn settle(&self) {
+        let want = self.asked.fetch_add(1, Ordering::SeqCst) + 1;
+        let deadline = Instant::now() + SETTLE;
+        while self.swept.load(Ordering::SeqCst) < want && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     /// Mint the folder. Refused when a recording already runs — the session lock is the ONE
@@ -254,14 +294,23 @@ impl Recorder {
     /// Close every stream and finalize the manifest. `Ok(None)` is a recorder that was not
     /// running; a manifest that could not be written is the error, never a silent `None`.
     pub fn stop(&self) -> Result<Option<PathBuf>, String> {
-        let Some(mut session) = self.held().take() else { return Ok(None) };
+        if !self.running() {
+            return Ok(None);
+        }
+        self.settle();
+        let mut guard = self.held();
+        let Some(mut session) = guard.take() else { return Ok(None) };
+        // Numbered while the session is still held: it outranks every snapshot taken before the
+        // take, after which nothing holds a session to mint another from.
+        let version = self.version.fetch_add(1, Ordering::SeqCst) + 1;
+        drop(guard);
         let ids: Vec<StreamId> = session.open.keys().cloned().collect();
         for id in &ids {
             session.close(id, "stopped");
         }
         session.stopped_utc = Some(self.time.utc());
         let folder = session.folder.clone();
-        session.manifest(&self.time).write_atomic(&folder)?;
+        self.land(&session.manifest(&self.time), &folder, version)?;
         Ok(Some(folder))
     }
 
@@ -297,7 +346,9 @@ impl Recorder {
                 Err(why)
             }
         };
-        self.publish(guard)?;
+        // The manifest is a projection and is rewritten at every later publish, so a stream that
+        // opened is OPEN even where the disk refused this snapshot.
+        let _ = self.publish(guard);
         opened
     }
 
@@ -347,8 +398,8 @@ impl Recorder {
         stream.write(frame)
     }
 
-    /// Hand one video readback to that stream's encoder, with the instant it was rendered at.
-    /// `false` is a drop the caller counts — a real-time engine is never stalled by a disk.
+    /// Hand one video readback to its encoder, dated by the tick that DREW it rather than the one
+    /// that took it. `false` is a drop the caller counts: a real-time engine is never stalled.
     pub fn write_video(&self, id: &StreamId, texels: &[u8], at: f64) -> bool {
         let stream = {
             let guard = self.held();
@@ -370,6 +421,15 @@ impl Recorder {
             stream.dropped_at = Some(at);
         }
         let _ = self.publish(guard);
+    }
+
+    /// What a derived timeline last measured itself against patch time. The manifest carries it so
+    /// an analyst can correct the stream against the ones that read the clock.
+    pub fn drift(&self, id: &StreamId, seconds: f64) {
+        let guard = self.held();
+        if let Some(stream) = guard.as_ref().and_then(|s| s.open.get(id)) {
+            held(stream).drift = Some(seconds);
+        }
     }
 
     /// Whether this stream has a file open right now — what a drain asks so it opens one exactly

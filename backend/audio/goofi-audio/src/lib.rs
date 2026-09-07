@@ -353,7 +353,7 @@ impl AudioEngine {
             .collect();
         let (inbox, to_audio) = rtrb::RingBuffer::new(QUEUE);
         let (from_audio, outbox) = rtrb::RingBuffer::new(QUEUE);
-        let anchor = Arc::new(runtime::Anchor::new(time.now()));
+        let anchor = Arc::new(runtime::Anchor::new(time.clone()));
         AudioEngine {
             instance,
             time,

@@ -1806,13 +1806,9 @@ fn set_armed(
         actor,
         goofi_graph::Command::SetRecorded { uid, record },
     )?;
-    let closing = (!arm && state.recorder.running()).then(|| stream_id(&g, uid, &slot));
-    // The graph lock goes FIRST: closing a video waits for its encoder, and no op may hold the
-    // one graph mutex across a child process.
+    // The op arms and nothing else. Each engine's own drain observes the settled set and closes
+    // the stream after it has read what was already delivered — closing here raced that.
     drop(g);
-    if let Some(id) = closing {
-        state.recorder.close(&id, "disarmed");
-    }
     Ok(json!({ "ok": true, "changed": true }))
 }
 
