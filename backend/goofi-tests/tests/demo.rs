@@ -3,7 +3,7 @@
 //! this mode withholds is the convenient doors.
 
 use goofi_bridge::phrase;
-use goofi_tests::{host, http, j, Goofi};
+use goofi_tests::{host, http, j, Client, Goofi};
 
 /// Every op a demo drops, and the one it keeps because a visitor needs a reset.
 const DROPPED: [&str; 5] =
@@ -12,7 +12,7 @@ const DROPPED: [&str; 5] =
 #[tokio::test]
 async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
     let full = Goofi::new();
-    let g = Goofi::demo();
+    let mut g = Goofi::demo();
 
     // The rows are ABSENT, not filtered on read — the index, dispatch and the resolver agree,
     // exactly as they do for headless.
@@ -63,9 +63,44 @@ async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
     let osc = g.add("LFO");
     assert_eq!(g.call("node state", j!({ "node": goofi_tests::hex(osc) }))["error"], j!(null));
 
+    // A public instance is not empty: it opens the patch named at boot, and `session new` — the
+    // only reset a visitor has — brings that patch back rather than the empty canvas. The file
+    // STEM is the slug, which is what lets one image serve every example on its own address.
+    let tmp = tempfile::tempdir().unwrap();
+    let example = tmp.path().join("psd-topomap.gfi");
+    full.add("LFO");
+    full.add("Buffer");
+    full.call("session save", j!({ "path": example.to_string_lossy() }));
+
+    g.state.load = Some(example.clone());
+    goofi_bridge::open_load(&g.state).expect("the patch named at boot opens");
+    assert_eq!(g.nodes().len(), 2, "a demo boots into the patch it was given");
+    g.call("session new", j!({}));
+    assert_eq!(g.nodes().len(), 2, "…and the visitor's reset restores it rather than emptying it");
+
+    g.state.demo_base = Some("https://demo.example.com".into());
     let base = g.serve().await;
     let addr = host(&base);
-    let other = host(&full.serve().await).to_string();
+    let full_base = full.serve().await;
+    let other = host(&full_base).to_string();
+
+    // The siblings ride the `hello`, so the app needs no round-trip to draw the chooser. One
+    // address each, and the one this instance IS marked, because a chooser has to say where it is.
+    let (_client, hello) = Client::connect(&base).await;
+    let examples = hello["examples"].as_array().expect("a demo names its siblings").clone();
+    assert_eq!(examples.len(), 4, "every example in the manifest: {examples:?}");
+    assert_eq!(examples[0]["url"], j!("https://demo.example.com/psd-topomap"));
+    let current: Vec<&str> = examples
+        .iter()
+        .filter(|e| e["current"] == j!(true))
+        .filter_map(|e| e["slug"].as_str())
+        .collect();
+    assert_eq!(current, ["psd-topomap"], "exactly one of them is here");
+
+    // Nothing to switch to on a goofi that is not one of a set — the default everywhere but the
+    // public deployment.
+    let (_full_client, full_hello) = Client::connect(&full_base).await;
+    assert!(full_hello["examples"].is_null(), "a local goofi offers no siblings: {full_hello:?}");
 
     // The host-facing routes are NOT MOUNTED. A 404 is the whole statement: there is no handler
     // to refuse from — and the SAME path on a full server answers, so the 404 is the mode rather

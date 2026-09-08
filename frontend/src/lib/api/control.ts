@@ -145,6 +145,18 @@ export interface GraphSnapshot {
 	/** A PUBLIC goofi: no terminal, no agents, no filesystem, no save or load, no audio. Carried
 	 * on `hello` alone, because it is decided once at start. */
 	demo?: boolean;
+	/** The other examples of a public set, this one among them. Absent unless the deployment
+	 * named where its siblings answer. */
+	examples?: DemoExample[];
+}
+
+/** One example of a public set, and the address it answers at — a whole instance, not a patch to
+ * load: switching is a navigation, so nobody else's session is replaced. */
+export interface DemoExample {
+	slug: string;
+	label: string;
+	url: string;
+	current: boolean;
 }
 
 /** One spawned harness. `stopping` spans the grace period between the stop and the exit. */

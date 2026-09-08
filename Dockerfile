@@ -19,6 +19,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
+# The recording every example follows, warmed here rather than by the first visitor: the node
+# would fetch these 31 MB on a background thread and play nothing until they landed. Above the
+# source copy, so an edit never re-downloads it. The URL is `node-bundles/eeg/eeg_playback.py`'s —
+# a stale copy costs the download, never the patch.
+RUN mkdir -p /samples && curl -fsSL -o /samples/eeg-rest-srm.edf \
+        https://s3.amazonaws.com/openneuro.org/ds003775/sub-001/ses-t1/eeg/sub-001_ses-t1_task-resteyesc_eeg.edf
+
 # A named directory rather than uv's default under HOME, so the runtime stage copies one known path.
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
 
@@ -43,6 +50,8 @@ COPY --from=build /opt/uv-python /opt/uv-python
 COPY --from=build /app/.gfivenv /app/.gfivenv
 COPY --from=build /app/.gfivenv-ft /app/.gfivenv-ft
 COPY --from=build /app/target/release/goofi /usr/local/bin/goofi
+# The patches `--load` names. One image carries every example; the variable picks which one.
+COPY --from=build /app/examples /app/examples
 
 # The embedded interpreter is linked against the free-threaded build, whose shared library lives
 # with the interpreter rather than on the loader's default path.
@@ -52,6 +61,7 @@ RUN printf '/opt/uv-python/*/lib\n' > /etc/ld.so.conf.d/uv-python.conf && ldconf
 ENV GOOFI_HOME=/data
 ENV GOOFI_DEMO=1
 RUN mkdir -p /data
+COPY --from=build /samples /data/.goofi/data/samples
 
 # `--port` rather than a PORT variable goofi would have to know the name of.
 CMD ["sh", "-c", "exec goofi serve --bind 0.0.0.0 --port ${PORT:-8000}"]
