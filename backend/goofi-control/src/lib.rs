@@ -142,6 +142,12 @@ pub struct Ticked {
 pub trait Half {
     /// A frame arrived on Array input `inbox`; `true` asks for a settle.
     fn arrive(&mut self, inbox: usize, frame: &Data) -> bool;
+    /// Whether only the NEWEST frame on an input matters. A half that DRAWS the frame as it
+    /// stands says yes and is handed one per pass; a half that accumulates every sample — audio's
+    /// resampling inbox — says no and is handed all of them.
+    fn latest_only(&self) -> bool {
+        false
+    }
     /// The wire into Array input `inbox` is gone.
     fn unwired(&mut self, _inbox: usize) {}
     /// The paced duties: publish what each output holds, and say what changed.
@@ -503,11 +509,24 @@ impl<H: Half> Control<H> {
         }
     }
 
-    /// Every frame that arrived, in order into the half, latest-wins into a mailbox — and every
-    /// binding a frame reached is evaluated once.
+    /// Every frame that arrived, in order into the half — or the newest alone, where the half says
+    /// only that one matters — and every binding a frame reached is evaluated once.
     fn receive(&mut self) {
         let mut moved = false;
+        let latest_only = self.half.latest_only();
         for s in &self.slots {
+            // Taking a sample is free where decoding it is not, and only the last one survives:
+            // a producer running flat out otherwise outruns this thread out of its own tick.
+            if latest_only {
+                let mut newest = None;
+                while let Ok(Some(sample)) = s.subscriber.receive() {
+                    newest = Some(sample);
+                }
+                if let Some(frame) = newest.and_then(|s| goofi_codec::decode(s.payload()).ok()) {
+                    moved |= self.half.arrive(s.inbox, &frame);
+                }
+                continue;
+            }
             while let Ok(Some(sample)) = s.subscriber.receive() {
                 if let Ok(frame) = goofi_codec::decode(sample.payload()) {
                     moved |= self.half.arrive(s.inbox, &frame);

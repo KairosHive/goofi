@@ -295,7 +295,12 @@ nothing. Its plan is replaced whole and never edited,
 because a stage index is a name and a stage that outlives its node draws into a stranger. The
 PROCESS owns one device and one compile thread, and every operation on that device takes one gate
 — a driver crashed inside its own shader compiler when two threads touched the device at once.
-The control half is `goofi-control`, shared with audio rather than copied. A texture never crosses
+The control half is `goofi-control`, shared with audio rather than copied, and it drains an input
+the way the HALF says: the newest frame alone where a half draws what it is handed, every frame
+where one accumulates them, as audio's resampling inbox does. What that cost: a producer runs flat
+out, so a graphics node converting each arrival to texels only to overwrite it was outrun out of
+its own tick — one tap frame every fifteen seconds off an engine that was rendering perfectly.
+A texture never crosses
 the wire: the tap reads back an f32 frame like any other, and `roadmap/graphics-engine.md` holds
 the design.
 

@@ -93,6 +93,10 @@ impl GraphicsHalf {
 }
 
 impl Half for GraphicsHalf {
+    fn latest_only(&self) -> bool {
+        true
+    }
+
     /// An arrival replaces whatever the render thread has not taken yet: latest wins, as every
     /// crossing into a scheduled engine is.
     fn arrive(&mut self, inbox: usize, frame: &Data) -> bool {
