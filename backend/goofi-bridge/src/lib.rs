@@ -72,6 +72,12 @@ pub struct AppState {
     pub graph: Arc<Mutex<Graph>>,
     /// What this instance serves, one owner: the op table, the routes and the engines read it.
     pub mode: Mode,
+    /// The patch `--load` named, opened before the first client connects. A demo reads it as the
+    /// visitor's reset too, having no Load to find the file again.
+    pub load: Option<PathBuf>,
+    /// Where a public set's other examples answer. Unset everywhere else, which is what withholds
+    /// the chooser.
+    pub demo_base: Option<String>,
     pub events: broadcast::Sender<String>,
     pub instance_id: Arc<str>,
     /// The op rows THIS instance serves — headless leaves the layout group out.
@@ -185,6 +191,8 @@ impl AppState {
             events,
             instance_id: Arc::from(format!("{iid:x}").as_str()),
             mode,
+            load: None,
+            demo_base: None,
             ops: Arc::new(ops::table(mode)),
             doc: Arc::new(Mutex::new(doc)),
             dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -242,6 +250,14 @@ impl AppState {
 
     /// Where the open patch's workspace files live right now. Copied out rather than borrowed: no
     /// filesystem walk may run while holding the lock.
+    /// The examples a public set offers, this instance's own among them. The patch file's STEM
+    /// is the slug, so one image serves every example and only `--load` differs.
+    pub(crate) fn examples(&self) -> Option<Value> {
+        let base = self.demo_base.as_deref()?;
+        let stem = self.load.as_deref().and_then(std::path::Path::file_stem);
+        Some(schemas::examples(base, stem.and_then(|s| s.to_str())))
+    }
+
     pub fn mount(&self) -> PathBuf {
         self.mount.lock().unwrap().clone()
     }
@@ -311,6 +327,13 @@ pub(crate) fn nonce_hex() -> String {
     let mut nonce = [0u8; 16];
     getrandom::fill(&mut nonce).expect("the OS random source");
     format!("{:032x}", u128::from_be_bytes(nonce))
+}
+
+/// Open the patch `--load` named, before the first client can connect. Nothing to do where none
+/// was named.
+pub fn open_load(state: &AppState) -> Result<(), String> {
+    let Some(path) = state.load.as_deref() else { return Ok(()) };
+    arms::load_file(state, path).map(|_| ())
 }
 
 /// Pack the patch to `target`: `manifest` beside the live workspace `mount`. Written to a temp
@@ -979,7 +1002,7 @@ fn control_seeds(state: &AppState) -> (String, String) {
         let g = state.graph.lock().unwrap();
         event(
             "hello",
-            schemas::snapshot(&g, &state.instance_id, true, unsaved, saved_at.as_deref(), roster, state.mode.demo),
+            schemas::snapshot(&g, state, true, unsaved, saved_at.as_deref(), roster),
         )
     };
     (hello, doc_state(state))

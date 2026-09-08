@@ -8,6 +8,29 @@ use serde_json::{json, Map, Value};
 
 pub const PROTOCOL_VERSION: i64 = 4;
 
+/// The examples a public deployment offers, compiled in beside the `.gfi` files they name.
+const EXAMPLES: &str = include_str!("../../../examples/demo.json");
+
+/// One row per example: where it answers under `base`, and which of them is `current`.
+pub(crate) fn examples(base: &str, current: Option<&str>) -> Value {
+    let base = base.trim_end_matches('/');
+    let manifest: Value = serde_json::from_str(EXAMPLES).expect("the compiled example manifest");
+    manifest["examples"]
+        .as_array()
+        .expect("the manifest lists examples")
+        .iter()
+        .map(|e| {
+            let slug = e["slug"].as_str().unwrap_or_default();
+            json!({
+                "slug": slug,
+                "label": e["label"],
+                "url": format!("{base}/{slug}"),
+                "current": Some(slug) == current,
+            })
+        })
+        .collect()
+}
+
 /// A single param descriptor, discriminated on `type`. `doc` is the type declaration's help text,
 /// which the runtime [`Param`] cannot carry. The source fields are the record's: an empty text is
 /// `null`, and a param with no record is a constant.
@@ -300,18 +323,19 @@ pub(crate) fn runtime_json(g: &Graph, uid: Uid) -> Value {
 }
 
 /// The `hello` / `graph_replaced` payload: the session frame plus the truths the doc never holds.
-/// It carries NO graph structure — that lives in the document alone.
+/// It carries NO graph structure — that lives in the document alone. `harnesses` is passed rather
+/// than read here because its config half is a disk read, which a caller holding the graph lock
+/// has already done off it.
 pub fn snapshot(
     g: &Graph,
-    instance_id: &str,
+    state: &crate::AppState,
     with_protocol: bool,
     unsaved: bool,
     save_path: Option<&str>,
     harnesses: Value,
-    demo: bool,
 ) -> Value {
     let mut snap = json!({
-        "instance_id": instance_id,
+        "instance_id": &*state.instance_id,
         "runtime": runtime_overlay(g),
         // Seeded for the same reason the runtime overlay is: `harness_changed` pushes transitions.
         "harnesses": harnesses,
@@ -323,7 +347,10 @@ pub fn snapshot(
         snap["protocol_version"] = json!(PROTOCOL_VERSION);
         // The palette rides along, so the first render needs no `list_nodes` round-trip.
         snap["node_types"] = catalog_types(g, Detail::Full);
-        snap["demo"] = json!(demo);
+        snap["demo"] = json!(state.mode.demo);
+        if let Some(examples) = state.examples() {
+            snap["examples"] = examples;
+        }
     }
     snap
 }

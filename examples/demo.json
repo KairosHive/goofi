@@ -1,0 +1,24 @@
+{
+	"examples": [
+		{
+			"slug": "psd-topomap",
+			"label": "PSD topomap",
+			"blurb": "Resting EEG through a spectrum into band power, drawn on the scalp."
+		},
+		{
+			"slug": "powerbands-osc",
+			"label": "Power bands to OSC",
+			"blurb": "The classical bands, split apart and published as OSC messages."
+		},
+		{
+			"slug": "musical-features",
+			"label": "Musical features",
+			"blurb": "Spectral peaks read as harmonicity and a tuning, sent out over OSC."
+		},
+		{
+			"slug": "connectivity-spectrogram",
+			"label": "Connectivity spectrogram",
+			"blurb": "Channel pairs reduced to a spectrogram that runs with the stream."
+		}
+	]
+}

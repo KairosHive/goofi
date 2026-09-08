@@ -417,6 +417,17 @@ fn the_workspace_counts_as_unsaved_work_and_a_fresh_load_is_clean() {
     opened.call("session load", j!({ "path": target.to_string_lossy() }));
     assert_eq!(std::fs::read(opened.state.mount().join("agent.md")).unwrap(), b"NOTES");
     assert!(!dirty(&opened), "a patch is not unsaved the moment it finishes loading");
+
+    // The same file at BOOT — `--load`, open before the first client connects, and as clean.
+    let mut booted = Goofi::new();
+    booted.state.load = Some(target.clone());
+    goofi_bridge::open_load(&booted.state).unwrap();
+    assert_eq!(std::fs::read(booted.state.mount().join("agent.md")).unwrap(), b"NOTES");
+    assert!(!dirty(&booted), "a boot load is no more unsaved work than any other load");
+    // `new` is the EMPTY patch here. Only a demo, which has no Load to find the file again,
+    // reads the reset as a return to what it booted into.
+    booted.call("session new", j!({}));
+    assert!(booted.nodes().is_empty(), "`session new` is the empty patch on a local goofi");
 }
 
 #[test]
