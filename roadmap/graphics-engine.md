@@ -86,7 +86,8 @@ before they arrive.
   production there is one graph and one engine, so the gate is uncontended except against the
   compile thread, which is exactly what it is for. No
   window. The clock is a constructor choice: `Clock::External` for the suite, driven by
-  `render(frames)`; `Clock::Timer` at 60 Hz for the CLI. A stage renders in a tick only when its
+  `render(frames)`; `Clock::Timer` at 30 Hz for the CLI — the rate a viewer draws at, and the rate a
+  lossless 16-bit recording of a stage can be encoded at. A stage renders in a tick only when its
   output has a reader — a subscriber on its data service, or a same-engine consumer that is
   demanded — so a node nobody reads costs nothing. That is TouchDesigner's cook model. The runtime
   is behind a mutex the tick thread and the engine share; the render thread never takes the graph

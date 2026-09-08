@@ -403,8 +403,8 @@ impl Runtime {
             if self.taping.contains_key(&uid) || rec.is_open(&id) {
                 continue;
             }
-            let kind = Kind::Video { size, fps: crate::FPS };
-            let live = match rec.open(&id, kind, t, StreamMeta::measured(Some(crate::FPS))) {
+            let kind = Kind::Video { size, fps: f64::from(crate::FPS) };
+            let live = match rec.open(&id, kind, t, StreamMeta::measured(Some(f64::from(crate::FPS)))) {
                 Ok(()) => true,
                 // A stream that will not open is this NODE's failure and nobody else's: the
                 // recording keeps every other stream, and the entry the recorder filed says why.
