@@ -2,15 +2,17 @@ import { describe, expect, it } from 'vitest';
 import type { ParamDescriptor } from '$lib/api/types';
 import {
 	admits,
-	counts,
 	filteredRows,
-	isExpression,
 	isModified,
-	isReference,
+	narrowing,
 	onlyAdmitted,
+	settleNonDefault,
+	SHOW_ALL,
+	toggleSource,
 	type Baseline,
-	type Filters
-} from './paramTouched';
+	type Filters,
+	type NonDefault
+} from './paramFilters';
 
 const base = {
 	doc: null,
@@ -31,12 +33,12 @@ const expr = (text: string, value = 0.5, dflt = 0.5): ParamDescriptor =>
 const ref = (target: string, value = 0.5, dflt = 0.5): ParamDescriptor =>
 	({ ...float(value, dflt), mode: 'reference', reference: target }) as ParamDescriptor;
 
-const F = (f: Partial<Filters>): Filters => ({
-	touched: false,
-	expression: false,
-	reference: false,
-	...f
-});
+const F = (f: Partial<Filters>): Filters => ({ ...SHOW_ALL, ...f });
+
+/** The list a settled document leaves, from nothing — what the inspector's effect holds. */
+const listOf = (groups: Parameters<typeof settleNonDefault>[1], b?: Baseline): NonDefault =>
+	settleNonDefault(new Map(), groups, b);
+const NONE: NonDefault = new Map();
 
 describe('isModified', () => {
 	it('is false for a param still sitting on its declared default', () => {
@@ -47,8 +49,6 @@ describe('isModified', () => {
 		expect(isModified(float(0.7, 0.5))).toBe(true);
 	});
 
-	// Being DRIVEN is no longer "touched" on its own: that is the Expression filter's question, and
-	// folding it in here made "what did I change" and "what is driven" one question when they are two.
 	it('is true for a newly bound expression, because binding one IS a change', () => {
 		expect(isModified(expr('t'))).toBe(true);
 	});
@@ -58,7 +58,7 @@ describe('isModified', () => {
 		expect(isModified(pulse)).toBe(false);
 	});
 
-	it('treats a string param off its default as touched', () => {
+	it('treats a string param off its default as non-default', () => {
 		const s = { ...base, type: 'string', value: 'hard', default: 'soft', options: null } as ParamDescriptor;
 		expect(isModified(s)).toBe(true);
 	});
@@ -74,8 +74,8 @@ describe('isModified', () => {
 		expect(isModified(float(0.9, 0.5), b, 'common', 'frequency')).toBe(true);
 	});
 
-	// A mapping survives Clear as a MAPPING — it keeps driving and keeps its own filter — but it
-	// stops counting as "changed", which is what makes the touched list quiet again.
+	// A mapping survives Clear as a MAPPING — it keeps driving, and keeps answering the source
+	// strip — but it stops counting as changed, which is what makes the list quiet again.
 	it('is false for an expression the baseline already recorded', () => {
 		const b: Baseline = { 'common/frequency': { value: 0.5, mode: 'expression', expression: 't', reference: '' } };
 		expect(isModified(expr('t'), b, 'common', 'frequency')).toBe(false);
@@ -93,40 +93,48 @@ describe('isModified', () => {
 	});
 });
 
-describe('the expression and reference filters', () => {
-	it('name the active source and nothing else', () => {
-		expect(isExpression(expr('t'))).toBe(true);
-		expect(isExpression(ref('lfo.out'))).toBe(false);
-		expect(isReference(ref('lfo.out'))).toBe(true);
-		expect(isReference(expr('t'))).toBe(false);
-		expect(isExpression(float(0.5, 0.5))).toBe(false);
-		expect(isReference(float(0.5, 0.5))).toBe(false);
+describe('the source set', () => {
+	it('starts as every mode, which takes nothing away', () => {
+		expect(narrowing(SHOW_ALL)).toBe(false);
+		expect(admits(SHOW_ALL, float(0.5, 0.5), NONE)).toBe(true);
+		expect(admits(SHOW_ALL, expr('t'), NONE)).toBe(true);
+		expect(admits(SHOW_ALL, ref('lfo.out'), NONE)).toBe(true);
 	});
 
-	// A mapping is worth seeing whether or not it has moved since the zero point — which is the
-	// reason these are filters of their own rather than a corner of "touched".
-	it('find a mapping that a clear has made untouched', () => {
-		const b: Baseline = { 'common/frequency': { value: 0.5, mode: 'expression', expression: 't', reference: '' } };
-		const d = expr('t');
-		expect(isModified(d, b, 'common', 'frequency')).toBe(false);
-		expect(admits(F({ expression: true }), d, b, 'common', 'frequency')).toBe(true);
+	it('flips one mode at a time, and says so', () => {
+		const off = toggleSource(SHOW_ALL, 'constant');
+		expect(off.sources).toEqual(['expression', 'reference']);
+		expect(narrowing(off)).toBe(true);
+		expect(toggleSource(off, 'constant').sources.sort()).toEqual(SHOW_ALL.sources.slice().sort());
+	});
+
+	it('admits only the modes still ticked', () => {
+		const mapped = F({ sources: ['expression', 'reference'] });
+		expect(admits(mapped, expr('t'), NONE)).toBe(true);
+		expect(admits(mapped, ref('lfo.out'), NONE)).toBe(true);
+		expect(admits(mapped, float(0.5, 0.5), NONE)).toBe(false);
+	});
+
+	it('admits nothing with every box cleared, rather than silently reopening', () => {
+		expect(admits(F({ sources: [] }), float(0.5, 0.5), NONE)).toBe(false);
 	});
 });
 
 describe('admits', () => {
-	it('admits everything when no filter is on', () => {
-		expect(admits(F({}), float(0.5, 0.5))).toBe(true);
+	const groups = { common: { curve: expr('t'), frequency: float(0.7, 0.5) } };
+
+	// AND, not OR: the source set says WHERE a value comes from and non-default says WHETHER it has
+	// moved, so a reader after "the expression I have edited" narrows on both.
+	it('ANDs the source set with the non-default list', () => {
+		const both = F({ nonDefault: true, sources: ['expression'] });
+		const list = listOf(groups);
+		expect(admits(both, expr('t'), list, 'common', 'curve')).toBe(true);
+		expect(admits(both, float(0.7, 0.5), list, 'common', 'frequency')).toBe(false);
 	});
 
-	// OR, not AND: each filter names a set worth seeing, and a reader who wants "what I changed and
-	// what I mapped" gets the union by turning both on.
-	it('ORs the filters that are on', () => {
-		const moved = float(0.7, 0.5);
-		const mapped = ref('lfo.out');
-		const both = F({ touched: true, reference: true });
-		expect(admits(both, moved)).toBe(true);
-		expect(admits(both, mapped)).toBe(true);
-		expect(admits(F({ reference: true }), moved)).toBe(false);
+	it('leaves every source alone while non-default is off', () => {
+		expect(admits(SHOW_ALL, float(0.5, 0.5), NONE)).toBe(true);
+		expect(admits(F({ nonDefault: true }), float(0.5, 0.5), NONE)).toBe(false);
 	});
 });
 
@@ -136,47 +144,90 @@ describe('filteredRows', () => {
 		shape: { curve: expr('t'), target: ref('lfo.out') }
 	};
 
-	it('spans every group, because which tab a knob was filed under is what the reader does not know', () => {
-		const rows = filteredRows(groups, F({ touched: true }));
-		expect(rows.map((r) => r.group + '/' + r.name).sort()).toEqual([
+	// The tabs stay up under a filter, so the caller names the ONE group it is showing.
+	it('answers only the groups it is given', () => {
+		expect(filteredRows(groups, SHOW_ALL, NONE, ['shape']).map((r) => r.name)).toEqual([
+			'curve',
+			'target'
+		]);
+	});
+
+	it('narrows one group to the sources still ticked', () => {
+		const mapped = F({ sources: ['expression'] });
+		expect(filteredRows(groups, mapped, NONE, ['shape']).map((r) => r.name)).toEqual(['curve']);
+		expect(filteredRows(groups, mapped, NONE, ['common'])).toEqual([]);
+	});
+
+	it('spans every group when given none, which is what a search hands back', () => {
+		expect(filteredRows(groups, SHOW_ALL, NONE).length).toBe(4);
+	});
+
+	it('narrows rows already gathered by a search', () => {
+		const rows = filteredRows(groups, SHOW_ALL, NONE);
+		expect(onlyAdmitted(rows, F({ sources: ['expression'] }), NONE).map((r) => r.name)).toEqual([
+			'curve'
+		]);
+	});
+});
+
+describe('settleNonDefault', () => {
+	const groups = {
+		common: { frequency: float(0.7, 0.5), amplitude: float(0.5, 0.5) },
+		shape: { curve: expr('t'), target: ref('lfo.out') }
+	};
+
+	// The list is the NODE's, because the clear beside it is: it says what pressing that would take
+	// back, not what the fronted tab happens to hold.
+	it('gathers across every group, whichever tab is fronted', () => {
+		expect([...listOf(groups).keys()].sort()).toEqual([
 			'common/frequency',
 			'shape/curve',
 			'shape/target'
 		]);
 	});
 
-	it('narrows to one source when only that filter is on', () => {
-		expect(filteredRows(groups, F({ expression: true })).map((r) => r.name)).toEqual(['curve']);
-		expect(filteredRows(groups, F({ reference: true })).map((r) => r.name)).toEqual(['target']);
+	/* The reported defect. A slider is dragged, and derived membership dropped its row the instant
+	   the drag crossed the default — under the pointer holding it, sometimes back in a frame later
+	   and sometimes not. So the list is STICKY: a param that has left its zero point stays until
+	   that zero point moves. */
+	it('keeps a param a drag has taken back onto its default', () => {
+		const moved = { common: { frequency: float(0.7, 0.5) } };
+		const list = listOf(moved);
+		expect(list.has('common/frequency')).toBe(true);
+		const onDefault = { common: { frequency: float(0.5, 0.5) } };
+		expect(settleNonDefault(list, onDefault).has('common/frequency')).toBe(true);
+		const past = { common: { frequency: float(0.3, 0.5) } };
+		expect(settleNonDefault(list, past).has('common/frequency')).toBe(true);
 	});
 
-	it('returns every param when nothing is filtered', () => {
-		expect(filteredRows(groups, F({})).length).toBe(4);
+	it('answers the list it was given when nothing moved, so a value tick writes no state', () => {
+		const list = listOf(groups);
+		expect(settleNonDefault(list, groups)).toBe(list);
 	});
 
-	it('narrows rows already gathered by a search', () => {
-		const rows = filteredRows(groups, F({}));
-		expect(onlyAdmitted(rows, F({ expression: true })).map((r) => r.name)).toEqual(['curve']);
-	});
-});
-
-describe('counts', () => {
-	it('counts each filter separately, across every group', () => {
-		const groups = {
-			common: { frequency: float(0.7, 0.5), amplitude: float(0.5, 0.5) },
-			shape: { curve: expr('t'), target: ref('lfo.out') }
-		};
-		expect(counts(groups)).toEqual({ touched: 3, expression: 1, reference: 1 });
-	});
-
-	// The reported case: a preset moves hundreds of params, Clear takes them back to zero, and the
-	// mappings are still findable by their own filters.
-	it('drops the touched count to nothing after a clear, leaving the mappings countable', () => {
-		const groups = { common: { a: float(0.7, 0.5), b: expr('t') } };
+	// The reported case: a preset moves hundreds of params, and Clear takes them back to zero.
+	it('empties on the clear that moves every zero point, and refills as one moves again', () => {
+		const list = listOf(groups);
+		expect(list.size).toBe(3);
 		const b: Baseline = {
-			'common/a': { value: 0.7, mode: 'constant', expression: '', reference: '' },
-			'common/b': { value: 0.5, mode: 'expression', expression: 't', reference: '' }
+			'common/frequency': { value: 0.7, mode: 'constant', expression: '', reference: '' },
+			'common/amplitude': { value: 0.5, mode: 'constant', expression: '', reference: '' },
+			'shape/curve': { value: 0.5, mode: 'expression', expression: 't', reference: '' },
+			'shape/target': { value: 0.5, mode: 'reference', reference: 'lfo.out', expression: '' }
 		};
-		expect(counts(groups, b)).toEqual({ touched: 0, expression: 1, reference: 0 });
+		const cleared = settleNonDefault(list, groups, b);
+		expect(cleared.size).toBe(0);
+		const moved = { ...groups, common: { ...groups.common, frequency: float(0.9, 0.5) } };
+		expect([...settleNonDefault(cleared, moved, b).keys()]).toEqual(['common/frequency']);
+	});
+
+	/* A clear's reply and its delta reach the browser on one socket, but the list must not depend on
+	   which lands first: a value arriving in that window carries the OLD zero point, which is the one
+	   every entry already stands on, so the list is untouched until the new baseline is what is read.
+	*/
+	it('is unmoved by a value that arrives before the new baseline does', () => {
+		const list = listOf(groups);
+		const ticked = { ...groups, common: { ...groups.common, frequency: float(0.72, 0.5) } };
+		expect([...settleNonDefault(list, ticked).keys()].sort()).toEqual([...list.keys()].sort());
 	});
 });
