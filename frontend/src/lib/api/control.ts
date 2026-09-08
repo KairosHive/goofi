@@ -229,10 +229,15 @@ export type ControlEvent =
 			payload: { node: string; stage: NodeStage; error?: string | null; runtime?: NodeRuntime | null };
 	  }
 	| { event: 'node_stats'; payload: { node: string; stats: NodeStats } }
-	// Applied surgically (only these params' `value`), never a wholesale params replace.
+	// One node's LIVE source state, both maps whole: what its driven params evaluate to, and what
+	// they fail with. Applied surgically, never a wholesale params replace.
 	| {
 			event: 'param_values';
-			payload: { node: string; values: Record<string, Record<string, number | string | boolean>> };
+			payload: {
+				node: string;
+				values: Record<string, Record<string, number | string | boolean>>;
+				errors: Record<string, Record<string, string>>;
+			};
 	  }
 	| { event: 'unsaved_changes'; payload: { unsaved_changes: boolean } }
 	| { event: 'save_path_changed'; payload: { save_path: string | null } }

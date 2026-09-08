@@ -294,6 +294,7 @@ async fn the_app_is_served_out_of_the_binary_and_the_client_router_owns_the_rest
 const ROUTES: &[(&str, &str, u16)] = &[
     ("/control", "WS", 101),
     ("/data/deadbeef/out", "WS", 101),
+    ("/params/deadbeef", "WS", 101),
     ("/term/no-such-instance", "WS", 101),
     ("/mcp", "POST", 200),
     // 400, not 200: `/exec` refuses the probe's empty body for its own reason, and that reason

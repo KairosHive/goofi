@@ -151,12 +151,26 @@ pub fn describe_node_params(g: &Graph, uid: Uid) -> Value {
 pub fn expression_value_map(g: &Graph, uid: Uid) -> Value {
     let mut groups = Map::new();
     for (group, name, p) in g.driven_values(uid) {
-        let entry = groups.entry(group.to_string()).or_insert_with(|| Value::Object(Map::new()));
-        if let Value::Object(names) = entry {
-            names.insert(name.to_string(), goofi_graph::param_value_json(p));
-        }
+        insert_at(&mut groups, group, name, goofi_graph::param_value_json(p));
     }
     Value::Object(groups)
+}
+
+/// A node's param errors in that same `{group: {name: …}}` shape — the whole map, so a param it no
+/// longer names is one whose failure has cleared.
+pub fn param_error_map(g: &Graph, uid: Uid) -> Value {
+    let mut groups = Map::new();
+    for (group, name, msg) in g.param_errors(uid) {
+        insert_at(&mut groups, group, name, json!(msg));
+    }
+    Value::Object(groups)
+}
+
+fn insert_at(groups: &mut Map<String, Value>, group: &str, name: &str, v: Value) {
+    let entry = groups.entry(group.to_string()).or_insert_with(|| Value::Object(Map::new()));
+    if let Value::Object(names) = entry {
+        names.insert(name.to_string(), v);
+    }
 }
 
 /// A node instance's param VALUES, `{group: {name: value}}`, without descriptor metadata.
