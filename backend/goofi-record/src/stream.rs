@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::beside::Beside;
+use crate::beside::{Beside, Extent};
 use crate::csv::Csv;
 use crate::npy::Npy;
 use crate::video::{Encoders, Video};
@@ -14,9 +14,9 @@ use crate::wav::Wav;
 /// is a video. Nothing writes the wire format to disk.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
-    /// One frame's shape. The file holds a stack of them, so a frame of another shape is another
-    /// file — the rule a resized texture already follows.
-    Array { frame: Vec<usize> },
+    /// Every array, whatever its shape: the file is FLAT and the sidecar's shape line splits it,
+    /// so a node whose shape moves — a filling `Buffer`, a peak count — stays in one file.
+    Array,
     Table { columns: Vec<String> },
     Text,
     Audio { rate: f64, channels: usize },
@@ -26,7 +26,7 @@ pub enum Kind {
 impl Kind {
     pub fn extension(&self, encoders: &dyn Encoders) -> &'static str {
         match self {
-            Kind::Array { .. } => "npy",
+            Kind::Array => "npy",
             Kind::Table { .. } => "csv",
             Kind::Text => "txt",
             Kind::Audio { .. } => "wav",
@@ -76,8 +76,9 @@ const SYNC_EVERY: Duration = Duration::from_secs(1);
 /// What one frame carries into a stream: the instant it was made, its `Meta` for the sidecar, and
 /// the payload in the shape its own kind takes.
 pub enum Written<'a> {
-    /// One array frame, appended as it stands.
-    Rows(&'a [u8]),
+    /// One array frame, appended as it stands, and the shape it came in — which the flat file
+    /// cannot hold, so the sidecar carries it.
+    Rows { samples: &'a [u8], shape: Vec<usize> },
     /// One audio block, PLANAR as the engine renders it — the wav interleaves it on the way in,
     /// into a buffer of its own, so a block costs no allocation.
     Blocks { planar: &'a [u8], channels: usize },
@@ -95,6 +96,9 @@ pub struct Stream {
     pub dropped_at: Option<f64>,
     /// The last frame number this file holds; the gap to the next one is what went missing.
     numbered: Option<u64>,
+    /// What shapes this file has held. The sidecar's line is written off it, and the manifest
+    /// projects it: one shape while every frame agreed, none once one did not.
+    shapes: Shapes,
     /// What a derived timeline last measured itself against patch time.
     pub drift: Option<f64>,
     fill: f32,
@@ -104,6 +108,33 @@ pub struct Stream {
     /// not get a line.
     beside: Option<Beside>,
     synced: Instant,
+}
+
+/// What shapes one file has held: nothing yet, one that every frame agreed on, or several — in
+/// which case the last is kept, because the next frame is compared against it.
+enum Shapes {
+    None,
+    One(Vec<usize>),
+    Many(Vec<usize>),
+}
+
+impl Shapes {
+    /// Take `shape` in, and answer it back where it MOVED — the one place the sidecar writes a
+    /// shape, since a reader carries the last one forward.
+    fn took(&mut self, shape: Vec<usize>) -> Option<&[usize]> {
+        if self.last() == Some(&shape[..]) {
+            return None;
+        }
+        *self = if matches!(self, Shapes::None) { Shapes::One(shape) } else { Shapes::Many(shape) };
+        self.last()
+    }
+
+    fn last(&self) -> Option<&[usize]> {
+        match self {
+            Shapes::None => None,
+            Shapes::One(held) | Shapes::Many(held) => Some(held),
+        }
+    }
 }
 
 /// Where a stream's frames land.
@@ -127,7 +158,7 @@ impl Stream {
     ) -> Result<Stream, String> {
         let path = folder.join(&file);
         let sink = match &kind {
-            Kind::Array { frame } => Sink::Array(Npy::create(&path, frame)?),
+            Kind::Array => Sink::Array(Npy::create(&path)?),
             Kind::Table { columns } => Sink::Table(Csv::create(&path, columns)?),
             Kind::Text => Sink::Text(std::io::BufWriter::new(
                 std::fs::File::create_new(&path).map_err(|e| e.to_string())?,
@@ -150,6 +181,7 @@ impl Stream {
             dropped: 0,
             dropped_at: None,
             numbered: None,
+            shapes: Shapes::None,
             drift: None,
             fill: 0.0,
             lines: 0,
@@ -168,6 +200,15 @@ impl Stream {
             Sink::Text(_) => self.lines,
             Sink::Audio(w) => w.frames(),
             Sink::Video(v) => v.encoded(),
+        }
+    }
+
+    /// The one shape every frame of this file had, which is what lets a reader fold the flat
+    /// values back in one line. Absent where a shape moved: the sidecar is the index then.
+    pub fn frame(&self) -> Option<Vec<usize>> {
+        match &self.shapes {
+            Shapes::One(shape) => Some(shape.clone()),
+            _ => None,
         }
     }
 
@@ -196,7 +237,8 @@ impl Stream {
     }
 
     /// Whether this stream can still take what the frame brings. A `false` is a NEW file, never a
-    /// refused frame: an array that reshaped, a table with other columns, a full wav.
+    /// refused frame: a table with other columns, a full wav. An array always takes one — its
+    /// file is flat, so a reshape is not a reason to open another.
     pub fn takes(&self, kind: &Kind, bytes: usize) -> bool {
         match (&self.sink, kind) {
             (Sink::Audio(w), Kind::Audio { .. }) => w.room_for(bytes),
@@ -222,25 +264,25 @@ impl Stream {
         written: Written<'_>,
         meta: Option<&goofi_core::Meta>,
     ) -> Result<(), String> {
-        let rows = match (&mut self.sink, written) {
-            (Sink::Array(n), Written::Rows(s)) => {
-                n.write(s)?;
-                1
+        let extent = match (&mut self.sink, written) {
+            (Sink::Array(n), Written::Rows { samples, shape }) => {
+                n.write(samples)?;
+                Extent::Shape(self.shapes.took(shape))
             }
             (Sink::Audio(w), Written::Blocks { planar, channels }) => {
                 let was = w.frames();
                 w.write_planar(planar, channels)?;
-                w.frames() - was
+                Extent::Rows(w.frames() - was)
             }
             (Sink::Table(c), Written::Cells(cells)) => {
                 c.write(at, &cells)?;
-                1
+                Extent::Rows(1)
             }
             (Sink::Text(f), Written::Text(t)) => {
                 use std::io::Write;
                 writeln!(f, "{}", t.replace('\n', "\\n")).map_err(|e| e.to_string())?;
                 self.lines += 1;
-                1
+                Extent::Rows(1)
             }
             _ => return Err("the frame is not the shape this stream holds".into()),
         };
@@ -252,7 +294,7 @@ impl Stream {
             }
         }
         if let Some(beside) = &mut self.beside {
-            beside.line(at, rows, meta)?;
+            beside.line(at, extent, meta)?;
         }
         if self.synced.elapsed() >= SYNC_EVERY {
             self.sync()?;

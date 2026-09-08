@@ -3,14 +3,14 @@
 //!
 //! The header is padded ASCII and the samples follow it, so a frame is `write_all` of the bytes
 //! the wire already holds and the count is patched IN PLACE on the sync cadence. What that buys is
-//! the property the recorder is built on: a writer that is killed leaves every whole frame
-//! readable, because the frames are contiguous and the count follows from the file's size.
+//! the property the recorder is built on: a writer that is killed leaves every whole value
+//! readable, because the values are contiguous and the count follows from the file's size.
 
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
-/// The widest a frame count can ever be written, so an appended file's header is sized once and
+/// The widest a value count can ever be written, so an appended file's header is sized once and
 /// the count can never outgrow the room reserved for it.
 const COUNT: usize = 20;
 
@@ -43,30 +43,34 @@ fn dict(shape: &[usize]) -> String {
     format!("{{'descr': '<f4', 'fortran_order': False, 'shape': ({dims}), }}")
 }
 
-/// One `.npy` a stream is appended to: the shape of ONE frame, and the count of them the header
-/// carries.
+/// One FLAT `.npy` a stream is appended to: every value the stream ever carried, in order, under
+/// a 1-D header whose count is patched as they land.
+///
+/// It is flat rather than a stack of frames because a node's shape MOVES — a filling `Buffer`
+/// grows its window every tick — and a stack can only hold one shape. So a frame of any shape
+/// appends here, the sidecar's shape line is what splits them again, and a reshape is no longer
+/// a reason to open a file.
 pub struct Npy {
     file: BufWriter<File>,
-    frame: Vec<usize>,
+    values: u64,
     frames: u64,
     head: usize,
 }
 
 impl Npy {
-    pub fn create(path: &Path, frame: &[usize]) -> Result<Npy, String> {
+    pub fn create(path: &Path) -> Result<Npy, String> {
         let file = File::create_new(path).map_err(|e| e.to_string())?;
-        let head = head_len(&stacked(u64::MAX, frame), COUNT);
-        let mut npy = Npy { file: BufWriter::new(file), frame: frame.to_vec(), frames: 0, head };
+        let head = head_len(&[u64::MAX as usize], COUNT);
+        let mut npy = Npy { file: BufWriter::new(file), values: 0, frames: 0, head };
         npy.head()?;
         Ok(npy)
     }
 
-    /// One frame's samples, which are `<f4` already and are appended untouched.
+    /// One frame's samples, which are `<f4` already and are appended untouched, whatever shape
+    /// the frame had.
     pub fn write(&mut self, samples: &[u8]) -> Result<(), String> {
-        if samples.len() != self.frame.iter().product::<usize>() * 4 {
-            return Err("the frame is not the shape this file holds".into());
-        }
         self.file.write_all(samples).map_err(|e| e.to_string())?;
+        self.values += samples.len() as u64 / 4;
         self.frames += 1;
         Ok(())
     }
@@ -85,13 +89,8 @@ impl Npy {
     }
 
     fn head(&mut self) -> Result<(), String> {
-        let head = header(&stacked(self.frames, &self.frame), self.head);
+        let head = header(&[self.values as usize], self.head);
         self.file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         self.file.write_all(&head).map_err(|e| e.to_string())
     }
-}
-
-/// The file's own shape: how many frames, then one frame's.
-fn stacked(frames: u64, frame: &[usize]) -> Vec<usize> {
-    std::iter::once(frames as usize).chain(frame.iter().copied()).collect()
 }
