@@ -238,7 +238,7 @@ class _Net:
 
 
 class ReinforcementLearning(goofi.Node):
-    """Learns to drive a continuous action so a reward keeps rising, and keeps learning.
+    """Learns to drive a continuous action so a reward keeps rising, and never settles.
 
     Wire a feature of the signal to `observations`, the feature you want raised to `reward`, and
     `actions` to whatever sets the stimulus. `diagnostics` is how stagnation is SEEN before it costs
