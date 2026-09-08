@@ -2,7 +2,7 @@
 	import { harnesses, harnessLabel } from '$lib/stores/harness.svelte';
 	import { detachTermSession } from '$lib/stores/termSession';
 	import { workspace } from 'panelty';
-	import { Button, Dialog } from '$lib/ui';
+	import { Button, ConfirmDialog } from '$lib/ui';
 
 	const hs = harnesses();
 	const ws = workspace();
@@ -25,35 +25,14 @@
 	}
 </script>
 
-<Dialog open={!!hs.closing} onClose={() => hs.cancelClose()} data-testid="agent-close-dialog">
-	<h2>Close this agent view?</h2>
-	<p>
-		Detaching leaves {name} running in the patch workspace — re-attach it from any agent panel. Killing
-		stops it.
-	</p>
-	<div class="choices">
-		<Button data-testid="agent-detach" onclick={() => answer(false)}>Detach</Button>
-		<Button variant="danger" data-testid="agent-kill" onclick={() => answer(true)}>Kill</Button>
-		<Button variant="ghost" onclick={() => hs.cancelClose()}>Cancel</Button>
-	</div>
-</Dialog>
-
-<style>
-	.choices {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--space-3);
-		justify-content: flex-end;
-		margin-top: var(--space-6);
-	}
-	h2 {
-		margin: 0 0 var(--space-4);
-		font-size: var(--fs-body);
-		font-weight: 600;
-	}
-	p {
-		margin: 0;
-		color: var(--text-dim);
-		font-size: var(--fs-small);
-	}
-</style>
+<ConfirmDialog
+	open={!!hs.closing}
+	question="Close this agent view?"
+	detail={`Detaching leaves ${name} running in the patch workspace — re-attach it from any agent panel. Killing stops it.`}
+	onClose={() => hs.cancelClose()}
+	data-testid="agent-close-dialog"
+>
+	<Button data-testid="agent-detach" onclick={() => answer(false)}>Detach</Button>
+	<Button variant="danger" data-testid="agent-kill" onclick={() => answer(true)}>Kill</Button>
+	<Button variant="ghost" onclick={() => hs.cancelClose()}>Cancel</Button>
+</ConfirmDialog>

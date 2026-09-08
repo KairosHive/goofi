@@ -25,6 +25,7 @@ export { default as Disclosure } from './Disclosure.svelte';
 
 export { default as Popover } from './Popover.svelte';
 export { default as Dialog } from './Dialog.svelte';
+export { default as ConfirmDialog } from './ConfirmDialog.svelte';
 
 export { isTextEditingTarget } from './textEditing';
 

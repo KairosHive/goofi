@@ -368,8 +368,18 @@ export class GraphStore {
 
 	/** Move one of the patch's own node files into the private library, where every later patch
 	 * finds it. The fresh catalog arrives as a `node_types` event in every open tab. */
-	async saveNodeToLibrary(type: string): Promise<{ type: string; path: string }> {
-		return this.ctl.call<{ type: string; path: string }>('library save', { type });
+	async saveNodeToLibrary(type: string, overwrite: boolean): Promise<{ type: string; path: string }> {
+		return this.ctl.call<{ type: string; path: string }>('library save', { type, overwrite });
+	}
+
+	/** The private library's own file for this type, hidden behind the patch's — what a save to the
+	 * library would replace, and null where it would land on nothing. */
+	async libraryFileBehind(type: string): Promise<string | null> {
+		const r = await this.ctl.call<{ shadowed?: { provenance: string; path: string }[] }>(
+			'library get',
+			{ type }
+		);
+		return r.shadowed?.find((s) => s.provenance === 'custom')?.path ?? null;
 	}
 
 	/** Where this patch's workspace files live — a per-run temp directory under a random name. It
