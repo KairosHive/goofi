@@ -28,14 +28,14 @@ use half::GraphicsHalf;
 use runtime::{Runtime, Stats};
 use scan::{Class, Compiler};
 
-/// The engine renders at this pace under its own clock — the rate a display refreshes at, and
-/// what a viewer can draw.
-const PERIOD: Duration = Duration::from_micros(16_667);
+/// The rate the engine renders at under its own clock, which is also the rate a viewer draws at
+/// and the rate a recording is encoded at. A tick the clock did not pace — the harness's `render`
+/// — is why every frame's instant is written beside the video rather than trusted to the
+/// container.
+pub const FPS: u32 = 30;
 
-/// The rate a recording is encoded at, which is the rate the engine's own clock renders at. A
-/// tick the clock did not pace — the harness's `render` — is why every frame's instant is written
-/// beside the video rather than trusted to the container.
-pub const FPS: f64 = 1_000_000.0 / PERIOD.as_micros() as f64;
+/// The pace that rate asks of the clock thread.
+const PERIOD: Duration = Duration::from_nanos(1_000_000_000 / FPS as u64);
 
 /// What drives the ticks: the harness's `render(frames)`, or a clock of the engine's own.
 #[derive(Clone, Copy, PartialEq, Eq)]
