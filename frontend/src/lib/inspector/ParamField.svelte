@@ -1,9 +1,10 @@
 <!--
-  ParamField — one inspector row, its control region chosen by `controlKind(descriptor)`. Collapsed it
-  is the name and the interface the ACTIVE source wears; the name opens a second row holding the
-  three-way switch — constant, expression, reference — and what a driven source currently reads.
-  `vmin/vmax` are SOFT bounds: they scope only the Slider's track, and the NumberInput beside it
-  commits what is typed.
+  ParamField — one inspector row: the name, and the one control `controlKind(descriptor)` chooses.
+  That control is the row in EVERY mode — driven, it is disabled and reads out what the source
+  produces, since the param's own face is what a reader recognises. The name opens a second row
+  holding the three-way switch — constant, expression, reference — and the editor of whichever
+  source is active. `vmin/vmax` are SOFT bounds: they scope only the Slider's track, and the
+  NumberInput beside it commits what is typed.
 -->
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -91,15 +92,6 @@
 			onSetSource({ mode });
 		}
 	}
-
-	function previewText(): string {
-		const v = descriptor.value;
-		if (v === null || v === undefined) return '—';
-		if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '—';
-		if (typeof v === 'boolean') return v ? 'true' : 'false';
-		if (typeof v === 'string') return v.length > 32 ? v.slice(0, 31) + '…' : v;
-		return String(v);
-	}
 </script>
 
 <div
@@ -118,12 +110,65 @@
 		<!-- `display: contents` so the face inherits WITHOUT laying out: Field requires paired controls to
 		     be its direct children, and a real box would take them out of the @container column-flip. -->
 		<div class="pf-value">
-			{#if kind === 'pulse'}
-				<!-- The field's label already names it, so the button carries the ACT alone and fills the row. -->
+			{#if num}
+				<!-- SOFT bounds → Slider only; the NumberInput is UNBOUNDED (the engine does not clamp on set). -->
+				<Slider
+					value={num.value}
+					onChange={onCommit}
+					min={num.vmin}
+					max={num.vmax}
+					{step}
+					disabled={driven}
+					data-testid="param-slider"
+				/>
+				<NumberInput
+					value={num.value}
+					onChange={onCommit}
+					{step}
+					scrub
+					disabled={driven}
+					data-testid="param-number"
+				/>
+			{:else if kind === 'toggle'}
+				<Toggle
+					value={Boolean(descriptor.value)}
+					onChange={onCommit}
+					disabled={driven}
+					data-testid="param-toggle"
+				/>
+			{:else if kind === 'select'}
+				<!-- A non-refreshable dropdown passes no `onRefresh`, so the Select renders no ⟳. -->
+				<Select
+					{options}
+					value={String(descriptor.value)}
+					onChange={onCommit}
+					onRefresh={descriptor.refreshable ? onRefresh : undefined}
+					{refreshing}
+					disabled={driven}
+					refreshTestid="param-refresh"
+					data-testid="param-select"
+				/>
+			{:else if kind === 'text'}
+				<TextInput
+					value={String(descriptor.value)}
+					onChange={onCommit}
+					disabled={driven}
+					data-testid="param-text"
+				/>
+			{:else if kind === 'pulse'}
+				<!-- A pulse holds no value to read out, so a driven one keeps its button: firing one by
+				     hand is a request, and the source fires on its own edges. -->
 				<Button class="pf-pulse" title="Fire one pulse" onclick={onPulse} data-testid="param-pulse">
 					pulse
 				</Button>
+			{:else if kind === 'unknown'}
+				<code class="unknown" data-testid="param-unknown">{JSON.stringify(descriptor.value)}</code>
 			{/if}
+		</div>
+	</Field>
+
+	{#if open}
+		<div class="pf-more" data-testid="param-more">
 			{#if showSource}
 				<div class="src-region">
 					{#if showPicker}
@@ -144,46 +189,6 @@
 							testid="param-expr-input"
 						/>
 					{/if}
-					<!-- A failure is not a readout, so it stays on the collapsed row where the value it
-					     replaces does not. -->
-					{#if shown && descriptor.error}
-						<div class="src-error" title={descriptor.error} data-testid="param-source-error">
-							<span class="prefix"><Icon name="triangle-alert" /></span>
-							<span class="msg">{descriptor.error}</span>
-						</div>
-					{/if}
-				</div>
-			{:else if num}
-				<!-- SOFT bounds → Slider only; the NumberInput is UNBOUNDED (the engine does not clamp on set). -->
-				<Slider value={num.value} onChange={onCommit} min={num.vmin} max={num.vmax} {step} data-testid="param-slider" />
-				<NumberInput value={num.value} onChange={onCommit} {step} scrub data-testid="param-number" />
-			{:else if kind === 'toggle'}
-				<Toggle value={Boolean(descriptor.value)} onChange={onCommit} data-testid="param-toggle" />
-			{:else if kind === 'select'}
-				<!-- A non-refreshable dropdown passes no `onRefresh`, so the Select renders no ⟳. -->
-				<Select
-					{options}
-					value={String(descriptor.value)}
-					onChange={onCommit}
-					onRefresh={descriptor.refreshable ? onRefresh : undefined}
-					{refreshing}
-					refreshTestid="param-refresh"
-					data-testid="param-select"
-				/>
-			{:else if kind === 'text'}
-				<TextInput value={String(descriptor.value)} onChange={onCommit} data-testid="param-text" />
-			{:else if kind === 'unknown'}
-				<code class="unknown" data-testid="param-unknown">{JSON.stringify(descriptor.value)}</code>
-			{/if}
-		</div>
-	</Field>
-
-	{#if open}
-		<div class="pf-more" data-testid="param-more">
-			{#if shown && !descriptor.error && kind !== 'pulse'}
-				<div class="src-preview" title={String(descriptor.value)} data-testid="param-preview">
-					<span class="prefix" aria-hidden="true">=</span>
-					<span class="value">{previewText()}</span>
 				</div>
 			{/if}
 			{#if driven}
@@ -234,6 +239,14 @@
 			/>
 		</div>
 	{/if}
+	<!-- Shown whether or not the source is unfolded: the value beside it is the literal standing in,
+	     and a failure is not a readout. -->
+	{#if shown && descriptor.error}
+		<div class="src-error" title={descriptor.error} data-testid="param-source-error">
+			<span class="prefix"><Icon name="triangle-alert" /></span>
+			<span class="msg">{descriptor.error}</span>
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -278,15 +291,14 @@
 		flex-wrap: wrap;
 		gap: var(--space-3);
 	}
+	/* Wide enough to type an expression in, and the first thing to take its own line when the pane
+	   is narrower than that. */
 	.src-region {
-		flex: 3 1 0;
+		flex: 1 1 14rem;
 		min-width: 0;
 		display: flex;
-		flex-direction: column;
-		gap: var(--space-2);
 	}
-	.src-error,
-	.src-preview {
+	.src-error {
 		display: flex;
 		align-items: baseline;
 		gap: var(--space-2);
@@ -294,8 +306,6 @@
 		font-family: var(--font-mono);
 		font-size: var(--fs-micro);
 		padding: 0 var(--space-1);
-	}
-	.src-error {
 		color: var(--danger);
 	}
 	.src-error .prefix {
@@ -306,10 +316,6 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		min-width: 0;
-	}
-	.src-preview {
-		flex: 1 1 auto;
-		color: var(--text-muted);
 	}
 	.unknown {
 		font-size: var(--fs-micro);
