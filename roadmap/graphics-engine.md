@@ -352,6 +352,63 @@ and no quantization anywhere in the process. Measured at four stages of 1024 squ
 resolution: 14.6 fps a viewer before, 30.0 after, with the readback a quarter of the bytes.
 What that leaves is the socket's own cost, which is what a 1024-square image at 30 fps IS
 (4 MB a frame a viewer) and not something the engine can be asked to make smaller.
+### The tessellation node (2026-09-08)
+
+`Tessellate` is one node with four geometries, and the reason it is one node rather than four is
+that they give ONE answer. Every fold returns a cell: where in the picture the tile reads from,
+where the tile itself sits, how far the point stands from the seam, which of the two hands it is,
+and which tile it is. Everything after the fold — the picture, the figure-ground trade, the seam,
+the tint — reads those five and never the geometry, so a fifth geometry touches nothing else.
+
+- **The seventeen wallpaper groups fold two ways, and the split is forced.** Thirteen of them have
+  their whole point group about a lattice point, so one reduction to the lattice's own VORONOI cell
+  — which that point group maps to itself — followed by an angle fold into a wedge is exact and is
+  the same eight lines for all thirteen. pg, pmg and pgg fold along glides that no rotation about a
+  lattice point reaches, and they fold in lattice coordinates instead. p4g is the fourth odd one and
+  needed the smallest correction of all: its mirrors miss the four-fold centre, so the wedge is the
+  plain quarter and the mirror's own angle belongs to the displacement field alone. Getting that
+  wrong made p4g draw p4m's picture exactly, which nothing but a comparison of all seventeen
+  pictures against each other would have found.
+- **Escher's deformation is one identity, `u(gx) = g u(x)`.** A displacement field averaged over the
+  point group satisfies it, and that identity is the whole reason a bent tile still interlocks: push
+  a boundary out here and the same push arrives as a dent on every tile that meets it. So the fold
+  is unchanged and what moves is the point handed to it. The suite pins the claim the only way it
+  can be pinned — a frame with the displacement at full is still EXACTLY periodic on the lattice.
+- **The field is a gradient turned a quarter turn, and the plain gradient was built first and was
+  wrong.** A gradient field squeezes the plane, so a boundary pushed by one THICKENS instead of
+  bending, and at the amplitude where anything was visible the tiles were already folding through
+  each other. Its perpendicular shears, holds the area of every tile it moves, and reaches an
+  interlocking arm at an amplitude a gradient cannot survive.
+- **A parquet deformation is the same field with its strength read off where in the frame the point
+  stands.** The tiles go on fitting — a homeomorphism of the plane carries a tiling to a tiling — and
+  stop being congruent, which is exactly what Escher's metamorphoses do and what the periodicity
+  test then correctly refuses.
+- **The three angles ARE the curvature, and a mirror is one curve.** `k|x|² - 2n·x + d = 0`
+  normalised so `|n|² - kd = 1` is a circle when `k` is not zero and a line when it is; reflection in
+  it is an inversion either way, and the fundamental domain is where all three powers are negative.
+  Normalising by putting one vertex at distance 1 rather than by a unit disk is what makes the
+  Euclidean case fall out as `k = 0`, a straight third mirror and no special arm anywhere. Spherical,
+  flat and hyperbolic are then one continuous sweep of `sides`, `meet` and `hinge`. A hyperbolic
+  plane ENDS, and the three domain tests do not say so — they answer yes outside the limit circle
+  too — so the radius is computed and the outside is transparent.
+- **What a solver is for.** The three group folds are closed form and answer per texel. The mosaic
+  is not: its cells come from the picture, so one Lloyd step runs per frame in a state buffer and
+  the division settles while it is watched. A site wanders at most one cell from where it was born,
+  which is what bounds the nearest-site search to a block — and the block is not taste, since a site
+  outside it must be further off than the worst site inside, which needs `2·REACH + 1` cells. The
+  first build pinned each site inside its own square; a site that cannot leave its square cannot
+  crowd anywhere, and crowding is the whole of what a weighted relaxation has to say.
+- **The picture drives the deformation through its own gradient, not through a fit.** `fit` blends
+  the synthetic field into one read off the picture, and the picture is read through a mapping that
+  sweeps the cell and comes back the way it went, because a field that jumps where two cells meet is
+  a tiling with a tear in it. An Escherization proper — a descent onto a goal shape — was designed
+  and dropped: the closed-form field reaches the same place and cannot fail to converge.
+- **The measurements that shaped it.** The edge density is taken over half a cell, since a cell can
+  only walk towards structure its own size and a one-texel tap under-samples the quadrature
+  entirely. The seam's width comes from the derivative of the distance it is drawn from, so a warp
+  that compresses the plane does not thicken the line it draws. The suite's own oracle had to be
+  replaced once: a whole-frame checksum agreed to nine digits across two frames whose texels
+  differed by thirty percent, so the frames are compared as 256 block means instead.
 
 ## Phases
 

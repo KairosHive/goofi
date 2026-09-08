@@ -38,6 +38,48 @@ fn ridge(d: &goofi_core::Data) -> Vec<Option<usize>> {
         .collect()
 }
 
+/// How far the frame disagrees with itself shifted `dx` columns, as luminance per texel.
+fn slid(d: &goofi_core::Data, dx: usize) -> f32 {
+    let (h, w) = (shape(d)[0], shape(d)[1]);
+    let v = f32s(d);
+    let lum = |i: usize| v[i * 4] + v[i * 4 + 1] + v[i * 4 + 2];
+    let mut off = 0.0;
+    for y in 0..h {
+        for x in 0..w - dx {
+            off += (lum(y * w + x) - lum(y * w + x + dx)).abs();
+        }
+    }
+    off / ((w - dx) * h) as f32
+}
+
+/// A frame as the mean of each of its 256 blocks. Fine enough that two folds which merely
+/// rearrange one tile's content disagree, coarse enough that two renders of one setting do not —
+/// a whole-frame checksum failed the first half of that, agreeing to nine digits across frames
+/// whose texels differed by thirty percent.
+fn mark(d: &goofi_core::Data) -> Vec<f32> {
+    let (h, w) = (shape(d)[0], shape(d)[1]);
+    let v = f32s(d);
+    let mut out = vec![0.0f32; 256];
+    let mut per = vec![0.0f32; 256];
+    for y in (0..h).step_by(3) {
+        for x in (0..w).step_by(3) {
+            let b = (y * 16 / h) * 16 + x * 16 / w;
+            let i = (y * w + x) * 4;
+            out[b] += v[i] + v[i + 1] + v[i + 2];
+            per[b] += 1.0;
+        }
+    }
+    out.iter().zip(per).map(|(s, n)| s / n.max(1.0)).collect()
+}
+
+/// The furthest any block moved between two frames. Two renders of one setting answer exactly 0.
+fn apart(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max)
+}
+
+/// Wider than the noise between two renders, narrower than the closest two folds come.
+const MOVED: f32 = 0.02;
+
 fn close(a: [f32; 4], b: [f32; 4]) -> bool {
     a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3)
 }
@@ -658,6 +700,195 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
                                { "dim": 1, "max": 128, "method": "area" }] }]))
         .await;
     holds_at(vec![64, 128, 4], "a viewer that cannot draw the frame shrank one that can");
+}
+
+/// A division of the plane, walked through its four geometries. The law under all of them is the
+/// same: whatever a fold does to a picture, a tile carried onto its neighbour must land exactly —
+/// and it must go on landing exactly after the Escher displacement has bent every boundary. The
+/// ground is a gradient rather than a flat colour, because two groups can divide the plane along
+/// the very same seams and differ only in what each tile then shows.
+#[test]
+fn a_tessellation_holds_its_symmetry() {
+    const SIDE: usize = 360;
+    const CELL: usize = 120;
+
+    let g = Goofi::new();
+    let ground = g.add("graphics:Ramp");
+    g.ready(ground);
+    g.set_param(ground, "ramp", "angle", 35.0);
+    for (name, value) in [("r0", 0.15), ("g0", 0.1), ("b0", 0.6), ("r1", 1.0), ("g1", 0.85), ("b1", 0.2)] {
+        g.set_param(ground, "ramp", name, value);
+    }
+    let t = g.add("graphics:Tessellate");
+    g.ready(t);
+    g.link(ground, "out", t, "input");
+    for node in [ground, t] {
+        g.set_param(node, "common", "width", SIDE as i64);
+        g.set_param(node, "common", "height", SIDE as i64);
+    }
+    g.set_param(t, "gestalt", "contour", 1.0);
+    g.set_param(t, "tile", "scale", 3.0);
+    assert!(g.error(t).is_none(), "{:?}", g.error(t));
+    let probe = g.probe(t, "out");
+
+    // Step: all seventeen groups fold, and each is exactly periodic on its own lattice — three
+    // cells across the frame, so one lattice vector is 160 columns. A fold that is not constant on
+    // the group's orbits leaves a seam, and a seam is what this reading catches.
+    let groups = ["p1", "p2", "pm", "pg", "cm", "pmm", "pmg", "pgg", "cmm", "p4", "p4m", "p4g", "p3", "p3m1",
+                  "p31m", "p6", "p6m"];
+    let mut seen: Vec<(&str, Vec<f32>)> = Vec::new();
+    for group in groups {
+        g.set_param(t, "wallpaper", "group", group);
+        // A frame is this group's only once it has stopped being the last one's, which is what
+        // keeps every reading below off a frame the param change had not reached yet.
+        let was = seen.last().map(|(_, m)| m.clone());
+        let f = drawn(&g, t, group, |d| {
+            shape(d) == vec![SIDE, SIDE, 4] && was.as_ref().is_none_or(|m| apart(&mark(d), m) > MOVED)
+        });
+        let drift = slid(&f, CELL);
+        assert!(drift < 0.02, "{group} is not periodic on its own lattice: {drift}");
+        seen.push((group, mark(&f)));
+    }
+    // …and they are seventeen folds rather than one arm of a switch answering for several. pmm and
+    // pgg draw the very same seams and are told apart only here, by what each tile is shown of.
+    for (i, (a, ma)) in seen.iter().enumerate() {
+        for (b, mb) in &seen[i + 1..] {
+            assert!(apart(ma, mb) > MOVED, "{a} and {b} folded to the same picture");
+        }
+    }
+
+    // Step: figure trades the two hands of a tile — so it has something to trade only where the
+    // group carries a reflection. p4 is built from rotations alone and cannot answer it; p4m is
+    // the same lattice with mirrors, and turns half its tiles over.
+    g.set_param(t, "wallpaper", "group", "p4");
+    let one_hand = drawn(&g, t, "p4 again", |d| apart(&mark(d), &seen[9].1) < MOVED);
+    g.set_param(t, "gestalt", "figure", 1.0);
+    assert!(
+        g.stays(|g| {
+            render(g, 1);
+            probe.latest().is_none_or(|d| apart(&mark(&d), &mark(&one_hand)) < MOVED)
+        }),
+        "figure turned a tile p4 has only one of",
+    );
+    g.set_param(t, "wallpaper", "group", "p4m");
+    drawn(&g, t, "p4m with its hands traded", |d| apart(&mark(d), &seen[10].1) > MOVED);
+    g.set_param(t, "gestalt", "figure", 0.0);
+
+    // Step: the Escher displacement. It bends every boundary — and because the field is averaged
+    // over the point group, the bent tiling is still EXACTLY the same tiling, which is the whole
+    // claim the page rests on.
+    g.set_param(t, "wallpaper", "group", "p4");
+    let plain = drawn(&g, t, "p4's straight grid", |d| apart(&mark(d), &seen[9].1) < MOVED);
+    g.set_param(t, "escher", "amount", 1.0);
+    let bent = drawn(&g, t, "the boundaries bent", |d| apart(&mark(d), &mark(&plain)) > MOVED);
+    assert!(slid(&bent, CELL) < 0.02, "the displacement broke the tiling: {}", slid(&bent, CELL));
+
+    // Step: the parquet drift. The tiles go on interlocking, but they no longer MATCH — the shape
+    // is read off where in the frame it stands, so the lattice period goes and the fit stays.
+    g.set_param(t, "morph", "drift", 1.5);
+    drawn(&g, t, "the shape drifting across the frame", |d| slid(d, CELL) > 0.05);
+    g.set_param(t, "morph", "drift", 0.0);
+    g.set_param(t, "escher", "amount", 0.0);
+
+    // Step: curvature. The three angles decide the geometry and nothing else does — (6, 3, 2) sums
+    // to a flat plane and repeats, (7, 3, 2) does not sum to one and cannot, and what a hyperbolic
+    // fold cannot reach is left transparent rather than filled with a guess. The (2, 3, 6) group's
+    // own translation is 180 columns at this scale, which is the reading that says it came out flat.
+    g.set_param(t, "tile", "kind", "kaleido");
+    g.set_param(t, "kaleido", "sides", 6.0);
+    g.set_param(t, "kaleido", "meet", 3.0);
+    g.set_param(t, "kaleido", "hinge", 2.0);
+    g.set_param(t, "tile", "scale", 6.0);
+    let flat = drawn(&g, t, "a Euclidean kaleidoscope", |d| px(d, 2, 2)[3] > 0.5 && slid(d, 180) < 0.02);
+    assert!(slid(&flat, 97) > 0.05, "a flat kaleidoscope that repeats at any shift is a blank one");
+    g.set_param(t, "kaleido", "sides", 7.0);
+    g.set_param(t, "tile", "scale", 9.0);
+    let curved = drawn(&g, t, "a circle limit", |d| px(d, 2, 2)[3] < 0.5);
+    assert!(slid(&curved, 120) > 0.05, "a hyperbolic tiling repeats: {}", slid(&curved, 120));
+    assert!(px(&curved, SIDE / 2, SIDE / 2)[3] > 0.5, "the disk itself is empty");
+
+    // Step: the multigrid. Two families cross into a lattice; five cut a pattern that never
+    // repeats, which is the difference between a crystal and a Penrose tiling — and the reason one
+    // knob covers both.
+    g.set_param(t, "tile", "kind", "quasi");
+    g.set_param(t, "tile", "scale", 3.0);
+    g.set_param(t, "quasi", "fold", 2);
+    drawn(&g, t, "a periodic multigrid", |d| px(d, 2, 2)[3] > 0.5 && slid(d, CELL) < 0.02);
+    g.set_param(t, "quasi", "fold", 5);
+    let never = drawn(&g, t, "a multigrid that never repeats", |d| slid(d, CELL) > 0.05);
+    for dx in [40, 80, 120, 200] {
+        assert!(slid(&never, dx) > 0.03, "the pentagrid repeats at {dx}: {}", slid(&never, dx));
+    }
+    assert!(g.error(t).is_none(), "{:?}", g.error(t));
+}
+
+/// The mosaic's solver, the one part of this node that has to CONVERGE rather than be computed.
+/// One Lloyd step a frame walks the sites onto the picture, and what proves the step ran is where
+/// the cells end up: told to follow nothing they settle into a lattice of their own, and told to
+/// follow the edges they crowd onto the one edge a disc has.
+#[test]
+fn the_mosaic_walks_its_cells_onto_the_picture() {
+    /// Seams per texel in a ring: the disc's rim, or a patch of its flat middle. Small cells mean
+    /// more seam for the same room, so this reads as how finely the ring is divided.
+    fn seams(d: &goofi_core::Data, rim: bool) -> f32 {
+        let (h, w) = (shape(d)[0], shape(d)[1]);
+        let v = f32s(d);
+        let mut hit = 0.0f32;
+        let mut room = 0.0f32;
+        for y in 0..h {
+            for x in 0..w {
+                let q = ((x as f32 / w as f32 - 0.5).powi(2) + (y as f32 / h as f32 - 0.5).powi(2)).sqrt();
+                if rim != ((q - 0.3).abs() < 0.04) || (!rim && q > 0.2) {
+                    continue;
+                }
+                room += 1.0;
+                let t = &v[(y * w + x) * 4..];
+                hit += f32::from(t[0] + t[1] + t[2] < 0.6 && t[3] > 0.5);
+            }
+        }
+        hit / room.max(1.0)
+    }
+
+    let g = Goofi::new();
+    let disc = g.add("graphics:Shape");
+    g.ready(disc);
+    let t = g.add("graphics:Tessellate");
+    g.ready(t);
+    g.link(disc, "out", t, "input");
+    for node in [disc, t] {
+        g.set_param(node, "common", "width", 192);
+        g.set_param(node, "common", "height", 192);
+    }
+    g.set_param(disc, "shape", "size", 0.6);
+    g.set_param(disc, "shape", "soft", 0.01);
+    g.set_param(t, "tile", "kind", "mosaic");
+    g.set_param(t, "mosaic", "cells", 12);
+    g.set_param(t, "mosaic", "rate", 0.5);
+    g.set_param(t, "gestalt", "contour", 1.0);
+    let probe = g.probe(t, "out");
+    let ring = |d: &goofi_core::Data| seams(d, true) / seams(d, false).max(1e-4);
+
+    // Step: with no density to follow the sites relax into an even packing — Lloyd's own answer to
+    // a flat picture — so the rim and the middle are divided alike wherever the disc is white.
+    g.set_param(t, "mosaic", "density", "flat");
+    let even = g.until("the cells settle on nothing in particular", |g| {
+        render(g, 60);
+        probe.latest().filter(|d| seams(d, false) > 0.05)
+    });
+    render(&g, 240);
+    let even = probe.latest().unwrap_or(even);
+    assert!(ring(&even) < 1.12, "a flat density already crowded the rim: {}", ring(&even));
+
+    // Step: told to follow the edges, the same solver walks the same sites onto the one edge the
+    // picture has. Nothing about the fold changed — only what the quadrature weighs.
+    g.set_param(t, "mosaic", "density", "edges");
+    let found = g.until("the cells find the rim", |g| {
+        render(g, 60);
+        probe.latest().filter(|d| ring(d) > 1.2)
+    });
+    assert!(ring(&found) > ring(&even) * 1.15, "the rim is no finer than the middle: {}", ring(&found));
+    assert!(seams(&found, false) > 0.0, "the middle lost its cells entirely");
+    assert!(g.error(t).is_none(), "{:?}", g.error(t));
 }
 
 const FOREIGN: &str = "/* goofi\n{ \"doc\": \"claims an audio slot\", \"inputs\": [{\"name\": \"input\", \"kind\": \"AUDIO\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
