@@ -9,6 +9,7 @@ pub mod npy;
 pub mod stream;
 pub mod video;
 pub mod wav;
+pub mod writer;
 
 use goofi_core::time::{stamp, stamp_nanos, Time};
 use goofi_node::Uid;
@@ -29,6 +30,12 @@ fn held<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// The longest a stop waits for its drains and reapers.
 const SETTLE: Duration = Duration::from_millis(500);
+
+/// How often a sweep's counts reach the manifest. The manifest is a PROJECTION and every stream
+/// reaches the disk on this same cadence, so nothing is fresher for being written more often —
+/// and a rewrite is a create, an fsync and a rename ON THE DRAIN THREAD, which a sweep rate of
+/// fifty a second turns into the thing that makes a drain fall behind its transport.
+const NOTE_EVERY: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StreamId {
@@ -203,12 +210,18 @@ impl Session {
 pub struct Recorder {
     time: Arc<Time>,
     session: Mutex<Option<Session>>,
+    /// The thread that turns frames into files. A drain hands frames over and never formats one
+    /// itself: at a producer's rate, formatting is what makes a drain fall behind its transport.
+    writer: Mutex<Option<writer::Writer>>,
     encoders: Mutex<Arc<dyn video::Encoders>>,
     /// Every manifest snapshot is numbered under the session lock and lands in that order: a
     /// slow write is SKIPPED where a newer one already reached the disk. Nothing holds the
     /// session while writing, so a slow disk cannot park a stream's own frames.
     version: AtomicU64,
     landed: Mutex<u64>,
+    /// When a sweep's counts last reached the manifest. Every other writer publishes at once —
+    /// an open, a close, a drop — because each is rare and each is news.
+    noted: Mutex<Instant>,
     /// The sweeps a stop has asked its drains for, and the ones they have finished. A stop waits
     /// for the second to reach the first, so no file is closed over a frame already delivered.
     asked: AtomicU64,
@@ -220,9 +233,11 @@ impl Recorder {
         Recorder {
             time,
             session: Mutex::new(None),
+            writer: Mutex::new(None),
             encoders: Mutex::new(Arc::new(video::FfmpegEncoders)),
             version: AtomicU64::new(0),
             landed: Mutex::new(0),
+            noted: Mutex::new(Instant::now()),
             asked: AtomicU64::new(0),
             swept: AtomicU64::new(0),
         }
@@ -292,7 +307,7 @@ impl Recorder {
 
     /// Mint the folder. Refused when a recording already runs — the session lock is the ONE
     /// authority on that, so no caller can check and then act past it.
-    pub fn start(&self, root: &Path, name: &str, patch: Option<&Path>) -> Result<PathBuf, String> {
+    pub fn start(self: &Arc<Self>, root: &Path, name: &str, patch: Option<&Path>) -> Result<PathBuf, String> {
         let mut held = self.held();
         if held.is_some() {
             return Err("a recording already runs".into());
@@ -312,6 +327,9 @@ impl Recorder {
         };
         session.manifest(&self.time).write_atomic(&folder)?;
         *held = Some(session);
+        drop(held);
+        *self.writer.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some(writer::Writer::new(Arc::downgrade(self)));
         Ok(folder)
     }
 
@@ -322,6 +340,9 @@ impl Recorder {
             return Ok(None);
         }
         self.settle();
+        // The writer goes FIRST: a file closed over a frame still queued is a frame the manifest
+        // counted and the disk never got.
+        drop(held(&self.writer).take());
         let mut guard = self.held();
         let Some(mut session) = guard.take() else { return Ok(None) };
         // Numbered while the session is still held: it outranks every snapshot taken before the
@@ -342,8 +363,28 @@ impl Recorder {
         self.held().is_some()
     }
 
-    /// Open a file for a stream, closing whatever that stream held.
+    /// Open a file for a stream, closing whatever that stream held. Everything queued for it
+    /// reaches the old file first, so a reopen never moves a frame into the file after it.
     pub fn open(
+        &self,
+        id: &StreamId,
+        kind: Kind,
+        t0_patch: f64,
+        meta: StreamMeta,
+    ) -> Result<(), String> {
+        // A video's frames never ride the queue — they go to its own encoder — and this is called
+        // from the thread that RENDERS, which must not wait on another stream's disk.
+        if !matches!(kind, Kind::Video { .. }) {
+            if let Some(writer) = held(&self.writer).as_ref() {
+                writer.flush();
+            }
+        }
+        self.open_now(id, kind, t0_patch, meta)
+    }
+
+    /// The open itself, with no flush: the WRITER's own door, because a writer that waited on its
+    /// own queue would wait for ever.
+    fn open_now(
         &self,
         id: &StreamId,
         kind: Kind,
@@ -399,6 +440,17 @@ impl Recorder {
     /// Close a stream and finalize its file. A VIDEO's encoder is waited for here, so this is
     /// never called from a thread that renders — [`Recorder::close_later`] is that door.
     pub fn close(&self, id: &StreamId, why: &str) {
+        // NO session lock is held here, which is what lets the writer reach the flush.
+        if let Some(writer) = held(&self.writer).as_ref() {
+            writer.flush();
+        }
+        self.close_now(id, why);
+    }
+
+    /// The close itself, with no flush: the WRITER's own door, as [`Recorder::open_now`] is. A
+    /// writer that waited on its own queue would wait for ever, and nothing of this stream can
+    /// still be queued when the thread that would write it is the caller.
+    pub(crate) fn close_now(&self, id: &StreamId, why: &str) {
         let detached = self.held().as_mut().and_then(|s| s.detach(id));
         let Some(stream) = detached else { return };
         // NO lock is held here: finalizing a video waits for its encoder, and every other stream
@@ -415,7 +467,35 @@ impl Recorder {
     /// count land under ONE stream lock, so a frame is in the file if and only if its own gap was
     /// counted — a stop cannot take the session between the two and leave a gap nothing accounts
     /// for.
-    pub fn write(
+    /// Hand one frame over to be written. `false` is a queue that is full — a counted drop, never
+    /// a stall, because the thread that calls this is draining a real-time transport.
+    pub fn take_frame(
+        &self,
+        id: &StreamId,
+        bytes: &[u8],
+        rate: Option<f64>,
+        timeline: Timeline,
+        gap: u64,
+        at: f64,
+    ) -> bool {
+        let guard = held(&self.writer);
+        let Some(writer) = guard.as_ref() else { return false };
+        writer.take(id, bytes, rate, timeline, gap, at)
+    }
+
+    /// One queued frame, on the writer's thread: the file it belongs in, opened if the frame no
+    /// longer fits the one that is open, and then the frame itself. An `Err` is the STREAM's
+    /// death — a full disk, a frame the codec cannot read — and the lane is what says so.
+    pub(crate) fn write_queued(&self, q: &writer::Queued) -> Result<(), String> {
+        let read = frame::read(&q.bytes, q.rate)?;
+        if !self.takes(&q.id, &read.kind, q.bytes.len()) {
+            let meta = writer::meta_of(read.meta.as_ref(), q.timeline);
+            self.open_now(&q.id, read.kind.clone(), q.at, meta)?;
+        }
+        self.write(&q.id, read, q.gap, q.at)
+    }
+
+    fn write(
         &self,
         id: &StreamId,
         read: frame::Incoming<'_>,
@@ -446,9 +526,17 @@ impl Recorder {
         takes
     }
 
-    /// Rewrite the manifest for what a sweep changed. Once per sweep: a rewrite per frame would
-    /// make a drain that has fallen behind fall further behind.
+    /// Rewrite the manifest for what the sweeps since the last one changed, on [`NOTE_EVERY`].
+    /// Every count is already on its stream, so a skipped note loses nothing: the next one, and
+    /// the stop, both mint the projection whole.
     pub fn note(&self) {
+        {
+            let mut noted = held(&self.noted);
+            if noted.elapsed() < NOTE_EVERY {
+                return;
+            }
+            *noted = Instant::now();
+        }
         let _ = self.publish(self.held());
     }
 
