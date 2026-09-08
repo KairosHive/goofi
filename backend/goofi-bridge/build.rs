@@ -6,6 +6,7 @@ use std::time::SystemTime;
 
 fn main() {
     prebuild_nodes();
+    embed_skills();
     // Outside every early return below, or the headless verdict outlives the change that revoked it.
     println!("cargo:rerun-if-env-changed=GOOFI_HEADLESS");
     let frontend = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../frontend");
@@ -73,6 +74,28 @@ fn sdk_of(path: &Path) -> Option<&'static goofi_build::Sdk> {
 }
 
 /// The directories directly under `dir`, sorted.
+/// Emit `$OUT_DIR/skills.rs`: every file of every `skills/<name>/`, keyed `<name>/<within>`, so a
+/// workspace can be seeded with them and an agent spawned into it reads them from its own cwd.
+/// Sorted by `dirs_under`/`files_under`, so the table is stable across builds.
+fn embed_skills() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../skills");
+    println!("cargo:rerun-if-changed={}", root.display());
+    let mut files = String::new();
+    for skill in dirs_under(&root) {
+        let name = skill.file_name().unwrap().to_string_lossy().into_owned();
+        println!("cargo:rerun-if-changed={}", skill.display());
+        for path in files_under(&skill) {
+            println!("cargo:rerun-if-changed={}", path.display());
+            let within =
+                path.strip_prefix(&skill).unwrap().to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+            files += &format!("    ({:?}, include_bytes!({:?})),\n", format!("{name}/{within}"), path.display().to_string());
+        }
+    }
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR")).join("skills.rs");
+    std::fs::write(out, format!("pub static SHIPPED_SKILLS: &[(&str, &[u8])] = &[\n{files}];\n"))
+        .expect("write skills.rs");
+}
+
 fn dirs_under(dir: &Path) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> =
         std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();

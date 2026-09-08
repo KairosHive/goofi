@@ -350,15 +350,56 @@ pub fn open_output_subscriber(node: &IoxNode, service: &str) -> Result<ByteSubsc
         .map_err(|e| format!("subscriber `{service}`: {e}"))
 }
 
-/// The recording publisher: a STATIC segment of exactly [`RECORD_BUDGET`], so an outsized frame is
-/// refused at the loan instead of resizing it.
-pub fn record_publisher(service: &ByteService, what: &str, shape: RecordShape) -> Result<BytePublisher, String> {
-    service
-        .publisher_builder()
-        .initial_max_slice_len(shape.slice)
-        .allocation_strategy(AllocationStrategy::Static)
-        .create()
-        .map_err(|e| format!("record publisher `{what}`: {e}"))
+/// A producer's end of one armed slot's recording service: a STATIC segment of exactly
+/// [`RECORD_BUDGET`], so an outsized frame is refused at the loan instead of resizing it.
+///
+/// It is opened by the ARMING and released by the READER. Dropping the publisher releases the
+/// segment the recorder's queue points into, so a disarm that dropped it destroyed the frames the
+/// service had already delivered — a loss no gap and no count could ever show. A disarm therefore
+/// only [retires](RecordPort::retire) the port; [`RecordPort::spent`] is what says it may go.
+pub struct RecordPort {
+    service: ByteService,
+    publisher: BytePublisher,
+    bell: Doorbell,
+    retired: bool,
+}
+
+impl RecordPort {
+    pub fn open(node: &IoxNode, service: &str, door: &str, what: &str, shape: RecordShape) -> Result<RecordPort, String> {
+        let service = record_data_service(node, service, shape)?;
+        let publisher = service
+            .publisher_builder()
+            .initial_max_slice_len(shape.slice)
+            .allocation_strategy(AllocationStrategy::Static)
+            .create()
+            .map_err(|e| format!("record publisher `{what}`: {e}"))?;
+        let bell = Doorbell::open(node, door)?;
+        Ok(RecordPort { service, publisher, bell, retired: false })
+    }
+
+    /// One frame onto the service, and the recorder's door rung. `false` is a refused loan, which
+    /// the next frame's own number witnesses. A retired port sends nothing.
+    pub fn send(&self, bytes: &[u8]) -> bool {
+        !self.retired && publish(&self.publisher, bytes, std::iter::once((&self.bell, RECORD_EVENT_ID)))
+    }
+
+    /// Disarmed: stop publishing, but stay open while the recorder still reads.
+    pub fn retire(&mut self) {
+        self.retired = true;
+    }
+
+    pub fn armed(&mut self) {
+        self.retired = false;
+    }
+
+    pub fn retired(&self) -> bool {
+        self.retired
+    }
+
+    /// Retired, and nobody drinks from it any more — the one state in which dropping it is safe.
+    pub fn spent(&self) -> bool {
+        self.retired && subscribers(&self.service) == 0
+    }
 }
 
 /// Open the recorder's end of an armed output slot's recording service.

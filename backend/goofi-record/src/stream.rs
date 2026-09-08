@@ -93,6 +93,8 @@ pub struct Stream {
     pub t0_utc: SystemTime,
     pub dropped: u64,
     pub dropped_at: Option<f64>,
+    /// The last frame number this file holds; the gap to the next one is what went missing.
+    numbered: Option<u64>,
     /// What a derived timeline last measured itself against patch time.
     pub drift: Option<f64>,
     fill: f32,
@@ -147,6 +149,7 @@ impl Stream {
             t0_utc,
             dropped: 0,
             dropped_at: None,
+            numbered: None,
             drift: None,
             fill: 0.0,
             lines: 0,
@@ -210,7 +213,9 @@ impl Stream {
         }
     }
 
-    /// Append one frame, and reach the disk on a one-second cadence so a crash costs a second.
+    /// Append one frame, and reach the disk on a one-second cadence so a crash costs a second. The
+    /// frame's own NUMBER is what says whether any went missing before it, so `dropped` is the gap
+    /// in this file's numbering and can never be a loss the file itself cannot show.
     pub fn write(
         &mut self,
         at: f64,
@@ -239,6 +244,13 @@ impl Stream {
             }
             _ => return Err("the frame is not the shape this stream holds".into()),
         };
+        if let Some(n) = meta.and_then(|m| m.index()) {
+            let missed = self.numbered.replace(n).map_or(0, |l| n.saturating_sub(l).saturating_sub(1));
+            if missed > 0 {
+                self.dropped += missed;
+                self.dropped_at = Some(at);
+            }
+        }
         if let Some(beside) = &mut self.beside {
             beside.line(at, rows, meta)?;
         }

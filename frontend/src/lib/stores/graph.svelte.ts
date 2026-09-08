@@ -4,6 +4,7 @@ import {
 	getControl,
 	type Control,
 	type ControlEvent,
+	type DemoExample,
 	type DirListing,
 	type GraphSnapshot,
 	type LinkInfo,
@@ -94,6 +95,8 @@ export class GraphStore {
 	/** What the server said it is. Every affordance a demo withholds reads THIS, never a list of
 	 * its own. */
 	demo = $state(false);
+	/** The public set this instance belongs to, empty everywhere else. */
+	examples = $state<DemoExample[]>([]);
 	connected = $state(false);
 	/** Latches on the first connect and never clears — see {@link disconnected}. */
 	private _everConnected = $state(false);
@@ -207,6 +210,7 @@ export class GraphStore {
 		this.unsavedChanges = snap.unsaved_changes;
 		// `hello` alone carries it; a `graph_replaced` snapshot must not clear what the mode is.
 		if (snap.demo !== undefined) this.demo = snap.demo;
+		if (snap.examples !== undefined) this.examples = snap.examples;
 
 		// The arrangement rides the doc; what the snapshot carries is the VIEWPOINT, this client's
 		// alone — persisted, never converged.
@@ -619,12 +623,12 @@ export class GraphStore {
 		}
 	}
 
-	/** Move the touched filter's zero point to what the node holds now. It edits no param, so an
-	 * expression or a reference keeps driving; it IS undoable, since the zero point is document
-	 * state a later reader depends on. */
-	async clearTouched(node: string): Promise<void> {
+	/** Take every param's default from what the node holds now — the zero point the non-default
+	 * filter reads. It edits no param, so an expression or a reference keeps driving; it IS
+	 * undoable, since the zero point is document state a later reader depends on. */
+	async clearNonDefault(node: string): Promise<void> {
 		await this.ctl.call('node baseline', { node });
-		this._recordGraphCmd(`Clear touched on ${this.nodeById(node)?.name ?? node}`);
+		this._recordGraphCmd(`Clear non-default on ${this.nodeById(node)?.name ?? node}`);
 	}
 
 	/** Fire a pulse param: a request the node acts on, with no value and so no inverse to undo. */

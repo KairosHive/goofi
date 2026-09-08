@@ -1639,8 +1639,8 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         *state.save_path.lock().unwrap() = from_path.clone();
         let _ = state.events.send(event(
             "graph_replaced",
-            schemas::snapshot(&g, &state.instance_id, false, false, from_path.as_deref(),
-                              state.harnesses.roster(&agents), state.mode.demo),
+            schemas::snapshot(&g, state, false, false, from_path.as_deref(),
+                              state.harnesses.roster(&agents)),
         ));
         // The patch brought its own node types, which `graph_replaced` does not carry.
         let _ = state.events.send(event("node_types", json!({ "types": schemas::catalog_types(&g, Detail::Full) })));
@@ -1653,6 +1653,11 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
     };
     resync_and_broadcast(state);
     Ok(result)
+}
+
+/// The patch at `path`, through the one replacement every source shares.
+pub(crate) fn load_file(state: &AppState, path: &std::path::Path) -> Result<Value, String> {
+    load_patch(state, &json!({ "path": path.to_string_lossy() }))
 }
 
 pub(crate) fn session_load(
@@ -1676,7 +1681,11 @@ pub(crate) fn session_new(
     _actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    load_patch(state, &json!({}))
+    // A demo withholds Load, so the reset is the only way back to the example it was given.
+    match state.load.as_deref().filter(|_| state.mode.demo) {
+        Some(example) => load_file(state, example),
+        None => load_patch(state, &json!({})),
+    }
 }
 
 pub(crate) fn undo(

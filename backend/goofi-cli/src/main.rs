@@ -23,6 +23,8 @@ struct Cli {
     /// A PUBLIC goofi: no terminal, no agents, no filesystem, no save or load, no audio. Also set
     /// by `GOOFI_DEMO` in the environment. Not a sandbox.
     demo: bool,
+    /// A patch to open before the first client connects. Also `GOOFI_LOAD` in the environment.
+    load: Option<String>,
     help: bool,
 }
 
@@ -36,13 +38,14 @@ impl Default for Cli {
             headless: false,
             debug: false,
             demo: false,
+            load: None,
             help: false,
         }
     }
 }
 
 const USAGE: &str = "usage: goofi [serve] [--port N] [--bind HOST] \
-     [--extra-nodes DIR] [--list-nodes] [--headless] [--debug] [--demo]";
+     [--extra-nodes DIR] [--list-nodes] [--headless] [--debug] [--demo] [--load PATCH]";
 
 fn headless_env() -> bool {
     matches!(std::env::var("GOOFI_HEADLESS").as_deref(), Ok("1") | Ok("true"))
@@ -57,6 +60,11 @@ const DEFAULT_PORT: u16 = 8000;
 
 fn demo_env() -> bool {
     matches!(std::env::var("GOOFI_DEMO").as_deref(), Ok("1") | Ok("true"))
+}
+
+/// A set variable that is empty names nothing — a platform spells an unset variable that way.
+fn named_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
 /// Parse the argument list (already skipping argv[0]). `Err` is the message to print before
@@ -76,6 +84,7 @@ fn parse_args<I: Iterator<Item = String>>(mut args: I) -> Result<Cli, String> {
             "--headless" => cli.headless = true,
             "--debug" => cli.debug = true,
             "--demo" => cli.demo = true,
+            "--load" => cli.load = Some(need(args.next())?),
             "-h" | "--help" => cli.help = true,
             other => return Err(format!("unknown argument `{other}` (try --help)")),
         }
@@ -144,7 +153,9 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
              `{}`, which `cargo run -p goofi-init` provisions.\n  \
              GOOFI_HEADLESS=1 in the environment is --headless; setting it for the BUILD leaves \
              the app out of the binary entirely. GOOFI_DEBUG=1 is --debug, which opens `/dev/*` \
-             — the UI primitive gallery and the other development surfaces.",
+             — the UI primitive gallery and the other development surfaces. GOOFI_LOAD is --load, \
+             the patch to open at start; on a demo it is what `session new` returns to, and \
+             GOOFI_DEMO_BASE names where that set's other examples answer.",
             goofi_init::GIL_VENV
         );
         return;
@@ -157,7 +168,9 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
         }
     };
     let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo };
-    let state = AppState::new(mode, goofi_bridge::Clock::Device, goofi_bridge::RenderClock::Timer);
+    let mut state = AppState::new(mode, goofi_bridge::Clock::Device, goofi_bridge::RenderClock::Timer);
+    state.load = cli.load.clone().or_else(|| named_env("GOOFI_LOAD")).map(PathBuf::from);
+    state.demo_base = named_env("GOOFI_DEMO_BASE");
     std::process::exit(run(cli, python, state, shutdown_signal(), ui).await);
 }
 
@@ -420,7 +433,7 @@ async fn run(
     // Before ANY use of the embedded interpreter.
     point_embedded_python_at_its_venv();
 
-    let Cli { port, bind, extra_nodes, list_nodes, headless, debug, demo, help: _ } = cli;
+    let Cli { port, bind, extra_nodes, list_nodes, headless, debug, demo, load: _, help: _ } = cli;
     let port = port.unwrap_or(DEFAULT_PORT);
 
     if !list_nodes {
@@ -469,6 +482,10 @@ async fn run(
         eprintln!("    cargo build");
         eprintln!("  Or serve the API alone: --headless, or GOOFI_HEADLESS=1.");
         1
+    } else if let Err(e) = goofi_bridge::open_load(&state) {
+        eprintln!("refusing to start: the patch --load named did not open.");
+        eprintln!("  {e}");
+        1
     } else {
         spawn_workers(&state);
         match tokio::net::TcpListener::bind((bind.as_str(), port)).await {
@@ -500,6 +517,9 @@ async fn run(
                 }
                 if demo {
                     println!("  demo: no terminal, no agents, no filesystem, no audio");
+                }
+                if let Some(patch) = &state.load {
+                    println!("  opened {}", patch.display());
                 }
                 if debug && !headless {
                     println!("  debug: {url}/dev/ui is open — the UI primitive gallery");
@@ -769,12 +789,14 @@ mod tests {
     fn reads_every_value_taking_flag() {
         let cli = parse(&[
             "--port", "9001", "--bind", "0.0.0.0", "--extra-nodes", "b", "--list-nodes",
+            "--load", "patch.gfi",
         ])
         .expect("a well-formed invocation");
         assert_eq!(cli.port, Some(9001));
         assert_eq!(cli.bind, "0.0.0.0");
         assert_eq!(cli.extra_nodes, ["b"]);
         assert!(cli.list_nodes);
+        assert_eq!(cli.load.as_deref(), Some("patch.gfi"));
     }
 
     #[test]
@@ -788,7 +810,7 @@ mod tests {
 
     #[test]
     fn a_value_taking_flag_without_its_value_is_an_error() {
-        for flag in ["--port", "--bind", "--extra-nodes"] {
+        for flag in ["--port", "--bind", "--extra-nodes", "--load"] {
             let err = parse(&[flag]).expect_err(&format!("`{flag}` alone must not be ignored"));
             assert!(err.contains(flag), "the message names the flag: {err}");
         }

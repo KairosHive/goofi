@@ -111,7 +111,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     };
     let hand = |bytes: &[u8]| {
         assert!(
-            rec.take_frame(&id, bytes, None, goofi_record::Timeline::Measured, 0, 0.0),
+            rec.take_frame(&id, bytes, None, goofi_record::Timeline::Measured, 0.0, false),
             "the writer took the frame"
         );
     };

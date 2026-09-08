@@ -1,5 +1,7 @@
 <!-- Disclosure — one collapse control: a caret plus a `summary` that toggles `children` in and
-     out of the DOM. `open` is bindable and also reports through `onToggle`. -->
+     out of the DOM. `open` is bindable and also reports through `onToggle`.
+     `--disclosure-surface` and `--disclosure-hover` seat the summary row on a ground of its own; the
+     body keeps whatever is behind it. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -56,7 +58,7 @@
 		width: 100%;
 		min-height: var(--hit);
 		padding: var(--space-2) var(--space-3);
-		background: transparent;
+		background: var(--disclosure-surface, transparent);
 		border: none;
 		border-radius: var(--radius-sm);
 		color: var(--text);
@@ -68,7 +70,7 @@
 		transition: background var(--dur-fast) var(--ease);
 	}
 	.ui-disclosure-summary:hover {
-		background: var(--surface-2);
+		background: var(--disclosure-hover, var(--surface-2));
 	}
 	.ui-disclosure-summary:focus-visible {
 		outline: var(--focus-width) solid var(--focus-ink);

@@ -463,24 +463,23 @@ impl Recorder {
         let _ = self.publish(guard);
     }
 
-    /// Write one already-encoded frame, carrying the frames MISSING before it. The write and the
-    /// count land under ONE stream lock, so a frame is in the file if and only if its own gap was
-    /// counted — a stop cannot take the session between the two and leave a gap nothing accounts
-    /// for.
-    /// Hand one frame over to be written. `false` is a queue that is full — a counted drop, never
-    /// a stall, because the thread that calls this is draining a real-time transport.
+    /// Hand one frame over to be written. `false` is a queue that is full, or no recording at all —
+    /// either way the frame is not written, and the next one's own number says so.
+    ///
+    /// `wait` is the LAST hand-over of a stream, where a full queue is waited on rather than
+    /// dropped: a drain that must not stall is one with more frames coming, and this one has none.
     pub fn take_frame(
         &self,
         id: &StreamId,
         bytes: &[u8],
         rate: Option<f64>,
         timeline: Timeline,
-        gap: u64,
         at: f64,
+        wait: bool,
     ) -> bool {
         let guard = held(&self.writer);
         let Some(writer) = guard.as_ref() else { return false };
-        writer.take(id, bytes, rate, timeline, gap, at)
+        writer.take(id, bytes, rate, timeline, at, wait)
     }
 
     /// One queued frame, on the writer's thread: the file it belongs in, opened if the frame no
@@ -492,27 +491,16 @@ impl Recorder {
             let meta = writer::meta_of(read.meta.as_ref(), q.timeline);
             self.open_now(&q.id, read.kind.clone(), q.at, meta)?;
         }
-        self.write(&q.id, read, q.gap, q.at)
+        self.write(&q.id, read, q.at)
     }
 
-    fn write(
-        &self,
-        id: &StreamId,
-        read: frame::Incoming<'_>,
-        missed: u64,
-        at: f64,
-    ) -> Result<(), String> {
+    fn write(&self, id: &StreamId, read: frame::Incoming<'_>, at: f64) -> Result<(), String> {
         let stream = {
             let guard = self.held();
             let session = guard.as_ref().ok_or("no recording is running")?;
             session.open.get(id).ok_or("no such open stream")?.clone()
         };
-        let mut stream = held(&stream);
-        let done = stream.write(at, read.written, read.meta.as_ref());
-        if done.is_ok() && missed > 0 {
-            stream.dropped += missed;
-            stream.dropped_at = Some(at);
-        }
+        let done = held(&stream).write(at, read.written, read.meta.as_ref());
         done
     }
 

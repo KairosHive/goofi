@@ -1,6 +1,5 @@
 <script module lang="ts">
 	import type { NodeInstanceInfo } from '$lib/api/control';
-	import type { ParamDescriptor } from '$lib/api/types';
 	import type { StatusTone } from '$lib/ui';
 	import type { BadgeTone } from '$lib/ui/Badge.svelte';
 
@@ -14,9 +13,9 @@
 	/** The param count a node needs before it is worth offering a filter. */
 	export const SEARCH_FROM = 8;
 
-	/** …and before browsing is hopeless enough to want a touched-only filter as well. A hand-written
-	    node is read; a plugin's hundreds are hunted, and only the second wants the switch. */
-	export const TOUCHED_FROM = 40;
+	/** …and before browsing is hopeless enough to want the filter strip as well. A hand-written
+	    node is read; a plugin's hundreds are hunted, and only the second wants the switches. */
+	export const FILTER_FROM = 40;
 
 </script>
 
@@ -25,7 +24,7 @@
   `<ParamField>` per param in the active group.
 -->
 <script lang="ts">
-	import type { SourcePatch } from '$lib/api/types';
+	import type { ParamMode, SourcePatch } from '$lib/api/types';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
@@ -36,7 +35,16 @@
 	import ParamField from './ParamField.svelte';
 	import SubPatchInspector from '$lib/editor/SubPatchInspector.svelte';
 	import { matchParams, type ParamHit } from './paramSearch';
-	import { anyFilter, counts, filteredRows, onlyAdmitted, type Filters } from './paramTouched';
+	import {
+		filteredRows,
+		narrowing,
+		onlyAdmitted,
+		settleNonDefault,
+		SHOW_ALL,
+		toggleSource,
+		type Filters,
+		type NonDefault
+	} from './paramFilters';
 	import {
 		Bar,
 		Tabs,
@@ -48,7 +56,7 @@
 		Icon,
 		IconButton,
 		MODE_ATTRS,
-		Toggle
+		Segmented
 	} from '$lib/ui';
 
 	let {
@@ -80,13 +88,17 @@
 		if (!node) return;
 		void g.pulse(node.uid, group, name).catch((e) => console.warn('pulse failed', e));
 	}
-	function clearTouched(): void {
+	function clearNonDefault(): void {
 		if (!node) return;
-		void g.clearTouched(node.uid).catch((e) => console.warn('clear touched failed', e));
+		void g.clearNonDefault(node.uid).catch((e) => console.warn('clear non-default failed', e));
 	}
 	function setSource(group: string, name: string, source: SourcePatch): void {
 		if (!node) return;
 		void g.setSource(node.uid, group, name, source).catch((e) => console.warn('set source failed', e));
+	}
+	function showEditor(): void {
+		if (!node) return;
+		void g.showNodeEditor(node.uid).catch((e) => console.warn('editor failed', e));
 	}
 
 	// Keyed by uid, so switching nodes closes the editor while a live state update (which re-creates the
@@ -164,6 +176,11 @@
 	const groupNames = $derived(node ? Object.keys(node.params) : []);
 	const health = $derived(nodeHealth(node));
 
+	// A docstring leads with its one-line summary, so that line IS the row and the caret opens what
+	// follows it. A node whose whole doc is that line has nothing to open, and gets no caret.
+	const docHead = $derived((node?.doc ?? '').split('\n')[0].trim());
+	const docRest = $derived((node?.doc ?? '').split('\n').slice(1).join('\n').trim());
+
 	const tabItems = $derived(groupNames.map((name) => ({ id: name, label: name })));
 
 	// DERIVED, so the right tab is in the first paint and there is no `.ui-tab` background transition to
@@ -187,48 +204,49 @@
 		Object.values(node?.params ?? {}).reduce((n, named) => n + Object.keys(named ?? {}).length, 0)
 	);
 	const searchable = $derived(paramCount > SEARCH_FROM);
-	const filterable = $derived(paramCount > TOUCHED_FROM);
+	const filterable = $derived(paramCount > FILTER_FROM);
 
-	// A plugin declares every param it has, so browsing one is a scroll; touched-only is the way
-	// through. It starts OFF and returns there whenever the selection moves: the control only shows
-	// on a node with params enough to need it, so a filter carried onto a small node would hide its
+	// A plugin declares every param it has, so browsing one is a scroll; the filters are the way
+	// through, and they narrow the GROUP the reader is in rather than dissolving the tabs. They open
+	// showing everything and return there whenever the selection moves: the strip only shows on a
+	// node with params enough to need it, so a filter carried onto a small node would hide its
 	// params behind a switch that is not on screen to turn off.
-	// Three of them, OR'd: "what did I change" and "what is driven" are two questions, and a reader
-	// chasing a mapping wants it whether or not it has moved since the zero point.
-	let filters = $state<Filters>({ touched: false, expression: false, reference: false });
+	let filters = $state<Filters>(SHOW_ALL);
 	let filtered = $state<string | null>(null);
+	// STICKY, and taken from SETTLED state: params join as they leave their zero points, and the
+	// clear that moves those points is what empties it. `settleNonDefault` answers the list it was
+	// given when nothing moved, so this writes no state on the value ticks a reference-driven param
+	// sends by the frame.
+	let nonDefault = $state<NonDefault>(new Map());
 	$effect(() => {
 		const uid = node?.uid ?? null;
 		if (uid !== filtered) {
 			filtered = uid;
-			filters = { touched: false, expression: false, reference: false };
+			filters = SHOW_ALL;
+			nonDefault = new Map();
 		}
+	});
+	$effect(() => {
+		nonDefault = settleNonDefault(nonDefault, node?.params, baseline);
 	});
 	/** The node's cleared zero points, keyed `group/name`; absent until Clear is pressed. */
 	const baseline = $derived(node?.baseline);
-	const tally = $derived(counts(node?.params, baseline));
-	const filtering = $derived(anyFilter(filters));
+	const changed = $derived(nonDefault.size);
+	const narrowed = $derived(narrowing(filters));
 
 	/** True while the list spans every group rather than the fronted tab. */
-	const across = $derived(searching || filtering);
+	const across = $derived(searching);
 
-	// All three modes reduce to the same row list, so a field is rendered from one place whichever
-	// is on. Touched-only spans EVERY group: a knob was turned in the plugin's own window, and
-	// which tab goofi filed it under is the one thing the reader does not know.
+	// Both paths reduce to the same row list, so a field is rendered from one place whichever is on.
+	// A SEARCH is what spans the groups: which tab a plugin filed a knob under is the one thing the
+	// reader does not know, and that is a question the tabs cannot answer.
 	const rows = $derived.by<ParamHit[]>(() => {
 		const n = node;
 		if (!n) return [];
-		// A search inside the filter searches what the filter admits: the toggle is the standing
-		// question, and a query narrows that rather than reopening everything behind it.
-		if (searching) {
-			const hits = matchParams(n.params, query);
-			return filtering ? onlyAdmitted(hits, filters, baseline) : hits;
-		}
-		const named = (g: string) => (n.params[g] ?? {}) as Record<string, ParamDescriptor>;
-		const of = (g: string) =>
-			Object.entries(named(g)).map(([name, descriptor]) => ({ group: g, name, descriptor }));
-		if (filtering) return filteredRows(n.params, filters, baseline, groupNames);
-		return activeGroup ? of(activeGroup) : [];
+		// A search inside the filters searches what they admit: the strip is the standing question,
+		// and a query narrows that rather than reopening everything behind it.
+		if (searching) return onlyAdmitted(matchParams(n.params, query), filters, nonDefault);
+		return activeGroup ? filteredRows(n.params, filters, nonDefault, [activeGroup]) : [];
 	});
 </script>
 
@@ -285,6 +303,16 @@
 							onclick={() => void saveToLibrary(node.type, false)}><Icon name="save" /></IconButton
 						>
 					{/if}
+					{#if node.editor}
+						<IconButton
+							variant="ghost"
+							density="chrome"
+							label="Open plugin editor"
+							title="Open this plugin's own editor, in a window on the machine goofi runs on"
+							data-testid="inspector-editor"
+							onclick={showEditor}><Icon name="app-window" /></IconButton
+						>
+					{/if}
 					<Badge
 						tone={BADGE_TONE[health.tone]}
 						class="pf-state"
@@ -309,70 +337,100 @@
 				{/snippet}
 			</Bar>
 
-			{#if node.doc}
-				<Disclosure>
+			{#if docRest}
+				<Disclosure class="pf-docs">
 					{#snippet summary()}
-						<span data-testid="docs-toggle">docs</span>
+						<span data-testid="docs-toggle">{docHead}</span>
 					{/snippet}
 					{#snippet children()}
-						<p class="pf-docstring" data-testid="docstring">{node.doc}</p>
+						<p class="pf-docstring" data-testid="docstring">{docRest}</p>
 					{/snippet}
 				</Disclosure>
+			{:else if docHead}
+				<p class="pf-doc-line" data-testid="docstring">{docHead}</p>
 			{/if}
 		{/if}
 
 		{#if node.subpatch}
 			<SubPatchInspector {node} />
 		{:else}
-			{#if searchable || searching}
-				<!-- Native, not `TextInput`: this filters per keystroke and owns Escape. -->
-				<input
-					class="pf-search"
-					{...MODE_ATTRS.search}
-					bind:value={query}
-					onkeydown={(e) => {
-						if (e.key === 'Escape') query = '';
-					}}
-					placeholder={filtering ? 'Search filtered…' : 'Search parameters…'}
-					autocomplete="off"
-					aria-label="Search parameters"
-					data-testid="param-search"
-				/>
-			{/if}
+			{#if searchable || searching || filterable}
+				<div class="pf-tools" data-testid="param-filters">
+					{#if searchable || searching}
+						<!-- Native, not `TextInput`: this filters per keystroke and owns Escape. -->
+						<input
+							class="pf-search"
+							{...MODE_ATTRS.search}
+							bind:value={query}
+							onkeydown={(e) => {
+								if (e.key === 'Escape') query = '';
+							}}
+							placeholder={narrowed ? 'Search filtered…' : 'Search parameters…'}
+							autocomplete="off"
+							aria-label="Search parameters"
+							data-testid="param-search"
+						/>
+					{/if}
 
-			{#if filterable}
-				<div class="pf-filters" data-testid="param-filters">
-					<label class="pf-touched" data-testid="param-touched-only">
-						<Toggle value={filters.touched} onChange={(v) => (filters = { ...filters, touched: v })} />
-						<span>Touched only</span>
-						<span class="pf-touched-count">{tally.touched}</span>
-					</label>
-					<label class="pf-touched" data-testid="param-expression-only">
-						<Toggle
-							value={filters.expression}
-							onChange={(v) => (filters = { ...filters, expression: v })}
+					{#if filterable}
+						<div class="pf-nondefault">
+							<Segmented
+								value={filters.nonDefault ? 'non-default' : null}
+								segments={[
+									{
+										id: 'non-default',
+										label: '',
+										icon: 'hand',
+										count: changed,
+										name: 'Non-default only',
+										title:
+											'Non-default only — the params on this node that no longer hold their default',
+										testid: 'param-non-default-only'
+									}
+								]}
+								onChange={() => (filters = { ...filters, nonDefault: !filters.nonDefault })}
+							/>
+							<!-- Clearing moves the default this counts from; it edits no param, so an expression
+							     or a reference keeps driving and keeps answering the source strip. -->
+							<IconButton
+								variant="ghost"
+								density="chrome"
+								class="pf-clear"
+								label="Clear non-default"
+								title="Take every param's default from what this node holds now. Mappings keep working."
+								data-testid="param-non-default-clear"
+								disabled={changed === 0}
+								onclick={() => clearNonDefault()}><Icon name="eraser" /></IconButton
+							>
+						</div>
+						<Segmented
+							value={filters.sources}
+							segments={[
+								{
+									id: 'constant',
+									label: 'C',
+									name: 'Constant',
+									title: 'Constant — the params holding a value set by hand',
+									testid: 'param-constant-only'
+								},
+								{
+									id: 'expression',
+									label: 'E',
+									name: 'Expression',
+									title: 'Expression — the params Python drives',
+									testid: 'param-expression-only'
+								},
+								{
+									id: 'reference',
+									label: 'R',
+									name: 'Reference',
+									title: "Reference — the params following a node's output slot",
+									testid: 'param-reference-only'
+								}
+							]}
+							onChange={(id) => (filters = toggleSource(filters, id as ParamMode))}
 						/>
-						<span>Expression</span>
-						<span class="pf-touched-count">{tally.expression}</span>
-					</label>
-					<label class="pf-touched" data-testid="param-reference-only">
-						<Toggle
-							value={filters.reference}
-							onChange={(v) => (filters = { ...filters, reference: v })}
-						/>
-						<span>Reference</span>
-						<span class="pf-touched-count">{tally.reference}</span>
-					</label>
-					<!-- Clearing moves the zero point the touched filter counts from; it edits no param,
-					     so an expression or a reference keeps driving and keeps its own filter. -->
-					<button
-						type="button"
-						class="pf-clear"
-						data-testid="param-touched-clear"
-						disabled={tally.touched === 0}
-						title="Count touched from what this node holds now. Mappings keep working."
-						onclick={() => clearTouched()}>Clear</button
-					>
+					{/if}
 				</div>
 			{/if}
 
@@ -394,7 +452,7 @@
 			>
 				{#if rows.length === 0}
 					<div class="pf-empty-group" data-testid={searching ? 'param-no-matches' : 'param-empty-group'}>
-						{#if searching}{filtering ? 'No filtered parameters match.' : 'No parameters match.'}{:else if filtering}Nothing matches these filters — move a control here or in the plugin's own window, or bind one.{:else}No parameters in this group.{/if}
+						{#if searching}{narrowed ? 'No filtered parameters match.' : 'No parameters match.'}{:else if narrowed}Nothing in this group matches these filters — another group may still hold one.{:else}No parameters in this group.{/if}
 					</div>
 				{:else}
 					{#each rows as { group, name: paramName, descriptor } (node.uid + '/' + group + '/' + paramName)}
@@ -504,6 +562,24 @@
 		color: var(--text-dim);
 		white-space: pre-wrap;
 	}
+	/* The docs row is chrome too, so it wears the header block's ground; what it opens keeps the
+	   body's dark behind it. */
+	.param-form :global(.pf-docs) {
+		--disclosure-surface: var(--surface-2);
+		--disclosure-hover: var(--surface-3);
+	}
+	/* A whole docstring that IS its summary line: the same row, with nothing to open. */
+	.pf-doc-line {
+		margin: 0;
+		padding: var(--space-2) var(--space-3);
+		background: var(--surface-2);
+		color: var(--text);
+		font-size: var(--fs-small);
+		font-weight: 600;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
 	/* Anchored on `.param-form`, a real element of THIS template: `pf-identity-bar` is a class passed to
 	   another component, and Svelte's scoping hash never reaches its markup. */
 	.param-form :global(.pf-identity-bar) {
@@ -548,55 +624,36 @@
 		text-align: center;
 		padding: var(--space-6) 0;
 	}
-	.pf-filters {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: var(--space-3);
-	}
-
-	.pf-clear {
-		font: inherit;
-		cursor: pointer;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: transparent;
-		color: inherit;
-		font-size: var(--fs-small);
-		padding: var(--space-1) var(--space-3);
-	}
-
-	.pf-clear:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-
-	.pf-touched {
+	/* Chrome, not body: it wears the tab strip's own surface and horizontal padding, so the search,
+	   the filters and the group tabs beneath them read as one header block. */
+	.pf-tools {
 		display: flex;
 		align-items: center;
-		gap: var(--space-2);
-		margin: var(--space-3) var(--space-6) 0;
-		color: var(--text-2);
-		cursor: pointer;
-	}
-	.pf-touched-count {
-		margin-left: auto;
-		color: var(--text-muted);
-		font-variant-numeric: tabular-nums;
-	}
-
-	.pf-search {
-		font: inherit;
-		color: var(--text-1);
+		gap: var(--space-4);
+		padding: var(--space-2);
 		background: var(--surface-2);
-		border: 1px solid var(--border-1);
-		border-radius: var(--radius-2);
-		padding: var(--space-2) var(--space-3);
-		margin: var(--space-3) var(--space-6) 0;
+	}
+	.pf-search {
+		flex: 1 1 auto;
 		min-width: 0;
+		height: var(--chrome-control-h);
+		padding: 0 var(--space-3);
+		font-size: var(--fs-small);
 	}
 	.pf-search::placeholder {
 		color: var(--text-muted);
+	}
+	/* The clear moves the default this one filter reads, so it rides against that toggle. */
+	.pf-nondefault {
+		display: flex;
+		align-items: center;
+	}
+	.param-form :global(.pf-clear) {
+		--panelty-icon-btn-size: var(--chrome-control-h);
+		color: var(--text-muted);
+	}
+	.param-form :global(.pf-clear:hover:not(:disabled)) {
+		color: var(--text);
 	}
 	.pf-row {
 		display: flex;
@@ -616,9 +673,11 @@
 			text-underline-offset: 2px;
 		}
 	}
-	/* 16px so focusing it does not force-zoom iOS; mirrors app.css's coarse input floor. */
+	/* 16px so focusing one does not force-zoom iOS; mirrors app.css's coarse input floor, which a
+	   field naming its own size would otherwise outrank. */
 	@media (hover: none) and (pointer: coarse) {
-		.pf-rename {
+		.pf-rename,
+		.pf-search {
 			font-size: 16px;
 		}
 	}
