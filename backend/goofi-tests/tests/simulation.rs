@@ -307,12 +307,6 @@ fn the_automata_keep_a_grid_of_their_own_and_it_goes_somewhere() {
         g.set_param(node, "common", "width", 64);
         g.set_param(node, "common", "height", 64);
         g.ready(node);
-        // Lenia's kernel is hundreds of samples wide, so it is given room to grow rather than the
-        // radius a 64-pixel grid would swallow.
-        if ty == "Lenia" {
-            g.set_param(node, "lenia", "radius", 6);
-            g.set_param(node, "lenia", "scale", 4.0);
-        }
         let seeded = drawn(&g, node, &format!("{ty} to seed its grid"), |d| {
             let v = f32s(d);
             v.iter().any(|x| x.abs() > 0.01) && v.iter().any(|x| (x - v[0]).abs() > 0.01)
