@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use goofi_tests::{f32s, install, install_all, labels, require_python, shape, Goofi};
+use goofi_tests::{f32s, hex, install, install_all, j, labels, require_python, shape, Goofi};
 
 /// The `.py` files a bundle ships, read as they are checked in.
 fn bundled(bundle: &str, files: &[&str]) -> Vec<(String, String)> {
@@ -472,4 +472,80 @@ fn a_scale_is_also_a_palette_and_a_rhythm_a_synth_can_play() {
     ] {
         assert!(g.error(node).is_none(), "{ty} carries no error: {:?}", g.error(node));
     }
+}
+
+#[test]
+fn the_ml_agent_acts_before_a_reward_is_wired_and_keeps_its_shape_as_it_is_retuned() {
+    // An agent is USED as a session that outlives its own settings: it starts with nothing on its
+    // reward slot, is given one, is rescaled, is widened, and is reset — and every one of those has
+    // to leave a running loop still producing rather than a node that faulted or wedged.
+    let _py = require_python();
+    let g = Goofi::new();
+
+    let ty = install_bundled(&g, "ml", "reinforcement_learning.py");
+    let agent = g.add(&ty);
+    g.set_param(agent, "agent", "width", 16);
+
+    let osc = g.add("LFO");
+    g.set_param(osc, "lfo", "frequency", 0.7);
+    let buf = g.add("Buffer");
+    g.set_param(buf, "buffer", "size", 8);
+    g.link(osc, "out", buf, "input");
+    g.link(buf, "out", agent, "observations");
+
+    let actions = g.probe(agent, "actions");
+    let readings = g.probe(agent, "diagnostics");
+
+    // An unwired reward is a reward of zero, never a fault: the loop is built one end at a time.
+    let d = first_frame(&g, &ty, agent, &actions, |d| shape(d) == vec![2]);
+    let v = f32s(&d);
+    assert!(v.iter().all(|x| x.is_finite() && (-1.0..=1.0).contains(x)), "acted within its range: {v:?}");
+    assert_eq!(labels(&d, "dim0"), ["action0", "action1"], "each action is named");
+
+    // Every reading is named, because stagnation is meant to be READ rather than guessed at.
+    let d = first_frame(&g, &ty, agent, &readings, |d| shape(d) == vec![7]);
+    assert_eq!(
+        labels(&d, "dim0"),
+        ["avg_reward", "td_error", "entropy", "effective_rank", "dormant", "weight_norm", "step_size"],
+    );
+
+    // A reward lands, and the agent takes it up rather than ignoring the slot it was given late.
+    let reward = g.add("LFO");
+    g.set_param(reward, "lfo", "frequency", 0.31);
+    g.set_param(reward, "lfo", "offset", 2.0);
+    g.link(reward, "out", agent, "reward");
+    g.until("the reward to reach the agent", |_| readings.latest().filter(|d| f32s(d)[0] > 0.5));
+    // The rank is measured over a window and is honestly 0 until one has gone by, so it is WAITED
+    // for rather than read on arrival: a first observation normalises to zero and spans nothing.
+    let d = g.until("the representation to span more than one direction", |_| {
+        readings.latest().filter(|d| f32s(d)[3] > 1.0)
+    });
+    let seen = f32s(&d);
+    assert!(seen[2].is_finite(), "entropy stays a number: {}", seen[2]);
+    assert!(seen[5] > 0.0, "the weights have a size: {}", seen[5]);
+
+    // Rescaling moves where the action comes out, and nothing about it has to be relearned.
+    g.set_param(agent, "action", "low", 10.0);
+    g.set_param(agent, "action", "high", 20.0);
+    let d = g.until("actions in the new range", |_| {
+        actions.latest().filter(|d| f32s(d).iter().all(|x| (10.0..=20.0).contains(x)))
+    });
+    assert_eq!(shape(&d), vec![2], "rescaling is not a rebuild");
+
+    // Widening the action space IS a rebuild, and the running loop survives it.
+    g.set_param(agent, "agent", "actions", 5);
+    let d = g.until("five actions", |_| actions.latest().filter(|d| shape(d) == vec![5]));
+    assert_eq!(labels(&d, "dim0").len(), 5, "and every one of them is named");
+    assert!(f32s(&d).iter().all(|x| x.is_finite()), "{:?}", f32s(&d));
+
+    // So is growing the networks under it.
+    g.set_param(agent, "agent", "width", 32);
+    g.until("frames after the networks grow", |_| {
+        readings.latest().filter(|d| f32s(d)[5] > 0.0)
+    });
+
+    // And a reset leaves a loop that still runs, which is the only thing a reset must not break.
+    g.call("node param pulse", j!({ "node": hex(agent), "param": "agent/reset" }));
+    g.until("frames after the reset", |_| actions.latest().filter(|d| shape(d) == vec![5]));
+    assert!(g.error(agent).is_none(), "no standing error: {:?}", g.error(agent));
 }

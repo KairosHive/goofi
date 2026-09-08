@@ -1,0 +1,2 @@
+# Stream AC is written against numpy alone, which the goofi wheel already brings. The node needs
+# no torch: one sample, no batch, and two small MLPs whose gradients are written out by hand.
