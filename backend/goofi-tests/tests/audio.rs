@@ -125,10 +125,11 @@ fn a_patch_sounds_under_the_external_clock() {
     let mut audio: Vec<&str> = types["types"].as_array().unwrap().iter()
         .filter_map(|r| r["type"].as_str()).filter(|t| t.starts_with("audio:")).collect();
     audio.sort_unstable();
-    // The shipped set, whole: four built in because their control halves own OS handles, and
-    // sixteen files built by the same pipeline an authored node takes.
+    // The shipped set, whole: four built in because their control halves own OS handles, and the
+    // files built by the same pipeline an authored node takes — from every bundle, not the audio
+    // one alone, which is why `BioFilter` is here and lives under `biotuner`.
     assert_eq!(audio, ["audio:AudioIn", "audio:AudioOut", "audio:AudioPlayback", "audio:BandFilter", "audio:BandFollow",
-                       "audio:Delay", "audio:Env", "audio:Feedback",
+                       "audio:BioFilter", "audio:Delay", "audio:Env", "audio:Feedback",
                        "audio:Filter", "audio:FreqShift", "audio:Gain", "audio:Limiter", "audio:MidiIn",
                        "audio:Mixdown", "audio:Noise", "audio:Osc", "audio:Quantize", "audio:Reverb",
                        "audio:SignalIn", "audio:Slew"]);

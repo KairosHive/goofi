@@ -24,7 +24,7 @@ static OUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Audio }
 
 pub static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Input],
-    doc: "The device's input: the channels `channels` names, in that order, or every channel it has.",
+    doc: "The device's input: the channels `channels` names, in order, or all of them.",
     inputs: &[],
     outputs: OUTS,
     params: PARAMS,

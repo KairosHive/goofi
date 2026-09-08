@@ -893,7 +893,7 @@ impl serde::Serialize for MetaValueJson<'_> {
                 map.end()
             }
             MetaValue::Axes(a) => {
-                let dims: Vec<(String, &[Coord])> = a.dims().map(|(d, c)| (d, c)).collect();
+                let dims: Vec<(String, &[Coord])> = a.dims().collect();
                 let mut map = s.serialize_map(Some(dims.len()))?;
                 for (dim, coords) in dims {
                     map.serialize_entry(&dim, &CoordsJson(coords))?;
