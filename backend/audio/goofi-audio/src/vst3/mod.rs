@@ -11,7 +11,7 @@ mod node;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use goofi_audio_sdk::{AudioNode, MAX_PORTS};
@@ -37,6 +37,17 @@ const MAX_PARAMS: usize = 4096;
 /// A CEILING on the child, as `OPEN_WAIT` is on a device: the scan runs under the graph lock, and
 /// a plugin that blocks at load must not wedge every op.
 const SCAN_WAIT: Duration = Duration::from_secs(20);
+
+/// The host's half of a cache key: the sources that decide what goofi reads out of a plugin, as
+/// `goofi-build`'s `SDK_HASH` is the sources an authored node compiles against. The BINARY's mtime
+/// was the first spelling, and it changes on every relink of the same code, so a `cargo build`
+/// rescanned every plugin on the machine.
+static SCANNER: LazyLock<String> = LazyLock::new(|| {
+    goofi_build::digest(
+        [include_str!("mod.rs"), include_str!("host.rs"), include_str!("module.rs"), include_str!("node.rs")]
+            .map(str::as_bytes),
+    )
+});
 
 /// What the scanner writes: the factory's vendor and every "Audio Module Class".
 #[derive(Serialize, Deserialize)]
@@ -314,7 +325,7 @@ fn scan_bundle(engine: &mut AudioEngine, bundle: &Path) -> Vec<ScannedType> {
 /// A bundle carried inside a patch lands on a fresh path every load, so it is scanned once again.
 fn described(scanner: &Path, bundle: &Path, binary: &Path, stamp: Stamp) -> Result<Bundle, String> {
     let dir = goofi_build::base_dir(&goofi_core::home::dir()).join("vst3");
-    let key = key_of(scanner, binary, stamp);
+    let key = key_of(binary, stamp);
     let file = dir.join(format!("{key}.json"));
     let read = std::fs::read(&file).ok();
     if let Some(verdict) = read.and_then(|b| serde_json::from_slice::<Result<Bundle, String>>(&b).ok()) {
@@ -335,22 +346,11 @@ fn described(scanner: &Path, bundle: &Path, binary: &Path, stamp: Stamp) -> Resu
     verdict
 }
 
-/// What decides the verdict: the binary's own path and stamp, and the scanner's.
-fn key_of(scanner: &Path, binary: &Path, (len, modified): Stamp) -> String {
+/// What decides the verdict: the binary's own path and stamp, and the scanner's sources.
+fn key_of(binary: &Path, (len, modified): Stamp) -> String {
     let nanos = modified.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-    let (len, nanos, scanner) = (len.to_le_bytes(), nanos.to_le_bytes(), stamp_bytes(scanner));
-    goofi_build::digest([binary.as_os_str().as_encoded_bytes(), &len[..], &nanos[..], &scanner[..]])
-}
-
-/// The scanner's length and mtime, little-endian — the identity that changes when goofi does.
-fn stamp_bytes(scanner: &Path) -> Vec<u8> {
-    let meta = std::fs::metadata(scanner).ok();
-    let len = meta.as_ref().map_or(0, |m| m.len());
-    let modified = meta
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_nanos());
-    [len.to_le_bytes().as_slice(), modified.to_le_bytes().as_slice()].concat()
+    let (len, nanos) = (len.to_le_bytes(), nanos.to_le_bytes());
+    goofi_build::digest([binary.as_os_str().as_encoded_bytes(), &len[..], &nanos[..], SCANNER.as_bytes()])
 }
 
 /// One child, its output going to a FILE — never a pipe, which a plugin's chatter could fill while

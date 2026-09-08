@@ -26,20 +26,24 @@ the one refusal that is not remembered: it is goofi's doing rather than the plug
 
 Not open: the 20 s ceiling stays. A plugin that hangs must not hang the boot.
 
-## Open: the scanner's identity in the key
+## Settled 2026-09-07: the scanner's identity is its SOURCES
 
-The key still carries `stamp_bytes(scanner)` — goofi's own binary's length and mtime. The rationale
-is sound and is not what is wrong: *what a host reads out of a plugin is the host's answer as much as
-the plugin's*, so the host has to be in the key. mtime is the wrong spelling of "the host", because it
-changes on every relink of the same code, and the next boot then rescans all ~150 plugins. Measured
-consequence: `$GOOFI_HOME/.goofi/build/vst3` held **5,099 entries, 180 MB** — about thirty-four
-generations of the same hundred and fifty plugins, one per rebuild, and nothing ever collects them.
+The key carried `stamp_bytes(scanner)` — goofi's own binary's length and mtime. The rationale was
+sound and was never what was wrong: *what a host reads out of a plugin is the host's answer as much
+as the plugin's*, so the host belongs in the key. mtime is the wrong spelling of "the host", because
+it changes on every relink of the same code, and the next boot then rescanned every plugin on the
+machine. Measured consequence: `$GOOFI_HOME/.goofi/build/vst3` held **7,167 entries, 255 MB** across
+four days — about fifty-seven generations of the same 125 plugins, one per rebuild.
 
-The two candidates the first pass named: `CARGO_PKG_VERSION` is stable across rebuilds and moves when
-a release does, which is right for a user and wrong for whoever is editing the scanner that week; a
-content hash of the scanner binary is exact and is NOT stable on Windows, where a fresh `.pdb`
-timestamp lands in the image, so it buys nothing over mtime. A third is open: a build-time hash of the
-scanner's OWN sources, which is what `goofi-build`'s `SDK_HASH` already does for the node SDKs.
+It is the third candidate the pass before named: a hash of the scanner's OWN sources, which is what
+`goofi-build`'s `SDK_HASH` already does for the node SDKs. `CARGO_PKG_VERSION` was rejected for
+moving only on a release, and a content hash of the scanner binary for not being stable on Windows,
+where a fresh `.pdb` timestamp lands in the image. The sources are stable across a relink of the
+same code AND change when the scanning code does, which is the property both of those miss.
+
+Measured 2026-09-07, 125 bundles, `cargo run` (debug), to a live headless session: a cold scan is
+187.9 s and a warm boot 3.6 s, and the boot after a relink was paying the cold number every time.
+It is 3.4 s now.
 
 ## Open: the door that retries a refusal
 
