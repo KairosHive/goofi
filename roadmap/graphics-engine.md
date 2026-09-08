@@ -46,7 +46,7 @@ before they arrive.
   projected as `DEFAULT_KIND`): a texture draws as an image, an array and audio as a line. The
   suite's graphics-shaped skeleton was renamed `skelgfx`, because `graphics` is the real engine's.
 - **A plot of an ARRAY input is drawn in the SHADER, and the engine's whole part in it is the
-  frame's RANGE** — BUILT 2026-09-07, and the first build of it was wrong. `ArrayIn` carries a
+  frame's RANGE** — BUILT 2026-09-07, and the first build of it was wrong. `SignalIn` carries a
   `plot` group of its own — `mode` (`texture`, `line`, `trajectory`), `autoscale`, `min`, `max`,
   `log_x`, `log_y`, `points`, `thickness` — and its body draws them: a line is the band this column
   of texels spans, which is its two edges and every sample between them, so the min/max fold a
@@ -134,7 +134,7 @@ before they arrive.
   that was there read the newly added fourth tier as the third, and said nothing.
 - **The node set was agreed with the owner** (2026-09-06): `Constant`, `Ramp`, `Noise`, `Shape`,
   `Level`, `Transform`, `Blur`, `Composite`, `Displace`, `Lookup`, `Threshold`, `Feedback`,
-  `ArrayIn`. `Shader` is out for now. A camera is a Python signal node feeding `ArrayIn`, later.
+  `SignalIn`. `Shader` is out for now. A camera is a Python signal node feeding `SignalIn`, later.
   `Window` (2026-09-06) and `Life` (2026-09-07) joined it, each arriving with the engine mechanism
   it needed rather than on its own.
 
@@ -177,7 +177,7 @@ rest standing.
 
 ### What the node set and the audit landed (2026-09-06)
 
-All thirteen ship. `ArrayIn` is the door in from the rest of the patch, `Feedback` the one node a
+All thirteen ship. `SignalIn` is the door in from the signal plane, `Feedback` the one node a
 loop closes through, and the other eleven are sources and filters. The scenario draws a frame from
 EVERY shipped type and checks the node stands with no error: a palette row says naga read the
 file, and only a frame says this device built the pipeline behind it.
@@ -274,7 +274,7 @@ for, sized, fed, counted in `session status`, and closed with its node.
   into one kernel stays possible without touching a node file. Fusion is not built and not
   scheduled; it is the answer if a measurement ever shows the per-node dispatch cost matters.
 - **Cross-engine data follows the seam**: latest-wins by decree over the derived names; the tap is
-  the crossing out, an ARRAY input the crossing in. No bridge node is needed beyond `ArrayIn`.
+  the crossing out, an ARRAY input the crossing in. No bridge node is needed beyond `SignalIn`.
 - **No Python tier, no second UI stack.**
 - **Shadertoy compatibility is not a constraint.** naga's GLSL frontend was measured mis-hoisting
   loads out of `&&` guards; WGSL is the language.
@@ -438,7 +438,7 @@ the tint — reads those five and never the geometry, so a fifth geometry touche
   1x1 buffer needs a pass of its own, since one pass's targets share one size.
 - A vector-typed param (a colour as one `vec4f`) needs a layouter and a `Param` kind that does
   not exist.
-- `ArrayIn` plots the line and the trajectory; the IMAGE viewer's colormap and the topomap are not
+- `SignalIn` plots the line and the trajectory; the IMAGE viewer's colormap and the topomap are not
   modes. A colormap is `Lookup` with a palette behind it, and the palette a viewer offers —
   viridis, coolwarm — is a table no node makes, so either a `Colormap` generator or a mode has to
   carry it. A topomap needs the electrode positions the frame's own METADATA carries, and nothing

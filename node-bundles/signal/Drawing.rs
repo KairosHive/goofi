@@ -1,6 +1,6 @@
 //! Drawing — a drawing widget's picture, as a frame. Point `image` at the pad the way a knob's
 //! value is pointed at a global — an expression of `globals.<panel>.<pad>` — and every stroke it
-//! holds arrives here as RGBA. `graphics:ArrayIn` is what puts it on the GPU.
+//! holds arrives here as RGBA. `graphics:SignalIn` is what puts it on the GPU.
 
 use goofi_core::{png, Data, Meta, SlotType};
 use goofi_signal_sdk::{
@@ -61,7 +61,7 @@ static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Image, Tag::Input],
     doc: "A drawing widget's picture, as a frame.\n\
           Every stroke a `draw` widget holds — a hand's or `control draw`'s — as an [H, W, 4] \
-          RGBA frame spanning 0..1. Feed `graphics:ArrayIn` with it to put the drawing on the GPU.",
+          RGBA frame spanning 0..1. Feed `graphics:SignalIn` with it to put the drawing on the GPU.",
     inputs: &[],
     outputs: OUTPUTS,
     params: PARAMS,
