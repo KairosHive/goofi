@@ -305,11 +305,16 @@ FRAMES — the wire format itself — so nothing is re-encoded, the metadata rid
 in the frame's own `Meta`, and a truncated file decodes to its last whole frame. WAV, CSV and MP4
 are each lossy against a `Data` frame, so they are a LATER tool over a finished recording and never
 a format the recorder writes. Graphics is the one exception, because a texture is `Rgba16Float` and
-no codec takes float: an ffmpeg child writes FFV1 in Matroska, which the manifest states in words
-is lossless WITHIN [0,1] and clips outside it, and no stream ever claims plain "lossless". The
-in-process pure-Rust alternatives were offered with measurements — `lz4_flex` 735 MB/s at 2.0x,
-`zstd -1` 451 MB/s at 7.9x, single-core on a gradient frame, both beating FFV1 — and ffmpeg was
-kept; the dependency is bounded, so a missing ffmpeg costs THAT STREAM alone. Arming is
+no integer format holds one: an ffmpeg child writes FFV1 in Matroska, and what it writes is what a
+viewer WATCHES rather than what an analyst measures — ten-bit gbrp, the [0,1] window with the rest
+clipped, alpha dropped — which the manifest states in those words, and a video never claims
+"lossless" at all. The channel count is not taste: a 16-bit alpha plane is one a common player
+cannot allocate, and VLC kills the decoder and plays the file as nothing. The encoder must also
+hold the render clock, because a rawvideo pipe carries no timestamps, so the container is
+constant-rate and every dropped frame SHORTENS the recording instead of gapping it. The in-process
+pure-Rust alternatives were offered with measurements — `lz4_flex` 735 MB/s at 2.0x, `zstd -1` 451
+MB/s at 7.9x, single-core on a gradient frame, both beating FFV1 — and ffmpeg was kept; the
+dependency is bounded, so a missing ffmpeg costs THAT STREAM alone. Arming is
 `doc.nodes[<uid>].record`, so it is undoable, saved, copied with the node and delivered by `settle`
 alone — never a set kept beside the recorder, which claimed an arming that had in fact failed. The
 clock is the one timing authority and its UTC is anchored ONCE at the patch origin, so a frame

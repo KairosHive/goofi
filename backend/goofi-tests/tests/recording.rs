@@ -311,7 +311,7 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     assert_eq!(video["engine"], j!("graphics"), "{video}");
     assert_eq!(video["size"], j!([32, 16]), "{video}");
     let says = video["encoding"].as_str().expect("what the encoding cost, in words");
-    assert!(says.contains("lossless within [0,1]") && says.contains("clipped"), "{says}");
+    assert!(!says.contains("lossless") && says.contains("clipped"), "a video never claims it: {says}");
     let file = std::path::Path::new(&folder).join(video["file"].as_str().expect("a name"));
     assert_eq!(file.extension().and_then(|e| e.to_str()), Some("mkv"), "{file:?}");
     let written = std::fs::read(&file).expect("the video");
@@ -347,6 +347,19 @@ fn arming_survives_a_rewire_and_rides_the_document() {
             .output()
             .expect("ffmpeg reads back what it wrote");
         assert_eq!(read.stdout.len() as u64, held * texels, "every frame in the file is one frame: {entry}");
+        // …and what a PLAYER finds in it: three components at the rate the manifest states. A
+        // 16-bit alpha plane is one VLC cannot allocate, and it plays such a file as nothing.
+        let probed = std::process::Command::new("ffprobe")
+            .args(["-v", "error", "-select_streams", "v:0"])
+            .args(["-show_entries", "stream=pix_fmt,r_frame_rate", "-of", "csv=p=0"])
+            .arg(&made)
+            .output()
+            .expect("ffprobe reads what the encoder wrote");
+        let says = String::from_utf8_lossy(&probed.stdout).trim().to_string();
+        let (pix, rate) = says.split_once(',').expect("ffprobe names a pixel format and a rate");
+        assert_eq!(pix, "gbrp10le", "the recorded stream carries no alpha plane: {says}");
+        let fps = entry["fps"].as_f64().expect("the rate the manifest states");
+        assert_eq!(rate, format!("{fps}/1"), "the container is timed at the rate the manifest states");
     }
     let sizes: Vec<&serde_json::Value> = m["streams"]
         .as_array()
