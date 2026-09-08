@@ -255,7 +255,11 @@ fn spawn_reducer(
         let mut next_serve = std::time::Instant::now();
         // What the producer was last told its readers want. Pushed only on a CHANGE: it takes the
         // graph lock, and a viewer's box moves rarely — the frontend quantizes it to 32-px steps.
-        let mut demanded: Option<Option<(u32, u32)>> = None;
+        let mut demanded: Option<Option<goofi_view::ViewWant>> = None;
+        // The last frame's kind and shape, off its header — what the planner reads for a frame
+        // this loop never decoded. `made` is that frame itself, ready to forward as it stands.
+        let mut peeked: Option<Peek> = None;
+        let mut made: Option<Bytes> = None;
         // A snapshot needs ONE full-resolution frame, so the demand is held wide until one lands
         // rather than for the single sweep the ask was seen on — the producer needs a tick to answer.
         let mut full_res = false;
@@ -312,6 +316,16 @@ fn spawn_reducer(
             let mut fresh = false;
             if let Some(f) = &feed {
                 while let Ok(Some(sample)) = f.subscriber.receive() {
+                    peeked = Peek::of(sample.payload()).or(peeked.take());
+                    // A producer that answered the demand in the viewers' own width is FORWARDED:
+                    // decoding those texels to f32 only to quantize them back is the whole cost the
+                    // demand exists to remove, and there is nothing left here to reduce.
+                    if peeked.as_ref().is_some_and(|p| p.ready) {
+                        made = Some(Bytes::copy_from_slice(sample.payload()));
+                        fresh = true;
+                        continue;
+                    }
+                    made = None;
                     if let Ok(frame) = goofi_codec::decode(sample.payload()) {
                         if !is_reduced(&frame) {
                             *full.lock().unwrap() = Some(frame.clone());
@@ -345,12 +359,17 @@ fn spawn_reducer(
                 None
             } else {
                 let held = specs.lock().unwrap();
-                match latest.lock().unwrap().as_ref() {
-                    Some(d) if !held.values().all(|v| v.is_empty()) => {
-                        goofi_view::image_box(&union_specs(&held), d)
+                // Planned against the frame's HEADER, so a frame this loop forwarded without
+                // decoding still says what the viewers may ask of the one after it.
+                match peeked.as_ref() {
+                    Some(p) if !held.values().all(|v| v.is_empty()) => {
+                        goofi_view::image_box(&union_specs(&held), p)
                     }
                     // Nothing declared, or nothing produced yet to measure a declaration against.
-                    _ => Some(goofi_view::UNDECLARED_BOX),
+                    _ => Some(goofi_view::ViewWant {
+                        size: goofi_view::UNDECLARED_BOX,
+                        depth: goofi_view::Depth::F32,
+                    }),
                 }
             };
             // Only while subscribed — the producer this names is the one the feed is open on — and
@@ -363,7 +382,9 @@ fn spawn_reducer(
             if specs.lock().unwrap().is_empty() {
                 continue;
             }
-            let Some(d) = latest.lock().unwrap().clone() else { continue };
+            if made.is_none() && latest.lock().unwrap().is_none() {
+                continue;
+            }
             let g_now = gen.load(Ordering::Acquire);
             if !fresh && served == Some(g_now) {
                 continue; // nothing new to say — no emit, no joiner, no spec change
@@ -379,16 +400,24 @@ fn spawn_reducer(
             if next_serve < now {
                 next_serve = now + crate::vocab::VIEWER_INTERVAL;
             }
-            let plan = goofi_view::plan(&union_specs(&specs.lock().unwrap()), &d);
-            let out = goofi_core::reduce::reduce_for_view(&d, &plan);
-            reductions.fetch_add(1, Ordering::Relaxed);
-            // 8-bit only where every viewer of the slot draws it, and only for a frame that has
-            // texels; the reduction itself is f32 either way.
-            let quantized = (plan.depth == goofi_view::Depth::U8)
-                .then(|| goofi_core::reduce::quantize_u8(&out))
-                .flatten()
-                .map(|(shape, texels, meta)| goofi_codec::encode_u8(&shape, &texels, &meta));
-            let bytes = Bytes::from(quantized.unwrap_or_else(|| goofi_codec::encode(&out)));
+            let bytes = match &made {
+                // Already exactly what the viewers asked for: one buffer, shared by every
+                // subscriber, and no pass over a texel anywhere in this process.
+                Some(ready) => ready.clone(),
+                None => {
+                    let Some(d) = latest.lock().unwrap().clone() else { continue };
+                    let plan = goofi_view::plan(&union_specs(&specs.lock().unwrap()), &d);
+                    let out = goofi_core::reduce::reduce_for_view(&d, &plan);
+                    reductions.fetch_add(1, Ordering::Relaxed);
+                    // 8-bit only where every viewer of the slot draws it, and only for a frame that
+                    // has texels; the reduction itself is f32 either way.
+                    let quantized = (plan.depth == goofi_view::Depth::U8)
+                        .then(|| goofi_core::reduce::quantize_u8(&out))
+                        .flatten()
+                        .map(|(shape, texels, meta)| goofi_codec::encode_u8(&shape, &texels, &meta));
+                    Bytes::from(quantized.unwrap_or_else(|| goofi_codec::encode(&out)))
+                }
+            };
             let _ = tx.send(bytes); // Err only if all receivers are momentarily gone — harmless.
             served = Some(g_now);
         }
@@ -399,6 +428,38 @@ fn spawn_reducer(
 /// Whether a producer shrank this frame on the way out, as its own meta records.
 fn is_reduced(d: &goofi_core::Data) -> bool {
     !matches!(d.meta().reduced(), None | Some(goofi_core::MetaValue::Null))
+}
+
+/// A frame read off its HEADER alone — its kind, its shape, and whether its body is already the
+/// 8-bit texels an image viewer draws. What a producer made to the plan is forwarded rather than
+/// remade, so this is everything the loop knows about such a frame.
+struct Peek {
+    tag: u8,
+    shape: Vec<usize>,
+    ready: bool,
+}
+
+impl goofi_view::Reducible for Peek {
+    fn dtype_tag(&self) -> u8 {
+        self.tag
+    }
+    fn ndim(&self) -> usize {
+        self.shape.len()
+    }
+    fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+}
+
+impl Peek {
+    fn of(payload: &[u8]) -> Option<Peek> {
+        let (tag, _, body) = goofi_codec::split_frame(payload).ok()?;
+        let (dtype, shape) = match tag {
+            0 => goofi_codec::array_head(body).map(|(d, shape, _)| (d, shape))?,
+            _ => (&b""[..], Vec::new()),
+        };
+        Some(Peek { tag, shape, ready: dtype == b"|u1" })
+    }
 }
 
 /// The one number a tap reads out of a frame: the indexed element of an array, the only element

@@ -58,16 +58,23 @@ impl Upload {
     }
 }
 
-/// What the render thread and the control half hand each other: the frame one read back, and
-/// whether the other is ready for the next. The engine reads back for a viewer only when the
-/// viewer has FINISHED with the last frame, so an accessory can never pace the engine — and
-/// never has to be waited for either.
+/// One frame off the GPU, in the width its readers DRAW. The engine converts on the device, so
+/// neither arm costs the CPU a conversion — and the 8-bit arm never becomes a `Data`, because
+/// `Data` is f32 and expanding texels only to quantize them again downstream is the work this
+/// exists to remove.
+pub enum Tapped {
+    Full(Data),
+    Texels { shape: Vec<usize>, bytes: Vec<u8>, meta: goofi_core::Meta },
+}
+
+/// Where the render thread leaves the frame it read back, until the half takes it. Latest wins,
+/// as every crossing into a scheduled engine is: what paces the readback is the ring's ONE slot in
+/// flight, so an accessory can never pace the engine and never has to be waited for. A re-arm flag
+/// beside it was a second owner of that pacing, and it cost a whole tick per frame — the half runs
+/// on another thread, so the tick that took a frame could never see it set again.
 #[derive(Default)]
 pub struct Tap {
-    /// The render thread's: the frame it left, until the half takes it.
-    pub frame: Option<Data>,
-    /// The half's: it has published what it had and will take another.
-    pub wanted: bool,
+    pub frame: Option<Tapped>,
 }
 
 pub struct GraphicsHalf {
@@ -114,10 +121,13 @@ impl Half for GraphicsHalf {
         // Taken from UNDER the lock and encoded outside it: the render thread waits on this
         // mutex, so an encode held across it is the frontend stalling a node tick.
         let taken = self.tap.lock().expect("the tap").frame.take();
-        if let Some(frame) = taken {
-            publish(0, &goofi_codec::encode(&frame));
+        match taken {
+            Some(Tapped::Full(frame)) => publish(0, &goofi_codec::encode(&frame)),
+            Some(Tapped::Texels { shape, bytes, meta }) => {
+                publish(0, &goofi_codec::encode_u8(&shape, &bytes, &meta))
+            }
+            None => {}
         }
-        self.tap.lock().expect("the tap").wanted = readers;
         let size = crate::plan::asked(cx.params, self.size);
         Ticked { errors: Vec::new(), replan: std::mem::replace(&mut self.last, size) != size }
     }

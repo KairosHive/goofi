@@ -268,17 +268,28 @@ fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<(Ve
     (admitted > 0).then_some((axes, if every_u8 { Depth::U8 } else { Depth::F32 }))
 }
 
+/// What a slot's readers want of its frames: the box to fit the readback into, and the sample
+/// width they draw. A producer that can make exactly this spends nothing downstream — no
+/// reduction, and no quantization either.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewWant {
+    pub size: (u32, u32),
+    pub depth: Depth,
+}
+
 /// The box every admitted viewer would reduce both image axes to with an area kernel — the size
-/// a PRODUCER could render instead, making the reduction downstream free. This is what the
-/// viewers ASKED for, not the fit for one frame, so it does not move when the producer answers
-/// it. `None` unless both axes resolve to an area kernel: a plan that subsamples means something
-/// else, and a producer must not answer it with an average.
-pub fn image_box<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<(u32, u32)> {
+/// a PRODUCER could render instead, making the reduction downstream free — and the depth every
+/// one of them draws. This is what the viewers ASKED for, not the fit for one frame, so it does
+/// not move when the producer answers it. `None` unless both axes resolve to an area kernel: a
+/// plan that subsamples means something else, and a producer must not answer it with an average.
+pub fn image_box<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<ViewWant> {
     // Nothing admits it, so nobody here is drawing it — and a frame nobody draws needs no pixels.
-    let Some((axes, _)) = fold_axes(specs, frame) else { return Some(UNDECLARED_BOX) };
+    let Some((axes, depth)) = fold_axes(specs, frame) else {
+        return Some(ViewWant { size: UNDECLARED_BOX, depth: Depth::F32 });
+    };
     let axis = |d: usize| axes.iter().find(|a| a.dim == d).filter(|a| a.method == ReduceMethod::Area);
     let (h, w) = (axis(0)?, axis(1)?);
-    Some((w.max as u32, h.max as u32))
+    Some(ViewWant { size: (w.max as u32, h.max as u32), depth })
 }
 
 /// `src` scaled into `box_` with its aspect kept, never enlarged — the one place that rule is

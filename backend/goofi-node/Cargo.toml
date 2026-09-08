@@ -6,6 +6,9 @@ license.workspace = true
 
 [dependencies]
 goofi-core = { path = "../goofi-core" }
+# The payload-free ViewSpec algebra: what a viewer asks of a producer crosses this seam, and the
+# crate that owns that vocabulary has no dependencies of its own.
+goofi-view = { path = "../goofi-view" }
 indexmap = "2"
 # `ParamKey` derives Serialize/Deserialize — it addresses a param over the async runtime's wire.
 serde = { version = "1", features = ["derive"] }

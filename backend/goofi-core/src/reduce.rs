@@ -118,6 +118,13 @@ pub fn quantize_u8(frame: &Data) -> Option<(Vec<usize>, Vec<u8>, crate::Meta)> {
     let span = hi - lo;
     let texels: Vec<u8> = values().map(|v| (((v - lo) / span).clamp(0.0, 1.0) * 255.0).round() as u8).collect();
     let mut meta = frame.meta().clone();
+    note_depth(&mut meta, lo, hi);
+    Some((shape.to_vec(), texels, meta))
+}
+
+/// Say what window a frame's texels span, so a viewer maps one back to a value. ONE spelling,
+/// whether the quantization happened here or on a GPU that wrote the texels directly.
+pub fn note_depth(meta: &mut crate::Meta, lo: f32, hi: f32) {
     let mut reduced = match meta.reduced() {
         Some(MetaValue::Map(m)) => m.clone(),
         _ => BTreeMap::new(),
@@ -130,7 +137,6 @@ pub fn quantize_u8(frame: &Data) -> Option<(Vec<usize>, Vec<u8>, crate::Meta)> {
         ])),
     );
     meta.set_reduced(Some(MetaValue::Map(reduced)));
-    Some((shape.to_vec(), texels, meta))
 }
 
 /// `m` evenly-spaced indices into `0..n` (inclusive endpoints, like `np.linspace(0,n-1,m)`).

@@ -1053,6 +1053,7 @@ dependencies = [
  "getrandom 0.4.3",
  "goofi-core",
  "goofi-node",
+ "goofi-view",
  "indexmap",
  "serde",
  "serde_json",
@@ -1088,6 +1089,7 @@ name = "goofi-node"
 version = "3.1.0"
 dependencies = [
  "goofi-core",
+ "goofi-view",
  "indexmap",
  "serde",
  "serde_json",
