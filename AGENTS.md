@@ -463,6 +463,19 @@ saved with. A load extracts into a FRESH mount, parses, and only then swaps: gra
 or neither. A load restores the uids the patch was saved with, because everything keyed by uid
 that the load does not itself remap depends on it.
 
+**The skills ride the workspace, so an agent reads them from its own cwd.** `skills/` is embedded
+at build time as the node bundles are, laid into `mount/skills/` and packaged into the `.gfi` like
+any other workspace file — there is no second door and no registry. Seeding is per SKILL and
+ABSENT-ONLY, and it happens on a LOAD as well as on a fresh mount, which is the one place this
+departs from the orientation: an unpacked workspace is the patch's own and goofi does not write
+into it, but a skill goofi has GAINED since the patch was saved is not something that patch has an
+opinion about. So the archive brings what it had, the load adds what is new, and the next save
+packages the union — a patch saved before a skill existed acquires it by being opened. The unit is
+the DIRECTORY so an edit inside one survives, and the cost, stated: deleting a whole skill from a
+patch brings it back on the next load, with `.goofiignore` the door for a patch that wants it
+gone. Every site seeds BEFORE the workspace baseline is taken, or a patch would be dirty from the
+moment it opened, having been dirtied by goofi's own seeding.
+
 **Identity is structural.** A spawned agent's identity travels in its ENVIRONMENT, minted by
 goofi at the spawn: `GOOFI_SESSION` names the server, `GOOFI_ACTOR` names its own undo stack, and
 the running binary's OWN DIRECTORY leads PATH, so `goofi` resolves to this very binary — nothing is

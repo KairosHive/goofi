@@ -165,6 +165,7 @@ impl AppState {
         // the seed itself.
         let mount = new_mount();
         term::seed_orientation(&mount);
+        seed_skills(&mount);
         let workspace_baseline = goofi_graph::archive::fingerprint(&mount);
         // Project the INITIAL graph — no nodes, but the seeded system globals — so a client that
         // connects to a fresh backend has the current state at once.
@@ -373,6 +374,10 @@ fn stage_load(
     } else {
         term::seed_orientation(mount);
     }
+    // BOTH ways, unlike the orientation: an unpacked workspace is the patch's own and goofi does
+    // not write into it, but a skill goofi has GAINED since the patch was saved is not something
+    // the patch has an opinion about. Absent-only, so nothing of the patch's is touched.
+    seed_skills(mount);
     Ok((content, from_path))
 }
 
@@ -641,6 +646,36 @@ pub async fn serve_app(
 }
 
 include!(concat!(env!("OUT_DIR"), "/shipped.rs"));
+include!(concat!(env!("OUT_DIR"), "/skills.rs"));
+
+/// Where a workspace keeps the skills an agent spawned into it can read.
+pub const SKILLS_DIR: &str = "skills";
+
+/// Lay every shipped skill goofi carries into `mount/skills/`, per SKILL and absent-only: a skill
+/// the workspace already has is the patch's own and is never written over, and one goofi has
+/// gained since the patch was saved lands whole. That is what makes a load re-populate — the
+/// archive brings what it had, this adds what is new, and the save packages the union.
+///
+/// The unit is the skill DIRECTORY rather than the file, so an edit inside one — or a file deleted
+/// from one — survives a load. The cost is that deleting a whole skill from a patch brings it back
+/// on the next load; `.goofiignore` is the door for a patch that wants it gone for good.
+///
+/// Called BEFORE the workspace baseline is taken at every site, or a patch is dirty from the
+/// moment it opens, having been dirtied by goofi's own seeding.
+pub fn seed_skills(mount: &std::path::Path) {
+    let root = mount.join(SKILLS_DIR);
+    for (rel, bytes) in SHIPPED_SKILLS {
+        let Some((skill, _)) = rel.split_once('/') else { continue };
+        if root.join(skill).exists() {
+            continue;
+        }
+        let at = root.join(rel);
+        if let Some(dir) = at.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(at, bytes);
+    }
+}
 
 /// The shipped bundles, written under the home for this version AND this embed — every file of
 /// every bundle, beside the artifacts goofi's own build made of its nodes — so a shipped node

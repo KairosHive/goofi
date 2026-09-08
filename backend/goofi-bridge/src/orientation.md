@@ -141,10 +141,10 @@ keeps state between ticks.
 
 Your working directory **is** the patch's workspace, and it rides inside the `.gfi` when the
 human saves — so anything you leave there returns with the patch, including this file, which is
-yours to edit as you learn what this patch is for. `goofi session status` says where it is (a
-per-run temp directory, so ask rather than assume). `.goofiignore` says what is *not* packaged
-(`__pycache__/`, `*.pyc`, …); its header documents its own syntax, and the same list decides
-whether the workspace counts as changed, so a scratch file that should not travel belongs in it.
+yours to edit as you learn what this patch is for. `goofi session status` says where it is.
+`skills/` holds goofi's guides — read the one matching your task first. `.goofiignore` says what
+is *not* packaged; its header documents its own syntax, and the same list decides whether the
+workspace counts as changed, so a scratch file that should not travel belongs in it.
 
 ## Handle with care
 
