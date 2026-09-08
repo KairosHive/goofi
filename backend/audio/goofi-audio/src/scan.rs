@@ -50,7 +50,7 @@ impl AudioEngine {
             let opened = goofi_build::open(artifact)?;
             let intro = goofi_node::parse_introspection(&opened.describe)?;
             if let Some(reason) = goofi_node::illegal_slot(&intro)
-                .or_else(|| goofi_node::foreign_slot(&intro, Some(goofi_core::SlotType::Audio)))
+                .or_else(|| goofi_node::foreign_output(&intro, Some(goofi_core::SlotType::Audio)))
             {
                 return Err(reason);
             }
