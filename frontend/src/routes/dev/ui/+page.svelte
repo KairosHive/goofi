@@ -319,6 +319,15 @@
 				max={1}
 				data-testid="ui-slider-extend"
 			/>
+			<!-- The face a driven param wears: the value, and no way to move it. -->
+			<Slider
+				value={cutoff}
+				onChange={(v) => (cutoff = v)}
+				min={0}
+				max={1}
+				disabled
+				data-testid="ui-slider-disabled"
+			/>
 		</div>
 	</section>
 
@@ -337,6 +346,15 @@
 			</Field>
 			<span class="readout" data-testid="ui-select-refreshes">{refreshCount}</span>
 			<span class="readout" data-testid="ui-select-value">{refreshValue}</span>
+			<Field label="driven" data-testid="ui-select-disabled-field">
+				<Select
+					value={refreshValue}
+					onChange={(v) => (refreshValue = v)}
+					options={['sine', 'square', 'saw', 'triangle']}
+					disabled
+					data-testid="ui-select-disabled"
+				/>
+			</Field>
 			<Field label="stale value" data-testid="ui-select-stale-field">
 				<Select
 					value={stalePick}
@@ -403,6 +421,9 @@
 				<Toggle value={toggled} onChange={(v) => (toggled = v)} data-testid="ui-toggle" />
 			</Field>
 			<span class="readout" data-testid="ui-toggle-value">{toggled ? 'on' : 'off'}</span>
+			<Field label="driven" data-testid="ui-toggle-disabled-field">
+				<Toggle value={toggled} onChange={(v) => (toggled = v)} disabled data-testid="ui-toggle-disabled" />
+			</Field>
 		</div>
 	</section>
 
