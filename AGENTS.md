@@ -614,6 +614,14 @@ Two interpreters, both machine-local and gitignored, and the names are deliberat
 - a GIL python, which the subprocess tier always runs, because that tier exists precisely for
   packages that are not free-threading-safe.
 
+A bundle's `requirements.txt` goes into BOTH; a `requirements-gil.txt` beside it goes into the GIL
+one alone. That second file is how a bundle says "this package ships no free-threaded wheel", which
+is the ordinary case for an inference runtime and was going to be the ordinary case for every
+model-running node — onnxruntime has no `cp314t` wheel and neither does torch. Without it the
+choice was to keep such a node out of the repo, or to leave its dependency undeclared and let it
+fail on first use; the tier the node already belonged to was the answer, and now the provisioning
+can say so.
+
 **Never resolve the interpreter path.** The config names it RELATIVE and canonicalizes nothing: on
 unix a venv's `python` is a symlink into the base install, which is exactly where the goofi wheel
 is not — so canonicalizing hands pyo3 an interpreter that cannot import it, nothing errors, and

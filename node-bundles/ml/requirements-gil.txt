@@ -1,0 +1,4 @@
+# Decoder runs a trained model rather than training one, so it takes the runtime and not the
+# framework — and onnxruntime picks up CUDA or DirectML where the machine has them. It ships no
+# free-threaded wheel, which is what puts it here and the node on the subprocess tier.
+onnxruntime
