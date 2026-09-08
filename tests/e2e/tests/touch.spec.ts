@@ -113,6 +113,9 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			await tapNode(page, osc);
 			await expect(pane(page)).toHaveClass(/open/);
 			const field = pane(page).getByTestId('param-field-frequency');
+			// The row is collapsed to its name and its widget; the source switch is what the name opens.
+			await field.getByRole('button', { name: 'frequency' }).tap();
+			await expect(field.getByTestId('param-more'), 'the name opened the source row').toBeVisible();
 			await field.getByTestId('param-mode-reference').tap();
 			await field.getByTestId('param-ref-node').tap();
 			const option = page.getByTestId('param-ref-node-list').getByRole('option', { name: lfoName });

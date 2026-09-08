@@ -59,6 +59,7 @@
 	let cutoff = $state(0.3);
 	let cqValue = $state(0.4);
 	let sliderExtend = $state(5);
+	let fieldOpen = $state(false);
 	let swapMode = $state<'number' | 'text' | 'raw'>('number');
 	let swapNum = $state(2);
 	let swapText = $state('sin(x)');
@@ -214,6 +215,23 @@
 				<NumberInput value={gain} onChange={(v) => (gain = v)} data-testid="ui-field-number" />
 			</Field>
 			<span class="readout" data-testid="ui-field-committed">{gain}</span>
+		</div>
+	</section>
+
+	<section>
+		<h2>Field as a disclosure summary (the param row)</h2>
+		<div class="form">
+			<Field
+				label="frequency"
+				data-testid="ui-field-expand"
+				expanded={fieldOpen}
+				onExpand={() => (fieldOpen = !fieldOpen)}
+			>
+				<Slider value={cutoff} onChange={(v) => (cutoff = v)} min={20} max={20000} />
+			</Field>
+			{#if fieldOpen}
+				<span class="readout" data-testid="ui-field-expand-body">what the caret revealed</span>
+			{/if}
 		</div>
 	</section>
 
