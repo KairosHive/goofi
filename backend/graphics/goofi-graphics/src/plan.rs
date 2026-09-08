@@ -14,9 +14,23 @@ use crate::half::{Tap, Upload};
 use crate::scan::Built;
 use crate::Instance;
 
-/// The readback box packed into the one cell [`Stage::wants`] reads; zero is the stage's own size.
-pub fn pack(want: Option<(u32, u32)>) -> u64 {
-    want.map_or(0, |(w, h)| (u64::from(w) << 32) | u64::from(h))
+/// What a slot's readers asked for, in the ONE cell [`Stage::wants`] reads: the box on two 16-bit
+/// axes — [`MAX_SIZE`] is 8192, so they fit — and the depth on one bit above them. Zero is the
+/// frame itself at f32, which is what a snapshot and a global following the slot need. One packer
+/// and one reader, so the cell has one owner and no second field to keep in step.
+pub fn pack(want: Option<goofi_view::ViewWant>) -> u64 {
+    want.map_or(0, |w| {
+        let depth = u64::from(w.depth == goofi_view::Depth::U8) << 32;
+        depth | (u64::from(w.size.0.min(MAX_SIZE)) << 16) | u64::from(w.size.1.min(MAX_SIZE))
+    })
+}
+
+/// The cell read back, or `None` where nothing narrowed it.
+fn unpack(cell: u64) -> Option<goofi_view::ViewWant> {
+    (cell != 0).then_some(goofi_view::ViewWant {
+        size: (((cell >> 16) & 0xffff) as u32, (cell & 0xffff) as u32),
+        depth: if cell & (1 << 32) == 0 { goofi_view::Depth::F32 } else { goofi_view::Depth::U8 },
+    })
 }
 
 /// What a chain that can follow nothing falls back to. It is what the two default-size globals
@@ -77,14 +91,17 @@ impl Stage {
     /// What size each reader of this stage's output wants it at, or nothing where that reader is
     /// absent: a window on the machine's own screen — the one reader the transport cannot count —
     /// and a subscriber on its data service. A screen is always the frame's own size.
-    pub fn wants(&self, recording: bool) -> [Option<(u32, u32)>; 3] {
-        let mut wants = [None; 3];
+    pub fn wants(&self, recording: bool) -> [Option<(u32, u32)>; 4] {
+        let mut wants = [None; 4];
         wants[Want::Screen as usize] = self.window.map(|_| self.size);
-        let tap = match self.tap_box.load(Ordering::Relaxed) {
-            0 => self.size,
-            v => goofi_view::fit(self.size, ((v >> 32) as u32, v as u32)),
+        let asked = unpack(self.tap_box.load(Ordering::Relaxed));
+        let tap = asked.map_or(self.size, |w| goofi_view::fit(self.size, w.size));
+        // The two taps are one reader in two formats, so at most one of them is ever wanted.
+        let which = match asked.map(|w| w.depth) {
+            Some(goofi_view::Depth::U8) => Want::TapU8,
+            _ => Want::Tap,
         };
-        wants[Want::Tap as usize] = self.readers.load(Ordering::Relaxed).then_some(tap);
+        wants[which as usize] = self.readers.load(Ordering::Relaxed).then_some(tap);
         // A recorder takes the frame at its own size: a recording is the evidence, and evidence
         // is never fitted to a box somebody's screen happened to have.
         wants[Want::Record as usize] = (recording && self.record.is_some()).then_some(self.size);

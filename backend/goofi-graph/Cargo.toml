@@ -10,6 +10,8 @@ license.workspace = true
 [dependencies]
 goofi-core = { path = "../goofi-core" }
 goofi-node = { path = "../goofi-node" }
+# What a viewer asks of a producer, which `set_view_demand` carries to every engine.
+goofi-view = { path = "../goofi-view" }
 
 # One line: the random scope a graph's service names live in.
 getrandom = "0.4"

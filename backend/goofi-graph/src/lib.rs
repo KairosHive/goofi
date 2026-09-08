@@ -806,7 +806,7 @@ impl Graph {
     /// [`Engine::as_any_mut`].
     /// Tell whichever engine owns `uid` what its readers want of `slot`. Offered to every engine
     /// rather than routed: an engine that does not hold the uid, or cannot render to size, no-ops.
-    pub fn set_view_demand(&mut self, uid: Uid, slot: &str, want: Option<(u32, u32)>) {
+    pub fn set_view_demand(&mut self, uid: Uid, slot: &str, want: Option<goofi_view::ViewWant>) {
         for e in self.engines_mut() {
             e.view_demand(uid, slot, want);
         }

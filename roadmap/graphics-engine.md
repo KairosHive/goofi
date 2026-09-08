@@ -6,8 +6,7 @@ compute engine over a `Field` dtype; redesigned with the owner on 2026-09-06 as 
 step, and this file was rewritten to it. What the first design decided and still stands is kept
 below under "kept from the first design". **The first step is BUILT as of 2026-09-06** — the
 engine, the `.wgsl` contract, uploads, references, `Feedback`, the tap, the uint8 hop and all
-thirteen nodes. What is left is phase 2 and the Open list. The working spec is
-`docs/superpowers/specs/2026-09-06-graphics-engine-design.md`.
+thirteen nodes. What is left is phase 2 and the Open list.
 
 The seam this engine assumes is `multi-engine-graph.md`. The audio engine, `audio-engine.md`, is
 the template for a scheduled engine and is followed here wherever the two are the same thing.
@@ -328,6 +327,32 @@ for, sized, fed, counted in `session status`, and closed with its node.
 - **`mono` off is three decorrelated fields**, and what earns it is `Displace`: that node reads
   red and green as two directions, and one field behind both pushes every texel the same way.
 
+### What the frame path cost, measured 2026-09-08
+
+The engine held its clock all along and every viewer in the app drew at a THIRD of it. Two
+independent one-tick delays, in the same loop, found by measuring the two ends separately: on an
+RTX 4090, one to eight `graphics:Noise` stages at 512 and 1024 square, `session status` reported
+30.0 fps in every configuration while the socket delivered 9.2 to 10.2.
+
+- **A map callback runs on a poll and nowhere else.** The poll sat after the submit, so a copy
+  started in one tick could not be ready until the poll at the END of the next one, and `take` —
+  which runs at the top — saw it a tick after that. The poll moved above the take.
+- **`Tap::wanted` was a second owner of the pacing the ring already had.** `take` cleared it and
+  the control HALF set it again, on another thread, so the tick that took a frame could never see
+  it set before it decided whether to start the next readback. The ring's one slot in flight is
+  the whole pacing rule, and the flag is deleted. The cost of the pair was exactly 3 ticks per
+  frame; after them, 29–30 fps at the socket in every configuration.
+
+**A viewer's DEPTH rides the demand beside its box, and the reducer forwards what already fits.**
+An image viewer draws 8 bits; the tap was reading back `Rgba32Float` and the reducer was
+quantizing it on a CPU. `Want::TapU8` is a fourth reader with `Rgba8Unorm` and a blit entry of its
+own, `ViewWant` carries `{size, depth}` through one packed cell, and a `|u1` frame reaches the
+reducer already being the answer — so it is broadcast as it stands, with no decode, no reduction
+and no quantization anywhere in the process. Measured at four stages of 1024 square, all at full
+resolution: 14.6 fps a viewer before, 30.0 after, with the readback a quarter of the bytes.
+What that leaves is the socket's own cost, which is what a 1024-square image at 30 fps IS
+(4 MB a frame a viewer) and not something the engine can be asked to make smaller.
+
 ## Phases
 
 1. **BUILT 2026-09-06**: the engine, the `.wgsl` contract, uploads, references, `Feedback`, the
@@ -345,16 +370,12 @@ for, sized, fed, counted in `session status`, and closed with its node.
 - The device gate serialises the tick against a compile. It was measured as necessary on one
   driver; whether every driver needs it is not known, and the cheap way to find out is to try
   another machine before making the gate narrower.
-- The BROWSER has not drawn a graphics frame by hand yet. The binary has: a release `goofi` on an
-  RTX 4090 through Vulkan holds 60 fps with one reader, at 512 square and at 1280x720 alike, and
-  the worst tick of a run is the first, which allocates. It renders nothing while nothing reads,
-  which is the demand rule holding outside the suite. A DEBUG binary manages 14 fps at 512 square,
-  because the readback converts a million texels from f16 in an unoptimized loop; that is the
-  build, not the design, and it is why a rate must never be read off `cargo run` alone.
-- The readback waits on the render thread once per tick; a double-buffered readback is the lever
-  if a tick misses 16 ms.
-- The reducer's area kernel at 1080p; a GPU-side downscale needs the viewer's size to reach the
-  engine, which the constraint algebra does not carry.
+- The binary holds its clock: a release `goofi` on an RTX 4090 through Vulkan is 60 fps with one
+  reader, at 512 square and at 1280x720 alike, and the worst tick of a run is the first, which
+  allocates. It renders nothing while nothing reads, which is the demand rule holding outside the
+  suite. A DEBUG binary manages 14 fps at 512 square, because the readback converts a million
+  texels from f16 in an unoptimized loop; that is the build, not the design, and it is why a rate
+  must never be read off `cargo run` alone.
 - A feedback chain, and a state buffer, restart from black at a resize.
 - A state buffer takes the node's own size, so a node cannot hold a handful of numbers cheaply. A
   1x1 buffer needs a pass of its own, since one pass's targets share one size.

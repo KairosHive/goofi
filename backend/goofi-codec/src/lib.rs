@@ -184,20 +184,27 @@ pub fn frame_meta(frame: &[u8]) -> std::result::Result<goofi_core::Meta, String>
     parse_meta(meta)
 }
 
-/// An array body's shape and its samples, BORROWED. The engine's own arrays are `<f4` already, so
-/// a recorder appends the bytes it was handed; a foreign dtype answers `None` and takes [`decode`].
-pub fn array_view(body: &[u8]) -> Option<(Vec<usize>, &[u8])> {
+/// An array body's dtype string, shape and samples, BORROWED and whatever the dtype — what a
+/// reader needs to plan for a frame without decoding one.
+pub fn array_head(body: &[u8]) -> Option<(&[u8], Vec<usize>, &[u8])> {
     let mut cur = Cursor::new(body);
     let ndim = cur.u8("array ndim").ok()?;
     let dslen = cur.u8("array dtype len").ok()?;
-    if cur.take(dslen, "array dtype string").ok()? != b"<f4" {
-        return None;
-    }
+    let dtype = cur.take(dslen, "array dtype string").ok()?;
     let mut shape = Vec::with_capacity(ndim);
     for _ in 0..ndim {
         shape.push(cur.u32("array shape").ok()?);
     }
-    let samples = cur.rest();
+    Some((dtype, shape, cur.rest()))
+}
+
+/// An array body's shape and its samples, BORROWED. The engine's own arrays are `<f4` already, so
+/// a recorder appends the bytes it was handed; a foreign dtype answers `None` and takes [`decode`].
+pub fn array_view(body: &[u8]) -> Option<(Vec<usize>, &[u8])> {
+    let (dtype, shape, samples) = array_head(body)?;
+    if dtype != b"<f4" {
+        return None;
+    }
     (samples.len() == shape.iter().product::<usize>() * 4).then_some((shape, samples))
 }
 

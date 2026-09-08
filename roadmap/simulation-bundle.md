@@ -165,6 +165,10 @@ anything forms.
   alone. Lenia at radius 10 is 441 samples a pixel, which is 115 M samples a frame at 512 square.
   The engine has no per-stage budget and no way to say "this stage may run at a lower rate"; a
   demand-driven engine that silently drops stages under load is worth a look on its own.
+  **Worth re-measuring before it is designed for**: the second half of that reading — stages that
+  stopped producing — has a candidate cause that is now fixed, the tap pacing in
+  `graphics-engine.md`, which held every viewer in the app at a third of the clock whatever the
+  load. The 24 ms tick is real either way.
 - **Sub-stepping in the graphics plan.** One tick is one pass, so an automaton that wants ten steps
   a frame cannot have them. A fragment shader cannot loop over a texture it writes, so this is the
   plan's question and not a node's.

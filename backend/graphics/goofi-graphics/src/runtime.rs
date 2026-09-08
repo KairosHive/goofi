@@ -11,7 +11,7 @@ use goofi_record::{Kind, Recorder, StreamId, StreamMeta};
 use goofi_node::Uid;
 
 use crate::gpu::{padded_row, target, Gpu, Want};
-use crate::half::Upload;
+use crate::half::{Tapped, Upload};
 use crate::plan::{Input, Plan};
 use crate::shader;
 
@@ -78,7 +78,7 @@ struct Ring {
 struct State {
     out: Option<Target>,
     /// One per [`Want`], sized with `out`; only a stage that reader watches has one.
-    reads: [Option<Ring>; 3],
+    reads: [Option<Ring>; 4],
     /// One declared state buffer each: the texture the last tick left, and the one this tick
     /// writes. They swap after every render, which is the whole of how a node holds state.
     buffers: Vec<[Target; 2]>,
@@ -154,7 +154,7 @@ impl Runtime {
         };
         let state = State {
             out: None,
-            reads: [None, None, None],
+            reads: [None, None, None, None],
             buffers: Vec::new(),
             count: 0,
             uploads: Vec::new(),
@@ -216,6 +216,9 @@ impl Runtime {
             return;
         }
         let _gate = crate::gpu::gate();
+        // BEFORE the take, because a map callback runs on a poll and nowhere else: polling only
+        // after the submit below left every copy one whole tick older than it had to be.
+        let _ = self.gpu.device.poll(wgpu::PollType::Poll);
         // What an earlier tick put on the device and the device has finished since.
         self.take();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
@@ -303,11 +306,6 @@ impl Runtime {
             self.stats.stages.fetch_add(1, Ordering::Relaxed);
             self.states.get_mut(&stage.uid).expect("just borrowed").advance();
             for w in Want::ALL {
-                // A viewer is read back for only once it has FINISHED with the last frame, so it
-                // paces itself and can never pace the engine. A screen never waits its turn.
-                if w == Want::Tap && !stage.tap.lock().expect("the tap").wanted {
-                    continue;
-                }
                 // A stage the recorder could not open a stream for is read back for nobody.
                 if w == Want::Record && !self.taping.get(&stage.uid).is_some_and(|t| t.live) {
                     continue;
@@ -344,9 +342,6 @@ impl Runtime {
                 ring.flight.push_back(slot);
             }
         }
-        // Never `Wait`: this runs the callback for a copy the device has already finished, and the
-        // rest are picked up at a later tick. The engine's clock paces it, never the device's.
-        let _ = self.gpu.device.poll(wgpu::PollType::Poll);
         self.stats.frames.fetch_add(1, Ordering::Relaxed);
         self.stats.tick_max_us.fetch_max(began.elapsed().as_micros() as u64, Ordering::Relaxed);
     }
@@ -476,7 +471,7 @@ impl Runtime {
                         }
                         give_back(&spare, rows);
                     }
-                    Want::Tap => {
+                    Want::Tap | Want::TapU8 => {
                         let shape = vec![size.1 as usize, size.0 as usize, 4];
                         // A frame that was shrunk on the way out says so, in the words
                         // `reduce_for_view` uses — otherwise it would understate its own origin
@@ -487,10 +482,16 @@ impl Runtime {
                             let axes = [(0, shrunk.from.1 as usize, area), (1, shrunk.from.0 as usize, area)];
                             goofi_core::reduce::note_reduced(&mut meta, &axes);
                         }
-                        if let Ok(frame) = Data::array_f32(shape, rows, meta) {
-                            let mut tap = tap_cell.lock().expect("the tap");
-                            tap.frame = Some(frame);
-                            tap.wanted = false;
+                        let held = if w == Want::TapU8 {
+                            // The window the GPU clamped to, said the way `quantize_u8` says it,
+                            // so a viewer maps a texel back through the one rule.
+                            goofi_core::reduce::note_depth(&mut meta, 0.0, 1.0);
+                            Some(Tapped::Texels { shape, bytes: rows, meta })
+                        } else {
+                            Data::array_f32(shape, rows, meta).ok().map(Tapped::Full)
+                        };
+                        if let Some(held) = held {
+                            tap_cell.lock().expect("the tap").frame = Some(held);
                         }
                     }
                 }
@@ -632,7 +633,7 @@ impl State {
     /// The output texture at `size`, the state buffers beside it, and one readback per reader
     /// that is there. All are remade when the size moves, which is what loses a feedback chain
     /// and a stateful node their history.
-    fn ensure_out(&mut self, gpu: &Gpu, size: (u32, u32), wants: [Option<(u32, u32)>; 3], buffers: usize) {
+    fn ensure_out(&mut self, gpu: &Gpu, size: (u32, u32), wants: [Option<(u32, u32)>; 4], buffers: usize) {
         if self.out.as_ref().is_none_or(|t| t.size != size) || self.buffers.len() != buffers {
             let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
@@ -647,7 +648,7 @@ impl State {
             };
             self.buffers = (0..buffers).map(|_| [fresh(), fresh()]).collect();
             self.count = 0;
-            self.reads = [None, None, None];
+            self.reads = [None, None, None, None];
         }
         for w in Want::ALL {
             let held = &mut self.reads[w as usize];

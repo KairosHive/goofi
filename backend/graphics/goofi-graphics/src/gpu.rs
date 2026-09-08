@@ -8,17 +8,20 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// What a reader takes off a stage, and the format the GPU converts into for it — so no texel is
-/// ever converted on the CPU. A screen takes 8-bit in the byte order it reads, a `Data` frame f32,
-/// and the recorder the 16-bit unsigned texels `rgba64le` names.
+/// ever converted on the CPU. A screen takes 8-bit in the byte order it reads, the recorder the
+/// 16-bit unsigned texels `rgba64le` names, and a tap whichever width its viewers DRAW: f32 where
+/// anything reads the numbers, 8-bit where every one of them draws pixels. The two taps are
+/// separate readers because they are separate formats, and at most one of them is ever wanted.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Want {
     Screen,
     Tap,
+    TapU8,
     Record,
 }
 
 impl Want {
-    pub const ALL: [Want; 3] = [Want::Screen, Want::Tap, Want::Record];
+    pub const ALL: [Want; 4] = [Want::Screen, Want::Tap, Want::TapU8, Want::Record];
 
     pub const fn format(self) -> wgpu::TextureFormat {
         match self {
@@ -27,6 +30,7 @@ impl Want {
             #[cfg(target_os = "macos")]
             Want::Screen => wgpu::TextureFormat::Rgba8Unorm,
             Want::Tap => wgpu::TextureFormat::Rgba32Float,
+            Want::TapU8 => wgpu::TextureFormat::Rgba8Unorm,
             Want::Record => wgpu::TextureFormat::Rgba16Uint,
         }
     }
@@ -37,7 +41,7 @@ impl Want {
     pub const fn depth(self) -> usize {
         match self {
             Want::Screen => 2,
-            Want::Tap => 1,
+            Want::Tap | Want::TapU8 => 1,
             Want::Record => 2,
         }
     }
@@ -47,6 +51,7 @@ impl Want {
         match self {
             Want::Screen => 4,
             Want::Tap => 16,
+            Want::TapU8 => 4,
             Want::Record => 8,
         }
     }
@@ -92,6 +97,11 @@ fn boxed(at: vec2f) -> vec4f {
 @fragment fn record(@builtin(position) at: vec4f) -> @location(0) vec4<u32> {
     return vec4<u32>(clamp(boxed(at.xy), vec4f(0.0), vec4f(1.0)) * 65535.0 + vec4f(0.5));
 }
+// An 8-bit tap: the [0,1] window, which is the range a viewer clamps a colour to anyway, mapped
+// by the target's own unorm conversion. `meta.reduced.depth` carries that window to the viewer.
+@fragment fn tap8(@builtin(position) at: vec4f) -> @location(0) vec4f {
+    return clamp(boxed(at.xy), vec4f(0.0), vec4f(1.0));
+}
 @fragment fn screen(@builtin(position) at: vec4f) -> @location(0) vec4f {
     // A screen is OPAQUE: two platforms of three drop the fourth byte and the third composites
     // it, so a shader's own alpha would show through on one of them.
@@ -109,7 +119,7 @@ pub struct Gpu {
     /// What an unwired texture input reads: present, transparent, never an error.
     pub blank: wgpu::TextureView,
     /// One conversion pipeline per [`Want`], and the layout the source texture binds through.
-    blits: [wgpu::RenderPipeline; 3],
+    blits: [wgpu::RenderPipeline; 4],
     blit_group: wgpu::BindGroupLayout,
     group0: [wgpu::BindGroupLayout; 2],
     textures: Mutex<HashMap<usize, Arc<wgpu::BindGroupLayout>>>,
@@ -275,6 +285,7 @@ impl Gpu {
         let blits = [
             blit("screen", Want::Screen.format()),
             blit("tap", Want::Tap.format()),
+            blit("tap8", Want::TapU8.format()),
             blit("record", Want::Record.format()),
         ];
         Ok(Gpu {

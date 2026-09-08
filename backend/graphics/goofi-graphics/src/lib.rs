@@ -491,7 +491,7 @@ impl Engine for GraphicsEngine {
     /// renders at its authored `output` size, which is what a window on the screen shows.
     /// It is one cell rather than plan state, because a viewer appearing or leaving must not be
     /// able to re-plan an engine — an accessory never reaches the engine's own scheduling.
-    fn view_demand(&mut self, uid: Uid, _slot: &str, want: Option<(u32, u32)>) {
+    fn view_demand(&mut self, uid: Uid, _slot: &str, want: Option<goofi_view::ViewWant>) {
         if let Some(inst) = self.live.get(&uid) {
             inst.tap_box.store(plan::pack(want), Ordering::Relaxed);
         }
