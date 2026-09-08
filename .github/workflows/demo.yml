@@ -1,0 +1,66 @@
+name: Demo
+
+# The public demo's four services deploy from `demo`, and this is the only thing that moves it:
+# one fast-forward a day. Each service builds the whole image — two CPython interpreters and a
+# release build, 30–60 minutes each — so deploying from `main` spent four of those on every push,
+# a docs-only commit included. A day's commits are now one build of four.
+#
+# `demo` is therefore also the record of what the public demo RUNS, which `main` never was.
+
+on:
+  schedule:
+    # Off the hour: the shared runners are least contended away from :00.
+    - cron: '17 4 * * *'
+  # The escape hatch, for a fix that should not wait for tomorrow.
+  workflow_dispatch:
+
+concurrency:
+  group: demo-advance
+  cancel-in-progress: false
+
+# Explicit, as `ci.yml` is: `$sha:refs/heads/demo` below is a refspec in bash and a parameter
+# modifier in zsh, which silently eats the `:r`.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  advance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Fast-forward `demo` to `main`
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main demo
+          main=$(git rev-parse origin/main)
+          demo=$(git rev-parse origin/demo)
+
+          if [ "$main" = "$demo" ]; then
+            echo "No commit since the last one deployed ($(git rev-parse --short "$demo")); nothing to build."
+            echo "up to date at \`$(git rev-parse --short "$demo")\` — no build" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # A rewritten or diverged `main` must stop here rather than take the demo somewhere no
+          # branch points: the push below is a plain one, and this is what keeps it able to be.
+          if ! git merge-base --is-ancestor "$demo" "$main"; then
+            echo "::error::\`main\` is not a descendant of \`demo\` — refusing to move it sideways."
+            exit 1
+          fi
+
+          echo "Deploying $(git rev-list --count "$demo..$main") commit(s):"
+          git log --oneline --no-decorate "$demo..$main"
+          git push origin "$main:refs/heads/demo"
+
+          {
+            echo "### Demo advanced to \`$(git rev-parse --short "$main")\`"
+            echo
+            git log --format='- %h %s' "$demo..$main"
+          } >> "$GITHUB_STEP_SUMMARY"
