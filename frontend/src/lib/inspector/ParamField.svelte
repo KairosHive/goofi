@@ -19,6 +19,7 @@
 		Icon,
 		Segmented
 	} from '$lib/ui';
+	import { ui } from '$lib/stores/ui.svelte';
 	import { controlKind } from './controlKind';
 	import { literalFor } from './paramSeed';
 	import ExprEditor from './expr/ExprEditor.svelte';
@@ -33,6 +34,7 @@
 		onPulse,
 		refreshing = false,
 		selfName,
+		dropZone = null,
 		class: klass = '',
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
@@ -45,7 +47,12 @@
 		refreshing?: boolean;
 		/** The node's display name, handed to the expression editor as `me`. */
 		selfName?: string;
+		/** This row's key as a node-drop target; null while it is not one. */
+		dropZone?: string | null;
 	} = $props();
+
+	const uiStore = ui();
+	const over = $derived(dropZone !== null && uiStore.nodeDragZone === dropZone);
 
 	const kind = $derived(controlKind(descriptor));
 
@@ -95,7 +102,13 @@
 	}
 </script>
 
-<div class={`pf-param ${klass}`.trim()} {...rest}>
+<div
+	class={`pf-param ${klass}`.trim()}
+	class:armed={dropZone !== null}
+	class:over
+	data-node-drop={dropZone}
+	{...rest}
+>
 	<Field
 		label={paramName}
 		doc={descriptor.doc ?? undefined}
@@ -229,6 +242,16 @@
 		flex-direction: column;
 		gap: var(--space-2);
 		min-width: 0;
+	}
+	/* An `outline` rather than a border: a row that becomes a target must not move the rows under it. */
+	.pf-param.armed {
+		outline: 1px dashed var(--border-strong);
+		outline-offset: var(--space-2);
+		border-radius: var(--radius-sm);
+	}
+	.pf-param.over {
+		outline: 1px solid var(--accent);
+		background: var(--accent-fill);
 	}
 	/* Values are data; the label above them is chrome. Box-less, so the controls inside stay Field's
 	   own direct children. */

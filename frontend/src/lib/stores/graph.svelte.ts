@@ -568,11 +568,17 @@ export class GraphStore {
 	/** The first output of node `uid` that can feed the global named `name`, as `node.slot`. */
 	feedFor(name: string, uid: string): string | null {
 		const gv = this.globals.find((v) => v.name === name);
+		return gv ? this.referenceFor(uid, gv.type) : null;
+	}
+
+	/** The `node.slot` a param or a global of `type` may follow on node `uid`, or null for none. A
+	 * facade keys its slots by port uid and a reference names the port, so the LABEL is the half. */
+	referenceFor(uid: string, type: string): string | null {
 		const node = this.nodeById(uid);
-		if (!gv || !node) return null;
-		const want = wantedDtype(gv.type);
-		const slot = Object.entries(node.output_slots).find(([, d]) => feeds(d as SlotDtype, want as SlotDtype))?.[0];
-		return slot ? `${node.name}.${slot}` : null;
+		if (!node) return null;
+		const want = wantedDtype(type);
+		const key = Object.entries(node.output_slots).find(([, d]) => feeds(d as SlotDtype, want as SlotDtype))?.[0];
+		return key ? `${node.name}.${node.slot_labels?.[key] ?? key}` : null;
 	}
 
 	/** The nodes tagged `midi` with an output that can feed the global named `name`. */
