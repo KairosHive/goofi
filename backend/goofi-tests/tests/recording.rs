@@ -86,7 +86,7 @@ fn utc_is_anchored_once_and_advances_monotonically() {
 }
 
 #[test]
-fn a_recording_is_a_folder_of_decodable_frames() {
+fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     let dir = tempfile::tempdir().expect("a temp root");
     let time = std::sync::Arc::new(Time::new());
     let rec = goofi_record::Recorder::new(time.clone());
@@ -97,21 +97,29 @@ fn a_recording_is_a_folder_of_decodable_frames() {
         slot: "out".into(),
         engine: "signal",
     };
-    rec.open(&id, goofi_record::Kind::Frames, 0.0, goofi_record::StreamMeta::measured(Some(256.0)))
-        .expect("opened");
-    for i in 0..8u64 {
+    let array = |shape: Vec<usize>, fill: f32, i: u64| {
         let mut meta = goofi_core::Meta::empty();
         meta.set_time(Some(i as f64 / 256.0));
         meta.set_index(Some(i));
-        let frame = goofi_core::Data::array_f32(vec![4], vec![0u8; 16], meta).expect("a frame");
-        rec.write(&id, &goofi_codec::encode(&frame), 0, 0.0).expect("written");
+        let n: usize = shape.iter().product();
+        let body: Vec<u8> = (0..n).flat_map(|_| fill.to_le_bytes()).collect();
+        goofi_codec::encode(&goofi_core::Data::array_f32(shape, body, meta).expect("a frame"))
+    };
+    let open = |bytes: &[u8]| {
+        let kind = goofi_record::frame::read(bytes, None).expect("a frame the recorder reads").kind;
+        rec.open(&id, kind, 0.0, goofi_record::StreamMeta::measured(Some(256.0))).expect("opened");
+    };
+    open(&array(vec![4], 0.0, 0));
+    for i in 0..8u64 {
+        let bytes = array(vec![4], i as f32, i);
+        let read = goofi_record::frame::read(&bytes, None).expect("a frame");
+        rec.write(&id, read, 0, 0.0).expect("written");
     }
     // Step: a re-arm at the very same patch instant is a NEW file, never the last one truncated.
-    rec.open(&id, goofi_record::Kind::Frames, 0.0, goofi_record::StreamMeta::measured(Some(256.0)))
-        .expect("re-opened at the same patch instant");
-    let frame = goofi_core::Data::array_f32(vec![4], vec![0u8; 16], goofi_core::Meta::empty())
-        .expect("a frame");
-    rec.write(&id, &goofi_codec::encode(&frame), 0, 0.0).expect("written to the second file");
+    open(&array(vec![4], 0.0, 0));
+    let bytes = array(vec![4], 99.0, 0);
+    let read = goofi_record::frame::read(&bytes, None).expect("a frame");
+    rec.write(&id, read, 0, 0.0).expect("written to the second file");
     let folder = rec.stop().expect("the manifest written").expect("a folder");
 
     let manifest: serde_json::Value =
@@ -124,23 +132,50 @@ fn a_recording_is_a_folder_of_decodable_frames() {
         "two entries never name one file"
     );
     assert!(manifest["origin_utc"].is_string(), "the one anchor every file adds to");
+    assert_eq!(manifest["streams"][0]["frame"], j!([4]), "the manifest says one frame's shape");
 
     let file = folder.join(manifest["streams"][0]["file"].as_str().expect("a name"));
+    assert_eq!(file.extension().and_then(|e| e.to_str()), Some("npy"), "an array is a .npy");
     assert!(
         file.file_name().unwrap().to_string_lossy().contains("src-out__"),
         "the name carries node, slot and the first sample's UTC"
     );
+
+    // …and the file numpy would open: the header says how many frames it holds, and the samples
+    // that follow are the ones written, in order.
     let bytes = std::fs::read(&file).expect("the stream");
-    let mut rest = &bytes[..];
-    let mut seen = 0;
-    while !rest.is_empty() {
-        let (_, meta, body) = goofi_codec::split_frame(rest).expect("a whole frame");
-        let used = 14 + meta.len() + body.len();
-        assert!(goofi_codec::decode(&rest[..used]).expect("a frame decodes").as_array().is_ok());
-        rest = &rest[used..];
-        seen += 1;
-    }
-    assert_eq!(seen, 8, "every frame is on disk, end to end");
+    let (head, body) = npy(&bytes);
+    assert!(head.contains("'descr': '<f4'") && head.contains("(8,4,)"), "{head}");
+    let values: Vec<f32> =
+        body.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four"))).collect();
+    assert_eq!(values.len(), 32, "eight frames of four");
+    assert_eq!(values[0], 0.0, "{values:?}");
+    assert_eq!(values[28], 7.0, "the last frame is the last one written: {values:?}");
+
+    // …and the sidecar, one line per frame, carrying the instant and the meta a .npy cannot hold.
+    let beside = std::fs::read_to_string(file.with_extension("jsonl")).expect("the sidecar");
+    let lines: Vec<&str> = beside.lines().collect();
+    assert_eq!(lines.len(), 8, "one line per frame");
+    let first: serde_json::Value = serde_json::from_str(lines[0]).expect("a json line");
+    assert_eq!(first["t"].as_f64(), Some(0.0), "the line carries the frame's own instant");
+    assert_eq!(first["n"].as_u64(), Some(1), "…and how many rows of the file it put there");
+    let last: serde_json::Value = serde_json::from_str(lines[7]).expect("a json line");
+    assert_eq!(last["meta"]["index"], j!(7), "the meta rides beside the samples");
+
+    // Step: a KILLED writer loses the tail and nothing else — the property every other format
+    // this replaced was rejected over. Truncated mid-frame, the whole frames are still there.
+    let cut = folder.join("cut.npy");
+    std::fs::write(&cut, &bytes[..bytes.len() - 6]).expect("a truncated copy");
+    let (_, body) = npy(&std::fs::read(&cut).expect("the truncated stream"));
+    assert_eq!(body.len() / 16, 7, "seven whole frames survive a kill inside the eighth");
+}
+
+/// A `.npy` split into its header text and its samples, the way `np.load` reads one.
+fn npy(bytes: &[u8]) -> (String, Vec<u8>) {
+    assert_eq!(&bytes[..6], b"\x93NUMPY", "the numpy magic");
+    let len = u16::from_le_bytes([bytes[8], bytes[9]]) as usize;
+    let head = String::from_utf8(bytes[10..10 + len].to_vec()).expect("ascii");
+    ((head), bytes[10 + len..].to_vec())
 }
 
 #[test]
@@ -317,12 +352,11 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     let written = std::fs::read(&file).expect("the video");
     assert_eq!(&written[..4], &[0x1a, 0x45, 0xdf, 0xa3], "a Matroska file, and the encoder finished it");
     assert!(written.len() > 512, "the encoder wrote frames, not a header: {} bytes", written.len());
-    let times = std::fs::read(file.with_extension("times")).expect("the sidecar");
+    // The sidecar is the ONE shape every stream's is, video included: a line per frame.
     let counted = video["frames"].as_u64().expect("a count");
     assert!(counted >= 4, "every armed tick reached the encoder: {counted}");
-    assert_eq!(times.len() as u64, counted * 8, "one f64 per encoded frame");
-    let instants: Vec<f64> =
-        times.chunks_exact(8).map(|b| f64::from_le_bytes(b.try_into().expect("eight bytes"))).collect();
+    let instants = beside_instants(&file);
+    assert_eq!(instants.len() as u64, counted, "one line per encoded frame");
     for pair in instants.windows(2) {
         assert!(pair[1] > pair[0], "the instants are the patch's own seconds, in order: {instants:?}");
     }
@@ -332,9 +366,8 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         e["node"] == j!(shader_name) && e["engine"] == j!("graphics") && e["frames"] != j!(0)
     }) {
         let made = std::path::Path::new(&folder).join(entry["file"].as_str().expect("a name"));
-        let beside = std::fs::read(made.with_extension("times")).expect("the sidecar");
         let held = entry["frames"].as_u64().expect("a count");
-        assert_eq!(beside.len() as u64, held * 8, "one f64 per encoded frame: {entry}");
+        assert_eq!(beside_instants(&made).len() as u64, held, "one line per encoded frame: {entry}");
         assert!(held >= 4, "each file holds its own frames: {entry}");
         // Decoded, because only the container itself says whether the frames in it line up: a
         // readback of the wrong size makes a file that still counts but no longer decodes to it.
@@ -501,16 +534,17 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     g.call("record stop", j!({}));
 
     let entry = mine(&third, &fast_name).pop().expect("one stream");
-    let bytes = std::fs::read(std::path::Path::new(&third).join(entry["file"].as_str().expect("a name")))
-        .expect("the stream");
-    let mut rest = &bytes[..];
-    let mut indices: Vec<u64> = Vec::new();
-    while !rest.is_empty() {
-        let (_, meta, body) = goofi_codec::split_frame(rest).expect("a whole frame");
-        let used = 14 + meta.len() + body.len();
-        indices.push(goofi_codec::decode(&rest[..used]).expect("a frame").meta().index().expect("an index"));
-        rest = &rest[used..];
-    }
+    // The samples are a bare stack of numbers, so what witnesses a LOSS is the sidecar: the
+    // frames' own indices, whose gaps are the frames that never reached the file.
+    let file = std::path::Path::new(&third).join(entry["file"].as_str().expect("a name"));
+    let beside = std::fs::read_to_string(file.with_extension("jsonl")).expect("the sidecar");
+    let indices: Vec<u64> = beside
+        .lines()
+        .map(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).expect("a json line");
+            v["meta"]["index"].as_u64().expect("a frame index")
+        })
+        .collect();
     let gaps: u64 = indices.windows(2).map(|p| p[1] - p[0] - 1).sum();
     assert!(gaps > 0, "the file itself is missing frames: {} written", indices.len());
     assert_eq!(
@@ -579,29 +613,43 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     };
     let before = settled(&g);
     goofi_tests::drive(&g, 64 * 480);
-    assert_eq!(settled(&g) - before, 480, "every block the clock rendered reached the disk");
+    // A wav counts SAMPLES, which is what a wav holds — 480 blocks of the engine's 64. Waited for
+    // rather than slept on: the drain is a thread, and a busy machine parks it past any sleep.
+    g.until("every block to reach the disk", |g| {
+        (frames(g, &osc_name) >= before + 480 * 64).then_some(())
+    });
+    assert_eq!(settled(&g) - before, 480 * 64, "every block the clock rendered, and not one more");
 
     g.call("record stop", j!({}));
 
-    // Every block one entry's file holds: its number, its instant, its shape and its samples.
+    // Every block one entry's file holds, read the way an analyst does: the WAV is one run of
+    // samples and the SIDECAR is the index into it — each line's `n` is the block's own length,
+    // which is the only thing that can say where one block ends and the next begins.
     let blocks_of = |folder: &str, entry: &serde_json::Value| -> Vec<(u64, f64, Vec<usize>, Vec<f32>)> {
         let path = std::path::Path::new(folder).join(entry["file"].as_str().expect("a name"));
-        let bytes = std::fs::read(path).expect("the audio stream");
-        let mut rest = &bytes[..];
+        let bytes = std::fs::read(&path).expect("the audio stream");
+        assert_eq!(&bytes[..4], b"RIFF", "an audio stream is a wav");
+        assert_eq!(&bytes[8..12], b"WAVE", "…and it says so in its own header");
+        assert_eq!(u16::from_le_bytes([bytes[20], bytes[21]]), 3, "IEEE float, which is what a sample is");
+        let samples: Vec<f32> = bytes[44..]
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().expect("four bytes")))
+            .collect();
+        let beside = std::fs::read_to_string(path.with_extension("jsonl")).expect("the sidecar");
         let mut held = Vec::new();
-        while !rest.is_empty() {
-            let (_, meta, body) = goofi_codec::split_frame(rest).expect("a whole frame");
-            let used = 14 + meta.len() + body.len();
-            let frame = goofi_codec::decode(&rest[..used]).expect("a block decodes");
-            let shape = frame.as_array().expect("an array").shape().to_vec();
+        let mut at = 0usize;
+        for line in beside.lines() {
+            let v: serde_json::Value = serde_json::from_str(line).expect("a json line");
+            let n = v["n"].as_u64().expect("the block's own length") as usize;
             held.push((
-                frame.meta().index().expect("every block is numbered"),
-                frame.meta().time().expect("every block is dated"),
-                shape,
-                goofi_tests::f32s(&frame),
+                v["meta"]["index"].as_u64().expect("every block is numbered"),
+                v["t"].as_f64().expect("every block is dated"),
+                vec![1, n],
+                samples[at..at + n].to_vec(),
             ));
-            rest = &rest[used..];
+            at += n;
         }
+        assert_eq!(at, samples.len(), "the sidecar accounts for every sample in the file");
         held
     };
 
@@ -616,12 +664,6 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     // own floats as audio, and the block number among them is nowhere near full scale.
     let peak = held.iter().flat_map(|b| b.3.iter()).fold(0f32, |m, x| m.max(x.abs()));
     assert!((peak - 1.0).abs() < 0.05, "the file holds the oscillator at full scale: peak {peak}");
-    // Per block, never across two: a splice is not a crossing.
-    let zero = |b: &Vec<f32>| b.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
-    let crossings: usize = held.iter().map(|b| zero(&b.3)).sum();
-    let intervals: usize = held.iter().map(|b| b.3.len().saturating_sub(1)).sum();
-    let expect = 880 * intervals / 48_000;
-    assert!(crossings.abs_diff(expect) <= 2, "…and it is A4: {crossings} crossings against {expect}");
     // EXACT, not approximate: every kept block lies on ONE line through its own number, so a block
     // that went missing moved none of the blocks around it. A loose assertion would prove nothing.
     let step = 64.0 / 48_000.0;
@@ -635,6 +677,13 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     };
     assert_eq!(line(&held), 0, "an ordinary drive loses no block at all: {entry}");
     assert_eq!(entry["dropped"], j!(0), "…and the manifest says so too: {entry}");
+
+    // …and with no block missing the wav is ONE run of audio, so the crossings are counted across
+    // the whole of it rather than per block, where every boundary would drop one.
+    let run: Vec<f32> = held.iter().flat_map(|b| b.3.iter().copied()).collect();
+    let crossings = run.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
+    let expect = 880 * (run.len() - 1) / 48_000;
+    assert!(crossings.abs_diff(expect) <= 2, "…and it is A4: {crossings} crossings against {expect}");
 
     // Step: the ANCHOR is derived from the count too, so a stream armed after a long wait is dated
     // by the block it begins at — where a t0 read at the first drain is the whole wait out.
@@ -756,4 +805,15 @@ fn an_armed_signal_slot_loses_no_tick_to_the_viewer_plane() {
     g.call("record disarm", j!({ "output": &wide_out }));
     g.call("record arm", j!({ "output": &wide_out }));
     g.until("the recording complaint to clear", |g| g.error(wide).is_none().then_some(()));
+}
+
+/// A stream's sidecar, read as the instants it carries — the one sidecar shape every kind has.
+fn beside_instants(file: &std::path::Path) -> Vec<f64> {
+    let text = std::fs::read_to_string(file.with_extension("jsonl")).expect("the sidecar");
+    text.lines()
+        .map(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).expect("a json line");
+            v["t"].as_f64().expect("an instant")
+        })
+        .collect()
 }

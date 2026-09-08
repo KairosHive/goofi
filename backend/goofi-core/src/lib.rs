@@ -789,3 +789,90 @@ impl Param {
         }
     }
 }
+
+/// A frame's `Meta` as JSON — what a `/data` reply carries and what a recording's sidecar holds.
+/// ONE projection, two ways out: a `Value` for a reply, and straight to a writer for a sidecar,
+/// which is what keeps a per-frame line off the allocator.
+pub struct MetaJson<'a>(pub &'a Meta);
+
+impl serde::Serialize for MetaJson<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let kept: Vec<(&String, &MetaValue)> = self.0.iter().filter(|(_, v)| in_json(v)).collect();
+        let mut map = s.serialize_map(Some(kept.len()))?;
+        for (k, v) in kept {
+            map.serialize_entry(k, &MetaValueJson(v))?;
+        }
+        map.end()
+    }
+}
+
+struct MetaValueJson<'a>(&'a MetaValue);
+
+/// `Bytes` has no JSON form and an EMPTY `Axes` says nothing, so neither reaches a reader.
+fn in_json(v: &MetaValue) -> bool {
+    match v {
+        MetaValue::Bytes(_) => false,
+        MetaValue::Axes(a) => a.dims().next().is_some(),
+        _ => true,
+    }
+}
+
+impl serde::Serialize for MetaValueJson<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::{SerializeMap, SerializeSeq};
+        match self.0 {
+            MetaValue::Null | MetaValue::Bytes(_) => s.serialize_unit(),
+            MetaValue::Bool(b) => s.serialize_bool(*b),
+            MetaValue::Int(i) => s.serialize_i64(*i),
+            MetaValue::Uint(u) => s.serialize_u64(*u),
+            MetaValue::Float(f) => s.serialize_f64(*f),
+            MetaValue::Str(v) => s.serialize_str(v),
+            MetaValue::List(l) => {
+                let kept: Vec<&MetaValue> = l.iter().filter(|v| in_json(v)).collect();
+                let mut seq = s.serialize_seq(Some(kept.len()))?;
+                for v in kept {
+                    seq.serialize_element(&MetaValueJson(v))?;
+                }
+                seq.end()
+            }
+            MetaValue::Map(m) => {
+                let kept: Vec<(&String, &MetaValue)> = m.iter().filter(|(_, v)| in_json(v)).collect();
+                let mut map = s.serialize_map(Some(kept.len()))?;
+                for (k, v) in kept {
+                    map.serialize_entry(k, &MetaValueJson(v))?;
+                }
+                map.end()
+            }
+            MetaValue::Axes(a) => {
+                let dims: Vec<(String, &[Coord])> = a.dims().map(|(d, c)| (d, c)).collect();
+                let mut map = s.serialize_map(Some(dims.len()))?;
+                for (dim, coords) in dims {
+                    map.serialize_entry(&dim, &CoordsJson(coords))?;
+                }
+                map.end()
+            }
+        }
+    }
+}
+
+struct CoordsJson<'a>(&'a [Coord]);
+
+impl serde::Serialize for CoordsJson<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut seq = s.serialize_seq(Some(self.0.len()))?;
+        for c in self.0 {
+            match c {
+                Coord::Num(n) => seq.serialize_element(n)?,
+                Coord::Str(v) => seq.serialize_element(&**v)?,
+            }
+        }
+        seq.end()
+    }
+}
+
+/// The `Value` form, for a caller that holds the whole reply in memory.
+pub fn meta_json(m: &Meta) -> serde_json::Value {
+    serde_json::to_value(MetaJson(m)).unwrap_or(serde_json::Value::Null)
+}
