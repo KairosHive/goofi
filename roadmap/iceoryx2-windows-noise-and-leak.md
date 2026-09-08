@@ -166,6 +166,37 @@ stay written down for the day the wait stops being the right answer.
 The three PR branches and `main` are GREEN on ubuntu and macOS as of this date, so a red Windows
 job on any of them is this file and needs no reading past this line.
 
+## A stranded service outlives a restart, because a restart keeps the uid
+
+Measured 2026-09-08 on a live instance, by hand. Twenty-seven `signal:LFO` nodes were added to one
+patch in a single batch to drive one node's params. The first one's service opened; the other
+twenty-six came up `ServiceInCorruptedState`, and the reply named the service, so the diagnosis is
+in the error already: `goofi_<session>_<uid>_<generation>_out_out`.
+
+What matters is which of the three repairs works.
+
+- **`node restart` does not.** It is a rebirth on a NEW GENERATION at the SAME uid, so the name
+  moves from `_0_` to `_1_` and lands next to the same stranded directory. Tried on two nodes: the
+  error stayed, and on one of them it only changed its spelling — `ServiceInCorruptedState` to
+  `HangsInCreation`, which reads like progress and is not.
+- **Thinning the patch does not, on its own.** Removing twenty of the twenty-seven let four of the
+  seven survivors open cleanly and left three still stuck, which is what says the trouble is the
+  stranded name rather than a live count.
+- **`node remove` then `node add` does.** A new uid is a new name, no stranded directory sits under
+  it, and all three opened first try. That is the workaround, and it is the ONE that reaches this
+  signature.
+
+So the leak this file is about is not only litter. It takes a name out of circulation for the life
+of the process, and a burst of node adds is what walks into one. Two readings follow that were not
+obvious before: a **root of its own per instance** — already the strongest of the Open items below —
+would also bound this, since a name can only collide with an entry the same instance stranded; and a
+bounded retry on CREATE, also below, cannot reach it, because the second attempt asks for the very
+same name.
+
+Not reproduced on a fresh boot, and not chased further: the boot's own `reclaim_stale_resources` is
+what clears the ground, and this was a long-lived session that had a full `cargo test --workspace`
+run beside it.
+
 ## Open — parked on that call, not being worked
 
 - Whether goofi should reclaim the leak itself at startup rather than wait for upstream. It
