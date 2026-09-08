@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Generate the zero-phase filter golden from scipy, the authority the node is measured against.
+"""Generate the filter golden from scipy, the authority the node is measured against.
 
 Run with an interpreter that has numpy and scipy:
 
     .gfivenv/bin/python backend/goofi-tests/tests/gen_filter_golden.py
 
 Writes backend/goofi-tests/tests/fixtures/filter_golden.json — the input, the design, and what
-`sosfiltfilt` makes of it. The Rust scenario feeds the SAME input to the node and compares.
+`sosfiltfilt` and `sosfilt` make of it, one per phase — and, for the causal phase, one more from
+a filter already at rest, which is where a live stream fed silence first stands. The Rust scenario
+feeds the SAME input to the node and compares.
 
 Lowpass and highpass only. A Butterworth cascade of second-order sections is the bilinear
 transform of one analog prototype, so scipy's design and the node's agree exactly there. A
@@ -17,7 +19,7 @@ import json
 import os
 
 import numpy as np
-from scipy.signal import butter, sosfiltfilt
+from scipy.signal import butter, sosfilt, sosfilt_zi, sosfiltfilt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "fixtures", "filter_golden.json")
@@ -49,12 +51,22 @@ def main():
     cases = []
     for case in CASES:
         sos = butter(case["order"], case["cutoff"], btype=case["mode"], fs=SFREQ, output="sos")
-        y = sosfiltfilt(sos, x.astype(np.float64))
-        cases.append({**case, "expected": [float(v) for v in y]})
+        wide = x.astype(np.float64)
+        y = sosfiltfilt(sos, wide)
+        # The causal pass starts from the first sample held steady, which is what the node primes.
+        causal, _ = sosfilt(sos, wide, zi=sosfilt_zi(sos) * wide[0])
+        # And from rest, which is where a filter that has already run over silence stands.
+        rest, _ = sosfilt(sos, wide, zi=np.zeros((sos.shape[0], 2)))
+        cases.append({
+            **case,
+            "expected": [float(v) for v in y],
+            "causal": [float(v) for v in causal],
+            "causal_from_rest": [float(v) for v in rest],
+        })
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w") as f:
         json.dump({"sfreq": SFREQ, "input": [float(v) for v in x], "cases": cases}, f)
-    print(f"wrote {OUT}: {len(cases)} cases over {N} samples")
+    print(f"wrote {OUT}: {len(cases)} cases over {N} samples, both phases")
 
 
 if __name__ == "__main__":

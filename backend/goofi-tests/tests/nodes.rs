@@ -431,15 +431,33 @@ fn a_node_saved_to_the_private_library_leaves_the_patch_rides_the_archive_and_st
     assert_eq!(g.call("session status", j!({}))["dirty"], false, "a move alone does not dirty the patch");
     emits(&g, live, 1.0); // …and the instance was never restarted out from under the patch
 
-    // A save NEVER overwrites: a second node of that name is refused, and the library's own file
-    // stands. The workspace file wins the name while it is there, which is what makes it savable.
+    // A save never overwrites of its own accord: a second node of that name is refused, and the
+    // library's own file stands. The workspace file wins the name while it is there, which is what
+    // makes it savable — and `library get` names the file it hides, which is what a caller asks
+    // before it decides.
     write_node(&workspace, "my_kept.py", "5.0");
     rescan(&g);
     let why = g.refuse("library save", j!({ "type": "MyKept" }));
     assert!(why.contains("already holds"), "{why}");
+    let hidden = g.call("library get", j!({ "type": "MyKept" }))["shadowed"].clone();
+    assert_eq!(hidden.as_array().map(Vec::len), Some(1), "the library's file, and nothing else: {hidden}");
+    assert_eq!(hidden[0]["provenance"], "custom", "{hidden}");
+    assert_eq!(hidden[0]["path"], goofi_core::path::to_slash(&library.path().join("my_kept.py")));
     let kept = std::fs::read_to_string(library.path().join("my_kept.py")).unwrap();
     assert!(kept.contains("[1.0]"), "the library's own file is untouched: {kept}");
-    std::fs::remove_file(workspace.join("my_kept.py")).unwrap();
+
+    // `--overwrite` is the one door through it: the file in the way is replaced, and the move is
+    // the same move — the patch's own file leaves the workspace.
+    let replaced = g.call("library save", j!({ "type": "MyKept", "overwrite": true }));
+    assert_eq!(replaced["type"], "signal:MyKept", "{replaced}");
+    assert!(!workspace.join("my_kept.py").exists(), "…and the patch's file left, as any save moves it");
+    let kept = std::fs::read_to_string(library.path().join("my_kept.py")).unwrap();
+    assert!(kept.contains("[5.0]"), "the library holds what replaced it: {kept}");
+    assert_eq!(g.call("library get", j!({ "type": "MyKept" }))["shadowed"], j!([]), "nothing stands behind it");
+    emits(&g, live, 5.0);
+
+    // The library is the one source from here, so put back the file this patch was saved with.
+    write_node(library.path(), "my_kept.py", "1.0");
     rescan(&g);
     emits(&g, live, 1.0);
 
