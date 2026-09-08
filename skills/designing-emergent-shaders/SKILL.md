@@ -170,7 +170,7 @@ interesting region with both ends still valid pictures.
 
 | Mistake | Why it disappoints |
 |---|---|
-| **3D noise sampled at `(x, y, time)`** | the most convincing fake there is — it boils and drifts and looks alive, but every frame was computable before the first one ran. Nothing accumulates. Both baselines written against this skill did it. |
+| **3D noise sampled at `(x, y, time)`** | the most convincing fake there is — it boils and drifts and looks alive, but every frame was computable before the first one ran. Nothing accumulates. Both agents this skill was tested against started here; the one that stopped when it felt finished shipped it. |
 | `sin(time * k)` anywhere in a stateful body | prescribed loop; visibly cycles |
 | Analytic flow field driven by the clock | the field cannot bend the flow; motion is imposed |
 | fBm octaves summed for "multi-scale" | texture, not competing structure |
@@ -192,9 +192,9 @@ goofi library get --type graphics:Mine    # at YOUR file's own line number
 
 **Check the structure, not the statistics.** Pixel measures — spatial variance, mean frame-to-frame
 difference — catch a shader that is *dead* (flat, frozen, NaN) and nothing more. They cannot tell
-development from churn: a clock-driven fBm field scores higher on both "detail" and "motion" than
-ThoughtField does, because drift and boil move a great many pixels without anything happening.
-Measured, on two baselines written for this skill's own test.
+development from churn: a clock-driven fBm field scored higher on both "detail" and "motion" than
+the reference field, because drift and boil move a great many pixels without anything happening.
+Measured, on the shaders written for this skill's own test.
 
 So grep yourself first — these three are decisive and take seconds:
 
@@ -206,11 +206,25 @@ grep -n 'fbm\|octave' Mine.wgsl     # summed octaves → texture, not competing 
 …and read `next_<buffer>` asking: **is any quantity derived from this buffer used to change this
 buffer?** If not, the loop is open and it will not develop.
 
-**What following this skill does not buy you.** Tested: an agent given these five moves produced a
-structurally correct field on the first try — `time` 0, no summed octaves, every move present —
-whose picture was washed out, mean 0.87 with almost no variation. The architecture transfers; the
-*tuning* does not. `sensitivity`, `reinforcement` and `balance` decide whether the field lives in
-its interesting band or pins to one end, and only looking tells you which. Budget a pass for it.
+**What this skill is worth, measured honestly.** Three shaders were written for the same brief —
+"genuine emergent complexity" — two without this skill and one with it. All three opened the same
+way: a clock-driven field sampling noise along *t*. What separated them was iteration, not talent.
+
+| | `time` | `fbm` | params / groups |
+|---|---|---|---|
+| stopped when it felt finished | 8 | 5 | 8 / 2 |
+| kept going, no skill, ~40 min more | 0 | 0 | 23 / 5 |
+| with this skill | 0 | 0 | 27 / 5 |
+
+So the honest claim is **not** "agents fail without this". An agent that iterates long enough
+rediscovers every move here unaided — which is the best evidence they are real and not one
+person's taste. What the skill buys is having them at the start instead of after forty minutes,
+and a verification habit: the agent that had it checked its own field for periodicity, found two
+defects — a collapsed channel and a washed-out render — and fixed both before calling it done.
+
+**Budget the tuning pass regardless.** `sensitivity`, `reinforcement` and `balance` decide whether
+the field lives in its interesting band or pins to one end. Both good runs above needed a
+correction there that no amount of correct architecture prevented.
 
 Then judge the picture, which no number does for you:
 
