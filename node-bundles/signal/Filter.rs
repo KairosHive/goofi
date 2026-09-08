@@ -1,11 +1,13 @@
-//! Filter — a Butterworth band, run forwards and then backwards over the stitched past, so what
-//! comes out is not shifted in time. It holds no filter state: the input's own past is the state.
+//! Filter — a Butterworth band. Zero-phase runs it forwards and then backwards, so what comes
+//! out is not shifted in time; causal runs it once and carries its state on, so a sample is
+//! answered the moment it arrives. Either way the stitched past is what makes every chunking of
+//! one signal give one answer.
 
 use goofi_core::{resolve_axis, stream, Data, SlotType, Stream};
 use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 /// One second-order section, normalized so `a0 == 1`.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq)]
 struct Biquad {
     b0: f32,
     b1: f32,
@@ -81,16 +83,22 @@ fn butterworth(kind: Kind, f0: f64, order: usize, sfreq: f64, into: &mut Vec<Biq
     }
 }
 
-/// One pass of the cascade over `lane`, each section starting at rest for the first sample.
-fn pass(sections: &[Biquad], lane: &[f32]) -> Vec<f32> {
-    let first = lane.first().copied().unwrap_or(0.0);
-    let mut state: Vec<[f32; 2]> = Vec::with_capacity(sections.len());
-    let mut level = first;
-    for s in sections {
-        let rest = s.rest();
-        state.push([rest[0] * level, rest[1] * level]);
-        level *= s.dc_gain();
-    }
+/// The cascade's state for a steady `level` at its input — where a pass starts, so its first
+/// sample does not read as a step out of silence.
+fn primed(sections: &[Biquad], mut level: f32) -> Vec<[f32; 2]> {
+    sections
+        .iter()
+        .map(|s| {
+            let rest = s.rest();
+            let z = [rest[0] * level, rest[1] * level];
+            level *= s.dc_gain();
+            z
+        })
+        .collect()
+}
+
+/// Run the cascade over `lane`, carrying `state` on from wherever the last run left it.
+fn run(sections: &[Biquad], state: &mut [[f32; 2]], lane: &[f32]) -> Vec<f32> {
     lane.iter()
         .map(|sample| {
             let mut x = *sample;
@@ -106,6 +114,12 @@ fn pass(sections: &[Biquad], lane: &[f32]) -> Vec<f32> {
         .collect()
 }
 
+/// One pass of the cascade over `lane`, starting at rest for its first sample.
+fn pass(sections: &[Biquad], lane: &[f32]) -> Vec<f32> {
+    let mut state = primed(sections, lane.first().copied().unwrap_or(0.0));
+    run(sections, &mut state, lane)
+}
+
 /// `lane` with `pad` samples of its own reflection at each end, turned through the end sample —
 /// so the extension continues the trend rather than facing a step.
 fn odd_extend(lane: &[f32], pad: usize) -> Vec<f32> {
@@ -116,10 +130,76 @@ fn odd_extend(lane: &[f32], pad: usize) -> Vec<f32> {
     head.chain(lane.iter().copied()).chain(tail).collect()
 }
 
+/// One lane's causal memory: the cascade state after the last sample it ran, and the outputs it
+/// has already made for the steps `past` still holds.
+#[derive(Default)]
+struct Memory {
+    state: Vec<[f32; 2]>,
+    made: Vec<f32>,
+}
+
 #[derive(Default)]
 struct Filter {
     past: Stream,
     sections: Vec<Biquad>,
+    memory: Vec<Memory>,
+}
+
+impl Filter {
+    /// Forwards and then backwards over the stitched past, so nothing comes out shifted in time.
+    fn zero_phase(&mut self, shape: &[usize], dim: usize, frame: &[u8]) -> Vec<Vec<f32>> {
+        let settle = self.sections.iter().map(Biquad::settling).max().unwrap_or(1).min(1 << 16);
+        // The PAST is what settles a pass, and it is real data. The reflection at each end is kept
+        // short, as scipy keeps it: a long one is a block of constant the filter answers instead.
+        let edge = 3 * (2 * self.sections.len() + 1);
+        let n = shape[dim];
+        let (wide, stitched, at) = self.past.push(shape, dim, frame, settle + n);
+        stream::lanes(&wide, dim, &stitched)
+            .iter()
+            .map(|lane| {
+                let pad = edge.min(lane.len().saturating_sub(1));
+                let extended = odd_extend(lane, pad);
+                let ahead = pass(&self.sections, &extended);
+                let mut back: Vec<f32> = ahead.into_iter().rev().collect();
+                back = pass(&self.sections, &back);
+                back.reverse();
+                back[pad + at..pad + at + n].to_vec()
+            })
+            .collect()
+    }
+
+    /// One pass, each lane carrying its own state on, so a sample is answered as it arrives. The
+    /// stitched past is here only to spot the steps this filter has already run.
+    fn causal(&mut self, shape: &[usize], dim: usize, frame: &[u8]) -> Vec<Vec<f32>> {
+        let n = shape[dim];
+        let held = self.past.steps().min(n);
+        let (wide, stitched, at) = self.past.push(shape, dim, frame, n);
+        let total = wide[dim];
+        let lanes = stream::lanes(&wide, dim, &stitched);
+        let cold = self.memory.len() != lanes.len()
+            || self.memory.iter().any(|m| m.state.len() != self.sections.len());
+        if cold {
+            self.memory = (0..lanes.len()).map(|_| Memory::default()).collect();
+        }
+        // What this frame brings that the filter has not run: all of the past after a redesign,
+        // and otherwise the part a rolling window did not already overlap.
+        let fresh = if cold { total } else { n - held.saturating_sub(at) };
+        let sections = &self.sections;
+        lanes
+            .iter()
+            .zip(self.memory.iter_mut())
+            .map(|(lane, m)| {
+                if m.state.is_empty() {
+                    m.state = primed(sections, lane.first().copied().unwrap_or(0.0));
+                }
+                let made = run(sections, &mut m.state, &lane[lane.len() - fresh..]);
+                m.made.extend(made);
+                let stale = m.made.len().saturating_sub(total);
+                m.made.drain(..stale);
+                m.made[m.made.len() - n..].to_vec()
+            })
+            .collect()
+    }
 }
 
 impl Node for Filter {
@@ -143,41 +223,34 @@ impl Node for Filter {
         if matches!(mode, "bandpass" | "notch") && low >= high {
             return Err(format!("{mode} needs low < high, got {low} and {high}").into());
         }
-        self.sections.clear();
+        let mut sections = Vec::new();
         match mode {
-            "lowpass" => butterworth(Kind::Low, high, order, sfreq, &mut self.sections),
-            "highpass" => butterworth(Kind::High, low, order, sfreq, &mut self.sections),
+            "lowpass" => butterworth(Kind::Low, high, order, sfreq, &mut sections),
+            "highpass" => butterworth(Kind::High, low, order, sfreq, &mut sections),
             "notch" => {
                 // The RBJ notch takes a centre and a quality; this is the pair that means low..high.
                 let centre = (low * high).sqrt();
                 for _ in 0..order.div_ceil(2) {
-                    self.sections.push(Biquad::new(Kind::Notch, centre, centre / (high - low), sfreq));
+                    sections.push(Biquad::new(Kind::Notch, centre, centre / (high - low), sfreq));
                 }
             }
             _ => {
-                butterworth(Kind::High, low, order, sfreq, &mut self.sections);
-                butterworth(Kind::Low, high, order, sfreq, &mut self.sections);
+                butterworth(Kind::High, low, order, sfreq, &mut sections);
+                butterworth(Kind::Low, high, order, sfreq, &mut sections);
             }
         }
+        // A redesigned cascade is a different filter, and the state the old one left means
+        // nothing to it.
+        if sections != self.sections {
+            self.sections = sections;
+            self.memory.clear();
+        }
 
-        let settle = self.sections.iter().map(Biquad::settling).max().unwrap_or(1).min(1 << 16);
-        // The PAST is what settles a pass, and it is real data. The reflection at each end is kept
-        // short, as scipy keeps it: a long one is a block of constant the filter answers instead.
-        let edge = 3 * (2 * self.sections.len() + 1);
-        let n = a.shape()[dim];
-        let (shape, stitched, at) = self.past.push(a.shape(), dim, a.as_bytes(), settle + n);
-        let filtered: Vec<Vec<f32>> = stream::lanes(&shape, dim, &stitched)
-            .iter()
-            .map(|lane| {
-                let pad = edge.min(lane.len().saturating_sub(1));
-                let wide = odd_extend(lane, pad);
-                let ahead = pass(&self.sections, &wide);
-                let mut back: Vec<f32> = ahead.into_iter().rev().collect();
-                back = pass(&self.sections, &back);
-                back.reverse();
-                back[pad + at..pad + at + n].to_vec()
-            })
-            .collect();
+        let filtered = if p.str("filter", "phase").unwrap_or("zero-phase") == "causal" {
+            self.causal(a.shape(), dim, a.as_bytes())
+        } else {
+            self.zero_phase(a.shape(), dim, a.as_bytes())
+        };
         let buf = stream::unlanes(a.shape(), dim, &filtered);
         out.set("out", Data::array_f32(a.shape().to_vec(), buf, d.meta().clone()).map_err(|e| e.to_string())?);
         Ok(())
@@ -185,6 +258,7 @@ impl Node for Filter {
 
     fn on_pulse(&mut self, _key: &ParamKey, _p: &Params<'_>) -> NodeResult {
         self.past.reset();
+        self.memory.clear();
         Ok(())
     }
 }
@@ -202,6 +276,21 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some(
             "Which part of the spectrum survives: below `high`, above `low`, between the two, or \
              everything except between the two.",
+        ),
+    },
+    ParamDecl {
+        group: "filter",
+        name: "phase",
+        spec: ParamSpec::Str {
+            default: "zero-phase",
+            options: &["zero-phase", "causal"],
+            refresh: false,
+        },
+        expression: None,
+        doc: Some(
+            "`zero-phase` shifts nothing in time, but it reads the future, so a live stream is \
+             answered late. `causal` answers each sample as it arrives, at the cost of a lag that \
+             grows towards the band edges.",
         ),
     },
     ParamDecl {
@@ -252,7 +341,7 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Arra
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Transform],
     doc: "Keep one band of the spectrum.\n\
-          Run both ways, so nothing comes out shifted in time.",
+          Zero-phase, so nothing is shifted in time, or causal, so nothing waits.",
     inputs: INPUTS,
     outputs: OUTPUTS,
     params: PARAMS,
