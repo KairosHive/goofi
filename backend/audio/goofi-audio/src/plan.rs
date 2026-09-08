@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 
 use goofi_audio_sdk::{BLOCK, MAX_CHANNELS};
 use goofi_core::SlotType;
-use goofi_control::scalar_of;
+use goofi_control::{param_of, scalar_of};
 use goofi_node::{BindingView, GraphView, NodeManifest, Uid};
 
 use crate::Instance;
@@ -51,7 +51,10 @@ pub struct Plan {
     /// What the device hears: every agreeing `AudioOut`'s input times its gain, summed here.
     pub output: (Region, u16),
     /// Per agreeing `AudioOut`: where its input and its gain read.
-    pub sinks: Vec<(Source, Source)>,
+    /// Per `AudioOut`: what it plays, its gain, and the DEVICE channels its own channels land on.
+    /// `None` is the whole device — every channel on the channel of the same number — which is
+    /// what every patch written before `channels` existed means.
+    pub sinks: Vec<(Source, Source, Option<Vec<u16>>)>,
 }
 
 impl Default for Plan {
@@ -163,7 +166,7 @@ pub fn compile(
     // A node Kahn could not order is IN a loop when it reaches itself; the rest are only fed by one.
     let members: HashSet<Uid> = stuck.iter().copied().filter(|u| reaches_itself(*u, &inbound, &stuck)).collect();
     let (order, _) = if members.is_empty() { (order, stuck) } else { kahn(live, &inbound, &members) };
-    let faults: Vec<(Uid, String)> =
+    let mut faults: Vec<(Uid, String)> =
         members.iter().map(|u| (*u, "in a loop with no feedback node, so it does not run".to_string())).collect();
 
     let mut plan = Plan::default();
@@ -220,23 +223,53 @@ pub fn compile(
             })
             .collect();
         if inst.manifest.type_name == crate::nodes::audio_out::TYPE && !silent.contains(uid) {
-            plan.sinks.push((ins[0].clone(), params[crate::nodes::audio_out::P::GAIN].clone()));
+            // A selection that does not parse plays NOTHING rather than everything: a typo that
+            // silently reverted to the whole device would put a signal on channels the patch took
+            // care to keep clear, and on a live rig that is the expensive direction to be wrong in.
+            // The fault carries the parser's own message.
+            let spec = str_of(view.nodes[uid].params, &inst.manifest.params[crate::nodes::audio_out::P::CHANNELS]);
+            match crate::chanmap::parse(&spec) {
+                Ok(sel) => plan.sinks.push((
+                    ins[0].clone(),
+                    params[crate::nodes::audio_out::P::GAIN].clone(),
+                    sel,
+                )),
+                Err(why) => faults.push((*uid, why)),
+            }
         }
         let audio_params = inst.twin.audio_params(params.len()).min(params.len());
         let scalars_at = alloc_strip(params.len(), &mut plan.arena_len);
         plan.stages.push(Stage { idx: inst.idx, serial: inst.serial, ins, params, outs, audio_params, scalars_at });
     }
+    // The device is opened as wide as the furthest channel any sink reaches. Without a selection
+    // that is the sink's own width, as it always was; with one it is one past the highest channel
+    // NAMED, so an `AudioOut` on `3-4` opens four channels however narrow what feeds it is.
     let width = plan
         .sinks
         .iter()
-        .map(|(input, _)| match input {
-            Source::Region { channels, .. } | Source::Sum { channels, .. } | Source::Inbox { channels, .. } => *channels,
-            Source::Silence | Source::Scalar { .. } => 1,
+        .map(|(input, _, sel)| {
+            let own = match input {
+                Source::Region { channels, .. } | Source::Sum { channels, .. } | Source::Inbox { channels, .. } => {
+                    *channels
+                }
+                Source::Silence | Source::Scalar { .. } => 1,
+            };
+            sel.as_deref().map_or(own, crate::chanmap::needed_width)
         })
         .max()
-        .unwrap_or(1);
+        .unwrap_or(1)
+        .min(MAX_CHANNELS);
     plan.output = (alloc(width, &mut plan.arena_len), width);
     (plan, faults)
+}
+
+/// A `Str` param's text at plan time, off the node's record rather than a control half's consts:
+/// the plan is compiled from the desired state, and that is where a channel selection lives.
+fn str_of(params: &goofi_node::ParamGroups, d: &goofi_audio_sdk::ParamDecl) -> String {
+    match param_of(params, d) {
+        goofi_core::Param::Str { value, .. } => value,
+        _ => String::new(),
+    }
 }
 
 /// The order Kahn finds — feedback nodes first, then by uid — and the nodes it could not place.

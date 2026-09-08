@@ -52,7 +52,9 @@ pub struct Ports {
 struct Io {
     stream: Option<cpal::Stream>,
     midi: Option<midir::MidiInputConnection<()>>,
-    device: Option<(String, f64)>,
+    /// The device name, the clock's rate and the channel selection — every input the open
+    /// depends on, so a move in any one of them reopens the stream.
+    device: Option<(String, f64, String)>,
     port: Option<String>,
     /// Raised by the input stream's error callback; the name is then tried once more.
     dead: Arc<AtomicBool>,
@@ -173,21 +175,28 @@ impl AudioHalf {
             io.device = None;
         }
         if let Some((producer, chans)) = ports.audio_in.clone() {
-            let wanted = (text(consts, audio_in::P::DEVICE), rate);
+            let wanted = (text(consts, audio_in::P::DEVICE), rate, text(consts, audio_in::P::CHANNELS));
             if io.device.as_ref() != Some(&wanted) {
                 io.stream = None;
-                let (stream, error) = match open_input(&wanted.0, wanted.1, producer, io.dead.clone(), clock) {
-                    Ok(Some((stream, c))) => {
-                        chans.store(c, Ordering::Relaxed);
-                        (Some(stream), None)
-                    }
-                    Ok(None) => (None, Some(NO_DEVICE.to_string())),
-                    Err(e) => (None, Some(e)),
+                // A selection that does not parse is the CHANNELS param's error and not the
+                // device's: the device may be perfectly openable, and an error hung on the wrong
+                // param is one the reader looks for in the wrong place.
+                let (stream, error, sel_error) = match crate::chanmap::parse(&wanted.2) {
+                    Err(why) => (None, None, Some(why)),
+                    Ok(sel) => match open_input(&wanted.0, wanted.1, sel.as_deref(), producer, io.dead.clone(), clock) {
+                        Ok(Some((stream, c))) => {
+                            chans.store(c, Ordering::Relaxed);
+                            (Some(stream), None, None)
+                        }
+                        Ok(None) => (None, Some(NO_DEVICE.to_string()), None),
+                        Err(e) => (None, Some(e), None),
+                    },
                 };
                 replan = true;
                 io.stream = stream;
                 io.device = Some(wanted);
                 errors.push((key_of(manifest, audio_in::P::DEVICE), error));
+                errors.push((key_of(manifest, audio_in::P::CHANNELS), sel_error));
             }
         }
         if let Some(producer) = ports.midi_in.clone() {
@@ -511,6 +520,7 @@ fn source_path(name: &str) -> PathBuf {
 fn open_input(
     name: &str,
     rate: f64,
+    sel: Option<&[u16]>,
     producer: Feed<f32>,
     dead: Arc<AtomicBool>,
     clock: Clock,
@@ -527,8 +537,26 @@ fn open_input(
     // channel the interface has — eighteen on a Scarlett 4pre — where WASAPI answers with the pair
     // an endpoint is. Ask for what can be carried rather than for everything, so the extra channels
     // are never opened instead of being read and dropped.
-    config.channels = config.channels.min(MAX_CHANNELS);
-    let channels = config.channels;
+    //
+    // A SELECTION moves that line. The stream must be opened wide enough to CONTAIN the highest
+    // channel asked for — channel 18 is only there if eighteen were opened — while what leaves the
+    // callback is only the selection, which the parser has already held to `MAX_CHANNELS`. So the
+    // ceiling applies to what the node emits and never to what the device is opened at, and the
+    // channels past sixteen of a wide card become reachable for the first time.
+    let device_width = config.channels;
+    config.channels = match sel {
+        Some(sel) => crate::chanmap::needed_width(sel).min(device_width),
+        None => device_width.min(MAX_CHANNELS),
+    };
+    let opened = config.channels;
+    // A selection naming a channel the device does not have is the selection's error, and it is
+    // worth saying how wide the device actually is — the number is not written on the front panel.
+    if let Some(sel) = sel {
+        if let Some(past) = sel.iter().copied().find(|c| *c >= device_width) {
+            return Err(format!("`{name}` has {device_width} input channels and the selection names channel {}", past + 1));
+        }
+    }
+    let channels = sel.map_or(opened, |s| s.len() as u16);
     if let Ok(configs) = device.supported_input_configs() {
         let ranges: Vec<(u32, u32)> = configs.map(|c| (c.min_sample_rate(), c.max_sample_rate())).collect();
         if let Some(why) = rate_refusal(config.sample_rate, &ranges) {
@@ -540,8 +568,9 @@ fn open_input(
     // hands over the device's own word — a Focusrite's is `i32` — failed outright on a format goofi
     // never asked about. Reading it and converting in the callback is the whole of the difference.
     let refused = |f| format!("the driver's sample format {f} is one goofi does not read");
+    let sel = sel.map(<[u16]>::to_vec);
     let open = |f| {
-        crate::by_format!(f, input_stream, refused, &device, config, channels, producer.clone(), dead.clone())
+        crate::by_format!(f, input_stream, refused, &device, config, opened, sel.clone(), producer.clone(), dead.clone())
     };
     let stream = open(format).map_err(|e| format!("`{name}`: {e}"))?;
     stream.play().map_err(|e| format!("`{name}`: {e}"))?;
@@ -576,7 +605,8 @@ fn rate_refusal(wanted: u32, ranges: &[(u32, u32)]) -> Option<String> {
 fn input_stream<T>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
-    channels: u16,
+    opened: u16,
+    sel: Option<Vec<u16>>,
     producer: Feed<f32>,
     dead: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, String>
@@ -584,18 +614,30 @@ where
     T: cpal::SizedSample,
     f32: cpal::FromSample<T>,
 {
+    // The width the NODE emits, which is the selection's length or the whole opened stream. The
+    // selection is held by value in the callback and never read from the control thread again, so
+    // a change of selection is a new stream rather than a message to a live one.
+    let emitted = sel.as_ref().map_or(opened, |s| s.len() as u16);
     device
         .build_input_stream::<T, _, _>(
             config,
             move |data: &[T], _| {
                 let Ok(mut inbox) = producer.try_lock() else { return };
-                let frames = data.len() / channels as usize;
-                if let Ok(chunk) = inbox.write_chunk_uninit(2 + data.len()) {
-                    chunk.fill_from_iter(
-                        [f32::from(channels), frames as f32]
-                            .into_iter()
-                            .chain(data.iter().map(|s| f32::from_sample_(*s))),
-                    );
+                let frames = data.len() / opened as usize;
+                let len = frames * emitted as usize;
+                if let Ok(chunk) = inbox.write_chunk_uninit(2 + len) {
+                    let header = [f32::from(emitted), frames as f32].into_iter();
+                    let _ = match &sel {
+                        // No selection: the stream's own interleaving is already the answer.
+                        None => chunk.fill_from_iter(header.chain(data.iter().map(|s| f32::from_sample_(*s)))),
+                        // A selection GATHERS: frame by frame, the named channels in the order they
+                        // were named, so `4-3` really does arrive swapped and a repeat really does
+                        // fan out. `sel` was checked against the opened width at open, so the index
+                        // is in range for every frame this stream will ever deliver.
+                        Some(sel) => chunk.fill_from_iter(header.chain((0..frames).flat_map(|f| {
+                            sel.iter().map(move |c| f32::from_sample_(data[f * opened as usize + *c as usize]))
+                        }))),
+                    };
                 }
             },
             move |e| {
@@ -634,6 +676,197 @@ fn open_port(name: &str, producer: Feed<Note>) -> Result<midir::MidiInputConnect
 #[cfg(test)]
 mod tests {
     use super::rate_refusal;
+
+    /// The reported case, in the order it actually happens: an ASIO INPUT is opened first — a
+    /// loaded patch does this before any dropdown exists — and the OUTPUT list is then asked for.
+    /// The driver is held by the capture stream, so it cannot be enumerated, and unless it was
+    /// learned before anything opened it is absent from the output list with no way back. This is
+    /// what `host::warm` is for, and this test is the reason it cannot be lazy.
+    ///
+    /// `cargo test -p goofi-audio --features asio asio_is_offered_in_both -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs a multi-channel ASIO device"]
+    fn asio_is_offered_in_both_directions_once_a_stream_holds_the_driver() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{Arc, Mutex};
+
+        // Resolve and open the INPUT first, touching no list at all — as loading a patch does.
+        let name = "ASIO: Focusrite USB ASIO";
+        let (producer, _consumer) = rtrb::RingBuffer::<f32>::new(super::INBOX_RING);
+        let opened = super::open_input(
+            name,
+            48000.0,
+            None,
+            Arc::new(Mutex::new(producer)),
+            Arc::new(AtomicBool::new(false)),
+            crate::Clock::Device,
+        );
+        let _stream = opened.unwrap_or_else(|e| panic!("`{name}`: {e}")).expect("the device clock opens");
+        println!("`{name}` is capturing, and now holds the driver");
+
+        // Both lists must still offer it: the input that is running, and the output side of the
+        // same card, which is the direction nothing has looked at yet.
+        for kind in [crate::host::Kind::Input, crate::host::Kind::Output] {
+            let word = match kind {
+                crate::host::Kind::Input => "input",
+                crate::host::Kind::Output => "output",
+            };
+            let list: Vec<String> = crate::host::named(kind).into_iter().map(|(n, _)| n).collect();
+            assert!(list.iter().any(|n| n == name), "`{name}` is missing from the {word} list: {list:#?}");
+            println!("{word} list offers `{name}`");
+        }
+
+        // …and the output side really opens, so the offer is not a promise the open cannot keep.
+        let dev = crate::host::device(crate::host::Kind::Output, name).expect("the output resolves");
+        let supported = cpal::traits::DeviceTrait::default_output_config(&dev).expect("a default output config");
+        let out = cpal::traits::DeviceTrait::build_output_stream::<i32, _, _>(
+            &dev,
+            supported.config(),
+            |d: &mut [i32], _| d.fill(0),
+            |e| eprintln!("{e}"),
+            None,
+        )
+        .expect("the ASIO output opens beside the running input");
+        cpal::traits::StreamTrait::play(&out).expect("the output plays");
+        println!("input and output are BOTH live on `{name}`");
+    }
+
+    /// The order a USER works in: name the output, hear it, and only THEN go looking for an input.
+    /// Nothing enumerated the input side while the driver was still free, so a cache that is only
+    /// filled by a dropdown someone happened to open is empty exactly when it is needed. A patch
+    /// loaded with an ASIO `AudioOut` already in it opens the stream before any dropdown exists at
+    /// all, which is the same hole reached sooner.
+    ///
+    /// `cargo test -p goofi-audio --features asio the_input_list_survives -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs a multi-channel ASIO device"]
+    fn the_input_list_survives_an_output_named_first() {
+        use cpal::traits::{DeviceTrait, StreamTrait};
+
+        // NO enumeration of the input side first — this process resolves the output and nothing
+        // else, exactly as a loaded patch does.
+        let name = crate::host::named(crate::host::Kind::Output)
+            .into_iter()
+            .find(|(n, _)| crate::host::asio_driver(n).is_some_and(|d| d.contains("Focusrite")))
+            .map(|(n, _)| n)
+            .expect("no Focusrite ASIO output");
+        let dev = crate::host::device(crate::host::Kind::Output, &name).expect("the output resolves");
+        let supported = dev.default_output_config().expect("a default output config");
+        let out = dev
+            .build_output_stream::<i32, _, _>(supported.config(), |d: &mut [i32], _| d.fill(0), |e| eprintln!("{e}"), None)
+            .expect("the ASIO output opens");
+        out.play().expect("the output plays");
+
+        let ins: Vec<String> =
+            crate::host::named(crate::host::Kind::Input).into_iter().map(|(n, _)| n).collect();
+        println!("inputs while `{name}` plays: {ins:#?}");
+        assert!(
+            ins.iter().any(|n| n == &name),
+            "`{name}` is not offered as an input while it plays, so ASIO cannot be had in both directions"
+        );
+    }
+
+    /// FULL DUPLEX on one ASIO driver: an `AudioOut` and an `AudioIn` naming the same card, which
+    /// is the ordinary way to use an interface and the thing that was reported as impossible.
+    ///
+    /// `cargo test -p goofi-audio --features asio full_duplex -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs a multi-channel ASIO device"]
+    fn full_duplex_on_one_asio_driver() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{Arc, Mutex};
+
+        use cpal::traits::{DeviceTrait, StreamTrait};
+
+        let name = crate::host::named(crate::host::Kind::Output)
+            .into_iter()
+            .find(|(n, _)| crate::host::asio_driver(n).is_some_and(|d| d.contains("Focusrite")))
+            .map(|(n, _)| n)
+            .expect("no Focusrite ASIO output");
+
+        // The OUTPUT first, as the clock does: it is the device clock, and it loads the driver.
+        let dev = crate::host::device(crate::host::Kind::Output, &name).expect("the output resolves");
+        let supported = dev.default_output_config().expect("a default output config");
+        let rate = f64::from(supported.sample_rate());
+        let out = dev
+            .build_output_stream::<i32, _, _>(supported.config(), |d: &mut [i32], _| d.fill(0), |e| eprintln!("out: {e}"), None)
+            .expect("the ASIO output opens");
+        out.play().expect("the output plays");
+        println!("output holding `{name}` at {rate} Hz");
+
+        // …then the INPUT on the same driver, through the same door `AudioIn` uses.
+        let (producer, mut consumer) = rtrb::RingBuffer::<f32>::new(super::INBOX_RING);
+        let sel = crate::chanmap::parse("1-2").expect("the spec parses");
+        let opened = super::open_input(
+            &name,
+            rate,
+            sel.as_deref(),
+            Arc::new(Mutex::new(producer)),
+            Arc::new(AtomicBool::new(false)),
+            crate::Clock::Device,
+        );
+        let (_in_stream, channels) =
+            opened.unwrap_or_else(|e| panic!("the input on the SAME driver: {e}")).expect("the device clock opens");
+        assert_eq!(channels, 2);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let header = consumer.pop().expect("the input callback ran while the output held the driver");
+        assert_eq!(header as u16, 2, "the capture is live and two channels wide");
+        println!("input and output are BOTH live on `{name}`");
+    }
+
+    /// The whole point of `channels`, on real hardware: a Scarlett's inputs 3 and 4 are not
+    /// reachable through WASAPI at all — it publishes the card as one stereo endpoint — and under
+    /// ASIO they are channels 3 and 4 of an eighteen-wide device. This opens that device once per
+    /// selection and checks the width the NODE emits, which is what the graph then carries.
+    ///
+    /// Ignored because it needs the card: `cargo test -p goofi-audio --features asio
+    /// a_selection_opens -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs a multi-channel ASIO device"]
+    fn a_selection_opens_the_channels_it_names() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{Arc, Mutex};
+
+        use cpal::traits::DeviceTrait;
+
+        let ins = crate::host::named(crate::host::Kind::Input);
+        let (name, device) = ins
+            .iter()
+            .find(|(n, _)| crate::host::asio_driver(n).is_some_and(|d| d.contains("Focusrite")))
+            .expect("no Focusrite ASIO input");
+        let supported = device.default_input_config().expect("no default input config");
+        let (width, rate) = (supported.channels(), f64::from(supported.sample_rate()));
+        println!("`{name}`: {width} channels at {rate} Hz");
+
+        // `all` is capped by what the engine carries; a selection is capped only by the device,
+        // which is how channel 17 of an eighteen-wide card becomes reachable at all.
+        let all = width.min(goofi_audio_sdk::MAX_CHANNELS);
+        let mut cases: Vec<(&str, u16)> = vec![("all", all), ("1", 1), ("2", 1), ("1-2", 2), ("3", 1), ("4", 1), ("3-4", 2), ("4-3", 2)];
+        if width >= 18 {
+            cases.push(("17-18", 2));
+        }
+        for (spec, want) in cases {
+            let sel = crate::chanmap::parse(spec).expect("the spec parses");
+            let (producer, mut consumer) = rtrb::RingBuffer::<f32>::new(super::INBOX_RING);
+            let opened = super::open_input(
+                name,
+                rate,
+                sel.as_deref(),
+                Arc::new(Mutex::new(producer)),
+                Arc::new(AtomicBool::new(false)),
+                crate::Clock::Device,
+            );
+            let (stream, channels) = opened.unwrap_or_else(|e| panic!("`{spec}`: {e}")).expect("the device clock opens");
+            assert_eq!(channels, want, "`{spec}` emits {want} channels");
+
+            // …and the callback agrees: the first number of every frame it enters IS the width.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let header = consumer.pop().expect("the callback entered a frame");
+            assert_eq!(header as u16, want, "`{spec}`: the callback's own header says {want}");
+            println!("`{spec}` -> {channels} channels");
+            drop(stream);
+        }
+    }
 
     /// The case this was written for: a card pinned to one rate by its own control panel, or by
     /// another application already holding it, against a graph clocked from somewhere else. The

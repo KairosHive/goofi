@@ -13,6 +13,13 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("the output device the engine's clock follows; every AudioOut names the same one"),
     },
+    CHANNELS = ParamDecl {
+        group: "audio",
+        name: "channels",
+        spec: ParamSpec::Str { default: crate::chanmap::ALL, options: &[], refresh: false },
+        expression: None,
+        doc: Some(crate::chanmap::DOC),
+    },
     GAIN = ParamDecl {
         group: "audio",
         name: "gain",
@@ -28,6 +35,8 @@ static INS: &[SlotDecl] =
 pub static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Output],
     doc: "The sound device: what reaches `input` is heard, times `gain`.\n\
+          `channels` names the device channels it lands on, the first incoming channel on the \
+          first channel named, so two AudioOuts can hold different pairs of one card.\n\
           Every AudioOut on the device sums.",
     inputs: INS,
     outputs: &[],
