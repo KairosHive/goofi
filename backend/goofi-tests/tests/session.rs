@@ -85,6 +85,22 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("patch.gfi");
     std::fs::write(g.state.mount().join("notes.md"), b"the EEG source is on channel 3").unwrap();
+
+    // Step: the skills goofi ships are laid into every workspace, so an agent spawned into one
+    // reads them from its own cwd — and seeded BEFORE the baseline, so they never dirty a patch.
+    let skills = g.state.mount().join(goofi_bridge::SKILLS_DIR);
+    let shipped: Vec<String> = std::fs::read_dir(&skills)
+        .expect("a workspace carries the shipped skills")
+        .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+        .collect();
+    assert!(shipped.contains(&"designing-emergent-shaders".to_string()), "{shipped:?}");
+    assert!(skills.join("designing-emergent-shaders/SKILL.md").is_file(), "with its files beside it");
+    // An edit of goofi's own copy is the PATCH's from here on, and must survive the round trip.
+    std::fs::write(skills.join("designing-emergent-shaders/SKILL.md"), b"mine now").unwrap();
+    // …and a skill this patch invented travels like any other workspace file.
+    std::fs::create_dir_all(skills.join("mine")).unwrap();
+    std::fs::write(skills.join("mine/SKILL.md"), b"a skill of the patch's own").unwrap();
+
     g.call("session save", j!({ "path": path.to_string_lossy() }));
     assert_eq!(g.call("session status", j!({}))["dirty"], false, "a saved patch is clean");
 
@@ -106,6 +122,31 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
                b"the EEG source is on channel 3", "the workspace travelled with the patch");
     assert_eq!(other.call("session status", j!({}))["dirty"], false,
                "a patch is not unsaved the moment it finishes loading");
+
+    // Step: the skills rode inside the `.gfi`, and the patch's own copies are what came back —
+    // goofi seeds the absent ones and never writes over one the patch carries.
+    let landed = other.state.mount().join(goofi_bridge::SKILLS_DIR);
+    assert_eq!(std::fs::read(landed.join("designing-emergent-shaders/SKILL.md")).unwrap(),
+               b"mine now", "an edited skill is the PATCH's, and a load does not restore goofi's");
+    assert_eq!(std::fs::read(landed.join("mine/SKILL.md")).unwrap(),
+               b"a skill of the patch's own", "…and a skill the patch invented travels with it");
+
+    // Step: a patch saved WITHOUT a skill goofi has — which is every patch saved before that skill
+    // existed — is given it on load, and packages it from then on.
+    std::fs::remove_dir_all(landed.join("designing-emergent-shaders")).unwrap();
+    let older = dir.path().join("older.gfi");
+    other.call("session save", j!({ "path": older.to_string_lossy() }));
+    let reopened = Goofi::new();
+    reopened.call("session load", j!({ "path": older.to_string_lossy() }));
+    let regained = reopened.state.mount().join(goofi_bridge::SKILLS_DIR);
+    assert!(regained.join("designing-emergent-shaders/SKILL.md").is_file(),
+            "a skill goofi gained since the patch was saved is laid in on load");
+    assert_ne!(std::fs::read(regained.join("designing-emergent-shaders/SKILL.md")).unwrap(),
+               b"mine now", "and it is goofi's own copy, the patch having carried none");
+    assert_eq!(std::fs::read(regained.join("mine/SKILL.md")).unwrap(),
+               b"a skill of the patch's own", "the patch's own is untouched beside it");
+    assert_eq!(reopened.call("session status", j!({}))["dirty"], false,
+               "seeding a skill on load never leaves the patch dirty");
 
     // …and reopened over ITSELF, in the session that has been running it all along.
     let mut ev = g.events();
