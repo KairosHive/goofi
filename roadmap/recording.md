@@ -136,11 +136,37 @@ already queued was what it cost, because the index run then stayed contiguous, s
 invisible and every surviving block was dated 1.33 ms late.
 
 **Graphics is a third `Want`, and arming registers demand.** A stage renders only where its output
-has a reader, so an armed stage is one — at its OWN size, because a recording is evidence and is
-never fitted to somebody's viewport. Frames leave through an `Encoders` seam; the one implementation
-is an ffmpeg child writing FFV1 in Matroska from `rgba64le`, beside a `.times` sidecar of one f64
-patch-second per ENCODED frame. Encoding runs off the render thread behind a two-deep queue, and a
-frame the queue refuses is a counted drop rather than a stalled engine.
+has a reader, so an armed stage is one — at its OWN size, which is the stage's and never somebody's
+viewport. Frames leave through an `Encoders` seam; the one implementation
+is an ffmpeg child writing FFV1 in Matroska, `rgba64le` in and `gbrp10le` out, beside a `.times`
+sidecar of one f64 patch-second per ENCODED frame. Encoding runs off the render thread behind a
+two-deep queue, and a frame the queue refuses is a counted drop rather than a stalled engine.
+
+**A video is what a viewer WATCHES, and the exact texels are not in it.** No integer format holds
+an `Rgba16Float` texture — the 16-bit unsigned mapping that was there first is finer than f16 above
+1/64 and COARSER below it, and anything under 7.6e-6 becomes 0, so "lossless within [0,1]" was an
+overclaim at the dark end whatever the depth. So the video is stated as a viewable PROJECTION and
+claims no losslessness at all: ten-bit `gbrp10le`, which is 222 KB a frame at 512 square against
+797 for sixteen — 6.5 MB/s at 30 fps instead of 23. An analyst who needs the texels records the
+tap, which is f32.
+
+**It carries three channels, because a fourth is a file that plays as nothing.** The readback is
+RGBA and the recorded stream is not: VLC cannot allocate a picture for a 16-bit ALPHA plane, so
+`gbrap16le` reaches the decoder and dies there — `get_buffer() failed`, then `buffer deadlock
+prevented`, and a window that stays empty. The same frames as `gbrp16le` play, and so do
+`yuv444p16le` and 8-bit `gbrap`: it is depth AND alpha together that no common player takes. YUV at
+any depth was rejected beside them — its matrix is a lossy conversion the RGB path does not pay.
+The manifest says in words that alpha is not kept.
+
+**The container is CONSTANT-RATE, so the encoder must hold the render clock.** A rawvideo pipe
+carries no timestamps — `-use_wallclock_as_timestamps` with `-fps_mode passthrough` was tried and
+the demuxer ignores it — so the file's timeline is `-r` times its frame count, and every dropped
+frame shortens the recording rather than gapping it. What that cost: FFV1's default is ONE thread,
+19 frames a second at 512 square, against a clock that then rendered 60 — two frames in three
+dropped, and three seconds of patch time playing back as one. Slicing it (`-slices 24 -coder 1
+-context 1`) reaches 73 fps on the same frames and files 9% smaller than slicing alone, and the
+render clock is 30. The `.times` sidecar stays the alignment authority, which is what makes a drop
+recoverable rather than silent.
 
 **Finalizing never runs on the render thread.** `Recorder::close_later` reaps on a thread of its own
 for every close the render thread causes. Closing in place held the session mutex across
@@ -156,8 +182,9 @@ They are CONVERSIONS of the written file, made later and by a separate tool; not
 beside the recording, and no format choice can undo the buffered path.
 
 **Graphics is the stated exception, and it is stated in the manifest.** Every texture is
-`Rgba16Float` and no codec takes float, so a video entry says in words that it is lossless within
-[0,1] and that a value outside that range is clipped to it. No stream claims plain "lossless".
+`Rgba16Float` and no integer format holds one, so a video entry says in words that it is a viewable
+projection and not evidence: ten bits of red, green and blue, a value outside [0,1] clipped to it,
+and alpha not kept. It claims no losslessness at all, plain or qualified.
 
 **Video is encoded through ffmpeg, and the owner chose it against measured alternatives.**
 In-process pure-Rust compressors were offered with numbers, and ffmpeg was kept. The numbers stand
@@ -165,7 +192,9 @@ for whoever proposes one again: single-core, on a 1920×1080 RGBA16 frame of GRA
 `lz4_flex` reached 735 MB/s at 2.0x and `zstd -1` 451 MB/s at 7.9x — both faster than FFV1, and
 zstd denser. Gradient content makes those ratios optimistic against real shader output. The trade,
 as a fact about the two formats: a `.mkv` opens in any player, and a goofi frame stream opens in
-goofi. The dependency is bounded — a missing ffmpeg costs THAT STREAM alone: the node wears a
+goofi. That first half is a fact about the CONTAINER and not about what is put in it — a `.mkv` of
+`gbrap16le` opened in nothing — which is why the pixel format is a decision and not a default.
+The dependency is bounded — a missing ffmpeg costs THAT STREAM alone: the node wears a
 standing error naming the package, the manifest holds an entry saying why the stream is empty, and
 only a recording whose every armed stream is video is refused.
 
@@ -184,6 +213,12 @@ recorders cannot own one timeline.
 - **A rate change mid-recording** re-ties the audio anchor, so the frames either side of it derive
   from different ties. That is a real discontinuity and the manifest does not name it as one — only
   the `drift` either side of it moves.
+- **A stage the ENGINE cannot render at 30 fps still plays fast.** The container is constant-rate,
+  so a heavy shader or a huge frame that overruns the tick shortens the video the same way a slow
+  encoder does — the drop just happens one stage earlier, and nothing in the file says so. The
+  `.times` sidecar holds the truth either way. Making the file itself honest needs per-frame
+  timestamps, and a rawvideo pipe carries none: that means a container goofi writes, or a retiming
+  pass over the finished file.
 - **A reaper that races a stop loses that stream's manifest row.** The file is still finalized, so
   the recording keeps the video and loses only what describes it. The fix was built and WITHDRAWN:
   making `stop` wait for `close_later` parks it inside a blocking ffmpeg `finish`, which is the

@@ -62,11 +62,12 @@ impl Encoders for FfmpegEncoders {
 pub const MISSING: &str = "`ffmpeg` is not on PATH, and a graphics slot is armed. \
                            Install the `ffmpeg` package, or disarm the graphics slot.";
 
-/// What the manifest states about a video stream, in words. Every texture in the graphics engine
-/// is 16-bit FLOAT and no video codec takes float, so the recorded window is the one a
-/// 16-bit UNSIGNED texel holds.
-pub const CLIP: &str = "FFV1 in Matroska at rgba64le: lossless within [0,1], and a value outside \
-                        that range is clipped to it.";
+/// What the manifest states about a video stream, in words. No integer format holds an
+/// `Rgba16Float` texture, so a video is what a viewer WATCHES and never what an analyst measures,
+/// and it says so: three channels of ten bits, the [0,1] window, and no claim of losslessness.
+pub const CLIP: &str = "FFV1 in Matroska at gbrp10le: a viewable projection of the frame and not \
+                        evidence of it — ten bits of red, green and blue, a value outside [0,1] \
+                        clipped to it, and alpha not kept.";
 
 /// One `ffmpeg` child. FFV1 is lossless and Matroska is the container that carries it; MP4
 /// cannot.
@@ -83,6 +84,10 @@ impl Ffmpeg {
             .args(["-f", "rawvideo", "-pix_fmt", "rgba64le"])
             .args(["-s", &format!("{w}x{h}"), "-r", &format!("{fps}")])
             .args(["-i", "-", "-an", "-c:v", "ffv1"])
+            // Sliced, so the encode threads: ONE thread is the default and it holds 19 frames a
+            // second at 512 square, under the clock feeding it, which a fixed-rate file plays fast.
+            .args(["-slices", "24", "-coder", "1", "-context", "1"])
+            .args(["-pix_fmt", "gbrp10le"])
             .arg(file)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
