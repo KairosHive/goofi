@@ -92,6 +92,7 @@
 
 	let chipCount = $state(0);
 	let segment = $state('a');
+	let segmentSet = $state<string[]>(['x']);
 	let combo = $state('beta');
 
 	function doRefresh(): void {
@@ -528,7 +529,7 @@
 	</section>
 
 	<section>
-		<h2>Segmented (one lit segment, chrome-height)</h2>
+		<h2>Segmented (one lit segment, or a lit set — chrome-height)</h2>
 		<div class="form">
 			<Segmented
 				value={segment}
@@ -547,6 +548,20 @@
 				onChange={() => (segment = segment === 'a' ? 'b' : 'a')}
 				aria-label="lone sample"
 				data-testid="ui-segmented-lone"
+			/>
+			<Segmented
+				value={segmentSet}
+				segments={[
+					{ id: 'x', label: '', icon: 'sliders-horizontal', count: 3, name: 'glyph' },
+					{ id: 'y', label: 'E', count: 12, name: 'lettered' },
+					{ id: 'z', label: 'R', count: 0, name: 'empty' }
+				]}
+				onChange={(id) =>
+					(segmentSet = segmentSet.includes(id)
+						? segmentSet.filter((s) => s !== id)
+						: [...segmentSet, id])}
+				aria-label="set sample"
+				data-testid="ui-segmented-set"
 			/>
 		</div>
 	</section>
