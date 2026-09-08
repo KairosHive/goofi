@@ -342,6 +342,7 @@ fn a_learned_automaton_grows_from_its_seed_instead_of_flooding_the_grid() {
     g.set_param(node, "common", "width", 64);
     g.set_param(node, "common", "height", 64);
     g.set_param(node, "neuralca", "start", "dot");
+    g.set_param(node, "neuralca", "alive", true);
     g.ready(node);
 
     // `shade` maps the state through `rgb * 0.5 + 0.5`, so a DEAD cell renders mid-grey and the
@@ -373,6 +374,69 @@ fn a_learned_automaton_grows_from_its_seed_instead_of_flooding_the_grid() {
     // …and it is not simply frozen: the seed is still alive after all that.
     assert!(lit(&after, &middle) > 0.05, "the seed itself is still alive after twenty ticks");
     assert!(g.error(node).is_none(), "NeuralCA stands with an error");
+
+    // Step: the rule it runs is the one on the wire, packed the way the trainer packs it. A model
+    // of one hidden unit whose input layer is zero has a step that no state can change, so every
+    // cell walks to the same known colour — which a rule read from the wrong offsets cannot give.
+    let text = g.add("signal:Text");
+    let json = g.add("signal:FromJson");
+    let pick = g.add("signal:TableSelect");
+    for n in [text, json, pick] {
+        g.ready(n);
+    }
+    // One unit, an input layer of zero and a bias of one: a step no state can change, so channels
+    // 0, 1 and 2 walk to their bounds and the whole grid reads magenta.
+    g.set_param(text, "text", "value", rule_json(1, &[(12, [1.0, 0.0, 0.0, 0.0]), (13, [1.5, -1.5, 1.5, 0.0])]));
+    g.set_param(pick, "table", "key", "w");
+    g.link(text, "out", json, "input");
+    g.link(json, "out", pick, "input");
+    g.link(pick, "array", node, "weights");
+    g.set_param(node, "neuralca", "alive", false);
+
+    let ruled = drawn(&g, node, "the wired rule to take the whole grid", |d| {
+        f32s(d).chunks_exact(4).all(|px| px[0] > 0.99 && px[1] < 0.01 && px[2] > 0.99)
+    });
+    assert_eq!(shape(&ruled), vec![64, 64, 4], "and it is still the frame it was told to draw");
+    assert!(g.error(node).is_none(), "NeuralCA stands with an error on a wired rule");
+
+    // Step: and the ORDER of what a cell sees is the trainer's. The perception vector is filter
+    // major — twelve channels of itself, then of each slope, then of the curvature — so weight 2
+    // of an input row is channel 2 as it stands. A second unit reads exactly that and drives the
+    // grid somewhere else; under any other order it reads a slope, which is zero on a flat grid,
+    // and the magenta above never moves.
+    let order = rule_json(
+        2,
+        &[
+            (12, [1.0, 0.0, 0.0, 0.0]),
+            (13, [0.0, 0.0, 1.5, 0.0]),
+            (16, [0.0, 0.0, 1.0, 0.0]),
+            (29, [-1.5, 1.5, 0.0, 0.0]),
+        ],
+    );
+    g.set_param(text, "text", "value", order);
+    drawn(&g, node, "the second unit to read channel 2 and turn the grid", |d| {
+        f32s(d).chunks_exact(4).all(|px| px[0] < 0.01 && px[1] > 0.99 && px[2] > 0.99)
+    });
+
+    // …and a length no packing can explain is no rule: the node falls back to its own rather than
+    // reading past the end of what it was handed.
+    g.set_param(text, "text", "value", r#"{"w": [[[1.0, 2.0, 3.0, 4.0]]]}"#.to_string());
+    drawn(&g, node, "the drawn rule back", |d| {
+        f32s(d).chunks_exact(4).any(|px| px[0] > 0.01 || px[1] < 0.99)
+    });
+    assert!(g.error(node).is_none(), "a weight array of the wrong length is not an error");
+}
+
+/// A weight array the way `training/style_ca.py` packs one: `hidden` blocks of sixteen texels —
+/// twelve for the input row, one for the bias, three for the output column — then three of bias.
+fn rule_json(hidden: usize, set: &[(usize, [f32; 4])]) -> String {
+    let mut texels = vec![[0.0f32; 4]; 16 * hidden + 3];
+    for (i, v) in set {
+        texels[*i] = *v;
+    }
+    let rows: Vec<String> =
+        texels.iter().map(|t| format!("[{},{},{},{}]", t[0], t[1], t[2], t[3])).collect();
+    format!("{{\"w\": [[{}]]}}", rows.join(","))
 }
 
 /// Every model in this pack that ships a graphics half beside it, and the slots that half draws —
