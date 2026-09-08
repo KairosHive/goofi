@@ -62,7 +62,7 @@ landed beside it:
   frame in goofi already has.
 - **The picture leaves the pad as a FRAME.** `Drawing` is a signal node that takes the widget's
   global the way a knob's value takes one — an expression of `globals.<panel>.<pad>` — decodes the
-  PNG and emits `[H, W, 4]` RGBA in 0..1; `graphics:ArrayIn` is what puts it on the GPU. The
+  PNG and emits `[H, W, 4]` RGBA in 0..1; `graphics:SignalIn` is what puts it on the GPU. The
   decoder is `goofi_core::png`, which is where it had to be: `goofi-core` is the one crate every
   generated node crate already depends on. It reads what a browser canvas writes — 8 bits a
   sample, no interlacing — and refuses the rest BY NAME rather than guessing; a decoder for the

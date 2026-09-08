@@ -155,7 +155,7 @@ anything forms.
 
 - **Nothing draws points.** `Swarm` and every particle model answer `[N, D]` positions, and the
   graphics engine is a full-screen fragment chain with no way to splat them. `Physarum` works
-  around it by rasterizing its own field into `ArrayIn`, at a copy per frame. Whether the answer
+  around it by rasterizing its own field into `graphics:SignalIn`, at a copy per frame. Whether the answer
   is a point-splatting graphics node or a compute stage is the graphics engine's question, and it
   is worth asking before more particle models arrive.
 - **`Lenia` is expensive enough to starve its neighbours.** Measured on a live server, 2026-09-07,

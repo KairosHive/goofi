@@ -183,6 +183,29 @@ pub fn band_partial(b: usize, voices: usize) -> (usize, f32) {
 }
 
 
+/// What every crossing into the audio plane shares. The other planes carry numbers in their own
+/// units, so each `<Source>In` node names the range those numbers span and this is what makes
+/// them a signal — one vocabulary, so two crossings cannot mean different things by one word.
+pub mod cross {
+    /// The `mode` options, in the order [`ranged`] reads their index.
+    pub const RANGES: &[&str] = &["direct", "bipolar", "unipolar"];
+
+    /// `v` on the plane it is crossing into: itself, or its place in `lo..hi` as a full-scale
+    /// bipolar or unipolar signal. `min`..`max` is a declaration, so what falls outside it is
+    /// held at the end it left by.
+    pub fn ranged(mode: u8, v: f32, lo: f32, hi: f32) -> f32 {
+        if mode == 0 {
+            return v;
+        }
+        // A range of no width has no place in it; the low end is the whole of it.
+        let t = if hi > lo { ((v - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 0.0 };
+        match mode {
+            1 => t * 2.0 - 1.0,
+            _ => t,
+        }
+    }
+}
+
 /// A rising-edge detector over a gate: `true` on the sample the gate goes HIGH.
 #[derive(Default)]
 pub struct Edge {

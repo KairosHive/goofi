@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use goofi_tests::{ep, f32s, hex, j, render, shape, Goofi, Uid, Viewer};
+use goofi_tests::{drive, ep, f32s, hex, j, render, shape, Goofi, Uid, Viewer};
 
 const NO_GPU: &str = "no graphics engine here. The suite needs a GPU adapter: install a Vulkan \
                       driver, or Mesa's lavapipe (`mesa-vulkan-drivers`)";
@@ -139,7 +139,7 @@ fn shaders_render_on_the_gpu() {
     // right way up. The one place the two row orders could disagree.
     let img = g.add("_TestImage");
     g.ready(img);
-    let up = g.add("graphics:ArrayIn");
+    let up = g.add("graphics:SignalIn");
     g.ready(up);
     g.set_param(up, "common", "width", 4);
     g.set_param(up, "common", "height", 4);
@@ -162,10 +162,10 @@ fn shaders_render_on_the_gpu() {
     let frame = drawn(&g, up, "the raw [1, 64] frame", |d| shape(d) == vec![32, 64, 4]);
     assert!(close(px(&frame, 0, 0), [0.0, 0.0, 0.0, 1.0]), "texture mode is the frame itself: {:?}", px(&frame, 0, 0));
 
-    g.set_param(up, "plot", "mode", "line");
-    g.set_param(up, "plot", "autoscale", false);
-    g.set_param(up, "plot", "min", 0.0);
-    g.set_param(up, "plot", "max", 1.0);
+    g.set_param(up, "signal", "mode", "line");
+    g.set_param(up, "signal", "autoscale", false);
+    g.set_param(up, "signal", "min", 0.0);
+    g.set_param(up, "signal", "max", 1.0);
     let plot = drawn(&g, up, "the line plot", |d| {
         px(d, 0, 0)[3] == 0.0 && ridge(d).iter().all(Option::is_some)
     });
@@ -180,8 +180,8 @@ fn shaders_render_on_the_gpu() {
 
     // …and the same frame with two channels is a trajectory: one against the other, the range
     // shared so the shape is not distorted.
-    g.set_param(up, "plot", "mode", "trajectory");
-    g.set_param(up, "plot", "autoscale", true);
+    g.set_param(up, "signal", "mode", "trajectory");
+    g.set_param(up, "signal", "autoscale", true);
     g.set_param(ramp, "ramp", "channels", 2);
     let traj = drawn(&g, up, "the trajectory", |d| {
         let lit = ridge(d).iter().filter(|c| c.is_some()).count();
@@ -193,10 +193,103 @@ fn shaders_render_on_the_gpu() {
     assert!(at_right < at_left, "channel 1 against channel 0 climbs: {at_left} to {at_right}");
     assert!(right < 63, "and both axes share one range, so it does not fill the width: {right}");
 
-    g.set_param(up, "plot", "mode", "texture");
+    g.set_param(up, "signal", "mode", "texture");
     g.set_param(ramp, "ramp", "channels", 1);
     drawn(&g, up, "the raw frame again", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 1.0]));
     g.call("link remove", j!({ "from": ep(hex(ramp), "out"), "to": ep(hex(up), "input") }));
+
+    // Step: the audio plane and this one, both ways, over the ONE cross-engine transport. Each
+    // crossing declares the plane it crosses FROM, so a wire from the wrong one is refused and
+    // these chains are the only shape that links at all.
+    let flat = g.add("_TestConst");
+    g.ready(flat);
+    g.set_param(flat, "constant", "length", 64);
+    g.set_param(flat, "constant", "value", 0.5);
+    let stream = g.add("audio:SignalIn");
+    g.set_param(stream, "signal", "mode", "direct");
+    g.link(flat, "out", stream, "input");
+    // `graphics:AudioIn` holds its own picture between renders — a HISTORY, which is what a
+    // stream has and a frame has not: every render walks the picture one column left and stands
+    // the newest column at the right edge.
+    let scope = g.add("graphics:AudioIn");
+    g.ready(scope);
+    g.set_param(scope, "common", "width", 64);
+    g.set_param(scope, "common", "height", 32);
+    g.set_param(scope, "audio", "autoscale", false);
+    g.set_param(scope, "audio", "range", 1.0);
+    // The door takes the plane it is named for and no other: a signal frame is refused here, and
+    // an ARRAY input on a crossing would have taken it — which is the whole reason to declare one.
+    assert!(g.refuse("link add", j!({ "from": ep(hex(flat), "out"), "to": ep(hex(scope), "input") }))
+        .contains("different data types"), "a signal frame must not enter the audio door");
+    g.link(stream, "out", scope, "input");
+    let watch = g.probe(scope, "out");
+    let running = |g: &Goofi, what: &str, want: fn(&goofi_core::Data) -> bool| {
+        g.until(what, |g| {
+            drive(g, 480);
+            render(g, 1);
+            watch.latest().filter(&want)
+        })
+    };
+    // A column holds the BAND its samples spanned, and audio is bipolar, so half of full scale
+    // stands a quarter down the frame and nowhere else.
+    let band = running(&g, "the stream's band, a quarter down", |d| {
+        shape(d) == vec![32, 64, 4] && px(d, 8, 63)[3] > 0.5
+    });
+    assert!(px(&band, 0, 63)[3] < 0.5 && px(&band, 24, 63)[3] < 0.5, "and only there: {band:?}", band = band.meta());
+
+    // The history: change the value and render on, and the picture holds BOTH at once — the new
+    // column at the right, the old ones still left of it. Nothing but a read of the last render's
+    // own buffer can show that, so this is what says a state buffer is really carried.
+    g.set_param(flat, "constant", "value", -0.5);
+    let both = running(&g, "both values standing in one picture", |d| {
+        px(d, 24, 63)[3] > 0.5 && (0..64).any(|col| px(d, 8, col)[3] > 0.5)
+    });
+    assert!(px(&both, 24, 0)[3] < 0.5, "the newest column is the RIGHT one: {:?}", px(&both, 24, 0));
+
+    // The waterfall lays the FRAME down the column instead of its band — which is what stacks a
+    // spectrum into a spectrogram, and for a flat stream is the whole column at one level.
+    g.set_param(scope, "audio", "mode", "waterfall");
+    running(&g, "the frame down the column", |d| {
+        (0..32).all(|row| (px(d, row, 63)[3] - 0.5).abs() < 0.1)
+    });
+    for uid in [scope, stream, flat] {
+        g.call("node remove", j!({ "node": hex(uid) }));
+    }
+
+    // …and the other way: `audio:GraphicsIn` reads a texture's texels in scan order, so the
+    // PICTURE's size is the crossing's length. A gradient across the frame arrives as a sweep,
+    // and its channels arrive as channels — alpha among them, since a texture is RGBA.
+    let field = g.add("graphics:Ramp");
+    g.ready(field);
+    g.set_param(field, "common", "width", 64);
+    g.set_param(field, "common", "height", 64);
+    let into_audio = g.add("audio:GraphicsIn");
+    g.set_param(into_audio, "graphics", "mode", "direct");
+    g.set_param(into_audio, "graphics", "channels", "all");
+    g.link(field, "out", into_audio, "input");
+    let sink = g.add("audio:AudioOut");
+    g.link(into_audio, "out", sink, "input");
+    let (rgba, chans) = g.until("the texture's channels as channels", |g| {
+        render(g, 1);
+        let (x, c) = drive(g, 480);
+        (c == 4 && x.chunks_exact(4).any(|t| t[0] > 0.5)).then_some((x, c))
+    });
+    assert_eq!(chans, 4, "a texture is RGBA, so it crosses as four");
+    let lanes = |c: usize| rgba.chunks_exact(4).map(|t| t[c]).collect::<Vec<f32>>();
+    let red = lanes(0);
+    assert!(red.iter().any(|v| *v < 0.1) && red.iter().any(|v| *v > 0.9), "the gradient sweeps: {} .. {}",
+            red.iter().copied().fold(f32::INFINITY, f32::min), red.iter().copied().fold(0.0f32, f32::max));
+    assert!(lanes(3).iter().all(|v| (v - 1.0).abs() < 0.01), "and the ramp is opaque throughout");
+    // Brightness is the other way to take it, on one channel, the weights summing to one.
+    g.set_param(into_audio, "graphics", "channels", "luma");
+    g.until("the picture's brightness on one channel", |g| {
+        render(g, 1);
+        let (x, c) = drive(g, 480);
+        (c == 1 && x.iter().any(|v| *v > 0.9) && x.iter().any(|v| *v < 0.1)).then_some(())
+    });
+    for uid in [sink, into_audio, field] {
+        g.call("node remove", j!({ "node": hex(uid) }));
+    }
 
     // Step: a texture chain does not flip either. A gradient down the frame, copied by a Level,
     // still runs the same way — the half of the orientation rule an upload cannot see.
@@ -356,13 +449,16 @@ fn shaders_render_on_the_gpu() {
     g.call("library refresh", j!({}));
 
     // Step: a slot of a kind a shader cannot carry is greyed, and the reason names what it may be.
-    std::fs::write(dir.join("Loud.wgsl"), FOREIGN).unwrap();
+    // A TEXTURE is a stage of this engine's plan and everything else is a frame it uploads, so
+    // what is refused is a kind that is no frame at all — never another engine's, which is a
+    // crossing.
+    std::fs::write(dir.join("Texty.wgsl"), TEXTY).unwrap();
     g.call("library refresh", j!({}));
     let listed = g.call("library list", j!({ "full": true }));
-    let row = listed["types"].as_array().unwrap().iter().find(|r| r["type"] == "graphics:Loud").cloned();
-    let row = row.expect("a shader that names an audio slot is still a row");
+    let row = listed["types"].as_array().unwrap().iter().find(|r| r["type"] == "graphics:Texty").cloned();
+    let row = row.expect("a shader that names a string slot is still a row");
     assert_eq!(row["available"], false, "{row}");
-    assert!(row["doc"].as_str().unwrap_or_default().contains("TEXTURE or ARRAY"), "{row}");
+    assert!(row["doc"].as_str().unwrap_or_default().contains("TEXTURE, ARRAY or AUDIO"), "{row}");
 
     // Step: a node holds its own state between two ticks. A state buffer starts empty, so a body
     // seeds itself on `frame == 0` and reads what the last tick wrote from then on.
@@ -439,6 +535,50 @@ fn shaders_render_on_the_gpu() {
     assert_eq!(shot.len(), 3, "a texture reads back as [H, W, 4]: {shot:?}");
     let source = g.call("library get", j!({ "type": "graphics:Half", "source": true }));
     assert!(source["text"].as_str().is_some_and(|t| t.contains("textureSample")), "{source}");
+
+    // Step: the crossing OUT. A texture output wires straight into any ARRAY input, so the
+    // crossing itself needs no node; `signal:GraphicsIn` is what makes it a size the rest of the
+    // patch can carry, and the readings a picture is usually wanted for.
+    let field = g.add("graphics:Ramp");
+    g.ready(field);
+    g.set_param(field, "common", "width", 128);
+    g.set_param(field, "common", "height", 64);
+    let down = g.add("signal:GraphicsIn");
+    g.link(field, "out", down, "input");
+    let read = g.probe(down, "out");
+    let waited = |g: &Goofi, what: &str, want: fn(&goofi_core::Data) -> bool| {
+        let read = g.probe(down, "out");
+        g.until(what, |g| {
+            render(g, 1);
+            read.latest().filter(&want)
+        })
+    };
+    // The whole frame first: `size` bounds each picture axis, and the frame says what it was
+    // rendered from, so a reader can still map a value back to the texel it came from.
+    g.set_param(down, "graphics", "size", 16);
+    let small = waited(&g, "the frame cut to size", |d| shape(d) == vec![16, 16, 4]);
+    let noted = small.meta().reduced().cloned().expect("a frame cut on the way over says so");
+    assert!(format!("{noted:?}").contains("128"), "it names the width it came from: {noted:?}");
+    g.set_param(down, "graphics", "size", 0);
+    waited(&g, "and zero is every texel of it", |d| shape(d) == vec![64, 128, 4]);
+
+    // A horizontal gradient rises ACROSS the frame and is flat down it, so the two profiles are
+    // the two answers — and the channel axis is spent, since brightness is what they read.
+    g.set_param(down, "graphics", "mode", "columns");
+    let across = waited(&g, "the profile across", |d| shape(d) == vec![128]);
+    let x = f32s(&across);
+    assert!(x[0] < 0.05 && x[127] > 0.95, "it runs dark to light: {} to {}", x[0], x[127]);
+    assert!(x.windows(2).all(|w| w[1] >= w[0] - 1e-4), "monotonically: {x:?}");
+    g.set_param(down, "graphics", "mode", "rows");
+    let downwards = waited(&g, "the profile down", |d| shape(d) == vec![64]);
+    let y = f32s(&downwards);
+    assert!(y.iter().all(|v| (v - y[0]).abs() < 0.01), "and is flat the other way: {} .. {}", y[0], y[63]);
+    g.set_param(down, "graphics", "mode", "gray");
+    waited(&g, "brightness keeps the picture's shape", |d| shape(d) == vec![64, 128]);
+    for uid in [down, field] {
+        g.call("node remove", j!({ "node": hex(uid) }));
+    }
+    drop(read);
 
     // Step: the demand stops when the LAST reader goes. A reducer that keeps its subscription
     // alive is a reader as far as the engine can tell, and this node would render for ever.
@@ -648,20 +788,23 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
     made(vec![64, 128, 4]);
 
     // Every reader from here on declares NOTHING, and none of them may widen the readback.
+    // `want` for an unbroken stretch, any other shape restarting the stretch. A STRAGGLER is why
+    // it restarts rather than fails: `reducers.latest` is both the snapshot's ask and its read, so
+    // the read that ends the step above arms one more full frame, which lands whenever the machine
+    // gets round to it. A real dilution settles at the wrong size and never yields the stretch, so
+    // the deadline is what still catches one — and it names the shape it kept seeing.
     let holds_at = |want: Vec<usize>, why: &str| {
         let tick = std::time::Duration::from_millis(20);
-        // Settled first: a snapshot is answered with one full frame, and a negative measured
-        // across that answer would name the wrong cause.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let mut run = 0;
-        while run < 10 {
-            assert!(std::time::Instant::now() < deadline, "the readback never settled at {want:?}: {why}");
-            run = if engine.latest().is_some_and(|d| shape(&d) == want) { run + 1 } else { 0 };
-            std::thread::sleep(tick);
-        }
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while std::time::Instant::now() < until {
-            assert!(engine.latest().is_none_or(|d| shape(&d) == want), "{why}");
+        let hold = std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut since = std::time::Instant::now();
+        let mut seen = None;
+        while since.elapsed() < hold {
+            assert!(std::time::Instant::now() < deadline, "{why}: {seen:?} where {want:?} should stand");
+            seen = engine.latest().map(|d| shape(&d));
+            if seen.as_ref().is_some_and(|s| *s != want) {
+                since = std::time::Instant::now();
+            }
             std::thread::sleep(tick);
         }
     };
@@ -891,7 +1034,7 @@ fn the_mosaic_walks_its_cells_onto_the_picture() {
     assert!(g.error(t).is_none(), "{:?}", g.error(t));
 }
 
-const FOREIGN: &str = "/* goofi\n{ \"doc\": \"claims an audio slot\", \"inputs\": [{\"name\": \"input\", \"kind\": \"AUDIO\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
+const TEXTY: &str = "/* goofi\n{ \"doc\": \"claims a string slot\", \"inputs\": [{\"name\": \"input\", \"kind\": \"STRING\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
 const BROKEN: &str = "/* goofi\n{ \"doc\": \"does not compile\" }\n*/\nfn shade(uv: vec2f) -> vec4f { return nothing(uv); }\n";
 const COUNT: &str = "/* goofi\n{ \"doc\": \"counts a tenth a tick in a buffer of its own\", \"state\": [\"acc\"] }\n*/\nfn at(uv: vec2f) -> vec2i { return vec2i(floor(uv * resolution)); }\nfn next_acc(uv: vec2f) -> vec4f {\n    if frame == 0u { return vec4f(0.1, 0.75, 0.0, 1.0); }\n    let held = textureLoad(acc, at(uv), 0);\n    return vec4f(held.r + 0.1, held.g, 0.0, 1.0);\n}\nfn shade(uv: vec2f) -> vec4f { return vec4f(textureLoad(acc, at(uv), 0).rgb, 1.0); }\n";
 const HALF: &str = "/* goofi\n{ \"doc\": \"half of the input\", \"inputs\": [{\"name\": \"input\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let c = textureSample(input, samp, uv); return vec4f(c.rgb * 0.5, c.a); }\n";

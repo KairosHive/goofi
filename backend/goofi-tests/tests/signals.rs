@@ -778,7 +778,7 @@ fn texel(d: &Data, row: usize, col: usize) -> [f32; 4] {
 
 /// What a hand leaves on a drawing widget, and what `control draw` leaves beside it, is a frame
 /// like any other: the node reads the global the widget IS — the way a knob's value is read — and
-/// answers pixels, which is what `graphics:ArrayIn` then puts on the GPU.
+/// answers pixels, which is what `graphics:SignalIn` then puts on the GPU.
 #[test]
 fn a_drawing_widget_reaches_the_patch_as_a_frame() {
     let g = Goofi::new();
