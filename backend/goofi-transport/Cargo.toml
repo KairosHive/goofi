@@ -14,3 +14,11 @@ iceoryx2 = "0.9.3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Taking a refused node's DACL back so its owner can unlink it — see `grant_owner`.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+] }

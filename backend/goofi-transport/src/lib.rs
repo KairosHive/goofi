@@ -189,9 +189,7 @@ pub fn reclaim_stale_resources() {
         }
         CallbackProgression::Continue
     });
-    for id in refused {
-        force_remove_refused(&id.to_string());
-    }
+    force_remove_refused(&refused);
 }
 
 /// WORKAROUND, and it is one: eclipse-iceoryx/iceoryx2#1869. On Windows a node's bookkeeping files
@@ -204,25 +202,94 @@ pub fn reclaim_stale_resources() {
 /// and never a blanket pass over the directory — that is what deleted a directory out from under a
 /// live enumeration and took the process down with iceoryx2's own assert.
 #[cfg(windows)]
-fn force_remove_refused(id: &str) {
-    use std::process::{Command, Stdio};
-    let Some(dir) = nodes_dir().map(|d| format!("{d}/{id}")) else { return };
-    if !std::path::Path::new(&dir).exists() {
+fn force_remove_refused(refused: &[u128]) {
+    if refused.is_empty() {
         return;
     }
-    // `*S-1-3-4` is OWNER RIGHTS: it grants the object's own owner, which is this user, and nobody
-    // else. Shelling out for the same reason `proc::taskkill` does — `/T` has no one-call API.
-    let _ = Command::new("icacls")
-        .args([dir.as_str(), "/grant", "*S-1-3-4:(OI)(CI)F", "/T", "/C", "/Q"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    let _ = std::fs::remove_dir_all(&dir);
+    let Some(nodes) = nodes_dir() else { return };
+    let ids: Vec<String> = refused.iter().map(u128::to_string).collect();
+    // ONE pass, matching the id as a WHOLE run of digits: a dead node's MONITOR files sit beside
+    // its directory rather than inside, so reaching only the directory leaves three per node —
+    // but a bare substring would let a short id name a LIVE node whose own id merely contains it.
+    for entry in std::fs::read_dir(&nodes).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let mut runs = name.split(|c: char| !c.is_ascii_digit());
+        if runs.any(|run| ids.iter().any(|id| run == id)) {
+            take_path(&entry.path());
+        }
+    }
+}
+
+/// Take one path's DACL back, then unlink it — contents first, since a directory goes empty only.
+#[cfg(windows)]
+fn take_path(path: &std::path::Path) {
+    let dir = path.is_dir();
+    if dir {
+        for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
+            take_path(&entry.path());
+        }
+    }
+    grant_owner(path);
+    let _ = if dir { std::fs::remove_dir(path) } else { std::fs::remove_file(path) };
+}
+
+/// Grant OWNER RIGHTS full control on ONE path, explicitly. Naming the file is the whole point: a
+/// protected DACL is precisely one that refuses an inherited ace, so a grant on the parent — an
+/// `icacls /T` walk, which this replaces — never reaches the file it was meant for.
+#[cfg(windows)]
+fn grant_owner(path: &std::path::Path) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, GENERIC_ALL, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSidToSidW, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SET_ACCESS,
+        SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
+    };
+    use windows_sys::Win32::Security::{
+        ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE, PROTECTED_DACL_SECURITY_INFORMATION,
+    };
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    // `S-1-3-4` is OWNER RIGHTS: it grants the object's own owner, which is this user, and nobody else.
+    let sid_text: Vec<u16> = "S-1-3-4".encode_utf16().chain(std::iter::once(0)).collect();
+    let mut sid = std::ptr::null_mut();
+    if unsafe { ConvertStringSidToSidW(sid_text.as_ptr(), &mut sid) } == 0 {
+        return;
+    }
+    let access = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: GENERIC_ALL,
+        grfAccessMode: SET_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
+            ptstrName: sid.cast(),
+        },
+    };
+    let mut acl: *mut ACL = std::ptr::null_mut();
+    if unsafe { SetEntriesInAclW(1, &access, std::ptr::null(), &mut acl) } == ERROR_SUCCESS {
+        unsafe {
+            SetNamedSecurityInfoW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                acl,
+                std::ptr::null(),
+            );
+        }
+    }
+    unsafe {
+        LocalFree(acl.cast());
+        LocalFree(sid.cast());
+    }
 }
 
 /// Everywhere else iceoryx2's own reclaim is the whole of it, and a refusal is its business.
 #[cfg(not(windows))]
-fn force_remove_refused(_id: &str) {}
+fn force_remove_refused(_refused: &[u128]) {}
 
 /// Make the root iceoryx2 is configured for. It fills the layout in — `nodes/`, `services/` —
 /// but does not create the top directory, and on Windows nothing else does: every node then fails
