@@ -7,12 +7,13 @@
 FROM rust:1.97.1-bookworm AS build
 
 # uv and npm are the two tools goofi-init demands; the four -dev libraries are its `AUDIO_LIBS`,
-# one per cpal host, compiled in whether or not a demo ever opens a device. Node comes from
+# one per cpal host, compiled in whether or not a demo ever opens a device. `libclang-dev` is
+# bindgen's, which `libspa-sys` runs: the pipewire host cannot build without it. Node comes from
 # NodeSource, not apt: bookworm ships 18.20 and the frontend's vite asks for ^20.19 || >=22.12,
 # so an apt node fails the SPA build — which `cargo build` refuses to fall back from. 24 rather
 # than 22, matching CI: the lockfile is gitignored, and npm 10 crashes on this manifest without one.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg pkg-config \
+        ca-certificates curl gnupg pkg-config libclang-dev \
         libasound2-dev libpipewire-0.3-dev libjack-jackd2-dev libdbus-1-dev \
     && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
