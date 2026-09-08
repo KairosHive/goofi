@@ -1,4 +1,4 @@
-# goofi as one public container. DRAFT — never built yet.
+# goofi as one public container, in demo mode.
 #
 # The build path IS the run path: `goofi_init::repo_root()` is baked in at compile time from
 # CARGO_MANIFEST_DIR, so the binary looks for its two venvs where the build left them. Both stages
@@ -6,13 +6,14 @@
 
 FROM rust:1.97.1-bookworm AS build
 
-# uv and npm are the two tools goofi-init demands; libasound2-dev is cpal's, which is compiled in
-# whether or not a demo ever opens a device. Node comes from NodeSource, not apt: bookworm
-# ships 18.20 and the frontend's vite asks for ^20.19 || >=22.12, so an apt node fails the
-# SPA build — which `cargo build` refuses to fall back from. 24 rather than 22, matching CI:
-# the lockfile is gitignored, and npm 10 crashes on this manifest without one.
+# uv and npm are the two tools goofi-init demands; the four -dev libraries are its `AUDIO_LIBS`,
+# one per cpal host, compiled in whether or not a demo ever opens a device. Node comes from
+# NodeSource, not apt: bookworm ships 18.20 and the frontend's vite asks for ^20.19 || >=22.12,
+# so an apt node fails the SPA build — which `cargo build` refuses to fall back from. 24 rather
+# than 22, matching CI: the lockfile is gitignored, and npm 10 crashes on this manifest without one.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg libasound2-dev pkg-config \
+        ca-certificates curl gnupg pkg-config \
+        libasound2-dev libpipewire-0.3-dev libjack-jackd2-dev libdbus-1-dev \
     && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
@@ -31,8 +32,10 @@ RUN cargo build --release -p goofi-cli
 
 FROM debian:bookworm-slim
 
+# The runtime halves of the build stage's audio libraries: cpal links all four, so the binary
+# needs them present to start even where no device is ever opened.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates libasound2 \
+        ca-certificates libasound2 libpipewire-0.3-0 libjack-jackd2-0 libdbus-1-3 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
