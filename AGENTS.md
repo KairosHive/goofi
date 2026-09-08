@@ -5,9 +5,9 @@ browser node-graph: each node ingests, transforms or emits `Data`, and edges car
 output and input slots. It targets live, high-rate streams — kHz EEG, HD video — with many
 simultaneous viewers.
 
-This branch (`rust-rewrite`) is a ground-up Rust rewrite of the backend. The original Python
-implementation is deleted from this branch; it lives on `main`, and for reference at
-`../../goofi-pipe/`. The SvelteKit frontend carried over and is the only UI.
+goofi is a ground-up Rust rewrite of a Python original, and the rewrite IS `main`. The Python
+implementation is not in this tree; it is kept for reference at `../../goofi-pipe/`. The
+SvelteKit frontend carried over and is the only UI.
 
 **This file is orientation, and nothing else.** It holds the design principles and the
 architectural decisions — the things the code cannot tell you because they are choices rather
@@ -189,7 +189,7 @@ manifest.
 7. **Zero warnings, and that includes clippy.** A task is not done at "finished". Build with
    `--all-targets` and clear what it prints — that flag is load-bearing, because a plain build
    never compiles the integration test targets and a warning there ships. `cargo clippy --workspace
-   --all-targets` is clean as of 2026-08-20 and stays that way. Remove the dead field; never
+   --all-targets` is clean as of 2026-09-08 and stays that way. Remove the dead field; never
    silence it with a `_` prefix or an `#[allow]`.
 
 8. **Honest reporting.** If tests fail, say so with the output. If a step was skipped, say that.
@@ -301,8 +301,13 @@ where one accumulates them, as audio's resampling inbox does. What that cost: a 
 out, so a graphics node converting each arrival to texels only to overwrite it was outrun out of
 its own tick — one tap frame every fifteen seconds off an engine that was rendering perfectly.
 A texture never crosses
-the wire: the tap reads back an f32 frame like any other, and `roadmap/graphics-engine.md` holds
-the design.
+the wire: the tap reads back a frame like any other, in the WIDTH its readers draw — f32 where
+anything reads the numbers, 8-bit where every reader is an image viewer, converted on the device
+so no texel is ever converted on a CPU. What paces that readback is the ring's ONE slot in flight
+and nothing else; a re-arm flag beside it was a second owner of the same pacing, and because the
+half that would have set it runs on another thread, the tick that took a frame could never see it
+set again — every viewer in the app ran at a third of the engine's rate.
+`roadmap/graphics-engine.md` holds the design.
 
 **A recording is a folder of files their OWN tools open, and the node's own record is what arms
 it.** `goofi-record` owns the folder, the manifest and one writer per stream, and each stream's
@@ -310,8 +315,10 @@ file is the format its SHAPE takes: an array is a `.npy`, a table a `.csv`, text
 audio a `.wav` of IEEE float32, a texture a video. Nothing writes the wire format to disk. Every
 one is append-only behind a fixed-size head patched on the sync cadence, so a killed writer costs
 the tail alone — the whole frames follow from the file's size. Beside each is ONE sidecar shape, a
-JSON line per frame carrying the instant, the ROWS that frame added and the `Meta` the file cannot
-hold; the row count is what makes it an index, since a `.wav` holds blocks of no fixed length. A
+JSON line per frame carrying the instant, the ROWS that frame added and whatever of the `Meta` the
+file cannot hold has MOVED since the line before — a reader carries the rest forward, and the
+instant is not among them because the line's own `t` owns that. The row count is what makes it an
+index, since a `.wav` holds blocks of no fixed length. A
 frame that no longer fits — a reshaped array, a retitled table, a `.wav` at RIFF's 4 GB ceiling —
 opens the NEXT file, the rule a resized texture already followed. A texture is the one stream that
 is NOT exact, because it is `Rgba16Float` and no integer format holds one: an ffmpeg child writes
@@ -350,8 +357,12 @@ constraint algebra; the bridge folds every viewer's constraints against the real
 reduces ONCE, on its own subscription — so no number of viewers can slow a `process()` down.
 
 **An accessory never reaches an engine's scheduling, and never widens what it makes.** A viewer's
-box — what it asks a producer to fit its readback into — is a LIVE CELL the render thread reads,
-never plan state: a viewer appearing, resizing or leaving must not be able to re-plan an engine.
+ask — the box it wants a producer's readback fitted into, and the sample width it draws — is a
+LIVE CELL the render thread reads, never plan state: a viewer appearing, resizing or leaving must
+not be able to re-plan an engine. Both halves ride ONE cell, because a box and a depth that could
+disagree are two things to keep in step. A producer that answers the ask exactly is FORWARDED
+rather than remade: the reducer sends those bytes as they stand, and no pass over a texel happens
+anywhere in the process.
 And a reader that declared nothing has asked for no pixels, so its readback is ONE TEXEL — the
 cheapest frame that is still a frame, whose metadata is the whole product. A viewer declares what
 it DRAWS; a frame it accepts but cannot draw is one it can only DESCRIBE, and that is a second,
@@ -492,8 +503,8 @@ of the package, never a patch in this tree.
 
 ## Hard constraints
 
-- **Work happens on `rust-rewrite`. Leave `main` alone.** Never push or force-push without
-  explicit authorization; branch before committing on a default branch.
+- **`main` is the working branch.** Never push or force-push without explicit authorization, and
+  branch before committing on it.
 - **The version lives in ONE place** — `[workspace.package] version`. Every crate inherits it and
   the Python wheel derives it. Bumping it also re-provisions the venvs.
 - Commit in small, focused, readable steps at green checkpoints — never one mega-commit. Commit

@@ -71,7 +71,7 @@ impl Goofi {
         Goofi::with_mode(goofi_bridge::Mode { headless: false, demo: true })
     }
 
-    /// One whose graphics engine runs on its OWN 60 Hz clock, as the binary does — nothing to
+    /// One whose graphics engine runs on its OWN timer clock, as the binary does — nothing to
     /// drive by hand, and nothing to mistake a driven frame for.
     pub fn timed() -> Goofi {
         Goofi::boot(goofi_bridge::Mode::default(), goofi_bridge::RenderClock::Timer)
@@ -441,7 +441,7 @@ pub fn drive(g: &Goofi, frames: usize) -> (Vec<f32>, u16) {
 }
 
 /// Tick the graphics engine's external clock `frames` times, on this thread — what the binary's
-/// own 60 Hz clock does, at the caller's pace.
+/// own timer clock does, at the caller's pace.
 pub fn render(g: &Goofi, frames: usize) {
     let mut graph = g.state.graph.lock().unwrap();
     goofi_bridge::graphics_engine(&mut graph).render(frames);

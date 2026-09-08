@@ -63,7 +63,7 @@ pub struct Mode {
     /// The API alone: no app is served, and the layout group leaves the vocabulary.
     pub headless: bool,
     /// A PUBLIC goofi: no terminal, no agents, no filesystem, no save or load, no audio. It is NOT
-    /// a sandbox — a param expression is still Python. See `roadmap/demo-mode.md`.
+    /// a sandbox — a param expression is still Python.
     pub demo: bool,
 }
 

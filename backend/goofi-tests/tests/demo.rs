@@ -1,6 +1,6 @@
 //! Demo mode: the ONE mode a PUBLIC goofi serves in — the graph, and nothing of the host around
 //! it. It is not a sandbox and never claims to be: a param expression is still Python, and what
-//! this mode withholds is the convenient doors. `roadmap/demo-mode.md` states the rest.
+//! this mode withholds is the convenient doors.
 
 use goofi_bridge::phrase;
 use goofi_tests::{host, http, j, Goofi};

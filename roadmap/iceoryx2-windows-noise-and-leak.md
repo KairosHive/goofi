@@ -163,8 +163,8 @@ reclaim, not the per-instance root, not the retry — because each one is goofi 
 defect whose owner is already fixing it, and a workaround outlives the thing it works around. They
 stay written down for the day the wait stops being the right answer.
 
-The three PR branches and `rust-rewrite` are GREEN on ubuntu and macOS as of this date, so a red
-Windows job on any of them is this file and needs no reading past this line.
+The three PR branches and `main` are GREEN on ubuntu and macOS as of this date, so a red Windows
+job on any of them is this file and needs no reading past this line.
 
 ## Open — parked on that call, not being worked
 
