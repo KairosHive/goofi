@@ -1,6 +1,7 @@
-# MediaPipe is a TensorFlow Lite runtime behind a C extension, and OpenCV is another; neither
-# ships a free-threaded wheel, which is what puts both here and both nodes on the subprocess tier.
-# `mediapipe` brings `opencv-contrib-python` itself, and Camera is named beside it because Camera
-# imports `cv2` on its own account rather than through MediaPipe.
+# MediaPipe is a TensorFlow Lite runtime behind a C extension, and OpenCV is another; neither ships
+# a free-threaded wheel, which is what puts both here and every node in this bundle on the
+# subprocess tier. `mediapipe` brings `opencv-contrib-python` itself, and it is named here as well
+# because Camera, Flow and Segment import `cv2` on their own account rather than through MediaPipe
+# — and Flow wants the contrib build in particular, for DIS optical flow.
 mediapipe
 opencv-contrib-python
