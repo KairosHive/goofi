@@ -7,6 +7,7 @@ import type { NodeView, DocParamLeaves, FacadeFace } from './graphDoc';
 export type { DocParamLeaves };
 
 export type ViewersBlob = NodeInstanceInfo['viewers'];
+export type BaselineBlob = NodeInstanceInfo['baseline'];
 
 /** Per-param runtime overlay (event-sourced, never in the doc). */
 export interface ParamRuntime {
@@ -68,6 +69,7 @@ export function assembleNode(
 	view: NodeView,
 	docParams: DocParamLeaves,
 	viewers: ViewersBlob,
+	baseline: BaselineBlob,
 	catalog: NodeTypeInfo | undefined,
 	runtime: RuntimeOverlay,
 	face?: FacadeFace
@@ -99,6 +101,7 @@ export function assembleNode(
 		params,
 		pos: view.pos,
 		viewers,
+		baseline,
 		scope: view.scope,
 		error: runtime.error ?? null,
 		stage: runtime.stage,

@@ -73,6 +73,8 @@ export interface NodeInstanceInfo {
 	pos: [number, number];
 	/** Per-output-slot view state restored from the .gfi patch. */
 	viewers: Record<string, { collapsed?: boolean; kind?: string; settings?: Record<string, unknown> }>;
+	/** The touched filter's zero points, keyed `group/name`; absent until Clear is pressed. */
+	baseline?: Record<string, { value?: unknown; mode?: string; expression?: string | null; reference?: string | null }>;
 	/** The scope this node sits in; `'__root__'` at the top level. */
 	scope: string;
 	error: string | null;

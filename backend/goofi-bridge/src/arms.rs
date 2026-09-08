@@ -349,6 +349,7 @@ pub(crate) fn node_add(
         params: None,
         sources: vec![],
         viewers: None,
+        baseline: None,
         record: None,
         scope,
     };
@@ -501,6 +502,33 @@ pub(crate) fn node_param_refresh(
     }
     resync_and_broadcast(state);
     Ok(json!({ "ok": true }))
+}
+
+/// Take the touched filter's zero point to be what the node holds NOW.
+///
+/// A plugin's params count as touched when they differ from the plugin's FACTORY default, and
+/// loading a preset moves hundreds of them at once — so the filter that exists to show the few in
+/// play fills with everything the preset touched, and reshuffles whenever the preset changes. This
+/// records the current values as the new zero. It edits no param and breaks no binding: an
+/// expression or a reference keeps driving exactly as it did, and the Expression and Reference
+/// filters still find it.
+pub(crate) fn node_touched_clear(
+    state: &AppState,
+    payload: &Value,
+    actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let mut g = state.graph.lock().unwrap();
+    let uid = parse_uid(&g, payload, "node")?;
+    // `None` means "snapshot what is there", which the command does under the history lock so the
+    // inverse captures the blob it replaced.
+    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::SetBaseline { uid, baseline: None })?;
+    let cleared = g.baseline(uid).and_then(|b| b.as_object()).map_or(0, serde_json::Map::len);
+    // The zero point is document state and reaches no engine, so nothing else would mirror it:
+    // without this the graph holds the new baseline and every client still reads the old one.
+    drop(g);
+    resync_and_broadcast(state);
+    Ok(json!({ "ok": true, "cleared": cleared }))
 }
 
 /// NOT a command either: a pulse holds no state, so there is nothing to undo. The node acts on it

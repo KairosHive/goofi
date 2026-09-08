@@ -36,7 +36,7 @@
 	import ParamField from './ParamField.svelte';
 	import SubPatchInspector from '$lib/editor/SubPatchInspector.svelte';
 	import { matchParams, type ParamHit } from './paramSearch';
-	import { onlyTouched, touchedCount, touchedRows } from './paramTouched';
+	import { anyFilter, counts, filteredRows, onlyAdmitted, type Filters } from './paramTouched';
 	import { Bar, Tabs, Badge, Disclosure, EmptyState, Icon, IconButton, MODE_ATTRS, Toggle } from '$lib/ui';
 
 	let {
@@ -67,6 +67,10 @@
 	function pulse(group: string, name: string): void {
 		if (!node) return;
 		void g.pulse(node.uid, group, name).catch((e) => console.warn('pulse failed', e));
+	}
+	function clearTouched(): void {
+		if (!node) return;
+		void g.clearTouched(node.uid).catch((e) => console.warn('clear touched failed', e));
 	}
 	function setSource(group: string, name: string, source: SourcePatch): void {
 		if (!node) return;
@@ -157,19 +161,24 @@
 	// through. It starts OFF and returns there whenever the selection moves: the control only shows
 	// on a node with params enough to need it, so a filter carried onto a small node would hide its
 	// params behind a switch that is not on screen to turn off.
-	let touchedOnly = $state(false);
+	// Three of them, OR'd: "what did I change" and "what is driven" are two questions, and a reader
+	// chasing a mapping wants it whether or not it has moved since the zero point.
+	let filters = $state<Filters>({ touched: false, expression: false, reference: false });
 	let filtered = $state<string | null>(null);
 	$effect(() => {
 		const uid = node?.uid ?? null;
 		if (uid !== filtered) {
 			filtered = uid;
-			touchedOnly = false;
+			filters = { touched: false, expression: false, reference: false };
 		}
 	});
-	const touched = $derived(touchedCount(node?.params));
+	/** The node's cleared zero points, keyed `group/name`; absent until Clear is pressed. */
+	const baseline = $derived(node?.baseline);
+	const tally = $derived(counts(node?.params, baseline));
+	const filtering = $derived(anyFilter(filters));
 
 	/** True while the list spans every group rather than the fronted tab. */
-	const across = $derived(searching || touchedOnly);
+	const across = $derived(searching || filtering);
 
 	// All three modes reduce to the same row list, so a field is rendered from one place whichever
 	// is on. Touched-only spans EVERY group: a knob was turned in the plugin's own window, and
@@ -181,12 +190,12 @@
 		// question, and a query narrows that rather than reopening everything behind it.
 		if (searching) {
 			const hits = matchParams(n.params, query);
-			return touchedOnly ? onlyTouched(hits) : hits;
+			return filtering ? onlyAdmitted(hits, filters, baseline) : hits;
 		}
 		const named = (g: string) => (n.params[g] ?? {}) as Record<string, ParamDescriptor>;
 		const of = (g: string) =>
 			Object.entries(named(g)).map(([name, descriptor]) => ({ group: g, name, descriptor }));
-		if (touchedOnly) return touchedRows(n.params, groupNames);
+		if (filtering) return filteredRows(n.params, filters, baseline, groupNames);
 		return activeGroup ? of(activeGroup) : [];
 	});
 </script>
@@ -292,7 +301,7 @@
 					onkeydown={(e) => {
 						if (e.key === 'Escape') query = '';
 					}}
-					placeholder={touchedOnly ? 'Search touched…' : 'Search parameters…'}
+					placeholder={filtering ? 'Search filtered…' : 'Search parameters…'}
 					autocomplete="off"
 					aria-label="Search parameters"
 					data-testid="param-search"
@@ -300,11 +309,39 @@
 			{/if}
 
 			{#if filterable}
-				<label class="pf-touched" data-testid="param-touched-only">
-					<Toggle value={touchedOnly} onChange={(v) => (touchedOnly = v)} />
-					<span>Touched only</span>
-					<span class="pf-touched-count">{touched}</span>
-				</label>
+				<div class="pf-filters" data-testid="param-filters">
+					<label class="pf-touched" data-testid="param-touched-only">
+						<Toggle value={filters.touched} onChange={(v) => (filters = { ...filters, touched: v })} />
+						<span>Touched only</span>
+						<span class="pf-touched-count">{tally.touched}</span>
+					</label>
+					<label class="pf-touched" data-testid="param-expression-only">
+						<Toggle
+							value={filters.expression}
+							onChange={(v) => (filters = { ...filters, expression: v })}
+						/>
+						<span>Expression</span>
+						<span class="pf-touched-count">{tally.expression}</span>
+					</label>
+					<label class="pf-touched" data-testid="param-reference-only">
+						<Toggle
+							value={filters.reference}
+							onChange={(v) => (filters = { ...filters, reference: v })}
+						/>
+						<span>Reference</span>
+						<span class="pf-touched-count">{tally.reference}</span>
+					</label>
+					<!-- Clearing moves the zero point the touched filter counts from; it edits no param,
+					     so an expression or a reference keeps driving and keeps its own filter. -->
+					<button
+						type="button"
+						class="pf-clear"
+						data-testid="param-touched-clear"
+						disabled={tally.touched === 0}
+						title="Count touched from what this node holds now. Mappings keep working."
+						onclick={() => clearTouched()}>Clear</button
+					>
+				</div>
 			{/if}
 
 			{#if tabItems.length > 0 && !across}
@@ -325,7 +362,7 @@
 			>
 				{#if rows.length === 0}
 					<div class="pf-empty-group" data-testid={searching ? 'param-no-matches' : 'param-empty-group'}>
-						{#if searching}{touchedOnly ? 'No touched parameters match.' : 'No parameters match.'}{:else if touchedOnly}Nothing touched yet — move a control here or in the plugin's own window.{:else}No parameters in this group.{/if}
+						{#if searching}{filtering ? 'No filtered parameters match.' : 'No parameters match.'}{:else if filtering}Nothing matches these filters — move a control here or in the plugin's own window, or bind one.{:else}No parameters in this group.{/if}
 					</div>
 				{:else}
 					{#each rows as { group, name: paramName, descriptor } (node.uid + '/' + group + '/' + paramName)}
@@ -468,6 +505,29 @@
 		text-align: center;
 		padding: var(--space-6) 0;
 	}
+	.pf-filters {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-3);
+	}
+
+	.pf-clear {
+		font: inherit;
+		cursor: pointer;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: inherit;
+		font-size: var(--fs-small);
+		padding: var(--space-1) var(--space-3);
+	}
+
+	.pf-clear:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+
 	.pf-touched {
 		display: flex;
 		align-items: center;
