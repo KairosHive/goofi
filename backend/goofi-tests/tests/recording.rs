@@ -119,6 +119,11 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     for i in 0..8u64 {
         hand(&array(vec![4], i as f32, i));
     }
+    // Step: a frame that RESHAPES stays in the same file. The `.npy` is flat and the sidecar's
+    // shape line is what splits it, so a node whose shape moves — a filling `Buffer`, a peak
+    // count — no longer mints a file per tick.
+    hand(&array(vec![6], 8.0, 8));
+    hand(&array(vec![6], 9.0, 9));
     // Step: a re-arm at the very same patch instant is a NEW file, never the last one truncated.
     open(&array(vec![4], 0.0, 0));
     hand(&array(vec![4], 99.0, 0));
@@ -127,14 +132,23 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(folder.join("manifest.json")).expect("a manifest"))
             .expect("json");
-    assert_eq!(manifest["streams"][0]["frames"], 8);
+    assert_eq!(manifest["streams"][0]["frames"], 10, "eight of one shape, then two of another");
     assert_eq!(manifest["streams"][1]["frames"], 1);
     assert_ne!(
         manifest["streams"][0]["file"], manifest["streams"][1]["file"],
         "two entries never name one file"
     );
     assert!(manifest["origin_utc"].is_string(), "the one anchor every file adds to");
-    assert_eq!(manifest["streams"][0]["frame"], j!([4]), "the manifest says one frame's shape");
+    assert_eq!(
+        manifest["streams"][0].get("frame"),
+        None,
+        "a file whose shape MOVED states no one shape: the sidecar is its index"
+    );
+    assert_eq!(
+        manifest["streams"][1]["frame"],
+        j!([4]),
+        "a file every frame agreed on states the shape that folds it back"
+    );
 
     let file = folder.join(manifest["streams"][0]["file"].as_str().expect("a name"));
     assert_eq!(file.extension().and_then(|e| e.to_str()), Some("npy"), "an array is a .npy");
@@ -143,33 +157,44 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         "the name carries node, slot and the first sample's UTC"
     );
 
-    // …and the file numpy would open: the header says how many frames it holds, and the samples
-    // that follow are the ones written, in order.
+    // …and the file numpy would open: a FLAT header counting every value the stream carried, and
+    // the samples that follow are the ones written, in order, whatever shape each came in.
     let bytes = std::fs::read(&file).expect("the stream");
     let (head, body) = npy(&bytes);
-    assert!(head.contains("'descr': '<f4'") && head.contains("(8,4,)"), "{head}");
+    assert!(head.contains("'descr': '<f4'") && head.contains("(44,)"), "{head}");
     let values: Vec<f32> =
         body.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four"))).collect();
-    assert_eq!(values.len(), 32, "eight frames of four");
+    assert_eq!(values.len(), 44, "eight frames of four, then two of six");
     assert_eq!(values[0], 0.0, "{values:?}");
-    assert_eq!(values[28], 7.0, "the last frame is the last one written: {values:?}");
+    assert_eq!(values[28], 7.0, "the last frame of the first shape: {values:?}");
+    assert_eq!(values[32], 8.0, "the reshaped frame follows it in the same file: {values:?}");
+    assert_eq!(values[43], 9.0, "the last frame is the last one written: {values:?}");
 
-    // …and the sidecar, one line per frame, carrying the instant and the meta a .npy cannot hold.
+    // …and the sidecar, one line per frame, carrying the instant, the shape where it MOVED, and
+    // the meta a .npy cannot hold. The shape supersedes a row count: `n` would say the same
+    // thing twice, so an array line does not carry one.
     let beside = std::fs::read_to_string(file.with_extension("jsonl")).expect("the sidecar");
-    let lines: Vec<&str> = beside.lines().collect();
-    assert_eq!(lines.len(), 8, "one line per frame");
-    let first: serde_json::Value = serde_json::from_str(lines[0]).expect("a json line");
-    assert_eq!(first["t"].as_f64(), Some(0.0), "the line carries the frame's own instant");
-    assert_eq!(first["n"].as_u64(), Some(1), "…and how many rows of the file it put there");
-    let last: serde_json::Value = serde_json::from_str(lines[7]).expect("a json line");
-    assert_eq!(last["meta"]["index"], j!(7), "the meta rides beside the samples");
+    let lines: Vec<serde_json::Value> =
+        beside.lines().map(|l| serde_json::from_str(l).expect("a json line")).collect();
+    assert_eq!(lines.len(), 10, "one line per frame");
+    assert_eq!(lines[0]["t"].as_f64(), Some(0.0), "the line carries the frame's own instant");
+    assert_eq!(lines[0]["shape"], j!([4]), "…and the shape the first frame came in");
+    for (i, line) in lines.iter().enumerate() {
+        assert_eq!(line.get("n"), None, "an array line carries no row count: line {i}");
+    }
+    for (i, line) in lines.iter().enumerate().take(8).skip(1) {
+        assert_eq!(line.get("shape"), None, "a shape that HELD is not said again: line {i}");
+    }
+    assert_eq!(lines[8]["shape"], j!([6]), "…and the one that moved is said once");
+    assert_eq!(lines[9].get("shape"), None, "…and then held again");
+    assert_eq!(lines[9]["meta"]["index"], j!(9), "the meta rides beside the samples");
 
     // Step: a KILLED writer loses the tail and nothing else — the property every other format
-    // this replaced was rejected over. Truncated mid-frame, the whole frames are still there.
+    // this replaced was rejected over. Truncated mid-frame, the whole values are still there.
     let cut = folder.join("cut.npy");
     std::fs::write(&cut, &bytes[..bytes.len() - 6]).expect("a truncated copy");
     let (_, body) = npy(&std::fs::read(&cut).expect("the truncated stream"));
-    assert_eq!(body.len() / 16, 7, "seven whole frames survive a kill inside the eighth");
+    assert_eq!(body.len() / 4, 42, "forty-two whole values survive a kill inside the last frame");
 }
 
 /// A `.npy` split into its header text and its samples, the way `np.load` reads one.

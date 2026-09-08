@@ -73,7 +73,7 @@ fn finished(id: &StreamId, stream: &Arc<Mutex<Stream>>, why: &str) -> manifest::
 /// back, and — for a video alone — what its encoding costs.
 fn shape_of(kind: &Kind) -> Shape {
     match kind {
-        Kind::Array { frame } => Shape { frame: Some(frame.clone()), ..Shape::default() },
+        Kind::Array => Shape::default(),
         Kind::Table { columns } => Shape { columns: Some(columns.clone()), ..Shape::default() },
         Kind::Text => Shape::default(),
         Kind::Audio { .. } => Shape::default(),
@@ -85,7 +85,6 @@ fn shape_of(kind: &Kind) -> Shape {
 
 #[derive(Default)]
 struct Shape {
-    frame: Option<Vec<usize>>,
     columns: Option<Vec<String>>,
     size: Option<(u32, u32)>,
     fps: Option<f64>,
@@ -122,7 +121,7 @@ impl Session {
             timeline: s.meta.timeline.name(),
             drift: s.drift,
             channels: s.meta.channels,
-            frame: shape.frame,
+            frame: s.frame(),
             columns: shape.columns,
             size: shape.size,
             fps: shape.fps,
@@ -158,7 +157,7 @@ impl Session {
             timeline: meta.timeline.name(),
             drift: None,
             channels: meta.channels,
-            frame: shape.frame,
+            frame: None,
             columns: shape.columns,
             size: shape.size,
             fps: shape.fps,

@@ -65,16 +65,36 @@ the whole frames follow from the file's size, and `np.load` on a truncated `.npy
 rather than reading nonsense. NPY has ONE spelling in the tree, `goofi-record`'s, which the
 `/data` plane's `--raw` reply uses too.
 
-**Every stream has the same sidecar: one JSON line per frame.** `{"t", "n", "meta"}` — the instant,
-how many ROWS of the file that frame put there, and the `Meta` the file itself cannot hold. The row
-count is what makes it an INDEX rather than a note: a `.wav` holds blocks of no fixed length, so
-without it nothing can say which samples belong to which instant. A line is also the unit a kill
-truncates to. The meta is serialized STRAIGHT to the file — building a `serde_json::Value` per frame
-cost 4.3 µs a line against 0.33, and a fast stream outran its own drain.
+**An array's `.npy` is FLAT, and the sidecar is what splits it.** The header holds one 1-D shape —
+every value the stream ever carried, in order — and a frame of any shape appends into it untouched.
+A stack of frames was there first, its own first axis the count, and it could hold ONE shape: a
+`Buffer` filling its window grew by a frame a tick, so recording one at `size` 1000 minted about a
+thousand files. Which is the general case rather than that node's quirk — a peak count moves with
+the peaks, and a shape is a thing a node is entitled to change. So a reshape is no longer a reason
+to open a file, `Kind::Array` carries no shape at all, and `Stream::takes` answers true for every
+array frame through the arm it already had. What is given up is the ONE `np.load` that returned
+`(frames, …)`: a uniform stream folds back with the manifest's `frame` in one line, and a ragged
+one is split by the sidecar, which a reader opens for the instants anyway.
+
+**Every stream has the same sidecar: one JSON line per frame.** `{"t", <extent>, "meta"}` — the
+instant, what the frame takes OF THE FILE, and the `Meta` the file itself cannot hold. The extent is
+what makes it an INDEX rather than a note: no file here holds frames of one fixed size, so without
+it nothing can say which samples belong to which instant. A line is also the unit a kill truncates
+to. The meta is serialized STRAIGHT to the file — building a `serde_json::Value` per frame cost
+4.3 µs a line against 0.33, and a fast stream outran its own drain.
+
+**The extent is a SHAPE or a row count, and never both.** An array says `"shape"`, and only on the
+line where it MOVED, because a reader carries the last one forward; every other kind says `"n"`,
+its own units, because it has no shape to carry — a `.wav` holds blocks of no fixed length and a
+`.csv` row is a row. Both on one line would state one fact twice, since a count is `prod(shape)`,
+and `Extent` is the type that makes writing each impossible. `Shapes` on the stream is the one
+owner: it takes each frame's shape, answers it back only where it moved, and the manifest's `frame`
+is its projection — the shape while every frame agreed, absent once one did not. A uniform 200 Hz
+`[1, 4]` stream's line is now `{"t":…}` alone, which is SHORTER than the `"n":1` it replaced.
 
 **A frame that no longer fits opens the NEXT file**, which is the rule a resized texture already
-followed: an array whose shape moved, a table with other columns, a `.wav` at the 4 GB ceiling RIFF
-counts in. RF64 lifts that ceiling and is read by far less than plain WAV, which is the whole reason
+followed: a table with other columns, a `.wav` at the 4 GB ceiling RIFF counts in. An array is no
+longer among them. RF64 lifts that ceiling and is read by far less than plain WAV, which is the whole reason
 a recording is a WAV at all.
 
 **The manifest is a PROJECTION, minted at every rewrite** from the closed streams' entries and the
@@ -223,6 +243,33 @@ exactly on all eight runs, at losses from 25% to 98%.
 
 ## What was decided against
 
+**A ragged container was measured against the flat `.npy`, and every one lost.** The bar is the
+recorder's own two: the format must APPEND, so a killed writer costs the tail alone, and a tool the
+analyst already has must open it. Measured 2026-09-08.
+
+- **A zip of one `.npy` per frame (`.npz`)** writes its directory at the END, so a killed writer
+  leaves a file `zipfile` refuses whole. Rewriting the directory each sync fixes that and grows
+  with the frame count, so the rewrite slows forever.
+- **Concatenated NPY** — one complete `.npy` per frame, one after the other — passes both bars:
+  four frames of `(3,3)`, `(5,3)`, `(2,3)`, `(7,3)` read back exactly through a loop over
+  `np.load(handle)`, and a file cut short returned every whole frame and then raised. It costs 128
+  bytes of header PER FRAME, which on a 200 Hz `[1, 4]` stream is eight times the data, and
+  `np.load(path)` on it returns frame 0 SILENTLY — a worse failure than a file that does not open.
+- **Arrow IPC**, in the STREAM spelling, is crash-safe and was rejected on cost: the missing
+  end-of-stream marker did not trouble pyarrow and a cut mid-batch read every batch before it. It
+  costs 315 bytes a frame, FIXED whatever the frame holds — 1967% of a `[1, 4]` frame, 0.5% of a
+  `[64, 256]` one — plus 13 crates new to the lockfile, a copy per frame to build the array and its
+  offsets, and a read side that is pyarrow rather than numpy. The Arrow FILE spelling and Parquet
+  both write an index at the end and fail the first bar outright.
+- **HDF5 and netCDF** need libhdf5 through bindgen, and a killed file can be unreadable whole
+  rather than in the tail. **Zarr** makes one file per chunk, so a ragged stream makes thousands.
+  **Padding every frame to a maximum shape** writes values the node never made.
+
+**Only the leading axis folding into the index was rejected too**, and it is the one that would
+have kept `np.load` returning a stacked array. It needs the varying axis to be axis 0, and here it
+is usually the LAST — a `Buffer` defaults to `axis -1`, and axis 0 is channels — so it would fold
+the CHANNEL axis of a `[64, 256]` stream, recoverably and wrongly, to serve the ragged case.
+
 **Compressing a stream file is not worth what it costs.** Measured 2026-09-08 on 26 MB of
 realistic f32 biosignal content — a random walk at microvolt scale, which is what a stream
 actually holds: `zstd -1` 1.19x, `zstd -9` 1.20x, `gzip -1` 1.26x. The property given up is the
@@ -283,7 +330,8 @@ recorders cannot own one timeline.
   own EMA of its update rate, seventeen significant digits of it, and the sidecar's `t` column IS
   the emission times it is measured from. It survived the delta above because it moves every
   frame, and it is what is left of a line: about a third of one, and the difference between a
-  200 Hz stream's sidecar being 443% of its data and about 300%. Dropping it means a reader
+  200 Hz stream's sidecar being 443% of its data and about 300%. Those two figures are from before
+  `"n"` left an array line, so both now stand lower by its width. Dropping `ufreq` means a reader
   recomputes the rate from `t`, which is not the same number as the engine's EMA.
 - **A rate change mid-recording** re-ties the audio anchor, so the frames either side of it derive
   from different ties. That is a real discontinuity and the manifest does not name it as one — only

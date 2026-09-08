@@ -314,13 +314,19 @@ it.** `goofi-record` owns the folder, the manifest and one writer per stream, an
 file is the format its SHAPE takes: an array is a `.npy`, a table a `.csv`, text its own lines,
 audio a `.wav` of IEEE float32, a texture a video. Nothing writes the wire format to disk. Every
 one is append-only behind a fixed-size head patched on the sync cadence, so a killed writer costs
-the tail alone — the whole frames follow from the file's size. Beside each is ONE sidecar shape, a
-JSON line per frame carrying the instant, the ROWS that frame added and whatever of the `Meta` the
-file cannot hold has MOVED since the line before — a reader carries the rest forward, and the
-instant is not among them because the line's own `t` owns that. The row count is what makes it an
-index, since a `.wav` holds blocks of no fixed length. A
-frame that no longer fits — a reshaped array, a retitled table, a `.wav` at RIFF's 4 GB ceiling —
-opens the NEXT file, the rule a resized texture already followed. A texture is the one stream that
+the tail alone — the whole frames follow from the file's size. An array's `.npy` is FLAT — one 1-D
+run of every value the stream ever carried — because a node's shape MOVES, a filling `Buffer` on
+every tick, and a stack of frames holds one shape only. Beside each is ONE sidecar shape, a
+JSON line per frame carrying the instant, what the frame takes OF THE FILE, and whatever of the
+`Meta` the file cannot hold has MOVED since the line before — a reader carries the rest forward,
+and the instant is not among them because the line's own `t` owns that. What the frame takes is the
+one thing that splits a file whose frames are not all one size: an array says its SHAPE, and only
+where that moved, so the manifest states the shape a uniform stream folds back by and states none
+at all once one frame differed; every other kind says its ROW COUNT, since a `.wav` holds blocks of
+no fixed length and has no shape to carry. Never both — a count is `prod(shape)`, and a line that
+said each would hold one fact twice. A frame that no longer fits — a retitled table, a `.wav` at
+RIFF's 4 GB ceiling — opens the NEXT file, the rule a resized texture already followed; a RESHAPE
+is not one of them. A texture is the one stream that
 is NOT exact, because it is `Rgba16Float` and no integer format holds one: an ffmpeg child writes
 FFV1 in Matroska, and what it writes is what a viewer WATCHES rather than what an analyst measures
 — ten-bit gbrp, the [0,1] window with the rest clipped, alpha dropped — which the manifest states
