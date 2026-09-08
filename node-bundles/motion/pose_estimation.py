@@ -147,10 +147,12 @@ class PoseEstimation(goofi.Node):
 
         rows, labels = read(found, p.mode, frame.shape[1], frame.shape[0])
         xyz = np.asarray(rows, dtype=np.float32).reshape(-1, 3)
-        meta = {"channels": {"dim0": labels, "dim1": ["x", "y", "z"]}}
-        if p.mode == "gesture":
-            meta["gesture"] = naming(found)
-        return {"positions": (xyz, meta), "velocities": (self.moved(xyz, p), meta)}
+        # One meta per output: the two frames name the same rows but not the same axes, and a
+        # `Data` is refused where its channel names and its shape disagree.
+        held = {"gesture": naming(found)} if p.mode == "gesture" else {}
+        place = {"channels": {"dim0": labels, "dim1": ["x", "y", "z"]}, **held}
+        speed = {"channels": {"dim0": labels, "dim1": ["x", "y"]}, **held}
+        return {"positions": (xyz, place), "velocities": (self.moved(xyz, p), speed)}
 
     def moved(self, xyz, p):
         """How far each row travelled since the last picture, in units a second."""
