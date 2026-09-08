@@ -16,15 +16,19 @@
   `<ParamField>` per param in the active group.
 -->
 <script lang="ts">
-	import type { ParamMode, SourcePatch } from '$lib/api/types';
+	import type { ParamDescriptor, ParamMode, SourcePatch } from '$lib/api/types';
 	import type { HTMLAttributes } from 'svelte/elements';
+	import type { MenuItem } from 'panelty';
+	import { ContextMenu } from 'panelty';
 	import { graph } from '$lib/stores/graph.svelte';
+	import { ui } from '$lib/stores/ui.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { isValidName } from '$lib/crdt/graphDoc';
 	import { formatName } from '$lib/editor/categoryColor';
 	import { bareName } from '$lib/editor/typeId';
 	import { nodeHealth } from '$lib/editor/nodeHealth';
 	import ParamField from './ParamField.svelte';
+	import { expressionFor } from './paramSeed';
 	import SubPatchInspector from '$lib/editor/SubPatchInspector.svelte';
 	import { matchParams, type ParamHit } from './paramSearch';
 	import {
@@ -66,6 +70,7 @@
 	} = $props();
 
 	const g = graph();
+	const uiStore = ui();
 
 	// Each RPC is fire-and-forget with a logged failure, so a rejection is never unhandled.
 	function setValue(group: string, name: string, value: unknown): void {
@@ -163,6 +168,42 @@
 		const at = replacing;
 		replacing = null;
 		if (at) void saveToLibrary(at.type, true);
+	}
+
+	// A node dragged out of the editor onto a param row: the row is a target only where the node HAS
+	// an output that param may follow, so the menu can never open on a link the manager would refuse.
+	const formId = $props.id();
+	const dragged = $derived(uiStore.nodeDrag);
+	$effect(() =>
+		uiStore.onNodeDrop(formId, (uid, zone, at) => {
+			const [group, name] = zone.split('/');
+			const reference = g.referenceFor(uid, node?.params?.[group]?.[name]?.type ?? '');
+			if (reference) menu = { x: at.x, y: at.y, items: linkItems(group, name, uid, reference) };
+		})
+	);
+	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+
+	/** The two ways one dropped node can drive a param: followed, or read by an expression. */
+	function linkItems(group: string, name: string, uid: string, reference: string): MenuItem[] {
+		const expression = expressionFor(reference, Object.keys(g.nodeById(uid)?.output_slots ?? {}).length);
+		return [
+			{
+				label: `Reference ${reference}`,
+				icon: 'workflow',
+				action: () => setSource(group, name, { reference })
+			},
+			{
+				label: `Expression ${expression}`,
+				icon: 'terminal',
+				action: () => setSource(group, name, { expression })
+			}
+		];
+	}
+
+	/** The row's drop-zone key, or null where this node cannot drive that param. */
+	function dropZone(group: string, name: string, d: ParamDescriptor): string | null {
+		if (!dragged || dragged === node?.uid) return null;
+		return g.referenceFor(dragged, d.type) ? `${formId}#${group}/${name}` : null;
 	}
 
 	const groupNames = $derived(node ? Object.keys(node.params) : []);
@@ -441,6 +482,7 @@
 								{paramName}
 								selfName={node?.name}
 								{descriptor}
+								dropZone={dropZone(group, paramName, descriptor)}
 								data-testid={`param-field-${paramName}`}
 								refreshing={node != null && g.isRefreshing(node.uid, group, paramName)}
 								onCommit={(v) => setValue(group, paramName, v)}
@@ -455,6 +497,10 @@
 		{/if}
 	{/if}
 </section>
+
+{#if menu}
+	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
+{/if}
 
 <ConfirmDialog
 	open={!!replacing}

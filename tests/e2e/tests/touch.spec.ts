@@ -91,6 +91,8 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 		});
 
 		let osc = '';
+		let lfo = '';
+		let lfoName = '';
 		await test.step('a tap selects a node, and the inspector arrives as a sheet', async () => {
 			osc = await addNode(page, 'LFO', [40, 40]);
 			await waitForNode(page, osc);
@@ -102,14 +104,14 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 		});
 
 		await test.step('a reference is picked by finger: the mode chip, then the node, then its slot', async () => {
-			const lfo = await addNode(page, 'LFO', [40, 260]);
+			lfo = await addNode(page, 'LFO', [40, 260]);
 			await waitForNode(page, lfo);
 			const nameOf = (u: string): Promise<string> =>
 				page.evaluate(
 					(uid) => (window as any).goofi.query.graph().nodes.find((n: { uid: string }) => n.uid === uid)?.name,
 					u
 				);
-			const lfoName = await nameOf(lfo);
+			lfoName = await nameOf(lfo);
 			await tapNode(page, osc);
 			await expect(pane(page)).toHaveClass(/open/);
 			const field = pane(page).getByTestId('param-field-frequency');
@@ -145,6 +147,27 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			await field.getByTestId('param-mode-constant').tap();
 			await expect.poll(() => frequency('mode')).toBe('constant');
 			expect.soft(await frequency('reference'), 'a mode switch retains the reference').toBe(`${lfoName}.out`);
+		});
+
+		await test.step('a node carried onto a param row offers the two ways to drive it', async () => {
+			const row = pane(page).getByTestId('param-field-amplitude');
+			const card = (await page.locator(`.svelte-flow__node[data-id="${lfo}"] .header`).boundingBox())!;
+			const at = (await row.boundingBox())!;
+			const to = { x: Math.round(at.x + at.width / 2), y: Math.round(at.y + at.height / 2) };
+			await swipe(page, { x: Math.round(card.x + card.width / 2), y: Math.round(card.y + card.height / 2) }, to);
+			const menu = page.locator('.context-menu');
+			await expect(menu, 'the drop asks which kind of link it is').toBeVisible();
+			await menu.getByText(/^Reference/).tap();
+			await expect
+				.poll(() =>
+					page.evaluate(
+						(u) =>
+							(window as any).goofi.query.graph().nodes.find((n: { uid: string }) => n.uid === u)?.params
+								.lfo.amplitude.reference,
+						osc
+					)
+				)
+				.toBe(`${lfoName}.out`);
 		});
 
 		await test.step('a long press on a control tells what it does, and does NOT do it', async () => {

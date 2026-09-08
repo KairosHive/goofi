@@ -550,8 +550,8 @@
 		return null;
 	}
 
-	/** The control widget under a screen point, in a control panel that is in edit mode. */
-	function widgetUnder(x: number, y: number): string | null {
+	/** The marked drop zone under a screen point — a control widget, a param row. */
+	function dropZoneUnder(x: number, y: number): string | null {
 		for (const el of document.querySelectorAll<HTMLElement>('[data-node-drop]')) {
 			const r = el.getBoundingClientRect();
 			if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) return el.dataset.nodeDrop ?? null;
@@ -559,15 +559,15 @@
 		return null;
 	}
 
-	type LinkTarget = { panel: string } | { widget: string };
+	type LinkTarget = { panel: string } | { zone: string };
 
-	/** What a dragged node would link into under the cursor: a widget, or a node-accepting panel
+	/** What a dragged node would link into under the cursor: a drop zone, or a node-accepting panel
 	 * other than this editor. */
 	function linkTargetAt(event: MouseEvent | TouchEvent): LinkTarget | null {
 		const p = eventPoint(event);
 		if (!p) return null;
-		const widget = widgetUnder(p.clientX, p.clientY);
-		if (widget) return { widget };
+		const zone = dropZoneUnder(p.clientX, p.clientY);
+		if (zone) return { zone };
 		const t = panelUnder(p.clientX, p.clientY);
 		return t && t.id !== panelId && getPanelType(t.type)?.acceptsNode === true ? { panel: t.id } : null;
 	}
@@ -597,7 +597,7 @@
 		if (target) {
 			// A reference drag, not a coordinate move: the node snaps back and a ghost follows.
 			uiStore.nodeDragTarget = 'panel' in target ? target.panel : null;
-			uiStore.nodeDragWidget = 'widget' in target ? target.widget : null;
+			uiStore.nodeDragZone = 'zone' in target ? target.zone : null;
 			// `eventPoint`, because a TouchEvent carries no `clientX` of its own.
 			const p = eventPoint(args.event) ?? { clientX: 0, clientY: 0 };
 			linkGhost = { x: p.clientX, y: p.clientY, name: g.nodeById(args.nodes[0]?.id ?? '')?.name ?? '' };
@@ -606,7 +606,7 @@
 			return;
 		}
 		uiStore.nodeDragTarget = null;
-		uiStore.nodeDragWidget = null;
+		uiStore.nodeDragZone = null;
 		linkGhost = null;
 		const current = new Map<string, { x: number; y: number }>();
 		for (const n of args.nodes) current.set(n.id, { x: n.position.x, y: n.position.y });
@@ -634,12 +634,12 @@
 			revertDragged(dragged);
 			for (const id of dragged) pinned.delete(id);
 			const uid = args.nodes[0]?.id ?? '';
-			if ('panel' in target) {
-				const drop = uiStore.nodeDropFor(target.panel);
-				if (drop) drop(uid);
-				else ws.linkNodeToPanel(target.panel, uid);
+			const p = eventPoint(args.event) ?? { clientX: 0, clientY: 0 };
+			const where = 'zone' in target ? target.zone : target.panel;
+			// The workspace's own meaning is the fallback, and only a panel has one: bind it to the node.
+			if (!uiStore.dropNode(where, uid, { x: p.clientX, y: p.clientY }) && 'panel' in target) {
+				ws.linkNodeToPanel(target.panel, uid);
 			}
-			else void g.linkControl(target.widget, uid).catch(() => {});
 		} else {
 			const current = new Map<string, { x: number; y: number }>();
 			for (const n of args.nodes) current.set(n.id, { x: n.position.x, y: n.position.y });
@@ -672,7 +672,7 @@
 		}
 		uiStore.nodeDrag = null;
 		uiStore.nodeDragTarget = null;
-		uiStore.nodeDragWidget = null;
+		uiStore.nodeDragZone = null;
 		linkGhost = null;
 		snapGuides = [];
 	}
@@ -1104,7 +1104,7 @@
 			if (uiStore.nodeDrag !== null) {
 				uiStore.nodeDrag = null;
 				uiStore.nodeDragTarget = null;
-				uiStore.nodeDragWidget = null;
+				uiStore.nodeDragZone = null;
 			}
 		};
 	});
