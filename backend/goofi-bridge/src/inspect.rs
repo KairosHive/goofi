@@ -268,8 +268,9 @@ pub fn globals(g: &Graph) -> Value {
     json!({ "globals": entries, "groups": groups })
 }
 
-/// `library get`: one type's provenance, and — when `source` asks — the file itself, under
-/// `text`: the entry's own `source` is where the TYPE came from, and one key cannot be both.
+/// `library get`: one type's provenance, what its file hides, and — when `source` asks — the file
+/// itself, under `text`: the entry's own `source` is where the TYPE came from, and one key cannot
+/// be both.
 pub fn node_source(
     g: &Graph,
     ty: &str,
@@ -295,9 +296,10 @@ pub fn node_source(
         .chain(roots.iter().rev().map(|(d, o)| (d.clone(), word(o))));
     // The file names the type, so the path re-derives without a registry; the registry says only
     // whether the patch's folder is where it lives.
-    let found = dirs.into_iter().find_map(|(dir, provenance)| {
+    let mut files = dirs.into_iter().filter_map(|(dir, provenance)| {
         Some((crate::node_file_in(&dir, goofi_node::bare(ty), engine)?, provenance))
     });
+    let found = files.next();
     let tier = g.type_tier(ty);
     info["language"] = json!(tier.map(goofi_node::Isolation::language));
     info["tier"] = json!(tier.map(goofi_node::Isolation::wire));
@@ -307,6 +309,11 @@ pub fn node_source(
     });
     info["path"] =
         found.as_ref().map(|(p, _)| json!(goofi_core::path::to_slash(p))).unwrap_or(Value::Null);
+    // What the winner HIDES: the same type's file in every root behind it — which is what a
+    // `library save` would land on, and why an edit to one of them changes nothing.
+    info["shadowed"] = files
+        .map(|(p, provenance)| json!({ "provenance": provenance, "path": goofi_core::path::to_slash(&p) }))
+        .collect();
     if source {
         info["text"] = found
             .as_ref()

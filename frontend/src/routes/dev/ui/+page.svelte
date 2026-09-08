@@ -17,6 +17,7 @@
 		Tabs,
 		Disclosure,
 		Popover,
+		ConfirmDialog,
 		Dialog,
 		Badge,
 		Chip,
@@ -87,6 +88,7 @@
 	let menuPopoverAnchor = $state<HTMLElement | null>(null);
 	let menuPopoverOpen = $state(false);
 	let dialogOpen = $state(false);
+	let confirmOpen = $state(false);
 
 	let chipCount = $state(0);
 	let segment = $state('a');
@@ -481,6 +483,25 @@
 				</div>
 			</div>
 		</Dialog>
+	</section>
+
+	<section>
+		<h2>ConfirmDialog (one question, the answers as buttons)</h2>
+		<div class="form">
+			<Button onclick={() => (confirmOpen = true)} data-testid="ui-confirm-trigger">Ask</Button>
+		</div>
+		<ConfirmDialog
+			open={confirmOpen}
+			question="Throw this away?"
+			detail="The dialog owns the question, the prose and the row; the caller supplies the answers."
+			onClose={() => (confirmOpen = false)}
+			data-testid="ui-confirm"
+		>
+			<Button variant="danger" onclick={() => (confirmOpen = false)} data-testid="ui-confirm-yes">
+				Throw away
+			</Button>
+			<Button variant="ghost" onclick={() => (confirmOpen = false)}>Cancel</Button>
+		</ConfirmDialog>
 	</section>
 
 	<section>

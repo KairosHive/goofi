@@ -37,7 +37,19 @@
 	import SubPatchInspector from '$lib/editor/SubPatchInspector.svelte';
 	import { matchParams, type ParamHit } from './paramSearch';
 	import { anyFilter, counts, filteredRows, onlyAdmitted, type Filters } from './paramTouched';
-	import { Bar, Tabs, Badge, Disclosure, EmptyState, Icon, IconButton, MODE_ATTRS, Toggle } from '$lib/ui';
+	import {
+		Bar,
+		Tabs,
+		Badge,
+		Button,
+		ConfirmDialog,
+		Disclosure,
+		EmptyState,
+		Icon,
+		IconButton,
+		MODE_ATTRS,
+		Toggle
+	} from '$lib/ui';
 
 	let {
 		node,
@@ -114,19 +126,39 @@
 		return n != null && (g.nodeTypes ?? []).some((t) => t.type === n.type && t.source === 'patch');
 	});
 	let saving = $state(false);
+	// The type rides with the path: the inspector follows the selection, so by the time the dialog
+	// is answered the node under it need not be the one the question was about.
+	let replacing = $state<{ type: string; path: string } | null>(null);
 
-	async function saveToLibrary(): Promise<void> {
-		const n = node;
-		if (!n) return;
+	// A file the library already holds is a question before it is a save; an answered one is not
+	// asked again.
+	async function saveToLibrary(type: string, overwrite: boolean): Promise<void> {
 		saving = true;
 		try {
-			await g.saveNodeToLibrary(n.type);
-			notify().raise(`${bareName(n.type)} is in your library`);
+			const held = overwrite ? null : await g.libraryFileBehind(type);
+			if (held) {
+				replacing = { type, path: held };
+			} else {
+				await g.saveNodeToLibrary(type, overwrite);
+				notify().raise(`${bareName(type)} is in your library`);
+			}
 		} catch (e) {
 			notify().failure('Save to library', e);
 		} finally {
 			saving = false;
 		}
+	}
+
+	const replaceDetail = $derived(
+		replacing
+			? `Your library already holds ${bareName(replacing.type)}, at ${replacing.path}. Overwriting puts this patch's file there instead; the one in your library is lost.`
+			: ''
+	);
+
+	function replace(): void {
+		const at = replacing;
+		replacing = null;
+		if (at) void saveToLibrary(at.type, true);
 	}
 
 	const groupNames = $derived(node ? Object.keys(node.params) : []);
@@ -250,7 +282,7 @@
 							title="Move this node's file into your private library, where every patch finds it"
 							data-testid="save-to-library"
 							disabled={saving}
-							onclick={saveToLibrary}><Icon name="save" /></IconButton
+							onclick={() => void saveToLibrary(node.type, false)}><Icon name="save" /></IconButton
 						>
 					{/if}
 					<Badge
@@ -388,6 +420,17 @@
 		{/if}
 	{/if}
 </section>
+
+<ConfirmDialog
+	open={!!replacing}
+	question="Replace the node in your library?"
+	detail={replaceDetail}
+	onClose={() => (replacing = null)}
+	data-testid="library-replace-dialog"
+>
+	<Button variant="danger" data-testid="library-replace" onclick={replace}>Overwrite</Button>
+	<Button variant="ghost" onclick={() => (replacing = null)}>Cancel</Button>
+</ConfirmDialog>
 
 <style>
 	.param-form {
