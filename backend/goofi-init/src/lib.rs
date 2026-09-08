@@ -90,12 +90,14 @@ pub fn init(root: &Path) -> Result<(), String> {
 
     // The bundles' packages every time, never gated on presence: a bundle added since the last
     // run names new ones, and uv answers a satisfied list in milliseconds.
-    let reqs = requirements_in(&bundle_dirs(root));
-    for (venv, py) in [(FT_VENV, &ft), (GIL_VENV, &gil)] {
+    let dirs = bundle_dirs(root);
+    let shared = requirements_in(&dirs);
+    let gil_only: Vec<PathBuf> = shared.iter().cloned().chain(gil_requirements_in(&dirs)).collect();
+    for (venv, py, reqs) in [(FT_VENV, &ft, &shared), (GIL_VENV, &gil, &gil_only)] {
         install_wheel(root, venv, py)?;
         if !reqs.is_empty() {
             println!("  installing the bundles' packages into {venv}");
-            install_packages(py, &reqs)?;
+            install_packages(py, reqs)?;
         }
     }
 
@@ -275,7 +277,17 @@ pub fn bundle_dirs(root: &Path) -> Vec<PathBuf> {
 
 /// The `requirements.txt` each of `dirs` carries — what its nodes import beyond goofi's own.
 pub fn requirements_in(dirs: &[PathBuf]) -> Vec<PathBuf> {
-    dirs.iter().map(|d| d.join("requirements.txt")).filter(|p| p.is_file()).collect()
+    named_in(dirs, "requirements.txt")
+}
+
+/// The `requirements-gil.txt` each of `dirs` carries: packages that ship no free-threaded wheel,
+/// asked of the subprocess interpreter alone — which is the tier that exists for them.
+pub fn gil_requirements_in(dirs: &[PathBuf]) -> Vec<PathBuf> {
+    named_in(dirs, "requirements-gil.txt")
+}
+
+fn named_in(dirs: &[PathBuf], file: &str) -> Vec<PathBuf> {
+    dirs.iter().map(|d| d.join(file)).filter(|p| p.is_file()).collect()
 }
 
 fn pip_install(py: &Path, reqs: &[PathBuf], dry_run: bool) -> Command {

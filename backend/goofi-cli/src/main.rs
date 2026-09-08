@@ -626,27 +626,32 @@ fn point_embedded_python_at_its_venv() {
 #[cfg(not(feature = "python"))]
 fn point_embedded_python_at_its_venv() {}
 
-/// Every node directory's `requirements.txt`, checked against both interpreters before the scan
-/// imports anything. Nothing is installed unasked: a terminal is asked once, and anything else is
-/// told what will be unavailable and served through.
+/// Every node directory's requirements, checked against the interpreter each is asked of before the
+/// scan imports anything. Nothing is installed unasked: a terminal is asked once, and anything else
+/// is told what will be unavailable and served through.
 #[cfg(feature = "python")]
 fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) {
     use std::io::IsTerminal;
-    let reqs = goofi_init::requirements_in(dirs);
-    if reqs.is_empty() {
+    let shared = goofi_init::requirements_in(dirs);
+    let gil_only: Vec<PathBuf> =
+        shared.iter().cloned().chain(goofi_init::gil_requirements_in(dirs)).collect();
+    if gil_only.is_empty() {
         return;
     }
     let root = goofi_init::repo_root();
-    let interpreters =
-        [goofi_init::venv_python(&root.join(goofi_init::FT_VENV)), Some(PathBuf::from(subproc_python))];
+    let interpreters = [
+        (goofi_init::venv_python(&root.join(goofi_init::FT_VENV)), &shared),
+        (Some(PathBuf::from(subproc_python)), &gil_only),
+    ];
     let mut lacking = Vec::new();
-    for py in interpreters.into_iter().flatten() {
+    for (py, reqs) in interpreters {
+        let Some(py) = py.filter(|_| !reqs.is_empty()) else { continue };
         let shown = py.strip_prefix(&root).unwrap_or(&py).display().to_string();
-        match goofi_init::missing_packages(&py, &reqs) {
+        match goofi_init::missing_packages(&py, reqs) {
             Ok(missing) if missing.is_empty() => {}
             Ok(missing) => {
                 eprintln!("  {shown} lacks {}", missing.join(", "));
-                lacking.push(py);
+                lacking.push((py, reqs.clone()));
             }
             Err(e) => eprintln!("  could not check {shown}: {e}"),
         }
@@ -654,7 +659,7 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) {
     if lacking.is_empty() {
         return;
     }
-    let from = reqs.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ");
+    let from = gil_only.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ");
     if !std::io::stdin().is_terminal() {
         eprintln!("  named by {from}; no terminal to ask, so those nodes will be unavailable");
         return;
@@ -666,7 +671,7 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) {
         eprintln!("  not installed; those nodes will be unavailable");
         return;
     }
-    for py in lacking {
+    for (py, reqs) in lacking {
         if let Err(e) = goofi_init::install_packages(&py, &reqs) {
             eprintln!("  {e}");
         }
