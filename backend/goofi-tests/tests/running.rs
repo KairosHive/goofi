@@ -410,6 +410,20 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
         assert_eq!(g.state.reducers.subscribers(&key), 0, "round {round}: the viewer's socket closed");
     }
 
+    // Those rounds out-ran the idle, so no feed above ever closed. A gap past it closes one, and
+    // the attach after is the re-open — the only path that mints, and one mint per attach panicked
+    // a reducer thread on Windows, where a node's birth is a directory create.
+    let iox = g.state.reducers.iox_node_id();
+    assert!(iox.is_some(), "the feeds so far minted the one node they share");
+    for round in 0..3 {
+        tokio::time::sleep(goofi_bridge::reducer::IDLE * 2).await;
+        let mut v = Viewer::open(&base, &hex(osc), "out").await;
+        v.view(spec(32)).await;
+        v.until(|d| !f32s(d).is_empty()).await;
+        assert_eq!(g.state.reducers.iox_node_id(), iox, "round {round}: the re-open minted a node");
+        drop(v);
+    }
+
     g.call("node remove", j!({ "node": hex(osc) }));
     assert!(holds_within(Duration::from_secs(5), || g.state.reducers.active_slots() == 0).await,
             "the node left and its reducer went with it");

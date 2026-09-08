@@ -115,8 +115,10 @@ describe('node-identity read cutover — nodes built from the doc when the catal
 		d.node('n1', 'signal:Oscillator', 'osc0', [0, 0]);
 		d.patch({ nodes: { n1: { params: { common: { max_frequency: { value: 55 } } } } } });
 
-		// A state_update carrying a STALE value (999) + an error + stage: the value must
-		// stay the doc's 55 (params are doc-owned), while error/stage/error merge.
+		// A state_update carrying a STALE value (999) + an error + stage: the value must stay the
+		// doc's 55 (params are doc-owned), and the ERROR must not land at all. An op's echo is taken
+		// before the node has re-evaluated the source that op just moved, so its error is the
+		// PREVIOUS source's — which is how a corrected expression kept showing the typo's NameError.
 		fc.emit({
 			event: 'state_update',
 			payload: {
@@ -131,8 +133,21 @@ describe('node-identity read cutover — nodes built from the doc when the catal
 		});
 		const n = g.nodeById('n1')!;
 		expect(n.params.common.max_frequency.value).toBe(55); // doc value preserved
-		expect(n.params.common.max_frequency.error).toBe('compile error'); // runtime merged
+		expect(n.params.common.max_frequency.error, 'the echo is one evaluation behind').toBeNull();
 		expect(n.stage).toBe('ready');
+
+		// The live plane is what carries a failure, and what clears it: both maps are WHOLE, so the
+		// tick that omits the param is the one that says the expression is working again.
+		fc.emit({
+			event: 'param_values',
+			payload: { node: 'n1', values: {}, errors: { common: { max_frequency: 'NameError' } } }
+		});
+		expect(g.nodeById('n1')!.params.common.max_frequency.error).toBe('NameError');
+		fc.emit({ event: 'param_values', payload: { node: 'n1', values: {}, errors: {} } });
+		expect(
+			g.nodeById('n1')!.params.common.max_frequency.error,
+			'a failure that cleared with no op behind it still reaches the replica'
+		).toBeNull();
 	});
 
 	it('an unknown type (missing from the catalog) still renders identity + pos', () => {
@@ -173,7 +188,7 @@ describe('expression live value survives a doc rebuild', () => {
 		});
 
 		// A param_values event delivers the live evaluated value (7) — never written to the doc.
-		fc.emit({ event: 'param_values', payload: { node: 'n1', values: { common: { max_frequency: 7 } } } });
+		fc.emit({ event: 'param_values', payload: { node: 'n1', values: { common: { max_frequency: 7 } }, errors: {} } });
 		expect(g.nodeById('n1')!.params.common.max_frequency.value).toBe(7);
 
 		// An unrelated doc change rebuilds every node from the doc. The live value must NOT revert to
@@ -186,7 +201,7 @@ describe('expression live value survives a doc rebuild', () => {
 
 		// The map is the node's WHOLE live state: one that no longer names the param withdraws its
 		// value, and the committed literal shows again — a re-pointed reference leaves exactly this.
-		fc.emit({ event: 'param_values', payload: { node: 'n1', values: {} } });
+		fc.emit({ event: 'param_values', payload: { node: 'n1', values: {}, errors: {} } });
 		expect(g.nodeById('n1')!.params.common.max_frequency.value, 'withdrawn').toBe(99);
 	});
 });

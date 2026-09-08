@@ -14,6 +14,7 @@
 		onRefresh,
 		refreshing = false,
 		refreshTestid,
+		disabled = false,
 		density = 'comfortable',
 		class: klass = '',
 		...rest
@@ -31,6 +32,8 @@
 		refreshing?: boolean;
 		/** `data-testid` stamped on the ⟳ button. */
 		refreshTestid?: string;
+		/** Show the value and take no input — what a driven param's own control wears. */
+		disabled?: boolean;
 	} = $props();
 
 	const ownId = $props.id();
@@ -44,7 +47,7 @@
 		id={fieldId}
 		class="ui-select-input"
 		{value}
-		disabled={refreshing}
+		disabled={disabled || refreshing}
 		onchange={(e) => onChange((e.currentTarget as HTMLSelectElement).value)}
 	>
 		{#each items as opt (opt)}
@@ -55,7 +58,7 @@
 		<IconButton
 			size="sm"
 			label={refreshing ? 'Re-scanning…' : 'Re-scan for options'}
-			disabled={refreshing}
+			disabled={disabled || refreshing}
 			aria-busy={refreshing}
 			data-testid={refreshTestid}
 			onclick={() => onRefresh()}

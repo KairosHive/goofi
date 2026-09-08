@@ -697,7 +697,9 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
 
     let mut ev = g.events();
     set("nd('src')");
-    // `error` is runtime-derived and rides `state_update`, never the doc.
+    // The record rides `state_update`; `error` is runtime-derived and rides the LIVE plane, never
+    // the doc and never an op's echo — an echo is taken before the node has re-evaluated the source
+    // the op just moved, so it would carry the error of the source that is gone.
     let d = g.until("the descriptor echo", |_| {
         let p = ev.next("state_update");
         (p["node"] == hex(consumer)).then(|| p["params"]["common"]["max_frequency"].clone())
@@ -777,6 +779,21 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     g.until("the reference is live again", |g| {
         let l = line(g);
         (l.contains("ref: gain.out") && !l.contains("[error")).then_some(())
+    });
+    /* …and a client is TOLD, on the same plane that carries the value. Nothing was written for this
+       clear — no op, no doc delta — so with the error riding op echoes alone a replica kept showing
+       the previous source's failure under an expression that was working. */
+    let mut live = g.events();
+    let errors_of = |p: &serde_json::Value| p["errors"]["common"].get("max_frequency").cloned();
+    param(&g, j!({ "reference": "signal.out" }));
+    g.until("the shape error reaches the live plane", |_| {
+        let p = live.next("param_values");
+        (p["node"] == hex(consumer) && errors_of(&p).is_some_and(|e| e.as_str().is_some_and(|m| m.contains("one element")))).then_some(())
+    });
+    param(&g, j!({ "reference": "gain.out" }));
+    g.until("…and the clear does too", |_| {
+        let p = live.next("param_values");
+        (p["node"] == hex(consumer) && errors_of(&p).is_none()).then_some(())
     });
     // A deleted producer leaves the reference standing with its error; undo clears it.
     g.call("node remove", j!({ "node": hex(level) }));

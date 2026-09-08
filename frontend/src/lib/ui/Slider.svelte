@@ -11,6 +11,7 @@
 		min = 0,
 		max = 1,
 		step,
+		disabled = false,
 		class: klass = '',
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
@@ -19,6 +20,8 @@
 		min?: number;
 		max?: number;
 		step?: number;
+		/** Show the value and take no input — what a driven param's own control wears. */
+		disabled?: boolean;
 	} = $props();
 
 	const ownId = $props.id();
@@ -51,6 +54,7 @@
 		id={fieldId}
 		class="ui-slider-range"
 		type="range"
+		{disabled}
 		min={lo}
 		max={hi}
 		step={stp}
@@ -80,6 +84,9 @@
 		border: none;
 		/* A vertical touch gesture scrolls; a horizontal one drags the thumb. */
 		touch-action: pan-y;
+	}
+	.ui-slider-range:disabled {
+		opacity: var(--disabled-opacity);
 	}
 	.ui-slider-bound {
 		flex-shrink: 0;

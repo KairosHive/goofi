@@ -2735,12 +2735,20 @@ impl Graph {
         let entry = self.leaf(uid)?;
         let key = ParamKey::new(group, name);
         let b = entry.sources.get(&key)?;
-        Some(SourceInfo {
-            state: b.state.clone(),
-            // Derived rather than stored: the graph could not bind it, or the node could not
-            // evaluate it, and a source the graph refused is never shipped for the node to judge.
-            error: b.bind_error.clone().or_else(|| entry.health.param_errors.get(&key).cloned()),
-        })
+        Some(SourceInfo { state: b.state.clone(), error: source_error(entry, &key) })
+    }
+
+    /// Every param error on `uid` as `(group, name, message)` — what the live sweep broadcasts, so
+    /// a failure that arrives or clears with no op behind it still reaches a client.
+    pub fn param_errors(&self, uid: Uid) -> Vec<(&str, &str, String)> {
+        let Some(entry) = self.leaf(uid) else { return Vec::new() };
+        entry
+            .sources
+            .keys()
+            .filter_map(|key| {
+                source_error(entry, key).map(|m| (key.group.as_str(), key.name.as_str(), m))
+            })
+            .collect()
     }
 
     /// Every source record on a node as `(group, name, state)` — what a delete's inverse must
@@ -3795,6 +3803,13 @@ fn build_view<'a>(
         })
         .collect();
     GraphView { instance, edges, nodes }
+}
+
+/// One param's error: the bind the graph refused, or the node's own last evaluation failure. The
+/// one derivation, so a descriptor and the live sweep cannot answer differently.
+fn source_error(e: &Leaf, key: &ParamKey) -> Option<String> {
+    let b = e.sources.get(key)?;
+    b.bind_error.clone().or_else(|| e.health.param_errors.get(key).cloned())
 }
 
 /// One node's current error, derived fresh from the places one can arise. A free function so the

@@ -199,18 +199,38 @@ run beside it.
 
 ## Open — parked on that call, not being worked
 
-- Whether goofi should reclaim the leak itself at startup rather than wait for upstream. It
-  already pre-creates `<root>/nodes` and `<root>/services`, so it has an opinion about that
-  directory — but sweeping another library's bookkeeping is exactly the mirror this file's
-  neighbours warn about, and a stale entry from a LIVE peer must never be swept.
+- ~~Whether goofi should reclaim the leak itself at startup~~ — TAKEN, 2026-09-08. It already did,
+  and it did not work: the reclaim was written 2026-08-27 and the measurement that priced it landed
+  2026-09-06, so it still granted with the `/T` walk this file proves insufficient, and it reached
+  only `<nodes>/<id>` while the three `node_monitor` files are SIBLINGS of that directory. The grant
+  is now per FILE and explicit, through `SetNamedSecurityInfoW` rather than a shelled-out process
+  each. Still scoped exactly as before — only a node iceoryx2 declared dead AND then refused, never
+  a blanket pass — and an id now matches as a whole run of digits, because a bare substring would
+  let a short id name a LIVE node whose own id merely contains it. UNVERIFIED on Windows: it
+  typechecks for `x86_64-pc-windows-msvc` and no machine here can run it.
 - **Whether an instance gets a ROOT of its own**, which is the one lever nobody has tried and the
   only one that does not sweep: it isolates instead, so it has none of the failure mode that severed
   every other goofi on the machine. It would keep `<root>/nodes` down to one instance's entries, so
   the leak could not compound across a run. What it needs judging against is the rendezvous — the
   root is process-global to iceoryx2, and two goofis meant to see each other must share one — so it
   is a real decision about what an instance IS, not a test-only knob. The owner's call.
+  Read once more 2026-09-08, and that blocker looks weaker than it is written: EVERY service name
+  goofi mints is already scoped to one instance (`service_base`, `record_door_service`) or to one
+  pid (`goofi_sub_*`), so no two goofi instances rendezvous on a service today and none is given up
+  by isolating. What the lever does cost is the peers that must SHARE the root — the subprocess
+  Python child, and the `crash_helper` test's child — which means propagating it in the
+  environment beside `GOOFI_IOX_REQ`, not just setting `set_root_path`.
 - Whether the noise deserves any local mitigation before a release lands. Stderr filtering is
   ruled out: a pipe-based filter DEADLOCKS the Python subprocess tier, which was measured.
+- **The subprocess Python tier does not use goofi's iceoryx2 config at all**, and that is a noise
+  source in its own right. `goofi-python/src/subproc.rs` and `goofi-pymod/src/serve.rs` both build
+  their node with a bare `NodeBuilder::new()`, so they fall back to `Config::global_config()` —
+  where all three automatic dead-node cleanup passes are ON, the passes `iox_config` turns off
+  everywhere else precisely because `reclaim_stale_resources` does that job once. So every
+  subprocess node runs a full sweep of the whole nodes directory on creation AND on destruction, in
+  BOTH processes. What makes it more than a one-line fix is placement: neither crate depends on
+  `goofi-transport`, and the wheel deliberately keeps iceoryx2 behind `extension-module` — so it is
+  three booleans duplicated into two more owners, or a shared home for the one decision.
 - Whether a bounded retry on service CREATE (any platform, no `cfg`) is boundary tolerance or
   symptom-hiding. Still parked, but the 2026-09-06 run prices it: SEVEN of the eight failures wear a
   create-time `Err` a retry could absorb, and the eighth is the `panic!`, which nothing can. So it is

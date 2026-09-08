@@ -35,7 +35,8 @@ pub struct Entry {
     pub drift: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channels: Option<usize>,
-    /// One frame's shape, for an array: the file stacks them, so its own first axis is the count.
+    /// The shape every frame of an array file had, which folds its flat values back in one line.
+    /// Absent where the shape MOVED: the sidecar's own shape line is the index then.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame: Option<Vec<usize>>,
     #[serde(skip_serializing_if = "Option::is_none")]

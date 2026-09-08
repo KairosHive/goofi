@@ -1,17 +1,17 @@
 /* goofi
-{ "doc": "a signal frame as a texture\nThe door in from the rest of the patch. `plot/mode` says what the frame becomes: its own texels — [N] is one row, [H, W] is gray, [H, W, C] keeps the channels it has — or the line plot or the trajectory a viewer draws of it, on transparent ground so it composites. A [C, N] frame is C series; a trajectory pairs the channels, one against the other. Set common/width and height, or it is 1024 square.",
+{ "doc": "a signal frame as a texture\nThe door in from the signal plane. `signal/mode` says what the frame becomes: its own texels — [N] is one row, [H, W] is gray, [H, W, C] keeps the channels it has — or the line plot or the trajectory a viewer draws of it, on transparent ground so it composites. A [C, N] frame is C series; a trajectory pairs the channels, one against the other. Set common/width and height, or it is 1024 square.",
   "tags": ["image", "generator"],
   "inputs": [{"name": "input", "kind": "ARRAY"}],
   "params": [
-    {"group": "plot", "name": "mode", "kind": "str", "default": "texture",
+    {"group": "signal", "name": "mode", "kind": "str", "default": "texture",
      "options": ["texture", "line", "trajectory"]},
-    {"group": "plot", "name": "autoscale", "kind": "bool", "default": true},
-    {"group": "plot", "name": "min", "kind": "float", "default": -1.0, "min": -1000000000.0, "max": 1000000000.0},
-    {"group": "plot", "name": "max", "kind": "float", "default": 1.0, "min": -1000000000.0, "max": 1000000000.0},
-    {"group": "plot", "name": "log_x", "kind": "bool", "default": false},
-    {"group": "plot", "name": "log_y", "kind": "bool", "default": false},
-    {"group": "plot", "name": "points", "kind": "float", "default": 0.0, "min": 0.0, "max": 12.0},
-    {"group": "plot", "name": "thickness", "kind": "float", "default": 1.5, "min": 0.5, "max": 8.0} ] }
+    {"group": "signal", "name": "autoscale", "kind": "bool", "default": true},
+    {"group": "signal", "name": "min", "kind": "float", "default": -1.0, "min": -1000000000.0, "max": 1000000000.0},
+    {"group": "signal", "name": "max", "kind": "float", "default": 1.0, "min": -1000000000.0, "max": 1000000000.0},
+    {"group": "signal", "name": "log_x", "kind": "bool", "default": false},
+    {"group": "signal", "name": "log_y", "kind": "bool", "default": false},
+    {"group": "signal", "name": "points", "kind": "float", "default": 0.0, "min": 0.0, "max": 12.0},
+    {"group": "signal", "name": "thickness", "kind": "float", "default": 1.5, "min": 0.5, "max": 8.0} ] }
 */
 
 // Half a path's width, and the dot that says where a trajectory is now.

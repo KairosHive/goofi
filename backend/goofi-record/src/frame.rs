@@ -36,8 +36,8 @@ pub fn read<'a>(frame: &'a [u8], rate: Option<f64>) -> Result<Incoming<'a>, Stri
                     })
                 }
                 None => Ok(Incoming {
-                    kind: Kind::Array { frame: shape },
-                    written: Written::Rows(samples),
+                    kind: Kind::Array,
+                    written: Written::Rows { samples, shape },
                     meta,
                 }),
             }

@@ -2,7 +2,10 @@
 //! a frame's f32 LE bytes. Each returns `None` when it would not shrink the axis.
 
 use crate::{Coord, Data, Meta, MetaValue, Value};
-use goofi_view::{MergedViewSpec, ReduceMethod};
+use goofi_view::MergedViewSpec;
+/// The kernels' own vocabulary, re-exported so a node file — which reaches goofi-core through its
+/// SDK and never `goofi-view` — can name the method it asks for.
+pub use goofi_view::ReduceMethod;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
@@ -73,6 +76,20 @@ fn axis_record(orig_len: usize, method: ReduceMethod) -> BTreeMap<String, MetaVa
     entry.insert("orig_len".to_string(), MetaValue::Uint(orig_len as u64));
     entry.insert("method".to_string(), MetaValue::Str(method_name(method).to_string()));
     entry
+}
+
+/// What `dim` measured before every reduction this meta already records, and `now` where it
+/// records none — so a second reduction of one frame states the first one's origin and not its
+/// own input, which is the length a reader would map a texel back through.
+pub fn origin_of(meta: &Meta, dim: usize, now: usize) -> usize {
+    let Some(MetaValue::Map(dims)) = meta.reduced() else { return now };
+    match dims.get(&dim.to_string()) {
+        Some(MetaValue::Map(entry)) => match entry.get("orig_len") {
+            Some(MetaValue::Uint(n)) => *n as usize,
+            _ => now,
+        },
+        _ => now,
+    }
 }
 
 /// Say that `dims` were already reduced — for a producer that rendered the reduced size rather

@@ -130,7 +130,8 @@ fn a_patch_sounds_under_the_external_clock() {
     // one alone, which is why `BioFilter` is here and lives under `biotuner`.
     assert_eq!(audio, ["audio:AudioIn", "audio:AudioOut", "audio:AudioPlayback", "audio:BandFilter", "audio:BandFollow",
                        "audio:BioFilter", "audio:Delay", "audio:Env", "audio:Feedback",
-                       "audio:Filter", "audio:FreqShift", "audio:Gain", "audio:Limiter", "audio:MidiIn",
+                       "audio:Filter", "audio:FreqShift", "audio:Gain", "audio:GraphicsIn", "audio:Limiter",
+                       "audio:MidiIn",
                        "audio:Mixdown", "audio:Noise", "audio:Osc", "audio:Quantize", "audio:Reverb",
                        "audio:SignalIn", "audio:Slew"]);
     let osc = g.add("Osc");
@@ -421,7 +422,7 @@ fn a_patch_sounds_under_the_external_clock() {
     // what can be named is a refresh; a MIDI port's voices are the channels a gate sees.
     g.set_param(gain3, "gain", "gain", 0.0);
     sounds(&g, "the chain to fall silent", |x| peak(x) == 0.0);
-    let mic = g.add("AudioIn");
+    let mic = g.add("audio:AudioIn");
     // The external clock renders at `drive`'s speed, which no live capture stream can meet: the
     // default device is resolved and never opened, and a machine with no card says so instead.
     let why = g.until("the default device to be refused", |g| g.error(mic));
@@ -586,6 +587,33 @@ fn a_patch_sounds_under_the_external_clock() {
     });
     assert_eq!(snapshot["meta"]["sfreq"], 48000.0, "{snapshot}");
 
+    // …and `signal:AudioIn` is what gives that stream a framing the clock does not decide: a tap
+    // hands over whatever the last blocks held, and a window is the length the analysis asked for.
+    let framed = g.add("signal:AudioIn");
+    g.set_param(framed, "audio", "mode", "window");
+    g.set_param(framed, "audio", "size", 512);
+    g.link(osc3, "out", framed, "input");
+    let framing = g.probe(framed, "out");
+    let window = g.until("a fixed-length window off the tap", |g| {
+        drive(g, TENTH);
+        framing.latest()
+    });
+    assert_eq!(shape(&window), vec![1, 512], "the window is asked for, not taken: {:?}", shape(&window));
+    g.set_param(framed, "audio", "mode", "envelope");
+    g.set_param(framed, "audio", "size", 64);
+    let envelope = g.until("one level per 64 samples", |g| {
+        drive(g, TENTH);
+        framing.latest().filter(|d| shape(d) != vec![1, 512])
+    });
+    assert_eq!(envelope.meta().sfreq(), Some(750.0), "a level per block runs at the rate over the block");
+    // A block is a fraction of a cycle at this pitch, so each level wobbles about the sine's own
+    // RMS rather than sitting on it.
+    let rms = f32s(&envelope);
+    assert!(rms.iter().all(|v| (0.6..0.8).contains(v)), "every level is the sine's: {} .. {}",
+            rms.iter().copied().fold(f32::INFINITY, f32::min), peak(&rms));
+    assert!((mean(&rms) - 0.707).abs() < 0.02, "and they average it: {}", mean(&rms));
+    g.call("node remove", j!({ "node": hex(framed) }));
+
     // Step: the in-order crossing — a signal ramp at 256 Hz enters through `SignalIn`, resampled
     // to the rate: it rises from zero, a tenth of a second is a twentieth of it, and the next
     // tenth continues where this one stopped.
@@ -593,7 +621,7 @@ fn a_patch_sounds_under_the_external_clock() {
     sounds(&g, "the gain to close", |x| peak(x) == 0.0);
     g.call("node remove", j!({ "node": hex(buffer) }));
     let ramp = g.add("_TestRamp");
-    let signal_in = g.add("SignalIn");
+    let signal_in = g.add("audio:SignalIn");
     g.link(ramp, "out", signal_in, "input");
     g.link(signal_in, "out", out, "input");
     let first = g.until("the ramp to enter", |g| {
@@ -608,6 +636,22 @@ fn a_patch_sounds_under_the_external_clock() {
     assert!(second[0] >= top - 0.001 && second.windows(2).all(|w| w[1] >= w[0]), "…and continues: {} after {top}", second[0]);
     let span = second[second.len() - 1] - second[0];
     assert!((span - 0.05).abs() < 0.002, "a whole tenth is a twentieth of the ramp: {span}");
+
+    // …and `mode` is what makes those numbers a SIGNAL: the range they span, named, becomes full
+    // scale. Every crossing into the audio plane says it the same way.
+    g.set_param(signal_in, "signal", "mode", "bipolar");
+    let mapped = g.until("the named range on full scale", |g| {
+        let (x, _) = drive(g, TENTH);
+        (x[0] < 0.0 && x[x.len() - 1] < 0.0).then_some(x)
+    });
+    assert!(mapped.windows(2).all(|w| w[1] >= w[0]), "the ramp still rises, below zero now");
+    let span = mapped[mapped.len() - 1] - mapped[0];
+    assert!((span - 0.10).abs() < 0.004, "0..1 onto [-1, 1] doubles the slope: {span}");
+    // A range the signal has already left holds it at that end: `min`..`max` is a declaration.
+    g.set_param(signal_in, "signal", "max", 0.05);
+    sounds(&g, "the ramp pinned where it left the range", |x| x.iter().all(|v| *v == 1.0));
+    g.set_param(signal_in, "signal", "mode", "direct");
+    g.set_param(signal_in, "signal", "max", 1.0);
 
     // Step: a frame that is not a number crosses as silence — a NaN stays on the plane that made
     // it and never enters the plan.
@@ -664,7 +708,7 @@ fn a_patch_sounds_under_the_external_clock() {
     g.set_param(ramp4, "ramp", "channels", 4);
     let under = g.add("Math");
     g.set_param(under, "math", "pre_add", -1.0);
-    let in4 = g.add("SignalIn");
+    let in4 = g.add("audio:SignalIn");
     g.link(ramp4, "out", under, "input");
     g.link(under, "out", in4, "input");
     let in4_name = g.doc()["nodes"][hex(in4)]["name"].as_str().unwrap().to_string();
@@ -686,7 +730,7 @@ fn a_patch_sounds_under_the_external_clock() {
     // and the second channel is its own.
     let ramp2 = g.add("_TestRamp");
     g.set_param(ramp2, "ramp", "channels", 2);
-    let in2 = g.add("SignalIn");
+    let in2 = g.add("audio:SignalIn");
     g.link(ramp2, "out", in2, "input");
     g.link(in2, "out", out, "input");
     g.until("stereo", |g| {
@@ -1223,7 +1267,7 @@ fn one_signal_speaks_through_another_band_by_band() {
     g.set_param(chord, "ramp", "length", 1);
     let half = g.add("Math");
     g.set_param(half, "math", "multiply", 0.5);
-    let voices = g.add("SignalIn");
+    let voices = g.add("audio:SignalIn");
     g.link(chord, "out", half, "input");
     g.link(half, "out", voices, "input");
     let heard_voices = g.probe(voices, "out");
@@ -1274,7 +1318,7 @@ fn one_signal_speaks_through_another_band_by_band() {
     let shut = g.add("Math");
     g.set_param(shut, "range", "from_low", 0.5);
     g.set_param(shut, "range", "bound", "clamp");
-    let gates = g.add("SignalIn");
+    let gates = g.add("audio:SignalIn");
     g.link(chord, "out", shut, "input");
     g.link(shut, "out", gates, "input");
     let heard_gates = g.probe(gates, "out");

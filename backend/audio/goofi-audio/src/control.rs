@@ -353,15 +353,17 @@ impl Inbox {
         Inbox { ring, chans: Arc::new(AtomicU16::new(1)), pos: 0.0 }
     }
 
-    /// Resample one `[T]` or `[C, T]` frame linearly from its `sfreq` to the rate and enter it
-    /// whole, as one chunk headed by its channel count and length. A frame with no `sfreq` enters
-    /// one sample per sample, so a control value is held until the next. Answers whether the
-    /// channel count moved.
+    /// Resample one frame linearly from its `sfreq` to the rate and enter it whole, as one chunk
+    /// headed by its channel count and length. A frame with no `sfreq` enters one sample per
+    /// sample, so a control value is held until the next. Answers whether the channel count moved.
     fn enter(&mut self, frame: &Data, rate: f64) -> Option<bool> {
         let goofi_core::Value::Array(a) = frame.value() else { return None };
-        let (c, t) = match *a.shape() {
-            [t] => (1, t),
-            [c, t] => (c, t),
+        // Where lane `ch` sample `i` sits: a signal frame is planar `[C, T]`, and a texture is
+        // texels — every channel of one position together, `[H, W, C]` in scan order.
+        let (c, t, lane, stride) = match *a.shape() {
+            [t] => (1, t, t, 1),
+            [c, t] => (c, t, t, 1),
+            [h, w, c] => (c, h * w, 1, c),
             _ => return None,
         };
         if c == 0 || t == 0 || c > MAX_CHANNELS as usize {
@@ -378,7 +380,7 @@ impl Inbox {
         let Some(need) = n.checked_mul(c).and_then(|s| s.checked_add(2)) else { return Some(moved) };
         if let Ok(chunk) = self.ring.write_chunk_uninit(need) {
             let at = |ch: usize, i: usize| {
-                let v = x[ch * t + i.min(t - 1)];
+                let v = x[ch * lane + i.min(t - 1) * stride];
                 if v.is_finite() { v } else { 0.0 }
             };
             let samples = (0..n).flat_map(|k| {

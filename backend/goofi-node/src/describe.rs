@@ -168,18 +168,15 @@ pub fn illegal_slot(intro: &probe::Introspection) -> Option<String> {
         .map(|bad| format!("slot `{bad}` is not a legal name: {}", goofi_core::globals::NAME_RULE))
 }
 
-/// The first slot whose kind belongs to an engine other than `own`, phrased for the palette. An
-/// engine-local kind never crosses the wire, so a file declaring one is in the wrong folder.
-pub fn foreign_slot(intro: &probe::Introspection, own: Option<goofi_core::SlotType>) -> Option<String> {
-    intro
-        .inputs
-        .iter()
-        .map(|s| (&s.name, &s.kind))
-        .chain(intro.outputs.iter().map(|s| (&s.name, &s.kind)))
-        .find_map(|(name, kind)| {
-            let kind = goofi_core::SlotType::from_name(kind).filter(|k| Some(*k) != own)?;
-            Some(format!("slot `{name}` is {}", kind.engine_local()?))
-        })
+/// The first OUTPUT whose kind belongs to an engine other than `own`, phrased for the palette. A
+/// node cannot PRODUCE another engine's kind, so a file declaring one is in the wrong folder. An
+/// engine-local kind on an INPUT is a crossing, and every engine routes a foreign arrival as a
+/// frame off the wire — which is what lets a crossing declare the plane it crosses FROM.
+pub fn foreign_output(intro: &probe::Introspection, own: Option<goofi_core::SlotType>) -> Option<String> {
+    intro.outputs.iter().find_map(|s| {
+        let kind = goofi_core::SlotType::from_name(&s.kind).filter(|k| Some(*k) != own)?;
+        Some(format!("output `{}` is {}", s.name, kind.engine_local()?))
+    })
 }
 
 /// Leak a `'static &str` for the catalog's lifetime.

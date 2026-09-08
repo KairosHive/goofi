@@ -261,7 +261,7 @@ fn encode(
         }
         // A frame the sidecar could not account for is a frame nothing can align, so it is LOST
         // rather than counted — the container holds it and the manifest says it was not kept.
-        if let Err(e) = beside.line(at, 1, None) {
+        if let Err(e) = beside.line(at, crate::beside::Extent::Rows(1), None) {
             counts.lost.fetch_add(1, Ordering::Relaxed);
             died(counts, e);
             break;

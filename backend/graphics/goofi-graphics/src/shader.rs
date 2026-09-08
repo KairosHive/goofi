@@ -14,8 +14,8 @@ const RESERVED: &[&str] =
 /// The one output every graphics node has.
 const OUT: &str = "out";
 
-/// Every ARRAY input, in the order their uploads are numbered. What a frame's own range is
-/// carried against.
+/// Every input that arrives as a FRAME rather than as a stage of this engine's own plan, in the
+/// order their uploads are numbered. What a frame's own range is carried against.
 pub fn array_inputs(m: &NodeManifest) -> impl Iterator<Item = &'static str> + '_ {
     m.inputs.iter().filter(|s| s.kind != SlotType::Texture).map(|s| s.name)
 }
@@ -39,9 +39,13 @@ pub fn header(source: &str) -> Result<Introspection, String> {
     }
     intro.outputs.push(goofi_core::probe::OutSlot { name: OUT.to_string(), kind: SlotType::Texture.name().to_string() });
     for s in &intro.inputs {
+        // A TEXTURE is a stage of this engine's own plan; everything else arrives as a frame and
+        // is uploaded, which is what makes a crossing declare the plane it crosses FROM.
         match SlotType::from_name(&s.kind) {
-            Some(SlotType::Texture | SlotType::Array) => {}
-            _ => return Err(format!("input `{}` is `{}`; a graphics input is TEXTURE or ARRAY", s.name, s.kind)),
+            Some(SlotType::Texture | SlotType::Array | SlotType::Audio) => {}
+            _ => return Err(format!(
+                "input `{}` is `{}`; a graphics input is TEXTURE, ARRAY or AUDIO", s.name, s.kind
+            )),
         }
     }
     let mut taken: Vec<String> = RESERVED.iter().map(|s| (*s).to_string()).collect();

@@ -309,7 +309,7 @@ static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Generator, Tag::Simulation, Tag::Image],
     doc: "Slime-mould agents growing a transport network.\n\
           Each follows the trail it and the others left; `trail` is a field an image viewer or \
-          `ArrayIn` draws directly.",
+          `SignalIn` draws directly.",
     inputs: INPUTS,
     outputs: OUTPUTS,
     params: PARAMS,
