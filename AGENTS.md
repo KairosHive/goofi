@@ -340,11 +340,16 @@ a rate-locked stream derives its timeline from the SAMPLE COUNT, tied to the clo
 runtime lock — where no block can be rendered between reading the count and reading the clock, which
 is why the audio thread reads no clock at all. The device's rate error then walks that timeline away
 from patch time, and the manifest carries the measured drift rather than a re-tie that would put a
-seam in the exact block spacing. What the shape cost, four times: a re-arm at the same
-instant truncated the file it had just closed; a running drop counter applied to already-queued
+seam in the exact block spacing. A loss is counted where the file is: a frame carries its own
+NUMBER, and the gap to the previous number in that same file is what `dropped` says — so an
+entry's count and its own file's numbering cannot disagree, and a refusal anywhere between the
+producer and the disk is witnessed once, by the next frame that lands. What the shape cost, five
+times: a re-arm at the same instant truncated the file it had just closed; a running drop counter applied to already-queued
 blocks made the loss invisible AND dated the survivors 1.33 ms late; finalizing a video held the
-session mutex and stalled every other engine's drain; and every second holder of "is this stream
-open" wrote at a stream the recorder had closed. `roadmap/recording.md` holds the design.
+session mutex and stalled every other engine's drain; every second holder of "is this stream
+open" wrote at a stream the recorder had closed; and a mark kept by the DRAIN instead outlived the
+recording it was made in, so a drain that never woke between a stop and the next start put the
+blocks between them on the new file's first frame — the one place no numbering can show them. `roadmap/recording.md` holds the design.
 
 **There is no tick.** Every node owns one thread and schedules itself, waking for a control
 message, a frame on an input, or its own rate cap elapsing. Frames travel node to node over
@@ -462,6 +467,19 @@ carried between the lines.
 saved with. A load extracts into a FRESH mount, parses, and only then swaps: graph and workspace,
 or neither. A load restores the uids the patch was saved with, because everything keyed by uid
 that the load does not itself remap depends on it.
+
+**The skills ride the workspace, so an agent reads them from its own cwd.** `skills/` is embedded
+at build time as the node bundles are, laid into `mount/skills/` and packaged into the `.gfi` like
+any other workspace file — there is no second door and no registry. Seeding is per SKILL and
+ABSENT-ONLY, and it happens on a LOAD as well as on a fresh mount, which is the one place this
+departs from the orientation: an unpacked workspace is the patch's own and goofi does not write
+into it, but a skill goofi has GAINED since the patch was saved is not something that patch has an
+opinion about. So the archive brings what it had, the load adds what is new, and the next save
+packages the union — a patch saved before a skill existed acquires it by being opened. The unit is
+the DIRECTORY so an edit inside one survives, and the cost, stated: deleting a whole skill from a
+patch brings it back on the next load, with `.goofiignore` the door for a patch that wants it
+gone. Every site seeds BEFORE the workspace baseline is taken, or a patch would be dirty from the
+moment it opened, having been dirtied by goofi's own seeding.
 
 **Identity is structural.** A spawned agent's identity travels in its ENVIRONMENT, minted by
 goofi at the spawn: `GOOFI_SESSION` names the server, `GOOFI_ACTOR` names its own undo stack, and

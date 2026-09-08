@@ -11,7 +11,7 @@ use goofi_core::Data;
 use goofi_node::NodeManifest;
 use goofi_transport::{
     control_service, data_service, door_service, event_service, iox_node, message_service,
-    output_service, publisher, record_data_service, record_door_service, record_publisher,
+    output_service, publisher, record_door_service,
     record_service, record_shape, service_base,
     status_service, ByteService, ByteSubscriber, Doorbell, EventService, IoxNode, INITIAL_SLICE,
     MESSAGE_SLICE,
@@ -53,8 +53,8 @@ pub struct IoxTransport {
     inputs: Mutex<Vec<(String, Vec<InputWire>)>>,
     /// The recorder's one door, by name; a bell onto it is opened with the slot that rings it.
     record_door: ServiceName,
-    /// The armed slots' second publishers and their bells, reconciled by `RecSlot`.
-    records: Mutex<HashMap<String, (BytePublisher, Doorbell)>>,
+    /// The armed slots' second publishers, reconciled by `RecSlot` and released by the recorder.
+    records: Mutex<HashMap<String, goofi_transport::RecordPort>>,
     /// What the recording last cost and why — the count and the cause a node wears as a fault.
     trouble: Mutex<Option<(u64, String)>>,
     /// Must outlive every port built from it, so it is declared LAST — Rust drops a struct's fields
@@ -233,7 +233,13 @@ impl Transport for IoxTransport {
 
     fn record_out(&self, slots: &[String]) -> Result<(), String> {
         let mut records = self.records.lock().unwrap();
-        records.retain(|slot, _| slots.contains(slot));
+        for (slot, port) in records.iter_mut() {
+            match slots.contains(slot) {
+                true => port.armed(),
+                false => port.retire(),
+            }
+        }
+        records.retain(|_, port| !port.spent());
         let mut failed = Vec::new();
         let wanted: Vec<&String> = slots.iter().filter(|s| !records.contains_key(*s)).collect();
         for slot in wanted {
@@ -242,10 +248,14 @@ impl Transport for IoxTransport {
                 continue;
             }
             let shape = record_shape("signal");
-            match record_data_service(&self.node, &record_service(&self.base, slot), shape)
-                .and_then(|service| record_publisher(&service, slot, shape))
-                .and_then(|port| Doorbell::open(&self.node, &self.record_door).map(|b| (port, b)))
-            {
+            let opened = goofi_transport::RecordPort::open(
+                &self.node,
+                &record_service(&self.base, slot),
+                &self.record_door,
+                slot,
+                shape,
+            );
+            match opened {
                 Ok(port) => {
                     records.insert(slot.clone(), port);
                 }
@@ -276,8 +286,13 @@ impl Transport for IoxTransport {
         let bytes = goofi_codec::encode(frame);
         let targets = port.targets.lock().unwrap();
         goofi_transport::publish(&port.publisher, &bytes, targets.iter().map(|(b, id)| (b, *id)));
-        if let Some((rec, bell)) = self.records.lock().unwrap().get(slot) {
-            if !goofi_transport::publish(rec, &bytes, std::iter::once((bell, goofi_transport::RECORD_EVENT_ID))) {
+        let mut records = self.records.lock().unwrap();
+        // A retired port is dropped HERE rather than at the disarm, so the release follows the
+        // recorder's own reading and never outruns it.
+        records.retain(|_, port| !port.spent());
+        if let Some(rec) = records.get(slot) {
+            let ok = rec.send(&bytes);
+            if !ok && !rec.retired() {
                 let mut trouble = self.trouble.lock().unwrap();
                 let (dropped, _) = trouble.get_or_insert_with(|| (0, self.loan_refused(&bytes)));
                 *dropped += 1;

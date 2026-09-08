@@ -60,6 +60,27 @@
 
 	let agentMenu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
+	let exampleMenu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+
+	/** Which of the set this instance is. The server marks it; nothing here derives it. */
+	const example = $derived(g.examples.find((e) => e.current));
+
+	// A whole instance each, so this is a NAVIGATION: nobody else's session is replaced by it.
+	function openExamples(e: MouseEvent): void {
+		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+		exampleMenu = {
+			x: Math.max(6, r.right - 220),
+			y: r.bottom + 4,
+			items: g.examples.map((x) => ({
+				label: x.label,
+				disabled: x.current,
+				action: () => {
+					location.href = x.url;
+				}
+			}))
+		};
+	}
+
 	/** Raise the detach-or-kill question, and show the terminal it is about. Writes no layout: a
 	 * question must not dirty the patch. */
 	function askClose(id: string): void {
@@ -165,17 +186,20 @@
 				px(strip, 'padding-right');
 		}
 		const reserve = tabs ? Math.max(TABSLOT_HITS * hit, tabsContent) : 0;
-		// Neither live chip may spill into a hidden menu, so its width comes off the budget instead.
+		// No zone resident may spill into a hidden menu, so its width comes off the budget instead.
 		const unplanned = (id: string): number => {
 			const el = zone.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 			return el ? el.getBoundingClientRect().width + zoneGap : 0;
 		};
-		const alarmW = unplanned('topbar-connection') + unplanned('topbar-agents');
+		const residents =
+			unplanned('topbar-connection') +
+			unplanned('topbar-agents') +
+			unplanned('topbar-examples');
 		const budget =
 			bar.clientWidth -
 			px(bar, 'padding-left') -
 			px(bar, 'padding-right') -
-			alarmW -
+			residents -
 			barGap * sections -
 			reserve;
 
@@ -227,7 +251,16 @@
 	function canvasItems(): MenuItem[] {
 		const ed = activeOrOnlyEditor(sel.activeEditorId);
 		const has = ed?.hasSelection() ?? false;
+		// A demo withholds Load, so this is the only way back to the example it serves — and it
+		// serves one patch to everyone, which is what makes a way back worth having.
+		const reset: MenuItem[] = example
+			? [
+					{ label: `Reset to ${example.label}`, icon: 'refresh-cw', action: () => void g.newPatch() },
+					{ separator: true }
+				]
+			: [];
 		return [
+			...reset,
 			{ label: 'Select all', icon: 'square-dashed', disabled: !ed, action: () => ed?.selectAll() },
 			// Multi-select's only pointer way out: with the mode on, a tap on empty canvas keeps.
 			{ label: 'Clear selection', disabled: !has, action: () => ed?.clearSelection() },
@@ -306,13 +339,26 @@
 		<div class="tabslot" bind:this={tabslotEl}>{@render tabs()}</div>
 	{/if}
 
+	<!-- What this instance IS, so a visitor to the public one can see it is not their own. Centred
+	     on the BAR rather than placed in the flow, which the overflow plan measures. -->
+	{#if g.demo}
+		<span
+			class="demo"
+			title="The public demo: one patch, shared by everyone here, and no files"
+			data-testid="topbar-demo">demo</span
+		>
+	{/if}
+
 	<div class="action-zone" bind:this={zoneEl}>
-		<!-- What this instance IS, so a visitor to the public one can see it is not their own. -->
-		{#if g.demo}
-			<Badge
-				tone="accent"
-				title="The public demo: one patch, shared by everyone here, and no files"
-				data-testid="topbar-demo">demo</Badge
+		<!-- One instance per example, so the set is a set of ADDRESSES and this is a link. -->
+		{#if example}
+			<Button
+				variant="ghost"
+				size="sm"
+				data-testid="topbar-examples"
+				aria-expanded={exampleMenu !== null}
+				title="Open another example"
+				onclick={openExamples}>{example.label}<Icon name="chevron-down" /></Button
 			>
 		{/if}
 		<!-- The connection speaks only when it needs attention, and never spills into a menu. -->
@@ -448,6 +494,15 @@
 	/>
 {/if}
 
+{#if exampleMenu}
+	<ContextMenu
+		x={exampleMenu.x}
+		y={exampleMenu.y}
+		items={exampleMenu.items}
+		onClose={() => (exampleMenu = null)}
+	/>
+{/if}
+
 {#if overflowMenu}
 	<ContextMenu
 		x={overflowMenu.x}
@@ -461,12 +516,31 @@
 	.topbar {
 		display: flex;
 		align-items: center;
+		position: relative;
 		gap: var(--space-7);
 		padding: 0 var(--space-6);
 		background: var(--surface-1);
 		/* No fixed height: the resident --hit-sized controls set it, so it grows on a coarse pointer. */
 		font-size: var(--fs-body);
 		z-index: 10;
+	}
+	/* Out of the flow entirely, so the bar's centre is the bar's, not the leftover between two
+	   boxes whose widths move. It reads, and it is never a target. */
+	.demo {
+		position: absolute;
+		left: 50%;
+		transform: translateX(-50%);
+		font-weight: 700;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--text);
+		pointer-events: none;
+	}
+	/* Where the strip fills the bar there is no centre left to stand in. */
+	@media (max-width: 46rem) {
+		.demo {
+			display: none;
+		}
 	}
 	.tabslot {
 		flex: 1 1 auto;

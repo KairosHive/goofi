@@ -72,6 +72,12 @@ pub struct AppState {
     pub graph: Arc<Mutex<Graph>>,
     /// What this instance serves, one owner: the op table, the routes and the engines read it.
     pub mode: Mode,
+    /// The patch `--load` named, opened before the first client connects. A demo reads it as the
+    /// visitor's reset too, having no Load to find the file again.
+    pub load: Option<PathBuf>,
+    /// Where a public set's other examples answer. Unset everywhere else, which is what withholds
+    /// the chooser.
+    pub demo_base: Option<String>,
     pub events: broadcast::Sender<String>,
     pub instance_id: Arc<str>,
     /// The op rows THIS instance serves — headless leaves the layout group out.
@@ -165,6 +171,7 @@ impl AppState {
         // the seed itself.
         let mount = new_mount();
         term::seed_orientation(&mount);
+        seed_skills(&mount);
         let workspace_baseline = goofi_graph::archive::fingerprint(&mount);
         // Project the INITIAL graph — no nodes, but the seeded system globals — so a client that
         // connects to a fresh backend has the current state at once.
@@ -184,6 +191,8 @@ impl AppState {
             events,
             instance_id: Arc::from(format!("{iid:x}").as_str()),
             mode,
+            load: None,
+            demo_base: None,
             ops: Arc::new(ops::table(mode)),
             doc: Arc::new(Mutex::new(doc)),
             dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -241,6 +250,14 @@ impl AppState {
 
     /// Where the open patch's workspace files live right now. Copied out rather than borrowed: no
     /// filesystem walk may run while holding the lock.
+    /// The examples a public set offers, this instance's own among them. The patch file's STEM
+    /// is the slug, so one image serves every example and only `--load` differs.
+    pub(crate) fn examples(&self) -> Option<Value> {
+        let base = self.demo_base.as_deref()?;
+        let stem = self.load.as_deref().and_then(std::path::Path::file_stem);
+        Some(schemas::examples(base, stem.and_then(|s| s.to_str())))
+    }
+
     pub fn mount(&self) -> PathBuf {
         self.mount.lock().unwrap().clone()
     }
@@ -312,6 +329,13 @@ pub(crate) fn nonce_hex() -> String {
     format!("{:032x}", u128::from_be_bytes(nonce))
 }
 
+/// Open the patch `--load` named, before the first client can connect. Nothing to do where none
+/// was named.
+pub fn open_load(state: &AppState) -> Result<(), String> {
+    let Some(path) = state.load.as_deref() else { return Ok(()) };
+    arms::load_file(state, path).map(|_| ())
+}
+
 /// Pack the patch to `target`: `manifest` beside the live workspace `mount`. Written to a temp
 /// sibling and RENAMED, so a write that dies part-way leaves the previous `.gfi` standing.
 pub fn save_archive(
@@ -373,6 +397,10 @@ fn stage_load(
     } else {
         term::seed_orientation(mount);
     }
+    // BOTH ways, unlike the orientation: an unpacked workspace is the patch's own and goofi does
+    // not write into it, but a skill goofi has GAINED since the patch was saved is not something
+    // the patch has an opinion about. Absent-only, so nothing of the patch's is touched.
+    seed_skills(mount);
     Ok((content, from_path))
 }
 
@@ -641,6 +669,36 @@ pub async fn serve_app(
 }
 
 include!(concat!(env!("OUT_DIR"), "/shipped.rs"));
+include!(concat!(env!("OUT_DIR"), "/skills.rs"));
+
+/// Where a workspace keeps the skills an agent spawned into it can read.
+pub const SKILLS_DIR: &str = "skills";
+
+/// Lay every shipped skill goofi carries into `mount/skills/`, per SKILL and absent-only: a skill
+/// the workspace already has is the patch's own and is never written over, and one goofi has
+/// gained since the patch was saved lands whole. That is what makes a load re-populate — the
+/// archive brings what it had, this adds what is new, and the save packages the union.
+///
+/// The unit is the skill DIRECTORY rather than the file, so an edit inside one — or a file deleted
+/// from one — survives a load. The cost is that deleting a whole skill from a patch brings it back
+/// on the next load; `.goofiignore` is the door for a patch that wants it gone for good.
+///
+/// Called BEFORE the workspace baseline is taken at every site, or a patch is dirty from the
+/// moment it opens, having been dirtied by goofi's own seeding.
+pub fn seed_skills(mount: &std::path::Path) {
+    let root = mount.join(SKILLS_DIR);
+    for (rel, bytes) in SHIPPED_SKILLS {
+        let Some((skill, _)) = rel.split_once('/') else { continue };
+        if root.join(skill).exists() {
+            continue;
+        }
+        let at = root.join(rel);
+        if let Some(dir) = at.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(at, bytes);
+    }
+}
 
 /// The shipped bundles, written under the home for this version AND this embed — every file of
 /// every bundle, beside the artifacts goofi's own build made of its nodes — so a shipped node
@@ -944,7 +1002,7 @@ fn control_seeds(state: &AppState) -> (String, String) {
         let g = state.graph.lock().unwrap();
         event(
             "hello",
-            schemas::snapshot(&g, &state.instance_id, true, unsaved, saved_at.as_deref(), roster, state.mode.demo),
+            schemas::snapshot(&g, state, true, unsaved, saved_at.as_deref(), roster),
         )
     };
     (hello, doc_state(state))
