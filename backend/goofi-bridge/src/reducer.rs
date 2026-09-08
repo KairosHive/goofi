@@ -74,6 +74,9 @@ pub struct SlotReducers {
     inner: Arc<Mutex<HashMap<SlotKey, SlotReducer>>>,
     graph: Arc<Mutex<Graph>>,
     next_conn: Arc<AtomicU64>,
+    /// One iceoryx2 node behind every feed: the reducers are ONE port owner, and a node per feed
+    /// made each viewer's attach mint a node directory — a create that can fail hard on Windows.
+    iox: SharedIox,
     /// Where every tap's pick goes: the follower, which writes the global and broadcasts.
     follow: std::sync::mpsc::Sender<Followed>,
 }
@@ -84,6 +87,7 @@ impl SlotReducers {
             inner: Arc::new(Mutex::new(HashMap::new())),
             graph,
             next_conn: Arc::new(AtomicU64::new(1)),
+            iox: Arc::new(Mutex::new(None)),
             follow,
         }
     }
@@ -127,7 +131,8 @@ impl SlotReducers {
                 full: Arc::new(Mutex::new(None)),
                 asked: Arc::new(AtomicBool::new(false)),
             };
-            spawn_reducer(key.clone(), &reducer, self.graph.clone(), slots, self.follow.clone());
+            let (graph, iox) = (self.graph.clone(), self.iox.clone());
+            spawn_reducer(key.clone(), &reducer, graph, iox, slots, self.follow.clone());
             reducer
         })
     }
@@ -195,6 +200,12 @@ impl SlotReducers {
     pub fn reductions(&self, key: &SlotKey) -> u64 {
         self.inner.lock().unwrap().get(key).map(|r| r.reductions.load(Ordering::Relaxed)).unwrap_or(0)
     }
+
+    /// The iceoryx2 node every feed is built from, by id — `None` until the first feed mints it.
+    /// One port owner is one node, so this never changes again (test/diagnostic).
+    pub fn iox_node_id(&self) -> Option<u128> {
+        self.iox.lock().unwrap().as_ref().map(|n| n.id().value())
+    }
 }
 
 /// How often the slot's subscribe address is re-derived from the graph: a service name carries the
@@ -202,7 +213,19 @@ impl SlotReducers {
 pub const REHOME_INTERVAL: Duration = Duration::from_secs(1);
 /// How long a reducer nobody asks of keeps its subscription. WALL TIME, not a count of sleeps: a
 /// platform whose sleep rounds up would otherwise hold on for as much longer.
-const IDLE: Duration = Duration::from_secs(1);
+pub const IDLE: Duration = Duration::from_secs(1);
+
+/// The reducers' ONE iceoryx2 node, minted on first feed and shared by every later one.
+type SharedIox = Arc<Mutex<Option<Arc<goofi_transport::IoxNode>>>>;
+
+/// The shared node, minting it if this is the first feed to ask; `None` is retried by the next.
+fn shared_iox(iox: &SharedIox) -> Option<Arc<goofi_transport::IoxNode>> {
+    let mut held = iox.lock().unwrap();
+    if held.is_none() {
+        *held = goofi_transport::iox_node().ok().map(Arc::new);
+    }
+    held.clone()
+}
 
 /// One end of a slot's data service: the subscriber, its iceoryx2 node, and the service name it
 /// was opened on.
@@ -211,18 +234,18 @@ struct SlotFeed {
     service: String,
     /// Declared LAST: fields drop in order, and a node dropped before its subscriber cannot remove
     /// its own directory.
-    _node: goofi_transport::IoxNode,
+    _node: Arc<goofi_transport::IoxNode>,
 }
 
 /// Open a subscriber on `(uid, slot)`'s current output service, or `None` while the node is not
 /// addressable; a miss is retried on the next re-home rather than being fatal.
-fn open_feed(graph: &Mutex<Graph>, uid: Uid, slot: &str) -> Option<SlotFeed> {
+fn open_feed(graph: &Mutex<Graph>, iox: &SharedIox, uid: Uid, slot: &str) -> Option<SlotFeed> {
     let service = {
         let g = graph.lock().unwrap();
         g.manifest(uid)?;
         crate::output_service_of(&g, uid, slot)
     };
-    let node = goofi_transport::iox_node().ok()?;
+    let node = shared_iox(iox)?;
     let subscriber = goofi_transport::open_output_subscriber(&node, &service).ok()?;
     Some(SlotFeed { _node: node, subscriber, service })
 }
@@ -235,6 +258,7 @@ fn spawn_reducer(
     key: SlotKey,
     reducer: &SlotReducer,
     graph: Arc<Mutex<Graph>>,
+    iox: SharedIox,
     slots: Weak<Mutex<HashMap<SlotKey, SlotReducer>>>,
     follow: std::sync::mpsc::Sender<Followed>,
 ) {
@@ -245,7 +269,7 @@ fn spawn_reducer(
     let asked = reducer.asked.clone();
     let (uid, slot) = key.clone();
     goofi_transport::thread(format!("goofi-reduce-{slot}")).spawn(move || {
-        let mut feed = open_feed(&graph, uid, &slot);
+        let mut feed = open_feed(&graph, &iox, uid, &slot);
         let mut rehomed = std::time::Instant::now();
         // An attached subscriber is what a scheduled engine reads as demand, so a feed nobody
         // wants keeps a GPU node rendering for ever.
@@ -307,11 +331,11 @@ fn spawn_reducer(
                     demanded = None;
                 }
                 if asked_at.elapsed() <= IDLE && feed.as_ref().is_none_or(|f| f.service != current) {
-                    feed = open_feed(&graph, uid, &slot);
+                    feed = open_feed(&graph, &iox, uid, &slot);
                 }
             }
             if feed.is_none() && asked_at.elapsed() <= IDLE {
-                feed = open_feed(&graph, uid, &slot);
+                feed = open_feed(&graph, &iox, uid, &slot);
             }
             let mut fresh = false;
             if let Some(f) = &feed {
