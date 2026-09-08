@@ -337,6 +337,10 @@ const QUEUE: usize = 4096;
 
 impl AudioEngine {
     pub fn new(instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>, clock: Clock) -> AudioEngine {
+        // Before a plugin is instantiated and before a stream exists, which is the only safe
+        // moment to enumerate ASIO and the only one early enough to be useful. `host::warm` holds
+        // both halves of that.
+        host::prewarm();
         let classes: HashMap<&'static str, Class> = nodes::BUILT_IN
             .iter()
             .map(|(type_name, m, make)| {
