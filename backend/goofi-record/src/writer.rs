@@ -8,7 +8,7 @@
 //! kept. A lane that overflows is its own stream's problem and nobody else's.
 //!
 //! A full lane is a counted DROP, never a stall: the caller leaves the frame's index unreached and
-//! the next frame's gap counts it, so a loss here is witnessed exactly as a loss at the subscriber.
+//! the next frame written carries the gap, so a loss here is witnessed exactly as one at the subscriber.
 
 use std::collections::HashMap;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
@@ -29,7 +29,6 @@ pub struct Queued {
     pub bytes: Vec<u8>,
     pub rate: Option<f64>,
     pub timeline: Timeline,
-    pub gap: u64,
     pub at: f64,
 }
 
@@ -58,7 +57,7 @@ impl Writer {
     }
 
     /// Take one frame off the caller. `false` is a lane that is full — which the CALLER accounts
-    /// for by leaving the frame's index unreached, so the next frame's gap counts it.
+    /// for by the NEXT frame that is written, whose own number says what went missing before it.
     ///
     pub fn take(
         &self,
@@ -66,15 +65,18 @@ impl Writer {
         bytes: &[u8],
         rate: Option<f64>,
         timeline: Timeline,
-        gap: u64,
         at: f64,
+        wait: bool,
     ) -> bool {
         let mut buffer = self.free.lock().expect("the free frames").pop().unwrap_or_default();
         buffer.clear();
         buffer.extend_from_slice(bytes);
-        let queued = Queued { id: id.clone(), bytes: buffer, rate, timeline, gap, at };
+        let queued = Queued { id: id.clone(), bytes: buffer, rate, timeline, at };
         let mut lanes = self.lanes.lock().expect("the lanes");
         let lane = lanes.entry(id.clone()).or_insert_with(|| self.lane());
+        if wait {
+            return lane.jobs.send(Job::Frame(queued)).is_ok();
+        }
         match lane.jobs.try_send(Job::Frame(queued)) {
             Ok(()) => true,
             Err(TrySendError::Full(job) | TrySendError::Disconnected(job)) => {
