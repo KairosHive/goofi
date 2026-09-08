@@ -110,6 +110,12 @@ struct NodeEntry {
     pos: [f64; 2],
     /// Opaque: persisted and round-tripped, never interpreted.
     viewers: serde_json::Value,
+    /// The values the touched-only filter counts FROM, `group/name` to value — opaque here in the
+    /// same way `viewers` is. A plugin's params are touched when they differ from the plugin's
+    /// factory default, and loading a preset moves hundreds of them at once, so the filter that
+    /// exists to show the few in play fills with the ones the preset moved. Clearing records the
+    /// current values as the new zero, and the filter counts from there.
+    baseline: serde_json::Value,
     /// The output slots armed for recording, in the order they were armed.
     record: Vec<String>,
 }
@@ -1296,7 +1302,7 @@ impl Graph {
         let born = self.pick_name(name, &base, None);
         self.nodes.insert(
             uid,
-            NodeEntry { kind, name: born.clone(), pos: [0.0, 0.0], viewers: serde_json::json!({}), record: Vec::new() },
+            NodeEntry { kind, name: born.clone(), pos: [0.0, 0.0], viewers: serde_json::json!({}), baseline: serde_json::json!({}), record: Vec::new() },
         );
         self.set_member_scope(uid, scope);
         self.rebind_naming(&born);
@@ -1377,7 +1383,7 @@ impl Graph {
                 })),
                 name,
                 pos: [0.0, 0.0],
-                viewers: serde_json::json!({}),
+                viewers: serde_json::json!({}), baseline: serde_json::json!({}),
                 record: Vec::new(),
             },
         );
@@ -1563,6 +1569,51 @@ impl Graph {
     /// The viewer view-state blob of anything a uid can name (empty object if never set).
     pub fn viewers(&self, uid: Uid) -> Option<&serde_json::Value> {
         self.nodes.get(&uid).map(|e| &e.viewers)
+    }
+
+    /// Replace the values the touched filter counts from, WHOLE — the whole blob, which is what
+    /// makes the command's inverse exact.
+    pub fn set_node_baseline(&mut self, uid: Uid, baseline: serde_json::Value) -> Result<(), String> {
+        let e = self.nodes.get_mut(&uid).ok_or_else(|| format!("no such node {uid}"))?;
+        e.baseline = baseline;
+        Ok(())
+    }
+
+    /// What the node holds RIGHT NOW, in the shape a baseline is stored in: one entry per param,
+    /// keyed `group/name`, carrying the active source and the three things a change can happen to.
+    /// Pulse params are left out — they hold no value, so nothing about one can be "changed".
+    ///
+    /// This is the snapshot the Clear button takes. It records the SOURCE as well as the literal
+    /// because a param moving from a constant to an expression is a change even when the number it
+    /// evaluates to is the same.
+    pub fn touched_baseline(&self, uid: Uid) -> serde_json::Value {
+        let Some(leaf) = self.nodes.get(&uid).and_then(|e| e.leaf()) else {
+            return serde_json::json!({});
+        };
+        let mut out = serde_json::Map::new();
+        for (group, names) in &*leaf.params {
+            for (name, p) in names {
+                if matches!(p, Param::Pulse) {
+                    continue;
+                }
+                let source = leaf.sources.iter().find(|(k, _)| k.group == *group && k.name == *name).map(|(_, b)| b);
+                out.insert(
+                    format!("{group}/{name}"),
+                    serde_json::json!({
+                        "value": param_value_json(p),
+                        "mode": source.map(|b| b.state.mode).unwrap_or_default(),
+                        "expression": source.map(|b| b.state.expression.clone()).unwrap_or_default(),
+                        "reference": source.map(|b| b.state.reference.clone()).unwrap_or_default(),
+                    }),
+                );
+            }
+        }
+        serde_json::Value::Object(out)
+    }
+
+    /// The touched-filter baseline of anything a uid can name (empty object if never cleared).
+    pub fn baseline(&self, uid: Uid) -> Option<&serde_json::Value> {
+        self.nodes.get(&uid).map(|e| &e.baseline)
     }
 
     /// Replace the output slots armed for recording. The whole vector, which is what makes the
@@ -1968,7 +2019,7 @@ impl Graph {
         let disp = self.fresh_name("subpatch");
         self.nodes.insert(
             scope_uid,
-            NodeEntry { kind: Kind::Facade, name: disp, pos, viewers: serde_json::json!({}), record: Vec::new() },
+            NodeEntry { kind: Kind::Facade, name: disp, pos, viewers: serde_json::json!({}), baseline: serde_json::json!({}), record: Vec::new() },
         );
         self.set_member_scope(scope_uid, parent);
 
@@ -2083,7 +2134,7 @@ impl Graph {
                 kind: Kind::Facade,
                 name: self.pick_name(&name, "subpatch", Some(scope_id)),
                 pos,
-                viewers: serde_json::json!({}),
+                viewers: serde_json::json!({}), baseline: serde_json::json!({}),
                 record: Vec::new(),
             },
         );
@@ -3114,6 +3165,10 @@ impl Graph {
             if e.viewers.as_object().is_some_and(|m| !m.is_empty()) {
                 rec.insert("viewers".into(), e.viewers.clone());
             }
+            // Likewise: a node nobody has cleared carries no baseline key at all.
+            if e.baseline.as_object().is_some_and(|m| !m.is_empty()) {
+                rec.insert("baseline".into(), e.baseline.clone());
+            }
             if !e.record.is_empty() {
                 rec.insert("record".into(), json!(e.record));
             }
@@ -3245,6 +3300,9 @@ impl Graph {
                     })
                     .collect(),
                 viewers: rec.get("viewers").filter(|v| v.is_object()).map(|v| remap_slots(v, &idmap)),
+                // NOT slot-remapped: a baseline is keyed by `group/param`, which a paste does not
+                // renumber the way it renumbers the slot uids a viewer blob is keyed by.
+                baseline: rec.get("baseline").filter(|v| v.is_object()).cloned(),
                 record: Some(read_record(rec)),
                 // A port cannot exist without a scope, so it takes the paste target when its own
                 // facade is not in the fragment — the same fallback every other kind gets below.
@@ -3427,13 +3485,16 @@ impl Graph {
                     kind: Kind::Facade,
                     name: String::new(),
                     pos: read_pos(rec),
-                    viewers: serde_json::json!({}),
+                    viewers: serde_json::json!({}), baseline: serde_json::json!({}),
                     record: Vec::new(),
                 },
             );
             self.force_set_name(idmap[old], rec.get("name").and_then(|v| v.as_str()).unwrap_or(""));
             if let Some(v) = rec.get("viewers").filter(|v| v.is_object()) {
                 let _ = self.set_node_viewers(idmap[old], v.clone());
+            }
+            if let Some(v) = rec.get("baseline").filter(|v| v.is_object()) {
+                let _ = self.set_node_baseline(idmap[old], v.clone());
             }
             let _ = self.set_recorded(idmap[old], read_record(rec));
         }
@@ -3454,6 +3515,9 @@ impl Graph {
             let _ = self.set_node_pos(uid, read_pos(rec));
             if let Some(v) = rec.get("viewers").filter(|v| v.is_object()) {
                 let _ = self.set_node_viewers(uid, v.clone());
+            }
+            if let Some(v) = rec.get("baseline").filter(|v| v.is_object()) {
+                let _ = self.set_node_baseline(uid, v.clone());
             }
             let _ = self.set_recorded(uid, read_record(rec));
             for (group, name, state) in record_sources(rec) {
@@ -3487,6 +3551,11 @@ impl Graph {
                     pos: read_pos(rec),
                     viewers: rec
                         .get("viewers")
+                        .filter(|v| v.is_object())
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({})),
+                    baseline: rec
+                        .get("baseline")
                         .filter(|v| v.is_object())
                         .cloned()
                         .unwrap_or_else(|| serde_json::json!({})),

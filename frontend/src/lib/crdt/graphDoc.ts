@@ -197,6 +197,17 @@ export function setParamSource(
 	return true;
 }
 
+/** A node's touched-filter zero points (`{"group/name": {value, mode, …}}`), or `undefined`. */
+export function baselineJson(doc: Doc, uid: string): unknown {
+	const v = nodesMap(doc)[uid]?.baseline;
+	if (typeof v !== 'string') return undefined;
+	try {
+		return JSON.parse(v);
+	} catch {
+		return undefined;
+	}
+}
+
 /** A node's opaque per-slot viewer blob (`{slot: {collapsed, kind, settings}}`), or `undefined`. */
 export function viewersJson(doc: Doc, uid: string): unknown {
 	const v = nodesMap(doc)[uid]?.viewers;

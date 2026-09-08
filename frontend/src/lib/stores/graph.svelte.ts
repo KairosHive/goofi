@@ -28,6 +28,7 @@ import {
 	facadeFaces,
 	docParams,
 	viewersJson,
+	baselineJson,
 	recordedSlots,
 	globalViews,
 	globalGroupLocks,
@@ -608,6 +609,14 @@ export class GraphStore {
 		}
 	}
 
+	/** Move the touched filter's zero point to what the node holds now. It edits no param, so an
+	 * expression or a reference keeps driving; it IS undoable, since the zero point is document
+	 * state a later reader depends on. */
+	async clearTouched(node: string): Promise<void> {
+		await this.ctl.call('node baseline', { node });
+		this._recordGraphCmd(`Clear touched on ${this.nodeById(node)?.name ?? node}`);
+	}
+
 	/** Fire a pulse param: a request the node acts on, with no value and so no inverse to undo. */
 	async pulse(node: string, group: string, name: string): Promise<void> {
 		const param = this.nodeById(node)?.params?.[group]?.[name];
@@ -787,7 +796,11 @@ export class GraphStore {
 		const catalog = this.nodeTypes?.find((c) => c.type === nv.type);
 		const faces = facadeFaces(doc);
 		const viewers = (viewersJson(doc, t.uid) ?? {}) as NodeInstanceInfo['viewers'];
-		Object.assign(t, assembleNode(nv, docParams(doc, t.uid), viewers, catalog, runtime, faces.get(t.uid)));
+		const baseline = baselineJson(doc, t.uid) as NodeInstanceInfo['baseline'];
+		Object.assign(
+			t,
+			assembleNode(nv, docParams(doc, t.uid), viewers, baseline, catalog, runtime, faces.get(t.uid))
+		);
 	}
 
 	/** Build `this.nodes` from the doc: each record is the doc's own fields, plus the catalog
@@ -806,7 +819,8 @@ export class GraphStore {
 				? this._extractRuntime(existing)
 				: this._seedRuntime(nv.uid, !!boundaryType(nv.type) || faces.has(nv.uid));
 			const viewers = (viewersJson(doc, nv.uid) ?? {}) as NodeInstanceInfo['viewers'];
-			return assembleNode(nv, docParams(doc, nv.uid), viewers, catalog, runtime, faces.get(nv.uid));
+			const baseline = baselineJson(doc, nv.uid) as NodeInstanceInfo['baseline'];
+			return assembleNode(nv, docParams(doc, nv.uid), viewers, baseline, catalog, runtime, faces.get(nv.uid));
 		});
 		this._reconcileNodes(next);
 	}

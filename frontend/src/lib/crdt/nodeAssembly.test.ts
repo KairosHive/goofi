@@ -68,7 +68,7 @@ describe('assembleNode — three-way merge', () => {
 	it('merges catalog structure + doc values + runtime into a full node', () => {
 		const docParams: DocParamLeaves = { common: { frequency: { value: 12 } } };
 		const runtime: RuntimeOverlay = { error: null, stage: 'ready' };
-		const n = assembleNode(view, docParams, {}, catalog(), runtime);
+		const n = assembleNode(view, docParams, {}, undefined, catalog(), runtime);
 
 		// Identity + pos from the doc view.
 		expect([n.uid, n.type, n.name, n.pos]).toEqual(['n1', 'signal:Oscillator', 'osc0', [10, 20]]);
@@ -92,7 +92,7 @@ describe('assembleNode — three-way merge', () => {
 	it('does not mutate the shared catalog descriptor', () => {
 		const cat = catalog();
 		const docParams: DocParamLeaves = { common: { frequency: { value: 99 } } };
-		assembleNode(view, docParams, {}, cat, {});
+		assembleNode(view, docParams, {}, undefined, cat, {});
 		// The catalog's default value must be untouched by the per-node merge.
 		expect(cat.params.common.frequency.value).toBe(1);
 	});
@@ -106,7 +106,7 @@ describe('assembleNode — three-way merge', () => {
 		const runtime: RuntimeOverlay = {
 			params: { common: { frequency: { error: 'name error: lfo' } } }
 		};
-		const freq = assembleNode(view, docParams, {}, catalog(), runtime).params.common.frequency;
+		const freq = assembleNode(view, docParams, {}, undefined, catalog(), runtime).params.common.frequency;
 		expect(freq.mode).toBe('expression');
 		expect(freq.expression).toBe("nd('lfo')");
 		expect(freq.reference).toBe('lfo.out');
@@ -117,7 +117,7 @@ describe('assembleNode — three-way merge', () => {
 	it('reads a constant when the doc leaf has no source record', () => {
 		// The catalog default carries no record; a doc leaf without one is a constant with nothing
 		// retained (never inherit a record the doc does not have).
-		const freq = assembleNode(view, { common: { frequency: { value: 5 } } }, {}, catalog(), {}).params
+		const freq = assembleNode(view, { common: { frequency: { value: 5 } } }, {}, undefined, catalog(), {}).params
 			.common.frequency;
 		expect(freq.mode).toBe('constant');
 		expect(freq.expression).toBeNull();
@@ -128,7 +128,7 @@ describe('assembleNode — three-way merge', () => {
 		const runtime: RuntimeOverlay = {
 			params: { audio: { device: { options: ['default', 'HD Audio', 'USB Mic'] } } }
 		};
-		const device = assembleNode(view, {}, {}, catalog(), runtime).params.audio.device;
+		const device = assembleNode(view, {}, {}, undefined, catalog(), runtime).params.audio.device;
 		expect((device as { options: string[] }).options).toEqual(['default', 'HD Audio', 'USB Mic']);
 	});
 
@@ -137,7 +137,7 @@ describe('assembleNode — three-way merge', () => {
 		// doc keys as unknown descriptors so committed values are not lost.
 		const docParams: DocParamLeaves = { common: { frequency: { value: 7 } } };
 		const runtime: RuntimeOverlay = { error: 'missing dep: numpy', stage: 'error' };
-		const n = assembleNode(view, docParams, {}, undefined, runtime);
+		const n = assembleNode(view, docParams, {}, undefined, undefined, runtime);
 		expect(n.name).toBe('osc0');
 		expect(n.pos).toEqual([10, 20]);
 		expect(n.input_slots).toEqual({});
@@ -152,14 +152,14 @@ describe('assembleNode — three-way merge', () => {
 	it('keeps a pulse a pulse: no value key in its leaf, and no live gate value on it', () => {
 		// A pulse holds no value, so its doc leaf has no `value` — a merge patch spends `null` on
 		// "delete this key" — and the gate its source reports is not a value to show.
-		const unbound = assembleNode(view, { count: { reset: {} } }, {}, catalog(), {}).params.count.reset;
+		const unbound = assembleNode(view, { count: { reset: {} } }, {}, undefined, catalog(), {}).params.count.reset;
 		expect(unbound.type).toBe('pulse');
 		expect(unbound.value).toBeNull();
 		expect(unbound.mode).toBe('constant');
 
 		const docParams: DocParamLeaves = { count: { reset: { source: { mode: 'reference', ref: 'clock.out' } } } };
 		const runtime: RuntimeOverlay = { params: { count: { reset: { liveValue: true } } } };
-		const reset = assembleNode(view, docParams, {}, catalog(), runtime).params.count.reset;
+		const reset = assembleNode(view, docParams, {}, undefined, catalog(), runtime).params.count.reset;
 		expect(reset.type).toBe('pulse');
 		expect(reset.value).toBeNull();
 		expect(reset.mode).toBe('reference');
@@ -168,6 +168,6 @@ describe('assembleNode — three-way merge', () => {
 
 	it('passes the viewers blob through verbatim', () => {
 		const viewers = { out: { collapsed: false, kind: 'line', settings: {} } };
-		expect(assembleNode(view, {}, viewers, catalog(), {}).viewers).toEqual(viewers);
+		expect(assembleNode(view, {}, viewers, undefined, catalog(), {}).viewers).toEqual(viewers);
 	});
 });

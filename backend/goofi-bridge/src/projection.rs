@@ -53,6 +53,12 @@ pub fn of(g: &Graph) -> Value {
         if let Some(v) = g.viewers(uid).filter(|v| v.as_object().is_some_and(|m| !m.is_empty())) {
             node.insert("viewers".into(), json!(v.to_string()));
         }
+        // The touched filter's zero point, in that same `json_string` shape and for the same reason:
+        // its keys are `group/param`, so as a tree of leaves a merge patch could not tell one
+        // param's zero being deleted from the whole blob being replaced.
+        if let Some(v) = g.baseline(uid).filter(|v| v.as_object().is_some_and(|m| !m.is_empty())) {
+            node.insert("baseline".into(), json!(v.to_string()));
+        }
         node.insert("record".into(), json!(g.recorded(uid).unwrap_or(&[])));
         nodes.insert(uid.to_hex(), Value::Object(node));
     }
