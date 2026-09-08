@@ -521,8 +521,9 @@ of the package, never a patch in this tree.
 
 ## Hard constraints
 
-- **`main` is the working branch.** Never push or force-push without explicit authorization, and
-  branch before committing on it.
+- **`main` is the working branch, and everyone commits on it.** Several agents work at once and
+  they work TOGETHER on one branch: no branch and no worktree unless the user asks for one. Never
+  force-push.
 - **The version lives in ONE place** — `[workspace.package] version`. Every crate inherits it and
   the Python wheel derives it. Bumping it also re-provisions the venvs.
 - Commit in small, focused, readable steps at green checkpoints — never one mega-commit. Commit
