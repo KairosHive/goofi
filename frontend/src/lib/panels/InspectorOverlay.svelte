@@ -26,13 +26,6 @@
 			.catch((e) => console.warn('restart failed', e));
 	}
 
-	function openEditor(): void {
-		if (!renderedNode) return;
-		void graph()
-			.showNodeEditor(renderedNode.uid)
-			.catch((e) => console.warn('editor failed', e));
-	}
-
 	/** Closing is a real outro, so the last node stays rendered until the slide finishes. */
 	let renderedNode = $state<NodeInstanceInfo | null>(null);
 	const open = $derived(enabled && node !== null);
@@ -44,17 +37,6 @@
 
 <SidePane {open} onClosed={() => (renderedNode = null)} testid="auto-side-panel">
 	<ScrollArea>
-		<!-- Above the params: a plugin with sixty of them would bury it. -->
-		{#if renderedNode?.editor}
-			<section class="node-actions">
-				<Button
-					size="sm"
-					onclick={openEditor}
-					title="Open this plugin's own editor, in a window on the machine goofi runs on"
-					data-testid="inspector-editor">▤ Open plugin editor</Button
-				>
-			</section>
-		{/if}
 		<ParamForm node={renderedNode} {onClose} />
 		{#if renderedNode}
 			<MetadataPanel node={renderedNode} />
@@ -78,10 +60,6 @@
 </SidePane>
 
 <style>
-	.node-actions {
-		padding: var(--space-3) var(--space-6);
-		border-bottom: 1px solid var(--border);
-	}
 	.node-error {
 		padding: var(--space-6);
 		border-top: 1px solid var(--border);
