@@ -76,6 +76,7 @@ TASKS = {
             "min_face_detection_confidence": "confidence",
             "min_face_presence_confidence": "confidence",
             "min_tracking_confidence": "tracking",
+            "output_face_blendshapes": "expression",
         },
     ),
     "facebox": Task(
@@ -90,7 +91,11 @@ TASKS = {
         "holistic_landmarker/holistic_landmarker/float16/1/holistic_landmarker.task",
         "detect_for_video",
         ["pose_landmarks", "face_landmarks", "left_hand_landmarks", "right_hand_landmarks"],
-        {"min_face_detection_confidence": "confidence", "min_pose_detection_confidence": "confidence"},
+        {
+            "min_face_detection_confidence": "confidence",
+            "min_pose_detection_confidence": "confidence",
+            "output_face_blendshapes": "expression",
+        },
     ),
 }
 
@@ -102,7 +107,11 @@ class PoseEstimation(goofi.Node):
 
     TAGS = ["analysis", "motion", "ml"]
     INPUTS = {"image": goofi.InputSlot(goofi.DataType.ARRAY)}
-    OUTPUTS = {"positions": goofi.DataType.ARRAY, "velocities": goofi.DataType.ARRAY}
+    OUTPUTS = {
+        "positions": goofi.DataType.ARRAY,
+        "velocities": goofi.DataType.ARRAY,
+        "expression": goofi.DataType.ARRAY,
+    }
     PARAMS = {
         "pose": {
             "mode": goofi.StringParam(
@@ -119,6 +128,11 @@ class PoseEstimation(goofi.Node):
                 0.5, 0.0, 1.0, doc="How sure it must stay to keep tracking rather than search again. `facebox` and `holistic` do not track."
             ),
             "smooth": goofi.FloatParam(0.5, 0.0, 0.99, doc="How much of the last velocity to keep, so a jumpy reading walks."),
+            "expression": goofi.BoolParam(
+                False,
+                doc="Also score the 52 named faces a face can pull — `jawOpen`, `browInnerUp`, "
+                "`mouthSmileLeft`. Only `face` and `holistic` have a face to read, and it costs to ask.",
+            ),
         }
     }
 
@@ -135,7 +149,7 @@ class PoseEstimation(goofi.Node):
         if image is None:
             return None
         p = self.params.pose
-        want = (p.mode, p.detections, round(p.confidence, 3), round(p.tracking, 3))
+        want = (p.mode, p.detections, round(p.confidence, 3), round(p.tracking, 3), p.expression)
         if want != self.built:
             self.build(p, want)
 
@@ -152,7 +166,11 @@ class PoseEstimation(goofi.Node):
         held = {"gesture": naming(found)} if p.mode == "gesture" else {}
         place = {"channels": {"dim0": labels, "dim1": ["x", "y", "z"]}, **held}
         speed = {"channels": {"dim0": labels, "dim1": ["x", "y"]}, **held}
-        return {"positions": (xyz, place), "velocities": (self.moved(xyz, p), speed)}
+        return {
+            "positions": (xyz, place),
+            "velocities": (self.moved(xyz, p), speed),
+            "expression": pulled(found),
+        }
 
     def moved(self, xyz, p):
         """How far each row travelled since the last picture, in units a second."""
@@ -251,3 +269,13 @@ def spots(found, width, height):
 def naming(found):
     """What the recogniser called each hand, in the order the hands came out."""
     return ",".join(g[0].category_name for g in found.gestures if g)
+
+
+def pulled(found):
+    """The 52 named faces a face is pulling, one row per face. Empty where there is no face."""
+    faces = [f for f in grouped(getattr(found, "face_blendshapes", None)) if f]
+    if not faces:
+        return np.zeros((0, 0), np.float32), {}
+    scores = np.asarray([[c.score for c in f] for f in faces], dtype=np.float32)
+    names = [c.category_name for c in faces[0]]
+    return scores, {"channels": {"dim0": [f"face{k}" for k in range(len(faces))], "dim1": names}}
