@@ -32,7 +32,8 @@ struct Feed {
     id: StreamId,
     service: String,
     subscriber: goofi_transport::ByteSubscriber,
-    last: Option<u64>,
+    /// The one frame the writer's lane refused, kept for the next sweep.
+    held: Option<Vec<u8>>,
     /// How this engine dates a frame, and how deep the recorder's end of its service is.
     timeline: Timeline,
     /// Whether this engine's frames are AUDIO — the one stream kind that is a wav.
@@ -69,37 +70,41 @@ fn armed(g: &Graph) -> HashMap<(Uid, String), (String, StreamId)> {
 }
 
 
+/// One frame onto the writer, read for what only this thread can read. The file it belongs in, and
+/// every byte of formatting, is the writer's: formatting here made the drain slower than a fast
+/// producer, and a drain that falls behind its transport loses another stream's frames.
+fn hand(recorder: &Recorder, time: &Time, feed: &Feed, bytes: &[u8], finally: bool, drift: &mut Option<f64>) -> bool {
+    let meta = goofi_codec::frame_meta(bytes).ok();
+    let at = meta.as_ref().and_then(|m| m.time()).unwrap_or_else(|| time.now());
+    let rate = feed.rate.then(|| meta.as_ref().and_then(|m| m.sfreq()).unwrap_or_default());
+    if let Some(goofi_core::MetaValue::Float(d)) = meta.as_ref().and_then(|m| m.get(goofi_core::META_DRIFT)) {
+        *drift = Some(*d);
+    }
+    recorder.take_frame(&feed.id, bytes, rate, feed.timeline, at, finally)
+}
+
 /// Take every frame the feed holds, in one pass, and write each straight through. A recorder that
 /// kept only the newest frame is the defect this feature exists to prevent, so nothing stops at one.
-fn drain_feed(recorder: &Recorder, time: &Time, feed: &mut Feed) {
-    let (mut taken, mut missed) = (0usize, 0u64);
+///
+/// Nothing here counts a loss and nothing here MAKES one: a frame the lane refuses is HELD rather
+/// than thrown away, because it has already left the transport and no numbering could show it
+/// gone. What overflows is then the subscriber's oldest, which the next frame's own number says.
+fn drain_feed(recorder: &Recorder, time: &Time, feed: &mut Feed, finally: bool) {
+    let mut taken = 0usize;
     let mut drift: Option<f64> = None;
+    if let Some(held) = feed.held.take() {
+        if !hand(recorder, time, feed, &held, finally, &mut drift) {
+            feed.held = Some(held);
+            return;
+        }
+        taken += 1;
+    }
     while let Ok(Some(sample)) = feed.subscriber.receive() {
         let bytes = sample.payload();
-        // This thread READS the meta and hands the frame on; the file it belongs in, and every
-        // byte of formatting, is the writer's. Formatting here made the drain slower than a fast
-        // producer, and a drain that falls behind its transport loses another stream's frames.
-        let meta = goofi_codec::frame_meta(bytes).ok();
-        let at = meta.as_ref().and_then(|m| m.time()).unwrap_or_else(|| time.now());
-        let rate = feed.rate.then(|| meta.as_ref().and_then(|m| m.sfreq()).unwrap_or_default());
-        if let Some(goofi_core::MetaValue::Float(d)) = meta.as_ref().and_then(|m| m.get(goofi_core::META_DRIFT)) {
-            drift = Some(*d);
+        if !hand(recorder, time, feed, bytes, finally, &mut drift) {
+            feed.held = Some(bytes.to_vec());
+            break;
         }
-        let index = meta.as_ref().and_then(|m| m.index());
-        // The subscriber overflows the OLDEST frame and says nothing, so the indices are the only
-        // witness. An index that RESETS is a rebirth, never a loss.
-        let gap = match (index, feed.last) {
-            (Some(i), Some(last)) => i.saturating_sub(last).saturating_sub(1),
-            _ => 0,
-        };
-        // A refused frame is a FULL lane. The index it carried is NOT recorded as reached, so the
-        // next frame's own gap counts it: a loss at the lane and a loss at the subscriber are the
-        // same loss, witnessed the same way, and neither is counted twice.
-        if !recorder.take_frame(&feed.id, bytes, rate, feed.timeline, gap, at) {
-            continue;
-        }
-        feed.last = index;
-        missed += gap;
         taken += 1;
     }
     if taken > 0 {
@@ -111,7 +116,7 @@ fn drain_feed(recorder: &Recorder, time: &Time, feed: &mut Feed) {
         recorder.drift(&feed.id, d);
     }
     // Once per sweep: every count already rode its own write, so only the manifest is left.
-    if missed > 0 || taken > 0 {
+    if taken > 0 {
         recorder.note();
     }
 }
@@ -129,7 +134,7 @@ impl Drain {
                 None => "disarmed",
             };
             let mut feed = self.feeds.remove(&key).expect("a key just read");
-            drain_feed(&self.recorder, &self.time, &mut feed);
+            drain_feed(&self.recorder, &self.time, &mut feed, true);
             self.recorder.close(&feed.id, why);
         }
         for (key, (service, id)) in wanted {
@@ -139,8 +144,15 @@ impl Drain {
             let shape = record_shape(id.engine);
             let timeline = timeline(id.engine).expect("armed filtered the engines above");
             if let Ok(subscriber) = goofi_transport::open_record_subscriber(&self.node, &service, shape) {
-                let feed = Feed { rate: id.engine == "audio", id, service, subscriber, last: None,
-                                  timeline, buffer: shape.buffer };
+                let feed = Feed {
+                    rate: id.engine == "audio",
+                    id,
+                    service,
+                    subscriber,
+                    held: None,
+                    timeline,
+                    buffer: shape.buffer,
+                };
                 self.feeds.insert(key, feed);
             }
         }
@@ -148,7 +160,7 @@ impl Drain {
 
     fn sweep(&mut self) {
         for feed in self.feeds.values_mut() {
-            drain_feed(&self.recorder, &self.time, feed);
+            drain_feed(&self.recorder, &self.time, feed, false);
         }
     }
 
@@ -156,7 +168,7 @@ impl Drain {
     /// so the frames the last sweep did not reach are not the tail this recording loses.
     fn release(&mut self) {
         for (_, mut feed) in self.feeds.drain().collect::<Vec<_>>() {
-            drain_feed(&self.recorder, &self.time, &mut feed);
+            drain_feed(&self.recorder, &self.time, &mut feed, true);
         }
     }
 }

@@ -18,9 +18,8 @@ use goofi_node::{
 };
 use goofi_transport::{
     data_service, door_service, event_service, iox_node, open_output_subscriber, output_service, publisher,
-    record_data_service, record_door_service, record_publisher, record_service, record_shape, take_where,
+    record_door_service, record_service, record_shape, take_where,
     ByteService, BytePublisher, ByteSubscriber, Doorbell, Halt, IoxNode, Listener, ServiceName, INITIAL_SLICE,
-    RECORD_EVENT_ID,
 };
 use indexmap::IndexMap;
 
@@ -288,7 +287,7 @@ struct Out {
     service: ByteService,
     publisher: BytePublisher,
     bells: Vec<(String, Doorbell, EventId)>,
-    record: Option<(BytePublisher, Doorbell)>,
+    record: Option<goofi_transport::RecordPort>,
 }
 
 struct SlotSub {
@@ -460,20 +459,31 @@ impl<H: Half> Control<H> {
 
     /// The recorder's second publisher on every armed output, and none on the rest. It is opened
     /// here rather than at birth because the segment is a whole budget and an unarmed slot owes
-    /// none of it.
+    /// none of it — and it is let go by the RECORDER's reading rather than by the disarm, or the
+    /// frames already delivered would go with it.
     fn apply_records(&mut self, armed: &[String]) {
         let shape = record_shape(self.engine);
         for (out, decl) in self.outs.iter_mut().zip(self.manifest.outputs) {
-            if !armed.iter().any(|s| s == decl.name) {
+            if let Some(port) = out.record.as_mut() {
+                match armed.iter().any(|s| s == decl.name) {
+                    true => port.armed(),
+                    false => port.retire(),
+                }
+                if !port.spent() {
+                    continue;
+                }
                 out.record = None;
+            }
+            if !armed.iter().any(|s| s == decl.name) {
                 continue;
             }
-            if out.record.is_some() {
-                continue;
-            }
-            let opened = record_data_service(&self.node, &record_service(&self.base, decl.name), shape)
-                .and_then(|service| record_publisher(&service, decl.name, shape))
-                .and_then(|port| Doorbell::open(&self.node, &self.record_door).map(|bell| (port, bell)));
+            let opened = goofi_transport::RecordPort::open(
+                &self.node,
+                &record_service(&self.base, decl.name),
+                &self.record_door,
+                decl.name,
+                shape,
+            );
             match opened {
                 Ok(port) => out.record = Some(port),
                 Err(e) => eprintln!("{}: could not arm `{}`: {e}", self.engine, decl.name),
@@ -567,11 +577,11 @@ impl<H: Half> Control<H> {
             }
         }
         let readers: Vec<bool> = self.outs.iter().map(|o| goofi_transport::subscribers(&o.service) > 0).collect();
-        let recorded: Vec<bool> = self.outs.iter().map(|o| o.record.is_some()).collect();
+        let recorded: Vec<bool> = self.outs.iter().map(|o| o.record.as_ref().is_some_and(|r| !r.retired())).collect();
         let outs = &self.outs;
         let record = |i: usize, bytes: &[u8]| {
-            let Some((port, bell)) = outs[i].record.as_ref() else { return };
-            goofi_transport::publish(port, bytes, std::iter::once((bell, RECORD_EVENT_ID)));
+            let Some(port) = outs[i].record.as_ref() else { return };
+            port.send(bytes);
         };
         let cx = Cx {
             consts: &self.consts,

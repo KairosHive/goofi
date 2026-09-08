@@ -340,11 +340,16 @@ a rate-locked stream derives its timeline from the SAMPLE COUNT, tied to the clo
 runtime lock — where no block can be rendered between reading the count and reading the clock, which
 is why the audio thread reads no clock at all. The device's rate error then walks that timeline away
 from patch time, and the manifest carries the measured drift rather than a re-tie that would put a
-seam in the exact block spacing. What the shape cost, four times: a re-arm at the same
-instant truncated the file it had just closed; a running drop counter applied to already-queued
+seam in the exact block spacing. A loss is counted where the file is: a frame carries its own
+NUMBER, and the gap to the previous number in that same file is what `dropped` says — so an
+entry's count and its own file's numbering cannot disagree, and a refusal anywhere between the
+producer and the disk is witnessed once, by the next frame that lands. What the shape cost, five
+times: a re-arm at the same instant truncated the file it had just closed; a running drop counter applied to already-queued
 blocks made the loss invisible AND dated the survivors 1.33 ms late; finalizing a video held the
-session mutex and stalled every other engine's drain; and every second holder of "is this stream
-open" wrote at a stream the recorder had closed. `roadmap/recording.md` holds the design.
+session mutex and stalled every other engine's drain; every second holder of "is this stream
+open" wrote at a stream the recorder had closed; and a mark kept by the DRAIN instead outlived the
+recording it was made in, so a drain that never woke between a stop and the next start put the
+blocks between them on the new file's first frame — the one place no numbering can show them. `roadmap/recording.md` holds the design.
 
 **There is no tick.** Every node owns one thread and schedules itself, waking for a control
 message, a frame on an input, or its own rate cap elapsing. Frames travel node to node over
