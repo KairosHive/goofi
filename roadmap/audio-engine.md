@@ -141,6 +141,50 @@ The `ASIO: ` prefix that shipped first was this idea for one host; it is now the
 what stays ASIO's alone is the SDK's — one driver per process, a ten-second open, and a list that
 empties once a stream holds a driver.
 
+**A device that was seen is offered again, in BOTH directions.** The emptying list above was a
+one-way door for a year: `host::device` consulted the remembered handle at OPEN, so a name already
+in a patch still resolved, but `host::named` walked the hosts fresh, so the name could not be
+CHOSEN. An ASIO output holding the driver therefore left `AudioIn` showing WASAPI alone — the same
+card, playing, unpickable to capture from. Measured on a Focusrite Scarlett: six ASIO inputs while
+idle, zero while an ASIO output held the driver. The cache is now read at enumeration too, and is
+keyed by KIND as well as name, since the two directions of one card are not one device to cpal and
+a driver need not offer both.
+
+**And the cache is filled BEFORE anything opens, not when a list is asked for.** Filling it lazily
+looks sufficient and is not: it can only ever be filled while no stream holds a driver, and by the
+time a list is asked for that may already be false. A patch loaded with an ASIO `AudioIn` in it
+opens the capture stream before any dropdown exists, and from then on the OUTPUT list has no ASIO
+in it and no way to get any — the driver that is recording cannot be enumerated, and it was never
+seen while it could be. Reported as "if I choose ASIO for one, I cannot choose it for the other",
+and easy to mistake for a rule forbidding it; there is no such rule, and the one ASIO rule there is
+(below) refuses only a SECOND driver. So `host::warm` learns both directions ONCE, at ENGINE
+CONSTRUCTION. Not at the first list, and emphatically not when a name is resolved to open: that is
+the latest useful moment and a fatal one — it enumerates ASIO on the clock thread, loading every
+ASIO driver on the machine into a process that is at that moment instantiating VST3 plugins, and a
+patch holding two of them died with STATUS_HEAP_CORRUPTION every time. Engine construction is
+before any plugin is instantiated and before any stream exists. Once, because a handle does not go
+stale while its driver is loadable and enumerating ASIO loads every driver and costs seconds. A driver another APPLICATION holds at that moment is
+genuinely unavailable, and no bookkeeping here can make it otherwise.
+
+**Which channels a node uses is a param, spelled the way the front panel is.** WASAPI publishes an
+interface as one stereo endpoint per pair, so "which channels" was never a question a patch could
+ask: the endpoint WAS the answer. ASIO hands over the whole card — eighteen in and eight out on a
+Scarlett — and the question becomes unavoidable. `AudioIn` and `AudioOut` each carry a `channels`
+param reading `all`, `1`, `1-2`, `3-4` or `1,3-4`, ONE-BASED because that is what is silkscreened
+next to the socket. Order is kept and repeats are allowed, so a selection is a patchbay and not a
+set: `4-3` swaps a pair without a node in between. One parser (`chanmap`) serves both nodes, so the
+two spell it the same.
+On the INPUT side the stream is opened wide enough to CONTAIN the highest channel named and the
+callback gathers only the selection, so `MAX_CHANNELS` bounds what the node EMITS and no longer
+what the device is opened at — which is what makes channels 17 and 18 of a wide card reachable at
+all. On the OUTPUT side the selection routes: the sink's own channel `c` lands on the device
+channel named `c`th, every channel nobody named is left alone, and the device is opened one past
+the furthest any sink reaches — so two `AudioOut`s can hold different pairs of one card without
+either clearing the other's. A selection that does not parse is a FAULT and plays nothing, rather
+than falling back to the whole device: a typo that quietly went everywhere would put signal on
+channels the patch took care to keep clear, and on a live rig that is the expensive direction to be
+wrong in.
+
 **Priority is why the host choice is not cosmetic.** cpal's `realtime` feature promotes the callback
 thread, and the `pulseaudio` host has no call to it, where alsa, pipewire and jack do. So the pulse
 shim can give the device list and the mixer and can never give a real-time thread, and
@@ -597,8 +641,15 @@ its reasons are in the locked decisions; what survives of the two reviews that p
   question for a release and not for a build. Revisit it there — and note the way out if the answer
   is no: bind the driver as the COM object it is, `CoCreateInstance` on the CLSID under
   `HKLM\SOFTWARE\ASIO` against a vtable goofi declares, which puts no SDK in the tree.
-  **Unverified on Windows.** Nothing in this tree can build the ASIO path — `asio-sys` is
-  Windows-only — so CI's `windows-latest` leg is the first thing that judges it.
+  **Verified on Windows 2026-09-07**, against a Focusrite Scarlett: the driver enumerates as one
+  18-in/8-out device at 48 kHz in `i32`, where WASAPI shows the same card as `Analogue 1 + 2` and
+  nothing else. Three defects surfaced there and are fixed above: the input list emptying while an
+  ASIO output held the driver, the cache that answers for it being fillable only before anything
+  opened, and there being no way to name a channel past the first pair. ASIO in BOTH directions at
+  once — an `AudioIn` and an `AudioOut` on one card — is verified there too, capture live beside
+  playback on the one driver. All of it is covered by `#[ignore]`d tests in `goofi-audio` that name the hardware they need, which is the
+  one exception to "no test opens a device": the rule keeps the SUITE off the machine's card, and
+  these are opt-in and never run by it. CI's `windows-latest` leg still judges the build.
 - **A sample format cpal adds is refused until a device reports it.** `SampleFormat` is
   `#[non_exhaustive]`, so the dispatch must keep a wildcard arm and no new variant can be a compile
   error. goofi now writes and reads every format cpal has a sample type for — DSD is the only
@@ -617,6 +668,8 @@ its reasons are in the locked decisions; what survives of the two reviews that p
   Whether the rule takes the last sample, or a reference into the signal plane needs a node in
   between, is open.
 - **Whether `MAX_CHANNELS = 16` is right**, and what a spectral port does to it when `Bins` arrives.
+  Less pressing since `channels`: a wide card's channels past sixteen are reachable a selection at a
+  time, so what the ceiling still bars is carrying more than sixteen of them AT ONCE.
 - **Drift between two devices** for `AudioIn`: measured before any correction is built.
 - **A canvas affordance for references** — `param-sources.md` holds it.
 - **Type names are ONE namespace across engines.** A shipped audio `Gain` and a patch's

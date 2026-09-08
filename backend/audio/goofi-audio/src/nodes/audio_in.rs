@@ -11,13 +11,20 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("the input device; one other than the clock's drifts, and the ring holds or drops at its edges — an `ASIO: ` name must be the same driver the rest of the patch uses, since only one loads at a time"),
     },
+    CHANNELS = ParamDecl {
+        group: "audio",
+        name: "channels",
+        spec: ParamSpec::Str { default: crate::chanmap::ALL, options: &[], refresh: false },
+        expression: None,
+        doc: Some(crate::chanmap::DOC),
+    },
 }
 
 static OUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Audio }];
 
 pub static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Input],
-    doc: "The device's input, as many channels as it has.",
+    doc: "The device's input: the channels `channels` names, in that order, or every channel it has.",
     inputs: &[],
     outputs: OUTS,
     params: PARAMS,

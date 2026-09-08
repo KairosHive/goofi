@@ -450,12 +450,36 @@ impl Runtime {
         {
             let dst = unsafe { region_mut(base, len, at, channels) };
             dst.fill(0.0);
-            for (input, gain) in &self.plan.sinks {
+            for (input, gain, sel) in &self.plan.sinks {
                 let (input, gain) = unsafe { (port(base, len, input), port(base, len, gain)) };
-                for c in 0..channels as usize {
-                    let (x, g) = (input.chan(c), gain.chan(c));
-                    for i in 0..BLOCK {
-                        dst[c * BLOCK + i] += x[i] * g[i];
+                match sel {
+                    // No selection: every device channel is fed by the port's channel of the same
+                    // number, and `Port::chan` spreads a narrower port across all of them.
+                    None => {
+                        for c in 0..channels as usize {
+                            let (x, g) = (input.chan(c), gain.chan(c));
+                            for i in 0..BLOCK {
+                                dst[c * BLOCK + i] += x[i] * g[i];
+                            }
+                        }
+                    }
+                    // A selection ROUTES: the sink's own channel `c` lands on the device channel
+                    // named `c`th, and every device channel nobody named is left as it was — which
+                    // is what lets two AudioOuts hold different pairs of one card without either
+                    // clearing the other's. A name past the width the device opened at is dropped,
+                    // since the plan's width is capped at `MAX_CHANNELS` and a device may be
+                    // narrower than the plan asked for.
+                    Some(sel) => {
+                        for (c, dev) in sel.iter().enumerate() {
+                            let dev = *dev as usize;
+                            if dev >= channels as usize {
+                                continue;
+                            }
+                            let (x, g) = (input.chan(c), gain.chan(c));
+                            for i in 0..BLOCK {
+                                dst[dev * BLOCK + i] += x[i] * g[i];
+                            }
+                        }
                     }
                 }
             }

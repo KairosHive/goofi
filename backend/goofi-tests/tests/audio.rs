@@ -1300,3 +1300,80 @@ fn one_signal_speaks_through_another_band_by_band() {
     let others = settled(&g, chord_bank, "while the voices still held carry as they did");
     assert!(peak(&others) > peak(&single), "the rest of the chord stands: {}", peak(&others));
 }
+
+/// One channel of the interleaved device buffer `drive` hands back.
+fn lane(x: &[f32], c: usize, channels: u16) -> Vec<f32> {
+    x.iter().skip(c).step_by(channels as usize).copied().collect()
+}
+
+/// `channels` on `AudioIn` and `AudioOut` is what makes a multi-channel interface addressable:
+/// WASAPI publishes a card as stereo endpoints, so before it there was no way to ask for a
+/// Scarlett's inputs 3 and 4, or to put a signal on its outputs 3 and 4 while something else held
+/// 1 and 2. This is the output half, which needs no hardware — the input half is the same parser
+/// against a real device.
+#[test]
+fn an_audio_out_lands_on_the_channels_it_names() {
+    let g = Goofi::new();
+    g.state.graph.lock().unwrap().set_evaluator(Arc::new(FirstVar));
+
+    let osc = g.add("Osc");
+    let out = g.add("AudioOut");
+    g.link(osc, "out", out, "input");
+    let (all, channels) = drive(&g, TENTH);
+    assert_eq!(channels, 1, "`all` on a mono chain is what it always was");
+    assert!((peak(&all) - 1.0).abs() < 0.01, "the sine is heard: peak {}", peak(&all));
+
+    // A selection opens the device wide enough to CONTAIN the channels named, and puts the signal
+    // only on those: the pair nobody named stays silent, which is the whole point of asking.
+    g.set_param(out, "audio", "channels", "3-4");
+    let channels = 4;
+    let x = wide(&g, "the sine on channels 3 and 4", channels);
+    for c in [0, 1] {
+        assert_eq!(peak(&lane(&x, c, channels)), 0.0, "channel {} was not named and is silent", c + 1);
+    }
+    for c in [2, 3] {
+        let l = lane(&x, c, channels);
+        assert!((peak(&l) - 1.0).abs() < 0.01, "channel {} carries the sine: peak {}", c + 1, peak(&l));
+    }
+
+    // A single channel is a single channel — the mono source does NOT spread across the device.
+    g.set_param(out, "audio", "channels", "2");
+    let channels = 2;
+    let x = wide(&g, "the sine on channel 2 alone", channels);
+    assert_eq!(peak(&lane(&x, 0, channels)), 0.0, "channel 1 is silent");
+    assert!((peak(&lane(&x, 1, channels)) - 1.0).abs() < 0.01, "channel 2 carries the sine");
+
+    // Two outputs, different pairs of one device: neither clears the other's.
+    g.set_param(out, "audio", "channels", "1-2");
+    let out2 = g.add("AudioOut");
+    g.link(osc, "out", out2, "input");
+    g.set_param(out2, "audio", "channels", "3-4");
+    g.set_param(out2, "audio", "gain", 0.5);
+    let channels = 4;
+    let x = wide(&g, "two outputs holding different pairs", channels);
+    for c in [0, 1] {
+        assert!((peak(&lane(&x, c, channels)) - 1.0).abs() < 0.01, "channel {} is the first output", c + 1);
+    }
+    for c in [2, 3] {
+        assert!((peak(&lane(&x, c, channels)) - 0.5).abs() < 0.01, "channel {} is the second, at its own gain", c + 1);
+    }
+
+    // A selection that does not parse is a FAULT and plays nothing: silently falling back to the
+    // whole device would put a signal on channels the patch took care to keep clear.
+    g.call("node remove", j!({ "node": hex(out2) }));
+    g.set_param(out, "audio", "channels", "1-0");
+    let why = g.until("the bad selection to be named", |g| g.error(out));
+    assert!(why.contains("count from 1"), "the refusal says where counting starts: {why}");
+    g.set_param(out, "audio", "channels", "all");
+    g.until("the fault to clear", |g| g.error(out).is_none().then_some(()));
+}
+
+/// Drive tenths until the device buffer is `channels` wide, and hand that tenth back. The WIDTH is
+/// what a channel selection moves, so it is what says the param has landed — peak alone would hand
+/// back the tenth before it, which still sounds exactly as it did.
+fn wide(g: &Goofi, what: &str, channels: u16) -> Vec<f32> {
+    g.until(what, |g| {
+        let (x, c) = drive(g, TENTH);
+        (c == channels).then_some(x)
+    })
+}

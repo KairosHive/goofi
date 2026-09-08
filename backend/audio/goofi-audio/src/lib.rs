@@ -18,6 +18,7 @@ use goofi_node::{
     ParamGroups, ParamKey, Ringer, Status, Touched, Uid, Via, NATIVE,
 };
 
+mod chanmap;
 mod control;
 mod host;
 pub use host::{hosts, NO_ASIO_NOTE};
