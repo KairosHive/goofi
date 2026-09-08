@@ -56,10 +56,26 @@ began at; `manifest.json` sits beside one file per stream, named
 `<node>-<slot>__<UTC of its first sample>`. The root is `globals.record.root`, else
 `~/.goofi/recordings`.
 
-**A stream file is CONCATENATED GOOF FRAMES — the wire format itself.** Nothing is re-encoded and
-nothing is re-framed: the signal engine's `publish` already encodes once, and the recorder writes
-those bytes. Metadata rides beside every sample in the frame's own `Meta`, so a truncated file
-decodes to its last whole frame and needs no header to be read at all.
+**A stream file is the format its own SHAPE takes, and nothing writes the wire format to disk.**
+An array is a `.npy`, a table is a `.csv`, text is its own lines, audio is a `.wav` of IEEE float32
+and a texture is a video — each chosen because it IS that type's shape, which is more orthogonal
+than forcing five kinds through one container. Every one is append-only behind a fixed-size head
+that is patched on the sync cadence, so a writer that is killed costs the tail and nothing else:
+the whole frames follow from the file's size, and `np.load` on a truncated `.npy` fails honestly
+rather than reading nonsense. NPY has ONE spelling in the tree, `goofi-record`'s, which the
+`/data` plane's `--raw` reply uses too.
+
+**Every stream has the same sidecar: one JSON line per frame.** `{"t", "n", "meta"}` — the instant,
+how many ROWS of the file that frame put there, and the `Meta` the file itself cannot hold. The row
+count is what makes it an INDEX rather than a note: a `.wav` holds blocks of no fixed length, so
+without it nothing can say which samples belong to which instant. A line is also the unit a kill
+truncates to. The meta is serialized STRAIGHT to the file — building a `serde_json::Value` per frame
+cost 4.3 µs a line against 0.33, and a fast stream outran its own drain.
+
+**A frame that no longer fits opens the NEXT file**, which is the rule a resized texture already
+followed: an array whose shape moved, a table with other columns, a `.wav` at the 4 GB ceiling RIFF
+counts in. RF64 lifts that ceiling and is read by far less than plain WAV, which is the whole reason
+a recording is a WAV at all.
 
 **The manifest is a PROJECTION, minted at every rewrite** from the closed streams' entries and the
 open streams' own state, then written beside and renamed. No count lives both on a stream and in a
@@ -204,7 +220,6 @@ recorders cannot own one timeline.
 
 ## Open
 
-- **Export.** WAV, CSV and MP4 out of a finished recording, as a separate tool over the folder.
 - **Packing.** A recording is a directory; making one file of it is an action, and it has no op.
 - **The panel add-on loader.** The recorder panel is compiled in, as `library.md`'s first tenant
   says; the loader itself is that file's item.
@@ -213,6 +228,13 @@ recorders cannot own one timeline.
 - **A rate change mid-recording** re-ties the audio anchor, so the frames either side of it derive
   from different ties. That is a real discontinuity and the manifest does not name it as one — only
   the `drift` either side of it moves.
+- **The drain formats on the thread that drains it, and a fast stream now outruns it.** Writing was
+  a memcpy of the wire bytes; it is now a `.npy` append plus a JSON line, and the ONE drain thread
+  that serves every feed falls behind a 100 kHz one — the suite's audio stream then loses blocks a
+  memcpy kept. Three rounds of cutting the per-frame cost did not close it, so the shape is
+  the answer rather than the constant: the video path already puts its slow work on a writer thread
+  behind a bounded queue, and the signal and audio paths should do the same now that writing is no
+  longer a memcpy.
 - **A stage the ENGINE cannot render at 30 fps still plays fast.** The container is constant-rate,
   so a heavy shader or a huge frame that overruns the tick shortens the video the same way a slow
   encoder does — the drop just happens one stage earlier, and nothing in the file says so. The
