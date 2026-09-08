@@ -256,12 +256,15 @@ fn shaders_render_on_the_gpu() {
         .filter(|t| t.starts_with("graphics:"))
         .map(String::from)
         .collect();
-    // Against the bundle on disk, not a number: a fourteenth node must not fail the suite for
-    // existing, and a node that stops registering must fail it.
-    let bundle = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../node-bundles/graphics");
-    let mut want: Vec<String> = std::fs::read_dir(&bundle)
-        .expect("the shipped bundle")
+    // Against the bundles on disk, not a number: a fourteenth node must not fail the suite for
+    // existing, and a node that stops registering must fail it. EVERY bundle, because a `.wgsl`
+    // is the graphics engine's wherever it is shipped from — the simulation pack ships the
+    // graphics half of each of its models beside the model.
+    let bundles = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../node-bundles");
+    let mut want: Vec<String> = std::fs::read_dir(&bundles)
+        .expect("the shipped bundles")
         .filter_map(|e| e.ok())
+        .flat_map(|bundle| std::fs::read_dir(bundle.path()).into_iter().flatten().flatten())
         .filter(|e| e.path().extension().is_some_and(|x| x == "wgsl"))
         .map(|e| format!("graphics:{}", e.path().file_stem().unwrap().to_string_lossy()))
         .collect();
