@@ -9,14 +9,6 @@
 		warn: 'warning',
 		error: 'danger'
 	};
-
-	/** The param count a node needs before it is worth offering a filter. */
-	export const SEARCH_FROM = 8;
-
-	/** …and before browsing is hopeless enough to want the filter strip as well. A hand-written
-	    node is read; a plugin's hundreds are hunted, and only the second wants the switches. */
-	export const FILTER_FROM = 40;
-
 </script>
 
 <!--
@@ -24,15 +16,19 @@
   `<ParamField>` per param in the active group.
 -->
 <script lang="ts">
-	import type { ParamMode, SourcePatch } from '$lib/api/types';
+	import type { ParamDescriptor, ParamMode, SourcePatch } from '$lib/api/types';
 	import type { HTMLAttributes } from 'svelte/elements';
-	import { graph } from '$lib/stores/graph.svelte';
+	import type { MenuItem } from 'panelty';
+	import { ContextMenu } from 'panelty';
+	import { graph, paramLive } from '$lib/stores/graph.svelte';
+	import { ui } from '$lib/stores/ui.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { isValidName } from '$lib/crdt/graphDoc';
 	import { formatName } from '$lib/editor/categoryColor';
 	import { bareName } from '$lib/editor/typeId';
 	import { nodeHealth } from '$lib/editor/nodeHealth';
 	import ParamField from './ParamField.svelte';
+	import { expressionFor } from './paramSeed';
 	import SubPatchInspector from '$lib/editor/SubPatchInspector.svelte';
 	import { matchParams, type ParamHit } from './paramSearch';
 	import {
@@ -74,6 +70,12 @@
 	} = $props();
 
 	const g = graph();
+	const uiStore = ui();
+	const live = paramLive();
+
+	// A driven param's value is a READOUT, and the control plane paces one for health rather than
+	// for reading: the socket is open only while this form is showing the node.
+	$effect(() => (node ? live.watch(node.uid) : undefined));
 
 	// Each RPC is fire-and-forget with a logged failure, so a rejection is never unhandled.
 	function setValue(group: string, name: string, value: unknown): void {
@@ -173,6 +175,42 @@
 		if (at) void saveToLibrary(at.type, true);
 	}
 
+	// A node dragged out of the editor onto a param row: the row is a target only where the node HAS
+	// an output that param may follow, so the menu can never open on a link the manager would refuse.
+	const formId = $props.id();
+	const dragged = $derived(uiStore.nodeDrag);
+	$effect(() =>
+		uiStore.onNodeDrop(formId, (uid, zone, at) => {
+			const [group, name] = zone.split('/');
+			const reference = g.referenceFor(uid, node?.params?.[group]?.[name]?.type ?? '');
+			if (reference) menu = { x: at.x, y: at.y, items: linkItems(group, name, uid, reference) };
+		})
+	);
+	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+
+	/** The two ways one dropped node can drive a param: followed, or read by an expression. */
+	function linkItems(group: string, name: string, uid: string, reference: string): MenuItem[] {
+		const expression = expressionFor(reference, Object.keys(g.nodeById(uid)?.output_slots ?? {}).length);
+		return [
+			{
+				label: `Reference ${reference}`,
+				icon: 'workflow',
+				action: () => setSource(group, name, { reference })
+			},
+			{
+				label: `Expression ${expression}`,
+				icon: 'terminal',
+				action: () => setSource(group, name, { expression })
+			}
+		];
+	}
+
+	/** The row's drop-zone key, or null where this node cannot drive that param. */
+	function dropZone(group: string, name: string, d: ParamDescriptor): string | null {
+		if (!dragged || dragged === node?.uid) return null;
+		return g.referenceFor(dragged, d.type) ? `${formId}#${group}/${name}` : null;
+	}
+
 	const groupNames = $derived(node ? Object.keys(node.params) : []);
 	const health = $derived(nodeHealth(node));
 
@@ -199,18 +237,9 @@
 	// as it has units and the one you want is rarely in the tab you are on.
 	let query = $state('');
 	const searching = $derived(query.trim().length > 0);
-	// A short node is faster to read than to filter; a plugin with no units is one long tab.
-	const paramCount = $derived(
-		Object.values(node?.params ?? {}).reduce((n, named) => n + Object.keys(named ?? {}).length, 0)
-	);
-	const searchable = $derived(paramCount > SEARCH_FROM);
-	const filterable = $derived(paramCount > FILTER_FROM);
 
-	// A plugin declares every param it has, so browsing one is a scroll; the filters are the way
-	// through, and they narrow the GROUP the reader is in rather than dissolving the tabs. They open
-	// showing everything and return there whenever the selection moves: the strip only shows on a
-	// node with params enough to need it, so a filter carried onto a small node would hide its
-	// params behind a switch that is not on screen to turn off.
+	// The filters narrow the GROUP the reader is in rather than dissolving the tabs, and they open
+	// showing everything again whenever the selection moves.
 	let filters = $state<Filters>(SHOW_ALL);
 	let filtered = $state<string | null>(null);
 	// STICKY, and taken from SETTLED state: params join as they leave their zero points, and the
@@ -354,85 +383,79 @@
 		{#if node.subpatch}
 			<SubPatchInspector {node} />
 		{:else}
-			{#if searchable || searching || filterable}
-				<div class="pf-tools" data-testid="param-filters">
-					{#if searchable || searching}
-						<!-- Native, not `TextInput`: this filters per keystroke and owns Escape. -->
-						<input
-							class="pf-search"
-							{...MODE_ATTRS.search}
-							bind:value={query}
-							onkeydown={(e) => {
-								if (e.key === 'Escape') query = '';
-							}}
-							placeholder={narrowed ? 'Search filtered…' : 'Search parameters…'}
-							autocomplete="off"
-							aria-label="Search parameters"
-							data-testid="param-search"
-						/>
-					{/if}
+			<div class="pf-tools" data-testid="param-filters">
+				<!-- Native, not `TextInput`: this filters per keystroke and owns Escape. -->
+				<input
+					class="pf-search"
+					{...MODE_ATTRS.search}
+					bind:value={query}
+					onkeydown={(e) => {
+						if (e.key === 'Escape') query = '';
+					}}
+					placeholder={narrowed ? 'Search filtered…' : 'Search parameters…'}
+					autocomplete="off"
+					aria-label="Search parameters"
+					data-testid="param-search"
+				/>
 
-					{#if filterable}
-						<div class="pf-nondefault">
-							<Segmented
-								value={filters.nonDefault ? 'non-default' : null}
-								segments={[
-									{
-										id: 'non-default',
-										label: '',
-										icon: 'hand',
-										count: changed,
-										name: 'Non-default only',
-										title:
-											'Non-default only — the params on this node that no longer hold their default',
-										testid: 'param-non-default-only'
-									}
-								]}
-								onChange={() => (filters = { ...filters, nonDefault: !filters.nonDefault })}
-							/>
-							<!-- Clearing moves the default this counts from; it edits no param, so an expression
-							     or a reference keeps driving and keeps answering the source strip. -->
-							<IconButton
-								variant="ghost"
-								density="chrome"
-								class="pf-clear"
-								label="Clear non-default"
-								title="Take every param's default from what this node holds now. Mappings keep working."
-								data-testid="param-non-default-clear"
-								disabled={changed === 0}
-								onclick={() => clearNonDefault()}><Icon name="eraser" /></IconButton
-							>
-						</div>
-						<Segmented
-							value={filters.sources}
-							segments={[
-								{
-									id: 'constant',
-									label: 'C',
-									name: 'Constant',
-									title: 'Constant — the params holding a value set by hand',
-									testid: 'param-constant-only'
-								},
-								{
-									id: 'expression',
-									label: 'E',
-									name: 'Expression',
-									title: 'Expression — the params Python drives',
-									testid: 'param-expression-only'
-								},
-								{
-									id: 'reference',
-									label: 'R',
-									name: 'Reference',
-									title: "Reference — the params following a node's output slot",
-									testid: 'param-reference-only'
-								}
-							]}
-							onChange={(id) => (filters = toggleSource(filters, id as ParamMode))}
-						/>
-					{/if}
+				<div class="pf-nondefault">
+					<Segmented
+						value={filters.nonDefault ? 'non-default' : null}
+						segments={[
+							{
+								id: 'non-default',
+								label: '',
+								icon: 'hand',
+								count: changed,
+								name: 'Non-default only',
+								title:
+									'Non-default only — the params on this node that no longer hold their default',
+								testid: 'param-non-default-only'
+							}
+						]}
+						onChange={() => (filters = { ...filters, nonDefault: !filters.nonDefault })}
+					/>
+					<!-- Clearing moves the default this counts from; it edits no param, so an expression
+					     or a reference keeps driving and keeps answering the source strip. -->
+					<IconButton
+						variant="ghost"
+						density="chrome"
+						class="pf-clear"
+						label="Clear non-default"
+						title="Take every param's default from what this node holds now. Mappings keep working."
+						data-testid="param-non-default-clear"
+						disabled={changed === 0}
+						onclick={() => clearNonDefault()}><Icon name="eraser" /></IconButton
+					>
 				</div>
-			{/if}
+				<Segmented
+					value={filters.sources}
+					segments={[
+						{
+							id: 'constant',
+							label: 'C',
+							name: 'Constant',
+							title: 'Constant — the params holding a value set by hand',
+							testid: 'param-constant-only'
+						},
+						{
+							id: 'expression',
+							label: 'E',
+							name: 'Expression',
+							title: 'Expression — the params Python drives',
+							testid: 'param-expression-only'
+						},
+						{
+							id: 'reference',
+							label: 'R',
+							name: 'Reference',
+							title: "Reference — the params following a node's output slot",
+							testid: 'param-reference-only'
+						}
+					]}
+					onChange={(id) => (filters = toggleSource(filters, id as ParamMode))}
+				/>
+			</div>
 
 			{#if tabItems.length > 0 && !across}
 				<Tabs
@@ -464,6 +487,7 @@
 								{paramName}
 								selfName={node?.name}
 								{descriptor}
+								dropZone={dropZone(group, paramName, descriptor)}
 								data-testid={`param-field-${paramName}`}
 								refreshing={node != null && g.isRefreshing(node.uid, group, paramName)}
 								onCommit={(v) => setValue(group, paramName, v)}
@@ -478,6 +502,10 @@
 		{/if}
 	{/if}
 </section>
+
+{#if menu}
+	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
+{/if}
 
 <ConfirmDialog
 	open={!!replacing}

@@ -51,16 +51,39 @@ function mergeParam(
 ): ParamDescriptor {
 	// Shallow-copy so the shared catalog descriptor is never mutated.
 	const p: ParamDescriptor = catalog ? { ...catalog } : unknownParam();
-	if (leaf && leaf.value !== undefined) (p as { value: unknown }).value = leaf.value;
 	p.mode = leaf?.source?.mode ?? 'constant';
 	p.expression = leaf?.source?.expr ?? null;
 	p.reference = leaf?.source?.ref ?? null;
 	p.triggers = leaf?.source?.triggers === true;
 	p.error = runtime?.error ?? null;
 	if (p.type === 'string' && runtime?.options !== undefined) p.options = runtime.options;
-	if (p.type !== 'pulse' && p.mode !== 'constant' && runtime?.liveValue !== undefined)
-		(p as { value: unknown }).value = runtime.liveValue;
+	showValue(p, leaf?.value, runtime?.liveValue);
 	return p;
+}
+
+/** What a param SHOWS: a driven one reads what its source evaluated to, a withdrawn value falls
+ *  back to the committed leaf, and neither leaves the declared default standing. ONE rule, so the
+ *  full assemble and the live event that updates one node in place cannot disagree. */
+function showValue(p: ParamDescriptor, committed: unknown, live: unknown): void {
+	const driven = p.type !== 'pulse' && p.mode !== 'constant';
+	const v = driven && live !== undefined ? live : committed;
+	if (v !== undefined) (p as { value: unknown }).value = v;
+}
+
+/** Write one node's live source state onto its assembled params, in place: the `param_values`
+ *  event's two whole maps, which is why an absent key reads as withdrawn rather than unchanged. */
+export function applyLiveParams(
+	node: NodeInstanceInfo,
+	committed: DocParamLeaves,
+	values: Record<string, Record<string, unknown>>,
+	errors: Record<string, Record<string, string>>
+): void {
+	for (const [group, names] of Object.entries(node.params)) {
+		for (const [name, p] of Object.entries(names)) {
+			p.error = errors[group]?.[name] ?? null;
+			showValue(p, committed[group]?.[name]?.value, values[group]?.[name]);
+		}
+	}
 }
 
 /** Assemble a full render `NodeInstanceInfo` from the doc view, catalog and runtime overlay. A

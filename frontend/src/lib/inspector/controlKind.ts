@@ -1,21 +1,13 @@
-/** Descriptor → the inspector control that renders it. First match wins. */
+/** Descriptor → the inspector control that renders it. The param's TYPE alone decides: the row
+ *  wears the same control in every mode, disabled where a source drives it. */
 import type { ParamDescriptor } from '$lib/api/types';
 
-export type ControlKind =
-	| 'pulse'
-	| 'expression'
-	| 'reference'
-	| 'numeric'
-	| 'toggle'
-	| 'select'
-	| 'text'
-	| 'unknown';
+export type ControlKind = 'pulse' | 'numeric' | 'toggle' | 'select' | 'text' | 'unknown';
 
 export function controlKind(descriptor: ParamDescriptor): ControlKind {
-	if (descriptor.type === 'pulse') return 'pulse';
-	if (descriptor.mode === 'expression') return 'expression';
-	if (descriptor.mode === 'reference') return 'reference';
 	switch (descriptor.type) {
+		case 'pulse':
+			return 'pulse';
 		case 'float':
 		case 'int':
 			return 'numeric';

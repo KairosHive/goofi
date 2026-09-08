@@ -146,7 +146,7 @@ correction, with `tanh` on the tails, is what gives the table above.
 - **`ridged` and `billow` cannot combine with `multifractal`.** They are all one param, so the fold
   and the cascade are exclusive. Splitting them into two params would fix it and cost a third knob.
 - **The signal half.** `multifractal_cloud` at 256 square is 53 fps in numpy, so the EXACT
-  generators are viable as a Python node emitting `[H, W]` into `ArrayIn` — approximate in the
+  generators are viable as a Python node emitting `[H, W]` into `graphics:SignalIn` — approximate in the
   shader for motion, exact on the signal side for stimuli. Which one a patch wants is the user's
   call, and both should exist. `graphics:Noise` and `signal:Noise` already share a name.
 - **c1/c2 as an analysis node.** `wavelet_leaders_2d` measures any field, not only these. It

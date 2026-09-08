@@ -11,6 +11,15 @@ export type SlotClickSeed = {
 	clientY: number;
 };
 
+/** Where a node was let go, in client coordinates: what a menu the drop opens hangs at. */
+export interface DropPoint {
+	x: number;
+	y: number;
+}
+
+/** What a dropped node does to the zone it landed on: the zone's own tail, and the drop point. */
+export type NodeDrop = (uid: string, zone: string, at: DropPoint) => void;
+
 /** Compose the key that names a single (node, slot) pair. */
 export function slotKey(node: string, slot: string): string {
 	return `${node}|${slot}`;
@@ -40,8 +49,8 @@ export class UIStore {
 	/** Id of the linkable panel the dragged node is over, or null. */
 	nodeDragTarget = $state<string | null>(null);
 
-	/** Name of the control widget the dragged node is over, or null. */
-	nodeDragWidget = $state<string | null>(null);
+	/** The `data-node-drop` value of the drop zone the dragged node is over, or null. */
+	nodeDragZone = $state<string | null>(null);
 
 	/** Input slots an in-flight cable drag is near ({@link slotKey} keys); replaced, never mutated. */
 	cableNear = $state.raw<ReadonlySet<string>>(new Set());
@@ -54,21 +63,28 @@ export class UIStore {
 		return this.cableNear.has(slotKey(node, slot));
 	}
 
-	/** What a node dropped on a panel MEANS, by panel id. A panel that wants a drop to do something
-	 * other than bind the node registers here; the editor asks before it links. Not `$state`: it is
-	 * read by an event handler, never rendered. */
-	#nodeDrops = new Map<string, (uid: string) => void>();
+	/** What a node dropped on a panel or a marked drop zone MEANS, by the OWNER of the target — a
+	 * panel id, or whatever a zone's owner minted. The editor knows where a drop landed and never
+	 * what it means. Not `$state`: it is read by an event handler, never rendered. */
+	#nodeDrops = new Map<string, NodeDrop>();
 
-	/** Take a panel's drop meaning, and give back the undo of that registration. */
-	onNodeDrop(panelId: string, drop: (uid: string) => void): () => void {
-		this.#nodeDrops.set(panelId, drop);
+	/** Take an owner's drop meaning, and give back the undo of that registration. */
+	onNodeDrop(owner: string, drop: NodeDrop): () => void {
+		this.#nodeDrops.set(owner, drop);
 		return () => {
-			if (this.#nodeDrops.get(panelId) === drop) this.#nodeDrops.delete(panelId);
+			if (this.#nodeDrops.get(owner) === drop) this.#nodeDrops.delete(owner);
 		};
 	}
 
-	nodeDropFor(panelId: string): ((uid: string) => void) | null {
-		return this.#nodeDrops.get(panelId) ?? null;
+	/** Hand node `uid` to what owns `target`; false when nobody claimed it. A zone names its owner
+	 * before the `#`, and what the owner reads after it. */
+	dropNode(target: string, uid: string, at: DropPoint): boolean {
+		const cut = target.indexOf('#');
+		const owner = cut < 0 ? target : target.slice(0, cut);
+		const drop = this.#nodeDrops.get(owner);
+		if (!drop) return false;
+		drop(uid, cut < 0 ? '' : target.slice(cut + 1), at);
+		return true;
 	}
 
 	/** Register an open in-panel editor by a stable id (idempotent). */

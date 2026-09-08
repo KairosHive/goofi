@@ -65,6 +65,12 @@
 	const named = $derived(group !== '');
 	const groupLock = $derived<LockView>(g.globalGroups[group] ?? { config: false, value: false });
 	const elements = $derived(g.globals.filter((gv) => gv.group === group && gv.control));
+	// What a node dropped on one of this panel's widgets means, said by the panel that draws them.
+	$effect(() =>
+		uiStore.onNodeDrop(props.panelId, (uid, name) => {
+			void g.linkControl(name, uid).catch(() => {});
+		})
+	);
 	// A panel opens ready to USE, whatever its group holds and whatever another panel over the same
 	// group is doing: the mode is this one's own view.
 	let editing = $state(false);
@@ -486,7 +492,7 @@
 						class="cell"
 						class:picked={edit && picked === gv.name}
 						data-testid={`control-${group}-${gv.element}`}
-						data-node-drop={edit ? gv.name : undefined}
+						data-node-drop={edit ? `${props.panelId}#${gv.name}` : undefined}
 						style={`grid-column: ${at.x + 1} / span ${at.w}; grid-row: ${at.y + 1} / span ${at.h}`}
 						tabindex={edit ? 0 : undefined}
 						use:grab={(e) => down(e, gv, false)}
@@ -558,7 +564,11 @@
 							></span>
 						{/if}
 						{#if edit && uiStore.nodeDrag !== null}
-							<div class="node-drop-hint" class:active={uiStore.nodeDragWidget === gv.name} data-testid="node-drop-hint"></div>
+							<div
+								class="node-drop-hint"
+								class:active={uiStore.nodeDragZone === `${props.panelId}#${gv.name}`}
+								data-testid="node-drop-hint"
+							></div>
 						{/if}
 					</div>
 				{/each}

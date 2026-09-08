@@ -7,11 +7,14 @@
 	let {
 		value,
 		onChange,
+		disabled = false,
 		class: klass = '',
 		...rest
 	}: Omit<HTMLLabelAttributes, 'onchange'> & {
 		value: boolean;
 		onChange: (v: boolean) => void;
+		/** Show the value and take no input — what a driven param's own control wears. */
+		disabled?: boolean;
 	} = $props();
 
 	const ownId = $props.id();
@@ -23,6 +26,7 @@
 		id={fieldId}
 		class="ui-toggle-input"
 		type="checkbox"
+		{disabled}
 		checked={value}
 		onchange={(e) => onChange((e.currentTarget as HTMLInputElement).checked)}
 	/>
@@ -46,6 +50,12 @@
 		height: 100%;
 		opacity: 0;
 		cursor: pointer;
+	}
+	.ui-toggle-input:disabled {
+		cursor: not-allowed;
+	}
+	.ui-toggle-input:disabled ~ .ui-toggle-track {
+		opacity: var(--disabled-opacity);
 	}
 	.ui-toggle-track {
 		position: absolute;

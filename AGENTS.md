@@ -283,7 +283,8 @@ anywhere. A node HOLDS state by declaring named buffers: `cells` reads what the 
 `next_cells` writes what this one leaves, and one pass fills the output and every buffer at once —
 so a buffer is the node's own size, and `frame`, the renders since it was made, is what a body
 seeds itself on. An ARRAY input's transfer is the frame's own texels, and a PLOT of one is the
-SHADER's work: `ArrayIn` draws the line and the trajectory a viewer draws, in WGSL, under params of
+SHADER's work: `graphics:SignalIn` draws the line and the trajectory a viewer draws, in WGSL, under
+params of
 its own — a graphics node is a shader, and a CPU rasteriser in the transfer path was built, measured
 and thrown away. What the engine adds is the one thing a body cannot work out for itself: the range
 the frame's values spanned, carried into `p` beside the params, since finding it in the shader is a
@@ -309,18 +310,48 @@ half that would have set it runs on another thread, the tick that took a frame c
 set again — every viewer in the app ran at a third of the engine's rate.
 `roadmap/graphics-engine.md` holds the design.
 
+**A crossing is a node named for where the data comes FROM, and it DECLARES that plane.** Six
+ordered pairs of three engines, six nodes, one rule: `<Source>In`, in the engine that RECEIVES —
+`audio:SignalIn`, `audio:GraphicsIn`, `graphics:SignalIn`, `graphics:AudioIn`, `signal:AudioIn`,
+`signal:GraphicsIn`. The input's kind is the SOURCE's kind, so a wire from the wrong plane is
+refused at `link add` and the palette says what the node takes. `SlotType::feeds` still lets an
+engine-local kind reach a plain ARRAY input — that tap is how a texture or a stream reaches ANY
+node, and it is the crossing when no node is wanted — but a crossing must not be spelled that way:
+an ARRAY input on one advertises a door that accepts anything, which is what `audio:GraphicsIn`
+did, and the wrong wire then landed and did nothing. Nothing in the engines had to be taught this:
+each already routes an input by "my own kind, or not" — a TEXTURE input on an audio node is an
+inbox and a cross-engine subscription exactly as an ARRAY one was, an AUDIO input on a graphics
+node is an upload, and the signal engine reads no slot kind at all. What DID have to move is the
+guard that refused a foreign kind anywhere in a file: a node cannot PRODUCE another engine's kind,
+but an input of one is a crossing, so the rule is about OUTPUTS. Every crossing carries a direct
+mapping and modes beside it, and a mode is keyed on the SHAPE that arrives rather than on a source
+— the declaration is what a wire is checked against, and the node is still handed a plain frame.
+Into the audio plane the modes are ONE vocabulary in the SDK, a named range mapped onto full scale,
+because two crossings that both say `bipolar` must not mean two things by it; out of it they are
+the framings and readings the receiving plane wants, and a mode earns its place by being outside
+what the library already composes. What the shape cost: a texture into the audio plane was silently
+DROPPED, because the one inbox every Array input enters through took `[T]` and `[C, T]` and
+returned nothing for a `[H, W, C]` — the gap was in the crossing every audio node shares rather
+than in a node, so fixing it there gave every audio node the same door.
+
 **A recording is a folder of files their OWN tools open, and the node's own record is what arms
 it.** `goofi-record` owns the folder, the manifest and one writer per stream, and each stream's
 file is the format its SHAPE takes: an array is a `.npy`, a table a `.csv`, text its own lines,
 audio a `.wav` of IEEE float32, a texture a video. Nothing writes the wire format to disk. Every
 one is append-only behind a fixed-size head patched on the sync cadence, so a killed writer costs
-the tail alone — the whole frames follow from the file's size. Beside each is ONE sidecar shape, a
-JSON line per frame carrying the instant, the ROWS that frame added and whatever of the `Meta` the
-file cannot hold has MOVED since the line before — a reader carries the rest forward, and the
-instant is not among them because the line's own `t` owns that. The row count is what makes it an
-index, since a `.wav` holds blocks of no fixed length. A
-frame that no longer fits — a reshaped array, a retitled table, a `.wav` at RIFF's 4 GB ceiling —
-opens the NEXT file, the rule a resized texture already followed. A texture is the one stream that
+the tail alone — the whole frames follow from the file's size. An array's `.npy` is FLAT — one 1-D
+run of every value the stream ever carried — because a node's shape MOVES, a filling `Buffer` on
+every tick, and a stack of frames holds one shape only. Beside each is ONE sidecar shape, a
+JSON line per frame carrying the instant, what the frame takes OF THE FILE, and whatever of the
+`Meta` the file cannot hold has MOVED since the line before — a reader carries the rest forward,
+and the instant is not among them because the line's own `t` owns that. What the frame takes is the
+one thing that splits a file whose frames are not all one size: an array says its SHAPE, and only
+where that moved, so the manifest states the shape a uniform stream folds back by and states none
+at all once one frame differed; every other kind says its ROW COUNT, since a `.wav` holds blocks of
+no fixed length and has no shape to carry. Never both — a count is `prod(shape)`, and a line that
+said each would hold one fact twice. A frame that no longer fits — a retitled table, a `.wav` at
+RIFF's 4 GB ceiling — opens the NEXT file, the rule a resized texture already followed; a RESHAPE
+is not one of them. A texture is the one stream that
 is NOT exact, because it is `Rgba16Float` and no integer format holds one: an ffmpeg child writes
 FFV1 in Matroska, and what it writes is what a viewer WATCHES rather than what an analyst measures
 — ten-bit gbrp, the [0,1] window with the rest clipped, alpha dropped — which the manifest states
@@ -360,6 +391,21 @@ ready; pub/sub has no history, so anything said before that is queued or re-plan
 **One data stream per (node, slot), whatever the viewer count.** Viewers publish a payload-free
 constraint algebra; the bridge folds every viewer's constraints against the real frame and
 reduces ONCE, on its own subscription — so no number of viewers can slow a `process()` down.
+
+**A param's value is a READOUT and its error is HEALTH, and the two ride different planes.** Both
+are owned by the node that evaluates the source and projected into the graph; what differs is how
+each is carried. The error is a transition, so it rides `/control`'s paced sweep, whole-map
+per node and restated rather than diffed, so a client that just connected is current within one
+period — reliable, and never an op's echo, because an echo is taken before the node has
+re-evaluated the source the op just moved and therefore always carries the PREVIOUS source's
+failure. That is what shipped: a corrected expression kept showing the typo's `NameError` for ever,
+because the clear the runtime had already reported reached the graph and stopped there — the
+client's copy was refreshed by op echoes alone. The value is a stream, so it rides `/params/<node>`
+— per connection, opened by whatever is DISPLAYING the node, restating the pair every tick rather
+than diffing it, so a tab that opened late or re-seeded is current within one. Per connection is
+the load-bearing half: a 20 Hz stream on the shared control ring makes a throttled background tab
+lag into a full document re-seed, and a param nobody is looking at must cost nothing. On the health
+pace alone, a slider following an expression moved twice a second.
 
 **An accessory never reaches an engine's scheduling, and never widens what it makes.** A viewer's
 ask — the box it wants a producer's readback fitted into, and the sample width it draws — is a
@@ -500,7 +546,7 @@ makes; the widget paints them through the very function a pointer reaches, so a 
 cannot disagree about what a stroke looks like. The op writes nothing, which is what leaves the
 widget's own commit as the drawing's one undo step; the cost is that a pad nobody has open draws
 nothing, and the reply says how many clients heard it. The picture leaves as a frame: `Drawing`
-reads the widget's global the way a knob reads one and decodes the PNG, `graphics:ArrayIn` puts it
+reads the widget's global the way a knob reads one and decodes the PNG, `graphics:SignalIn` puts it
 on the GPU. `roadmap/control-panels.md` holds the rest.
 
 **The frontend is a replica, and its styling has one source.** Every colour, spacing, type and
@@ -521,8 +567,9 @@ of the package, never a patch in this tree.
 
 ## Hard constraints
 
-- **`main` is the working branch.** Never push or force-push without explicit authorization, and
-  branch before committing on it.
+- **`main` is the working branch, and everyone commits on it.** Several agents work at once and
+  they work TOGETHER on one branch: no branch and no worktree unless the user asks for one. Never
+  force-push.
 - **The version lives in ONE place** — `[workspace.package] version`. Every crate inherits it and
   the Python wheel derives it. Bumping it also re-provisions the venvs.
 - Commit in small, focused, readable steps at green checkpoints — never one mega-commit. Commit
