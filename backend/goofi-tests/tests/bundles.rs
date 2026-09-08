@@ -165,9 +165,11 @@ fn a_complexity_node_reads_a_real_signal_rather_than_answering_a_constant() {
 }
 
 #[test]
-fn every_bundle_names_its_packages_and_both_interpreters_hold_them() {
+fn every_bundle_names_its_packages_and_the_interpreter_asked_of_holds_them() {
     // Provisioning installs each bundle's `requirements.txt` and startup checks the same files, so
     // a Python bundle without one, or an interpreter short of one, is what either would silently pass.
+    // `requirements-gil.txt` is the exception and it is asked only of the subprocess interpreter,
+    // because a package with no free-threaded wheel is exactly what that tier exists for.
     let root = goofi_init::repo_root();
     let bundles = goofi_init::bundle_dirs(&root);
     assert!(!bundles.is_empty(), "the repo ships bundles under node-bundles/");
@@ -177,13 +179,15 @@ fn every_bundle_names_its_packages_and_both_interpreters_hold_them() {
     for b in bundles.iter().filter(|b| pythonic(b)) {
         assert!(b.join("requirements.txt").is_file(), "{} names its packages", b.display());
     }
-    let reqs = goofi_init::requirements_in(&bundles);
+    let shared = goofi_init::requirements_in(&bundles);
+    let gil_only: Vec<PathBuf> =
+        shared.iter().cloned().chain(goofi_init::gil_requirements_in(&bundles)).collect();
     let gap = std::env::temp_dir().join(format!("goofi-gap-{}.txt", std::process::id()));
     std::fs::write(&gap, "cowsay\n").unwrap();
-    for venv in [goofi_init::FT_VENV, goofi_init::GIL_VENV] {
+    for (venv, reqs) in [(goofi_init::FT_VENV, &shared), (goofi_init::GIL_VENV, &gil_only)] {
         let py = goofi_init::venv_python(&root.join(venv))
             .unwrap_or_else(|| panic!("no {venv}: {}", goofi_init::RUN_ME));
-        let missing = goofi_init::missing_packages(&py, &reqs).expect("uv audits the interpreter");
+        let missing = goofi_init::missing_packages(&py, reqs).expect("uv audits the interpreter");
         assert!(missing.is_empty(), "{venv} lacks {missing:?}: {}", goofi_init::RUN_ME);
         // The check can SEE a gap: naming what is absent takes the index, as the install would.
         let missing = goofi_init::missing_packages(&py, std::slice::from_ref(&gap)).expect("uv resolves the gap");
@@ -548,4 +552,185 @@ fn the_ml_agent_acts_before_a_reward_is_wired_and_keeps_its_shape_as_it_is_retun
     g.call("node param pulse", j!({ "node": hex(agent), "param": "agent/reset" }));
     g.until("frames after the reset", |_| actions.latest().filter(|d| shape(d) == vec![5]));
     assert!(g.error(agent).is_none(), "no standing error: {:?}", g.error(agent));
+}
+
+/// A `.npy` of one f32 array, so a test hands `Weights` a real file rather than a stand-in.
+fn npy(shape: &[usize], data: &[f32]) -> Vec<u8> {
+    let dims: String = shape.iter().map(|d| format!("{d},")).collect();
+    let mut head = format!("{{'descr': '<f4', 'fortran_order': False, 'shape': ({dims}), }}");
+    while (10 + head.len() + 1) % 64 != 0 {
+        head.push(' ');
+    }
+    head.push('\n');
+    let mut out = b"\x93NUMPY\x01\x00".to_vec();
+    out.extend_from_slice(&(head.len() as u16).to_le_bytes());
+    out.extend_from_slice(head.as_bytes());
+    data.iter().for_each(|v| out.extend_from_slice(&v.to_le_bytes()));
+    out
+}
+
+#[test]
+fn a_trained_model_reaches_the_patch_as_a_file_and_keeps_saying_so() {
+    // A model is trained outside goofi and arrives as numbers. What the door has to survive is
+    // being wired up LATE: pub/sub has no history, so a source that announces its file once and
+    // falls silent hands the node behind it nothing at all.
+    let _py = require_python();
+    let g = Goofi::new();
+    let ty = install_bundled(&g, "ml", "weights.py");
+    let dir = g.state.mount();
+
+    let rule: Vec<f32> = (0..12).map(|i| i as f32 * 0.5 - 2.0).collect();
+    std::fs::write(dir.join("rule.npy"), npy(&[1, 3, 4], &rule)).unwrap();
+    std::fs::write(dir.join("other.npy"), npy(&[2, 2], &[9.0, 8.0, 7.0, 6.0])).unwrap();
+    let named = |file: &str| dir.join(file).to_string_lossy().to_string();
+
+    let node = g.add(&ty);
+    g.set_param(node, "weights", "file", named("rule.npy"));
+    let probe = g.probe(node, "out");
+    let d = first_frame(&g, &ty, node, &probe, |d| shape(d) == vec![1, 3, 4]);
+    assert_eq!(f32s(&d), rule, "the file's own numbers, in the shape it was saved with");
+
+    // A reader that opened after the file was read hears it too.
+    let late = g.probe(node, "out");
+    let d = g.until("a later reader to hear the same file", |_| late.latest());
+    assert_eq!(f32s(&d), rule, "a weight file is repeated, never announced once");
+
+    // A new path is a new model, and it needs no restart.
+    g.set_param(node, "weights", "file", named("other.npy"));
+    let d = g.until("the second file", |_| late.latest().filter(|d| shape(d) == vec![2, 2]));
+    assert_eq!(f32s(&d), vec![9.0, 8.0, 7.0, 6.0], "the path is what says which model is loaded");
+    assert!(g.error(node).is_none(), "Weights stands with no error: {:?}", g.error(node));
+
+    // A path that names nothing says so, rather than repeating the model it used to hold.
+    g.set_param(node, "weights", "file", named("absent.npy"));
+    let why = g.until("the missing file to be reported", |g| g.error(node));
+    assert!(why.contains("absent.npy"), "the error names the path: {why}");
+
+    // Step: and a REAL model draws what it was trained to draw. `stripes_nca.npy` is a texture
+    // automaton `training/style_ca.py` trained to a style loss of 0.0013; the numbers below are
+    // what that trainer's own torch model settles at over 200 ticks, stable to 0.005 across seeds.
+    // The shader is a second implementation of that same rule, and this is the one place the two
+    // are held against each other — the failure it exists for is a texture that trains well and
+    // runs wrong.
+    std::fs::write(dir.join("stripes.npy"), include_bytes!("fixtures/stripes_nca.npy")).unwrap();
+    g.set_param(node, "weights", "file", named("stripes.npy"));
+    // The engine's clock is the test's own, so hundreds of ticks pass inside one beat of a source
+    // paced for a static file. The rule has to be on the wire before those ticks mean anything.
+    g.set_param(node, "common", "max_frequency", 60.0);
+    g.until("the rule to be on the wire", |_| late.latest().filter(|d| shape(d) == vec![1, 1539, 4]));
+
+    let ca = g.add("graphics:NeuralCA");
+    g.set_param(ca, "common", "width", 128);
+    g.set_param(ca, "common", "height", 128);
+    g.set_param(ca, "neuralca", "start", "zero");
+    g.ready(ca);
+    g.link(node, "out", ca, "weights");
+
+    // The probe FIRST: a stage nobody reads does not render, so ticks before it opens are no ticks.
+    let drawn = g.probe(ca, "out");
+    let stats = |d: &goofi_core::Data, c: usize| {
+        let ch: Vec<f32> = f32s(d).into_iter().skip(c).step_by(4).collect();
+        let mean = ch.iter().sum::<f32>() / ch.len() as f32;
+        (mean, (ch.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / ch.len() as f32).sqrt())
+    };
+    let want = [(0.485, 0.205), (0.505, 0.289), (0.478, 0.090)];
+    let settled = |d: &goofi_core::Data| {
+        shape(d) == vec![128, 128, 4]
+            && want.iter().enumerate().all(|(c, (m, s))| {
+                let (mean, std) = stats(d, c);
+                (mean - m).abs() < 0.05 && (std - s).abs() < 0.05
+            })
+    };
+    let texture = g.until("the trained texture to settle", |g| {
+        goofi_tests::render(g, 4);
+        drawn.latest().filter(settled)
+    });
+    for (c, (m, s)) in want.iter().enumerate() {
+        let (mean, std) = stats(&texture, c);
+        assert!((mean - m).abs() < 0.05, "channel {c} sits at {mean}, and the trainer's own sits at {m}");
+        assert!((std - s).abs() < 0.05, "channel {c} varies by {std}, and the trainer's own varies by {s}");
+    }
+    assert!(g.error(ca).is_none(), "NeuralCA stands with no error on a trained rule: {:?}", g.error(ca));
+}
+
+#[test]
+fn a_trained_generator_draws_what_the_patch_steers_it_to() {
+    // A generator wants a latent of a few hundred numbers and a patch has a handful of features.
+    // What the node owns is the fit between them, and the frame it hands back: rows down, values a
+    // viewer can draw, and a picture that MOVES when the patch does and holds still when it does not.
+    let _py = require_python();
+    let g = Goofi::new();
+    let ty = install_bundled(&g, "ml", "decoder.py");
+    let model = g.state.mount().join("tiny.onnx");
+    std::fs::write(&model, include_bytes!("fixtures/tiny_generator.onnx")).unwrap();
+
+    let node = g.add(&ty);
+    g.set_param(node, "decoder", "file", model.to_string_lossy().to_string());
+    g.set_param(node, "decoder", "spread", 0.0);
+    g.set_param(node, "decoder", "smooth", 0.0);
+    let probe = g.probe(node, "out");
+
+    // At no spread the latent is the mean itself, so the picture is the model's bias alone — whose
+    // ramp runs DOWN the rows, which a frame passed over upside down would get backwards.
+    let d = first_frame(&g, &ty, node, &probe, |d| shape(d) == vec![4, 4, 3]);
+    let held = f32s(&d);
+    let row = |v: &[f32], r: usize| v[r * 4 * 3];
+    assert!(row(&held, 0) < 0.05, "row 0 is the top: {}", row(&held, 0));
+    assert!(row(&held, 3) > 0.95, "and row 3 the bottom: {}", row(&held, 3));
+    assert!(held.iter().all(|x| (0.0..=1.0).contains(x)), "a `[-1, 1]` model is handed over as a frame a viewer draws");
+
+    // Nothing is wired, so the same latent comes back and the picture holds still.
+    let again = g.until("a second frame", |_| probe.latest().map(|d| f32s(&d)));
+    assert!(again.iter().zip(&held).all(|(a, b)| (a - b).abs() < 1e-5), "an unwired generator is not noise");
+
+    // A wired number takes a direction of its own, and the picture moves along it.
+    g.set_param(node, "decoder", "spread", 1.0);
+    let drive = g.add("signal:Constant");
+    g.set_param(drive, "constant", "value", 2.0);
+    g.set_param(drive, "constant", "shape", "3");
+    g.link(drive, "out", node, "drive");
+    let moved = g.until("the drive to move the picture", |_| {
+        probe.latest().map(|d| f32s(&d)).filter(|v| v.iter().zip(&held).any(|(a, b)| (a - b).abs() > 0.05))
+    });
+    assert!(moved.iter().all(|x| (0.0..=1.0).contains(x)), "and it is still a frame: {moved:?}");
+    assert!(g.error(node).is_none(), "Decoder stands with no error: {:?}", g.error(node));
+
+    // Step: `direct` is the other way to steer, for a model whose own axes already mean something —
+    // the components of a PCA, or a generator exported through them. Wired number i IS axis i, so a
+    // drive of nothing must land on the mean latent EXACTLY, where `drawn` would have pushed it out
+    // to the shell instead. That difference is the whole of the mode.
+    g.set_param(node, "decoder", "axes", "direct");
+    g.set_param(drive, "constant", "value", 0.0);
+    let centred = g.until("the mean latent through the direct axes", |_| {
+        probe.latest().map(|d| f32s(&d)).filter(|v| v.iter().zip(&held).all(|(a, b)| (a - b).abs() < 1e-4))
+    });
+    assert_eq!(centred.len(), held.len(), "and it is the same frame the zero latent drew");
+
+    // …and the latent SCALES with the drive, which is the half of the mode a zero cannot show: a
+    // bigger number lands further from the mean, where `drawn` puts every drive on the one shell and
+    // hands back a picture the same distance out however hard it was pushed.
+    // Smoothing off first, and every reading waits for the frame to CHANGE — a param set here lands
+    // on the node's own thread, so the frame already in hand is one from before it.
+    g.set_param(node, "decoder", "smooth", 0.0);
+    g.set_param(drive, "constant", "value", 0.35);
+    let near = g.until("the picture at a small drive", |_| {
+        probe.latest().map(|d| f32s(&d)).filter(|v| v.iter().zip(&centred).any(|(a, b)| (a - b).abs() > 1e-4))
+    });
+    g.set_param(drive, "constant", "value", 3.0);
+    let away = g.until("the picture at a large drive", |_| {
+        probe.latest().map(|d| f32s(&d)).filter(|v| v.iter().zip(&near).any(|(a, b)| (a - b).abs() > 1e-4))
+    });
+    let reach = |v: &[f32]| v.iter().zip(&centred).map(|(a, b)| (a - b).abs()).sum::<f32>();
+    assert!(
+        reach(&away) > reach(&near) * 1.8,
+        "a drive of 3.0 must land further out than one of 0.35 ({} vs {}); on the shell they would tie",
+        reach(&away),
+        reach(&near)
+    );
+    assert!(away.iter().all(|x| (0.0..=1.0).contains(x)), "direct mode still answers a frame");
+    assert!(g.error(node).is_none(), "Decoder stands with no error in direct mode: {:?}", g.error(node));
+
+    // A file that is no model says so, rather than drawing the one it used to hold.
+    g.set_param(node, "decoder", "file", model.with_extension("absent").to_string_lossy().to_string());
+    g.until("the missing model to be reported", |g| g.error(node));
 }
