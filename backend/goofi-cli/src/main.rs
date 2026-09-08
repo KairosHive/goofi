@@ -21,7 +21,7 @@ struct Cli {
     /// Open `/dev/*`, the development surfaces. Also set by `GOOFI_DEBUG` in the environment.
     debug: bool,
     /// A PUBLIC goofi: no terminal, no agents, no filesystem, no save or load, no audio. Also set
-    /// by `GOOFI_DEMO` in the environment. Not a sandbox — see `roadmap/demo-mode.md`.
+    /// by `GOOFI_DEMO` in the environment. Not a sandbox.
     demo: bool,
     help: bool,
 }
