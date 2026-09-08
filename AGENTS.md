@@ -581,20 +581,27 @@ the frontend's dependencies. It is the same list because a gate with two spellin
 one that drifts is the one nobody runs by hand. The clippy line is spelled `-- -D warnings` there:
 "and this prints nothing" is not enforceable by reading, and clippy carries the rustc lints too, so
 that one command is the build-warning gate as well.
-**That one job runs on Linux, Windows AND macOS**, as a matrix rather than three jobs, so there is
-still one list — minus two steps that provably cannot differ. `svelte-check` type-checks, and a type has
-no platform; Playwright drives a browser, and the half of it that IS platform-specific is the
-binary underneath, which `goofi-tests` already proves on every runner. **vitest is NOT in that
-set** and runs everywhere: its guards WALK THE TREE, and a `rel` built with `\` is how three of
-them failed on Windows while one of those quietly found nothing and passed.
-The matrix costs nothing — standard runners are free on a public repo — and each machine buys
-something different. Windows is a whole separate PAL, and none of it is visible from Linux: a
-ConPTY that answers a cursor query and never reports EOF, a `cmd` launcher, `\` in every path a
-test compares, a `.pdb` two targets can collide on. Every one of those was found by hand, on a
-machine, after it had already shipped. macOS is there for its ARCHITECTURE rather than its unix:
-`macos-latest` is arm64, so it is the only place aarch64 is compiled at all, and the only place
-pyo3's embedded interpreter meets dylib and codesigning rules. Note what the warning gate still cannot hold: `-D warnings` is
-rustc's, and a CARGO warning — the `.pdb` collision was one — passes it silently.
+**That job runs on Linux ALONE as of 2026-09-08**, as a matrix of one — the shape is kept because
+restoring a platform is then one line in `os`. It ran on Windows and macOS too, and they were
+dropped for Actions MINUTES, which is a bill rather than a judgment: the premise that had made the
+matrix free ("standard runners are free on a public repo") stopped being true. The list itself is
+unchanged — a per-platform gate running a subset is the second spelling CI exists to prevent —
+minus two steps that provably cannot differ. `svelte-check` type-checks, and a type has no
+platform; Playwright drives a browser, and the half of it that IS platform-specific is the binary
+underneath, which `goofi-tests` proves on whatever runner there is. **vitest is NOT in that set**
+and runs everywhere: its guards WALK THE TREE, and a `rel` built with `\` is how three of them
+failed on Windows while one of those quietly found nothing and passed.
+
+**What green no longer means.** Windows is a whole separate PAL and none of it is visible from
+Linux: a ConPTY that answers a cursor query and never reports EOF, a `cmd` launcher, `\` in every
+path a test compares, a `.pdb` two targets can collide on. Every one of those was found by hand,
+on a machine, after it had already shipped — which is the argument for the matrix and is exactly
+what is now unfunded rather than disproved. macOS was there for its ARCHITECTURE rather than its
+unix: `macos-latest` is arm64, so with it gone **aarch64 is compiled nowhere**, and pyo3's
+embedded interpreter meets dylib and codesigning rules nowhere. Expect the first run after either
+is restored to be red, and do not read a green Linux job as cross-platform evidence in the
+meantime. Note what the warning gate still cannot hold either: `-D warnings` is rustc's, and a
+CARGO warning — the `.pdb` collision was one — passes it silently.
 **TypeScript stays on 6.x.** 7 installs and `svelte-check` will run against it — with both versions
 side by side and a `--tsgo` flag — and it checks **66 files instead of 754** and reports success.
 A gate that silently covers a tenth of the app is worse than no gate. Re-try when svelte-check's

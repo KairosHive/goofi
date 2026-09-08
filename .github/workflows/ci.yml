@@ -25,22 +25,28 @@ defaults:
 # The steps are also the fresh-clone path, in order — `goofi-init`, then cargo — so a clone that
 # needs a third command fails HERE rather than on a contributor's machine.
 #
-# One job, run on THREE machines. The list is the same list — a per-platform gate running a subset
-# would be the second spelling this file exists to prevent — and it is a matrix rather than three
-# jobs for that reason. The two steps it does drop are dropped because they provably cannot differ,
-# not to save time; see the orientation. `fail-fast` is off so one platform's failure still reports
-# the others'.
+# One job, and the list is the same list — a per-platform gate running a subset would be the
+# second spelling this file exists to prevent. The two steps it drops are dropped because they
+# provably cannot differ, not to save time; see the orientation. `fail-fast` is off so one
+# platform's failure still reports the others'.
 #
-# It costs nothing: standard runners are free on a public repo. What each one buys is different.
-# Windows is a whole separate PAL — ConPTY, a `cmd` launcher, `\` in every path, a `.pdb` two
-# targets collide on. macOS is arm64, so it is the only place aarch64 is compiled at all, and the
-# only place pyo3's embedded interpreter meets dylib and codesigning rules.
+# It is a MATRIX OF ONE, and that is the only reason the shape survives: Windows and macOS were
+# dropped 2026-09-08 because the org ran out of Actions minutes, which is a bill and not a
+# judgment about what they were worth. The premise that retired them was this comment's own —
+# "standard runners are free on a public repo" — and it stopped being true.
+#
+# What is no longer covered, so nobody mistakes green for proof: Windows is a whole separate PAL —
+# ConPTY, a `cmd` launcher, `\` in every path, a `.pdb` two targets collide on — and every one of
+# those defects reached a user's machine before CI ever compiled them. macOS is arm64, so with it
+# gone aarch64 is compiled NOWHERE, and pyo3's embedded interpreter never meets dylib or
+# codesigning rules. Both are one line away: put them back in `os` when there are minutes for it,
+# and expect the first run to be red.
 jobs:
   gates:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     # What the list costs a standard runner, measured 2026-09-05: the workspace tests alone took
     # 47 minutes on macOS and were still running at 55 on Linux and Windows, and the in-process
