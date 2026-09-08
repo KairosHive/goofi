@@ -20,7 +20,7 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { MenuItem } from 'panelty';
 	import { ContextMenu } from 'panelty';
-	import { graph } from '$lib/stores/graph.svelte';
+	import { graph, paramLive } from '$lib/stores/graph.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { isValidName } from '$lib/crdt/graphDoc';
@@ -71,6 +71,11 @@
 
 	const g = graph();
 	const uiStore = ui();
+	const live = paramLive();
+
+	// A driven param's value is a READOUT, and the control plane paces one for health rather than
+	// for reading: the socket is open only while this form is showing the node.
+	$effect(() => (node ? live.watch(node.uid) : undefined));
 
 	// Each RPC is fire-and-forget with a logged failure, so a rejection is never unhandled.
 	function setValue(group: string, name: string, value: unknown): void {

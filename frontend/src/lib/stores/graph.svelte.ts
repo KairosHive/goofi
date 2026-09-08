@@ -58,7 +58,8 @@ export interface ControlPatch extends Partial<Cell> {
 	step?: number;
 	options?: string[];
 }
-import { assembleNode, type RuntimeOverlay } from '$lib/crdt/nodeAssembly';
+import { applyLiveParams, assembleNode, type RuntimeOverlay } from '$lib/crdt/nodeAssembly';
+import { ParamLive, type LiveSource } from '$lib/api/paramLive';
 import type { StringParam, SourcePatch } from '$lib/api/types';
 import type { GraphFragment } from '$lib/editor/clipboard';
 
@@ -317,23 +318,9 @@ export class GraphStore {
 				if (t) t.stats = ev.payload.stats;
 				break;
 			}
-			case 'param_values': {
-				// The node's WHOLE live-value map, never a delta: a driven param it no longer names
-				// has no live value and shows its literal again.
-				const t = this.nodeById(ev.payload.node);
-				if (t) {
-					const runtime = this._extractRuntime(t);
-					for (const [group, names] of Object.entries(runtime.params ?? {})) {
-						for (const [name, pr] of Object.entries(names)) {
-							const live = ev.payload.values[group]?.[name];
-							if (live === undefined) delete pr.liveValue;
-							else pr.liveValue = live;
-						}
-					}
-					this._reassembleNode(t, runtime);
-				}
+			case 'param_values':
+				this.applyLiveSource(ev.payload.node, ev.payload);
 				break;
-			}
 			case 'error': {
 				// A REPORT, so only a node that RUNS raises one — a facade's health rides `node_stage`.
 				const t = this.nodeById(ev.payload.node);
@@ -768,6 +755,15 @@ export class GraphStore {
 		};
 	}
 
+	/** One node's live source state, both maps WHOLE: a driven param neither names has no live value
+	 * and shows its literal again, and no standing error. Written in place — a READOUT must not
+	 * re-assemble a node — and the one door the control plane's own event and the faster `/params`
+	 * socket both come through. */
+	applyLiveSource(node: string, live: LiveSource): void {
+		const t = this.nodeById(node);
+		if (t) applyLiveParams(t, docParams(this._sync.doc, t.uid), live.values, live.errors);
+	}
+
 	/** Pull the RUNTIME (event-sourced, never-in-the-doc) fields off a node so a re-assemble keeps them. */
 	private _extractRuntime(node: NodeInstanceInfo): RuntimeOverlay {
 		const params: NonNullable<RuntimeOverlay['params']> = {};
@@ -791,7 +787,9 @@ export class GraphStore {
 		};
 	}
 
-	/** Merge ONLY the runtime param bits from a state_update's descriptor map onto an existing node. */
+	/** Merge ONLY the runtime param bits from a state_update's descriptor map onto an existing node.
+	 * NOT the error: an echo is taken before the node has re-evaluated the source the op just moved,
+	 * so it would carry the PREVIOUS source's failure. The live plane owns that field. */
 	private _mergeParamRuntime(
 		t: NodeInstanceInfo,
 		params: Record<string, Record<string, unknown>>
@@ -800,27 +798,10 @@ export class GraphStore {
 			for (const [name, desc] of Object.entries(names)) {
 				const p = t.params[group]?.[name];
 				if (!p) continue;
-				const d = desc as { error?: string | null; options?: string[] | null };
-				(p as { error: string | null }).error = d.error ?? null;
+				const d = desc as { options?: string[] | null };
 				if (p.type === 'string') (p as StringParam).options = d.options ?? null;
 			}
 		}
-	}
-
-	/** Re-assemble ONE node from the doc under `runtime`, in place, so a runtime-only change reads
-	 * the doc's literals through the same merge a doc change does. */
-	private _reassembleNode(t: NodeInstanceInfo, runtime: RuntimeOverlay): void {
-		const doc = this._sync.doc;
-		const nv = nodeViews(doc).find((v) => v.uid === t.uid);
-		if (!nv) return;
-		const catalog = this.nodeTypes?.find((c) => c.type === nv.type);
-		const faces = facadeFaces(doc);
-		const viewers = (viewersJson(doc, t.uid) ?? {}) as NodeInstanceInfo['viewers'];
-		const baseline = baselineJson(doc, t.uid) as NodeInstanceInfo['baseline'];
-		Object.assign(
-			t,
-			assembleNode(nv, docParams(doc, t.uid), viewers, baseline, catalog, runtime, faces.get(t.uid))
-		);
 	}
 
 	/** Build `this.nodes` from the doc: each record is the doc's own fields, plus the catalog
@@ -894,6 +875,13 @@ export class GraphStore {
 		});
 	}
 
+}
+
+let _live: ParamLive | null = null;
+/** The live param plane, wired to the one store it writes into. */
+export function paramLive(): ParamLive {
+	if (!_live) _live = new ParamLive((node, live) => graph().applyLiveSource(node, live));
+	return _live;
 }
 
 let _store: GraphStore | null = null;

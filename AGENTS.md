@@ -392,6 +392,21 @@ ready; pub/sub has no history, so anything said before that is queued or re-plan
 constraint algebra; the bridge folds every viewer's constraints against the real frame and
 reduces ONCE, on its own subscription — so no number of viewers can slow a `process()` down.
 
+**A param's value is a READOUT and its error is HEALTH, and the two ride different planes.** Both
+are owned by the node that evaluates the source and projected into the graph; what differs is how
+each is carried. The error is a transition, so it rides `/control`'s paced sweep, whole-map
+per node and restated rather than diffed, so a client that just connected is current within one
+period — reliable, and never an op's echo, because an echo is taken before the node has
+re-evaluated the source the op just moved and therefore always carries the PREVIOUS source's
+failure. That is what shipped: a corrected expression kept showing the typo's `NameError` for ever,
+because the clear the runtime had already reported reached the graph and stopped there — the
+client's copy was refreshed by op echoes alone. The value is a stream, so it rides `/params/<node>`
+— per connection, opened by whatever is DISPLAYING the node, restating the pair every tick rather
+than diffing it, so a tab that opened late or re-seeded is current within one. Per connection is
+the load-bearing half: a 20 Hz stream on the shared control ring makes a throttled background tab
+lag into a full document re-seed, and a param nobody is looking at must cost nothing. On the health
+pace alone, a slider following an expression moved twice a second.
+
 **An accessory never reaches an engine's scheduling, and never widens what it makes.** A viewer's
 ask — the box it wants a producer's readback fitted into, and the sample width it draws — is a
 LIVE CELL the render thread reads, never plan state: a viewer appearing, resizing or leaving must

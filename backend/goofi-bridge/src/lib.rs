@@ -1,7 +1,8 @@
 //! The axum server: `/control` (JSON RPC + broadcast events, doc state and doc deltas among them),
 //! `/data/<node>/<slot>` (ONE reduced GOOF stream per slot, whatever the viewer count — the kind
-//! is not in the path, since viewers publish their ViewSpec inband), `/term`, `/mcp`, and the SPA
-//! compiled into the binary.
+//! is not in the path, since viewers publish their ViewSpec inband), `/params/<node>` (one node's
+//! evaluated params, for whoever is displaying them), `/term`, `/mcp`, and the SPA compiled into
+//! the binary.
 
 mod arms;
 pub mod phrase;
@@ -414,6 +415,15 @@ fn routes(state: AppState) -> Router {
                 ws.on_upgrade(move |socket| handle_control(socket, state))
             }),
         )
+        // One node's evaluated params, at a readout's pace — opened by whatever is DISPLAYING them.
+        .route(
+            "/params/{node}",
+            any(|Path(node): Path<String>,
+                 ws: WebSocketUpgrade,
+                 State(state): State<AppState>| async {
+                ws.on_upgrade(move |socket| handle_params(socket, state, node))
+            }),
+        )
         // One stream per (node, slot): each connection sends its viewers' ViewSpecs inband.
         .route(
             "/data/{node}/{slot}",
@@ -484,6 +494,11 @@ fn error_transitions(
 /// is EVENT-WOKEN: a node's report notifies the waker, so nothing polls to discover one.
 const BROADCAST_PERIOD: Duration = Duration::from_millis(500);
 
+/// …and how often `/params` re-reads one node's evaluated values. A stage is a TRANSITION and a
+/// live value is a READOUT, so they cannot share a clock: on the health period alone, a slider
+/// following an expression moved twice a second.
+const LIVE_PERIOD: Duration = Duration::from_millis(50);
+
 /// The background worker a live server needs — the status drain: take every node's reports, apply
 /// them to the graph, and broadcast the events that carry them.
 ///
@@ -519,17 +534,11 @@ pub fn spawn_workers(state: &AppState) {
                     let mut rates: Vec<(String, f64)> = Vec::new();
                     let mut errs: Vec<(String, u64, Option<String>)> = Vec::new();
                     let mut stages: Vec<(String, NodeState)> = Vec::new();
-                    let mut expr_vals: Vec<(String, Value)> = Vec::new();
                     let leaves = g.node_uids();
                     for u in g.all_uids() {
                         let hex = u.to_hex();
                         if let Some(f) = g.node_ufreq(u) {
                             rates.push((hex.clone(), f));
-                        }
-                        // The WHOLE map, for every node with a driven param — an empty one is how
-                        // a client learns a value was withdrawn.
-                        if g.driven(u) {
-                            expr_vals.push((hex.clone(), schemas::expression_value_map(g, u)));
                         }
                         let generation = g.node_generation(u);
                         let err = g.last_error(u).map(str::to_string);
@@ -549,7 +558,7 @@ pub fn spawn_workers(state: &AppState) {
                             param_state_update(g, uid, &[(&key.group, &key.name)])
                         })
                         .collect();
-                    Some((rates, errs, expr_vals, stages, refreshed))
+                    Some((rates, errs, stages, refreshed, live_pairs(g)))
                 })
             };
             // A knob turned in a plugin's own window is authoring, and enters by the door every
@@ -558,12 +567,18 @@ pub fn spawn_workers(state: &AppState) {
                 let payload = json!({ "node": e.uid.to_hex(), "param": format!("{}/{}", e.key.group, e.key.name), "value": goofi_graph::param_value_json(&e.value) });
                 let _ = state.call("node param edit", payload, "editor");
             }
-            let Some((rates, errs, expr_vals, stages, refreshed)) = collected else { continue };
+            let Some((rates, errs, stages, refreshed, live)) = collected else { continue };
             // From NOW, not the deadline just passed: a worker held off the lock owes no burst of
             // catch-up broadcasts.
             next_broadcast = Instant::now() + period;
             for ev in refreshed {
                 let _ = events.send(ev);
+            }
+            // The values and errors a source is producing, RELIABLY: the whole pair, restated, so a
+            // client that just connected is current within one period and none of this is a delta
+            // anybody has to have heard. `/params` carries the same pairs faster for whoever looks.
+            for (hex, pair) in live {
+                let _ = events.send(event("param_values", pair_payload(&hex, &pair)));
             }
             let changed = error_transitions(&errs, &mut last_errors);
             for (node, ufreq) in rates {
@@ -572,9 +587,6 @@ pub fn spawn_workers(state: &AppState) {
                     "payload": { "node": node, "stats": { "updates_per_second": ufreq } }
                 });
                 let _ = events.send(ev.to_string());
-            }
-            for (node, values) in expr_vals {
-                let _ = events.send(event("param_values", json!({ "node": node, "values": values })));
             }
             for hex in changed {
                 let err = errs.iter().find(|(h, ..)| *h == hex).and_then(|(.., e)| e.clone());
@@ -592,6 +604,34 @@ pub fn spawn_workers(state: &AppState) {
             }
         }
     });
+}
+
+/// One node's live pair as the wire carries it: the node it belongs to, beside the two maps.
+fn pair_payload(hex: &str, pair: &Value) -> Value {
+    let mut payload = pair.clone();
+    payload["node"] = json!(hex);
+    payload
+}
+
+/// What every node with a live source is currently producing and failing with. A node with neither
+/// is left out: a param back on its literal is one the DOCUMENT says is a constant, and that is
+/// what stops a client from reading a live value for it.
+fn live_pairs(g: &Graph) -> Vec<(String, Value)> {
+    g.all_uids()
+        .into_iter()
+        .filter(|u| g.driven(*u) || !g.param_errors(*u).is_empty())
+        .map(|u| (u.to_hex(), live_pair(g, u)))
+        .collect()
+}
+
+/// One node's pair: what its driven params evaluate to and what they fail with, both maps WHOLE —
+/// so a param either of them no longer names is one whose value was withdrawn or whose error
+/// cleared. Two empty maps where nothing drives the node at all.
+fn live_pair(g: &Graph, uid: Uid) -> Value {
+    json!({
+        "values": schemas::expression_value_map(g, uid),
+        "errors": schemas::param_error_map(g, uid),
+    })
 }
 
 /// What the state sweep diffs per node: generation, stage, last error, and the tier it runs on.
@@ -1530,6 +1570,50 @@ impl PeerLiveness {
     fn pong(&mut self) {
         self.awaiting_pong_since = None;
     }
+}
+
+/// `/params/{node}` — one node's evaluated param values and their errors, at [`LIVE_PERIOD`].
+///
+/// PER CONNECTION, and opened only by what is displaying the node: a param nobody is looking at
+/// costs nothing, and a tab the browser has throttled falls behind on its own readout instead of
+/// lagging the shared control ring into a re-seed. The control plane carries the same pairs on the
+/// health period, so this socket is SMOOTHNESS and never the only carrier — which is why a lost
+/// frame here needs no recovery at all.
+///
+/// Like the sweep it hurries, it RESTATES the pair rather than diffing it, which is what a readout
+/// is: 20 frames a second of one node's numbers is nothing per connection, and it leaves nothing to
+/// seed — a tab that opened this socket late is current within a tick.
+async fn handle_params(socket: WebSocket, state: AppState, node: String) {
+    let (mut tx, mut rx) = socket.split();
+    let Some(uid) = Uid::from_hex(&node) else {
+        farewell(tx, rx, 4004, "bad node uid").await;
+        return;
+    };
+    // Not resolved to a live node: a port with nothing behind it and a node still being born are
+    // both real addresses with nothing to say yet, exactly as `/data` treats them.
+    let mut tick = tokio::time::interval(LIVE_PERIOD);
+    // A readout has no catch-up: a peer that took its time is sent the value NOW, never the burst
+    // of ticks it was too slow to receive.
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = tick.tick() => {
+                let pair = {
+                    let g = state.graph.lock().unwrap();
+                    live_pair(&g, uid)
+                };
+                let text = pair_payload(&uid.to_hex(), &pair).to_string();
+                if tx.send(Message::Text(text.into())).await.is_err() {
+                    return;
+                }
+            }
+            incoming = rx.next() => match incoming {
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                _ => {}
+            },
+        }
+    }
+    farewell(tx, rx, 1000, "").await;
 }
 
 async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: String) {
