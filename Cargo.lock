@@ -1210,6 +1210,7 @@ dependencies = [
  "goofi-node",
  "iceoryx2",
  "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
