@@ -1,16 +1,21 @@
 <!-- Field — the labelled-control frame: a real `<label>` for=-linked to the first live control
      (see field.ts), plus an `adornment` that is a SIBLING of the label, never inside it. The row
      wraps on its OWN width rather than on a breakpoint, so one field per line is the resting
-     shape and the label steps above the value only where the two cannot share a line. -->
+     shape and the label steps above the value only where the two cannot share a line.
+     Given `onExpand`, the label is a disclosure summary instead: a caret plus a press target the
+     whole name wide, for a row that reveals more beneath itself. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
+	import { Icon } from 'panelty';
 	import { provideFieldControlId } from './field';
 
 	let {
 		label,
 		doc,
 		adornment,
+		expanded = false,
+		onExpand,
 		class: klass = '',
 		children,
 		...rest
@@ -20,6 +25,10 @@
 		doc?: string;
 		/** Trailing control affordance. */
 		adornment?: Snippet;
+		/** Whether what this row reveals is open; drawn on the caret, and announced. */
+		expanded?: boolean;
+		/** Makes the label a disclosure summary rather than a `<label>`. */
+		onExpand?: () => void;
 		children?: Snippet;
 	} = $props();
 
@@ -28,7 +37,13 @@
 </script>
 
 <div {...rest} class={`ui-field ${klass}`.trim()} title={doc ?? rest.title}>
-	<label class="ui-field-label" for={controlId}>{label}</label>
+	{#if onExpand}
+		<button type="button" class="ui-field-label ui-field-summary" aria-expanded={expanded} onclick={onExpand}>
+			<span class="ui-field-caret" class:open={expanded}><Icon name="chevron-right" /></span>{label}
+		</button>
+	{:else}
+		<label class="ui-field-label" for={controlId}>{label}</label>
+	{/if}
 	<div class="ui-field-value">
 		<div class="ui-field-control">{@render children?.()}</div>
 		{#if adornment}
@@ -57,6 +72,35 @@
 		font-weight: 600;
 		letter-spacing: 0.01em;
 		cursor: pointer;
+	}
+	.ui-field-summary {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: 0;
+		border: none;
+		background: none;
+		font: inherit;
+		text-align: left;
+	}
+	.ui-field-summary:hover {
+		color: var(--accent);
+	}
+	.ui-field-summary:focus-visible {
+		outline: var(--focus-width) solid var(--focus-ink);
+		outline-offset: 2px;
+		border-radius: var(--radius-sm);
+	}
+	.ui-field-caret {
+		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+		font-size: var(--fs-micro);
+		color: var(--text-muted);
+		transition: transform var(--dur-slow) var(--ease);
+	}
+	.ui-field-caret.open {
+		transform: rotate(90deg);
 	}
 	/* ONE flex item, so a field too narrow for a single line drops the whole value under the label
 	   instead of orphaning the adornment on a line of its own. Its basis IS the wrap threshold, and
