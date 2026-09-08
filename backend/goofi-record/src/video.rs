@@ -1,12 +1,11 @@
 //! A video stream: the frames one armed graphics slot renders, encoded, and the sidecar of
 //! instants that makes the video alignable frame by frame with every other stream.
 //!
-//! [`Video`] is the stream and knows no codec: a queue the engine hands frames to, the `.times`
-//! file, and the counters. Everything a codec needs is behind [`Encoder`], and `Ffmpeg` is the
+//! [`Video`] is the stream and knows no codec: a queue the engine hands frames to, the sidecar
+//! every stream has, and the counters. Everything a codec needs is behind [`Encoder`], and `Ffmpeg` is the
 //! one implementation of it.
 
-use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -137,8 +136,8 @@ pub struct Video {
 }
 
 impl Video {
-    /// Open the encoder onto `file`, and the `.times` sidecar beside it. The encoder FIRST, so a
-    /// machine that cannot encode leaves no half a stream behind.
+    /// Open the encoder onto `file`, and the sidecar beside it. The encoder FIRST, so a machine
+    /// that cannot encode leaves no half a stream behind.
     pub fn spawn(
         encoders: &dyn Encoders,
         folder: &Path,
@@ -148,7 +147,7 @@ impl Video {
     ) -> Result<Video, String> {
         let out = folder.join(file);
         let encoder = encoders.open(&out, size, fps)?;
-        let times = File::create(out.with_extension("times")).map_err(|e| e.to_string())?;
+        let beside = crate::beside::Beside::create(&out)?;
         let (tx, rx) = sync_channel(QUEUE);
         let counts = Counts::default();
         let free = Free::default();
@@ -156,7 +155,7 @@ impl Video {
             let (counts, free) = (counts.clone(), free.clone());
             std::thread::Builder::new()
                 .name("goofi-record-video".into())
-                .spawn(move || encode(rx, encoder, BufWriter::new(times), &counts, &free))
+                .spawn(move || encode(rx, encoder, beside, &counts, &free))
                 .map_err(|e| e.to_string())?
         };
         Ok(Video { frames: Some(tx), writer: Some(writer), counts, free })
@@ -243,7 +242,7 @@ fn give_back(free: &Free, buffer: Vec<u8>) {
 fn encode(
     rx: Receiver<Job>,
     mut encoder: Box<dyn Encoder>,
-    mut times: BufWriter<File>,
+    mut beside: crate::beside::Beside,
     counts: &Counts,
     free: &Free,
 ) {
@@ -262,15 +261,15 @@ fn encode(
         }
         // A frame the sidecar could not account for is a frame nothing can align, so it is LOST
         // rather than counted — the container holds it and the manifest says it was not kept.
-        if let Err(e) = times.write_all(&at.to_le_bytes()) {
+        if let Err(e) = beside.line(at, 1, None) {
             counts.lost.fetch_add(1, Ordering::Relaxed);
-            died(counts, e.to_string());
+            died(counts, e);
             break;
         }
         counts.encoded.fetch_add(1, Ordering::Relaxed);
         give_back(free, buffer);
         if flushed.elapsed() >= FLUSH_EVERY {
-            let _ = times.flush();
+            let _ = beside.sync();
             flushed = Instant::now();
         }
     }
@@ -281,8 +280,7 @@ fn encode(
         counts.lost.fetch_add(1, Ordering::Relaxed);
         give_back(free, buffer);
     }
-    let _ = times.flush();
-    let _ = times.get_ref().sync_data();
+    let _ = beside.sync();
     if let Err(why) = encoder.finish() {
         died(counts, why);
     }

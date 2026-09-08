@@ -299,22 +299,27 @@ The control half is `goofi-control`, shared with audio rather than copied. A tex
 the wire: the tap reads back an f32 frame like any other, and `roadmap/graphics-engine.md` holds
 the design.
 
-**A recording is LOSSLESS RAW, and the node's own record is what arms it.** `goofi-record` owns the
-folder, the manifest and one writer per stream; a signal or audio stream is CONCATENATED GOOF
-FRAMES — the wire format itself — so nothing is re-encoded, the metadata rides beside every sample
-in the frame's own `Meta`, and a truncated file decodes to its last whole frame. WAV, CSV and MP4
-are each lossy against a `Data` frame, so they are a LATER tool over a finished recording and never
-a format the recorder writes. Graphics is the one exception, because a texture is `Rgba16Float` and
-no integer format holds one: an ffmpeg child writes FFV1 in Matroska, and what it writes is what a
-viewer WATCHES rather than what an analyst measures — ten-bit gbrp, the [0,1] window with the rest
-clipped, alpha dropped — which the manifest states in those words, and a video never claims
-"lossless" at all. The channel count is not taste: a 16-bit alpha plane is one a common player
-cannot allocate, and VLC kills the decoder and plays the file as nothing. The encoder must also
-hold the render clock, because a rawvideo pipe carries no timestamps, so the container is
-constant-rate and every dropped frame SHORTENS the recording instead of gapping it. The in-process
-pure-Rust alternatives were offered with measurements — `lz4_flex` 735 MB/s at 2.0x, `zstd -1` 451
-MB/s at 7.9x, single-core on a gradient frame, both beating FFV1 — and ffmpeg was kept; the
-dependency is bounded, so a missing ffmpeg costs THAT STREAM alone. Arming is
+**A recording is a folder of files their OWN tools open, and the node's own record is what arms
+it.** `goofi-record` owns the folder, the manifest and one writer per stream, and each stream's
+file is the format its SHAPE takes: an array is a `.npy`, a table a `.csv`, text its own lines,
+audio a `.wav` of IEEE float32, a texture a video. Nothing writes the wire format to disk. Every
+one is append-only behind a fixed-size head patched on the sync cadence, so a killed writer costs
+the tail alone — the whole frames follow from the file's size. Beside each is ONE sidecar shape, a
+JSON line per frame carrying the instant, the ROWS that frame added and the `Meta` the file cannot
+hold; the row count is what makes it an index, since a `.wav` holds blocks of no fixed length. A
+frame that no longer fits — a reshaped array, a retitled table, a `.wav` at RIFF's 4 GB ceiling —
+opens the NEXT file, the rule a resized texture already followed. A texture is the one stream that
+is NOT exact, because it is `Rgba16Float` and no integer format holds one: an ffmpeg child writes
+FFV1 in Matroska, and what it writes is what a viewer WATCHES rather than what an analyst measures
+— ten-bit gbrp, the [0,1] window with the rest clipped, alpha dropped — which the manifest states
+in those words, and a video never claims "lossless" at all. The channel count is not taste: a
+16-bit alpha plane is one a common player cannot allocate, and VLC kills the decoder and plays the
+file as nothing. The encoder must also hold the render clock, because a rawvideo pipe carries no
+timestamps, so the container is constant-rate and every dropped frame SHORTENS the recording
+instead of gapping it. The in-process pure-Rust alternatives were offered with measurements —
+`lz4_flex` 735 MB/s at 2.0x, `zstd -1` 451 MB/s at 7.9x, single-core on a gradient frame, both
+beating FFV1 — and ffmpeg was kept; the dependency is bounded, so a missing ffmpeg costs THAT
+STREAM alone. Arming is
 `doc.nodes[<uid>].record`, so it is undoable, saved, copied with the node and delivered by `settle`
 alone — never a set kept beside the recorder, which claimed an arming that had in fact failed. The
 clock is the one timing authority and its UTC is anchored ONCE at the patch origin, so a frame

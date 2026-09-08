@@ -1,9 +1,14 @@
 //! The recorder: a folder, one manifest, and one writer per stream. It owns no engine and no
 //! engine owns it.
 
+pub mod beside;
+pub mod csv;
+pub mod frame;
 pub mod manifest;
+pub mod npy;
 pub mod stream;
 pub mod video;
+pub mod wav;
 
 use goofi_core::time::{stamp, stamp_nanos, Time};
 use goofi_node::Uid;
@@ -14,7 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 pub use manifest::Manifest;
-pub use stream::{Kind, Stream, StreamMeta, Timeline};
+pub use stream::{Kind, Stream, StreamMeta, Timeline, Written};
 
 /// A poisoned lock is a panicked writer, and a recording that keeps writing beats a panic in
 /// every other drain.
@@ -57,12 +62,27 @@ fn finished(id: &StreamId, stream: &Arc<Mutex<Stream>>, why: &str) -> manifest::
     Session::entry(id, &s, Some(why.to_string()), error)
 }
 
-/// What a stream's kind puts in its manifest entry — and, for a video, what its encoding costs.
-fn shape_of(kind: Kind) -> (Option<(u32, u32)>, Option<f64>, Option<&'static str>) {
+/// What a stream's kind puts in its manifest entry: the shape a reader needs to fold the file
+/// back, and — for a video alone — what its encoding costs.
+fn shape_of(kind: &Kind) -> Shape {
     match kind {
-        Kind::Frames => (None, None, None),
-        Kind::Video { size, fps } => (Some(size), Some(fps), Some(video::CLIP)),
+        Kind::Array { frame } => Shape { frame: Some(frame.clone()), ..Shape::default() },
+        Kind::Table { columns } => Shape { columns: Some(columns.clone()), ..Shape::default() },
+        Kind::Text => Shape::default(),
+        Kind::Audio { .. } => Shape::default(),
+        Kind::Video { size, fps } => {
+            Shape { size: Some(*size), fps: Some(*fps), encoding: Some(video::CLIP), ..Shape::default() }
+        }
     }
+}
+
+#[derive(Default)]
+struct Shape {
+    frame: Option<Vec<usize>>,
+    columns: Option<Vec<String>>,
+    size: Option<(u32, u32)>,
+    fps: Option<f64>,
+    encoding: Option<&'static str>,
 }
 
 struct Session {
@@ -82,7 +102,7 @@ impl Session {
         because: Option<String>,
         error: Option<String>,
     ) -> manifest::Entry {
-        let (size, fps, encoding) = shape_of(s.kind);
+        let shape = shape_of(&s.kind);
         manifest::Entry {
             file: s.file.clone(),
             node: id.node.clone(),
@@ -95,9 +115,11 @@ impl Session {
             timeline: s.meta.timeline.name(),
             drift: s.drift,
             channels: s.meta.channels,
-            size,
-            fps,
-            encoding,
+            frame: shape.frame,
+            columns: shape.columns,
+            size: shape.size,
+            fps: shape.fps,
+            encoding: shape.encoding,
             frames: s.frames(),
             dropped: s.lost(),
             dropped_at: s.dropped_at,
@@ -116,7 +138,7 @@ impl Session {
         t0_utc: SystemTime,
         why: &str,
     ) -> manifest::Entry {
-        let (size, fps, encoding) = shape_of(kind);
+        let shape = shape_of(&kind);
         manifest::Entry {
             file: file.to_string(),
             node: id.node.clone(),
@@ -129,9 +151,11 @@ impl Session {
             timeline: meta.timeline.name(),
             drift: None,
             channels: meta.channels,
-            size,
-            fps,
-            encoding,
+            frame: shape.frame,
+            columns: shape.columns,
+            size: shape.size,
+            fps: shape.fps,
+            encoding: shape.encoding,
             frames: 0,
             dropped: 0,
             dropped_at: None,
@@ -333,7 +357,8 @@ impl Recorder {
         let base = format!("{}-{}__{}Z", id.node, id.slot, stamp_nanos(t0_utc));
         let encoders = held(&self.encoders).clone();
         let file = session.free_name(&base, kind.extension(&*encoders));
-        let made = Stream::create(&*encoders, &session.folder, file.clone(), kind, meta.clone(), t0_patch, t0_utc);
+        let made =
+            Stream::create(&*encoders, &session.folder, file.clone(), kind.clone(), meta.clone(), t0_patch, t0_utc);
         // A stream that could not open is an ENTRY, not an absence: a recording says what it was
         // asked for and did not get, or nobody reading it later can tell.
         let opened = match made {
@@ -390,19 +415,35 @@ impl Recorder {
     /// count land under ONE stream lock, so a frame is in the file if and only if its own gap was
     /// counted — a stop cannot take the session between the two and leave a gap nothing accounts
     /// for.
-    pub fn write(&self, id: &StreamId, frame: &[u8], missed: u64, at: f64) -> Result<(), String> {
+    pub fn write(
+        &self,
+        id: &StreamId,
+        read: frame::Incoming<'_>,
+        missed: u64,
+        at: f64,
+    ) -> Result<(), String> {
         let stream = {
             let guard = self.held();
             let session = guard.as_ref().ok_or("no recording is running")?;
             session.open.get(id).ok_or("no such open stream")?.clone()
         };
         let mut stream = held(&stream);
-        let done = stream.write(frame);
+        let done = stream.write(at, read.written, read.meta.as_ref());
         if done.is_ok() && missed > 0 {
             stream.dropped += missed;
             stream.dropped_at = Some(at);
         }
         done
+    }
+
+    /// Whether the stream's open file still takes what a frame brings — a `false` is the caller's
+    /// cue to open the next one, never to drop the frame. An unopened stream takes nothing.
+    pub fn takes(&self, id: &StreamId, kind: &Kind, bytes: usize) -> bool {
+        let guard = self.held();
+        let Some(session) = guard.as_ref() else { return false };
+        let Some(stream) = session.open.get(id) else { return false };
+        let takes = held(stream).takes(kind, bytes);
+        takes
     }
 
     /// Rewrite the manifest for what a sweep changed. Once per sweep: a rewrite per frame would

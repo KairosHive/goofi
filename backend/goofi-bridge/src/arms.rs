@@ -596,11 +596,12 @@ pub(crate) fn node_snapshot(
 /// A frame as the snapshot answers it: an ARRAY as its shape and range unless `raw` asks for the
 /// numbers, STRING as its text, TABLE recursing.
 fn frame_json(d: &goofi_core::Data, raw: bool) -> Value {
-    let meta = meta_json(d.meta());
+    let meta = goofi_core::meta_json(d.meta());
     match d.value() {
         goofi_core::Value::Array(s) if raw => {
             use base64::Engine;
-            let npy = base64::engine::general_purpose::STANDARD.encode(npy_bytes(s));
+            let npy = base64::engine::general_purpose::STANDARD
+                .encode(goofi_record::npy::bytes(s.shape(), s.as_bytes()));
             json!({ "meta": meta, "npy_b64": npy })
         }
         goofi_core::Value::Array(s) => json!({ "meta": meta, "shape": s.shape(), "range": range_json(s) }),
@@ -624,59 +625,7 @@ fn range_json(s: &goofi_core::ArrayStore) -> Value {
     }
 }
 
-/// NPY v1.0: goofi arrays are row-major, little-endian f32 by construction.
-fn npy_bytes(s: &goofi_core::ArrayStore) -> Vec<u8> {
-    let shape: String = s.shape().iter().map(|d| format!("{d},")).collect();
-    let mut h =
-        format!("{{'descr': '<f4', 'fortran_order': False, 'shape': ({shape}), }}").into_bytes();
-    h.resize(h.len() + (64 - (10 + h.len() + 1) % 64) % 64, b' ');
-    h.push(b'\n');
-    let mut out = Vec::with_capacity(10 + h.len() + s.as_bytes().len());
-    out.extend_from_slice(b"\x93NUMPY\x01\x00");
-    out.extend_from_slice(&(h.len() as u16).to_le_bytes());
-    out.extend_from_slice(&h);
-    out.extend_from_slice(s.as_bytes());
-    out
-}
 
-fn meta_json(m: &goofi_core::Meta) -> Value {
-    Value::Object(
-        m.iter().filter_map(|(k, v)| Some((k.clone(), meta_value_json(v)?))).collect(),
-    )
-}
-
-/// `Bytes` carries no JSON form and is dropped; `Axes` becomes the `{dimN: [...]}` channels map.
-fn meta_value_json(v: &goofi_core::MetaValue) -> Option<Value> {
-    use goofi_core::MetaValue as M;
-    Some(match v {
-        M::Null => Value::Null,
-        M::Bool(b) => json!(b),
-        M::Int(i) => json!(i),
-        M::Uint(u) => json!(u),
-        M::Float(f) => json!(f),
-        M::Str(s) => json!(s),
-        M::List(l) => Value::Array(l.iter().filter_map(meta_value_json).collect()),
-        M::Map(m) => {
-            Value::Object(m.iter().filter_map(|(k, v)| Some((k.clone(), meta_value_json(v)?))).collect())
-        }
-        M::Bytes(_) => return None,
-        M::Axes(a) => {
-            let dims: serde_json::Map<String, Value> = a
-                .dims()
-                .map(|(dim, coords)| {
-                    (dim, Value::Array(coords.iter().map(|c| match c {
-                        goofi_core::Coord::Num(n) => json!(n),
-                        goofi_core::Coord::Str(s) => json!(&**s),
-                    }).collect()))
-                })
-                .collect();
-            match dims.is_empty() {
-                true => return None,
-                false => Value::Object(dims),
-            }
-        }
-    })
-}
 
 pub(crate) fn node_param_edit(
     state: &AppState,
