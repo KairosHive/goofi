@@ -15,14 +15,15 @@ fn settle(g: &Goofi, what: &str, node: Uid, slot: &str, mut keep: impl FnMut(&[f
     })
 }
 
-/// The newest frame of `slot`, whatever it holds.
-fn once(g: &Goofi, node: Uid, slot: &str) -> goofi_core::Data {
+/// The newest frame of `slot` that `keep` accepts. A param a step has just set lands on the node's
+/// OWN thread, so a frame from before it landed is one to wait past rather than one to read.
+fn frame(g: &Goofi, what: &str, node: Uid, slot: &str, keep: impl Fn(&goofi_core::Data) -> bool) -> goofi_core::Data {
     let probe = g.probe(node, slot);
-    g.until(&format!("a frame on {slot}"), |g| {
+    g.until(what, |g| {
         if let Some(e) = g.error(node) {
-            panic!("{slot}: the node failed instead — {e}");
+            panic!("{what}: the node failed instead — {e}");
         }
-        probe.latest()
+        probe.latest().filter(&keep)
     })
 }
 
@@ -35,7 +36,7 @@ fn a_network_of_oscillators_synchronises_when_the_coupling_rises() {
     // Sixty-four oscillators two hertz apart: far enough that weak coupling cannot hold them and
     // strong coupling visibly can, which is the whole content of the Kuramoto model.
     let g = Goofi::new();
-    let k = g.add("Kuramoto");
+    let k = g.add("signal:Kuramoto");
     g.set_param(k, "kuramoto", "size", 64);
     g.set_param(k, "kuramoto", "spread", 2.0);
     g.set_param(k, "kuramoto", "coupling", 0.0);
@@ -43,8 +44,7 @@ fn a_network_of_oscillators_synchronises_when_the_coupling_rises() {
     g.set_param(k, "output", "sfreq", 2000.0);
 
     // The phases come out one per oscillator, named, and inside one turn.
-    let phases = once(&g, k, "phases");
-    assert_eq!(shape(&phases), vec![64], "one phase per oscillator");
+    let phases = frame(&g, "one phase per oscillator", k, "phases", |d| shape(d) == vec![64]);
     assert_eq!(labels(&phases, "dim0").first().map(String::as_str), Some("osc0"), "the oscillators are named");
     assert!(f32s(&phases).iter().all(|p| (0.0..std::f64::consts::TAU as f32).contains(p)), "a phase is one turn");
 
@@ -76,6 +76,7 @@ fn a_network_of_oscillators_synchronises_when_the_coupling_rises() {
     let matrix = g.add("signal:Constant");
     g.set_param(matrix, "constant", "value", 1.0);
     g.set_param(matrix, "constant", "shape", "8, 8");
+    settle(&g, "the matrix to take its shape", matrix, "out", |v| v.len() == 64);
     g.link(matrix, "out", k, "coupling");
     let sized = settle(&g, "the network to take the matrix's size", k, "phases", |v| v.len() == 8);
     assert_eq!(sized.len(), 8, "the coupling matrix, not `size`, says how many oscillators there are");
@@ -86,7 +87,7 @@ fn each_model_shows_the_behaviour_it_is_named_for() {
     let g = Goofi::new();
 
     // Lorenz: normalized into a range a param reference can use, and never still.
-    let lorenz = g.add("Attractor");
+    let lorenz = g.add("signal:Attractor");
     g.set_param(lorenz, "output", "sfreq", 5000.0);
     let first = settle(&g, "a point on the attractor", lorenz, "out", |v| v.len() == 3);
     assert!(first.iter().all(|v| v.abs() < 4.0), "normalized, the attractor stays near the unit range: {first:?}");
@@ -104,10 +105,10 @@ fn each_model_shows_the_behaviour_it_is_named_for() {
     g.set_param(hopf, "oscillator", "model", "stuartlandau");
     g.set_param(hopf, "oscillator", "nonlinearity", -1.0);
     g.set_param(hopf, "output", "sfreq", 5000.0);
-    let dead = settle(&g, "the oscillator below the bifurcation to decay", hopf, "out", |v| v[0].hypot(v[1]) < 0.02);
+    let dead = settle(&g, "the oscillator below the bifurcation to decay", hopf, "out", |v| v.len() == 2 && v[0].hypot(v[1]) < 0.02);
     assert!(dead[0].hypot(dead[1]) < 0.02, "below the bifurcation there is only the fixed point: {dead:?}");
     g.set_param(hopf, "oscillator", "nonlinearity", 1.0);
-    let alive = settle(&g, "the oscillator above the bifurcation to grow a cycle", hopf, "out", |v| v[0].hypot(v[1]) > 0.7);
+    let alive = settle(&g, "the oscillator above the bifurcation to grow a cycle", hopf, "out", |v| v.len() == 2 && v[0].hypot(v[1]) > 0.7);
     assert!(alive[0].hypot(alive[1]) > 0.7, "above it the amplitude settles at the square root of lambda: {alive:?}");
 
     // An epidemic: everyone starts susceptible, the infection peaks, and it burns out.
@@ -116,13 +117,13 @@ fn each_model_shows_the_behaviour_it_is_named_for() {
     g.set_param(sir, "population", "predation", 4.0);
     g.set_param(sir, "population", "mortality", 0.5);
     g.set_param(sir, "output", "sfreq", 2000.0);
-    let peak = settle(&g, "the outbreak to take hold", sir, "out", |v| v[1] > 0.2);
+    let peak = settle(&g, "the outbreak to take hold", sir, "out", |v| v.len() == 3 && v[1] > 0.2);
     assert!(peak[0] < 0.8, "the susceptible share falls as the outbreak grows: {peak:?}");
-    let over = settle(&g, "the outbreak to burn out", sir, "out", |v| v[1] < 0.01 && v[2] > 0.5);
+    let over = settle(&g, "the outbreak to burn out", sir, "out", |v| v.len() == 3 && v[1] < 0.01 && v[2] > 0.5);
     assert!(over[2] > 0.5, "most of the population ends up recovered: {over:?}");
 
     // Kauffman's knob: one connection each freezes the network, five leaves it churning.
-    let rbn = g.add("Boolean");
+    let rbn = g.add("signal:Boolean");
     g.set_param(rbn, "boolean", "size", 256);
     g.set_param(rbn, "boolean", "connections", 1);
     g.set_param(rbn, "output", "sfreq", 200.0);
@@ -133,7 +134,7 @@ fn each_model_shows_the_behaviour_it_is_named_for() {
     assert!(churning[0] > 0.1, "at five it never settles: {churning:?}");
 
     // Vicsek's transition: quiet particles align, noisy ones do not.
-    let flock = g.add("Swarm");
+    let flock = g.add("signal:Swarm");
     g.set_param(flock, "swarm", "model", "vicsek");
     g.set_param(flock, "swarm", "count", 200);
     g.set_param(flock, "swarm", "radius", 0.15);
@@ -146,7 +147,7 @@ fn each_model_shows_the_behaviour_it_is_named_for() {
     assert!(disordered[0] < 0.5, "noise breaks the alignment: {disordered:?}");
 
     // Avalanches: below the critical point they die out, above it they take the network.
-    let avalanche = g.add("Branching");
+    let avalanche = g.add("signal:Branching");
     g.set_param(avalanche, "branching", "size", 2000);
     g.set_param(avalanche, "branching", "branching", 0.5);
     g.set_param(avalanche, "branching", "drive", 0.002);
@@ -158,7 +159,7 @@ fn each_model_shows_the_behaviour_it_is_named_for() {
     assert!(storm[0] > 0.1, "above one, it spreads: {storm:?}");
 
     // A spiking network: below threshold it is silent, and one knob turns it on.
-    let net = g.add("Spiking");
+    let net = g.add("signal:Spiking");
     g.set_param(net, "network", "size", 200);
     g.set_param(net, "neuron", "drive", 0.0);
     g.set_param(net, "neuron", "noise", 0.0);
@@ -169,16 +170,14 @@ fn each_model_shows_the_behaviour_it_is_named_for() {
     g.set_param(net, "neuron", "drive", 1.5);
     let firing = settle(&g, "the driven network to fire", net, "rate", |v| v[0] > 0.0);
     assert!(firing[0] > 0.0, "driven past threshold, the network spikes: {firing:?}");
-    let potentials = once(&g, net, "potentials");
-    assert_eq!(shape(&potentials), vec![200], "one potential per neuron");
+    frame(&g, "one potential per neuron", net, "potentials", |d| shape(d) == vec![200]);
 
     // Quantum: a statevector is normalized, and entanglement is what the ring of gates buys.
-    let q = g.add("Quantum");
+    let q = g.add("signal:Quantum");
     g.set_param(q, "quantum", "qubits", 4);
     g.set_param(q, "quantum", "entangle", false);
-    let probabilities = once(&g, q, "probabilities");
-    assert_eq!(shape(&probabilities), vec![16], "sixteen amplitudes for four qubits");
-    let total: f32 = f32s(&probabilities).iter().sum();
+    let probabilities = settle(&g, "sixteen amplitudes for four qubits", q, "probabilities", |v| v.len() == 16);
+    let total: f32 = probabilities.iter().sum();
     assert!((total - 1.0).abs() < 1e-3, "the probabilities sum to one, not {total}");
     let separable = settle(&g, "the unentangled circuit", q, "entropy", |_| true);
     assert!(separable[0] < 1e-3, "with no two-qubit gate every qubit stays its own: {separable:?}");
@@ -187,11 +186,10 @@ fn each_model_shows_the_behaviour_it_is_named_for() {
     assert!(entangled[0] > 0.1, "the ring of controlled-nots entangles them: {entangled:?}");
 
     // Slime mould: the field is an image, and it grows from nothing.
-    let mould = g.add("Physarum");
+    let mould = g.add("signal:Physarum");
     g.set_param(mould, "physarum", "size", 64);
     g.set_param(mould, "physarum", "agents", 2000);
-    let trail = once(&g, mould, "trail");
-    assert_eq!(shape(&trail), vec![64, 64], "the trail is a square field");
+    frame(&g, "the trail is a square field", mould, "trail", |d| shape(d) == vec![64, 64]);
     let grown = settle(&g, "the trail to be laid down", mould, "trail", |v| v.iter().any(|x| *x > 0.5));
     assert!(grown.iter().any(|x| *x > 0.5), "the agents deposit something");
 }
@@ -202,7 +200,7 @@ fn a_memory_completes_a_fragment_and_a_readout_learns_to_predict() {
 
     // A Hopfield network told nothing settles into one of the memories it was given, and says
     // which: exactly one overlap goes high while the rest stay near zero.
-    let memory = g.add("Hopfield");
+    let memory = g.add("signal:Hopfield");
     g.set_param(memory, "hopfield", "size", 128);
     g.set_param(memory, "hopfield", "patterns", 3);
     g.set_param(memory, "hopfield", "beta", 20.0);
@@ -213,14 +211,13 @@ fn a_memory_completes_a_fragment_and_a_readout_learns_to_predict() {
     });
     let strong = overlap.iter().filter(|o| o.abs() > 0.9).count();
     assert_eq!(strong, 1, "it falls into ONE memory, not a blur of them: {overlap:?}");
-    let state = once(&g, memory, "state");
-    assert_eq!(shape(&state), vec![128], "the state is as wide as a memory");
+    frame(&g, "the state is as wide as a memory", memory, "state", |d| shape(d) == vec![128]);
 
     // A reservoir driven by a slow wave, and a readout trained to say what the wave is doing. The
     // claim is not a number: it is that training makes the error smaller than not training does.
     let wave = g.add("LFO");
     g.set_param(wave, "lfo", "frequency", 0.5);
-    let pool = g.add("Reservoir");
+    let pool = g.add("signal:Reservoir");
     g.set_param(pool, "reservoir", "size", 60);
     g.set_param(pool, "reservoir", "spectral_radius", 0.9);
     g.set_param(pool, "output", "sfreq", 100.0);
@@ -231,7 +228,7 @@ fn a_memory_completes_a_fragment_and_a_readout_learns_to_predict() {
     g.link(wave, "out", readout, "target");
 
     let untrained = settle(&g, "the untrained readout to answer", readout, "error", |v| v[0].abs() > 0.0);
-    assert_eq!(shape(&once(&g, readout, "weights")), vec![1, 60], "a weight per unit of the pool");
+    frame(&g, "a weight per unit of the pool", readout, "weights", |d| shape(d) == vec![1, 60]);
 
     g.set_param(readout, "readout", "learning", true);
     let trained = settle(&g, "the readout to learn the wave", readout, "error", |v| v[0].abs() < 0.02);
@@ -382,4 +379,157 @@ fn a_learned_automaton_grows_from_its_seed_instead_of_flooding_the_grid() {
     // …and it is not simply frozen: the seed is still alive after all that.
     assert!(lit(&after, &middle) > 0.05, "the seed itself is still alive after twenty ticks");
     assert!(g.error(node).is_none(), "NeuralCA stands with an error");
+}
+
+/// Every model in this pack that ships a graphics half beside it, and the slots that half draws —
+/// read off the two manifests rather than listed here, so a new pair joins the scenario by
+/// existing and a renamed slot fails it.
+fn pairs(g: &Goofi) -> Vec<(String, Vec<String>)> {
+    let listed = g.call("library list", j!({ "full": true }));
+    let types = listed["types"].as_array().expect("a palette").clone();
+    let outputs = |ty: &str| {
+        types
+            .iter()
+            .find(|r| r["type"] == j!(ty))
+            .and_then(|r| r["output_slots"].as_object().cloned())
+            .map(|o| o.keys().cloned().collect::<Vec<String>>())
+    };
+    let mut found: Vec<(String, Vec<String>)> = types
+        .iter()
+        .filter(|r| r["bundle"] == j!("simulation"))
+        .filter_map(|r| Some(r["type"].as_str()?.strip_prefix("graphics:")?.to_string()))
+        .map(|bare| {
+            let half = format!("graphics:{bare}");
+            let slots: Vec<String> = types
+                .iter()
+                .find(|r| r["type"] == j!(half))
+                .and_then(|r| r["input_slots"].as_object().cloned())
+                .expect("the half's own inputs")
+                .keys()
+                .cloned()
+                .collect();
+            // The whole of what makes it a PAIR: every slot the picture takes is an output of the
+            // model it is named after, so wiring one needs nothing looked up.
+            let model = outputs(&format!("signal:{bare}")).unwrap_or_else(|| panic!("{bare} has no model"));
+            for slot in &slots {
+                assert!(model.contains(slot), "graphics:{bare} draws `{slot}`, which signal:{bare} does not emit");
+            }
+            (bare, slots)
+        })
+        .collect();
+    found.sort();
+    assert!(found.len() >= 10, "the simulation pack ships a graphics half per model: {found:?}");
+    found
+}
+
+/// How much a rendered frame differs from the same node's blank one, as a share of its texels.
+fn moved(frame: &goofi_core::Data, blank: &[f32]) -> f32 {
+    let v = f32s(frame);
+    let apart = v.iter().zip(blank).filter(|(a, b)| (*a - *b).abs() > 0.02).count();
+    apart as f32 / v.len() as f32
+}
+
+#[test]
+fn every_model_draws_its_own_picture_and_the_picture_is_the_model() {
+    let g = Goofi::new();
+
+    for (model, slots) in pairs(&g) {
+        let view = g.add(&format!("graphics:{model}"));
+        g.set_param(view, "common", "width", 64);
+        g.set_param(view, "common", "height", 64);
+        g.ready(view);
+
+        // With nothing behind it a picture is EMPTY rather than decorative — which is what makes
+        // the difference below the model's own doing and not the shader's.
+        let empty = f32s(&drawn(&g, view, &format!("{model} to draw its ground"), |_| true));
+        let flat = empty.chunks_exact(4).all(|px| px.iter().zip(&empty[..4]).all(|(a, b)| (a - b).abs() < 1e-3));
+        assert!(flat, "graphics:{model} draws something of its own with nothing wired");
+
+        let sim = g.add(&format!("signal:{model}"));
+        // Three models draw nothing worth judging at their defaults: the pool is asleep until it
+        // is driven, the network is too far below criticality to cascade, and the mould's field is
+        // a bigger frame than a 64-pixel picture of it has any use for.
+        let mut drive = None;
+        match model.as_str() {
+            "Reservoir" => {
+                let wave = g.add("LFO");
+                g.set_param(wave, "lfo", "frequency", 2.0);
+                g.link(wave, "out", sim, "input");
+                drive = Some(wave);
+            }
+            "Branching" => {
+                g.set_param(sim, "branching", "size", 200);
+                g.set_param(sim, "branching", "branching", 1.0);
+                g.set_param(sim, "branching", "drive", 0.02);
+            }
+            "Physarum" => {
+                g.set_param(sim, "physarum", "size", 64);
+                g.set_param(sim, "physarum", "agents", 2000);
+            }
+            _ => {}
+        }
+        for slot in &slots {
+            g.link(sim, slot, view, slot);
+        }
+
+        let picture = drawn(&g, view, &format!("{model} to reach its picture"), |d| moved(d, &empty) > 0.005);
+        assert!(moved(&picture, &empty) > 0.005, "graphics:{model} drew nothing the model put there");
+        assert_eq!(shape(&picture), vec![64, 64, 4], "graphics:{model} draws the size it was told to");
+        assert!(g.error(view).is_none(), "graphics:{model} stands with an error");
+        assert!(g.error(sim).is_none(), "signal:{model} stands with an error");
+
+        g.call("node remove", j!({ "node": hex(view) }));
+        g.call("node remove", j!({ "node": hex(sim) }));
+        if let Some(wave) = drive {
+            g.call("node remove", j!({ "node": hex(wave) }));
+        }
+    }
+}
+
+/// How far out from the middle anything is drawn, as a share of the half-frame, staying inside the
+/// ring the dots sit on: on a phase circle that leaves the order vector and nothing else.
+fn reach(frame: &goofi_core::Data, side: usize) -> f32 {
+    let v = f32s(frame);
+    let mid = side as f32 * 0.5;
+    let mut far = 0.0f32;
+    for row in 0..side {
+        for col in 0..side {
+            let out = (row as f32 + 0.5 - mid).hypot(col as f32 + 0.5 - mid) / mid;
+            if out < 0.80 && v[(row * side + col) * 4 + 3] > 0.5 {
+                far = far.max(out);
+            }
+        }
+    }
+    far
+}
+
+#[test]
+fn the_phase_circle_lengthens_its_arrow_as_the_oscillators_fall_into_step() {
+    // The claim a picture has to answer for: it is not decoration, it MEASURES. The order vector
+    // is the one thing on a phase circle that moves with the model rather than with the frame, so
+    // the same coupling sweep the model is judged by is run again through the picture alone.
+    let g = Goofi::new();
+    let k = g.add("signal:Kuramoto");
+    g.set_param(k, "kuramoto", "size", 64);
+    g.set_param(k, "kuramoto", "spread", 2.0);
+    g.set_param(k, "kuramoto", "coupling", 0.0);
+    g.set_param(k, "sim", "seed", 7);
+    g.set_param(k, "output", "sfreq", 2000.0);
+
+    let circle = g.add("graphics:Kuramoto");
+    g.set_param(circle, "common", "width", 192);
+    g.set_param(circle, "common", "height", 192);
+    // The guide ring off and the dots thin, so the only thing left inside the ring is the arrow.
+    g.set_param(circle, "circle", "ring", 0.0);
+    g.set_param(circle, "circle", "radius", 0.9);
+    g.set_param(circle, "circle", "dot", 1.5);
+    g.ready(circle);
+    g.link(k, "phases", circle, "phases");
+
+    let scattered = drawn(&g, circle, "the uncoupled circle", |d| reach(d, 192) > 0.0 && reach(d, 192) < 0.45);
+    assert!(reach(&scattered, 192) < 0.45, "uncoupled, the order vector barely leaves the middle");
+
+    g.set_param(k, "kuramoto", "coupling", 80.0);
+    let locked = drawn(&g, circle, "the coupled circle", |d| reach(d, 192) > 0.70);
+    assert!(reach(&locked, 192) > 0.70, "locked, it reaches most of the way out to the ring");
 }
