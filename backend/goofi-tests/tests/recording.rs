@@ -89,7 +89,7 @@ fn utc_is_anchored_once_and_advances_monotonically() {
 fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     let dir = tempfile::tempdir().expect("a temp root");
     let time = std::sync::Arc::new(Time::new());
-    let rec = goofi_record::Recorder::new(time.clone());
+    let rec = std::sync::Arc::new(goofi_record::Recorder::new(time.clone()));
     rec.start(dir.path(), "probe", None).expect("started");
     let id = goofi_record::StreamId {
         uid: goofi_node::Uid(1),
@@ -109,17 +109,19 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         let kind = goofi_record::frame::read(bytes, None).expect("a frame the recorder reads").kind;
         rec.open(&id, kind, 0.0, goofi_record::StreamMeta::measured(Some(256.0))).expect("opened");
     };
+    let hand = |bytes: &[u8]| {
+        assert!(
+            rec.take_frame(&id, bytes, None, goofi_record::Timeline::Measured, 0, 0.0),
+            "the writer took the frame"
+        );
+    };
     open(&array(vec![4], 0.0, 0));
     for i in 0..8u64 {
-        let bytes = array(vec![4], i as f32, i);
-        let read = goofi_record::frame::read(&bytes, None).expect("a frame");
-        rec.write(&id, read, 0, 0.0).expect("written");
+        hand(&array(vec![4], i as f32, i));
     }
     // Step: a re-arm at the very same patch instant is a NEW file, never the last one truncated.
     open(&array(vec![4], 0.0, 0));
-    let bytes = array(vec![4], 99.0, 0);
-    let read = goofi_record::frame::read(&bytes, None).expect("a frame");
-    rec.write(&id, read, 0, 0.0).expect("written to the second file");
+    hand(&array(vec![4], 99.0, 0));
     let folder = rec.stop().expect("the manifest written").expect("a folder");
 
     let manifest: serde_json::Value =
@@ -734,9 +736,11 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         goofi_tests::drive(g, 4_800);
         (frames(g, &osc_name) > 0).then_some(())
     });
-    // Four seconds of audio in ONE call, against a one-second ring and a buffer of 1024 blocks:
-    // the render holds the graph lock throughout, so nothing downstream can keep up with it.
-    goofi_tests::drive(&g, 48_000 * 4);
+    // The ring holds ONE second and the control half empties it every 10 ms, so what decides an
+    // overrun is the ratio of render speed to drain speed — not the length of the burst, which
+    // scales both. Four seconds sat on that boundary and stopped overrunning at all once the
+    // writer moved off the drain; 256 overruns on every run of eight, by a margin of 25% to 98%.
+    goofi_tests::drive(&g, 48_000 * 256);
     g.until("the blocks that survived the overflow to reach the disk", |g| {
         goofi_tests::drive(g, 4_800);
         (dropped(g) > 0).then_some(())

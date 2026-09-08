@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use goofi_core::time::Time;
 use goofi_graph::{Graph, Uid};
-use goofi_record::{Recorder, StreamId, StreamMeta, Timeline};
+use goofi_record::{Recorder, StreamId, Timeline};
 use goofi_transport::{record_shape, Halt};
 
 /// The longest a sweep waits on the door — a CEILING on the park, never a cadence.
@@ -33,9 +33,6 @@ struct Feed {
     service: String,
     subscriber: goofi_transport::ByteSubscriber,
     last: Option<u64>,
-    /// A failed open or write has been said on the stream and the feed is dead. Re-opening a file
-    /// per frame against a full disk is worse than stopping.
-    failed: bool,
     /// How this engine dates a frame, and how deep the recorder's end of its service is.
     timeline: Timeline,
     /// Whether this engine's frames are AUDIO — the one stream kind that is a wav.
@@ -71,64 +68,35 @@ fn armed(g: &Graph) -> HashMap<(Uid, String), (String, StreamId)> {
     out
 }
 
-/// What one frame's meta says the stream it belongs to is. The timeline is the ENGINE's word, not
-/// the frame's: a rate alone says nothing about whether the times were counted or read.
-fn stream_meta(meta: Option<&goofi_core::Meta>, timeline: Timeline) -> StreamMeta {
-    let sfreq = meta.and_then(|m| m.sfreq());
-    let held = match timeline {
-        Timeline::Measured => StreamMeta::measured(sfreq),
-        Timeline::Derived => StreamMeta::derived(sfreq),
-    };
-    match meta.and_then(|m| m.channels().dims().next().map(|(_, c)| c.len())) {
-        Some(n) => held.with_channels(n),
-        None => held,
-    }
-}
 
 /// Take every frame the feed holds, in one pass, and write each straight through. A recorder that
 /// kept only the newest frame is the defect this feature exists to prevent, so nothing stops at one.
 fn drain_feed(recorder: &Recorder, time: &Time, feed: &mut Feed) {
-    if feed.failed {
-        return;
-    }
     let (mut taken, mut missed) = (0usize, 0u64);
     let mut drift: Option<f64> = None;
     while let Ok(Some(sample)) = feed.subscriber.receive() {
         let bytes = sample.payload();
-        // ONE read per frame, and every field below comes off it. Parsing the meta a second time
-        // made the drain slower than a fast producer, and a drain that never exhausts its feed
-        // never returns to the resolve a disarm waits on.
-        let rate = feed.rate.then(|| goofi_codec::frame_meta(bytes).ok().and_then(|m| m.sfreq()).unwrap_or_default());
-        let Ok(read) = goofi_record::frame::read(bytes, rate) else {
-            feed.failed = true;
-            break;
-        };
-        let at = read.meta.as_ref().and_then(|m| m.time()).unwrap_or_else(|| time.now());
-        if !recorder.takes(&feed.id, &read.kind, bytes.len()) {
-            // The meta is cloned HERE and nowhere else: an open is once a file, where a clone per
-            // frame put an IndexMap on the path of every drain.
-            let opened =
-                recorder.open(&feed.id, read.kind.clone(), at, stream_meta(read.meta.as_ref(), feed.timeline));
-            if opened.is_err() {
-                feed.failed = true;
-                break;
-            }
-            feed.last = None;
-        }
-        if let Some(goofi_core::MetaValue::Float(d)) = read.meta.as_ref().and_then(|m| m.get(goofi_core::META_DRIFT)) {
+        // This thread READS the meta and hands the frame on; the file it belongs in, and every
+        // byte of formatting, is the writer's. Formatting here made the drain slower than a fast
+        // producer, and a drain that falls behind its transport loses another stream's frames.
+        let meta = goofi_codec::frame_meta(bytes).ok();
+        let at = meta.as_ref().and_then(|m| m.time()).unwrap_or_else(|| time.now());
+        let rate = feed.rate.then(|| meta.as_ref().and_then(|m| m.sfreq()).unwrap_or_default());
+        if let Some(goofi_core::MetaValue::Float(d)) = meta.as_ref().and_then(|m| m.get(goofi_core::META_DRIFT)) {
             drift = Some(*d);
         }
-        let index = read.meta.as_ref().and_then(|m| m.index());
+        let index = meta.as_ref().and_then(|m| m.index());
         // The subscriber overflows the OLDEST frame and says nothing, so the indices are the only
         // witness. An index that RESETS is a rebirth, never a loss.
         let gap = match (index, feed.last) {
             (Some(i), Some(last)) => i.saturating_sub(last).saturating_sub(1),
             _ => 0,
         };
-        if let Err(e) = recorder.write(&feed.id, read, gap, at) {
-            recorder.close(&feed.id, &format!("the frame could not be written: {e}"));
-            feed.failed = true;
-            break;
+        // A refused frame is a FULL lane. The index it carried is NOT recorded as reached, so the
+        // next frame's own gap counts it: a loss at the lane and a loss at the subscriber are the
+        // same loss, witnessed the same way, and neither is counted twice.
+        if !recorder.take_frame(&feed.id, bytes, rate, feed.timeline, gap, at) {
+            continue;
         }
         feed.last = index;
         missed += gap;
@@ -171,9 +139,8 @@ impl Drain {
             let shape = record_shape(id.engine);
             let timeline = timeline(id.engine).expect("armed filtered the engines above");
             if let Ok(subscriber) = goofi_transport::open_record_subscriber(&self.node, &service, shape) {
-                let feed =
-                    Feed { rate: id.engine == "audio", id, service, subscriber, last: None,
-                           failed: false, timeline, buffer: shape.buffer };
+                let feed = Feed { rate: id.engine == "audio", id, service, subscriber, last: None,
+                                  timeline, buffer: shape.buffer };
                 self.feeds.insert(key, feed);
             }
         }

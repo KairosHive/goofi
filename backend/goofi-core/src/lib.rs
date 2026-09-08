@@ -790,9 +790,57 @@ impl Param {
     }
 }
 
-/// A frame's `Meta` as JSON — what a `/data` reply carries and what a recording's sidecar holds.
-/// ONE projection, two ways out: a `Value` for a reply, and straight to a writer for a sidecar,
-/// which is what keeps a per-frame line off the allocator.
+/// What a sidecar has already said, key by key, so the next line can be a DELTA against it.
+pub type Said = BTreeMap<String, Vec<u8>>;
+
+/// Write the entries of `meta` that MOVED since `said` as a JSON object, and remember them.
+/// Answers whether anything was written.
+///
+/// Two entries never reach a line: a `Null`, which says nothing, and the instant, because a
+/// sidecar's own `t` is the one owner of that. Everything else is written once and carried
+/// forward by the reader — `sfreq` and the channel names are the stream's, not the frame's, and
+/// repeating them per frame cost more than the samples on a narrow fast stream.
+pub fn write_meta_delta(
+    out: &mut impl std::io::Write,
+    meta: &Meta,
+    said: &mut Said,
+    scratch: &mut Vec<u8>,
+) -> std::io::Result<bool> {
+    let mut opened = false;
+    for (key, value) in meta.iter() {
+        if key == META_TIME || matches!(value, MetaValue::Null) || !in_json(value) {
+            continue;
+        }
+        scratch.clear();
+        serde_json::to_writer(&mut *scratch, &MetaValueJson(value))
+            .map_err(std::io::Error::other)?;
+        if said.get(key).is_some_and(|last| last == scratch) {
+            continue;
+        }
+        out.write_all(if opened { b"," } else { b"{" })?;
+        serde_json::to_writer(&mut *out, key).map_err(std::io::Error::other)?;
+        out.write_all(b":")?;
+        out.write_all(scratch)?;
+        opened = true;
+        match said.get_mut(key) {
+            Some(held) => {
+                held.clear();
+                held.extend_from_slice(scratch);
+            }
+            None => {
+                said.insert(key.clone(), scratch.clone());
+            }
+        }
+    }
+    if opened {
+        out.write_all(b"}")?;
+    }
+    Ok(opened)
+}
+
+/// A frame's `Meta` as JSON — what a `/data` reply carries. ONE projection, two ways out: a
+/// `Value` for a reply, and [`write_meta_delta`] straight to a writer for a sidecar, which is what
+/// keeps a per-frame line off the allocator.
 pub struct MetaJson<'a>(pub &'a Meta);
 
 impl serde::Serialize for MetaJson<'_> {

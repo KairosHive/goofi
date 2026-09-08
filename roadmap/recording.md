@@ -190,7 +190,45 @@ for every close the render thread causes. Closing in place held the session mute
 viewer and both other engines' drains until ffmpeg had finished; and a manifest rewrite under that
 same lock parked the render thread — and with it the one process-wide GPU gate — on a disk write.
 
+## What the drain and the sidecar cost, measured 2026-09-08
+
+**Formatting left the drain, one LANE per stream.** Writing was a memcpy of the wire bytes; it
+became a `.npy` append plus a JSON line, and the one drain thread that serves every feed fell
+behind a 100 kHz one. The shape was the answer rather than the constant, and the video path had
+had it all along: a frame is copied into a pooled buffer, queued, and formatted on a thread of the
+stream's OWN — because a shared queue makes one stream's overload another's loss. A full lane is a
+counted drop, never a stall, witnessed by the same index gap a loss at the subscriber is.
+
+**A failed write is the stream's death, said once.** The move to a writer thread had left the
+drain's `failed` flag unwritten, so a full disk retried the open per frame and lost every frame
+after it in silence — `close_now` is the writer's own door, as `open_now` is, and it files the
+reason in the manifest.
+
+**The manifest is a projection, and it lands on the STREAMS' own cadence.** A rewrite is a create,
+an fsync and a rename, and it was one per sweep — up to fifty a second, on the drain thread, which
+is the thread that must not fall behind a transport. Nothing is fresher for it: `record status`
+reads live state, and every count already rides its own write.
+
+**The sidecar said the instant twice and the stream's constants every frame.** A line was
+`{"t",…,"meta":{sfreq,ufreq,time,index,reduced:null}}` — 122 bytes for a four-float frame, where
+`time` duplicated `t`, `sfreq` duplicated the manifest, and `reduced` was always null. A line now
+carries only what MOVED, a reader carries the rest forward, and `t` is the one owner of the
+instant. Measured over 5 s: a 200 Hz `[1, 4]` stream's sidecar went from 740% of its data to 443%,
+a 2 kHz one from 94% to 57%, and the recorder's whole cost at 2 kHz from 18.2% of a core to 11.4%.
+
+**Nothing is lost, and every loss is counted, at every rate measured.** 200 Hz, 250 Hz at 64x256,
+and 2 kHz all recorded with zero unaccounted index gaps. Against a manufactured audio overrun of
+256 seconds in one render call, the manifest's `dropped` equalled the missing block numbers
+exactly on all eight runs, at losses from 25% to 98%.
+
 ## What was decided against
+
+**Compressing a stream file is not worth what it costs.** Measured 2026-09-08 on 26 MB of
+realistic f32 biosignal content — a random walk at microvolt scale, which is what a stream
+actually holds: `zstd -1` 1.19x, `zstd -9` 1.20x, `gzip -1` 1.26x. The property given up is the
+whole point of the format — a `.npy` is what `np.load` opens, and a compressed one is what a tool
+goofi ships opens. A synthetic ramp compresses 7500x, which is why the measurement had to be on
+content and not on a fixture. The disk lever was never the container: it is the sidecar, above.
 
 **A recording is LOSSLESS raw and nothing else.** WAV, MP4 and CSV are each lossy against a `Data`
 frame: WAV loses anything not audio-shaped, CSV loses f32 below nine digits, MP4 by construction.
@@ -225,16 +263,31 @@ recorders cannot own one timeline.
   says; the loader itself is that file's item.
 - **An audio stream has no channel labels**, so the manifest's `channels` is null for one and the
   count is in every frame's shape.
+- **The first frames of a stream are lost UNCOUNTED, and this is the one hole left in "never
+  silently".** The producer opens its record publisher at the arm; the drain opens its subscriber
+  on the first `resolve` after `record start`, and iceoryx2 has no history, so whatever was
+  published in between is gone. The gap cannot be counted either: `feed.last` is `None` on the
+  first frame, so the first index is taken as the beginning whatever it is. It is a handful of
+  frames — the producer's own publish rings the drain's door — but it is the only loss in the
+  system that leaves no trace. The fix that closes it is holding the subscriber for as long as the
+  slot is ARMED rather than only while a recording runs, which costs a drain-and-discard on an
+  armed-but-idle slot; whether that is the right trade at 100 kHz is the owner's call. The
+  cheaper half — the drain filing the first index it saw, so a reader can see where the file
+  begins — closes nothing but makes it visible.
+- **A frame costs three string clones to reach its lane.** `Writer::take` clones the whole
+  `StreamId` — node, slot, engine — to key the lane map and again to ride with the queued frame,
+  which is six allocations a frame at whatever rate the producer runs. A lane INDEX handed back at
+  the first `take` would cost none. Nothing measures it as the dominant term yet; the recorder is
+  11.4% of a core at 2 kHz and the formatting is most of that.
+- **`ufreq` rides every sidecar line and is derived from the column beside it.** It is the node's
+  own EMA of its update rate, seventeen significant digits of it, and the sidecar's `t` column IS
+  the emission times it is measured from. It survived the delta above because it moves every
+  frame, and it is what is left of a line: about a third of one, and the difference between a
+  200 Hz stream's sidecar being 443% of its data and about 300%. Dropping it means a reader
+  recomputes the rate from `t`, which is not the same number as the engine's EMA.
 - **A rate change mid-recording** re-ties the audio anchor, so the frames either side of it derive
   from different ties. That is a real discontinuity and the manifest does not name it as one — only
   the `drift` either side of it moves.
-- **The drain formats on the thread that drains it, and a fast stream now outruns it.** Writing was
-  a memcpy of the wire bytes; it is now a `.npy` append plus a JSON line, and the ONE drain thread
-  that serves every feed falls behind a 100 kHz one — the suite's audio stream then loses blocks a
-  memcpy kept. Three rounds of cutting the per-frame cost did not close it, so the shape is
-  the answer rather than the constant: the video path already puts its slow work on a writer thread
-  behind a bounded queue, and the signal and audio paths should do the same now that writing is no
-  longer a memcpy.
 - **A stage the ENGINE cannot render at 30 fps still plays fast.** The container is constant-rate,
   so a heavy shader or a huge frame that overruns the tick shortens the video the same way a slow
   encoder does — the drop just happens one stage earlier, and nothing in the file says so. The
