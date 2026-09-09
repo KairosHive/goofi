@@ -412,6 +412,161 @@ fn the_biotuner_bundle_reads_a_scale_out_of_a_signal_and_measures_it() {
 }
 
 #[test]
+fn biotuner_timbres_drive_audio_voices_and_export_the_same_selected_spectrum() {
+    let _py = require_python();
+    let g = Goofi::new();
+    let mut sources = bundled("biotuner", &["timbre_controls.py", "vital_preset.py"]);
+    sources.push(("timbre_source.py".into(), include_str!("fixtures/timbre_source.py").into()));
+    let pairs: Vec<_> = sources.iter().map(|(name, source)| (name.as_str(), source.as_str())).collect();
+    let [timbre_ty, preset_ty, source_ty]: [String; 3] = install_all(&g, &pairs).try_into().unwrap();
+    let source = g.add(&source_ty);
+    let timbre = g.add(&timbre_ty);
+    g.set_param(timbre, "timbre", "base_freq", 261.63);
+    g.set_param(timbre, "timbre", "tilt", 1.0);
+    g.link(source, "tuning", timbre, "input");
+    let partials = g.probe(timbre, "partials");
+    let pitch = g.probe(timbre, "pitch");
+    let gain = g.probe(timbre, "gain");
+    let voices = g.probe(timbre, "voices");
+    let brightness = g.probe(timbre, "brightness");
+    let d = first_frame(&g, &timbre_ty, timbre, &partials, |d| shape(d) == vec![2, 3]);
+    assert_eq!(labels(&d, "dim0"), ["Fz", "Cz"]);
+    let hz = f32s(&d);
+    for (a, b) in hz.iter().zip([261.63, 392.445, 523.26, 261.63, 327.0375, 457.8525]) {
+        assert!((a - b).abs() < 0.001, "partials are sorted, positive, and unique: {hz:?}");
+    }
+    let d = first_frame(&g, &timbre_ty, timbre, &pitch, |d| shape(d) == vec![8, 1]);
+    let pitches = f32s(&d);
+    assert!(pitches[0].abs() < 1e-5);
+    assert!((pitches[1] - 1.5f32.log2()).abs() < 1e-5);
+    assert!((pitches[2] - 1.0).abs() < 1e-5);
+    assert!(d.meta().sfreq().is_none());
+    let d = first_frame(&g, &timbre_ty, timbre, &gain, |d| shape(d) == vec![8, 1]);
+    let gains = f32s(&d);
+    assert!((gains.iter().sum::<f32>() - 1.0).abs() < 1e-6);
+    assert!(gains[3..].iter().all(|v| *v == 0.0));
+    let d = first_frame(&g, &timbre_ty, timbre, &voices, |d| shape(d) == vec![16, 1]);
+    let packed = f32s(&d);
+    assert_eq!(&packed[..8], &pitches);
+    for (actual, expected) in packed[8..11].iter().zip([0.7, 0.7 / 1.5, 0.35]) {
+        assert!((actual - expected).abs() < 1e-6, "VST velocities use linear amplitudes");
+    }
+    assert!(packed[11..].iter().all(|v| *v == 0.0));
+    let d = first_frame(&g, &timbre_ty, timbre, &brightness, |d| shape(d) == vec![2]);
+    let bright = f32s(&d);
+    assert!(bright.iter().all(|v| (0.0..=1.0).contains(v)));
+    g.set_param(source, "source", "mode", "reverse");
+    let n = brightness.count();
+    g.until("reordered ratios to be measured", |_| (brightness.count() > n).then_some(()));
+    assert_eq!(f32s(&brightness.latest().unwrap()), bright);
+
+    // Hear the columns through the public audio boundary, without opening a device.
+    let pitch_in = g.add("audio:SignalIn");
+    let gain_in = g.add("audio:SignalIn");
+    g.link(timbre, "pitch", pitch_in, "input");
+    g.link(timbre, "gain", gain_in, "input");
+    let osc = g.add("Osc");
+    let amp = g.add("Gain");
+    let mix = g.add("Mixdown");
+    g.link(osc, "out", amp, "input");
+    g.link(amp, "out", mix, "input");
+    for (node, param, from) in [(osc, "osc/pitch", pitch_in), (amp, "gain/gain", gain_in)] {
+        let name = g.doc()["nodes"][hex(from)]["name"].as_str().unwrap().to_string();
+        g.call("node param edit", j!({"node": hex(node), "param": param,
+            "reference": format!("{name}.out"), "mode": "reference"}));
+    }
+    let heard = g.probe(mix, "out");
+    let audible = |d: &goofi_core::Data| f32s(d).iter().any(|v| v.abs() > 0.01);
+    let d = g.until("the timbre to produce audio", |g| {
+        goofi_tests::drive(g, 4800);
+        heard.latest().filter(audible)
+    });
+    assert!(f32s(&d).iter().all(|v| v.is_finite() && v.abs() <= 1.001));
+    g.link(source, "gates", timbre, "gate");
+    g.until("the second VST voice to release", |_| voices.latest().filter(|d| {
+        let v = f32s(d);
+        v[8] > 0.0 && v[9] == 0.0 && v[10] > 0.0
+    }));
+    g.set_param(source, "source", "gate", 0.0);
+    g.until("all voice gains to close", |_| gain.latest().filter(|d| f32s(d).iter().all(|v| *v == 0.0)));
+    g.until("silence through the audio engine", |g| {
+        goofi_tests::drive(g, 4800);
+        heard.latest().filter(|d| f32s(d).iter().all(|v| *v == 0.0))
+    });
+
+    let preset = g.add(&preset_ty);
+    let path = g.probe(preset, "path");
+    let files = g.probe(preset, "files");
+    let folder = g.state.mount().join("exports");
+    g.set_param(preset, "preset", "folder", folder.to_string_lossy().to_string());
+    g.set_param(preset, "preset", "row", 1);
+    g.link(timbre, "partials", preset, "partials");
+    g.link(timbre, "amplitudes", preset, "amplitudes");
+    first_frame(&g, &preset_ty, preset, &path, |_| true);
+    let n = path.count();
+    g.until("exporter to receive its input frames", |_| (path.count() > n + 2).then_some(()));
+    assert!(!folder.exists(), "exporting requires a pulse");
+    g.call("node param pulse", j!({"node": hex(preset), "param": "preset/write"}));
+    let d = first_frame(&g, &preset_ty, preset, &files, |d| d.as_table().is_ok_and(|t| t.contains_key("companion")));
+    let exports = d.as_table().unwrap();
+    let settings: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(exports["companion"].as_str().unwrap()).unwrap()).unwrap();
+    assert_eq!(settings["timbre"]["matching_method"], "explicit");
+    assert_eq!(settings["base_freq"], 261.63, "the source frame owns the reference frequency");
+    let ratios = settings["timbre"]["matched_tuning"].as_array().unwrap();
+    for (ratio, expected) in ratios.iter().zip([1.0, 1.25, 1.75]) {
+        assert!((ratio.as_f64().unwrap() - expected).abs() < 1e-6);
+    }
+    let exported: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(exports["vital"].as_str().unwrap()).unwrap()).unwrap();
+    assert!(exported["settings"].is_object(), "a real Vital preset was written");
+    let encoded = exported["settings"]["wavetables"][0]["groups"][0]["components"][0]["keyframes"][0]["wave_data"]
+        .as_str().unwrap();
+    let wave = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).unwrap();
+    let wave: Vec<_> = wave.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+    let expected: Vec<f64> = (0..2048).map(|i| [1.0, 1.25, 1.75].iter().map(|r| {
+        (std::f64::consts::TAU * r * i as f64 / 2048.0).sin() / r
+    }).sum()).collect();
+    let peak = expected.iter().fold(0.0f64, |peak, v| peak.max(v.abs()));
+    assert_eq!(wave.len(), expected.len());
+    for (actual, expected) in wave.iter().zip(expected) {
+        assert!((*actual as f64 - 0.99 * expected / peak).abs() < 1e-5, "export preserves the selected amplitudes");
+    }
+
+    // An ensemble must use the current optional signal, including its removal.
+    g.set_param(preset, "preset", "kind", "ensemble");
+    g.link(source, "signal", preset, "signal");
+    for (name, with_signal) in [("with_signal", true), ("without_signal", false)] {
+        if !with_signal {
+            g.call("link remove", j!({"from": goofi_tests::ep(hex(source), "signal"), "to": goofi_tests::ep(hex(preset), "signal")}));
+        }
+        g.set_param(preset, "preset", "name", name);
+        let n = path.count();
+        g.until("the exporter snapshot to settle", |_| (path.count() > n + 2).then_some(()));
+        g.call("node param pulse", j!({"node": hex(preset), "param": "preset/write"}));
+        let d = first_frame(&g, &preset_ty, preset, &files, |d| {
+            d.as_table().is_ok_and(|t| t.get("__manifest__").is_some_and(|d| {
+                d.as_str().is_ok_and(|s| s.ends_with(&format!("{name}.ensemble.manifest.json")))
+            }))
+        });
+        let files = d.as_table().unwrap();
+        assert!(files.contains_key("base_morph/vital"));
+        assert_eq!(files.contains_key("pad/vital"), with_signal, "a disconnected signal cannot be exported again");
+    }
+
+    // Empty tuning rows must mute every audio output instead of leaving a held note.
+    g.call("link remove", j!({"from": goofi_tests::ep(hex(source), "gates"), "to": goofi_tests::ep(hex(timbre), "gate")}));
+    g.set_param(source, "source", "mode", "empty");
+    g.until("empty tunings to release all VST notes", |_| voices.latest().filter(|d| f32s(d).iter().all(|v| *v == 0.0)));
+    g.set_param(source, "source", "mode", "single");
+    g.until("one partial to sound without padding notes", |_| gain.latest().filter(|d| {
+        let v = f32s(d);
+        v[0] == 1.0 && v[1..].iter().all(|v| *v == 0.0)
+    }));
+    assert!(g.error(timbre).is_none());
+}
+
+#[test]
 fn harmonic_spectrum_feeds_the_biotuner_bundle_and_recovers_as_windows_change() {
     let _py = require_python();
     let g = Goofi::new();
