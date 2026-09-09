@@ -57,6 +57,28 @@ test('a patch under construction holds together at every stage', async ({ page }
 			await expectIntact(page, 'the empty app');
 		});
 
+		await test.step('the node menu keeps search focused across categories', async () => {
+			await page.locator('.svelte-flow__pane').first().dblclick();
+			const menu = page.getByRole('dialog', { name: 'Add node', exact: true });
+			const search = page.getByTestId('add-menu-search');
+			await expect(search).toBeFocused();
+			const tabs = page.getByTestId('add-menu-tabs').getByRole('tab');
+			for (const tab of await tabs.all()) {
+				await tab.click();
+				await expect(tab).toHaveAttribute('aria-selected', 'true');
+				await expect(search).toBeFocused();
+			}
+			await page.keyboard.type('LFO');
+			await expect(search).toHaveValue('LFO');
+			await search.press('Tab');
+			await expect(search).toBeFocused();
+			await search.press('Shift+Tab');
+			await expect(search).toBeFocused();
+			await expectIntact(page, 'the node menu');
+			await search.press('Escape');
+			await expect(menu).toHaveCount(0);
+		});
+
 		let osc = '';
 		let buf = '';
 		await test.step('two nodes on the canvas, wired', async () => {
