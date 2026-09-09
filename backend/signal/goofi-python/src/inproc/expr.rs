@@ -40,10 +40,10 @@ def __goofi_noise(src):
 def __goofi_eval(code, locals_, t, lo, hi):
     ns = dict(__goofi_scope)
     ns["t"] = t
-    def lfo(*, src=t, vmin=lo, vmax=hi):
-        return vmin + (vmax - vmin) * (sin(tau * src) + 1) / 2
-    def noi(*, src=t, vmin=lo, vmax=hi):
-        return vmin + (vmax - vmin) * __goofi_noise(src)
+    def lfo(*, freq=1, src=t, vmin=lo, vmax=hi):
+        return vmin + (vmax - vmin) * (sin(tau * freq * src) + 1) / 2
+    def noi(*, freq=1, src=t, vmin=lo, vmax=hi):
+        return vmin + (vmax - vmin) * __goofi_noise(freq * src)
     ns.update(lfo=lfo, noi=noi)
     ns.update(locals_)
     return eval(code, ns)

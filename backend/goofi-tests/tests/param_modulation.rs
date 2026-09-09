@@ -36,6 +36,15 @@ fn modulation_uses_the_current_target_range_and_coordinate() {
     let left = evaluate("noi()", 1.0 - 1e-6, 0.0, 1.0).unwrap();
     let right = evaluate("noi()", 1.0 + 1e-6, 0.0, 1.0).unwrap();
     assert!((left - right).abs() < 1e-9);
+    for kind in ["lfo", "noi"] {
+        for freq in [0.0, 0.05, 0.5, 2.0] {
+            let actual = evaluate(&format!("{kind}(freq={freq})"), 0.37, 2.0, 6.0).unwrap();
+            let expected = evaluate(&format!("{kind}()"), 0.37 * freq, 2.0, 6.0).unwrap();
+            assert!((actual - expected).abs() < 1e-10);
+            let explicit = evaluate(&format!("{kind}(freq={freq}, src=0.37)"), 999.0, 2.0, 6.0).unwrap();
+            assert_eq!(actual, explicit);
+        }
+    }
     let code = evaluator.compile("lfo()").unwrap();
     for (lo, hi) in [(2, 6), (-10, 20)] {
         let target = Param::Int { value: 0, vmin: lo, vmax: hi };
