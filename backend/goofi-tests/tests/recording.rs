@@ -715,7 +715,14 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     let osc = g.add("Osc");
     let osc_hex = goofi_tests::hex(osc);
     g.ready(osc);
+    let gain = g.add("audio:Gain");
+    g.set_param(gain, "gain", "gain", 0.5);
+    g.link(osc, "out", gain, "input");
+    g.ready(gain);
+    let gain_hex = goofi_tests::hex(gain);
+    let gain_name = name_of(&g, &gain_hex);
     g.call("record arm", j!({ "output": goofi_tests::ep(&osc_hex, "out") }));
+    g.call("record arm", j!({ "output": goofi_tests::ep(&gain_hex, "out") }));
     let fifth = g.call("record start", j!({ "root": root.path() }))["folder"]
         .as_str()
         .expect("a folder")
@@ -723,7 +730,7 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     let osc_name = name_of(&g, &osc_hex);
     g.until("the audio engine's blocks to reach the disk", |g| {
         goofi_tests::drive(g, 4_800);
-        (frames(g, &osc_name) >= 64).then_some(())
+        (frames(g, &osc_name) >= 64 && frames(g, &gain_name) >= 64).then_some(())
     });
 
     // A clean drive loses NOTHING, counted against what was DRIVEN rather than the file's own
@@ -801,6 +808,21 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     };
     assert_eq!(line(&held), 0, "an ordinary drive loses no block at all: {entry}");
     assert_eq!(entry["dropped"], j!(0), "…and the manifest says so too: {entry}");
+
+    let gain_entry = mine(&fifth, &gain_name).pop().expect("the second audio stream's entry");
+    let gained = blocks_of(&fifth, &gain_entry);
+    assert_eq!(gain_entry["sfreq"], entry["sfreq"], "both recordings use the same sample rate");
+    assert_eq!(gain_entry["dropped"], j!(0), "the second stream loses no block");
+    assert_eq!(gained.len(), held.len(), "both files contain every simultaneous block");
+    for (source, scaled) in held.iter().zip(&gained) {
+        assert_eq!(scaled.0, source.0, "corresponding blocks have the same number");
+        assert_eq!(scaled.1, source.1, "corresponding blocks have the same timestamp");
+        assert_eq!(scaled.2, source.2, "corresponding blocks have the same sample count");
+        for (i, (x, y)) in source.3.iter().zip(&scaled.3).enumerate() {
+            assert_eq!(*y, *x * 0.5, "sample {i} in block {} stays aligned across both WAV files", source.0);
+        }
+    }
+    g.call("record disarm", j!({ "output": goofi_tests::ep(&gain_hex, "out") }));
 
     // …and with no block missing the wav is ONE run of audio, so the crossings are counted across
     // the whole of it rather than per block, where every boundary would drop one.
