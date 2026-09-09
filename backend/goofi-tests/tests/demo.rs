@@ -35,12 +35,12 @@ async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
     let why = g.refuse("agent list", j!({}));
     assert!(why.contains("unknown op"), "{why}");
     let words = vec!["agent".to_string(), "list".to_string()];
-    let Err(why) = phrase::resolve(g.state.ops(), &words) else { panic!("resolved on a demo") };
+    let Err(why) = phrase::resolve(&g.state.ops().iter().collect::<Vec<_>>(), &words) else { panic!("resolved on a demo") };
     assert!(why.contains("does not serve the `agent` ops"), "{why}");
 
     // Completion follows the served set, so nothing offers a door that is not there.
     let offered = |g: &Goofi, word: &str| {
-        phrase::complete(g.state.ops(), None, "").iter().any(|(w, _)| w == word)
+        phrase::complete(&g.state.ops().iter().collect::<Vec<_>>(), None, "").iter().any(|(w, _)| w == word)
     };
     for word in ["agent", "dir"] {
         assert!(offered(&full, word), "a full server offers `{word}`");
