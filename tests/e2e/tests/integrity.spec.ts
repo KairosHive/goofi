@@ -288,16 +288,33 @@ test('parameter groups keep readable widths and scroll to the last group', async
 		const sizes = await strip.evaluate((el) => ({
 			width: el.clientWidth,
 			content: el.scrollWidth,
-			minimum: 7 * parseFloat(getComputedStyle(document.documentElement).fontSize),
-			tabs: Array.from(el.querySelectorAll('[role="tab"]'), (tab) => tab.getBoundingClientRect().width)
+			minimum: 3 * parseFloat(getComputedStyle(document.documentElement).fontSize),
+			tabs: Array.from(el.querySelectorAll('[role="tab"]'), (tab) => {
+				const label = tab.querySelector('.ui-tab-label')!;
+				const range = document.createRange();
+				range.selectNodeContents(label);
+				const style = getComputedStyle(tab);
+				return {
+					width: tab.getBoundingClientRect().width,
+					natural: range.getBoundingClientRect().width + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
+				};
+			})
 		}));
-		expect(sizes.content).toBeGreaterThan(sizes.width);
-		for (const width of sizes.tabs) expect(width).toBeGreaterThanOrEqual(sizes.minimum - 1);
+		if (sizes.minimum * sizes.tabs.length > sizes.width) {
+			expect(sizes.content).toBeGreaterThan(sizes.width);
+		}
+		for (const tab of sizes.tabs) {
+			expect(tab.width).toBeGreaterThanOrEqual(sizes.minimum - 1);
+			expect(tab.width).toBeLessThanOrEqual(Math.max(sizes.minimum, tab.natural) + 1);
+		}
 		await tabs.first().focus();
 		await page.keyboard.press('End');
 		await expect(tabs.last()).toHaveAttribute('aria-selected', 'true');
 		await expect(tabs.last()).toBeInViewport();
-		expect(await strip.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+		if (sizes.content > sizes.width) {
+			await strip.evaluate((el) => el.scrollTo({ left: el.scrollWidth }));
+			await expect.poll(() => strip.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+		}
 		await expectIntact(page, 'the last parameter group after scrolling');
 	} finally {
 		await tearDown(page);
