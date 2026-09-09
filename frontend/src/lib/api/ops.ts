@@ -34,6 +34,7 @@ export type OpName =
 	| 'global entry source'
 	| 'global entry lock'
 	| 'global entry rename'
+	| 'global group add'
 	| 'global group rename'
 	| 'global group lock'
 	| 'control list'

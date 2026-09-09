@@ -503,11 +503,28 @@ export class GraphStore {
 		this._recordGraphCmd(`Add global ${name}`);
 	}
 
-	/** Edit an existing global's value (system or user); the type is immutable and stays. */
+	/** Edit an existing global's value, keeping its type. */
 	async setGlobalValue(name: string, value: number | string | boolean): Promise<void> {
 		if (!this.globals.some((g) => g.name === name)) throw new Error(`no global ${name}`);
 		await this.ctl.call('global entry edit', { name, value });
 		this._recordGraphCmd(`Set global ${name}`);
+	}
+
+	async setGlobalType(name: string, type: GlobalType): Promise<void> {
+		await this.ctl.call('global entry edit', { name, type });
+		this._recordGraphCmd(`Change global ${name} type`);
+	}
+
+	async addGlobalEntry(group: string): Promise<string> {
+		const result = await this.ctl.call('global entry add', { group }) as { name: string };
+		this._recordGraphCmd(`Add global ${result.name}`);
+		return result.name;
+	}
+
+	async addGlobalGroup(): Promise<string> {
+		const result = await this.ctl.call('global group add', {}) as { group: string };
+		this._recordGraphCmd(`Add global group ${result.group}`);
+		return result.group;
 	}
 
 	/** Remove a user global (a system global is refused by the server). */

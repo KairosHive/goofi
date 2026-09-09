@@ -1,393 +1,246 @@
-<!-- Globals panel — a key/value table over the patch's globals, one collapsed section per group.
-     A lock decides what a row may change: `config` holds the name, the widget and the membership,
-     `value` holds the value, and a group's lock reaches every member. -->
 <script lang="ts">
+	import { tick } from 'svelte';
 	import type { PanelProps } from 'panelty';
 	import { graph } from '$lib/stores/graph.svelte';
-	import {
-		effectiveLock,
-		groupedGlobals,
-		isValidIdentifier,
-		type GlobalType,
-		type GlobalView,
-		type LockView
-	} from '$lib/crdt/graphDoc';
-	import {
-		Button,
-		Disclosure,
-		Icon,
-		IconButton,
-		MODE_ATTRS,
-		NumberInput,
-		ScrollArea,
-		Select,
-		TextInput,
-		Toggle
-	} from '$lib/ui';
+	import { effectiveLock, groupedGlobals, isValidIdentifier, type GlobalType, type GlobalView } from '$lib/crdt/graphDoc';
+	import { Button, Icon, IconButton, MODE_ATTRS, NumberInput, ScrollArea, Select, TextInput, Toggle } from '$lib/ui';
 
-	// Nothing of the panel contract is read, but it must be DECLARED: without it the inferred
-	// props type is `{}` and the registry (`Component<PanelProps>`) won't take this component.
 	let {}: PanelProps = $props();
 	const g = graph();
 	const globals = $derived(g.globals);
 	const groups = $derived(groupedGlobals(globals, g.globalGroups));
-	/** goofi's own group: config-locked for life, and no lock of its is a caller's to set. */
-	const SYSTEM = 'system';
-
-	// The group an add row is open in; `''` is a row for a NEW group, and null is none.
-	let adding = $state<string | null>(null);
-	let newGroup = $state('');
-	let newName = $state('');
-	let newType = $state<GlobalType>('float');
-	const targetGroup = $derived(adding === '' ? newGroup : (adding ?? ''));
-	const fullName = $derived(`${targetGroup}.${newName}`);
-	const nameTaken = $derived(globals.some((gv) => gv.name === fullName));
-	const nameOk = $derived(isValidIdentifier(targetGroup) && isValidIdentifier(newName));
-	const canAdd = $derived(adding !== null && nameOk && !nameTaken);
-
-	// A group starts closed: a patch has many, and the panel is a list of them, not of every value.
+	let panel: HTMLDivElement;
 	let open = $state<Record<string, boolean>>({});
+	let editing = $state<string | null>(null);
+	let groupName = $state('');
+	let focusEntry = $state<string | null>(null);
+	let busy = $state(false);
+	let error = $state('');
 
-	function zeroFor(type: GlobalType): number | string | boolean {
-		return type === 'bool' ? false : type === 'string' ? '' : 0;
+	$effect(() => {
+		const name = focusEntry;
+		if (name && globals.some((entry) => entry.name === name)) {
+			focusEntry = null;
+			void tick().then(() => {
+				const input = panel.querySelector<HTMLInputElement>(`[data-name="${name}"] [data-testid="global-name"]`);
+				input?.focus();
+				input?.select();
+			});
+		}
+	});
+
+	function report(reason: unknown): void {
+		error = String(reason);
 	}
 
-	function openAdd(group: string): void {
-		adding = group;
-		newGroup = '';
-		newName = '';
+	function editGroup(group: string): void {
+		editing = group;
+		groupName = group;
+		error = '';
 	}
 
-	function focusInput(el: HTMLInputElement): void {
-		el.focus();
+	function selectName(input: HTMLInputElement): void {
+		input.focus();
+		input.select();
 	}
 
-	function rowKey(e: KeyboardEvent): void {
-		if (e.key === 'Enter') void add();
-		else if (e.key === 'Escape') adding = null;
-	}
-
-	async function add(): Promise<void> {
-		if (!canAdd) return;
-		const group = targetGroup;
+	async function addGroup(): Promise<void> {
+		busy = true;
+		error = '';
 		try {
-			await g.addGlobal(fullName, zeroFor(newType), newType);
-			open[group] = true;
-			adding = null;
-		} catch {
-			/* server rejected (invalid name / collision) — keep the row for correction */
+			editGroup(await g.addGlobalGroup());
+		} catch (reason) {
+			report(reason);
+		} finally {
+			busy = false;
 		}
 	}
 
-	function commitValue(gv: GlobalView, raw: string | number | boolean): void {
-		let val: number | string | boolean;
-		if (gv.type === 'bool') val = raw === true;
-		else if (gv.type === 'string') val = String(raw);
+	async function renameGroup(from: string): Promise<void> {
+		if (editing !== from) return;
+		const to = groupName.trim();
+		if (to === from) {
+			editing = null;
+			return;
+		}
+		if (!isValidIdentifier(to)) {
+			error = 'Use letters, digits and underscores. Start with a letter or underscore.';
+			return;
+		}
+		try {
+			await g.renameGlobalGroup(from, to);
+			open[to] = open[from] === true;
+			delete open[from];
+			editing = null;
+			error = '';
+		} catch (reason) {
+			report(reason);
+		}
+	}
+
+	async function addEntry(group: string): Promise<void> {
+		busy = true;
+		error = '';
+		try {
+			focusEntry = await g.addGlobalEntry(group);
+		} catch (reason) {
+			report(reason);
+		} finally {
+			busy = false;
+		}
+	}
+
+	function commitValue(entry: GlobalView, raw: string | number | boolean): void {
+		let value: number | string | boolean;
+		if (entry.type === 'bool') value = raw === true;
+		else if (entry.type === 'string') value = String(raw);
 		else {
-			const n = Number(raw);
-			if (!Number.isFinite(n)) return;
-			val = gv.type === 'int' ? Math.round(n) : n;
+			const number = Number(raw);
+			if (!Number.isFinite(number)) return;
+			value = entry.type === 'int' ? Math.round(number) : number;
 		}
-		void g.setGlobalValue(gv.name, val).catch(() => {});
+		void g.setGlobalValue(entry.name, value).catch(report);
 	}
 
-	function commitName(gv: GlobalView, raw: string): void {
-		const next = raw.trim();
-		if (next === gv.element) return;
-		void g.renameGlobal(gv.name, `${gv.group}.${next}`).catch(() => {});
-	}
-
-	function commitGroup(from: string, raw: string): void {
-		const next = raw.trim();
-		if (next === from) return;
-		void g.renameGlobalGroup(from, next).catch(() => {});
-	}
-
-	function numberDisplay(gv: GlobalView): number {
-		return typeof gv.value === 'number' ? gv.value : 0;
-	}
-
-	function lockGroup(group: string, lock: Partial<LockView>): void {
-		void g.lockGlobalGroup(group, lock).catch(() => {});
-	}
-
-	function lockEntry(gv: GlobalView, lock: Partial<LockView>): void {
-		void g.lockGlobal(gv.name, lock).catch(() => {});
-	}
-
-	function axisTitle(axis: 'config' | 'value', on: boolean, heldByGroup: boolean): string {
-		const what = axis === 'config' ? 'name, widget and membership' : 'value';
-		if (heldByGroup) return `The group holds the ${what}`;
-		return on ? `Unlock the ${what}` : `Lock the ${what}`;
+	function commitName(entry: GlobalView, raw: string): void {
+		const name = raw.trim();
+		if (name !== entry.element) void g.renameGlobal(entry.name, `${entry.group}.${name}`).catch(report);
 	}
 </script>
 
-{#snippet lockToggles(
-	lock: LockView,
-	heldBy: LockView | null,
-	set: (patch: Partial<LockView>) => void,
-	own: boolean,
-	testid: string
-)}
-	<IconButton
-		variant="ghost"
-		size="sm"
-		data-testid={`${testid}-config`}
-		title={own ? axisTitle('config', lock.config, heldBy?.config === true) : 'goofi’s own'}
-		label={axisTitle('config', lock.config, heldBy?.config === true)}
-		aria-pressed={lock.config}
-		disabled={!own || heldBy?.config === true}
-		onclick={() => set({ config: !lock.config })}
-		><Icon name={lock.config || heldBy?.config ? 'lock' : 'lock-open'} /></IconButton
-	>
-	<IconButton
-		variant="ghost"
-		size="sm"
-		data-testid={`${testid}-value`}
-		title={own ? axisTitle('value', lock.value, heldBy?.value === true) : 'goofi’s own'}
-		label={axisTitle('value', lock.value, heldBy?.value === true)}
-		aria-pressed={lock.value}
-		disabled={!own || heldBy?.value === true}
-		onclick={() => set({ value: !lock.value })}
-		><Icon name={lock.value || heldBy?.value ? 'lock' : 'lock-open'} /></IconButton
-	>
-{/snippet}
-
-<div class="wrap" data-testid="globals-panel">
+<div class="wrap" data-testid="globals-panel" bind:this={panel}>
 	<ScrollArea>
 		<div class="gp-body">
 			{#each groups as grp (grp.group)}
-				{@const own = grp.group !== SYSTEM}
-				{@const controlled = grp.entries.some((e) => e.control)}
-				<Disclosure
-					class="grp"
-					data-testid="global-group"
-					data-group={grp.group}
-					data-lock-config={grp.lock.config}
-					data-lock-value={grp.lock.value}
-					open={open[grp.group] === true}
-					onToggle={(v) => (open[grp.group] = v)}
-				>
-					{#snippet summary()}
-						<span class="grp-name">{grp.group}</span>
+				{@const controlled = grp.entries.some((entry) => entry.control)}
+				<section class="grp" data-testid="global-group" data-group={grp.group}
+					data-lock-config={grp.lock.config} data-lock-value={grp.lock.value}>
+					<div class="grp-head">
+						<IconButton variant="ghost" size="sm" label={`${open[grp.group] ? 'Collapse' : 'Expand'} ${grp.group}`}
+							aria-expanded={open[grp.group] === true} data-testid="global-group-toggle"
+							onclick={() => (open[grp.group] = !open[grp.group])}>
+							<Icon name={open[grp.group] ? 'chevron-down' : 'chevron-right'} />
+						</IconButton>
+						{#if editing === grp.group}
+							<input {...MODE_ATTRS.search} class="group-name-input" data-testid="global-group-name"
+								aria-label="Group name" bind:value={groupName} use:selectName
+								onblur={() => void renameGroup(grp.group)}
+								onkeydown={(event) => {
+									if (event.key === 'Enter') event.currentTarget.blur();
+									if (event.key === 'Escape') { editing = null; error = ''; }
+								}} />
+						{:else}
+							<button class="grp-name" onclick={() => (open[grp.group] = !open[grp.group])}
+								aria-expanded={open[grp.group] === true}>{grp.group}</button>
+							{#if !grp.lock.config}
+								<IconButton variant="ghost" size="sm" label={`Rename ${grp.group}`} title="Rename group"
+									data-testid="global-group-edit" onclick={() => editGroup(grp.group)}><Icon name="pencil" /></IconButton>
+							{/if}
+						{/if}
 						<span class="grp-tags">
 							<span class="grp-count">{grp.entries.length}</span>
 							{#if controlled}
 								<span class="grp-control" role="img" aria-label="Control panel" title="Control panel"><Icon name="sliders-horizontal" /></span>
 							{/if}
 							{#if grp.lock.config || grp.lock.value}
-								<span
-									class="grp-lock"
-									title={grp.lock.config && grp.lock.value
-										? 'Locked: names, widgets, membership and values'
-										: grp.lock.config
-											? 'Locked: names, widgets and membership'
-											: 'Locked: values'}><Icon name="lock" /></span
-								>
+								<span class="grp-lock" role="img" aria-label="Built-in lock" title="Built-in lock"><Icon name="lock" /></span>
 							{/if}
 						</span>
-					{/snippet}
-					<table>
-						<tbody>
-							{#each grp.entries as gv (gv.name)}
-								{@const held = effectiveLock(gv, grp.lock)}
-								<tr
-									data-testid="global-row"
-									data-name={gv.name}
-									data-lock-config={held.config}
-									data-lock-value={held.value}
-									data-control={gv.control ? gv.control.kind : undefined}
-								>
-									<td class="c-name">
-										{#if held.config}
-											<span class="fixed" title={own ? 'Config-locked' : 'System global — goofi’s own'}>{gv.element}</span>
-										{:else}
-											<TextInput
-												inputmode="search"
-												data-testid="global-name"
-												value={gv.element}
-												autocomplete="off"
-												onChange={(v) => commitName(gv, v)}
-											/>
-										{/if}
-									</td>
-									<td class="c-val">
-										{#if held.value}
-											<span class="ro-value" data-testid="global-value" title={own ? 'Value-locked' : 'Machine global — the value is this machine’s'}>{String(gv.value)}</span>
-										{:else if gv.type === 'bool'}
-											<Toggle
-												data-testid="global-value"
-												value={gv.value === true}
-												onChange={(v) => commitValue(gv, v)}
-											/>
-										{:else if gv.type === 'string'}
-											<!-- Machine-read: the `text` default's autocorrect would corrupt a good value. -->
-											<TextInput
-												inputmode="search"
-												data-testid="global-value"
-												value={String(gv.value)}
-												autocomplete="off"
-												onChange={(v) => commitValue(gv, v)}
-											/>
-										{:else}
-											<NumberInput
-												data-testid="global-value"
-												value={numberDisplay(gv)}
-												onChange={(v) => commitValue(gv, v)}
-											/>
-										{/if}
-									</td>
-									<td class="c-act">
-										<span class="type" title="type">{gv.type}</span>
-										{@render lockToggles(gv.lock, grp.lock, (p) => lockEntry(gv, p), own, 'global-lock')}
-										{#if !held.config}
-											<IconButton
-												variant="ghost"
-												size="sm"
-												data-testid="global-delete"
-												title="Delete global"
-												label="Delete {gv.name}"
-												onclick={() => void g.removeGlobal(gv.name)}><Icon name="x" /></IconButton
-											>
-										{/if}
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-					<div class="grp-foot">
-						{#if own && !grp.lock.config}
-							<TextInput
-								inputmode="search"
-								data-testid="global-group-name"
-								title="Rename this group"
-								value={grp.group}
-								autocomplete="off"
-								onChange={(v) => commitGroup(grp.group, v)}
-							/>
-						{:else}
-							<span class="grp-fixed">{grp.group}</span>
-						{/if}
-						{@render lockToggles(grp.lock, null, (p) => lockGroup(grp.group, p), own, 'global-group-lock')}
-						{#if own && !grp.lock.config}
-							<IconButton
-								variant="ghost"
-								size="sm"
-								data-testid="global-add-in"
-								title="Add a global to {grp.group}"
-								label="Add a global to {grp.group}"
-								onclick={() => openAdd(grp.group)}><Icon name="plus" /></IconButton
-							>
-						{/if}
 					</div>
-					{#if adding === grp.group}
-						{@render addRow(false)}
+					{#if open[grp.group]}
+						<div class="grp-body">
+							{#each grp.entries as entry (entry.name)}
+								{@const held = effectiveLock(entry, grp.lock)}
+								<div class="entry" data-testid="global-row" data-name={entry.name}
+									data-lock-config={held.config} data-lock-value={held.value}
+									data-control={entry.control?.kind}>
+									<div class="entry-name">
+										{#if held.config}
+											<span class="fixed">{entry.element}</span>
+										{:else}
+											<TextInput inputmode="search" data-testid="global-name" aria-label="Entry name"
+												value={entry.element} autocomplete="off" onChange={(value) => commitName(entry, value)} />
+										{/if}
+									</div>
+									<div class="entry-value">
+										{#if held.value || entry.source}
+											<span class="ro-value" data-testid="global-value">{String(entry.value)}</span>
+										{:else if entry.type === 'bool'}
+											<Toggle data-testid="global-value" value={entry.value === true} onChange={(value) => commitValue(entry, value)} />
+										{:else if entry.type === 'string'}
+											<TextInput inputmode="search" data-testid="global-value" aria-label="Entry value"
+												value={String(entry.value)} autocomplete="off" onChange={(value) => commitValue(entry, value)} />
+										{:else}
+											<NumberInput data-testid="global-value" aria-label="Entry value" value={Number(entry.value)}
+												onChange={(value) => commitValue(entry, value)} />
+										{/if}
+									</div>
+									<Select data-testid="global-type" aria-label="Entry type" value={entry.type}
+										disabled={held.config || held.value || !!entry.source}
+										options={['float', 'int', 'bool', 'string']}
+										onChange={(value) => void g.setGlobalType(entry.name, value as GlobalType).catch(report)} />
+									{#if !held.config}
+										<IconButton variant="ghost" size="sm" data-testid="global-delete" title="Delete entry"
+											label={`Delete ${entry.name}`} onclick={() => void g.removeGlobal(entry.name).catch(report)}><Icon name="x" /></IconButton>
+									{/if}
+								</div>
+							{/each}
+							{#if !grp.lock.config}
+								<Button variant="ghost" size="sm" data-testid="global-add-in" disabled={busy}
+									onclick={() => void addEntry(grp.group)}><Icon name="plus" />entry</Button>
+							{/if}
+						</div>
 					{/if}
-				</Disclosure>
+				</section>
 			{/each}
-
-			<div class="new-group">
-				<IconButton
-					variant="ghost"
-					size="sm"
-					data-testid="global-add-group-btn"
-					title="New group"
-					label="New group"
-					onclick={() => openAdd('')}><Icon name="plus" /></IconButton
-				>
-				<span class="new-group-hint">group</span>
-			</div>
-			{#if adding === ''}
-				{@render addRow(true)}
-			{/if}
+			<Button class="new-group" variant="ghost" size="sm" data-testid="global-add-group-btn"
+				disabled={busy} onclick={() => void addGroup()}><Icon name="plus" />group</Button>
+			{#if error}<p class="error" role="alert">{error}</p>{/if}
 		</div>
 	</ScrollArea>
 </div>
 
-{#snippet addRow(fresh: boolean)}
-	<div class="add" data-testid="global-add">
-		{#if fresh}
-			<input
-				{...MODE_ATTRS.search}
-				class="name"
-				data-testid="global-add-group"
-				placeholder="group"
-				bind:value={newGroup}
-				autocomplete="off"
-				use:focusInput
-				onkeydown={rowKey}
-			/>
-		{/if}
-		{#if fresh}
-			<input
-				{...MODE_ATTRS.search}
-				class="name"
-				data-testid="global-add-name"
-				placeholder="element"
-				bind:value={newName}
-				autocomplete="off"
-				onkeydown={rowKey}
-			/>
-		{:else}
-			<input
-				{...MODE_ATTRS.search}
-				class="name"
-				data-testid="global-add-name"
-				placeholder="element"
-				bind:value={newName}
-				autocomplete="off"
-				use:focusInput
-				onkeydown={rowKey}
-			/>
-		{/if}
-		<Select
-			style="flex: 0 1 auto"
-			data-testid="global-add-type"
-			value={newType}
-			onChange={(v) => (newType = v as GlobalType)}
-			options={['float', 'int', 'bool', 'string']}
-		/>
-		<Button size="sm" data-testid="global-add-btn" disabled={!canAdd} onclick={add}>Add</Button>
-		<IconButton
-			variant="ghost"
-			size="sm"
-			data-testid="global-add-cancel"
-			title="Cancel"
-			label="Cancel"
-			onclick={() => (adding = null)}><Icon name="x" /></IconButton
-		>
-	</div>
-	{#if newName && !nameOk}
-		<div class="hint bad">Every global is `group.element`, each a valid identifier (letters, digits, _; can't start with a digit; not “globals”).</div>
-	{:else if nameTaken}
-		<div class="hint bad">A global named “{fullName}” already exists.</div>
-	{/if}
-{/snippet}
-
 <style>
 	.wrap {
 		height: 100%;
-		display: flex;
-		flex-direction: column;
 		min-height: 0;
+		container-type: inline-size;
 	}
 	.gp-body {
 		padding: var(--space-3) var(--space-5) var(--space-6);
 	}
-	table {
-		width: 100%;
-		border-collapse: collapse;
-		font-size: var(--fs-small);
-	}
-	.gp-body :global(.grp:nth-child(even)) {
+	.grp:nth-child(even) {
 		background: color-mix(in srgb, var(--text) 3%, transparent);
 		border-radius: var(--radius-sm);
 	}
-	.gp-body :global(.grp .ui-disclosure-label) {
+	.grp-head {
 		display: flex;
 		align-items: center;
+		gap: var(--space-2);
+		min-height: var(--hit);
+		padding: var(--space-2) var(--space-3);
+	}
+	.grp-name, .group-name-input {
+		min-width: 0;
+		font-family: var(--font-mono);
+		font-size: var(--fs-small);
+		color: var(--text);
+	}
+	.grp-name {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+	}
+	.group-name-input {
+		width: 12ch;
 		flex: 1;
-		gap: var(--space-3);
+		background: var(--surface-1);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
 	}
 	.grp-tags {
 		display: inline-flex;
@@ -395,123 +248,35 @@
 		gap: var(--space-3);
 		flex-shrink: 0;
 		margin-left: auto;
-	}
-	.grp-name {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		font-family: var(--font-mono);
-		font-size: var(--fs-small);
-	}
-	.grp-count {
-		color: var(--text-muted);
-		font-size: var(--fs-micro);
-	}
-	.grp-control,
-	.grp-lock {
-		display: inline-flex;
 		color: var(--text-muted);
 	}
-	.grp-control {
-		color: var(--accent);
-	}
-	.grp-foot {
-		display: flex;
-		align-items: center;
+	.grp-count { font-size: var(--fs-micro); }
+	.grp-control, .grp-lock { display: inline-flex; }
+	.grp-control { color: var(--accent); }
+	.grp-body { padding: var(--space-2) var(--space-3); }
+	.entry {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto var(--hit);
 		gap: var(--space-2);
-		padding: var(--space-2) var(--space-3);
-	}
-	.grp-fixed {
-		flex: 1;
-		min-width: 0;
-		font-family: var(--font-mono);
-		font-size: var(--fs-small);
-		color: var(--text-muted);
-	}
-	.new-group {
-		display: flex;
 		align-items: center;
-		gap: var(--space-2);
-		margin-top: var(--space-4);
-		padding: 0 var(--space-3);
-	}
-	.new-group-hint {
-		font-size: var(--fs-micro);
-		color: var(--text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-	}
-	td {
-		padding: var(--space-2) var(--space-3);
+		padding: var(--space-2) 0;
 		border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-		vertical-align: middle;
+		font-size: var(--fs-small);
 	}
-	/* Stated on the CELLS: the ui inputs carry `font: inherit`, so the cell hands them a face. */
-	td.c-name,
-	td.c-val {
+	.entry-name, .entry-value {
+		min-width: 0;
 		font-family: var(--font-mono);
-	}
-	.c-name {
-		width: 40%;
-	}
-	.c-val {
-		width: 35%;
-		/* let the bare NumberInput fill the cell instead of its default fixed width */
 		--number-width: 100%;
 	}
-	.c-act {
-		width: 25%;
-		white-space: nowrap;
-		text-align: right;
+	.fixed, .ro-value { overflow-wrap: anywhere; }
+	.ro-value { color: var(--text-muted); }
+	.gp-body :global(.new-group) { margin-top: var(--space-4); }
+	.error { color: var(--danger); font-size: var(--fs-small); overflow-wrap: anywhere; }
+	@container (max-width: 400px) {
+		.entry { grid-template-columns: minmax(0, 1fr) auto var(--hit); }
+		.entry-name { grid-column: 1 / -1; }
 	}
-	.fixed {
-		font-family: var(--font-mono);
-		color: var(--text);
-	}
-	.ro-value {
-		font-family: var(--font-mono);
-		font-size: var(--fs-small);
-		color: var(--text-muted);
-		overflow-wrap: anywhere;
-	}
-	/* The one native input, kept for live per-keystroke validation; the `td` seam cannot reach it. */
-	input.name {
-		width: 100%;
-		box-sizing: border-box;
-		font-family: var(--font-mono);
-		font-size: var(--fs-small);
-		padding: var(--space-1) var(--space-3);
-		background: var(--surface-1);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--text);
-	}
-	.type {
-		font-family: var(--font-mono);
-		font-size: var(--fs-micro);
-		color: var(--text-muted);
-		margin-right: var(--space-3);
-	}
-	.add {
-		display: flex;
-		gap: var(--space-3);
-		align-items: center;
-		padding: var(--space-2) var(--space-3);
-	}
-	.add .name {
-		flex: 1 1 auto;
-	}
-	.hint {
-		margin-top: var(--space-3);
-		font-size: var(--fs-micro);
-	}
-	.hint.bad {
-		color: var(--danger);
-	}
-	/* iOS force-zooms a focused control under 16px, and `input.name` out-specifies app.css's floor. */
 	@media (hover: none) and (pointer: coarse) {
-		input.name {
-			font-size: 16px;
-		}
+		.group-name-input { font-size: 16px; }
 	}
 </style>

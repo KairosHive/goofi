@@ -300,7 +300,7 @@ function lockOf(raw: unknown): LockView {
 	return { config: l.config === true, value: l.value === true };
 }
 
-/** Every group that carries a lock, by name. */
+/** Explicit groups and their built-in flags, by name. */
 export function globalGroupLocks(doc: Doc): Record<string, LockView> {
 	const out: Record<string, LockView> = {};
 	for (const [group, rec] of Object.entries(obj(doc.global_groups))) out[group] = lockOf(obj(rec).lock);
@@ -346,18 +346,13 @@ export interface GlobalGroupView {
 	lock: LockView;
 }
 
-/** Globals folded into their groups, each group in first-appearance order, with the group's lock;
- * a group that holds only a lock is listed too, since the lock is what makes it a group. */
+/** Explicit groups keep their order even when empty; groups inferred from entries follow them. */
 export function groupedGlobals(views: GlobalView[], locks: Record<string, LockView> = {}): GlobalGroupView[] {
-	const out: GlobalGroupView[] = [];
-	const lockFor = (group: string): LockView => locks[group] ?? { config: false, value: false };
-	for (const v of views) {
-		const held = out.find((g) => g.group === v.group);
-		if (held) held.entries.push(v);
-		else out.push({ group: v.group, entries: [v], lock: lockFor(v.group) });
-	}
-	for (const group of Object.keys(locks)) {
-		if (!out.some((g) => g.group === group)) out.push({ group, entries: [], lock: lockFor(group) });
+	const out: GlobalGroupView[] = Object.entries(locks).map(([group, lock]) => ({ group, entries: [], lock }));
+	for (const entry of views) {
+		const group = out.find((group) => group.group === entry.group);
+		if (group) group.entries.push(entry);
+		else out.push({ group: entry.group, entries: [entry], lock: { config: false, value: false } });
 	}
 	return out;
 }

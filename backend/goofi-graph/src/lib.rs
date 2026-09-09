@@ -562,8 +562,16 @@ impl Graph {
         control: Option<Option<goofi_core::globals::Control>>,
     ) -> Result<(), String> {
         if let Some(c) = &control {
-            let held = self.globals.get(name).or(value.as_ref()).ok_or_else(|| format!("no such global `{name}`"))?;
+            let held = value.as_ref().or_else(|| self.globals.get(name)).ok_or_else(|| format!("no such global `{name}`"))?;
             self.globals.check_control(name, held, c.as_ref())?;
+        }
+        if let Some(value) = &value {
+            let next_control = control.as_ref().map(|c| c.as_ref()).unwrap_or_else(|| self.globals.control(name));
+            if let Some(c) = next_control {
+                if !c.fits(value) {
+                    return Err(c.mismatch(value));
+                }
+            }
         }
         self.globals.apply_change(name, value, at)?;
         if let Some(c) = control {
@@ -623,8 +631,24 @@ impl Graph {
     }
 
     /// Lock or unlock a whole group, answering the lock it held.
-    pub fn set_global_group_lock(&mut self, group: &str, lock: goofi_core::globals::Lock) -> Result<goofi_core::globals::Lock, String> {
+    pub fn set_global_group_lock(&mut self, group: &str, lock: Option<goofi_core::globals::Lock>) -> Result<Option<goofi_core::globals::Lock>, String> {
         self.globals.set_group_lock(group, lock)
+    }
+
+    /// Add an empty group.
+    pub fn add_global_group(&mut self, group: &str, at: Option<usize>) -> Result<(), String> {
+        if self.arrangement.control_panels().iter().any(|(_, held)| held == group) {
+            return Err(format!("global group `{group}` already exists"));
+        }
+        self.globals.add_group(group, at)
+    }
+
+    /// Remove an empty group that no panel uses.
+    pub fn remove_global_group(&mut self, group: &str) -> Result<(), String> {
+        if self.arrangement.control_panels().iter().any(|(_, held)| held == group) {
+            return Err(format!("global group `{group}` is used by a control panel"));
+        }
+        self.globals.remove_group(group)
     }
 
     /// Rename one global, and rewrite every expression that reads it.
@@ -3480,7 +3504,7 @@ impl Graph {
         if let Some(serde_json::Value::Object(groups)) = doc.get("global_groups") {
             for (group, rec) in groups {
                 if let Some(l) = rec.get("lock").and_then(|l| serde_json::from_value(l.clone()).ok()) {
-                    let _ = self.globals.set_group_lock(group, l);
+                    let _ = self.globals.set_group_lock(group, Some(l));
                 }
             }
         }
