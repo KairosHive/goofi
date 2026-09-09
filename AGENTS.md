@@ -1,100 +1,26 @@
-# goofi-pipe
+# goofi
 
-A real-time, node-based data-processing platform for biosignals. A user builds **patches** in a
-browser node-graph: each node ingests, transforms or emits `Data`, and edges carry data between
-output and input slots. It targets live, high-rate streams — kHz EEG, HD video — with many
-simultaneous viewers.
+goofi is a real-time node-based platform for biosignals, audio, and graphics. Users build
+patches in a browser. The backend is Rust; the frontend is SvelteKit.
 
-goofi is a ground-up Rust rewrite of a Python original, and the rewrite IS `main`. The Python
-implementation is not in this tree; it is kept for reference at `../../goofi-pipe/`. The
-SvelteKit frontend carried over and is the only UI.
+Use ASD-STE100 Simplified Technical English. Read the code for implementation details.
 
-**This file is orientation, and nothing else.** It holds the design principles and the
-architectural decisions — the things the code cannot tell you because they are choices rather
-than facts. Everything else is in the code: read that. A map of the crates, the shape of a
-manifest, the name of an op — all of it goes stale here and never goes stale there.
+## Guiding principles
 
----
-
-## Communication
-
-All communication — internal thought, explanation, planning, sub-agent exchanges, and messages to
-the user — is held in **ASD-STE100 Simplified Technical English** only.
-
----
-
-## Design principles
-
-These are ours. They are the standard this codebase is held to — not a general-purpose
-methodology, and not an installed skill. Where an outside practice disagrees, this section wins.
-
-1. **One programmatic interface.** Everything goofi can do, it does through one op vocabulary.
-   `/control`, `/mcp`, a script and a test are TRANSPORTS over one entry point, never four
-   surfaces with four sets of behaviour. A capability only the UI can reach is a defect, and a
-   test that needs a door of its own is telling you the API is incomplete.
-
-2. **The code is the source of truth, and comments are scarce.** Code that needs prose to be
-   understood is code to simplify, not to annotate. The default is NO comment.
-
-   The philosophy in this file is strong and we follow it, so code that follows it explains
-   itself. What earns a comment is a **deviation** — the place we had a good reason to stray —
-   and the comment states that reason in brief. This is rare by construction: a file thick with
-   comments is either badly written or quietly off-philosophy, and both are the real finding.
-
-   The limits are hard, not aspirational:
-   - **An inline comment is one line. Two is the ceiling, ever.** Needing more means the code is
-     wrong, or the reason belongs in this file as a decision.
-   - **A docstring briefly states a purpose**, plus a few words on a parameter only where the name
-     cannot carry it. A parameter that needs explaining is usually a parameter to rename.
-   - **No comment should need extensive reading.** A reader skims it and moves on.
-
-   Not comments: restating the code, the history of how a decision was reached, an argument for
-   the design, a changelog, or a defect's biography. If it matters beyond the line it sits on, it
-   is an architectural decision and belongs in this file.
-
-3. **Make the error impossible, don't handle it.** Prefer a type, a bounded domain, a shared
-   schema or an unconstructible invalid state over a runtime guard. Keep genuine boundary errors:
-   a Python node CAN raise, so propagate it — never panic.
-
-4. **Delete before adding.** The cost of a feature is the lines it leaves behind. A rewrite that
-   is smaller is the fix; a fix that is bigger needs a reason. Two code paths that should agree
-   get unified at one source of truth rather than patched in both.
-
-5. **One artifact.** `goofi` is a single binary with the frontend compiled in — the server, and
-   the CLI client of a running server, in one file. It serves the app and never opens one — the
-   URL is printed, and the opening is the user's. `--headless` withholds the app entirely and
-   serves the API alone.
-
-6. **One system, several representations.** Phone and desktop, agent and human, are the same
-   machinery with different presentations — never a second track, never a per-device guard.
-
-7. **Root cause before fix.** Trace it to its origin and fix it there. Three failed fixes means
-   the architecture is wrong; stop and reconsider it rather than adding a fourth patch.
-
-8. **One owner, and decisions from settled state.** Two halves of one rule, and the pair the rest of
-   this file leans on hardest.
-
-   Every conceptual thing has exactly ONE owner of its state. Everything else derives it on read, or
-   is a strictly one-way projection of it. A mirror, a cache beside its source, a count kept in two
-   layers, a value both stored and derivable — each is a thing every future change must remember to
-   update in lockstep, and eventually one does not.
-
-   And a decision is taken from SETTLED state: a batch of mutations yields at most one decision,
-   taken after the batch. Sequencing work off each individual mutation makes every intermediate a
-   command, and an intermediate is a state nobody intended and nothing asked for.
-
-   What it cost: "how many viewers want this stream" lived in three places, and each acted the
-   instant it was touched. A viewer that detached and re-attached inside one render tick passed
-   through zero on all three, so a batch that ended exactly where it started still closed the
-   socket, destroyed the backend's reducer and dropped the cached frame — under every OTHER viewer
-   of that slot. The end state was correct throughout, which is why every test passed.
-
-   Both halves are audited for on their own, and a finding stands **regardless of its
-   justification** — a good reason is an attribute of the duplication, never an exemption from
-   naming it. "No consequence observed" is a finding too: the cost of this pattern is paid later,
-   by whoever writes the change that forgets one holder.
-
----
+1. **One capability interface.** UI, CLI, MCP, scripts, and tests use the same op vocabulary.
+   Device and client differences belong in presentation, not separate behavior paths.
+2. **One state owner.** Derive values from their source or project them one way. Avoid mirrored
+   state, duplicate counters, and caches that must be kept in sync manually.
+3. **Decide from settled state.** Apply a batch before scheduling work, broadcasting changes,
+   or changing resource ownership. Intermediate mutations must not cause independent decisions.
+4. **Keep the smallest coherent design.** Delete obsolete paths and share rules that must agree.
+   Prefer clear code to explanation; comments explain exceptions, and docstrings state purpose.
+5. **Fix the cause.** Trace callers and boundaries before changing a subsystem. Use types and
+   shared schemas to prevent invalid states; report real boundary failures without panics.
+   A structural refactor is appropriate when it removes a class of errors.
+6. **Test observable behavior.** Exercise real sessions through the public interface. Extend
+   the situation that would catch a regression, with a fixture that can reproduce the failure.
+   Use browser tests for socket integration, layout integrity, and gestures.
 
 ## Pre-launch policy
 
@@ -117,608 +43,80 @@ before the first production deployment.
 - Consolidate the migration baseline only as an explicit, coordinated change rather than as
   incidental work in a feature branch.
 
----
-
 ## How we work
 
-In priority order. These override speed.
+- Keep changes focused and preserve other work in the shared checkout. Match local style;
+  do not reformat unrelated code.
+- Run the checks relevant to the change. Builds and clippy must be warning-free; fix warnings
+  rather than suppress them. Report failures and skipped checks explicitly.
+- Verify audit findings against real callers and upstream guards. Review again after fixes;
+  stop when no substantive findings remain.
+- Commit at tested checkpoints with a `Co-Authored-By:` trailer naming the model used.
 
-1. **Test the software in use, not its functions.** A test launches the system, commands a range
-   of actions through the one programmatic interface, and asserts the state that results. That is
-   the standard — not a unit test per function, and not test-first as a law. A suite of green
-   functions that break when assembled is the failure this replaces.
-   - Every Rust test lives in one crate, which is separate from the crates it judges, so it
-     reaches only public API and is structurally incapable of pinning implementation detail.
-   - The suite is a short list of NAMED SITUATIONS, one file each. A test earns its place by
-     covering a way the system is used; prefer one scenario crossing four layers to four tests
-     that each pin one. When a bug is fixed, **extend the scenario that would have caught it**
-     rather than adding a test beside it.
-   - Svelte component glue cannot mount in a unit runner. Verify it by typecheck and a Playwright
-     scenario, and keep the testable logic in a module a scenario can drive.
-   - **A situation is a SESSION, not an assertion.** One boot, then an ordered walk that stacks
-     actions and probes after each, named by `test.step` so a failure still says which stage. The
-     states worth testing have a history — a rename after an edit, a reconnect after a drop — and a
-     test that boots, does one thing and exits cannot reach any of them. Measured here: the setup
-     was 76% of a Playwright test and the assertion it existed for was 24%.
-   - Inside a session, an assertion the next step DEPENDS on is hard; an independent observation is
-     `expect.soft`, so one wrong reading cannot hide the ten behaviours after it.
+## Quick facts
 
-2. **What e2e is for: the seam, and the app holding together.** Everything goofi can do is
-   reachable through the op vocabulary and is proved against the manager in `goofi-tests` — far
-   cheaper and far sharper than driving a mouse to reach the same op. So a browser test earns its
-   place only where a browser is the instrument:
-   - **The socket seam.** The frontend's client and the manager's document must fit with no slack
-     and no overlap: every op lands exactly once, two tabs converge, a tab that loses the socket
-     rejoins on the manager's document instead of merging its stale one. Each half's own suite
-     passes with the other half broken, which is why this cannot live in either.
-   - **Structural integrity.** One complex scene, swept for what a restyle must never be able to
-     break: a page that scrolls, text clipped away, a control cut off by a box that cannot scroll,
-     a tap target under the app's own `--hit`. **Never a design value** — no pinned padding, no
-     token colour, no measured box. Design freedom is the point; the net catches things falling
-     apart, not things changing.
-   - **Gestures.** A door that only a finger opens is proved only by a finger.
+- Work on `main`. Create branches or worktrees only when asked; never force-push.
+- `roadmap/` is the committed backlog: one file per open feature, containing decisions and
+  remaining work. Remove completed entries.
+- Rust uses four spaces; frontend code uses tabs and single quotes. Do not run Prettier.
+- The version is `[workspace.package].version`; the toolchain is in `rust-toolchain.toml`.
+- One binary serves the app and acts as its CLI. It prints the URL without opening a browser;
+  `--headless` serves only the API. `goofi help` lists commands.
+- The manager owns the graph and document. Browser documents are read-only replicas, updated
+  with versioned JSON merge patches. Document leaves cannot be null.
+- Mutations are commands with inverses and session-specific undo. Fresh calls are strict;
+  replay tolerates stale targets. Layout inverses use forward planners.
+- Signal nodes schedule themselves; audio and graphics have their own clocks. Node processing
+  does not run under the graph lock. Cross-engine transport is latest-wins shared memory.
+- Rust nodes are `.rs` files built against an engine SDK; graphics nodes are `.wgsl` files.
+  Python nodes use the shared marshalling interface in both automatic execution tiers.
+- Each frame counts in full, including a Buffer window. Never infer sample overlap. Resample
+  handles independent windows; Epoch captures supplied windows. Input clearing takes effect
+  after a successful process call and before the next input drain.
+- Params have one active source: constant, expression, or reference. Values use `/params/<node>`;
+  errors use `/control`. Viewer demand must not change engine scheduling.
+- A `.gfi` patch is an archive of its document and workspace. Recordings use native data files
+  with metadata sidecars. Shared-memory and wire-format changes require matching consumers.
+- The app targets a single user on localhost or a trusted LAN. WebSocket endpoints have no auth;
+  retain Origin/Host checks. `/dev/*` requires debug mode.
+- Support touch, tablet, and desktop in both orientations. Navigation must not dirty the patch.
+  Preserve workspace layout and cable-drag behavior unless a redesign is requested.
+- `panelty` owns panel mechanics; change that dependency upstream. Shared UI tokens live in
+  `:root`; use container queries for panel sizing. UI primitives must not import stores.
+- All Rust tests belong in `goofi-tests` and use public APIs. Prefer named sessions over isolated
+  assertions. Check Svelte changes with typecheck and a relevant Playwright session.
+- Tests must not open audio hardware or native windows. Use the test clocks and hosts.
+- Rebuild both installed Python wheels after changing the Python API. Do not canonicalize venv
+  interpreter paths; use the paths provided by setup.
+- Reclaim shared memory through iceoryx2; never script deletion of `/dev/shm/iox2_*`. Declare an
+  iceoryx2 node after its ports so the ports are dropped first.
 
-   Everything else is comfort. Hundreds of tests re-driving the op surface through a mouse, or
-   pinning a value a design pass will move, find nothing and cost the freedom to restyle.
+## Run and test
 
-3. **A fixture that cannot express the failure makes a passing test theatre.** The question is
-   never "does this stand in for the real thing?" but **"can this reproduce the failure I am
-   trying to prevent?"** — and the way to answer it is to run the broken variant against your
-   fixture and watch it pass. This has cost real defects: a fake socket hard-coded to OPEN hid a
-   message dropped on a connecting one; a single-node fixture hid a counter summing across
-   streams; a load test into a *fresh* instance passed against code that renumbered every node; and a disarm
-fixture that called `graph.set_recorded` instead of driving the `record disarm` op could not see an
-800-frame loss at all, where driving the real op reported 784 frames written against 55 in the
-manifest.
+With Rust, `uv`, and `npm` available, run from the repository root:
 
-4. **Structural edits over shallow hacks.** Prefer the change that makes the codebase correct by
-   construction over the one that silences the symptom. A larger, well-reasoned refactor is
-   welcome when it removes a class of bugs — refactor scope is not gated.
-
-5. **Deep code analysis.** Before changing a subsystem, hold enough of it in context to reason
-   about the change's blast radius. Trust documented internal contracts; verify the ones you are
-   about to depend on.
-
-6. **Minimum diff, maximum clarity.** Match the surrounding idiom and naming — but NOT its comment
-   density, which is the one thing never to copy from a neighbour: comments are scarce by principle
-   2, and a thick file is a file to thin, not a bar to meet.
-   Do not reformat code you are not changing. Rust is 4 spaces; the frontend is tabs and single
-   quotes. There is no rustfmt.toml and no Prettier config — **never run Prettier**, hand-match
-   the style instead.
-
-7. **Zero warnings, and that includes clippy.** A task is not done at "finished". Build with
-   `--all-targets` and clear what it prints — that flag is load-bearing, because a plain build
-   never compiles the integration test targets and a warning there ships. `cargo clippy --workspace
-   --all-targets` is clean as of 2026-09-08 and stays that way. Remove the dead field; never
-   silence it with a `_` prefix or an `#[allow]`.
-
-8. **Honest reporting.** If tests fail, say so with the output. If a step was skipped, say that.
-   State what is verified plainly; never claim done what you have not run.
-
-**Hardening a subsystem is an audit run to convergence, not a read-through.** Fan finders across
-its dimensions in parallel, then adversarially verify every candidate before believing it — a
-correctness finding must trace a real caller and check the upstream guards, not just the local
-function, and a leanness finding must not be a speculative reshape, which is itself inflation.
-Re-run after each fix round. Convergence looks like the confirmed count shrinking *and* shifting
-from structural to trivial; stop there rather than manufacturing churn. Use the most capable
-model for every finder and verifier — a weaker finder under-finds.
-
----
-
-## Architectural decisions
-
-The shape of the system, stated where it is a CHOICE. The mechanism is in the code.
-
-**One process, one graph, one document.** The graph, the engine and the web server live in one
-Rust process. A browser's replica is READ-ONLY: every mutation is a command sent as an RPC, the
-manager applies it, and the delta is broadcast. **The document is the only graph projection** — a
-snapshot that also carried nodes was tried, and the two drifted.
-
-**The document is plain JSON, and a delta is a merge patch.** It was a CRDT, and nothing a CRDT is
-for was in use: the replica never writes, undo is the manager's own command history, and there is
-nothing to merge. What was left was one-way replication, with the library fighting it — the
-broadcast gate could not use the state vector, because a delete does not advance one. Merge patch
-spends `null` on "delete this key", so it is exact only while the document has no null leaf; a test
-pins that, and if a null is ever needed the delta needs an explicit tombstone instead.
-
-**Several devices edit one patch at once, and the manager is what serialises them.** Concurrency is
-resolved where the graph lock already is: an op applies, the delta is computed, and it is broadcast
-— all with the document lock still held, so two writers cannot interleave into out-of-order
-versions. A patch names the version it applies TO, which lets a replica tell the two ways a version
-can mismatch apart. A patch it ALREADY holds is stale, because a socket is subscribed before it is
-snapshotted, so a peer's edit in that window arrives twice; skipping it is routine. A patch reaching
-PAST it is a lost delta, and it is refused rather than merged onto the wrong base.
-
-**Everything is a command with an exact inverse.** Undo/redo is manager-owned and filtered per
-session, so two browser tabs undo their own work. Layout is a document root like any other and
-rides the same machinery. **Tolerance belongs to replay, strictness to the fresh caller:** a command's
-own execution is idempotent so a stale toggle converges instead of wedging a session's stack,
-and the first-hand RPC path gates on a precondition instead.
-
-**No layout inverse restores raw state.** Every one re-plans through the forward planners. Pinning
-an entry back into the slot it held resurrects what the forward op promoted away, on top of
-whatever a peer has since built there.
-
-**The graph is the model's authority, and every engine stands behind one trait.** `goofi-graph`
-holds what a patch IS and depends on nothing above `goofi-node`; an engine owns its nodes'
-runtime, health, library and within-engine transport, and registers at one composition root
-(`goofi-bridge`'s `fresh_graph`). Propagation is settled-state: ops record what they touched, and
-one settle per batch hands every engine the same port-resolved view. Cross-engine data rides
-`goofi-transport` — derived iceoryx2 names, latest-wins by decree, rendezvous by
-`open_or_create`, never a protocol between engines. A scheduled engine's clock thread drains its
-boundary at its own tick and is never rung; a consumer is rung only where it is doorbell-driven —
-a signal node, or the audio engine's control half. Two skeleton scheduled engines in the suite pin
-the whole seam.
-
-**A param has one source: constant, expression or reference.** The mode names the active one and
-the other two keep their content. A reference is `node.slot`, by name, no Python: the signal plane
-copies the scalar on arrival, and the audio engine makes it a plan edge at audio rate. That is how
-control-rate and audio-rate modulation share one door with no precedence rule, and why no audio
-node carries a CV port — every modulatable quantity is a param. Node and slot names are letters
-and digits, so `node.slot` needs no quoting. `roadmap/param-sources.md` holds the rest.
-
-**Every audio node stands behind one goofi trait, and a plugin format is an adapter.** A shipped
-and an authored node are the same one-file `cdylib` from different folders; a VST3 plugin
-implements the same trait. A plugin's editor is a native window on the server's desktop, hosted on
-the process MAIN thread — where a display answers, the main thread is a window loop and the server
-runs beside it — because a JUCE plugin holds the thread that loaded it to be its message thread;
-the view is off the RUNNING instance, and a knob in it enters the document through the param op
-like any author, so the parameter list stays the one portable UI. The
-engine is synchronous, in-process, one 64-frame block per callback, no iceoryx2 on the audio path;
-every signal is audio-rate numbers in a standard range, and a gate, a pitch and a voice count are
-conventions, not types. CLAP was adopted and then replaced, and the reasons are recorded so it is
-not re-argued. Hardware belongs to the DEVICE clock alone — the external clock renders at
-`drive()`'s speed, which no live stream can meet — so no test opens a microphone or a speaker, and
-the suite's window host has no screen for the same reason, so no test opens a window; and
-what the device clock opens is the machine's sound SERVER, never its card, because a raw ALSA
-stream is one the OS volume and the OS mute cannot reach. `roadmap/audio-engine.md` holds the
-design.
-
-**A graphics node is a `.wgsl` FILE, and the file's header is its manifest.** No SDK, no cargo, no
-toolchain: a text editor is the whole requirement to author one, and the engine appends its prelude
-AFTER the file's text so a naga error names the line the author sees. Every texture is
-`Rgba16Float`, and `uv`, the sampler, texture memory, an upload's rows and a readback's rows all
-put row 0 at the TOP — one convention, so a pass-through body is a copy and no flip is written
-anywhere. A node HOLDS state by declaring named buffers: `cells` reads what the last tick left,
-`next_cells` writes what this one leaves, and one pass fills the output and every buffer at once —
-so a buffer is the node's own size, and `frame`, the renders since it was made, is what a body
-seeds itself on. An ARRAY input's transfer is the frame's own texels, and a PLOT of one is the
-SHADER's work: `graphics:SignalIn` draws the line and the trajectory a viewer draws, in WGSL, under
-params of
-its own — a graphics node is a shader, and a CPU rasteriser in the transfer path was built, measured
-and thrown away. What the engine adds is the one thing a body cannot work out for itself: the range
-the frame's values spanned, carried into `p` beside the params, since finding it in the shader is a
-reduction over every texel AT every texel. Its size is a param like any other:
-`common.width` and `common.height`, 0 following what is wired behind, and
-`globals.system.default_width` on a node that makes its own frames. The engine is scheduled and
-DEMAND-DRIVEN: a stage renders only where its output has a reader, so a node nobody watches costs
-nothing. Its plan is replaced whole and never edited,
-because a stage index is a name and a stage that outlives its node draws into a stranger. The
-PROCESS owns one device and one compile thread, and every operation on that device takes one gate
-— a driver crashed inside its own shader compiler when two threads touched the device at once.
-The control half is `goofi-control`, shared with audio rather than copied, and it drains an input
-the way the HALF says: the newest frame alone where a half draws what it is handed, every frame
-where one accumulates them, as audio's resampling inbox does. What that cost: a producer runs flat
-out, so a graphics node converting each arrival to texels only to overwrite it was outrun out of
-its own tick — one tap frame every fifteen seconds off an engine that was rendering perfectly.
-A texture never crosses
-the wire: the tap reads back a frame like any other, in the WIDTH its readers draw — f32 where
-anything reads the numbers, 8-bit where every reader is an image viewer, converted on the device
-so no texel is ever converted on a CPU. What paces that readback is the ring's ONE slot in flight
-and nothing else; a re-arm flag beside it was a second owner of the same pacing, and because the
-half that would have set it runs on another thread, the tick that took a frame could never see it
-set again — every viewer in the app ran at a third of the engine's rate.
-`roadmap/graphics-engine.md` holds the design.
-
-**A crossing is a node named for where the data comes FROM, and it DECLARES that plane.** Six
-ordered pairs of three engines, six nodes, one rule: `<Source>In`, in the engine that RECEIVES —
-`audio:SignalIn`, `audio:GraphicsIn`, `graphics:SignalIn`, `graphics:AudioIn`, `signal:AudioIn`,
-`signal:GraphicsIn`. The input's kind is the SOURCE's kind, so a wire from the wrong plane is
-refused at `link add` and the palette says what the node takes. `SlotType::feeds` still lets an
-engine-local kind reach a plain ARRAY input — that tap is how a texture or a stream reaches ANY
-node, and it is the crossing when no node is wanted — but a crossing must not be spelled that way:
-an ARRAY input on one advertises a door that accepts anything, which is what `audio:GraphicsIn`
-did, and the wrong wire then landed and did nothing. Nothing in the engines had to be taught this:
-each already routes an input by "my own kind, or not" — a TEXTURE input on an audio node is an
-inbox and a cross-engine subscription exactly as an ARRAY one was, an AUDIO input on a graphics
-node is an upload, and the signal engine reads no slot kind at all. What DID have to move is the
-guard that refused a foreign kind anywhere in a file: a node cannot PRODUCE another engine's kind,
-but an input of one is a crossing, so the rule is about OUTPUTS. Every crossing carries a direct
-mapping and modes beside it, and a mode is keyed on the SHAPE that arrives rather than on a source
-— the declaration is what a wire is checked against, and the node is still handed a plain frame.
-Into the audio plane the modes are ONE vocabulary in the SDK, a named range mapped onto full scale,
-because two crossings that both say `bipolar` must not mean two things by it; out of it they are
-the framings and readings the receiving plane wants, and a mode earns its place by being outside
-what the library already composes. What the shape cost: a texture into the audio plane was silently
-DROPPED, because the one inbox every Array input enters through took `[T]` and `[C, T]` and
-returned nothing for a `[H, W, C]` — the gap was in the crossing every audio node shares rather
-than in a node, so fixing it there gave every audio node the same door.
-
-**A recording is a folder of files their OWN tools open, and the node's own record is what arms
-it.** `goofi-record` owns the folder, the manifest and one writer per stream, and each stream's
-file is the format its SHAPE takes: an array is a `.npy`, a table a `.csv`, text its own lines,
-audio a `.wav` of IEEE float32, a texture a video. Nothing writes the wire format to disk. Every
-one is append-only behind a fixed-size head patched on the sync cadence, so a killed writer costs
-the tail alone — the whole frames follow from the file's size. An array's `.npy` is FLAT — one 1-D
-run of every value the stream ever carried — because a node's shape MOVES, a filling `Buffer` on
-every tick, and a stack of frames holds one shape only. Beside each is ONE sidecar shape, a
-JSON line per frame carrying the instant, what the frame takes OF THE FILE, and whatever of the
-`Meta` the file cannot hold has MOVED since the line before — a reader carries the rest forward,
-and the instant is not among them because the line's own `t` owns that. What the frame takes is the
-one thing that splits a file whose frames are not all one size: an array says its SHAPE, and only
-where that moved, so the manifest states the shape a uniform stream folds back by and states none
-at all once one frame differed; every other kind says its ROW COUNT, since a `.wav` holds blocks of
-no fixed length and has no shape to carry. Never both — a count is `prod(shape)`, and a line that
-said each would hold one fact twice. A frame that no longer fits — a retitled table, a `.wav` at
-RIFF's 4 GB ceiling — opens the NEXT file, the rule a resized texture already followed; a RESHAPE
-is not one of them. A texture is the one stream that
-is NOT exact, because it is `Rgba16Float` and no integer format holds one: an ffmpeg child writes
-FFV1 in Matroska, and what it writes is what a viewer WATCHES rather than what an analyst measures
-— ten-bit gbrp, the [0,1] window with the rest clipped, alpha dropped — which the manifest states
-in those words, and a video never claims "lossless" at all. The channel count is not taste: a
-16-bit alpha plane is one a common player cannot allocate, and VLC kills the decoder and plays the
-file as nothing. The encoder must also hold the render clock, because a rawvideo pipe carries no
-timestamps, so the container is constant-rate and every dropped frame SHORTENS the recording
-instead of gapping it. The in-process pure-Rust alternatives were offered with measurements —
-`lz4_flex` 735 MB/s at 2.0x, `zstd -1` 451 MB/s at 7.9x, single-core on a gradient frame, both
-beating FFV1 — and ffmpeg was kept; the dependency is bounded, so a missing ffmpeg costs THAT
-STREAM alone. Arming is
-`doc.nodes[<uid>].record`, so it is undoable, saved, copied with the node and delivered by `settle`
-alone — never a set kept beside the recorder, which claimed an arming that had in fact failed. The
-clock is the one timing authority and its UTC is anchored ONCE at the patch origin, so a frame
-carries patch seconds, the manifest carries the anchor, and an NTP step cannot bend a recording;
-a rate-locked stream derives its timeline from the SAMPLE COUNT, tied to the clock ONCE under the
-runtime lock — where no block can be rendered between reading the count and reading the clock, which
-is why the audio thread reads no clock at all. The device's rate error then walks that timeline away
-from patch time, and the manifest carries the measured drift rather than a re-tie that would put a
-seam in the exact block spacing. A loss is counted where the file is: a frame carries its own
-NUMBER, and the gap to the previous number in that same file is what `dropped` says — so an
-entry's count and its own file's numbering cannot disagree, and a refusal anywhere between the
-producer and the disk is witnessed once, by the next frame that lands. What the shape cost, five
-times: a re-arm at the same instant truncated the file it had just closed; a running drop counter applied to already-queued
-blocks made the loss invisible AND dated the survivors 1.33 ms late; finalizing a video held the
-session mutex and stalled every other engine's drain; every second holder of "is this stream
-open" wrote at a stream the recorder had closed; and a mark kept by the DRAIN instead outlived the
-recording it was made in, so a drain that never woke between a stop and the next start put the
-blocks between them on the new file's first frame — the one place no numbering can show them. `roadmap/recording.md` holds the design.
-
-**There is no tick.** Every node owns one thread and schedules itself, waking for a control
-message, a frame on an input, or its own rate cap elapsing. Frames travel node to node over
-shared memory, never through the graph — so no node runs under the graph mutex and no user action
-waits on a `process()`. A node is KNOWN when its add answers and ADDRESSABLE only once it reports
-ready; pub/sub has no history, so anything said before that is queued or re-planned, never lost.
-
-**A frame is the complete input.** Buffer produces rolling windows, and each window counts in
-full. Consumers never infer overlap from values or sample positions. A node that needs fresh
-samples is connected before Buffer. Resample processes each window independently. Epoch captures
-the supplied window on a trigger; Buffer owns its length. A signal node can request that a held
-input be cleared after a successful process call. The runtime applies those clears before its
-next input drain; a failed call keeps the held data.
-
-**One data stream per (node, slot), whatever the viewer count.** Viewers publish a payload-free
-constraint algebra; the bridge folds every viewer's constraints against the real frame and
-reduces ONCE, on its own subscription — so no number of viewers can slow a `process()` down.
-
-**A param's value is a READOUT and its error is HEALTH, and the two ride different planes.** Both
-are owned by the node that evaluates the source and projected into the graph; what differs is how
-each is carried. The error is a transition, so it rides `/control`'s paced sweep, whole-map
-per node and restated rather than diffed, so a client that just connected is current within one
-period — reliable, and never an op's echo, because an echo is taken before the node has
-re-evaluated the source the op just moved and therefore always carries the PREVIOUS source's
-failure. That is what shipped: a corrected expression kept showing the typo's `NameError` for ever,
-because the clear the runtime had already reported reached the graph and stopped there — the
-client's copy was refreshed by op echoes alone. The value is a stream, so it rides `/params/<node>`
-— per connection, opened by whatever is DISPLAYING the node, restating the pair every tick rather
-than diffing it, so a tab that opened late or re-seeded is current within one. Per connection is
-the load-bearing half: a 20 Hz stream on the shared control ring makes a throttled background tab
-lag into a full document re-seed, and a param nobody is looking at must cost nothing. On the health
-pace alone, a slider following an expression moved twice a second.
-
-**An accessory never reaches an engine's scheduling, and never widens what it makes.** A viewer's
-ask — the box it wants a producer's readback fitted into, and the sample width it draws — is a
-LIVE CELL the render thread reads, never plan state: a viewer appearing, resizing or leaving must
-not be able to re-plan an engine. Both halves ride ONE cell, because a box and a depth that could
-disagree are two things to keep in step. A producer that answers the ask exactly is FORWARDED
-rather than remade: the reducer sends those bytes as they stand, and no pass over a texel happens
-anywhere in the process.
-And a reader that declared nothing has asked for no pixels, so its readback is ONE TEXEL — the
-cheapest frame that is still a frame, whose metadata is the whole product. A viewer declares what
-it DRAWS; a frame it accepts but cannot draw is one it can only DESCRIBE, and that is a second,
-cheaper declaration rather than its drawing axes stretched over a frame it renders nothing of. A
-frame NO declaration admits is not a declaration either — it takes the same one texel, never the
-passthrough that "no axes" would otherwise mean. Only a reader of RAW pixels widens a readback at
-all — a global
-following the slot, or a snapshot — because widening is the most expensive thing an engine can be
-told to do. What it cost, at 1920 square: an open metadata panel, which reads no pixels, held the
-engine at 30 fps for as long as it was open; six viewers closing at once — one pan of the node
-editor — took it to 10; and a line viewer parked on a texture, drawing nothing but a shape
-readout, took it to 12 on 9 MB frames.
-
-**Every out-of-crate node runs one contract.** In-process free-threaded and subprocess GIL-bound
-Python nodes share one marshalling seam, so they cannot drift; neither the tier nor the
-interpreter is selectable — one probe per node file routes it, by whether its imports keep the
-GIL disabled. A Rust node runs the same seam: every Rust node, shipped or authored, signal or
-audio, is one `.rs` file naming the SDK it is written against — which is what routes it to its
-engine — built by one pipeline into a `cdylib` and loaded behind a version symbol. A `.wgsl` file
-is the third such routing, and the one that needs no build at all. The signal ABI IS the subprocess tier's codec — one encode and one
-decode per side per run, a copy a compiled-in node never paid, accepted as the price of one
-seam; the audio ABI crosses the block as descriptors of the arena's own regions, because a block
-is memory the plan laid out, not a frame in flight. There is no static registration. Every
-`node-bundles/<bundle>/` is shipped — prebuilt at goofi's build time and embedded, each bundle a
-root of its own — so `cargo run` carries them all, and a toolchain is needed to author and never
-to run; `--extra-nodes` adds a root at run time.
-
-**A node the user wrote has a home outside the patch.** `$GOOFI_HOME/.goofi/custom/` is the private
-library — the ONE node root goofi writes into — scanned after every other root and before the
-patch's own, so it beats a shipped node and loses to the open patch. `library save <type>` MOVES a
-patch's node file into it, because two copies of one node are two claimants on its name. A `.gfi`
-still carries every library file the patch's nodes use, packed straight into the archive and never
-into the mount, so a patch opens on a machine that has no such library. A load then DROPS the copy
-the archive brought wherever the library already holds it BYTE FOR BYTE: one file, so an edit there
-reaches every patch that uses it. A copy that DIFFERS stays and wins the name, exactly as any patch
-file wins one.
-
-**Exit is a real teardown.** Every node is stopped and waited for — to a CEILING, not a join,
-because a wedged node must not wedge the exit. That wait is what releases shared memory; what a
-crash leaves behind is reclaimed by the next start's sweep.
-
-**The node library is ORTHOGONAL, and that is a standing rule rather than a past clean-up.** The
-old Python implementation grew a node per need and ended with hundreds of overlapping
-single-purpose ones. The replacement is a small set that COMPOSES. Before adding a node the
-question is not "would this be useful?" but "what does the library already compose to, and is this
-genuinely outside that span?" — which is why `Filter` is one node with a `mode` of four options
-where the old tree had four nodes.
-
-**A public goofi runs in DEMO mode, and demo mode is not a sandbox.** `GOOFI_DEMO` — one runtime
-boolean folded beside `headless`, riding the document as ONE field — DROPS an op from the
-vocabulary and leaves a route unmounted rather than refusing either. A param expression is Python
-and a Python node is Python, so a visitor executes arbitrary code by design: the mode removes the
-convenient doors, never the capability, and it must never be described as a sandbox. Every visitor
-shares ONE patch, because one process holds one graph. Idle belongs to the HOSTING PLATFORM alone —
-a goofi-owned countdown was built and removed, because two idle authorities cannot both own "is
-this idle", and the platform's sleep is what resets the process.
-
-**A failed frontend build is a failed build.** The bundle is compiled into the binary, so there is
-no such thing as falling back to the previous one — it is an app that does not match the binary
-around it, and on a fresh clone it does not exist. The build script fails instead, and a binary
-that ended up with no app refuses to start rather than answering every route with nothing.
-
-**Headless is ONE mode with three doors.** `--headless`, `GOOFI_HEADLESS` in the environment, and
-`GOOFI_HEADLESS` set for the BUILD — which leaves the app out of the binary and stamps
-`HEADLESS_BUILD`, so that binary is headless for life rather than needing the flag repeated at
-every run. All three fold into one boolean before anything reads it, because a mode reachable three
-ways must not be three conditions to keep in step. That stamp is also what separates an empty
-bundle someone ASKED for from one that is a broken build: the first is the mode, the second is
-refused.
-
-**A virtual node is a node, and only the backend may know otherwise.** A boundary port and a
-sub-patch facade are nodes: named in the one namespace `nd()` reads, moved, wired, viewed, copied,
-deleted and inspected by the same ops, and carried in the document's ONE `nodes` map. The backend
-keeps the thin distinctions their own nature forces — neither runs, so neither holds params, a
-manifest or a lifecycle stage, and a port relays rather than produces, so a read resolves what is
-behind it. **The frontend gets none.** A frontend branch on port-ness or scope-ness is a defect
-unless it is purely about how the thing is DRAWN.
-
-The test for "is this necessary" is the UNWIRED state: a port with nothing behind it must be in the
-state an unconnected leaf is in — present, addressable, viewable, wireable, saved — just with no
-data. It is never absent, never an error, never a closed socket. Deleting the node behind a port
-leaves the port; a viewer opened before the wire stays open and starts drawing when the wire lands.
-What this cost, three times over: a port was DELETED when its target was, its `/data` socket was
-refused with a terminal close code that the client then made permanent, and `node state` answered
-"no node" for the thing `node add` had just returned.
-
-**A node is addressed by its NAME, and the uid is the document's key.** The two are not rivals: a
-uid is identity, unique for the node's life and restored by a load, so the document, the manifest
-and every uid-keyed binding stay on it. A name is the HANDLE — unique across the patch, minted at
-birth, and what a person and an agent both actually type. So every op takes either, and every read
-answers the name: a wire's two ends, a diagram's mermaid ids, a standing error's row, a panel's
-binding. A uid rides beside a name only where a caller keys records of its own. What this buys is
-a batch with no bookkeeping in it — `node add --name src`, then `link add src/out …`, with nothing
-carried between the lines.
-
-**A patch is an archive.** A `.gfi` is a zip holding the manifest beside the workspace tree it was
-saved with. A load extracts into a FRESH mount, parses, and only then swaps: graph and workspace,
-or neither. A load restores the uids the patch was saved with, because everything keyed by uid
-that the load does not itself remap depends on it.
-
-**The skills ride the workspace, so an agent reads them from its own cwd.** `skills/` is embedded
-at build time as the node bundles are, laid into `mount/skills/` and packaged into the `.gfi` like
-any other workspace file — there is no second door and no registry. Seeding is per SKILL and
-ABSENT-ONLY, and it happens on a LOAD as well as on a fresh mount, which is the one place this
-departs from the orientation: an unpacked workspace is the patch's own and goofi does not write
-into it, but a skill goofi has GAINED since the patch was saved is not something that patch has an
-opinion about. So the archive brings what it had, the load adds what is new, and the next save
-packages the union — a patch saved before a skill existed acquires it by being opened. The unit is
-the DIRECTORY so an edit inside one survives, and the cost, stated: deleting a whole skill from a
-patch brings it back on the next load, with `.goofiignore` the door for a patch that wants it
-gone. Every site seeds BEFORE the workspace baseline is taken, or a patch would be dirty from the
-moment it opened, having been dirtied by goofi's own seeding.
-
-**Identity is structural.** A spawned agent's identity travels in its ENVIRONMENT, minted by
-goofi at the spawn: `GOOFI_SESSION` names the server, `GOOFI_ACTOR` names its own undo stack, and
-the running binary's OWN DIRECTORY leads PATH, so `goofi` resolves to this very binary — nothing is
-detected, nothing is templated, and there is nothing to spoof. It is the directory rather than a
-launcher laid beside it, because a launcher is a script and a script has a dialect: a `goofi.cmd`
-is what `cmd` reads and what no bash-family shell will, so the agent that goofi most exists to
-serve found no `goofi` at all. Copying the binary somewhere neutral is not the way out either —
-Windows loads a process's DLLs from the directory it runs out of. What an agent can reach, every local process
-can already reach: `/exec` and `/mcp` extend the same trust `/control` always has, and a stopped
-agent's environment naming the server until the kill lands is that same trust, accepted. The
-Origin/Host allowlist covers every route including the WebSocket upgrades — a drive-by guard, not
-authentication; this app stays single-user and local by design.
-
-**A drawing pad has ONE painter, and the CLI is another hand on it.** `control draw` parses a
-turtle script — the geometry is Rust's, so a refusal names the line — and broadcasts the STROKES it
-makes; the widget paints them through the very function a pointer reaches, so a script and a finger
-cannot disagree about what a stroke looks like. The op writes nothing, which is what leaves the
-widget's own commit as the drawing's one undo step; the cost is that a pad nobody has open draws
-nothing, and the reply says how many clients heard it. The picture leaves as a frame: `Drawing`
-reads the widget's global the way a knob reads one and decodes the PNG, `graphics:SignalIn` puts it
-on the GPU. `roadmap/control-panels.md` holds the rest.
-
-**The frontend is a replica, and its styling has one source.** Every colour, spacing, type and
-motion token lives in one `:root`; a component states its own layout, never another's. The
-primitive library is a LEAF layer and must not import a store — doing so reshuffles the CSS chunk
-graph and gave the app a first-paint flash.
-
-**The panel system is a dependency, not a subsystem.** Tabs, splits, maximize and the drag-and-drop
-are `panelty` — an npm package with a repo of its own (`dav0dea/panelty`), which goofi consumes like
-any other dependency. It holds NO tree: it raises an intent, and goofi's `LayoutHost` turns each one
-into a single manager op, so the document stays the only owner of the layout. Its styling is a
-CONTRACT rather than a shared `:root` — the package ships a `--panelty-*-default` for every token
-and reads `var(--panelty-x, var(--panelty-x-default))`, and goofi maps its own tokens onto that in
-one block, which a test pins in both directions. Work that belongs to the panel system is a release
-of the package, never a patch in this tree.
-
----
-
-## Hard constraints
-
-- **`main` is the working branch, and everyone commits on it.** Several agents work at once and
-  they work TOGETHER on one branch: no branch and no worktree unless the user asks for one. Never
-  force-push.
-- **The version lives in ONE place** — `[workspace.package] version`. Every crate inherits it and
-  the Python wheel derives it. Bumping it also re-provisions the venvs.
-- Commit in small, focused, readable steps at green checkpoints — never one mega-commit. Commit
-  messages end with a `Co-Authored-By:` trailer naming the model that actually wrote them.
-- **`roadmap/` is the backlog, and it is committed.** One file per unbuilt feature, in the repo
-  root. It is the ONE place a deferred item is recorded — an item tracked anywhere else is an item
-  that drifts. A file states the decisions already taken and what is open, never a plan.
-- No auth on the WS endpoints — single-user, local/trusted-LAN app.
-- **Responsive and touch-capable across desktop, tablet and phone**, both orientations. Desktop is
-  the reference, but no interaction may exist solely behind hover, right-click or a keyboard
-  chord. Touch needs its own door in, gated on the one spelling a test enforces. Panel width is
-  independent of viewport width, so `@container` is the default tool and `@media` is reserved for
-  real device-class questions. One theme, done well.
-- `/dev/*` is development surface: `--debug` (or `GOOFI_DEBUG=1`) opens it, nothing else does.
-  `/dev/ui` renders one sample of every `$lib/ui` export and is a real tool for UI work; the guard
-  against a primitive nobody uses is a vitest check that the barrel has no orphan export.
-- **The workspace/panel system and the cable-drag feel are frozen UX.** Restyle them, do not
-  redesign them — and the panel system is `panelty`, so restyling it means the token contract, not
-  its source. There is no phone-only layout mode: a phone renders the same panel tree, and panel
-  maximize is the small-screen mechanism.
-- **Navigation must not dirty the patch, on either platform.** Entering a sub-patch is navigation;
-  changing a viewer's type is a real view setting. Persistence and dirtiness are separate axes,
-  and an unclassified write counts as authoring — so forgetting to classify costs a spurious dot,
-  never a lost change.
-- Do not reintroduce dearpygui, zmq, or a Python manager.
-- The shared-memory transport and the binary wire format are load-bearing; changing either means
-  changing the frontend's decoder in lockstep, and a golden pins it.
-
----
-
-## Getting it running
-
-Setup is ONE command, and it is not a shell script: `cargo run -p goofi-init`, once per clone,
-with `uv` and `npm` on PATH. It creates both interpreters, installs both wheels, installs the
-frontend's dependencies, and writes the gitignored cargo config that points pyo3 at the
-free-threaded one. Until it has run, the build fails with a single line telling you to run it.
-
-**Two commands is the ceiling** — that one and `cargo run`. Every precondition cargo has and cannot
-provide for itself belongs inside goofi-init, never in a third line of a README: a build script
-that stops to name a second setup step is a build that did not have to stop. The frontend's
-`node_modules` was that third line, and it cost a fresh clone a server that started and served
-nothing.
-
-**`cargo run` starts the server, and the same binary is the CLI client of a running one.**
-`default-run` in `goofi-cli` is what keeps that bare command unambiguous, because the workspace also
-builds `goofi-init` and the suite's `vst3scan`. From a second shell, `goofi session list` names what
-is running and `goofi help` lists the vocabulary. Three environment variables steer the client, all
-optional: `GOOFI_SESSION` picks the server when more than one runs, `GOOFI_ACTOR` names the undo
-stack the commands land on, and `GOOFI_HOME` must MATCH the server's, because the session record
-the client finds it through lives under it. An agent goofi spawns is handed the first two already.
-
-**The toolchain is pinned**, in `rust-toolchain.toml` — a different statement from `rust-version` in
-Cargo.toml, which is the OLDEST compiler this code supports where the pin is the one it is built and
-gated with. It exists because CI's `stable` had drifted eight releases past the machine the code was
-checked on, so every lint added in between arrived as a CI failure on code nobody had touched.
-Moving the pin is a deliberate commit that fixes whatever the new release names.
-
-The gates, once it is provisioned:
-
-```bash
-cargo test --workspace --no-fail-fast       # must stay green, and warning-free
-cargo test -p goofi-tests --features embed  # …plus the in-process Python tier, which LINKS libpython
-cargo build --workspace --all-targets 2>&1 | grep -n '^warning'   # anchor the grep: a test's own
-#   log line can contain "warning:" and read as a failing gate when it is not
-cargo clippy --workspace --all-targets                             # …and this prints nothing
-cd frontend && npm run check && npm run test   # svelte-check + tsc strict, then vitest
-cd tests/e2e && npm install && npm run e2e     # Playwright: its own package, its own install
-#   Four situations across four viewport projects: the socket seam, structural integrity, gestures,
-#   and the agent harness. Everything else, the op vocabulary already proves in goofi-tests.
+```sh
+cargo run -p goofi-init
+cargo run
 ```
-**CI runs this list and nothing else** — `.github/workflows/ci.yml`, ONE job, because the gates
-share one machine's worth of setup and the SPA is compiled in: no cargo build here happens without
-the frontend's dependencies. It is the same list because a gate with two spellings drifts, and the
-one that drifts is the one nobody runs by hand. The clippy line is spelled `-- -D warnings` there:
-"and this prints nothing" is not enforceable by reading, and clippy carries the rustc lints too, so
-that one command is the build-warning gate as well.
-**That job runs on Linux ALONE as of 2026-09-08**, as a matrix of one — the shape is kept because
-restoring a platform is then one line in `os`. It ran on Windows and macOS too, and they were
-dropped for Actions MINUTES, which is a bill rather than a judgment: the premise that had made the
-matrix free ("standard runners are free on a public repo") stopped being true. The list itself is
-unchanged — a per-platform gate running a subset is the second spelling CI exists to prevent —
-minus two steps that provably cannot differ. `svelte-check` type-checks, and a type has no
-platform; Playwright drives a browser, and the half of it that IS platform-specific is the binary
-underneath, which `goofi-tests` proves on whatever runner there is. **vitest is NOT in that set**
-and runs everywhere: its guards WALK THE TREE, and a `rel` built with `\` is how three of them
-failed on Windows while one of those quietly found nothing and passed.
 
-**What green no longer means.** Windows is a whole separate PAL and none of it is visible from
-Linux: a ConPTY that answers a cursor query and never reports EOF, a `cmd` launcher, `\` in every
-path a test compares, a `.pdb` two targets can collide on. Every one of those was found by hand,
-on a machine, after it had already shipped — which is the argument for the matrix and is exactly
-what is now unfunded rather than disproved. macOS was there for its ARCHITECTURE rather than its
-unix: `macos-latest` is arm64, so with it gone **aarch64 is compiled nowhere**, and pyo3's
-embedded interpreter meets dylib and codesigning rules nowhere. Expect the first run after either
-is restored to be red, and do not read a green Linux job as cross-platform evidence in the
-meantime. Note what the warning gate still cannot hold either: `-D warnings` is rustc's, and a
-CARGO warning — the `.pdb` collision was one — passes it silently.
-**TypeScript stays on 6.x.** 7 installs and `svelte-check` will run against it — with both versions
-side by side and a `--tsgo` flag — and it checks **66 files instead of 754** and reports success.
-A gate that silently covers a tenth of the app is worse than no gate. Re-try when svelte-check's
-TS 7 support stops being experimental; it is one version string.
+Checks from the repository root:
 
-Two interpreters, both machine-local and gitignored, and the names are deliberate — a generic
-`.venv` is claimed by editors and by `uv` itself, and a stale one is not inert:
+```sh
+cargo build --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --no-fail-fast
+cargo test -p goofi-tests --features embed
+npm --prefix frontend run check
+npm --prefix frontend run test
+```
 
-- a free-threaded 3.14t, which the in-process host LINKS against and the discovery probe uses;
-- a GIL python, which the subprocess tier always runs, because that tier exists precisely for
-  packages that are not free-threading-safe.
+For a focused Rust session, use `cargo test -p goofi-tests --test <situation>`.
+For browser tests:
 
-A bundle's `requirements.txt` goes into BOTH; a `requirements-gil.txt` beside it goes into the GIL
-one alone. That second file is how a bundle says "this package ships no free-threaded wheel", which
-is the ordinary case for an inference runtime and was going to be the ordinary case for every
-model-running node — onnxruntime has no `cp314t` wheel and neither does torch. Without it the
-choice was to keep such a node out of the repo, or to leave its dependency undeclared and let it
-fail on first use; the tier the node already belonged to was the answer, and now the provisioning
-can say so.
-
-**Never resolve the interpreter path.** The config names it RELATIVE and canonicalizes nothing: on
-unix a venv's `python` is a symlink into the base install, which is exactly where the goofi wheel
-is not — so canonicalizing hands pyo3 an interpreter that cannot import it, nothing errors, and
-every Python node silently drops to the subprocess tier.
-
-**Known gap:** provisioning reinstalls when the wheel is missing or broken, never when it is
-merely stale. After changing the Python package, delete the venv — or the probe keeps running the
-old wheel and a node using a new authoring feature silently disappears from the palette.
-
-The cross-language tests find these interpreters themselves and **fail with an actionable message**
-when none can import goofi. They never skip, and nothing in the suite is `#[ignore]`d. The graphics
-suite is the same rule against a GPU: a machine with no adapter has no graphics engine and no
-graphics type in the catalog, and the scenario fails naming the package to install
-(`mesa-vulkan-drivers`, which is lavapipe) rather than skipping.
-
-`/dev/shm/iox2_*` is not a leak, and two reviews have now misread it as one. The count PEAKS
-during a run and settles back, because every node releases its shared memory when it drops. Delete
-those files by hand only to get a clean measurement, never as a fix — and NEVER from a script:
-unlinking a same-user tmpfs file always succeeds, mapped or not, so no sweep can tell a corpse from
-a live sibling's segment. The e2e harness had one, and every suite run severed each OTHER goofi on
-the machine: its existing wires kept flowing on their mappings while every wire made after landed
-on recreated, empty backing — no error, node green, data dead. Reclaim goes through iceoryx2
-(`reclaim_stale_resources`, at every boot), which knows dead from alive; nothing else deletes. Relatedly: **a struct that
-owns an iceoryx2 node beside its ports must declare the node LAST**, because Rust drops fields in
-declaration order and a node dropped first cannot remove its own directory.
-
-Never background CPU load with `(cmd &)` subshells when benchmarking — leaked processes outlive
-the test and corrupt every later measurement.
+```sh
+cd tests/e2e
+npm install
+npx playwright install chromium
+npm run e2e
+```
