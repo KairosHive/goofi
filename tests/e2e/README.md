@@ -1,6 +1,6 @@
 # goofi e2e (Playwright)
 
-End-to-end tests that boot the real `goofi-pipe` backend and drive the real SPA through
+End-to-end tests that boot the real `goofi` backend and drive the real SPA through
 `window.goofi` (the agent façade). Committed, CI-runnable, isolated from `backend/` and
 `frontend/`.
 
@@ -16,7 +16,7 @@ npm test                         # just `playwright test`, against whatever is a
 
 `npm run e2e` = the frontend build plus `cargo build -p goofi-cli`, then `playwright test`.
 
-**One backend per worker.** `globalSetup.ts` spawns a fleet of `goofi-pipe`s on
+**One backend per worker.** `globalSetup.ts` spawns a fleet of `goofi`s on
 `8500 + <worker slot>` (override the base with `GOOFI_E2E_PORT`, the width with
 `GOOFI_E2E_WORKERS`) and reaps them afterwards; each worker derives its own port from
 `TEST_PARALLEL_INDEX`, so no spec knows a port exists. That is what makes the suite parallel: a

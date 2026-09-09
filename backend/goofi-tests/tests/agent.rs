@@ -593,7 +593,7 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
     let mount = state.mount();
     let agents = std::fs::read_to_string(mount.join("AGENTS.md"))
         .expect("the workspace was seeded with the orientation");
-    assert!(agents.contains("goofi-pipe is a live"), "the orientation is the real one: {agents}");
+    assert!(agents.contains("goofi is a live"), "the orientation is the real one: {agents}");
     assert_eq!(std::fs::read_to_string(mount.join("CLAUDE.md")).unwrap(), "@AGENTS.md\n");
     // The orientation's own node example, written where the orientation says, is a node — so the
     // seeded text can never name a folder the scan does not read or a shape the probe refuses.

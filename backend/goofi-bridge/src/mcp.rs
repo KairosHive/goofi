@@ -141,7 +141,7 @@ async fn serve(state: &AppState, body: &str) -> Response {
                     Some(_) => LATEST_PROTOCOL,
                 },
                 "capabilities": { "tools": {} },
-                "serverInfo": { "name": "goofi-pipe", "version": env!("CARGO_PKG_VERSION") },
+                "serverInfo": { "name": "goofi", "version": env!("CARGO_PKG_VERSION") },
                 // No `instructions`: the orientation is `AGENTS.md` in the harness's cwd.
             }),
         ),

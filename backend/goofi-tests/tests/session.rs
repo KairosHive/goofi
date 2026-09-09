@@ -256,7 +256,7 @@ fn a_new_patch_inherits_nothing_from_the_one_before_it() {
     assert!(!old_mount.exists(), "and the one it replaced is released, not leaked");
     // `new` MINTS the workspace, so it seeds the orientation while `load`, one line away, must not.
     assert!(!mount.join("notes.md").exists());
-    assert!(std::fs::read_to_string(mount.join("AGENTS.md")).unwrap().contains("goofi-pipe is a live"));
+    assert!(std::fs::read_to_string(mount.join("AGENTS.md")).unwrap().contains("goofi is a live"));
     assert_eq!(std::fs::read_to_string(mount.join("CLAUDE.md")).unwrap(), "@AGENTS.md\n");
 }
 

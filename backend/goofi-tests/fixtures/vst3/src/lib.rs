@@ -619,7 +619,7 @@ impl IPluginFactoryTrait for Factory {
     unsafe fn getFactoryInfo(&self, info: *mut PFactoryInfo) -> tresult {
         let info = &mut *info;
         copy_cstring("goofi", &mut info.vendor);
-        copy_cstring("https://github.com/PhilippThoelke/goofi-pipe", &mut info.url);
+        copy_cstring("https://example.com/goofi", &mut info.url);
         info.flags = PFactoryInfo_::FactoryFlags_::kUnicode as int32;
         kResultOk
     }

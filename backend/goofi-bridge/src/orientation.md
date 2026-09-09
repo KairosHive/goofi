@@ -1,4 +1,4 @@
-goofi-pipe is a live signal-processing patch: a graph of nodes running right now, in a window a
+goofi is a live signal-processing patch: a graph of nodes running right now, in a window a
 human has open beside you. Your edits reach their screen at once and theirs reach your next read,
 so work in small steps and check each one, `goofi nodes inspect` between them. Every write
 answers with what it did, so read the reply instead of following it with another call. Never
