@@ -14,12 +14,20 @@ test('globals group markers stay at the right edge on desktop and touch', async 
 				kind: 'knob', min: 0, max: 1, x: 0, y: 0, w: 3, h: 3
 			});
 			await g.commands.addGlobal('other.value', 1, 'float');
-			await g.commands.lockGlobalGroup('desk', { config: true });
 			await g.commands.setPanelType(g.query.panels()[0].panelId, 'globals');
 		});
 		const panel = page.getByTestId('globals-panel');
 		const desk = panel.locator('[data-group="desk"]');
 		await expect(desk.getByRole('img', { name: 'Control panel' })).toBeVisible();
+		await expect(desk).toHaveAttribute('data-lock-config', 'true');
+		await expect(desk.getByTestId('global-group-edit')).toHaveCount(0);
+		const markers = await desk.locator('.grp-tags').evaluate((tags) => ({
+			last: tags.lastElementChild?.className,
+			control: getComputedStyle(tags.querySelector('.grp-control')!).color,
+			lock: getComputedStyle(tags.querySelector('.grp-lock')!).color
+		}));
+		expect(markers.last).toContain('grp-count');
+		expect(markers.control).toBe(markers.lock);
 		for (const width of [1280, 390]) {
 			await page.setViewportSize({ width, height: 844 });
 			const summary = desk.getByTestId('global-group-toggle');
@@ -32,9 +40,21 @@ test('globals group markers stay at the right edge on desktop and touch', async 
 				groups.map((group) => getComputedStyle(group).backgroundColor)
 			);
 			expect(backgrounds[0]).not.toBe(backgrounds[1]);
-			if (width === 390) await summary.tap();
-			else await summary.click();
+			const middle = { x: rowBox.width / 2, y: rowBox.height / 2 };
+			if (width === 390) await summary.tap({ position: middle });
+			else await summary.click({ position: middle });
 			await expect(desk.getByTestId('global-row')).toBeVisible();
+			await expect(desk.getByTestId('global-name')).toHaveCount(0);
+			await expect(desk.getByTestId('global-delete')).toHaveCount(0);
+			await expect(desk.getByTestId('global-add-in')).toHaveCount(0);
+			await expect(desk.getByTestId('global-type').locator('select')).toBeDisabled();
+			await desk.getByTestId('global-value').fill('0.75');
+			await desk.getByTestId('global-value').press('Enter');
+			await expect.poll(() => page.evaluate(() => (window as any).goofi.query.globals()
+				.find((entry: { name: string }) => entry.name === 'desk.level').value)).toBe(0.75);
+			expect(await panel.getByTestId('global-group').evaluateAll((groups) => groups.every((group) =>
+				getComputedStyle(group).borderBottomStyle === 'solid' && getComputedStyle(group).borderBottomWidth === '1px'
+			))).toBe(true);
 			if (width === 390) await summary.tap();
 			else await summary.click();
 			await expect(desk.getByTestId('global-row')).toHaveCount(0);
