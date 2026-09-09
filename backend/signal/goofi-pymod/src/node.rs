@@ -6,13 +6,26 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 #[pyclass(subclass)]
-pub struct Node {}
+pub struct Node {
+    pub(crate) clear_inputs: Option<Vec<String>>,
+}
 
 #[pymethods]
 impl Node {
     #[new]
     fn new() -> Node {
-        Node {}
+        Node { clear_inputs: None }
+    }
+
+    /// Clear a held input after this process call succeeds.
+    fn clear_input(&mut self, name: String) -> PyResult<()> {
+        let slots = self.clear_inputs.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("clear_input() is only available inside process()")
+        })?;
+        if !slots.contains(&name) {
+            slots.push(name);
+        }
+        Ok(())
     }
 
     /// `{slot_name: DataType | InputSlot}` — the node's input slots.

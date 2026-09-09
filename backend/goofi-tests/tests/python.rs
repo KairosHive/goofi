@@ -87,6 +87,89 @@ class Boom(goofi.Node):
     let d = g.until("the recovered node", |_| probe.latest().filter(|d| f32s(d)[0] > 1.0));
     assert!(f32s(&d)[0] > 1.0, "the child survived the raise with its state: {:?}", f32s(&d));
     g.until("the error to clear", |g| g.error(node).is_none().then_some(()));
+
+    install(&g, "once.py", r#"
+import goofi
+import numpy as np
+class Once(goofi.Node):
+    OUTPUTS = {"out": goofi.DataType.ARRAY}
+    PRODUCER = True
+    PARAMS = {"send": {"value": goofi.IntParam(0, 0, 100)}}
+    def setup(self):
+        self.last = 0
+    def process(self):
+        value = self.params.send.value
+        if value == self.last:
+            return None
+        self.last = value
+        return np.array([value], dtype=np.float32)
+"#);
+    install(&g, "consume.py", r#"
+import goofi
+import numpy as np
+class Consume(goofi.Node):
+    INPUTS = {"data": goofi.InputSlot(goofi.DataType.ARRAY, multi=True)}
+    OUTPUTS = {"out": goofi.DataType.ARRAY}
+    PARAMS = {"consume": {"mode": goofi.IntParam(0, 0, 4)}}
+    def process(self, data):
+        mode = self.params.consume.mode
+        if mode:
+            self.clear_input("data")
+        if mode == 2:
+            return None
+        if mode == 3:
+            raise ValueError("consume failed")
+        if mode == 4:
+            self.clear_input("missing")
+        return np.array([mode, sum(float(d.data[0]) for _, d in data if d is not None)], dtype=np.float32)
+"#);
+    let first = g.add("Once");
+    let second = g.add("Once");
+    for source in [first, second] {
+        g.set_param(source, "common", "max_frequency", 20.0);
+    }
+    let consume = g.add("Consume");
+    let consumed = g.probe(consume, "out");
+    free_run(&g, consume, 20.0);
+    g.link(first, "out", consume, "data");
+    g.link(second, "out", consume, "data");
+    g.ready(first);
+    g.ready(second);
+    let sees = |mode: f32, sum: f32| {
+        let before = consumed.latest().and_then(|d| d.meta().index());
+        g.until("the held input readout", |_| {
+            consumed.latest().filter(|d| d.meta().index() > before && f32s(d) == [mode, sum])
+        });
+    };
+    sees(0.0, 0.0);
+    g.set_param(first, "send", "value", 2);
+    g.set_param(second, "send", "value", 3);
+    sees(0.0, 5.0);
+    g.set_param(consume, "consume", "mode", 1);
+    sees(1.0, 0.0);
+    g.set_param(consume, "consume", "mode", 0);
+    sees(0.0, 0.0);
+    g.set_param(first, "send", "value", 4);
+    g.set_param(second, "send", "value", 6);
+    sees(0.0, 10.0);
+    g.set_param(consume, "consume", "mode", 3);
+    let why = g.until("a failed consumption", |g| g.error(consume));
+    assert!(why.contains("consume failed"), "{why}");
+    g.set_param(consume, "consume", "mode", 0);
+    sees(0.0, 10.0);
+    g.until("failed process recovery", |g| g.error(consume).is_none().then_some(()));
+    g.set_param(consume, "consume", "mode", 4);
+    let why = g.until("an invalid clear request", |g| g.error(consume));
+    assert!(why.contains("missing"), "{why}");
+    g.set_param(consume, "consume", "mode", 0);
+    sees(0.0, 10.0);
+    g.until("clear failure recovery", |g| g.error(consume).is_none().then_some(()));
+    g.set_param(consume, "consume", "mode", 2);
+    std::thread::sleep(Duration::from_millis(200));
+    g.set_param(consume, "consume", "mode", 0);
+    sees(0.0, 0.0);
+    g.set_param(second, "send", "value", 7);
+    sees(0.0, 7.0);
 }
 
 #[test]

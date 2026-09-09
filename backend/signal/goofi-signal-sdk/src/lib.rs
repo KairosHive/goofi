@@ -108,11 +108,23 @@ impl<'a> Outputs<'a> {
 pub struct NodeCtx {
     /// Monotonic seconds since the PATCH began — one clock across every node thread.
     pub now: f64,
+    clear_inputs: Vec<String>,
 }
 
 impl NodeCtx {
     pub fn new() -> NodeCtx {
         NodeCtx::default()
+    }
+
+    /// Clear a held input after this process call succeeds.
+    pub fn clear_input(&mut self, name: &str) {
+        if !self.clear_inputs.iter().any(|slot| slot == name) {
+            self.clear_inputs.push(name.to_owned());
+        }
+    }
+
+    pub fn take_cleared_inputs(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.clear_inputs)
     }
 }
 

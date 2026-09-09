@@ -463,17 +463,24 @@ pub fn decode_request(buf: &[u8]) -> std::result::Result<Request, String> {
     }
 }
 
-/// A decoded subprocess response: the node's output slots, a per-tick node error message, or
-/// a refreshed option list — `None` when the node had no answer and the param keeps its own.
+/// Outputs and input clears from a successful process call.
+pub struct ProcessOutput {
+    pub outputs: Vec<(String, Data)>,
+    pub clear_inputs: Vec<String>,
+}
+
 pub enum Response {
-    Slots(Vec<(String, Data)>),
+    Process(ProcessOutput),
     NodeError(String),
     Options(Option<Vec<String>>),
 }
 
-/// Encode an OK response: `[0][slots]`; an output has no source, so each crosses with none.
-pub fn encode_response(slots: &[(&str, &Data)]) -> Vec<u8> {
+/// Encode outputs and input clears from a successful call.
+pub fn encode_response(slots: &[(&str, &Data)], clear_inputs: &[String]) -> Vec<u8> {
     let mut out = vec![0u8];
+    let clears = rmp_serde::to_vec(clear_inputs).expect("strings");
+    out.extend_from_slice(&(clears.len() as u32).to_le_bytes());
+    out.extend_from_slice(&clears);
     let unsourced: Vec<(&str, &str, &Data)> = slots.iter().map(|(name, d)| (*name, "", *d)).collect();
     encode_slots(&unsourced, &mut out);
     out
@@ -497,7 +504,13 @@ pub fn encode_options_response(options: &Option<Vec<String>>) -> Vec<u8> {
 pub fn decode_response(buf: &[u8]) -> std::result::Result<Response, String> {
     let (&tag, rest) = buf.split_first().ok_or("empty response frame")?;
     match tag {
-        0 => Ok(Response::Slots(decode_slots(rest)?.into_iter().map(|(name, _, d)| (name, d)).collect())),
+        0 => {
+            let mut cur = Cursor::new(rest);
+            let len = cur.u32("input clears length")?;
+            let clear_inputs = rmp_serde::from_slice(cur.take(len, "input clears")?).map_err(|e| e.to_string())?;
+            let outputs = decode_slots(cur.rest())?.into_iter().map(|(name, _, d)| (name, d)).collect();
+            Ok(Response::Process(ProcessOutput { outputs, clear_inputs }))
+        },
         1 => Ok(Response::NodeError(String::from_utf8_lossy(rest).into_owned())),
         2 => Ok(Response::Options(rmp_serde::from_slice(rest).map_err(|e| e.to_string())?)),
         other => Err(format!("unknown response tag {other}")),

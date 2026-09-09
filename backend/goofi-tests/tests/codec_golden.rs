@@ -165,7 +165,9 @@ fn a_request_carries_each_multi_frame_with_its_source() {
     let named: Vec<(&str, &str)> = slots.iter().map(|(n, s, _)| (n.as_str(), s.as_str())).collect();
     assert_eq!(named, vec![("input", "alpha.out"), ("input", "beta.out"), ("gate", "")]);
     assert_eq!(encode(&slots[1].2), encode(b), "the second entry is beta's own frame");
-    let reply = goofi_codec::decode_response(&goofi_codec::encode_response(&[("out", b)])).expect("a response");
-    let goofi_codec::Response::Slots(outs) = reply else { panic!("slots") };
+    let reply = goofi_codec::decode_response(&goofi_codec::encode_response(&[("out", b)], &["input".into()])).expect("a response");
+    let goofi_codec::Response::Process(result) = reply else { panic!("process output") };
+    assert_eq!(result.clear_inputs, vec!["input"]);
+    let outs = result.outputs;
     assert_eq!((outs[0].0.as_str(), encode(&outs[0].1)), ("out", encode(b)));
 }
