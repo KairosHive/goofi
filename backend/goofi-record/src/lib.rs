@@ -15,7 +15,7 @@ use goofi_core::time::{stamp, stamp_nanos, Time};
 use goofi_node::Uid;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -29,7 +29,24 @@ fn held<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// The longest a stop waits for its drains and reapers.
-const SETTLE: Duration = Duration::from_millis(500);
+const SETTLE: Duration = Duration::from_secs(3);
+
+/// The composition root joins engine queues to the recorder's transport drain.
+/// None of these waits may run on a device callback or with the graph locked.
+pub trait Capture: Send + Sync {
+    fn prepare(&self) -> Result<(), String>;
+    fn boundary(&self, window: Arc<goofi_core::record::FrameWindow>, begin: bool) -> Result<(), String>;
+}
+
+/// Preparation needs subscribers before a session exists. Clear this transient
+/// state on every return path, including a refused start.
+struct Preparing<'a>(&'a AtomicBool);
+
+impl Drop for Preparing<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
 
 /// How often a sweep's counts reach the manifest. The manifest is a PROJECTION and every stream
 /// reaches the disk on this same cadence, so nothing is fresher for being written more often —
@@ -93,6 +110,7 @@ struct Shape {
 }
 
 struct Session {
+    audio_window: Arc<goofi_core::record::FrameWindow>,
     folder: PathBuf,
     name: String,
     patch: Option<PathBuf>,
@@ -225,6 +243,9 @@ pub struct Recorder {
     /// for the second to reach the first, so no file is closed over a frame already delivered.
     asked: AtomicU64,
     swept: AtomicU64,
+    transition: Mutex<()>,
+    capture: Mutex<Option<Arc<dyn Capture>>>,
+    preparing: AtomicBool,
 }
 
 impl Recorder {
@@ -237,6 +258,9 @@ impl Recorder {
             noted: Mutex::new(Instant::now()),
             asked: AtomicU64::new(0),
             swept: AtomicU64::new(0),
+            transition: Mutex::new(()),
+            capture: Mutex::new(None),
+            preparing: AtomicBool::new(false),
         }
     }
 
@@ -244,6 +268,10 @@ impl Recorder {
     /// above this knows there was one.
     pub fn set_encoders(&self, encoders: Arc<dyn video::Encoders>) {
         *held(&self.encoders) = encoders;
+    }
+
+    pub fn set_capture(&self, capture: Arc<dyn Capture>) {
+        *held(&self.capture) = Some(capture);
     }
 
     /// Whether a video stream could be opened at all. `record start` asks it, and refuses only a
@@ -297,20 +325,33 @@ impl Recorder {
 
     /// Ask every drain for one more sweep and wait for it, to a CEILING — a wedged drain must
     /// never wedge a stop. What it buys is the tail: the frames the last sweep did not reach.
-    fn settle(&self) {
+    fn settle(&self) -> Result<(), String> {
         let want = self.asked.fetch_add(1, Ordering::SeqCst) + 1;
         let deadline = Instant::now() + SETTLE;
         while self.swept.load(Ordering::SeqCst) < want && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(1));
         }
+        if self.swept.load(Ordering::SeqCst) < want {
+            return Err("recording streams did not acknowledge the flush".into());
+        }
+        Ok(())
     }
 
     /// Mint the folder. Refused when a recording already runs — the session lock is the ONE
     /// authority on that, so no caller can check and then act past it.
     pub fn start(self: &Arc<Self>, root: &Path, name: &str, patch: Option<&Path>) -> Result<PathBuf, String> {
-        let mut held = self.held();
-        if held.is_some() {
+        let _transition = held(&self.transition);
+        if self.running() {
             return Err("a recording already runs".into());
+        }
+        self.preparing.store(true, Ordering::Release);
+        let _preparing = Preparing(&self.preparing);
+        let capture = held(&self.capture).clone();
+        let window = Arc::new(goofi_core::record::FrameWindow::default());
+        if let Some(capture) = &capture {
+            window.prepare();
+            capture.prepare()?;
+            self.settle()?;
         }
         let started = self.time.now();
         let stamped = format!("{}Z", stamp(self.time.utc_at(started)));
@@ -326,22 +367,40 @@ impl Recorder {
             closed: Vec::new(),
             version: 0,
             landed: Arc::new(Mutex::new(0)),
+            audio_window: window.clone(),
         };
         session.manifest(&self.time).write_atomic(&folder)?;
-        *held = Some(Arc::new(Mutex::new(session)));
-        drop(held);
+        *self.held() = Some(Arc::new(Mutex::new(session)));
         *self.writer.lock().unwrap_or_else(PoisonError::into_inner) =
             Some(writer::Writer::new(Arc::downgrade(self)));
+        if let Some(capture) = capture {
+            if let Err(error) = capture.boundary(window.clone(), true) {
+                window.finish(0);
+                self.finish()?;
+                return Err(error);
+            }
+        }
         Ok(folder)
     }
 
     /// Close every stream and finalize the manifest. `Ok(None)` is a recorder that was not
     /// running; a manifest that could not be written is the error, never a silent `None`.
     pub fn stop(&self) -> Result<Option<PathBuf>, String> {
+        let _transition = held(&self.transition);
         if !self.running() {
             return Ok(None);
         }
-        self.settle();
+        if let Some(capture) = held(&self.capture).clone() {
+            let window = self.held().as_ref().map(|s| held(s).audio_window.clone());
+            if let Some(window) = window {
+                capture.boundary(window, false)?;
+            }
+            self.settle()?;
+        }
+        self.finish()
+    }
+
+    fn finish(&self) -> Result<Option<PathBuf>, String> {
         // The writer goes FIRST: a file closed over a frame still queued is a frame the manifest
         // counted and the disk never got.
         drop(held(&self.writer).take());
@@ -362,6 +421,10 @@ impl Recorder {
 
     pub fn running(&self) -> bool {
         self.held().is_some()
+    }
+
+    pub fn receiving(&self) -> bool {
+        self.preparing.load(Ordering::Acquire) || self.running()
     }
 
     /// Open a file for a stream, closing whatever that stream held. Everything queued for it
@@ -490,8 +553,19 @@ impl Recorder {
         at: f64,
         wait: bool,
     ) -> bool {
+        if id.engine == "audio" {
+            let index = goofi_codec::frame_meta(bytes).ok().and_then(|m| m.index());
+            if let Some(index) = index {
+                let window = self.held().as_ref().map(|s| held(s).audio_window.clone());
+                if window.is_none_or(|window| !window.contains(index)) {
+                    return true;
+                }
+            }
+        }
         let guard = held(&self.writer);
-        let Some(writer) = guard.as_ref() else { return false };
+        // Idle armed feeds are still drained. They must not retain a frame from
+        // the previous recording or discard a new one after a start boundary.
+        let Some(writer) = guard.as_ref() else { return true };
         writer.take(id, bytes, rate, timeline, at, wait)
     }
 

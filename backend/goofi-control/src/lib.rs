@@ -165,6 +165,12 @@ struct Mail {
     desired: Option<Desired>,
     refresh: Vec<ParamKey>,
     pulse: Vec<ParamKey>,
+    flush: Vec<Flush>,
+}
+
+struct Flush {
+    armed: Vec<String>,
+    ack: std::sync::mpsc::SyncSender<Result<(), String>>,
 }
 
 /// The engine's end of one control half.
@@ -177,6 +183,17 @@ pub struct Handle {
 }
 
 impl Handle {
+    /// Acknowledge settled recording ports and one complete control tick. The
+    /// caller waits outside the graph lock and never on the audio callback.
+    pub fn flush(&self) -> std::sync::mpsc::Receiver<Result<(), String>> {
+        let (ack, done) = std::sync::mpsc::sync_channel(1);
+        let armed = self.last.lock().expect("the last desired").as_ref()
+            .map(|d| d.record.clone()).unwrap_or_default();
+        self.mail.lock().unwrap().flush.push(Flush { armed, ack });
+        let _ = self.bell.ring(0);
+        done
+    }
+
     fn send(&self, desired: Desired) {
         *self.last.lock().expect("the last desired") = Some(desired.clone());
         self.mail.lock().unwrap().desired = Some(desired);
@@ -360,9 +377,20 @@ impl<H: Half> Control<H> {
                 }
             }
             self.receive();
-            if self.last_tick.elapsed() >= TICK {
+            if !mail.flush.is_empty() || self.last_tick.elapsed() >= TICK {
                 self.last_tick = Instant::now();
                 self.tick();
+            }
+            for Flush { armed, ack } in mail.flush {
+                let missing: Vec<_> = armed.iter().filter(|name| {
+                    !self.manifest.outputs.iter().zip(&self.outs).any(|(decl, out)| {
+                        decl.name == name.as_str() && out.record.as_ref().is_some_and(|p| !p.retired())
+                    })
+                }).cloned().collect();
+                let result = if missing.is_empty() { Ok(()) } else {
+                    Err(format!("recording ports are not ready: {}", missing.join(", ")))
+                };
+                let _ = ack.try_send(result);
             }
         }
     }
@@ -688,4 +716,3 @@ pub fn text(consts: &[Param], param: usize) -> String {
 pub fn flag(consts: &[Param], param: usize) -> bool {
     consts.get(param).and_then(|p| p.as_bool()).unwrap_or(false)
 }
-

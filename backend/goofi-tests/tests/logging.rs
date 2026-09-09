@@ -59,6 +59,9 @@ fn bounded_log_evicts_the_least_recent_group() {
 fn process_capture_child() {
     let Some(path) = std::env::var_os("GOOFI_LOG_CAPTURE_RESULT") else { return };
     log::capture_stdio().unwrap();
+    let startup = goofi_core::startup::Startup::begin("capture-test");
+    goofi_core::startup::report("Checking captured startup");
+    startup.finish("Capture test ready");
     println!("native stdout marker");
     eprintln!("native stderr marker");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
@@ -85,6 +88,10 @@ fn native_process_output_reaches_logs_and_never_the_launch_shell() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("native stdout marker"));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("native stderr marker"));
+    let terminal = String::from_utf8_lossy(&output.stdout);
+    for message in ["capture-test", "Checking captured startup", "Capture test ready"] {
+        assert!(terminal.contains(message), "startup status must reach the launch shell: {terminal}");
+    }
     let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
     for (stream, text) in [("stdout", "native stdout marker"), ("stderr", "native stderr marker")] {
         assert!(saved["groups"].as_array().unwrap().iter().any(|row| row["stream"] == stream && row["text"] == text));

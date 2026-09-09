@@ -27,8 +27,7 @@ indexmap = "2"
 rtrb = "0.3"
 # Every host cpal can build, so `available_hosts()` answers what the machine actually runs and the
 # choice between them is the user's. cpal target-gates each one, so a feature named here that the
-# platform has no host for costs nothing. `realtime` promotes the callback thread — MMCSS on
-# Windows, rtkit on Linux, and rtkit is what `realtime-dbus` reaches.
+# platform has no host for costs nothing.
 cpal = { version = "0.18", features = ["pipewire", "pulseaudio", "jack", "realtime", "realtime-dbus"] }
 midir = "0.11"
 vst3 = "0.3.0"

@@ -417,6 +417,35 @@ impl AudioEngine {
         (out, channels)
     }
 
+    pub fn flush_recording(&self) -> Vec<mpsc::Receiver<Result<(), String>>> {
+        self.live.values().map(|node| node.control.flush()).collect()
+    }
+
+    /// Change the recording interval between whole blocks. No wait, allocation,
+    /// or notification lock runs on the audio thread. Wait on the returned action
+    /// only after releasing the graph lock.
+    pub fn recording_boundary(
+        &mut self,
+        window: Arc<goofi_core::record::FrameWindow>,
+        begin: bool,
+    ) -> impl FnOnce() -> Result<(), String> + Send + 'static {
+        let done = Arc::new(AtomicBool::new(false));
+        self.send(Msg::RecordBoundary { window, begin, done: done.clone() });
+        if self.device.is_none() {
+            self.runtime().apply_pending();
+        }
+        move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !done.load(Ordering::Acquire) {
+                if Instant::now() >= deadline {
+                    return Err("audio clock did not acknowledge the recording boundary".into());
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Ok(())
+        }
+    }
+
     /// Read without the runtime lock: taking it under the graph lock would cost a callback its block.
     pub fn status(&self) -> AudioStatus {
         AudioStatus {
@@ -477,6 +506,7 @@ impl AudioEngine {
                 // The drop is the POINT: these come back so the audio thread never frees them.
                 Retired::Plan(plan, arena) => drop((plan, arena)),
                 Retired::Slab(slab) => drop(slab),
+                Retired::RecordBoundary(window, done) => drop((window, done)),
                 Retired::Faulted { uid, serial, fault } => {
                     if self.live.get(&uid).is_some_and(|i| i.serial == serial) {
                         let msg = match fault {
