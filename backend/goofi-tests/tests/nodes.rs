@@ -298,6 +298,42 @@ fn a_rust_node_file_builds_loads_follows_its_edits_and_shadows_a_shipped_one() {
     opened.call("session load", j!({ "path": target.to_string_lossy() }));
     let uid = opened.state.graph.lock().unwrap().node_uids()[0];
     emits(&opened, uid, 3.0);
+
+    std::fs::write(mount.join("nodes_signal").join("Consume.rs"), r#"
+use goofi_core::{Data, Meta, SlotType};
+use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params, SlotDecl};
+#[derive(Default)]
+struct Consume { frames: u32 }
+impl Node for Consume {
+    fn process(&mut self, i: &Inputs<'_>, o: &mut Outputs<'_>, c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {
+        if i.get("data").is_some() {
+            self.frames += 1;
+            c.clear_input("data");
+            return Ok(());
+        }
+        o.set("out", Data::array_f32(vec![1], (-(self.frames as f32)).to_le_bytes().to_vec(), Meta::new())
+            .map_err(|e| e.to_string())?);
+        Ok(())
+    }
+}
+static INPUTS: &[SlotDecl] = &[SlotDecl { name: "data", kind: SlotType::Array, trigger_process: true, multi: false, required: false }];
+static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];
+static MANIFEST: Manifest = Manifest { tags: &[], doc: "consumes each input frame", inputs: INPUTS, outputs: OUTPUTS, params: &[], producer: false };
+goofi_signal_sdk::export!(Consume, MANIFEST);
+"#).unwrap();
+    assert_eq!(rescan(&g)["added"], j!(["signal:Consume"]));
+    g.set_param(live, "common", "max_frequency", 2.0);
+    let consume = g.add("Consume");
+    g.set_param(consume, "common", "autotrigger", true);
+    g.set_param(consume, "common", "max_frequency", 20.0);
+    let consumed = g.probe(consume, "out");
+    g.link(live, "out", consume, "data");
+    let first = g.until("a Rust node to clear without an output", |_| {
+        consumed.latest().filter(|d| first_f32(d) < 0.0).map(|d| first_f32(&d))
+    });
+    g.until("the cleared Rust input to receive another frame", |_| {
+        consumed.latest().filter(|d| first_f32(d) < first)
+    });
 }
 
 /// An audio producer that holds the level it was written with — which FILE a node runs, heard.

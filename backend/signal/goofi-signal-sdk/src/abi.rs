@@ -101,7 +101,7 @@ pub unsafe extern "C" fn setup(node: *mut c_void, ctx: Ctx, request: Bytes, sink
     call(node, Some(ctx), request, sink, write, |inst, req| {
         let (params, _) = process_request(req)?;
         inst.node.setup(&mut inst.ctx, &Params::new(&params)).map_err(|e| e.0)?;
-        Ok(goofi_codec::encode_response(&[]))
+        Ok(goofi_codec::encode_response(&[], &[]))
     })
 }
 
@@ -125,10 +125,11 @@ pub unsafe extern "C" fn process(node: *mut c_void, ctx: Ctx, request: Bytes, si
             inst.manifest.outputs.iter().map(|o| (o.name, None)).collect();
         let inputs = Inputs::with_multi(&singles, &multis);
         let mut out = Outputs::new(&mut outputs);
+        inst.ctx.take_cleared_inputs();
         inst.node.process(&inputs, &mut out, &mut inst.ctx, &Params::new(&params)).map_err(|e| e.0)?;
         let emitted: Vec<(&str, &Data)> =
             outputs.iter().filter_map(|(name, d)| d.as_ref().map(|d| (*name, d))).collect();
-        Ok(goofi_codec::encode_response(&emitted))
+        Ok(goofi_codec::encode_response(&emitted, &inst.ctx.take_cleared_inputs()))
     })
 }
 
@@ -140,7 +141,7 @@ pub unsafe extern "C" fn on_param_changed(node: *mut c_void, ctx: Ctx, request: 
         let (group, name, value): (String, String, goofi_core::Param) =
             rmp_serde::from_slice(req).map_err(|e| e.to_string())?;
         inst.node.on_param_changed(&ParamKey::new(group, name), &value).map_err(|e| e.0)?;
-        Ok(goofi_codec::encode_response(&[]))
+        Ok(goofi_codec::encode_response(&[], &[]))
     })
 }
 
@@ -166,7 +167,7 @@ pub unsafe extern "C" fn on_pulse(node: *mut c_void, ctx: Ctx, request: Bytes, s
             return Err("a run where a pulse was expected".into());
         };
         inst.node.on_pulse(&ParamKey::new(group, name), &Params::new(&params)).map_err(|e| e.0)?;
-        Ok(goofi_codec::encode_response(&[]))
+        Ok(goofi_codec::encode_response(&[], &[]))
     })
 }
 

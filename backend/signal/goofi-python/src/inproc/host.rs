@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use goofi_core::{Data, SrcDtype};
+use goofi_core::SrcDtype;
 use goofi_node::{Isolation, IsolationCell, Params};
 use goofi_signal_sdk::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
 use pyo3::prelude::*;
@@ -103,7 +103,7 @@ impl Node for PyNode {
             .map_or(Ok(()), |e| Err(NodeError(e)))
     }
 
-    fn process(&mut self, inp: &Inputs<'_>, out: &mut Outputs<'_>, _c: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
+    fn process(&mut self, inp: &Inputs<'_>, out: &mut Outputs<'_>, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
         let inputs: Vec<(&str, goofi_pymod::exec::SlotIn<'_>)> = self
             .in_slots
             .iter()
@@ -118,7 +118,7 @@ impl Node for PyNode {
             .collect();
 
         let check_gil = !self.gil_checked;
-        let (outs, tripped): (Vec<(String, Data)>, bool) = attach(|py| -> Result<_, String> {
+        let (outs, tripped): (goofi_codec::ProcessOutput, bool) = attach(|py| -> Result<_, String> {
             let outs = goofi_pymod::exec::run_process(
                 py,
                 self.instance.bind(py),
@@ -150,7 +150,10 @@ impl Node for PyNode {
             return Err("node re-enabled the GIL at runtime; restart it to move it to a subprocess".into());
         }
         self.gil_checked = true;
-        for (slot, data) in outs {
+        for slot in outs.clear_inputs {
+            ctx.clear_input(&slot);
+        }
+        for (slot, data) in outs.outputs {
             out.set(&slot, data);
         }
         Ok(())

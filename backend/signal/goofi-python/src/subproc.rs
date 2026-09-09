@@ -214,7 +214,7 @@ impl RemoteNode {
 }
 
 impl Node for RemoteNode {
-    fn process(&mut self, inp: &Inputs<'_>, out: &mut Outputs<'_>, _c: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
+    fn process(&mut self, inp: &Inputs<'_>, out: &mut Outputs<'_>, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
         // Only the PRESENT frames cross the wire, a `multi` slot's each with its source; the child
         // rebuilds the declared kwarg set from `INPUTS`.
         let mut present: Vec<(&str, &str, &Data)> = Vec::new();
@@ -227,8 +227,11 @@ impl Node for RemoteNode {
         }
         // A node RAISE does not kill the child: its state is preserved and the error is instant.
         match self.ask(&goofi_codec::encode_request(p.groups(), &present)).map_err(NodeError)? {
-            goofi_codec::Response::Slots(outs) => {
-                for (slot, data) in outs {
+            goofi_codec::Response::Process(result) => {
+                for slot in result.clear_inputs {
+                    ctx.clear_input(&slot);
+                }
+                for (slot, data) in result.outputs {
                     out.set(&slot, data);
                 }
                 Ok(())

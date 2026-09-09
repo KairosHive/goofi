@@ -152,7 +152,7 @@ fn handle(
         }
         Request::Pulse { params, group, name } => {
             return Ok(match crate::exec::run_pulse(py, instance, &params, &group, &name) {
-                None => encode_response(&[]),
+                None => encode_response(&[], &[]),
                 Some(raised) => encode_error_response(&raised),
             });
         }
@@ -171,9 +171,9 @@ fn handle(
         })
         .collect();
     match run_node(py, instance, &params, &inputs, out_slots, warned, did_setup) {
-        Ok(outs) => {
-            let slots: Vec<(&str, &CoreData)> = outs.iter().map(|(n, d)| (n.as_str(), d)).collect();
-            Ok(encode_response(&slots))
+        Ok(result) => {
+            let slots: Vec<(&str, &CoreData)> = result.outputs.iter().map(|(n, d)| (n.as_str(), d)).collect();
+            Ok(encode_response(&slots, &result.clear_inputs))
         }
         Err(e) => Ok(encode_error_response(&e.to_string())),
     }
@@ -189,7 +189,7 @@ fn run_node(
     out_slots: &[&str],
     warned: &mut HashSet<SrcDtype>,
     did_setup: &mut bool,
-) -> PyResult<Vec<(String, CoreData)>> {
+) -> PyResult<goofi_codec::ProcessOutput> {
     if !*did_setup {
         crate::exec::run_setup(py, instance, params)?;
         *did_setup = true;

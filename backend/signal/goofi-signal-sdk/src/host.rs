@@ -61,7 +61,7 @@ impl Handle {
 
     fn done(answer: Result<Response, String>) -> NodeResult {
         match answer {
-            Ok(Response::Slots(_)) => Ok(()),
+            Ok(Response::Process(_)) => Ok(()),
             Ok(Response::NodeError(msg)) => Err(NodeError(msg)),
             Ok(Response::Options(_)) => Err(NodeError("the node answered options where none were asked".into())),
             Err(e) => Err(NodeError(e)),
@@ -86,8 +86,11 @@ impl Node for Handle {
             }
         }
         match self.call(self.vtable.process, ctx.now, &goofi_codec::encode_request(p.groups(), &present)) {
-            Ok(Response::Slots(outs)) => {
-                for (slot, data) in outs {
+            Ok(Response::Process(result)) => {
+                for slot in result.clear_inputs {
+                    ctx.clear_input(&slot);
+                }
+                for (slot, data) in result.outputs {
                     out.set(&slot, data);
                 }
                 Ok(())

@@ -87,6 +87,25 @@ pub fn run_process(
     inputs: &[(&str, SlotIn<'_>)],
     out_slots: &[&str],
     warned: &mut HashSet<SrcDtype>,
+) -> PyResult<goofi_codec::ProcessOutput> {
+    let node = instance.cast::<crate::node::Node>()?;
+    node.borrow_mut().clear_inputs = Some(Vec::new());
+    let result = process_outputs(py, instance, params, inputs, out_slots, warned);
+    let clear_inputs = node.borrow_mut().clear_inputs.take().unwrap_or_default();
+    let outputs = result?;
+    if let Some(name) = clear_inputs.iter().find(|name| !inputs.iter().any(|(slot, _)| slot == name)) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!("no input slot `{name}`")));
+    }
+    Ok(goofi_codec::ProcessOutput { outputs, clear_inputs })
+}
+
+fn process_outputs(
+    py: Python<'_>,
+    instance: &Bound<'_, PyAny>,
+    params: &Groups,
+    inputs: &[(&str, SlotIn<'_>)],
+    out_slots: &[&str],
+    warned: &mut HashSet<SrcDtype>,
 ) -> PyResult<Vec<(String, CoreData)>> {
     apply_params(py, instance, params)?;
 

@@ -636,6 +636,7 @@ impl NodeRuntime {
             }));
             return;
         }
+        self.ctx.take_cleared_inputs();
         self.ctx.now = self.time.now();
         let multis = self.materialize_multis();
         let mut outputs = self.manifest.output_buffer();
@@ -646,6 +647,23 @@ impl NodeRuntime {
             crate::guard_lifecycle(|| self.node.process(&inputs, &mut out, &mut self.ctx, &params))
                 .unwrap_or_else(crate::fold_panic)
         };
+        let clears = self.ctx.take_cleared_inputs();
+        let result = result.and_then(|()| {
+            if let Some(name) = clears.iter().find(|name| !self.manifest.inputs.iter().any(|slot| slot.name == *name)) {
+                return Err(crate::NodeError(format!("no input slot `{name}`")));
+            }
+            for name in clears {
+                if let Some(cell) = self.inputs.get_mut(name.as_str()) {
+                    *cell = None;
+                }
+                if let Some(cells) = self.multi_wires.get_mut(name.as_str()) {
+                    for (_, _, cell) in cells {
+                        *cell = None;
+                    }
+                }
+            }
+            Ok(())
+        });
         match result {
             Ok(()) => {
                 // Clearing on success is safe because `process` is unreachable while a setup error
