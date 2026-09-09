@@ -33,6 +33,7 @@ fn probe_reason(stderr: &str) -> String {
 
 /// Run `goofi.introspect(path)` in `python` and parse the result; `Err` carries why it failed.
 pub fn probe_introspect(path: &Path, python: &str) -> Result<probe::Introspection, String> {
+    goofi_core::startup::report(format!("Indexing Python node {}", path.file_name().unwrap_or_default().to_string_lossy()));
     // The payload is a dup of fd 1 taken before fd 1 is rerouted to stderr, so anything an
     // import prints to stdout — even from a C extension — cannot corrupt the JSON.
     const PROBE: &str = "\

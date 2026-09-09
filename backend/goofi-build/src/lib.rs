@@ -130,6 +130,7 @@ fn build(sdk: &Sdk, source: &Path, base: &Path, key: &str, artifact: &Path) -> R
     if artifact.is_file() {
         return Ok(artifact.to_path_buf());
     }
+    goofi_core::startup::report(format!("Building native node {}", source.file_name().unwrap_or_default().to_string_lossy()));
     let crate_dir = base.join("crates").join(key);
     let crate_name = format!("goofi_node_{}", stem_of(source).to_lowercase());
     generate(sdk, source, &sdk_root(base), &crate_dir, &crate_name)?;

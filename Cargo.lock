@@ -976,6 +976,7 @@ dependencies = [
 name = "goofi-build"
 version = "3.1.0"
 dependencies = [
+ "goofi-core",
  "libloading 0.8.9",
  "sha2",
 ]
