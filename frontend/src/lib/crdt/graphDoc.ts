@@ -4,7 +4,7 @@
  */
 import { EMPTY_PANEL_TYPE, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
 import { ROOT_ID } from '$lib/editor/subpatchScene';
-import { PARAM_MODES, type ParamMode } from '$lib/api/types';
+import { PARAM_MODES, VIDEO_QUALITIES, type VideoQuality, type ParamMode } from '$lib/api/types';
 import type { LayoutNode, Workspace } from 'panelty';
 
 export type Doc = Record<string, unknown>;
@@ -220,12 +220,17 @@ export function viewersJson(doc: Doc, uid: string): unknown {
 }
 
 /** Every armed output slot, node by node, in the order the document holds them. */
-export function recordedSlots(doc: Doc): { uid: string; slot: string }[] {
-	const out: { uid: string; slot: string }[] = [];
+export function recordedSlots(doc: Doc): { uid: string; slot: string; quality: VideoQuality }[] {
+	const out: { uid: string; slot: string; quality: VideoQuality }[] = [];
 	for (const [uid, n] of Object.entries(nodesMap(doc))) {
 		const r = n?.record;
 		if (!Array.isArray(r)) continue;
-		for (const slot of r) if (typeof slot === 'string') out.push({ uid, slot });
+		for (const entry of r) {
+			const { slot, quality } = obj(entry);
+			if (typeof slot === 'string' && VIDEO_QUALITIES.includes(quality as VideoQuality)) {
+				out.push({ uid, slot, quality: quality as VideoQuality });
+			}
+		}
 	}
 	return out;
 }

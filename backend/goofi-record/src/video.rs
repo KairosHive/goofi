@@ -6,6 +6,7 @@
 //! one implementation of it.
 
 use std::io::{Read, Write};
+use goofi_core::record::VideoQuality;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -30,7 +31,7 @@ pub trait Encoders: Send + Sync {
     fn probe(&self) -> Result<(), String>;
     /// The container this backend writes, which is what names the file.
     fn extension(&self) -> &'static str;
-    fn open(&self, file: &Path, size: (u32, u32), fps: f64) -> Result<Box<dyn Encoder>, String>;
+    fn open(&self, file: &Path, size: (u32, u32), fps: f64, quality: VideoQuality) -> Result<Box<dyn Encoder>, String>;
 }
 
 /// Constant-quality H.264 in Matroska, through an `ffmpeg` child on stdin.
@@ -52,12 +53,12 @@ impl Encoders for FfmpegEncoders {
         "mkv"
     }
 
-    fn open(&self, file: &Path, size: (u32, u32), fps: f64) -> Result<Box<dyn Encoder>, String> {
+    fn open(&self, file: &Path, size: (u32, u32), fps: f64, quality: VideoQuality) -> Result<Box<dyn Encoder>, String> {
         if size.0 == 0 || size.1 == 0 || !fps.is_finite() || fps <= 0.0 {
             return Err("video needs a nonzero size and a positive finite frame rate".into());
         }
         Ok(Box::new(Ffmpeg {
-            child: None, stdin: None, file: file.to_path_buf(), size, fps, closed: false, stderr: None,
+            child: None, stdin: None, file: file.to_path_buf(), size, fps, quality, closed: false, stderr: None,
         }))
     }
 }
@@ -125,6 +126,7 @@ struct Ffmpeg {
     file: PathBuf,
     size: (u32, u32),
     fps: f64,
+    quality: VideoQuality,
     closed: bool,
     stderr: Option<std::thread::JoinHandle<String>>,
 }
@@ -142,24 +144,24 @@ impl Preset {
         #[cfg(target_os = "macos")]
         presets.push(Self {
             codec: "h264_videotoolbox",
-            options: &["-q:v", "65", "-allow_sw", "0"], device: None,
+            options: &["-allow_sw", "0"], device: None,
         });
         #[cfg(not(target_os = "macos"))]
         presets.push(Self {
             codec: "h264_nvenc",
-            options: &["-preset", "p5", "-tune", "hq", "-rc", "constqp", "-qp", "23"],
+            options: &["-preset", "p5", "-tune", "hq", "-rc", "constqp"],
             device: None,
         });
         #[cfg(target_os = "windows")]
         presets.push(Self {
             codec: "h264_amf",
-            options: &["-quality", "quality", "-rc", "cqp", "-qp_i", "23", "-qp_p", "23"],
+            options: &["-quality", "quality", "-rc", "cqp"],
             device: None,
         });
         #[cfg(not(target_os = "macos"))]
         presets.push(Self {
             codec: "h264_qsv",
-            options: &["-preset", "medium", "-global_quality", "23"], device: None,
+            options: &["-preset", "medium"], device: None,
         });
         #[cfg(target_os = "linux")]
         if let Ok(entries) = std::fs::read_dir("/dev/dri") {
@@ -168,11 +170,11 @@ impl Preset {
                 .collect();
             devices.sort();
             presets.extend(devices.into_iter().map(|device| Self {
-                codec: "h264_vaapi", options: &["-rc_mode", "CQP", "-qp", "23"], device: Some(device),
+                codec: "h264_vaapi", options: &["-rc_mode", "CQP"], device: Some(device),
             }));
         }
         presets.push(Self {
-            codec: "libx264", options: &["-preset", "veryfast", "-crf", "23"], device: None,
+            codec: "libx264", options: &["-preset", "veryfast"], device: None,
         });
         presets
     }
@@ -183,7 +185,15 @@ impl Preset {
         }
     }
 
-    fn output(&self, command: &mut Command, fps: f64) {
+    fn output(&self, command: &mut Command, fps: f64, quality: VideoQuality) {
+        let q = quality.quantizer().to_string();
+        match self.codec {
+            "h264_videotoolbox" => { command.args(["-q:v", &quality.apple_quality().to_string()]); }
+            "h264_amf" => { command.args(["-qp_i", &q, "-qp_p", &q]); }
+            "h264_qsv" => { command.args(["-global_quality", &q]); }
+            "libx264" => { command.args(["-crf", &q]); }
+            _ => { command.args(["-qp", &q]); }
+        }
         let filter = "pad=ceil(iw/2)*2:ceil(ih/2)*2,scale=out_color_matrix=bt709:out_range=tv";
         command.args(["-vf", &if self.device.is_some() {
             format!("{filter},format=nv12,hwupload")
@@ -196,13 +206,13 @@ impl Preset {
     }
 
     /// Encode at the requested size. An encoder in FFmpeg's list can still lack a usable device.
-    fn works(&self, size: (u32, u32), fps: f64) -> Result<bool, String> {
+    fn works(&self, size: (u32, u32), fps: f64, quality: VideoQuality) -> Result<bool, String> {
         let mut command = ffmpeg();
         self.input(&mut command);
         command.args(["-f", "lavfi", "-i", &format!(
             "nullsrc=size={}x{}:rate={fps},format=rgba", size.0, size.1,
         )]);
-        self.output(&mut command, fps);
+        self.output(&mut command, fps, quality);
         let child = command.args(["-frames:v", "1", "-f", "null", "-"])
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
             .spawn().map_err(|e| format!("{MISSING} ({e})"))?;
@@ -237,7 +247,7 @@ impl Ffmpeg {
             if STOPPING.load(Ordering::Relaxed) {
                 return Err("video encoders are stopping".into());
             }
-            if preset.works(self.size, self.fps)? {
+            if preset.works(self.size, self.fps, self.quality)? {
                 selected = Some(preset);
                 break;
             }
@@ -248,7 +258,7 @@ impl Ffmpeg {
         command.args(["-f", "rawvideo", "-pix_fmt", "rgba"])
             .args(["-s", &format!("{}x{}", self.size.0, self.size.1), "-r", &format!("{}", self.fps)])
             .args(["-i", "-"]);
-        preset.output(&mut command, self.fps);
+        preset.output(&mut command, self.fps, self.quality);
         let mut child = command.arg(&self.file)
             .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped())
             .spawn().map_err(|e| format!("could not start FFmpeg: {e}"))?;
@@ -345,9 +355,10 @@ impl Video {
         file: &str,
         size: (u32, u32),
         fps: f64,
+        quality: VideoQuality,
     ) -> Result<Video, String> {
         let out = folder.join(file);
-        let encoder = encoders.open(&out, size, fps)?;
+        let encoder = encoders.open(&out, size, fps, quality)?;
         let beside = crate::beside::Beside::create(&out)?;
         let (tx, rx) = sync_channel(QUEUE);
         let counts = Counts::default();

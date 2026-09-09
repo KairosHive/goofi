@@ -1,5 +1,6 @@
 //! The graph, and the nodes that schedule themselves.
 
+use goofi_core::record::RecordedOutput;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -117,7 +118,7 @@ struct NodeEntry {
     /// current values as the new zero, and the filter counts from there.
     baseline: serde_json::Value,
     /// The output slots armed for recording, in the order they were armed.
-    record: Vec<String>,
+    record: Vec<RecordedOutput>,
 }
 
 impl NodeEntry {
@@ -1626,7 +1627,7 @@ impl Graph {
 
     /// Replace the output slots armed for recording. The whole vector, which is what makes the
     /// command's inverse exact.
-    pub fn set_recorded(&mut self, uid: Uid, record: Vec<String>) -> Result<(), String> {
+    pub fn set_recorded(&mut self, uid: Uid, record: Vec<RecordedOutput>) -> Result<(), String> {
         let e = self.nodes.get_mut(&uid).ok_or_else(|| format!("no such node {uid}"))?;
         e.record = record;
         self.touched.push(Touched::Record(uid));
@@ -1634,7 +1635,7 @@ impl Graph {
     }
 
     /// The output slots armed for recording on anything a uid can name.
-    pub fn recorded(&self, uid: Uid) -> Option<&[String]> {
+    pub fn recorded(&self, uid: Uid) -> Option<&[RecordedOutput]> {
         self.nodes.get(&uid).map(|e| e.record.as_slice())
     }
 
@@ -3643,11 +3644,8 @@ pub fn name_base(type_name: &str) -> String {
 }
 
 /// A record's armed output slots, as a `.gfi` and a copied fragment carry them.
-fn read_record(rec: &serde_json::Value) -> Vec<String> {
-    rec.get("record")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
-        .unwrap_or_default()
+fn read_record(rec: &serde_json::Value) -> Vec<RecordedOutput> {
+    rec.get("record").and_then(|value| serde_json::from_value(value.clone()).ok()).unwrap_or_default()
 }
 
 /// A viewer blob under the uids a paste minted. A facade keys its blob by PORT UID, so a copy that

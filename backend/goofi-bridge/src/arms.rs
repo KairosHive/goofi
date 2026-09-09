@@ -1834,9 +1834,9 @@ fn set_armed(
     let (uid, slot) = parse_endpoint(&g, payload, op, "output")?;
     let slot = vocab::resolve_slot(&g, op, uid, &slot)?;
     let mut record = g.recorded(uid).unwrap_or(&[]).to_vec();
-    let held = record.iter().position(|s| *s == slot);
+    let held = record.iter().position(|s| s.slot == slot);
     match (arm, held) {
-        (true, None) => record.push(slot.clone()),
+        (true, None) => record.push(goofi_core::record::RecordedOutput { slot: slot.clone(), quality: Default::default() }),
         (false, Some(i)) => {
             record.remove(i);
         }
@@ -1869,6 +1869,31 @@ pub(crate) fn record_disarm(
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
     set_armed(state, actor, "record disarm", payload, false)
+}
+
+pub(crate) fn record_quality(
+    state: &AppState,
+    payload: &Value,
+    actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let mut g = state.graph.lock().unwrap();
+    let (uid, slot) = parse_endpoint(&g, payload, "record quality", "output")?;
+    let slot = vocab::resolve_slot(&g, "record quality", uid, &slot)?;
+    if g.node_type(uid).and_then(|ty| g.type_engine(&ty)) != Some("graphics") {
+        return Err("record quality: quality settings apply to video outputs only".into());
+    }
+    let quality = serde_json::from_value::<goofi_core::record::VideoQuality>(payload["quality"].clone())
+        .map_err(|_| "record quality: expected small, high, or very_high")?;
+    let mut record = g.recorded(uid).unwrap_or(&[]).to_vec();
+    let output = record.iter_mut().find(|output| output.slot == slot)
+        .ok_or("record quality: arm the output first")?;
+    if output.quality == quality {
+        return Ok(json!({ "ok": true, "changed": false }));
+    }
+    output.quality = quality;
+    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::SetRecorded { uid, record })?;
+    Ok(json!({ "ok": true, "changed": true }))
 }
 
 /// A `record start` argument, taken from the payload and otherwise from `globals.record.<key>`.

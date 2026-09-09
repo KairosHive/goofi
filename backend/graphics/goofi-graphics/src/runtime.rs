@@ -358,7 +358,7 @@ impl Runtime {
     /// holds one size, and a seam the file system shows beats one hidden inside a video.
     fn follow_record(&mut self, recording: bool, t: f64) {
         let Some(rec) = self.recorder.clone() else { return };
-        let mut want: HashMap<Uid, (StreamId, (u32, u32))> = HashMap::new();
+        let mut want: HashMap<Uid, (StreamId, (u32, u32), goofi_core::record::VideoQuality)> = HashMap::new();
         if recording {
             for stage in &self.plan.stages {
                 if let Some(r) = &stage.record {
@@ -368,7 +368,7 @@ impl Runtime {
                         slot: r.slot.clone(),
                         engine: "graphics",
                     };
-                    want.insert(stage.uid, (id, stage.size));
+                    want.insert(stage.uid, (id, stage.size, r.quality));
                 }
             }
         }
@@ -376,7 +376,7 @@ impl Runtime {
             let held = &self.taping[&uid];
             // The RECORDER owns whether a stream is open: a `record disarm` closes one behind the
             // render thread's back, and a tape kept over that would never open the next file.
-            let kept = want.get(&uid).is_some_and(|(_, size)| *size == held.size)
+            let kept = want.get(&uid).is_some_and(|(_, size, quality)| *size == held.size && *quality == held.quality)
                 && (!held.live || rec.is_open(&held.id));
             if kept {
                 if held.missed > 0 && held.said.elapsed() >= SAY_EVERY {
@@ -388,7 +388,8 @@ impl Runtime {
                 continue;
             }
             let why = match want.get(&uid) {
-                Some((_, size)) if *size != held.size => "resized",
+                Some((_, size, _)) if *size != held.size => "resized",
+                Some((_, _, quality)) if *quality != held.quality => "quality changed",
                 Some(_) => "reopened",
                 None if recording => "disarmed",
                 None => "stopped",
@@ -399,11 +400,11 @@ impl Runtime {
                 rec.close_later(&held.id, why, held.missed, t);
             }
         }
-        for (uid, (id, size)) in want {
+        for (uid, (id, size, quality)) in want {
             if self.taping.contains_key(&uid) || rec.is_open(&id) {
                 continue;
             }
-            let kind = Kind::Video { size, fps: f64::from(crate::FPS) };
+            let kind = Kind::Video { size, fps: f64::from(crate::FPS), quality };
             let live = match rec.open(&id, kind, t, StreamMeta::measured(Some(f64::from(crate::FPS)))) {
                 Ok(()) => true,
                 // A stream that will not open is this NODE's failure and nobody else's: the
@@ -413,7 +414,7 @@ impl Runtime {
                     false
                 }
             };
-            self.taping.insert(uid, Tape { id, size, missed: 0, said: Instant::now(), live });
+            self.taping.insert(uid, Tape { id, size, quality, started: t, missed: 0, said: Instant::now(), live });
         }
     }
 
@@ -467,9 +468,8 @@ impl Runtime {
                         }
                     }
                     Want::Record => {
-                        // A readback still in flight from the last size belongs to the file that
-                        // size opened, which is closed — it is nobody's drop and nobody's frame.
-                        let held = self.taping.get(&uid).filter(|tape| tape.live && tape.size == size);
+                        // Readbacks from before a resize or quality change belong to the closed file.
+                        let held = self.taping.get(&uid).filter(|tape| tape.live && tape.size == size && at >= tape.started);
                         if let Some((tape, rec)) = held.zip(self.recorder.as_ref()) {
                             let taken = rec.write_video(&tape.id, &rows, at);
                             self.taping.get_mut(&uid).expect("just read").missed += u64::from(!taken);
@@ -510,6 +510,8 @@ impl Runtime {
 struct Tape {
     id: StreamId,
     size: (u32, u32),
+    quality: goofi_core::record::VideoQuality,
+    started: f64,
     missed: u64,
     said: Instant,
     /// Whether the recorder actually opened it. A stage that could not be encoded keeps its tape

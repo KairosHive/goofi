@@ -77,8 +77,8 @@ fn shape_of(kind: &Kind) -> Shape {
         Kind::Table { columns } => Shape { columns: Some(columns.clone()), ..Shape::default() },
         Kind::Text => Shape::default(),
         Kind::Audio { .. } => Shape::default(),
-        Kind::Video { size, fps } => {
-            Shape { size: Some(*size), fps: Some(*fps), encoding: Some(video::CLIP), ..Shape::default() }
+        Kind::Video { size, fps, quality } => {
+            Shape { size: Some(*size), fps: Some(*fps), encoding: Some(video::CLIP), quality: Some(*quality), ..Shape::default() }
         }
     }
 }
@@ -89,6 +89,7 @@ struct Shape {
     size: Option<(u32, u32)>,
     fps: Option<f64>,
     encoding: Option<&'static str>,
+    quality: Option<goofi_core::record::VideoQuality>,
 }
 
 struct Session {
@@ -128,6 +129,7 @@ impl Session {
             size: shape.size,
             fps: shape.fps,
             encoding: shape.encoding,
+            quality: shape.quality,
             frames: s.frames(),
             dropped: s.lost(),
             dropped_at: s.dropped_at,
@@ -164,6 +166,7 @@ impl Session {
             size: shape.size,
             fps: shape.fps,
             encoding: shape.encoding,
+            quality: shape.quality,
             frames: 0,
             dropped: 0,
             dropped_at: None,

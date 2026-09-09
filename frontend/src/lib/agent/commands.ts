@@ -1,4 +1,5 @@
 /** Flat, typed command facade over the store logic the UI uses; paired with `query` for reads. */
+import type { VideoQuality } from '$lib/api/types';
 import type { SourcePatch } from '$lib/api/types';
 import { graph, type Cell, type ControlPatch } from '$lib/stores/graph.svelte';
 import { selection } from '$lib/stores/selection.svelte';
@@ -55,6 +56,8 @@ export const commands = {
 		graph().lockGlobalGroup(group, lock),
 
 	armSlot: (node: string, slot: string): Promise<void> => graph().armSlot(node, slot),
+	setRecordQuality: (node: string, slot: string, quality: VideoQuality): Promise<void> =>
+		graph().setRecordQuality(node, slot, quality),
 	disarmSlot: (node: string, slot: string): Promise<void> => graph().disarmSlot(node, slot),
 	startRecording: (name = '', root = ''): Promise<string> => graph().startRecording(name, root),
 	stopRecording: (): Promise<string> => graph().stopRecording(),

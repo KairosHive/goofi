@@ -55,6 +55,7 @@ export type OpName =
 	| 'agent stop'
 	| 'record status'
 	| 'record arm'
+	| 'record quality'
 	| 'record disarm'
 	| 'record start'
 	| 'record stop'
