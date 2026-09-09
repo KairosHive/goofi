@@ -4,9 +4,8 @@ import { PANEL_TYPES, type PanelTypeId } from '$lib/api/vocab';
 import { harnesses } from '$lib/stores/harness.svelte';
 import EmptyPanel from './EmptyPanel.svelte';
 import NodeEditorPanel from './NodeEditorPanel.svelte';
-import ParametersPanel from './ParametersPanel.svelte';
+import InspectorPanel from './InspectorPanel.svelte';
 import ViewerPanel from './ViewerPanel.svelte';
-import MetadataInspectorPanel from './MetadataInspectorPanel.svelte';
 import ConsolePanel from './ConsolePanel.svelte';
 import GlobalsPanel from './GlobalsPanel.svelte';
 import ControlPanel from './ControlPanel.svelte';
@@ -16,9 +15,8 @@ import RecorderPanel from './RecorderPanel.svelte';
 const components: Record<PanelTypeId, Component<PanelProps>> = {
 	empty: EmptyPanel,
 	'node-editor': NodeEditorPanel,
-	parameters: ParametersPanel,
+	inspector: InspectorPanel,
 	viewer: ViewerPanel,
-	metadata: MetadataInspectorPanel,
 	console: ConsolePanel,
 	globals: GlobalsPanel,
 	control: ControlPanel,
