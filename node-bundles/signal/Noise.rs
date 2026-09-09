@@ -169,7 +169,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "noise",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: i32::MAX as i64 },
+        spec: ParamSpec::Int { default: -1, min: -1, max: i32::MAX as i64, options: &[] },
         expression: None,
         doc: Some("Fixes the stream so a patch replays the same noise; -1 takes a fresh one."),
     },
@@ -193,7 +193,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "output",
         name: "channels",
-        spec: ParamSpec::Int { default: 1, min: 1, max: 64 },
+        spec: ParamSpec::Int { default: 1, min: 1, max: 64, options: &[] },
         expression: None,
         doc: Some("How many independent noise streams to emit, one per channel."),
     },

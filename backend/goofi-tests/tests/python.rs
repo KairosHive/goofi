@@ -174,7 +174,7 @@ class Consume(goofi.Node):
 
 #[test]
 fn a_python_node_writing_to_stdout_does_not_corrupt_the_transport() {
-    // The child routes fd 1 to stderr, so a node that prints cannot inject bytes into the frames.
+    // Text streams are captured independently of the shared-memory frames.
     let _py = require_python();
     let g = Goofi::new();
     install(&g, "chatty.py", r#"
@@ -185,7 +185,9 @@ class Chatty(goofi.Node):
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     def process(self, data):
         print("debug from the node", flush=True)
-        sys.stdout.flush()
+        print("interleaved output", flush=True)
+        print("debug from the node", flush=True)
+        print("node stderr", file=sys.stderr, flush=True)
         return {"out": data.data * 2.0}
 "#);
     let src = g.add("_TestCounter");
@@ -199,6 +201,13 @@ class Chatty(goofi.Node):
     });
     assert_eq!(f32s(&second)[0] % 2.0, 0.0, "every frame is the doubled counter: {:?}", f32s(&second));
     assert!(g.error(node).is_none(), "the transport stayed in sync: {:?}", g.error(node));
+    g.until("both text streams reach the log with node identity", |g| {
+        let snapshot = g.call("log list", j!({}));
+        let rows = snapshot["groups"].as_array()?;
+        let out = rows.iter().find(|row| row["node"] == hex(node) && row["text"] == "debug from the node" && row["stream"] == "stdout")?;
+        rows.iter().find(|row| row["node"] == hex(node) && row["text"] == "node stderr" && row["stream"] == "stderr")?;
+        (out["count"].as_u64()? >= 2).then_some(())
+    });
 }
 
 #[test]

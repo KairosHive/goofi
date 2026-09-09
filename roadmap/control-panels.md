@@ -1,7 +1,7 @@
 # Control panels: what is deferred
 
 The control panel itself is BUILT (2026-09-05): a group of globals, each carrying a `control`
-record, drawn as knobs, sliders and fields by the `control` panel type. `globals.group.element` is
+record, drawn as knobs, sliders and text widgets by the `control` panel type. `globals.group.element` is
 the one spelling an expression uses. What is below was decided with the owner and deliberately not
 built in that step.
 
@@ -21,6 +21,12 @@ Two things this must not become: a second selection state beside the canvas's ow
 touch-unreachable feature — a long press is the coarse door, and `tests/e2e/tests/touch.spec.ts` is
 where that is proved.
 
+## Parameter drops
+
+A widget label can be dragged onto a parameter to set `globals.<panel>.<widget>`. In edit mode,
+a widget can also be dragged out of the panel onto a parameter. A reference drop leaves its
+value and layout unchanged and makes one undo step.
+
 ## A canvas affordance
 
 `param-sources.md` owns this item for a control element and a reference alike: nothing draws either
@@ -38,16 +44,16 @@ the widget's inspector binds the first number that moves. Open beside it:
 
 ## The drawing pad, and the turtle that reaches it (2026-09-07)
 
-The `draw` widget was already a control kind holding a `data:image/png;base64,…` URL — a STRING,
+The `paint` widget was already a control kind holding a `data:image/png;base64,…` URL — a STRING,
 so it crossed the wire and saved into the patch through machinery that was already there. What
 landed beside it:
 
 - **The widget has ONE colour control.** A hue wheel, a native picker and a brightness slider stood
   together and were three doors onto one colour: the wheel could not say what the picker could, so
   the two disagreed on every grey. The swatch opens the platform's picker, and size, soft, erase and
-  clear stand beside it. `drawPad.ts` and its round-trip test went with the wheel, which was the
-  only thing that wanted HSV.
-- **`control draw` is another HAND on the pad, never a second painter.** The op parses a turtle
+  clear stand beside it. The old colour helper and its round-trip test went with the wheel,
+  which was the only thing that wanted HSV.
+- **`control paint` is another HAND on the pad, never a second painter.** The op parses a turtle
   script — so a refusal names the line — and broadcasts the STROKES it makes; the widget paints
   them through the very function a pointer reaches. The op writes nothing itself, so the widget's
   own commit stays the drawing's one undo step, and the reply carries `clients` because a pad

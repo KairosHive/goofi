@@ -33,6 +33,7 @@ fn a_chain_runs_streams_and_follows_the_params_edited_under_it() {
     let g = Goofi::new();
     let osc = g.add("LFO");
     let buf = g.add("Buffer");
+    g.set_param(buf, "buffer", "unit", "samples");
     g.set_param(buf, "buffer", "size", 64);
     g.set_param(osc, "output", "sfreq", 64.0);
     g.set_param(osc, "output", "mode", "block");
@@ -169,6 +170,7 @@ fn each_way_a_node_can_fail_is_reported_and_none_of_them_stops_the_patch() {
     let g = Goofi::new();
     let bad = g.add("_TestFail");
     let panics = g.add("_TestPanic");
+    g.set_param(panics, "common", "max_frequency", 20.0);
     let unborn = g.add("_TestSetupFail");
     let osc = g.add("LFO");
     let buf = g.add("Buffer");

@@ -6,7 +6,7 @@ use goofi_graph::{Graph, SourceInfo, Uid};
 use goofi_node::{NodeManifest, ParamGroups};
 use serde_json::{json, Map, Value};
 
-pub const PROTOCOL_VERSION: i64 = 4;
+pub const PROTOCOL_VERSION: i64 = 5;
 
 /// The examples a public deployment offers, compiled in beside the `.gfi` files they name.
 const EXAMPLES: &str = include_str!("../../../examples/demo.json");
@@ -58,7 +58,8 @@ pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi
             m.insert("vmin".into(), json!(vmin));
             m.insert("vmax".into(), json!(vmax));
         }
-        Param::Int { vmin, vmax, .. } => {
+        Param::Int { vmin, vmax, options, .. } => {
+            m.insert("options".into(), json!(options));
             m.insert("type".into(), json!("int"));
             m.insert("vmin".into(), json!(vmin));
             m.insert("vmax".into(), json!(vmax));

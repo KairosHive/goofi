@@ -67,11 +67,11 @@
 		fsMode = 'load';
 	}
 
-	async function onFsPick(pickedPath: string): Promise<void> {
+	async function onFsPick(pickedPath: string, overwrite = false): Promise<void> {
 		const mode = fsMode;
 		fsMode = null;
 		try {
-			if (mode === 'save') await g.save(pickedPath);
+			if (mode === 'save') await g.save(pickedPath, overwrite);
 			else if (mode === 'load') await g.load(pickedPath);
 		} catch (e) {
 			notify().failure(mode === 'save' ? 'Save' : 'Load', e);

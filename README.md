@@ -141,6 +141,24 @@ Nothing fails silently. A node whose dependencies are missing everywhere is list
 `unavailable`, greyed out and naming the missing module; an exception inside `process()` surfaces
 on the node's error channel instead of taking anything down.
 
+## Console
+
+The Console panel shows application logs and captured stdout/stderr. Exact messages with the
+same source, level, and stream share one row and a count. Each repeat moves its row to the bottom.
+Use the severity buttons, node selector, and text filter to inspect the retained history.
+
+The prompt runs the same commands as the CLI, without the leading `goofi`. Press Up or Down for
+command history, and Tab for completion. Commands use the browser tab's undo history.
+
+`goofi log list` reads the groups, `goofi log write "message" --level warning --component my-tool`
+adds a message. Log history cannot be cleared from the app or command interface. Host Rust components can
+write through `goofi_core::log::record`. Python node text keeps its node identity; native writes
+without an identity appear under `goofi`.
+
+The backend retains up to 10,000 groups and 16 MiB of message text. A message is limited to 64 KiB.
+Stream lines end at a newline or EOF. Reconnects restore the retained groups; live repeats send
+only their identity, count, sequence, and last timestamp. Agent PTYs keep their own terminals.
+
 ## Agents
 
 goofi launches the coding harness you already use — `claude`, `codex` and `opencode` out of the

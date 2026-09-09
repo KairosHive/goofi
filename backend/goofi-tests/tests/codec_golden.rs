@@ -171,3 +171,34 @@ fn a_request_carries_each_multi_frame_with_its_source() {
     let outs = result.outputs;
     assert_eq!((outs[0].0.as_str(), encode(&outs[0].1)), ("out", encode(b)));
 }
+
+#[test]
+fn malformed_and_deep_frames_are_refused_before_reduction() {
+    use goofi_core::reduce::{reduce_axis, ReduceMethod};
+    for method in [ReduceMethod::Area, ReduceMethod::Envelope, ReduceMethod::Subsample] {
+        for shape in [vec![usize::MAX, 2], vec![10], vec![0, usize::MAX]] {
+            assert!(reduce_axis(&[], &shape, 0, 1, method).is_none());
+        }
+        let bytes = le_bytes(&[1.0, 2.0, 3.0, 4.0]);
+        assert!(reduce_axis(&bytes, &[4], 0, usize::MAX, method).is_none());
+        assert!(reduce_axis(&bytes, &[4], usize::MAX, 1, method).is_none());
+        let reduced = reduce_axis(&bytes, &[4], 0, 1, method).unwrap();
+        assert!(reduced.bytes.len() <= bytes.len());
+    }
+
+    // Build nested table frames directly so the encoder cannot hide a decoder depth fault.
+    let mut frame = encode(&Data::string("leaf", Meta::empty()));
+    for _ in 0..70 {
+        let mut body = 1u32.to_le_bytes().to_vec();
+        body.extend_from_slice(&1u16.to_le_bytes());
+        body.push(b'x');
+        body.extend_from_slice(&(frame.len() as u32).to_le_bytes());
+        body.extend_from_slice(&frame);
+        frame = b"GOOF\x02\x02".to_vec();
+        frame.extend_from_slice(&0u32.to_le_bytes());
+        frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        frame.extend_from_slice(&body);
+    }
+    assert!(goofi_codec::decode(&frame).unwrap_err().contains("nesting"));
+    assert!(goofi_codec::decode(&encode(&Data::string("next frame", Meta::empty()))).is_ok());
+}

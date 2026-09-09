@@ -35,6 +35,7 @@ impl PyNode {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let name = format!("goofi_user_{}", SEQ.fetch_add(1, Ordering::Relaxed));
         attach(|py| {
+            super::log::install(py)?;
             let module = goofi_pymod::loader::module_from_source(py, &name, source)?;
             let instance = goofi_pymod::loader::instantiate(py, &module)?;
             // The instance keeps its module alive through `__globals__`, so evicting the
@@ -81,6 +82,7 @@ pub fn interpreter_path() -> Option<String> {
 impl Drop for PyNode {
     fn drop(&mut self) {
         attach(|py| goofi_pymod::exec::run_stop(self.instance.bind(py)));
+        super::log::flush();
     }
 }
 
@@ -143,7 +145,8 @@ impl Node for PyNode {
             // the type's tier is the whole re-route: the next `restart_node` builds from this.
             let demoted = self.tier.is_some_and(|t| t.set(Isolation::Subprocess));
             if demoted {
-                eprintln!("note: this node re-enabled the GIL; restart it to move it to a subprocess");
+                goofi_core::log::record(goofi_core::log::source(), goofi_core::log::Level::Warning, None,
+                    "This node re-enabled the GIL. Restart it to move it to a subprocess.");
             }
             // Deliberately not latched: the condition is permanent, so the error must keep being
             // re-reported — the stats sweep samples state, and would miss a one-tick error.

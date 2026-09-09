@@ -21,28 +21,10 @@ impl Node for Delay {
     ) -> NodeResult {
         let d = inp.get("input").ok_or("`input` is required")?;
         let a = d.assert_ndims().at_least(1)?;
-        let size = p.f64("delay", "size").unwrap_or(10.0).max(0.0);
+        let size = p.f64("delay", "size").unwrap_or(10.0);
         let unit = p.str("delay", "unit").unwrap_or("samples");
-        let sfreq = d.meta().sfreq();
-
-        // Seconds are samples when the frame says how fast it runs, and updates when it does not.
-        let by_samples = match unit {
-            "samples" => true,
-            "seconds" => sfreq.is_some(),
-            _ => false,
-        };
-        if !by_samples {
-            let back = match (unit, sfreq) {
-                ("seconds", _) => {
-                    let ufreq = d.meta().get("ufreq").and_then(|v| match v {
-                        goofi_core::MetaValue::Float(f) => Some(*f),
-                        goofi_core::MetaValue::Int(i) => Some(*i as f64),
-                        _ => None,
-                    });
-                    (size * ufreq.unwrap_or(1.0)).round().max(0.0) as usize
-                }
-                _ => size.round() as usize,
-            };
+        let back = goofi_core::stream::window_count(size, unit, d.meta())?;
+        if matches!(unit, "updates" | "seconds (ufreq)") || (unit == "seconds" && d.meta().sfreq().is_none()) {
             self.frames.push_back(d.clone());
             while self.frames.len() > back + 1 {
                 self.frames.pop_front();
@@ -53,10 +35,6 @@ impl Node for Delay {
         }
 
         let dim = resolve_axis(p.i64("delay", "axis").unwrap_or(-1), a.shape().len())?;
-        let back = match unit {
-            "seconds" => (size * sfreq.expect("seconds with a rate")).round().max(0.0) as usize,
-            _ => size.round() as usize,
-        };
         let n = a.shape()[dim];
         let (shape, stitched, at) = self.past.push(a.shape(), dim, a.as_bytes(), back);
         // Before the stream begins there is nothing to read back, so the earliest sample stands in.
@@ -90,17 +68,14 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "delay",
         name: "unit",
-        spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds", "updates"], refresh: false },
+        spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds", "seconds (ufreq)", "updates"], refresh: false },
         expression: None,
-        doc: Some(
-            "What `size` counts. `seconds` reads as samples on a frame that carries a rate, and as \
-             updates on one that does not.",
-        ),
+        doc: Some("Samples counts along the axis. Seconds uses sfreq, or delays whole frames at ufreq if no sample rate is set. Updates and seconds (ufreq) delay whole frames."),
     },
     ParamDecl {
         group: "delay",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7 },
+        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis the delay runs along when it counts samples. -1 is time."),
     },

@@ -2,7 +2,7 @@
 //! every message is a pointer move, every port is a view into the arena the plan laid out.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,6 +18,29 @@ pub const OVERRUNS: u8 = 8;
 /// a plugin measured at 1.3-2.0ms against a 1.33ms block crossed the line on 127 of 57330 blocks
 /// and cost no underrun at all, so a budget with no margin ejects on the scheduler's noise.
 pub const BUDGET: u32 = 4;
+
+/// Publish one complete frame, or drop it if the ring is full. Copy each part in
+/// bulk, including when the header or samples cross the ring's wrap point.
+fn publish(ring: &mut rtrb::Producer<f32>, header: &[f32], samples: &[f32]) {
+    let Ok(mut chunk) = ring.write_chunk_uninit(header.len() + samples.len()) else { return };
+    let (first, second) = chunk.as_mut_slices();
+    let mut offset = 0;
+    for source in [header, samples] {
+        let at = offset.min(first.len());
+        let count = source.len().min(first.len() - at);
+        let rest = offset.saturating_sub(first.len());
+        // The reserved chunk has exactly header.len() + samples.len() slots.
+        // These two non-overlapping copies initialize this source's part, and
+        // neither source aliases the ring. No partial frame is published.
+        unsafe {
+            std::ptr::copy_nonoverlapping(source.as_ptr(), first.as_mut_ptr().add(at).cast::<f32>(), count);
+            std::ptr::copy_nonoverlapping(source.as_ptr().add(count), second.as_mut_ptr().add(rest).cast::<f32>(), source.len() - count);
+        }
+        offset += source.len();
+    }
+    // Both parts, including every slot on either side of the wrap, are initialized.
+    unsafe { chunk.commit_all() };
+}
 
 pub struct Slot {
     pub uid: Uid,
@@ -227,6 +250,7 @@ pub enum Msg {
     Remove(usize),
     Plan { plan: Plan, arena: Vec<f32> },
     Grow(Vec<Option<Slot>>),
+    RecordBoundary { window: Arc<goofi_core::record::FrameWindow>, begin: bool, done: Arc<AtomicBool> },
 }
 
 /// Why a node left the plan.
@@ -241,6 +265,7 @@ pub enum Retired {
     Slot(Slot),
     Plan(Plan, Vec<f32>),
     Slab(Vec<Option<Slot>>),
+    RecordBoundary(Arc<goofi_core::record::FrameWindow>, Arc<AtomicBool>),
     Faulted { uid: Uid, serial: u64, fault: Fault },
 }
 
@@ -297,6 +322,12 @@ impl Runtime {
 
     fn apply(&mut self, msg: Msg) {
         let retired = match msg {
+            Msg::RecordBoundary { window, begin, done } => {
+                let block = self.anchor.blocks.load(Ordering::Relaxed);
+                if begin { window.begin(block); } else { window.finish(block); }
+                done.store(true, Ordering::Release);
+                Some(Retired::RecordBoundary(window, done))
+            }
             Msg::Insert { idx, slot } => self.slab[idx].replace(slot).map(Retired::Slot),
             Msg::Remove(idx) => self.slab[idx].take().map(Retired::Slot),
             Msg::Plan { plan, arena } => {
@@ -431,18 +462,14 @@ impl Runtime {
             for (k, (at, channels)) in stage.outs.iter().enumerate() {
                 let out = unsafe { region(base, len, *at, *channels) };
                 if let Some(tap) = slot.taps.get_mut(k) {
-                    if let Ok(chunk) = tap.write_chunk_uninit(1 + out.len()) {
-                        chunk.fill_from_iter(std::iter::once(*channels as f32).chain(out.iter().copied()));
-                    }
+                    publish(tap, &[*channels as f32], out);
                 }
                 if let Some(rec) = slot.recs.get_mut(k) {
                     // A block that does not fit is simply not there: its NUMBER is the gap the
                     // recorder counts, so nothing here has to remember that it was lost.
-                    if let Ok(chunk) = rec.write_chunk_uninit(REC_HEADER + out.len()) {
-                        let (lo, hi) = number_out(n);
-                        let head = [*channels as f32, lo, hi, epoch as f32];
-                        chunk.fill_from_iter(head.into_iter().chain(out.iter().copied()));
-                    }
+                    let (lo, hi) = number_out(n);
+                    let head = [*channels as f32, lo, hi, epoch as f32];
+                    publish(rec, &head, out);
                 }
             }
         }

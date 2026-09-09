@@ -1,4 +1,4 @@
-<!-- Control panel — knobs, sliders and fields over ONE group of globals. Edit mode is this panel's
+<!-- Control panel — knobs, sliders and text widgets over ONE group of globals. Edit mode is this panel's
      own view and nothing else: out of it a drag turns a widget; in it the same drag moves it, the
      corner resizes it, a strip above the board holds the name and the palette, and the picked
      widget's form opens beside the widget itself. Every change it makes is a globals op, so the
@@ -11,15 +11,13 @@
 	import type { ControlView, GlobalView, LockView } from '$lib/crdt/graphDoc';
 	import { effectiveLock, isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { ui } from '$lib/stores/ui.svelte';
-	import { notify } from '$lib/stores/notify.svelte';
-	import { bindViewer } from '$lib/api/frames';
 	import { getControl, type Mark } from '$lib/api/control';
-	import type { ArrayData, DataFrame } from '$lib/codec/decode';
-	import { viewSpecForKind } from '$lib/viewers/capacity';
+	import MidiLearn from '$lib/inspector/MidiLearn.svelte';
+	import { midiLearn } from '$lib/inspector/midiLearn.svelte';
 	import RefPicker from '$lib/inspector/RefPicker.svelte';
 	import {
 		Chip,
-		DrawPad,
+		PaintPad,
 		EmptyState,
 		Field,
 		Icon,
@@ -71,9 +69,8 @@
 			void g.linkControl(name, uid).catch(() => {});
 		})
 	);
-	// A panel opens ready to USE, whatever its group holds and whatever another panel over the same
-	// group is doing: the mode is this one's own view.
-	let editing = $state(false);
+	// Each panel starts in edit mode and owns its mode independently.
+	let editing = $state(true);
 	const edit = $derived(named && editing);
 
 	let board: HTMLDivElement | null = $state(null);
@@ -161,7 +158,6 @@
 	function setEdit(on: boolean): void {
 		picked = null;
 		renaming = null;
-		stopLearning();
 		editing = on;
 	}
 
@@ -193,9 +189,45 @@
 		};
 	}
 
+	let globalGrab: { name: string; x: number; y: number; pointer: number } | null = $state(null);
+
+	function grabGlobal(e: PointerEvent, gv: GlobalView): void {
+		if (e.button !== 0) return;
+		globalGrab = { name: gv.name, x: e.clientX, y: e.clientY, pointer: e.pointerId };
+		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+		e.stopPropagation();
+	}
+
+	function moveGlobal(e: PointerEvent): void {
+		if (!globalGrab || globalGrab.pointer !== e.pointerId) return;
+		if (!uiStore.globalDrag && Math.hypot(e.clientX - globalGrab.x, e.clientY - globalGrab.y) < 4) return;
+		uiStore.globalDrag = {
+			name: globalGrab.name, x: e.clientX, y: e.clientY,
+			target: document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-global-drop]') ?? null
+		};
+	}
+
+	function cancelGlobal(): void {
+		globalGrab = null;
+		uiStore.globalDrag = null;
+	}
+
+	function dropGlobal(e: PointerEvent): void {
+		if (!globalGrab || globalGrab.pointer !== e.pointerId) return;
+		moveGlobal(e);
+		const dropped = uiStore.globalDrag;
+		cancelGlobal();
+		if (dropped && elements.some((gv) => gv.name === dropped.name)) {
+			dropped.target?.dispatchEvent(new CustomEvent('global-expression-drop', { detail: `globals.${dropped.name}` }));
+		}
+	}
+
+	onDestroy(() => { if (globalGrab) cancelGlobal(); });
+
 	function down(e: PointerEvent, gv: GlobalView, resize: boolean): void {
 		if (!edit || !board) return;
 		picked = gv.name;
+		if (!resize) grabGlobal(e, gv);
 		drag = { name: gv.name, from: cellOf(gv), x: e.clientX, y: e.clientY, units: unitsOf(board), resize, to: null };
 		const el = e.currentTarget as HTMLElement;
 		el.setPointerCapture(e.pointerId);
@@ -206,6 +238,12 @@
 
 	function move(e: PointerEvent): void {
 		if (!drag) return;
+		if (!drag.resize && !onBoard(e)) {
+			moveGlobal(e);
+			drag.to = null;
+			return;
+		}
+		uiStore.globalDrag = null;
 		const [dx, dy] = [e.clientX - drag.x, e.clientY - drag.y];
 		drag.to = drag.resize
 			? resizedBy(drag.from, dx, dy, drag.units, COLUMNS)
@@ -213,8 +251,14 @@
 	}
 
 	// ONE op per gesture, so a drag is one undo step, the way every other frozen drag is.
-	function up(): void {
+	function up(e: PointerEvent): void {
 		if (!drag) return;
+		if (!drag.resize && !onBoard(e)) {
+			dropGlobal(e);
+			drag = null;
+			return;
+		}
+		cancelGlobal();
 		const { name, from, to } = drag;
 		drag = null;
 		const gv = elements.find((el) => el.name === name);
@@ -315,7 +359,7 @@
 	});
 
 	function setSource(pv: GlobalView, reference: string): void {
-		if (learning === pv.name) stopLearning();
+		if (midiLearn.target === `control:${pv.name}`) midiLearn.stop();
 		linking = false;
 		void g.sourceControl(group, pv.element, reference).catch(() => {});
 	}
@@ -326,78 +370,20 @@
 		void g.sourceControl(group, pv.element, ref, Math.max(0, Math.round(index))).catch(() => {});
 	}
 
-	// MIDI learn: listen to the followed slot, and the first number that moves is the one. A widget
-	// with no link yet is linked first — to the patch's one MIDI node, or to the one asked for.
-	let learning = $state<string | null>(null);
-	let unbind: (() => void) | null = null;
-	let asking = $state<string | null>(null);
-	const asked = $derived(elements.find((el) => el.name === asking) ?? null);
-	const askAnchor = $derived.by(() => {
-		if (!board || !asked) return null;
-		return board.querySelector<HTMLElement>(`[data-testid="control-${group}-${asked.element}"]`);
-	});
-	function stopLearning(): void {
-		unbind?.();
-		unbind = null;
-		learning = null;
-	}
-	function startLearning(gv: GlobalView, ref: string): void {
-		stopLearning();
-		const [nodeName, slot] = ref.split('.');
-		const uid = g.nodes.find((n) => n.name === nodeName)?.uid;
-		if (!slot || !uid) return;
-		const { element, name } = gv;
-		let baseline: number[] | null = null;
-		learning = name;
-		unbind = bindViewer(uid, slot, `learn:${name}`, [viewSpecForKind('line', 4096, 64)], (f: DataFrame) => {
-			const values = (f.data as ArrayData).values;
-			if (!values || typeof values.length !== 'number') return;
-			if (!baseline) {
-				baseline = Array.from(values);
-				return;
-			}
-			for (let i = 0; i < values.length; i++) {
-				if (Math.abs(values[i] - (baseline[i] ?? values[i])) > 1e-6) {
-					stopLearning();
-					void g.sourceControl(group, element, ref, i).catch(() => {});
-					return;
-				}
-			}
-		});
-	}
-	async function linkAndLearn(gv: GlobalView, uid: string): Promise<void> {
-		asking = null;
-		try {
-			const ref = await g.linkControl(gv.name, uid);
-			if (ref) startLearning(gv, ref);
-		} catch {
-			/* refused */
-		}
-	}
-	async function learn(gv: GlobalView): Promise<void> {
-		if (learning === gv.name) return stopLearning();
-		if (gv.source) return startLearning(gv, gv.source.reference);
-		const feeds = g.midiFeeds(gv.name);
-		if (feeds.length === 0) notify().raise('No MIDI node in the patch — add one, then learn');
-		else if (feeds.length === 1) await linkAndLearn(gv, feeds[0].uid);
-		else asking = gv.name;
-	}
-	$effect(() => {
-		if (!edit || (learning && !elements.some((el) => el.name === learning))) stopLearning();
-	});
-	onDestroy(stopLearning);
 
-	/** `control draw` reaches the pad that holds that global, and nothing else: the op parses a
+	/** `control paint` reaches the pad that holds that global, and nothing else: the op parses a
 	    turtle script and the WIDGET makes the strokes, so a script and a hand paint by one code. */
 	let painting = $state<{ id: number; name: string; marks: Mark[] } | null>(null);
 	let batch = 0;
-	const stopDrawing = getControl().on((ev) => {
-		if (ev.event === 'control_draw') {
+	const stopPainting = getControl().on((ev) => {
+		if (ev.event === 'control_paint') {
 			painting = { id: ++batch, name: ev.payload.name, marks: ev.payload.marks };
 		}
 	});
-	onDestroy(stopDrawing);
+	onDestroy(stopPainting);
 </script>
+
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && globalGrab) { drag = null; cancelGlobal(); } }} />
 
 {#snippet widget(c: ControlView, value: Value, label: string, onChange: (v: Value) => void, name = '')}
 	{#if c.kind === 'knob'}
@@ -410,8 +396,8 @@
 		<Toggle value={value === true} {onChange} />
 	{:else if c.kind === 'dropdown'}
 		<Select value={String(value)} options={c.options ?? []} {onChange} />
-	{:else if c.kind === 'draw'}
-		<DrawPad value={String(value)} {onChange} pending={painting?.name === name ? painting : null} />
+	{:else if c.kind === 'paint'}
+		<PaintPad value={String(value)} {onChange} pending={painting?.name === name ? painting : null} />
 	{:else}
 		<TextArea value={String(value)} aria-label={label} {onChange} />
 	{/if}
@@ -472,7 +458,8 @@
 				style={`--columns: ${COLUMNS}`}
 				onpointermove={move}
 				onpointerup={up}
-				onpointercancel={up}
+				onpointercancel={() => { drag = null; cancelGlobal(); }}
+				onlostpointercapture={() => { drag = null; cancelGlobal(); }}
 			>
 				{#if elements.length === 0}
 					<div class="fill">
@@ -508,7 +495,12 @@
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<span
 							class="label"
-							title="Double-click to rename"
+							title="Drag onto a parameter to set its expression. Double-click to rename"
+							use:grab={(e) => grabGlobal(e, gv)}
+							onpointermove={moveGlobal}
+							onpointerup={dropGlobal}
+							onpointercancel={cancelGlobal}
+							onlostpointercapture={cancelGlobal}
 							ondblclick={(e) => startRename(gv, (e.currentTarget as HTMLElement).parentElement as HTMLElement)}
 							>{gv.element}</span
 						>
@@ -530,21 +522,12 @@
 							</div>
 						{/if}
 						{#if edit}
-							<button
-								type="button"
-								class="learn"
-								class:on={learning === gv.name}
-								data-testid="control-learn"
-								title={learning === gv.name
-									? 'Listening: move one control on the MIDI node'
-									: gv.source
-										? `Learn which of ${gv.source.reference} moves`
-										: 'Link a MIDI node and learn which of its controls moves'}
-								aria-label="MIDI learn for {gv.element}"
-								aria-pressed={learning === gv.name}
-								onpointerdown={(e) => e.stopPropagation()}
-								onclick={() => void learn(gv)}><Icon name="radio" /></button
-							>
+							{#if gv.type === 'float' || gv.type === 'int'}
+								<div class="learn">
+									<MidiLearn label={gv.element} target={`control:${gv.name}`} testid="control-learn"
+										onLearn={(ref, index) => { void g.sourceControl(group, gv.element, ref, index).catch(() => {}); }} />
+								</div>
+							{/if}
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<button
 								type="button"
@@ -665,12 +648,10 @@
 						{/if}
 						<!-- The corner buttons' door for a finger: a cell is narrower than two finger-sized targets. -->
 						<div class="touch-actions">
-							<Chip
-								tone={learning === pv.name ? 'accent' : 'neutral'}
-								aria-pressed={learning === pv.name}
-								data-testid="control-learn"
-								onclick={() => void learn(pv)}>{learning === pv.name ? 'listening…' : 'MIDI learn'}</Chip
-							>
+							{#if pv.type === 'float' || pv.type === 'int'}
+								<MidiLearn label={pv.element} target={`control:${pv.name}`} testid="control-learn"
+									onLearn={(ref, index) => { void g.sourceControl(group, pv.element, ref, index).catch(() => {}); }} />
+							{/if}
 							<Chip tone="danger" data-testid="control-delete" onclick={() => void g.removeControl(group, pv.element)}>delete</Chip>
 						</div>
 					</div>
@@ -679,24 +660,8 @@
 		{/key}
 	{/if}
 
-	{#if asked && askAnchor}
-		{@const gv = asked}
-		<Popover
-			anchor={askAnchor}
-			open
-			onDismiss={() => (asking = null)}
-			catcher
-			role="dialog"
-			aria-label="Which MIDI node"
-			data-testid="control-learn-ask"
-		>
-			<div class="ask">
-				<span class="ask-title">Learn from which MIDI node?</span>
-				{#each g.midiFeeds(gv.name) as f (f.uid)}
-					<Chip data-testid={`control-learn-ask-${f.name}`} onclick={() => void linkAndLearn(gv, f.uid)}>{f.reference}</Chip>
-				{/each}
-			</div>
-		</Popover>
+	{#if globalGrab && uiStore.globalDrag}
+		<div class="global-ghost" style={`left: ${uiStore.globalDrag.x + 12}px; top: ${uiStore.globalDrag.y + 12}px`} aria-hidden="true">globals.{uiStore.globalDrag.name}</div>
 	{/if}
 
 	{#if lift}
@@ -717,6 +682,17 @@
 </div>
 
 <style>
+	.global-ghost {
+		position: fixed;
+		z-index: 10000;
+		pointer-events: none;
+		padding: var(--space-2);
+		background: var(--surface-3);
+		color: var(--text);
+		border: 1px solid var(--accent);
+		border-radius: var(--radius-sm);
+	}
+
 	.wrap {
 		display: flex;
 		flex-direction: column;
@@ -791,34 +767,8 @@
 		top: 0;
 		left: 0;
 		z-index: 1;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		min-width: var(--hit);
-		min-height: var(--hit);
-		padding: 0;
-		background: transparent;
-		border: none;
-		border-radius: var(--radius-md);
-		color: var(--info);
-		cursor: pointer;
 	}
-	.learn.on {
-		background: var(--info-fill);
-		animation: listen 1s ease-in-out infinite alternate;
-	}
-	@keyframes listen {
-		from {
-			opacity: 1;
-		}
-		to {
-			opacity: 0.45;
-		}
-	}
-	.learn:focus-visible {
-		outline: var(--focus-width) solid var(--focus-ink);
-		outline-offset: -2px;
-	}
+
 	.touch-actions {
 		display: none;
 		gap: var(--space-2);
@@ -831,16 +781,6 @@
 		.touch-actions {
 			display: flex;
 		}
-	}
-	.ask {
-		display: flex;
-		flex-direction: column;
-		align-items: stretch;
-		gap: var(--space-2);
-	}
-	.ask-title {
-		font-size: var(--fs-small);
-		color: var(--text-dim);
 	}
 	/* The board is a container, so a grid unit is a share of ITS width and follows every resize. */
 	.sheet {
@@ -905,6 +845,8 @@
 		opacity: var(--disabled-opacity);
 	}
 	.label {
+		touch-action: none;
+		cursor: grab;
 		height: var(--label-h);
 		line-height: var(--label-h);
 		text-align: center;

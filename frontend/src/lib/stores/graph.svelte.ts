@@ -1,5 +1,6 @@
 /** Central reactive graph state, backed by the control WS. The store owns the only writes, so a
  * component just reads its `$state` fields. */
+import type { VideoQuality } from '$lib/api/types';
 import {
 	getControl,
 	type Control,
@@ -104,7 +105,7 @@ export class GraphStore {
 	hadHello = $state(false);
 
 	/** Every armed output slot, doc-authoritative: the document is the one owner of what is armed. */
-	armed = $state<{ uid: string; slot: string }[]>([]);
+	armed = $state<{ uid: string; slot: string; quality: VideoQuality }[]>([]);
 
 	/** The recording SESSION, as the backend last reported it. Pushed, never derived here. */
 	record = $state<RecordStatus>(IDLE_RECORD);
@@ -239,7 +240,6 @@ export class GraphStore {
 		// A wholesale load mints new uids and clears the manager's history, so a kept client entry
 		// would pop against a command that is not there. A same-session reconnect never comes here.
 		history().reset();
-		consoleStore().clear();
 		selection().forgetAll();
 	}
 
@@ -321,13 +321,14 @@ export class GraphStore {
 			case 'param_values':
 				this.applyLiveSource(ev.payload.node, ev.payload);
 				break;
+			case 'logs':
+				consoleStore().apply(ev.payload);
+				break;
 			case 'error': {
 				// A REPORT, so only a node that RUNS raises one — a facade's health rides `node_stage`.
 				const t = this.nodeById(ev.payload.node);
 				if (t) t.error = ev.payload.error;
 				else this._stashRuntime(ev.payload.node, { error: ev.payload.error });
-				if (ev.payload.error)
-					consoleStore().ingestError(ev.payload.node, ev.payload.error, Date.now());
 				break;
 			}
 			case 'unsaved_changes':
@@ -359,17 +360,18 @@ export class GraphStore {
 
 	/** Move one of the patch's own node files into the private library, where every later patch
 	 * finds it. The fresh catalog arrives as a `node_types` event in every open tab. */
-	async saveNodeToLibrary(type: string, overwrite: boolean): Promise<{ type: string; path: string }> {
-		return this.ctl.call<{ type: string; path: string }>('library save', { type, overwrite });
+	async saveNodeToLibrary(type: string, overwrite: boolean, name?: string): Promise<{ type: string; path: string }> {
+		return this.ctl.call<{ type: string; path: string }>('library save', { type, overwrite, ...(name ? { name } : {}) });
 	}
 
 	/** The private library's own file for this type, hidden behind the patch's — what a save to the
 	 * library would replace, and null where it would land on nothing. */
 	async libraryFileBehind(type: string): Promise<string | null> {
-		const r = await this.ctl.call<{ shadowed?: { provenance: string; path: string }[] }>(
+		const r = await this.ctl.call<{ provenance?: string; path?: string; shadowed?: { provenance: string; path: string }[] }>(
 			'library get',
 			{ type }
 		);
+		if (r.provenance === 'custom') return r.path ?? null;
 		return r.shadowed?.find((s) => s.provenance === 'custom')?.path ?? null;
 	}
 
@@ -413,6 +415,13 @@ export class GraphStore {
 			output: `${node}/${slot}`
 		});
 		if (r?.changed) this._recordGraphCmd(`Arm ${slot}`);
+	}
+
+	async setRecordQuality(node: string, slot: string, quality: VideoQuality): Promise<void> {
+		const r = await this.ctl.call<{ changed?: boolean }>('record quality', {
+			output: `${node}/${slot}`, quality
+		});
+		if (r?.changed) this._recordGraphCmd(`Set ${slot} recording quality`);
 	}
 
 	async disarmSlot(node: string, slot: string): Promise<void> {
@@ -494,11 +503,28 @@ export class GraphStore {
 		this._recordGraphCmd(`Add global ${name}`);
 	}
 
-	/** Edit an existing global's value (system or user); the type is immutable and stays. */
+	/** Edit an existing global's value, keeping its type. */
 	async setGlobalValue(name: string, value: number | string | boolean): Promise<void> {
 		if (!this.globals.some((g) => g.name === name)) throw new Error(`no global ${name}`);
 		await this.ctl.call('global entry edit', { name, value });
 		this._recordGraphCmd(`Set global ${name}`);
+	}
+
+	async setGlobalType(name: string, type: GlobalType): Promise<void> {
+		await this.ctl.call('global entry edit', { name, type });
+		this._recordGraphCmd(`Change global ${name} type`);
+	}
+
+	async addGlobalEntry(group: string): Promise<string> {
+		const result = await this.ctl.call('global entry add', { group }) as { name: string };
+		this._recordGraphCmd(`Add global ${result.name}`);
+		return result.name;
+	}
+
+	async addGlobalGroup(): Promise<string> {
+		const result = await this.ctl.call('global group add', {}) as { group: string };
+		this._recordGraphCmd(`Add global group ${result.group}`);
+		return result.group;
 	}
 
 	/** Remove a user global (a system global is refused by the server). */
@@ -566,15 +592,6 @@ export class GraphStore {
 		const want = wantedDtype(type);
 		const key = Object.entries(node.output_slots).find(([, d]) => feeds(d as SlotDtype, want as SlotDtype))?.[0];
 		return key ? `${node.name}.${node.slot_labels?.[key] ?? key}` : null;
-	}
-
-	/** The nodes tagged `midi` with an output that can feed the global named `name`. */
-	midiFeeds(name: string): { uid: string; name: string; reference: string }[] {
-		return this.nodes.flatMap((n) => {
-			if (!this.nodeTypes?.find((t) => t.type === n.type)?.tags.includes('midi')) return [];
-			const reference = this.feedFor(name, n.uid);
-			return reference ? [{ uid: n.uid, name: n.name, reference }] : [];
-		});
 	}
 
 	/** Make the widget named `name` follow the first output of node `uid` that can feed it. */
@@ -685,9 +702,9 @@ export class GraphStore {
 
 	/** Write the patch. Where it landed comes back from the MANAGER (`save_path_changed`), never
 	 * latched from this reply — a latch names the patch only in the tab that saved it. */
-	async save(path: string): Promise<{ path: string }> {
+	async save(path: string, overwrite = true): Promise<{ path: string }> {
 		// A given `path` becomes the patch's home; the arrangement is the manager's already.
-		return this.ctl.call<{ path: string }>('session save', { path });
+		return this.ctl.call<{ path: string }>('session save', { path, overwrite });
 	}
 
 	/** Reset to an empty, unnamed patch. Nothing is written here: a New emits no
@@ -707,6 +724,10 @@ export class GraphStore {
 	async expandInstance(instId: string): Promise<void> {
 		await this.ctl.call('nodes ungroup', { subpatch: instId });
 		this._recordGraphCmd('Ungroup');
+	}
+
+	async statPath(path: string): Promise<{ path: string; kind: 'file' | 'dir' | 'missing' }> {
+		return this.ctl.call('dir stat', { path });
 	}
 
 	/** List one directory level on the BACKEND filesystem (full FS, no jail). */

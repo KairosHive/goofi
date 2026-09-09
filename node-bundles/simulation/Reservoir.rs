@@ -238,7 +238,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "reservoir",
         name: "size",
-        spec: ParamSpec::Int { default: 100, min: 2, max: 1000 },
+        spec: ParamSpec::Int { default: 100, min: 2, max: 1000, options: &[] },
         expression: None,
         doc: Some("How many units. A wired `connectivity` matrix decides instead. Cost grows with the square."),
     },
@@ -294,7 +294,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000 },
+        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the weights and the biases. Negative takes a fresh one from the clock."),
     },

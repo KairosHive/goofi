@@ -26,6 +26,18 @@ impl GlobalValue {
         }
     }
 
+    /// Convert to a named type, using an empty value when conversion is not possible.
+    pub fn converted_to(&self, ty: &str) -> Option<GlobalValue> {
+        let template = match ty {
+            "float" => GlobalValue::Float(0.0),
+            "int" => GlobalValue::Int(0),
+            "bool" => GlobalValue::Bool(false),
+            "string" => GlobalValue::Str(String::new()),
+            _ => return None,
+        };
+        Some(self.clone().coerced_like(&template))
+    }
+
     /// Coerce to `template`'s variant, so an existing global's declared type stays stable on set.
     fn coerced_like(self, template: &GlobalValue) -> GlobalValue {
         use GlobalValue as G;
@@ -52,10 +64,10 @@ pub enum ControlKind {
     Knob,
     Slider,
     Number,
-    Field,
+    Text,
     Toggle,
     Dropdown,
-    Draw,
+    Paint,
 }
 
 impl ControlKind {
@@ -64,10 +76,10 @@ impl ControlKind {
         ControlKind::Knob,
         ControlKind::Slider,
         ControlKind::Number,
-        ControlKind::Field,
+        ControlKind::Text,
         ControlKind::Toggle,
         ControlKind::Dropdown,
-        ControlKind::Draw,
+        ControlKind::Paint,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -75,10 +87,10 @@ impl ControlKind {
             ControlKind::Knob => "knob",
             ControlKind::Slider => "slider",
             ControlKind::Number => "number",
-            ControlKind::Field => "field",
+            ControlKind::Text => "text",
             ControlKind::Toggle => "toggle",
             ControlKind::Dropdown => "dropdown",
-            ControlKind::Draw => "draw",
+            ControlKind::Paint => "paint",
         }
     }
 
@@ -89,7 +101,7 @@ impl ControlKind {
             ControlKind::Toggle => GlobalValue::Bool(false),
             // A drawing is a `data:image/png;base64,…` URL, which is a STRING like any other: the
             // widget draws it, an expression reads it, and nothing new crosses the wire for it.
-            ControlKind::Field | ControlKind::Dropdown | ControlKind::Draw => GlobalValue::Str(String::new()),
+            ControlKind::Text | ControlKind::Dropdown | ControlKind::Paint => GlobalValue::Str(String::new()),
         }
     }
 
@@ -99,12 +111,12 @@ impl ControlKind {
             ControlKind::Knob => (4.0, 4.0),
             ControlKind::Slider => (8.0, 2.0),
             ControlKind::Number => (4.0, 2.0),
-            // A field is born THREE rows tall because it is a text area, not a line: a poem is
+            // A text widget is born THREE rows tall because it is a text area, not a line: a poem is
             // what people put in one, and a one-line box says the opposite.
-            ControlKind::Field => (6.0, 3.0),
+            ControlKind::Text => (6.0, 3.0),
             ControlKind::Dropdown => (6.0, 2.0),
             ControlKind::Toggle => (2.0, 2.0),
-            ControlKind::Draw => (8.0, 8.0),
+            ControlKind::Paint => (8.0, 8.0),
         }
     }
 }
@@ -164,7 +176,7 @@ impl Control {
         match self.kind {
             K::Knob | K::Slider | K::Number => matches!(value, G::Float(_) | G::Int(_)),
             K::Toggle => matches!(value, G::Bool(_)),
-            K::Field | K::Dropdown | K::Draw => matches!(value, G::Str(_)),
+            K::Text | K::Dropdown | K::Paint => matches!(value, G::Str(_)),
         }
     }
 
@@ -356,7 +368,7 @@ pub struct GlobalStore {
     controls: IndexMap<String, Control>,
     sources: IndexMap<String, GlobalSource>,
     locks: IndexMap<String, Lock>,
-    group_locks: IndexMap<String, Lock>,
+    groups: IndexMap<String, Lock>,
 }
 
 impl Default for GlobalStore {
@@ -372,7 +384,7 @@ impl GlobalStore {
             controls: IndexMap::new(),
             sources: IndexMap::new(),
             locks: IndexMap::new(),
-            group_locks: IndexMap::new(),
+            groups: IndexMap::new(),
         };
         s.reassert_system();
         s
@@ -390,7 +402,7 @@ impl GlobalStore {
                 self.values.entry(def.name.to_string()).or_insert_with(def.value);
             }
         }
-        self.group_locks.insert(SYSTEM_GROUP.to_string(), Lock { config: true, value: false });
+        self.groups.insert(SYSTEM_GROUP.to_string(), Lock { config: true, value: false });
     }
 
     pub fn get(&self, name: &str) -> Option<&GlobalValue> {
@@ -457,9 +469,9 @@ impl GlobalStore {
         true
     }
 
-    /// Every group that holds a lock, in the order the locks were set.
+    /// Explicit groups and their built-in flags, in creation order.
     pub fn groups(&self) -> impl Iterator<Item = (&str, Lock)> {
-        self.group_locks.iter().map(|(g, l)| (g.as_str(), *l))
+        self.groups.iter().map(|(g, l)| (g.as_str(), *l))
     }
 
     /// Whether a `.gfi` must leave `name` out: an ephemeral global's value is goofi's own.
@@ -473,7 +485,7 @@ impl GlobalStore {
     }
 
     pub fn group_lock(&self, group: &str) -> Lock {
-        self.group_locks.get(group).copied().unwrap_or_default()
+        self.groups.get(group).copied().unwrap_or_default()
     }
 
     /// What holds `name` right now: its own lock and its group's together.
@@ -497,21 +509,47 @@ impl GlobalStore {
         Ok(old)
     }
 
-    /// Set a group's lock, answering the one it held. A lock is what makes a group exist as much
-    /// as a member does, so any legal group name takes one.
-    pub fn set_group_lock(&mut self, group: &str, lock: Lock) -> Result<Lock, String> {
+    /// Set or remove a group record, answering the previous record for undo.
+    pub fn set_group_lock(&mut self, group: &str, lock: Option<Lock>) -> Result<Option<Lock>, String> {
         if group == SYSTEM_GROUP {
             return Err(format!("`{SYSTEM_GROUP}` is goofi's own; its lock is not yours to set"));
         }
         if !is_valid_identifier(group) {
             return Err(format!("invalid group name `{group}`: {GLOBAL_NAME_RULE}"));
         }
-        let old = self.group_lock(group);
-        match lock.is_default() {
-            true => drop(self.group_locks.shift_remove(group)),
-            false => drop(self.group_locks.insert(group.to_string(), lock)),
+        Ok(match lock {
+            Some(lock) => self.groups.insert(group.to_string(), lock),
+            None => self.groups.shift_remove(group),
+        })
+    }
+
+    /// Create an empty group at its saved position.
+    pub fn add_group(&mut self, group: &str, at: Option<usize>) -> Result<(), String> {
+        if !is_valid_identifier(group) {
+            return Err(format!("invalid group name `{group}`: {GLOBAL_NAME_RULE}"));
         }
-        Ok(old)
+        if self.has_group(group) {
+            return Err(format!("global group `{group}` already exists"));
+        }
+        let at = at.unwrap_or(self.groups.len()).min(self.groups.len());
+        self.groups.shift_insert(at, group.to_string(), Lock::default());
+        Ok(())
+    }
+
+    pub fn group_index(&self, group: &str) -> Option<usize> {
+        self.groups.get_index_of(group)
+    }
+
+    /// Remove an empty, unlocked group.
+    pub fn remove_group(&mut self, group: &str) -> Result<(), String> {
+        if self.group_lock(group).config || self.group_lock(group).value {
+            return Err(format!("global group `{group}` is locked"));
+        }
+        if self.values.keys().any(|name| group_of(name) == group) {
+            return Err(format!("global group `{group}` is not empty"));
+        }
+        self.groups.shift_remove(group).ok_or_else(|| format!("no global group `{group}`"))?;
+        Ok(())
     }
 
     fn config_locked(&self, name: &str) -> Result<(), String> {
@@ -544,7 +582,7 @@ impl GlobalStore {
         Ok(())
     }
 
-    /// Set an EXISTING global, coercing to its declared type; errors when it does not exist.
+    /// Set an existing global. A type change also requires an unlocked configuration.
     pub fn set(&mut self, name: &str, value: GlobalValue) -> Result<(), String> {
         if is_ephemeral(name) {
             return Err(format!("global `{name}` is read-only: it is ephemeral, and goofi says what it holds"));
@@ -557,8 +595,10 @@ impl GlobalStore {
         }
         match self.values.get(name) {
             Some(existing) => {
-                let coerced = value.coerced_like(existing);
-                self.values.insert(name.to_string(), coerced);
+                if existing.type_name() != value.type_name() {
+                    self.config_locked(name)?;
+                }
+                self.values.insert(name.to_string(), value);
                 Ok(())
             }
             None => Err(format!("no such global `{name}`")),
@@ -660,15 +700,16 @@ impl GlobalStore {
         for (old, new) in &moved {
             self.rename(old, new)?;
         }
-        if let Some(l) = self.group_locks.shift_remove(from) {
-            self.group_locks.insert(to.to_string(), l);
+        if let Some(at) = self.groups.get_index_of(from) {
+            let lock = self.groups.shift_remove(from).unwrap_or_default();
+            self.groups.shift_insert(at, to.to_string(), lock);
         }
         Ok(moved)
     }
 
-    /// Whether anything makes `group` a group here: a member, or a lock.
+    /// Whether a group has an explicit record or an entry.
     pub fn has_group(&self, group: &str) -> bool {
-        self.group_locks.contains_key(group) || self.values.keys().any(|k| group_of(k) == group)
+        self.groups.contains_key(group) || self.values.keys().any(|k| group_of(k) == group)
     }
 
     /// Apply one change: `Some(v)` sets or adds (a NEW global lands at `at`); `None` leaves the

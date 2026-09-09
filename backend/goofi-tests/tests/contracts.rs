@@ -180,7 +180,7 @@ static MULTI_IN: &[SlotDecl] = &[
 ];
 static TRANSFORM: NodeManifest = manifest("MultiThing", MULTI_IN, &[], false);
 static DOCUMENTED_PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "welch", name: "nperseg", spec: ParamSpec::Int { default: 256, min: 16, max: 4096 },
+    group: "welch", name: "nperseg", spec: ParamSpec::Int { default: 256, min: 16, max: 4096, options: &[] },
     expression: None,
     doc: Some("Samples per Welch segment: longer means finer frequency resolution."),
 }];

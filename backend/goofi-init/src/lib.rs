@@ -290,16 +290,18 @@ fn named_in(dirs: &[PathBuf], file: &str) -> Vec<PathBuf> {
     dirs.iter().map(|d| d.join(file)).filter(|p| p.is_file()).collect()
 }
 
-fn pip_install(py: &Path, reqs: &[PathBuf], dry_run: bool) -> Command {
+fn pip_install(py: &Path, reqs: &[PathBuf], dry_run: bool) -> Result<Command, String> {
     let mut cmd = uv(["pip", "install", "--python"]);
     cmd.arg(py);
     if dry_run {
         cmd.arg("--dry-run");
     }
     for r in reqs {
+        std::fs::read_to_string(r)
+            .map_err(|e| format!("cannot read requirements file {} as UTF-8: {e}", r.display()))?;
         cmd.arg("-r").arg(r);
     }
-    cmd
+    Ok(cmd)
 }
 
 fn names(reqs: &[PathBuf]) -> String {
@@ -312,7 +314,7 @@ pub fn missing_packages(py: &Path, reqs: &[PathBuf]) -> Result<Vec<String>, Stri
     if reqs.is_empty() {
         return Ok(Vec::new());
     }
-    let out = pip_install(py, reqs, true).output().map_err(|e| format!("could not run uv: {e}"))?;
+    let out = pip_install(py, reqs, true)?.output().map_err(|e| format!("could not run uv: {e}"))?;
     let text = String::from_utf8_lossy(&out.stderr);
     if !out.status.success() {
         return Err(format!("uv could not resolve {}: {}", names(reqs), text.trim()));
@@ -323,7 +325,7 @@ pub fn missing_packages(py: &Path, reqs: &[PathBuf]) -> Result<Vec<String>, Stri
 
 /// Install `reqs` into `py`.
 pub fn install_packages(py: &Path, reqs: &[PathBuf]) -> Result<(), String> {
-    run(&mut pip_install(py, reqs, false), &format!("install {}", names(reqs)))
+    run(&mut pip_install(py, reqs, false)?, &format!("install {}", names(reqs)))
 }
 
 /// Does this interpreter hold THIS goofi? `introspect` separates the Rust wheel from the old Python

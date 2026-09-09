@@ -264,7 +264,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "mass",
         name: "size",
-        spec: ParamSpec::Int { default: 1, min: 1, max: 512 },
+        spec: ParamSpec::Int { default: 1, min: 1, max: 512, options: &[] },
         expression: None,
         doc: Some("How many populations, when nothing is wired. A `connectivity` matrix decides instead."),
     },
@@ -309,7 +309,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000 },
+        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the starting state and the noise. Negative takes a fresh one from the clock."),
     },
