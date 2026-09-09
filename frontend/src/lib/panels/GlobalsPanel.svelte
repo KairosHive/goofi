@@ -13,7 +13,6 @@
 		type LockView
 	} from '$lib/crdt/graphDoc';
 	import {
-		Badge,
 		Button,
 		Disclosure,
 		Icon,
@@ -171,20 +170,22 @@
 				>
 					{#snippet summary()}
 						<span class="grp-name">{grp.group}</span>
-						<span class="grp-count">{grp.entries.length}</span>
-						{#if controlled}
-							<Badge tone="accent">control panel</Badge>
-						{/if}
-						{#if grp.lock.config || grp.lock.value}
-							<span
-								class="grp-lock"
-								title={grp.lock.config && grp.lock.value
-									? 'Locked: names, widgets, membership and values'
-									: grp.lock.config
-										? 'Locked: names, widgets and membership'
-										: 'Locked: values'}><Icon name="lock" /></span
-							>
-						{/if}
+						<span class="grp-tags">
+							<span class="grp-count">{grp.entries.length}</span>
+							{#if controlled}
+								<span class="grp-control" role="img" aria-label="Control panel" title="Control panel"><Icon name="sliders-horizontal" /></span>
+							{/if}
+							{#if grp.lock.config || grp.lock.value}
+								<span
+									class="grp-lock"
+									title={grp.lock.config && grp.lock.value
+										? 'Locked: names, widgets, membership and values'
+										: grp.lock.config
+											? 'Locked: names, widgets and membership'
+											: 'Locked: values'}><Icon name="lock" /></span
+								>
+							{/if}
+						</span>
 					{/snippet}
 					<table>
 						<tbody>
@@ -378,20 +379,41 @@
 		border-collapse: collapse;
 		font-size: var(--fs-small);
 	}
+	.gp-body :global(.grp:nth-child(even)) {
+		background: color-mix(in srgb, var(--text) 3%, transparent);
+		border-radius: var(--radius-sm);
+	}
+	.gp-body :global(.grp .ui-disclosure-label) {
+		display: flex;
+		align-items: center;
+		flex: 1;
+		gap: var(--space-3);
+	}
+	.grp-tags {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-3);
+		flex-shrink: 0;
+		margin-left: auto;
+	}
 	.grp-name {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
 		font-family: var(--font-mono);
 		font-size: var(--fs-small);
 	}
 	.grp-count {
-		margin-left: var(--space-2);
-		margin-right: var(--space-3);
 		color: var(--text-muted);
 		font-size: var(--fs-micro);
 	}
+	.grp-control,
 	.grp-lock {
 		display: inline-flex;
-		margin-left: var(--space-3);
 		color: var(--text-muted);
+	}
+	.grp-control {
+		color: var(--accent);
 	}
 	.grp-foot {
 		display: flex;
