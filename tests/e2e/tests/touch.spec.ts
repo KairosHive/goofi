@@ -246,6 +246,8 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 				g.commands.setPanelType(panel.panelId, 'control');
 				g.commands.setPanelState(panel.panelId, { group: 'desk' });
 			});
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-edit', 'true');
+			await page.getByTestId('control-edit-toggle').tap();
 			const knob = page.getByTestId('control-desk-level');
 			await expect(knob).toBeVisible();
 			const level = () =>

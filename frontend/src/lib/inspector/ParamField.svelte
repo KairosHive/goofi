@@ -24,6 +24,7 @@
 	import { controlKind } from './controlKind';
 	import { literalFor } from './paramSeed';
 	import ExprEditor from './expr/ExprEditor.svelte';
+	import MidiLearn from './MidiLearn.svelte';
 	import RefPicker from './RefPicker.svelte';
 
 	let {
@@ -52,19 +53,31 @@
 		dropZone?: string | null;
 	} = $props();
 
+	const learnId = $props.id();
 	const uiStore = ui();
-	const over = $derived(dropZone !== null && uiStore.nodeDragZone === dropZone);
+	let row = $state<HTMLDivElement>();
+	const over = $derived(
+		(dropZone !== null && uiStore.nodeDragZone === dropZone) ||
+		(uiStore.globalDrag !== null && uiStore.globalDrag.target === row)
+	);
+
+	function acceptGlobal(el: HTMLDivElement): { destroy(): void } {
+		const drop = (event: Event): void => {
+			picking = false;
+			onSetSource({ expression: (event as CustomEvent<string>).detail });
+		};
+		el.addEventListener('global-expression-drop', drop);
+		return { destroy: () => el.removeEventListener('global-expression-drop', drop) };
+	}
 
 	const kind = $derived(controlKind(descriptor));
 
 	let open = $state(false);
 
-	// `step` is computed against the SAME auto-extended bounds the Slider uses; a native `'any'` would
+	// `step` uses the declared bounds; a native `'any'` would
 	// NaN the NumberInput's scrub arithmetic.
 	const num = $derived(descriptor.type === 'float' || descriptor.type === 'int' ? descriptor : null);
-	const lo = $derived(num ? Math.min(num.vmin, num.value) : 0);
-	const hi = $derived(num ? Math.max(num.vmax, num.value) : 1);
-	const step = $derived(num ? (num.type === 'int' ? 1 : Math.max((hi - lo) / 200, 1e-6)) : 1);
+	const step = $derived(num ? (num.type === 'int' ? 1 : Math.max((num.vmax - num.vmin) / 200, 1e-6)) : 1);
 
 	const options = $derived(descriptor.type === 'string' ? (descriptor.options ?? []) : []);
 
@@ -96,7 +109,10 @@
 
 <div
 	class={`pf-param ${klass}`.trim()}
-	class:armed={dropZone !== null}
+	bind:this={row}
+	use:acceptGlobal
+	data-global-drop
+	class:armed={dropZone !== null || uiStore.globalDrag !== null}
 	class:over
 	data-node-drop={dropZone}
 	{...rest}
@@ -112,6 +128,16 @@
 		<div class="pf-value">
 			{#if num}
 				<!-- SOFT bounds → Slider only; the NumberInput is UNBOUNDED (the engine does not clamp on set). -->
+				{#if num.type === 'int' && num.options?.length}
+					<Segmented
+						value={String(num.value)}
+						segments={num.options.map((value) => ({ id: String(value), label: String(value) }))}
+						onChange={(value) => onCommit(Number(value))}
+						disabled={driven}
+						data-testid="param-options"
+						fill
+					/>
+				{:else}
 				<Slider
 					value={num.value}
 					onChange={onCommit}
@@ -121,6 +147,7 @@
 					disabled={driven}
 					data-testid="param-slider"
 				/>
+				{/if}
 				<NumberInput
 					value={num.value}
 					onChange={onCommit}
@@ -237,6 +264,10 @@
 				aria-label={`${paramName} source`}
 				data-testid="param-mode"
 			/>
+			{#if num}
+				<MidiLearn label={paramName} target={`param:${learnId}`}
+					onLearn={(reference, index) => onSetSource({ reference: `${reference}[${index}]` })} />
+			{/if}
 		</div>
 	{/if}
 	<!-- Shown whether or not the source is unfolded: the value beside it is the literal standing in,

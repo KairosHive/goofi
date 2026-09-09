@@ -62,6 +62,7 @@ pub enum Input {
 pub struct Record {
     pub node: String,
     pub slot: String,
+    pub quality: goofi_core::record::VideoQuality,
 }
 
 pub struct Stage {
@@ -232,8 +233,9 @@ fn recorded(view: &GraphView<'_>, uid: Uid, inst: &Instance) -> Option<Record> {
         .manifest
         .outputs
         .iter()
-        .find(|o| o.kind == SlotType::Texture && nv.recorded.iter().any(|r| r == o.name))?;
-    Some(Record { node: nv.name.to_string(), slot: slot.name.to_string() })
+        .find(|o| o.kind == SlotType::Texture && nv.recorded.iter().any(|r| r.slot == o.name))?;
+    Some(Record { node: nv.name.to_string(), slot: slot.name.to_string(),
+        quality: nv.recorded.iter().find(|r| r.slot == slot.name)?.quality })
 }
 
 /// Every wire between two live nodes, by the input it lands on.

@@ -1,14 +1,14 @@
-<!-- Console panel — every node's stdout/stderr, virtualized over the console store's ring buffer
-     with a measured cumulative-height model. -->
+<!-- Application logs and the shared op command interface. -->
 <script lang="ts">
+	import { getControl } from '$lib/api/control';
 	import type { PanelProps } from 'panelty';
-	import { consoleStore, type ConsoleEntry, type ConsoleView } from '$lib/stores/console.svelte';
+	import { consoleStore, type ConsoleEntry, type LogLevel } from '$lib/stores/console.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { linkedNodeName } from 'panelty';
 	import { copyText } from '$lib/clipboard';
-	import { COLLAPSE_LINES, estimateRowHeight } from './consoleRowHeight';
+	import { estimateRowHeight } from './consoleRowHeight';
 	import NodeSelect from './NodeSelect.svelte';
 	import { Bar, Chip, Badge, Icon, IconButton, EmptyState } from '$lib/ui';
 	import { onDestroy, tick } from 'svelte';
@@ -20,17 +20,79 @@
 
 	const filterName = $derived(linkedNodeName(linkState)); // the bound node's uid (identity)
 	const nodeLabel = (uid: string): string => graph().nodeById(uid)?.name ?? uid;
+	const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+	const sourceLabel = (entry: ConsoleEntry): string => entry.node ? nodeLabel(entry.node) : entry.component;
 	const dragActive = $derived(uiStore.nodeDrag !== null);
 	const over = $derived(uiStore.nodeDragTarget === panelId);
 
-	let showStdout = $state(true);
-	let showStderr = $state(true);
+	let levels = $state(new Set<LogLevel>(['info', 'warning', 'error']));
+	let query = $state('');
+	let command = $state('');
+	let busy = $state(false);
+	let commandError = $state('');
+	let history: string[] = [];
+	let historyIndex = 0;
+	let draft = '';
+	let completions = $state<string[]>([]);
+
+	function toggleLevel(level: LogLevel): void {
+		const next = new Set(levels);
+		if (next.has(level)) next.delete(level); else next.add(level);
+		levels = next;
+	}
+
+	async function submit(): Promise<void> {
+		const line = command.trim();
+		if (!line || busy) return;
+		busy = true;
+		commandError = '';
+		history = [...history.filter((entry) => entry !== line), line].slice(-200);
+		historyIndex = history.length;
+		command = '';
+		completions = [];
+		try {
+			await getControl().call('log write', { text: `› ${line}`, component: 'command' });
+			const response = await fetch('/exec', {
+				method: 'POST', headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ commands: [line], actor: getControl().actor })
+			});
+			const result = await response.json();
+			if (!response.ok || result.error) throw new Error(result.error ?? `Request failed (${response.status})`);
+			for (const entry of result.results) {
+				await getControl().call('log write', { text: entry.text, component: 'command' });
+			}
+		} catch (error) {
+			const text = error instanceof Error ? error.message : String(error);
+			try { await getControl().call('log write', { text, level: 'error', component: 'command' }); }
+			catch { commandError = text; }
+		} finally { busy = false; }
+	}
+
+	async function commandKey(event: KeyboardEvent): Promise<void> {
+		if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+			event.preventDefault();
+			if (historyIndex === history.length) draft = command;
+			historyIndex = Math.max(0, Math.min(history.length, historyIndex + (event.key === 'ArrowUp' ? -1 : 1)));
+			command = history[historyIndex] ?? draft;
+		} else if (event.key === 'Tab') {
+			event.preventDefault();
+			const line = command;
+			try {
+				const result = await getControl().call<{ text: string }>('op complete', { line });
+				if (command !== line) return;
+				completions = result.text.split('\n').filter(Boolean).map((row) => row.split('\t')[0]);
+				if (completions.length === 1) {
+					command = line.replace(/[^\s]*$/, completions[0]) + ' ';
+					completions = [];
+				}
+			} catch (error) { commandError = String(error); }
+		} else if (event.key === 'Escape') { completions = []; }
+	}
 
 	const OVERSCAN = 8;
 
 	// Panel-local: wrapped heights depend on *this* panel's width, so they can't live in the store.
-	let expanded = $state(new Set<number>());
-	let measured = $state(new Map<number, { h: number; trunc: boolean }>());
+	let measured = $state(new Map<number, number>());
 
 	/** The row's content floor in px, read from the same token and query the CSS floors with. */
 	function contentFloor(): number {
@@ -39,57 +101,27 @@
 		return parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--hit')) || 0;
 	}
 	function heightOf(e: ConsoleEntry, floor: number): number {
-		return measured.get(e.uid)?.h ?? estimateRowHeight(e.lines, expanded.has(e.uid), floor);
-	}
-	function expandable(e: ConsoleEntry): boolean {
-		return measured.get(e.uid)?.trunc ?? e.lines > COLLAPSE_LINES;
+		return measured.get(e.uid) ?? estimateRowHeight(e.lines, floor);
 	}
 
-	// ResizeObserver fires after layout, so writing `measured` here can't recurse into the size.
-	function measure(node: HTMLElement, params: { uid: number; exp: boolean }) {
-		let cur = params;
+	// Wrapped text needs a measured height for this panel's width.
+	function measure(node: HTMLElement, uid: number) {
+		let id = uid;
 		const report = (): void => {
 			const h = node.offsetHeight;
-			const txt = node.querySelector('.txt');
-			const trunc = !cur.exp && txt ? txt.scrollHeight - txt.clientHeight > 1 : undefined;
-			const prev = measured.get(cur.uid);
-			const next = { h, trunc: trunc ?? prev?.trunc ?? false };
-			if (!prev || prev.h !== next.h || prev.trunc !== next.trunc) {
-				const m = new Map(measured);
-				m.set(cur.uid, next);
-				measured = m;
+			if (measured.get(id) !== h) {
+				const next = new Map(measured);
+				next.set(id, h);
+				measured = next;
 			}
 		};
 		const ro = new ResizeObserver(report);
 		ro.observe(node);
 		report();
 		return {
-			update(next: { uid: number; exp: boolean }) {
-				cur = next;
-				report();
-			},
+			update(uid: number) { id = uid; report(); },
 			destroy: () => ro.disconnect()
 		};
-	}
-
-	function toggle(uid: number): void {
-		const next = new Set(expanded);
-		if (next.has(uid)) next.delete(uid);
-		else next.add(uid);
-		expanded = next;
-	}
-
-	// A text-selection drag ends with a click on the row; only a stationary click toggles it.
-	let downX = 0;
-	let downY = 0;
-	function onRowDown(ev: MouseEvent): void {
-		downX = ev.clientX;
-		downY = ev.clientY;
-	}
-	function onRowClick(ev: MouseEvent, uid: number, canToggle: boolean): void {
-		if (!canToggle) return;
-		if (Math.hypot(ev.clientX - downX, ev.clientY - downY) > 4) return;
-		toggle(uid);
 	}
 
 	let copiedUid = $state(-1);
@@ -108,14 +140,15 @@
 		clearTimeout(copiedTimer);
 	});
 
-	// Each view has its own uid space, so the uid-keyed geometry resets when the filter changes.
-	let view = $state<ConsoleView | null>(null);
+	const view = $derived.by(() => {
+		cs.version;
+		return cs.view(filterName, levels, query);
+	});
+
 	$effect(() => {
-		const v = cs.acquireView(filterName, showStdout, showStderr);
-		view = v;
-		expanded = new Set();
-		measured = new Map();
-		return () => cs.releaseView(v.sig);
+		const ids = new Set(Array.from({ length: view.total() }, (_, i) => view.get(i).uid));
+		const kept = new Map([...measured].filter(([id]) => ids.has(id)));
+		if (kept.size !== measured.size) measured = kept;
 	});
 
 	let scrollEl = $state<HTMLDivElement | null>(null);
@@ -125,9 +158,8 @@
 
 	// Cumulative row offsets: cum[i] = total height of rows [0, i).
 	const layout = $derived.by<{ n: number; cum: Float64Array; height: number }>(() => {
-		cs.layoutVersion;
+		cs.version;
 		measured;
-		expanded;
 		const v = view;
 		const n = v ? v.total() : 0;
 		const cum = new Float64Array(n + 1);
@@ -150,20 +182,10 @@
 
 	const start = $derived(Math.max(0, indexAt(layout.cum, scrollTop) - OVERSCAN));
 	const end = $derived(Math.min(layout.n, indexAt(layout.cum, scrollTop + viewportH) + OVERSCAN + 1));
-	// Shallow-copy each visible entry: `count` is bumped in place on coalesce, and the keyed
-	// {#each} would not re-render a same-reference item.
-	const windowRows = $derived.by<{ e: ConsoleEntry; exp: boolean; canToggle: boolean }[]>(() => {
-		cs.version;
-		const v = view;
-		if (!v) return [];
-		const out: { e: ConsoleEntry; exp: boolean; canToggle: boolean }[] = [];
-		const e = Math.min(end, v.total());
-		for (let i = start; i < e; i++) {
-			const copy = { ...v.get(i) };
-			const exp = expanded.has(copy.uid);
-			out.push({ e: copy, exp, canToggle: exp || expandable(copy) });
-		}
-		return out;
+	const windowRows = $derived.by<ConsoleEntry[]>(() => {
+		const rows: ConsoleEntry[] = [];
+		for (let i = start; i < Math.min(end, view.total()); i++) rows.push(view.get(i));
+		return rows;
 	});
 	const topPad = $derived(layout.cum[Math.min(start, layout.n)]);
 	const bottomPad = $derived(Math.max(0, layout.height - layout.cum[Math.min(end, layout.n)]));
@@ -182,7 +204,7 @@
 	}
 
 	$effect(() => {
-		layout.height;
+		layout;
 		if (stuck && scrollEl) {
 			void tick().then(() => {
 				if (scrollEl && stuck) scrollEl.scrollTop = scrollEl.scrollHeight;
@@ -198,25 +220,18 @@
 <div class="wrap" data-testid="console-panel">
 	<Bar>
 		{#snippet start()}
-			<Chip
-				density="chrome"
-				tone={showStdout ? 'accent' : 'neutral'}
-				aria-pressed={showStdout}
-				onclick={() => (showStdout = !showStdout)}
-				title="Show stdout">out</Chip
-			>
-			<Chip
-				density="chrome"
-				tone={showStderr ? 'danger' : 'neutral'}
-				aria-pressed={showStderr}
-				onclick={() => (showStderr = !showStderr)}
-				title="Show stderr">err</Chip
-			>
+			{#each ['info', 'warning', 'error'] as level}
+				<Chip density="chrome" tone={levels.has(level as LogLevel) ? 'accent' : 'neutral'}
+					aria-pressed={levels.has(level as LogLevel)} onclick={() => toggleLevel(level as LogLevel)}
+					title="Show {level} messages">{#if level === 'info'}<Icon name="info" />{/if}{level}</Chip>
+			{/each}
 		{/snippet}
 		{#snippet end()}
-			<NodeSelect {panelId} state={linkState} emptyLabel="All nodes" />
+			<NodeSelect {panelId} state={linkState} emptyLabel="All sources" />
 		{/snippet}
 	</Bar>
+
+	<input class="filter" aria-label="Filter messages" placeholder="Filter messages" bind:value={query} />
 
 	<div
 		class="scroll thin-scrollbar"
@@ -230,46 +245,34 @@
 			</EmptyState>
 		{:else}
 			<div style="height:{topPad}px"></div>
-			{#each windowRows as row (row.e.uid)}
-				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+			{#each windowRows as row (row.uid)}
 				<div
 					class="row"
-					class:err={row.e.stream === 'stderr'}
-					class:toggleable={row.canToggle}
+					class:err={row.level === 'error'}
+					class:warn={row.level === 'warning'}
 					data-testid="console-entry"
-					data-node={row.e.node}
-					data-stream={row.e.stream}
-					role={row.canToggle ? 'button' : undefined}
-					tabindex={row.canToggle ? 0 : undefined}
-					onmousedown={onRowDown}
-					onclick={(ev) => onRowClick(ev, row.e.uid, row.canToggle)}
-					onkeydown={(ev) => {
-						if (row.canToggle && (ev.key === 'Enter' || ev.key === ' ')) {
-							ev.preventDefault();
-							toggle(row.e.uid);
-						}
-					}}
-					use:measure={{ uid: row.e.uid, exp: row.exp }}
+					data-node={row.node}
+					data-stream={row.stream}
+					data-level={row.level}
+					use:measure={row.uid}
 				>
-					<span class="caret"
-						>{#if row.exp}<Icon name="chevron-down" />{:else if row.canToggle}<Icon
-								name="chevron-right"
-							/>{/if}</span
-					>
 					{#if !filterName}
 						<button
 							class="node"
+							title={sourceLabel(row)}
+							aria-label={sourceLabel(row)}
 							onclick={(ev) => {
 								ev.stopPropagation();
-								focus(row.e.node);
-							}}>{nodeLabel(row.e.node)}</button
+								if (row.node) focus(row.node);
+							}}>{Array.from(sourceLabel(row))[0]}</button
 						>
 					{/if}
-					<pre class="txt" class:clamp={!row.exp}>{row.e.text}</pre>
+					<time title={new Date(row.ts).toISOString()}>{timeFormat.format(row.ts)}</time>
+					<pre class="txt">{row.text}</pre>
 					<div class="actions">
-						{#if row.e.count > 1}
-							<Badge data-testid="console-count" title="{row.e.count} occurrences"
-								>×{row.e.count}</Badge
+						{#if row.count > 1}
+							<Badge data-testid="console-count" title="{row.count} occurrences"
+								>×{row.count}</Badge
 							>
 						{/if}
 						<IconButton
@@ -283,8 +286,8 @@
 							onmousedown={(ev) => ev.stopPropagation()}
 							onclick={(ev) => {
 								ev.stopPropagation();
-								copy(row.e.text, row.e.uid);
-							}}><Icon name={copiedUid === row.e.uid ? 'check' : 'copy'} /></IconButton
+								copy(row.text, row.uid);
+							}}><Icon name={copiedUid === row.uid ? 'check' : 'copy'} /></IconButton
 						>
 					</div>
 				</div>
@@ -303,14 +306,41 @@
 		>
 	{/if}
 
+	{#if completions.length}<div class="completions">{completions.join(' · ')}</div>{/if}
+	{#if commandError}<div class="command-error" role="alert">{commandError}</div>{/if}
+	<form class="prompt" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
+		<span aria-hidden="true">›</span>
+		<input aria-label="Console command" placeholder="Enter an op · Tab to complete" bind:value={command}
+			onkeydown={commandKey} autocomplete="off" spellcheck="false" />
+		<button type="submit" disabled={busy || !command.trim()}>{busy ? 'Running…' : 'Run'}</button>
+	</form>
+
 	{#if dragActive}
 		<div class="node-drop-hint" class:active={over} data-testid="node-drop-hint"></div>
 	{/if}
 </div>
 
 <style>
+	.filter, .prompt {
+		border: 0;
+		border-bottom: 1px solid var(--border);
+		padding: var(--space-5) var(--space-6);
+		background: transparent;
+		color: var(--text);
+		min-width: 0;
+	}
+	.prompt { display: flex; gap: var(--space-5); border-top: 1px solid var(--border); }
+	.prompt input { flex: 1; min-width: 0; border: 0; background: transparent; color: inherit; font-family: var(--font-mono); }
+	.prompt button { color: var(--accent); background: transparent; border: 0; cursor: pointer; }
+	.prompt button:disabled { opacity: 0.5; }
+	.command-error { color: var(--danger); }
+	.command-error, .completions { padding: var(--space-5); overflow-wrap: anywhere; max-height: 100px; overflow: auto; }
+	time { color: var(--text-muted); white-space: nowrap; font-size: var(--fs-micro); line-height: 16px; }
+	.row.warn { color: var(--warning); background: color-mix(in srgb, var(--warning) 9%, transparent); }
+
 	.wrap {
 		position: relative;
+		container-type: inline-size;
 		height: 100%;
 		display: flex;
 		flex-direction: column;
@@ -331,29 +361,13 @@
 		gap: var(--space-5);
 		/* Mirrored by `PAD = 4` in consoleRowHeight.ts; px, because that estimate precedes layout. */
 		padding: 2px var(--space-6);
-		border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 		box-sizing: border-box;
-	}
-	.row.toggleable {
-		cursor: pointer;
-	}
-	.row.toggleable:hover {
-		background: color-mix(in srgb, var(--accent) 7%, transparent);
 	}
 	.row.err {
 		background: color-mix(in srgb, var(--danger) 9%, transparent);
 		color: var(--danger);
 	}
-	.row.err.toggleable:hover {
-		background: var(--danger-fill);
-	}
-	.caret {
-		flex: 0 0 auto;
-		width: 10px;
-		line-height: 16px;
-		color: var(--text-muted);
-		font-size: var(--fs-micro);
-	}
+	.node, time, .actions { user-select: none; }
 	.node {
 		flex: 0 0 auto;
 		background: transparent;
@@ -364,7 +378,7 @@
 		font-family: var(--font-mono);
 		font-size: var(--fs-micro);
 		cursor: pointer;
-		max-width: 160px;
+		width: 1ch;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -381,12 +395,6 @@
 		color: inherit;
 		user-select: text;
 		cursor: text;
-	}
-	.txt.clamp {
-		display: -webkit-box;
-		-webkit-line-clamp: 3;
-		line-clamp: 3;
-		-webkit-box-orient: vertical;
 	}
 	.actions {
 		flex: 0 0 auto;
@@ -406,6 +414,9 @@
 		opacity: 1;
 		pointer-events: auto;
 	}
+	@container (max-width: 420px) {
+		time { display: none; }
+	}
 	/* Touch has no hover, so the copy button rests open. */
 	@media (hover: none) and (pointer: coarse) {
 		.row :global(.console-copy-btn) {
@@ -416,7 +427,7 @@
 	.wrap :global(.to-bottom-fab) {
 		position: absolute;
 		right: 12px;
-		bottom: 12px;
+		bottom: 52px;
 		border-radius: 999px;
 		box-shadow: var(--shadow-1);
 		z-index: 2;

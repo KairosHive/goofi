@@ -208,7 +208,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "kuramoto",
         name: "size",
-        spec: ParamSpec::Int { default: 8, min: 1, max: 1024 },
+        spec: ParamSpec::Int { default: 8, min: 1, max: 1024, options: &[] },
         expression: None,
         doc: Some("How many oscillators, when neither input says. A wired input decides instead."),
     },
@@ -250,7 +250,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000 },
+        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the phases and the drawn frequencies. Negative takes a fresh one from the clock."),
     },

@@ -21,8 +21,8 @@ impl Node for TableNormalize {
         let d = inp.get("input").ok_or("`input` is required")?;
         let table = d.as_table()?;
         let mode = p.str("normalize", "mode").unwrap_or("zscore");
-        let window = p.f64("window", "size").unwrap_or(0.0).max(0.0).round() as usize;
-        validate(mode, window)?;
+        let size = p.f64("window", "size").unwrap_or(0.0);
+        let unit = p.str("window", "unit").unwrap_or("samples");
         let hold = p.bool("window", "hold").unwrap_or(false);
 
         let mut scaled: IndexMap<String, Data> = IndexMap::with_capacity(table.len());
@@ -31,6 +31,9 @@ impl Node for TableNormalize {
                 scaled.insert(name.clone(), member.clone());
                 continue;
             };
+            let meta = if unit == "seconds (ufreq)" { d.meta() } else { member.meta() };
+            let window = goofi_core::stream::window_count(size, unit, meta)?;
+            validate(mode, window)?;
             let values: Vec<f32> =
                 a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes"))).collect();
             let run = self.seen.entry(name.clone()).or_default();
@@ -68,6 +71,13 @@ static INPUTS: &[SlotDecl] =
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Table }];
 
 static PARAMS: &[ParamDecl] = &[
+    ParamDecl {
+        group: "window",
+        name: "unit",
+        spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds", "seconds (ufreq)"], refresh: false },
+        expression: None,
+        doc: Some("What size counts for each member. Seconds uses the member's sfreq or ufreq; seconds (ufreq) uses the table's update rate."),
+    },
     ParamDecl {
         group: "normalize",
         name: "mode",

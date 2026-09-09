@@ -57,6 +57,28 @@ test('a patch under construction holds together at every stage', async ({ page }
 			await expectIntact(page, 'the empty app');
 		});
 
+		await test.step('the node menu keeps search focused across categories', async () => {
+			await page.locator('.svelte-flow__pane').first().dblclick();
+			const menu = page.getByRole('dialog', { name: 'Add node', exact: true });
+			const search = page.getByTestId('add-menu-search');
+			await expect(search).toBeFocused();
+			const tabs = page.getByTestId('add-menu-tabs').getByRole('tab');
+			for (const tab of await tabs.all()) {
+				await tab.click();
+				await expect(tab).toHaveAttribute('aria-selected', 'true');
+				await expect(search).toBeFocused();
+			}
+			await page.keyboard.type('LFO');
+			await expect(search).toHaveValue('LFO');
+			await search.press('Tab');
+			await expect(search).toBeFocused();
+			await search.press('Shift+Tab');
+			await expect(search).toBeFocused();
+			await expectIntact(page, 'the node menu');
+			await search.press('Escape');
+			await expect(menu).toHaveCount(0);
+		});
+
 		let osc = '';
 		let buf = '';
 		await test.step('two nodes on the canvas, wired', async () => {
@@ -250,4 +272,51 @@ test('the primitive gallery holds together', async ({ page }) => {
 	await page.goto('/dev/ui');
 	await expect(page.getByTestId('ui-button-default-md')).toBeVisible();
 	await expectIntact(page, 'the primitive gallery');
+});
+
+
+test('parameter groups keep readable widths and scroll to the last group', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const uid = await addNode(page, 'graphics:TimeWarpFbm');
+		await waitForNode(page, uid);
+		await selectNode(page, uid);
+		const strip = page.getByTestId('param-tabs');
+		const tabs = strip.getByRole('tab');
+		await expect(tabs).toHaveCount(10);
+		const sizes = await strip.evaluate((el) => ({
+			width: el.clientWidth,
+			content: el.scrollWidth,
+			minimum: 3 * parseFloat(getComputedStyle(document.documentElement).fontSize),
+			tabs: Array.from(el.querySelectorAll('[role="tab"]'), (tab) => {
+				const label = tab.querySelector('.ui-tab-label')!;
+				const range = document.createRange();
+				range.selectNodeContents(label);
+				const style = getComputedStyle(tab);
+				return {
+					width: tab.getBoundingClientRect().width,
+					natural: range.getBoundingClientRect().width + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
+				};
+			})
+		}));
+		if (sizes.minimum * sizes.tabs.length > sizes.width) {
+			expect(sizes.content).toBeGreaterThan(sizes.width);
+		}
+		for (const tab of sizes.tabs) {
+			expect(tab.width).toBeGreaterThanOrEqual(sizes.minimum - 1);
+			expect(tab.width).toBeLessThanOrEqual(Math.max(sizes.minimum, tab.natural) + 1);
+		}
+		await tabs.first().focus();
+		await page.keyboard.press('End');
+		await expect(tabs.last()).toHaveAttribute('aria-selected', 'true');
+		await expect(tabs.last()).toBeInViewport();
+		if (sizes.content > sizes.width) {
+			await strip.evaluate((el) => el.scrollTo({ left: el.scrollWidth }));
+			await expect.poll(() => strip.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+		}
+		await expectIntact(page, 'the last parameter group after scrolling');
+	} finally {
+		await tearDown(page);
+	}
 });

@@ -438,7 +438,7 @@ static CONST_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "constant",
         name: "length",
-        spec: ParamSpec::Int { default: 1, min: 1, max: 1_000_000 },
+        spec: ParamSpec::Int { default: 1, min: 1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("How many elements the emitted array has."),
     },
@@ -481,14 +481,14 @@ static RAMP_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "ramp",
         name: "length",
-        spec: ParamSpec::Int { default: 512, min: 1, max: 1_000_000 },
+        spec: ParamSpec::Int { default: 512, min: 1, max: 1_000_000, options: &[] },
         expression: None,
         doc: None,
     },
     ParamDecl {
         group: "ramp",
         name: "channels",
-        spec: ParamSpec::Int { default: 1, min: 1, max: 16 },
+        spec: ParamSpec::Int { default: 1, min: 1, max: 16, options: &[] },
         expression: None,
         doc: None,
     },

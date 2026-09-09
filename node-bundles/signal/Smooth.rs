@@ -37,17 +37,6 @@ fn exponential(lane: &[f32], tau: f64) -> Vec<f32> {
         .collect()
 }
 
-/// `size` in the given unit as a count of samples along the axis.
-fn width(size: f64, unit: &str, sfreq: Option<f64>) -> Result<usize, String> {
-    match unit {
-        "seconds" => {
-            let rate = sfreq.ok_or("`seconds` needs a frame that carries its sample rate")?;
-            Ok((size * rate).round().max(1.0) as usize)
-        }
-        _ => Ok(size.round().max(1.0) as usize),
-    }
-}
-
 impl Node for Smooth {
     fn process(
         &mut self,
@@ -58,16 +47,17 @@ impl Node for Smooth {
     ) -> NodeResult {
         let d = inp.get("input").ok_or("`input` is required")?;
         let a = d.assert_ndims().at_least(1)?;
-        let size = p.f64("smooth", "size").unwrap_or(10.0).max(0.0);
+        let size = p.f64("smooth", "size").unwrap_or(10.0);
         let unit = p.str("smooth", "unit").unwrap_or("samples");
         let exp = p.str("smooth", "mode").unwrap_or("average") == "exponential";
 
-        if unit == "updates" {
+        let w = goofi_core::stream::window_count(size, unit, d.meta())?.max(1);
+        if matches!(unit, "updates" | "seconds (ufreq)") || (unit == "seconds" && d.meta().sfreq().is_none()) {
             // The stream here is the SEQUENCE of frames, so one value per position is smoothed
             // across updates rather than along an axis.
             let values: Vec<f32> = a.as_bytes().chunks_exact(4)
                 .map(|x| f32::from_le_bytes(x.try_into().expect("four bytes"))).collect();
-            let keep = size.round().max(1.0) as usize;
+            let keep = w;
             if self.frames.front().is_some_and(|f| f.len() != values.len()) {
                 self.frames.clear();
             }
@@ -86,9 +76,8 @@ impl Node for Smooth {
         }
 
         let dim = resolve_axis(p.i64("smooth", "axis").unwrap_or(-1), a.shape().len())?;
-        let w = width(size, unit, d.meta().sfreq())?;
         // An exponential needs several time constants of past before its answer settles.
-        let reach = if exp { w * 5 } else { w };
+        let reach = if exp { w.checked_mul(5).ok_or("smoothing window is too large")? } else { w };
         let n = a.shape()[dim];
         let (shape, stitched, at) = self.past.push(a.shape(), dim, a.as_bytes(), reach);
         let smoothed: Vec<Vec<f32>> = stream::lanes(&shape, dim, &stitched)
@@ -131,7 +120,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "smooth",
         name: "unit",
-        spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds", "updates"], refresh: false },
+        spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds", "seconds (ufreq)", "updates"], refresh: false },
         expression: None,
         doc: Some(
             "What `size` counts. `updates` smooths each position across frames instead of along \
@@ -141,7 +130,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "smooth",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7 },
+        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis to smooth along. -1 is time."),
     },

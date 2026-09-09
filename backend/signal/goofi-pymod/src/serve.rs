@@ -25,13 +25,6 @@ pub fn serve(py: Python<'_>) -> PyResult<()> {
     goofi_codec::liveness::watch_parent(&env(goofi_codec::liveness::ENV_VAR)?)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("parent-liveness watcher: {e}")))?;
 
-    // Route stdout -> stderr BEFORE compiling the user module, so a node's prints cannot reach
-    // the parent's stdout.
-    let os = py.import("os")?;
-    os.call_method1("dup2", (2, 1))?;
-    let sys = py.import("sys")?;
-    sys.setattr("stdout", sys.getattr("stderr")?)?;
-
     // The source comes on stdin rather than in the environment, which Windows caps as a block.
     let mut source = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut source)

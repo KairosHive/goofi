@@ -131,7 +131,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "wavelet",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7 },
+        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis holds the samples. -1 is time."),
     },
@@ -152,7 +152,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "range",
         name: "count",
-        spec: ParamSpec::Int { default: 40, min: 2, max: 512 },
+        spec: ParamSpec::Int { default: 40, min: 2, max: 512, options: &[16, 32, 64, 128] },
         expression: None,
         doc: Some("How many frequencies to look at, spaced evenly by ratio between the two above."),
     },

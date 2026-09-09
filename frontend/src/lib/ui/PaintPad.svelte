@@ -1,4 +1,4 @@
-<!-- DrawPad — a canvas you paint on, whose value is a `data:image/png;base64,…` URL. That is a
+<!-- PaintPad — a canvas you paint on, whose value is a `data:image/png;base64,…` URL. That is a
      STRING like any other, so a drawing crosses the wire, saves into the patch and is read by an
      expression through machinery that was already there; nothing new had to learn about images.
 
@@ -157,14 +157,14 @@
 	}
 </script>
 
-<div class="pad" data-testid="draw-pad">
+<div class="pad" data-testid="paint-pad">
 	<div class="tools">
 		<label class="swatch" title="Pick the ink" style={`--ink: ${hex}`}>
 			<input
 				type="color"
 				value={hex}
 				{disabled}
-				data-testid="draw-colour"
+				data-testid="paint-colour"
 				oninput={(e) => (hex = (e.currentTarget as HTMLInputElement).value)}
 			/>
 		</label>
@@ -177,7 +177,7 @@
 				step="1"
 				bind:value={size}
 				{disabled}
-				data-testid="draw-size"
+				data-testid="paint-size"
 			/>
 		</label>
 		<label class="dial" title={`Softness ${soft}`}>
@@ -189,7 +189,7 @@
 				step="1"
 				bind:value={soft}
 				{disabled}
-				data-testid="draw-soft"
+				data-testid="paint-soft"
 			/>
 		</label>
 		<Button
@@ -197,7 +197,7 @@
 			variant={erasing ? 'primary' : 'ghost'}
 			title="Paint transparency instead of colour"
 			{disabled}
-			data-testid="draw-eraser"
+			data-testid="paint-eraser"
 			onclick={() => (erasing = !erasing)}>erase</Button
 		>
 		<Button
@@ -205,7 +205,7 @@
 			variant="ghost"
 			title="Clear the drawing"
 			{disabled}
-			data-testid="draw-clear"
+			data-testid="paint-clear"
 			onclick={clear}>clear</Button
 		>
 	</div>
@@ -214,7 +214,7 @@
 		class="sheet"
 		width={SIZE}
 		height={SIZE}
-		data-testid="draw-canvas"
+		data-testid="paint-canvas"
 		onpointerdown={down}
 		onpointermove={move}
 		onpointerup={up}

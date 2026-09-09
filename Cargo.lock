@@ -122,8 +122,6 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "audio_thread_priority"
 version = "0.35.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b1b4a0adbf971420cca66a75361a1190f34a6762d66361e5cde03dda35d1ed3"
 dependencies = [
  "cfg-if",
  "dbus",
@@ -1040,9 +1038,11 @@ version = "3.1.0"
 dependencies = [
  "base64",
  "dunce",
+ "filedescriptor",
  "flate2",
  "goofi-view",
  "indexmap",
+ "libc",
  "serde",
  "serde_json",
  "toml 0.8.23",
@@ -1172,6 +1172,7 @@ dependencies = [
 name = "goofi-tests"
 version = "3.1.0"
 dependencies = [
+ "audio_thread_priority",
  "base64",
  "bytes",
  "futures-util",
@@ -1193,6 +1194,7 @@ dependencies = [
  "goofi-view",
  "goofi-window",
  "indexmap",
+ "libc",
  "midir",
  "pyo3",
  "rmpv",

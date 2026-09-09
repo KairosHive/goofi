@@ -63,7 +63,7 @@ pub static PANEL_TYPES: &[PanelType] = &[
     PanelType { id: "globals", title: "Globals", icon: "globe", accepts_node: false,
                 doc: "the patch globals, which any expression can read" },
     PanelType { id: "control", title: "Control", icon: "sliders-vertical", accepts_node: false,
-                doc: "knobs, sliders and fields over one group of globals" },
+                doc: "knobs, sliders and text widgets over one group of globals" },
     PanelType { id: "agent", title: "Agent", icon: "bot", accepts_node: false,
                 doc: "a terminal on an agent harness, running in the patch workspace" },
     PanelType { id: "recorder", title: "Recorder", icon: "circle-dot", accepts_node: true,

@@ -166,22 +166,23 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("control edit", j!({ "group": "control0", "element": "level", "x": 0.0, "y": 3.0 }));
     assert_eq!(g.doc()["globals"]["control0.level"]["control"]["y"], 3.0, "the followed widget moved");
     g.call("global entry lock", j!({ "name": "control0.level", "value": false }));
-    // A `draw` widget takes turtle steps from the CLI. The op PARSES — so a refusal names the line
+    // A `paint` widget takes turtle steps from the CLI. The op PARSES — so a refusal names the line
     // — and answers the strokes it made of them; the WIDGET paints those, by the code a hand
     // reaches, so a script and a mouse are one painter and never two.
-    g.call("control add", j!({ "group": "control0", "kind": "draw", "element": "pad" }));
-    let drew = g.call("control draw", j!({ "group": "control0", "element": "pad",
+    g.call("control add", j!({ "group": "control0", "kind": "paint", "element": "pad" }));
+    let drew = g.call("control paint", j!({ "group": "control0", "element": "pad",
         "steps": "pen #f0a\nwidth 40\ngoto 100 100\ncurve 100 0 200 100 200 200\nclear" }));
     assert_eq!(drew["steps"], j!(5), "{drew}");
     assert!(drew["marks"].as_u64().is_some_and(|m| m > 5), "a curve is many strokes: {drew}");
-    let why = g.refuse("control draw", j!({ "group": "control0", "element": "pad",
+    let why = g.refuse("control paint", j!({ "group": "control0", "element": "pad",
                                             "steps": "forward 10\nfrward 20" }));
     assert!(why.contains("line 2") && why.contains("frward"), "a refusal names the line: {why}");
-    let why = g.refuse("control draw", j!({ "group": "control0", "element": "knob0", "steps": "forward 10" }));
-    assert!(why.contains("knob"), "only a `draw` widget takes steps: {why}");
+    let why = g.refuse("control paint", j!({ "group": "control0", "element": "knob0", "steps": "forward 10" }));
+    assert!(why.contains("knob"), "only a `paint` widget takes steps: {why}");
 
     for kind in goofi_core::globals::ControlKind::ALL {
         let born = g.call("control add", j!({ "group": "kinds", "kind": kind.as_str() }));
+        assert_eq!(born["name"], format!("kinds.{}0", kind.as_str()));
         let record = &born["control"];
         assert!(record["w"].as_f64().is_some_and(|w| (1.0..=goofi_core::globals::CONTROL_COLUMNS).contains(&w)));
         assert!(record["h"].as_f64().is_some_and(|h| h >= 1.0));
@@ -627,8 +628,8 @@ fn a_reply_says_what_the_write_actually_did() {
 
     // A literal is COERCED to the param's declared type, so the value stored may differ.
     let buf = g.add("Buffer");
-    let coerced = g.set_param(buf, "buffer", "size", 512.6);
-    assert_eq!(coerced["value"], 513, "an int param rounds: {coerced}");
+    let coerced = g.set_param(buf, "buffer", "axis", 1.6);
+    assert_eq!(coerced["value"], 2, "an int param rounds: {coerced}");
 
     // Addressed by uid, answered by NAME: what comes back is what the next op takes.
     let wired = g.call("link add", j!({ "from": ep(&osc, "out"), "to": ep(hex(buf), "input") }));
@@ -653,10 +654,10 @@ fn a_reply_says_what_the_write_actually_did() {
 
     // Every op takes it, and every read gives it back — the uid is a second door, never the first.
     assert_eq!(g.call("node param edit",
-                      j!({ "node": "win", "param": "buffer/size", "value": 32 }))["value"], 32);
+                      j!({ "node": "win", "param": "buffer/size", "value": 32 }))["value"], 32.0);
     let uid = made[1]["uid"].as_str().unwrap().to_string();
     assert_eq!(g.call("node param edit",
-                      j!({ "node": &uid, "param": "buffer/size", "value": 64 }))["value"], 64);
+                      j!({ "node": &uid, "param": "buffer/size", "value": 64 }))["value"], 64.0);
     let drawn = g.call("nodes inspect", j!({}))["text"].as_str().unwrap().to_string();
     assert!(drawn.contains("src -- out→input --> win"), "the diagram wires names: {drawn}");
     assert!(!drawn.contains(&uid), "…and shows no uid at all: {drawn}");
@@ -815,6 +816,22 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     // A rename follows into the reference, as it does into an expression.
     g.call("node edit", j!({ "node": hex(level), "name": "gain" }));
     field(&mut ev, "the reference followed the rename", &|d| d["reference"] == j!("gain.out"));
+    let wide = g.add("_TestConst");
+    g.call("node edit", j!({ "node": hex(wide), "name": "wide" }));
+    g.set_param(wide, "constant", "value", 0.75);
+    g.set_param(wide, "constant", "length", 8);
+    param(&g, j!({ "reference": "wide.out[7]" }));
+    g.until("an indexed reference reads a wide frame without Python", |_| {
+        let p = ev.next("param_values");
+        (p["node"] == hex(consumer) && p["values"]["common"]["max_frequency"] == j!(0.75)).then_some(())
+    });
+    g.call("node edit", j!({ "node": hex(wide), "name": "bank" }));
+    field(&mut ev, "the indexed reference follows a rename", &|d| d["reference"] == j!("bank.out[7]"));
+    param(&g, j!({ "reference": "bank.out[8]" }));
+    g.until("an out-of-range index reports an error", |g| line(g).contains("outside frame").then_some(()));
+    for bad in ["bank.out[-1]", "bank.out[1.5]", "bank.out[1][0]"] {
+        assert!(param(&g, j!({ "reference": bad }))["error"].as_str().is_some());
+    }
     // A frame with more than one element is a shape error on ARRIVAL, and the literal stands.
     param(&g, j!({ "reference": "signal.out" }));
     g.until("the shape error", |g| line(g).contains("one element").then_some(()));
@@ -1028,4 +1045,45 @@ fn clearing_the_touched_baseline_moves_the_zero_point_and_breaks_no_binding() {
     assert!(baseline(&g).is_null(), "undo took the zero point back: {}", baseline(&g));
     assert_eq!(g.call("redo", j!({}))["changed"], true);
     assert_eq!(baseline(&g)["oscillator/frequency"]["value"], j!(3.5), "redo put it back");
+}
+
+#[test]
+fn empty_global_groups_and_entry_types_survive_editing_and_reload() {
+    let g = Goofi::new();
+    assert_eq!(g.call("global group add", j!({}))["group"], "group0");
+    assert!(g.doc()["global_groups"]["group0"].is_object());
+    g.call("undo", j!({}));
+    assert!(g.doc()["global_groups"].get("group0").is_none());
+    g.call("redo", j!({}));
+    assert_eq!(g.call("global group add", j!({}))["group"], "group1");
+    g.call("global group rename", j!({ "from": "group0", "to": "desk" }));
+    assert_eq!(g.call("global group add", j!({}))["group"], "group0");
+    g.refuse("global group add", j!({ "group": "desk" }));
+    g.refuse("global group add", j!({ "group": "bad name" }));
+    assert_eq!(g.call("global entry add", j!({ "group": "desk" }))["name"], "desk.entry0");
+    assert_eq!(g.call("global entry add", j!({ "group": "desk" }))["name"], "desk.entry1");
+    g.call("global entry edit", j!({ "name": "desk.entry0", "type": "string", "value": "hello" }));
+    assert_eq!(g.doc()["globals"]["desk.entry0"]["type"], "string");
+    assert_eq!(g.doc()["globals"]["desk.entry0"]["value"], "hello");
+    g.call("undo", j!({}));
+    assert_eq!(g.doc()["globals"]["desk.entry0"]["type"], "float");
+    g.call("redo", j!({}));
+    g.call("global entry edit", j!({ "name": "desk.entry1", "type": "bool", "value": true }));
+    assert_eq!(g.doc()["globals"]["desk.entry1"]["value"], true);
+    g.call("global entry edit", j!({ "name": "desk.entry1", "type": "int" }));
+    assert_eq!(g.doc()["globals"]["desk.entry1"]["value"], 1);
+    g.call("undo", j!({}));
+    assert_eq!(g.doc()["globals"]["desk.entry1"]["type"], "bool");
+    g.refuse("global entry edit", j!({ "name": "system.default_ufreq", "type": "string", "value": "no" }));
+    g.call("global entry add", j!({ "name": "desk.knob", "type": "float", "value": 1.0,
+        "control": { "kind": "knob", "x": 0, "y": 0, "w": 3, "h": 3 } }));
+    let before = g.doc()["globals"]["desk.knob"].clone();
+    g.refuse("global entry edit", j!({ "name": "desk.knob", "type": "string", "value": "no" }));
+    assert_eq!(g.doc()["globals"]["desk.knob"], before);
+    let saved = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
+    g.call("session load", j!({ "content": saved }));
+    assert!(g.doc()["global_groups"]["group0"].is_object());
+    assert!(g.doc()["global_groups"]["group1"].is_object());
+    assert_eq!(g.doc()["globals"]["desk.entry0"]["value"], "hello");
+    assert_eq!(g.doc()["globals"]["desk.entry1"]["type"], "bool");
 }

@@ -39,6 +39,7 @@ export interface FloatParam extends BaseParam {
 
 export interface IntParam extends BaseParam {
 	type: 'int';
+	options?: number[];
 	value: number;
 	vmin: number;
 	vmax: number;
@@ -72,3 +73,6 @@ export type ParamDescriptor =
 	| StringParam
 	| PulseParam
 	| UnknownParam;
+
+export const VIDEO_QUALITIES = ['small', 'high', 'very_high'] as const;
+export type VideoQuality = (typeof VIDEO_QUALITIES)[number];

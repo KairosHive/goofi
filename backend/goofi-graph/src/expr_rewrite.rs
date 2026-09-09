@@ -274,15 +274,17 @@ pub fn rename_reference(
     reference: &str,
     rename: impl Fn(&str, Option<&str>) -> (Option<String>, Option<String>),
 ) -> Option<String> {
-    let (name, slot) = reference.split_once('.')?;
+    let (base, index) = goofi_node::mailbox::split_index(reference).ok()?;
+    let (name, slot) = base.split_once('.')?;
     let (new_name, new_slot) = rename(name, Some(slot));
     if new_name.is_none() && new_slot.is_none() {
         return None;
     }
     Some(format!(
-        "{}.{}",
+        "{}.{}{}",
         new_name.unwrap_or_else(|| name.to_string()),
-        new_slot.unwrap_or_else(|| slot.to_string())
+        new_slot.unwrap_or_else(|| slot.to_string()),
+        index.map_or_else(String::new, |i| format!("[{i}]"))
     ))
 }
 

@@ -131,7 +131,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "quantize",
         name: "count",
-        spec: ParamSpec::Int { default: 12, min: 2, max: 4096 },
+        spec: ParamSpec::Int { default: 12, min: 2, max: 4096, options: &[] },
         expression: None,
         doc: Some("How many values are allowed, spread evenly from `low` to `high` inclusive."),
     },

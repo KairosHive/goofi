@@ -23,6 +23,8 @@
 		segments,
 		onChange,
 		bad = false,
+		disabled = false,
+		fill = false,
 		class: klass = '',
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
@@ -32,15 +34,19 @@
 		onChange: (id: string) => void;
 		/** Paint the lit segment in the danger tone. */
 		bad?: boolean;
+		disabled?: boolean;
+		/** Fill the available width with equal-width segments. */
+		fill?: boolean;
 	} = $props();
 
 	const lit = (id: string) => (Array.isArray(value) ? value.includes(id) : id === value);
 </script>
 
-<div {...rest} role="group" class={`ui-segmented ${klass}`.trim()}>
+<div {...rest} role="group" class={`ui-segmented ${klass}`.trim()} class:fill>
 	{#each segments as s (s.id)}
 		<button
 			type="button"
+			{disabled}
 			class="seg"
 			class:on={lit(s.id)}
 			class:bad={lit(s.id) && bad}
@@ -68,6 +74,12 @@
 	}
 	.ui-segmented:has(.seg.on:only-child) {
 		border-color: var(--accent);
+	}
+	.ui-segmented.fill {
+		flex: 1 1 auto;
+	}
+	.fill .seg {
+		flex: 1 1 0;
 	}
 	.seg {
 		flex: 0 0 auto;

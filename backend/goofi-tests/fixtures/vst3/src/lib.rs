@@ -154,7 +154,7 @@ impl IComponentTrait for Processor {
         };
         copy_wstring(name, &mut bus.name);
         bus.busType = BusTypes_::kMain as BusType;
-        bus.flags = BusInfo_::BusFlags_::kDefaultActive as u32;
+        bus.flags = BusInfo_::BusFlags_::kDefaultActive;
         kResultOk
     }
 
@@ -416,12 +416,12 @@ impl IEditControllerTrait for Controller {
     /// One of each shape the manifest derivation has a rule for: continuous, stepped within the
     /// `Str` ceiling, stepped past it, and one the host must omit.
     unsafe fn getParameterInfo(&self, param_index: i32, info: *mut ParameterInfo) -> tresult {
-        let automate = ParameterInfo_::ParameterFlags_::kCanAutomate as i32;
+        let automate = ParameterInfo_::ParameterFlags_::kCanAutomate;
         let (title, units, steps, default, flags) = match param_index {
             0 => ("Gain", "x", 0, 1.0, automate),
             1 => ("Shape", "", 2, 0.0, automate),
             2 => ("Steps", "", 200, 0.5, automate),
-            3 => ("Meter", "", 0, 0.0, automate | ParameterInfo_::ParameterFlags_::kIsReadOnly as i32),
+            3 => ("Meter", "", 0, 0.0, automate | ParameterInfo_::ParameterFlags_::kIsReadOnly),
             _ => return kInvalidArgument,
         };
         let info = &mut *info;
@@ -475,13 +475,22 @@ impl IEditControllerTrait for Controller {
     unsafe fn createView(&self, name: *const c_char) -> *mut IPlugView {
         let editor = !name.is_null() && std::ffi::CStr::from_ptr(name).to_str() == Ok("editor");
         let Some(handler) = self.handler.borrow().clone().filter(|_| editor) else { return std::ptr::null_mut() };
+        #[cfg(target_os = "linux")]
+        let (timer, event) = callback_handlers(handler.clone());
+        #[cfg(target_os = "linux")]
+        let (event_fd, event_peer) = std::os::unix::net::UnixStream::pair().expect("the editor's event descriptors");
         let view = View {
             #[cfg(target_os = "linux")]
-            turn: ComWrapper::new(Turn { handler: handler.clone(), fired: Cell::new(false) })
-                .to_com_ptr::<Linux::ITimerHandler>()
-                .expect("a turn is a timer handler"),
+            turn: timer,
+            #[cfg(target_os = "linux")]
+            event,
+            #[cfg(target_os = "linux")]
+            event_fd,
+            #[cfg(target_os = "linux")]
+            _event_peer: event_peer,
             #[cfg(target_os = "linux")]
             run_loop: RefCell::new(None),
+            #[cfg(not(target_os = "linux"))]
             handler,
             frame: RefCell::new(None),
         };
@@ -499,10 +508,17 @@ unsafe fn turn(handler: &ComPtr<IComponentHandler>) {
 /// The editor: attached, it turns the knob — through the host's run loop on Linux, where a real
 /// editor's own events and timers ride, and straight away where the platform pumps them itself.
 struct View {
+    #[cfg(not(target_os = "linux"))]
     handler: ComPtr<IComponentHandler>,
     frame: RefCell<Option<ComPtr<IPlugFrame>>>,
     #[cfg(target_os = "linux")]
     turn: ComPtr<Linux::ITimerHandler>,
+    #[cfg(target_os = "linux")]
+    event: ComPtr<Linux::IEventHandler>,
+    #[cfg(target_os = "linux")]
+    event_fd: std::os::unix::net::UnixStream,
+    #[cfg(target_os = "linux")]
+    _event_peer: std::os::unix::net::UnixStream,
     #[cfg(target_os = "linux")]
     run_loop: RefCell<Option<ComPtr<Linux::IRunLoop>>>,
 }
@@ -524,8 +540,15 @@ impl IPlugViewTrait for View {
     unsafe fn attached(&self, _parent: *mut c_void, _type: FIDString) -> tresult {
         #[cfg(target_os = "linux")]
         {
+            use std::os::fd::AsRawFd;
             let Some(run_loop) = self.frame.borrow().as_ref().and_then(|f| f.cast::<Linux::IRunLoop>()) else { return kResultFalse };
-            run_loop.registerTimer(self.turn.as_ptr(), 10);
+            if run_loop.registerEventHandler(self.event.as_ptr(), self.event_fd.as_raw_fd()) != kResultOk {
+                return kResultFalse;
+            }
+            if run_loop.registerTimer(self.turn.as_ptr(), 10) != kResultOk {
+                run_loop.unregisterEventHandler(self.event.as_ptr());
+                return kResultFalse;
+            }
             *self.run_loop.borrow_mut() = Some(run_loop);
         }
         #[cfg(not(target_os = "linux"))]
@@ -537,6 +560,7 @@ impl IPlugViewTrait for View {
         #[cfg(target_os = "linux")]
         if let Some(run_loop) = self.run_loop.borrow_mut().take() {
             run_loop.unregisterTimer(self.turn.as_ptr());
+            run_loop.unregisterEventHandler(self.event.as_ptr());
         }
         kResultOk
     }
@@ -589,7 +613,43 @@ struct Turn {
 
 #[cfg(target_os = "linux")]
 impl Class for Turn {
-    type Interfaces = (Linux::ITimerHandler,);
+    type Interfaces = (Linux::ITimerHandler, Linux::IEventHandler);
+}
+
+/// The caller already has typed callback pointers. Reject redundant queries, which returned
+/// a different interface in Zebralette3 and made the host call the wrong vtable method.
+#[cfg(target_os = "linux")]
+fn callback_handlers(handler: ComPtr<IComponentHandler>) -> (ComPtr<Linux::ITimerHandler>, ComPtr<Linux::IEventHandler>) {
+    use std::sync::OnceLock;
+    unsafe extern "system" fn no_query(_this: *mut FUnknown, _iid: *const TUID, obj: *mut *mut c_void) -> tresult {
+        *obj = std::ptr::null_mut();
+        kNoInterface
+    }
+    static TIMER: OnceLock<Linux::ITimerHandlerVtbl> = OnceLock::new();
+    static EVENT: OnceLock<Linux::IEventHandlerVtbl> = OnceLock::new();
+    let callback = ComWrapper::new(Turn { handler, fired: Cell::new(false) });
+    let timer = callback.to_com_ptr::<Linux::ITimerHandler>().expect("a timer handler");
+    let event = callback.to_com_ptr::<Linux::IEventHandler>().expect("an event handler");
+    // Each fresh interface keeps its generated addRef, release and callback entries. Only
+    // queryInterface differs; the static tables outlive every callback reference.
+    unsafe {
+        (*timer.as_ptr()).vtbl = TIMER.get_or_init(|| {
+            let mut table = *(*timer.as_ptr()).vtbl;
+            table.base.queryInterface = no_query;
+            table
+        });
+        (*event.as_ptr()).vtbl = EVENT.get_or_init(|| {
+            let mut table = *(*event.as_ptr()).vtbl;
+            table.base.queryInterface = no_query;
+            table
+        });
+    }
+    (timer, event)
+}
+
+#[cfg(target_os = "linux")]
+impl Linux::IEventHandlerTrait for Turn {
+    unsafe fn onFDIsSet(&self, _fd: Linux::FileDescriptor) {}
 }
 
 #[cfg(target_os = "linux")]

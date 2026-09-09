@@ -271,7 +271,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000 },
+        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Nudges the starting point. Negative takes a fresh one from the clock."),
     },
