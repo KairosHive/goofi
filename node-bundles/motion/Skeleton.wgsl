@@ -11,10 +11,10 @@
     {"group": "rig", "name": "fit", "kind": "bool", "default": false,
      "doc": "Stretch the coordinates onto the frame using the range they themselves span. Off keeps the unit box a landmark already uses."},
 
-    {"group": "draw", "name": "bone", "kind": "float", "default": 2.0, "min": 0.0, "max": 12.0,
-     "doc": "How thick a link between two landmarks is drawn, in texels. Zero draws none."},
-    {"group": "draw", "name": "joint", "kind": "float", "default": 3.5, "min": 0.0, "max": 24.0,
-     "doc": "How big a landmark itself is drawn, in texels. Zero draws none."},
+    {"group": "draw", "name": "bone", "kind": "float", "default": 10.0, "min": 0.0, "max": 80.0,
+     "doc": "How thick a link between two landmarks is drawn, in thousandths of the frame's height, so it keeps its weight at any size. Zero draws none."},
+    {"group": "draw", "name": "joint", "kind": "float", "default": 16.0, "min": 0.0, "max": 120.0,
+     "doc": "How big a landmark itself is drawn, in thousandths of the frame's height. Zero draws none."},
     {"group": "draw", "name": "streak", "kind": "float", "default": 0.0, "min": 0.0, "max": 1.0,
      "doc": "How many seconds of travel to show as a tail behind each landmark. A velocity is per SECOND, so a tenth already draws a long one."},
     {"group": "draw", "name": "depth", "kind": "float", "default": 0.6, "min": 0.0, "max": 2.0,
@@ -212,8 +212,10 @@ fn shade(uv: vec2f) -> vec4f {
     let aspect = vec2f(resolution.x / max(resolution.y, 1.0), 1.0);
     let q = uv * aspect;
     let soft = 0.7 / max(resolution.y, 1.0);
-    let bone = p.bone * 0.5 / max(resolution.y, 1.0);
-    let joint = p.joint * 0.5 / max(resolution.y, 1.0);
+    // Thousandths of the frame's HEIGHT rather than texels: a skeleton keeps its weight when the
+    // node is resized, and a thumbnail that area-averages the frame down still has ink left in it.
+    let bone = p.bone * 0.0005;
+    let joint = p.joint * 0.0005;
 
     var out = vec4f(0.0);
     let rig = rig_of(n);
