@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { loadPlugins } from '$lib/plugins/runtime.svelte';
 	import TopBar from '$lib/editor/TopBar.svelte';
 	import FsBrowser from '$lib/fs/FsBrowser.svelte';
 	import { uploadPatch } from '$lib/api/patchFile';
@@ -25,6 +26,7 @@
 	import { onMount } from 'svelte';
 
 	let protocolMismatch = $state(false);
+	let pluginsReady = $state(false);
 
 	// Before any panel renders; the pre-sync frame is the manager's own first-mint spelling, so the
 	// editor mounts once.
@@ -159,10 +161,24 @@
 	});
 
 	onMount(() => {
+		let started = false;
+		let disposed = false;
+		let cleanup: (() => void) | undefined;
+		const offPlugins = getControl().onConnect((connected) => {
+			if (!connected || started) return;
+			started = true;
+			void loadPlugins().then((dispose) => {
+				if (disposed) dispose();
+				else cleanup = dispose;
+			}).catch((error) => notify().failure('Plugins', error)).finally(() => pluginsReady = true);
+		});
 		window.addEventListener('keydown', onKeydown);
 		window.addEventListener('beforeunload', onBeforeUnload);
 		const offProto = getControl().onProtocolMismatch(() => (protocolMismatch = true));
 		return () => {
+			disposed = true;
+			offPlugins();
+			cleanup?.();
 			window.removeEventListener('keydown', onKeydown);
 			window.removeEventListener('beforeunload', onBeforeUnload);
 			offProto();
@@ -189,7 +205,7 @@
 		{/snippet}
 	</TopBar>
 	<div class="main">
-		<WorkspaceView />
+		{#if pluginsReady}<WorkspaceView />{/if}
 		<ErrorPanel onFocus={focusError} />
 	</div>
 	{#if fsMode}

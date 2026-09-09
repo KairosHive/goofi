@@ -13,6 +13,7 @@ mod fsbrowse;
 mod inspect;
 mod mcp;
 pub mod ops;
+pub mod plugins;
 mod origin;
 mod patchfile;
 mod proc;
@@ -70,6 +71,7 @@ pub struct Mode {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub plugins: Arc<plugins::Plugins>,
     pub graph: Arc<Mutex<Graph>>,
     /// What this instance serves, one owner: the op table, the routes and the engines read it.
     pub mode: Mode,
@@ -82,7 +84,7 @@ pub struct AppState {
     pub events: broadcast::Sender<String>,
     pub instance_id: Arc<str>,
     /// The op rows THIS instance serves — headless leaves the layout group out.
-    ops: Arc<Vec<&'static ops::Op>>,
+    ops: Arc<Vec<&'static ops::Op<'static>>>,
     /// The control-plane document every client replicates, re-projected from the graph after each
     /// successful op; its deltas ride the `events` channel.
     pub doc: Arc<Mutex<crate::doc::GraphDoc>>,
@@ -188,6 +190,7 @@ impl AppState {
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
         let reducers = reducer::SlotReducers::new(graph.clone(), follow_tx);
         let state = AppState {
+            plugins: Arc::new(plugins::Plugins::default()),
             graph,
             events,
             instance_id: Arc::from(format!("{iid:x}").as_str()),
@@ -221,6 +224,7 @@ impl AppState {
         if let Err(error) = self.recorder.stop() {
             goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("Recording could not be finalized: {error}"));
         }
+        self.plugins.stop(self);
         self.record_drain.stop();
         while !self.record_drain.released() {
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -272,6 +276,7 @@ impl AppState {
         };
         let mut roots: Vec<(PathBuf, goofi_graph::Origin)> =
             self.roots.iter().map(|d| (d.clone(), named(d))).collect();
+        roots.extend(self.plugins.node_roots());
         roots.push((self.custom.clone(), goofi_graph::Origin::Custom));
         roots
     }
@@ -457,6 +462,7 @@ fn local_routes(state: AppState) -> Router {
         // The CLI's door: the same lines, parse and batch semantics as `goofi_exec`.
         .route("/exec", post(exec_endpoint))
         .route("/mcp", post(mcp::endpoint))
+        .route("/plugins/{id}/{*file}", get(plugins::asset))
         // A spawned harness's terminal: binary frames are PTY bytes, text frames JSON control.
         .route(
             "/term/{instance}",
@@ -1288,13 +1294,13 @@ fn apply_layout(
 
 impl AppState {
     /// The op rows this instance serves.
-    pub fn ops(&self) -> &[&'static ops::Op] {
-        &self.ops
+    pub fn ops(&self) -> Vec<ops::Op<'_>> {
+        self.ops.iter().map(|o| **o).chain(self.plugins.operations()).collect()
     }
 
     /// The served row for `name` — absent rows (headless's layout group) answer `unknown op`.
-    pub fn find_op(&self, name: &str) -> Option<&'static ops::Op> {
-        self.ops.iter().find(|o| o.name == name).copied()
+    pub fn find_op(&self, name: &str) -> Option<ops::Op<'_>> {
+        self.ops.iter().map(|op| **op).chain(self.plugins.operations()).find(|op| op.name == name)
     }
 
     /// Run one control op — the single entry point every surface shares. `actor` scopes the undo
@@ -1306,8 +1312,17 @@ impl AppState {
         let Some(spec) = self.find_op(op) else {
             return Err(format!("unknown op `{op}`"));
         };
+        let _scope = plugins::CallScope::enter(op)?;
+        let _record_start = (op == "record start").then(|| self.plugins.record_start.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        let hooked = self.plugins.has_hooks(op);
+        if hooked { spec.validate(&payload)?; }
+        let payload = self.plugins.pre_op(self, op, payload, actor)?;
+        if hooked { spec.validate(&payload)?; }
         let mut events: Vec<String> = Vec::new();
-        let result = spec.handler.run(self, &payload, actor, &mut events);
+        let result = match spec.handler {
+            ops::Handler::PluginRead | ops::Handler::PluginEffect => self.plugins.call(self, op, &payload, actor),
+            _ => spec.handler.run(self, &payload, actor, &mut events),
+        };
         if result.is_ok() && spec.handler.is_write() {
             resync_and_broadcast(self);
             events.extend(self.set_dirty(true));
@@ -1315,6 +1330,7 @@ impl AppState {
         for e in events {
             let _ = self.events.send(e);
         }
+        self.plugins.post_op(self, op, &payload, &result, actor);
         result
     }
 }

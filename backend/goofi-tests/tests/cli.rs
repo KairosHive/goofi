@@ -107,7 +107,7 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     // The reserved client set is pinned AS the list, and help teaches the door words.
     assert_eq!(
         goofi_bridge::ops::RESERVED,
-        ["serve", "help", "session list", "agent term", "plugin", "completions"]
+        ["serve", "help", "session list", "agent term", "completions"]
     );
     let top = ok(&url, "default", "help");
     assert!(top.contains("session list") && top.contains("node"), "{top}");

@@ -39,6 +39,7 @@ base64 = "0.22"
 # The command-line split the phrase layer parses with: the same quoting bash gives argv, which is
 # the contract — every transport that speaks lines gets bash's own word rules.
 shell-words = "1"
+toml = "0.8"
 # The PTY the agent harness runs on (wezterm's crate).
 portable-pty = "0.9"
 # SIGTERM then SIGKILL, to the process GROUP: `portable_pty::ChildKiller` offers neither the

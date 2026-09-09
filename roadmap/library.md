@@ -1,4 +1,7 @@
-# The library: node bundles and panel add-ons
+# The library: plugin distribution
+
+The local package contract is now `sdk/README.md`; `plugins.md` tracks the first corpus plugin.
+Installed packages live in `.goofi/plugins/<id>/`, with an optional `nodes/` bundle.
 
 One place to find, install, publish and update what goofi does not ship: **bundles** of nodes, and
 **panel add-ons**. This item replaces `node-marketplace.md` and `panel-plugins.md`: distribution
@@ -34,17 +37,15 @@ anyone can install.
 
 ## Decisions
 
-**The unit is a bundle.** A bundle is a directory with a `requirements.txt` for the Python
-packages its nodes import — this exists today: checked against both interpreters at startup and
-installed only on a yes in the terminal — and a manifest beside its files: a name, a version, a
-description, and the goofi version it was built against. It is a flat folder of node
-files, each naming its own engine — `node-sources.md`'s rule — and, later, `panels/`.
-A bundle is the only thing that is installed, published or updated. There is no per-node install.
+**The installation unit is a plugin package.** `goofi-plugin.toml` defines its ID, version, and
+interface version. Optional `backend/`, `frontend/`, and `nodes/` directories supply its content.
+The `nodes/` directory is an ordinary flat node bundle, including its existing Python requirements
+files. The local loader and SDK are implemented; see `sdk/README.md`. Distribution installs,
+publishes, and updates a complete package. There is no per-node install.
 
-**Installed bundles live in `$GOOFI_HOME/.goofi/bundles/<name>/`**, one directory each, and the
-scan order becomes: the shipped tree, then each installed bundle, then the private library
-(`.goofi/custom/`, which is built), then this patch's own `workspace/nodes_*/`. The precedence `node-sources.md` states is unchanged; this fills the middle
-slot it left open. A bundle's name is a palette facet the palette derives from where a node came from.
+**Installed plugins live in `$GOOFI_HOME/.goofi/plugins/<id>/`.** Their `nodes/` directories are
+scanned after shipped and extra roots, before `.goofi/custom/` and the patch workspace. The plugin
+ID supplies the node bundle's provenance. There is no separate installed-bundle directory.
 
 **The repo's own bundles live in `node-bundles/<name>/`**, and they publish through the same door a
 third party's do. There is no shipped tree beside them any more: every node goofi ships is in a
@@ -67,8 +68,8 @@ passes: an import that fails names its missing package in the palette, as today.
 **Everything is `library` ops, and the service speaks the remote half of them.** The vocabulary
 has a local half and a remote half:
 
-- local, against `.goofi/bundles/`: `library bundle list | install | update | remove`. Built first,
-  against a path and a git URL, with no service at all.
+- local: `plugin list` already reports installed packages. Add `plugin install | update | remove`
+  against a path and a pinned git URL, with no remote service required.
 - remote, goofi as a CLIENT of the service: `library login`, `library source add | list | remove`,
   `library search`, `library publish`. The service's HTTP API IS these phrases, so the panel's
   code calls `library source add` and does not know whether goofi forwards it or the website
@@ -97,93 +98,32 @@ and adding one is a project of its own. What the library guarantees instead: a b
 only from a public repo, at a pinned commit, under an account the forge vouches for, and the
 panel shows all three before an install. Whether anything more is needed is decided by use.
 
-## Panel add-ons: the runtime door
+## Plugin runtime
 
-A node bundle needs no new door — a directory of `.py` files is already a node source. A panel
-add-on does, and the door is the hard part of this item.
-
-What a panel add-on declares: a Svelte component rendered in its own panel and nowhere else; an
-optional backend process, Rust or Python, with its own lifecycle; a set of control ops that JOIN
-the one vocabulary; and its identity — a panel type id, a title, an icon, whether it takes a bound
-node.
-
-What goofi exposes back: dialogs and header-bar notifications; info/warn/error reporting at a
-severity the app renders consistently; the graph, the document, the selection and the `/data`
-plane; and a panel-to-panel API so two add-ons cooperate without either importing the other.
-
-Locked, because the codebase's rules already say so:
-
-- **The built-in panels go through the add-on door**, or the door is not proved.
-- **An add-on's ops join the one vocabulary.** `plugin <name> <phrase…>` always exists as the
-  explicit spelling (the prefix is RESERVED today); an add-on may also claim bare phrases, and the
-  whole bare namespace — built-ins, the reserved client words and every add-on — is ONE
-  prefix-free set checked at registration. The op table's rows are `&'static`, so an OWNED row
-  form an add-on can register after construction is the first thing to build.
-- **The document stays the one owner of the panel tree.** An add-on holds no tree, as panelty
-  holds none: it raises intents and goofi turns each into one op.
-- **Styling is a CONTRACT, not a shared `:root`.** The panelty token pattern is the precedent.
-- **An add-on that fails to load degrades legibly and names why.** It never takes the app down.
-
-The decision the door turns on: **the frontend bundle is compiled into the binary, and an
-add-on's component cannot be.** It must arrive as JavaScript loaded at run time, which crosses the
-two rules the build discipline rests on. Surveyed 2026-09-06, and decided:
-
-**The boundary is a CUSTOM ELEMENT, not Svelte and not an iframe.** A Svelte component would couple
-every add-on to goofi's exact Svelte version and to `$lib`'s internal shape — an ABI with no
-version symbol, and a bundler the author must run, which is the bar the `.wgsl` node exists to
-avoid. An iframe buys isolation this project has already declined to want: trust is provenance, and
-an add-on runs in the app's origin with the control socket by decision above. What the iframe would
-then cost is real — a CSS custom property does not cross a frame, so the token contract needs a
-bridge, and focus, keyboard and touch each need one too. A custom element is a platform primitive
-with no version to keep in step, tokens cascade into it, and any framework or none compiles to one.
-
-**The first add-on is COMPILED IN, and the loader comes second.** The recorder panel
-(`recording.md`) is that first tenant and it LANDED 2026-09-07, with its own backend half, its own
-`record` ops and its own drop behaviour, so the door is measured against something real rather than
-a stub. It took a `&'static` op row and a `&'static` `PANEL_TYPES` row like every built-in panel, so
-what it proves is the SHAPE an add-on needs and not the door itself: the owned op row, the run-time
-panel type and the custom-element boundary are each still unbuilt.
-
-**The op row is the first thing to build, and it is more than one field.** `Op` is `&'static` in
-its name, args, doc and result; `Handler` holds a bare `fn` pointer, so an add-on handler carrying
-its own state cannot be one; `AppState.ops` is `Arc<Vec<&'static Op>>`; `phrase.rs` walks a
-`&'static` tree, `schemas.rs` and `mcp.rs` derive from the rows, and the frontend's `OpName` union
-is generated from them. The union needs an escape for a run-time row.
-
-**The panel vocabulary is compiled in TWICE**, and both must take a run-time row: `PANEL_TYPES` in
-`vocab.rs` is `&'static`, and `frontend/src/lib/api/vocab.ts` is generated from it with
-`PanelTypeId` a closed union.
-
-**The backend half needs nothing new.** `term::Harnesses` is a working roster of spawned processes
-with lifecycle, events and a per-instance socket. An add-on's backend process is that shape.
-
-Still open here: how an add-on is versioned against goofi's interface and what a mismatch does;
-whether a panel-to-panel message is a manager-ordered op (replayable, undoable, testable through
-the one interface) or a peer channel (cheaper, weaker); and what the CSP becomes — there is none in
-the tree today, so nothing has to be un-decided.
+The folder loader, Python service SDK, operation hooks, frontend panel registration, editable
+header entries, and bundled Rust/Python nodes are implemented. `sdk/README.md` owns that contract;
+`plugins.md` tracks the session/corpus plugin. Distribution must use that interface without a
+second panel loader or service protocol.
 
 ## Order of work
 
 1. **Done: `node-bundles/complexity` and `node-bundles/eeg`**, loaded with `--extra-nodes`, each
    naming its packages in a `requirements.txt` that provisioning installs and startup checks, and
    one scenario per bundle in `goofi-tests`.
-2. **The bundle manifest and the local half**: `library bundle install <path | git url>` into
-   `.goofi/bundles/`, the scan order, the bundle facet, `list`, `update`, `remove`. The
-   `.gfi` records `name@version`.
+2. **Package distribution**: `plugin install <path | git url>`, `update`, and `remove` around the
+   implemented folder loader. Add package version requirements to `.gfi` manifests.
 3. **The static scanner** in `goofi-node`, and `library source` against a local folder, so an
    author previews the detection before any service exists.
 4. **The panel**, inside goofi, against the local half.
 5. **The service and the remote half**: accounts, sources, bundles, publish, search. Then the
    panel exports to the website.
-6. **Panel add-ons**, once the door's first decision is taken.
 
 ## Open
 
 - What the service is written in and where it is hosted, and what it stores in. It shares the
   scanner with goofi, so Rust is the default; nothing else is decided.
-- A bundle carries a Rust audio node in `nodes_audio/` by `node-sources.md`'s rule; what a bundle
-  must declare for the build (the allowlist is fixed, so nothing yet) is settled when the first
-  one is published.
+- Published Rust nodes use the existing engine SDKs and build allowlists through the package
+  `nodes/` directory. Verify that the published package contains every required source.
 - Whether a first-party bundle is ever privileged over a third party's — pinned, unremovable, or
   exempt from naming itself in a patch's manifest. Nothing is today, and the door is only proved
   while nothing is.

@@ -5,6 +5,7 @@
 	"scripts": {
 		"build:backend": "npm --prefix ../../frontend run build && cargo build --manifest-path ../../Cargo.toml -p goofi-cli",
 		"e2e": "npm run check && npm run build:backend && playwright test",
+		"e2e:plugins": "npm run check && playwright test --config playwright.plugins.config.ts",
 		"test": "playwright test",
 		"check": "tsc --noEmit"
 	},
