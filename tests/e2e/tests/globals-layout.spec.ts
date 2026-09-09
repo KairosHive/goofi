@@ -36,14 +36,15 @@ test('globals group markers stay at the right edge on desktop and touch', async 
 			const tagBox = (await tags.boundingBox())!;
 			expect(rowBox.x + rowBox.width - tagBox.x - tagBox.width).toBeLessThan(20);
 			expect(tagBox.x).toBeGreaterThan(rowBox.x + rowBox.width / 2);
-			const backgrounds = await panel.getByTestId('global-group').evaluateAll((groups) =>
+			const backgrounds = await panel.locator('.grp-head').evaluateAll((groups) =>
 				groups.map((group) => getComputedStyle(group).backgroundColor)
 			);
-			expect(backgrounds[0]).not.toBe(backgrounds[1]);
+			expect(new Set(backgrounds).size).toBe(1);
 			const middle = { x: rowBox.width / 2, y: rowBox.height / 2 };
 			if (width === 390) await summary.tap({ position: middle });
 			else await summary.click({ position: middle });
 			await expect(desk.getByTestId('global-row')).toBeVisible();
+			expect(await desk.locator('.grp-body').evaluate((body) => getComputedStyle(body).backgroundColor)).not.toBe(backgrounds[0]);
 			await expect(desk.getByTestId('global-name')).toHaveCount(0);
 			await expect(desk.getByTestId('global-delete')).toHaveCount(0);
 			await expect(desk.getByTestId('global-add-in')).toHaveCount(0);

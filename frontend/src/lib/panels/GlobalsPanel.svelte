@@ -211,11 +211,9 @@
 	.grp {
 		border-bottom: 1px solid var(--border);
 	}
-	.grp:nth-child(even) {
-		background: color-mix(in srgb, var(--text) 6%, transparent);
-		border-radius: var(--radius-sm);
-	}
 	.grp-head {
+		background: var(--surface-2);
+		border-radius: var(--radius-sm);
 		position: relative;
 		display: flex;
 		align-items: center;
@@ -282,7 +280,10 @@
 	}
 	.grp-count { font-size: var(--fs-micro); }
 	.grp-control, .grp-lock { display: inline-flex; }
-	.grp-body { padding: var(--space-2) var(--space-3); }
+	.grp-body {
+		background: var(--surface-1);
+		padding: var(--space-2) var(--space-3);
+	}
 	.entry {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto var(--hit);
