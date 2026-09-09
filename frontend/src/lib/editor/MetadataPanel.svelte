@@ -8,12 +8,8 @@
 
 	type Props = {
 		node: NodeInstanceInfo;
-		/** Show the "Metadata" header and slot dropdown, i.e. own the slot rather than take it. */
-		showHeader?: boolean;
-		/** Externally-controlled slot. NOT named `slot`: that is Svelte's legacy slot attribute. */
-		slotName?: string | null;
 	};
-	const { node, showHeader = true, slotName = null }: Props = $props();
+	const { node }: Props = $props();
 
 	const slots = $derived(Object.keys(node.output_slots ?? {}));
 	let internalSlot = $state<string | null>(null);
@@ -22,19 +18,14 @@
 	 *  constrains nothing a real viewer asked for. */
 	const token =
 		typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `md-${Math.random()}`;
-
-	// Own the slot only in header mode; otherwise the parent controls it.
 	$effect(() => {
-		if (!showHeader) return;
 		const fst = slots[0] ?? null;
 		if (internalSlot === null || !slots.includes(internalSlot)) internalSlot = fst;
 	});
 
-	const activeSlot = $derived(showHeader ? internalSlot : slotName);
-
 	$effect(() => {
 		lastFrame = null;
-		const slot = activeSlot;
+		const slot = internalSlot;
 		if (!slot) return;
 		return bindViewer(node.uid, slot, token, null, (f: DataFrame) => {
 			lastFrame = f;
@@ -53,7 +44,7 @@
 	// Polled, not derived: a rate must keep falling when frames stop, and only a frame re-renders.
 	let drops = $state<number | null>(null);
 	$effect(() => {
-		const slot = activeSlot;
+		const slot = internalSlot;
 		drops = null;
 		if (!slot) return;
 		const id = setInterval(() => (drops = dropRate(node.uid, slot)), 250);
@@ -63,21 +54,19 @@
 	const statsRows = $derived(nodeStatsRows(node.stats, drops));
 </script>
 
-<section class="panel" class:bare={!showHeader}>
-	{#if showHeader}
-		<header>
-			<span>Metadata</span>
-			{#if slots.length > 0}
-				<Select
-					class="slot-select"
-					value={internalSlot ?? ''}
-					onChange={(v) => (internalSlot = v)}
-					options={slots}
-					labels={node.slot_labels}
-				/>
-			{/if}
-		</header>
-	{/if}
+<section class="panel">
+	<header>
+		<span>Metadata</span>
+		{#if slots.length > 0}
+			<Select
+				class="slot-select"
+				value={internalSlot ?? ''}
+				onChange={(v) => (internalSlot = v)}
+				options={slots}
+				labels={node.slot_labels}
+			/>
+		{/if}
+	</header>
 
 	{#if statsRows.length > 0}
 		<dl class="stats" data-testid="node-stats">
@@ -122,9 +111,6 @@
 	.panel {
 		padding: var(--space-6);
 		border-top: 1px solid var(--border);
-	}
-	.panel.bare {
-		border-top: none;
 	}
 	header {
 		display: flex;

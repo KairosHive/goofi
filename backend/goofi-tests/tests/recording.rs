@@ -896,6 +896,48 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     // The survivors are still where they were rendered — one line through every kept block, gap and
     // all — and the file's own numbering is missing exactly what the manifest counted.
     assert_eq!(line(&blocks_of(&seventh, &overflowed)), lost, "the count and the numbering agree");
+
+    inside.store(false, Ordering::Relaxed);
+    release.store(false, Ordering::Relaxed);
+    g.state.recorder.set_encoders(std::sync::Arc::new(SlowEncoders {
+        inside: inside.clone(), release: release.clone(),
+    }));
+    let video = g.add("graphics:Constant");
+    g.set_param(video, "common", "width", 32);
+    g.set_param(video, "common", "height", 16);
+    g.ready(video);
+    g.call("record arm", j!({ "output": goofi_tests::ep(video, "out") }));
+    let last = g.call("record start", j!({ "root": root.path(), "name": "shutdown" }))["folder"]
+        .as_str().expect("a folder").to_string();
+    g.until("video frames before shutdown", |g| {
+        goofi_tests::render(g, 1);
+        g.call("record status", j!({}))["streams"].as_array()
+            .is_some_and(|streams| streams.iter().any(|stream| stream["engine"] == "graphics" && stream["frames"].as_u64().unwrap_or(0) > 0))
+            .then_some(())
+    });
+    g.state.graph.lock().unwrap().shutdown();
+    assert_eq!(g.state.graph.lock().unwrap().node_count(), 0);
+    std::thread::scope(|scope| {
+        let (done, finished) = std::sync::mpsc::channel();
+        let state = &g.state;
+        scope.spawn(move || {
+            state.stop_recording();
+            done.send(()).unwrap();
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while !inside.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let draining = inside.load(Ordering::Relaxed) && finished.try_recv().is_err();
+        release.store(true, Ordering::Relaxed);
+        finished.recv_timeout(std::time::Duration::from_secs(8)).expect("shutdown drains the recorder");
+        assert!(draining, "shutdown waits for video after the engines have stopped");
+    });
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(std::path::Path::new(&last).join("manifest.json")).unwrap(),
+    ).unwrap();
+    assert!(manifest["stopped_utc"].is_string(), "shutdown finalizes the manifest");
+
 }
 
 #[test]

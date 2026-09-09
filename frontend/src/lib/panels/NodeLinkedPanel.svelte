@@ -1,4 +1,4 @@
-<!-- Shared chrome for the node-linked panels (Parameters / Viewer / Metadata). -->
+<!-- Shared chrome for the node-linked panels (Inspector / Viewer). -->
 <script lang="ts">
 	import type { PanelProps } from 'panelty';
 	import type { NodeInstanceInfo } from '$lib/api/control';
