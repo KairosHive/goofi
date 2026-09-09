@@ -77,7 +77,6 @@
 		cursor: pointer;
 	}
 	button:focus-visible { outline: var(--focus-width) solid var(--focus-ink); }
-	.listening { background: var(--info-fill); }
 	.spinner {
 		width: 14px;
 		height: 14px;

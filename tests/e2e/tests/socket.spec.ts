@@ -895,6 +895,7 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 			await g.commands.setPanelType(panel.panelId, 'control');
 			await g.commands.setPanelState(panel.panelId, { group: 'desk' });
 		});
+		await page.getByTestId('control-edit-toggle').click();
 		const widget = page.getByTestId('control-desk-level');
 		const row = page.getByTestId('param-field-frequency');
 		await expect(widget).toBeVisible();
