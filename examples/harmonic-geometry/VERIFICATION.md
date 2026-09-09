@@ -15,7 +15,7 @@ camera, and light controls separate from the mode walk. The saved patch uses a
   visible output, relighting with an unchanged source field, exact stillness
   when controls are held, a different picture after retuning, the control
   limits, and external controls that pass through zero.
-- The embedded archive session passed for all **nine** patches in 51.76 seconds,
+- The final embedded archive session passed for all **nine** patches in 147.61 seconds,
   including live globals, save/reload, and the original audio example.
 - Clippy for the embedded geometry test and its dependencies passed with
   warnings denied. The E2E TypeScript check also passed.
@@ -35,6 +35,11 @@ instead of `0.0314`. The archive builder now derives steps from the decimal
 limits. Recipes 01, 02, and 05 also receive the corrected step values. An initial
 height-pass version requested unsupported float16 packing; the final version
 uses ordinary float32 arithmetic and a two-channel height encoding.
+The relief preview also waits for lit metal, since its studio background has
+enough spatial variation to pass a generic nonempty-image check on its own.
+A capture rerun with the live preview also active timed out in recipe 01's
+dashboard. The final run passed after the private preview was saved and paused;
+the preview was then restored.
 
 The full workspace suite and frontend unit suite were not repeated for this
 shader-only addition. Their earlier results and machine failures remain below.
