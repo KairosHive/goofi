@@ -212,6 +212,7 @@ pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>)
             drain.sweep();
             drain.recorder.swept(mark);
         }
+        drain.release();
         drop(drain);
         halt.release();
     });

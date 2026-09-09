@@ -215,8 +215,17 @@ test('a patch under construction holds together at every stage', async ({ page }
 					(n) => !CHROME.some((c) => n.toLowerCase().includes(c))
 				);
 				expect(names.length, 'the switcher offers types to walk').toBeGreaterThan(3);
+				expect(names).toContain('Inspector');
+				expect(names).not.toContain('Parameters');
+				expect(names).not.toContain('Metadata');
 				for (const name of names) {
 					await choosePanelType(page, name);
+					if (name === 'Inspector') {
+						await page.getByTestId('panel-node').locator('select').selectOption(osc);
+						await expect(page.locator('.param-form')).toBeVisible();
+						await expect(page.getByText('Metadata', { exact: true })).toBeVisible();
+						await expect(page.locator('.meta-field').first()).toBeVisible();
+					}
 					if (name === 'Recorder')
 						await expect(page.getByTestId('recorder-stream').first()).toBeVisible();
 					await expectIntact(page, `the ${name} panel`);

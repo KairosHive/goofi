@@ -57,14 +57,11 @@
 
 	let {
 		node,
-		showHeader = true,
 		onClose,
 		class: klass = '',
 		...rest
 	}: HTMLAttributes<HTMLElement> & {
 		node: NodeInstanceInfo | null;
-		/** Show the identity header (rename + state + docs). */
-		showHeader?: boolean;
 		/** Renders a ✕ in the identity Bar; only the slide-in inspector supplies one. */
 		onClose?: () => void;
 	} = $props();
@@ -293,98 +290,96 @@
 			{#snippet hint()}Select a node to edit its parameters.{/snippet}
 		</EmptyState>
 	{:else}
-		{#if showHeader}
-			<Bar class="pf-identity-bar">
-				{#snippet start()}
-					<div class="pf-identity">
-						<div class="pf-title">
-							{#if editingName}
-								<!-- svelte-ignore a11y_autofocus -->
-								<input
-									{...MODE_ATTRS.search}
-									class="pf-rename"
-									class:bad={nameDraft.trim() !== '' && !isValidName(nameDraft.trim())}
-									aria-label="Node name"
-									value={nameDraft}
-									oninput={(e) => (nameDraft = e.currentTarget.value)}
-									onblur={commitRename}
-									onkeydown={(e) => {
-										if (e.key === 'Enter') commitRename();
-										else if (e.key === 'Escape') cancelRename();
-									}}
-									data-testid="node-name-input"
-									use:focusInput
-								/>
-							{:else}
-								<button
-									class="pf-name"
-									title="Click to rename"
-									onclick={startRename}
-									data-testid="node-name">{node.name}</button
-								>
-							{/if}
-						</div>
-						<div class="pf-type">{formatName(bareName(node.type))}</div>
+		<Bar class="pf-identity-bar">
+			{#snippet start()}
+				<div class="pf-identity">
+					<div class="pf-title">
+						{#if editingName}
+							<!-- svelte-ignore a11y_autofocus -->
+							<input
+								{...MODE_ATTRS.search}
+								class="pf-rename"
+								class:bad={nameDraft.trim() !== '' && !isValidName(nameDraft.trim())}
+								aria-label="Node name"
+								value={nameDraft}
+								oninput={(e) => (nameDraft = e.currentTarget.value)}
+								onblur={commitRename}
+								onkeydown={(e) => {
+									if (e.key === 'Enter') commitRename();
+									else if (e.key === 'Escape') cancelRename();
+								}}
+								data-testid="node-name-input"
+								use:focusInput
+							/>
+						{:else}
+							<button
+								class="pf-name"
+								title="Click to rename"
+								onclick={startRename}
+								data-testid="node-name">{node.name}</button
+							>
+						{/if}
 					</div>
-				{/snippet}
-				{#snippet end()}
-					{#if savable}
-						<IconButton
-							variant="ghost"
-							density="chrome"
-							label="Save to custom library"
-							title="Move this node's file into your private library, where every patch finds it"
-							data-testid="save-to-library"
-							disabled={saving}
-							onclick={() => void saveToLibrary(node.type, false)}><Icon name="save" /></IconButton
-						>
-					{/if}
-					{#if node.editor}
-						<IconButton
-							variant="ghost"
-							density="chrome"
-							label="Open plugin editor"
-							title="Open this plugin's own editor, in a window on the machine goofi runs on"
-							data-testid="inspector-editor"
-							onclick={showEditor}><Icon name="app-window" /></IconButton
-						>
-					{/if}
-					<Badge
-						tone={BADGE_TONE[health.tone]}
-						class="pf-state"
-						title={health.hint}
-						data-testid="node-state"
+					<div class="pf-type">{formatName(bareName(node.type))}</div>
+				</div>
+			{/snippet}
+			{#snippet end()}
+				{#if savable}
+					<IconButton
+						variant="ghost"
+						density="chrome"
+						label="Save to custom library"
+						title="Move this node's file into your private library, where every patch finds it"
+						data-testid="save-to-library"
+						disabled={saving}
+						onclick={() => void saveToLibrary(node.type, false)}><Icon name="save" /></IconButton
 					>
-						{health.status}{#if health.runtime}<span class="pf-runtime" data-testid="node-runtime"
-								>{health.runtime}</span
-							>{/if}
-					</Badge>
-					{#if onClose}
-						<IconButton
-							variant="ghost"
-							density="chrome"
-							class="pf-close"
-							label="Close inspector"
-							title="Close the inspector"
-							data-testid="inspector-close"
-							onclick={onClose}><Icon name="x" /></IconButton
-						>
-					{/if}
-				{/snippet}
-			</Bar>
+				{/if}
+				{#if node.editor}
+					<IconButton
+						variant="ghost"
+						density="chrome"
+						label="Open plugin editor"
+						title="Open this plugin's own editor, in a window on the machine goofi runs on"
+						data-testid="inspector-editor"
+						onclick={showEditor}><Icon name="app-window" /></IconButton
+					>
+				{/if}
+				<Badge
+					tone={BADGE_TONE[health.tone]}
+					class="pf-state"
+					title={health.hint}
+					data-testid="node-state"
+				>
+					{health.status}{#if health.runtime}<span class="pf-runtime" data-testid="node-runtime"
+							>{health.runtime}</span
+						>{/if}
+				</Badge>
+				{#if onClose}
+					<IconButton
+						variant="ghost"
+						density="chrome"
+						class="pf-close"
+						label="Close inspector"
+						title="Close the inspector"
+						data-testid="inspector-close"
+						onclick={onClose}><Icon name="x" /></IconButton
+					>
+				{/if}
+			{/snippet}
+		</Bar>
 
-			{#if docRest}
-				<Disclosure class="pf-docs">
-					{#snippet summary()}
-						<span data-testid="docs-toggle">{docHead}</span>
-					{/snippet}
-					{#snippet children()}
-						<p class="pf-docstring" data-testid="docstring">{docRest}</p>
-					{/snippet}
-				</Disclosure>
-			{:else if docHead}
-				<p class="pf-doc-line" data-testid="docstring">{docHead}</p>
-			{/if}
+		{#if docRest}
+			<Disclosure class="pf-docs">
+				{#snippet summary()}
+					<span data-testid="docs-toggle">{docHead}</span>
+				{/snippet}
+				{#snippet children()}
+					<p class="pf-docstring" data-testid="docstring">{docRest}</p>
+				{/snippet}
+			</Disclosure>
+		{:else if docHead}
+			<p class="pf-doc-line" data-testid="docstring">{docHead}</p>
 		{/if}
 
 		{#if node.subpatch}

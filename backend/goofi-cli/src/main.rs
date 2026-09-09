@@ -161,6 +161,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
         );
         return;
     }
+    let shutdown = watch_shutdown();
     let startup = Startup::begin(env!("CARGO_PKG_VERSION"));
     report("Checking the Python environment");
     let python = match default_subproc_python() {
@@ -175,7 +176,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     let mut state = AppState::new(mode, goofi_bridge::Clock::Device, goofi_bridge::RenderClock::Timer);
     state.load = cli.load.clone().or_else(|| named_env("GOOFI_LOAD")).map(PathBuf::from);
     state.demo_base = named_env("GOOFI_DEMO_BASE");
-    std::process::exit(run(cli, python, state, shutdown_signal(), ui, Some(startup)).await);
+    std::process::exit(run(cli, python, state, async { let _ = shutdown.await; }, ui, Some(startup)).await);
 }
 
 /// Send lines to the resolved server and print each entry — decoded NPY bytes when the result
@@ -566,11 +567,16 @@ async fn run(
     drop(startup);
     // The order is load-bearing: the agents leave before their workspace goes, and a node's
     // thread releases its shared memory before the mount goes.
+    println!("  Stopping engines · press Ctrl+C again to force exit");
     if let Some(insist) = state.harnesses.reap_all() {
         insist();
     }
-    state.stop_recording();
     state.graph.lock().unwrap().shutdown();
+    if state.recorder.running() {
+        println!("  Draining recording · waiting for queued frames to reach disk");
+    }
+    state.stop_recording();
+    println!("  Stopped");
     state.release_mount();
     code
 }
@@ -591,6 +597,24 @@ impl Drop for SessionFile {
     fn drop(&mut self) {
         goofi_core::home::remove_session(&self.0);
     }
+}
+
+fn watch_shutdown() -> tokio::sync::oneshot::Receiver<()> {
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    goofi_transport::thread("goofi-signals").spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("the signal runtime")
+            .block_on(async {
+                shutdown_signal().await;
+                let _ = stop.send(());
+                shutdown_signal().await;
+                goofi_record::video::kill_encoders();
+                std::process::exit(130);
+            });
+    }).expect("the signal thread");
+    stopped
 }
 
 /// Resolve on the first request to stop. A door that cannot be installed must **never** resolve —

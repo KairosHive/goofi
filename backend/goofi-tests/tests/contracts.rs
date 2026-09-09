@@ -125,7 +125,7 @@ fn a_vocabulary_word_is_emittable_documented_and_offered_where_it_is_asked_for()
 
     // Each op that takes a vocabulary word enumerates the set in its own description, by expansion.
     let doc = find("layout panel edit").expect("registered").doc();
-    for word in ["parameters", "node-editor", "viewer", "line", "trajectory", "topomap"] {
+    for word in ["inspector", "node-editor", "viewer", "line", "trajectory", "topomap"] {
         assert!(doc.contains(word), "`{word}` is not offered by the panel edit doc: {doc}");
     }
     // The description is the ONLY text an agent reads, so node edit's has to carry the viewer
