@@ -526,21 +526,22 @@ impl GlobalStore {
         self.controls.get(name)
     }
 
-    /// Set or clear a global's control record; a widget that cannot draw the value is refused.
-    pub fn set_control(&mut self, name: &str, control: Option<Control>) -> Result<(), String> {
-        let value = self.values.get(name).ok_or_else(|| format!("no such global `{name}`"))?;
+    pub fn check_control(&self, name: &str, value: &GlobalValue, control: Option<&Control>) -> Result<(), String> {
         self.config_locked(name)?;
         match control {
             Some(c) if !c.fits(value) => Err(c.mismatch(value)),
-            Some(c) => {
-                self.controls.insert(name.to_string(), c);
-                Ok(())
-            }
-            None => {
-                self.controls.shift_remove(name);
-                Ok(())
-            }
+            _ => Ok(()),
         }
+    }
+
+    pub fn set_control(&mut self, name: &str, control: Option<Control>) -> Result<(), String> {
+        let value = self.values.get(name).ok_or_else(|| format!("no such global `{name}`"))?;
+        self.check_control(name, value, control.as_ref())?;
+        match control {
+            Some(c) => { self.controls.insert(name.to_string(), c); }
+            None => { self.controls.shift_remove(name); }
+        }
+        Ok(())
     }
 
     /// Set an EXISTING global, coercing to its declared type; errors when it does not exist.
@@ -642,6 +643,9 @@ impl GlobalStore {
         if self.group_lock(from).config {
             return Err(format!("group `{from}` is config-locked"));
         }
+        if self.has_group(to) {
+            return Err(format!("global group `{to}` already exists"));
+        }
         let moved: Vec<(String, String)> = self
             .values
             .keys()
@@ -681,54 +685,5 @@ impl GlobalStore {
             None if self.values.contains_key(name) => Ok(()),
             None => Err(format!("no such global `{name}`")),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A kind is declared in four places — `ALL`, `as_str`, `born_value`, `born_box` — and `fits`
-    /// is a fifth that decides whether the widget will draw the value it was born holding. Adding
-    /// one and updating only some of them compiles: `fits` would simply answer `false`, and the
-    /// widget would refuse its own birth value at runtime. This is what makes that a test failure.
-    #[test]
-    fn every_kind_draws_the_value_it_is_born_holding() {
-        for kind in ControlKind::ALL {
-            let born = kind.born_value();
-            let control = Control {
-                kind,
-                min: None,
-                max: None,
-                step: None,
-                options: Vec::new(),
-                x: 0.0,
-                y: 0.0,
-                w: 0.0,
-                h: 0.0,
-            };
-            assert!(control.fits(&born), "a `{}` cannot draw its own birth value {born:?}", kind.as_str());
-        }
-    }
-
-    #[test]
-    fn every_kind_is_born_in_a_box_that_fits_the_grid() {
-        for kind in ControlKind::ALL {
-            let (w, h) = kind.born_box();
-            let name = kind.as_str();
-            assert!(w >= 1.0 && h >= 1.0, "`{name}` is born {w}x{h}, which is smaller than a cell");
-            assert!(w <= CONTROL_COLUMNS, "`{name}` is born {w} wide, past the {CONTROL_COLUMNS}-column grid");
-        }
-    }
-
-    /// `as_str` is the wire spelling — the `.gfi`, the op vocabulary and the generated TypeScript
-    /// union all read it — so two kinds sharing one would make a document ambiguous.
-    #[test]
-    fn every_kind_spells_itself_once() {
-        let mut seen: Vec<&str> = ControlKind::ALL.iter().map(|k| k.as_str()).collect();
-        let before = seen.len();
-        seen.sort_unstable();
-        seen.dedup();
-        assert_eq!(seen.len(), before, "two control kinds share a spelling: {seen:?}");
     }
 }

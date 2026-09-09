@@ -559,6 +559,10 @@ impl Graph {
         at: Option<usize>,
         control: Option<Option<goofi_core::globals::Control>>,
     ) -> Result<(), String> {
+        if let Some(c) = &control {
+            let held = self.globals.get(name).or(value.as_ref()).ok_or_else(|| format!("no such global `{name}`"))?;
+            self.globals.check_control(name, held, c.as_ref())?;
+        }
         self.globals.apply_change(name, value, at)?;
         if let Some(c) = control {
             self.globals.set_control(name, c)?;
@@ -631,6 +635,9 @@ impl Graph {
 
     /// Rename a group, and rewrite every expression that reads any member.
     pub fn rename_global_group(&mut self, from: &str, to: &str) -> Result<Vec<Uid>, String> {
+        if self.arrangement.control_panels().iter().any(|(_, group)| group == to) {
+            return Err(format!("global group `{to}` already exists"));
+        }
         let writes = self.arrangement.regroup(from, to);
         if writes.is_empty() && !self.globals.has_group(from) {
             return Err(format!("no global group `{from}`"));

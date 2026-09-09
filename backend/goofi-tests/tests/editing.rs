@@ -180,6 +180,15 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let why = g.refuse("control draw", j!({ "group": "control0", "element": "knob0", "steps": "forward 10" }));
     assert!(why.contains("knob"), "only a `draw` widget takes steps: {why}");
 
+    for kind in goofi_core::globals::ControlKind::ALL {
+        let born = g.call("control add", j!({ "group": "kinds", "kind": kind.as_str() }));
+        let record = &born["control"];
+        assert!(record["w"].as_f64().is_some_and(|w| (1.0..=goofi_core::globals::CONTROL_COLUMNS).contains(&w)));
+        assert!(record["h"].as_f64().is_some_and(|h| h >= 1.0));
+        assert_eq!(record["kind"], kind.as_str());
+        g.call("control remove", j!({ "group": "kinds", "element": born["name"].as_str().unwrap().split_once('.').unwrap().1 }));
+    }
+
     // A panel's edit mode is the panel's own view and no state of the manager's, so the widget door
     // is held by a config lock exactly as every other globals door is.
     g.call("global group lock", j!({ "group": "control0", "config": true }));
@@ -265,14 +274,15 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let built = g.doc();
 
     // A compound is ONE step though it is an add plus a remove composed.
+    let expected_steps = 45 + 2 * goofi_core::globals::ControlKind::ALL.len();
     let mut steps = 0;
     while g.call("undo", j!({}))["changed"] == true {
         steps += 1;
-        assert!(steps < 50, "the stack never emptied");
+        assert!(steps <= expected_steps, "the stack never emptied");
     }
     assert!(g.nodes().is_empty() && g.instances().is_empty(), "back to an empty patch");
     assert!(g.doc()["globals"]["desk.handle"].is_null() && g.doc()["globals"]["patch.subj"].is_null());
-    assert_eq!(steps, 45, "one step per command — a compound (the rename, the two-edit batch) and a three-field node edit are each ONE");
+    assert_eq!(steps, expected_steps, "one step per command — a compound (the rename, the two-edit batch) and a three-field node edit are each ONE");
 
     while g.call("redo", j!({}))["changed"] == true {}
     assert_eq!(g.doc(), built, "redo rebuilt the patch it undid, uid for uid");
@@ -347,6 +357,55 @@ fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
     for _ in 0..4 {
         assert_eq!(one.call("undo", j!({}))["changed"], true, "the stack stays walkable to empty");
     }
+
+    let before = one.doc();
+    let bad_control = j!({ "kind": "toggle", "x": 0, "y": 0, "w": 2, "h": 2 });
+    one.refuse("global entry add", j!({ "name": "audit.bad", "type": "float", "value": 1.0, "control": bad_control }));
+    assert_eq!(one.doc(), before);
+    one.call("global entry add", j!({ "name": "audit.bad", "type": "float", "value": 1.0 }));
+    one.refuse("global entry edit", j!({ "name": "audit.bad", "value": 2.0, "control": bad_control }));
+    one.call("global entry add", j!({ "name": "audit.after", "type": "float", "value": 3.0 }));
+    assert_eq!(one.doc()["globals"]["audit.bad"]["value"], 1.0);
+    one.refuse("compound", j!({ "ops": [
+        { "op": "global entry edit", "payload": { "name": "audit.after", "value": 4.0 } },
+        { "op": "global entry edit", "payload": { "name": "audit.bad", "value": 5.0, "control": bad_control } }
+    ] }));
+    assert_eq!(one.doc()["globals"]["audit.after"]["value"], 3.0);
+    one.call("undo", j!({}));
+    assert!(one.doc()["globals"].get("audit.after").is_none());
+    two.call("global entry remove", j!({ "name": "audit.bad" }));
+    one.call("undo", j!({}));
+    one.call("redo", j!({}));
+    assert!(one.doc()["globals"].get("audit.bad").is_none());
+
+    one.call("global entry add", j!({ "name": "first.one", "type": "float", "value": 1.0 }));
+    two.call("global entry add", j!({ "name": "second.two", "type": "float", "value": 2.0 }));
+    let before = one.doc();
+    one.refuse("global group rename", j!({ "from": "first", "to": "second" }));
+    assert_eq!(one.doc(), before);
+    two.call("global group lock", j!({ "group": "locked", "value": true }));
+    one.refuse("global group rename", j!({ "from": "first", "to": "locked" }));
+    two.call("layout panel edit", j!({ "panel": first_panel(&one), "type": "control", "state": { "group": "panelonly" } }));
+    one.refuse("global group rename", j!({ "from": "first", "to": "panelonly" }));
+    one.call("global group rename", j!({ "from": "first", "to": "renamed" }));
+    one.call("undo", j!({}));
+    assert_eq!(one.doc()["globals"]["first.one"]["value"], 1.0);
+    one.call("redo", j!({}));
+    two.call("global entry add", j!({ "name": "renamed.peer", "type": "float", "value": 2.0 }));
+    one.call("undo", j!({}));
+    assert_eq!(one.doc()["globals"]["renamed.peer"]["value"], 2.0);
+    assert_eq!(one.doc()["globals"]["renamed.one"]["value"], 1.0);
+    assert!(one.doc()["globals"].get("first.peer").is_none());
+
+    one.call("global entry edit", j!({ "name": "renamed.one", "value": 4.0 }));
+    two.call("global entry lock", j!({ "name": "renamed.one", "value": true }));
+    one.call("undo", j!({}));
+    assert_eq!(one.doc()["globals"]["renamed.one"]["value"], 4.0);
+    one.refuse("global entry edit", j!({ "name": "renamed.one", "value": 5.0 }));
+    one.call("global entry rename", j!({ "name": "second.two", "to": "second.moved" }));
+    two.call("global entry rename", j!({ "name": "second.moved", "to": "second.peer" }));
+    one.call("undo", j!({}));
+    assert_eq!(one.doc()["globals"]["second.peer"]["value"], 2.0);
 }
 
 #[test]

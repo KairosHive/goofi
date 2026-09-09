@@ -448,7 +448,20 @@ fn a_node_saved_to_the_private_library_leaves_the_patch_rides_the_archive_and_st
 
     // `--overwrite` is the one door through it: the file in the way is replaced, and the move is
     // the same move — the patch's own file leaves the workspace.
+    let input = workspace.join("my_kept.py");
+    let held_input = workspace.join(".held-source");
+    std::fs::rename(&input, &held_input).unwrap();
+    std::fs::create_dir(&input).unwrap();
+    g.refuse("library save", j!({ "type": "MyKept", "overwrite": true }));
+    assert_eq!(std::fs::read_to_string(library.path().join("my_kept.py")).unwrap(), kept);
+    std::fs::remove_dir(&input).unwrap();
+    std::fs::rename(&held_input, &input).unwrap();
+
+    let renamed_input = workspace.join("my__kept.py");
+    std::fs::rename(&input, &renamed_input).unwrap();
     let replaced = g.call("library save", j!({ "type": "MyKept", "overwrite": true }));
+    assert!(!renamed_input.exists());
+    assert!(!library.path().join("my__kept.py").exists());
     assert_eq!(replaced["type"], "signal:MyKept", "{replaced}");
     assert!(!workspace.join("my_kept.py").exists(), "…and the patch's file left, as any save moves it");
     let kept = std::fs::read_to_string(library.path().join("my_kept.py")).unwrap();
