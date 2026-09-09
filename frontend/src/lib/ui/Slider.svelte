@@ -31,11 +31,8 @@
 		(v) => onChange(v)
 	);
 
-	// Auto-extend so an out-of-range live value never clips at an edge.
-	const lo = $derived(Math.min(min, live.value));
-	const hi = $derived(Math.max(max, live.value));
 	// A default step gives the range ~200 stops across the span.
-	const stp = $derived(step ?? Math.max((hi - lo) / 200, 1e-6));
+	const stp = $derived(step ?? Math.max((max - min) / 200, 1e-6));
 
 	function fmtBound(v: number): string {
 		if (!Number.isFinite(v)) return '';
@@ -49,14 +46,14 @@
 </script>
 
 <div {...rest} class={`ui-slider ${klass}`.trim()}>
-	<span class="ui-slider-bound" aria-hidden="true">{fmtBound(lo)}</span>
+	<span class="ui-slider-bound" aria-hidden="true">{fmtBound(min)}</span>
 	<input
 		id={fieldId}
 		class="ui-slider-range"
 		type="range"
 		{disabled}
-		min={lo}
-		max={hi}
+		{min}
+		{max}
 		step={stp}
 		value={live.value}
 		onpointerdown={() => live.begin()}
@@ -64,7 +61,7 @@
 		onpointercancel={() => live.end()}
 		oninput={(e) => live.commit(Number((e.currentTarget as HTMLInputElement).value))}
 	/>
-	<span class="ui-slider-bound" aria-hidden="true">{fmtBound(hi)}</span>
+	<span class="ui-slider-bound" aria-hidden="true">{fmtBound(max)}</span>
 </div>
 
 <style>

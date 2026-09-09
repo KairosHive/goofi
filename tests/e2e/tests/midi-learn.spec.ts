@@ -54,6 +54,21 @@ class LearnMidi(goofi.Node):
 		await expect(field.getByTestId('param-number')).toHaveValue('0.75');
 		await expect(learn.locator('svg')).toBeVisible();
 
+		const slider = field.getByTestId('param-slider');
+		const track = slider.locator('input');
+		const bounds = await slider.locator('.ui-slider-bound').allTextContents();
+		const descriptor = (await nodeParams(page, consumer)).common.max_frequency;
+		const step = await track.getAttribute('step');
+		for (const value of [descriptor.vmin - 1, descriptor.vmax + 1, 0.75]) {
+			await updateParam(page, midi, 'test', 'note', value);
+			await expect.poll(async () => Number(await field.getByTestId('param-number').inputValue())).toBe(value);
+			await expect(slider.locator('.ui-slider-bound')).toHaveText(bounds);
+			await expect(track).toHaveAttribute('min', String(descriptor.vmin));
+			await expect(track).toHaveAttribute('max', String(descriptor.vmax));
+			await expect(track).toHaveAttribute('step', step!);
+		}
+
+
 		const second = await addNode(page, 'LearnMidi', [350, 300]);
 		await rawCall(page, 'node edit', { node: second, name: 'pads' });
 		await selectNode(page, consumer);

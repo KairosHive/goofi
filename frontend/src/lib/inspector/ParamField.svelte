@@ -74,12 +74,10 @@
 
 	let open = $state(false);
 
-	// `step` is computed against the SAME auto-extended bounds the Slider uses; a native `'any'` would
+	// `step` uses the declared bounds; a native `'any'` would
 	// NaN the NumberInput's scrub arithmetic.
 	const num = $derived(descriptor.type === 'float' || descriptor.type === 'int' ? descriptor : null);
-	const lo = $derived(num ? Math.min(num.vmin, num.value) : 0);
-	const hi = $derived(num ? Math.max(num.vmax, num.value) : 1);
-	const step = $derived(num ? (num.type === 'int' ? 1 : Math.max((hi - lo) / 200, 1e-6)) : 1);
+	const step = $derived(num ? (num.type === 'int' ? 1 : Math.max((num.vmax - num.vmin) / 200, 1e-6)) : 1);
 
 	const options = $derived(descriptor.type === 'string' ? (descriptor.options ?? []) : []);
 
