@@ -5,6 +5,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use goofi_bridge::{serve_app, spawn_workers, AppState, HEADLESS_BUILD, SPA};
+use goofi_core::startup::{report, Startup};
 use goofi_node::{Isolation, Scanned};
 
 #[derive(Debug)]
@@ -160,6 +161,8 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
         );
         return;
     }
+    let startup = Startup::begin(env!("CARGO_PKG_VERSION"));
+    report("Checking the Python environment");
     let python = match default_subproc_python() {
         Ok(p) => p,
         Err(e) => {
@@ -168,10 +171,11 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
         }
     };
     let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo };
+    report("Starting signal, audio and graphics engines");
     let mut state = AppState::new(mode, goofi_bridge::Clock::Device, goofi_bridge::RenderClock::Timer);
     state.load = cli.load.clone().or_else(|| named_env("GOOFI_LOAD")).map(PathBuf::from);
     state.demo_base = named_env("GOOFI_DEMO_BASE");
-    std::process::exit(run(cli, python, state, shutdown_signal(), ui).await);
+    std::process::exit(run(cli, python, state, shutdown_signal(), ui, Some(startup)).await);
 }
 
 /// Send lines to the resolved server and print each entry — decoded NPY bytes when the result
@@ -429,6 +433,7 @@ async fn run(
     mut state: AppState,
     shutdown: impl Future<Output = ()>,
     ui: Option<goofi_window::Ui>,
+    mut startup: Option<Startup>,
 ) -> i32 {
     // Before ANY use of the embedded interpreter.
     point_embedded_python_at_its_venv();
@@ -436,6 +441,7 @@ async fn run(
     let Cli { port, bind, extra_nodes, list_nodes, headless, debug, demo, load: _, help: _ } = cli;
     let port = port.unwrap_or(DEFAULT_PORT);
 
+    report("Preparing parameter expressions");
     if !list_nodes {
         register_evaluator(&state);
     }
@@ -443,6 +449,7 @@ async fn run(
     // Every root the scan reads, the private library included: a node saved there may name
     // packages exactly as a bundle's does.
     let scanned: Vec<PathBuf> = state.node_roots().into_iter().map(|(d, _)| d).collect();
+    report("Checking node package requirements");
     ensure_packages(&scanned, &subproc_python);
     // Handed to the engine before anything scans, so the boot scan and every rescan share it.
     goofi_bridge::signal_engine(&mut state.graph.lock().unwrap())
@@ -463,11 +470,15 @@ async fn run(
     }
     boot_scan(&state);
     if !demo {
+        report("Checking audio hosts");
         println!("  audio hosts: {}{}", goofi_audio::hosts(), goofi_audio::NO_ASIO_NOTE);
     }
 
     let code = if list_nodes {
         let names = goofi_bridge::catalog_type_names(&state.graph.lock().unwrap());
+        if let Some(startup) = startup.take() {
+            startup.finish("Node library ready");
+        }
         println!("{} node types: {}", names.len(), names.join(", "));
         0
     // An arm of this chain rather than an early `return`: only the tail of this function gives
@@ -482,11 +493,17 @@ async fn run(
         eprintln!("    cargo build");
         eprintln!("  Or serve the API alone: --headless, or GOOFI_HEADLESS=1.");
         1
-    } else if let Err(e) = goofi_bridge::open_load(&state) {
+    } else if let Err(e) = {
+        if let Some(patch) = &state.load {
+            report(format!("Opening patch {}", patch.display()));
+        }
+        goofi_bridge::open_load(&state)
+    } {
         eprintln!("refusing to start: the patch --load named did not open.");
         eprintln!("  {e}");
         1
     } else {
+        report(format!("Starting services on {bind}:{port}"));
         spawn_workers(&state);
         match tokio::net::TcpListener::bind((bind.as_str(), port)).await {
             Err(e) => {
@@ -505,7 +522,10 @@ async fn run(
                 // The OPENABLE spelling, as the session file records it — `http://0.0.0.0` is
                 // not an address a browser can visit.
                 let url = state.local_url();
-                println!("goofi → {url}");
+                if let Some(startup) = startup.take() {
+                    startup.finish("Ready");
+                }
+                println!("\ngoofi → {url}");
                 if !demo {
                     println!("  MCP endpoint → {url}/mcp");
                 }
@@ -524,6 +544,7 @@ async fn run(
                 if debug && !headless {
                     println!("  debug: {url}/dev/ui is open — the UI primitive gallery");
                 }
+                println!("  Ctrl+C to stop\n");
                 // Last, and on stderr, so it is the line still on screen and survives a `> log`.
                 if let Some(warning) = exposure_warning(&bind).filter(|_| !demo) {
                     eprintln!("{warning}");
@@ -542,6 +563,7 @@ async fn run(
             }
         }
     };
+    drop(startup);
     // The order is load-bearing: the agents leave before their workspace goes, and a node's
     // thread releases its shared memory before the mount goes.
     if let Some(insist) = state.harnesses.reap_all() {
@@ -679,12 +701,15 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) {
     if lacking.is_empty() {
         return;
     }
-    let from = gil_only.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ");
+    eprintln!("  Requirements files:");
+    for path in &gil_only {
+        eprintln!("    {}", path.display());
+    }
     if !std::io::stdin().is_terminal() {
-        eprintln!("  named by {from}; no terminal to ask, so those nodes will be unavailable");
+        eprintln!("  no terminal to ask, so those nodes will be unavailable");
         return;
     }
-    eprint!("  named by {from} — install now? [y/N] ");
+    eprint!("  Install missing packages now? [y/N] ");
     let mut answer = String::new();
     let _ = std::io::stdin().read_line(&mut answer);
     if !answer.trim().eq_ignore_ascii_case("y") {
@@ -717,17 +742,18 @@ fn note_replaced(name: &str, replaced: bool) {
 #[cfg(feature = "python")]
 const NO_PYTHON_NOTE: &str = "";
 #[cfg(not(feature = "python"))]
-const NO_PYTHON_NOTE: &str = " (built without the `python` feature — node discovery is off)";
+const NO_PYTHON_NOTE: &str = " (embedded Python disabled)";
 
 /// The boot scan, reported. It runs the bridge's own `rescan`, so the baseline the first refresh
 /// diffs against IS this scan.
 fn boot_scan(state: &AppState) {
+    report("Preparing native nodes (cached builds are reused)");
     goofi_bridge::prebuild(state, &state.mount());
-    let (found, dirs) = {
+    report("Indexing the node library");
+    let found = {
         let mut g = state.graph.lock().unwrap();
         let patch = state.mount();
-        let dirs: Vec<PathBuf> = state.node_roots().into_iter().map(|(d, _)| d).collect();
-        (goofi_bridge::rescan(state, &mut g, &patch).1, dirs)
+        goofi_bridge::rescan(state, &mut g, &patch).1
     };
     let (mut n_native, mut n_in, mut n_sub, mut n_shader, mut n_bad) = (0u32, 0u32, 0u32, 0u32, 0u32);
     for t in found {
@@ -748,10 +774,9 @@ fn boot_scan(state: &AppState) {
         }
     }
     let bad = if n_bad > 0 { format!(", {n_bad} unavailable") } else { String::new() };
-    let from = dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", ");
-    println!(
-        "  {n_native} native + {n_in} in-process + {n_sub} subprocess + {n_shader} shader node type(s) from {from}{bad}{NO_PYTHON_NOTE}"
-    );
+    let total = n_native + n_in + n_sub + n_shader;
+    println!("  Node library: {total} available{bad}");
+    println!("    {n_native} native · {n_in} in-process · {n_sub} subprocess · {n_shader} shaders{NO_PYTHON_NOTE}");
 }
 
 // The suite lives in `goofi-tests`; a binary has no lib target for it to reach into.
@@ -889,7 +914,7 @@ mod tests {
         }
         // An already-resolved shutdown takes the same path ctrl-C does; port 0 binds ephemerally.
         let cli = Cli { port: Some(0), ..Cli::default() };
-        assert_eq!(run(cli, "python3".into(), state, std::future::ready(()), None).await, 0);
+        assert_eq!(run(cli, "python3".into(), state, std::future::ready(()), None, None).await, 0);
         assert!(
             released.load(std::sync::atomic::Ordering::Acquire),
             "the node's runtime was dropped — its shared memory went with it — before the exit"
@@ -903,7 +928,7 @@ mod tests {
         let mount = state.mount();
         assert!(mount.is_dir(), "the mount exists after boot: {}", mount.display());
         let cli = Cli { port: Some(0), ..Cli::default() };
-        assert_eq!(run(cli, "python3".into(), state, std::future::ready(()), None).await, 0);
+        assert_eq!(run(cli, "python3".into(), state, std::future::ready(()), None, None).await, 0);
         let husk = mount.parent().expect("the mount is nested under a nonce dir");
         assert!(!husk.exists(), "the nonce directory goes too, not just workspace: {}", husk.display());
 
@@ -911,7 +936,7 @@ mod tests {
         let listed = walled();
         let m2 = listed.mount();
         let cli = Cli { list_nodes: true, ..Cli::default() };
-        assert_eq!(run(cli, "python3".into(), listed, std::future::pending(), None).await, 0);
+        assert_eq!(run(cli, "python3".into(), listed, std::future::pending(), None, None).await, 0);
         assert!(!m2.exists(), "--list-nodes reclaims too: {}", m2.display());
     }
 

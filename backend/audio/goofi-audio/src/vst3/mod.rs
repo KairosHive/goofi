@@ -334,6 +334,7 @@ fn described(scanner: &Path, bundle: &Path, binary: &Path, stamp: Stamp) -> Resu
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let part = dir.join(format!("{key}.{}.part", std::process::id()));
     let errors = part.with_extension("err");
+    goofi_core::startup::report(format!("Indexing VST3 plugin {}", bundle.file_name().unwrap_or_default().to_string_lossy()));
     let mut child = spawn_scanner(scanner, bundle, &part, &errors)?;
     let verdict = answered(&mut child, &errors)
         .and_then(|()| std::fs::read(&part).map_err(|e| format!("the scanner wrote nothing: {e}")))
