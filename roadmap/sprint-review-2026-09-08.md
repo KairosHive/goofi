@@ -2,12 +2,15 @@
 
 ## Resolution pass
 
-Resolved: R01, R02, R06–R14 (11 findings). R03–R05 remain open as one shared sample-progress contract.
+Resolved: R01–R14. The follow-up decisions below replace the proposed sample-progress contract.
 
 | Findings | Result |
 |---|---|
 | R01 | A close holds its original session before flushing or waiting; manifest ordering belongs to that session. |
 | R02 | WAV format changes open a new file; varying block sizes remain valid. |
+| R03 | Every frame is appended in full. Removed overlap matching, causal output reuse, and excess history retention. Also corrected FreqShift's odd-length FFT mask. |
+| R04 | Epoch captures supplied windows; Buffer owns window length. Rust and both Python tiers can clear inputs after a successful process call. |
+| R05 | Resample handles independent windows. Fractional-rate conversion reports the actual rate, bounds filter factors, and validates its axis. |
 | R06 | Control compatibility and locks are checked before a global value changes. |
 | R07 | Rename refuses an occupied destination, including panel-only and lock-only groups; replay does not move a group whose members a peer changed. |
 | R08 | Fresh commands remain strict; stale global replay leaves current state in place and does not block the stack. |
@@ -18,7 +21,24 @@ Resolved: R01, R02, R06–R14 (11 findings). R03–R05 remain open as one shared
 | R13 | Replacement is staged and synced before rename; the existing library filename is retained when the same type has another source filename. |
 | R14 | The reviewed private audio/global test modules were removed, including five ignored hardware tests. Useful checks now run through existing external audio/editing sessions. This is not a claim that every older private test in the repository was removed. |
 
-R03–R05 have no safe local correction. A delivery index identifies a frame, but not the sample range in a rolling window. The shared contract must define sample ranges for Buffer and transforms, expose arrival progress to Python and Rust nodes, and retain fractional resampling phase/filter state. This pass leaves those implementations unchanged rather than replacing byte guesses with timestamp guesses.
+Follow-up decisions (user-approved):
+
+- A frame is the complete input, including a rolling Buffer window. No sample identity, overlap annotation, or overlap inference is needed. A node that needs fresh samples is connected before Buffer.
+- `NodeCtx::clear_input` and Python `self.clear_input` request consumption. The runtime validates every name, then clears held cells only on success, before its next input drain. A multi input clears all held wire values but retains its links. Failed calls preserve data; a successful call with no outputs still clears.
+- Epoch consumes each trigger. A qualifying trigger captures an available data window once; later triggers require a new data arrival. Data arrivals alone do not capture. Rejected windows are consumed. Removed before/after timing, internal history, pending events, and pre-trigger baseline; kept averaging, whole-window baseline, rejection, and reset.
+- Resample has no cross-frame phase or filter history. Each window's output length rounds up. A bounded rational ratio supports fractional rates; output metadata states the actual conversion rate. Extreme conversion factors are refused before filter allocation.
+
+Follow-up validation:
+
+- Codec 2/2, EEG 2/2, authored/library nodes 8/8, subprocess Python 11/11, and signals 9/9 passed through the normal runtime.
+- The input-clearing error/recovery session also passed with embedded Python.
+- The final EEG session also passed after adding labeled one-dimensional window coverage.
+- The user's new simultaneous Osc/Gain WAV assertions passed; the full recording session file passed 4/4 serially. That test remains the user's uncommitted change.
+- Final `cargo build --workspace --all-targets` and `cargo clippy --workspace --all-targets -- -D warnings` passed without warnings, with offline dependency resolution.
+- Added checks for repeated equal scalars, complete repeated windows, causal filter progress, odd-length frequency shifts, fractional rates, repeated independent resampling, and invalid-axis recovery.
+- Original Stream failed a public-source probe (2 samples held instead of 3); the replacement passed. Original Resample produced 52 samples at a claimed 25.5 Hz for a 200-sample 100 Hz window; the replacement produced 51. These two negative controls are component probes, not full manager sessions.
+- Both local Python wheels were rebuilt and installed. The first sandboxed signal run timed out before its first output; normal shared-memory runs passed. An initial build warning for an unused import was fixed.
+- No frontend changes or browser tests in this follow-up. Full workspace tests and the full embedded-Python suite were not run.
 
 Validation completed:
 
@@ -55,7 +75,7 @@ The sections below preserve the original review evidence. Their line numbers and
 ## Work order
 
 1. R01 and R02: recording integrity; independent fixes.
-2. R03–R05: define sample identity/progress first, then fix consumers. Do not invent three separate deduplication rules.
+2. R03–R05: completed under the full-frame decisions above; no sample-progress contract.
 3. R06–R08: global mutation planning and replay. Test these together in the existing editing session.
 4. R09–R11: frontend state and reconnect behavior.
 5. R12–R14: shared statistics, safe library replacement, and test/code reduction.
