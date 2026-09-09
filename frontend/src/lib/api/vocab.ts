@@ -9,9 +9,8 @@ import type { IconName } from '$lib/ui';
 export type PanelTypeId =
 	| 'empty'
 	| 'node-editor'
-	| 'parameters'
+	| 'inspector'
 	| 'viewer'
-	| 'metadata'
 	| 'console'
 	| 'globals'
 	| 'control'
@@ -59,9 +58,8 @@ export interface ViewerKindInfo {
 export const PANEL_TYPES: readonly PanelTypeInfo[] = [
 	{ id: 'empty', title: 'Empty', icon: 'square-dashed', acceptsNode: false, doc: 'a placeholder with no content yet — what a fresh split births' },
 	{ id: 'node-editor', title: 'Node Editor', icon: 'workflow', acceptsNode: false, doc: 'the patch canvas — nodes, wires and sub-patches' },
-	{ id: 'parameters', title: 'Parameters', icon: 'sliders-horizontal', acceptsNode: true, doc: 'the parameters of one node, with ranges and expression bindings' },
+	{ id: 'inspector', title: 'Inspector', icon: 'sliders-horizontal', acceptsNode: true, doc: 'the parameters, metadata and errors of one node' },
 	{ id: 'viewer', title: 'Viewer', icon: 'activity', acceptsNode: true, doc: 'live frames from one output slot, drawn by `state.kind`' },
-	{ id: 'metadata', title: 'Metadata', icon: 'info', acceptsNode: true, doc: 'frame metadata from one output slot (sfreq, channels, shape)' },
 	{ id: 'console', title: 'Console', icon: 'terminal', acceptsNode: true, doc: 'the patch log; a bound node filters it to that node' },
 	{ id: 'globals', title: 'Globals', icon: 'globe', acceptsNode: false, doc: 'the patch globals, which any expression can read' },
 	{ id: 'control', title: 'Control', icon: 'sliders-vertical', acceptsNode: false, doc: 'knobs, sliders and fields over one group of globals' },
