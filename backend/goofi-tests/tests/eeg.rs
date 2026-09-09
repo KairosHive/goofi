@@ -6,7 +6,8 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use goofi_tests::{f32s, install, labels, require_python, shape, Goofi, OutputProbe, Uid};
+use goofi_tests::{f32s, hex, install, labels, require_python, shape, Goofi, OutputProbe, Uid};
+use serde_json::json;
 
 /// One of a bundle's files, installed through the same seam a user's own file takes.
 fn bundled(g: &Goofi, bundle: &str, file: &str) -> String {
@@ -132,6 +133,8 @@ fn a_montage_is_rereferenced_related_and_read_as_a_graph() {
     let values = f32s(&got);
     assert!(values.iter().all(|x| x.is_finite()), "c2 is a number for every channel: {values:?}");
     assert!(values.iter().all(|x| x.abs() < 0.6), "noise is not strongly multifractal: {values:?}");
+
+    capture_windows(&g);
 }
 
 #[test]
@@ -188,4 +191,132 @@ fn a_connectivity_matrix_tells_a_shared_rhythm_from_two_that_are_not() {
         shared > independent + 0.3,
         "the shared rhythm locks and the noise does not: {shared:.3} against {independent:.3}"
     );
+}
+
+fn capture_windows(g: &Goofi) {
+    let source_type = install(g, "epoch_windows.py", r#"
+import goofi
+import numpy as np
+
+class EpochWindows(goofi.Node):
+    OUTPUTS = {"data": goofi.DataType.ARRAY, "trigger": goofi.DataType.ARRAY}
+    PRODUCER = True
+    PARAMS = {"emit": {
+        "data": goofi.PulseParam(), "trigger": goofi.PulseParam(),
+        "value": goofi.FloatParam(1.0, -100.0, 100.0), "width": goofi.IntParam(3, 1, 32),
+        "level": goofi.FloatParam(1.0, 0.0, 1.0), "flat": goofi.BoolParam(False),
+    }}
+
+    def setup(self):
+        self.pending = {}
+
+    def pulse_emit_data(self):
+        x = np.arange(self.params.emit.width, dtype=np.float32) + self.params.emit.value
+        if self.params.emit.flat:
+            self.pending["data"] = (x, {"channels": {"dim0": [str(i) for i in range(x.size)]}})
+        else:
+            self.pending["data"] = (x.reshape(1, -1), {"channels": {"dim0": ["Cz"]}})
+
+    def pulse_emit_trigger(self):
+        self.pending["trigger"] = np.array([self.params.emit.level], dtype=np.float32)
+
+    def process(self):
+        result, self.pending = self.pending, {}
+        return result
+"#);
+    let source = g.add(&source_type);
+    g.set_param(source, "common", "autotrigger", true);
+    g.set_param(source, "common", "max_frequency", 100.0);
+    let epoch = g.add(&bundled(g, "eeg", "epoch.py"));
+    let count = g.probe(epoch, "count");
+    let latest = g.probe(epoch, "latest");
+    let average = g.probe(epoch, "erp");
+    let sent = g.probe(source, "data");
+    g.link(source, "data", epoch, "data");
+    g.link(source, "trigger", epoch, "trigger");
+    g.ready(source);
+    g.ready(epoch);
+    let pulse = |param: &str| {
+        g.call("node param pulse", json!({"node": hex(source), "param": format!("emit/{param}")}));
+    };
+    let held = |n: f32| {
+        assert!(g.stays(|_| count.latest().is_some_and(|d| f32s(&d) == [n])), "capture count must remain {n}");
+    };
+    let capture = |n: f32| {
+        pulse("trigger");
+        frame(g, "one accepted epoch", epoch, &count, |d| f32s(d) == [n]);
+    };
+    let supply = |value: f64, width: i64| {
+        g.set_param(source, "emit", "value", value);
+        g.set_param(source, "emit", "width", width);
+        pulse("data");
+        frame(g, "the supplied window", source, &sent, |d| {
+            shape(d) == vec![1, width as usize] && f32s(d)[0] == value as f32
+        });
+    };
+
+    pulse("trigger");
+    assert!(g.stays(|_| count.latest().is_none()), "a trigger without data captures nothing");
+    supply(1.0, 3);
+    assert!(g.stays(|_| count.latest().is_none()), "data must not reuse an old trigger");
+    capture(1.0);
+    let first = frame(g, "the complete first window", epoch, &latest, |d| f32s(d) == [1.0, 2.0, 3.0]);
+    assert_eq!(labels(&first, "dim0"), ["Cz"]);
+    pulse("trigger");
+    held(1.0);
+    supply(3.0, 3);
+    held(1.0);
+    capture(2.0);
+    frame(g, "the mean of two windows", epoch, &average, |d| f32s(d) == [2.0, 3.0, 4.0]);
+
+    g.set_param(source, "emit", "level", 0.0);
+    supply(5.0, 3);
+    held(2.0);
+    pulse("trigger");
+    held(2.0);
+    g.set_param(source, "emit", "level", 1.0);
+    capture(3.0);
+    frame(g, "a low trigger leaves the window available", epoch, &average, |d| f32s(d) == [3.0, 4.0, 5.0]);
+
+    g.set_param(epoch, "epoch", "reject", 1.0);
+    supply(7.0, 3);
+    held(3.0);
+    pulse("trigger");
+    held(3.0);
+    g.set_param(epoch, "epoch", "reject", 0.0);
+    pulse("trigger");
+    held(3.0);
+
+    g.set_param(epoch, "epoch", "baseline", "whole");
+    supply(9.0, 3);
+    held(3.0);
+    capture(4.0);
+    frame(g, "whole-window baseline correction", epoch, &average, |d| f32s(d) == [-1.0, 0.0, 1.0]);
+
+    g.set_param(epoch, "epoch", "baseline", "none");
+    supply(11.0, 2);
+    held(4.0);
+    capture(1.0);
+    frame(g, "a changed shape starts a new average", epoch, &average, |d| f32s(d) == [11.0, 12.0]);
+    g.call("node param pulse", json!({"node": hex(epoch), "param": "epoch/reset"}));
+    supply(21.0, 2);
+    held(1.0);
+    pulse("trigger");
+    frame(g, "a reset forgets previous windows", epoch, &average, |d| f32s(d) == [21.0, 22.0]);
+    held(1.0);
+    g.set_param(source, "emit", "flat", true);
+    g.set_param(source, "emit", "value", 31.0);
+    g.set_param(epoch, "epoch", "baseline", "whole");
+    pulse("data");
+    frame(g, "a labeled one-dimensional window", source, &sent, |d| shape(d) == vec![2]);
+    held(1.0);
+    pulse("trigger");
+    for probe in [&average, &latest] {
+        let flat = frame(g, "baseline preserves the supplied dimensions", epoch, probe, |d| {
+            shape(d) == vec![2] && f32s(d) == [-0.5, 0.5]
+        });
+        assert_eq!(labels(&flat, "dim0"), ["0", "1"]);
+    }
+    held(1.0);
+    assert!(g.error(epoch).is_none(), "window capture leaves no error");
 }
