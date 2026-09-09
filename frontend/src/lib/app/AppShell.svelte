@@ -172,7 +172,7 @@
 </script>
 
 <svelte:head>
-	<title>{g.unsavedChanges ? '● ' : ''}{g.savePath ? g.savePath.split('/').pop() : 'goofi-pipe'}</title
+	<title>{g.unsavedChanges ? '● ' : ''}{g.savePath ? g.savePath.split('/').pop() : 'goofi'}</title
 	>
 </svelte:head>
 

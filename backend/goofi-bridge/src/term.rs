@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn an_orientation_the_agent_has_edited_is_never_seeded_over() {
         let tmp = tempfile::tempdir().expect("a temp dir");
-        let learned = "goofi-pipe patch notes: the EEG source is on channel 3.\n";
+        let learned = "goofi patch notes: the EEG source is on channel 3.\n";
         std::fs::write(tmp.path().join("AGENTS.md"), learned).unwrap();
         std::fs::write(tmp.path().join("CLAUDE.md"), "@AGENTS.md\nand a note of its own\n").unwrap();
 
