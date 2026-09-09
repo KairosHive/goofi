@@ -4,6 +4,41 @@ Checked on Windows x86_64, 9 September 2026, with Rust 1.97.1, the repository's
 two Python environments, and Chromium. Biotuner is pinned to the same revision
 as the existing bundle: `f45570e674d8193c7780891b9053a39bf6168c1e`.
 
+## Chladni material study
+
+Recipe 09, **Jade resonance**, adds `HarmonicRelief` after the original bundle
+checkpoint below. The renderer reads `HarmonicChladni.out` and keeps material,
+camera, and light controls separate from the mode walk. The saved patch uses a
+512 × 512 source field and output.
+
+- The focused public GPU session passed in 18.73 seconds. It checks finite
+  visible output, relighting with an unchanged source field, exact stillness
+  when controls are held, a different picture after retuning, the control
+  limits, and external controls that pass through zero.
+- The embedded archive session passed for all **nine** patches in 51.76 seconds,
+  including live globals, save/reload, and the original audio example.
+- Clippy for the embedded geometry test and its dependencies passed with
+  warnings denied. The E2E TypeScript check also passed.
+- The final app build passed without compiler warnings.
+- Both final Playwright sessions passed in 1.4 minutes: all nine live patches,
+  the relief and light slider endpoints, tablet layouts, and the cookbook on
+  desktop and phone.
+- The material was visually inspected after two tuning passes. It has no
+  clock reads and no stored simulation state. Its motion is the upstream
+  mode interpolation. This is a height-field rendering, not a physical solid
+  vibration model; its fixed ray budget can lose very thin features at steep
+  views or high spatial frequencies.
+
+The first browser run found a generated light slider that stopped one step
+before its endpoint: binary arithmetic had written `0.031400000000000004`
+instead of `0.0314`. The archive builder now derives steps from the decimal
+limits. Recipes 01, 02, and 05 also receive the corrected step values. An initial
+height-pass version requested unsupported float16 packing; the final version
+uses ordinary float32 arithmetic and a two-channel height encoding.
+
+The full workspace suite and frontend unit suite were not repeated for this
+shader-only addition. Their earlier results and machine failures remain below.
+
 ## What the sessions check
 
 The public Rust sessions are in
