@@ -16,7 +16,7 @@ patches. The [survey](SURVEY.md) records the source review and implementation pl
 | `GeometryView` | Geometry → transparent image, dashboard, and finite RGBA field upload |
 | `HarmonicVoices` | Harmonic frame → fixed pitch/gain columns that retain component fades |
 | `graphics:HarmonicLissajous` | Packed harmonics → a projected 3D light trace |
-| `graphics:HarmonicChladni` | Packed modes/harmonics → a signed plate/open-wave field |
+| `graphics:HarmonicChladni` | Packed modes/harmonics → signed plate/open waves or nodal density with D4 symmetry |
 | `graphics:HarmonicInk` | Signed texture + optional BioColors palette → color, nodes, or contours |
 | `graphics:HarmonicFlow` | A vector field → persistent seeded ink, with explicit freeze and reset |
 | `graphics:HarmonicRelief` | Signed texture → twelve morphable organic and material textures, with parallax and directional light |
@@ -28,7 +28,8 @@ patches. The [survey](SURVEY.md) records the source review and implementation pl
 `morph`. At most 32 components are supported. Silent slots stay in this frame;
 ordinary `tuning`, `peaks`, `amps`, and `phases` outputs omit them. No `sfreq`
 is inherited from an analyzed waveform. `packed` is `[4,32]`, with these four
-rows and zero padding. `HarmonicModes.modes` is `[4,32]`: m, n, amplitude, phase.
+rows and zero padding. `HarmonicModes.modes` is `[4,32]`, or `[4,64]` for fixed
+field blends: m, n, amplitude, phase.
 
 `geometry` is a TABLE with `type` (STRING), `coordinates` (ARRAY or numbered TABLE
 of arrays for sets), and `info` (JSON STRING with parameters and metadata).
@@ -73,12 +74,27 @@ jumps restart at step one. Pitch glides join consecutive ratios in log frequency
 including the loop boundary. See **10 · Living ratios** for a complete example.
 
 `RatioSequence.transition` is a TABLE with `input` and `target` harmonic TABLEs
-(one ratio, amplitude 1, phase 0 each) and an eased scalar `mix`. Connect it to
-`HarmonicModes.transition` to map both endpoint ratios first, then interpolate
-their mode coordinates. The complete packet keeps a step's endpoint change and
+and an eased scalar `mix`. `chord.state` selects single-ratio endpoints or full
+anchor chords with the moving voice replaced at each endpoint. Connect it to
+`HarmonicModes.transition`. The complete packet keeps a step's endpoint change and
 mix reset together. Use either this packet or the separate input/target/mix
 ports; connecting both routes reports an error. The existing `tuning` output
 still supplies the moving anchor chord for open waves, sound, and other media.
+
+`HarmonicModes` offers `per ratio` and `chord pairs` mappings. The latter calls
+Biotuner's `chord_to_int_modes` and `chladni_field_pairwise`: `[1, 5/4, 3/2]`
+becomes `[4, 5, 6]` and, with all pairs, `(4,5), (4,6), (5,6)`. Pair weights
+are uniform and phases zero, as in Biotuner's chord-pair medium. Only active,
+distinct ratios participate. Auto/all/root/adjacent pair subsets follow the
+upstream builder. More than 32 pairs reports an error instead of dropping pairs.
+
+`interpolation = fields` keeps two endpoint mode banks at fixed wavenumbers
+and blends their weights. This produces `[4,64]`, accepted by HarmonicChladni,
+and avoids spatial expansion from the grid origin. `coordinates` retains the
+explicit fractional-wavenumber effect. The `mapping` STRING reports input
+ratios, integer chord, actual pairs, mode-cap scaling, and blend amount. A cap
+scales all chord wavenumbers by the same factor, following Biotuner; increase
+max_mode or simplify the chord to retain integer endpoints.
 
 Use `Tuning.tuning` in ratios mode, or `Peaks.peaks` / `HarmonicSpectrum.peaks`
 in peaks mode. Select one leading row. Amplitudes and phases must belong to the
@@ -106,3 +122,13 @@ equilibrium result. Tracer and streaming outputs are velocity fields; only
 HarmonicFlow owns an evolving ink state. The heavier upstream crystallization,
 reaction-diffusion, plasma equilibrium, polygon eigenproblem, and volume-surface
 extraction paths are surveyed but are not frame-rate nodes in this bundle.
+
+HarmonicChladni implements the notebook density stage with `field/output = nodal`
+and `field/density_symmetry = d4_max`. It takes the maximum over eight rotated
+and reflected densities, after `exp(-w²/σ²)`. `d4_sum` averages that orbit;
+non-square grids skip D4, as upstream does. The fixed sigma default is 0.05.
+Signed output remains available. Match the consumer: HarmonicInk style density,
+or HarmonicRelief input_kind density. The latter inverts its deposit Gaussian
+so the supplied density controls organic deposits without a second Gaussian.
+The field pass uses one previous-frame displacement texture, with no feedback
+accumulation. It adds one graphics frame of latency.

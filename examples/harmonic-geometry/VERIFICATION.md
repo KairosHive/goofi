@@ -4,7 +4,37 @@ Checked on Windows x86_64, 9 September 2026, with Rust 1.97.1, the repository's
 two Python environments, and Chromium. Biotuner is pinned to the same revision
 as the existing bundle: `f45570e674d8193c7780891b9053a39bf6168c1e`.
 
-## Continuous Chladni states
+## Notebook field mapping and density
+
+Recipe 10 now uses the full anchor chord, Biotuner common-denominator mode
+pairs, fixed endpoint field blends, and the notebook's nodal density with D4
+maximum. Coordinates interpolation remains an option. The field's signed,
+nodal, and antinodal output selector is separate from its density symmetry.
+The material and plain ink consumers use explicit density input modes.
+
+Checks for this revision:
+
+- The public node session compares six source ratios at five transition
+  positions each with `chladni_field_pairwise` and `chladni_nodal_density` from
+  the installed Biotuner. Signed GPU error is below 0.003; D4 nodal density
+  error is below 0.015, including float16 render storage. All six endpoint
+  fields are distinct. Passed in 24.05 seconds.
+- The existing coordinate-motion boundary and ping-pong session passed in
+  9.30 seconds. The fixed-field comparison verifies no spatial scaling.
+- Both shader archives loaded and rendered in 18.88 seconds. The recipe 10
+  image capture now waits for pattern contrast instead of accepting the
+  startup background; that strengthened session passed in 16.43 seconds.
+- Focused clippy passed with `-D warnings`; CLI build passed without warnings.
+- Browser test typecheck passed. Living-ratios controls, visible picture motion
+  with a fixed texture, pause, full-chord report, and the desktop/phone cookbook
+  passed in two Playwright sessions (18.6 seconds).
+
+The numerical reference covers the default D4 maximum and explicit sigma 0.05;
+it does not exhaust all output, symmetry, or pair-subset combinations. The full
+workspace suite was not rerun for this focused revision. Windows iceoryx2 cleanup
+messages remain in test logs; the sessions completed successfully.
+
+## Earlier continuous Chladni state checkpoint
 
 Recipe 10 previously selected open waves and modulated one voice of an anchor
 chord. This did not demonstrate a Chladni state walk. It now starts at approach
