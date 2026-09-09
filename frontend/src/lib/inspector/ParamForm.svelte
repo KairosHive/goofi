@@ -204,7 +204,8 @@
 	}
 
 	function modulate(group: string, name: string, kind: 'lfo' | 'noi'): void {
-		setSource(group, name, { expression: `${kind}()` });
+		const freq = 0.05 + Math.random() * 1.95;
+		setSource(group, name, { expression: `${kind}(freq=${freq})` });
 	}
 
 	function modulationMenu(event: MouseEvent, group: string, name: string, d: ParamDescriptor): void {

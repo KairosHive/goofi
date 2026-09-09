@@ -961,18 +961,35 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 	const row = page.getByTestId('param-field-frequency');
 	const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
 	const original = await source();
-	for (const [label, expr] of [['LFO', 'lfo()'], ['Noise', 'noi()']]) {
-		await row.click({ button: 'right' });
-		await page.getByRole('menuitem', { name: label, exact: true }).click();
-		await expect.poll(async () => (await source()).expr).toBe(expr);
-		expect((await source()).mode).toBe('expression');
+	async function expectModulation(kind: string, previous: unknown): Promise<void> {
+		await expect.poll(async () => (await source()).expr).not.toBe(previous);
+		const param = await source();
+		expect(param.mode).toBe('expression');
+		const match = param.expr.match(new RegExp(`^${kind}\\(freq=([0-9.]+)\\)$`));
+		expect(match).not.toBeNull();
+		const freq = Number(match![1]);
+		expect(freq).toBeGreaterThanOrEqual(0.05);
+		expect(freq).toBeLessThanOrEqual(2);
+	}
+	for (const [label, kind] of [['LFO', 'lfo'], ['Noise', 'noi']]) {
+		for (let i = 0; i < 2; i++) {
+			const previous = await source();
+			await row.click({ button: 'right' });
+			await page.getByRole('menuitem', { name: label, exact: true }).click();
+			await expectModulation(kind, previous.expr);
+		}
+		await undo(page);
 		await undo(page);
 		await expect.poll(source).toEqual(original);
 	}
-	for (const [key, expr] of [['l', 'lfo()'], ['n', 'noi()']]) {
-		await row.hover();
-		await page.keyboard.press(key);
-		await expect.poll(async () => (await source()).expr).toBe(expr);
+	for (const [key, kind] of [['l', 'lfo'], ['n', 'noi']]) {
+		for (let i = 0; i < 2; i++) {
+			const previous = await source();
+			await row.hover();
+			await page.keyboard.press(key);
+			await expectModulation(kind, previous.expr);
+		}
+		await undo(page);
 		await undo(page);
 		await expect.poll(source).toEqual(original);
 	}
