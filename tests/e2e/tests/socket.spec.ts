@@ -968,8 +968,8 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 		const match = param.expr.match(new RegExp(`^${kind}\\(freq=([0-9.]+)\\)$`));
 		expect(match).not.toBeNull();
 		const freq = Number(match![1]);
-		expect(freq).toBeGreaterThanOrEqual(0.05);
-		expect(freq).toBeLessThanOrEqual(2);
+		expect(freq).toBeGreaterThanOrEqual(0.01);
+		expect(freq).toBeLessThanOrEqual(0.2);
 	}
 	for (const [label, kind] of [['LFO', 'lfo'], ['Noise', 'noi']]) {
 		for (let i = 0; i < 2; i++) {
