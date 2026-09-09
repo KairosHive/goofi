@@ -216,15 +216,15 @@ impl AppState {
         state
     }
 
-    /// End the recording as a teardown does: the drain stops and is waited for to a CEILING — a
-    /// wedged drain must not wedge the exit — and only then is the manifest finalized.
+    /// Drain queued frames and finalize recording files after the engines stop.
     pub fn stop_recording(&self) {
         self.record_drain.stop();
-        goofi_transport::wait_released(
-            std::iter::once(&*self.record_drain),
-            goofi_transport::SHUTDOWN_WAIT,
-        );
-        let _ = self.recorder.stop();
+        while !self.record_drain.released() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        if let Err(error) = self.recorder.stop() {
+            eprintln!("Recording could not be finalized: {error}");
+        }
     }
 
     /// Record the address this server actually bound — what `local_url` derives from.
