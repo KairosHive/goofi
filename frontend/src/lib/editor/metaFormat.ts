@@ -1,10 +1,5 @@
 /** Pure formatting for the metadata inspector. */
 
-/** Max list elements rendered inline before truncating with a `… (+N more)` tail. */
-const ARRAY_CAP = 200;
-/** Decimals a number keeps on the collapsed header line. */
-const PREVIEW_DECIMALS = 2;
-
 function isTypedArray(v: unknown): v is ArrayLike<number> {
 	return ArrayBuffer.isView(v) && !(v instanceof DataView);
 }
@@ -25,25 +20,14 @@ function formatScalar(v: unknown): string {
 	return String(v);
 }
 
-/** Header-line form of a scalar, with decimals capped. An exponential form is left alone:
- * capping its decimals would drop the only digits it has. */
-function formatScalarPreview(v: unknown): string {
-	const s = formatScalar(v);
-	if (typeof v !== 'number' || !Number.isFinite(v) || s.includes('e')) return s;
-	const capped = v.toFixed(PREVIEW_DECIMALS).replace(/\.?0+$/, '');
-	return capped === '-0' ? '0' : capped;
-}
-
 /** Compact single-line form, used for lists and anything nested inside one. */
-function formatInline(v: unknown): string {
+export function formatMetaInline(v: unknown): string {
 	if (isList(v)) {
 		const arr = Array.from(v as ArrayLike<unknown>);
-		const head = arr.slice(0, ARRAY_CAP).map(formatInline).join(', ');
-		const tail = arr.length > ARRAY_CAP ? `, … (+${arr.length - ARRAY_CAP} more)` : '';
-		return '[' + head + tail + ']';
+		return '[' + arr.map(formatMetaInline).join(', ') + ']';
 	}
 	if (isPlainObject(v)) {
-		return '{' + Object.entries(v).map(([k, x]) => `${k}: ${formatInline(x)}`).join(', ') + '}';
+		return '{' + Object.entries(v).map(([k, x]) => `${k}: ${formatMetaInline(x)}`).join(', ') + '}';
 	}
 	return formatScalar(v);
 }
@@ -89,7 +73,7 @@ export function metaEntries(meta: unknown): [string, unknown][] {
 
 /** Readable text for one meta value: lists inline, dicts indented multi-line. */
 export function formatMetaValue(value: unknown, indent = 0): string {
-	if (isList(value)) return formatInline(value);
+	if (isList(value)) return formatMetaInline(value);
 	if (isPlainObject(value)) {
 		const entries = Object.entries(value);
 		if (entries.length === 0) return '{}';
@@ -103,12 +87,4 @@ export function formatMetaValue(value: unknown, indent = 0): string {
 			.join('\n');
 	}
 	return formatScalar(value);
-}
-
-/** Short hint for a collapsed field header: container size, or the scalar itself. */
-export function metaPreview(value: unknown): string {
-	if (isList(value)) return `[${(value as ArrayLike<unknown>).length}]`;
-	if (isPlainObject(value)) return `{${Object.keys(value).length}}`;
-	const s = formatScalarPreview(value);
-	return s.length > 60 ? s.slice(0, 59) + '…' : s;
 }
