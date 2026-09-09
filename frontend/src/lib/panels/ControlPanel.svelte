@@ -13,7 +13,7 @@
 	import { ui } from '$lib/stores/ui.svelte';
 	import { getControl, type Mark } from '$lib/api/control';
 	import MidiLearn from '$lib/inspector/MidiLearn.svelte';
-	import { midiLearn } from '$lib/inspector/midiLearn.svelte';
+	import { midiLearn } from '$lib/inspector/midiLearnState.svelte';
 	import RefPicker from '$lib/inspector/RefPicker.svelte';
 	import {
 		Chip,
