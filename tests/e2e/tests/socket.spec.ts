@@ -950,3 +950,45 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		await page.evaluate(() => (window as any).goofi.commands.removeGlobal('desk.level'));
 	}
 });
+
+test('parameter modulation menu and hover keys use expressions with undo', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	const osc = await addNode(page, 'LFO');
+	await waitForNode(page, osc);
+	await selectNode(page, osc);
+	const row = page.getByTestId('param-field-frequency');
+	const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
+	const original = await source();
+	for (const [label, expr] of [['LFO', 'lfo()'], ['Noise', 'noi()']]) {
+		await row.click({ button: 'right' });
+		await page.getByRole('menuitem', { name: label, exact: true }).click();
+		await expect.poll(async () => (await source()).expr).toBe(expr);
+		expect((await source()).mode).toBe('expression');
+		await undo(page);
+		await expect.poll(source).toEqual(original);
+	}
+	for (const [key, expr] of [['l', 'lfo()'], ['n', 'noi()']]) {
+		await row.hover();
+		await page.keyboard.press(key);
+		await expect.poll(async () => (await source()).expr).toBe(expr);
+		await undo(page);
+		await expect.poll(source).toEqual(original);
+	}
+	const search = page.getByTestId('param-search');
+	await search.focus();
+	await row.hover();
+	await page.keyboard.press('l');
+	await expect(search).toHaveValue('l');
+	expect(await source()).toEqual(original);
+	await search.fill('');
+	await search.blur();
+	await row.hover();
+	await page.keyboard.press('Control+n');
+	expect(await source()).toEqual(original);
+	await page.mouse.move(0, 0);
+	await page.keyboard.press('n');
+	expect(await source()).toEqual(original);
+	await clearGraph(page);
+});

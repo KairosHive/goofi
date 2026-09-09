@@ -25,9 +25,26 @@ __goofi_scope = {k: v for k, v in globals().items() if not k.startswith("__")}
 def __goofi_compile(source):
     return compile(source, "<goofi-expr>", "eval")
 
-def __goofi_eval(code, locals_, t):
+def __goofi_noise(src):
+    # Hash integer coordinates, then interpolate with zero slope at each endpoint.
+    x = floor(src)
+    def sample(i):
+        i = (i ^ 0x9e3779b9) & 0xffffffff
+        i = ((i ^ (i >> 16)) * 0x7feb352d) & 0xffffffff
+        i = ((i ^ (i >> 15)) * 0x846ca68b) & 0xffffffff
+        return (i ^ (i >> 16)) / 0xffffffff
+    f = src - x
+    blend = f * f * f * (f * (f * 6 - 15) + 10)
+    return sample(x) * (1 - blend) + sample(x + 1) * blend
+
+def __goofi_eval(code, locals_, t, lo, hi):
     ns = dict(__goofi_scope)
     ns["t"] = t
+    def lfo(*, src=t, vmin=lo, vmax=hi):
+        return vmin + (vmax - vmin) * (sin(tau * src) + 1) / 2
+    def noi(*, src=t, vmin=lo, vmax=hi):
+        return vmin + (vmax - vmin) * __goofi_noise(src)
+    ns.update(lfo=lfo, noi=noi)
     ns.update(locals_)
     return eval(code, ns)
 "#;
@@ -163,10 +180,15 @@ impl ExprEvaluator for PyExprEvaluator {
                 };
                 locals.set_item(name.as_str(), val).map_err(|e| ExprError(e.to_string()))?;
             }
+            let (lo, hi) = match ctx.target {
+                Param::Float { vmin, vmax, .. } => (*vmin, *vmax),
+                Param::Int { vmin, vmax, .. } => (*vmin as f64, *vmax as f64),
+                _ => (0.0, 1.0),
+            };
             let result = self
                 .eval_fn
                 .bind(py)
-                .call1((code.bind(py), &locals, ctx.t))
+                .call1((code.bind(py), &locals, ctx.t, lo, hi))
                 .map_err(|e| ExprError(e.to_string()))?;
             coerce(&result, ctx.target).map_err(ExprError)
         })
