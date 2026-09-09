@@ -332,18 +332,19 @@ def recipes():
     p.control('stepSeconds', 4.0, .25, 10, step=.05)
     p.control('glide', 1.0, 0, 1)
     p.control('direction', 'ping-pong', kind='dropdown', options=['forward', 'ping-pong'])
-    p.node('ratios', 'signal:RatioSequence', (0, 0))
+    p.node('ratios', 'signal:RatioSequence', (0, 0), chord={'state': 'anchor chord'})
     for name, param in [('ratios', 'ratios'), ('running', 'running'), ('stepSeconds', 'seconds'), ('glide', 'glide'), ('direction', 'direction')]:
         p.bind('ratios', 'sequence', param, 'globals.geometry.'+name)
     p.harmonic('chord', '1, 9/8, 2', '1, 9/8, 2', (380, 0), False)
     p.wire('ratios', 'tuning', 'chord', 'a')
-    p.node('modes', 'signal:HarmonicModes', (750, 0))
+    p.node('modes', 'signal:HarmonicModes', (750, 0),
+           modes={'mapping': 'chord pairs', 'interpolation': 'fields', 'max_mode': 24})
     p.wire('ratios', 'transition', 'modes', 'transition')
     p.node('field', 'graphics:HarmonicChladni', (1120, 0),
-           field={'approach': 0.0, 'symmetry': 1.0, 'directions': 7, 'period': .5}, common={'width': 512, 'height': 512})
+           field={'approach': 0.0, 'symmetry': 1.0, 'directions': 7, 'period': .5, 'output': 'nodal'}, common={'width': 512, 'height': 512})
     p.wire('chord', 'packed', 'field', 'harmonics'); p.wire('modes', 'modes', 'field', 'modes')
     p.node('organism', 'graphics:HarmonicRelief', (1500, 0),
-           material={'texture_a': 'sand', 'texture_b': 'spores'}, camera={'tilt': 0.0, 'turn': 0.0},
+           material={'texture_a': 'sand', 'texture_b': 'spores'}, form={'input_kind': 'density'}, camera={'tilt': 0.0, 'turn': 0.0},
            common={'width': 512, 'height': 512})
     p.wire('field', 'out', 'organism', 'input')
     p.bind('organism', 'material', 'texture_mix', reference='slow.out')
@@ -354,7 +355,7 @@ def recipes():
         ('density', .9, 0, 1, 'organism', 'material', 'density'),
         ('grainSize', 40.0, 4, 64, 'organism', 'material', 'texture_scale'),
         ('grainHeight', .75, 0, 1, 'organism', 'material', 'texture_depth'),
-        ('bandWidth', .022, .008, .15, 'organism', 'form', 'seam'),
+        ('bandWidth', .05, .008, .15, 'field', 'field', 'sigma'),
         ('approach', 0.0, 0, 1, 'field', 'field', 'approach'),
         ('period', .5, .2, 1.0, 'field', 'field', 'period'),
     ]:
@@ -365,7 +366,20 @@ def recipes():
     p.monitor = ('ratioTrace', 'out', 'line')
     p.display('organism', 'out'); p.display('ratioTrace', 'out', 'line'); p.display('ratios', 'label', 'string')
     p.ink('field', name='nodalLines')
+    p.nodes[p.names['nodalLines']]['params'].setdefault('ink', {})['style'] = 'density'
     p.display('nodalLines', 'out')
+    p.display('modes', 'mapping', 'string')
+    p.control('anchorChord', '1, 9/8, 2', kind='text')
+    p.bind('ratios', 'chord', 'anchors', 'globals.geometry.anchorChord')
+    p.control('squareSymmetry', 'd4_max', kind='dropdown', options=['none', 'd4_max', 'd4_sum'])
+    p.bind('field', 'field', 'density_symmetry', 'globals.geometry.squareSymmetry')
+    for name, value, param, options in [
+        ('mapping', 'chord pairs', 'mapping', ['per ratio', 'chord pairs']),
+        ('pairSet', 'auto', 'pairs', ['auto', 'all', 'root', 'adjacent']),
+        ('motion', 'fields', 'interpolation', ['coordinates', 'fields']),
+    ]:
+        p.control(name, value, kind='dropdown', options=options)
+        p.bind('modes', 'modes', param, 'globals.geometry.'+name)
     yield p.save()
 
 

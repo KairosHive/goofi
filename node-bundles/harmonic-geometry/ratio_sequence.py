@@ -41,7 +41,8 @@ class RatioSequence(goofi.Node):
 
     transition contains input and target harmonic TABLEs for the two step ratios
     and their eased mix. Connect it to HarmonicModes.transition for smooth plate
-    mode motion. Each endpoint has one ratio, amplitude one, and phase zero.
+    mode motion. chord.state selects a single ratio or the full anchor chord;
+    its endpoint amplitudes are uniform and phases are zero.
     """
 
     TAGS = ['generator', 'music']
@@ -58,6 +59,7 @@ class RatioSequence(goofi.Node):
             'reset': goofi.PulseParam(doc='Return to the first ratio and start its hold again.'),
         },
         'chord': {
+            'state': goofi.StringParam('single ratio', ['single ratio', 'anchor chord'], doc='Transition endpoints use one ratio or the full anchor chord with its selected voice replaced.'),
             'anchors': goofi.StringParam('1, 9/8, 2', doc='Fixed chord before one voice is replaced by the moving ratio. At most 32 components.'),
             'voice': goofi.IntParam(1, 0, 31, doc='Zero-based component replaced in tuning. Other components stay fixed.'),
         },
@@ -116,7 +118,12 @@ class RatioSequence(goofi.Node):
         ratio = float(np.exp((1.0-amount)*np.log(ratios[current])+amount*np.log(ratios[target])))
         tuning[voice] = ratio
         scalar = lambda value: np.asarray([value], dtype=np.float32)
-        harmonic = lambda value: {'ratios': scalar(value), 'amplitudes': scalar(1), 'phases': scalar(0)}
+        def harmonic(value):
+            r = scalar(value) if self.params.chord.state == 'single ratio' else tuning.astype(np.float32).copy()
+            if self.params.chord.state == 'anchor chord':
+                r[voice] = value
+            return {'ratios': r, 'amplitudes': np.full(len(r), 1/len(r), dtype=np.float32),
+                    'phases': np.zeros(len(r), dtype=np.float32)}
         return {'ratio': scalar(ratio), 'target': scalar(ratios[target]), 'tuning': tuning.astype(np.float32),
                 'step': scalar(current+1), 'phase': scalar(phase),
                 'transition': {'input': harmonic(ratios[current]), 'target': harmonic(ratios[target]), 'mix': scalar(amount)},

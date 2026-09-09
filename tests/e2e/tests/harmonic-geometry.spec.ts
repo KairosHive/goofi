@@ -209,6 +209,9 @@ test('living ratios modulate the organic field with a visible trace and pause co
 		await expect(page.getByTestId('control-geometry-auto').getByRole('checkbox')).not.toBeChecked();
 		await expect(page.getByTestId('control-geometry-approach').getByRole('slider')).toHaveValue('0');
 		await expect(page.getByTestId('control-geometry-glide').getByRole('slider')).toHaveValue('1');
+		await expect(page.getByTestId('control-geometry-mapping').getByRole('combobox')).toHaveValue('chord pairs');
+		await expect(page.getByTestId('control-geometry-motion').getByRole('combobox')).toHaveValue('fields');
+		await expect(page.getByTestId('control-geometry-squareSymmetry').getByRole('combobox')).toHaveValue('d4_max');
 		await expect.poll(() => page.locator('.vp-body canvas:visible').count()).toBeGreaterThanOrEqual(2);
 		await expect.poll(() => imageContrast(page), { timeout: 45_000 }).toBeGreaterThan(15);
 		const still = (await page.locator('.vp-body canvas:visible').first().screenshot()).toString('base64');
@@ -226,6 +229,9 @@ test('living ratios modulate the organic field with a visible trace and pause co
 		await expect(page.locator('.vp-body')).toContainText('ratio');
 		await page.getByRole('tab', { name: 'nodalLines Close tab', exact: true }).click();
 		await expect.poll(() => imageContrast(page)).toBeGreaterThan(15);
+		await page.getByRole('tab', { name: 'modes Close tab', exact: true }).click();
+		await expect(page.locator('.vp-body')).toContainText('integer chord');
+		await expect(page.locator('.vp-body')).toContainText('pairs');
 	} finally {
 		await resetPatch(page);
 	}

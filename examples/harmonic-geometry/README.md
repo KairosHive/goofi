@@ -70,8 +70,10 @@ The trace below the picture shows recent ratios; the **ratios** tab gives a
 numeric readout. In this patch, **auto/mix** control only the texture blend.
 The RatioSequence node also has a reset pulse and an optional external clock.
 The default uses four seconds per state and glide 1, so motion has no hold.
-Each ratio maps to an integer plate mode; the mode coordinates then interpolate
-to the next state. This avoids repeated integer remapping of a gliding ratio.
+Each ratio replaces one voice in the anchor chord. Biotuner converts the whole
+chord to integer wavenumbers and constructs its pairwise Chladni field. The
+default `motion = fields` blends the fixed endpoint fields, with no spatial
+scaling. `coordinates` retains the optional grid-origin expansion effect.
 The endpoint frames and blend travel together in `transition`, so each step
 change is coherent. These intermediate fields are visual transitions between
 plate states, not physical plate eigenmodes.
@@ -80,3 +82,15 @@ plate states, not physical plate eigenmodes.
 ratio with the fixed anchor chord to form open waves. Texture auto starts off;
 turn it on after inspecting the geometry. The **nodalLines** tab shows the same
 field as clear lines. **Canvas** gives the textured view the full window.
+The **modes** tab reports every endpoint ratio and actual mode pair. **mapping**
+selects per-ratio or chord-pair construction; **pairSet** selects Biotuner's
+auto/all/root/adjacent subsets. **anchorChord** changes the other source ratios.
+
+The field node follows the [Biotuner Chladni cymatics notebook](https://antoinebellemare.github.io/biotuner/examples/harmonic_geometry/07_chladni_cymatics.html):
+whole-chord integer modes, pairwise antisymmetric cosine products, then
+`exp(-w²/σ²)` density. **squareSymmetry** selects no symmetry, the D4 maximum
+(union of nodal sets), or the D4 average. **bandWidth** sets sigma, initially
+0.05. D4 is applied after the Gaussian; applying it to signed displacement
+would lose nodal lines. HarmonicChladni can also output signed or antinodal
+fields. For density output, set HarmonicRelief `form/input_kind = density`
+and HarmonicInk `ink/style = density`, as this patch does.
