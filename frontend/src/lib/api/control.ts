@@ -221,9 +221,9 @@ export type ControlEvent =
 			};
 	  }
 	| { event: 'error'; payload: { node: string; error: string | null } }
-	// `control draw`: the strokes a turtle script makes, for the pad that holds that global to
+	// `control paint`: the strokes a turtle script makes, for the pad that holds that global to
 	// draw. The op parses; the WIDGET paints, by the code a mouse reaches.
-	| { event: 'control_draw'; payload: { name: string; marks: Mark[] } }
+	| { event: 'control_paint'; payload: { name: string; marks: Mark[] } }
 	| {
 			event: 'node_stage';
 			payload: { node: string; stage: NodeStage; error?: string | null; runtime?: NodeRuntime | null };

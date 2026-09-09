@@ -880,7 +880,7 @@ fn texel(d: &Data, row: usize, col: usize) -> [f32; 4] {
     f32s(d)[at..at + 4].try_into().expect("four channels")
 }
 
-/// What a hand leaves on a drawing widget, and what `control draw` leaves beside it, is a frame
+/// What a hand leaves on a drawing widget, and what `control paint` leaves beside it, is a frame
 /// like any other: the node reads the global the widget IS — the way a knob's value is read — and
 /// answers pixels, which is what `graphics:SignalIn` then puts on the GPU.
 #[test]
@@ -889,7 +889,7 @@ fn a_drawing_widget_reaches_the_patch_as_a_frame() {
     // Binding an expression COMPILES it, which wants an evaluator present; reading a bare global
     // does not, so this one is never asked what `globals.pad.sketch` means.
     g.state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(goofi_tests::FirstVar));
-    g.call("control add", j!({ "group": "pad", "kind": "draw", "element": "sketch" }));
+    g.call("control add", j!({ "group": "pad", "kind": "paint", "element": "sketch" }));
     let node = g.add("Drawing");
     let bound = g.call("node param edit", j!({ "node": hex(node), "param": "drawing/image",
                                                "expression": "globals.pad.sketch" }));

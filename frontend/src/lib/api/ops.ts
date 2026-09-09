@@ -40,7 +40,7 @@ export type OpName =
 	| 'control add'
 	| 'control edit'
 	| 'control remove'
-	| 'control draw'
+	| 'control paint'
 	| 'control source'
 	| 'library list'
 	| 'library get'
