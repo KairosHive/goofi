@@ -1,5 +1,42 @@
 # Audio engine
 
+## Linux VST crashes (2026-09-09)
+
+GDB reproduced `SIGXCPU` with multiple Zebralette3 instances on PipeWire. The signal came
+from the kernel while `IAudioProcessor::process` ran on `pw_out`. CPAL 0.18.2's real-time
+promotion set `RLIMIT_RTTIME` to 21,333 microseconds for a 1,024-frame buffer at 48 kHz.
+The node watchdog checks after each process call; it cannot prevent this signal during a
+call or limit the total work across nodes and blocks in one callback.
+
+Real-time scheduling stays enabled. With `audio.gfi` and the frontend open, GDB also
+caught the signal in the audio-to-viewer ring copy. The local `audio_thread_priority`
+patch now tries native scheduling before RTKit, as PipeWire does. On a system with
+native permission this keeps real-time priority without installing RTKit's CPU limit.
+The viewer and recording rings use bulk copies, and development builds optimize the
+audio crate while retaining debug checks. No audio buffer or processing delay is added.
+Recording preparation acknowledges the control ports and subscribers before capture.
+One block-clock interval gates every audio track. Stop closes that interval, flushes the
+node queues, then flushes transport and disk. Faster rendering must not change track
+alignment; the recording tests exercise immediate stop and repeated takes.
+
+Remaining: the RTKit fallback still imposes a finite process-wide CPU limit. Native
+plugin processing needs process isolation so a CPU-limit signal or memory fault cannot
+terminate the app. Keep the device callback bounded, with a defined fallback for late
+worker output. Measure the added buffering latency and deadline misses under CPU load
+before selecting the worker scheduling and buffer policy. Remove the local dependency
+patch when upstream provides direct-first Linux promotion.
+
+Editor stress tests found two more host failures. Zebralette3 returned an `IPlugView`
+pointer when the host queried an already supplied `IEventHandler` pointer. The callback
+then called `isPlatformTypeSupported` with a file descriptor and crashed in `strcmp`.
+The host now retains the supplied typed callback directly. The test plugin rejects
+redundant callback queries to cover both event and timer registration.
+
+Rapid editor creation also produced X11 `BadWindow` in Surge XT Effects. The plugin used
+its own connection before the server had processed the host's parent-window creation.
+The host now checks the map request before handing the window ID to the plugin. A flush
+alone did not establish this order across the two connections.
+
 The second engine — a peer of the signal plane inside one graph. Designed with the user on
 2026-08-24/25 against measurements, not instinct; every number below was taken on the target machine
 and the harnesses are named where they still exist. Designed in full with the user on 2026-09-02, section by section: the node

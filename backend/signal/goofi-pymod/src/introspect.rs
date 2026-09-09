@@ -108,7 +108,7 @@ fn param_spec(descr: &Bound<'_, PyAny>) -> PyResult<(ParamSpec, Option<String>, 
     Ok(match descr.extract::<ParamDescr>()? {
         ParamDescr::Int(p) => {
             let p = p.borrow();
-            (ParamSpec::Int { default: p.default, min: p.min, max: p.max }, p.doc.clone(), p.expression.clone())
+            (ParamSpec::Int { default: p.default, min: p.min, max: p.max, options: p.options.clone() }, p.doc.clone(), p.expression.clone())
         }
         ParamDescr::Float(p) => {
             let p = p.borrow();

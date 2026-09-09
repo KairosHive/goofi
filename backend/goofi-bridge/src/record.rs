@@ -52,12 +52,52 @@ struct Drain {
     node: goofi_transport::IoxNode,
 }
 
+struct AudioCapture(std::sync::Weak<Mutex<Graph>>);
+
+impl AudioCapture {
+    fn flush(&self) -> Result<(), String> {
+        let graph = self.0.upgrade().ok_or("the recording graph is gone")?;
+        let waits = {
+            let mut graph = graph.lock().unwrap_or_else(|e| e.into_inner());
+            crate::try_audio_engine(&mut graph).map(|audio| audio.flush_recording()).unwrap_or_default()
+        };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        for wait in waits {
+            wait.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .map_err(|_| "audio control did not acknowledge the recording flush")??;
+        }
+        Ok(())
+    }
+}
+
+impl goofi_record::Capture for AudioCapture {
+    fn prepare(&self) -> Result<(), String> {
+        self.flush()
+    }
+
+    fn boundary(&self, window: Arc<goofi_core::record::FrameWindow>, begin: bool) -> Result<(), String> {
+        let graph = self.0.upgrade().ok_or("the recording graph is gone")?;
+        let action = {
+            let mut graph = graph.lock().unwrap_or_else(|e| e.into_inner());
+            crate::try_audio_engine(&mut graph).map(|audio| audio.recording_boundary(window, begin))
+        };
+        if let Some(action) = action {
+            action()?;
+        }
+        if !begin {
+            self.flush()?;
+        }
+        Ok(())
+    }
+}
+
 /// Every armed signal stream the settled graph names, with the service its CURRENT generation
 /// publishes on.
 fn armed(g: &Graph) -> HashMap<(Uid, String), (String, StreamId)> {
     let mut out = HashMap::new();
     for uid in g.all_uids() {
-        for slot in g.recorded(uid).unwrap_or(&[]) {
+        for output in g.recorded(uid).unwrap_or(&[]) {
+            let slot = &output.slot;
             let id = crate::arms::stream_id(g, uid, slot);
             if timeline(id.engine).is_none() {
                 continue;
@@ -125,8 +165,9 @@ impl Drain {
     /// Reconcile the held feeds against the settled graph. A departing feed is drained TO
     /// EXHAUSTION before it is closed: what the service already delivered is transported data, and
     /// dropping the subscriber would lose it where no gap and no count could ever show it.
-    fn resolve(&mut self) {
+    fn resolve(&mut self) -> bool {
         let wanted = armed(&self.graph.lock().unwrap_or_else(|e| e.into_inner()));
+        let expected = wanted.len();
         for key in self.feeds.keys().cloned().collect::<Vec<_>>() {
             let why = match wanted.get(&key) {
                 Some((service, _)) if *service == self.feeds[&key].service => continue,
@@ -156,11 +197,12 @@ impl Drain {
                 self.feeds.insert(key, feed);
             }
         }
+        self.feeds.len() == expected
     }
 
-    fn sweep(&mut self) {
+    fn sweep(&mut self, finally: bool) {
         for feed in self.feeds.values_mut() {
-            drain_feed(&self.recorder, &self.time, feed, false);
+            drain_feed(&self.recorder, &self.time, feed, finally);
         }
     }
 
@@ -175,6 +217,7 @@ impl Drain {
 
 /// Start the one drain. `halt` is what stops it, and what a teardown waits on to a ceiling.
 pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>) {
+    recorder.set_capture(Arc::new(AudioCapture(Arc::downgrade(&graph))));
     let (instance, time) = {
         let g = graph.lock().unwrap_or_else(|e| e.into_inner());
         (g.instance().to_string(), g.time())
@@ -193,6 +236,8 @@ pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>)
         };
         let mut drain = Drain { graph, recorder, time, feeds: HashMap::new(), listener, node };
         let mut resolved = Instant::now() - RESOLVE;
+        let mut swept = 0;
+        let mut ready = false;
         while !halt.stopped() {
             // The event id is ignored, which spends none of the id budget: a burst across every
             // armed slot coalesces into one sweep.
@@ -200,17 +245,23 @@ pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>)
             // Read BEFORE the sweep: a sweep already under way when a stop asked is not an answer
             // to it.
             let mark = drain.recorder.sweeping();
-            if !drain.recorder.running() {
+            if !drain.recorder.receiving() {
                 drain.release();
                 drain.recorder.swept(mark);
+                swept = mark;
                 continue;
             }
-            if resolved.elapsed() >= RESOLVE || drain.feeds.is_empty() {
-                drain.resolve();
+            if resolved.elapsed() >= RESOLVE || drain.feeds.is_empty() || mark != swept {
+                ready = drain.resolve();
                 resolved = Instant::now();
             }
-            drain.sweep();
-            drain.recorder.swept(mark);
+            // Keep subscribers ready during preparation. A requested sweep drains with
+            // backpressure so its acknowledgement includes every queued frame.
+            drain.sweep(mark != swept);
+            if ready {
+                drain.recorder.swept(mark);
+                swept = mark;
+            }
         }
         drain.release();
         drop(drain);

@@ -135,7 +135,7 @@ impl DeviceClock {
                 };
                 if on_go.recv().is_ok() {
                     if let Err(e) = stream.play() {
-                        eprintln!("audio: {e}");
+                        goofi_core::log::record(goofi_core::log::Source::component("audio"), goofi_core::log::Level::Error, None, format!("audio: {e}"));
                         stats.dead.store(true, Ordering::Release);
                         waker.notify();
                     }
@@ -243,7 +243,7 @@ where
                 }
                 // The stream plays on at ordinary priority, so this is the deadline lost rather
                 // than a period missed: counting it as an xrun would hide the very thing to read.
-                cpal::ErrorKind::RealtimeDenied => eprintln!("audio: {e}"),
+                cpal::ErrorKind::RealtimeDenied => goofi_core::log::record(goofi_core::log::Source::component("audio"), goofi_core::log::Level::Error, None, format!("audio: {e}")),
                 _ => {
                     died.xruns.fetch_add(1, Ordering::Relaxed);
                 }
@@ -417,6 +417,35 @@ impl AudioEngine {
         (out, channels)
     }
 
+    pub fn flush_recording(&self) -> Vec<mpsc::Receiver<Result<(), String>>> {
+        self.live.values().map(|node| node.control.flush()).collect()
+    }
+
+    /// Change the recording interval between whole blocks. No wait, allocation,
+    /// or notification lock runs on the audio thread. Wait on the returned action
+    /// only after releasing the graph lock.
+    pub fn recording_boundary(
+        &mut self,
+        window: Arc<goofi_core::record::FrameWindow>,
+        begin: bool,
+    ) -> impl FnOnce() -> Result<(), String> + Send + 'static {
+        let done = Arc::new(AtomicBool::new(false));
+        self.send(Msg::RecordBoundary { window, begin, done: done.clone() });
+        if self.device.is_none() {
+            self.runtime().apply_pending();
+        }
+        move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !done.load(Ordering::Acquire) {
+                if Instant::now() >= deadline {
+                    return Err("audio clock did not acknowledge the recording boundary".into());
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Ok(())
+        }
+    }
+
     /// Read without the runtime lock: taking it under the graph lock would cost a callback its block.
     pub fn status(&self) -> AudioStatus {
         AudioStatus {
@@ -464,7 +493,7 @@ impl AudioEngine {
             std::fs::create_dir_all(path.parent().expect("a state file has a directory")).and_then(|()| std::fs::write(&path, bytes))
         };
         if let Err(e) = written {
-            eprintln!("audio: could not keep {}: {e}", path.display());
+            goofi_core::log::record(goofi_core::log::Source::component("audio"), goofi_core::log::Level::Error, None, format!("audio: could not keep {}: {e}", path.display()));
         }
     }
 
@@ -477,6 +506,7 @@ impl AudioEngine {
                 // The drop is the POINT: these come back so the audio thread never frees them.
                 Retired::Plan(plan, arena) => drop((plan, arena)),
                 Retired::Slab(slab) => drop(slab),
+                Retired::RecordBoundary(window, done) => drop((window, done)),
                 Retired::Faulted { uid, serial, fault } => {
                     if self.live.get(&uid).is_some_and(|i| i.serial == serial) {
                         let msg = match fault {
@@ -548,7 +578,7 @@ impl AudioEngine {
                     .collect()
             })
             .collect();
-        Desired { consts, subs, targets, record: nv.recorded.to_vec() }
+        Desired { consts, subs, targets, record: nv.recorded.iter().map(|output| output.slot.clone()).collect() }
     }
 
     /// A plugin's params as its controller counts them — normalized, in the plugin's own order —

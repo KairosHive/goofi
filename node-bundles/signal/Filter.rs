@@ -283,14 +283,14 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "filter",
         name: "order",
-        spec: ParamSpec::Int { default: 4, min: 2, max: 16 },
+        spec: ParamSpec::Int { default: 4, min: 2, max: 16, options: &[2, 4, 6, 8] },
         expression: None,
         doc: Some("How sharply the edge cuts. A higher order is steeper and rings for longer."),
     },
     ParamDecl {
         group: "filter",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7 },
+        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis to filter along. -1 is time."),
     },

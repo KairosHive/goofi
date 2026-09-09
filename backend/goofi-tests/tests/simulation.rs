@@ -256,6 +256,7 @@ fn the_cortical_model_answers_in_the_band_it_is_named_for() {
     g.set_param(mass, "output", "sfreq", 1000.0);
     g.set_param(mass, "sim", "seed", 11);
     let buffer = g.add("Buffer");
+    g.set_param(buffer, "buffer", "unit", "samples");
     g.set_param(buffer, "buffer", "size", 2048);
     let psd = g.add("Psd");
     g.set_param(psd, "psd", "mode", "fft");

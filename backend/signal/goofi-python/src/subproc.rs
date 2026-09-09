@@ -27,9 +27,9 @@ pub const COLD_START_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The iceoryx2 node + its ports. The node must outlive the ports it created.
 struct Ports {
-    _node: iceoryx2::node::Node<ipc_threadsafe::Service>,
     req_pub: BytePublisher,
     resp_sub: ByteSubscriber,
+    _node: iceoryx2::node::Node<ipc_threadsafe::Service>,
 }
 
 /// The spawned child plus the iceoryx2 ports it talks over.
@@ -84,12 +84,21 @@ impl Running {
             // The source rides stdin, never the environment: Windows caps a whole environment
             // block at 32767 characters, and a node file is text of no stated size.
             .stdin(Stdio::piped())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
+            .env("PYTHONUNBUFFERED", "1")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         // Armed BEFORE the spawn it guards, so a Ctrl-C or a crash here cannot orphan the child.
         let armed = goofi_codec::liveness::arm(&mut cmd).map_err(|e| format!("liveness pipe: {e}"))?;
         let mut child = cmd.spawn().map_err(|e| format!("spawn `{python}`: {e}"))?;
         let parent_alive = Some(armed.into_writer());
+        if let Some(out) = child.stdout.take() {
+            let source = goofi_core::log::source();
+            std::thread::spawn(move || goofi_core::log::drain(out, source, "stdout"));
+        }
+        if let Some(err) = child.stderr.take() {
+            let source = goofi_core::log::source();
+            std::thread::spawn(move || goofi_core::log::drain(err, source, "stderr"));
+        }
         // The write end is dropped as this ends, and that EOF is where the child stops reading.
         let handed = match child.stdin.take() {
             Some(mut w) => w.write_all(source.as_bytes()).map_err(|e| format!("hand the source over: {e}")),

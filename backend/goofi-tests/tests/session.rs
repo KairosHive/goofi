@@ -338,7 +338,10 @@ fn a_save_packs_the_live_mount_refuses_to_pack_into_it_and_never_truncates_a_goo
     std::fs::write(mount.join("agent.md"), b"notes").unwrap();
 
     let target = tmp.path().join("patch.gfi");
-    goofi_bridge::save_archive(&target, "version: 7\n", &mount, &[]).unwrap();
+    goofi_bridge::save_archive(&target, "version: 7\n", &mount, &[], true).unwrap();
+    let before = std::fs::read(&target).unwrap();
+    assert!(goofi_bridge::save_archive(&target, "version: 8\n", &mount, &[], false).is_err());
+    assert_eq!(std::fs::read(&target).unwrap(), before);
     let dest = tmp.path().join("unpacked");
     assert_eq!(goofi_graph::archive::read_gfi(&target, &dest).unwrap(), "version: 7\n");
     assert_eq!(std::fs::read(dest.join("agent.md")).unwrap(), b"notes", "the LIVE mount is packed");
@@ -348,14 +351,14 @@ fn a_save_packs_the_live_mount_refuses_to_pack_into_it_and_never_truncates_a_goo
     let good = tmp.path().join("previous.gfi");
     std::fs::write(&good, b"the previous save").unwrap();
     let gone = tmp.path().join("mnt").join("gone").join("workspace");
-    let err = goofi_bridge::save_archive(&good, "version: 7\n", &gone, &[]).unwrap_err();
+    let err = goofi_bridge::save_archive(&good, "version: 7\n", &gone, &[], true).unwrap_err();
     assert!(err.contains("save failed"), "the refusal names the operation: {err}");
     assert_eq!(std::fs::read(&good).unwrap(), b"the previous save");
     assert!(!tmp.path().join("previous.gfi.tmp").exists(), "the half-written sibling is cleaned up");
 
     // A target inside the mount would pack the archive into itself.
     for inside in [mount.join("patch.gfi"), mount.parent().unwrap().join("patch.gfi")] {
-        let err = goofi_bridge::save_archive(&inside, "version: 7\n", &mount, &[]).unwrap_err();
+        let err = goofi_bridge::save_archive(&inside, "version: 7\n", &mount, &[], true).unwrap_err();
         assert!(err.contains("temporary workspace"), "the refusal says why: {err}");
         assert!(!inside.exists(), "a refused save writes nothing");
     }
@@ -367,7 +370,7 @@ fn a_save_packs_the_live_mount_refuses_to_pack_into_it_and_never_truncates_a_goo
     std::fs::write(mount.join("Agent.md"), b"the other one").unwrap();
     if std::fs::read(mount.join("agent.md")).is_ok_and(|b| b == b"notes") {
         let clash = tmp.path().join("clash.gfi");
-        let err = goofi_bridge::save_archive(&clash, "version: 7\n", &mount, &[]).unwrap_err();
+        let err = goofi_bridge::save_archive(&clash, "version: 7\n", &mount, &[], true).unwrap_err();
         assert!(err.contains("fold case"), "the refusal names the reason: {err}");
         assert!(!clash.exists(), "and it writes nothing");
     }

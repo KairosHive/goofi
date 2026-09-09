@@ -20,7 +20,7 @@ pub enum Kind {
     Table { columns: Vec<String> },
     Text,
     Audio { rate: f64, channels: usize },
-    Video { size: (u32, u32), fps: f64 },
+    Video { size: (u32, u32), fps: f64, quality: goofi_core::record::VideoQuality },
 }
 
 impl Kind {
@@ -164,8 +164,8 @@ impl Stream {
                 std::fs::File::create_new(&path).map_err(|e| e.to_string())?,
             )),
             Kind::Audio { rate, channels } => Sink::Audio(Wav::create(&path, *rate, *channels)?),
-            Kind::Video { size, fps } => {
-                Sink::Video(Video::spawn(encoders, folder, &file, *size, *fps)?)
+            Kind::Video { size, fps, quality } => {
+                Sink::Video(Video::spawn(encoders, folder, &file, *size, *fps, *quality)?)
             }
         };
         let beside = match kind {

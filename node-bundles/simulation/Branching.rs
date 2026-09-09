@@ -197,14 +197,14 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "branching",
         name: "size",
-        spec: ParamSpec::Int { default: 1024, min: 2, max: 100_000 },
+        spec: ParamSpec::Int { default: 1024, min: 2, max: 100_000, options: &[] },
         expression: None,
         doc: Some("How many units. A larger network shows the power law over more decades."),
     },
     ParamDecl {
         group: "branching",
         name: "connections",
-        spec: ParamSpec::Int { default: 8, min: 1, max: 64 },
+        spec: ParamSpec::Int { default: 8, min: 1, max: 64, options: &[] },
         expression: None,
         doc: Some("How many units one can wake. `branching` is shared out between them."),
     },
@@ -218,14 +218,14 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "branching",
         name: "refractory",
-        spec: ParamSpec::Int { default: 1, min: 0, max: 100 },
+        spec: ParamSpec::Int { default: 1, min: 0, max: 100, options: &[] },
         expression: None,
         doc: Some("Steps a unit stays silent after it fires. Zero lets one unit sustain itself for ever."),
     },
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000 },
+        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the wiring and the draws. Negative takes a fresh one from the clock."),
     },

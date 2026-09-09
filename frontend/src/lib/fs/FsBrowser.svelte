@@ -3,14 +3,14 @@
 	import { ui } from '$lib/stores/ui.svelte';
 	import type { FsEntry, FsRoot } from '$lib/api/control';
 	import { downloadPatch } from '$lib/api/patchFile';
-	import { Bar, Button, Dialog, EmptyState, Icon, IconButton, ScrollArea, TextInput } from '$lib/ui';
+	import { Bar, Button, ConfirmDialog, Dialog, EmptyState, Icon, IconButton, ScrollArea, TextInput } from '$lib/ui';
 	import { onMount, untrack } from 'svelte';
 
 	type Props = {
 		mode: 'save' | 'load';
 		initialPath?: string | null;
 		suggestedName?: string;
-		onPick: (path: string) => void;
+		onPick: (path: string, overwrite?: boolean) => void;
 		onClose: () => void;
 		/** The through-the-browser copy, for locations the backend cannot reach. */
 		onFilePick: (file: File) => void;
@@ -32,6 +32,8 @@
 	let pathDraft = $state('');
 	let filename = $state(untrack(() => suggestedName)); // initial draft; user edits own it
 	let selected = $state<string | null>(null);
+	let replacing = $state<string | null>(null);
+	let checking = $state(false);
 	let error = $state<string | null>(null);
 	let pathBarEl = $state<HTMLDivElement | null>(null);
 	let fileInput = $state<HTMLInputElement | null>(null);
@@ -87,13 +89,22 @@
 		}
 	}
 
-	function confirmSave(): void {
+	async function confirmSave(): Promise<void> {
 		const name = filename.trim();
-		if (!name) return;
-		// The path bar is authoritative: a fast Save must not fall back to a stale cwd.
+		if (!name || checking) return;
 		const dir = (pathDraft || cwd).replace(/\/+$/, '');
 		const full = `${dir}/${name.endsWith('.gfi') ? name : name + '.gfi'}`;
-		onPick(full);
+		checking = true;
+		try {
+			const target = await g.statPath(full);
+			if (target.kind === 'dir') error = 'Choose a file name. This path is a folder.';
+			else if (target.kind === 'file') replacing = target.path;
+			else onPick(target.path);
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+		} finally {
+			checking = false;
+		}
 	}
 
 	function confirmOpen(): void {
@@ -222,7 +233,7 @@
 			{#snippet end()}
 				<Button variant="ghost" onclick={onClose}>Cancel</Button>
 				{#if mode === 'save'}
-					<Button variant="primary" onclick={confirmSave} data-testid="fs-save">Save</Button>
+					<Button variant="primary" onclick={confirmSave} disabled={checking} data-testid="fs-save">Save</Button>
 				{:else}
 					<Button variant="primary" disabled={!selected} onclick={confirmOpen} data-testid="fs-open">
 						Open
@@ -232,6 +243,21 @@
 		</Bar>
 	</div>
 </Dialog>
+
+<ConfirmDialog
+	open={replacing !== null}
+	question="Overwrite this patch?"
+	detail={`The file ${replacing ?? ''} already exists. Overwrite replaces its contents.`}
+	onClose={() => (replacing = null)}
+	data-testid="fs-replace-dialog"
+>
+	<Button variant="danger" data-testid="fs-replace" onclick={() => {
+		const path = replacing;
+		replacing = null;
+		if (path) onPick(path, true);
+	}}>Overwrite</Button>
+	<Button variant="ghost" onclick={() => (replacing = null)}>Cancel</Button>
+</ConfirmDialog>
 
 <style>
 	.frame {

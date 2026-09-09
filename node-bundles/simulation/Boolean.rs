@@ -176,14 +176,14 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "boolean",
         name: "size",
-        spec: ParamSpec::Int { default: 64, min: 2, max: 4096 },
+        spec: ParamSpec::Int { default: 64, min: 2, max: 4096, options: &[] },
         expression: None,
         doc: Some("How many units."),
     },
     ParamDecl {
         group: "boolean",
         name: "connections",
-        spec: ParamSpec::Int { default: 2, min: 1, max: 6 },
+        spec: ParamSpec::Int { default: 2, min: 1, max: 6, options: &[] },
         expression: None,
         doc: Some("How many units each one reads. 1 freezes, 3 and up is chaos, and 2 is the edge between them."),
     },
@@ -204,7 +204,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000 },
+        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the wiring, the rules and the starting state. Negative takes a fresh one from the clock."),
     },

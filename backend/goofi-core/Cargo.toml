@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+filedescriptor = "0.8.3"
 indexmap = "2"
 # A drawing widget's value is a `data:image/png;base64,…` URL and a node has to read the pixels out
 # of it; `src/png.rs` is that door, and these are the two halves it does not hand-roll.
@@ -22,3 +23,6 @@ toml = "0.8"
 # `Reducible` seam for `Data` — the allowed signal→shared dependency direction; goofi-view
 # never depends back on goofi-core.
 goofi-view = { path = "../goofi-view" }
+
+[target.'cfg(windows)'.dependencies]
+libc = "0.2"

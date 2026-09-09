@@ -25,7 +25,7 @@ goofi_audio_sdk::params! {
     VOICES = ParamDecl {
         group: "midi",
         name: "voices",
-        spec: ParamSpec::Int { default: 4, min: 1, max: MAX_CHANNELS as i64 },
+        spec: ParamSpec::Int { default: 4, min: 1, max: MAX_CHANNELS as i64, options: &[] },
         expression: None,
         doc: Some(
             "one channel per voice on every output; notes take voices round-robin. The bundled              `voices` output needs two channels per voice, so it carries the first 8 — past that,              wire gate, pitch and velocity separately",

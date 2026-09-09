@@ -62,10 +62,11 @@
 	// A tag reaches the list through the search, so panelty's Tabs carries the only facet left —
 	// and it has no ink hook, so the engine's colour goes on the tokens a tab reads.
 	function engineInk(id: string): { style?: string } {
-		if (id === ALL_TAB) return {};
+		const layout = 'flex: 1 0 auto; justify-content: center; min-width: max-content;';
+		if (id === ALL_TAB) return { style: layout };
 		const ink = familyColor(id);
 		return {
-			style: `--panelty-text: ${ink}; --panelty-text-dim: color-mix(in srgb, ${ink} 65%, transparent)`
+			style: `${layout} --panelty-text: ${ink}; --panelty-text-dim: color-mix(in srgb, ${ink} 65%, transparent)`
 		};
 	}
 
@@ -118,7 +119,7 @@
 		} else if (e.key === 'ArrowUp') {
 			e.preventDefault();
 			highlighted = Math.max(0, highlighted - 1);
-		} else if (e.key === 'Tab' && tabs.length > 1) {
+		} else if (e.key === 'Tab') {
 			// The field keeps the focus throughout — Escape is the way out, never Tab.
 			e.preventDefault();
 			const at = tabs.findIndex((t) => t.id === tab);
@@ -127,7 +128,16 @@
 	}
 </script>
 
-<div class="add-menu" role="dialog" aria-label="Add node">
+<div
+	class="add-menu"
+	role="dialog"
+	tabindex="-1"
+	aria-label="Add node"
+	onmousedown={(event) => {
+		if (event.target !== inputEl) event.preventDefault();
+	}}
+	onfocusin={() => inputEl?.focus({ preventScroll: true })}
+>
 	{#if seed}
 		<div class="seed-chip" data-testid="add-menu-seed">
 			<span class="seed-arrow">{seed.side === 'source' ? '→' : '←'}</span>
@@ -166,10 +176,10 @@
 	</div>
 
 	{#if tabs.length > 1}
-		<!-- Scrolls: the menu is 320px at its widest, which a growing engine set outgrows. -->
 		<div class="engine-row">
 			<Tabs
 				items={tabs}
+				style="flex-wrap: wrap;"
 				active={tab}
 				onSelect={selectTab}
 				tabProps={(item) => engineInk(item.id)}

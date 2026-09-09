@@ -76,7 +76,7 @@ pub struct Param {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ParamSpec {
-    Int { default: i64, min: i64, max: i64 },
+    Int { default: i64, min: i64, max: i64, #[serde(default)] options: Vec<i64> },
     Float { default: f64, min: f64, max: f64 },
     Bool { default: bool },
     Str {

@@ -52,6 +52,9 @@ export class UIStore {
 	/** The `data-node-drop` value of the drop zone the dragged node is over, or null. */
 	nodeDragZone = $state<string | null>(null);
 
+	/** Global being dragged from a widget label to a parameter. */
+	globalDrag = $state<{ name: string; x: number; y: number; target: Element | null } | null>(null);
+
 	/** Input slots an in-flight cable drag is near ({@link slotKey} keys); replaced, never mutated. */
 	cableNear = $state.raw<ReadonlySet<string>>(new Set());
 

@@ -2,6 +2,7 @@
 //! The graph looks down at this and nothing engine-specific; an engine looks down at this and the
 //! transport, and never at the graph.
 
+use goofi_core::record::RecordedOutput;
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::Path;
@@ -120,7 +121,7 @@ pub struct NodeView<'a> {
     pub params: &'a ParamGroups,
     pub bindings: Vec<BindingView<'a>>,
     /// The output slots armed for recording.
-    pub recorded: &'a [String],
+    pub recorded: &'a [RecordedOutput],
 }
 
 /// The settled graph, as every engine reads it after a batch: the WHOLE graph — engines filter.

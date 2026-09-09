@@ -1348,7 +1348,7 @@
 		position: fixed;
 		z-index: var(--z-addmenu);
 		/* The clamp can only SHIFT a surface that fits, so on a narrow phone the width gives first. */
-		width: min(320px, calc(100vw - var(--space-8)));
+		width: min(440px, calc(100vw - var(--space-8)));
 	}
 	.breadcrumb {
 		position: absolute;

@@ -211,7 +211,7 @@ describe('graphDoc globals', () => {
 		]);
 	});
 
-	it('folds globals into groups, each group in first-appearance order, with the lock that holds it', () => {
+	it('keeps explicit groups before groups inferred from entries, including empty groups', () => {
 		const doc: Doc = {
 			...seedDoc(),
 			globals: {
@@ -225,10 +225,9 @@ describe('graphDoc globals', () => {
 		const locks = globalGroupLocks(doc);
 		const groups = groupedGlobals(views, locks);
 		expect(groups.map((g) => [g.group, g.entries.map((e) => e.element), g.lock])).toEqual([
+			['system', [], { config: true, value: false }],
 			['mixer', ['gain', 'pan'], { config: true, value: false }],
-			['patch', ['subject'], { config: false, value: false }],
-			// A lock is what makes a group as much as a member does, so a group holding only one is listed.
-			['system', [], { config: true, value: false }]
+			['patch', ['subject'], { config: false, value: false }]
 		]);
 		// What holds an entry is its own lock and its group's together.
 		expect(effectiveLock(views[2], locks.mixer)).toEqual({ config: true, value: true });

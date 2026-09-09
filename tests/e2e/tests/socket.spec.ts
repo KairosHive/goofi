@@ -9,6 +9,7 @@
 // backend holds would ask the accused to testify.
 
 import { test, expect, type Browser, type Page } from '@playwright/test';
+import { touchSession } from '../lib/touch';
 import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
 import {
 	armSocketControl,
@@ -511,12 +512,12 @@ test.describe('the control socket', () => {
 			await test.step('a drawing restores its pixels through undo, redo and replacement', async () => {
 				await page.evaluate(async () => {
 					const g = (window as any).goofi;
-					await g.commands.addGlobal('review.picture', '', 'string', { kind: 'draw', x: 0, y: 0, w: 5, h: 5 });
+					await g.commands.addGlobal('review.picture', '', 'string', { kind: 'paint', x: 0, y: 0, w: 5, h: 5 });
 					const panel = g.query.panels()[0];
 					g.commands.setPanelType(panel.panelId, 'control');
 					g.commands.setPanelState(panel.panelId, { group: 'review' });
 				});
-				const canvas = page.getByTestId('draw-canvas');
+				const canvas = page.getByTestId('paint-canvas');
 				await expect(canvas).toBeVisible();
 				const empty = await canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL());
 				const box = (await canvas.boundingBox())!;
@@ -531,13 +532,17 @@ test.describe('the control socket', () => {
 				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(empty);
 				await redo(page);
 				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(picture);
-				await page.getByTestId('draw-clear').click();
+				await page.getByTestId('paint-clear').click();
 				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(empty);
 				await undo(page);
 				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(picture);
 				await rawCall(page, 'global entry edit', { name: 'review.picture', value: empty });
 				await rawCall(page, 'global entry edit', { name: 'review.picture', value: picture });
 				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(picture);
+				await rawCall(page, 'control paint', {
+					group: 'review', element: 'picture', steps: 'clear\npen #ff0000\nwidth 40\ngoto 100 100\nforward 200'
+				});
+				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).not.toBe(picture);
 				await page.evaluate(async () => {
 					const g = (window as any).goofi;
 					await g.commands.removeGlobal('review.picture');
@@ -870,4 +875,138 @@ test.describe('the control socket', () => {
 			await clearGraph(page);
 		}
 	});
+});
+
+test('widget drags set parameter expressions with one undo step', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	const osc = await addNode(page, 'LFO');
+	await waitForNode(page, osc);
+	await selectNode(page, osc);
+	await splitRight(page);
+	try {
+		await page.evaluate(async () => {
+			const g = (window as any).goofi;
+			await g.commands.addGlobal('desk.level', 0.5, 'float', {
+				kind: 'knob', min: 0, max: 1, x: 0, y: 0, w: 3, h: 3
+			});
+			const panel = g.query.panels()[1];
+			await g.commands.setPanelType(panel.panelId, 'control');
+			await g.commands.setPanelState(panel.panelId, { group: 'desk' });
+		});
+		await page.getByTestId('control-edit-toggle').click();
+		const widget = page.getByTestId('control-desk-level');
+		const row = page.getByTestId('param-field-frequency');
+		await expect(widget).toBeVisible();
+		await expect(row).toBeVisible();
+		const before = (await backendDoc(page)).globals['desk.level'];
+		const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
+		const original = await source();
+		async function dragLabel(body = false): Promise<void> {
+			await widget.hover();
+			const label = (await widget.locator(body ? '.widget' : '.label').boundingBox())!;
+			const target = (await row.boundingBox())!;
+			await page.mouse.move(label.x + label.width / 2, label.y + label.height / 2);
+			await page.mouse.down();
+			await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 12 });
+			await expect(row).toHaveClass(/over/);
+		}
+		await dragLabel();
+		await page.mouse.up();
+		await expect.poll(async () => (await source()).expr).toBe('globals.desk.level');
+		expect((await source()).mode).toBe('expression');
+		expect((await backendDoc(page)).globals['desk.level']).toEqual(before);
+		await undo(page);
+		await expect.poll(source).toEqual(original);
+		await dragLabel();
+		await page.keyboard.press('Escape');
+		await page.mouse.up();
+		await expect(row).not.toHaveClass(/armed|over/);
+		expect(await source()).toEqual(original);
+		await dragLabel();
+		await page.mouse.move(5, 5);
+		await page.mouse.up();
+		await expect(row).not.toHaveClass(/armed|over/);
+		expect(await source()).toEqual(original);
+		await page.getByTestId('control-edit-toggle').click();
+		await dragLabel(true);
+		await page.mouse.up();
+		await expect.poll(async () => (await source()).expr).toBe('globals.desk.level');
+		expect((await backendDoc(page)).globals['desk.level']).toEqual(before);
+		await undo(page);
+		await expect.poll(source).toEqual(original);
+		const finger = await touchSession(page);
+		const body = (await widget.locator('.widget').boundingBox())!;
+		const target = (await row.boundingBox())!;
+		await finger.down({ x: body.x + body.width / 2, y: body.y + body.height / 2 });
+		await finger.moveTo({ x: target.x + target.width / 2, y: target.y + target.height / 2 });
+		await expect(row).toHaveClass(/over/);
+		await finger.up();
+		await expect.poll(async () => (await source()).expr).toBe('globals.desk.level');
+		expect((await backendDoc(page)).globals['desk.level']).toEqual(before);
+	} finally {
+		await clearGraph(page);
+		await closeSplit(page);
+		await page.evaluate(() => (window as any).goofi.commands.removeGlobal('desk.level'));
+	}
+});
+
+test('parameter modulation menu and hover keys use expressions with undo', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	const osc = await addNode(page, 'LFO');
+	await waitForNode(page, osc);
+	await selectNode(page, osc);
+	const row = page.getByTestId('param-field-frequency');
+	const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
+	const original = await source();
+	async function expectModulation(kind: string, previous: unknown): Promise<void> {
+		await expect.poll(async () => (await source()).expr).not.toBe(previous);
+		const param = await source();
+		expect(param.mode).toBe('expression');
+		const match = param.expr.match(new RegExp(`^${kind}\\(freq=([0-9.]+)\\)$`));
+		expect(match).not.toBeNull();
+		const freq = Number(match![1]);
+		expect(freq).toBeGreaterThanOrEqual(0.01);
+		expect(freq).toBeLessThanOrEqual(0.2);
+	}
+	for (const [label, kind] of [['LFO', 'lfo'], ['Noise', 'noi']]) {
+		for (let i = 0; i < 2; i++) {
+			const previous = await source();
+			await row.click({ button: 'right' });
+			await page.getByRole('menuitem', { name: label, exact: true }).click();
+			await expectModulation(kind, previous.expr);
+		}
+		await undo(page);
+		await undo(page);
+		await expect.poll(source).toEqual(original);
+	}
+	for (const [key, kind] of [['l', 'lfo'], ['n', 'noi']]) {
+		for (let i = 0; i < 2; i++) {
+			const previous = await source();
+			await row.hover();
+			await page.keyboard.press(key);
+			await expectModulation(kind, previous.expr);
+		}
+		await undo(page);
+		await undo(page);
+		await expect.poll(source).toEqual(original);
+	}
+	const search = page.getByTestId('param-search');
+	await search.focus();
+	await row.hover();
+	await page.keyboard.press('l');
+	await expect(search).toHaveValue('l');
+	expect(await source()).toEqual(original);
+	await search.fill('');
+	await search.blur();
+	await row.hover();
+	await page.keyboard.press('Control+n');
+	expect(await source()).toEqual(original);
+	await page.mouse.move(0, 0);
+	await page.keyboard.press('n');
+	expect(await source()).toEqual(original);
+	await clearGraph(page);
 });

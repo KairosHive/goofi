@@ -72,6 +72,7 @@ fn the_complexity_bundle_reduces_the_time_axis_and_leaves_the_channels_alone() {
     let named = g.add("Meta");
     g.set_param(named, "meta", "labels", "Fz,Cz,Pz");
     let buf = g.add("Buffer");
+    g.set_param(buf, "buffer", "unit", "samples");
     g.set_param(buf, "buffer", "size", 256);
     g.link(src, "out", named, "input");
     g.link(named, "out", buf, "input");
@@ -129,6 +130,7 @@ fn a_complexity_node_reads_a_real_signal_rather_than_answering_a_constant() {
     g.set_param(osc, "output", "sfreq", 256.0);
     g.set_param(osc, "output", "mode", "block");
     g.set_param(osc, "lfo", "frequency", 8.0);
+    g.set_param(buf, "buffer", "unit", "samples");
     g.set_param(buf, "buffer", "size", 256);
     g.link(osc, "out", buf, "input");
     // Every oracle below is for a FULL window: a growing one holds fewer cycles, or one cut short.
@@ -177,11 +179,16 @@ fn every_bundle_names_its_packages_and_the_interpreter_asked_of_holds_them() {
         std::fs::read_dir(b).into_iter().flatten().flatten().any(|e| e.path().extension().is_some_and(|x| x == "py"))
     };
     for b in bundles.iter().filter(|b| pythonic(b)) {
-        assert!(b.join("requirements.txt").is_file(), "{} names its packages", b.display());
+        assert!(b.join("requirements.txt").is_file() || b.join("requirements-gil.txt").is_file(),
+                "{} names its packages for at least one interpreter", b.display());
     }
     let shared = goofi_init::requirements_in(&bundles);
     let gil_only: Vec<PathBuf> =
         shared.iter().cloned().chain(goofi_init::gil_requirements_in(&bundles)).collect();
+    for path in &gil_only {
+        std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("{} must be UTF-8: {e}", path.display()));
+    }
     let gap = std::env::temp_dir().join(format!("goofi-gap-{}.txt", std::process::id()));
     std::fs::write(&gap, "cowsay\n").unwrap();
     for (venv, reqs) in [(goofi_init::FT_VENV, &shared), (goofi_init::GIL_VENV, &gil_only)] {
@@ -192,6 +199,20 @@ fn every_bundle_names_its_packages_and_the_interpreter_asked_of_holds_them() {
         // The check can SEE a gap: naming what is absent takes the index, as the install would.
         let missing = goofi_init::missing_packages(&py, std::slice::from_ref(&gap)).expect("uv resolves the gap");
         assert!(missing.iter().any(|m| m.starts_with("cowsay==")), "{venv}: the gap is named: {missing:?}");
+    }
+}
+
+#[test]
+fn invalid_requirements_fail_before_checking_or_installing_packages() {
+    let dir = tempfile::tempdir().unwrap();
+    let requirements = dir.path().join("requirements-gil.txt");
+    std::fs::write(&requirements, b"# invalid comment: \x97\nnumpy\n").unwrap();
+    let python = dir.path().join("no-interpreter");
+    for error in [
+        goofi_init::missing_packages(&python, std::slice::from_ref(&requirements)).unwrap_err(),
+        goofi_init::install_packages(&python, std::slice::from_ref(&requirements)).unwrap_err(),
+    ] {
+        assert!(error.contains("requirements-gil.txt") && error.contains("UTF-8"), "{error}");
     }
 }
 
@@ -244,6 +265,7 @@ fn the_eeg_bundle_plays_a_recording_reads_its_spectrum_and_receives_a_live_strea
 
     // Its spectrum, through the shipped Buffer and Psd, into the two spectral nodes.
     let buf = g.add("Buffer");
+    g.set_param(buf, "buffer", "unit", "samples");
     g.set_param(buf, "buffer", "size", 256);
     let window = g.probe(buf, "out");
     let psd = g.add("Psd");
@@ -318,6 +340,7 @@ fn a_scale_from_a_sine(g: &Goofi, also: &[&str]) -> (goofi_tests::Uid, goofi_tes
     g.set_param(osc, "output", "sfreq", 256.0);
     g.set_param(osc, "output", "mode", "block");
     g.set_param(osc, "lfo", "frequency", 8.0);
+    g.set_param(buf, "buffer", "unit", "samples");
     g.set_param(buf, "buffer", "size", 512);
     // Two windows of eight whole cycles each, so the second channel holds the SAME spectrum.
     g.set_param(cut, "reshape", "shape", "2,256");
@@ -850,6 +873,7 @@ fn the_ml_agent_acts_before_a_reward_is_wired_and_keeps_its_shape_as_it_is_retun
     let osc = g.add("LFO");
     g.set_param(osc, "lfo", "frequency", 0.7);
     let buf = g.add("Buffer");
+    g.set_param(buf, "buffer", "unit", "samples");
     g.set_param(buf, "buffer", "size", 8);
     g.link(osc, "out", buf, "input");
     g.link(buf, "out", agent, "observations");

@@ -58,6 +58,7 @@ impl Node for Psd {
             let samples = match p.str("welch", "unit").unwrap_or("seconds") {
                 "samples" => size,
                 "fraction" => size * n as f64,
+                "seconds (ufreq)" => goofi_core::stream::window_count(size, "seconds (ufreq)", d.meta())? as f64,
                 _ => size * sfreq,
             };
             (samples.round().max(2.0) as usize).min(n)
@@ -151,7 +152,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "psd",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7 },
+        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis holds the samples. -1 is time."),
     },
@@ -167,7 +168,7 @@ static PARAMS: &[ParamDecl] = &[
         name: "unit",
         spec: ParamSpec::Str {
             default: "seconds",
-            options: &["seconds", "samples", "fraction"],
+            options: &["seconds", "samples", "seconds (ufreq)", "fraction"],
             refresh: false,
         },
         expression: None,
