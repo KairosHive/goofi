@@ -1,0 +1,36 @@
+"""Convert frames from the harmonic_geometry public tests into cookbook images.
+
+Run the test with --features embed first to include the eight patch previews.
+The test writes raw float32 frames under target/harmonic-geometry/frames.
+"""
+
+from pathlib import Path
+import json
+import numpy as np
+from PIL import Image, ImageDraw
+
+
+HERE = Path(__file__).resolve().parent
+FRAMES = HERE.parents[1] / 'target/harmonic-geometry/frames'
+OUT = HERE / 'assets'
+OUT.mkdir(parents=True, exist_ok=True)
+
+tiles = []
+for path in sorted(FRAMES.glob('*.f32')):
+    shape = json.loads(path.with_suffix('.json').read_text())
+    data = np.fromfile(path, dtype=np.float32).reshape(shape)
+    image = Image.fromarray(np.uint8(np.clip(data, 0, 1)*255))
+    image.save(OUT / (path.stem+'.png'))
+    if path.stem.startswith(('gpu-', '0')):
+        continue
+    tile = Image.new('RGB', (320, 245), (11, 20, 32))
+    tile.paste(image.resize((320, 220)), (0, 0))
+    ImageDraw.Draw(tile).text((12, 223), path.stem, fill=(220, 230, 220))
+    tiles.append(tile)
+
+if not tiles:
+    raise SystemExit('No geometry frames found. Run the harmonic_geometry public tests first.')
+sheet = Image.new('RGB', (320*6, 245*((len(tiles)+5)//6)), (11, 20, 32))
+for i, tile in enumerate(tiles):
+    sheet.paste(tile, (i%6*320, i//6*245))
+sheet.save(OUT / 'atlas.png')

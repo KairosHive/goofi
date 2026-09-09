@@ -1,0 +1,114 @@
+import { test, expect } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { waitForApp, resetPatch } from '../lib/app';
+import { rawCall } from '../lib/raw';
+import { REPO_ROOT } from '../playwright.config';
+
+const folder = path.join(REPO_ROOT, 'examples', 'harmonic-geometry');
+const recipes = JSON.parse(fs.readFileSync(path.join(folder, 'recipes.json'), 'utf8')) as Array<{
+	file: string; title: string; nodes: number; views: [string, string, string][];
+}>;
+
+test('the harmonic geometry cookbook opens as live dashboards with usable controls', async ({ page }) => {
+	test.setTimeout(360_000);
+	page.setDefaultTimeout(15_000);
+	const thrown: string[] = [];
+	page.on('pageerror', (e) => thrown.push(String(e)));
+	await page.setViewportSize({ width: 1440, height: 1000 });
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		for (const recipe of recipes) {
+			await test.step(recipe.title, async () => {
+				const loaded = await rawCall(page, 'session load', { path: path.join(folder, recipe.file) });
+				expect(loaded.error, JSON.stringify(loaded)).toBeUndefined();
+				await expect.poll(() => page.evaluate(() => (window as any).goofi.query.graph().nodes.length)).toBe(recipe.nodes);
+				await expect(page.getByTestId('control-panel')).toBeVisible();
+				for (const [index, [name, slot]] of recipe.views.entries()) {
+					if (index) await page.getByTestId('workspace-tabs').locator('.ui-tab').filter({ hasText: name }).click();
+					await expect.poll(() => page.evaluate(({ name, slot }) => {
+						const g = (window as any).goofi;
+						const node = g.query.graph().nodes.find((n: any) => n.name === name);
+						return node && g.query.frameSummary(node.uid, slot) !== null;
+					}, { name, slot }), { timeout: 45_000, message: `${recipe.file}: ${name}.${slot} reaches the browser` }).toBe(true);
+					await expect(page.locator('.vp-body canvas').first()).toBeVisible();
+					if (!index) {
+						if (slot === 'out') await expect.poll(async () => {
+							const png = await page.locator('.vp-body canvas:visible').first().screenshot();
+							return page.evaluate(async (encoded) => {
+								const bytes = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
+								const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+								const canvas = new OffscreenCanvas(32, 32);
+								const ctx = canvas.getContext('2d')!;
+								// The center avoids letterboxing: a flat startup frame must not pass.
+								ctx.drawImage(bitmap, bitmap.width/4, bitmap.height/4, bitmap.width/2, bitmap.height/2, 0, 0, 32, 32);
+								bitmap.close();
+								const pixels = ctx.getImageData(0, 0, 32, 32).data;
+								let low = 255, high = 0;
+								for (let i = 0; i < pixels.length; i += 4) { low = Math.min(low, pixels[i]); high = Math.max(high, pixels[i]); }
+								return high-low;
+							}, png.toString('base64'));
+						}, { timeout: 45_000, message: 'The plate viewer shows a pattern after its shader inputs arrive' }).toBeGreaterThan(8);
+						if (slot === 'dashboard') await expect.poll(() => page.evaluate(({ name, slot }) => {
+							const g = (window as any).goofi;
+							const node = g.query.graph().nodes.find((n: any) => n.name === name);
+							const frame = g.query.frameSummary(node.uid, slot);
+							return frame && (frame.reducedLength === undefined || frame.reducedLength >= 300_000);
+						}, { name, slot })).toBe(true);
+						await page.screenshot({ path: path.join(folder, 'assets', recipe.file.replace('.gfi', '-browser.png')) });
+					}
+				}
+				await page.getByRole('tab', { name: 'Play Close tab', exact: true }).click();
+				const auto = page.getByTestId('control-geometry-auto');
+				await auto.getByRole('checkbox').uncheck();
+				await expect.poll(async () => {
+					const state = await rawCall(page, 'global list');
+					return state.result?.globals?.find((g: any) => g.name === 'geometry.auto')?.value;
+				}).toBe(false);
+				const slider = page.getByTestId('control-geometry-mix').getByRole('slider');
+				await slider.focus();
+				await page.keyboard.press('End');
+				await expect.poll(async () => {
+					const state = await rawCall(page, 'global list');
+					return state.result?.globals?.find((g: any) => g.name === 'geometry.mix')?.value;
+				}).toBe(1);
+				await expect.poll(async () => (await rawCall(page, 'session status')).result.errors,
+					{ message: `${recipe.file}: control expressions settle without node errors` }).toEqual([]);
+			});
+		}
+		// One representative patch in both tablet orientations. Controls scroll inside their panel.
+		await rawCall(page, 'session load', { path: path.join(folder, recipes[0].file) });
+		for (const size of [{ width: 820, height: 1180 }, { width: 1180, height: 820 }]) {
+			await page.setViewportSize(size);
+			await expect(page.getByTestId('control-geometry-mix')).toBeVisible();
+			await expect(page.locator('.vp-body canvas').first()).toBeVisible();
+			const bounds = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }));
+			expect(bounds.width).toBeLessThanOrEqual(size.width);
+			expect(bounds.height).toBeLessThanOrEqual(size.height);
+		}
+		expect(thrown).toEqual([]);
+	} finally {
+		await resetPatch(page);
+	}
+});
+
+test('the illustrated cookbook reads on a phone and filters its geometry atlas', async ({ page }, info) => {
+	const errors: string[] = [];
+	page.on('pageerror', (e) => errors.push(String(e)));
+	await page.setViewportSize({ width: 1440, height: 1050 });
+	await page.goto(pathToFileURL(path.join(folder, 'Cookbook.html')).href);
+	await expect(page.locator('.recipe')).toHaveCount(8);
+	await expect(page.locator('.specimen')).toHaveCount(46);
+	await page.screenshot({ path: info.outputPath('cookbook-desktop.png') });
+	await page.getByRole('searchbox', { name: 'Filter geometry methods' }).fill('knot');
+	await expect(page.locator('.specimen:visible')).toHaveCount(1);
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.evaluate(() => scrollTo(0, 0));
+	await expect(page.locator('h1')).toBeVisible();
+	const width = await page.evaluate(() => document.documentElement.scrollWidth);
+	expect(width).toBeLessThanOrEqual(390);
+	await page.screenshot({ path: info.outputPath('cookbook-phone.png') });
+	expect(errors).toEqual([]);
+});
