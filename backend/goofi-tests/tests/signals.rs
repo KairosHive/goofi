@@ -568,6 +568,65 @@ fn a_stitching_node_answers_from_the_past_and_a_transform_round_trips() {
     assert!(f32s(&later).iter().all(|v| (v - 6.0).abs() < 1e-4),
             "a delay moves the stream, it does not change it: {:?}", f32s(&later));
 
+    let step = g.add("signal:Constant");
+    set(step, "constant", "value", j!(0.0));
+    let step_delay = g.add("signal:Delay");
+    set(step_delay, "delay", "size", j!(2));
+    let step_probe = g.probe(step_delay, "out");
+    g.link(step, "out", step_delay, "input");
+    g.until("the delay holds the initial zero", |_| {
+        step_probe.latest().filter(|d| f32s(d) == vec![0.0])
+    });
+    let step_rate = g.add("Meta");
+    set(step_rate, "meta", "sfreq", j!(100.0));
+    let causal = g.add("signal:Filter");
+    set(causal, "filter", "phase", j!("causal"));
+    set(causal, "filter", "mode", j!("lowpass"));
+    set(causal, "filter", "high", j!(10.0));
+    let pc = g.probe(causal, "out");
+    g.link(step, "out", step_rate, "input");
+    g.link(step_rate, "out", causal, "input");
+    g.until("the causal filter starts at zero", |_| pc.latest().filter(|d| f32s(d) == vec![0.0]));
+    set(step, "constant", "value", j!(1.0));
+    g.until("equal scalar arrivals advance the delay", |_| {
+        step_probe.latest().filter(|d| f32s(d) == vec![1.0])
+    });
+
+    g.until("equal scalar arrivals advance the causal filter", |_| {
+        pc.latest().filter(|d| (f32s(d)[0] - 1.0).abs() < 1e-4)
+    });
+
+    let repeated = g.add("_TestRamp");
+    set(repeated, "ramp", "channels", j!(1));
+    set(repeated, "ramp", "length", j!(4));
+    let repeated_delay = g.add("signal:Delay");
+    set(repeated_delay, "delay", "size", j!(2));
+    let repeated_probe = g.probe(repeated_delay, "out");
+    g.link(repeated, "out", repeated_delay, "input");
+    g.until("a repeated window is consumed in full", |_| {
+        repeated_probe.latest().filter(|d| {
+            let v = f32s(d);
+            v.len() == 4 && v[0] == 0.5
+                && v[1] == 0.75 && v[2] == 0.0 && v[3] == 0.25
+        })
+    });
+
+    set(repeated, "ramp", "length", j!(3));
+    let unchanged = g.add("signal:FreqShift");
+    let pu = g.probe(unchanged, "out");
+    g.link(repeated, "out", unchanged, "input");
+    g.until("zero frequency shift preserves odd windows after history fills", |_| {
+        pu.latest().filter(|d| {
+            let index = d.meta().get("index").and_then(|v| match v {
+                goofi_core::MetaValue::Int(i) => Some(*i),
+                _ => None,
+            }).unwrap_or(0);
+            let v = f32s(d);
+            index > 5 && v.len() == 3 && v.iter().enumerate()
+                .all(|(i, value)| (*value - i as f32 / 3.0).abs() < 1e-5)
+        })
+    });
+
     // The spectrum both ways over a constant: what comes back is what went in, and the rate the
     // forward pass folded into the bin spacing is read out of it again.
     let flat = g.add("signal:Constant");

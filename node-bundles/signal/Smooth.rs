@@ -90,7 +90,7 @@ impl Node for Smooth {
         // An exponential needs several time constants of past before its answer settles.
         let reach = if exp { w * 5 } else { w };
         let n = a.shape()[dim];
-        let (shape, stitched, at) = self.past.push(a.shape(), dim, a.as_bytes(), reach + n);
+        let (shape, stitched, at) = self.past.push(a.shape(), dim, a.as_bytes(), reach);
         let smoothed: Vec<Vec<f32>> = stream::lanes(&shape, dim, &stitched)
             .iter()
             .map(|lane| {

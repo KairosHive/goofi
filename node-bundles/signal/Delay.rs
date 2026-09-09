@@ -58,7 +58,7 @@ impl Node for Delay {
             _ => size.round() as usize,
         };
         let n = a.shape()[dim];
-        let (shape, stitched, at) = self.past.push(a.shape(), dim, a.as_bytes(), back + n);
+        let (shape, stitched, at) = self.past.push(a.shape(), dim, a.as_bytes(), back);
         // Before the stream begins there is nothing to read back, so the earliest sample stands in.
         let shifted: Vec<Vec<f32>> = stream::lanes(&shape, dim, &stitched)
             .iter()

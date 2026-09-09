@@ -42,7 +42,7 @@ impl Node for Normalize {
         let (shape, stitched, at) = if width == 0 {
             (a.shape().to_vec(), a.as_bytes().to_vec(), 0usize)
         } else {
-            self.past.push(a.shape(), dim, a.as_bytes(), width + n)
+            self.past.push(a.shape(), dim, a.as_bytes(), width)
         };
         let lanes = stream::lanes(&shape, dim, &stitched);
 
