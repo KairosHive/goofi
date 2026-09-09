@@ -500,7 +500,7 @@
 					onSelect={(id) => (frontGroup = id)}
 					data-testid="param-tabs"
 					style="overflow-x: auto; flex-shrink: 0"
-					tabProps={() => ({ style: 'min-width: 7rem' })}
+					tabProps={() => ({ style: 'min-width: 3rem; max-width: max-content' })}
 				/>
 			{/if}
 
