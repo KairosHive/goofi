@@ -1,0 +1,3 @@
+# Keep the same revision as the Biotuner bundle: descriptors and generators share an API.
+biotuner @ git+https://github.com/dav0dea/biotuner@f45570e674d8193c7780891b9053a39bf6168c1e
+Pillow>=11
