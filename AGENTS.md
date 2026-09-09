@@ -388,6 +388,13 @@ shared memory, never through the graph — so no node runs under the graph mutex
 waits on a `process()`. A node is KNOWN when its add answers and ADDRESSABLE only once it reports
 ready; pub/sub has no history, so anything said before that is queued or re-planned, never lost.
 
+**A frame is the complete input.** Buffer produces rolling windows, and each window counts in
+full. Consumers never infer overlap from values or sample positions. A node that needs fresh
+samples is connected before Buffer. Resample processes each window independently. Epoch captures
+the supplied window on a trigger; Buffer owns its length. A signal node can request that a held
+input be cleared after a successful process call. The runtime applies those clears before its
+next input drain; a failed call keeps the held data.
+
 **One data stream per (node, slot), whatever the viewer count.** Viewers publish a payload-free
 constraint algebra; the bridge folds every viewer's constraints against the real frame and
 reduces ONCE, on its own subscription — so no number of viewers can slow a `process()` down.
