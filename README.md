@@ -151,7 +151,7 @@ The prompt runs the same commands as the CLI, without the leading `goofi`. Press
 command history, and Tab for completion. Commands use the browser tab's undo history.
 
 `goofi log list` reads the groups, `goofi log write "message" --level warning --component my-tool`
-adds a message, and `goofi log clear` clears the history for all clients. Host Rust components can
+adds a message. Log history cannot be cleared from the app or command interface. Host Rust components can
 write through `goofi_core::log::record`. Python node text keeps its node identity; native writes
 without an identity appear under `goofi`.
 

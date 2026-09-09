@@ -2064,8 +2064,3 @@ pub(crate) fn log_write(_state: &AppState, payload: &Value, _actor: &str, _event
     record(Source::component(payload["component"].as_str().unwrap_or("console")), level, None, parse_str(payload, "text")?);
     Ok(json!({ "logged": true }))
 }
-
-pub(crate) fn log_clear(_state: &AppState, _payload: &Value, _actor: &str, _events: &mut Vec<String>) -> Result<Value, String> {
-    goofi_core::log::global().lock().unwrap_or_else(|e| e.into_inner()).clear();
-    Ok(json!({ "cleared": true }))
-}

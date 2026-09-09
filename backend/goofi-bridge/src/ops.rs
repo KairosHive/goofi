@@ -293,8 +293,6 @@ pub static TREE: &[Entry] = &[
              doc: "Read the retained log groups, ordered by their last occurrence.", result: "{cursor, oldest, reset, groups}" }),
         Leaf(Op { name: "write", handler: Effect(arms::log_write), args: "text:string! level:string component:string", positional: 1,
              doc: "Write an application message. Level is info, warning or error.", result: "{logged: true}" }),
-        Leaf(Op { name: "clear", handler: Effect(arms::log_clear), args: "", positional: 0,
-             doc: "Clear all retained application log groups.", result: "{cleared: true}" }),
     ]),
     Group("op", "the vocabulary itself", &[
         Leaf(Op { name: "list", handler: Read(arms::op_list), args: "doc:bool", positional: 0,

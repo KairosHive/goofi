@@ -23,14 +23,14 @@ describe('console log replica', () => {
 		expect(rows(s)[1].count).toBe(2);
 	});
 
-	it('replaces history on reconnect, applies eviction and clears from the server', () => {
+	it('replaces history on reconnect and applies eviction', () => {
 		const s = new ConsoleStore();
 		s.apply({ reset: true, cursor: 2, oldest: 1, groups: [group(1, 'old'), group(2, 'kept')] });
 		s.apply({ reset: false, cursor: 3, oldest: 2, groups: [group(3, 'new')] });
 		expect(rows(s).map((g) => g.text)).toEqual(['kept', 'new']);
 		s.apply({ reset: true, cursor: 1, oldest: 1, groups: [group(1, 'other server')] });
 		expect(rows(s).map((g) => g.text)).toEqual(['other server']);
-		s.apply({ reset: false, cursor: 2, oldest: 3, groups: [] });
+		s.apply({ reset: true, cursor: 0, oldest: 1, groups: [] });
 		expect(rows(s)).toEqual([]);
 	});
 
