@@ -1,5 +1,6 @@
 /** Central reactive graph state, backed by the control WS. The store owns the only writes, so a
  * component just reads its `$state` fields. */
+import type { VideoQuality } from '$lib/api/types';
 import {
 	getControl,
 	type Control,
@@ -104,7 +105,7 @@ export class GraphStore {
 	hadHello = $state(false);
 
 	/** Every armed output slot, doc-authoritative: the document is the one owner of what is armed. */
-	armed = $state<{ uid: string; slot: string }[]>([]);
+	armed = $state<{ uid: string; slot: string; quality: VideoQuality }[]>([]);
 
 	/** The recording SESSION, as the backend last reported it. Pushed, never derived here. */
 	record = $state<RecordStatus>(IDLE_RECORD);
@@ -414,6 +415,13 @@ export class GraphStore {
 			output: `${node}/${slot}`
 		});
 		if (r?.changed) this._recordGraphCmd(`Arm ${slot}`);
+	}
+
+	async setRecordQuality(node: string, slot: string, quality: VideoQuality): Promise<void> {
+		const r = await this.ctl.call<{ changed?: boolean }>('record quality', {
+			output: `${node}/${slot}`, quality
+		});
+		if (r?.changed) this._recordGraphCmd(`Set ${slot} recording quality`);
 	}
 
 	async disarmSlot(node: string, slot: string): Promise<void> {

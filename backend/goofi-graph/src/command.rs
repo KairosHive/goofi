@@ -1,5 +1,6 @@
 //! Patch commands with exact inverses — the manager's undo/redo unit.
 
+use goofi_core::record::RecordedOutput;
 use crate::{Graph, Uid};
 use goofi_core::globals::{Control, GlobalValue};
 use goofi_core::Param;
@@ -67,7 +68,7 @@ pub enum Command {
         /// Captured touched-filter baseline to restore; `None` for a user add (defaults to empty).
         baseline: Option<serde_json::Value>,
         /// Captured armed output slots to restore; `None` for a user add (defaults to none).
-        record: Option<Vec<String>>,
+        record: Option<Vec<RecordedOutput>>,
         /// The scope to create the node INSIDE (`None` = ROOT). A PORT's membership rides HERE and
         /// nowhere else: one cannot be created without a scope. Every other kind is placed by a
         /// [`Command::SetScope`] child, after every uid the capture names exists.
@@ -102,7 +103,7 @@ pub enum Command {
     /// vector it replaced.
     SetRecorded {
         uid: Uid,
-        record: Vec<String>,
+        record: Vec<RecordedOutput>,
     },
     /// Replace the values the touched filter counts from, WHOLE. `None` snapshots what the node
     /// holds NOW, which is what the Clear button does; `Some` restores a captured blob, which is
@@ -445,7 +446,7 @@ impl Command {
             }
 
             Command::SetRecorded { uid, record } => {
-                let Some(was) = g.recorded(uid).map(<[String]>::to_vec) else {
+                let Some(was) = g.recorded(uid).map(<[RecordedOutput]>::to_vec) else {
                     return Ok((Outcome::Ok, Command::Compound(vec![]))); // idempotent: it is gone
                 };
                 g.set_recorded(uid, record)?;
@@ -695,7 +696,7 @@ impl Command {
                         sources: vec![],
                         viewers: g.viewers(id).cloned(),
                         baseline: g.baseline(id).cloned(),
-                        record: g.recorded(id).filter(|r| !r.is_empty()).map(<[String]>::to_vec),
+                        record: g.recorded(id).filter(|r| !r.is_empty()).map(<[RecordedOutput]>::to_vec),
                         scope: Some(scope),
                     })
                     .collect();
@@ -956,7 +957,7 @@ fn capture_subtree_restore(g: &Graph, root: Uid) -> (Command, std::collections::
             sources,
             viewers: g.viewers(u).filter(|v| v.as_object().is_some_and(|m| !m.is_empty())).cloned(),
             baseline: g.baseline(u).filter(|v| v.as_object().is_some_and(|m| !m.is_empty())).cloned(),
-            record: g.recorded(u).filter(|r| !r.is_empty()).map(<[String]>::to_vec),
+            record: g.recorded(u).filter(|r| !r.is_empty()).map(<[RecordedOutput]>::to_vec),
             scope: g.stub(u).map(|(s, _)| s),
         });
     }

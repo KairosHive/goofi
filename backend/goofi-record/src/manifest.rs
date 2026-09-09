@@ -48,6 +48,8 @@ pub struct Entry {
     /// What a video stream's encoding costs, in words: it is the one stream that is not exact.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encoding: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<goofi_core::record::VideoQuality>,
     pub frames: u64,
     pub dropped: u64,
     #[serde(skip_serializing_if = "Option::is_none")]

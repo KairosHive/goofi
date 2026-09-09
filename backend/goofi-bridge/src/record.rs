@@ -57,7 +57,8 @@ struct Drain {
 fn armed(g: &Graph) -> HashMap<(Uid, String), (String, StreamId)> {
     let mut out = HashMap::new();
     for uid in g.all_uids() {
-        for slot in g.recorded(uid).unwrap_or(&[]) {
+        for output in g.recorded(uid).unwrap_or(&[]) {
+            let slot = &output.slot;
             let id = crate::arms::stream_id(g, uid, slot);
             if timeline(id.engine).is_none() {
                 continue;

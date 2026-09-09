@@ -32,6 +32,7 @@ impl goofi_record::video::Encoders for SlowEncoders {
         _file: &std::path::Path,
         _size: (u32, u32),
         _fps: f64,
+        _quality: goofi_core::record::VideoQuality,
     ) -> Result<Box<dyn goofi_record::video::Encoder>, String> {
         Ok(Box::new(Slow { inside: self.inside.clone(), release: self.release.clone() }))
     }
@@ -62,6 +63,7 @@ impl goofi_record::video::Encoders for NoEncoder {
         _file: &std::path::Path,
         _size: (u32, u32),
         _fps: f64,
+        _quality: goofi_core::record::VideoQuality,
     ) -> Result<Box<dyn goofi_record::video::Encoder>, String> {
         Err(NoEncoder::WHY.into())
     }
@@ -246,7 +248,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         let release = std::sync::Arc::new(AtomicBool::new(false));
         rec.set_encoders(std::sync::Arc::new(SlowEncoders { inside: inside.clone(), release: release.clone() }));
         let old = rec.start(dir.path(), &format!("slow-{restart}"), None).expect("started");
-        rec.open(&id, goofi_record::Kind::Video { size: (1, 1), fps: 60.0 }, time.now(),
+        rec.open(&id, goofi_record::Kind::Video { size: (1, 1), fps: 60.0, quality: Default::default() }, time.now(),
             goofi_record::StreamMeta::measured(None)).expect("video opened");
         let closing = rec.clone();
         let stream = id.clone();
@@ -298,20 +300,20 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     let dst = goofi_tests::hex(g.add("_TestSink"));
 
     g.call("record arm", j!({ "output": goofi_tests::ep(&src, "out") }));
-    assert_eq!(g.doc()["nodes"][&src]["record"], j!(["out"]), "arming is the node's own record");
+    assert_eq!(g.doc()["nodes"][&src]["record"], j!([{ "slot": "out", "quality": "high" }]), "arming is the node's own record");
 
     let status = g.call("record status", j!({}));
     assert_eq!(status["running"], j!(false), "arming a slot does not begin a recording");
 
     g.call("link add", j!({ "from": goofi_tests::ep(&src, "out"), "to": goofi_tests::ep(&dst, "input") }));
-    assert_eq!(g.doc()["nodes"][&src]["record"], j!(["out"]), "a re-wire cannot disarm a recording");
+    assert_eq!(g.doc()["nodes"][&src]["record"], j!([{ "slot": "out", "quality": "high" }]), "a re-wire cannot disarm a recording");
 
     g.call("undo", j!({}));
     g.call("undo", j!({}));
     assert_eq!(g.doc()["nodes"][&src]["record"], j!([]), "arming has an exact inverse");
 
     g.call("redo", j!({}));
-    assert_eq!(g.doc()["nodes"][&src]["record"], j!(["out"]), "and the arm comes back");
+    assert_eq!(g.doc()["nodes"][&src]["record"], j!([{ "slot": "out", "quality": "high" }]), "and the arm comes back");
 
     let root = tempfile::tempdir().expect("a temp root");
     let folder = g.call("record start", j!({ "name": "walk", "root": root.path() }))["folder"]
@@ -1021,7 +1023,7 @@ fn h264_records_full_resolution_and_pads_odd_sizes() {
     encoders.probe().expect("FFmpeg is installed");
     for (width, height) in [(3840u32, 2160u32), (63, 31), (1, 1)] {
         let path = root.path().join(format!("{width}x{height}.mkv"));
-        let mut encoder = encoders.open(&path, (width, height), 60.0).expect("open video");
+        let mut encoder = encoders.open(&path, (width, height), 60.0, Default::default()).expect("open video");
         assert!(encoder.write(&[0]).is_err(), "a partial frame must not corrupt the pipe");
         let mut frame = vec![0u8; width as usize * height as usize * 4];
         for pixel in frame.chunks_exact_mut(4) {
@@ -1050,4 +1052,89 @@ fn h264_records_full_resolution_and_pads_odd_sizes() {
                 "a short flat-colour 4K clip stays small");
         }
     }
+}
+
+#[test]
+fn video_quality_is_saved_undone_and_applied_to_each_file() {
+    let g = goofi_tests::Goofi::new();
+    let root = tempfile::tempdir().expect("recording root");
+    let uid = g.add("graphics:Constant");
+    g.set_param(uid, "common", "width", 32);
+    g.set_param(uid, "common", "height", 16);
+    g.ready(uid);
+    let output = goofi_tests::ep(uid, "out");
+    g.call("record arm", j!({ "output": output }));
+    let quality = || g.doc()["nodes"][goofi_tests::hex(uid)]["record"][0]["quality"].clone();
+    assert_eq!(quality(), "high");
+    g.call("record quality", j!({ "output": output, "quality": "small" }));
+    assert_eq!(quality(), "small");
+    g.call("undo", j!({}));
+    assert_eq!(quality(), "high");
+    g.call("redo", j!({}));
+    assert_eq!(quality(), "small");
+    assert!(g.refuse("record quality", j!({ "output": output, "quality": "invalid" })).contains("quality"));
+    let path = root.path().join("quality.gfi");
+    g.call("session save", j!({ "path": path }));
+    g.call("session load", j!({ "path": path }));
+    assert_eq!(quality(), "small", "the patch keeps the output's quality");
+    g.ready(uid);
+    let folder = g.call("record start", j!({ "root": root.path() }))["folder"].as_str().unwrap().to_string();
+    let frames = || g.state.recorder.status().streams.iter().map(|stream| stream.frames).sum::<u64>();
+    g.until("the small-quality video to write frames", |_| {
+        goofi_tests::render(&g, 1);
+        (frames() >= 4).then_some(())
+    });
+    let before = frames();
+    g.call("record quality", j!({ "output": output, "quality": "very_high" }));
+    g.until("the new quality to open a new file", |_| {
+        goofi_tests::render(&g, 1);
+        (frames() >= before + 4).then_some(())
+    });
+    g.call("record stop", j!({}));
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(std::path::Path::new(&folder).join("manifest.json")).unwrap(),
+    ).unwrap();
+    let streams = manifest["streams"].as_array().unwrap();
+    assert_eq!(streams.len(), 2, "each quality has a separate video file: {manifest}");
+    assert_eq!(streams[0]["quality"], "small");
+    assert_eq!(streams[0]["closed_because"], "quality changed");
+    assert_eq!(streams[1]["quality"], "very_high");
+    for stream in streams {
+        let file = std::path::Path::new(&folder).join(stream["file"].as_str().unwrap());
+        assert!(file.exists());
+        let start = stream["t0_patch"].as_f64().unwrap();
+        assert!(beside_instants(&file).iter().all(|at| *at >= start), "no earlier readback enters the new file");
+        assert!(stream.get("error").is_none(), "{stream}");
+    }
+}
+
+#[test]
+fn video_quality_changes_the_encoded_picture() {
+    use goofi_core::record::VideoQuality;
+    use goofi_record::video::{Encoders, FfmpegEncoders};
+    let root = tempfile::tempdir().unwrap();
+    let mut state = 17u32;
+    let mut frame = vec![0u8; 128 * 128 * 4];
+    for pixel in frame.chunks_exact_mut(4) {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let grey = (state >> 24) as u8;
+        pixel.copy_from_slice(&[grey, grey, grey, 255]);
+    }
+    let mut errors = Vec::new();
+    for quality in [VideoQuality::Small, VideoQuality::VeryHigh] {
+        let file = root.path().join(format!("{quality:?}.mkv"));
+        let mut encoder = FfmpegEncoders.open(&file, (128, 128), 60.0, quality).unwrap();
+        for _ in 0..4 { encoder.write(&frame).unwrap(); }
+        encoder.finish().unwrap();
+        let decoded = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-i"]).arg(&file)
+            .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba", "-"])
+            .output().unwrap();
+        assert!(decoded.status.success());
+        assert_eq!(decoded.stdout.len(), frame.len());
+        let error: u64 = decoded.stdout.chunks_exact(4).zip(frame.chunks_exact(4))
+            .map(|(out, input)| i64::from(out[0]).abs_diff(i64::from(input[0])).pow(2)).sum();
+        errors.push(error);
+    }
+    assert!(errors[1] < errors[0], "very high quality preserves more of the supplied picture: {errors:?}");
 }

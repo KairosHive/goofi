@@ -548,7 +548,7 @@ impl AudioEngine {
                     .collect()
             })
             .collect();
-        Desired { consts, subs, targets, record: nv.recorded.to_vec() }
+        Desired { consts, subs, targets, record: nv.recorded.iter().map(|output| output.slot.clone()).collect() }
     }
 
     /// A plugin's params as its controller counts them — normalized, in the plugin's own order —

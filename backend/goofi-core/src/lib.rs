@@ -13,6 +13,7 @@ pub mod path;
 pub mod png;
 pub mod probe;
 pub mod reduce;
+pub mod record;
 pub mod startup;
 pub mod stream;
 pub mod time;
