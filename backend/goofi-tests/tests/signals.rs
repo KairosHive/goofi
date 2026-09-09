@@ -734,6 +734,29 @@ fn the_analysis_nodes_read_a_known_sine_and_say_what_it_is() {
     let peak_of = |v: &[f32]| v[64..192].iter().fold(0f32, |m, x| m.max(x.abs()));
     assert!((peak_of(&f32s(&halved)) - 1.0).abs() < 0.05, "the sine is still a sine at half the rate");
 
+    let complete = g.add("_TestRamp");
+    set(complete, "ramp", "length", j!(200));
+    set(complete, "ramp", "sfreq", j!(100.0));
+    let resampled = g.add("Resample");
+    set(resampled, "resample", "sfreq", j!(25.5));
+    let pr = g.probe(resampled, "out");
+    g.link(complete, "out", resampled, "input");
+    let first = g.until("a fractional rate resamples the complete window", |_| {
+        pr.latest().filter(|d| shape(d) == vec![1, 51] && d.meta().sfreq() == Some(25.5))
+    });
+    let values = f32s(&first);
+    g.until("the same window gives the same result on a later arrival", |_| {
+        pr.latest().filter(|d| d.meta().get("index") != first.meta().get("index") && f32s(d) == values)
+    });
+    set(complete, "ramp", "length", j!(1));
+    g.until("a one-sample window rounds up independently", |_| {
+        pr.latest().filter(|d| shape(d) == vec![1, 1] && d.meta().sfreq() == Some(25.5))
+    });
+    set(resampled, "resample", "axis", j!(-3));
+    g.until("an axis outside the window is refused", |_| g.error(resampled).filter(|e| e.contains("axis")));
+    set(resampled, "resample", "axis", j!(-1));
+    g.until("resampling recovers with a valid axis", |_| g.error(resampled).is_none().then_some(()));
+
     // A square matrix of one value has one axis that carries everything and two that carry
     // nothing, which is the answer to check an eigendecomposition against.
     let flat = g.add("signal:Constant");
