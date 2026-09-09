@@ -15,8 +15,8 @@
      "doc": "How thick a link between two landmarks is drawn, in texels. Zero draws none."},
     {"group": "draw", "name": "joint", "kind": "float", "default": 3.5, "min": 0.0, "max": 24.0,
      "doc": "How big a landmark itself is drawn, in texels. Zero draws none."},
-    {"group": "draw", "name": "streak", "kind": "float", "default": 0.0, "min": 0.0, "max": 4.0,
-     "doc": "How long a tail each landmark drags behind it, out of its own velocity."},
+    {"group": "draw", "name": "streak", "kind": "float", "default": 0.0, "min": 0.0, "max": 1.0,
+     "doc": "How many seconds of travel to show as a tail behind each landmark. A velocity is per SECOND, so a tenth already draws a long one."},
     {"group": "draw", "name": "depth", "kind": "float", "default": 0.6, "min": 0.0, "max": 2.0,
      "doc": "How much the third column shrinks and dims what is further away."},
 
@@ -53,6 +53,11 @@ const FACE_LINKS: i32 = 124;
 // walk every one of them. Eyes, brows, lips, nose and the oval are what carry the expression.
 // A frame with more rows than this walks them at a stride, because the point loop is per texel.
 const MAX_POINTS: i32 = 512;
+
+// The longest tail a landmark may drag, in frame heights. A velocity is reported per SECOND and a
+// hand crosses the frame in about one, so without this ceiling one landmark's streak is longer
+// than the picture and a body's worth of them floods it to a flat wash.
+const MAX_TAIL: f32 = 0.2;
 const MAX_FIGURES: i32 = 8;
 
 const EDGES: array<u32, 180> = array<u32, 180>(
@@ -247,7 +252,9 @@ fn shade(uv: vec2f) -> vec4f {
         let stride = max(1, n / MAX_POINTS);
         for (var i = 0; i < n; i = i + stride) {
             let px = coord(i, 0) * aspect.x;
-            let tail = drift(i, moving) * (p.streak * f32(carries));
+            let travel = drift(i, moving) * (p.streak * f32(carries));
+            let far = length(travel);
+            let tail = select(travel, travel * (MAX_TAIL / max(far, 1e-6)), far > MAX_TAIL);
             let reach = joint + soft + length(tail);
             if abs(q.x - px) > reach { continue; }
             let here = vec2f(px, coord(i, 1));
