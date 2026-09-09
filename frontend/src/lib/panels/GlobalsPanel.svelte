@@ -185,14 +185,14 @@
 								</div>
 							{/each}
 							{#if !lock.config}
-								<Button variant="ghost" size="sm" data-testid="global-add-in" disabled={busy}
+								<Button class="add-row" variant="ghost" size="sm" data-testid="global-add-in" disabled={busy}
 									onclick={() => void addEntry(grp.group)}><Icon name="plus" />entry</Button>
 							{/if}
 						</div>
 					{/if}
 				</section>
 			{/each}
-			<Button class="new-group" variant="ghost" size="sm" data-testid="global-add-group-btn"
+			<Button class="add-row new-group" variant="ghost" size="sm" data-testid="global-add-group-btn"
 				disabled={busy} onclick={() => void addGroup()}><Icon name="plus" />group</Button>
 			{#if error}<p class="error" role="alert">{error}</p>{/if}
 		</div>
@@ -208,7 +208,7 @@
 	.gp-body {
 		padding: var(--space-3) var(--space-5) var(--space-6);
 	}
-	.grp {
+	.grp:last-of-type {
 		border-bottom: 1px solid var(--border);
 	}
 	.grp-head {
@@ -290,8 +290,10 @@
 		gap: var(--space-2);
 		align-items: center;
 		padding: var(--space-2) 0;
-		border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 		font-size: var(--fs-small);
+	}
+	.entry + .entry {
+		border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 	}
 	.entry-name, .entry-value {
 		min-width: 0;
@@ -300,6 +302,10 @@
 	}
 	.fixed, .ro-value { overflow-wrap: anywhere; }
 	.ro-value { color: var(--text-muted); }
+	.gp-body :global(.add-row) {
+		width: 100%;
+		justify-content: center;
+	}
 	.gp-body :global(.new-group) { margin-top: var(--space-4); }
 	.error { color: var(--danger); font-size: var(--fs-small); overflow-wrap: anywhere; }
 	@container (max-width: 400px) {
