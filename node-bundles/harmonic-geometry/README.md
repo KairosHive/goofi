@@ -18,7 +18,7 @@ patches. The [survey](SURVEY.md) records the source review and implementation pl
 | `graphics:HarmonicChladni` | Packed modes/harmonics → a signed plate/open-wave field |
 | `graphics:HarmonicInk` | Signed texture + optional BioColors palette → color, nodes, or contours |
 | `graphics:HarmonicFlow` | A vector field → persistent seeded ink, with explicit freeze and reset |
-| `graphics:HarmonicRelief` | Signed texture → sculpted jade and metal, with parallax, engraving, and directional light |
+| `graphics:HarmonicRelief` | Signed texture → full-frame relief with four morphable textures, parallax, engraving, and directional light |
 
 ## Cable contracts
 
@@ -44,10 +44,14 @@ Upload these through `graphics:SignalIn`. The Flow shader accepts its ARRAY dire
 
 `HarmonicRelief` reads the same signed texture as Ink. It keeps the harmonic field
 separate from the material. Depth changes the relief; seam changes its metal band;
-camera and light change only the view. The renderer has no stored state or clock
-animation. Drive the upstream modes to move the sculpture. Its rounded plate is
-an artistic crop, not a new physical boundary condition. Masked input shows the
-opaque studio background. A render pass rebuilds the height map from the current
+camera and light change only the view. Select `texture_a` and `texture_b` from
+jade, brushed metal, woven silk, and porous stone. `texture_mix` blends their
+height detail, color, roughness, and reflectance with a smooth endpoint curve.
+`texture_scale` sets repeats; `texture_depth` sets the strength of surface detail.
+The renderer has no history or clock animation. Drive the upstream modes and
+texture mix independently. Mirrored field extension fills any aspect ratio;
+it is an artistic mapping, not a new physical boundary condition. Masked input
+shows the opaque background. A render pass rebuilds the height map from the current
 field each frame. It never reads an earlier height map. The float16 target uses
 two channels to retain height precision. The default is 512 × 512, with at most
 41 height samples, eight intersection refinements, four normal samples, and ten

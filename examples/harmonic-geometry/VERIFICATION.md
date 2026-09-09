@@ -4,7 +4,38 @@ Checked on Windows x86_64, 9 September 2026, with Rust 1.97.1, the repository's
 two Python environments, and Chromium. Biotuner is pinned to the same revision
 as the existing bundle: `f45570e674d8193c7780891b9053a39bf6168c1e`.
 
-## Chladni material study
+## Full-window texture morph update
+
+Recipe 09 now opens on Canvas, with a filled viewer and a mirrored field that
+has no plate outline. Play retains the controls. Two texture selectors and an
+independent LFO blend jade, brushed metal, woven silk, and porous stone. The
+blend changes surface height, color, and reflection together.
+
+- The expanded public GPU session passed in 14.40 seconds. It checks four
+  distinct finishes, exact endpoints, a small continuous mix step, unchanged
+  source data, stillness, retuning, control limits, and finite output. It also
+  checks surface variation on every edge at 640 × 360 and 360 × 640.
+- The focused embedded archive session passed in 10.93 seconds. It loads the
+  seven-node recipe, renders its output, sets the mode and texture mixes
+  independently, changes both texture selectors, and saves and reloads it.
+- Clippy for the embedded geometry test passed with warnings denied. The app
+  build and E2E TypeScript check passed without compiler warnings.
+- Both focused Playwright sessions passed in 12.4 seconds: Canvas is selected
+  on load, the picture fills landscape and portrait panels, texture selectors
+  and the manual mix work, and the illustrated cookbook fits desktop and phone.
+  No page errors or node errors remained. The GPU images and browser capture
+  were inspected; the cookbook includes all four finishes on the same field.
+
+One GPU run reached the Windows paging limit while the old preview process was
+still open. The test passed after that task's saved preview was stopped. No
+shared-memory files were removed by a script. Early shader checks caught and
+resolved a header type name and a WGSL vector comparison error.
+
+The full workspace suite and recipes 01–08 were not repeated for this update.
+The previous results below remain historical checks. The live preview was
+restarted with the updated shader and recipe after the focused tests.
+
+## Initial Chladni material study
 
 Recipe 09, **Jade resonance**, adds `HarmonicRelief` after the original bundle
 checkpoint below. The renderer reads `HarmonicChladni.out` and keeps material,
