@@ -1,86 +1,8 @@
-//! Normalize — put a signal on a common scale, from statistics taken over a window of its own
-//! past. A window of zero keeps running statistics instead, which costs no memory as it grows.
+//! Scale a signal from windowed or running statistics.
 
+use goofi_core::normalize::{apply, scale_of, validate, Running, Scale};
 use goofi_core::{resolve_axis, stream, Data, SlotType, Stream};
 use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
-
-/// What a lane is scaled by: a centre and a spread, whatever the mode calls them.
-#[derive(Clone, Copy, Default)]
-struct Scale {
-    centre: f64,
-    spread: f64,
-}
-
-/// Running count, mean and sum of squared deviations, and the extremes — one per lane.
-#[derive(Clone, Copy, Default)]
-struct Running {
-    n: f64,
-    mean: f64,
-    m2: f64,
-    low: f64,
-    high: f64,
-}
-
-impl Running {
-    fn push(&mut self, x: f64) {
-        if self.n == 0.0 {
-            (self.low, self.high) = (x, x);
-        }
-        self.n += 1.0;
-        let delta = x - self.mean;
-        self.mean += delta / self.n;
-        self.m2 += delta * (x - self.mean);
-        self.low = self.low.min(x);
-        self.high = self.high.max(x);
-    }
-
-    fn scale(&self, mode: &str) -> Scale {
-        match mode {
-            "minmax" => Scale { centre: self.low, spread: self.high - self.low },
-            _ => Scale { centre: self.mean, spread: (self.m2 / self.n.max(1.0)).sqrt() },
-        }
-    }
-}
-
-fn median(sorted: &[f64], at: f64) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    let pos = at * (sorted.len() - 1) as f64;
-    let (low, frac) = (pos.floor() as usize, pos.fract());
-    sorted[low] + (sorted[(low + 1).min(sorted.len() - 1)] - sorted[low]) * frac
-}
-
-/// The statistics of one window, by mode.
-fn scale_of(mode: &str, window: &[f32]) -> Scale {
-    match mode {
-        "minmax" => {
-            let low = window.iter().copied().fold(f32::INFINITY, f32::min) as f64;
-            let high = window.iter().copied().fold(f32::NEG_INFINITY, f32::max) as f64;
-            Scale { centre: low, spread: high - low }
-        }
-        "robust" => {
-            let mut v: Vec<f64> = window.iter().map(|x| *x as f64).collect();
-            v.sort_by(f64::total_cmp);
-            Scale { centre: median(&v, 0.5), spread: median(&v, 0.75) - median(&v, 0.25) }
-        }
-        _ => {
-            let n = window.len().max(1) as f64;
-            let mean = window.iter().map(|x| *x as f64).sum::<f64>() / n;
-            let var = window.iter().map(|x| (*x as f64 - mean).powi(2)).sum::<f64>() / n;
-            Scale { centre: mean, spread: var.sqrt() }
-        }
-    }
-}
-
-/// A spread of zero means the window does not vary, and every value sits at the centre.
-fn apply(scale: Scale, x: f32) -> f32 {
-    if scale.spread == 0.0 {
-        0.0
-    } else {
-        ((x as f64 - scale.centre) / scale.spread) as f32
-    }
-}
 
 #[derive(Default)]
 struct Normalize {
@@ -115,8 +37,9 @@ impl Node for Normalize {
             _ => size.round() as usize,
         };
 
+        validate(mode, width)?;
+
         let (shape, stitched, at) = if width == 0 {
-            // Running statistics: the node keeps no window at all, only the four numbers.
             (a.shape().to_vec(), a.as_bytes().to_vec(), 0usize)
         } else {
             self.past.push(a.shape(), dim, a.as_bytes(), width + n)
@@ -135,7 +58,7 @@ impl Node for Normalize {
                             run.push(*x as f64);
                         }
                     }
-                    self.running.iter().map(|r| r.scale(mode)).collect()
+                    self.running.iter().map(|r| r.scale(mode)).collect::<Result<_, _>>()?
                 } else {
                     lanes
                         .iter()
@@ -182,7 +105,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some(
             "How much of the past the statistics are taken over. 0 keeps running statistics over \
-             everything the node has seen, which costs no memory as it grows.",
+             everything the node has seen. Robust mode needs a positive size.",
         ),
     },
     ParamDecl {
