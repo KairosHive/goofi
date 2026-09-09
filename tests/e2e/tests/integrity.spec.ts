@@ -273,3 +273,33 @@ test('the primitive gallery holds together', async ({ page }) => {
 	await expect(page.getByTestId('ui-button-default-md')).toBeVisible();
 	await expectIntact(page, 'the primitive gallery');
 });
+
+
+test('parameter groups keep readable widths and scroll to the last group', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const uid = await addNode(page, 'graphics:TimeWarpFbm');
+		await waitForNode(page, uid);
+		await selectNode(page, uid);
+		const strip = page.getByTestId('param-tabs');
+		const tabs = strip.getByRole('tab');
+		await expect(tabs).toHaveCount(10);
+		const sizes = await strip.evaluate((el) => ({
+			width: el.clientWidth,
+			content: el.scrollWidth,
+			minimum: 7 * parseFloat(getComputedStyle(document.documentElement).fontSize),
+			tabs: Array.from(el.querySelectorAll('[role="tab"]'), (tab) => tab.getBoundingClientRect().width)
+		}));
+		expect(sizes.content).toBeGreaterThan(sizes.width);
+		for (const width of sizes.tabs) expect(width).toBeGreaterThanOrEqual(sizes.minimum - 1);
+		await tabs.first().focus();
+		await page.keyboard.press('End');
+		await expect(tabs.last()).toHaveAttribute('aria-selected', 'true');
+		await expect(tabs.last()).toBeInViewport();
+		expect(await strip.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+		await expectIntact(page, 'the last parameter group after scrolling');
+	} finally {
+		await tearDown(page);
+	}
+});
