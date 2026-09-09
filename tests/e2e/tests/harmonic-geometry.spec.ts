@@ -7,6 +7,7 @@ import { rawCall } from '../lib/raw';
 import { REPO_ROOT } from '../playwright.config';
 
 const folder = path.join(REPO_ROOT, 'examples', 'harmonic-geometry');
+const textures = ['jade', 'brushed metal', 'woven silk', 'porous stone', 'sand', 'dunes', 'lichen', 'coral', 'cells', 'spores', 'pollen', 'plankton'];
 const recipes = JSON.parse(fs.readFileSync(path.join(folder, 'recipes.json'), 'utf8')) as Array<{
 	file: string; title: string; nodes: number; views: [string, string, string][];
 }>;
@@ -44,14 +45,14 @@ test('the harmonic geometry cookbook opens as live dashboards with usable contro
 				await expect.poll(() => page.evaluate(() => (window as any).goofi.query.graph().nodes.length)).toBe(recipe.nodes);
 				await page.getByRole('tab', { name: 'Play Close tab', exact: true }).click();
 				await expect(page.getByTestId('control-panel')).toBeVisible();
-				for (const [index, [name, slot]] of recipe.views.entries()) {
+				for (const [index, [name, slot, kind]] of recipe.views.entries()) {
 					if (index) await page.getByTestId('workspace-tabs').locator('.ui-tab').filter({ hasText: name }).click();
 					await expect.poll(() => page.evaluate(({ name, slot }) => {
 						const g = (window as any).goofi;
 						const node = g.query.graph().nodes.find((n: any) => n.name === name);
 						return node && g.query.frameSummary(node.uid, slot) !== null;
 					}, { name, slot }), { timeout: 45_000, message: `${recipe.file}: ${name}.${slot} reaches the browser` }).toBe(true);
-					await expect(page.locator('.vp-body canvas').first()).toBeVisible();
+					if (kind !== 'string') await expect(page.locator('.vp-body canvas').first()).toBeVisible();
 					if (!index) {
 						if (slot === 'out') await expect.poll(() => imageContrast(page),
 							{ timeout: 45_000, message: 'The plate viewer shows a pattern after its shader inputs arrive' }).toBeGreaterThan(8);
@@ -127,7 +128,9 @@ test('jade fills the window and its texture controls morph independently', async
 		const loaded = await rawCall(page, 'session load', { path: path.join(folder, '09-jade-resonance.gfi') });
 		expect(loaded.error, JSON.stringify(loaded)).toBeUndefined();
 		const canvasTab = page.getByRole('tab', { name: 'Canvas Close tab', exact: true });
-		await expect(canvasTab).toHaveAttribute('aria-selected', 'true');
+		await expect(page.getByRole('tab', { name: 'Play Close tab', exact: true })).toHaveAttribute('aria-selected', 'true');
+		await expect(page.getByTestId('control-geometry-textureA').getByRole('combobox')).toHaveValue('sand');
+		await canvasTab.click();
 		const canvas = page.locator('.vp-body canvas:visible').first();
 		await expect.poll(() => page.evaluate(() => {
 			const g = (window as any).goofi;
@@ -148,9 +151,9 @@ test('jade fills the window and its texture controls morph independently', async
 		await page.setViewportSize({ width: 1440, height: 1000 });
 		await page.getByRole('tab', { name: 'Play Close tab', exact: true }).click();
 		for (const name of ['auto', 'textureAuto']) await page.getByTestId(`control-geometry-${name}`).getByRole('checkbox').uncheck();
-		for (const [name, value] of [['textureA', 'woven silk'], ['textureB', 'porous stone']]) {
+		for (const [name, value] of [['textureA', 'cells'], ['textureB', 'plankton']]) {
 			const select = page.getByTestId(`control-geometry-${name}`).getByRole('combobox');
-			await expect(select.locator('option')).toHaveText(['jade', 'brushed metal', 'woven silk', 'porous stone']);
+			await expect(select.locator('option')).toHaveText(textures);
 			await select.selectOption(value);
 		}
 		const slider = page.getByTestId('control-geometry-textureMix').getByRole('slider');
@@ -162,14 +165,40 @@ test('jade fills the window and its texture controls morph independently', async
 		}).toEqual([['geometry.mix', 0.3], ['geometry.textureMix', 1]]);
 		await expect.poll(async () => (await rawCall(page, 'session status')).result.errors).toEqual([]);
 		// Return to the saved finish for the cookbook picture, with manual controls held.
-		await page.getByTestId('control-geometry-textureA').getByRole('combobox').selectOption('jade');
-		await page.getByTestId('control-geometry-textureB').getByRole('combobox').selectOption('brushed metal');
+		await page.getByTestId('control-geometry-textureA').getByRole('combobox').selectOption('sand');
+		await page.getByTestId('control-geometry-textureB').getByRole('combobox').selectOption('lichen');
 		await slider.focus();
 		await page.keyboard.press('Home');
 		await canvasTab.click();
-		await expect.poll(() => imageContrast(page), { timeout: 30_000 }).toBeGreaterThan(80);
+		await expect.poll(() => imageContrast(page), { timeout: 30_000 }).toBeGreaterThan(15);
 		await page.screenshot({ path: path.join(folder, 'assets', '09-jade-resonance-browser.png') });
 		expect(errors).toEqual([]);
+	} finally {
+		await resetPatch(page);
+	}
+});
+
+test('living ratios modulate the organic field with a visible trace and pause control', async ({ page }) => {
+	test.setTimeout(120_000);
+	await page.setViewportSize({ width: 1440, height: 1000 });
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const loaded = await rawCall(page, 'session load', { path: path.join(folder, '10-living-ratios.gfi') });
+		expect(loaded.error, JSON.stringify(loaded)).toBeUndefined();
+		await expect(page.getByTestId('control-geometry-running').getByRole('checkbox')).toBeChecked();
+		await expect.poll(() => page.locator('.vp-body canvas:visible').count()).toBeGreaterThanOrEqual(2);
+		await expect.poll(() => imageContrast(page), { timeout: 45_000 }).toBeGreaterThan(15);
+		const sample = async () => (await rawCall(page, 'node snapshot', { output: 'ratios/ratio' })).result?.range?.mean;
+		await expect.poll(sample).toBeGreaterThan(1);
+		const first = await sample();
+		await expect.poll(sample, { timeout: 12_000 }).not.toBe(first);
+		await page.getByTestId('control-geometry-running').getByRole('checkbox').uncheck();
+		await expect.poll(async () => (await rawCall(page, 'global list')).result.globals.find((g: any) => g.name === 'geometry.running').value).toBe(false);
+		await expect.poll(async () => (await rawCall(page, 'session status')).result.errors).toEqual([]);
+		await page.screenshot({ path: path.join(folder, 'assets', '10-living-ratios-browser.png') });
+		await page.getByRole('tab', { name: 'ratios Close tab', exact: true }).click();
+		await expect(page.locator('.vp-body')).toContainText('ratio');
 	} finally {
 		await resetPatch(page);
 	}

@@ -1,6 +1,6 @@
 """Convert frames from the harmonic_geometry public tests into cookbook images.
 
-Run the test with --features embed first to include the nine patch previews.
+Run the test with --features embed first to include the ten patch previews.
 The test writes raw float32 frames under target/harmonic-geometry/frames.
 Pass frame stems to convert selected pictures without rebuilding the atlas.
 """
@@ -31,7 +31,7 @@ for path in sorted(FRAMES.glob('*.f32')):
     data = np.fromfile(path, dtype=np.float32).reshape(shape)
     image = Image.fromarray(np.uint8(np.clip(data, 0, 1)*255))
     image.save(OUT / (path.stem+'.png'))
-    if path.stem.startswith(('gpu-', 'relief-', '0')):
+    if path.stem.startswith(('gpu-', 'relief-')) or path.stem[:2].isdigit():
         continue
     tile = Image.new('RGB', (320, 245), (11, 20, 32))
     tile.paste(image.resize((320, 220)), (0, 0))
