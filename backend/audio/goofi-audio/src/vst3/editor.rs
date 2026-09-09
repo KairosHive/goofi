@@ -207,7 +207,9 @@ impl IPlugFrameTrait for Frame {
 #[cfg(target_os = "linux")]
 impl Linux::IRunLoopTrait for Frame {
     unsafe fn registerEventHandler(&self, handler: *mut Linux::IEventHandler, fd: Linux::FileDescriptor) -> tresult {
-        let Some(h) = ComRef::from_raw(handler).and_then(|h| h.cast::<Linux::IEventHandler>()) else { return kInvalidArgument };
+        // The argument already is this interface. Zebralette's queryInterface returns its
+        // IPlugView pointer here, so querying again makes onFDIsSet call a different method.
+        let Some(h) = ComRef::from_raw(handler).map(|h| h.to_com_ptr()) else { return kInvalidArgument };
         let key = handler as usize;
         self.registered.borrow_mut().push(key);
         self.runloop.borrow_mut().add_fd(key, fd, Box::new(move || {
@@ -226,7 +228,7 @@ impl Linux::IRunLoopTrait for Frame {
     }
 
     unsafe fn registerTimer(&self, handler: *mut Linux::ITimerHandler, milliseconds: Linux::TimerInterval) -> tresult {
-        let Some(h) = ComRef::from_raw(handler).and_then(|h| h.cast::<Linux::ITimerHandler>()) else { return kInvalidArgument };
+        let Some(h) = ComRef::from_raw(handler).map(|h| h.to_com_ptr()) else { return kInvalidArgument };
         let key = handler as usize;
         self.registered.borrow_mut().push(key);
         self.runloop.borrow_mut().add_timer(key, Duration::from_millis(milliseconds.max(1)), Box::new(move || {

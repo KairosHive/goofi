@@ -448,40 +448,47 @@ async fn run(
     let Cli { port, bind, extra_nodes, list_nodes, headless, debug, demo, load: _, help: _ } = cli;
     let port = port.unwrap_or(DEFAULT_PORT);
 
-    report("Preparing parameter expressions");
-    if !list_nodes {
-        register_evaluator(&state);
-    }
     state.roots.extend(extra_nodes.iter().map(PathBuf::from));
     // Every root the scan reads, the private library included: a node saved there may name
     // packages exactly as a bundle's does.
     let scanned: Vec<PathBuf> = state.node_roots().into_iter().map(|(d, _)| d).collect();
     report("Checking node package requirements");
-    ensure_packages(&scanned, &subproc_python);
-    // Handed to the engine before anything scans, so the boot scan and every rescan share it.
-    goofi_bridge::signal_engine(&mut state.graph.lock().unwrap())
-        .set_python(goofi_signal::Python::new(subproc_python.clone()));
-    {
-        let mut g = state.graph.lock().unwrap();
-        if !demo {
-            let audio = goofi_bridge::audio_engine(&mut g);
-            if let Ok(own) = std::env::current_exe() {
-                audio.set_vst3(own, goofi_audio::vst3::platform_dirs());
+    let ready = ensure_packages(&scanned, &subproc_python).and_then(|()| {
+        if list_nodes {
+            return Ok(());
+        }
+        report("Preparing parameter expressions");
+        register_evaluator(&state)
+    });
+    if ready.is_ok() {
+        // Handed to the engine before anything scans, so the boot scan and every rescan share it.
+        goofi_bridge::signal_engine(&mut state.graph.lock().unwrap())
+            .set_python(goofi_signal::Python::new(subproc_python.clone()));
+        {
+            let mut g = state.graph.lock().unwrap();
+            if !demo {
+                let audio = goofi_bridge::audio_engine(&mut g);
+                if let Ok(own) = std::env::current_exe() {
+                    audio.set_vst3(own, goofi_audio::vst3::platform_dirs());
+                }
+                audio.set_ui(ui.clone());
             }
-            audio.set_ui(ui.clone());
+            // One screen for both engines: a plugin's editor and a `Window` node are the same thread.
+            if let Some(graphics) = goofi_bridge::try_graphics_engine(&mut g) {
+                graphics.set_ui(ui);
+            }
         }
-        // One screen for both engines: a plugin's editor and a `Window` node are the same thread.
-        if let Some(graphics) = goofi_bridge::try_graphics_engine(&mut g) {
-            graphics.set_ui(ui);
+        boot_scan(&state);
+        if !demo {
+            report("Checking audio hosts");
+            println!("  audio hosts: {}{}", goofi_audio::hosts(), goofi_audio::NO_ASIO_NOTE);
         }
-    }
-    boot_scan(&state);
-    if !demo {
-        report("Checking audio hosts");
-        println!("  audio hosts: {}{}", goofi_audio::hosts(), goofi_audio::NO_ASIO_NOTE);
     }
 
-    let code = if list_nodes {
+    let code = if let Err(error) = ready {
+        let _ = goofi_core::log::terminal_line(&format!("Startup failed: {error}"));
+        1
+    } else if list_nodes {
         let names = goofi_bridge::catalog_type_names(&state.graph.lock().unwrap());
         if let Some(startup) = startup.take() {
             startup.finish("Node library ready");
@@ -577,11 +584,11 @@ async fn run(
     if let Some(insist) = state.harnesses.reap_all() {
         insist();
     }
-    state.graph.lock().unwrap().shutdown();
     if state.recorder.running() {
         println!("  Draining recording · waiting for queued frames to reach disk");
     }
     state.stop_recording();
+    state.graph.lock().unwrap().shutdown();
     println!("  Stopped");
     state.release_mount();
     code
@@ -670,14 +677,12 @@ async fn managed_stop() {
 
 /// Install the pyo3 param-expression evaluator into the graph.
 #[cfg(feature = "python")]
-fn register_evaluator(state: &AppState) {
-    match goofi_python::inproc::PyExprEvaluator::new() {
-        Ok(ev) => {
-            state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(ev));
-            println!("  param-expression evaluator ready (free-threaded Python)");
-        }
-        Err(e) => eprintln!("param-expression evaluator unavailable: {e}"),
-    }
+fn register_evaluator(state: &AppState) -> Result<(), String> {
+    let ev = goofi_python::inproc::PyExprEvaluator::new()
+        .map_err(|e| format!("param-expression evaluator unavailable: {e}"))?;
+    state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(ev));
+    println!("  param-expression evaluator ready (free-threaded Python)");
+    Ok(())
 }
 
 /// Hand the EMBEDDED interpreter the venv pyo3 was linked against: pyo3 links `libpython` from
@@ -699,16 +704,16 @@ fn point_embedded_python_at_its_venv() {
 fn point_embedded_python_at_its_venv() {}
 
 /// Every node directory's requirements, checked against the interpreter each is asked of before the
-/// scan imports anything. Nothing is installed unasked: a terminal is asked once, and anything else
-/// is told what will be unavailable and served through.
+/// scan imports anything. Startup requires a successful check and all required packages.
+/// A terminal can approve installation; a failed or declined installation stops startup.
 #[cfg(feature = "python")]
-fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) {
+fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) -> Result<(), String> {
     use std::io::IsTerminal;
     let shared = goofi_init::requirements_in(dirs);
     let gil_only: Vec<PathBuf> =
         shared.iter().cloned().chain(goofi_init::gil_requirements_in(dirs)).collect();
     if gil_only.is_empty() {
-        return;
+        return Ok(());
     }
     let root = goofi_init::repo_root();
     let interpreters = [
@@ -717,7 +722,10 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) {
     ];
     let mut lacking = Vec::new();
     for (py, reqs) in interpreters {
-        let Some(py) = py.filter(|_| !reqs.is_empty()) else { continue };
+        if reqs.is_empty() {
+            continue;
+        }
+        let py = py.ok_or_else(|| format!("missing Python environment; {}", goofi_init::RUN_ME))?;
         let shown = py.strip_prefix(&root).unwrap_or(&py).display().to_string();
         match goofi_init::missing_packages(&py, reqs) {
             Ok(missing) if missing.is_empty() => {}
@@ -725,40 +733,38 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) {
                 let _ = goofi_core::log::terminal_line(&format!("  {shown} lacks {}", missing.join(", ")));
                 lacking.push((py, reqs.clone()));
             }
-            Err(e) => { let _ = goofi_core::log::terminal_line(&format!("  could not check {shown}: {e}")); }
+            Err(e) => return Err(format!("could not check {shown}: {e}")),
         }
     }
     if lacking.is_empty() {
-        return;
+        return Ok(());
     }
     let _ = goofi_core::log::terminal_line("  Requirements files:");
     for path in &gil_only {
         let _ = goofi_core::log::terminal_line(&format!("    {}", path.display()));
     }
     if !std::io::stdin().is_terminal() {
-        let _ = goofi_core::log::terminal_line("  no terminal to ask, so those nodes will be unavailable");
-        return;
+        return Err(format!("required Python packages are missing and no terminal can approve installation; {}", goofi_init::RUN_ME));
     }
     let _ = goofi_core::log::terminal_line("  Install missing packages now? [y/N]");
     let mut answer = String::new();
-    let _ = std::io::stdin().read_line(&mut answer);
+    std::io::stdin().read_line(&mut answer).map_err(|e| format!("could not read installation approval: {e}"))?;
     if !answer.trim().eq_ignore_ascii_case("y") {
-        let _ = goofi_core::log::terminal_line("  not installed; those nodes will be unavailable");
-        return;
+        return Err(format!("required Python packages were not installed; {}", goofi_init::RUN_ME));
     }
     for (py, reqs) in lacking {
-        if let Err(e) = goofi_init::install_packages(&py, &reqs) {
-            let _ = goofi_core::log::terminal_line(&format!("  {e}"));
-        }
+        goofi_init::install_packages(&py, &reqs)?;
     }
+    Ok(())
 }
 
 #[cfg(not(feature = "python"))]
-fn ensure_packages(_dirs: &[PathBuf], _subproc_python: &str) {}
+fn ensure_packages(_dirs: &[PathBuf], _subproc_python: &str) -> Result<(), String> { Ok(()) }
 
 #[cfg(not(feature = "python"))]
-fn register_evaluator(_state: &AppState) {
+fn register_evaluator(_state: &AppState) -> Result<(), String> {
     println!("  param expressions DISABLED — rebuild with `--features python` to enable the evaluator");
+    Ok(())
 }
 
 /// One boot registration, reported — the boot registry starts empty, so a replacement here can

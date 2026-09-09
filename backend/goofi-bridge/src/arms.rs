@@ -1973,11 +1973,12 @@ pub(crate) fn record_start(
         .unwrap_or_else(goofi_core::home::recordings);
     let name = record_arg(&g, payload, "name").unwrap_or_default();
     let patch = state.save_path().map(std::path::PathBuf::from);
+    // Capture preparation and the stream drain need the graph to make progress.
+    drop(g);
     let folder = state
         .recorder
         .start(&root, &name, patch.as_deref())
         .map_err(|e| format!("record start: {e}"))?;
-    drop(g);
     spawn_record_beat(state, folder.clone());
     events.push(record_changed(state));
     Ok(json!({ "folder": folder.to_string_lossy() }))

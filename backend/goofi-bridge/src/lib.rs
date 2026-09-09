@@ -216,14 +216,14 @@ impl AppState {
         state
     }
 
-    /// Drain queued frames and finalize recording files after the engines stop.
+    /// Close the capture interval and drain its queues before the engines stop.
     pub fn stop_recording(&self) {
+        if let Err(error) = self.recorder.stop() {
+            goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("Recording could not be finalized: {error}"));
+        }
         self.record_drain.stop();
         while !self.record_drain.released() {
             std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        if let Err(error) = self.recorder.stop() {
-            goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("Recording could not be finalized: {error}"));
         }
     }
 

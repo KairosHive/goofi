@@ -91,8 +91,9 @@ impl Screen for Platform {
         self.conn.change_property8(PropMode::REPLACE, id, AtomEnum::WM_NAME, AtomEnum::STRING, title.as_bytes()).map_err(err)?;
         self.conn.change_property32(PropMode::REPLACE, id, self.wm_protocols, AtomEnum::ATOM, &[self.wm_delete]).map_err(err)?;
         self.fix_size(id, (w, h))?;
-        self.conn.map_window(id).map_err(err)?;
-        self.conn.flush().map_err(err)?;
+        // A plugin uses another X11 connection. Flushing only sends our requests; it does
+        // not ensure the server created the parent before the plugin creates a child in it.
+        self.conn.map_window(id).map_err(err)?.check().map_err(err)?;
         Ok((id as Id, id as usize as *mut c_void))
     }
 

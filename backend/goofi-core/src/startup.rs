@@ -1,4 +1,3 @@
-use std::io::{IsTerminal, Write};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -11,14 +10,7 @@ pub struct Startup {
 }
 
 fn line(mark: &str, message: &str) {
-    let mut out = std::io::stdout().lock();
-    let color = out.is_terminal() && std::env::var_os("NO_COLOR").is_none();
-    if color {
-        let _ = writeln!(out, "  \x1b[36m{mark}\x1b[0m {message}");
-    } else {
-        let _ = writeln!(out, "  {mark} {message}");
-    }
-    let _ = out.flush();
+    let _ = crate::log::terminal_line(&format!("  {mark} {message}"));
 }
 
 impl Startup {
