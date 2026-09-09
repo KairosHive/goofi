@@ -23,6 +23,7 @@ class Patch:
         self.slug, self.title = slug, title
         self.nodes, self.links, self.names, self.globals = {}, [], {}, []
         self.views = []
+        self.canvas = False
         self.row = 0
         self.extra = {}
         for name, value in [('default_ufreq', 20.0), ('default_width', 256), ('default_height', 256)]:
@@ -110,12 +111,17 @@ class Patch:
         display = panel('viewer', dict(zip(('node', 'slot', 'kind'), self.views[0])), .75)
         play = split('row', [control, display])
         tabs = [{'id': 'tab-play', 'name': 'Play', 'root': play}]
+        viewpoint = {'tab': 'tab-play', 'panel': display['id'], 'paths': {}}
+        if self.canvas:
+            canvas = panel('viewer', {**dict(zip(('node', 'slot', 'kind'), self.views[0])), 'settings': {'stretch': True}})
+            tabs.insert(0, {'id': 'tab-canvas', 'name': 'Canvas', 'root': canvas})
+            viewpoint = {'tab': 'tab-canvas', 'panel': canvas['id'], 'paths': {}}
         for i, v in enumerate(self.views[1:]):
             tabs.append({'id': f'tab-view-{i}', 'name': v[0], 'root': panel('viewer', dict(zip(('node', 'slot', 'kind'), v)))})
         tabs.append({'id': 'tab-patch', 'name': 'Patch', 'root': panel('node-editor')})
         patch = {'version': 1, 'goofi': VERSION, 'globals': self.globals, 'global_groups': {},
                  'root': {'nodes': self.nodes, 'links': self.links}, 'arrangement': {'tabs': tabs, '#seq': seq+10},
-                 'viewpoint': {'tab': 'tab-play', 'panel': display['id'], 'paths': {}}}
+                 'viewpoint': viewpoint}
         path = HERE/(self.slug+'.gfi')
         with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
             for name, data in {'patch.yaml': yaml.safe_dump(patch, sort_keys=False), 'workspace/.goofiignore': '', **self.extra}.items():
@@ -270,6 +276,7 @@ def recipes():
     yield p.save()
 
     p = Patch('09-jade-resonance', 'Jade resonance')
+    p.canvas = True
     p.harmonic('chordA', '1, 5/4, 3/2, 7/4', '1, 5/4, 3/2, 7/4', (0, 0), False)
     p.harmonic('chordB', '1, 6/5, 7/5, 9/5', '1, 6/5, 7/5, 9/5', (0, 380), False)
     p.node('modeWalk', 'signal:HarmonicModes', (380, 100))
@@ -282,6 +289,16 @@ def recipes():
     p.node('jade', 'graphics:HarmonicRelief', (1120, 100),
            common={'width': 512, 'height': 512})
     p.wire('plate', 'out', 'jade', 'input')
+    textures = ['jade', 'brushed metal', 'woven silk', 'porous stone']
+    for name, value, param in [('textureA', 'jade', 'texture_a'), ('textureB', 'brushed metal', 'texture_b')]:
+        p.control(name, value, kind='dropdown', options=textures)
+        p.bind('jade', 'material', param, 'globals.geometry.'+name)
+    p.control('textureAuto', True, kind='toggle')
+    p.control('textureMix', 0.0, 0, 1)
+    p.node('materialMotion', 'signal:LFO', (750, 520), lfo={'frequency': .012, 'phase': .75}, common={'max_frequency': 20.0})
+    p.bind('materialMotion', 'lfo', 'amplitude', '0.5 if globals.geometry.textureAuto else 0.0')
+    p.bind('materialMotion', 'lfo', 'offset', '0.5 if globals.geometry.textureAuto else globals.geometry.textureMix')
+    p.bind('jade', 'material', 'texture_mix', reference='materialMotion.out')
     for name, value, lo, hi, node, group, param in [
         ('symmetry', .82, 0, 1, 'plate', 'field', 'symmetry'),
         ('relief', .22, 0, .45, 'jade', 'form', 'depth'),
@@ -289,8 +306,10 @@ def recipes():
         ('engraving', .55, 0, 1, 'jade', 'form', 'engraving'),
         ('patina', .7, 0, 1, 'jade', 'material', 'patina'),
         ('roughness', .38, .12, .8, 'jade', 'material', 'roughness'),
+        ('textureScale', 24.0, 4, 64, 'jade', 'material', 'texture_scale'),
+        ('textureDepth', .55, 0, 1, 'jade', 'material', 'texture_depth'),
         ('light', -.75, -3.14, 3.14, 'jade', 'light', 'azimuth'),
-        ('tilt', .42, 0, .85, 'jade', 'camera', 'tilt'),
+        ('tilt', .25, 0, .85, 'jade', 'camera', 'tilt'),
     ]:
         p.control(name, value, lo, hi)
         p.bind(node, group, param, 'globals.geometry.'+name)

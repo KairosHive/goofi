@@ -22,7 +22,7 @@ cargo run -- --load examples/harmonic-geometry/01-breathing-lines.gfi
 | [06 · Interval garden](06-interval-garden.gfi) | Graphs, fractals, BioColors palettes, geometry metrics, EuclidRhythm |
 | [07 · Peaks to worlds](07-peaks-to-worlds.gfi) | Synthetic signal → HarmonicSpectrum → geometry; Tuning and TimbreControls |
 | [08 · A common chord](08-common-chord.gfi) | Shared component fades across geometry and continuous native synth controls |
-| [09 · Jade resonance](09-jade-resonance.gfi) | Sculpted Chladni relief, jade and gold, fine engraving, parallax, and directional light |
+| [09 · Jade resonance](09-jade-resonance.gfi) | Full-window Chladni relief; morph jade, brushed metal, woven silk, and porous stone |
 
 Recipes 01–08 use 256-pixel GPU previews and 960 × 660 CPU dashboards.
 Recipe 09 uses a 512-pixel field and material. They open
@@ -40,9 +40,19 @@ frames to the illustrations. `build_cookbook.py` rebuilds the HTML guide.
 The [verification record](VERIFICATION.md) gives checks and rebuild commands.
 Only recipe 07 contains a custom node: the supplied synthetic signal source.
 
-For the Chladni material study, load **09 · Jade resonance**. Let the mode walk
-run, or turn auto off and move mix. Increase relief to see the raised seams;
-move light and tilt to inspect their shape. Low roughness gives polished metal;
-high roughness gives satin. Patina moves from smoked bronze to jade. The node
-also has controls for contour count, plate roundness, turn, zoom, and exposure.
-These change the material and view without changing the harmonic field.
+For the Chladni material study, load **09 · Jade resonance**. **Canvas** fills
+the viewing area; **Play** shows the controls. Canvas stretches the image to
+the panel, including in portrait. The shader extends the field with mirrored
+tiles, so camera rotation and tilt leave no plate outline or empty border.
+
+Select **textureA** and **textureB** from jade, brushed metal, woven silk, and
+porous stone. **textureAuto** moves between them at a separate rate from the
+mode walk. Turn it off to set **textureMix** by hand. The blend changes small
+surface heights, color, and reflection together. **textureScale** sets detail
+size; **textureDepth** sets the strength of grooves, threads, and pores.
+
+Turn **auto** off to hold the harmonic structure with **mix**. Increase relief
+to see the raised seams; move light and tilt to inspect their shape. Roughness
+controls the highlights. Patina changes the jade finish from bronze to green.
+The node also has contour count, turn, zoom, and exposure controls. Material
+and camera controls leave the upstream harmonic field unchanged.
