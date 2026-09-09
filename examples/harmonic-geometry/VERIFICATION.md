@@ -4,6 +4,39 @@ Checked on Windows x86_64, 9 September 2026, with Rust 1.97.1, the repository's
 two Python environments, and Chromium. Biotuner is pinned to the same revision
 as the existing bundle: `f45570e674d8193c7780891b9053a39bf6168c1e`.
 
+## Continuous Chladni states
+
+Recipe 10 previously selected open waves and modulated one voice of an anchor
+chord. This did not demonstrate a Chladni state walk. It now starts at approach
+0 with full-step glides and four seconds per state. Texture animation starts
+off. A new nodalLines tab shows the same field without the surface texture.
+
+RatioSequence sends both endpoint harmonic frames and the eased mix in one
+transition TABLE. HarmonicModes maps the endpoints to integer modes, then
+interpolates their coordinates. A single packet keeps the endpoint changes and
+mix reset together at step boundaries. Separate harmonic input/target/mix ports
+remain available; connecting both routes reports an error. Without source data,
+the node waits, including while a loaded patch starts.
+
+- The public GPU continuity session passed in 18.19 seconds. It verifies mode
+  coordinates, substantial field movement within a step, continuity across a
+  step boundary and a reversal, and identical fields on the return path.
+- Both archive sessions passed in 23.23 seconds, including the existing
+  separate-input route in recipe 09 and the new packet route in recipe 10.
+- The app build passed in 19.85 seconds. Clippy passed with warnings denied,
+  and the browser test TypeScript check passed.
+- Two Chromium sessions passed in 17.9 seconds. The live test now requires
+  visible image movement while texture animation is disabled, checks the
+  Chladni and glide defaults, and opens the line view. The cookbook check covers
+  desktop and phone. The corrected live demo was restored without node errors.
+
+One full-size archive run reached the Windows paging limit with the live
+renderer also open. It was stopped and rerun alone. A startup check then found
+that the new optional input routes reported an error before their first frame;
+the node now waits as the former required input did. The full workspace suite
+was not repeated. Intermediate fractional modes remain visual transitions,
+not physical closed-plate eigenmodes.
+
 ## Organic textures and successive ratios
 
 This update supersedes the four-texture setup below. Recipes 09 and 10 open

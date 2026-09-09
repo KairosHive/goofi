@@ -62,10 +62,21 @@ controls the highlights. Patina changes the jade finish from bronze to green.
 The node also has contour count, turn, zoom, and exposure controls. Material
 and camera controls leave the upstream harmonic field unchanged.
 
-Load **10 · Living ratios** for a live modulation demonstration. **ratios** is
+Load **10 · Living ratios** for continuous Chladni state morphing. **ratios** is
 an editable ordered list of fractions or decimals. **stepSeconds** sets timing;
 **glide** sets how much of each step moves smoothly to the next ratio. Turn
 **running** off to hold the ratio. **direction** selects forward or ping-pong.
 The trace below the picture shows recent ratios; the **ratios** tab gives a
 numeric readout. In this patch, **auto/mix** control only the texture blend.
 The RatioSequence node also has a reset pulse and an optional external clock.
+The default uses four seconds per state and glide 1, so motion has no hold.
+Each ratio maps to an integer plate mode; the mode coordinates then interpolate
+to the next state. This avoids repeated integer remapping of a gliding ratio.
+The endpoint frames and blend travel together in `transition`, so each step
+change is coherent. These intermediate fields are visual transitions between
+plate states, not physical plate eigenmodes.
+
+**approach 0** shows the Chladni state walk. **approach 1** uses the continuous
+ratio with the fixed anchor chord to form open waves. Texture auto starts off;
+turn it on after inspecting the geometry. The **nodalLines** tab shows the same
+field as clear lines. **Canvas** gives the textured view the full window.

@@ -155,8 +155,13 @@
         "ratios",
         "label",
         "string"
+      ],
+      [
+        "nodalLines",
+        "out",
+        "image"
       ]
     ],
-    "nodes": 7
+    "nodes": 8
   }
 ]
