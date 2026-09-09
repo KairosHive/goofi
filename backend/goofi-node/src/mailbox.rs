@@ -57,11 +57,13 @@ pub fn gate(x: f64) -> bool {
 
 /// A global's value read into `target`'s shape, so a bare variable is coerced like any other source.
 fn value_as(value: &Param, target: &Param) -> Result<Param, String> {
+    if let (Param::Str { value, .. }, Param::Str { options, refresh, .. }) = (value, target) {
+        return Ok(Param::Str { value: value.clone(), options: options.clone(), refresh: *refresh });
+    }
     match (value.as_f64(), target) {
         (Some(x), Param::Float { vmin, vmax, .. }) => Ok(Param::Float { value: x, vmin: *vmin, vmax: *vmax }),
         (Some(x), Param::Int { vmin, vmax, .. }) => Ok(Param::Int { value: x.round() as i64, vmin: *vmin, vmax: *vmax }),
         (Some(x), Param::Bool { .. } | Param::Pulse) => Ok(Param::Bool { value: gate(x) }),
-        (_, Param::Str { .. }) if matches!(value, Param::Str { .. }) => Ok(value.clone()),
         _ => Err(format!("`{value:?}` does not fit `{target:?}`")),
     }
 }

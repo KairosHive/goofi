@@ -4,6 +4,64 @@ Checked on Windows x86_64, 9 September 2026, with Rust 1.97.1, the repository's
 two Python environments, and Chromium. Biotuner is pinned to the same revision
 as the existing bundle: `f45570e674d8193c7780891b9053a39bf6168c1e`.
 
+## Organic textures and successive ratios
+
+This update supersedes the four-texture setup below. Recipes 09 and 10 open
+on Play with visible controls; Canvas still fills the window. HarmonicRelief
+has twelve finishes, including sand, dunes, lichen, coral, cells, spores,
+pollen, and plankton. The organic finishes reduce broad relief and highlights.
+Density, detail scale, detail height, and texture mix remain separate controls.
+
+RatioSequence emits ordered fractions or decimals at a timed rate. Its public
+session checks holds, log-frequency glides, looping, ping-pong, pause, reset,
+clock changes, invalid-input recovery, and fixed anchor voices. The moving
+tuning reaches HarmonicMorph and changes an actual GPU Chladni field. Recipe
+10 adds a live ratio history and numeric readout to this route.
+
+The dropdown investigation found a shared binding defect: a bare string
+global replaced the target parameter's option metadata. A graphics parameter
+then received option index zero regardless of the selected text. The shared
+mailbox now preserves target options and copies the source value, as string
+references already do. Earlier browser checks verified selected values but
+did not establish that each selected string reached the GPU as its index.
+
+- The GPU material session passed in 16.50 seconds. It checks all twelve
+  distinct finishes, exact mix endpoints, small continuous mix changes,
+  density, held fields, retuning, relighting, finite values, and filled edges
+  at 384 × 216 and 216 × 384.
+- The final deterministic RatioSequence session passed in 13.00 seconds,
+  including reset from a later step back to the first ratio.
+- The new string-binding regression passed in 3.88 seconds. A global selects
+  green, blue, and red; the session verifies the actual GPU pixels.
+- Both embedded archive sessions passed in 17.68 seconds, including load,
+  controls, output, and save/reload. A further recipe 09 capture check passed
+  in 10.46 seconds after requiring valid mode data and a settled full image.
+- Clippy for the embedded geometry test passed with warnings denied. The app
+  build passed in 21.51 seconds. The E2E TypeScript check passed.
+- Three focused Chromium sessions passed in 27.2 seconds. They check twelve
+  dropdown choices, independent mixing, full-window landscape and portrait
+  layouts, changing ratios, the visible history, pause, the numeric readout,
+  and cookbook layout and filtering on desktop and phone.
+- The live demo was restored on port 8650 with no node errors. GPU captures
+  and browser views were inspected. The cookbook now includes ten recipes
+  and a twelve-finish gallery.
+
+Initial regression attempts exposed a missing test evaluator and invalid
+global names; the final fixture uses the app's evaluator and grouped names.
+One sequence run timed out during a transition. The final session waits for
+pause and resume to reach the ratio node before advancing the separate clock.
+One queued build hit a Windows executable lock; subsequent builds ran in
+sequence. Large GPU readbacks reached the Windows paging limit, so the test
+uses a 256-pixel source and 384-pixel output. Saved demos remain 512 pixels.
+The passing sessions still print the existing iceoryx Windows cleanup messages.
+No shared-memory files were removed by a script.
+
+These textures are procedural field mappings. They do not track particles or
+simulate biological growth. The renderer has no internal animation clock;
+the ratio sequencer and texture LFO provide explicit motion. The full workspace
+suite and recipes 01–08 were not repeated for this focused update. Their
+previous results below remain historical checks.
+
 ## Full-window texture morph update
 
 Recipe 09 now opens on Canvas, with a filled viewer and a mirrored field that

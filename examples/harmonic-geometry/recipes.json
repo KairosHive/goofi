@@ -136,5 +136,27 @@
       ]
     ],
     "nodes": 7
+  },
+  {
+    "file": "10-living-ratios.gfi",
+    "title": "Living ratios",
+    "views": [
+      [
+        "organism",
+        "out",
+        "image"
+      ],
+      [
+        "ratioTrace",
+        "out",
+        "line"
+      ],
+      [
+        "ratios",
+        "label",
+        "string"
+      ]
+    ],
+    "nodes": 7
   }
 ]
