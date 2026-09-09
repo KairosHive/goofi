@@ -412,6 +412,130 @@ fn the_biotuner_bundle_reads_a_scale_out_of_a_signal_and_measures_it() {
 }
 
 #[test]
+fn harmonic_spectrum_feeds_the_biotuner_bundle_and_recovers_as_windows_change() {
+    let _py = require_python();
+    let g = Goofi::new();
+    let mut sources = bundled("biotuner", &["harmonic_spectrum.py", "tuning.py", "harmonicity.py"]);
+    sources.push(("harmonic_signal.py".into(), include_str!("fixtures/harmonic_signal.py").into()));
+    let pairs: Vec<_> = sources.iter().map(|(name, source)| (name.as_str(), source.as_str())).collect();
+    let [spectrum_ty, tuning_ty, harm_ty, source_ty]: [String; 4] =
+        install_all(&g, &pairs).try_into().expect("one type per file");
+    let source = g.add(&source_ty);
+    let node = g.add(&spectrum_ty);
+    let spectrum = g.probe(node, "spectrum");
+    let frequencies = g.probe(node, "freqs");
+    let peaks = g.probe(node, "peaks");
+    let peak_values = g.probe(node, "peakValues");
+    let matrix = g.probe(node, "matrix");
+    let mean = g.probe(node, "harmonicity");
+    let complexity = g.probe(node, "complexity");
+    g.link(source, "out", node, "input");
+
+    let d = first_frame(&g, &spectrum_ty, node, &spectrum, |d| shape(d) == vec![2, 57]);
+    assert_eq!(labels(&d, "dim0"), ["Fz", "Cz"]);
+    assert!(d.meta().sfreq().is_none(), "frequency bins are not time samples");
+    let h = f32s(&d);
+    assert!(h.iter().all(|v| v.is_finite() && *v >= 0.0));
+    assert_ne!(&h[..57], &h[57..], "the two channels are analyzed separately");
+    let f = first_frame(&g, &spectrum_ty, node, &frequencies, |d| shape(d) == vec![57]);
+    let hz = f32s(&f);
+    assert_eq!(hz, (0..57).map(|i| 2.0 + i as f32 * 0.5).collect::<Vec<_>>());
+    assert_eq!(labels(&d, "dim1"), labels(&f, "dim0"));
+    let d = first_frame(&g, &spectrum_ty, node, &matrix, |d| shape(d) == vec![2, 57, 57]);
+    assert_eq!(labels(&d, "dim1"), labels(&f, "dim0"));
+    assert_eq!(labels(&d, "dim2"), labels(&f, "dim0"));
+    let m = f32s(&d);
+    // 8:12 is a 2:3 ratio: the shared biotuner measure gives 66 2/3.
+    assert!((m[12 * 57 + 20] - 66.66667).abs() < 0.001);
+    let d = first_frame(&g, &spectrum_ty, node, &mean, |d| shape(d) == vec![2]);
+    for (row, value) in h.chunks_exact(57).zip(f32s(&d)) {
+        assert!((row.iter().sum::<f32>() / 57.0 - value).abs() < 1e-5);
+    }
+    let d = first_frame(&g, &spectrum_ty, node, &complexity, |d| shape(d) == vec![2, 4]);
+    assert_eq!(labels(&d, "dim1"), ["flatness", "entropy", "spread", "higuchi"]);
+    assert!(f32s(&d).iter().all(|v| v.is_finite()));
+    let d = first_frame(&g, &spectrum_ty, node, &peaks, |d| shape(d) == vec![2, 5]);
+    let pk = f32s(&d);
+    for target in [8.0, 12.0, 16.0] {
+        assert!(pk[..5].contains(&target), "the harmonic chord has a peak at {target}: {pk:?}");
+    }
+    assert!(pk[..5].iter().any(|v| v.is_nan()), "unused peak positions are padded");
+    let d = first_frame(&g, &spectrum_ty, node, &peak_values, |d| shape(d) == vec![2, 5]);
+    for (row, (freqs, values)) in pk.chunks_exact(5).zip(f32s(&d).chunks_exact(5)).enumerate() {
+        for (freq, value) in freqs.iter().zip(values) {
+            if freq.is_nan() {
+                assert!(value.is_nan());
+            } else {
+                let index = hz.iter().position(|v| v == freq).unwrap();
+                assert!((h[row * 57 + index] - value).abs() < 1e-5);
+            }
+        }
+    }
+
+    let tuning = g.add(&tuning_ty);
+    let scale = g.probe(tuning, "tuning");
+    let harm = g.add(&harm_ty);
+    let score = g.probe(harm, "harmsim");
+    for target in [tuning, harm] {
+        g.link(node, "peaks", target, "input");
+    }
+    let d = first_frame(&g, &tuning_ty, tuning, &scale, |d| f32s(d).iter().any(|v| v.is_finite()));
+    assert_eq!(labels(&d, "dim0"), ["Fz", "Cz"]);
+    assert!(f32s(&d).iter().all(|v| v.is_nan() || (1.0..=2.0).contains(v)));
+    first_frame(&g, &harm_ty, harm, &score, |d| f32s(d).iter().all(|v| v.is_finite()));
+
+    for mode in ["flat", "nan"] {
+        g.set_param(source, "signal", "first", mode);
+        let d = g.until("a missing first row and a valid second row", |_| {
+            spectrum.latest().filter(|d| {
+                let values = f32s(d);
+                values[..57].iter().all(|v| v.is_nan()) && values[57..].iter().all(|v| v.is_finite())
+            })
+        });
+        assert_eq!(labels(&d, "dim0"), ["Fz", "Cz"]);
+        assert!(g.error(node).is_none());
+        g.set_param(source, "signal", "first", "chord");
+        g.until("valid rows after missing data", |_| spectrum.latest().filter(|d| f32s(d).iter().all(|v| v.is_finite())));
+    }
+    g.set_param(node, "spectrum", "n_peaks", 7);
+    g.until("the new peak width", |_| peaks.latest().filter(|d| shape(d) == vec![2, 7]));
+    g.set_param(node, "spectrum", "kernel", "subharm_tension");
+    g.until("the subharmonic kernel", |_| matrix.latest().filter(|d| f32s(d).iter().all(|v| (0.0..=1.0).contains(v))));
+    g.set_param(node, "spectrum", "precision", 1.0);
+    g.until("the coarser frequency grid", |_| spectrum.latest().filter(|d| shape(d) == vec![2, 29]));
+    g.set_param(source, "signal", "vector", true);
+    let d = g.until("a single time series", |_| spectrum.latest().filter(|d| shape(d) == vec![29]));
+    assert_eq!(labels(&d, "dim0").len(), 29, "time labels are replaced by frequency labels");
+
+    g.set_param(source, "signal", "sfreq", false);
+    let error = g.until("missing sampling rate to be reported", |g| g.error(node));
+    assert!(error.contains("sfreq"), "{error}");
+    g.set_param(source, "signal", "sfreq", true);
+    g.until("recovery after sampling rate is restored", |g| g.error(node).is_none().then_some(()));
+    g.set_param(node, "spectrum", "f_max", 200.0);
+    let error = g.until("a band above Nyquist to be reported", |g| g.error(node));
+    assert!(error.contains("sfreq / 2"), "{error}");
+    g.set_param(node, "spectrum", "f_max", 30.0);
+    g.until("recovery after the band is restored", |g| g.error(node).is_none().then_some(()));
+    for precision in [0.01, 10.0] {
+        g.set_param(node, "spectrum", "precision", precision);
+        let error = g.until("an unsupported frequency grid to be reported", |g| g.error(node));
+        assert!(error.contains("10..512"), "{error}");
+        g.set_param(node, "spectrum", "precision", 1.0);
+        g.until("recovery after the grid is restored", |g| g.error(node).is_none().then_some(()));
+    }
+    g.set_param(source, "signal", "samples", 16);
+    g.until("a short window to stop producing", |g| {
+        let count = spectrum.count();
+        g.stays(|g| spectrum.count() == count && g.error(node).is_none()).then_some(())
+    });
+    let count = spectrum.count();
+    g.set_param(source, "signal", "samples", 512);
+    g.until("a full window to resume analysis", |_| (spectrum.count() > count).then_some(()));
+    assert!(g.error(node).is_none());
+}
+
+#[test]
 fn a_scale_is_also_a_palette_and_a_rhythm_a_synth_can_play() {
     // The same numbers at three other rates, which is the whole reason the extraction stands alone.
     let _py = require_python();
