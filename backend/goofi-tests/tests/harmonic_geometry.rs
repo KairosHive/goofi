@@ -454,7 +454,8 @@ fn cookbook_archives_open_with_live_controls_and_sound_without_devices() {
                             high = high.max(pixel[0]);
                             visible |= channels == 4 && pixel[3] > 0.1;
                         }
-                        visible && high-low > 0.03 && values.iter().all(|v| v.is_finite())
+                        let ready = !file.starts_with("09-") || high > 0.7;
+                        visible && ready && high-low > 0.03 && values.iter().all(|v| v.is_finite())
                     } else {
                         values.iter().any(|v| v.is_finite() && *v > 0.01)
                     }
