@@ -204,7 +204,7 @@
 	}
 
 	function modulate(group: string, name: string, kind: 'lfo' | 'noi'): void {
-		const freq = 0.05 + Math.random() * 1.95;
+		const freq = 0.01 + Math.random() * 0.19;
 		setSource(group, name, { expression: `${kind}(freq=${freq})` });
 	}
 
