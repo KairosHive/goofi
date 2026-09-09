@@ -1,0 +1,128 @@
+[
+  {
+    "file": "01-breathing-lines.gfi",
+    "title": "Breathing lines",
+    "views": [
+      [
+        "lineStudy",
+        "dashboard",
+        "image"
+      ],
+      [
+        "lightTrace",
+        "out",
+        "image"
+      ]
+    ],
+    "nodes": 5
+  },
+  {
+    "file": "02-plate-mode-walk.gfi",
+    "title": "Plate mode walk",
+    "views": [
+      [
+        "ink",
+        "out",
+        "image"
+      ],
+      [
+        "plateStudy",
+        "dashboard",
+        "image"
+      ]
+    ],
+    "nodes": 9
+  },
+  {
+    "file": "03-between-media.gfi",
+    "title": "Between media",
+    "views": [
+      [
+        "mediaStudy",
+        "dashboard",
+        "image"
+      ],
+      [
+        "ink",
+        "out",
+        "image"
+      ]
+    ],
+    "nodes": 8
+  },
+  {
+    "file": "04-sand-and-memory.gfi",
+    "title": "Sand and memory",
+    "views": [
+      [
+        "sandStudy",
+        "dashboard",
+        "image"
+      ],
+      [
+        "carriedInk",
+        "out",
+        "image"
+      ]
+    ],
+    "nodes": 8
+  },
+  {
+    "file": "05-knot-to-knot.gfi",
+    "title": "Knot to knot",
+    "views": [
+      [
+        "knotStudy",
+        "dashboard",
+        "image"
+      ]
+    ],
+    "nodes": 7
+  },
+  {
+    "file": "06-interval-garden.gfi",
+    "title": "Interval garden",
+    "views": [
+      [
+        "gardenStudy",
+        "dashboard",
+        "image"
+      ],
+      [
+        "rhythm",
+        "patterns",
+        "image"
+      ]
+    ],
+    "nodes": 7
+  },
+  {
+    "file": "07-peaks-to-worlds.gfi",
+    "title": "Peaks to worlds",
+    "views": [
+      [
+        "peakStudy",
+        "dashboard",
+        "image"
+      ],
+      [
+        "spectrum",
+        "matrix",
+        "image"
+      ]
+    ],
+    "nodes": 9
+  },
+  {
+    "file": "08-common-chord.gfi",
+    "title": "A common chord",
+    "views": [
+      [
+        "chordStudy",
+        "dashboard",
+        "image"
+      ]
+    ],
+    "nodes": 10
+  }
+]
