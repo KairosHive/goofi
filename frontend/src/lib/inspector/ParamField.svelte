@@ -135,6 +135,7 @@
 						onChange={(value) => onCommit(Number(value))}
 						disabled={driven}
 						data-testid="param-options"
+						fill
 					/>
 				{:else}
 				<Slider
