@@ -112,6 +112,11 @@ test('globals group markers stay at the right edge on desktop and touch', async 
 			expect(Math.abs(buttonBox.x - rowBox.x)).toBeLessThan(1);
 			expect(await button.evaluate((element) => getComputedStyle(element).justifyContent)).toBe('center');
 		}
+		const editedRow = group.locator('[data-name="renamed.message"]');
+		const nameBox = (await editedRow.getByTestId('global-name').boundingBox())!;
+		const valueBox = (await editedRow.getByTestId('global-value').boundingBox())!;
+		expect(Math.abs(nameBox.y - valueBox.y)).toBeLessThan(1);
+		expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 		await page.screenshot({ path: testInfo.outputPath('globals-editing-phone.png') });
 		await panel.getByTestId('global-add-group-btn').tap();
 		await expect(panel.locator('[data-group="group0"]').getByTestId('global-group-name')).toBeFocused();

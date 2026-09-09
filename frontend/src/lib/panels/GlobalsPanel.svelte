@@ -308,7 +308,7 @@
 	}
 	.gp-body :global(.new-group) { margin-top: var(--space-4); }
 	.error { color: var(--danger); font-size: var(--fs-small); overflow-wrap: anywhere; }
-	@container (max-width: 400px) {
+	@container (max-width: 280px) {
 		.entry { grid-template-columns: minmax(0, 1fr) auto var(--hit); }
 		.entry-name { grid-column: 1 / -1; }
 	}
