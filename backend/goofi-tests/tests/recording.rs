@@ -195,6 +195,91 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     std::fs::write(&cut, &bytes[..bytes.len() - 6]).expect("a truncated copy");
     let (_, body) = npy(&std::fs::read(&cut).expect("the truncated stream"));
     assert_eq!(body.len() / 4, 42, "forty-two whole values survive a kill inside the last frame");
+    rec.start(dir.path(), "audio-formats", None).expect("audio recording started");
+    for (i, (channels, rate, samples)) in
+        [(1, 48_000.0, 4), (1, 48_000.0, 6), (2, 48_000.0, 5), (2, 96_000.0, 3)].into_iter().enumerate()
+    {
+        let mut meta = goofi_core::Meta::empty();
+        meta.set_sfreq(Some(rate));
+        meta.set_channels(goofi_core::Axes::new().with(
+            0,
+            goofi_core::Axis::coords(
+                (0..channels).map(|c| goofi_core::Coord::Str(c.to_string().into())).collect::<Vec<_>>(),
+            ),
+        ));
+        let values: Vec<u8> = (0..channels * samples).flat_map(|n| (n as f32).to_le_bytes()).collect();
+        let data = goofi_core::Data::array_f32(vec![channels, samples], values, meta).expect("audio block");
+        assert!(rec.take_frame(
+            &id, &goofi_codec::encode(&data), Some(rate), goofi_record::Timeline::Derived, i as f64, true,
+        ));
+    }
+    let folder = rec.stop().expect("audio stopped").expect("audio folder");
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(folder.join("manifest.json")).expect("audio manifest"),
+    ).expect("json");
+    let entries = manifest["streams"].as_array().expect("streams");
+    assert_eq!(entries.len(), 3, "block length stays legal; each format change opens a file");
+    for (entry, (channels, rate, counts)) in entries.iter().zip([
+        (1u16, 48_000u32, vec![4u64, 6]), (2, 48_000, vec![5]), (2, 96_000, vec![3]),
+    ]) {
+        let path = folder.join(entry["file"].as_str().expect("file name"));
+        let wav = std::fs::read(&path).expect("WAV file");
+        assert_eq!(&wav[..4], b"RIFF");
+        assert_eq!(&wav[8..16], b"WAVEfmt ");
+        assert_eq!(u16::from_le_bytes(wav[22..24].try_into().unwrap()), channels);
+        assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), rate);
+        let samples = counts.iter().sum::<u64>();
+        assert_eq!(wav.len() as u64 - 44, samples * u64::from(channels) * 4);
+        assert_eq!(entry["frames"], samples);
+        assert_eq!(entry["channels"], channels);
+        assert_eq!(entry["sfreq"].as_f64(), Some(f64::from(rate)));
+        let beside = std::fs::read_to_string(path.with_extension("jsonl")).expect("sidecar");
+        let written: Vec<u64> = beside.lines().map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).expect("sidecar row")["n"].as_u64().unwrap()
+        }).collect();
+        assert_eq!(written, counts);
+    }
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for restart in [false, true] {
+        let inside = std::sync::Arc::new(AtomicBool::new(false));
+        let release = std::sync::Arc::new(AtomicBool::new(false));
+        rec.set_encoders(std::sync::Arc::new(SlowEncoders { inside: inside.clone(), release: release.clone() }));
+        let old = rec.start(dir.path(), &format!("slow-{restart}"), None).expect("started");
+        rec.open(&id, goofi_record::Kind::Video { size: (1, 1), fps: 60.0 }, time.now(),
+            goofi_record::StreamMeta::measured(None)).expect("video opened");
+        let closing = rec.clone();
+        let stream = id.clone();
+        let close = std::thread::spawn(move || closing.close(&stream, "disarmed"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !inside.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let entered = inside.load(Ordering::Relaxed);
+        let stopped = if entered { rec.stop() } else { Ok(None) };
+        let next = if entered && restart {
+            rec.start(dir.path(), "next", None).map(Some)
+        } else { Ok(None) };
+        release.store(true, Ordering::Relaxed);
+        close.join().expect("close joined");
+        assert!(entered, "the close reached the slow encoder");
+        assert!(stopped.expect("stopped").is_some());
+        let next = next.expect("next recording started");
+        let old_manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(old.join("manifest.json")).expect("old manifest"),
+        ).expect("json");
+        assert_eq!(old_manifest["streams"].as_array().unwrap().len(), 1);
+        assert_eq!(old_manifest["streams"][0]["closed_because"], "disarmed");
+        assert!(old_manifest["stopped_utc"].is_string());
+        if let Some(next) = next {
+            rec.stop().expect("next recording stopped");
+            let next_manifest: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(next.join("manifest.json")).expect("next manifest"),
+            ).expect("json");
+            assert_eq!(next_manifest["streams"], j!([]));
+        }
+    }
+
 }
 
 /// A `.npy` split into its header text and its samples, the way `np.load` reads one.
@@ -459,13 +544,15 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         .set_encoders(std::sync::Arc::new(SlowEncoders { inside: inside.clone(), release: release.clone() }));
     g.call("record arm", j!({ "output": goofi_tests::ep(&src, "out") }));
     g.call("record arm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
-    g.call("record start", j!({ "root": root.path() }));
+    let closing_folder = g.call("record start", j!({ "root": root.path() }))["folder"]
+        .as_str().expect("a folder").to_string();
     g.until("both streams to reach the disk", |g| {
         goofi_tests::render(g, 1);
         (frames(g, &src_name) > 0 && frames(g, &shader_name) > 0).then_some(())
     });
     let went = std::sync::Arc::new(AtomicBool::new(false));
     let waited = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+    let mut next_folder = None;
     std::thread::scope(|scope| {
         scope.spawn(|| {
             g.call("record disarm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
@@ -502,12 +589,22 @@ fn arming_survives_a_rewire_and_rides_the_document() {
             goofi_tests::render(&g, 1);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        if went.load(Ordering::Relaxed) {
+            g.call("record stop", j!({}));
+            next_folder = Some(g.call("record start", j!({ "root": root.path(), "name": "after-close" }))["folder"]
+                .as_str().expect("a folder").to_string());
+        }
         release.store(true, Ordering::Relaxed);
     });
     assert!(went.load(Ordering::Relaxed), "a drain keeps writing while a video finalizes");
     let took = waited.load(Ordering::Relaxed);
     assert!(took < 1_000_000, "an op waited {took} us on a finalize that holds no lock it needs");
     g.call("record stop", j!({}));
+    g.until("the old recording to retain the closed video", |_g| {
+        (mine(&closing_folder, &shader_name).len() == 1).then_some(())
+    });
+    assert!(mine(&next_folder.expect("the next recording"), &shader_name).is_empty());
+
     g.call("record disarm", j!({ "output": goofi_tests::ep(&src, "out") }));
     g.state.recorder.set_encoders(std::sync::Arc::new(goofi_record::video::FfmpegEncoders));
 

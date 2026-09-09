@@ -393,8 +393,6 @@ impl Runtime {
             }
         }
         for (uid, (id, size)) in want {
-            // A stream the reaper has not finished closing is opened on a LATER tick: opening over
-            // it would finalize the encoder on this thread, which is what `close_later` prevents.
             if self.taping.contains_key(&uid) || rec.is_open(&id) {
                 continue;
             }
