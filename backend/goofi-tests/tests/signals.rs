@@ -545,6 +545,19 @@ fn a_stitching_node_answers_from_the_past_and_a_transform_round_trips() {
         pn.latest().filter(|d| shape(d) == vec![1] && (f32s(d)[0] - want).abs() < 0.02)
     });
 
+    set(norm, "normalize", "mode", j!("robust"));
+    g.until("the robust scale of a ramp", |_| {
+        pn.latest().filter(|d| shape(d) == vec![1] && (f32s(d)[0] - 1.0).abs() < 0.02)
+    });
+    set(norm, "window", "size", j!(0));
+    g.until("running robust normalization is refused", |_| {
+        g.error(norm).filter(|e| e.contains("positive window size"))
+    });
+    set(norm, "window", "size", j!(8));
+    g.until("windowed robust normalization recovers", |_| {
+        g.error(norm).is_none().then_some(())
+    });
+
     // A delay keeps the shape and the level it was given, at any reach: it moves the stream along
     // its own axis and invents nothing. What the reach itself buys is the past proven above.
     let delay = g.add("signal:Delay");
@@ -758,6 +771,15 @@ fn the_text_and_table_nodes_carry_a_value_out_to_json_and_back() {
         Some("beta:  alpha"),
         "a member that is not an array passes through whole",
     );
+
+    set(scale, "normalize", "mode", j!("robust"));
+    g.until("a table refuses running robust normalization", |_| {
+        g.error(scale).filter(|e| e.contains("positive window size"))
+    });
+    set(scale, "window", "size", j!(8));
+    g.until("windowed table normalization recovers", |_| {
+        g.error(scale).is_none().then_some(())
+    });
 
     for n in [fmt, table, json, back, pick, scale] {
         assert!(g.error(n).is_none(), "a text node carries no error: {:?}", g.error(n));

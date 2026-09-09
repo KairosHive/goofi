@@ -8,6 +8,7 @@ use indexmap::IndexMap;
 
 pub mod globals;
 pub mod home;
+pub mod normalize;
 pub mod path;
 pub mod png;
 pub mod probe;
