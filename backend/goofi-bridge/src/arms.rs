@@ -1286,8 +1286,7 @@ pub(crate) fn control_source(
     Ok(json!({ "source": source }))
 }
 
-/// Create a global. Every expression reading one depends on its TYPE, so the type is declared
-/// at birth and immutable after — re-typing is a remove and an add.
+/// Create a typed global.
 pub(crate) fn global_add(
     state: &AppState,
     payload: &Value,
@@ -1295,22 +1294,40 @@ pub(crate) fn global_add(
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
     let mut g = state.graph.lock().unwrap();
-    let name = parse_str(payload, "name")?.to_string();
+    let group = payload.get("group").and_then(Value::as_str);
+    let name = match group {
+        Some(group) => {
+            if payload.get("name").is_some() {
+                return Err("global entry add: give either name or group".to_string());
+            }
+            if !g.globals().has_group(group) {
+                return Err(format!("no global group `{group}`"));
+            }
+            (0..).map(|i| format!("{group}.entry{i}"))
+                .find(|name| g.globals().get(name).is_none())
+                .ok_or("no free entry name")?
+        }
+        None => parse_str(payload, "name")?.to_string(),
+    };
     if g.globals().get(&name).is_some() {
         return Err(format!("global entry add: `{name}` already exists — `global entry edit` changes it"));
     }
-    let ty = parse_str(payload, "type")?;
-    let val = payload.get("value").filter(|v| !v.is_null()).ok_or("global entry add: missing value")?;
-    let value = goofi_graph::global_from_json(&json!({ "value": val, "type": ty }))
-        .ok_or_else(|| format!("global entry add: `{val}` is not a {ty}"))?;
+    let value = if group.is_some() && payload.get("type").is_none() && payload.get("value").is_none() {
+        goofi_core::globals::GlobalValue::Float(0.0)
+    } else {
+        let ty = parse_str(payload, "type")?;
+        let val = payload.get("value").filter(|v| !v.is_null()).ok_or("global entry add: missing value")?;
+        goofi_graph::global_from_json(&json!({ "value": val, "type": ty }))
+            .ok_or_else(|| format!("global entry add: `{val}` is not a {ty}"))?
+    };
     let control = parse_control(payload)?;
     state.history.lock().unwrap().apply(
         &mut g,
         actor,
-        goofi_graph::Command::EditGlobal { name, value: Some(value.clone()), at: None, control },
+        goofi_graph::Command::EditGlobal { name: name.clone(), value: Some(value.clone()), at: None, control },
     )?;
     // As STORED: the conversion is type-directed, so a fraction into an int rounds.
-    Ok(json!({ "value": goofi_graph::global_to_json(&value)["value"] }))
+    Ok(json!({ "name": name, "value": goofi_graph::global_to_json(&value)["value"] }))
 }
 
 pub(crate) fn global_edit(
@@ -1325,7 +1342,7 @@ pub(crate) fn global_edit(
     let Some(held) = held else {
         return Err(format!("global entry edit: no global `{name}` — `global entry add` creates one"));
     };
-    let ty = held["type"].as_str().unwrap_or_default().to_string();
+    let ty = payload.get("type").and_then(Value::as_str).unwrap_or_else(|| held["type"].as_str().unwrap_or_default());
     let control = parse_control(payload)?;
     // A control-only edit is what the panel sends when it moves a widget, so the value is optional
     // once a `control` is given — and the entry keeps the one it holds, followed or locked as it may be.
@@ -1333,6 +1350,10 @@ pub(crate) fn global_edit(
         Some(val) => Some(
             goofi_graph::global_from_json(&json!({ "value": val, "type": ty }))
                 .ok_or_else(|| format!("global entry edit: `{val}` is not a {ty}"))?,
+        ),
+        None if payload.get("type").is_some() => Some(
+            g.globals().get(&name).and_then(|value| value.converted_to(ty))
+                .ok_or_else(|| format!("global entry edit: unknown type `{ty}`"))?,
         ),
         None if control.is_some() => None,
         None => return Err("global entry edit: missing value".to_string()),
@@ -1440,8 +1461,30 @@ pub(crate) fn global_group_lock(
     let mut g = state.graph.lock().unwrap();
     let group = parse_str(payload, "group")?.to_string();
     let lock = parse_lock(payload, g.globals().group_lock(&group)).map_err(|e| format!("global group lock: {e}"))?;
-    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::LockGlobalGroup { group, lock })?;
+    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::LockGlobalGroup { group, lock: Some(lock) })?;
     Ok(json!({ "lock": lock }))
+}
+
+pub(crate) fn global_group_add(
+    state: &AppState,
+    payload: &Value,
+    actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let mut g = state.graph.lock().unwrap();
+    let group = match payload.get("group").and_then(Value::as_str) {
+        Some(group) => group.to_string(),
+        None => {
+            let panels = g.arrangement().control_panels();
+            (0..).map(|i| format!("group{i}"))
+                .find(|name| !g.globals().has_group(name) && !panels.iter().any(|(_, group)| group == name))
+                .ok_or("no free group name")?
+        }
+    };
+    state.history.lock().unwrap().apply(
+        &mut g, actor, goofi_graph::Command::AddGlobalGroup { group: group.clone(), at: None },
+    )?;
+    Ok(json!({ "group": group }))
 }
 
 pub(crate) fn global_group_rename(

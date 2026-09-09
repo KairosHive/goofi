@@ -141,6 +141,8 @@ pub enum Command {
         from: String,
         to: String,
     },
+    AddGlobalGroup { group: String, at: Option<usize> },
+    RemoveGlobalGroup { group: String },
     RenameGlobalGroup {
         from: String,
         to: String,
@@ -153,7 +155,7 @@ pub enum Command {
     },
     LockGlobalGroup {
         group: String,
-        lock: goofi_core::globals::Lock,
+        lock: Option<goofi_core::globals::Lock>,
     },
     /// Set or clear what a global follows. Inverts as the source it replaced.
     SourceGlobal {
@@ -267,7 +269,8 @@ impl Command {
         }
         let global = matches!(self, Self::EditGlobal { .. } | Self::RemoveGlobal { .. }
             | Self::RenameGlobal { .. } | Self::RenameGlobalGroup { .. } | Self::LockGlobal { .. }
-            | Self::LockGlobalGroup { .. } | Self::SourceGlobal { .. });
+            | Self::LockGlobalGroup { .. } | Self::SourceGlobal { .. }
+            | Self::AddGlobalGroup { .. } | Self::RemoveGlobalGroup { .. });
         let result = (|| match self {
             Command::Compound(cmds) => {
                 let mut inverses = Vec::with_capacity(cmds.len());
@@ -526,6 +529,17 @@ impl Command {
             Command::RenameGlobal { from, to } => {
                 let touched = g.rename_global(&from, &to)?;
                 Ok((Outcome::Nodes(touched), Command::RenameGlobal { from: to, to: from }))
+            }
+
+            Command::AddGlobalGroup { group, at } => {
+                g.add_global_group(&group, at)?;
+                Ok((Outcome::Ok, Command::RemoveGlobalGroup { group }))
+            }
+
+            Command::RemoveGlobalGroup { group } => {
+                let at = g.globals().group_index(&group);
+                g.remove_global_group(&group)?;
+                Ok((Outcome::Ok, Command::AddGlobalGroup { group, at }))
             }
 
             Command::RenameGlobalGroup { from, to, members } => {

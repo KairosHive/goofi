@@ -1046,3 +1046,44 @@ fn clearing_the_touched_baseline_moves_the_zero_point_and_breaks_no_binding() {
     assert_eq!(g.call("redo", j!({}))["changed"], true);
     assert_eq!(baseline(&g)["oscillator/frequency"]["value"], j!(3.5), "redo put it back");
 }
+
+#[test]
+fn empty_global_groups_and_entry_types_survive_editing_and_reload() {
+    let g = Goofi::new();
+    assert_eq!(g.call("global group add", j!({}))["group"], "group0");
+    assert!(g.doc()["global_groups"]["group0"].is_object());
+    g.call("undo", j!({}));
+    assert!(g.doc()["global_groups"].get("group0").is_none());
+    g.call("redo", j!({}));
+    assert_eq!(g.call("global group add", j!({}))["group"], "group1");
+    g.call("global group rename", j!({ "from": "group0", "to": "desk" }));
+    assert_eq!(g.call("global group add", j!({}))["group"], "group0");
+    g.refuse("global group add", j!({ "group": "desk" }));
+    g.refuse("global group add", j!({ "group": "bad name" }));
+    assert_eq!(g.call("global entry add", j!({ "group": "desk" }))["name"], "desk.entry0");
+    assert_eq!(g.call("global entry add", j!({ "group": "desk" }))["name"], "desk.entry1");
+    g.call("global entry edit", j!({ "name": "desk.entry0", "type": "string", "value": "hello" }));
+    assert_eq!(g.doc()["globals"]["desk.entry0"]["type"], "string");
+    assert_eq!(g.doc()["globals"]["desk.entry0"]["value"], "hello");
+    g.call("undo", j!({}));
+    assert_eq!(g.doc()["globals"]["desk.entry0"]["type"], "float");
+    g.call("redo", j!({}));
+    g.call("global entry edit", j!({ "name": "desk.entry1", "type": "bool", "value": true }));
+    assert_eq!(g.doc()["globals"]["desk.entry1"]["value"], true);
+    g.call("global entry edit", j!({ "name": "desk.entry1", "type": "int" }));
+    assert_eq!(g.doc()["globals"]["desk.entry1"]["value"], 1);
+    g.call("undo", j!({}));
+    assert_eq!(g.doc()["globals"]["desk.entry1"]["type"], "bool");
+    g.refuse("global entry edit", j!({ "name": "system.default_ufreq", "type": "string", "value": "no" }));
+    g.call("global entry add", j!({ "name": "desk.knob", "type": "float", "value": 1.0,
+        "control": { "kind": "knob", "x": 0, "y": 0, "w": 3, "h": 3 } }));
+    let before = g.doc()["globals"]["desk.knob"].clone();
+    g.refuse("global entry edit", j!({ "name": "desk.knob", "type": "string", "value": "no" }));
+    assert_eq!(g.doc()["globals"]["desk.knob"], before);
+    let saved = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
+    g.call("session load", j!({ "content": saved }));
+    assert!(g.doc()["global_groups"]["group0"].is_object());
+    assert!(g.doc()["global_groups"]["group1"].is_object());
+    assert_eq!(g.doc()["globals"]["desk.entry0"]["value"], "hello");
+    assert_eq!(g.doc()["globals"]["desk.entry1"]["type"], "bool");
+}
