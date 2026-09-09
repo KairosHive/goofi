@@ -242,21 +242,19 @@
 	// showing everything again whenever the selection moves.
 	let filters = $state<Filters>(SHOW_ALL);
 	let filtered = $state<string | null>(null);
-	// STICKY, and taken from SETTLED state: params join as they leave their zero points, and the
-	// clear that moves those points is what empties it. `settleNonDefault` answers the list it was
-	// given when nothing moved, so this writes no state on the value ticks a reference-driven param
-	// sends by the frame.
+	let activeParam = $state<string | null>(null);
 	let nonDefault = $state<NonDefault>(new Map());
 	$effect(() => {
 		const uid = node?.uid ?? null;
 		if (uid !== filtered) {
 			filtered = uid;
 			filters = SHOW_ALL;
+			activeParam = null;
 			nonDefault = new Map();
 		}
 	});
 	$effect(() => {
-		nonDefault = settleNonDefault(nonDefault, node?.params, baseline);
+		nonDefault = settleNonDefault(nonDefault, node?.params, baseline, activeParam);
 	});
 	/** The node's cleared zero points, keyed `group/name`; absent until Clear is pressed. */
 	const baseline = $derived(node?.baseline);
@@ -278,6 +276,15 @@
 		return activeGroup ? filteredRows(n.params, filters, nonDefault, [activeGroup]) : [];
 	});
 </script>
+
+<svelte:window
+	onpointerdown={(e) => {
+		const row = (e.target as Element).closest<HTMLElement>('[data-param-key]');
+		activeParam = row?.dataset.paramNode === node?.uid ? row?.dataset.paramKey ?? null : null;
+	}}
+	onpointerup={() => (activeParam = null)}
+	onpointercancel={() => (activeParam = null)}
+/>
 
 <section {...rest} class={`param-form ${klass}`.trim()}>
 	{#if !node}
@@ -479,7 +486,7 @@
 					</div>
 				{:else}
 					{#each rows as { group, name: paramName, descriptor } (node.uid + '/' + group + '/' + paramName)}
-						<div class="pf-row">
+						<div class="pf-row" data-param-node={node.uid} data-param-key={`${group}/${paramName}`}>
 							{#if across}
 								<span class="pf-row-group" data-testid={`param-hit-group-${paramName}`}>{group}</span>
 							{/if}

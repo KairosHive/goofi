@@ -9,7 +9,7 @@
 // backend holds would ask the accused to testify.
 
 import { test, expect, type Browser, type Page } from '@playwright/test';
-import { closeSplit, splitRight, waitForApp } from '../lib/app';
+import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
 import {
 	armSocketControl,
 	backendDoc,
@@ -80,6 +80,20 @@ test.describe('the control socket', () => {
 	test('every op a client issues lands exactly once, and the manager agrees after each', async ({
 		page
 	}) => {
+		await page.addInitScript(() => {
+			const Native = window.WebSocket;
+			(window as any).__paramSockets = [];
+			(window as any).__paramFrames = 0;
+			window.WebSocket = class extends Native {
+				constructor(url: string | URL, protocols?: string | string[]) {
+					super(url, protocols);
+					if (String(url).includes('/params/')) {
+						(window as any).__paramSockets.push(this);
+						this.addEventListener('message', () => (window as any).__paramFrames++);
+					}
+				}
+			};
+		});
 		await page.goto('/');
 		await waitForApp(page);
 		await clearGraph(page);
@@ -147,6 +161,48 @@ test.describe('the control socket', () => {
 					.toBe('2 * 3');
 				const param = (await backendDoc(page)).nodes[osc].params.lfo.frequency;
 				expect(param.mode, 'the mode rode with the text').toBe('expression');
+			});
+
+			await test.step('a mounted inspector resumes its parameter stream after a close', async () => {
+				await selectNode(page, osc);
+				await expect.poll(() => page.evaluate(() => (window as any).__paramFrames)).toBeGreaterThan(2);
+				const before = await page.evaluate(() => {
+					const w = window as any;
+					for (const ws of w.__paramSockets) ws.close();
+					return { sockets: w.__paramSockets.length, frames: w.__paramFrames };
+				});
+				await expect.poll(() => page.evaluate(() => (window as any).__paramSockets.length)).toBe(before.sockets + 1);
+				await expect.poll(() => page.evaluate(() => (window as any).__paramFrames)).toBeGreaterThan(before.frames + 2);
+			});
+
+			await test.step('a filtered row stays through a drag and leaves when the gesture ends', async () => {
+				await rawCall(page, 'node baseline', { node: osc });
+				await page.getByTestId('param-search').fill('amplitude');
+				await page.getByTestId('param-non-default-only').click();
+				await expect(page.getByTestId('param-field-amplitude')).toHaveCount(0);
+				await page.evaluate((u) => (window as any).goofi.commands.updateParam(u, 'lfo', 'amplitude', 0.7), osc);
+				const field = page.getByTestId('param-field-amplitude');
+				await expect(field).toBeVisible();
+				const range = field.locator('input[type=range]');
+				await range.scrollIntoViewIfNeeded();
+				const slider = (await range.boundingBox())!;
+				await page.mouse.move(slider.x + slider.width * 0.7, slider.y + slider.height / 2);
+				await page.mouse.down();
+				await page.evaluate((u) => (window as any).goofi.commands.updateParam(u, 'lfo', 'amplitude', 0.42), osc);
+				await expect.poll(async () => (await nodeParams(page, osc)).lfo.amplitude.value).toBeCloseTo(0.42);
+				await expect.soft(field).toBeVisible();
+				await page.mouse.up();
+				await expect(field).toHaveCount(0);
+				for (let i = 0; i < 2; i++) {
+					await rawCall(page, 'node baseline', { node: osc });
+					await expect.soft(field).toHaveCount(0);
+				}
+				await page.evaluate((u) => (window as any).goofi.commands.updateParam(u, 'lfo', 'amplitude', 0.6), osc);
+				await expect(field).toBeVisible();
+				await rawCall(page, 'node baseline', { node: osc });
+				await expect(field).toHaveCount(0);
+				await page.getByTestId('param-non-default-only').click();
+				await page.getByTestId('param-search').fill('');
 			});
 
 			await test.step('a global is patch state, and lands the same way', async () => {
@@ -452,7 +508,44 @@ test.describe('the control socket', () => {
 					})
 					.toBe(0);
 			});
+			await test.step('a drawing restores its pixels through undo, redo and replacement', async () => {
+				await page.evaluate(async () => {
+					const g = (window as any).goofi;
+					await g.commands.addGlobal('review.picture', '', 'string', { kind: 'draw', x: 0, y: 0, w: 5, h: 5 });
+					const panel = g.query.panels()[0];
+					g.commands.setPanelType(panel.panelId, 'control');
+					g.commands.setPanelState(panel.panelId, { group: 'review' });
+				});
+				const canvas = page.getByTestId('draw-canvas');
+				await expect(canvas).toBeVisible();
+				const empty = await canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL());
+				const box = (await canvas.boundingBox())!;
+				await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
+				await page.mouse.down();
+				await page.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.7, { steps: 8 });
+				await page.mouse.up();
+				const picture = await canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL());
+				expect(picture).not.toBe(empty);
+				await expect.poll(async () => (await backendDoc(page)).globals['review.picture']?.value).toBe(picture);
+				await undo(page);
+				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(empty);
+				await redo(page);
+				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(picture);
+				await page.getByTestId('draw-clear').click();
+				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(empty);
+				await undo(page);
+				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(picture);
+				await rawCall(page, 'global entry edit', { name: 'review.picture', value: empty });
+				await rawCall(page, 'global entry edit', { name: 'review.picture', value: picture });
+				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(picture);
+				await page.evaluate(async () => {
+					const g = (window as any).goofi;
+					await g.commands.removeGlobal('review.picture');
+				});
+			});
+
 		} finally {
+			await restorePanelType(page);
 			await clearGraph(page);
 		}
 	});

@@ -87,12 +87,6 @@ export function toggleSource(f: Filters, m: ParamMode): Filters {
 	};
 }
 
-/**
- * The non-default list: every param that has left its zero point, and the zero point it joined
- * under. STICKY — a param dragged back ONTO its default stays in, and only a new zero point takes
- * it out. Membership read live instead dropped the row out from under the pointer the instant a
- * drag crossed the default, which is the one row the reader is holding.
- */
 export type NonDefault = ReadonlyMap<string, ParamBaseline>;
 
 /** Whether two lists say the same thing, so a caller can keep the one it holds. */
@@ -105,19 +99,11 @@ function sameList(a: NonDefault, b: NonDefault): boolean {
 	return true;
 }
 
-/**
- * The list as the settled document leaves it: a param off its zero point joins, one already in
- * stays while its zero point stands, and a CLEAR — which writes every param a new zero — empties
- * it. Answers `list` itself when nothing moved, so the caller writes no state and renders nothing.
- *
- * Taking the drop from the zero point rather than from the clear's own reply is what makes it
- * raceless: no reply ordering to trust, and a value arriving in the window between the two leaves
- * the list exactly as it was.
- */
 export function settleNonDefault(
 	list: NonDefault,
 	groups: ParamGroups | undefined,
-	base?: Baseline
+	base?: Baseline,
+	active: string | null = null
 ): NonDefault {
 	const next = new Map<string, ParamBaseline>();
 	for (const [group, named] of Object.entries(groups ?? {})) {
@@ -125,7 +111,7 @@ export function settleNonDefault(
 			const key = paramKey(group, name);
 			const z = zero(d, base, group, name);
 			const held = list.get(key);
-			if (isModified(d, base, group, name) || (held && sameZero(held, z))) next.set(key, z);
+			if (isModified(d, base, group, name) || (key === active && held && sameZero(held, z))) next.set(key, z);
 		}
 	}
 	return sameList(list, next) ? list : next;
