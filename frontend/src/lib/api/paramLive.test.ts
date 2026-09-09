@@ -16,6 +16,7 @@ class FakeSocket {
 	close(): void {
 		this.closed = true;
 		this.readyState = 3;
+		for (const cb of this.listeners.close ?? []) cb({});
 	}
 	deliver(data: unknown): void {
 		for (const cb of this.listeners.message ?? []) cb({ data });
@@ -54,7 +55,7 @@ describe('the live param plane', () => {
 
 	// Two inspectors can show one node — a second editor's pane, a Parameters panel — and the one
 	// that closes first must not take the other's readout with it.
-	it('shares one socket between holders, and closes it when the last one lets go', () => {
+	it('shares one socket between holders, and closes it when the last one lets go', async () => {
 		const p = live();
 		const a = p.watch('n1');
 		const b = p.watch('n1');
@@ -62,15 +63,43 @@ describe('the live param plane', () => {
 		a();
 		expect(FakeSocket.all[0].closed, 'the other holder still wants it').toBe(false);
 		b();
+		await Promise.resolve();
 		expect(FakeSocket.all[0].closed).toBe(true);
 	});
 
-	it('opens a fresh socket after the last holder let go', () => {
-		const p = live();
-		p.watch('n1')();
-		p.watch('n1');
-		expect(FakeSocket.all.length).toBe(2);
-		expect(FakeSocket.all[1].closed).toBe(false);
+	it('settles demand before closing and reconnects while readers remain', async () => {
+		vi.useFakeTimers();
+		try {
+			const p = live();
+			const a = p.watch('n1');
+			a();
+			const b = p.watch('n1');
+			const c = p.watch('n1');
+			await Promise.resolve();
+			expect(FakeSocket.all).toHaveLength(1);
+			expect(FakeSocket.all[0].closed).toBe(false);
+			FakeSocket.all[0].close();
+			await vi.advanceTimersByTimeAsync(500);
+			expect(FakeSocket.all).toHaveLength(2);
+			FakeSocket.all[1].deliver(JSON.stringify({ node: 'n1', values: { lfo: { frequency: 4 } } }));
+			expect(seen.at(-1)?.[1].values.lfo.frequency).toBe(4);
+			b();
+			b();
+			await Promise.resolve();
+			expect(FakeSocket.all[1].closed).toBe(false);
+			FakeSocket.all[1].close();
+			c();
+			await Promise.resolve();
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(FakeSocket.all).toHaveLength(2);
+			const d = p.watch('n1');
+			expect(FakeSocket.all).toHaveLength(3);
+			d();
+			await Promise.resolve();
+			expect(FakeSocket.all[2].closed).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('ignores a frame that names no node, rather than writing onto one', () => {

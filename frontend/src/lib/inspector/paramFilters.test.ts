@@ -186,18 +186,18 @@ describe('settleNonDefault', () => {
 		]);
 	});
 
-	/* The reported defect. A slider is dragged, and derived membership dropped its row the instant
-	   the drag crossed the default — under the pointer holding it, sometimes back in a frame later
-	   and sometimes not. So the list is STICKY: a param that has left its zero point stays until
-	   that zero point moves. */
-	it('keeps a param a drag has taken back onto its default', () => {
+	it('holds a row only until its pointer gesture ends', () => {
 		const moved = { common: { frequency: float(0.7, 0.5) } };
 		const list = listOf(moved);
-		expect(list.has('common/frequency')).toBe(true);
 		const onDefault = { common: { frequency: float(0.5, 0.5) } };
-		expect(settleNonDefault(list, onDefault).has('common/frequency')).toBe(true);
-		const past = { common: { frequency: float(0.3, 0.5) } };
-		expect(settleNonDefault(list, past).has('common/frequency')).toBe(true);
+		const dragging = settleNonDefault(list, onDefault, undefined, 'common/frequency');
+		expect(dragging.has('common/frequency')).toBe(true);
+		const ended = settleNonDefault(dragging, onDefault);
+		expect(ended.size).toBe(0);
+		const base = { 'common/frequency': { value: 0.5 } };
+		expect(settleNonDefault(ended, onDefault, base).size).toBe(0);
+		expect(settleNonDefault(ended, onDefault, base).size).toBe(0);
+		expect(settleNonDefault(ended, moved, base).has('common/frequency')).toBe(true);
 	});
 
 	it('answers the list it was given when nothing moved, so a value tick writes no state', () => {

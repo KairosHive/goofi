@@ -39,15 +39,14 @@
 	let erasing = $state(false);
 	let drawing = false;
 	let last: { x: number; y: number } | null = null;
-	/** What we last handed to `onChange`, so our own echo does not reload the canvas under the hand
-	    that is drawing on it. */
-	let mine = '';
+	let mine: string | null = null;
 
-	/** Load `value` in whenever it is someone else's — a patch load, another viewer, an agent. */
 	$effect(() => {
 		const url = value;
 		const el = canvas;
-		if (!el || url === mine) return;
+		const echo = url === mine;
+		mine = null;
+		if (!el || echo) return;
 		const ctx = el.getContext('2d');
 		if (!ctx) return;
 		if (!url) {
@@ -60,6 +59,7 @@
 			ctx.drawImage(img, 0, 0, SIZE, SIZE);
 		};
 		img.src = url;
+		return () => { img.onload = null; };
 	});
 
 	function at(e: PointerEvent): { x: number; y: number } | null {
