@@ -21,7 +21,7 @@ RELIEF_TEXTURES = next(p['options'] for p in RELIEF_HEADER['params'] if p['name'
 
 
 class Patch:
-    def __init__(self, slug, title):
+    def __init__(self, slug, title, auto=True, mix=0.3):
         self.slug, self.title = slug, title
         self.nodes, self.links, self.names, self.globals = {}, [], {}, []
         self.views = []
@@ -31,18 +31,18 @@ class Patch:
         self.extra = {}
         for name, value in [('default_ufreq', 20.0), ('default_width', 256), ('default_height', 256)]:
             self.globals.append({'name': 'system.'+name, 'type': 'int' if isinstance(value, int) else 'float', 'value': value})
-        self.control('auto', True, kind='toggle')
-        self.control('mix', 0.3, 0, 1)
+        self.control('auto', auto, kind='toggle')
+        self.control('mix', mix, 0, 1)
         self.node('slow', 'signal:LFO', (-380, 0), lfo={'frequency': 0.018, 'phase': 0.75}, common={'max_frequency': 20.0})
         self.bind('slow', 'lfo', 'amplitude', '0.5 if globals.geometry.auto else 0.0')
         self.bind('slow', 'lfo', 'offset', '0.5 if globals.geometry.auto else globals.geometry.mix')
 
-    def control(self, name, value, lo=0.0, hi=1.0, kind='slider', options=None):
+    def control(self, name, value, lo=0.0, hi=1.0, kind='slider', options=None, step=None):
         typ = 'bool' if isinstance(value, bool) else 'string' if isinstance(value, str) else 'float'
         control = {'kind': kind, 'x': 0.0, 'y': self.row, 'w': 16.0, 'h': 2.0 if kind != 'text' else 3.0}
         if typ == 'float':
-            # Native range inputs must reach the decimal endpoint in exactly 200 steps.
-            step = float((Decimal(str(hi))-Decimal(str(lo)))/200)
+            # Default steps reach both decimal endpoints; custom steps can also align the initial value.
+            if step is None: step = float((Decimal(str(hi))-Decimal(str(lo)))/200)
             control.update(min=lo, max=hi, step=step)
         if options: control['options'] = options
         self.row += control['h']
@@ -325,12 +325,12 @@ def recipes():
     p.display('jade', 'out')
     yield p.save()
 
-    p = Patch('10-living-ratios', 'Living ratios')
+    p = Patch('10-living-ratios', 'Living ratios', auto=False, mix=0.0)
     p.canvas = True
-    p.control('ratios', '9/8, 6/5, 5/4, 4/3, 7/5, 3/2, 5/3, 7/4', kind='text')
+    p.control('ratios', '3/2, 5/4, 4/3, 7/4, 5/3, 9/8', kind='text')
     p.control('running', True, kind='toggle')
-    p.control('stepSeconds', 2.5, .25, 10)
-    p.control('glide', .7, 0, 1)
+    p.control('stepSeconds', 4.0, .25, 10, step=.05)
+    p.control('glide', 1.0, 0, 1)
     p.control('direction', 'ping-pong', kind='dropdown', options=['forward', 'ping-pong'])
     p.node('ratios', 'signal:RatioSequence', (0, 0))
     for name, param in [('ratios', 'ratios'), ('running', 'running'), ('stepSeconds', 'seconds'), ('glide', 'glide'), ('direction', 'direction')]:
@@ -338,31 +338,34 @@ def recipes():
     p.harmonic('chord', '1, 9/8, 2', '1, 9/8, 2', (380, 0), False)
     p.wire('ratios', 'tuning', 'chord', 'a')
     p.node('modes', 'signal:HarmonicModes', (750, 0))
-    p.wire('chord', 'harmonic', 'modes', 'input')
+    p.wire('ratios', 'transition', 'modes', 'transition')
     p.node('field', 'graphics:HarmonicChladni', (1120, 0),
-           field={'approach': 1.0, 'directions': 7, 'period': .5}, common={'width': 512, 'height': 512})
+           field={'approach': 0.0, 'symmetry': 1.0, 'directions': 7, 'period': .5}, common={'width': 512, 'height': 512})
     p.wire('chord', 'packed', 'field', 'harmonics'); p.wire('modes', 'modes', 'field', 'modes')
     p.node('organism', 'graphics:HarmonicRelief', (1500, 0),
-           material={'texture_a': 'sand', 'texture_b': 'spores'}, common={'width': 512, 'height': 512})
+           material={'texture_a': 'sand', 'texture_b': 'spores'}, camera={'tilt': 0.0, 'turn': 0.0},
+           common={'width': 512, 'height': 512})
     p.wire('field', 'out', 'organism', 'input')
     p.bind('organism', 'material', 'texture_mix', reference='slow.out')
     for name, value, param in [('textureA', 'sand', 'texture_a'), ('textureB', 'spores', 'texture_b')]:
         p.control(name, value, kind='dropdown', options=RELIEF_TEXTURES)
         p.bind('organism', 'material', param, 'globals.geometry.'+name)
     for name, value, lo, hi, node, group, param in [
-        ('density', .75, 0, 1, 'organism', 'material', 'density'),
-        ('grainSize', 24.0, 4, 64, 'organism', 'material', 'texture_scale'),
+        ('density', .9, 0, 1, 'organism', 'material', 'density'),
+        ('grainSize', 40.0, 4, 64, 'organism', 'material', 'texture_scale'),
         ('grainHeight', .75, 0, 1, 'organism', 'material', 'texture_depth'),
         ('bandWidth', .022, .008, .15, 'organism', 'form', 'seam'),
-        ('approach', 1.0, 0, 1, 'field', 'field', 'approach'),
+        ('approach', 0.0, 0, 1, 'field', 'field', 'approach'),
         ('period', .5, .2, 1.0, 'field', 'field', 'period'),
     ]:
-        p.control(name, value, lo, hi)
+        p.control(name, value, lo, hi, step={'grainSize': .1, 'bandWidth': .0001}.get(name))
         p.bind(node, group, param, 'globals.geometry.'+name)
     p.node('ratioTrace', 'signal:Buffer', (380, 480), buffer={'size': 600})
     p.wire('ratios', 'ratio', 'ratioTrace', 'input')
     p.monitor = ('ratioTrace', 'out', 'line')
     p.display('organism', 'out'); p.display('ratioTrace', 'out', 'line'); p.display('ratios', 'label', 'string')
+    p.ink('field', name='nodalLines')
+    p.display('nodalLines', 'out')
     yield p.save()
 
 

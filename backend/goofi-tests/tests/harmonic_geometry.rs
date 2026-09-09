@@ -767,3 +767,57 @@ fn ratio_sequence_holds_glides_loops_and_drives_a_harmonic_field() {
     seek(0.0, 1.25); // A backward clock re-anchors safely.
     assert!(g.error(sequence).is_none());
 }
+
+#[test]
+fn sequenced_chladni_states_move_continuously_across_step_boundaries() {
+    let _py = require_python();
+    let g = Goofi::new();
+    install_bundle(&g, &[("ratio_clock.py", include_str!("fixtures/ratio_clock.py"))]);
+    let clock = g.add("RatioClock");
+    let sequence = g.add("RatioSequence");
+    g.set_param(sequence, "sequence", "ratios", "3/2, 5/4, 4/3");
+    g.set_param(sequence, "sequence", "seconds", 1.0);
+    g.set_param(sequence, "sequence", "glide", 1.0);
+    g.set_param(sequence, "sequence", "direction", "ping-pong");
+    g.link(clock, "out", sequence, "clock");
+    let modes = g.add("HarmonicModes");
+    g.link(sequence, "transition", modes, "transition");
+    let mode_data = g.probe(modes, "modes");
+    let plate = g.add("graphics:HarmonicChladni");
+    g.set_param(plate, "common", "width", 128);
+    g.set_param(plate, "common", "height", 128);
+    g.set_param(plate, "field", "symmetry", 1.0);
+    g.link(modes, "modes", plate, "modes");
+    let output = g.probe(plate, "out");
+    let capture = |time: f64, m: f32, n: f32| {
+        g.set_param(clock, "clock", "time", time);
+        g.until(&format!("plate mode ({m}, {n}) at clock {time}"), |_| {
+            mode_data.latest().filter(|d| (f32s(d)[0]-m).abs() < 0.0001 && (f32s(d)[32]-n).abs() < 0.0001)
+        });
+        let count = output.count();
+        let image = g.until("the interpolated plate reaches the GPU", |g| {
+            render(g, 1);
+            output.latest().filter(|_| output.count() > count+3)
+        });
+        assert!(g.error(modes).is_none());
+        f32s(&image)
+    };
+    let first = capture(0.0, 3.0, 2.0);
+    let quarter = capture(0.25, 3.3125, 2.3125);
+    let middle = capture(0.5, 4.0, 3.0);
+    let before = capture(0.999, 4.999994, 3.999994);
+    let boundary = capture(1.0, 5.0, 4.0);
+    let after = capture(1.001, 4.999997, 3.999997);
+    let second_middle = capture(1.5, 4.5, 3.5);
+    let turn = capture(2.0, 4.0, 3.0);
+    let reversed = capture(2.001, 4.000003, 3.000003);
+    let reverse_middle = capture(2.5, 4.5, 3.5);
+    let difference = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(a, b)| (a-b).abs()).sum::<f32>()/a.len() as f32;
+    assert!(difference(&first, &quarter) > 0.1, "the geometry moves during the first quarter of a step");
+    assert!(difference(&quarter, &middle) > 0.1, "the mode trajectory keeps moving");
+    assert!(difference(&middle, &boundary) > 0.1, "the endpoint is a distinct plate state");
+    for (a, b) in [(&before, &boundary), (&boundary, &after), (&turn, &reversed)] {
+        assert!(difference(a, b) < 0.002, "step changes and turnarounds do not jump to the old source state");
+    }
+    assert_eq!(second_middle, reverse_middle, "ping-pong retraces the same field");
+}
