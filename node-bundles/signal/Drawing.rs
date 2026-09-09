@@ -60,7 +60,7 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Arra
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Image, Tag::Input],
     doc: "A drawing widget's picture, as a frame.\n\
-          Every stroke a `draw` widget holds — a hand's or `control draw`'s — as an [H, W, 4] \
+          Every stroke a `paint` widget holds — a hand's or `control paint`'s — as an [H, W, 4] \
           RGBA frame spanning 0..1. Feed `graphics:SignalIn` with it to put the drawing on the GPU.",
     inputs: &[],
     outputs: OUTPUTS,

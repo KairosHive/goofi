@@ -21,9 +21,15 @@ impl Node for Buffer {
         p: &Params<'_>,
     ) -> NodeResult {
         let d = inp.get("input").ok_or("`input` is required")?;
-        let size = p.i64("buffer", "size").unwrap_or(1000).max(1) as usize;
+        let unit = p.str("buffer", "unit").unwrap_or("seconds");
+        let size = goofi_core::stream::window_count(p.f64("buffer", "size").unwrap_or(2.0), unit, d.meta())?.max(1);
         let a = d.assert_ndims().at_least(1)?;
-        let along = p.i64("buffer", "axis").unwrap_or(-1);
+        let along = if matches!(unit, "updates" | "seconds (ufreq)") {
+            a.shape().len() as i64
+        } else {
+            p.i64("buffer", "axis").unwrap_or(-1)
+        };
+        if along >= 255 { return Err("buffer axis must be less than 255".into()); }
         let mut shape = a.shape().to_vec();
         if along >= 0 {
             shape.resize(shape.len().max(along as usize + 1), 1);
@@ -41,7 +47,9 @@ impl Node for Buffer {
             self.layout = layout;
         }
 
-        let cap = size * stride;
+        if stride == 0 { return Err("buffer needs nonempty dimensions outside its axis".into()); }
+        let cap = size.checked_mul(stride).filter(|n| *n <= isize::MAX as usize)
+            .ok_or("buffer size exceeds the supported allocation")?;
         let src = a.as_bytes();
         for (o, window) in self.windows.iter_mut().enumerate() {
             window.extend_from_slice(&src[o * block..(o + 1) * block]);
@@ -72,15 +80,22 @@ impl Node for Buffer {
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "buffer",
-        name: "size",
-        spec: ParamSpec::Int { default: 1000, min: 1, max: 10_000_000 },
+        name: "unit",
+        spec: ParamSpec::Str { default: "seconds", options: &["seconds", "samples", "seconds (ufreq)", "updates"], refresh: false },
         expression: None,
-        doc: Some("How many of the most recent entries to keep along the chosen axis."),
+        doc: Some("Seconds uses sfreq, or ufreq if no sample rate is set, along the selected axis. Updates and seconds (ufreq) stack whole frames on a new trailing axis."),
+    },
+    ParamDecl {
+        group: "buffer",
+        name: "size",
+        spec: ParamSpec::Float { default: 2.0, min: 0.001, max: 60.0 },
+        expression: None,
+        doc: Some("How much recent data to keep, in the selected unit."),
     },
     ParamDecl {
         group: "buffer",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7 },
+        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some(
             "Which axis to roll along, negative from the end. -1 is time, the default and the \

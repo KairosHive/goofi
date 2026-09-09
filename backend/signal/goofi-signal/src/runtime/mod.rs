@@ -165,6 +165,7 @@ pub struct NodeRuntime {
 
 /// Everything a node's thread needs that is the GRAPH's rather than the node's.
 pub struct NodeEnv {
+    pub node: Option<String>,
     pub evaluator: Option<Arc<dyn ExprEvaluator>>,
     pub time: Arc<goofi_core::time::Time>,
 }
@@ -173,7 +174,7 @@ impl NodeEnv {
     /// The environment of a node that belongs to no graph — what a test driving a [`NodeRuntime`]
     /// directly gets.
     pub fn detached() -> NodeEnv {
-        NodeEnv { evaluator: None, time: Arc::new(goofi_core::time::Time::new()) }
+        NodeEnv { node: None, evaluator: None, time: Arc::new(goofi_core::time::Time::new()) }
     }
 }
 
@@ -843,6 +844,7 @@ pub fn spawn(
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     goofi_transport::thread(format!("goofi-{}", manifest.type_name))
         .spawn(move || {
+            goofi_core::log::set_source(goofi_core::log::Source { component: "signal".into(), node: env.node.clone() });
             // A node removed inside its own build window never runs `setup()` — which may open a
             // device — and releases at once rather than after the import it no longer needs.
             if !halt.stopped() {

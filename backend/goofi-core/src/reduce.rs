@@ -132,8 +132,8 @@ pub fn quantize_u8(frame: &Data) -> Option<(Vec<usize>, Vec<u8>, crate::Meta)> {
             (lo, lo + 1.0)
         }
     };
-    let span = hi - lo;
-    let texels: Vec<u8> = values().map(|v| (((v - lo) / span).clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+    let span = hi as f64 - lo as f64;
+    let texels: Vec<u8> = values().map(|v| ((((v as f64) - lo as f64) / span).clamp(0.0, 1.0) * 255.0).round() as u8).collect();
     let mut meta = frame.meta().clone();
     note_depth(&mut meta, lo, hi);
     Some((shape.to_vec(), texels, meta))
@@ -206,7 +206,8 @@ pub fn reduce_axis(
     max: usize,
     method: ReduceMethod,
 ) -> Option<AxisReduction> {
-    if dim >= shape.len() || max == 0 {
+    let elements = shape.iter().try_fold(1usize, |n, &d| n.checked_mul(d))?;
+    if elements == 0 || elements.checked_mul(4)? != bytes.len() || dim >= shape.len() || max == 0 {
         return None;
     }
     match method {
@@ -235,14 +236,14 @@ fn subsample_axis(bytes: &[u8], shape: &[usize], dim: usize, max: usize) -> Opti
 
 /// Integer bin edges: `bins+1` boundaries evenly spanning `0..axis`.
 fn bin_edges(axis: usize, bins: usize) -> Vec<usize> {
-    (0..=bins).map(|b| ((b as u64 * axis as u64) / bins as u64) as usize).collect()
+    (0..=bins).map(|b| ((b as u128 * axis as u128) / bins as u128) as usize).collect()
 }
 
 fn envelope_axis(bytes: &[u8], shape: &[usize], dim: usize, max: usize) -> Option<AxisReduction> {
     let (outer, axis, inner) = strides(shape, dim);
     let w = max.min(axis);
     // Envelope doubles the axis (min,max per bin); only worth it if it still shrinks ≥2×.
-    if w == 0 || axis < 2 * w {
+    if w == 0 || w > axis / 2 {
         return None;
     }
     let edges = bin_edges(axis, w);

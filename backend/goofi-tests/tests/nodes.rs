@@ -447,9 +447,8 @@ fn a_node_saved_to_the_private_library_leaves_the_patch_rides_the_archive_and_st
             .find(|v| v["type"] == ty).unwrap()["source"].clone()
     };
     assert_eq!(source(&g, "signal:MyKept"), "patch");
-    // Nothing but the patch's own may be saved: the library's is already there, a shipped one is
-    // not the user's to keep.
-    assert!(g.refuse("library save", j!({ "type": "LFO" })).contains("not this patch's own"));
+    // A shipped node cannot be saved as a custom node.
+    assert!(g.refuse("library save", j!({ "type": "LFO" })).contains("not a custom node"));
 
     // Saved first, so the dot below is about the MOVE and not about the node just added.
     let tmp = tempfile::tempdir().unwrap();
@@ -504,6 +503,24 @@ fn a_node_saved_to_the_private_library_leaves_the_patch_rides_the_archive_and_st
     assert!(kept.contains("[5.0]"), "the library holds what replaced it: {kept}");
     assert_eq!(g.call("library get", j!({ "type": "MyKept" }))["shadowed"], j!([]), "nothing stands behind it");
     emits(&g, live, 5.0);
+
+    // Every custom node can save again, with an explicit overwrite or a new file name.
+    g.refuse("library save", j!({ "type": "MyKept" }));
+    g.call("library save", j!({ "type": "MyKept", "overwrite": true }));
+    assert!(library.path().join("my_kept.py").is_file());
+    for name in ["../escape", "other.rs", "_hidden.py"] {
+        g.refuse("library save", j!({ "type": "MyKept", "name": name }));
+    }
+    write_rust_node(library.path(), "OtherLanguage.rs", "1.0");
+    let why = g.refuse("library save", j!({ "type": "MyKept", "name": "other_language.py", "overwrite": true }));
+    assert!(why.contains("another source language"));
+    assert!(!library.path().join("other_language.py").exists());
+    std::fs::remove_file(library.path().join("OtherLanguage.rs")).unwrap();
+    let renamed = g.call("library save", j!({ "type": "MyKept", "name": "other_kept.py" }));
+    assert_eq!(renamed["type"], "signal:OtherKept");
+    assert!(library.path().join("my_kept.py").is_file());
+    assert_eq!(std::fs::read(library.path().join("other_kept.py")).unwrap(), std::fs::read(library.path().join("my_kept.py")).unwrap());
+    g.refuse("library save", j!({ "type": "MyKept", "name": "other_kept.py" }));
 
     // The library is the one source from here, so put back the file this patch was saved with.
     write_node(library.path(), "my_kept.py", "1.0");

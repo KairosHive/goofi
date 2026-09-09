@@ -194,14 +194,14 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "quantum",
         name: "qubits",
-        spec: ParamSpec::Int { default: 6, min: 1, max: 12 },
+        spec: ParamSpec::Int { default: 6, min: 1, max: 12, options: &[] },
         expression: None,
         doc: Some("How many qubits. The statevector is two to this power, so 12 is four thousand amplitudes."),
     },
     ParamDecl {
         group: "quantum",
         name: "layers",
-        spec: ParamSpec::Int { default: 3, min: 1, max: 12 },
+        spec: ParamSpec::Int { default: 3, min: 1, max: 12, options: &[] },
         expression: None,
         doc: Some("How many rounds of rotations. More layers reach further into the space."),
     },
@@ -222,7 +222,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000 },
+        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the per-gate offsets, which is what makes one circuit differ from another."),
     },

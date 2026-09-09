@@ -117,3 +117,25 @@ impl Stream {
         (out_shape.clone(), reorder(&out_shape, dim, &self.data, false), offset)
     }
 }
+
+/// Convert a window size to a count. Seconds use the selected metadata rate.
+pub fn window_count(size: f64, unit: &str, meta: &crate::Meta) -> Result<usize, String> {
+    if !size.is_finite() || size < 0.0 {
+        return Err("size must be finite and nonnegative".into());
+    }
+    if size == 0.0 { return Ok(0); }
+    let rate = match unit {
+        "samples" | "updates" => 1.0,
+        "seconds" => meta.sfreq().or_else(|| meta.ufreq()).ok_or("seconds requires sfreq or ufreq metadata")?,
+        "seconds (ufreq)" => meta.ufreq().ok_or("seconds (ufreq) requires ufreq metadata")?,
+        _ => return Err(format!("unknown size unit: {unit}")),
+    };
+    if !rate.is_finite() || rate <= 0.0 {
+        return Err("the selected rate must be finite and positive".into());
+    }
+    let count = (size * rate).round();
+    if !count.is_finite() || count >= isize::MAX as f64 / 4.0 {
+        return Err("size exceeds the supported window length".into());
+    }
+    Ok(count as usize)
+}

@@ -1,5 +1,6 @@
 //! Patch commands with exact inverses — the manager's undo/redo unit.
 
+use goofi_core::record::RecordedOutput;
 use crate::{Graph, Uid};
 use goofi_core::globals::{Control, GlobalValue};
 use goofi_core::Param;
@@ -67,7 +68,7 @@ pub enum Command {
         /// Captured touched-filter baseline to restore; `None` for a user add (defaults to empty).
         baseline: Option<serde_json::Value>,
         /// Captured armed output slots to restore; `None` for a user add (defaults to none).
-        record: Option<Vec<String>>,
+        record: Option<Vec<RecordedOutput>>,
         /// The scope to create the node INSIDE (`None` = ROOT). A PORT's membership rides HERE and
         /// nowhere else: one cannot be created without a scope. Every other kind is placed by a
         /// [`Command::SetScope`] child, after every uid the capture names exists.
@@ -102,7 +103,7 @@ pub enum Command {
     /// vector it replaced.
     SetRecorded {
         uid: Uid,
-        record: Vec<String>,
+        record: Vec<RecordedOutput>,
     },
     /// Replace the values the touched filter counts from, WHOLE. `None` snapshots what the node
     /// holds NOW, which is what the Clear button does; `Some` restores a captured blob, which is
@@ -140,6 +141,8 @@ pub enum Command {
         from: String,
         to: String,
     },
+    AddGlobalGroup { group: String, at: Option<usize> },
+    RemoveGlobalGroup { group: String },
     RenameGlobalGroup {
         from: String,
         to: String,
@@ -152,7 +155,7 @@ pub enum Command {
     },
     LockGlobalGroup {
         group: String,
-        lock: goofi_core::globals::Lock,
+        lock: Option<goofi_core::globals::Lock>,
     },
     /// Set or clear what a global follows. Inverts as the source it replaced.
     SourceGlobal {
@@ -266,7 +269,8 @@ impl Command {
         }
         let global = matches!(self, Self::EditGlobal { .. } | Self::RemoveGlobal { .. }
             | Self::RenameGlobal { .. } | Self::RenameGlobalGroup { .. } | Self::LockGlobal { .. }
-            | Self::LockGlobalGroup { .. } | Self::SourceGlobal { .. });
+            | Self::LockGlobalGroup { .. } | Self::SourceGlobal { .. }
+            | Self::AddGlobalGroup { .. } | Self::RemoveGlobalGroup { .. });
         let result = (|| match self {
             Command::Compound(cmds) => {
                 let mut inverses = Vec::with_capacity(cmds.len());
@@ -445,7 +449,7 @@ impl Command {
             }
 
             Command::SetRecorded { uid, record } => {
-                let Some(was) = g.recorded(uid).map(<[String]>::to_vec) else {
+                let Some(was) = g.recorded(uid).map(<[RecordedOutput]>::to_vec) else {
                     return Ok((Outcome::Ok, Command::Compound(vec![]))); // idempotent: it is gone
                 };
                 g.set_recorded(uid, record)?;
@@ -525,6 +529,17 @@ impl Command {
             Command::RenameGlobal { from, to } => {
                 let touched = g.rename_global(&from, &to)?;
                 Ok((Outcome::Nodes(touched), Command::RenameGlobal { from: to, to: from }))
+            }
+
+            Command::AddGlobalGroup { group, at } => {
+                g.add_global_group(&group, at)?;
+                Ok((Outcome::Ok, Command::RemoveGlobalGroup { group }))
+            }
+
+            Command::RemoveGlobalGroup { group } => {
+                let at = g.globals().group_index(&group);
+                g.remove_global_group(&group)?;
+                Ok((Outcome::Ok, Command::AddGlobalGroup { group, at }))
             }
 
             Command::RenameGlobalGroup { from, to, members } => {
@@ -695,7 +710,7 @@ impl Command {
                         sources: vec![],
                         viewers: g.viewers(id).cloned(),
                         baseline: g.baseline(id).cloned(),
-                        record: g.recorded(id).filter(|r| !r.is_empty()).map(<[String]>::to_vec),
+                        record: g.recorded(id).filter(|r| !r.is_empty()).map(<[RecordedOutput]>::to_vec),
                         scope: Some(scope),
                     })
                     .collect();
@@ -956,7 +971,7 @@ fn capture_subtree_restore(g: &Graph, root: Uid) -> (Command, std::collections::
             sources,
             viewers: g.viewers(u).filter(|v| v.as_object().is_some_and(|m| !m.is_empty())).cloned(),
             baseline: g.baseline(u).filter(|v| v.as_object().is_some_and(|m| !m.is_empty())).cloned(),
-            record: g.recorded(u).filter(|r| !r.is_empty()).map(<[String]>::to_vec),
+            record: g.recorded(u).filter(|r| !r.is_empty()).map(<[RecordedOutput]>::to_vec),
             scope: g.stub(u).map(|(s, _)| s),
         });
     }

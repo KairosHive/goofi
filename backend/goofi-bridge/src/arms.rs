@@ -19,6 +19,22 @@ fn detail(payload: &Value, name: &str) -> Detail {
     }
 }
 
+pub(crate) fn dir_stat(
+    _state: &AppState,
+    payload: &Value,
+    _actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let path = fsbrowse::resolve(parse_str(payload, "path")?);
+    let kind = match std::fs::metadata(&path) {
+        Ok(meta) if meta.is_dir() => "dir",
+        Ok(_) => "file",
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "missing",
+        Err(e) => return Err(format!("{path}: {e}")),
+    };
+    Ok(json!({ "path": path, "kind": kind }))
+}
+
 pub(crate) fn dir_list(
     _state: &AppState,
     payload: &Value,
@@ -204,23 +220,42 @@ pub(crate) fn library_save(
         let g = state.graph.lock().unwrap();
         let (engine, entry) = g.resolve_type(asked).map_err(|e| format!("library save: {e}"))?;
         let ty = goofi_node::qualify(engine, entry.manifest.type_name);
-        if !g.is_patch_type(&ty) {
+        if !g.is_patch_type(&ty) && !g.is_custom_type(&ty) {
             return Err(format!(
-                "library save: `{ty}` is not this patch's own node — only a node file in the patch workspace is saved to the library"
+                "library save: `{ty}` is not a custom node"
             ));
         }
         let bare = entry.manifest.type_name;
-        let folder = mount.join(goofi_node::folder_of(engine));
+        let folder = if g.is_patch_type(&ty) { mount.join(goofi_node::folder_of(engine)) } else { state.custom.clone() };
         let from = crate::node_file_in(&folder, bare, engine)
             .ok_or_else(|| format!("library save: `{ty}` has no source file under {}", folder.display()))?;
         (engine, bare.to_string(), from)
     };
     let library = state.custom.clone();
-    let name = from.file_name().ok_or("library save: the source file has no name")?.to_owned();
+    let name = match payload.get("name").and_then(Value::as_str) {
+        Some(name) => {
+            if name.is_empty() || name.contains(['/', '\\']) {
+                return Err("library save: name must be a file name without a directory".into());
+            }
+            let mut path = std::path::PathBuf::from(name);
+            if path.extension().is_none() {
+                path.set_extension(from.extension().ok_or("library save: missing source extension")?);
+            }
+            if path.extension() != from.extension() || goofi_node::describe::type_name_of(&path).is_none() {
+                return Err("library save: use a valid node file name with the source extension".into());
+            }
+            path.into_os_string()
+        }
+        None => from.file_name().ok_or("library save: the source file has no name")?.to_owned(),
+    };
     let to = library.join(&name);
-    let held = crate::node_file_in(&library, &bare, engine)
+    let saved_type = goofi_node::describe::type_name_of(&to).ok_or("library save: invalid file name")?;
+    let held = crate::node_file_in(&library, &saved_type, engine)
         .or_else(|| to.exists().then(|| to.clone()));
     if let Some(held) = &held {
+        if held.extension() != from.extension() {
+            return Err(format!("library save: {} uses another source language; choose a different name", held.display()));
+        }
         if !overwrite {
             return Err(format!(
                 "library save: the library already holds {} — rename this node, or pass --overwrite to replace that file",
@@ -237,17 +272,25 @@ pub(crate) fn library_save(
         std::io::copy(&mut input, &mut output)?;
         output.sync_all()?;
         drop(output);
-        std::fs::rename(&staged, &to)
+        if overwrite {
+            std::fs::rename(&staged, &to)
+        } else {
+            std::fs::hard_link(&staged, &to)?;
+            std::fs::remove_file(&staged)
+        }
     })();
     if let Err(e) = replace {
         let _ = std::fs::remove_file(&staged);
         return Err(format!("library save: {}: {e}", to.display()));
     }
-    std::fs::remove_file(&from).map_err(|e| format!("library save: {}: {e}", from.display()))?;
+    // A renamed save is a new library type. Keep the source for existing instances.
+    if from != to && saved_type == bare {
+        std::fs::remove_file(&from).map_err(|e| format!("library save: {}: {e}", from.display()))?;
+    }
     // The file left the mount but the `.gfi` still carries it, from the library — so the patch's
     // saved content did not change, and the unsaved dot must not rise for a move alone.
     if let Ok(rel) = from.strip_prefix(&mount) {
-        state.forget_baseline(rel);
+        if !from.exists() { state.forget_baseline(rel); }
     }
     // Rescanned but NOT restarted: the code behind every live instance is byte for byte the file
     // that just moved.
@@ -257,7 +300,7 @@ pub(crate) fn library_save(
         events.push(event("node_types", json!({ "types": schemas::catalog_types(&g, Detail::Full) })));
     }
     resync_and_broadcast(state);
-    Ok(json!({ "type": goofi_node::qualify(engine, &bare), "path": goofi_core::path::to_slash(&to) }))
+    Ok(json!({ "type": goofi_node::qualify(engine, &saved_type), "path": goofi_core::path::to_slash(&to) }))
 }
 
 /// Explicit, never watched: an agent calls it after writing a node file.
@@ -1198,7 +1241,7 @@ pub(crate) fn control_remove(
 /// widget draws, through the very code a hand at the pad reaches: the CLI is another hand on the
 /// same canvas, never a second painter. Nothing is written here; what the widget then commits is
 /// the drawing's one write.
-pub(crate) fn control_draw(
+pub(crate) fn control_paint(
     state: &AppState,
     payload: &Value,
     _actor: &str,
@@ -1206,19 +1249,19 @@ pub(crate) fn control_draw(
 ) -> Result<Value, String> {
     let name = {
         let g = state.graph.lock().unwrap();
-        let (_, _, name) = element_of(&g, "control draw", payload)?;
+        let (_, _, name) = element_of(&g, "control paint", payload)?;
         match g.globals().control(&name).map(|c| c.kind) {
-            Some(goofi_core::globals::ControlKind::Draw) => name,
+            Some(goofi_core::globals::ControlKind::Paint) => name,
             Some(other) => {
-                return Err(format!("control draw: `{name}` is a {} widget; only a `draw` one takes steps", other.as_str()))
+                return Err(format!("control paint: `{name}` is a {} widget; only a `paint` one takes steps", other.as_str()))
             }
-            None => return Err(format!("control draw: `{name}` is not a control element")),
+            None => return Err(format!("control paint: `{name}` is not a control element")),
         }
     };
     let steps = goofi_core::turtle::parse(parse_str(payload, "steps")?)
-        .map_err(|e| format!("control draw: {e}"))?;
+        .map_err(|e| format!("control paint: {e}"))?;
     let marks = goofi_core::turtle::marks(&steps);
-    events.push(event("control_draw", json!({ "name": name, "marks": marks })));
+    events.push(event("control_paint", json!({ "name": name, "marks": marks })));
     // A pad is drawn on by whoever has it OPEN, so what the caller needs to know is whether anyone
     // was listening. Zero clients is a script that went nowhere, and saying so beats a bare `ok`.
     Ok(json!({ "steps": steps.len(), "marks": marks.len(), "clients": state.events.receiver_count() }))
@@ -1243,8 +1286,7 @@ pub(crate) fn control_source(
     Ok(json!({ "source": source }))
 }
 
-/// Create a global. Every expression reading one depends on its TYPE, so the type is declared
-/// at birth and immutable after — re-typing is a remove and an add.
+/// Create a typed global.
 pub(crate) fn global_add(
     state: &AppState,
     payload: &Value,
@@ -1252,22 +1294,40 @@ pub(crate) fn global_add(
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
     let mut g = state.graph.lock().unwrap();
-    let name = parse_str(payload, "name")?.to_string();
+    let group = payload.get("group").and_then(Value::as_str);
+    let name = match group {
+        Some(group) => {
+            if payload.get("name").is_some() {
+                return Err("global entry add: give either name or group".to_string());
+            }
+            if !g.globals().has_group(group) {
+                return Err(format!("no global group `{group}`"));
+            }
+            (0..).map(|i| format!("{group}.entry{i}"))
+                .find(|name| g.globals().get(name).is_none())
+                .ok_or("no free entry name")?
+        }
+        None => parse_str(payload, "name")?.to_string(),
+    };
     if g.globals().get(&name).is_some() {
         return Err(format!("global entry add: `{name}` already exists — `global entry edit` changes it"));
     }
-    let ty = parse_str(payload, "type")?;
-    let val = payload.get("value").filter(|v| !v.is_null()).ok_or("global entry add: missing value")?;
-    let value = goofi_graph::global_from_json(&json!({ "value": val, "type": ty }))
-        .ok_or_else(|| format!("global entry add: `{val}` is not a {ty}"))?;
+    let value = if group.is_some() && payload.get("type").is_none() && payload.get("value").is_none() {
+        goofi_core::globals::GlobalValue::Float(0.0)
+    } else {
+        let ty = parse_str(payload, "type")?;
+        let val = payload.get("value").filter(|v| !v.is_null()).ok_or("global entry add: missing value")?;
+        goofi_graph::global_from_json(&json!({ "value": val, "type": ty }))
+            .ok_or_else(|| format!("global entry add: `{val}` is not a {ty}"))?
+    };
     let control = parse_control(payload)?;
     state.history.lock().unwrap().apply(
         &mut g,
         actor,
-        goofi_graph::Command::EditGlobal { name, value: Some(value.clone()), at: None, control },
+        goofi_graph::Command::EditGlobal { name: name.clone(), value: Some(value.clone()), at: None, control },
     )?;
     // As STORED: the conversion is type-directed, so a fraction into an int rounds.
-    Ok(json!({ "value": goofi_graph::global_to_json(&value)["value"] }))
+    Ok(json!({ "name": name, "value": goofi_graph::global_to_json(&value)["value"] }))
 }
 
 pub(crate) fn global_edit(
@@ -1282,7 +1342,7 @@ pub(crate) fn global_edit(
     let Some(held) = held else {
         return Err(format!("global entry edit: no global `{name}` — `global entry add` creates one"));
     };
-    let ty = held["type"].as_str().unwrap_or_default().to_string();
+    let ty = payload.get("type").and_then(Value::as_str).unwrap_or_else(|| held["type"].as_str().unwrap_or_default());
     let control = parse_control(payload)?;
     // A control-only edit is what the panel sends when it moves a widget, so the value is optional
     // once a `control` is given — and the entry keeps the one it holds, followed or locked as it may be.
@@ -1290,6 +1350,10 @@ pub(crate) fn global_edit(
         Some(val) => Some(
             goofi_graph::global_from_json(&json!({ "value": val, "type": ty }))
                 .ok_or_else(|| format!("global entry edit: `{val}` is not a {ty}"))?,
+        ),
+        None if payload.get("type").is_some() => Some(
+            g.globals().get(&name).and_then(|value| value.converted_to(ty))
+                .ok_or_else(|| format!("global entry edit: unknown type `{ty}`"))?,
         ),
         None if control.is_some() => None,
         None => return Err("global entry edit: missing value".to_string()),
@@ -1397,8 +1461,30 @@ pub(crate) fn global_group_lock(
     let mut g = state.graph.lock().unwrap();
     let group = parse_str(payload, "group")?.to_string();
     let lock = parse_lock(payload, g.globals().group_lock(&group)).map_err(|e| format!("global group lock: {e}"))?;
-    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::LockGlobalGroup { group, lock })?;
+    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::LockGlobalGroup { group, lock: Some(lock) })?;
     Ok(json!({ "lock": lock }))
+}
+
+pub(crate) fn global_group_add(
+    state: &AppState,
+    payload: &Value,
+    actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let mut g = state.graph.lock().unwrap();
+    let group = match payload.get("group").and_then(Value::as_str) {
+        Some(group) => group.to_string(),
+        None => {
+            let panels = g.arrangement().control_panels();
+            (0..).map(|i| format!("group{i}"))
+                .find(|name| !g.globals().has_group(name) && !panels.iter().any(|(_, group)| group == name))
+                .ok_or("no free group name")?
+        }
+    };
+    state.history.lock().unwrap().apply(
+        &mut g, actor, goofi_graph::Command::AddGlobalGroup { group: group.clone(), at: None },
+    )?;
+    Ok(json!({ "group": group }))
 }
 
 pub(crate) fn global_group_rename(
@@ -1574,7 +1660,7 @@ pub(crate) fn session_save(
     // either way, which is the direction that LOSES an edit.
     g.persist();
     let packed = goofi_graph::archive::fingerprint(&mount);
-    save_archive(std::path::Path::new(&path), &g.serialize(), &mount, &bundled_custom(&g, &state.custom))?;
+    save_archive(std::path::Path::new(&path), &g.serialize(), &mount, &bundled_custom(&g, &state.custom), flag(payload, "overwrite", true))?;
     // Announced UNCONDITIONALLY, not on the flag's transition: a patch dirtied solely by a file
     // in the mount leaves the flag already false, so no transition comes.
     *state.workspace_baseline.lock().unwrap() = packed;
@@ -1791,9 +1877,9 @@ fn set_armed(
     let (uid, slot) = parse_endpoint(&g, payload, op, "output")?;
     let slot = vocab::resolve_slot(&g, op, uid, &slot)?;
     let mut record = g.recorded(uid).unwrap_or(&[]).to_vec();
-    let held = record.iter().position(|s| *s == slot);
+    let held = record.iter().position(|s| s.slot == slot);
     match (arm, held) {
-        (true, None) => record.push(slot.clone()),
+        (true, None) => record.push(goofi_core::record::RecordedOutput { slot: slot.clone(), quality: Default::default() }),
         (false, Some(i)) => {
             record.remove(i);
         }
@@ -1826,6 +1912,31 @@ pub(crate) fn record_disarm(
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
     set_armed(state, actor, "record disarm", payload, false)
+}
+
+pub(crate) fn record_quality(
+    state: &AppState,
+    payload: &Value,
+    actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let mut g = state.graph.lock().unwrap();
+    let (uid, slot) = parse_endpoint(&g, payload, "record quality", "output")?;
+    let slot = vocab::resolve_slot(&g, "record quality", uid, &slot)?;
+    if g.node_type(uid).and_then(|ty| g.type_engine(&ty)) != Some("graphics") {
+        return Err("record quality: quality settings apply to video outputs only".into());
+    }
+    let quality = serde_json::from_value::<goofi_core::record::VideoQuality>(payload["quality"].clone())
+        .map_err(|_| "record quality: expected small, high, or very_high")?;
+    let mut record = g.recorded(uid).unwrap_or(&[]).to_vec();
+    let output = record.iter_mut().find(|output| output.slot == slot)
+        .ok_or("record quality: arm the output first")?;
+    if output.quality == quality {
+        return Ok(json!({ "ok": true, "changed": false }));
+    }
+    output.quality = quality;
+    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::SetRecorded { uid, record })?;
+    Ok(json!({ "ok": true, "changed": true }))
 }
 
 /// A `record start` argument, taken from the payload and otherwise from `globals.record.<key>`.
@@ -1862,11 +1973,12 @@ pub(crate) fn record_start(
         .unwrap_or_else(goofi_core::home::recordings);
     let name = record_arg(&g, payload, "name").unwrap_or_default();
     let patch = state.save_path().map(std::path::PathBuf::from);
+    // Capture preparation and the stream drain need the graph to make progress.
+    drop(g);
     let folder = state
         .recorder
         .start(&root, &name, patch.as_deref())
         .map_err(|e| format!("record start: {e}"))?;
-    drop(g);
     spawn_record_beat(state, folder.clone());
     events.push(record_changed(state));
     Ok(json!({ "folder": folder.to_string_lossy() }))
@@ -1935,4 +2047,21 @@ pub(crate) fn record_state(state: &AppState) -> Value {
 
 pub(crate) fn record_changed(state: &AppState) -> String {
     crate::event("record_changed", record_state(state))
+}
+
+
+pub(crate) fn log_list(_state: &AppState, _payload: &Value, _actor: &str, _events: &mut Vec<String>) -> Result<Value, String> {
+    serde_json::to_value(goofi_core::log::global().lock().unwrap_or_else(|e| e.into_inner()).since(None)).map_err(|e| e.to_string())
+}
+
+pub(crate) fn log_write(_state: &AppState, payload: &Value, _actor: &str, _events: &mut Vec<String>) -> Result<Value, String> {
+    use goofi_core::log::{record, Level, Source};
+    let level = match payload["level"].as_str().unwrap_or("info") {
+        "info" => Level::Info,
+        "warning" => Level::Warning,
+        "error" => Level::Error,
+        _ => return Err("Level must be info, warning or error".into()),
+    };
+    record(Source::component(payload["component"].as_str().unwrap_or("console")), level, None, parse_str(payload, "text")?);
+    Ok(json!({ "logged": true }))
 }

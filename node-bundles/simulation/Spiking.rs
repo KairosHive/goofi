@@ -366,21 +366,21 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "network",
         name: "size",
-        spec: ParamSpec::Int { default: 200, min: 2, max: 20_000 },
+        spec: ParamSpec::Int { default: 200, min: 2, max: 20_000, options: &[] },
         expression: None,
         doc: Some("How many neurons. Cost grows with this times `fan_in`."),
     },
     ParamDecl {
         group: "network",
         name: "fan_in",
-        spec: ParamSpec::Int { default: 12, min: 1, max: 64 },
+        spec: ParamSpec::Int { default: 12, min: 1, max: 64, options: &[] },
         expression: None,
         doc: Some("How many neurons each one listens to."),
     },
     ParamDecl {
         group: "network",
         name: "dims",
-        spec: ParamSpec::Int { default: 2, min: 1, max: 3 },
+        spec: ParamSpec::Int { default: 2, min: 1, max: 3, options: &[] },
         expression: None,
         doc: Some("How many dimensions the neurons are laid out in, which is what distance and delay are measured in."),
     },
@@ -422,7 +422,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000 },
+        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the layout, the wiring and the noise. Negative takes a fresh one from the clock."),
     },

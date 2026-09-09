@@ -5,7 +5,7 @@ goofi_audio_sdk::params! {
     CHANNELS = ParamDecl {
         group: "mixdown",
         name: "channels",
-        spec: ParamSpec::Int { default: 2, min: 1, max: 16 },
+        spec: ParamSpec::Int { default: 2, min: 1, max: 16, options: &[] },
         expression: None,
         doc: Some("how many channels leave; 2 is the pair a speaker takes"),
     },

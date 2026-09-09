@@ -145,7 +145,7 @@ impl SignalEngine {
     /// Tell one node which of its output slots are armed — the whole set, which the node diffs.
     fn record_slots(&mut self, view: &GraphView<'_>, uid: Uid) {
         let Some(node) = view.nodes.get(&uid).filter(|n| n.engine == self.id()) else { return };
-        let slots = node.recorded.to_vec();
+        let slots = node.recorded.iter().map(|output| output.slot.clone()).collect();
         self.wire.send(uid, runtime::Control::RecSlot { slots });
     }
 
@@ -361,6 +361,7 @@ impl Engine for SignalEngine {
             .and_then(|transport| Ok((transport, runtime::NodeChannel::open(graph_node, &base)?)))
             .and_then(|(transport, channel)| {
                 let env = runtime::NodeEnv {
+                    node: Some(uid.to_hex()),
                     evaluator: self.evaluator.clone(),
                     time: self.time.clone(),
                 };

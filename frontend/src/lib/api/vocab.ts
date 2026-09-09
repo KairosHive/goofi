@@ -62,7 +62,7 @@ export const PANEL_TYPES: readonly PanelTypeInfo[] = [
 	{ id: 'viewer', title: 'Viewer', icon: 'activity', acceptsNode: true, doc: 'live frames from one output slot, drawn by `state.kind`' },
 	{ id: 'console', title: 'Console', icon: 'terminal', acceptsNode: true, doc: 'the patch log; a bound node filters it to that node' },
 	{ id: 'globals', title: 'Globals', icon: 'globe', acceptsNode: false, doc: 'the patch globals, which any expression can read' },
-	{ id: 'control', title: 'Control', icon: 'sliders-vertical', acceptsNode: false, doc: 'knobs, sliders and fields over one group of globals' },
+	{ id: 'control', title: 'Control', icon: 'sliders-vertical', acceptsNode: false, doc: 'knobs, sliders and text widgets over one group of globals' },
 	{ id: 'agent', title: 'Agent', icon: 'bot', acceptsNode: false, doc: 'a terminal on an agent harness, running in the patch workspace' },
 	{ id: 'recorder', title: 'Recorder', icon: 'circle-dot', acceptsNode: true, doc: 'capture the output slots of any node to disk, on one clock' },
 ];
@@ -83,10 +83,10 @@ export type ControlKindId =
 	| 'knob'
 	| 'slider'
 	| 'number'
-	| 'field'
+	| 'text'
 	| 'toggle'
 	| 'dropdown'
-	| 'draw';
+	| 'paint';
 
 export interface ControlKindInfo {
 	readonly id: ControlKindId;
@@ -102,10 +102,10 @@ export const CONTROL_KINDS: readonly ControlKindInfo[] = [
 	{ id: 'knob', type: 'float', w: 4, h: 4 },
 	{ id: 'slider', type: 'float', w: 8, h: 2 },
 	{ id: 'number', type: 'float', w: 4, h: 2 },
-	{ id: 'field', type: 'string', w: 6, h: 3 },
+	{ id: 'text', type: 'string', w: 6, h: 3 },
 	{ id: 'toggle', type: 'bool', w: 2, h: 2 },
 	{ id: 'dropdown', type: 'string', w: 6, h: 2 },
-	{ id: 'draw', type: 'string', w: 8, h: 8 },
+	{ id: 'paint', type: 'string', w: 8, h: 8 },
 ];
 
 /** How many columns a control panel's grid is, whatever its pixel width. */

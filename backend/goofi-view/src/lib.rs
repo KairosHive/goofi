@@ -160,8 +160,8 @@ pub trait Reducible {
 
 /// Map a possibly-negative axis index to `0..ndim`, or `None` if out of range.
 pub fn canon_dim(dim: i32, ndim: usize) -> Option<usize> {
-    let d = if dim < 0 { dim + ndim as i32 } else { dim };
-    (d >= 0 && (d as usize) < ndim).then_some(d as usize)
+    let d = if dim < 0 { ndim.checked_sub(dim.unsigned_abs() as usize)? } else { dim as usize };
+    (d < ndim).then_some(d)
 }
 
 impl ViewSpec {
@@ -289,7 +289,7 @@ pub fn image_box<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option
     };
     let axis = |d: usize| axes.iter().find(|a| a.dim == d).filter(|a| a.method == ReduceMethod::Area);
     let (h, w) = (axis(0)?, axis(1)?);
-    Some(ViewWant { size: (w.max as u32, h.max as u32), depth })
+    Some(ViewWant { size: (w.max.clamp(1, u32::MAX as usize) as u32, h.max.clamp(1, u32::MAX as usize) as u32), depth })
 }
 
 /// `src` scaled into `box_` with its aspect kept, never enlarged — the one place that rule is

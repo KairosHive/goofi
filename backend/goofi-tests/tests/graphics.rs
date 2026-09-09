@@ -1039,3 +1039,24 @@ const BROKEN: &str = "/* goofi\n{ \"doc\": \"does not compile\" }\n*/\nfn shade(
 const COUNT: &str = "/* goofi\n{ \"doc\": \"counts a tenth a tick in a buffer of its own\", \"state\": [\"acc\"] }\n*/\nfn at(uv: vec2f) -> vec2i { return vec2i(floor(uv * resolution)); }\nfn next_acc(uv: vec2f) -> vec4f {\n    if frame == 0u { return vec4f(0.1, 0.75, 0.0, 1.0); }\n    let held = textureLoad(acc, at(uv), 0);\n    return vec4f(held.r + 0.1, held.g, 0.0, 1.0);\n}\nfn shade(uv: vec2f) -> vec4f { return vec4f(textureLoad(acc, at(uv), 0).rgb, 1.0); }\n";
 const HALF: &str = "/* goofi\n{ \"doc\": \"half of the input\", \"inputs\": [{\"name\": \"input\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let c = textureSample(input, samp, uv); return vec4f(c.rgb * 0.5, c.a); }\n";
 const QUARTER: &str = "/* goofi\n{ \"doc\": \"a quarter of the input\", \"inputs\": [{\"name\": \"input\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let c = textureSample(input, samp, uv); return vec4f(c.rgb * 0.25, c.a); }\n";
+
+#[test]
+fn an_oversized_readback_reports_an_error_and_recovers_after_resize() {
+    let g = Goofi::new();
+    let node = g.add("graphics:Ramp");
+    g.ready(node);
+    g.set_param(node, "common", "width", 8192);
+    g.set_param(node, "common", "height", 8192);
+    let probe = g.probe(node, "out");
+    g.until("oversized readback is refused", |g| {
+        render(g, 1);
+        g.error(node).filter(|e| e.contains("readback:"))
+    });
+    g.set_param(node, "common", "width", 32);
+    g.set_param(node, "common", "height", 32);
+    g.until("readback resumes after resize", |g| {
+        render(g, 1);
+        probe.latest().filter(|d| shape(d) == vec![32, 32, 4])
+    });
+    g.until("readback error clears", |g| g.error(node).is_none().then_some(()));
+}
