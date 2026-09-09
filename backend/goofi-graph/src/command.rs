@@ -143,6 +143,7 @@ pub enum Command {
     RenameGlobalGroup {
         from: String,
         to: String,
+        members: Option<(Vec<String>, Vec<String>)>,
     },
     /// Lock or unlock one global, or a whole group. Each inverts as the lock it replaced.
     LockGlobal {
@@ -256,7 +257,17 @@ impl Command {
 
     /// Apply this command to `g`, returning its result and the exact inverse command.
     pub fn execute(self, g: &mut Graph) -> Result<(Outcome, Command), String> {
-        match self {
+        self.execute_mode(g, false)
+    }
+
+    fn execute_mode(self, g: &mut Graph, fresh: bool) -> Result<(Outcome, Command), String> {
+        if fresh {
+            self.precondition(g)?;
+        }
+        let global = matches!(self, Self::EditGlobal { .. } | Self::RemoveGlobal { .. }
+            | Self::RenameGlobal { .. } | Self::RenameGlobalGroup { .. } | Self::LockGlobal { .. }
+            | Self::LockGlobalGroup { .. } | Self::SourceGlobal { .. });
+        let result = (|| match self {
             Command::Compound(cmds) => {
                 let mut inverses = Vec::with_capacity(cmds.len());
                 let mut last = Outcome::Ok;
@@ -264,7 +275,7 @@ impl Command {
                 // echoes owed, and a later child returning nothing does not cancel an earlier one.
                 let mut echoes: Vec<Uid> = Vec::new();
                 for c in cmds {
-                    match c.execute(g) {
+                    match c.execute_mode(g, fresh) {
                         Ok((res, inv)) => {
                             match res {
                                 Outcome::Nodes(ns) => echoes.extend(ns),
@@ -516,9 +527,13 @@ impl Command {
                 Ok((Outcome::Nodes(touched), Command::RenameGlobal { from: to, to: from }))
             }
 
-            Command::RenameGlobalGroup { from, to } => {
+            Command::RenameGlobalGroup { from, to, members } => {
+                if members.is_some_and(|held| held != global_group_members(g, &from)) {
+                    return Err(format!("global group `{from}` has different members"));
+                }
                 let touched = g.rename_global_group(&from, &to)?;
-                Ok((Outcome::Nodes(touched), Command::RenameGlobalGroup { from: to, to: from }))
+                let members = Some(global_group_members(g, &to));
+                Ok((Outcome::Nodes(touched), Command::RenameGlobalGroup { from: to, to: from, members }))
             }
 
             Command::LockGlobal { name, lock } => {
@@ -728,9 +743,24 @@ impl Command {
                 Ok((Outcome::Ok, Command::Compound(inverse)))
             }
 
-
+        })();
+        match result {
+            // Global boundary refusals during replay leave a peer's current state in place.
+            Err(_) if global && !fresh => Ok((Outcome::Ok, Command::Compound(vec![]))),
+            other => other,
         }
     }
+}
+
+fn global_group_members(g: &Graph, group: &str) -> (Vec<String>, Vec<String>) {
+    let mut entries: Vec<String> = g.globals().entries()
+        .filter(|(name, ..)| name.split_once('.').is_some_and(|(held, _)| held == group))
+        .map(|(name, ..)| name.to_string()).collect();
+    let mut panels: Vec<String> = g.arrangement().control_panels().into_iter()
+        .filter(|(_, held)| held == group).map(|(id, _)| id).collect();
+    entries.sort();
+    panels.sort();
+    (entries, panels)
 }
 
 /// A per-ACTOR undo/redo history over one shared [`Graph`]. An entry holds ONE toggle, and
@@ -790,8 +820,7 @@ impl CommandHistory {
     /// A new command clears THIS actor's redo run, never another actor's.
     pub fn apply(&mut self, g: &mut Graph, actor: &str, cmd: Command) -> Result<Outcome, String> {
         // The fresh-caller gate. `flip` deliberately does NOT call this — see `Command::precondition`.
-        cmd.precondition(g)?;
-        let (outcome, inverse) = cmd.execute(g)?;
+        let (outcome, inverse) = cmd.execute_mode(g, true)?;
         // Record EVERY successful command, a forward no-op included: the client records one entry
         // per mutating RPC, so skipping one here desyncs the stacks and a later undo flips wrong.
         self.entries.retain(|e| !(e.actor == actor && e.undone));

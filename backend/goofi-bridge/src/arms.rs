@@ -218,26 +218,31 @@ pub(crate) fn library_save(
     let library = state.custom.clone();
     let name = from.file_name().ok_or("library save: the source file has no name")?.to_owned();
     let to = library.join(&name);
-    // The library holds one file per name, so a node that would land on one already there is
-    // refused with that file named — replaced only where the caller asked for exactly that.
-    let held = (crate::node_file_in(&library, &bare, engine))
+    let held = crate::node_file_in(&library, &bare, engine)
         .or_else(|| to.exists().then(|| to.clone()));
-    if let Some(held) = held {
+    if let Some(held) = &held {
         if !overwrite {
             return Err(format!(
                 "library save: the library already holds {} — rename this node, or pass --overwrite to replace that file",
-                goofi_core::path::to_slash(&held)
+                goofi_core::path::to_slash(held)
             ));
         }
-        // The file in the way may carry another NAME for the same type, so the copy below would
-        // leave it standing beside the new one.
-        std::fs::remove_file(&held)
-            .map_err(|e| format!("library save: {}: {e}", held.display()))?;
     }
+    let to = held.unwrap_or(to);
     std::fs::create_dir_all(&library).map_err(|e| format!("library save: {}: {e}", library.display()))?;
-    // Copy and remove rather than rename: the mount is a temp directory, which is routinely on a
-    // different filesystem from the home a rename cannot cross.
-    std::fs::copy(&from, &to).map_err(|e| format!("library save: {}: {e}", to.display()))?;
+    let staged = library.join(format!(".save-{}.part", crate::nonce_hex()));
+    let replace = (|| -> std::io::Result<()> {
+        let mut input = std::fs::File::open(&from)?;
+        let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&staged)?;
+        std::io::copy(&mut input, &mut output)?;
+        output.sync_all()?;
+        drop(output);
+        std::fs::rename(&staged, &to)
+    })();
+    if let Err(e) = replace {
+        let _ = std::fs::remove_file(&staged);
+        return Err(format!("library save: {}: {e}", to.display()));
+    }
     std::fs::remove_file(&from).map_err(|e| format!("library save: {}: {e}", from.display()))?;
     // The file left the mount but the `.gfi` still carries it, from the library — so the patch's
     // saved content did not change, and the unsaved dot must not rise for a move alone.
@@ -1408,7 +1413,7 @@ pub(crate) fn global_group_rename(
     state.history.lock().unwrap().apply(
         &mut g,
         actor,
-        goofi_graph::Command::RenameGlobalGroup { from, to: to.clone() },
+        goofi_graph::Command::RenameGlobalGroup { from, to: to.clone(), members: None },
     )?;
     Ok(json!({ "group": to }))
 }
