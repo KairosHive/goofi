@@ -3,7 +3,7 @@
   "tags": ["image", "transform"],
   "inputs": [{"name": "input", "kind": "TEXTURE"}, {"name": "palette", "kind": "ARRAY"}],
   "params": [
-    {"group": "ink", "name": "style", "kind": "str", "default": "nodal", "options": ["nodal", "signed", "magnitude", "contours"], "doc": "Zero lines, signed field, absolute value, or topographic contours."},
+    {"group": "ink", "name": "style", "kind": "str", "default": "nodal", "options": ["nodal", "signed", "magnitude", "contours", "density"], "doc": "Zero lines, signed field, absolute value, contours, or an already computed nodal density."},
     {"group": "ink", "name": "range", "kind": "float", "default": 1.0, "min": 0.001, "max": 100.0, "doc": "Absolute field value that fills the color range."},
     {"group": "ink", "name": "width", "kind": "float", "default": 0.045, "min": 0.001, "max": 0.4, "doc": "Nodal width relative to field range."},
     {"group": "ink", "name": "contours", "kind": "float", "default": 8.0, "min": 1.0, "max": 40.0},
@@ -36,6 +36,7 @@ fn shade(uv: vec2f) -> vec4f {
         case 1u: { tone = clamp(0.5 + 0.5 * v, 0.0, 1.0); }
         case 2u: { tone = clamp(abs(v), 0.0, 1.0); }
         case 3u: { tone = pow(0.5 + 0.5 * cos(v * 6.28318530718 * p.contours), 10.0); }
+        case 4u: { tone = clamp(sample.r, 0.0, 1.0); }
         default: {}
     }
     let color = 1.0 - exp(-color_at(tone) * p.exposure);

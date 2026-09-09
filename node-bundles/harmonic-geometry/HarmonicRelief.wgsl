@@ -4,6 +4,7 @@
   "state": ["reliefmap"],
   "inputs": [{"name": "input", "kind": "TEXTURE"}],
   "params": [
+    {"group": "form", "name": "input_kind", "kind": "str", "default": "signed", "options": ["signed", "density"], "doc": "Select density when HarmonicChladni outputs nodal density. Its density directly controls organic deposits."},
     {"group": "form", "name": "depth", "kind": "float", "default": 0.22, "min": 0.0, "max": 0.45, "doc": "Height of the harmonic relief. Zero removes harmonic height; texture_depth remains independent."},
     {"group": "form", "name": "seam", "kind": "float", "default": 0.022, "min": 0.008, "max": 0.15, "doc": "Width of the metal seam around zero displacement, relative to range."},
     {"group": "form", "name": "range", "kind": "float", "default": 1.0, "min": 0.01, "max": 20.0, "doc": "Fixed input field range. Sets the relief contrast without normalizing each frame."},
@@ -183,7 +184,12 @@ fn blended_surface(q: vec2f, v: f32) -> Surface {
 fn field_at(q: vec2f) -> vec2f {
     let value = textureSampleLevel(input, samp, mirrored_uv(q), 0.0);
     // Saturate extreme external fields before any square or contour calculation.
-    let v = clamp(value.r / max(abs(p.range), 0.0001), -8.0, 8.0);
+    var v = clamp(value.r / max(abs(p.range), 0.0001), -8.0, 8.0);
+    if p.input_kind == 1u {
+        // Invert the deposit Gaussian so density is not transformed twice.
+        let band = max(abs(p.seam)*3.0, 0.003);
+        v = band*sqrt(-2.0*log(clamp(value.r, 0.00000001, 1.0)));
+    }
     return vec2f(v, clamp(value.a, 0.0, 1.0));
 }
 

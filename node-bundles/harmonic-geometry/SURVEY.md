@@ -4,6 +4,29 @@ Survey date: 9 September 2026. Source: the installed Biotuner revision
 `f45570e674d8193c7780891b9053a39bf6168c1e`, also pinned by goofi's Biotuner bundle.
 The installed source, not a version label on the documentation site, defines this plan.
 
+## Chladni notebook review
+
+The supplied [Chladni cymatics notebook](https://antoinebellemare.github.io/biotuner/examples/harmonic_geometry/07_chladni_cymatics.html)
+uses whole-chord common-denominator integer modes, pairwise antisymmetric cosine
+products, and a nodal density transform. This differs from independently fitting
+each ratio to a small (m,n) pair. HarmonicModes now calls `chord_to_int_modes`
+and `chladni_field_pairwise` to obtain the actual pairs, weights, and cap. It
+retains source order and reports the mapping. Auto selects all pairs through
+three voices, then root pairs. The cap scales all wavenumbers proportionally.
+
+`chladni_nodal_density` computes `exp(-w²/σ²)`, then D4 max or average. The max
+unites nodal sets. Taking the maximum of signed fields would remove lines.
+HarmonicChladni implements that order on the GPU with explicit sigma 0.05,
+matching the notebook's sand example. Signed and antinodal outputs are also
+available. This shader does not implement upstream automatic sigma selection.
+
+The inclusive plate grid starts at zero. Interpolating wavenumbers on this grid
+causes the apparent corner expansion. The example now blends fixed endpoint
+fields before computing density. This is a visual interpolation choice, not a
+claim to reproduce the notebook's chord animation internals or a dynamic sand
+simulation. RatioSequence can supply a full anchor chord at each endpoint;
+the transition TABLE keeps both endpoints and their blend on one clock.
+
 ## What the module contains
 
 | Family | APIs surveyed | Use in goofi |
