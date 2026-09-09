@@ -2,7 +2,7 @@
 
 One MediaPipe vision task per `mode`, and every mode answers the same two frames: `positions`, one
 row per point in the picture's own box, and `velocities`, those same rows in units a second. That
-pair is what a field shader takes, so `graphics:Wake` wires straight off this node — and so does
+pair is what a renderer takes, so `graphics:Skeleton` wires straight off this node — and so does
 anything else that draws moving points.
 
 The model a mode needs is a file Google publishes rather than one the wheel carries. It is fetched
