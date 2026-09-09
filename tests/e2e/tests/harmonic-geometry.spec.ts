@@ -29,6 +29,25 @@ async function imageContrast(page: Page): Promise<number> {
 	}, png.toString('base64'));
 }
 
+async function imageMovement(page: Page, previous: string): Promise<number> {
+	const current = (await page.locator('.vp-body canvas:visible').first().screenshot()).toString('base64');
+	return page.evaluate(async ([previous, current]) => {
+		const read = async (encoded: string) => {
+			const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+			const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+			const canvas = new OffscreenCanvas(64, 64);
+			const ctx = canvas.getContext('2d')!;
+			ctx.drawImage(bitmap, 0, 0, 64, 64);
+			bitmap.close();
+			return ctx.getImageData(0, 0, 64, 64).data;
+		};
+		const [a, b] = await Promise.all([read(previous), read(current)]);
+		let difference = 0;
+		for (let i = 0; i < a.length; i += 4) difference += Math.abs(a[i]-b[i]);
+		return difference/(64*64);
+	}, [previous, current]);
+}
+
 test('the harmonic geometry cookbook opens as live dashboards with usable controls', async ({ page }) => {
 	test.setTimeout(360_000);
 	page.setDefaultTimeout(15_000);
@@ -187,8 +206,14 @@ test('living ratios modulate the organic field with a visible trace and pause co
 		const loaded = await rawCall(page, 'session load', { path: path.join(folder, '10-living-ratios.gfi') });
 		expect(loaded.error, JSON.stringify(loaded)).toBeUndefined();
 		await expect(page.getByTestId('control-geometry-running').getByRole('checkbox')).toBeChecked();
+		await expect(page.getByTestId('control-geometry-auto').getByRole('checkbox')).not.toBeChecked();
+		await expect(page.getByTestId('control-geometry-approach').getByRole('slider')).toHaveValue('0');
+		await expect(page.getByTestId('control-geometry-glide').getByRole('slider')).toHaveValue('1');
 		await expect.poll(() => page.locator('.vp-body canvas:visible').count()).toBeGreaterThanOrEqual(2);
 		await expect.poll(() => imageContrast(page), { timeout: 45_000 }).toBeGreaterThan(15);
+		const still = (await page.locator('.vp-body canvas:visible').first().screenshot()).toString('base64');
+		await expect.poll(() => imageMovement(page, still), { timeout: 8_000,
+			message: 'The Chladni picture visibly changes while the texture stays fixed' }).toBeGreaterThan(4);
 		const sample = async () => (await rawCall(page, 'node snapshot', { output: 'ratios/ratio' })).result?.range?.mean;
 		await expect.poll(sample).toBeGreaterThan(1);
 		const first = await sample();
@@ -199,6 +224,8 @@ test('living ratios modulate the organic field with a visible trace and pause co
 		await page.screenshot({ path: path.join(folder, 'assets', '10-living-ratios-browser.png') });
 		await page.getByRole('tab', { name: 'ratios Close tab', exact: true }).click();
 		await expect(page.locator('.vp-body')).toContainText('ratio');
+		await page.getByRole('tab', { name: 'nodalLines Close tab', exact: true }).click();
+		await expect.poll(() => imageContrast(page)).toBeGreaterThan(15);
 	} finally {
 		await resetPatch(page);
 	}
