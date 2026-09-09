@@ -582,6 +582,9 @@ fn harmonic_spectrum_feeds_the_biotuner_bundle_and_recovers_as_windows_change() 
     let peaks = g.probe(node, "peaks");
     let peak_values = g.probe(node, "peakValues");
     let matrix = g.probe(node, "matrix");
+    let activation = g.probe(node, "activation");
+    let power = g.probe(node, "power");
+    let waveform = g.probe(node, "waveform");
     let mean = g.probe(node, "harmonicity");
     let complexity = g.probe(node, "complexity");
     g.link(source, "out", node, "input");
@@ -602,6 +605,27 @@ fn harmonic_spectrum_feeds_the_biotuner_bundle_and_recovers_as_windows_change() 
     let m = f32s(&d);
     // 8:12 is a 2:3 ratio: the shared biotuner measure gives 66 2/3.
     assert!((m[12 * 57 + 20] - 66.66667).abs() < 0.001);
+    let d = first_frame(&g, &spectrum_ty, node, &power, |d| shape(d) == vec![2, 57]);
+    assert_eq!(labels(&d, "dim0"), ["Fz", "Cz"]);
+    assert!(d.meta().sfreq().is_none());
+    let p = f32s(&d);
+    for row in p.chunks_exact(57) {
+        assert!(row.iter().all(|v| v.is_finite() && *v >= 0.0));
+        assert!((row.iter().sum::<f32>() - 1.0).abs() < 1e-6);
+    }
+    let d = first_frame(&g, &spectrum_ty, node, &activation, |d| shape(d) == vec![2, 57, 57]);
+    assert_eq!(labels(&d, "dim2"), labels(&f, "dim0"));
+    for (row, a) in f32s(&d).chunks_exact(57 * 57).enumerate() {
+        for i in 0..57 {
+            for j in 0..57 {
+                let expected = m[row * 57 * 57 + i * 57 + j] * p[row * 57 + i] * p[row * 57 + j];
+                assert!((a[i * 57 + j] - expected).abs() < 1e-5, "activation uses the emitted power weights");
+            }
+        }
+    }
+    let d = first_frame(&g, &spectrum_ty, node, &waveform, |d| shape(d) == vec![2, 512]);
+    assert_eq!(d.meta().sfreq(), Some(256.0));
+    assert_eq!(labels(&d, "dim0"), ["Fz", "Cz"]);
     let d = first_frame(&g, &spectrum_ty, node, &mean, |d| shape(d) == vec![2]);
     for (row, value) in h.chunks_exact(57).zip(f32s(&d)) {
         assert!((row.iter().sum::<f32>() / 57.0 - value).abs() < 1e-5);
@@ -688,6 +712,60 @@ fn harmonic_spectrum_feeds_the_biotuner_bundle_and_recovers_as_windows_change() 
     g.set_param(source, "signal", "samples", 512);
     g.until("a full window to resume analysis", |_| (spectrum.count() > count).then_some(()));
     assert!(g.error(node).is_none());
+}
+
+#[test]
+fn harmonic_observatory_example_uses_the_biotuner_bundle_without_local_copies() {
+    let _py = require_python();
+    let mut g = Goofi::new();
+    let shipped = tempfile::tempdir().unwrap();
+    let biotuner = shipped.path().join("biotuner");
+    std::fs::create_dir(&biotuner).unwrap();
+    for (file, source) in bundled("biotuner", &["harmonic_spectrum.py", "harmonic_observatory.py"]) {
+        std::fs::write(biotuner.join(file), source).unwrap();
+    }
+    g.state.roots.push(biotuner);
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/harmonic-observatory.gfi");
+    g.call("session load", j!({"path": example.to_string_lossy()}));
+    let library = g.call("library list", j!({"full": true}));
+    for ty in ["signal:HarmonicSpectrum", "signal:HarmonicObservatory"] {
+        let entry = library["types"].as_array().unwrap().iter().find(|entry| entry["type"] == ty).unwrap();
+        assert_eq!(entry["source"], "builtin", "{ty} must come from the bundle");
+        assert_eq!(entry["bundle"], "biotuner");
+    }
+    let local = g.state.mount().join("nodes_signal");
+    assert!(!local.join("harmonic_spectrum.py").exists());
+    assert!(!local.join("harmonic_observatory.py").exists());
+    assert!(local.join("harmonic_scene.py").exists(), "the example keeps its signal source");
+    let doc = g.doc();
+    let node = |name: &str| {
+        let (uid, _) = doc["nodes"].as_object().unwrap().iter().find(|(_, entry)| entry["name"] == name).unwrap();
+        goofi_tests::Uid::from_hex(uid).unwrap()
+    };
+    let dashboard = node("observatory");
+    let spectrum = node("harmonicspectrum0");
+    let scene = node("harmonicScene");
+    let image = g.probe(dashboard, "dashboard");
+    let d = first_frame(&g, "HarmonicObservatory", dashboard, &image, |d| shape(d) == vec![629, 825, 3]);
+    let pixels = f32s(&d);
+    assert!(pixels.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+    assert!(pixels.iter().any(|v| *v > 0.9), "the dashboard draws its labels and plots");
+
+    // Grid changes and removal of the example-only scene control keep the dashboard live.
+    g.call("link remove", j!({"from": goofi_tests::ep(hex(scene), "morph"), "to": goofi_tests::ep(hex(dashboard), "morph")}));
+    let frequencies = g.probe(spectrum, "freqs");
+    g.set_param(spectrum, "spectrum", "precision", 1.0);
+    g.until("the example's frequency grid to change", |_| frequencies.latest().filter(|d| shape(d) == vec![29]));
+    let count = image.count();
+    g.until("the dashboard to render the changed grid", |g| {
+        (image.count() > count + 2 && g.error(dashboard).is_none()).then_some(())
+    });
+
+    // Saving must not copy bundle files back into the patch workspace.
+    let saved = shipped.path().join("saved.gfi");
+    g.call("session save", j!({"path": saved.to_string_lossy()}));
+    let archive = zip::ZipArchive::new(std::fs::File::open(saved).unwrap()).unwrap();
+    assert!(!archive.file_names().any(|name| name.ends_with("harmonic_observatory.py") || name.ends_with("harmonic_spectrum.py")));
 }
 
 #[test]

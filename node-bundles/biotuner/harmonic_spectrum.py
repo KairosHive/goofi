@@ -15,7 +15,7 @@ bins because the summary needs several bins and the matrix cost is quadratic.
 """
 
 import numpy as np
-from biotuner.harmonic_spectrum import compute_harmonic_spectrum
+from biotuner.harmonic_spectrum import compute_harmonic_spectrum, compute_frequency_and_psd, apply_power_law_remove
 import goofi
 
 
@@ -39,6 +39,9 @@ class HarmonicSpectrum(goofi.Node):
       peaks        peak frequencies in Hz, shape [..., n_peaks]
       peakValues   H(f) at each detected peak, shape [..., n_peaks]
       matrix       frequency-pair similarity, shape [..., F, F]
+      activation   matrix * power[:, None] * power[None, :]
+      power        min-subtracted PSD normalized to unit sum, as used by H(f)
+      waveform     the exact analysis input window
       harmonicity  mean H(f), one value per input row
       complexity   flatness, entropy, spread in Hz, and Higuchi dimension
     """
@@ -46,7 +49,7 @@ class HarmonicSpectrum(goofi.Node):
     TAGS = ["analysis"]
     INPUTS = {"input": goofi.InputSlot(goofi.DataType.ARRAY, required=True)}
     OUTPUTS = {name: goofi.DataType.ARRAY for name in (
-        "spectrum", "freqs", "peaks", "peakValues", "matrix", "harmonicity", "complexity"
+        "spectrum", "freqs", "peaks", "peakValues", "matrix", "harmonicity", "complexity", "activation", "power", "waveform"
     )}
     PARAMS = {
         "spectrum": {
@@ -90,6 +93,7 @@ class HarmonicSpectrum(goofi.Node):
         rows = x.reshape(-1, x.shape[-1])
         spectra = np.full((len(rows), width), np.nan)
         matrices = np.full((len(rows), width, width), np.nan)
+        powers = np.full((len(rows), width), np.nan)
         peaks = np.full((len(rows), p.n_peaks), np.nan)
         values = np.full_like(peaks, np.nan)
         means = np.full(len(rows), np.nan)
@@ -112,6 +116,10 @@ class HarmonicSpectrum(goofi.Node):
                     harmonic_kernel=p.kernel, harmonic_kernel_params=kernel_params,
                     n_peaks=p.n_peaks, legacy_self_pair_subtract=False,
                 )
+            pf, psd = compute_frequency_and_psd(row, p.precision, smoothness=1, fs=float(sfreq), noverlap=1, fmin=p.f_min, fmax=p.f_max)
+            clean = apply_power_law_remove(pf, psd, p.power_law_remove)
+            clean = np.maximum(clean - np.min(clean), 0)
+            powers[i] = clean / clean.sum() if clean.sum() > 0 else np.zeros_like(clean)
             spectra[i] = spectrum
             matrices[i] = matrix
             found = np.asarray(summary["peaks"])[:p.n_peaks]
@@ -129,6 +137,9 @@ class HarmonicSpectrum(goofi.Node):
         matrix_meta = {**meta, "channels": {**axes, last: hz, f"dim{x.ndim}": hz}}
         complexity_meta = {**meta, "channels": {**axes, last: COMPLEXITY}}
         return {
+            "activation": ((matrices * powers[:, :, None] * powers[:, None, :]).reshape(lead + (width, width)).astype(np.float32), matrix_meta),
+            "power": (powers.reshape(lead + (width,)).astype(np.float32), spectrum_meta),
+            "waveform": (x.astype(np.float32), input.meta),
             "spectrum": (spectra.reshape(lead + (width,)).astype(np.float32), spectrum_meta),
             "freqs": (freqs.astype(np.float32), {"channels": {"dim0": hz}}),
             "peaks": (peaks.reshape(lead + (p.n_peaks,)).astype(np.float32), meta),
