@@ -344,6 +344,7 @@ pub fn save_archive(
     manifest: &str,
     mount: &std::path::Path,
     extra: &[(String, PathBuf)],
+    overwrite: bool,
 ) -> Result<(), String> {
     // The mount's nonce directory is deleted when the patch closes, so a save into it saves into
     // nothing. Both sides go through `resolve`, or they disagree on what a path means.
@@ -358,10 +359,11 @@ pub fn save_archive(
         s
     });
     let packed = goofi_graph::archive::write_gfi(&tmp, manifest, mount, extra)
-        .and_then(|()| std::fs::rename(&tmp, target).map_err(|e| format!("{}: {e}", target.display())));
-    if packed.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
+        .and_then(|()| {
+            if overwrite { std::fs::rename(&tmp, target) } else { std::fs::hard_link(&tmp, target) }
+                .map_err(|e| format!("{}: {e}", target.display()))
+        });
+    let _ = std::fs::remove_file(&tmp);
     packed.map_err(|e| format!("save failed: {e}"))
 }
 

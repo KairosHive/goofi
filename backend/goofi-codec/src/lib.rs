@@ -166,8 +166,8 @@ pub fn split_frame(frame: &[u8]) -> std::result::Result<(u8, &[u8], &[u8]), Stri
     let tag = frame[5];
     let meta_len = u32::from_le_bytes(frame[6..10].try_into().unwrap()) as usize;
     let body_len = u32::from_le_bytes(frame[10..14].try_into().unwrap()) as usize;
-    let meta_end = HEADER_SIZE + meta_len;
-    let body_end = meta_end + body_len;
+    let meta_end = HEADER_SIZE.checked_add(meta_len).ok_or("metadata length overflow")?;
+    let body_end = meta_end.checked_add(body_len).ok_or("body length overflow")?;
     if frame.len() < body_end {
         return Err(format!(
             "frame truncated: need {body_end}, have {}",
@@ -205,11 +205,19 @@ pub fn array_view(body: &[u8]) -> Option<(Vec<usize>, &[u8])> {
     if dtype != b"<f4" {
         return None;
     }
-    (samples.len() == shape.iter().product::<usize>() * 4).then_some((shape, samples))
+    let bytes = shape.iter().try_fold(4usize, |n, &d| n.checked_mul(d))?;
+    (samples.len() == bytes).then_some((shape, samples))
 }
 
 /// Decode a GOOF v2 frame into a `Data`. The inverse of [`encode`].
 pub fn decode(frame: &[u8]) -> std::result::Result<Data, String> {
+    decode_at(frame, 0)
+}
+
+const MAX_DEPTH: usize = 64;
+
+fn decode_at(frame: &[u8], depth: usize) -> std::result::Result<Data, String> {
+    if depth >= MAX_DEPTH { return Err("frame nesting exceeds 64 levels".into()); }
     let (tag, meta_bytes, body) = split_frame(frame)?;
     let meta = parse_meta(meta_bytes)?;
     match tag {
@@ -218,7 +226,7 @@ pub fn decode(frame: &[u8]) -> std::result::Result<Data, String> {
             let s = std::str::from_utf8(body).map_err(|e| e.to_string())?;
             Ok(Data::string(s, meta))
         }
-        2 => decode_table(body, meta),
+        2 => decode_table(body, meta, depth),
         other => Err(format!("unknown dtype tag {other}")),
     }
 }
@@ -272,7 +280,7 @@ fn decode_array_body(body: &[u8], meta: goofi_core::Meta) -> std::result::Result
     Data::array_f32(shape, f32_bytes, meta).map_err(|e| e.to_string())
 }
 
-fn decode_table(body: &[u8], meta: goofi_core::Meta) -> std::result::Result<Data, String> {
+fn decode_table(body: &[u8], meta: goofi_core::Meta, depth: usize) -> std::result::Result<Data, String> {
     let mut cur = Cursor::new(body);
     let n = cur.u32("table count")?;
     let mut map: indexmap::IndexMap<String, Data> = indexmap::IndexMap::new();
@@ -282,7 +290,7 @@ fn decode_table(body: &[u8], meta: goofi_core::Meta) -> std::result::Result<Data
             .map_err(|e| e.to_string())?
             .to_string();
         let vlen = cur.u32("table value length")?;
-        let child = decode(cur.take(vlen, "table value frame")?)?;
+        let child = decode_at(cur.take(vlen, "table value frame")?, depth + 1)?;
         map.insert(key, child);
     }
     Ok(Data::table(map, meta))
@@ -295,7 +303,7 @@ fn parse_meta(bytes: &[u8]) -> std::result::Result<goofi_core::Meta, String> {
         return Ok(meta);
     }
     let mut cur = bytes;
-    let v = rmpv::decode::read_value(&mut cur).map_err(|e| e.to_string())?;
+    let v = rmpv::decode::read_value_with_max_depth(&mut cur, MAX_DEPTH).map_err(|e| e.to_string())?;
     let Mp::Map(entries) = v else {
         return Ok(meta);
     };

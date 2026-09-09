@@ -22,7 +22,7 @@ goofi_audio_sdk::params! {
     BANDS = ParamDecl {
         group: "band",
         name: "bands",
-        spec: ParamSpec::Int { default: 16, min: 2, max: MAX_CHANNELS as i64 },
+        spec: ParamSpec::Int { default: 16, min: 2, max: MAX_CHANNELS as i64, options: &[] },
         expression: None,
         doc: Some("how many bands leave, one per channel; `BandFilter` needs the same count"),
     },

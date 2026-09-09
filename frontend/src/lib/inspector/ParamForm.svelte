@@ -131,27 +131,29 @@
 		el.select();
 	}
 
-	// Only a node the user wrote in THIS patch can move to the library: one already in the library
-	// is there, and a shipped one is not the user's to keep.
+	// Custom nodes can be saved from the patch or from the library.
 	const savable = $derived.by(() => {
 		const n = node;
-		return n != null && (g.nodeTypes ?? []).some((t) => t.type === n.type && t.source === 'patch');
+		return n != null && (g.nodeTypes ?? []).some((t) => t.type === n.type && (t.source === 'patch' || t.source === 'custom'));
 	});
 	let saving = $state(false);
+	let libraryName = $state('');
 	// The type rides with the path: the inspector follows the selection, so by the time the dialog
 	// is answered the node under it need not be the one the question was about.
 	let replacing = $state<{ type: string; path: string } | null>(null);
 
 	// A file the library already holds is a question before it is a save; an answered one is not
 	// asked again.
-	async function saveToLibrary(type: string, overwrite: boolean): Promise<void> {
+	async function saveToLibrary(type: string, overwrite: boolean, name?: string): Promise<void> {
 		saving = true;
 		try {
-			const held = overwrite ? null : await g.libraryFileBehind(type);
+			const held = overwrite || name ? null : await g.libraryFileBehind(type);
 			if (held) {
+				libraryName = bareName(type);
 				replacing = { type, path: held };
 			} else {
-				await g.saveNodeToLibrary(type, overwrite);
+				await g.saveNodeToLibrary(type, overwrite, name);
+				replacing = null;
 				notify().raise(`${bareName(type)} is in your library`);
 			}
 		} catch (e) {
@@ -163,7 +165,7 @@
 
 	const replaceDetail = $derived(
 		replacing
-			? `Your library already holds ${bareName(replacing.type)}, at ${replacing.path}. Overwriting puts this patch's file there instead; the one in your library is lost.`
+			? `Your library already holds ${bareName(replacing.type)}, at ${replacing.path}. Choose Overwrite to replace it, or enter another file name and choose Adapt name.`
 			: ''
 	);
 
@@ -176,6 +178,12 @@
 	// A node dragged out of the editor onto a param row: the row is a target only where the node HAS
 	// an output that param may follow, so the menu can never open on a link the manager would refuse.
 	const formId = $props.id();
+	$effect(() => {
+		if (!replacing) return;
+		const id = `${formId}-library`;
+		uiStore.openEditor(id);
+		return () => uiStore.closeEditor(id);
+	});
 	const dragged = $derived(uiStore.nodeDrag);
 	$effect(() =>
 		uiStore.onNodeDrop(formId, (uid, zone, at) => {
@@ -555,13 +563,20 @@
 {/if}
 
 <ConfirmDialog
+	class="nokey"
 	open={!!replacing}
 	question="Replace the node in your library?"
 	detail={replaceDetail}
 	onClose={() => (replacing = null)}
 	data-testid="library-replace-dialog"
 >
-	<Button variant="danger" data-testid="library-replace" onclick={replace}>Overwrite</Button>
+	<Button variant="danger" disabled={saving} data-testid="library-replace" onclick={replace}>Overwrite</Button>
+	<!-- The button state follows each keystroke, before the field loses focus. -->
+	<input aria-label="New file name" bind:value={libraryName} data-testid="library-name" />
+	<Button disabled={saving || !libraryName.trim() || libraryName.trim() === bareName(replacing?.type ?? '')}
+		data-testid="library-rename" onclick={() => {
+			if (replacing) void saveToLibrary(replacing.type, false, libraryName.trim());
+		}}>Adapt name</Button>
 	<Button variant="ghost" onclick={() => (replacing = null)}>Cancel</Button>
 </ConfirmDialog>
 

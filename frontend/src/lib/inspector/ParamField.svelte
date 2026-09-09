@@ -128,6 +128,15 @@
 		<div class="pf-value">
 			{#if num}
 				<!-- SOFT bounds → Slider only; the NumberInput is UNBOUNDED (the engine does not clamp on set). -->
+				{#if num.type === 'int' && num.options?.length}
+					<Segmented
+						value={String(num.value)}
+						segments={num.options.map((value) => ({ id: String(value), label: String(value) }))}
+						onChange={(value) => onCommit(Number(value))}
+						disabled={driven}
+						data-testid="param-options"
+					/>
+				{:else}
 				<Slider
 					value={num.value}
 					onChange={onCommit}
@@ -137,6 +146,7 @@
 					disabled={driven}
 					data-testid="param-slider"
 				/>
+				{/if}
 				<NumberInput
 					value={num.value}
 					onChange={onCommit}

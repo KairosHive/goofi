@@ -501,7 +501,7 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
                 (probe::ParamSpec::Str { default, options, refresh: false }, Kind::Stepped(p.steps as f64), p.title.clone())
             } else {
                 let default = (p.default * p.steps as f64).round() as i64;
-                (probe::ParamSpec::Int { default, min: 0, max: p.steps as i64 }, Kind::Stepped(p.steps as f64), p.title.clone())
+                (probe::ParamSpec::Int { default, min: 0, max: p.steps as i64, options: vec![] }, Kind::Stepped(p.steps as f64), p.title.clone())
             };
             (p.id, kind, probe::Param { group, name, doc: Some(doc), expression: None, spec })
         })

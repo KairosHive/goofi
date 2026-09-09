@@ -374,6 +374,9 @@ impl Meta {
     pub fn set_sfreq(&mut self, v: Option<f64>) {
         self.set(META_SFREQ, v.map_or(MetaValue::Null, MetaValue::Float));
     }
+    pub fn ufreq(&self) -> Option<f64> {
+        as_f64(self.0.get(META_UFREQ))
+    }
     pub fn set_ufreq(&mut self, v: Option<f64>) {
         self.set(META_UFREQ, v.map_or(MetaValue::Null, MetaValue::Float));
     }
@@ -729,6 +732,7 @@ pub enum Param {
         value: i64,
         vmin: i64,
         vmax: i64,
+        options: Vec<i64>,
     },
     Bool {
         value: bool,
@@ -749,7 +753,7 @@ impl Param {
         Param::Float { value, vmin, vmax }
     }
     pub fn int(value: i64, vmin: i64, vmax: i64) -> Param {
-        Param::Int { value, vmin, vmax }
+        Param::Int { value, vmin, vmax, options: Vec::new() }
     }
     pub fn boolean(value: bool) -> Param {
         Param::Bool { value }

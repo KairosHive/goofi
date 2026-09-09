@@ -100,7 +100,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "join",
         name: "axis",
-        spec: ParamSpec::Int { default: 0, min: -8, max: 7 },
+        spec: ParamSpec::Int { default: 0, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis to join along, or where the new axis goes when stacking."),
     },

@@ -215,14 +215,14 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "physarum",
         name: "agents",
-        spec: ParamSpec::Int { default: 5000, min: 1, max: 200_000 },
+        spec: ParamSpec::Int { default: 5000, min: 1, max: 200_000, options: &[] },
         expression: None,
         doc: Some("How many agents crawl the field."),
     },
     ParamDecl {
         group: "physarum",
         name: "size",
-        spec: ParamSpec::Int { default: 128, min: 16, max: 512 },
+        spec: ParamSpec::Int { default: 128, min: 16, max: 512, options: &[] },
         expression: None,
         doc: Some("Width and height of the scent field in cells. The cost of spreading it grows with the square."),
     },
@@ -285,7 +285,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000 },
+        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds where the agents start and how they wander. Negative takes a fresh one from the clock."),
     },

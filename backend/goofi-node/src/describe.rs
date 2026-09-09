@@ -140,7 +140,7 @@ pub fn describe(
                 doc: p.doc.map(str::to_string),
                 expression: p.expression.map(|e| e.source.to_string()),
                 spec: match p.spec {
-                    ParamSpec::Int { default, min, max } => probe::ParamSpec::Int { default, min, max },
+                    ParamSpec::Int { default, min, max, options } => probe::ParamSpec::Int { default, min, max, options: options.to_vec() },
                     ParamSpec::Float { default, min, max } => probe::ParamSpec::Float { default, min, max },
                     ParamSpec::Bool { default } => probe::ParamSpec::Bool { default },
                     ParamSpec::Str { default, options, refresh } => probe::ParamSpec::Str {
@@ -228,8 +228,8 @@ pub fn leak_manifest(
 
 fn param_decl(p: &probe::Param) -> ParamDecl {
     let spec = match &p.spec {
-        probe::ParamSpec::Int { default, min, max } => {
-            ParamSpec::Int { default: *default, min: *min, max: *max }
+        probe::ParamSpec::Int { default, min, max, options } => {
+            ParamSpec::Int { default: *default, min: *min, max: *max, options: Box::leak(options.clone().into_boxed_slice()) }
         }
         probe::ParamSpec::Float { default, min, max } => {
             ParamSpec::Float { default: *default, min: *min, max: *max }

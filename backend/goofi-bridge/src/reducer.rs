@@ -119,6 +119,9 @@ impl SlotReducers {
         key: &SlotKey,
     ) -> &'a mut SlotReducer {
         let slots = Arc::downgrade(&self.inner);
+        if map.get(key).is_some_and(|r| r.stop.load(Ordering::Relaxed)) {
+            map.remove(key);
+        }
         map.entry(key.clone()).or_insert_with(|| {
             let reducer = SlotReducer {
                 specs: Arc::new(Mutex::new(HashMap::new())),
@@ -141,6 +144,10 @@ impl SlotReducers {
     pub fn subscribe(&self, key: SlotKey, conn: ConnId) -> broadcast::Receiver<Bytes> {
         let mut map = self.inner.lock().unwrap();
         let reducer = self.ensure(&mut map, &key);
+        if reducer.stop.load(Ordering::Relaxed) {
+            // A failed spawn closes this stream; the next request can try again.
+            return broadcast::channel(1).1;
+        }
         reducer.specs.lock().unwrap().entry(conn).or_default();
         // The receiver MUST exist before the bump, or a sweep between the two statements
         // broadcasts the join-serve into a fan-out this joiner is not yet part of.
@@ -268,14 +275,18 @@ fn spawn_reducer(
     let full = reducer.full.clone();
     let asked = reducer.asked.clone();
     let (uid, slot) = key.clone();
-    goofi_transport::thread(format!("goofi-reduce-{slot}")).spawn(move || {
+    let failed = stop.clone();
+    if let Err(error) = goofi_transport::thread(format!("goofi-reduce-{slot}")).spawn(move || {
         let mut feed = open_feed(&graph, &iox, uid, &slot);
+        // The cache still belongs to this service after an idle port is dropped.
+        let mut source = feed.as_ref().map(|f| f.service.clone());
         let mut rehomed = std::time::Instant::now();
         // An attached subscriber is what a scheduled engine reads as demand, so a feed nobody
         // wants keeps a GPU node rendering for ever.
         let mut asked_at = std::time::Instant::now();
         // `served: None` means "never broadcast", which is what sends the first frame without a bump.
         let mut served: Option<u64> = None;
+        let mut pending = false;
         let mut next_serve = std::time::Instant::now();
         // What the producer was last told its readers want. Pushed only on a CHANGE: it takes the
         // graph lock, and a viewer's box moves rarely — the frontend quantizes it to 32-px steps.
@@ -325,10 +336,17 @@ fn spawn_reducer(
                     }
                     return;
                 };
-                if feed.as_ref().is_some_and(|f| f.service != current) {
+                if source.as_ref() != Some(&current) {
+                    source = Some(current.clone());
                     // A new generation is a new producer, and its readback starts at the frame's
                     // own size — so what this loop believes it asked for holds nowhere any more.
                     demanded = None;
+                    peeked = None;
+                    made = None;
+                    *latest.lock().unwrap() = None;
+                    *full.lock().unwrap() = None;
+                    pending = false;
+                    served = None;
                 }
                 if asked_at.elapsed() <= IDLE && feed.as_ref().is_none_or(|f| f.service != current) {
                     feed = open_feed(&graph, &iox, uid, &slot);
@@ -340,17 +358,20 @@ fn spawn_reducer(
             let mut fresh = false;
             if let Some(f) = &feed {
                 while let Ok(Some(sample)) = f.subscriber.receive() {
-                    peeked = Peek::of(sample.payload()).or(peeked.take());
+                    let Some(header) = Peek::of(sample.payload()) else { continue };
                     // A producer that answered the demand in the viewers' own width is FORWARDED:
                     // decoding those texels to f32 only to quantize them back is the whole cost the
                     // demand exists to remove, and there is nothing left here to reduce.
-                    if peeked.as_ref().is_some_and(|p| p.ready) {
+                    if header.ready {
+                        peeked = Some(header);
+                        *latest.lock().unwrap() = None;
                         made = Some(Bytes::copy_from_slice(sample.payload()));
                         fresh = true;
                         continue;
                     }
-                    made = None;
                     if let Ok(frame) = goofi_codec::decode(sample.payload()) {
+                        peeked = Some(header);
+                        made = None;
                         if !is_reduced(&frame) {
                             *full.lock().unwrap() = Some(frame.clone());
                         }
@@ -359,6 +380,7 @@ fn spawn_reducer(
                     }
                 }
             }
+            pending |= fresh;
             if fresh {
                 let taps = taps.lock().unwrap().clone();
                 if let (false, Some(d)) = (taps.is_empty(), latest.lock().unwrap().clone()) {
@@ -410,7 +432,7 @@ fn spawn_reducer(
                 continue;
             }
             let g_now = gen.load(Ordering::Acquire);
-            if !fresh && served == Some(g_now) {
+            if !pending && served == Some(g_now) {
                 continue; // nothing new to say — no emit, no joiner, no spec change
             }
             // The viewer rate, held HERE because this is the one place N viewers became one
@@ -444,9 +466,12 @@ fn spawn_reducer(
             };
             let _ = tx.send(bytes); // Err only if all receivers are momentarily gone — harmless.
             served = Some(g_now);
+            pending = false;
         }
-    })
-    .expect("the slot reducer thread");
+    }) {
+        failed.store(true, Ordering::Relaxed);
+        eprintln!("could not start slot reducer: {error}");
+    }
 }
 
 /// Whether a producer shrank this frame on the way out, as its own meta records.
@@ -479,7 +504,15 @@ impl Peek {
     fn of(payload: &[u8]) -> Option<Peek> {
         let (tag, _, body) = goofi_codec::split_frame(payload).ok()?;
         let (dtype, shape) = match tag {
-            0 => goofi_codec::array_head(body).map(|(d, shape, _)| (d, shape))?,
+            0 => {
+                let (dtype, shape, samples) = goofi_codec::array_head(body)?;
+                if dtype == b"|u1" {
+                    let len = shape.iter().try_fold(1usize, |n, &d| n.checked_mul(d))?;
+                    if len != samples.len() { return None; }
+                    goofi_codec::frame_meta(payload).ok()?;
+                }
+                (dtype, shape)
+            },
             _ => (&b""[..], Vec::new()),
         };
         Some(Peek { tag, shape, ready: dtype == b"|u1" })
@@ -499,7 +532,8 @@ fn pick(d: &goofi_core::Data, index: Option<usize>) -> Option<goofi_core::global
                 None if bytes.len() == 4 => 0,
                 None => return None,
             };
-            let chunk: [u8; 4] = bytes.get(i * 4..i * 4 + 4)?.try_into().ok()?;
+            let start = i.checked_mul(4)?;
+            let chunk: [u8; 4] = bytes.get(start..start.checked_add(4)?)?.try_into().ok()?;
             Some(GlobalValue::Float(f32::from_le_bytes(chunk) as f64))
         }
         _ => None,

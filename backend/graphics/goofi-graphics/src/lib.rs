@@ -112,7 +112,7 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
     ParamDecl {
         group: "common",
         name,
-        spec: ParamSpec::Int { default: 0, min: 0, max: plan::MAX_SIZE as i64 },
+        spec: ParamSpec::Int { default: 0, min: 0, max: plan::MAX_SIZE as i64, options: &[] },
         expression: Some(ExprDecl {
             source,
             mode: if m.producer { ExprMode::On } else { ExprMode::Off },

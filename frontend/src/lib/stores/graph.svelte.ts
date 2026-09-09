@@ -359,17 +359,18 @@ export class GraphStore {
 
 	/** Move one of the patch's own node files into the private library, where every later patch
 	 * finds it. The fresh catalog arrives as a `node_types` event in every open tab. */
-	async saveNodeToLibrary(type: string, overwrite: boolean): Promise<{ type: string; path: string }> {
-		return this.ctl.call<{ type: string; path: string }>('library save', { type, overwrite });
+	async saveNodeToLibrary(type: string, overwrite: boolean, name?: string): Promise<{ type: string; path: string }> {
+		return this.ctl.call<{ type: string; path: string }>('library save', { type, overwrite, ...(name ? { name } : {}) });
 	}
 
 	/** The private library's own file for this type, hidden behind the patch's — what a save to the
 	 * library would replace, and null where it would land on nothing. */
 	async libraryFileBehind(type: string): Promise<string | null> {
-		const r = await this.ctl.call<{ shadowed?: { provenance: string; path: string }[] }>(
+		const r = await this.ctl.call<{ provenance?: string; path?: string; shadowed?: { provenance: string; path: string }[] }>(
 			'library get',
 			{ type }
 		);
+		if (r.provenance === 'custom') return r.path ?? null;
 		return r.shadowed?.find((s) => s.provenance === 'custom')?.path ?? null;
 	}
 
@@ -685,9 +686,9 @@ export class GraphStore {
 
 	/** Write the patch. Where it landed comes back from the MANAGER (`save_path_changed`), never
 	 * latched from this reply — a latch names the patch only in the tab that saved it. */
-	async save(path: string): Promise<{ path: string }> {
+	async save(path: string, overwrite = true): Promise<{ path: string }> {
 		// A given `path` becomes the patch's home; the arrangement is the manager's already.
-		return this.ctl.call<{ path: string }>('session save', { path });
+		return this.ctl.call<{ path: string }>('session save', { path, overwrite });
 	}
 
 	/** Reset to an empty, unnamed patch. Nothing is written here: a New emits no
@@ -707,6 +708,10 @@ export class GraphStore {
 	async expandInstance(instId: string): Promise<void> {
 		await this.ctl.call('nodes ungroup', { subpatch: instId });
 		this._recordGraphCmd('Ungroup');
+	}
+
+	async statPath(path: string): Promise<{ path: string; kind: 'file' | 'dir' | 'missing' }> {
+		return this.ctl.call('dir stat', { path });
 	}
 
 	/** List one directory level on the BACKEND filesystem (full FS, no jail). */

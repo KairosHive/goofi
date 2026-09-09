@@ -166,7 +166,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "select",
         name: "axis",
-        spec: ParamSpec::Int { default: 0, min: -8, max: 7 },
+        spec: ParamSpec::Int { default: 0, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis to cut, negative from the end. 0 is channels on a `[channels, time]` frame."),
     },

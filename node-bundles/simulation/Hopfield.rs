@@ -212,14 +212,14 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "hopfield",
         name: "size",
-        spec: ParamSpec::Int { default: 64, min: 2, max: 4096 },
+        spec: ParamSpec::Int { default: 64, min: 2, max: 4096, options: &[] },
         expression: None,
         doc: Some("How wide a memory is, when none is wired. A wired `patterns` matrix decides instead."),
     },
     ParamDecl {
         group: "hopfield",
         name: "patterns",
-        spec: ParamSpec::Int { default: 4, min: 1, max: 256 },
+        spec: ParamSpec::Int { default: 4, min: 1, max: 256, options: &[] },
         expression: None,
         doc: Some("How many memories to draw, when none is wired."),
     },
@@ -247,7 +247,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000 },
+        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the drawn memories and the starting state. Negative takes a fresh one from the clock."),
     },
