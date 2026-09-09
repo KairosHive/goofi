@@ -1364,7 +1364,10 @@ fn an_audio_out_lands_on_the_channels_it_names() {
     let osc = g.add("Osc");
     let out = g.add("AudioOut");
     g.link(osc, "out", out, "input");
-    let (all, channels) = drive(&g, TENTH);
+    let (all, channels) = g.until("the oscillator reaches the output", |g| {
+        let (samples, channels) = drive(g, TENTH);
+        (peak(&samples) > 0.99).then_some((samples, channels))
+    });
     assert_eq!(channels, 1, "`all` on a mono chain is what it always was");
     assert!((peak(&all) - 1.0).abs() < 0.01, "the sine is heard: peak {}", peak(&all));
 
@@ -1411,6 +1414,20 @@ fn an_audio_out_lands_on_the_channels_it_names() {
     assert!(why.contains("count from 1"), "the refusal says where counting starts: {why}");
     g.set_param(out, "audio", "channels", "all");
     g.until("the fault to clear", |g| g.error(out).is_none().then_some(()));
+    for spec in ["1,,2", "1-2-3", "1-64"] {
+        g.set_param(out, "audio", "channels", spec);
+        g.until("an invalid channel selection is refused", |g| g.error(out));
+        g.set_param(out, "audio", "channels", "all");
+        g.until("a valid selection clears the fault", |g| g.error(out).is_none().then_some(()));
+    }
+    g.set_param(out, "audio", "channels", "4-3");
+    let x = g.until("a descending output selection", |g| {
+        let (samples, channels) = drive(g, TENTH);
+        (channels == 4 && peak(&lane(&samples, 0, 4)) == 0.0 && peak(&lane(&samples, 1, 4)) == 0.0)
+            .then_some(samples)
+    });
+    assert!((peak(&lane(&x, 2, 4)) - 1.0).abs() < 0.01);
+    assert!((peak(&lane(&x, 3, 4)) - 1.0).abs() < 0.01);
 }
 
 /// Drive tenths until the device buffer is `channels` wide, and hand that tenth back. The WIDTH is
