@@ -8,7 +8,7 @@
 	import { graph } from '$lib/stores/graph.svelte';
 	import { linkedNodeName } from 'panelty';
 	import { copyText } from '$lib/clipboard';
-	import { COLLAPSE_LINES, estimateRowHeight } from './consoleRowHeight';
+	import { estimateRowHeight } from './consoleRowHeight';
 	import NodeSelect from './NodeSelect.svelte';
 	import { Bar, Chip, Badge, Icon, IconButton, EmptyState } from '$lib/ui';
 	import { onDestroy, tick } from 'svelte';
@@ -20,6 +20,8 @@
 
 	const filterName = $derived(linkedNodeName(linkState)); // the bound node's uid (identity)
 	const nodeLabel = (uid: string): string => graph().nodeById(uid)?.name ?? uid;
+	const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+	const sourceLabel = (entry: ConsoleEntry): string => entry.node ? nodeLabel(entry.node) : entry.component;
 	const dragActive = $derived(uiStore.nodeDrag !== null);
 	const over = $derived(uiStore.nodeDragTarget === panelId);
 
@@ -87,16 +89,10 @@
 		} else if (event.key === 'Escape') { completions = []; }
 	}
 
-	async function clearLogs(): Promise<void> {
-		try { await getControl().call('log clear'); commandError = ''; }
-		catch (error) { commandError = String(error); }
-	}
-
 	const OVERSCAN = 8;
 
 	// Panel-local: wrapped heights depend on *this* panel's width, so they can't live in the store.
-	let expanded = $state(new Set<number>());
-	let measured = $state(new Map<number, { h: number; trunc: boolean }>());
+	let measured = $state(new Map<number, number>());
 
 	/** The row's content floor in px, read from the same token and query the CSS floors with. */
 	function contentFloor(): number {
@@ -105,57 +101,27 @@
 		return parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--hit')) || 0;
 	}
 	function heightOf(e: ConsoleEntry, floor: number): number {
-		return measured.get(e.uid)?.h ?? estimateRowHeight(e.lines, expanded.has(e.uid), floor);
-	}
-	function expandable(e: ConsoleEntry): boolean {
-		return measured.get(e.uid)?.trunc ?? e.lines > COLLAPSE_LINES;
+		return measured.get(e.uid) ?? estimateRowHeight(e.lines, floor);
 	}
 
-	// ResizeObserver fires after layout, so writing `measured` here can't recurse into the size.
-	function measure(node: HTMLElement, params: { uid: number; exp: boolean }) {
-		let cur = params;
+	// Wrapped text needs a measured height for this panel's width.
+	function measure(node: HTMLElement, uid: number) {
+		let id = uid;
 		const report = (): void => {
 			const h = node.offsetHeight;
-			const txt = node.querySelector('.txt');
-			const trunc = !cur.exp && txt ? txt.scrollHeight - txt.clientHeight > 1 : undefined;
-			const prev = measured.get(cur.uid);
-			const next = { h, trunc: trunc ?? prev?.trunc ?? false };
-			if (!prev || prev.h !== next.h || prev.trunc !== next.trunc) {
-				const m = new Map(measured);
-				m.set(cur.uid, next);
-				measured = m;
+			if (measured.get(id) !== h) {
+				const next = new Map(measured);
+				next.set(id, h);
+				measured = next;
 			}
 		};
 		const ro = new ResizeObserver(report);
 		ro.observe(node);
 		report();
 		return {
-			update(next: { uid: number; exp: boolean }) {
-				cur = next;
-				report();
-			},
+			update(uid: number) { id = uid; report(); },
 			destroy: () => ro.disconnect()
 		};
-	}
-
-	function toggle(uid: number): void {
-		const next = new Set(expanded);
-		if (next.has(uid)) next.delete(uid);
-		else next.add(uid);
-		expanded = next;
-	}
-
-	// A text-selection drag ends with a click on the row; only a stationary click toggles it.
-	let downX = 0;
-	let downY = 0;
-	function onRowDown(ev: MouseEvent): void {
-		downX = ev.clientX;
-		downY = ev.clientY;
-	}
-	function onRowClick(ev: MouseEvent, uid: number, canToggle: boolean): void {
-		if (!canToggle) return;
-		if (Math.hypot(ev.clientX - downX, ev.clientY - downY) > 4) return;
-		toggle(uid);
 	}
 
 	let copiedUid = $state(-1);
@@ -183,8 +149,6 @@
 		const ids = new Set(Array.from({ length: view.total() }, (_, i) => view.get(i).uid));
 		const kept = new Map([...measured].filter(([id]) => ids.has(id)));
 		if (kept.size !== measured.size) measured = kept;
-		const open = new Set([...expanded].filter((id) => ids.has(id)));
-		if (open.size !== expanded.size) expanded = open;
 	});
 
 	let scrollEl = $state<HTMLDivElement | null>(null);
@@ -196,7 +160,6 @@
 	const layout = $derived.by<{ n: number; cum: Float64Array; height: number }>(() => {
 		cs.version;
 		measured;
-		expanded;
 		const v = view;
 		const n = v ? v.total() : 0;
 		const cum = new Float64Array(n + 1);
@@ -219,20 +182,10 @@
 
 	const start = $derived(Math.max(0, indexAt(layout.cum, scrollTop) - OVERSCAN));
 	const end = $derived(Math.min(layout.n, indexAt(layout.cum, scrollTop + viewportH) + OVERSCAN + 1));
-	// Shallow-copy each visible entry: `count` is bumped in place on coalesce, and the keyed
-	// {#each} would not re-render a same-reference item.
-	const windowRows = $derived.by<{ e: ConsoleEntry; exp: boolean; canToggle: boolean }[]>(() => {
-		cs.version;
-		const v = view;
-		if (!v) return [];
-		const out: { e: ConsoleEntry; exp: boolean; canToggle: boolean }[] = [];
-		const e = Math.min(end, v.total());
-		for (let i = start; i < e; i++) {
-			const copy = { ...v.get(i) };
-			const exp = expanded.has(copy.uid);
-			out.push({ e: copy, exp, canToggle: exp || expandable(copy) });
-		}
-		return out;
+	const windowRows = $derived.by<ConsoleEntry[]>(() => {
+		const rows: ConsoleEntry[] = [];
+		for (let i = start; i < Math.min(end, view.total()); i++) rows.push(view.get(i));
+		return rows;
 	});
 	const topPad = $derived(layout.cum[Math.min(start, layout.n)]);
 	const bottomPad = $derived(Math.max(0, layout.height - layout.cum[Math.min(end, layout.n)]));
@@ -272,7 +225,6 @@
 					aria-pressed={levels.has(level as LogLevel)} onclick={() => toggleLevel(level as LogLevel)}
 					title="Show {level} messages">{#if level === 'info'}<Icon name="info" />{/if}{level}</Chip>
 			{/each}
-			<IconButton variant="ghost" density="chrome" label="Clear console" title="Clear console" onclick={clearLogs}><Icon name="x" /></IconButton>
 		{/snippet}
 		{#snippet end()}
 			<NodeSelect {panelId} state={linkState} emptyLabel="All sources" />
@@ -293,49 +245,34 @@
 			</EmptyState>
 		{:else}
 			<div style="height:{topPad}px"></div>
-			{#each windowRows as row (row.e.uid)}
-				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+			{#each windowRows as row (row.uid)}
 				<div
 					class="row"
-					class:err={row.e.level === 'error'}
-					class:warn={row.e.level === 'warning'}
-					class:toggleable={row.canToggle}
+					class:err={row.level === 'error'}
+					class:warn={row.level === 'warning'}
 					data-testid="console-entry"
-					data-node={row.e.node}
-					data-stream={row.e.stream}
-					data-level={row.e.level}
-					role={row.canToggle ? 'button' : undefined}
-					tabindex={row.canToggle ? 0 : undefined}
-					onmousedown={onRowDown}
-					onclick={(ev) => onRowClick(ev, row.e.uid, row.canToggle)}
-					onkeydown={(ev) => {
-						if (row.canToggle && (ev.key === 'Enter' || ev.key === ' ')) {
-							ev.preventDefault();
-							toggle(row.e.uid);
-						}
-					}}
-					use:measure={{ uid: row.e.uid, exp: row.exp }}
+					data-node={row.node}
+					data-stream={row.stream}
+					data-level={row.level}
+					use:measure={row.uid}
 				>
-					<span class="caret"
-						>{#if row.exp}<Icon name="chevron-down" />{:else if row.canToggle}<Icon
-								name="chevron-right"
-							/>{/if}</span
-					>
 					{#if !filterName}
 						<button
 							class="node"
+							title={sourceLabel(row)}
+							aria-label={sourceLabel(row)}
 							onclick={(ev) => {
 								ev.stopPropagation();
-								if (row.e.node) focus(row.e.node);
-							}}>{row.e.node ? nodeLabel(row.e.node) : row.e.component}</button
+								if (row.node) focus(row.node);
+							}}>{Array.from(sourceLabel(row))[0]}</button
 						>
 					{/if}
-					<time title={new Date(row.e.ts).toISOString()}>{new Date(row.e.ts).toLocaleTimeString()}</time>
-					<pre class="txt" class:clamp={!row.exp}>{row.e.text}</pre>
+					<time title={new Date(row.ts).toISOString()}>{timeFormat.format(row.ts)}</time>
+					<pre class="txt">{row.text}</pre>
 					<div class="actions">
-						{#if row.e.count > 1}
-							<Badge data-testid="console-count" title="{row.e.count} occurrences"
-								>×{row.e.count}</Badge
+						{#if row.count > 1}
+							<Badge data-testid="console-count" title="{row.count} occurrences"
+								>×{row.count}</Badge
 							>
 						{/if}
 						<IconButton
@@ -349,8 +286,8 @@
 							onmousedown={(ev) => ev.stopPropagation()}
 							onclick={(ev) => {
 								ev.stopPropagation();
-								copy(row.e.text, row.e.uid);
-							}}><Icon name={copiedUid === row.e.uid ? 'check' : 'copy'} /></IconButton
+								copy(row.text, row.uid);
+							}}><Icon name={copiedUid === row.uid ? 'check' : 'copy'} /></IconButton
 						>
 					</div>
 				</div>
@@ -424,29 +361,13 @@
 		gap: var(--space-5);
 		/* Mirrored by `PAD = 4` in consoleRowHeight.ts; px, because that estimate precedes layout. */
 		padding: 2px var(--space-6);
-		border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 		box-sizing: border-box;
-	}
-	.row.toggleable {
-		cursor: pointer;
-	}
-	.row.toggleable:hover {
-		background: color-mix(in srgb, var(--accent) 7%, transparent);
 	}
 	.row.err {
 		background: color-mix(in srgb, var(--danger) 9%, transparent);
 		color: var(--danger);
 	}
-	.row.err.toggleable:hover {
-		background: var(--danger-fill);
-	}
-	.caret {
-		flex: 0 0 auto;
-		width: 10px;
-		line-height: 16px;
-		color: var(--text-muted);
-		font-size: var(--fs-micro);
-	}
+	.node, time, .actions { user-select: none; }
 	.node {
 		flex: 0 0 auto;
 		background: transparent;
@@ -457,7 +378,7 @@
 		font-family: var(--font-mono);
 		font-size: var(--fs-micro);
 		cursor: pointer;
-		max-width: 160px;
+		width: 1ch;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -474,12 +395,6 @@
 		color: inherit;
 		user-select: text;
 		cursor: text;
-	}
-	.txt.clamp {
-		display: -webkit-box;
-		-webkit-line-clamp: 3;
-		line-clamp: 3;
-		-webkit-box-orient: vertical;
 	}
 	.actions {
 		flex: 0 0 auto;
@@ -501,7 +416,6 @@
 	}
 	@container (max-width: 420px) {
 		time { display: none; }
-		.node { max-width: 90px; }
 	}
 	/* Touch has no hover, so the copy button rests open. */
 	@media (hover: none) and (pointer: coarse) {

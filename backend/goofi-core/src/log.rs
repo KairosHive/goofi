@@ -118,8 +118,6 @@ impl Log {
                 }).collect(),
         }
     }
-
-    pub fn clear(&mut self) { self.seq += 1; self.groups.clear(); self.keys.clear(); self.bytes = 0; }
 }
 
 pub fn global() -> &'static Mutex<Log> {

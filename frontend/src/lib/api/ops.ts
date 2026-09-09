@@ -51,7 +51,6 @@ export type OpName =
 	| 'dir list'
 	| 'log list'
 	| 'log write'
-	| 'log clear'
 	| 'op list'
 	| 'op complete'
 	| 'agent list'

@@ -41,12 +41,11 @@ fn byte_streams_preserve_split_lines_invalid_utf8_and_final_unterminated_text() 
 }
 
 #[test]
-fn bounded_log_evicts_the_least_recent_group_and_clear_invalidates_replicas() {
+fn bounded_log_evicts_the_least_recent_group() {
     let mut logs = Log::default();
     let message = |text: String| Message { source: Source::component("retention"), level: Level::Info, stream: None, text };
     for i in 0..log::MAX_GROUPS { logs.record(message(i.to_string())); }
     logs.record(message("0".into()));
-    let cursor = logs.since(None).cursor;
     logs.record(message("new".into()));
     let snapshot = serde_json::to_value(logs.since(None)).unwrap();
     let groups = snapshot["groups"].as_array().unwrap();
@@ -54,10 +53,6 @@ fn bounded_log_evicts_the_least_recent_group_and_clear_invalidates_replicas() {
     assert_eq!(groups[0]["text"], "2");
     assert_eq!(groups[groups.len() - 2]["text"], "0");
     assert_eq!(groups[groups.len() - 2]["count"], 2);
-    logs.clear();
-    let cleared = logs.since(Some(cursor));
-    assert!(cleared.groups.is_empty());
-    assert!(cleared.oldest > cleared.cursor && cleared.cursor > cursor);
 }
 
 #[test]
