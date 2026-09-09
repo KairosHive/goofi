@@ -60,7 +60,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "meta",
         name: "axis",
-        spec: ParamSpec::Int { default: 0, min: -8, max: 7 },
+        spec: ParamSpec::Int { default: 0, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis the labels name, negative from the end."),
     },

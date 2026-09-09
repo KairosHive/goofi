@@ -51,6 +51,7 @@ fn frame(
 /// A window of `size` off one producer, which is what makes every frame downstream one shape.
 fn window(g: &Goofi, from: Uid, size: i64) -> Uid {
     let buf = g.add("Buffer");
+    g.set_param(buf, "buffer", "unit", "samples");
     g.set_param(buf, "buffer", "size", size);
     g.link(from, "out", buf, "input");
     buf

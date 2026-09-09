@@ -12,7 +12,7 @@ goofi_audio_sdk::params! {
     CHANNELS = ParamDecl {
         group: "noise",
         name: "channels",
-        spec: ParamSpec::Int { default: 1, min: 1, max: 16 },
+        spec: ParamSpec::Int { default: 1, min: 1, max: 16, options: &[] },
         expression: None,
         doc: Some("how many channels to make; no two of them are alike"),
     },

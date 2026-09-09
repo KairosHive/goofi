@@ -230,7 +230,14 @@ impl Runtime {
             let stage = &self.plan.stages[i];
             let Some(Ok(pipeline)) = stage.pipeline.get() else { continue };
             let Some(state) = self.states.get_mut(&stage.uid) else { continue };
-            state.ensure_out(&self.gpu, stage.size, stage.wants(recording), stage.state);
+            if let Err(error) = state.ensure_out(&self.gpu, stage.size, stage.wants(recording), stage.state) {
+                self.trouble(stage.uid, Some(error));
+                continue;
+            }
+            let clear = self.troubles.lock().expect("the render troubles")
+                .get(&stage.uid).is_some_and(|why| why.starts_with("readback:"));
+            if clear { self.trouble(stage.uid, None); }
+            let Some(state) = self.states.get_mut(&stage.uid) else { continue };
             let shrunk_from = stage.size;
             for (k, cell) in stage.uploads.iter().enumerate() {
                 if let Some(up) = cell.lock().unwrap().take() {
@@ -631,7 +638,16 @@ impl State {
     /// The output texture at `size`, the state buffers beside it, and one readback per reader
     /// that is there. All are remade when the size moves, which is what loses a feedback chain
     /// and a stateful node their history.
-    fn ensure_out(&mut self, gpu: &Gpu, size: (u32, u32), wants: [Option<(u32, u32)>; 4], buffers: usize) {
+    fn ensure_out(&mut self, gpu: &Gpu, size: (u32, u32), wants: [Option<(u32, u32)>; 4], buffers: usize) -> Result<(), String> {
+        // Validate every readback before allocating textures or changing the current rings.
+        for w in Want::ALL {
+            if let Some((width, height)) = wants[w as usize] {
+                let bytes = u64::from(padded_row(width, w.texel())) * u64::from(height);
+                if bytes > gpu.device.limits().max_buffer_size {
+                    return Err(format!("readback: {width} by {height} exceeds the GPU buffer limit"));
+                }
+            }
+        }
         if self.out.as_ref().is_none_or(|t| t.size != size) || self.buffers.len() != buffers {
             let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
@@ -657,6 +673,7 @@ impl State {
                 (None, _) => *held = None,
             }
         }
+        Ok(())
     }
 
     /// One arrival into the texture its input samples.

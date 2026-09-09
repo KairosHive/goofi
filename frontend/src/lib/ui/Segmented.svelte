@@ -23,6 +23,7 @@
 		segments,
 		onChange,
 		bad = false,
+		disabled = false,
 		class: klass = '',
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
@@ -32,6 +33,7 @@
 		onChange: (id: string) => void;
 		/** Paint the lit segment in the danger tone. */
 		bad?: boolean;
+		disabled?: boolean;
 	} = $props();
 
 	const lit = (id: string) => (Array.isArray(value) ? value.includes(id) : id === value);
@@ -41,6 +43,7 @@
 	{#each segments as s (s.id)}
 		<button
 			type="button"
+			{disabled}
 			class="seg"
 			class:on={lit(s.id)}
 			class:bad={lit(s.id) && bad}

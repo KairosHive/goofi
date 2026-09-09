@@ -128,13 +128,13 @@ fn coerce(result: &Bound<'_, PyAny>, target: &Param) -> Result<Param, String> {
         Param::Float { vmin, vmax, .. } => {
             Ok(Param::Float { value: to_scalar::<f64>(result, "number")?, vmin: *vmin, vmax: *vmax })
         }
-        Param::Int { vmin, vmax, .. } => {
+        Param::Int { vmin, vmax, options, .. } => {
             let v = to_scalar::<f64>(result, "number")?;
             // `as i64` silently saturates NaN and ±inf; error instead.
             if !v.is_finite() {
                 return Err("expression result is not a finite number".to_string());
             }
-            Ok(Param::Int { value: v.round() as i64, vmin: *vmin, vmax: *vmax })
+            Ok(Param::Int { value: v.round() as i64, vmin: *vmin, vmax: *vmax, options: options.clone() })
         }
         // A pulse is a GATE to an expression: the runtime fires on the rise of this bool.
         Param::Bool { .. } | Param::Pulse => {

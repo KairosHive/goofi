@@ -129,14 +129,14 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "json",
         name: "indent",
-        spec: ParamSpec::Int { default: 0, min: 0, max: 8 },
+        spec: ParamSpec::Int { default: 0, min: 0, max: 8, options: &[0, 2, 4] },
         expression: None,
         doc: Some("Spaces of indent per level. 0 writes the whole table on one line."),
     },
     ParamDecl {
         group: "json",
         name: "decimals",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 17 },
+        spec: ParamSpec::Int { default: -1, min: -1, max: 17, options: &[] },
         expression: None,
         doc: Some("Digits after the point on every number. -1 writes each one in full."),
     },

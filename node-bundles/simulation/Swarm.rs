@@ -333,14 +333,14 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "swarm",
         name: "count",
-        spec: ParamSpec::Int { default: 300, min: 2, max: 2000 },
+        spec: ParamSpec::Int { default: 300, min: 2, max: 2000, options: &[] },
         expression: None,
         doc: Some("How many particles. Every pair is considered, so the cost grows with the square."),
     },
     ParamDecl {
         group: "swarm",
         name: "dims",
-        spec: ParamSpec::Int { default: 2, min: 2, max: 3 },
+        spec: ParamSpec::Int { default: 2, min: 2, max: 3, options: &[] },
         expression: None,
         doc: Some("Two dimensions or three. Positions always live in the unit box."),
     },
@@ -382,7 +382,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "swarm",
         name: "species",
-        spec: ParamSpec::Int { default: 4, min: 1, max: 16 },
+        spec: ParamSpec::Int { default: 4, min: 1, max: 16, options: &[] },
         expression: None,
         doc: Some("How many colours `particlelife` deals out. A wired `attraction` matrix decides instead."),
     },
@@ -417,7 +417,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000 },
+        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the layout, the colours and the drawn attraction matrix. Negative takes a fresh one from the clock."),
     },

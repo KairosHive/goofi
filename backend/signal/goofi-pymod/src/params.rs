@@ -55,6 +55,8 @@ pub struct IntParam {
     #[pyo3(get)]
     pub default: i64,
     #[pyo3(get)]
+    pub options: Vec<i64>,
+    #[pyo3(get)]
     pub min: i64,
     #[pyo3(get)]
     pub max: i64,
@@ -67,9 +69,9 @@ pub struct IntParam {
 #[pymethods]
 impl IntParam {
     #[new]
-    #[pyo3(signature = (default, min, max, doc=None, expression=None))]
-    fn new(default: i64, min: i64, max: i64, doc: Option<String>, expression: Option<String>) -> IntParam {
-        IntParam { default, min, max, doc, expression }
+    #[pyo3(signature = (default, min, max, doc=None, expression=None, options=Vec::new()))]
+    fn new(default: i64, min: i64, max: i64, doc: Option<String>, expression: Option<String>, options: Vec<i64>) -> IntParam {
+        IntParam { default, min, max, doc, expression, options }
     }
 }
 

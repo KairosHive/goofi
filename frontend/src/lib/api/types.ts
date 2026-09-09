@@ -39,6 +39,7 @@ export interface FloatParam extends BaseParam {
 
 export interface IntParam extends BaseParam {
 	type: 'int';
+	options?: number[];
 	value: number;
 	vmin: number;
 	vmax: number;

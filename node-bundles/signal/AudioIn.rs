@@ -34,7 +34,10 @@ impl Node for AudioIn {
             out.set("out", d.clone());
             return Ok(());
         }
-        let size = p.i64("audio", "size").unwrap_or(1024).clamp(1, 1_000_000) as usize;
+        let size = goofi_core::stream::window_count(
+            p.f64("audio", "size").unwrap_or(1024.0),
+            p.str("audio", "unit").unwrap_or("samples"), d.meta(),
+        )?.clamp(1, 1_000_000);
         if self.held.len() != lanes {
             self.held = vec![Vec::new(); lanes];
         }
@@ -81,6 +84,13 @@ impl Node for AudioIn {
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "audio",
+        name: "unit",
+        spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds"], refresh: false },
+        expression: None,
+        doc: Some("Seconds uses the incoming audio sample rate."),
+    },
+    ParamDecl {
+        group: "audio",
         name: "mode",
         spec: ParamSpec::Str { default: "stream", options: &["stream", "window", "envelope"], refresh: false },
         expression: None,
@@ -92,9 +102,9 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "audio",
         name: "size",
-        spec: ParamSpec::Int { default: 1024, min: 1, max: 1_000_000 },
+        spec: ParamSpec::Float { default: 1024.0, min: 0.001, max: 1_000_000.0 },
         expression: None,
-        doc: Some("Samples per window, or samples behind each level."),
+        doc: Some("Window length, or length behind each level, in the selected unit."),
     },
 ];
 static INPUTS: &[SlotDecl] =

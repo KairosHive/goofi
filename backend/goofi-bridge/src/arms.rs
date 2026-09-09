@@ -19,6 +19,22 @@ fn detail(payload: &Value, name: &str) -> Detail {
     }
 }
 
+pub(crate) fn dir_stat(
+    _state: &AppState,
+    payload: &Value,
+    _actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let path = fsbrowse::resolve(parse_str(payload, "path")?);
+    let kind = match std::fs::metadata(&path) {
+        Ok(meta) if meta.is_dir() => "dir",
+        Ok(_) => "file",
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "missing",
+        Err(e) => return Err(format!("{path}: {e}")),
+    };
+    Ok(json!({ "path": path, "kind": kind }))
+}
+
 pub(crate) fn dir_list(
     _state: &AppState,
     payload: &Value,
@@ -204,23 +220,42 @@ pub(crate) fn library_save(
         let g = state.graph.lock().unwrap();
         let (engine, entry) = g.resolve_type(asked).map_err(|e| format!("library save: {e}"))?;
         let ty = goofi_node::qualify(engine, entry.manifest.type_name);
-        if !g.is_patch_type(&ty) {
+        if !g.is_patch_type(&ty) && !g.is_custom_type(&ty) {
             return Err(format!(
-                "library save: `{ty}` is not this patch's own node — only a node file in the patch workspace is saved to the library"
+                "library save: `{ty}` is not a custom node"
             ));
         }
         let bare = entry.manifest.type_name;
-        let folder = mount.join(goofi_node::folder_of(engine));
+        let folder = if g.is_patch_type(&ty) { mount.join(goofi_node::folder_of(engine)) } else { state.custom.clone() };
         let from = crate::node_file_in(&folder, bare, engine)
             .ok_or_else(|| format!("library save: `{ty}` has no source file under {}", folder.display()))?;
         (engine, bare.to_string(), from)
     };
     let library = state.custom.clone();
-    let name = from.file_name().ok_or("library save: the source file has no name")?.to_owned();
+    let name = match payload.get("name").and_then(Value::as_str) {
+        Some(name) => {
+            if name.is_empty() || name.contains(['/', '\\']) {
+                return Err("library save: name must be a file name without a directory".into());
+            }
+            let mut path = std::path::PathBuf::from(name);
+            if path.extension().is_none() {
+                path.set_extension(from.extension().ok_or("library save: missing source extension")?);
+            }
+            if path.extension() != from.extension() || goofi_node::describe::type_name_of(&path).is_none() {
+                return Err("library save: use a valid node file name with the source extension".into());
+            }
+            path.into_os_string()
+        }
+        None => from.file_name().ok_or("library save: the source file has no name")?.to_owned(),
+    };
     let to = library.join(&name);
-    let held = crate::node_file_in(&library, &bare, engine)
+    let saved_type = goofi_node::describe::type_name_of(&to).ok_or("library save: invalid file name")?;
+    let held = crate::node_file_in(&library, &saved_type, engine)
         .or_else(|| to.exists().then(|| to.clone()));
     if let Some(held) = &held {
+        if held.extension() != from.extension() {
+            return Err(format!("library save: {} uses another source language; choose a different name", held.display()));
+        }
         if !overwrite {
             return Err(format!(
                 "library save: the library already holds {} — rename this node, or pass --overwrite to replace that file",
@@ -237,17 +272,25 @@ pub(crate) fn library_save(
         std::io::copy(&mut input, &mut output)?;
         output.sync_all()?;
         drop(output);
-        std::fs::rename(&staged, &to)
+        if overwrite {
+            std::fs::rename(&staged, &to)
+        } else {
+            std::fs::hard_link(&staged, &to)?;
+            std::fs::remove_file(&staged)
+        }
     })();
     if let Err(e) = replace {
         let _ = std::fs::remove_file(&staged);
         return Err(format!("library save: {}: {e}", to.display()));
     }
-    std::fs::remove_file(&from).map_err(|e| format!("library save: {}: {e}", from.display()))?;
+    // A renamed save is a new library type. Keep the source for existing instances.
+    if from != to && saved_type == bare {
+        std::fs::remove_file(&from).map_err(|e| format!("library save: {}: {e}", from.display()))?;
+    }
     // The file left the mount but the `.gfi` still carries it, from the library — so the patch's
     // saved content did not change, and the unsaved dot must not rise for a move alone.
     if let Ok(rel) = from.strip_prefix(&mount) {
-        state.forget_baseline(rel);
+        if !from.exists() { state.forget_baseline(rel); }
     }
     // Rescanned but NOT restarted: the code behind every live instance is byte for byte the file
     // that just moved.
@@ -257,7 +300,7 @@ pub(crate) fn library_save(
         events.push(event("node_types", json!({ "types": schemas::catalog_types(&g, Detail::Full) })));
     }
     resync_and_broadcast(state);
-    Ok(json!({ "type": goofi_node::qualify(engine, &bare), "path": goofi_core::path::to_slash(&to) }))
+    Ok(json!({ "type": goofi_node::qualify(engine, &saved_type), "path": goofi_core::path::to_slash(&to) }))
 }
 
 /// Explicit, never watched: an agent calls it after writing a node file.
@@ -1574,7 +1617,7 @@ pub(crate) fn session_save(
     // either way, which is the direction that LOSES an edit.
     g.persist();
     let packed = goofi_graph::archive::fingerprint(&mount);
-    save_archive(std::path::Path::new(&path), &g.serialize(), &mount, &bundled_custom(&g, &state.custom))?;
+    save_archive(std::path::Path::new(&path), &g.serialize(), &mount, &bundled_custom(&g, &state.custom), flag(payload, "overwrite", true))?;
     // Announced UNCONDITIONALLY, not on the flag's transition: a patch dirtied solely by a file
     // in the mount leaves the flag already false, so no transition comes.
     *state.workspace_baseline.lock().unwrap() = packed;

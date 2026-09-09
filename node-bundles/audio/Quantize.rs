@@ -19,7 +19,7 @@ goofi_audio_sdk::params! {
     ROOT = ParamDecl {
         group: "quantize",
         name: "root",
-        spec: ParamSpec::Int { default: 0, min: 0, max: 11 },
+        spec: ParamSpec::Int { default: 0, min: 0, max: 11, options: &[8, 12, 16, 24] },
         expression: None,
         doc: Some("the note the scale is built from, in semitones above C"),
     },

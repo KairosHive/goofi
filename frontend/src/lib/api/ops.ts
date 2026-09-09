@@ -46,6 +46,7 @@ export type OpName =
 	| 'library get'
 	| 'library save'
 	| 'library refresh'
+	| 'dir stat'
 	| 'dir list'
 	| 'op list'
 	| 'op complete'

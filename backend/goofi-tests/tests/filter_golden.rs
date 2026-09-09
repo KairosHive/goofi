@@ -108,6 +108,7 @@ fn the_filter_answers_what_scipy_answers_in_either_phase() {
     design(live, case);
     g.set_param(live, "filter", "phase", "causal");
     let buffer = g.add("signal:Buffer");
+    g.set_param(buffer, "buffer", "unit", "samples");
     g.set_param(buffer, "buffer", "size", input.len() as i64);
     let held = g.probe(buffer, "out");
     g.link(stream, "out", live, "input");

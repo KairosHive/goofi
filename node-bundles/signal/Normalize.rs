@@ -24,18 +24,12 @@ impl Node for Normalize {
         let a = d.assert_ndims().at_least(1)?;
         let mode = p.str("normalize", "mode").unwrap_or("zscore");
         let dim = resolve_axis(p.i64("window", "axis").unwrap_or(-1), a.shape().len())?;
-        let size = p.f64("window", "size").unwrap_or(1000.0).max(0.0);
+        let size = p.f64("window", "size").unwrap_or(1000.0);
         let unit = p.str("window", "unit").unwrap_or("samples");
         let hold = p.bool("window", "hold").unwrap_or(false);
         let n = a.shape()[dim];
 
-        let width = match unit {
-            "seconds" => {
-                let rate = d.meta().sfreq().ok_or("`seconds` needs a frame that carries its sample rate")?;
-                (size * rate).round() as usize
-            }
-            _ => size.round() as usize,
-        };
+        let width = goofi_core::stream::window_count(size, unit, d.meta())?;
 
         validate(mode, width)?;
 
@@ -111,14 +105,14 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "window",
         name: "unit",
-        spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds"], refresh: false },
+        spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds", "seconds (ufreq)"], refresh: false },
         expression: None,
         doc: Some("What `size` counts."),
     },
     ParamDecl {
         group: "window",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7 },
+        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis the statistics are taken along. -1 is time."),
     },

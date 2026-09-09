@@ -28,6 +28,7 @@ fn a_chain_filters_a_live_stream_and_reads_the_band_that_survives() {
     set(osc, "output", "sfreq", j!(256.0));
     set(osc, "output", "mode", j!("block"));
     set(osc, "lfo", "frequency", j!(10.0));
+    set(buf, "buffer", "unit", j!("samples"));
     set(buf, "buffer", "size", j!(512));
     set(flt, "filter", "low", j!(5.0));
     set(flt, "filter", "high", j!(20.0));
@@ -92,9 +93,12 @@ fn a_buffer_rolls_the_axis_it_was_told_to_and_grows_one_past_the_rank() {
     let set = |n, name: &str, v: serde_json::Value| {
         g.set_param(n, "buffer", name, v);
     };
+    set(time, "unit", j!("samples"));
     set(time, "size", j!(8));
+    set(chans, "unit", j!("samples"));
     set(chans, "size", j!(2));
     set(chans, "axis", j!(-2));
+    set(one, "unit", j!("samples"));
     set(one, "size", j!(1));
 
     let (pt, pc, po) = (g.probe(time, "out"), g.probe(chans, "out"), g.probe(one, "out"));
@@ -133,6 +137,7 @@ fn a_buffer_rolls_the_axis_it_was_told_to_and_grows_one_past_the_rank() {
     // element of the vector a channel with its own history.
     let per_channel = g.add("Reduce");
     let grow = g.add("Buffer");
+    set(grow, "unit", j!("samples"));
     set(grow, "size", j!(8));
     set(grow, "axis", j!(1));
     let pg = g.probe(grow, "out");
@@ -669,6 +674,7 @@ fn the_analysis_nodes_read_a_known_sine_and_say_what_it_is() {
     set(lfo, "output", "sfreq", j!(256.0));
     set(lfo, "common", "max_frequency", j!(20.0));
     let window = g.add("Buffer");
+    set(window, "buffer", "unit", j!("samples"));
     set(window, "buffer", "size", j!(512));
     g.link(lfo, "out", window, "input");
 
@@ -915,4 +921,39 @@ fn a_drawing_widget_reaches_the_patch_as_a_frame() {
     g.call("global entry edit", j!({ "name": "pad.sketch", "value": "data:image/png;base64,bm90YXBuZw==" }));
     let why = g.until("the node says what it could not read", |_| g.error(node));
     assert!(why.contains("PNG"), "{why}");
+}
+
+#[test]
+fn buffer_seconds_use_sample_rate_and_updates_stack_frames() {
+    let g = Goofi::new();
+    let src = g.add("_TestRamp");
+    g.set_param(src, "ramp", "sfreq", 8.0);
+    g.set_param(src, "ramp", "length", 4);
+    let buf = g.add("Buffer");
+    let probe = g.probe(buf, "out");
+    g.link(src, "out", buf, "input");
+    g.until("default two-second window", |_| probe.latest().filter(|d| shape(d).last() == Some(&16)));
+    g.set_param(buf, "buffer", "size", 0.5);
+    g.until("fractional seconds", |_| probe.latest().filter(|d| shape(d).last() == Some(&4)));
+    g.set_param(buf, "buffer", "unit", "updates");
+    g.set_param(buf, "buffer", "size", 2.0);
+    g.until("two complete frames", |_| probe.latest().filter(|d| shape(d).len() == 3 && shape(d).last() == Some(&2)));
+}
+
+#[test]
+fn sample_and_update_windows_use_their_own_rates() {
+    use goofi_core::{stream::window_count, Meta};
+    let mut meta = Meta::new().with_sfreq(Some(128.0));
+    meta.set_ufreq(Some(20.0));
+    assert_eq!(window_count(0.5, "seconds", &meta).unwrap(), 64);
+    assert_eq!(window_count(0.5, "seconds (ufreq)", &meta).unwrap(), 10);
+    let mut updates = Meta::empty();
+    updates.set_ufreq(Some(20.0));
+    assert_eq!(window_count(0.5, "seconds", &updates).unwrap(), 10);
+    assert_eq!(window_count(3.0, "samples", &Meta::empty()).unwrap(), 3);
+    assert!(window_count(1.0, "seconds", &Meta::empty()).is_err());
+    assert!(window_count(1.0, "seconds (ufreq)", &Meta::empty()).is_err());
+    for size in [-1.0, f64::INFINITY, f64::NAN, f64::MAX] {
+        assert!(window_count(size, "seconds", &meta).is_err());
+    }
 }

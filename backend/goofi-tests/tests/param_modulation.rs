@@ -47,7 +47,7 @@ fn modulation_uses_the_current_target_range_and_coordinate() {
     }
     let code = evaluator.compile("lfo()").unwrap();
     for (lo, hi) in [(2, 6), (-10, 20)] {
-        let target = Param::Int { value: 0, vmin: lo, vmax: hi };
+        let target = Param::Int { value: 0, vmin: lo, vmax: hi, options: vec![] };
         let result = evaluator.eval(code.id, &EvalCtx { locals: &locals, t: 0.25, target: &target }).unwrap();
         assert!(matches!(result, Param::Int { value, .. } if value == hi));
     }

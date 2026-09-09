@@ -59,7 +59,7 @@ pub fn gate(x: f64) -> bool {
 fn value_as(value: &Param, target: &Param) -> Result<Param, String> {
     match (value.as_f64(), target) {
         (Some(x), Param::Float { vmin, vmax, .. }) => Ok(Param::Float { value: x, vmin: *vmin, vmax: *vmax }),
-        (Some(x), Param::Int { vmin, vmax, .. }) => Ok(Param::Int { value: x.round() as i64, vmin: *vmin, vmax: *vmax }),
+        (Some(x), Param::Int { vmin, vmax, options, .. }) => Ok(Param::Int { value: x.round() as i64, vmin: *vmin, vmax: *vmax, options: options.clone() }),
         (Some(x), Param::Bool { .. } | Param::Pulse) => Ok(Param::Bool { value: gate(x) }),
         (_, Param::Str { .. }) if matches!(value, Param::Str { .. }) => Ok(value.clone()),
         _ => Err(format!("`{value:?}` does not fit `{target:?}`")),
@@ -76,7 +76,7 @@ fn scalar_of(frame: &Data, target: &Param) -> Result<Param, String> {
             let x = f32::from_le_bytes(bytes) as f64;
             Ok(match target {
                 Param::Float { vmin, vmax, .. } => Param::Float { value: x, vmin: *vmin, vmax: *vmax },
-                Param::Int { vmin, vmax, .. } => Param::Int { value: x.round() as i64, vmin: *vmin, vmax: *vmax },
+                Param::Int { vmin, vmax, options, .. } => Param::Int { value: x.round() as i64, vmin: *vmin, vmax: *vmax, options: options.clone() },
                 // A pulse is a GATE here: the same threshold, and the runtime fires on its rise.
                 Param::Bool { .. } | Param::Pulse => Param::Bool { value: gate(x) },
                 Param::Str { .. } => return Err("a string param references a STRING output".to_string()),

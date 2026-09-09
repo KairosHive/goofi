@@ -628,8 +628,8 @@ fn a_reply_says_what_the_write_actually_did() {
 
     // A literal is COERCED to the param's declared type, so the value stored may differ.
     let buf = g.add("Buffer");
-    let coerced = g.set_param(buf, "buffer", "size", 512.6);
-    assert_eq!(coerced["value"], 513, "an int param rounds: {coerced}");
+    let coerced = g.set_param(buf, "buffer", "axis", 1.6);
+    assert_eq!(coerced["value"], 2, "an int param rounds: {coerced}");
 
     // Addressed by uid, answered by NAME: what comes back is what the next op takes.
     let wired = g.call("link add", j!({ "from": ep(&osc, "out"), "to": ep(hex(buf), "input") }));
@@ -654,10 +654,10 @@ fn a_reply_says_what_the_write_actually_did() {
 
     // Every op takes it, and every read gives it back — the uid is a second door, never the first.
     assert_eq!(g.call("node param edit",
-                      j!({ "node": "win", "param": "buffer/size", "value": 32 }))["value"], 32);
+                      j!({ "node": "win", "param": "buffer/size", "value": 32 }))["value"], 32.0);
     let uid = made[1]["uid"].as_str().unwrap().to_string();
     assert_eq!(g.call("node param edit",
-                      j!({ "node": &uid, "param": "buffer/size", "value": 64 }))["value"], 64);
+                      j!({ "node": &uid, "param": "buffer/size", "value": 64 }))["value"], 64.0);
     let drawn = g.call("nodes inspect", j!({}))["text"].as_str().unwrap().to_string();
     assert!(drawn.contains("src -- out→input --> win"), "the diagram wires names: {drawn}");
     assert!(!drawn.contains(&uid), "…and shows no uid at all: {drawn}");

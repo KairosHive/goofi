@@ -42,7 +42,7 @@ pub(crate) enum Probed {
 
 impl Probed {
     /// The same answer, against the file at `path`. A probe's answer depends on the BYTES, so it
-    /// is memoised across paths — where the file is does not, and the source is read from there
+    /// is memoised across paths with the same type name — the source is read from there
     /// at registration.
     fn at(self, path: &Path) -> Probed {
         let moved = |d: Discovered| Discovered { source: path.to_path_buf(), ..d };
@@ -64,14 +64,17 @@ pub(crate) fn scan(engine: &mut SignalEngine, dir: &Path) -> Vec<ScannedType> {
     let (rust, paths): (Vec<_>, Vec<_>) =
         goofi_node::node_files(dir, goofi_node::Engine::id(engine)).into_iter().partition(|(p, _, _)| p.extension().is_some_and(|e| e == "rs"));
     // Probes spawn an interpreter each, so a folder is probed a few files at a time; a file whose
-    // key — its bytes and its interpreters' environment — is already decided is not probed again.
+    // key — its type name, bytes and interpreter environment — is already decided is not probed again.
     let width = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 8);
     let mut probes: Vec<Option<Probed>> = Vec::with_capacity(paths.len());
     for chunk in paths.chunks(width) {
         let python = engine.python.clone();
         let keyed: Vec<Option<String>> = chunk
             .iter()
-            .map(|(p, _, _)| python.as_ref().and_then(|py| goofi_python::probe_key(p, &py.interpreters())))
+            .map(|(p, name, _)| {
+                python.as_ref().and_then(|py| goofi_python::probe_key(p, &py.interpreters()))
+                    .map(|key| format!("{name}:{key}"))
+            })
             .collect();
         let cached: Vec<Option<Probed>> =
             keyed.iter().map(|k| k.as_ref().and_then(|k| engine.probed.get(k).cloned())).collect();
