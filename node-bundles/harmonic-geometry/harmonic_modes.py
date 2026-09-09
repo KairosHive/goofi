@@ -2,6 +2,9 @@
 
 input and target are harmonic TABLEs. Each is mapped independently by Biotuner.
 Then mode coordinates, amplitudes, and phases interpolate by component rank.
+Alternatively, transition takes one TABLE with input and target harmonic TABLEs
+and a scalar mix. RatioSequence supplies this complete frame so endpoint changes
+and the mix reset cannot arrive on separate clocks at a step boundary.
 Fractional intermediate modes draw a continuous visual field; they are not
 eigenmodes of the original closed plate. Use fixed fields plus GeometryBlend
 to retain integer endpoint fields instead.
@@ -15,11 +18,19 @@ import goofi
 
 
 class HarmonicModes(goofi.Node):
-    """Map harmonic ratios to Chladni modes and interpolate two mode structures."""
+    """Map harmonic ratios to Chladni modes and interpolate two mode structures.
+
+    Use separate input/target harmonic frames and mix, or a single transition
+    TABLE carrying those three fields. RatioSequence.transition supplies the
+    latter so a new step's endpoints and its mix reset remain synchronized.
+    Endpoints map to integer modes first; intermediate coordinates are continuous
+    visual fields. Connecting both input routes reports an error.
+    """
 
     TAGS = ["transform"]
-    INPUTS = {"input": goofi.InputSlot(goofi.DataType.TABLE, required=True),
+    INPUTS = {"input": goofi.InputSlot(goofi.DataType.TABLE, required=False),
               "target": goofi.InputSlot(goofi.DataType.TABLE, required=False),
+              "transition": goofi.InputSlot(goofi.DataType.TABLE, required=False),
               "mix": goofi.InputSlot(goofi.DataType.ARRAY, required=False)}
     OUTPUTS = {"modes": goofi.DataType.ARRAY}
     PARAMS = {"modes": {
@@ -45,7 +56,16 @@ class HarmonicModes(goofi.Node):
             modes[3, :len(r)] = ph
         return modes, len(r)
 
-    def process(self, input, target=None, mix=None):
+    def process(self, input=None, target=None, mix=None, transition=None):
+        if transition is not None:
+            if any(value is not None for value in (input, target, mix)):
+                raise ValueError("Connect either transition or separate input, target, and mix")
+            try:
+                input, target, mix = [transition.table[k] for k in ("input", "target", "mix")]
+            except KeyError as e:
+                raise ValueError("A transition needs input, target, and mix") from e
+        if input is None:
+            return None
         modes, na = self._modes(input)
         t = self.params.modes.mix
         if mix is not None:

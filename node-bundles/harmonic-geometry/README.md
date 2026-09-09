@@ -72,6 +72,14 @@ position. Reset, list/direction edits, clock source changes, and backward clock
 jumps restart at step one. Pitch glides join consecutive ratios in log frequency,
 including the loop boundary. See **10 · Living ratios** for a complete example.
 
+`RatioSequence.transition` is a TABLE with `input` and `target` harmonic TABLEs
+(one ratio, amplitude 1, phase 0 each) and an eased scalar `mix`. Connect it to
+`HarmonicModes.transition` to map both endpoint ratios first, then interpolate
+their mode coordinates. The complete packet keeps a step's endpoint change and
+mix reset together. Use either this packet or the separate input/target/mix
+ports; connecting both routes reports an error. The existing `tuning` output
+still supplies the moving anchor chord for open waves, sound, and other media.
+
 Use `Tuning.tuning` in ratios mode, or `Peaks.peaks` / `HarmonicSpectrum.peaks`
 in peaks mode. Select one leading row. Amplitudes and phases must belong to the
 same components. `Peaks.amps` is in dB: select the matching amplitude scale.
