@@ -1,8 +1,8 @@
-<!-- Console panel — every node's stdout/stderr, virtualized over the console store's ring buffer
-     with a measured cumulative-height model. -->
+<!-- Application logs and the shared op command interface. -->
 <script lang="ts">
+	import { getControl } from '$lib/api/control';
 	import type { PanelProps } from 'panelty';
-	import { consoleStore, type ConsoleEntry, type ConsoleView } from '$lib/stores/console.svelte';
+	import { consoleStore, type ConsoleEntry, type LogLevel } from '$lib/stores/console.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
@@ -23,8 +23,74 @@
 	const dragActive = $derived(uiStore.nodeDrag !== null);
 	const over = $derived(uiStore.nodeDragTarget === panelId);
 
-	let showStdout = $state(true);
-	let showStderr = $state(true);
+	let levels = $state(new Set<LogLevel>(['info', 'warning', 'error']));
+	let query = $state('');
+	let command = $state('');
+	let busy = $state(false);
+	let commandError = $state('');
+	let history: string[] = [];
+	let historyIndex = 0;
+	let draft = '';
+	let completions = $state<string[]>([]);
+
+	function toggleLevel(level: LogLevel): void {
+		const next = new Set(levels);
+		if (next.has(level)) next.delete(level); else next.add(level);
+		levels = next;
+	}
+
+	async function submit(): Promise<void> {
+		const line = command.trim();
+		if (!line || busy) return;
+		busy = true;
+		commandError = '';
+		history = [...history.filter((entry) => entry !== line), line].slice(-200);
+		historyIndex = history.length;
+		command = '';
+		completions = [];
+		try {
+			await getControl().call('log write', { text: `› ${line}`, component: 'command' });
+			const response = await fetch('/exec', {
+				method: 'POST', headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ commands: [line], actor: getControl().actor })
+			});
+			const result = await response.json();
+			if (!response.ok || result.error) throw new Error(result.error ?? `Request failed (${response.status})`);
+			for (const entry of result.results) {
+				await getControl().call('log write', { text: entry.text, component: 'command' });
+			}
+		} catch (error) {
+			const text = error instanceof Error ? error.message : String(error);
+			try { await getControl().call('log write', { text, level: 'error', component: 'command' }); }
+			catch { commandError = text; }
+		} finally { busy = false; }
+	}
+
+	async function commandKey(event: KeyboardEvent): Promise<void> {
+		if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+			event.preventDefault();
+			if (historyIndex === history.length) draft = command;
+			historyIndex = Math.max(0, Math.min(history.length, historyIndex + (event.key === 'ArrowUp' ? -1 : 1)));
+			command = history[historyIndex] ?? draft;
+		} else if (event.key === 'Tab') {
+			event.preventDefault();
+			const line = command;
+			try {
+				const result = await getControl().call<{ text: string }>('op complete', { line });
+				if (command !== line) return;
+				completions = result.text.split('\n').filter(Boolean).map((row) => row.split('\t')[0]);
+				if (completions.length === 1) {
+					command = line.replace(/[^\s]*$/, completions[0]) + ' ';
+					completions = [];
+				}
+			} catch (error) { commandError = String(error); }
+		} else if (event.key === 'Escape') { completions = []; }
+	}
+
+	async function clearLogs(): Promise<void> {
+		try { await getControl().call('log clear'); commandError = ''; }
+		catch (error) { commandError = String(error); }
+	}
 
 	const OVERSCAN = 8;
 
@@ -108,14 +174,17 @@
 		clearTimeout(copiedTimer);
 	});
 
-	// Each view has its own uid space, so the uid-keyed geometry resets when the filter changes.
-	let view = $state<ConsoleView | null>(null);
+	const view = $derived.by(() => {
+		cs.version;
+		return cs.view(filterName, levels, query);
+	});
+
 	$effect(() => {
-		const v = cs.acquireView(filterName, showStdout, showStderr);
-		view = v;
-		expanded = new Set();
-		measured = new Map();
-		return () => cs.releaseView(v.sig);
+		const ids = new Set(Array.from({ length: view.total() }, (_, i) => view.get(i).uid));
+		const kept = new Map([...measured].filter(([id]) => ids.has(id)));
+		if (kept.size !== measured.size) measured = kept;
+		const open = new Set([...expanded].filter((id) => ids.has(id)));
+		if (open.size !== expanded.size) expanded = open;
 	});
 
 	let scrollEl = $state<HTMLDivElement | null>(null);
@@ -125,7 +194,7 @@
 
 	// Cumulative row offsets: cum[i] = total height of rows [0, i).
 	const layout = $derived.by<{ n: number; cum: Float64Array; height: number }>(() => {
-		cs.layoutVersion;
+		cs.version;
 		measured;
 		expanded;
 		const v = view;
@@ -182,7 +251,7 @@
 	}
 
 	$effect(() => {
-		layout.height;
+		layout;
 		if (stuck && scrollEl) {
 			void tick().then(() => {
 				if (scrollEl && stuck) scrollEl.scrollTop = scrollEl.scrollHeight;
@@ -198,25 +267,19 @@
 <div class="wrap" data-testid="console-panel">
 	<Bar>
 		{#snippet start()}
-			<Chip
-				density="chrome"
-				tone={showStdout ? 'accent' : 'neutral'}
-				aria-pressed={showStdout}
-				onclick={() => (showStdout = !showStdout)}
-				title="Show stdout">out</Chip
-			>
-			<Chip
-				density="chrome"
-				tone={showStderr ? 'danger' : 'neutral'}
-				aria-pressed={showStderr}
-				onclick={() => (showStderr = !showStderr)}
-				title="Show stderr">err</Chip
-			>
+			{#each ['info', 'warning', 'error'] as level}
+				<Chip density="chrome" tone={levels.has(level as LogLevel) ? 'accent' : 'neutral'}
+					aria-pressed={levels.has(level as LogLevel)} onclick={() => toggleLevel(level as LogLevel)}
+					title="Show {level} messages">{#if level === 'info'}<Icon name="info" />{/if}{level}</Chip>
+			{/each}
+			<IconButton variant="ghost" density="chrome" label="Clear console" title="Clear console" onclick={clearLogs}><Icon name="x" /></IconButton>
 		{/snippet}
 		{#snippet end()}
-			<NodeSelect {panelId} state={linkState} emptyLabel="All nodes" />
+			<NodeSelect {panelId} state={linkState} emptyLabel="All sources" />
 		{/snippet}
 	</Bar>
+
+	<input class="filter" aria-label="Filter messages" placeholder="Filter messages" bind:value={query} />
 
 	<div
 		class="scroll thin-scrollbar"
@@ -234,11 +297,13 @@
 				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 				<div
 					class="row"
-					class:err={row.e.stream === 'stderr'}
+					class:err={row.e.level === 'error'}
+					class:warn={row.e.level === 'warning'}
 					class:toggleable={row.canToggle}
 					data-testid="console-entry"
 					data-node={row.e.node}
 					data-stream={row.e.stream}
+					data-level={row.e.level}
 					role={row.canToggle ? 'button' : undefined}
 					tabindex={row.canToggle ? 0 : undefined}
 					onmousedown={onRowDown}
@@ -261,10 +326,11 @@
 							class="node"
 							onclick={(ev) => {
 								ev.stopPropagation();
-								focus(row.e.node);
-							}}>{nodeLabel(row.e.node)}</button
+								if (row.e.node) focus(row.e.node);
+							}}>{row.e.node ? nodeLabel(row.e.node) : row.e.component}</button
 						>
 					{/if}
+					<time title={new Date(row.e.ts).toISOString()}>{new Date(row.e.ts).toLocaleTimeString()}</time>
 					<pre class="txt" class:clamp={!row.exp}>{row.e.text}</pre>
 					<div class="actions">
 						{#if row.e.count > 1}
@@ -303,14 +369,41 @@
 		>
 	{/if}
 
+	{#if completions.length}<div class="completions">{completions.join(' · ')}</div>{/if}
+	{#if commandError}<div class="command-error" role="alert">{commandError}</div>{/if}
+	<form class="prompt" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
+		<span aria-hidden="true">›</span>
+		<input aria-label="Console command" placeholder="Enter an op · Tab to complete" bind:value={command}
+			onkeydown={commandKey} autocomplete="off" spellcheck="false" />
+		<button type="submit" disabled={busy || !command.trim()}>{busy ? 'Running…' : 'Run'}</button>
+	</form>
+
 	{#if dragActive}
 		<div class="node-drop-hint" class:active={over} data-testid="node-drop-hint"></div>
 	{/if}
 </div>
 
 <style>
+	.filter, .prompt {
+		border: 0;
+		border-bottom: 1px solid var(--border);
+		padding: var(--space-5) var(--space-6);
+		background: transparent;
+		color: var(--text);
+		min-width: 0;
+	}
+	.prompt { display: flex; gap: var(--space-5); border-top: 1px solid var(--border); }
+	.prompt input { flex: 1; min-width: 0; border: 0; background: transparent; color: inherit; font-family: var(--font-mono); }
+	.prompt button { color: var(--accent); background: transparent; border: 0; cursor: pointer; }
+	.prompt button:disabled { opacity: 0.5; }
+	.command-error { color: var(--danger); }
+	.command-error, .completions { padding: var(--space-5); overflow-wrap: anywhere; max-height: 100px; overflow: auto; }
+	time { color: var(--text-muted); white-space: nowrap; font-size: var(--fs-micro); line-height: 16px; }
+	.row.warn { color: var(--warning); background: color-mix(in srgb, var(--warning) 9%, transparent); }
+
 	.wrap {
 		position: relative;
+		container-type: inline-size;
 		height: 100%;
 		display: flex;
 		flex-direction: column;
@@ -406,6 +499,10 @@
 		opacity: 1;
 		pointer-events: auto;
 	}
+	@container (max-width: 420px) {
+		time { display: none; }
+		.node { max-width: 90px; }
+	}
 	/* Touch has no hover, so the copy button rests open. */
 	@media (hover: none) and (pointer: coarse) {
 		.row :global(.console-copy-btn) {
@@ -416,7 +513,7 @@
 	.wrap :global(.to-bottom-fab) {
 		position: absolute;
 		right: 12px;
-		bottom: 12px;
+		bottom: 52px;
 		border-radius: 999px;
 		box-shadow: var(--shadow-1);
 		z-index: 2;

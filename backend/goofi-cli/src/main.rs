@@ -171,6 +171,12 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
             std::process::exit(1);
         }
     };
+    if !cli.list_nodes {
+        if let Err(e) = goofi_core::log::capture_stdio() {
+            eprintln!("Could not capture application output: {e}");
+            std::process::exit(1);
+        }
+    }
     let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo };
     report("Starting signal, audio and graphics engines");
     let mut state = AppState::new(mode, goofi_bridge::Clock::Device, goofi_bridge::RenderClock::Timer);
@@ -485,14 +491,14 @@ async fn run(
     // An arm of this chain rather than an early `return`: only the tail of this function gives
     // the workspace mount back.
     } else if !headless && SPA.is_empty() {
-        eprintln!("refusing to start: no app is compiled into this binary.");
-        eprintln!(
+        let _ = goofi_core::log::terminal_line("refusing to start: no app is compiled into this binary.");
+        let _ = goofi_core::log::terminal_line(
             "  The app is compiled in, so building it is not enough — build it, then rebuild \
              goofi:"
         );
-        eprintln!("    npm install && npm run build   (in frontend/)");
-        eprintln!("    cargo build");
-        eprintln!("  Or serve the API alone: --headless, or GOOFI_HEADLESS=1.");
+        let _ = goofi_core::log::terminal_line("    npm install && npm run build   (in frontend/)");
+        let _ = goofi_core::log::terminal_line("    cargo build");
+        let _ = goofi_core::log::terminal_line("  Or serve the API alone: --headless, or GOOFI_HEADLESS=1.");
         1
     } else if let Err(e) = {
         if let Some(patch) = &state.load {
@@ -500,16 +506,16 @@ async fn run(
         }
         goofi_bridge::open_load(&state)
     } {
-        eprintln!("refusing to start: the patch --load named did not open.");
-        eprintln!("  {e}");
+        let _ = goofi_core::log::terminal_line("refusing to start: the patch --load named did not open.");
+        let _ = goofi_core::log::terminal_line(&format!("  {e}"));
         1
     } else {
         report(format!("Starting services on {bind}:{port}"));
         spawn_workers(&state);
         match tokio::net::TcpListener::bind((bind.as_str(), port)).await {
             Err(e) => {
-                eprintln!("failed to bind {bind}:{port}: {e}");
-                eprintln!("  A goofi that already runs holds it: `goofi session list` names them, and `--port` picks another.");
+                let _ = goofi_core::log::terminal_line(&format!("failed to bind {bind}:{port}: {e}"));
+                let _ = goofi_core::log::terminal_line("  A goofi that already runs holds it: `goofi session list` names them, and `--port` picks another.");
                 1
             }
             Ok(listener) => {
@@ -526,7 +532,7 @@ async fn run(
                 if let Some(startup) = startup.take() {
                     startup.finish("Ready");
                 }
-                println!("\ngoofi → {url}");
+                let _ = goofi_core::log::print_url(&url);
                 if !demo {
                     println!("  MCP endpoint → {url}/mcp");
                 }
@@ -716,33 +722,33 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) {
         match goofi_init::missing_packages(&py, reqs) {
             Ok(missing) if missing.is_empty() => {}
             Ok(missing) => {
-                eprintln!("  {shown} lacks {}", missing.join(", "));
+                let _ = goofi_core::log::terminal_line(&format!("  {shown} lacks {}", missing.join(", ")));
                 lacking.push((py, reqs.clone()));
             }
-            Err(e) => eprintln!("  could not check {shown}: {e}"),
+            Err(e) => { let _ = goofi_core::log::terminal_line(&format!("  could not check {shown}: {e}")); }
         }
     }
     if lacking.is_empty() {
         return;
     }
-    eprintln!("  Requirements files:");
+    let _ = goofi_core::log::terminal_line("  Requirements files:");
     for path in &gil_only {
-        eprintln!("    {}", path.display());
+        let _ = goofi_core::log::terminal_line(&format!("    {}", path.display()));
     }
     if !std::io::stdin().is_terminal() {
-        eprintln!("  no terminal to ask, so those nodes will be unavailable");
+        let _ = goofi_core::log::terminal_line("  no terminal to ask, so those nodes will be unavailable");
         return;
     }
-    eprint!("  Install missing packages now? [y/N] ");
+    let _ = goofi_core::log::terminal_line("  Install missing packages now? [y/N]");
     let mut answer = String::new();
     let _ = std::io::stdin().read_line(&mut answer);
     if !answer.trim().eq_ignore_ascii_case("y") {
-        eprintln!("  not installed; those nodes will be unavailable");
+        let _ = goofi_core::log::terminal_line("  not installed; those nodes will be unavailable");
         return;
     }
     for (py, reqs) in lacking {
         if let Err(e) = goofi_init::install_packages(&py, &reqs) {
-            eprintln!("  {e}");
+            let _ = goofi_core::log::terminal_line(&format!("  {e}"));
         }
     }
 }

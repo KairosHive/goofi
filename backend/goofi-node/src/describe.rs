@@ -64,7 +64,7 @@ pub fn node_files(dir: &Path, engine: &str) -> Vec<(PathBuf, String, Option<crat
     let mut paths: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.path())).collect(),
         Err(e) => {
-            eprintln!("failed to read {}: {e}", dir.display());
+            goofi_core::log::record(goofi_core::log::Source::component("library"), goofi_core::log::Level::Error, None, format!("failed to read {}: {e}", dir.display()));
             return Vec::new();
         }
     };

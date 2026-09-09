@@ -2047,3 +2047,25 @@ pub(crate) fn record_state(state: &AppState) -> Value {
 pub(crate) fn record_changed(state: &AppState) -> String {
     crate::event("record_changed", record_state(state))
 }
+
+
+pub(crate) fn log_list(_state: &AppState, _payload: &Value, _actor: &str, _events: &mut Vec<String>) -> Result<Value, String> {
+    serde_json::to_value(goofi_core::log::global().lock().unwrap_or_else(|e| e.into_inner()).since(None)).map_err(|e| e.to_string())
+}
+
+pub(crate) fn log_write(_state: &AppState, payload: &Value, _actor: &str, _events: &mut Vec<String>) -> Result<Value, String> {
+    use goofi_core::log::{record, Level, Source};
+    let level = match payload["level"].as_str().unwrap_or("info") {
+        "info" => Level::Info,
+        "warning" => Level::Warning,
+        "error" => Level::Error,
+        _ => return Err("Level must be info, warning or error".into()),
+    };
+    record(Source::component(payload["component"].as_str().unwrap_or("console")), level, None, parse_str(payload, "text")?);
+    Ok(json!({ "logged": true }))
+}
+
+pub(crate) fn log_clear(_state: &AppState, _payload: &Value, _actor: &str, _events: &mut Vec<String>) -> Result<Value, String> {
+    goofi_core::log::global().lock().unwrap_or_else(|e| e.into_inner()).clear();
+    Ok(json!({ "cleared": true }))
+}

@@ -135,7 +135,7 @@ impl DeviceClock {
                 };
                 if on_go.recv().is_ok() {
                     if let Err(e) = stream.play() {
-                        eprintln!("audio: {e}");
+                        goofi_core::log::record(goofi_core::log::Source::component("audio"), goofi_core::log::Level::Error, None, format!("audio: {e}"));
                         stats.dead.store(true, Ordering::Release);
                         waker.notify();
                     }
@@ -243,7 +243,7 @@ where
                 }
                 // The stream plays on at ordinary priority, so this is the deadline lost rather
                 // than a period missed: counting it as an xrun would hide the very thing to read.
-                cpal::ErrorKind::RealtimeDenied => eprintln!("audio: {e}"),
+                cpal::ErrorKind::RealtimeDenied => goofi_core::log::record(goofi_core::log::Source::component("audio"), goofi_core::log::Level::Error, None, format!("audio: {e}")),
                 _ => {
                     died.xruns.fetch_add(1, Ordering::Relaxed);
                 }
@@ -464,7 +464,7 @@ impl AudioEngine {
             std::fs::create_dir_all(path.parent().expect("a state file has a directory")).and_then(|()| std::fs::write(&path, bytes))
         };
         if let Err(e) = written {
-            eprintln!("audio: could not keep {}: {e}", path.display());
+            goofi_core::log::record(goofi_core::log::Source::component("audio"), goofi_core::log::Level::Error, None, format!("audio: could not keep {}: {e}", path.display()));
         }
     }
 

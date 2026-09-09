@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
+pub mod log;
 pub mod globals;
 pub mod home;
 pub mod normalize;

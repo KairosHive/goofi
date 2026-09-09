@@ -361,6 +361,7 @@ impl Engine for SignalEngine {
             .and_then(|transport| Ok((transport, runtime::NodeChannel::open(graph_node, &base)?)))
             .and_then(|(transport, channel)| {
                 let env = runtime::NodeEnv {
+                    node: Some(uid.to_hex()),
                     evaluator: self.evaluator.clone(),
                     time: self.time.clone(),
                 };

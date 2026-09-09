@@ -240,7 +240,6 @@ export class GraphStore {
 		// A wholesale load mints new uids and clears the manager's history, so a kept client entry
 		// would pop against a command that is not there. A same-session reconnect never comes here.
 		history().reset();
-		consoleStore().clear();
 		selection().forgetAll();
 	}
 
@@ -322,13 +321,14 @@ export class GraphStore {
 			case 'param_values':
 				this.applyLiveSource(ev.payload.node, ev.payload);
 				break;
+			case 'logs':
+				consoleStore().apply(ev.payload);
+				break;
 			case 'error': {
 				// A REPORT, so only a node that RUNS raises one — a facade's health rides `node_stage`.
 				const t = this.nodeById(ev.payload.node);
 				if (t) t.error = ev.payload.error;
 				else this._stashRuntime(ev.payload.node, { error: ev.payload.error });
-				if (ev.payload.error)
-					consoleStore().ingestError(ev.payload.node, ev.payload.error, Date.now());
 				break;
 			}
 			case 'unsaved_changes':

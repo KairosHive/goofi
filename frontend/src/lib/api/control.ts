@@ -1,11 +1,12 @@
 /** Control-plane WebSocket client: typed RPC and event subscription over `/control`. */
+import type { LogBatch } from '$lib/stores/console.svelte';
 import type { ParamDescriptor } from '$lib/api/types';
 import type { OpName } from '$lib/api/ops';
 import type { TAGS } from '$lib/api/vocab';
 
 /** Control-plane protocol version. Bump it together with PROTOCOL_VERSION in
  * `backend/goofi-bridge/src/schemas.rs`. */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /** Whether a backend-reported protocol version is compatible with this build. */
 export function isProtocolCompatible(remote: unknown): boolean {
@@ -203,6 +204,7 @@ export interface RecordStatus {
 }
 
 export type ControlEvent =
+	| { event: 'logs'; payload: LogBatch }
 	| { event: 'hello'; payload: GraphSnapshot }
 	// The node itself arrives via the doc; this carries no projection of it.
 	| { event: 'node_added'; payload: { uid: string } }
