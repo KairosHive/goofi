@@ -1,7 +1,7 @@
 # Harmonic geometry
 
-Eight signal nodes and four shaders connect Biotuner's harmonic geometry to goofi.
-The [cookbook](../../examples/harmonic-geometry/Cookbook.html) includes eight working
+Eight signal nodes and five shaders connect Biotuner's harmonic geometry to goofi.
+The [cookbook](../../examples/harmonic-geometry/Cookbook.html) includes nine working
 patches. The [survey](SURVEY.md) records the source review and implementation plan.
 
 | Node | Role |
@@ -18,6 +18,7 @@ patches. The [survey](SURVEY.md) records the source review and implementation pl
 | `graphics:HarmonicChladni` | Packed modes/harmonics → a signed plate/open-wave field |
 | `graphics:HarmonicInk` | Signed texture + optional BioColors palette → color, nodes, or contours |
 | `graphics:HarmonicFlow` | A vector field → persistent seeded ink, with explicit freeze and reset |
+| `graphics:HarmonicRelief` | Signed texture → sculpted jade and metal, with parallax, engraving, and directional light |
 
 ## Cable contracts
 
@@ -40,6 +41,18 @@ and faces are `[T,3]` triangle indices. NaN outside a physical domain stays in
 geometry data. `GeometryView.field` and transport `field`/`flow` encode finite
 RGBA arrays: RGB repeats a scalar, or RG holds a vector; A holds coverage.
 Upload these through `graphics:SignalIn`. The Flow shader accepts its ARRAY directly.
+
+`HarmonicRelief` reads the same signed texture as Ink. It keeps the harmonic field
+separate from the material. Depth changes the relief; seam changes its metal band;
+camera and light change only the view. The renderer has no stored state or clock
+animation. Drive the upstream modes to move the sculpture. Its rounded plate is
+an artistic crop, not a new physical boundary condition. Masked input shows the
+opaque studio background. A render pass rebuilds the height map from the current
+field each frame. It never reads an earlier height map. The float16 target uses
+two channels to retain height precision. The default is 512 × 512, with at most
+41 height samples, eight intersection refinements, four normal samples, and ten
+shadow samples per pixel. These sample the prepared height instead of evaluating
+the full relief rule at each ray step.
 
 Use `Tuning.tuning` in ratios mode, or `Peaks.peaks` / `HarmonicSpectrum.peaks`
 in peaks mode. Select one leading row. Amplitudes and phases must belong to the
