@@ -493,3 +493,70 @@ fn cookbook_archives_open_with_live_controls_and_sound_without_devices() {
         assert_eq!(g.doc()["nodes"].as_object().unwrap().len(), recipe["nodes"].as_u64().unwrap() as usize);
     }
 }
+
+#[test]
+fn chladni_relief_follows_the_field_and_relights_without_changing_it() {
+    let _py = require_python();
+    let g = Goofi::new();
+    install_bundle(&g, &[]);
+    let chord = g.add("HarmonicMorph");
+    g.set_param(chord, "source", "ratios_a", "1, 5/4, 3/2, 7/4");
+    g.set_param(chord, "source", "ratios_b", "1, 6/5, 7/5, 9/5");
+    let modes = g.add("HarmonicModes");
+    g.link(chord, "harmonic", modes, "input");
+    let mode_data = g.probe(modes, "modes");
+    frame(&g, modes, &mode_data, |d| shape(d) == [4, 32]);
+    let plate = g.add("graphics:HarmonicChladni");
+    g.set_param(plate, "common", "width", 512);
+    g.set_param(plate, "common", "height", 512);
+    g.set_param(plate, "field", "symmetry", 0.82);
+    g.link(modes, "modes", plate, "modes");
+    let source = g.probe(plate, "out");
+    let material = g.add("graphics:HarmonicRelief");
+    g.set_param(material, "common", "width", 512);
+    g.set_param(material, "common", "height", 512);
+    g.link(plate, "out", material, "input");
+    let output = g.probe(material, "out");
+    let capture = |label: &str| {
+        let count = output.count();
+        g.until(label, |g| {
+            render(g, 1);
+            assert!(g.error(material).is_none(), "{:?}", g.error(material));
+            output.latest().filter(|d| output.count() > count+3 && shape(d) == [512, 512, 4])
+        })
+    };
+    let image = capture("the relief after its Chladni input arrives");
+    let values = f32s(&image);
+    assert!(values.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+    let red: Vec<_> = values.chunks_exact(4).map(|p| p[0]).collect();
+    assert!(red.iter().copied().fold(0.0, f32::max) > 0.7, "lit metal is visible");
+    assert!(red.iter().filter(|v| **v < 0.25).count() > red.len()/5, "the composition retains dark space");
+    save_frame("gpu-relief", &image);
+    let field_before = f32s(&source.latest().expect("the upstream plate rendered"));
+    g.set_param(material, "light", "azimuth", 1.8);
+    let relit = capture("a different light on the same relief");
+    assert_ne!(f32s(&relit), values, "the light changes the surface picture");
+    assert_eq!(f32s(&source.latest().unwrap()), field_before, "lighting leaves the signed field unchanged");
+    let held = capture("a held material with no hidden clock animation");
+    assert_eq!(f32s(&held), f32s(&relit));
+    let before = mode_data.count();
+    g.set_param(chord, "morph", "mix", 1.0);
+    frame(&g, modes, &mode_data, |_| mode_data.count() > before+2);
+    let retuned = capture("a new harmonic structure in the same material");
+    assert_ne!(f32s(&retuned), f32s(&held));
+    assert_ne!(f32s(&source.latest().unwrap()), field_before);
+    for (depth, tilt, roughness, seam) in [(0.0, 0.0, 0.8, 0.15), (0.45, 0.85, 0.12, 0.008)] {
+        g.set_param(material, "form", "depth", depth);
+        g.set_param(material, "camera", "tilt", tilt);
+        g.set_param(material, "material", "roughness", roughness);
+        g.set_param(material, "form", "seam", seam);
+        let image = capture("valid pictures at the material control limits");
+        assert!(f32s(&image).iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+    }
+    // Expressions can pass through zero; editor ranges do not clamp the public API.
+    for (group, name) in [("form", "seam"), ("form", "range"), ("material", "roughness"), ("camera", "zoom")] {
+        g.set_param(material, group, name, 0.0);
+    }
+    let zero = capture("finite output when external controls pass through zero");
+    assert!(f32s(&zero).iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+}

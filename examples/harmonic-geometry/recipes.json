@@ -124,5 +124,17 @@
       ]
     ],
     "nodes": 10
+  },
+  {
+    "file": "09-jade-resonance.gfi",
+    "title": "Jade resonance",
+    "views": [
+      [
+        "jade",
+        "out",
+        "image"
+      ]
+    ],
+    "nodes": 6
   }
 ]

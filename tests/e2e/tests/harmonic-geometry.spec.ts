@@ -76,6 +76,25 @@ test('the harmonic geometry cookbook opens as live dashboards with usable contro
 				}).toBe(1);
 				await expect.poll(async () => (await rawCall(page, 'session status')).result.errors,
 					{ message: `${recipe.file}: control expressions settle without node errors` }).toEqual([]);
+				if (recipe.file.startsWith('09-')) {
+					for (const [name, end] of [['relief', 0.45], ['light', 3.14]] as const) {
+						const control = page.getByTestId(`control-geometry-${name}`).getByRole('slider');
+						await control.scrollIntoViewIfNeeded();
+						await control.focus();
+						await page.keyboard.press('End');
+						await expect.poll(async () => {
+							const state = await rawCall(page, 'global list');
+							return state.result?.globals?.find((g: any) => g.name === `geometry.${name}`)?.value;
+						}).toBe(end);
+					}
+					await expect.poll(async () => (await rawCall(page, 'session status')).result.errors).toEqual([]);
+					const performance = await page.evaluate(() => {
+						const g = (window as any).goofi;
+						const node = g.query.graph().nodes.find((n: any) => n.name === 'jade');
+						return { shape: g.query.frameSummary(node.uid, 'out')?.shape, wireFps: g.query.arrivalRate(node.uid, 'out') };
+					});
+					await test.info().attach('jade-preview', { body: JSON.stringify(performance), contentType: 'application/json' });
+				}
 			});
 		}
 		// One representative patch in both tablet orientations. Controls scroll inside their panel.
@@ -99,7 +118,7 @@ test('the illustrated cookbook reads on a phone and filters its geometry atlas',
 	page.on('pageerror', (e) => errors.push(String(e)));
 	await page.setViewportSize({ width: 1440, height: 1050 });
 	await page.goto(pathToFileURL(path.join(folder, 'Cookbook.html')).href);
-	await expect(page.locator('.recipe')).toHaveCount(8);
+	await expect(page.locator('.recipe')).toHaveCount(recipes.length);
 	await expect(page.locator('.specimen')).toHaveCount(46);
 	await page.screenshot({ path: info.outputPath('cookbook-desktop.png') });
 	await page.getByRole('searchbox', { name: 'Filter geometry methods' }).fill('knot');
