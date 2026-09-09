@@ -223,7 +223,7 @@ impl AppState {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         if let Err(error) = self.recorder.stop() {
-            eprintln!("Recording could not be finalized: {error}");
+            goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("Recording could not be finalized: {error}"));
         }
     }
 
@@ -592,6 +592,9 @@ pub fn spawn_workers(state: &AppState) {
             }
             for hex in changed {
                 let err = errs.iter().find(|(h, ..)| *h == hex).and_then(|(.., e)| e.clone());
+                if let Some(text) = &err {
+                    goofi_core::log::record(goofi_core::log::Source { component: "node".into(), node: Some(hex.clone()) }, goofi_core::log::Level::Error, None, text.clone());
+                }
                 let _ = events.send(event("error", json!({ "node": hex, "error": err })));
             }
             last_stages.retain(|h, _| stages.iter().any(|(s, ..)| s == h));
@@ -860,7 +863,7 @@ pub fn fresh_graph(clock: Option<Clock>, render: RenderClock) -> Graph {
     }
     match goofi_graphics::GraphicsEngine::open(g.instance().to_string(), g.time(), g.drain_waker(), render) {
         Ok(engine) => g.register_engine(Box::new(engine)),
-        Err(why) => eprintln!("graphics: {why}; this machine renders no shaders"),
+        Err(why) => goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("graphics: {why}; this machine renders no shaders")),
     }
     g
 }
@@ -1069,8 +1072,18 @@ async fn handle_control(socket: WebSocket, state: AppState) {
         return;
     }
 
+    let mut log_cursor = None;
+    let mut log_tick = tokio::time::interval(Duration::from_millis(50));
     loop {
         tokio::select! {
+            _ = log_tick.tick() => {
+                let batch = goofi_core::log::global().lock().unwrap_or_else(|e| e.into_inner()).since(log_cursor);
+                if log_cursor != Some(batch.cursor) {
+                    log_cursor = Some(batch.cursor);
+                    let msg = event("logs", serde_json::to_value(batch).unwrap());
+                    if tx.send(Message::Text(msg.into())).await.is_err() { break; }
+                }
+            },
             incoming = rx.next() => match incoming {
                 Some(Ok(Message::Text(t))) => {
                     if let Some(reply) = dispatch(&state, t.as_str()) {

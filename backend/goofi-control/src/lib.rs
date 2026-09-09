@@ -486,7 +486,7 @@ impl<H: Half> Control<H> {
             );
             match opened {
                 Ok(port) => out.record = Some(port),
-                Err(e) => eprintln!("{}: could not arm `{}`: {e}", self.engine, decl.name),
+                Err(e) => goofi_core::log::record(goofi_core::log::Source::component("control"), goofi_core::log::Level::Error, None, format!("{}: could not arm `{}`: {e}", self.engine, decl.name)),
             }
         }
     }

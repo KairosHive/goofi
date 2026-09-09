@@ -288,6 +288,14 @@ pub static TREE: &[Entry] = &[
              doc: "List a directory on the goofi host — the save/load browser's read. Dot-names are left out; `--hidden` includes them.",
              result: "{path, parent, entries: [{name, kind, is_gfi}], roots}" }),
     ]),
+    Group("log", "application messages", &[
+        Leaf(Op { name: "list", handler: Read(arms::log_list), args: "", positional: 0,
+             doc: "Read the retained log groups, ordered by their last occurrence.", result: "{cursor, oldest, reset, groups}" }),
+        Leaf(Op { name: "write", handler: Effect(arms::log_write), args: "text:string! level:string component:string", positional: 1,
+             doc: "Write an application message. Level is info, warning or error.", result: "{logged: true}" }),
+        Leaf(Op { name: "clear", handler: Effect(arms::log_clear), args: "", positional: 0,
+             doc: "Clear all retained application log groups.", result: "{cleared: true}" }),
+    ]),
     Group("op", "the vocabulary itself", &[
         Leaf(Op { name: "list", handler: Read(arms::op_list), args: "doc:bool", positional: 0,
              doc: "Every op this server speaks: its name, its arguments (`!` marks a required one) and its kind — a `write` is undoable and may ride in a batch, an `effect` runs alone. Every argument is reachable as `--name value`, which is all a caller needs to write one. What an op DOES is `<op> --help`; `--doc` answers the whole vocabulary explained, which is the manual and costs like one.",
