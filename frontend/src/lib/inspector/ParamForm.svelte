@@ -27,6 +27,7 @@
 	import { formatName } from '$lib/editor/categoryColor';
 	import { bareName } from '$lib/editor/typeId';
 	import { nodeHealth } from '$lib/editor/nodeHealth';
+	import { isTextEditingTarget } from '$lib/ui/textEditing';
 	import ParamField from './ParamField.svelte';
 	import { expressionFor } from './paramSeed';
 	import SubPatchInspector from '$lib/editor/SubPatchInspector.svelte';
@@ -202,6 +203,38 @@
 		];
 	}
 
+	function modulate(group: string, name: string, kind: 'lfo' | 'noi'): void {
+		setSource(group, name, { expression: `${kind}()` });
+	}
+
+	function modulationMenu(event: MouseEvent, group: string, name: string, d: ParamDescriptor): void {
+		if (d.type !== 'float' && d.type !== 'int') return;
+		event.preventDefault();
+		event.stopPropagation();
+		menu = {
+			x: event.clientX,
+			y: event.clientY,
+			items: [
+				{ label: 'LFO', action: () => modulate(group, name, 'lfo') },
+				{ label: 'Noise', action: () => modulate(group, name, 'noi') }
+			]
+		};
+	}
+
+	function modulationKey(event: KeyboardEvent): void {
+		if (
+			event.defaultPrevented || event.repeat || event.ctrlKey || event.metaKey ||
+			event.altKey || event.shiftKey || event.isComposing || menu || isTextEditingTarget(event.target)
+		) return;
+		const kind = event.key === 'l' ? 'lfo' : event.key === 'n' ? 'noi' : null;
+		if (!kind) return;
+		const row = document.querySelector<HTMLElement>(`[data-param-form="${formId}"]:hover`);
+		const hit = rows.find((r) => `${r.group}/${r.name}` === row?.dataset.paramKey);
+		if (!hit || (hit.descriptor.type !== 'float' && hit.descriptor.type !== 'int')) return;
+		event.preventDefault();
+		modulate(hit.group, hit.name, kind);
+	}
+
 	/** The row's drop-zone key, or null where this node cannot drive that param. */
 	function dropZone(group: string, name: string, d: ParamDescriptor): string | null {
 		if (!dragged || dragged === node?.uid) return null;
@@ -275,6 +308,7 @@
 </script>
 
 <svelte:window
+	onkeydown={modulationKey}
 	onpointerdown={(e) => {
 		const row = (e.target as Element).closest<HTMLElement>('[data-param-key]');
 		activeParam = row?.dataset.paramNode === node?.uid ? row?.dataset.paramKey ?? null : null;
@@ -483,7 +517,15 @@
 					</div>
 				{:else}
 					{#each rows as { group, name: paramName, descriptor } (node.uid + '/' + group + '/' + paramName)}
-						<div class="pf-row" data-param-node={node.uid} data-param-key={`${group}/${paramName}`}>
+						<div
+							class="pf-row"
+							role="group"
+							aria-label={paramName}
+							data-param-form={formId}
+							data-param-node={node.uid}
+							data-param-key={`${group}/${paramName}`}
+							oncontextmenu={(event) => modulationMenu(event, group, paramName, descriptor)}
+						>
 							{#if across}
 								<span class="pf-row-group" data-testid={`param-hit-group-${paramName}`}>{group}</span>
 							{/if}
