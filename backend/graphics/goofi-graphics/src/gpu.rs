@@ -9,7 +9,7 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// What a reader takes off a stage, and the format the GPU converts into for it — so no texel is
 /// ever converted on the CPU. A screen takes 8-bit in the byte order it reads, the recorder the
-/// 16-bit unsigned texels `rgba64le` names, and a tap whichever width its viewers DRAW: f32 where
+/// 8-bit RGBA texels, and a tap whichever width its viewers DRAW: f32 where
 /// anything reads the numbers, 8-bit where every one of them draws pixels. The two taps are
 /// separate readers because they are separate formats, and at most one of them is ever wanted.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -31,7 +31,7 @@ impl Want {
             Want::Screen => wgpu::TextureFormat::Rgba8Unorm,
             Want::Tap => wgpu::TextureFormat::Rgba32Float,
             Want::TapU8 => wgpu::TextureFormat::Rgba8Unorm,
-            Want::Record => wgpu::TextureFormat::Rgba16Uint,
+            Want::Record => wgpu::TextureFormat::Rgba8Unorm,
         }
     }
 
@@ -52,7 +52,7 @@ impl Want {
             Want::Screen => 4,
             Want::Tap => 16,
             Want::TapU8 => 4,
-            Want::Record => 8,
+            Want::Record => 4,
         }
     }
 }
@@ -91,11 +91,6 @@ fn boxed(at: vec2f) -> vec4f {
 }
 @fragment fn tap(@builtin(position) at: vec4f) -> @location(0) vec4f {
     return boxed(at.xy);
-}
-// No codec takes float, so the recorder's texels are the [0,1] window mapped onto 16-bit
-// unsigned, and a value outside that window is clipped — what the manifest states in words.
-@fragment fn record(@builtin(position) at: vec4f) -> @location(0) vec4<u32> {
-    return vec4<u32>(clamp(boxed(at.xy), vec4f(0.0), vec4f(1.0)) * 65535.0 + vec4f(0.5));
 }
 // An 8-bit tap: the [0,1] window, which is the range a viewer clamps a colour to anyway, mapped
 // by the target's own unorm conversion. `meta.reduced.depth` carries that window to the viewer.
@@ -286,7 +281,7 @@ impl Gpu {
             blit("screen", Want::Screen.format()),
             blit("tap", Want::Tap.format()),
             blit("tap8", Want::TapU8.format()),
-            blit("record", Want::Record.format()),
+            blit("tap8", Want::Record.format()),
         ];
         Ok(Gpu {
             device,
