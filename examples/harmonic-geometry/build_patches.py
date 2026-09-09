@@ -16,6 +16,8 @@ import yaml
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 VERSION = tomllib.loads((ROOT/'Cargo.toml').read_text())['workspace']['package']['version']
+RELIEF_HEADER = json.loads((ROOT/'node-bundles/harmonic-geometry/HarmonicRelief.wgsl').read_text().split('/* goofi', 1)[1].split('*/', 1)[0])
+RELIEF_TEXTURES = next(p['options'] for p in RELIEF_HEADER['params'] if p['name'] == 'texture_a')
 
 
 class Patch:
@@ -24,6 +26,7 @@ class Patch:
         self.nodes, self.links, self.names, self.globals = {}, [], {}, []
         self.views = []
         self.canvas = False
+        self.monitor = None
         self.row = 0
         self.extra = {}
         for name, value in [('default_ufreq', 20.0), ('default_width', 256), ('default_height', 256)]:
@@ -108,14 +111,20 @@ class Patch:
             seq += 1
             return {'kind': 'split', 'id': f'split-{seq}', 'size': size, 'axis': axis, 'children': children}
         control = panel('control', {'group': 'geometry'}, .25)
-        display = panel('viewer', dict(zip(('node', 'slot', 'kind'), self.views[0])), .75)
-        play = split('row', [control, display])
+        display_state = dict(zip(('node', 'slot', 'kind'), self.views[0]))
+        if self.canvas: display_state['settings'] = {'stretch': True}
+        display = panel('viewer', display_state, .75)
+        content = display
+        if self.monitor:
+            display['size'] = .78
+            monitor = panel('viewer', dict(zip(('node', 'slot', 'kind'), self.monitor)), .22)
+            content = split('column', [display, monitor], .75)
+        play = split('row', [control, content])
         tabs = [{'id': 'tab-play', 'name': 'Play', 'root': play}]
         viewpoint = {'tab': 'tab-play', 'panel': display['id'], 'paths': {}}
         if self.canvas:
             canvas = panel('viewer', {**dict(zip(('node', 'slot', 'kind'), self.views[0])), 'settings': {'stretch': True}})
             tabs.insert(0, {'id': 'tab-canvas', 'name': 'Canvas', 'root': canvas})
-            viewpoint = {'tab': 'tab-canvas', 'panel': canvas['id'], 'paths': {}}
         for i, v in enumerate(self.views[1:]):
             tabs.append({'id': f'tab-view-{i}', 'name': v[0], 'root': panel('viewer', dict(zip(('node', 'slot', 'kind'), v)))})
         tabs.append({'id': 'tab-patch', 'name': 'Patch', 'root': panel('node-editor')})
@@ -289,9 +298,8 @@ def recipes():
     p.node('jade', 'graphics:HarmonicRelief', (1120, 100),
            common={'width': 512, 'height': 512})
     p.wire('plate', 'out', 'jade', 'input')
-    textures = ['jade', 'brushed metal', 'woven silk', 'porous stone']
-    for name, value, param in [('textureA', 'jade', 'texture_a'), ('textureB', 'brushed metal', 'texture_b')]:
-        p.control(name, value, kind='dropdown', options=textures)
+    for name, value, param in [('textureA', 'sand', 'texture_a'), ('textureB', 'lichen', 'texture_b')]:
+        p.control(name, value, kind='dropdown', options=RELIEF_TEXTURES)
         p.bind('jade', 'material', param, 'globals.geometry.'+name)
     p.control('textureAuto', True, kind='toggle')
     p.control('textureMix', 0.0, 0, 1)
@@ -307,13 +315,54 @@ def recipes():
         ('patina', .7, 0, 1, 'jade', 'material', 'patina'),
         ('roughness', .38, .12, .8, 'jade', 'material', 'roughness'),
         ('textureScale', 24.0, 4, 64, 'jade', 'material', 'texture_scale'),
-        ('textureDepth', .55, 0, 1, 'jade', 'material', 'texture_depth'),
+        ('textureDepth', .75, 0, 1, 'jade', 'material', 'texture_depth'),
+        ('density', .65, 0, 1, 'jade', 'material', 'density'),
         ('light', -.75, -3.14, 3.14, 'jade', 'light', 'azimuth'),
         ('tilt', .25, 0, .85, 'jade', 'camera', 'tilt'),
     ]:
         p.control(name, value, lo, hi)
         p.bind(node, group, param, 'globals.geometry.'+name)
     p.display('jade', 'out')
+    yield p.save()
+
+    p = Patch('10-living-ratios', 'Living ratios')
+    p.canvas = True
+    p.control('ratios', '9/8, 6/5, 5/4, 4/3, 7/5, 3/2, 5/3, 7/4', kind='text')
+    p.control('running', True, kind='toggle')
+    p.control('stepSeconds', 2.5, .25, 10)
+    p.control('glide', .7, 0, 1)
+    p.control('direction', 'ping-pong', kind='dropdown', options=['forward', 'ping-pong'])
+    p.node('ratios', 'signal:RatioSequence', (0, 0))
+    for name, param in [('ratios', 'ratios'), ('running', 'running'), ('stepSeconds', 'seconds'), ('glide', 'glide'), ('direction', 'direction')]:
+        p.bind('ratios', 'sequence', param, 'globals.geometry.'+name)
+    p.harmonic('chord', '1, 9/8, 2', '1, 9/8, 2', (380, 0), False)
+    p.wire('ratios', 'tuning', 'chord', 'a')
+    p.node('modes', 'signal:HarmonicModes', (750, 0))
+    p.wire('chord', 'harmonic', 'modes', 'input')
+    p.node('field', 'graphics:HarmonicChladni', (1120, 0),
+           field={'approach': 1.0, 'directions': 7, 'period': .5}, common={'width': 512, 'height': 512})
+    p.wire('chord', 'packed', 'field', 'harmonics'); p.wire('modes', 'modes', 'field', 'modes')
+    p.node('organism', 'graphics:HarmonicRelief', (1500, 0),
+           material={'texture_a': 'sand', 'texture_b': 'spores'}, common={'width': 512, 'height': 512})
+    p.wire('field', 'out', 'organism', 'input')
+    p.bind('organism', 'material', 'texture_mix', reference='slow.out')
+    for name, value, param in [('textureA', 'sand', 'texture_a'), ('textureB', 'spores', 'texture_b')]:
+        p.control(name, value, kind='dropdown', options=RELIEF_TEXTURES)
+        p.bind('organism', 'material', param, 'globals.geometry.'+name)
+    for name, value, lo, hi, node, group, param in [
+        ('density', .75, 0, 1, 'organism', 'material', 'density'),
+        ('grainSize', 24.0, 4, 64, 'organism', 'material', 'texture_scale'),
+        ('grainHeight', .75, 0, 1, 'organism', 'material', 'texture_depth'),
+        ('bandWidth', .022, .008, .15, 'organism', 'form', 'seam'),
+        ('approach', 1.0, 0, 1, 'field', 'field', 'approach'),
+        ('period', .5, .2, 1.0, 'field', 'field', 'period'),
+    ]:
+        p.control(name, value, lo, hi)
+        p.bind(node, group, param, 'globals.geometry.'+name)
+    p.node('ratioTrace', 'signal:Buffer', (380, 480), buffer={'size': 600})
+    p.wire('ratios', 'ratio', 'ratioTrace', 'input')
+    p.monitor = ('ratioTrace', 'out', 'line')
+    p.display('organism', 'out'); p.display('ratioTrace', 'out', 'line'); p.display('ratios', 'label', 'string')
     yield p.save()
 
 

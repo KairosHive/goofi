@@ -9,7 +9,7 @@ use goofi_tests::{drive, j};
 
 const FILES: &[&str] = &[
     "harmonic_morph.py", "harmonic_geometry.py", "geometry_blend.py", "harmonic_transport.py",
-    "geometry_metrics.py", "geometry_view.py", "harmonic_modes.py", "harmonic_voices.py",
+    "geometry_metrics.py", "geometry_view.py", "harmonic_modes.py", "harmonic_voices.py", "ratio_sequence.py",
 ];
 
 fn root() -> PathBuf {
@@ -45,6 +45,30 @@ fn save_frame(name: &str, data: &Data) {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(format!("{name}.f32")), data.as_array().unwrap().as_bytes()).unwrap();
     std::fs::write(dir.join(format!("{name}.json")), serde_json::to_vec(&shape(data)).unwrap()).unwrap();
+}
+
+#[test]
+#[cfg(feature = "embed")]
+fn global_string_selection_reaches_the_shader_as_its_option_index() {
+    let _py = require_python();
+    let g = Goofi::new();
+    g.state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(
+        goofi_python::inproc::PyExprEvaluator::new().expect("the same evaluator as the CLI")));
+    install_all(&g, &[("EnumColor.wgsl", include_str!("fixtures/enum_color.wgsl"))]);
+    let node = g.add("graphics:EnumColor");
+    g.call("global entry add", serde_json::json!({"name": "surface.finish", "type": "string", "value": "green"}));
+    let bound = g.call("node param edit", serde_json::json!({"node": node.to_string(), "param": "color/choice", "expression": "globals.surface.finish"}));
+    assert!(bound["error"].is_null(), "{bound}");
+    let output = g.probe(node, "out");
+    for (choice, expected) in [("green", [0.0, 1.0, 0.0, 1.0]), ("blue", [0.0, 0.0, 1.0, 1.0]), ("red", [1.0, 0.0, 0.0, 1.0])] {
+        g.call("global entry edit", serde_json::json!({"name": "surface.finish", "value": choice}));
+        g.until("the global dropdown selects the actual shader color", |g| {
+            render(g, 1);
+            assert!(g.error(node).is_none(), "{:?}", g.error(node));
+            output.latest().filter(|d| f32s(d)[..4] == expected)
+        });
+    }
+    assert!(g.error(node).is_none());
 }
 
 #[test]
@@ -425,6 +449,12 @@ fn jade_archive_opens_with_independent_texture_controls() {
     check_cookbook_archives(Some("09-jade-resonance.gfi"));
 }
 
+#[test]
+#[cfg(feature = "embed")]
+fn living_ratios_archive_opens_with_a_live_trace() {
+    check_cookbook_archives(Some("10-living-ratios.gfi"));
+}
+
 #[cfg(feature = "embed")]
 fn check_cookbook_archives(selected: Option<&str>) {
     let _py = require_python();
@@ -446,6 +476,11 @@ fn check_cookbook_archives(selected: Option<&str>) {
             Uid::from_hex(uid).unwrap()
         };
         assert_eq!(doc["nodes"].as_object().unwrap().len(), recipe["nodes"].as_u64().unwrap() as usize);
+        if file.starts_with("09-") {
+            let modes = lookup("modeWalk");
+            let source = g.probe(modes, "modes");
+            frame(&g, modes, &source, |d| shape(d) == [4, 32] && f32s(d)[64..96].iter().any(|v| *v > 0.01));
+        }
         for (i, view) in recipe["views"].as_array().unwrap().iter().enumerate() {
             let node = lookup(view[0].as_str().unwrap());
             let probe = g.probe(node, view[1].as_str().unwrap());
@@ -455,6 +490,7 @@ fn check_cookbook_archives(selected: Option<&str>) {
                     panic!("{file} {}: {error}", view[0]);
                 }
                 probe.latest().filter(|d| {
+                    if let Ok(text) = d.as_str() { return !text.is_empty(); }
                     let values = f32s(d);
                     let dimensions = shape(d);
                     if dimensions.len() == 3 && matches!(dimensions[2], 3 | 4) {
@@ -466,7 +502,11 @@ fn check_cookbook_archives(selected: Option<&str>) {
                             high = high.max(pixel[0]);
                             visible |= channels == 4 && pixel[3] > 0.1;
                         }
-                        let ready = !file.starts_with("09-") || high > 0.7;
+                        let ready = !file.starts_with("09-") || {
+                            let top: Vec<_> = values[..values.len()/4].chunks_exact(channels).map(|p| p[0]).collect();
+                            probe.count() > 5 && high > 0.4 &&
+                                top.iter().copied().fold(0.0f32, f32::max)-top.iter().copied().fold(1.0f32, f32::min) > 0.06
+                        };
                         visible && ready && high-low > 0.03 && values.iter().all(|v| v.is_finite())
                     } else {
                         values.iter().any(|v| v.is_finite() && *v > 0.01)
@@ -529,14 +569,16 @@ fn chladni_relief_follows_the_field_and_relights_without_changing_it() {
     let mode_data = g.probe(modes, "modes");
     frame(&g, modes, &mode_data, |d| shape(d) == [4, 32]);
     let plate = g.add("graphics:HarmonicChladni");
-    g.set_param(plate, "common", "width", 512);
-    g.set_param(plate, "common", "height", 512);
+    g.set_param(plate, "common", "width", 256);
+    g.set_param(plate, "common", "height", 256);
     g.set_param(plate, "field", "symmetry", 0.82);
     g.link(modes, "modes", plate, "modes");
     let source = g.probe(plate, "out");
     let material = g.add("graphics:HarmonicRelief");
-    g.set_param(material, "common", "width", 512);
-    g.set_param(material, "common", "height", 512);
+    g.set_param(material, "common", "width", 384);
+    g.set_param(material, "common", "height", 384);
+    g.set_param(material, "material", "texture_a", "jade");
+    g.set_param(material, "material", "texture_b", "brushed metal");
     g.link(plate, "out", material, "input");
     let output = g.probe(material, "out");
     let capture = |label: &str| {
@@ -557,7 +599,8 @@ fn chladni_relief_follows_the_field_and_relights_without_changing_it() {
     let field_before = f32s(&source.latest().expect("the upstream plate rendered"));
     let difference = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(a, b)| (a-b).abs()).sum::<f32>()/a.len() as f32;
     let mut finishes: Vec<Vec<f32>> = Vec::new();
-    for finish in ["jade", "brushed metal", "woven silk", "porous stone"] {
+    let textures = ["jade", "brushed metal", "woven silk", "porous stone", "sand", "dunes", "lichen", "coral", "cells", "spores", "pollen", "plankton"];
+    for finish in textures {
         g.set_param(material, "material", "texture_b", finish);
         g.set_param(material, "material", "texture_mix", 1.0);
         let image = capture("each texture endpoint on the held harmonic field");
@@ -577,9 +620,30 @@ fn chladni_relief_follows_the_field_and_relights_without_changing_it() {
     assert!(difference(&middle, &adjacent) > 0.0);
     assert!(difference(&middle, &adjacent) < difference(&finishes[0], &finishes[1])*0.1);
     assert!(difference(&middle, &finishes[0]) > 0.01 && difference(&middle, &finishes[1]) > 0.01);
+    for (a, b) in [(4, 6), (7, 8), (9, 11), (5, 10)] {
+        g.set_param(material, "material", "texture_a", textures[a]);
+        g.set_param(material, "material", "texture_b", textures[b]);
+        g.set_param(material, "material", "texture_mix", 0.0);
+        assert_eq!(f32s(&capture("organic A endpoint")), finishes[a]);
+        g.set_param(material, "material", "texture_mix", 1.0);
+        assert_eq!(f32s(&capture("organic B endpoint")), finishes[b]);
+        g.set_param(material, "material", "texture_mix", 0.5);
+        let middle = f32s(&capture("organic texture blend"));
+        g.set_param(material, "material", "texture_mix", 0.501);
+        let adjacent = f32s(&capture("small organic texture step"));
+        assert!(difference(&middle, &adjacent) < difference(&finishes[a], &finishes[b])*0.1);
+    }
+    g.set_param(material, "material", "texture_a", "sand");
+    g.set_param(material, "material", "texture_mix", 0.0);
+    g.set_param(material, "material", "density", 0.0);
+    let sparse = f32s(&capture("sparse nodal grains"));
+    g.set_param(material, "material", "density", 1.0);
+    assert!(difference(&sparse, &f32s(&capture("dense nodal grains"))) > 0.01);
+    g.set_param(material, "material", "density", 0.65);
+    g.set_param(material, "material", "texture_a", "jade");
     assert_eq!(f32s(&source.latest().unwrap()), field_before, "texture morphing leaves the signed field unchanged");
     g.set_param(material, "material", "texture_mix", 0.0);
-    for (width, height) in [(640, 360), (360, 640)] {
+    for (width, height) in [(384, 216), (216, 384)] {
         g.set_param(material, "common", "width", width);
         g.set_param(material, "common", "height", height);
         let image = capture("a filled surface in landscape and portrait");
@@ -594,8 +658,8 @@ fn chladni_relief_follows_the_field_and_relights_without_changing_it() {
             assert!(high-low > 0.15, "surface detail reaches edge {edge} at {width}x{height}");
         }
     }
-    g.set_param(material, "common", "width", 512);
-    g.set_param(material, "common", "height", 512);
+    g.set_param(material, "common", "width", 384);
+    g.set_param(material, "common", "height", 384);
     g.set_param(material, "light", "azimuth", 1.8);
     let relit = capture("a different light on the same relief");
     assert_ne!(f32s(&relit), values, "the light changes the surface picture");
@@ -622,4 +686,84 @@ fn chladni_relief_follows_the_field_and_relights_without_changing_it() {
     }
     let zero = capture("finite output when external controls pass through zero");
     assert!(f32s(&zero).iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+}
+
+#[test]
+#[cfg(feature = "embed")]
+fn ratio_sequence_holds_glides_loops_and_drives_a_harmonic_field() {
+    let _py = require_python();
+    let g = Goofi::new();
+    install_bundle(&g, &[("ratio_clock.py", include_str!("fixtures/ratio_clock.py"))]);
+    let clock = g.add("RatioClock");
+    let sequence = g.add("RatioSequence");
+    g.set_param(sequence, "sequence", "ratios", "1, 2, 4");
+    g.set_param(sequence, "sequence", "seconds", 1.0);
+    g.set_param(sequence, "sequence", "glide", 0.5);
+    g.link(clock, "out", sequence, "clock");
+    let ratio = g.probe(sequence, "ratio");
+    let tuning = g.probe(sequence, "tuning");
+    let seek = |time: f64, expected: f32| {
+        let before = ratio.count();
+        g.set_param(clock, "clock", "time", time);
+        g.until(&format!("ratio {expected} at clock {time}"), |g| {
+            assert!(g.error(sequence).is_none(), "{:?}", g.error(sequence));
+            ratio.latest().filter(|d| ratio.count() > before+1 && (f32s(d)[0]-expected).abs() < 1e-5)
+        })
+    };
+    seek(0.0, 1.0);
+    seek(0.25, 1.0);
+    seek(0.75, 2.0_f32.sqrt());
+    seek(1.0, 2.0);
+    let chord = frame(&g, sequence, &tuning, |d| f32s(d) == [1.0, 2.0, 2.0]);
+    assert_eq!(shape(&chord), [3]);
+    g.set_param(sequence, "sequence", "running", false);
+    seek(1.0, 2.0); // Let the pause reach this node before advancing the separate clock node.
+    seek(5.0, 2.0);
+    g.set_param(sequence, "sequence", "running", true);
+    seek(5.0, 2.0);
+    seek(5.75, 8.0_f32.sqrt());
+    seek(6.0, 4.0);
+    seek(6.75, 2.0); // The loop glides from four back to one in pitch.
+    seek(7.0, 1.0);
+    g.set_param(sequence, "sequence", "direction", "ping-pong");
+    seek(7.0, 1.0);
+    seek(8.0, 2.0);
+    seek(9.0, 4.0);
+    seek(10.0, 2.0);
+    seek(11.0, 1.0);
+    seek(12.0, 2.0);
+    g.call("node param pulse", j!({"node": sequence.to_string(), "param": "sequence/reset"}));
+    seek(12.0, 1.0);
+    g.set_param(sequence, "sequence", "ratios", "9/8, 3/2");
+    seek(12.0, 1.125);
+    let morph = g.add("HarmonicMorph");
+    g.link(sequence, "tuning", morph, "a");
+    let packed = g.probe(morph, "packed");
+    frame(&g, morph, &packed, |d| (f32s(d)[1]-1.125).abs() < 1e-5);
+    let plate = g.add("graphics:HarmonicChladni");
+    g.set_param(plate, "common", "width", 128);
+    g.set_param(plate, "common", "height", 128);
+    g.set_param(plate, "field", "approach", 1.0);
+    g.link(morph, "packed", plate, "harmonics");
+    let output = g.probe(plate, "out");
+    let capture = || {
+        let before = output.count();
+        g.until("sequenced ratios reach the shader", |g| {
+            render(g, 1);
+            output.latest().filter(|_| output.count() > before+3)
+        })
+    };
+    let before = f32s(&capture());
+    seek(13.0, 1.5);
+    frame(&g, morph, &packed, |d| (f32s(d)[1]-1.5).abs() < 1e-5);
+    let after = f32s(&capture());
+    assert_ne!(before, after, "the ratio sequence changes the actual harmonic field");
+    g.set_param(sequence, "sequence", "ratios", "1, 0");
+    g.until("invalid ratio list is reported", |g| g.error(sequence).filter(|e| e.contains("ratios must")));
+    g.set_param(sequence, "sequence", "ratios", "5/4");
+    g.until("valid ratios clear the earlier error", |g| g.error(sequence).is_none().then_some(()));
+    seek(13.0, 1.25);
+    seek(18.0, 1.25);
+    seek(0.0, 1.25); // A backward clock re-anchors safely.
+    assert!(g.error(sequence).is_none());
 }
