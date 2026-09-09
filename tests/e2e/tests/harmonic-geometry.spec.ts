@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -10,6 +10,23 @@ const folder = path.join(REPO_ROOT, 'examples', 'harmonic-geometry');
 const recipes = JSON.parse(fs.readFileSync(path.join(folder, 'recipes.json'), 'utf8')) as Array<{
 	file: string; title: string; nodes: number; views: [string, string, string][];
 }>;
+
+async function imageContrast(page: Page): Promise<number> {
+	const png = await page.locator('.vp-body canvas:visible').first().screenshot();
+	return page.evaluate(async (encoded) => {
+		const bytes = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
+		const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+		const canvas = new OffscreenCanvas(32, 32);
+		const ctx = canvas.getContext('2d')!;
+		// The center avoids letterboxing: a flat startup frame must not pass.
+		ctx.drawImage(bitmap, bitmap.width/4, bitmap.height/4, bitmap.width/2, bitmap.height/2, 0, 0, 32, 32);
+		bitmap.close();
+		const pixels = ctx.getImageData(0, 0, 32, 32).data;
+		let low = 255, high = 0;
+		for (let i = 0; i < pixels.length; i += 4) { low = Math.min(low, pixels[i]); high = Math.max(high, pixels[i]); }
+		return high-low;
+	}, png.toString('base64'));
+}
 
 test('the harmonic geometry cookbook opens as live dashboards with usable controls', async ({ page }) => {
 	test.setTimeout(360_000);
@@ -25,6 +42,7 @@ test('the harmonic geometry cookbook opens as live dashboards with usable contro
 				const loaded = await rawCall(page, 'session load', { path: path.join(folder, recipe.file) });
 				expect(loaded.error, JSON.stringify(loaded)).toBeUndefined();
 				await expect.poll(() => page.evaluate(() => (window as any).goofi.query.graph().nodes.length)).toBe(recipe.nodes);
+				await page.getByRole('tab', { name: 'Play Close tab', exact: true }).click();
 				await expect(page.getByTestId('control-panel')).toBeVisible();
 				for (const [index, [name, slot]] of recipe.views.entries()) {
 					if (index) await page.getByTestId('workspace-tabs').locator('.ui-tab').filter({ hasText: name }).click();
@@ -35,22 +53,8 @@ test('the harmonic geometry cookbook opens as live dashboards with usable contro
 					}, { name, slot }), { timeout: 45_000, message: `${recipe.file}: ${name}.${slot} reaches the browser` }).toBe(true);
 					await expect(page.locator('.vp-body canvas').first()).toBeVisible();
 					if (!index) {
-						if (slot === 'out') await expect.poll(async () => {
-							const png = await page.locator('.vp-body canvas:visible').first().screenshot();
-							return page.evaluate(async (encoded) => {
-								const bytes = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
-								const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
-								const canvas = new OffscreenCanvas(32, 32);
-								const ctx = canvas.getContext('2d')!;
-								// The center avoids letterboxing: a flat startup frame must not pass.
-								ctx.drawImage(bitmap, bitmap.width/4, bitmap.height/4, bitmap.width/2, bitmap.height/2, 0, 0, 32, 32);
-								bitmap.close();
-								const pixels = ctx.getImageData(0, 0, 32, 32).data;
-								let low = 255, high = 0;
-								for (let i = 0; i < pixels.length; i += 4) { low = Math.min(low, pixels[i]); high = Math.max(high, pixels[i]); }
-								return high-low;
-							}, png.toString('base64'));
-						}, { timeout: 45_000, message: 'The plate viewer shows a pattern after its shader inputs arrive' }).toBeGreaterThan(8);
+						if (slot === 'out') await expect.poll(() => imageContrast(page),
+							{ timeout: 45_000, message: 'The plate viewer shows a pattern after its shader inputs arrive' }).toBeGreaterThan(8);
 						if (slot === 'dashboard') await expect.poll(() => page.evaluate(({ name, slot }) => {
 							const g = (window as any).goofi;
 							const node = g.query.graph().nodes.find((n: any) => n.name === name);
@@ -108,6 +112,64 @@ test('the harmonic geometry cookbook opens as live dashboards with usable contro
 			expect(bounds.height).toBeLessThanOrEqual(size.height);
 		}
 		expect(thrown).toEqual([]);
+	} finally {
+		await resetPatch(page);
+	}
+});
+
+test('jade fills the window and its texture controls morph independently', async ({ page }) => {
+	test.setTimeout(120_000);
+	const errors: string[] = [];
+	page.on('pageerror', (e) => errors.push(String(e)));
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const loaded = await rawCall(page, 'session load', { path: path.join(folder, '09-jade-resonance.gfi') });
+		expect(loaded.error, JSON.stringify(loaded)).toBeUndefined();
+		const canvasTab = page.getByRole('tab', { name: 'Canvas Close tab', exact: true });
+		await expect(canvasTab).toHaveAttribute('aria-selected', 'true');
+		const canvas = page.locator('.vp-body canvas:visible').first();
+		await expect.poll(() => page.evaluate(() => {
+			const g = (window as any).goofi;
+			const node = g.query.graph().nodes.find((n: any) => n.name === 'jade');
+			return node && g.query.frameSummary(node.uid, 'out')?.shape;
+		}), { timeout: 45_000 }).toEqual([512, 512, 4]);
+		for (const size of [{ width: 1440, height: 1000 }, { width: 820, height: 1180 }]) {
+			await page.setViewportSize(size);
+			await expect(canvas).toBeVisible();
+			await expect(canvas).toHaveCSS('object-fit', 'fill');
+			const box = (await canvas.boundingBox())!;
+			expect(box.width).toBeGreaterThan(size.width*0.9);
+			expect(box.height).toBeGreaterThan(size.height*0.75);
+			const bounds = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.scrollHeight]);
+			expect(bounds[0]).toBeLessThanOrEqual(size.width);
+			expect(bounds[1]).toBeLessThanOrEqual(size.height);
+		}
+		await page.setViewportSize({ width: 1440, height: 1000 });
+		await page.getByRole('tab', { name: 'Play Close tab', exact: true }).click();
+		for (const name of ['auto', 'textureAuto']) await page.getByTestId(`control-geometry-${name}`).getByRole('checkbox').uncheck();
+		for (const [name, value] of [['textureA', 'woven silk'], ['textureB', 'porous stone']]) {
+			const select = page.getByTestId(`control-geometry-${name}`).getByRole('combobox');
+			await expect(select.locator('option')).toHaveText(['jade', 'brushed metal', 'woven silk', 'porous stone']);
+			await select.selectOption(value);
+		}
+		const slider = page.getByTestId('control-geometry-textureMix').getByRole('slider');
+		await slider.focus();
+		await page.keyboard.press('End');
+		await expect.poll(async () => {
+			const state = await rawCall(page, 'global list');
+			return state.result.globals.filter((g: any) => ['geometry.textureMix', 'geometry.mix'].includes(g.name)).map((g: any) => [g.name, g.value]);
+		}).toEqual([['geometry.mix', 0.3], ['geometry.textureMix', 1]]);
+		await expect.poll(async () => (await rawCall(page, 'session status')).result.errors).toEqual([]);
+		// Return to the saved finish for the cookbook picture, with manual controls held.
+		await page.getByTestId('control-geometry-textureA').getByRole('combobox').selectOption('jade');
+		await page.getByTestId('control-geometry-textureB').getByRole('combobox').selectOption('brushed metal');
+		await slider.focus();
+		await page.keyboard.press('Home');
+		await canvasTab.click();
+		await expect.poll(() => imageContrast(page), { timeout: 30_000 }).toBeGreaterThan(80);
+		await page.screenshot({ path: path.join(folder, 'assets', '09-jade-resonance-browser.png') });
+		expect(errors).toEqual([]);
 	} finally {
 		await resetPatch(page);
 	}
