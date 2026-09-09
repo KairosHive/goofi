@@ -52,10 +52,10 @@ pub enum ControlKind {
     Knob,
     Slider,
     Number,
-    Field,
+    Text,
     Toggle,
     Dropdown,
-    Draw,
+    Paint,
 }
 
 impl ControlKind {
@@ -64,10 +64,10 @@ impl ControlKind {
         ControlKind::Knob,
         ControlKind::Slider,
         ControlKind::Number,
-        ControlKind::Field,
+        ControlKind::Text,
         ControlKind::Toggle,
         ControlKind::Dropdown,
-        ControlKind::Draw,
+        ControlKind::Paint,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -75,10 +75,10 @@ impl ControlKind {
             ControlKind::Knob => "knob",
             ControlKind::Slider => "slider",
             ControlKind::Number => "number",
-            ControlKind::Field => "field",
+            ControlKind::Text => "text",
             ControlKind::Toggle => "toggle",
             ControlKind::Dropdown => "dropdown",
-            ControlKind::Draw => "draw",
+            ControlKind::Paint => "paint",
         }
     }
 
@@ -89,7 +89,7 @@ impl ControlKind {
             ControlKind::Toggle => GlobalValue::Bool(false),
             // A drawing is a `data:image/png;base64,…` URL, which is a STRING like any other: the
             // widget draws it, an expression reads it, and nothing new crosses the wire for it.
-            ControlKind::Field | ControlKind::Dropdown | ControlKind::Draw => GlobalValue::Str(String::new()),
+            ControlKind::Text | ControlKind::Dropdown | ControlKind::Paint => GlobalValue::Str(String::new()),
         }
     }
 
@@ -99,12 +99,12 @@ impl ControlKind {
             ControlKind::Knob => (4.0, 4.0),
             ControlKind::Slider => (8.0, 2.0),
             ControlKind::Number => (4.0, 2.0),
-            // A field is born THREE rows tall because it is a text area, not a line: a poem is
+            // A text widget is born THREE rows tall because it is a text area, not a line: a poem is
             // what people put in one, and a one-line box says the opposite.
-            ControlKind::Field => (6.0, 3.0),
+            ControlKind::Text => (6.0, 3.0),
             ControlKind::Dropdown => (6.0, 2.0),
             ControlKind::Toggle => (2.0, 2.0),
-            ControlKind::Draw => (8.0, 8.0),
+            ControlKind::Paint => (8.0, 8.0),
         }
     }
 }
@@ -164,7 +164,7 @@ impl Control {
         match self.kind {
             K::Knob | K::Slider | K::Number => matches!(value, G::Float(_) | G::Int(_)),
             K::Toggle => matches!(value, G::Bool(_)),
-            K::Field | K::Dropdown | K::Draw => matches!(value, G::Str(_)),
+            K::Text | K::Dropdown | K::Paint => matches!(value, G::Str(_)),
         }
     }
 

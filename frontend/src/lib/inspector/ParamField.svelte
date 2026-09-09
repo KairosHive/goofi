@@ -53,7 +53,20 @@
 	} = $props();
 
 	const uiStore = ui();
-	const over = $derived(dropZone !== null && uiStore.nodeDragZone === dropZone);
+	let row = $state<HTMLDivElement>();
+	const over = $derived(
+		(dropZone !== null && uiStore.nodeDragZone === dropZone) ||
+		(uiStore.globalDrag !== null && uiStore.globalDrag.target === row)
+	);
+
+	function acceptGlobal(el: HTMLDivElement): { destroy(): void } {
+		const drop = (event: Event): void => {
+			picking = false;
+			onSetSource({ expression: (event as CustomEvent<string>).detail });
+		};
+		el.addEventListener('global-expression-drop', drop);
+		return { destroy: () => el.removeEventListener('global-expression-drop', drop) };
+	}
 
 	const kind = $derived(controlKind(descriptor));
 
@@ -96,7 +109,10 @@
 
 <div
 	class={`pf-param ${klass}`.trim()}
-	class:armed={dropZone !== null}
+	bind:this={row}
+	use:acceptGlobal
+	data-global-drop
+	class:armed={dropZone !== null || uiStore.globalDrag !== null}
 	class:over
 	data-node-drop={dropZone}
 	{...rest}

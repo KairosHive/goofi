@@ -1,4 +1,4 @@
-<!-- Control panel — knobs, sliders and fields over ONE group of globals. Edit mode is this panel's
+<!-- Control panel — knobs, sliders and text widgets over ONE group of globals. Edit mode is this panel's
      own view and nothing else: out of it a drag turns a widget; in it the same drag moves it, the
      corner resizes it, a strip above the board holds the name and the palette, and the picked
      widget's form opens beside the widget itself. Every change it makes is a globals op, so the
@@ -19,7 +19,7 @@
 	import RefPicker from '$lib/inspector/RefPicker.svelte';
 	import {
 		Chip,
-		DrawPad,
+		PaintPad,
 		EmptyState,
 		Field,
 		Icon,
@@ -193,9 +193,45 @@
 		};
 	}
 
+	let globalGrab: { name: string; x: number; y: number; pointer: number } | null = $state(null);
+
+	function grabGlobal(e: PointerEvent, gv: GlobalView): void {
+		if (e.button !== 0) return;
+		globalGrab = { name: gv.name, x: e.clientX, y: e.clientY, pointer: e.pointerId };
+		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+		e.stopPropagation();
+	}
+
+	function moveGlobal(e: PointerEvent): void {
+		if (!globalGrab || globalGrab.pointer !== e.pointerId) return;
+		if (!uiStore.globalDrag && Math.hypot(e.clientX - globalGrab.x, e.clientY - globalGrab.y) < 4) return;
+		uiStore.globalDrag = {
+			name: globalGrab.name, x: e.clientX, y: e.clientY,
+			target: document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-global-drop]') ?? null
+		};
+	}
+
+	function cancelGlobal(): void {
+		globalGrab = null;
+		uiStore.globalDrag = null;
+	}
+
+	function dropGlobal(e: PointerEvent): void {
+		if (!globalGrab || globalGrab.pointer !== e.pointerId) return;
+		moveGlobal(e);
+		const dropped = uiStore.globalDrag;
+		cancelGlobal();
+		if (dropped && elements.some((gv) => gv.name === dropped.name)) {
+			dropped.target?.dispatchEvent(new CustomEvent('global-expression-drop', { detail: `globals.${dropped.name}` }));
+		}
+	}
+
+	onDestroy(() => { if (globalGrab) cancelGlobal(); });
+
 	function down(e: PointerEvent, gv: GlobalView, resize: boolean): void {
 		if (!edit || !board) return;
 		picked = gv.name;
+		if (!resize) grabGlobal(e, gv);
 		drag = { name: gv.name, from: cellOf(gv), x: e.clientX, y: e.clientY, units: unitsOf(board), resize, to: null };
 		const el = e.currentTarget as HTMLElement;
 		el.setPointerCapture(e.pointerId);
@@ -206,6 +242,12 @@
 
 	function move(e: PointerEvent): void {
 		if (!drag) return;
+		if (!drag.resize && !onBoard(e)) {
+			moveGlobal(e);
+			drag.to = null;
+			return;
+		}
+		uiStore.globalDrag = null;
 		const [dx, dy] = [e.clientX - drag.x, e.clientY - drag.y];
 		drag.to = drag.resize
 			? resizedBy(drag.from, dx, dy, drag.units, COLUMNS)
@@ -213,8 +255,14 @@
 	}
 
 	// ONE op per gesture, so a drag is one undo step, the way every other frozen drag is.
-	function up(): void {
+	function up(e: PointerEvent): void {
 		if (!drag) return;
+		if (!drag.resize && !onBoard(e)) {
+			dropGlobal(e);
+			drag = null;
+			return;
+		}
+		cancelGlobal();
 		const { name, from, to } = drag;
 		drag = null;
 		const gv = elements.find((el) => el.name === name);
@@ -387,17 +435,19 @@
 	});
 	onDestroy(stopLearning);
 
-	/** `control draw` reaches the pad that holds that global, and nothing else: the op parses a
+	/** `control paint` reaches the pad that holds that global, and nothing else: the op parses a
 	    turtle script and the WIDGET makes the strokes, so a script and a hand paint by one code. */
 	let painting = $state<{ id: number; name: string; marks: Mark[] } | null>(null);
 	let batch = 0;
-	const stopDrawing = getControl().on((ev) => {
-		if (ev.event === 'control_draw') {
+	const stopPainting = getControl().on((ev) => {
+		if (ev.event === 'control_paint') {
 			painting = { id: ++batch, name: ev.payload.name, marks: ev.payload.marks };
 		}
 	});
-	onDestroy(stopDrawing);
+	onDestroy(stopPainting);
 </script>
+
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && globalGrab) { drag = null; cancelGlobal(); } }} />
 
 {#snippet widget(c: ControlView, value: Value, label: string, onChange: (v: Value) => void, name = '')}
 	{#if c.kind === 'knob'}
@@ -410,8 +460,8 @@
 		<Toggle value={value === true} {onChange} />
 	{:else if c.kind === 'dropdown'}
 		<Select value={String(value)} options={c.options ?? []} {onChange} />
-	{:else if c.kind === 'draw'}
-		<DrawPad value={String(value)} {onChange} pending={painting?.name === name ? painting : null} />
+	{:else if c.kind === 'paint'}
+		<PaintPad value={String(value)} {onChange} pending={painting?.name === name ? painting : null} />
 	{:else}
 		<TextArea value={String(value)} aria-label={label} {onChange} />
 	{/if}
@@ -472,7 +522,8 @@
 				style={`--columns: ${COLUMNS}`}
 				onpointermove={move}
 				onpointerup={up}
-				onpointercancel={up}
+				onpointercancel={() => { drag = null; cancelGlobal(); }}
+				onlostpointercapture={() => { drag = null; cancelGlobal(); }}
 			>
 				{#if elements.length === 0}
 					<div class="fill">
@@ -508,7 +559,12 @@
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<span
 							class="label"
-							title="Double-click to rename"
+							title="Drag onto a parameter to set its expression. Double-click to rename"
+							use:grab={(e) => grabGlobal(e, gv)}
+							onpointermove={moveGlobal}
+							onpointerup={dropGlobal}
+							onpointercancel={cancelGlobal}
+							onlostpointercapture={cancelGlobal}
 							ondblclick={(e) => startRename(gv, (e.currentTarget as HTMLElement).parentElement as HTMLElement)}
 							>{gv.element}</span
 						>
@@ -699,6 +755,10 @@
 		</Popover>
 	{/if}
 
+	{#if globalGrab && uiStore.globalDrag}
+		<div class="global-ghost" style={`left: ${uiStore.globalDrag.x + 12}px; top: ${uiStore.globalDrag.y + 12}px`} aria-hidden="true">globals.{uiStore.globalDrag.name}</div>
+	{/if}
+
 	{#if lift}
 		<div class="ghost" class:snapped={lift.snapped} style={`left: ${lift.at.x}px; top: ${lift.at.y}px`} aria-hidden="true">
 			<div class="cell born" style={`width: ${lift.w}px; height: ${lift.h}px`}>
@@ -717,6 +777,17 @@
 </div>
 
 <style>
+	.global-ghost {
+		position: fixed;
+		z-index: 10000;
+		pointer-events: none;
+		padding: var(--space-2);
+		background: var(--surface-3);
+		color: var(--text);
+		border: 1px solid var(--accent);
+		border-radius: var(--radius-sm);
+	}
+
 	.wrap {
 		display: flex;
 		flex-direction: column;
@@ -905,6 +976,8 @@
 		opacity: var(--disabled-opacity);
 	}
 	.label {
+		touch-action: none;
+		cursor: grab;
 		height: var(--label-h);
 		line-height: var(--label-h);
 		text-align: center;
