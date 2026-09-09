@@ -2,7 +2,7 @@
 
 Eighty classes EfficientDet was taught: a person, a chair, a cup, a dog. One row per thing, and the
 row opens with the box's CENTRE, so the frame is the same shape a point renderer already reads —
-`Wake` and `Skeleton` take it with nothing in between, and the width, height and score follow for
+`graphics:Skeleton` takes it with nothing in between, and the width, height and score follow for
 whatever wants them. The class each row is of rides as that row's name.
 """
 
