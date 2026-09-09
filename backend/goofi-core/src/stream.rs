@@ -1,5 +1,4 @@
-//! `Stream` — the recent past of one node's input, so a stateful transform keeps no state of its
-//! own and every chunking of one signal gives one answer.
+//! Bounded input history. Each frame is appended in full.
 
 /// One input's recent past, held time-major so a step is `stride` contiguous bytes.
 #[derive(Default)]
@@ -68,47 +67,6 @@ pub fn unlanes(shape: &[usize], dim: usize, lanes: &[Vec<f32>]) -> Vec<u8> {
     out
 }
 
-fn step(s: &[u8], i: usize, stride: usize) -> &[u8] {
-    &s[i * stride..(i + 1) * stride]
-}
-
-/// The longest prefix of `frame` that is also a suffix of `past`, in steps.
-fn overlap(past: &[u8], frame: &[u8], stride: usize) -> usize {
-    let (p, f) = (past.len() / stride, frame.len() / stride);
-    if p == 0 || f == 0 {
-        return 0;
-    }
-    // A frame delivered twice matches whole, which the automaton below cannot report: its full
-    // match is a proper prefix by construction.
-    if f <= p && past[(p - f) * stride..] == *frame {
-        return f;
-    }
-    let mut pi = vec![0usize; f];
-    let mut k = 0;
-    for i in 1..f {
-        while k > 0 && step(frame, i, stride) != step(frame, k, stride) {
-            k = pi[k - 1];
-        }
-        if step(frame, i, stride) == step(frame, k, stride) {
-            k += 1;
-        }
-        pi[i] = k;
-    }
-    let mut k = 0;
-    for i in 0..p {
-        while k > 0 && step(past, i, stride) != step(frame, k, stride) {
-            k = pi[k - 1];
-        }
-        if step(past, i, stride) == step(frame, k, stride) {
-            k += 1;
-        }
-        if k == f {
-            k = pi[k - 1];
-        }
-    }
-    k
-}
-
 impl Stream {
     pub fn new() -> Stream {
         Stream::default()
@@ -129,8 +87,7 @@ impl Stream {
         self.steps() == 0
     }
 
-    /// Fold one frame in along `dim`, over at least `history` steps of past. Answers the stitched
-    /// frame in the caller's own layout, and the step the frame starts at along `dim`.
+    /// Append a full frame after at most `history` steps. Return the combined frame and its offset.
     pub fn push(
         &mut self,
         shape: &[usize],
@@ -147,16 +104,13 @@ impl Stream {
             self.data.clear();
             self.stride = stride;
         }
-        // One whole frame of past is the floor: a rolling window overlaps its predecessor by all
-        // but its newest steps, and a shorter past cannot express that match.
-        let keep = history.max(steps).min(self.steps());
+        let keep = history.min(self.steps());
         let cut = self.data.len() - keep * stride;
         self.data.drain(..cut);
 
         let tm = reorder(shape, dim, frame, true);
-        let k = overlap(&self.data, &tm, stride);
-        let offset = self.steps() - k;
-        self.data.extend_from_slice(&tm[k * stride..]);
+        let offset = self.steps();
+        self.data.extend_from_slice(&tm);
 
         let mut out_shape = shape.to_vec();
         out_shape[dim] = self.steps();

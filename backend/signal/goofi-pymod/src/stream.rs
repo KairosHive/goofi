@@ -7,8 +7,7 @@ use goofi_core::resolve_axis;
 
 use crate::data::array_to_f32;
 
-/// One input's recent past: a stateful transform keeps this instead of its own state, so any
-/// chunking of one signal gives one answer.
+/// Bounded input history. Each frame is appended in full.
 #[pyclass]
 #[derive(Default)]
 pub struct Stream {
@@ -22,8 +21,7 @@ impl Stream {
         Stream::default()
     }
 
-    /// Fold one frame in along `axis`, over at least `history` steps of past. Answers the
-    /// stitched array and the index the frame starts at along `axis`.
+    /// Append a full frame after at most `history` steps. Return the combined array and its offset.
     #[pyo3(signature = (array, axis=-1, history=0))]
     fn push<'py>(
         &mut self,

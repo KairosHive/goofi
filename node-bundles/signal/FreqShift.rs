@@ -44,7 +44,7 @@ impl Node for FreqShift {
         let inverse = self.planner.plan_fft_inverse(total);
 
         // Where the frame's first sample sits in the stream, counted from the very first sample.
-        let base = self.sent as f64 - (total - at) as f64 + n as f64;
+        let base = self.sent as f64;
         let step = std::f64::consts::TAU * shift / sfreq;
         let mut scratch = vec![Complex32::default(); total];
         let shifted: Vec<Vec<f32>> = stream::lanes(&shape, dim, &stitched)
@@ -58,7 +58,7 @@ impl Node for FreqShift {
                 for (k, c) in scratch.iter_mut().enumerate() {
                     if k == 0 || (total % 2 == 0 && k == half) {
                         continue;
-                    } else if k < half {
+                    } else if k <= half {
                         *c *= 2.0;
                     } else {
                         *c = Complex32::default();

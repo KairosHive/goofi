@@ -1,7 +1,4 @@
-//! Filter — a Butterworth band. Zero-phase runs it forwards and then backwards, so what comes
-//! out is not shifted in time; causal runs it once and carries its state on, so a sample is
-//! answered the moment it arrives. Either way the stitched past is what makes every chunking of
-//! one signal give one answer.
+//! A Butterworth filter with forward-backward or continuous causal processing.
 
 use goofi_core::{resolve_axis, stream, Data, SlotType, Stream};
 use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
@@ -130,19 +127,11 @@ fn odd_extend(lane: &[f32], pad: usize) -> Vec<f32> {
     head.chain(lane.iter().copied()).chain(tail).collect()
 }
 
-/// One lane's causal memory: the cascade state after the last sample it ran, and the outputs it
-/// has already made for the steps `past` still holds.
-#[derive(Default)]
-struct Memory {
-    state: Vec<[f32; 2]>,
-    made: Vec<f32>,
-}
-
 #[derive(Default)]
 struct Filter {
     past: Stream,
     sections: Vec<Biquad>,
-    memory: Vec<Memory>,
+    memory: Vec<Vec<[f32; 2]>>,
 }
 
 impl Filter {
@@ -153,7 +142,7 @@ impl Filter {
         // short, as scipy keeps it: a long one is a block of constant the filter answers instead.
         let edge = 3 * (2 * self.sections.len() + 1);
         let n = shape[dim];
-        let (wide, stitched, at) = self.past.push(shape, dim, frame, settle + n);
+        let (wide, stitched, at) = self.past.push(shape, dim, frame, settle);
         stream::lanes(&wide, dim, &stitched)
             .iter()
             .map(|lane| {
@@ -168,36 +157,18 @@ impl Filter {
             .collect()
     }
 
-    /// One pass, each lane carrying its own state on, so a sample is answered as it arrives. The
-    /// stitched past is here only to spot the steps this filter has already run.
     fn causal(&mut self, shape: &[usize], dim: usize, frame: &[u8]) -> Vec<Vec<f32>> {
-        let n = shape[dim];
-        let held = self.past.steps().min(n);
-        let (wide, stitched, at) = self.past.push(shape, dim, frame, n);
-        let total = wide[dim];
-        let lanes = stream::lanes(&wide, dim, &stitched);
-        let cold = self.memory.len() != lanes.len()
-            || self.memory.iter().any(|m| m.state.len() != self.sections.len());
-        if cold {
-            self.memory = (0..lanes.len()).map(|_| Memory::default()).collect();
+        let lanes = stream::lanes(shape, dim, frame);
+        if self.memory.len() != lanes.len() {
+            self.memory.clear();
         }
-        // What this frame brings that the filter has not run: all of the past after a redesign,
-        // and otherwise the part a rolling window did not already overlap.
-        let fresh = if cold { total } else { n - held.saturating_sub(at) };
-        let sections = &self.sections;
-        lanes
-            .iter()
-            .zip(self.memory.iter_mut())
-            .map(|(lane, m)| {
-                if m.state.is_empty() {
-                    m.state = primed(sections, lane.first().copied().unwrap_or(0.0));
-                }
-                let made = run(sections, &mut m.state, &lane[lane.len() - fresh..]);
-                m.made.extend(made);
-                let stale = m.made.len().saturating_sub(total);
-                m.made.drain(..stale);
-                m.made[m.made.len() - n..].to_vec()
-            })
+        if self.memory.is_empty() {
+            self.memory = lanes.iter()
+                .map(|lane| primed(&self.sections, lane.first().copied().unwrap_or(0.0)))
+                .collect();
+        }
+        lanes.iter().zip(&mut self.memory)
+            .map(|(lane, state)| run(&self.sections, state, lane))
             .collect()
     }
 }
@@ -247,8 +218,10 @@ impl Node for Filter {
         }
 
         let filtered = if p.str("filter", "phase").unwrap_or("zero-phase") == "causal" {
+            self.past.reset();
             self.causal(a.shape(), dim, a.as_bytes())
         } else {
+            self.memory.clear();
             self.zero_phase(a.shape(), dim, a.as_bytes())
         };
         let buf = stream::unlanes(a.shape(), dim, &filtered);
