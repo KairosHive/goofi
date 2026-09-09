@@ -2,9 +2,10 @@
 	import type { NodeInstanceInfo } from '$lib/api/control';
 	import { bindViewer, dropRate } from '$lib/api/frames';
 	import type { DataFrame } from '$lib/codec/decode';
-	import { metaEntries, formatMetaValue, metaPreview } from './metaFormat';
+	import { metaEntries, formatMetaValue, formatMetaInline } from './metaFormat';
+	import MetadataField from './MetadataField.svelte';
 	import { nodeStatsRows } from './nodeStats';
-	import { Icon, Select, EmptyState } from '$lib/ui';
+	import { Select, EmptyState } from '$lib/ui';
 
 	type Props = {
 		node: NodeInstanceInfo;
@@ -37,7 +38,7 @@
 		metaEntries(lastFrame?.meta).map(([key, value]) => ({
 			key,
 			body: formatMetaValue(value),
-			preview: metaPreview(value)
+			inline: formatMetaInline(value)
 		}))
 	);
 
@@ -86,17 +87,8 @@
 			</EmptyState>
 		{:else}
 			<div class="meta-tree">
-				<!-- No `open` binding: `<details>` owns the user's choice. A reactive one is undone by
-				     the next frame, because `toggle` fires asynchronously. -->
 				{#each fields as f (f.key)}
-					<details class="meta-field">
-						<summary>
-							<span class="caret"><Icon name="chevron-right" /></span>
-							<span class="mk">{f.key}</span>
-							<span class="mp">{f.preview}</span>
-						</summary>
-						<div class="mv">{f.body}</div>
-					</details>
+					<MetadataField name={f.key} body={f.body} inline={f.inline} />
 				{/each}
 			</div>
 		{/if}
@@ -150,51 +142,5 @@
 		display: flex;
 		flex-direction: column;
 		gap: 1px;
-	}
-	/* The native marker is off app-wide, so the chevron below is the affordance. */
-	.meta-field > summary {
-		display: flex;
-		align-items: baseline;
-		gap: var(--space-5);
-		cursor: pointer;
-		padding: var(--space-2) var(--space-1);
-		font-family: var(--font-mono);
-		font-size: var(--fs-small);
-		border-radius: var(--radius-sm);
-	}
-	.meta-field > summary:hover {
-		background: var(--surface-2);
-	}
-	/* `align-self`, so the row's baseline alignment survives an icon that has no baseline. */
-	.caret {
-		display: flex;
-		align-self: center;
-		flex: 0 0 auto;
-		font-size: var(--fs-micro);
-		color: var(--text-muted);
-		transition: transform var(--dur-slow) var(--ease);
-	}
-	.meta-field[open] > summary .caret {
-		transform: rotate(90deg);
-	}
-	.mk {
-		color: var(--text);
-		font-weight: 600;
-	}
-	.mp {
-		color: var(--text-muted);
-		font-size: var(--fs-micro);
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.mv {
-		font-family: var(--font-mono);
-		font-size: var(--fs-micro);
-		color: var(--text-dim);
-		/* Keep the dict indentation, but still wrap a long inline list. */
-		white-space: pre-wrap;
-		overflow-wrap: anywhere;
-		padding: var(--space-1) 0 var(--space-3) var(--space-7);
 	}
 </style>
