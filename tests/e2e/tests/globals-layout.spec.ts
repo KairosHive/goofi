@@ -53,8 +53,8 @@ test('globals group markers stay at the right edge on desktop and touch', async 
 			await desk.getByTestId('global-value').press('Enter');
 			await expect.poll(() => page.evaluate(() => (window as any).goofi.query.globals()
 				.find((entry: { name: string }) => entry.name === 'desk.level').value)).toBe(0.75);
-			expect(await panel.getByTestId('global-group').evaluateAll((groups) => groups.every((group) =>
-				getComputedStyle(group).borderBottomStyle === 'solid' && getComputedStyle(group).borderBottomWidth === '1px'
+			expect(await panel.getByTestId('global-group').evaluateAll((groups) => groups.every((group, index) =>
+				getComputedStyle(group).borderBottomWidth === (index === groups.length - 1 ? '1px' : '0px')
 			))).toBe(true);
 			if (width === 390) await summary.tap();
 			else await summary.click();
@@ -80,6 +80,10 @@ test('globals group markers stay at the right edge on desktop and touch', async 
 		await expect(row.getByTestId('global-name')).toBeFocused();
 		await add.tap();
 		await expect(group.getByTestId('global-row')).toHaveCount(2);
+		expect(await group.getByTestId('global-row').evaluateAll((rows) => rows.map((row) => ({
+			top: getComputedStyle(row).borderTopWidth,
+			bottom: getComputedStyle(row).borderBottomWidth
+		})))).toEqual([{ top: '0px', bottom: '0px' }, { top: '1px', bottom: '0px' }]);
 		row = group.locator('[data-name="fresh.entry1"]');
 		await expect(row.getByTestId('global-name')).toBeFocused();
 		await row.getByTestId('global-name').fill('message');
@@ -98,6 +102,16 @@ test('globals group markers stay at the right edge on desktop and touch', async 
 		await input.press('Enter');
 		group = panel.locator('[data-group="renamed"]');
 		await expect(group.getByTestId('global-row')).toHaveCount(2);
+		for (const [button, row] of [
+			[group.getByTestId('global-add-in'), group.getByTestId('global-row').first()],
+			[panel.getByTestId('global-add-group-btn'), group]
+		]) {
+			const buttonBox = (await button.boundingBox())!;
+			const rowBox = (await row.boundingBox())!;
+			expect(Math.abs(buttonBox.width - rowBox.width)).toBeLessThan(1);
+			expect(Math.abs(buttonBox.x - rowBox.x)).toBeLessThan(1);
+			expect(await button.evaluate((element) => getComputedStyle(element).justifyContent)).toBe('center');
+		}
 		await page.screenshot({ path: testInfo.outputPath('globals-editing-phone.png') });
 		await panel.getByTestId('global-add-group-btn').tap();
 		await expect(panel.locator('[data-group="group0"]').getByTestId('global-group-name')).toBeFocused();
