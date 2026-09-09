@@ -241,7 +241,7 @@ impl Stream {
     /// file is flat, so a reshape is not a reason to open another.
     pub fn takes(&self, kind: &Kind, bytes: usize) -> bool {
         match (&self.sink, kind) {
-            (Sink::Audio(w), Kind::Audio { .. }) => w.room_for(bytes),
+            (Sink::Audio(w), Kind::Audio { .. }) => &self.kind == kind && w.room_for(bytes),
             _ => &self.kind == kind,
         }
     }
