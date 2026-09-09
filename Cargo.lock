@@ -992,6 +992,7 @@ dependencies = [
  "goofi-init",
  "goofi-node",
  "goofi-python",
+ "goofi-record",
  "goofi-signal",
  "goofi-signal-sdk",
  "goofi-transport",

@@ -68,17 +68,36 @@ pub const CLIP: &str = "FFV1 in Matroska at gbrp10le: a viewable projection of t
                         evidence of it — ten bits of red, green and blue, a value outside [0,1] \
                         clipped to it, and alpha not kept.";
 
-/// One `ffmpeg` child. FFV1 is lossless and Matroska is the container that carries it; MP4
-/// cannot.
+static CHILDREN: Mutex<Vec<Child>> = Mutex::new(Vec::new());
+
+/// Stop encoder processes without waiting for queued frames.
+pub fn kill_encoders() {
+    for child in CHILDREN.lock().unwrap_or_else(|e| e.into_inner()).iter_mut() {
+        let _ = child.kill();
+    }
+}
+
 struct Ffmpeg {
-    child: Option<Child>,
+    child: Option<u32>,
     stdin: Option<ChildStdin>,
     file: PathBuf,
 }
 
 impl Ffmpeg {
     fn spawn(file: &Path, (w, h): (u32, u32), fps: f64) -> Result<Ffmpeg, String> {
-        let mut child = Command::new("ffmpeg")
+        let mut command = Command::new("ffmpeg");
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = command
             .args(["-hide_banner", "-loglevel", "error", "-y"])
             .args(["-f", "rawvideo", "-pix_fmt", "rgba64le"])
             .args(["-s", &format!("{w}x{h}"), "-r", &format!("{fps}")])
@@ -94,7 +113,9 @@ impl Ffmpeg {
             .spawn()
             .map_err(|_| MISSING.to_string())?;
         let stdin = child.stdin.take().ok_or("the encoder took no stdin")?;
-        Ok(Ffmpeg { child: Some(child), stdin: Some(stdin), file: file.to_path_buf() })
+        let id = child.id();
+        CHILDREN.lock().unwrap_or_else(|e| e.into_inner()).push(child);
+        Ok(Ffmpeg { child: Some(id), stdin: Some(stdin), file: file.to_path_buf() })
     }
 }
 
@@ -108,11 +129,23 @@ impl Encoder for Ffmpeg {
     /// waited for with its stdin still open never reaches that.
     fn finish(&mut self) -> Result<(), String> {
         drop(self.stdin.take());
-        let Some(mut child) = self.child.take() else { return Ok(()) };
-        match child.wait() {
-            Ok(status) if status.success() => Ok(()),
-            Ok(status) => Err(format!("ffmpeg left {} unfinished: {status}", self.file.display())),
-            Err(e) => Err(e.to_string()),
+        let Some(id) = self.child.take() else { return Ok(()) };
+        loop {
+            {
+                let mut children = CHILDREN.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(index) = children.iter().position(|child| child.id() == id) else {
+                    return Err("the encoder is no longer running".into());
+                };
+                if let Some(status) = children[index].try_wait().map_err(|e| e.to_string())? {
+                    let _ = children.swap_remove(index).wait();
+                    return if status.success() {
+                        Ok(())
+                    } else {
+                        Err(format!("ffmpeg left {} unfinished: {status}", self.file.display()))
+                    };
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 }
