@@ -6,6 +6,7 @@ load these archives through goofi's session load operation.
 """
 
 from pathlib import Path
+from decimal import Decimal
 import json
 import tomllib
 import zipfile
@@ -35,14 +36,18 @@ class Patch:
     def control(self, name, value, lo=0.0, hi=1.0, kind='slider', options=None):
         typ = 'bool' if isinstance(value, bool) else 'string' if isinstance(value, str) else 'float'
         control = {'kind': kind, 'x': 0.0, 'y': self.row, 'w': 16.0, 'h': 2.0 if kind != 'text' else 3.0}
-        if typ == 'float': control.update(min=lo, max=hi, step=(hi-lo)/200)
+        if typ == 'float':
+            # Native range inputs must reach the decimal endpoint in exactly 200 steps.
+            step = float((Decimal(str(hi))-Decimal(str(lo)))/200)
+            control.update(min=lo, max=hi, step=step)
         if options: control['options'] = options
         self.row += control['h']
         self.globals.append({'name': 'geometry.'+name, 'type': typ, 'value': value, 'control': control})
 
     def node(self, name, typ, pos, **params):
         if typ.startswith('graphics:'):
-            params.setdefault('common', {}).update(width=256, height=256)
+            for dimension in ('width', 'height'):
+                params.setdefault('common', {}).setdefault(dimension, 256)
         if typ == 'signal:GeometryView':
             params.setdefault('display', {}).update(size=256)
         # Each archive has its own node identities, including in browser stream caches.
@@ -262,6 +267,34 @@ def recipes():
     p.node('mixdown', 'audio:Mixdown', (1810, 420))
     p.wire('oscillator', 'out', 'amplifier', 'input'); p.wire('amplifier', 'out', 'mixdown', 'input')
     p.display('chordStudy')
+    yield p.save()
+
+    p = Patch('09-jade-resonance', 'Jade resonance')
+    p.harmonic('chordA', '1, 5/4, 3/2, 7/4', '1, 5/4, 3/2, 7/4', (0, 0), False)
+    p.harmonic('chordB', '1, 6/5, 7/5, 9/5', '1, 6/5, 7/5, 9/5', (0, 380), False)
+    p.node('modeWalk', 'signal:HarmonicModes', (380, 100))
+    p.wire('chordA', 'harmonic', 'modeWalk', 'input')
+    p.wire('chordB', 'harmonic', 'modeWalk', 'target')
+    p.wire('slow', 'out', 'modeWalk', 'mix')
+    p.node('plate', 'graphics:HarmonicChladni', (750, 100),
+           field={'symmetry': .82}, common={'width': 512, 'height': 512})
+    p.wire('modeWalk', 'modes', 'plate', 'modes')
+    p.node('jade', 'graphics:HarmonicRelief', (1120, 100),
+           common={'width': 512, 'height': 512})
+    p.wire('plate', 'out', 'jade', 'input')
+    for name, value, lo, hi, node, group, param in [
+        ('symmetry', .82, 0, 1, 'plate', 'field', 'symmetry'),
+        ('relief', .22, 0, .45, 'jade', 'form', 'depth'),
+        ('goldSeam', .022, .008, .15, 'jade', 'form', 'seam'),
+        ('engraving', .55, 0, 1, 'jade', 'form', 'engraving'),
+        ('patina', .7, 0, 1, 'jade', 'material', 'patina'),
+        ('roughness', .38, .12, .8, 'jade', 'material', 'roughness'),
+        ('light', -.75, -3.14, 3.14, 'jade', 'light', 'azimuth'),
+        ('tilt', .42, 0, .85, 'jade', 'camera', 'tilt'),
+    ]:
+        p.control(name, value, lo, hi)
+        p.bind(node, group, param, 'globals.geometry.'+name)
+    p.display('jade', 'out')
     yield p.save()
 
 
