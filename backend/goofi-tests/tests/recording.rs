@@ -492,17 +492,22 @@ fn arming_survives_a_rewire_and_rides_the_document() {
             .output()
             .expect("ffmpeg reads back what it wrote");
         assert_eq!(read.stdout.len() as u64, held * texels, "every frame in the file is one frame: {entry}");
+        assert!(read.status.success(), "{}", String::from_utf8_lossy(&read.stderr));
+        let red = u16::from_le_bytes(read.stdout[..2].try_into().unwrap()) as f32 / 65535.0;
+        assert!((red - 0.5).abs() < 0.04, "the GPU readback keeps the red channel: {red}");
         // …and what a PLAYER finds in it: three components at the rate the manifest states. A
         // 16-bit alpha plane is one VLC cannot allocate, and it plays such a file as nothing.
         let probed = std::process::Command::new("ffprobe")
             .args(["-v", "error", "-select_streams", "v:0"])
-            .args(["-show_entries", "stream=pix_fmt,r_frame_rate", "-of", "csv=p=0"])
+            .args(["-show_entries", "stream=codec_name,pix_fmt,r_frame_rate", "-of", "csv=p=0"])
             .arg(&made)
             .output()
             .expect("ffprobe reads what the encoder wrote");
         let says = String::from_utf8_lossy(&probed.stdout).trim().to_string();
-        let (pix, rate) = says.split_once(',').expect("ffprobe names a pixel format and a rate");
-        assert_eq!(pix, "gbrp10le", "the recorded stream carries no alpha plane: {says}");
+        let (codec, format) = says.split_once(',').expect("ffprobe names a codec");
+        assert_eq!(codec, "h264", "the recording uses the delivery codec: {says}");
+        let (pix, rate) = format.split_once(',').expect("ffprobe names a pixel format and a rate");
+        assert_eq!(pix, "yuv420p", "the recorded stream carries no alpha plane: {says}");
         let fps = entry["fps"].as_f64().expect("the rate the manifest states");
         assert_eq!(rate, format!("{fps}/1"), "the container is timed at the rate the manifest states");
     }
@@ -1006,4 +1011,43 @@ fn beside_instants(file: &std::path::Path) -> Vec<f64> {
             v["t"].as_f64().expect("an instant")
         })
         .collect()
+}
+
+#[test]
+fn h264_records_full_resolution_and_pads_odd_sizes() {
+    use goofi_record::video::{Encoders, FfmpegEncoders};
+    let root = tempfile::tempdir().expect("video folder");
+    let encoders = FfmpegEncoders;
+    encoders.probe().expect("FFmpeg is installed");
+    for (width, height) in [(3840u32, 2160u32), (63, 31), (1, 1)] {
+        let path = root.path().join(format!("{width}x{height}.mkv"));
+        let mut encoder = encoders.open(&path, (width, height), 60.0).expect("open video");
+        assert!(encoder.write(&[0]).is_err(), "a partial frame must not corrupt the pipe");
+        let mut frame = vec![0u8; width as usize * height as usize * 4];
+        for pixel in frame.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[128, 64, 192, 255]);
+        }
+        for _ in 0..12 {
+            encoder.write(&frame).expect("write full-resolution frame");
+        }
+        encoder.finish().expect("finish video");
+        encoder.finish().expect("finish is idempotent");
+        assert!(encoder.write(&frame).is_err(), "a closed encoder cannot restart");
+        let probe = std::process::Command::new("ffprobe")
+            .args(["-v", "error", "-count_frames", "-select_streams", "v:0"])
+            .args(["-show_entries", "stream=codec_name,pix_fmt,width,height,nb_read_frames", "-of", "json"])
+            .arg(&path).output().expect("inspect video");
+        assert!(probe.status.success(), "{}", String::from_utf8_lossy(&probe.stderr));
+        let probe: serde_json::Value = serde_json::from_slice(&probe.stdout).expect("probe JSON");
+        let stream = &probe["streams"][0];
+        assert_eq!(stream["codec_name"], "h264");
+        assert_eq!(stream["pix_fmt"], "yuv420p");
+        assert_eq!(stream["width"], width.next_multiple_of(2));
+        assert_eq!(stream["height"], height.next_multiple_of(2));
+        assert_eq!(stream["nb_read_frames"], "12");
+        if width == 3840 {
+            assert!(std::fs::metadata(&path).unwrap().len() < 1_000_000,
+                "a short flat-colour 4K clip stays small");
+        }
+    }
 }
