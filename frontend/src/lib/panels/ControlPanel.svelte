@@ -69,9 +69,8 @@
 			void g.linkControl(name, uid).catch(() => {});
 		})
 	);
-	// A panel opens ready to USE, whatever its group holds and whatever another panel over the same
-	// group is doing: the mode is this one's own view.
-	let editing = $state(false);
+	// Each panel starts in edit mode and owns its mode independently.
+	let editing = $state(true);
 	const edit = $derived(named && editing);
 
 	let board: HTMLDivElement | null = $state(null);

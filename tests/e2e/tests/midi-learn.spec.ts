@@ -45,6 +45,7 @@ class LearnMidi(goofi.Node):
 		await learn.click();
 		await expect(learn).toHaveAttribute('aria-pressed', 'true');
 		await expect(learn.locator('.spinner')).toBeVisible();
+		await expect(learn).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
 		// Give the real stream its initial frame before changing a channel.
 		await page.waitForTimeout(500);
 		await updateParam(page, midi, 'test', 'note', 0.75);
@@ -77,7 +78,7 @@ class LearnMidi(goofi.Node):
 			g.commands.setPanelType(panel.panelId, 'control');
 			g.commands.setPanelState(panel.panelId, { group: 'desk' });
 		});
-		await page.getByTestId('control-edit-toggle').click();
+		await expect(page.getByTestId('control-panel')).toHaveAttribute('data-edit', 'true');
 		await expect(page.getByTestId('control-desk-text').getByTestId('control-learn')).toHaveCount(0);
 		const widget = page.getByTestId('control-desk-level').getByTestId('control-learn');
 		await widget.click();
