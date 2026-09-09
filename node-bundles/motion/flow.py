@@ -3,7 +3,7 @@
 `PoseEstimation` finds a body and reports the points it knows the names of. This reports the motion
 of every texel and knows nothing: a curtain, a crowd, water, a hand out of frame. That makes it the
 model-free half of the bundle, and it is what a displacement wants — the field goes to
-`graphics:ArrayIn` and out of it as a texture that bends another picture.
+`graphics:SignalIn` and out of it as a texture that bends another picture.
 
 Motion is reported the way `PoseEstimation` reports it, in frame-widths a second, so the two are
 the same units wherever a patch mixes them.
