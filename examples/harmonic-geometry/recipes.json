@@ -160,6 +160,11 @@
         "nodalLines",
         "out",
         "image"
+      ],
+      [
+        "modes",
+        "mapping",
+        "string"
       ]
     ],
     "nodes": 8

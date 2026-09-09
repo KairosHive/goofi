@@ -502,7 +502,7 @@ fn check_cookbook_archives(selected: Option<&str>) {
                             high = high.max(pixel[0]);
                             visible |= channels == 4 && pixel[3] > 0.1;
                         }
-                        let ready = !file.starts_with("09-") || {
+                        let ready = !(file.starts_with("09-") || file.starts_with("10-")) || {
                             let top: Vec<_> = values[..values.len()/4].chunks_exact(channels).map(|p| p[0]).collect();
                             probe.count() > 5 && high > 0.4 &&
                                 top.iter().copied().fold(0.0f32, f32::max)-top.iter().copied().fold(1.0f32, f32::min) > 0.06
@@ -820,4 +820,85 @@ fn sequenced_chladni_states_move_continuously_across_step_boundaries() {
         assert!(difference(a, b) < 0.002, "step changes and turnarounds do not jump to the old source state");
     }
     assert_eq!(second_middle, reverse_middle, "ping-pong retraces the same field");
+}
+
+#[test]
+fn every_ratio_drives_a_full_chord_and_fixed_basis_fields_match_biotuner() {
+    let _py = require_python();
+    let g = Goofi::new();
+    install_bundle(&g, &[("ratio_clock.py", include_str!("fixtures/ratio_clock.py")),
+        ("chladni_reference.py", include_str!("fixtures/chladni_reference.py"))]);
+    let reference = g.add("ChladniReference");
+    let fields = g.probe(reference, "fields");
+    let pairs = g.probe(reference, "pairs");
+    let expected = f32s(&frame(&g, reference, &fields, |d| shape(d) == [6, 64, 64]));
+    let expected_pairs = f32s(&frame(&g, reference, &pairs, |d| shape(d) == [6, 3, 2]));
+    let density = g.probe(reference, "density");
+    let expected_density = f32s(&frame(&g, reference, &density, |d| shape(d) == [6, 5, 64, 64]));
+    let clock = g.add("RatioClock");
+    let sequence = g.add("RatioSequence");
+    g.set_param(sequence, "sequence", "ratios", "3/2, 5/4, 4/3, 7/4, 5/3, 9/8");
+    g.set_param(sequence, "sequence", "seconds", 1.0);
+    g.set_param(sequence, "sequence", "glide", 1.0);
+    g.set_param(sequence, "chord", "state", "anchor chord");
+    g.link(clock, "out", sequence, "clock");
+    let modes = g.add("HarmonicModes");
+    g.set_param(modes, "modes", "mapping", "chord pairs");
+    g.set_param(modes, "modes", "interpolation", "fields");
+    g.set_param(modes, "modes", "max_mode", 24);
+    g.link(sequence, "transition", modes, "transition");
+    let packed = g.probe(modes, "modes");
+    let report = g.probe(modes, "mapping");
+    let plate = g.add("graphics:HarmonicChladni");
+    g.set_param(plate, "common", "width", 64);
+    g.set_param(plate, "common", "height", 64);
+    g.set_param(plate, "field", "symmetry", 1.0);
+    g.link(modes, "modes", plate, "modes");
+    let output = g.probe(plate, "out");
+    for step in 0..6 {
+        for (phase_index, phase) in [0.0f32, 0.25, 0.5, 0.75, 0.999].into_iter().enumerate() {
+            g.set_param(plate, "field", "output", "signed");
+            let t = phase*phase*(3.0-2.0*phase);
+            let next = (step+1)%6;
+            g.set_param(clock, "clock", "time", step as f64+phase as f64);
+            frame(&g, modes, &packed, |d| {
+                if shape(d) != [4, 64] { return false; }
+                let p = f32s(d);
+                (0..3).all(|i| (p[i]-expected_pairs[step*6+i*2]).abs() < 1e-6
+                    && (p[64+i]-expected_pairs[step*6+i*2+1]).abs() < 1e-6
+                    && (p[32+i]-expected_pairs[next*6+i*2]).abs() < 1e-6
+                    && (p[96+i]-expected_pairs[next*6+i*2+1]).abs() < 1e-6
+                    && (p[128+i]-(1.0-t)/3.0).abs() < 1e-5 && (p[160+i]-t/3.0).abs() < 1e-5)
+            });
+            let count = output.count();
+            let gpu = g.until("a fixed-basis chord blend reaches the GPU", |g| {
+                render(g, 1);
+                output.latest().filter(|_| output.count() > count+3)
+            });
+            let pixels = f32s(&gpu);
+            let error = pixels.chunks_exact(4).enumerate().map(|(i, p)|
+                (p[0]-((1.0-t)*expected[step*4096+i]+t*expected[next*4096+i])).abs()).fold(0.0f32, f32::max);
+            assert!(error < 0.003, "step {step}, phase {phase}: CPU/GPU error {error}; fixed basis must not zoom");
+            g.set_param(plate, "field", "output", "nodal");
+            let count = output.count();
+            let gpu = g.until("notebook density reaches the GPU", |g| {
+                render(g, 1);
+                assert!(g.error(plate).is_none(), "{:?}", g.error(plate));
+                output.latest().filter(|_| output.count() > count+3)
+            });
+            let pixels = f32s(&gpu);
+            let error = pixels.chunks_exact(4).enumerate().map(|(i, p)|
+                (p[0]-expected_density[(step*5+phase_index)*4096+i]).abs()).fold(0.0f32, f32::max);
+            assert!(error < 0.015, "step {step}, phase {phase}: Biotuner D4 nodal density error {error}");
+        }
+    }
+    let mapping = frame(&g, modes, &report, |d| d.as_str().is_ok_and(|s| s.contains("integer chord [8, 9, 16]")));
+    assert!(mapping.as_str().unwrap().contains("pairs (8, 9), (8, 16), (9, 16)"));
+    for a in 0..6 {
+        for b in a+1..6 {
+            let difference = expected[a*4096..(a+1)*4096].iter().zip(&expected[b*4096..(b+1)*4096])
+                .map(|(a, b)| (a-b).abs()).sum::<f32>()/4096.0;
+            assert!(difference > 0.1, "each of the six source ratios produces a distinct chord field");
+        }
+    }
 }
