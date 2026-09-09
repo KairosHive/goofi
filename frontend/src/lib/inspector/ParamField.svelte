@@ -24,6 +24,7 @@
 	import { controlKind } from './controlKind';
 	import { literalFor } from './paramSeed';
 	import ExprEditor from './expr/ExprEditor.svelte';
+	import MidiLearn from './MidiLearn.svelte';
 	import RefPicker from './RefPicker.svelte';
 
 	let {
@@ -52,6 +53,7 @@
 		dropZone?: string | null;
 	} = $props();
 
+	const learnId = $props.id();
 	const uiStore = ui();
 	let row = $state<HTMLDivElement>();
 	const over = $derived(
@@ -264,6 +266,10 @@
 				aria-label={`${paramName} source`}
 				data-testid="param-mode"
 			/>
+			{#if num}
+				<MidiLearn label={paramName} target={`param:${learnId}`}
+					onLearn={(reference, index) => onSetSource({ reference: `${reference}[${index}]` })} />
+			{/if}
 		</div>
 	{/if}
 	<!-- Shown whether or not the source is unfolded: the value beside it is the literal standing in,

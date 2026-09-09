@@ -816,6 +816,22 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     // A rename follows into the reference, as it does into an expression.
     g.call("node edit", j!({ "node": hex(level), "name": "gain" }));
     field(&mut ev, "the reference followed the rename", &|d| d["reference"] == j!("gain.out"));
+    let wide = g.add("_TestConst");
+    g.call("node edit", j!({ "node": hex(wide), "name": "wide" }));
+    g.set_param(wide, "constant", "value", 0.75);
+    g.set_param(wide, "constant", "length", 8);
+    param(&g, j!({ "reference": "wide.out[7]" }));
+    g.until("an indexed reference reads a wide frame without Python", |_| {
+        let p = ev.next("param_values");
+        (p["node"] == hex(consumer) && p["values"]["common"]["max_frequency"] == j!(0.75)).then_some(())
+    });
+    g.call("node edit", j!({ "node": hex(wide), "name": "bank" }));
+    field(&mut ev, "the indexed reference follows a rename", &|d| d["reference"] == j!("bank.out[7]"));
+    param(&g, j!({ "reference": "bank.out[8]" }));
+    g.until("an out-of-range index reports an error", |g| line(g).contains("outside frame").then_some(()));
+    for bad in ["bank.out[-1]", "bank.out[1.5]", "bank.out[1][0]"] {
+        assert!(param(&g, j!({ "reference": bad }))["error"].as_str().is_some());
+    }
     // A frame with more than one element is a shape error on ARRIVAL, and the literal stands.
     param(&g, j!({ "reference": "signal.out" }));
     g.until("the shape error", |g| line(g).contains("one element").then_some(()));

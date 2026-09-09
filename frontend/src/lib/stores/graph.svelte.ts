@@ -569,15 +569,6 @@ export class GraphStore {
 		return key ? `${node.name}.${node.slot_labels?.[key] ?? key}` : null;
 	}
 
-	/** The nodes tagged `midi` with an output that can feed the global named `name`. */
-	midiFeeds(name: string): { uid: string; name: string; reference: string }[] {
-		return this.nodes.flatMap((n) => {
-			if (!this.nodeTypes?.find((t) => t.type === n.type)?.tags.includes('midi')) return [];
-			const reference = this.feedFor(name, n.uid);
-			return reference ? [{ uid: n.uid, name: n.name, reference }] : [];
-		});
-	}
-
 	/** Make the widget named `name` follow the first output of node `uid` that can feed it. */
 	async linkControl(name: string, uid: string): Promise<string | null> {
 		const gv = this.globals.find((v) => v.name === name);
