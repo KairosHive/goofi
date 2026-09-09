@@ -113,14 +113,14 @@
 		<div class="gp-body">
 			{#each groups as grp (grp.group)}
 				{@const controlled = grp.entries.some((entry) => entry.control)}
+				{@const lock = { ...grp.lock, config: grp.lock.config || controlled }}
 				<section class="grp" data-testid="global-group" data-group={grp.group}
-					data-lock-config={grp.lock.config} data-lock-value={grp.lock.value}>
+					data-lock-config={lock.config} data-lock-value={grp.lock.value}>
 					<div class="grp-head">
-						<IconButton variant="ghost" size="sm" label={`${open[grp.group] ? 'Collapse' : 'Expand'} ${grp.group}`}
+						<button class="grp-toggle" aria-label={`${open[grp.group] ? 'Collapse' : 'Expand'} ${grp.group}`}
 							aria-expanded={open[grp.group] === true} data-testid="global-group-toggle"
-							onclick={() => (open[grp.group] = !open[grp.group])}>
-							<Icon name={open[grp.group] ? 'chevron-down' : 'chevron-right'} />
-						</IconButton>
+							onclick={() => (open[grp.group] = !open[grp.group])}></button>
+						<span class="grp-caret"><Icon name={open[grp.group] ? 'chevron-down' : 'chevron-right'} /></span>
 						{#if editing === grp.group}
 							<input {...MODE_ATTRS.search} class="group-name-input" data-testid="global-group-name"
 								aria-label="Group name" bind:value={groupName} use:selectName
@@ -130,27 +130,26 @@
 									if (event.key === 'Escape') { editing = null; error = ''; }
 								}} />
 						{:else}
-							<button class="grp-name" onclick={() => (open[grp.group] = !open[grp.group])}
-								aria-expanded={open[grp.group] === true}>{grp.group}</button>
-							{#if !grp.lock.config}
+							<span class="grp-name">{grp.group}</span>
+							{#if !lock.config}
 								<IconButton variant="ghost" size="sm" label={`Rename ${grp.group}`} title="Rename group"
-									data-testid="global-group-edit" onclick={() => editGroup(grp.group)}><Icon name="pencil" /></IconButton>
+									class="grp-edit" data-testid="global-group-edit" onclick={() => editGroup(grp.group)}><Icon name="pencil" /></IconButton>
 							{/if}
 						{/if}
 						<span class="grp-tags">
-							<span class="grp-count">{grp.entries.length}</span>
 							{#if controlled}
 								<span class="grp-control" role="img" aria-label="Control panel" title="Control panel"><Icon name="sliders-horizontal" /></span>
 							{/if}
-							{#if grp.lock.config || grp.lock.value}
+							{#if lock.config || lock.value}
 								<span class="grp-lock" role="img" aria-label="Built-in lock" title="Built-in lock"><Icon name="lock" /></span>
 							{/if}
+							<span class="grp-count">{grp.entries.length}</span>
 						</span>
 					</div>
 					{#if open[grp.group]}
 						<div class="grp-body">
 							{#each grp.entries as entry (entry.name)}
-								{@const held = effectiveLock(entry, grp.lock)}
+								{@const held = effectiveLock(entry, lock)}
 								<div class="entry" data-testid="global-row" data-name={entry.name}
 									data-lock-config={held.config} data-lock-value={held.value}
 									data-control={entry.control?.kind}>
@@ -185,7 +184,7 @@
 									{/if}
 								</div>
 							{/each}
-							{#if !grp.lock.config}
+							{#if !lock.config}
 								<Button variant="ghost" size="sm" data-testid="global-add-in" disabled={busy}
 									onclick={() => void addEntry(grp.group)}><Icon name="plus" />entry</Button>
 							{/if}
@@ -209,17 +208,49 @@
 	.gp-body {
 		padding: var(--space-3) var(--space-5) var(--space-6);
 	}
+	.grp {
+		border-bottom: 1px solid var(--border);
+	}
 	.grp:nth-child(even) {
-		background: color-mix(in srgb, var(--text) 3%, transparent);
+		background: color-mix(in srgb, var(--text) 6%, transparent);
 		border-radius: var(--radius-sm);
 	}
 	.grp-head {
+		position: relative;
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
 		min-height: var(--hit);
 		padding: var(--space-2) var(--space-3);
 	}
+	.grp-toggle {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		border: none;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		cursor: pointer;
+	}
+	.grp-toggle:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+	.grp-toggle:focus-visible {
+		outline: var(--focus-width) solid var(--focus-ink);
+		outline-offset: -2px;
+	}
+	.grp-caret, .grp-name, .grp-tags {
+		position: relative;
+		pointer-events: none;
+	}
+	.grp-caret {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: var(--hit);
+		flex-shrink: 0;
+		color: var(--text-muted);
+	}
+	.grp-head :global(.grp-edit), .group-name-input { position: relative; }
 	.grp-name, .group-name-input {
 		min-width: 0;
 		font-family: var(--font-mono);
@@ -233,7 +264,6 @@
 		background: none;
 		border: none;
 		padding: 0;
-		cursor: pointer;
 	}
 	.group-name-input {
 		width: 12ch;
@@ -252,7 +282,6 @@
 	}
 	.grp-count { font-size: var(--fs-micro); }
 	.grp-control, .grp-lock { display: inline-flex; }
-	.grp-control { color: var(--accent); }
 	.grp-body { padding: var(--space-2) var(--space-3); }
 	.entry {
 		display: grid;
