@@ -1,11 +1,12 @@
 # Harmonic geometry
 
-Eight signal nodes and five shaders connect Biotuner's harmonic geometry to goofi.
-The [cookbook](../../examples/harmonic-geometry/Cookbook.html) includes nine working
+Nine signal nodes and five shaders connect Biotuner's harmonic geometry to goofi.
+The [cookbook](../../examples/harmonic-geometry/Cookbook.html) includes ten working
 patches. The [survey](SURVEY.md) records the source review and implementation plan.
 
 | Node | Role |
 | --- | --- |
+| `RatioSequence` | Timed ratio steps and pitch glides → current ratio, target, anchor chord, step, phase, and text readout |
 | `HarmonicMorph` | Two ratio or peak rows → a shared harmonic frame; phase, stretch, extension, and component fades |
 | `HarmonicGeometry` | 46 methods → curves, graphs, point clouds, meshes, or scalar fields |
 | `HarmonicModes` | Harmonic frame(s) → bounded Chladni mode arrays with optional mode interpolation |
@@ -18,7 +19,7 @@ patches. The [survey](SURVEY.md) records the source review and implementation pl
 | `graphics:HarmonicChladni` | Packed modes/harmonics → a signed plate/open-wave field |
 | `graphics:HarmonicInk` | Signed texture + optional BioColors palette → color, nodes, or contours |
 | `graphics:HarmonicFlow` | A vector field → persistent seeded ink, with explicit freeze and reset |
-| `graphics:HarmonicRelief` | Signed texture → full-frame relief with four morphable textures, parallax, engraving, and directional light |
+| `graphics:HarmonicRelief` | Signed texture → twelve morphable organic and material textures, with parallax and directional light |
 
 ## Cable contracts
 
@@ -45,9 +46,13 @@ Upload these through `graphics:SignalIn`. The Flow shader accepts its ARRAY dire
 `HarmonicRelief` reads the same signed texture as Ink. It keeps the harmonic field
 separate from the material. Depth changes the relief; seam changes its metal band;
 camera and light change only the view. Select `texture_a` and `texture_b` from
-jade, brushed metal, woven silk, and porous stone. `texture_mix` blends their
+jade, brushed metal, woven silk, porous stone, sand, dunes, lichen, coral, cells,
+spores, pollen, and plankton. `texture_mix` blends their
 height detail, color, roughness, and reflectance with a smooth endpoint curve.
 `texture_scale` sets repeats; `texture_depth` sets the strength of surface detail.
+`density` changes grain and colony coverage. Organic finishes have low gloss,
+small relief, no metal seams, and field-dependent grain bands or warped cells.
+They are procedural visual features, not tracked particles or biological models.
 The renderer has no history or clock animation. Drive the upstream modes and
 texture mix independently. Mirrored field extension fills any aspect ratio;
 it is an artistic mapping, not a new physical boundary condition. Masked input
@@ -57,6 +62,15 @@ two channels to retain height precision. The default is 512 × 512, with at most
 41 height samples, eight intersection refinements, four normal samples, and ten
 shadow samples per pixel. These sample the prepared height instead of evaluating
 the full relief rule at each ray step.
+
+`RatioSequence.ratio` and `target` are scalar arrays. `tuning` retains the fixed
+anchor chord and replaces its selected voice with the current ratio. `step` is
+one-based; `phase` runs from 0 to 1 inside a step. `label` is a STRING readout.
+Written lists retain their order. The optional `clock` input takes one finite
+time in seconds; otherwise the node uses monotonic elapsed time. Pause holds
+position. Reset, list/direction edits, clock source changes, and backward clock
+jumps restart at step one. Pitch glides join consecutive ratios in log frequency,
+including the loop boundary. See **10 · Living ratios** for a complete example.
 
 Use `Tuning.tuning` in ratios mode, or `Peaks.peaks` / `HarmonicSpectrum.peaks`
 in peaks mode. Select one leading row. Amplitudes and phases must belong to the
