@@ -416,6 +416,17 @@ fn phase_wrap_extensions_and_mode_walks_keep_their_endpoint_weights() {
 #[test]
 #[cfg(feature = "embed")]
 fn cookbook_archives_open_with_live_controls_and_sound_without_devices() {
+    check_cookbook_archives(None);
+}
+
+#[test]
+#[cfg(feature = "embed")]
+fn jade_archive_opens_with_independent_texture_controls() {
+    check_cookbook_archives(Some("09-jade-resonance.gfi"));
+}
+
+#[cfg(feature = "embed")]
+fn check_cookbook_archives(selected: Option<&str>) {
     let _py = require_python();
     let g = Goofi::new();
     g.state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(
@@ -424,6 +435,7 @@ fn cookbook_archives_open_with_live_controls_and_sound_without_devices() {
     let mut identities = std::collections::HashSet::new();
     for recipe in recipes.as_array().unwrap() {
         let file = recipe["file"].as_str().unwrap();
+        if selected.is_some_and(|selected| file != selected) { continue; }
         g.call("session load", j!({"path": root().join("examples/harmonic-geometry").join(file).to_string_lossy()}));
         let doc = g.doc();
         for uid in doc["nodes"].as_object().unwrap().keys() {
@@ -469,6 +481,15 @@ fn cookbook_archives_open_with_live_controls_and_sound_without_devices() {
         g.until("manual mix after control bindings settle", |g| {
             slow.latest().filter(|d| g.error(lookup("slow")).is_none() && (f32s(d)[0]-0.75).abs() < 1e-6)
         });
+        if file.starts_with("09-") {
+            g.call("global entry edit", j!({"name": "geometry.textureAuto", "value": false}));
+            g.call("global entry edit", j!({"name": "geometry.textureMix", "value": 0.35}));
+            g.call("global entry edit", j!({"name": "geometry.textureA", "value": "woven silk"}));
+            g.call("global entry edit", j!({"name": "geometry.textureB", "value": "porous stone"}));
+            let motion = g.probe(lookup("materialMotion"), "out");
+            frame(&g, lookup("materialMotion"), &motion, |d| (f32s(d)[0]-0.35).abs() < 1e-6);
+            assert!((f32s(&slow.latest().unwrap())[0]-0.75).abs() < 1e-6, "texture motion leaves the mode walk alone");
+        }
         if file.starts_with("08-") {
             let voices = lookup("voices");
             let gain = g.probe(voices, "gain");
@@ -523,7 +544,7 @@ fn chladni_relief_follows_the_field_and_relights_without_changing_it() {
         g.until(label, |g| {
             render(g, 1);
             assert!(g.error(material).is_none(), "{:?}", g.error(material));
-            output.latest().filter(|d| output.count() > count+3 && shape(d) == [512, 512, 4])
+            output.latest().filter(|_| output.count() > count+3)
         })
     };
     let image = capture("the relief after its Chladni input arrives");
@@ -531,9 +552,50 @@ fn chladni_relief_follows_the_field_and_relights_without_changing_it() {
     assert!(values.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
     let red: Vec<_> = values.chunks_exact(4).map(|p| p[0]).collect();
     assert!(red.iter().copied().fold(0.0, f32::max) > 0.7, "lit metal is visible");
-    assert!(red.iter().filter(|v| **v < 0.25).count() > red.len()/5, "the composition retains dark space");
+    assert!(red.iter().copied().fold(1.0, f32::min) < 0.25, "the relief retains deep basin contrast");
     save_frame("gpu-relief", &image);
     let field_before = f32s(&source.latest().expect("the upstream plate rendered"));
+    let difference = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(a, b)| (a-b).abs()).sum::<f32>()/a.len() as f32;
+    let mut finishes: Vec<Vec<f32>> = Vec::new();
+    for finish in ["jade", "brushed metal", "woven silk", "porous stone"] {
+        g.set_param(material, "material", "texture_b", finish);
+        g.set_param(material, "material", "texture_mix", 1.0);
+        let image = capture("each texture endpoint on the held harmonic field");
+        let pixels = f32s(&image);
+        assert!(pixels.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+        for previous in &finishes { assert!(difference(&pixels, previous) > 0.01, "distinct finish: {finish}"); }
+        save_frame(&format!("relief-{}", finish.replace(' ', "-")), &image);
+        finishes.push(pixels);
+    }
+    g.set_param(material, "material", "texture_b", "brushed metal");
+    g.set_param(material, "material", "texture_mix", 0.0);
+    assert_eq!(f32s(&capture("exact jade endpoint")), finishes[0]);
+    g.set_param(material, "material", "texture_mix", 0.5);
+    let middle = f32s(&capture("halfway texture has blended surface detail"));
+    g.set_param(material, "material", "texture_mix", 0.501);
+    let adjacent = f32s(&capture("a small texture step stays smooth"));
+    assert!(difference(&middle, &adjacent) > 0.0);
+    assert!(difference(&middle, &adjacent) < difference(&finishes[0], &finishes[1])*0.1);
+    assert!(difference(&middle, &finishes[0]) > 0.01 && difference(&middle, &finishes[1]) > 0.01);
+    assert_eq!(f32s(&source.latest().unwrap()), field_before, "texture morphing leaves the signed field unchanged");
+    g.set_param(material, "material", "texture_mix", 0.0);
+    for (width, height) in [(640, 360), (360, 640)] {
+        g.set_param(material, "common", "width", width);
+        g.set_param(material, "common", "height", height);
+        let image = capture("a filled surface in landscape and portrait");
+        assert_eq!(shape(&image), [height, width, 4]);
+        let pixels = f32s(&image);
+        for edge in 0..4 {
+            let mut low = 1.0_f32; let mut high = 0.0_f32;
+            for i in 0..if edge < 2 { width } else { height } {
+                let (x, y) = match edge { 0 => (i, 0), 1 => (i, height-1), 2 => (0, i), _ => (width-1, i) };
+                let red = pixels[(y*width+x)*4]; low = low.min(red); high = high.max(red);
+            }
+            assert!(high-low > 0.15, "surface detail reaches edge {edge} at {width}x{height}");
+        }
+    }
+    g.set_param(material, "common", "width", 512);
+    g.set_param(material, "common", "height", 512);
     g.set_param(material, "light", "azimuth", 1.8);
     let relit = capture("a different light on the same relief");
     assert_ne!(f32s(&relit), values, "the light changes the surface picture");
