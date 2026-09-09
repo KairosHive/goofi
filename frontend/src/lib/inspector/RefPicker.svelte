@@ -3,7 +3,7 @@
   filtered by what this param may reference. The pair commits as one `node.slot`.
 -->
 <script lang="ts">
-	import { Combobox } from '$lib/ui';
+	import { Combobox, NumberInput } from '$lib/ui';
 	import { liveCatalogue } from './expr/catalogue';
 	import { refNodes, refSlots, splitReference, wantedDtype } from './expr/refs';
 
@@ -23,9 +23,10 @@
 	const want = $derived(wantedDtype(paramType));
 	let node = $state('');
 	let slot = $state('');
+	const index = $derived(value?.match(/\[(\d+)\]$/)?.[1]);
 	// The committed value is adopted whenever it moves; a half-picked pair stays local until then.
 	$effect(() => {
-		[node, slot] = splitReference(value);
+		[node, slot] = splitReference(value?.replace(/\[\d+\]$/, '') ?? null);
 	});
 
 	function pickNode(n: string): void {
@@ -57,6 +58,10 @@
 		testid={`${testid}-slot`}
 		disabled={!node}
 	/>
+	{#if index !== undefined}
+		<NumberInput value={Number(index)} min={0} step={1} title="Channel index"
+			onChange={(v) => onCommit(`${node}.${slot}[${Math.max(0, Math.round(v))}]`)} />
+	{/if}
 </div>
 
 <style>

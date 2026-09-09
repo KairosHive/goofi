@@ -66,13 +66,28 @@ fn value_as(value: &Param, target: &Param) -> Result<Param, String> {
     }
 }
 
-fn scalar_of(frame: &Data, target: &Param) -> Result<Param, String> {
+/// Split an optional flat array index from a reference or a resolved variable.
+pub fn split_index(source: &str) -> Result<(&str, Option<usize>), String> {
+    let Some((base, tail)) = source.split_once('[') else {
+        return Ok((source, None));
+    };
+    let index = tail.strip_suffix(']')
+        .filter(|text| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|text| text.parse::<usize>().ok())
+        .ok_or_else(|| format!("invalid reference index in `{source}`"))?;
+    Ok((base, Some(index)))
+}
+
+fn scalar_of(frame: &Data, target: &Param, index: Option<usize>) -> Result<Param, String> {
     match (frame.value(), target) {
-        (goofi_core::Value::Str(s), Param::Str { options, refresh, .. }) => {
+        (goofi_core::Value::Str(s), Param::Str { options, refresh, .. }) if index.is_none() => {
             Ok(Param::Str { value: s.to_string(), options: options.clone(), refresh: *refresh })
         }
-        (goofi_core::Value::Array(a), _) if a.shape().iter().product::<usize>() == 1 => {
-            let bytes: [u8; 4] = a.as_bytes()[..4].try_into().expect("one f32");
+        (goofi_core::Value::Array(a), _) if index.is_some() || a.shape().iter().product::<usize>() == 1 => {
+            let at = index.unwrap_or(0);
+            let bytes: [u8; 4] = a.as_bytes().chunks_exact(4).nth(at)
+                .ok_or_else(|| format!("reference index {at} is outside frame {:?}", a.shape()))?
+                .try_into().map_err(|_| "reference element is not f32".to_string())?;
             let x = f32::from_le_bytes(bytes) as f64;
             Ok(match target {
                 Param::Float { vmin, vmax, .. } => Param::Float { value: x, vmin: *vmin, vmax: *vmax },
@@ -150,9 +165,14 @@ impl Expression {
         }
         // A bare variable is read without the evaluator: a global's value as it is, and a
         // referenced producer's frame as the one element it must hold.
-        match self.vars.get(self.source.trim()).and_then(Mailbox::value) {
+        let (variable, index) = if self.id.is_none() {
+            split_index(self.source.trim())?
+        } else {
+            (self.source.trim(), None)
+        };
+        match self.vars.get(variable).and_then(Mailbox::value) {
             Some(Local::Value(value)) => return value_as(value, target).map(Some),
-            Some(Local::Frame(frame)) if self.id.is_none() => return scalar_of(frame, target).map(Some),
+            Some(Local::Frame(frame)) if self.id.is_none() => return scalar_of(frame, target, index).map(Some),
             _ => {}
         }
         if self.vars.values().any(|m| m.value().is_none()) {

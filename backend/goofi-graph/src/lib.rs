@@ -2519,10 +2519,11 @@ impl Graph {
         // Both retained texts are scanned whatever the mode, because `terms` is what a later
         // rename or globals edit re-resolves against. Only the active one gets variables and a handle.
         let scanned = (!state.expression.is_empty()).then(|| expr_rewrite::rewrite(&state.expression));
-        let reference = (!state.reference.is_empty()).then(|| parse_reference(&state.reference));
+        let reference = (!state.reference.is_empty()).then(|| goofi_node::mailbox::split_index(&state.reference)
+            .and_then(|(base, index)| parse_reference(base).map(|r| (r, index))));
         let mut terms: Vec<expr_rewrite::VarRef> =
             scanned.iter().flatten().flat_map(|(_, refs)| refs.clone()).collect();
-        if let Some(Ok(r)) = &reference {
+        if let Some(Ok((r, _))) = &reference {
             terms.push(r.clone());
         }
         let missing = |vars: &[BoundVar]| {
@@ -2543,10 +2544,10 @@ impl Graph {
                 None => (String::new(), Vec::new(), Some("no expression to evaluate".to_string())),
             },
             Mode::Reference => match reference {
-                Some(Ok(r)) => {
+                Some(Ok((r, index))) => {
                     let vars = self.resolve_vars(uid, &key, std::slice::from_ref(&r));
                     let error = missing(&vars).or_else(|| self.reference_kind_error(&r, &param));
-                    (REF_VAR.to_string(), vars, error)
+                    (index.map_or_else(|| REF_VAR.to_string(), |i| format!("{REF_VAR}[{i}]")), vars, error)
                 }
                 Some(Err(e)) => (String::new(), Vec::new(), Some(e)),
                 None => (String::new(), Vec::new(), Some("no reference to follow".to_string())),
