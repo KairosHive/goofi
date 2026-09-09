@@ -4,6 +4,22 @@ Checked on Windows x86_64, 9 September 2026, with Rust 1.97.1, the repository's
 two Python environments, and Chromium. Biotuner is pinned to the same revision
 as the existing bundle: `f45570e674d8193c7780891b9053a39bf6168c1e`.
 
+## Push checkpoint after upstream merge
+
+The merged branch passed the six-chord, 30-position Biotuner/GPU comparison
+again (41.79 seconds). Its native build completed without compiler warnings.
+The frontend passed Svelte typecheck with zero errors and warnings after
+installing the merged lockfile and separating the Windows MIDI state import
+from the similarly named component. The earlier broad node and browser results
+below remain the coverage record; the full workspace suite was not repeated.
+
+All fourteen nodes are suitable for development use. The sequence, morph,
+mode mapping, Chladni, ink, and relief path has the strongest behavioral
+coverage. Other geometry methods, dashboards, metrics, transport, Lissajous,
+field/curve blending, flow, and voices have integration coverage with the
+limits below. Hardware audio, other GPU drivers, long runs, and all optional
+parameter combinations are not certified by these checks.
+
 ## Notebook field mapping and density
 
 Recipe 10 now uses the full anchor chord, Biotuner common-denominator mode
