@@ -129,6 +129,8 @@ export interface DirListing {
 
 
 export interface GraphSnapshot {
+	/** Current recorder status, refreshed on load and reconnect. */
+	record: RecordStatus;
 	/** Control-plane protocol version, present on the `hello` handshake. */
 	protocol_version?: number;
 	/** Identifies the manager process; it changes when the backend is restarted. */

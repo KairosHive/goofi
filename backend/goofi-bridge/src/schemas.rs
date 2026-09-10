@@ -352,6 +352,7 @@ pub fn snapshot(
     let mut snap = json!({
         "instance_id": &*state.instance_id,
         "runtime": runtime_overlay(g),
+        "record": crate::arms::record_state_at(state, g.time().now()),
         // Seeded for the same reason the runtime overlay is: `harness_changed` pushes transitions.
         "harnesses": harnesses,
         "save_path": save_path,

@@ -134,6 +134,14 @@
 		}
 	}
 
+	function onPointerDown(e: PointerEvent): void {
+		if (!e.isPrimary || e.button !== 0 || e.shiftKey) return;
+		// Drag handlers can cancel the browser action that clears the previous text selection.
+		// Clear it before those handlers run; the browser can then start a new text selection.
+		const selection = window.getSelection();
+		if (selection?.toString()) selection.removeAllRanges();
+	}
+
 	function onBeforeUnload(e: BeforeUnloadEvent): void {
 		if (pushTimer) {
 			clearTimeout(pushTimer);
@@ -171,6 +179,7 @@
 				else cleanup = dispose;
 			}).catch((error) => notify().failure('Plugins', error));
 		});
+		window.addEventListener('pointerdown', onPointerDown, true);
 		window.addEventListener('keydown', onKeydown);
 		window.addEventListener('beforeunload', onBeforeUnload);
 		const offProto = getControl().onProtocolMismatch(() => (protocolMismatch = true));
@@ -178,6 +187,7 @@
 			disposed = true;
 			offPlugins();
 			cleanup?.();
+			window.removeEventListener('pointerdown', onPointerDown, true);
 			window.removeEventListener('keydown', onKeydown);
 			window.removeEventListener('beforeunload', onBeforeUnload);
 			offProto();

@@ -159,10 +159,30 @@ fn a_complexity_node_reads_a_real_signal_rather_than_answering_a_constant() {
         })
         .collect();
 
+    // The MIDDLE of several readings, not the first. Eight Python subprocesses come up at once
+    // here, and a machine that stutters under them hands the buffer a window stitched from blocks
+    // that do not run on from one another. That window is a real discontinuity — it reads as extra
+    // zero crossings and a Hjorth far off 1 — and it is the harness stumbling, not the node. One
+    // such window cannot move a median; a node that truly answers a constant cannot hide behind it.
     for (ty, node, probe, range) in nodes {
-        let d = first_frame(&g, &ty, node, &probe, |d| shape(d) == vec![1]);
-        let v = f32s(&d)[0];
-        assert!(range.contains(&v), "{ty} of an 8 Hz sine is {v}, outside {range:?}");
+        first_frame(&g, &ty, node, &probe, |d| shape(d) == vec![1]);
+        // One reading per NEW frame, counted rather than compared: a node whose answer is a
+        // constant — which a steady sine makes several of these — never changes value, and waiting
+        // for five different numbers would wait forever.
+        let mut seen: Vec<f32> = Vec::new();
+        let mut at = probe.count();
+        g.until(&format!("{ty} to answer five frames"), |_| {
+            if probe.count() > at {
+                at = probe.count();
+                if let Some(v) = probe.latest().filter(|d| shape(d) == vec![1]).map(|d| f32s(&d)[0]) {
+                    seen.push(v);
+                }
+            }
+            (seen.len() >= 5).then_some(())
+        });
+        seen.sort_by(f32::total_cmp);
+        let v = seen[seen.len() / 2];
+        assert!(range.contains(&v), "{ty} of an 8 Hz sine is {v}, outside {range:?} (saw {seen:?})");
     }
 }
 
@@ -1149,4 +1169,85 @@ fn a_trained_generator_draws_what_the_patch_steers_it_to() {
     // A file that is no model says so, rather than drawing the one it used to hold.
     g.set_param(node, "decoder", "file", model.with_extension("absent").to_string_lossy().to_string());
     g.until("the missing model to be reported", |g| g.error(node));
+}
+
+#[test]
+fn an_onnx_node_runs_a_model_and_routes_each_sender_to_the_input_it_names() {
+    // The generic runner, against a model that answers `alpha - 2*beta`: an answer names which array
+    // landed on which input, so binding by NAME and binding by arrival order cannot both be right.
+    let _py = require_python();
+    let g = Goofi::new();
+    let ty = install_bundled(&g, "ml", "onnx.py");
+    let model = g.state.mount().join("pair.onnx");
+    std::fs::write(&model, include_bytes!("fixtures/two_inputs.onnx")).unwrap();
+
+    let node = g.add(&ty);
+    g.set_param(node, "onnx", "file", model.to_string_lossy().to_string());
+    let probe = g.probe(node, "out");
+
+    let one = g.add("signal:Constant");
+    g.set_param(one, "constant", "value", 1.0);
+    g.set_param(one, "constant", "shape", "3");
+    let two = g.add("signal:Constant");
+    g.set_param(two, "constant", "value", 2.0);
+    g.set_param(two, "constant", "shape", "3");
+    g.call("node edit", j!({ "node": hex(one), "name": "alpha" }));
+    g.call("node edit", j!({ "node": hex(two), "name": "beta" }));
+
+    // Wired the WRONG way round on purpose: beta reaches the slot first. By arrival order it would
+    // feed `alpha` and the answer would be 2 - 2*1 = 0; by name it feeds `beta`, for 1 - 2*2 = -3.
+    g.link(two, "out", node, "input");
+    g.link(one, "out", node, "input");
+    let d = first_frame(&g, &ty, node, &probe, |d| shape(d) == vec![1, 3]);
+    let got = f32s(&d);
+    assert!(
+        got.iter().all(|v| (v + 3.0).abs() < 1e-4),
+        "each sender feeds the input its NAME matches, whatever order it arrived in: {got:?}"
+    );
+
+    // Rename the senders past each other and the routing follows the names, not the wires. Two
+    // nodes cannot hold one name at once, so the swap goes through a name neither input answers to.
+    g.call("node edit", j!({ "node": hex(two), "name": "held" }));
+    g.call("node edit", j!({ "node": hex(one), "name": "beta" }));
+    g.call("node edit", j!({ "node": hex(two), "name": "alpha" }));
+    let swapped = g.until("the rename to re-route the inputs", |_| {
+        probe.latest().map(|d| f32s(&d)).filter(|v| v.iter().all(|x| x.abs() < 1e-4))
+    });
+    assert_eq!(swapped.len(), 3, "2 - 2*1 = 0 once the names are the other way round");
+    assert!(g.error(node).is_none(), "Onnx stands with no error: {:?}", g.error(node));
+}
+
+#[test]
+fn an_onnx_node_hands_back_the_models_own_shape_until_it_is_asked_for_a_picture() {
+    // `raw` is the contract for a model that answers anything at all; `image` is the one convenience,
+    // and it owes a viewer rows down, channels last, and values it can draw.
+    let _py = require_python();
+    let g = Goofi::new();
+    let ty = install_bundled(&g, "ml", "onnx.py");
+    let model = g.state.mount().join("tiny.onnx");
+    std::fs::write(&model, include_bytes!("fixtures/tiny_generator.onnx")).unwrap();
+
+    let node = g.add(&ty);
+    g.set_param(node, "onnx", "file", model.to_string_lossy().to_string());
+    let probe = g.probe(node, "out");
+
+    // Nothing is wired that fills the latent: a half-built patch still gets an answer, padded.
+    let drive = g.add("signal:Constant");
+    g.set_param(drive, "constant", "value", 0.0);
+    g.set_param(drive, "constant", "shape", "4");
+    g.link(drive, "out", node, "input");
+
+    let d = first_frame(&g, &ty, node, &probe, |d| shape(d).len() == 4);
+    assert_eq!(shape(&d), vec![1, 3, 4, 4], "raw hands back what the model answered, batch and all");
+
+    g.set_param(node, "onnx", "layout", "image");
+    let drawn = g.until("the picture layout", |_| probe.latest().filter(|d| shape(d) == vec![4, 4, 3]));
+    let v = f32s(&drawn);
+    assert!(v.iter().all(|x| (0.0..=1.0).contains(x)), "a signed model is handed over as a frame: {v:?}");
+    // Its bias ramps DOWN the rows, which a frame passed over upside down would get backwards.
+    assert!(v[0] < 0.05 && v[3 * 4 * 3] > 0.95, "rows run down: {} then {}", v[0], v[3 * 4 * 3]);
+
+    // A name the model does not answer to is said plainly, rather than quietly drawing output zero.
+    g.set_param(node, "onnx", "output", "nope");
+    g.until("the unknown output to be reported", |g| g.error(node));
 }
