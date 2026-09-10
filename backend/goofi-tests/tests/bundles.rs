@@ -628,6 +628,7 @@ fn harmonic_spectrum_feeds_the_biotuner_bundle_and_recovers_as_windows_change() 
     let activation = g.probe(node, "activation");
     let power = g.probe(node, "power");
     let waveform = g.probe(node, "waveform");
+    let analysis = g.probe(node, "analysis");
     let mean = g.probe(node, "harmonicity");
     let complexity = g.probe(node, "complexity");
     g.link(source, "out", node, "input");
@@ -676,6 +677,14 @@ fn harmonic_spectrum_feeds_the_biotuner_bundle_and_recovers_as_windows_change() 
     let d = first_frame(&g, &spectrum_ty, node, &complexity, |d| shape(d) == vec![2, 4]);
     assert_eq!(labels(&d, "dim1"), ["flatness", "entropy", "spread", "higuchi"]);
     assert!(f32s(&d).iter().all(|v| v.is_finite()));
+    let d = first_frame(&g, &spectrum_ty, node, &analysis, |d| d.as_table().is_ok());
+    let packet = d.as_table().unwrap();
+    assert_eq!(packet.len(), 10, "one analysis window contains every individual output");
+    assert_eq!(f32s(&packet["spectrum"]), h);
+    assert_eq!(f32s(&packet["matrix"]), m);
+    assert_eq!(f32s(&packet["power"]), p);
+    assert_eq!(labels(&packet["waveform"], "dim0"), ["Fz", "Cz"]);
+    assert_eq!(packet["waveform"].meta().sfreq(), Some(256.0));
     let d = first_frame(&g, &spectrum_ty, node, &peaks, |d| shape(d) == vec![2, 5]);
     let pk = f32s(&d);
     for target in [8.0, 12.0, 16.0] {
@@ -787,15 +796,16 @@ fn harmonic_observatory_example_uses_the_biotuner_bundle_without_local_copies() 
     };
     let dashboard = node("observatory");
     let spectrum = node("harmonicspectrum0");
-    let scene = node("harmonicScene");
+    assert_eq!(g.nodes().len(), 3, "the image viewer needs no graphics bridge or window");
+    let viewers: serde_json::Value = serde_json::from_str(doc["nodes"][hex(dashboard)]["viewers"].as_str().unwrap()).unwrap();
+    assert_eq!(viewers["dashboard"]["collapsed"], false);
     let image = g.probe(dashboard, "dashboard");
     let d = first_frame(&g, "HarmonicObservatory", dashboard, &image, |d| shape(d) == vec![629, 825, 3]);
     let pixels = f32s(&d);
     assert!(pixels.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
     assert!(pixels.iter().any(|v| *v > 0.9), "the dashboard draws its labels and plots");
 
-    // Grid changes and removal of the example-only scene control keep the dashboard live.
-    g.call("link remove", j!({"from": goofi_tests::ep(hex(scene), "morph"), "to": goofi_tests::ep(hex(dashboard), "morph")}));
+    // The single cable carries the new grid and all its arrays together.
     let frequencies = g.probe(spectrum, "freqs");
     g.set_param(spectrum, "spectrum", "precision", 1.0);
     g.until("the example's frequency grid to change", |_| frequencies.latest().filter(|d| shape(d) == vec![29]));
@@ -809,6 +819,31 @@ fn harmonic_observatory_example_uses_the_biotuner_bundle_without_local_copies() 
     g.call("session save", j!({"path": saved.to_string_lossy()}));
     let archive = zip::ZipArchive::new(std::fs::File::open(saved).unwrap()).unwrap();
     assert!(!archive.file_names().any(|name| name.ends_with("harmonic_observatory.py") || name.ends_with("harmonic_spectrum.py")));
+
+    // Replace the demonstration with labeled channels, using the same single input.
+    let source_ty = install(&g, "harmonic_signal.py", include_str!("fixtures/harmonic_signal.py"));
+    let source = g.add(&source_ty);
+    let scene = node("harmonicScene");
+    g.call("link remove", j!({"from": goofi_tests::ep(hex(scene), "out"), "to": goofi_tests::ep(hex(spectrum), "input")}));
+    g.link(source, "out", spectrum, "input");
+    let named = |d: &goofi_core::Data, name: &str| matches!(d.meta().get("channel"), Some(goofi_core::MetaValue::Str(v)) if v == name);
+    g.until("the first named channel", |_| image.latest().filter(|d| named(d, "Fz")));
+    let mut events = g.events();
+    g.call("node param refresh", j!({"node": hex(dashboard), "param": "display/channel"}));
+    let reply = g.until("channel names in the parameter menu", |_| {
+        let reply = events.next("state_update");
+        (reply["node"] == hex(dashboard) && reply["refreshed_params"] == j!([["display", "channel"]])).then_some(reply)
+    });
+    assert_eq!(reply["params"]["display"]["channel"]["options"], j!(["First channel", "Fz", "Cz"]));
+    g.set_param(dashboard, "display", "channel", "Cz");
+    g.until("the selected channel", |_| image.latest().filter(|d| named(d, "Cz")));
+    g.set_param(source, "signal", "vector", true);
+    let error = g.until("a removed channel to be reported", |g| g.error(dashboard));
+    assert!(error.contains("Cz") && error.contains("not available"), "{error}");
+    g.set_param(dashboard, "display", "channel", "First channel");
+    g.until("the unlabeled signal after channel selection is reset", |g| {
+        image.latest().filter(|d| named(d, "Row 1") && g.error(dashboard).is_none())
+    });
 }
 
 #[test]
