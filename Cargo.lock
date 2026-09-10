@@ -968,6 +968,7 @@ dependencies = [
  "shell-words",
  "tempfile",
  "tokio",
+ "toml 0.8.23",
 ]
 
 [[package]]

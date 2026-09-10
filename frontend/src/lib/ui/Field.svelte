@@ -83,9 +83,6 @@
 		font: inherit;
 		text-align: left;
 	}
-	.ui-field-summary:hover {
-		color: var(--accent);
-	}
 	.ui-field-summary:focus-visible {
 		outline: var(--focus-width) solid var(--focus-ink);
 		outline-offset: 2px;

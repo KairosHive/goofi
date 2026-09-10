@@ -5,8 +5,9 @@
 
 /// One op's contract. In the tree a leaf authors `name` as its FINAL word alone; the flat rows
 /// [`registry`] derives carry the full phrase, words joined with single spaces.
-pub struct Op {
-    pub name: &'static str,
+#[derive(Clone, Copy)]
+pub struct Op<'a> {
+    pub name: &'a str,
     /// What calling the op IS — see [`Handler`]. The batch gate, the dirty decision and the
     /// re-mirror are all READ off this kind, never declared beside it.
     pub handler: Handler,
@@ -15,20 +16,20 @@ pub struct Op {
     /// `float`, `int`, `bool`, `float2`, `json`, `any`, `param_addr`, `endpoint` (`node/slot`,
     /// the node half a name or a uid),
     /// `panel_type`, and `[]` for a list.
-    pub args: &'static str,
+    pub args: &'a str,
     /// How many of the LEADING declared args a command line takes as positionals (0..=2). A
     /// list-typed positional is variadic; every positional stays reachable as a flag too.
     pub positional: usize,
     /// The doc TEMPLATE; read it through [`Op::doc`], which expands the vocabularies.
-    pub doc: &'static str,
+    pub doc: &'a str,
     /// The result schema, as the shape a caller gets back.
-    pub result: &'static str,
+    pub result: &'a str,
 }
 
 /// One node of the phrase tree: a group word with its own one-line doc, or a leaf op.
 pub enum Entry {
     Group(&'static str, &'static str, &'static [Entry]),
-    Leaf(Op),
+    Leaf(Op<'static>),
 }
 
 /// An op's handler and its KIND in one field. A bool column beside a handler would be a second
@@ -36,6 +37,8 @@ pub enum Entry {
 /// replaced (`writes`, the dirty name-match) are readings of it instead.
 #[derive(Clone, Copy)]
 pub enum Handler {
+    PluginRead,
+    PluginEffect,
     /// Reads state, changes nothing: never dirties, never re-mirrors.
     Read(OpFn),
     /// Routes every mutation through the command history, so it has an exact inverse. The shared
@@ -62,28 +65,61 @@ impl Handler {
         actor: &str,
         events: &mut Vec<String>,
     ) -> Result<serde_json::Value, String> {
-        let (Handler::Read(f) | Handler::Write(f) | Handler::Effect(f)) = self;
+        let (Handler::Read(f) | Handler::Write(f) | Handler::Effect(f)) = self else {
+            return Err("plugin operations cannot run inside a graph batch".into());
+        };
         f(state, payload, actor, events)
     }
     pub fn is_write(&self) -> bool {
         matches!(self, Handler::Write(_))
     }
     pub fn is_read(&self) -> bool {
-        matches!(self, Handler::Read(_))
+        matches!(self, Handler::Read(_) | Handler::PluginRead)
     }
     /// The kind as the word `list_ops` answers with.
     pub fn kind_name(&self) -> &'static str {
         match self {
-            Handler::Read(_) => "read",
+            Handler::Read(_) | Handler::PluginRead => "read",
             Handler::Write(_) => "write",
-            Handler::Effect(_) => "effect",
+            Handler::Effect(_) | Handler::PluginEffect => "effect",
         }
     }
 }
 
-impl Op {
+impl<'a> Op<'a> {
+    /// Validate the envelope before and after a plugin transforms it.
+    pub fn validate(&self, value: &serde_json::Value) -> Result<(), String> {
+        let object = value.as_object().ok_or("operation arguments must be an object")?;
+        for key in object.keys() {
+            if !self.args().any(|(name, _, _)| name == key) {
+                return Err(format!("{}: unknown argument `{key}`", self.name));
+            }
+        }
+        fn matches(ty: &str, value: &serde_json::Value) -> bool {
+            if let Some(item) = ty.strip_suffix("[]") {
+                return value.as_array().is_some_and(|values| values.iter().all(|v| matches(item, v)));
+            }
+            match ty {
+                "json" | "any" => true,
+                "float" => value.is_number(),
+                "int" => value.is_i64() || value.is_u64(),
+                "bool" => value.is_boolean(),
+                "float2" => value.as_array().is_some_and(|v| v.len() == 2 && v.iter().all(|v| v.is_number())),
+                _ => value.is_string(),
+            }
+        }
+        for (name, ty, required) in self.args() {
+            match object.get(name) {
+                None if required => return Err(format!("{}: missing argument `{name}`", self.name)),
+                Some(value) if !matches(ty, value) => return Err(format!("{}: `{name}` requires {ty}", self.name)),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     /// The params schema, parsed: `(name, type, required)` per argument.
-    pub fn args(&self) -> impl Iterator<Item = (&'static str, &'static str, bool)> {
+    pub fn args(&self) -> impl Iterator<Item = (&'a str, &'a str, bool)> {
         self.args.split_whitespace().filter_map(|a| {
             let (name, ty) = a.split_once(':')?;
             Some((name, ty.trim_end_matches('!'), ty.ends_with('!')))
@@ -104,6 +140,9 @@ use Entry::{Group, Leaf};
 use Handler::{Effect, Read, Write};
 
 pub static TREE: &[Entry] = &[
+    Group("plugin", "installed plugin services and UI", &[
+        Leaf(Op { name: "list", handler: Read(crate::plugins::list), args: "", positional: 0, doc: "List installed plugins and their status.", result: "{plugins}" }),
+    ]),
     Group("session", "the goofi instance as a whole — identity, the open patch, save and load", &[
         Leaf(Op { name: "status", handler: Read(arms::session_status), args: "", positional: 0,
              doc: "The session's identity AND its health: which instance this is, where the patch lives, whether it differs from disk, and every standing error with how long it has stood. One read for `is my patch healthy, and have I saved it`.",
@@ -326,7 +365,7 @@ pub static TREE: &[Entry] = &[
         Leaf(Op { name: "disarm", handler: Write(arms::record_disarm), args: "output:endpoint!", positional: 1,
              doc: "Stop capturing this output slot. A file open for it is closed and named in the manifest. `changed` is false when the slot was not armed, which records no command.",
              result: "{ok: true, changed: bool}" }),
-        Leaf(Op { name: "start", handler: Effect(arms::record_start), args: "name:string root:string", positional: 1,
+        Leaf(Op { name: "start", handler: Effect(arms::record_start), args: "name:string root:string annotations:json", positional: 1,
              doc: "Begin a recording. `name` names the folder, which otherwise carries the UTC of this moment; `root` overrides the recordings folder for this one recording. Either one absent is read from `globals.record.name` and `globals.record.root`. Refused when nothing is armed, and refused when one already runs.",
              result: "{folder: string}" }),
         Leaf(Op { name: "stop", handler: Effect(arms::record_stop), args: "", positional: 0,
@@ -388,14 +427,14 @@ pub static TREE: &[Entry] = &[
 /// The phrases the CLIENT owns — `serve`, the door words, and the future `plugin` prefix. Never
 /// registrable, and prefix-free with the registry: the contracts invariant checks both together.
 pub static RESERVED: &[&str] =
-    &["serve", "help", "session list", "agent term", "plugin", "completions"];
+    &["serve", "help", "session list", "agent term", "completions"];
 
 /// The flat rows the tree spells, full phrases joined once and leaked once per process — what the
 /// socket, `op list` and the generated `OpName` union read.
-pub fn registry() -> &'static [Op] {
+pub fn registry() -> &'static [Op<'static>] {
     use std::sync::OnceLock;
-    static FLAT: OnceLock<Vec<Op>> = OnceLock::new();
-    fn walk(prefix: &str, entries: &[Entry], out: &mut Vec<Op>) {
+    static FLAT: OnceLock<Vec<Op<'static>>> = OnceLock::new();
+    fn walk(prefix: &str, entries: &[Entry], out: &mut Vec<Op<'static>>) {
         for e in entries {
             match e {
                 Entry::Group(word, _, children) => {
@@ -420,13 +459,13 @@ pub fn registry() -> &'static [Op] {
 }
 
 /// The row for `name`, if the op exists.
-pub fn find(name: &str) -> Option<&'static Op> {
+pub fn find(name: &str) -> Option<&'static Op<'static>> {
     registry().iter().find(|o| o.name == name)
 }
 
 /// The rows one server serves. A mode does not REGISTER what it withholds — the one spelling of
 /// each mode, so `op list`, the phrase resolver and the MCP all shrink with it.
-pub fn table(mode: crate::Mode) -> Vec<&'static Op> {
+pub fn table(mode: crate::Mode) -> Vec<&'static Op<'static>> {
     // What a demo drops: the host's filesystem, the agents it would spawn, the two ops that read
     // or write a `.gfi` beside them, and the one that writes a node file into the host's own home
     // — every visitor shares one process. `session new` stays: it is the visitor's reset.
@@ -451,7 +490,7 @@ pub fn typescript() -> String {
          // The manager's op registry is the only place an op name is declared: naming one that is\n\
          // not in it is a type error here and an `unknown op` refusal there. Regenerate by running\n\
          // `cargo test -p goofi-bridge`, which rewrites this file when it drifts.\n\
-         export type OpName =\n{};\n",
+         export type OpName =\n\t| `plugin ${{string}}`\n{};\n",
         names.join("\n")
     )
 }

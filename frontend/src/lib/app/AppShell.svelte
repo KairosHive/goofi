@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { loadPlugins } from '$lib/plugins/runtime.svelte';
 	import TopBar from '$lib/editor/TopBar.svelte';
 	import FsBrowser from '$lib/fs/FsBrowser.svelte';
 	import { uploadPatch } from '$lib/api/patchFile';
@@ -159,10 +160,24 @@
 	});
 
 	onMount(() => {
+		let started = false;
+		let disposed = false;
+		let cleanup: (() => void) | undefined;
+		const offPlugins = getControl().onConnect((connected) => {
+			if (!connected || started) return;
+			started = true;
+			void loadPlugins().then((dispose) => {
+				if (disposed) dispose();
+				else cleanup = dispose;
+			}).catch((error) => notify().failure('Plugins', error));
+		});
 		window.addEventListener('keydown', onKeydown);
 		window.addEventListener('beforeunload', onBeforeUnload);
 		const offProto = getControl().onProtocolMismatch(() => (protocolMismatch = true));
 		return () => {
+			disposed = true;
+			offPlugins();
+			cleanup?.();
 			window.removeEventListener('keydown', onKeydown);
 			window.removeEventListener('beforeunload', onBeforeUnload);
 			offProto();
