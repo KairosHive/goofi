@@ -85,6 +85,76 @@ fn close(a: [f32; 4], b: [f32; 4]) -> bool {
 }
 
 #[test]
+fn composite_modes_blend_colors_and_transparency() {
+    let g = Goofi::new();
+    let a = g.add("graphics:Constant");
+    let b = g.add("graphics:Constant");
+    let composite = g.add("graphics:Composite");
+    for node in [a, b, composite] {
+        g.ready(node);
+        g.set_param(node, "common", "width", 8);
+        g.set_param(node, "common", "height", 8);
+    }
+    for channel in ["r", "g", "b"] {
+        g.set_param(a, "colour", channel, 0.25);
+        g.set_param(b, "colour", channel, 0.75);
+    }
+    g.link(a, "out", composite, "a");
+    g.link(b, "out", composite, "b");
+    let expect = |mode: &str, expected: [f32; 4]| {
+        g.set_param(composite, "composite", "mode", mode);
+        drawn(&g, composite, mode, |d| close(px(d, 0, 0), expected));
+    };
+    for (mode, value) in [
+        ("over", 0.25), ("under", 0.75), ("add", 1.0), ("subtract", 0.5),
+        ("multiply", 0.1875), ("divide", 3.0), ("minimum", 0.25), ("maximum", 0.75),
+        ("screen", 0.8125), ("overlay", 0.625), ("hard light", 0.375),
+        ("soft light", 0.65625), ("color dodge", 1.0), ("color burn", 0.0),
+        ("difference", 0.5), ("exclusion", 0.625), ("in", 0.25), ("atop", 0.25),
+    ] {
+        expect(mode, [value, value, value, 1.0]);
+    }
+    expect("out", [0.0; 4]);
+    expect("xor", [0.0; 4]);
+
+    // Unequal alpha exposes straight/premultiplied color errors and mask direction.
+    g.set_param(a, "colour", "a", 0.5);
+    g.set_param(b, "colour", "a", 0.25);
+    expect("over", [0.35, 0.35, 0.35, 0.625]);
+    expect("under", [0.45, 0.45, 0.45, 0.625]);
+    expect("multiply", [0.3375, 0.3375, 0.3375, 0.625]);
+    expect("in", [0.25, 0.25, 0.25, 0.125]);
+    expect("out", [0.25, 0.25, 0.25, 0.375]);
+    expect("atop", [0.5, 0.5, 0.5, 0.25]);
+    expect("xor", [0.375, 0.375, 0.375, 0.5]);
+    g.set_param(composite, "composite", "blend", 0.5);
+    expect("over", [0.4642857, 0.4642857, 0.4642857, 0.4375]);
+    g.set_param(composite, "composite", "blend", 0.0);
+    expect("over", [0.75, 0.75, 0.75, 0.25]);
+    g.set_param(composite, "composite", "blend", 1.0);
+
+    // Hidden RGB must not enter the result, even for arithmetic modes.
+    g.set_param(a, "colour", "a", 0.0);
+    expect("add", [0.75, 0.75, 0.75, 0.25]);
+    g.set_param(b, "colour", "a", 0.0);
+    expect("over", [0.0; 4]);
+    for node in [a, b] {
+        g.set_param(node, "colour", "a", 1.0);
+    }
+    for channel in ["r", "g", "b"] {
+        g.set_param(a, "colour", channel, 0.0);
+    }
+    expect("divide", [0.0, 0.0, 0.0, 1.0]);
+    expect("color burn", [0.0, 0.0, 0.0, 1.0]);
+    for channel in ["r", "g", "b"] {
+        g.set_param(a, "colour", channel, 1.0);
+    }
+    expect("color dodge", [1.0; 4]);
+    expect("add", [1.75, 1.75, 1.75, 1.0]);
+    expect("subtract", [-0.25, -0.25, -0.25, 1.0]);
+}
+
+#[test]
 fn shaders_render_on_the_gpu() {
     let g = Goofi::new();
 
