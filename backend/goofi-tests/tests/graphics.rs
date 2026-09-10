@@ -85,6 +85,66 @@ fn close(a: [f32; 4], b: [f32; 4]) -> bool {
 }
 
 #[test]
+fn texture_math_maps_ranges_and_selected_channels() {
+    let g = Goofi::new();
+    let source = g.add("graphics:Constant");
+    let math = g.add("graphics:Math");
+    for node in [source, math] {
+        g.ready(node);
+        g.set_param(node, "common", "width", 8);
+        g.set_param(node, "common", "height", 4);
+    }
+    for (channel, value) in [("r", 0.25), ("g", 0.5), ("b", 1.0), ("a", 0.75)] {
+        g.set_param(source, "colour", channel, value);
+    }
+    g.link(source, "out", math, "input");
+    let expect = |what: &str, expected: [f32; 4]| {
+        drawn(&g, math, what, |d| shape(d) == vec![4, 8, 4] && close(px(d, 0, 0), expected));
+    };
+    expect("identity", [0.25, 0.5, 1.0, 0.75]);
+    g.set_param(math, "math", "pre_add", -0.5);
+    g.set_param(math, "math", "multiply", 2.0);
+    g.set_param(math, "math", "post_add", 0.25);
+    expect("ordered arithmetic with HDR output", [-0.25, 0.25, 1.25, 0.75]);
+    g.set_param(math, "math", "channels", "rgba");
+    g.set_param(math, "math", "post_add", 0.5);
+    expect("all four channels", [0.0, 0.5, 1.5, 1.0]);
+    g.set_param(math, "math", "channels", "alpha");
+    expect("alpha only", [0.25, 0.5, 1.0, 1.0]);
+    g.set_param(math, "math", "channels", "rgb");
+    g.set_param(math, "math", "pre_add", 0.0);
+    g.set_param(math, "math", "multiply", 1.0);
+    g.set_param(math, "math", "post_add", 0.0);
+    g.set_param(math, "range", "from_low", 0.25);
+    g.set_param(math, "range", "from_high", 0.75);
+    g.set_param(math, "range", "to_low", -1.0);
+    g.set_param(math, "range", "to_high", 1.0);
+    expect("range expansion", [-1.0, 0.0, 2.0, 0.75]);
+    g.set_param(math, "range", "bound", "clamp");
+    expect("clamp", [-1.0, 0.0, 1.0, 0.75]);
+    g.set_param(math, "range", "bound", "wrap");
+    expect("wrap", [-1.0, 0.0, 0.0, 0.75]);
+    g.set_param(math, "range", "to_low", 1.0);
+    g.set_param(math, "range", "to_high", -1.0);
+    g.set_param(math, "range", "bound", "clamp");
+    expect("reversed target", [1.0, 0.0, -1.0, 0.75]);
+    g.set_param(math, "range", "from_high", 0.25);
+    expect("zero-width source", [1.0, 1.0, 1.0, 0.75]);
+    g.set_param(math, "range", "from_low", 0.75);
+    expect("reversed source and target", [-1.0, 0.0, 1.0, 0.75]);
+
+    g.set_param(math, "range", "from_low", 0.0);
+    g.set_param(math, "range", "from_high", 1.0);
+    g.set_param(math, "range", "to_low", 1.0);
+    g.set_param(math, "range", "to_high", 2.0);
+    g.set_param(math, "math", "multiply", 8.0);
+    g.set_param(math, "range", "bound", "fold");
+    expect("octave fold matches signal Math", [1.5, 1.25, 1.125, 0.75]);
+    g.set_param(math, "range", "to_high", 1.0);
+    expect("zero-width target", [1.0, 1.0, 1.0, 0.75]);
+}
+
+#[test]
 fn blur_modes_spread_a_spot_without_hidden_color() {
     let g = Goofi::new();
     let dir = g.state.mount().join("nodes_graphics");
