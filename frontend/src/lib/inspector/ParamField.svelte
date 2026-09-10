@@ -22,7 +22,7 @@
 	} from '$lib/ui';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { controlKind } from './controlKind';
-	import { literalFor } from './paramSeed';
+	import { sourceForMode } from './paramSeed';
 	import ExprEditor from './expr/ExprEditor.svelte';
 	import MidiLearn from './MidiLearn.svelte';
 	import RefPicker from './RefPicker.svelte';
@@ -97,12 +97,10 @@
 	function choose(mode: ParamMode): void {
 		picking = false;
 		if (mode === descriptor.mode) return;
-		if (mode === 'expression' && !descriptor.expression) {
-			onSetSource({ expression: literalFor(descriptor) });
-		} else if (mode === 'reference' && !descriptor.reference) {
+		if (mode === 'reference' && !descriptor.reference) {
 			picking = true;
 		} else {
-			onSetSource({ mode });
+			onSetSource(sourceForMode(descriptor, mode));
 		}
 	}
 </script>
