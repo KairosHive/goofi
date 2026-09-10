@@ -69,8 +69,9 @@ impl Writer {
         out.push(']');
     }
 
-    fn value(&self, d: &Data, depth: usize, out: &mut String) {
+    fn value(&self, d: &Data, depth: usize, out: &mut String) -> NodeResult {
         match d.value() {
+            Value::Texture(_) => return Err("texture submissions cannot be written as JSON".into()),
             Value::Str(s) => quote(s, out),
             Value::Array(a) => {
                 let values: Vec<f32> = a
@@ -93,7 +94,7 @@ impl Writer {
                     quote(k, out);
                     out.push(':');
                     out.push(' ');
-                    self.value(v, depth + 1, out);
+                    self.value(v, depth + 1, out)?;
                 }
                 if !t.is_empty() {
                     self.newline(depth, out);
@@ -101,6 +102,7 @@ impl Writer {
                 out.push('}');
             }
         }
+        Ok(())
     }
 }
 
@@ -119,7 +121,7 @@ impl Node for ToJson {
             decimals: p.i64("json", "decimals").unwrap_or(-1).clamp(-1, 17),
         };
         let mut text = String::new();
-        w.value(d, 0, &mut text);
+        w.value(d, 0, &mut text)?;
         out.set("out", Data::string(text, Meta::new()));
         Ok(())
     }

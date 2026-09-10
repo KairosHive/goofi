@@ -692,6 +692,7 @@ fn frame_json(d: &goofi_core::Data, raw: bool) -> Value {
         }
         goofi_core::Value::Array(s) => json!({ "meta": meta, "shape": s.shape(), "range": range_json(s) }),
         goofi_core::Value::Str(s) => json!({ "meta": meta, "value": &**s }),
+        goofi_core::Value::Texture(t) => json!({ "meta": meta, "texture_size": t.size() }),
         goofi_core::Value::Table(t) => json!({ "meta": meta,
             "value": Value::Object(t.iter().map(|(k, v)| (k.clone(), frame_json(v, raw))).collect()) }),
     }

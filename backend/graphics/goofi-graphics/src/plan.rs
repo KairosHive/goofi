@@ -37,7 +37,7 @@ fn unpack(cell: u64) -> Option<goofi_view::ViewWant> {
 /// start at, so the floor and the patch's own default cannot drift apart.
 pub const GENERATOR: u32 = goofi_core::globals::DEFAULT_SIZE;
 /// The widest a node may ask for on either axis.
-pub const MAX_SIZE: u32 = 8192;
+pub const MAX_SIZE: u32 = goofi_core::texture::MAX_SIZE;
 
 /// The size held in a node's param atomics, whose universal `common` group starts at `base`.
 pub fn asked(params: &[AtomicU64], base: usize) -> (u32, u32) {
@@ -65,13 +65,19 @@ pub struct Record {
     pub quality: goofi_core::record::VideoQuality,
 }
 
+pub enum Pass {
+    Shader(Built),
+    Host { source: crate::producer::Source, program: Option<(Arc<str>, Built)> },
+}
+
 pub struct Stage {
     pub uid: Uid,
-    pub pipeline: Built,
+    pub pass: Pass,
     pub inputs: Vec<Input>,
     /// How many state buffers this stage carries between two ticks.
     pub state: usize,
     pub size: (u32, u32),
+    pub natural: (bool, bool),
     pub decls: &'static [ParamDecl],
     pub params: Arc<[AtomicU64]>,
     pub uploads: Vec<Arc<Mutex<Option<Upload>>>>,
@@ -183,8 +189,11 @@ pub fn compile(
     let mut stages = Vec::with_capacity(order.len());
     for uid in &order {
         let inst = &live[uid];
-        if let Some(Err(why)) = inst.class.pipeline.get() {
-            faults.push((*uid, format!("shader: {why}")));
+        if let crate::scan::Kind::Shader(built) = &inst.class.kind {
+            if let Some(Err(why)) = built.get() { faults.push((*uid, format!("shader: {why}"))); }
+        }
+        if let Some((_, built)) = &inst.program {
+            if let Some(Err(why)) = built.get() { faults.push((*uid, format!("texture program: {why}"))); }
         }
         let mut upload = 0;
         let inputs = inst
@@ -207,10 +216,14 @@ pub fn compile(
             .collect();
         stages.push(Stage {
             uid: *uid,
-            pipeline: inst.class.pipeline.clone(),
+            pass: match &inst.class.kind {
+                crate::scan::Kind::Shader(built) => Pass::Shader(built.clone()),
+                crate::scan::Kind::Host(_) => Pass::Host { source: inst.source.clone().expect("host source"), program: inst.program.clone() },
+            },
             inputs,
             state: inst.class.state.len(),
             size: sizes[uid],
+            natural: (inst.asked().0 == 0, inst.asked().1 == 0),
             decls: inst.class.manifest.params,
             params: inst.params.clone(),
             uploads: inst.uploads.clone(),
@@ -291,7 +304,8 @@ fn size_of(
         });
         let (fw, fh) = match behind {
             Some(p) => size_of(p, live, wires, sizes, visiting),
-            None => (GENERATOR, GENERATOR),
+            None => live.get(&uid).and_then(|i| i.source.as_ref())
+                .and_then(|s| s.lock().unwrap().as_ref().map(|f| f.size)).unwrap_or((GENERATOR, GENERATOR)),
         };
         answer = (if w == 0 { fw } else { w }, if h == 0 { fh } else { h });
     }

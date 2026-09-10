@@ -28,13 +28,15 @@ pub fn folder_of(engine: &str) -> String {
     format!("nodes_{engine}")
 }
 
-/// The engine a node file is for: a `.py` is a signal node, a `.wgsl` a graphics one, and a `.rs`
-/// names the SDK it uses.
+/// Python defaults to signal; a first-line `# goofi: graphics` header selects graphics.
+/// WGSL selects graphics. Rust names the SDK it uses.
 /// One naming none — a file mid-edit — is its folder's where the folder names an engine, and the
 /// signal engine's elsewhere; either then says why it does not build.
 pub fn engine_of(path: &Path) -> Option<String> {
     match path.extension()?.to_str()? {
-        "py" => Some("signal".to_string()),
+        "py" => Some(std::fs::read_to_string(path).ok()
+            .and_then(|s| s.lines().next()?.strip_prefix("# goofi: ").map(str::to_owned))
+            .unwrap_or_else(|| "signal".to_string())),
         "wgsl" => Some("graphics".to_string()),
         "rs" => Some(sdk_engine(&std::fs::read_to_string(path).ok()?).unwrap_or_else(|| folder_engine(path))),
         _ => None,

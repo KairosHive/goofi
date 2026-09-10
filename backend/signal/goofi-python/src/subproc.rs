@@ -10,7 +10,7 @@ use iceoryx2::prelude::*;
 
 use goofi_core::Data;
 use goofi_node::{ParamKey, Params};
-use goofi_signal_sdk::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
+use goofi_host_sdk::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
 
 /// Unique iceoryx2 service-name base per spawned subprocess, so concurrent nodes never collide.
 static SUBPROC_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -274,7 +274,7 @@ impl Drop for RemoteNode {
 use std::path::Path;
 
 use crate::Discovered;
-use goofi_signal_sdk::NodeFactory;
+use goofi_host_sdk::NodeFactory;
 use goofi_node::{Isolation, NodeManifest};
 
 /// A discovered subprocess node type, ready to `register_dyn_type` into a Graph.

@@ -83,7 +83,7 @@ between them: a band power off the signal engine can set a filter cutoff on the 
 | --- | --- | --- |
 | `signal` | Array data, at whatever rate the source runs. LSL, MIDI and OSC in and out, spectra and band powers, complexity measures, and the arithmetic to route what comes out of them. | A thread per node, each scheduling itself. |
 | `audio` | The same node interface at audio rate. Live in and out, MIDI, oscillators, filters, envelopes and feedback. | One topologically ordered thread. |
-| `graphics` | Pixels. A node is a WGSL fragment shader: noise and shapes to make them, blur and displacement to work them, feedback to read back what the last tick drew. | The GPU. |
+| `graphics` | Pixels from WGSL shaders or Rust/Python sources, with shared GPU textures. Noise and shapes generate images; Camera captures them; blur, displacement, and feedback process them. | The GPU. |
 
 VST3 is a **format**, not an engine — a plugin runs on the audio engine. Its nodes come off the
 machine the patch is open on, so goofi supports VST3 and ships none.
@@ -191,3 +191,5 @@ cd tests/e2e && npm install && npm run e2e    # Playwright against the real bina
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+See [graphics node authoring](sdk/graphics.md) for Rust and Python texture sources.

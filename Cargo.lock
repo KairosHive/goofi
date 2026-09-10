@@ -988,6 +988,7 @@ dependencies = [
  "goofi-bridge",
  "goofi-client",
  "goofi-core",
+ "goofi-graphics",
  "goofi-init",
  "goofi-node",
  "goofi-python",
@@ -1069,10 +1070,14 @@ dependencies = [
 name = "goofi-graphics"
 version = "3.1.0"
 dependencies = [
+ "goofi-build",
  "goofi-codec",
  "goofi-control",
  "goofi-core",
+ "goofi-host",
+ "goofi-host-sdk",
  "goofi-node",
+ "goofi-python",
  "goofi-record",
  "goofi-transport",
  "goofi-view",
@@ -1081,6 +1086,40 @@ dependencies = [
  "naga",
  "pollster",
  "wgpu",
+]
+
+[[package]]
+name = "goofi-graphics-sdk"
+version = "3.1.0"
+dependencies = [
+ "goofi-host-sdk",
+]
+
+[[package]]
+name = "goofi-host"
+version = "3.1.0"
+dependencies = [
+ "goofi-codec",
+ "goofi-core",
+ "goofi-host-sdk",
+ "goofi-node",
+ "goofi-transport",
+ "iceoryx2",
+ "indexmap",
+ "rmp-serde",
+ "serde",
+]
+
+[[package]]
+name = "goofi-host-sdk"
+version = "3.1.0"
+dependencies = [
+ "goofi-codec",
+ "goofi-core",
+ "goofi-node",
+ "indexmap",
+ "libloading 0.8.9",
+ "rmp-serde",
 ]
 
 [[package]]
@@ -1115,12 +1154,13 @@ dependencies = [
 name = "goofi-python"
 version = "3.1.0"
 dependencies = [
+ "goofi-build",
  "goofi-codec",
  "goofi-core",
+ "goofi-host-sdk",
  "goofi-init",
  "goofi-node",
  "goofi-pymod",
- "goofi-signal-sdk",
  "iceoryx2",
  "indexmap",
  "pyo3",
@@ -1144,29 +1184,19 @@ name = "goofi-signal"
 version = "3.1.0"
 dependencies = [
  "goofi-build",
- "goofi-codec",
  "goofi-core",
+ "goofi-host",
  "goofi-node",
  "goofi-python",
  "goofi-signal-sdk",
  "goofi-transport",
- "iceoryx2",
- "indexmap",
- "rmp-serde",
- "serde",
- "serde_json",
 ]
 
 [[package]]
 name = "goofi-signal-sdk"
 version = "3.1.0"
 dependencies = [
- "goofi-codec",
- "goofi-core",
- "goofi-node",
- "indexmap",
- "libloading 0.8.9",
- "rmp-serde",
+ "goofi-host-sdk",
 ]
 
 [[package]]

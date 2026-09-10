@@ -12,6 +12,7 @@ name = "goofi"
 path = "src/main.rs"
 
 [dependencies]
+goofi-graphics = { path = "../graphics/goofi-graphics" }
 goofi-bridge = { path = "../goofi-bridge" }
 goofi-client = { path = "../goofi-client" }
 goofi-core = { path = "../goofi-core" }
@@ -50,7 +51,7 @@ goofi-init = { path = "../goofi-init" }
 # `--no-default-features` is what a build with no libclang takes.
 asio = ["goofi-audio/asio"]
 default = ["python", "asio"]
-python = ["dep:goofi-python", "goofi-python/embed", "goofi-signal/embed"]
+python = ["dep:goofi-python", "goofi-python/embed", "goofi-signal/embed", "goofi-graphics/embed"]
 
 [dev-dependencies]
 # The trait the graceful-exit test's node implements.

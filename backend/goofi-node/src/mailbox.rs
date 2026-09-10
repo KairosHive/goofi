@@ -82,6 +82,7 @@ pub fn split_index(source: &str) -> Result<(&str, Option<usize>), String> {
 
 fn scalar_of(frame: &Data, target: &Param, index: Option<usize>) -> Result<Param, String> {
     match (frame.value(), target) {
+        (goofi_core::Value::Texture(_), _) => Err("a reference cannot read an unrendered texture submission".into()),
         (goofi_core::Value::Str(s), Param::Str { options, refresh, .. }) if index.is_none() => {
             Ok(Param::Str { value: s.to_string(), options: options.clone(), refresh: *refresh })
         }

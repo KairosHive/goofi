@@ -706,7 +706,7 @@ fn a_patch_sounds_under_the_external_clock() {
     // while the three above it sound. A gate is HIGH above zero, on both planes.
     let ramp4 = g.add("_TestRamp");
     g.set_param(ramp4, "ramp", "channels", 4);
-    let under = g.add("Math");
+    let under = g.add("signal:Math");
     g.set_param(under, "math", "pre_add", -1.0);
     let in4 = g.add("audio:SignalIn");
     g.link(ramp4, "out", under, "input");
@@ -1265,7 +1265,7 @@ fn one_signal_speaks_through_another_band_by_band() {
     g.set_param(chord, "ramp", "channels", 4);
     // One sample long, so channel c is exactly c rather than a ramp from c to c + 1.
     g.set_param(chord, "ramp", "length", 1);
-    let half = g.add("Math");
+    let half = g.add("signal:Math");
     g.set_param(half, "math", "multiply", 0.5);
     let voices = g.add("audio:SignalIn");
     g.link(chord, "out", half, "input");
@@ -1315,7 +1315,7 @@ fn one_signal_speaks_through_another_band_by_band() {
     // same ramp mapped to nothing-then-everything shuts the first voice and leaves the other three.
     g.set_param(tone, "osc", "pitch", 0.0);
     let sounding = settled(&g, chord_bank, "the first voice's own partial while it is held");
-    let shut = g.add("Math");
+    let shut = g.add("signal:Math");
     g.set_param(shut, "range", "from_low", 0.5);
     g.set_param(shut, "range", "bound", "clamp");
     let gates = g.add("audio:SignalIn");

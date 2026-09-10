@@ -1,5 +1,0 @@
-# OpenCV is a C extension with no free-threaded wheel, which is what puts it here and Camera on
-# the subprocess tier. It is the only node in this bundle that wants it, and it is named here
-# rather than beside a lens-reading node elsewhere because a camera is an input like `lsl_in` and
-# `osc_in`, not computer vision.
-opencv-contrib-python

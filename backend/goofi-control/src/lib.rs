@@ -113,6 +113,8 @@ impl Faults {
 
 /// This tick's settled state, as [`Half::tick`] reads it.
 pub struct Cx<'a> {
+    /// Resolved typed values, including strings, for host-node parameter projection.
+    pub values: Vec<Param>,
     /// The record value per declared param.
     pub consts: &'a [Param],
     /// The live value per declared param — a constant, or what a binding last evaluated to.
@@ -611,7 +613,12 @@ impl<H: Half> Control<H> {
             let Some(port) = outs[i].record.as_ref() else { return };
             port.send(bytes);
         };
+        let values = self.consts.iter().enumerate().map(|(i, value)| {
+            self.binds.iter().find(|b| b.param == i)
+                .and_then(|b| self.evaluated.get(&b.key)).unwrap_or(value).clone()
+        }).collect();
         let cx = Cx {
+            values,
             consts: &self.consts,
             params: &self.params,
             pulses: &pulses,

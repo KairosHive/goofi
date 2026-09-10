@@ -1,0 +1,11 @@
+[package]
+name = "goofi-graphics-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+host = ["goofi-host-sdk/host"]
+
+[dependencies]
+goofi-host-sdk = { path = "../../goofi-host-sdk" }
