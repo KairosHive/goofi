@@ -1,4 +1,4 @@
-/** Load each plugin frontend once per browser, before workspace panels mount. */
+/** Load plugin frontends while the workspace is available. */
 import { registerPanel } from 'panelty';
 import { getControl } from '$lib/api/control';
 import { notify } from '$lib/stores/notify.svelte';

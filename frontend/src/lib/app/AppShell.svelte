@@ -26,7 +26,6 @@
 	import { onMount } from 'svelte';
 
 	let protocolMismatch = $state(false);
-	let pluginsReady = $state(false);
 
 	// Before any panel renders; the pre-sync frame is the manager's own first-mint spelling, so the
 	// editor mounts once.
@@ -170,7 +169,7 @@
 			void loadPlugins().then((dispose) => {
 				if (disposed) dispose();
 				else cleanup = dispose;
-			}).catch((error) => notify().failure('Plugins', error)).finally(() => pluginsReady = true);
+			}).catch((error) => notify().failure('Plugins', error));
 		});
 		window.addEventListener('keydown', onKeydown);
 		window.addEventListener('beforeunload', onBeforeUnload);
@@ -205,7 +204,7 @@
 		{/snippet}
 	</TopBar>
 	<div class="main">
-		{#if pluginsReady}<WorkspaceView />{/if}
+		<WorkspaceView />
 		<ErrorPanel onFocus={focusError} />
 	</div>
 	{#if fsMode}
