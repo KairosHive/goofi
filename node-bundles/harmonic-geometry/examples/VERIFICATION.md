@@ -240,7 +240,7 @@ shader-only addition. Their earlier results and machine failures remain below.
 ## What the sessions check
 
 The public Rust sessions are in
-[`harmonic_geometry.rs`](../../backend/goofi-tests/tests/harmonic_geometry.rs).
+[`harmonic_geometry.rs`](../../../backend/goofi-tests/tests/harmonic_geometry.rs).
 They load real Python nodes and use goofi operations, output probes, the graphics
 test clock, and the audio test clock.
 
@@ -266,7 +266,7 @@ test clock, and the audio test clock.
   spatial variation after shader inputs arrive.
 
 The Playwright session is in
-[`harmonic-geometry.spec.ts`](../../tests/e2e/tests/harmonic-geometry.spec.ts).
+[`harmonic-geometry.spec.ts`](../../../tests/e2e/tests/harmonic-geometry.spec.ts).
 It opens all eight patches in the real app, switches every viewer tab, checks
 frame delivery, changes auto and mix, checks node errors, and checks both tablet
 orientations. A second session checks the cookbook on desktop and phone and
@@ -364,9 +364,9 @@ cargo test -p goofi-tests --features embed --test harmonic_geometry phase_wrap_e
 To rebuild the delivered files on Windows:
 
 ```sh
-.gfivenv/Scripts/python.exe examples/harmonic-geometry/build_patches.py
-.gfivenv/Scripts/python.exe examples/harmonic-geometry/build_images.py
-.gfivenv/Scripts/python.exe examples/harmonic-geometry/build_cookbook.py
+.gfivenv/Scripts/python.exe node-bundles/harmonic-geometry/examples/build_patches.py
+.gfivenv/Scripts/python.exe node-bundles/harmonic-geometry/examples/build_images.py
+.gfivenv/Scripts/python.exe node-bundles/harmonic-geometry/examples/build_cookbook.py
 ```
 
 On Linux/macOS use `.gfivenv/bin/python`. Run the Rust sessions first to produce
