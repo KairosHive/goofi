@@ -159,10 +159,30 @@ fn a_complexity_node_reads_a_real_signal_rather_than_answering_a_constant() {
         })
         .collect();
 
+    // The MIDDLE of several readings, not the first. Eight Python subprocesses come up at once
+    // here, and a machine that stutters under them hands the buffer a window stitched from blocks
+    // that do not run on from one another. That window is a real discontinuity — it reads as extra
+    // zero crossings and a Hjorth far off 1 — and it is the harness stumbling, not the node. One
+    // such window cannot move a median; a node that truly answers a constant cannot hide behind it.
     for (ty, node, probe, range) in nodes {
-        let d = first_frame(&g, &ty, node, &probe, |d| shape(d) == vec![1]);
-        let v = f32s(&d)[0];
-        assert!(range.contains(&v), "{ty} of an 8 Hz sine is {v}, outside {range:?}");
+        first_frame(&g, &ty, node, &probe, |d| shape(d) == vec![1]);
+        // One reading per NEW frame, counted rather than compared: a node whose answer is a
+        // constant — which a steady sine makes several of these — never changes value, and waiting
+        // for five different numbers would wait forever.
+        let mut seen: Vec<f32> = Vec::new();
+        let mut at = probe.count();
+        g.until(&format!("{ty} to answer five frames"), |_| {
+            if probe.count() > at {
+                at = probe.count();
+                if let Some(v) = probe.latest().filter(|d| shape(d) == vec![1]).map(|d| f32s(&d)[0]) {
+                    seen.push(v);
+                }
+            }
+            (seen.len() >= 5).then_some(())
+        });
+        seen.sort_by(f32::total_cmp);
+        let v = seen[seen.len() / 2];
+        assert!(range.contains(&v), "{ty} of an 8 Hz sine is {v}, outside {range:?} (saw {seen:?})");
     }
 }
 
@@ -1196,3 +1216,4 @@ fn an_onnx_node_hands_back_the_models_own_shape_until_it_is_asked_for_a_picture(
     g.set_param(node, "onnx", "output", "nope");
     g.until("the unknown output to be reported", |g| g.error(node));
 }
+
