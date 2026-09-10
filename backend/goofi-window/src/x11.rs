@@ -22,6 +22,8 @@ pub struct Platform {
     black: u32,
     wm_protocols: Atom,
     wm_delete: Atom,
+    net_wm_name: Atom,
+    utf8_string: Atom,
     /// A pipe: any thread writes to wake the pump out of its `poll`.
     wake: [i32; 2],
     depth: u8,
@@ -49,6 +51,8 @@ impl Platform {
         let atom = |name: &[u8]| conn.intern_atom(false, name).map_err(err)?.reply().map_err(err).map(|r| r.atom);
         let wm_protocols = atom(b"WM_PROTOCOLS")?;
         let wm_delete = atom(b"WM_DELETE_WINDOW")?;
+        let net_wm_name = atom(b"_NET_WM_NAME")?;
+        let utf8_string = atom(b"UTF8_STRING")?;
         let mut wake = [0i32; 2];
         if unsafe { libc::pipe2(wake.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) } != 0 {
             return Err("no wake pipe".into());
@@ -60,10 +64,17 @@ impl Platform {
             black,
             wm_protocols,
             wm_delete,
+            net_wm_name,
+            utf8_string,
             wake,
             depth,
             gcs: std::collections::HashMap::new(),
         })
+    }
+
+    fn set_title(&self, id: Window, title: &str) -> Result<(), String> {
+        self.conn.change_property8(PropMode::REPLACE, id, self.net_wm_name, self.utf8_string, title.as_bytes()).map_err(err)?;
+        Ok(())
     }
 
     /// The plugin draws at one size, so the window manager is told not to offer another.
@@ -88,7 +99,7 @@ impl Screen for Platform {
         self.conn
             .create_window(COPY_DEPTH_FROM_PARENT, id, self.root, 0, 0, w, h, 0, WindowClass::INPUT_OUTPUT, 0, &aux)
             .map_err(err)?;
-        self.conn.change_property8(PropMode::REPLACE, id, AtomEnum::WM_NAME, AtomEnum::STRING, title.as_bytes()).map_err(err)?;
+        self.set_title(id, title)?;
         self.conn.change_property32(PropMode::REPLACE, id, self.wm_protocols, AtomEnum::ATOM, &[self.wm_delete]).map_err(err)?;
         self.fix_size(id, (w, h))?;
         // A plugin uses another X11 connection. Flushing only sends our requests; it does
@@ -98,13 +109,7 @@ impl Screen for Platform {
     }
 
     fn retitle(&mut self, id: Id, title: &str) {
-        let _ = self.conn.change_property8(
-            PropMode::REPLACE,
-            id as Window,
-            AtomEnum::WM_NAME,
-            AtomEnum::STRING,
-            title.as_bytes(),
-        );
+        let _ = self.set_title(id as Window, title);
         let _ = self.conn.flush();
     }
 
