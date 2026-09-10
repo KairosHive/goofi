@@ -1,9 +1,8 @@
 """HarmonicModes: bounded Biotuner Chladni modes for shader synthesis.
 
-input and target are harmonic TABLEs. Each is mapped independently by Biotuner.
+input and target are harmonic ARRAYs. Each is mapped independently by Biotuner.
 Then mode coordinates, amplitudes, and phases interpolate by component rank.
-Alternatively, transition takes one TABLE with input and target harmonic TABLEs
-and a scalar mix. RatioSequence supplies this complete frame so endpoint changes
+Alternatively, transition takes one [2,N] ARRAY with endpoint ratios and mix metadata. RatioSequence supplies this complete frame so endpoint changes
 and the mix reset cannot arrive on separate clocks at a step boundary.
 Fractional intermediate modes draw a continuous visual field; they are not
 eigenmodes of the original closed plate. Select fields interpolation to retain
@@ -24,7 +23,7 @@ class HarmonicModes(goofi.Node):
     """Map harmonic ratios to Chladni modes and interpolate two mode structures.
 
     Use separate input/target harmonic frames and mix, or a single transition
-    TABLE carrying those three fields. RatioSequence.transition supplies the
+    ARRAY carrying endpoints and mix metadata. RatioSequence.transition supplies the
     latter so a new step's endpoints and its mix reset remain synchronized.
     Endpoints map to integer modes first; intermediate coordinates are continuous
     visual fields. Connecting both input routes reports an error.
@@ -33,9 +32,9 @@ class HarmonicModes(goofi.Node):
     """
 
     TAGS = ["transform"]
-    INPUTS = {"input": goofi.InputSlot(goofi.DataType.TABLE, required=False),
-              "target": goofi.InputSlot(goofi.DataType.TABLE, required=False),
-              "transition": goofi.InputSlot(goofi.DataType.TABLE, required=False),
+    INPUTS = {"input": goofi.InputSlot(goofi.DataType.ARRAY, required=False),
+              "target": goofi.InputSlot(goofi.DataType.ARRAY, required=False),
+              "transition": goofi.InputSlot(goofi.DataType.ARRAY, required=False),
               "mix": goofi.InputSlot(goofi.DataType.ARRAY, required=False)}
     OUTPUTS = {"modes": goofi.DataType.ARRAY, "mapping": goofi.DataType.STRING}
     PARAMS = {"modes": {
@@ -48,11 +47,11 @@ class HarmonicModes(goofi.Node):
     }}
 
     def _modes(self, data):
-        table, p = data.table, self.params.modes
-        try:
-            r, a, ph = [np.asarray(table[k].data, dtype=np.float64) for k in ("ratios", "amplitudes", "phases")]
-        except KeyError as e:
-            raise ValueError("HarmonicModes needs HarmonicMorph.harmonic") from e
+        p = self.params.modes
+        values = np.asarray(data.data, dtype=np.float64)
+        if values.ndim != 2 or values.shape[0] != 4:
+            raise ValueError("HarmonicModes needs a [4,N] harmonic ARRAY")
+        r, a, ph = values[:3]
         if r.ndim != 1 or a.shape != r.shape or ph.shape != r.shape or len(r) > 32:
             raise ValueError("Mode input needs aligned vectors of at most 32 components")
         if not np.all(np.isfinite(np.r_[r, a, ph])) or np.any(r <= 0) or np.any(a < 0):
@@ -88,10 +87,13 @@ class HarmonicModes(goofi.Node):
         if transition is not None:
             if any(value is not None for value in (input, target, mix)):
                 raise ValueError("Connect either transition or separate input, target, and mix")
-            try:
-                input, target, mix = [transition.table[k] for k in ("input", "target", "mix")]
-            except KeyError as e:
-                raise ValueError("A transition needs input, target, and mix") from e
+            endpoints = np.asarray(transition.data, dtype=np.float64)
+            if endpoints.ndim != 2 or endpoints.shape[0] != 2 or not 1 <= endpoints.shape[1] <= 32:
+                raise ValueError("Transition needs two endpoint ratio rows, at most 32 components")
+            def harmonic(row):
+                return goofi.Data(np.stack((row, np.full(len(row), 1/len(row)), np.zeros(len(row)), np.zeros(len(row)))))
+            input, target = (harmonic(row) for row in endpoints)
+            mix = goofi.Data(np.asarray([transition.meta["mix"]], dtype=np.float32))
         if input is None:
             return None
         modes, na, source_text = self._modes(input)

@@ -1,9 +1,8 @@
 """RatioSequence: timed ratio steps and pitch glides for harmonic modulation.
 
-ratio is one current ratio; tuning replaces one voice in a fixed anchor chord.
-Connect tuning to HarmonicMorph.a, then packed to a shader's harmonics input.
-For Chladni state morphing, connect transition to HarmonicModes.transition.
-It carries both endpoint harmonic frames and their blend in one coherent packet.
+One [2,N] transition ARRAY contains the two endpoint ratio rows. Mix, step,
+phase and selected voice are metadata. Feed the same packet to HarmonicMorph
+and HarmonicModes. Each consumer derives the current state from these endpoints.
 The optional clock input contains one elapsed time in seconds. Without it the
 node uses a monotonic clock. Frame rate does not determine sequence speed.
 """
@@ -39,16 +38,14 @@ class RatioSequence(goofi.Node):
     Keep anchor ratios outside the moving range to avoid component crossings in
     downstream nodes that sort or merge equal frequencies.
 
-    transition contains input and target harmonic TABLEs for the two step ratios
-    and their eased mix. Connect it to HarmonicModes.transition for smooth plate
+    transition contains the two endpoint ratio rows and their eased mix in metadata. Connect it to HarmonicModes.transition for smooth plate
     mode motion. chord.state selects a single ratio or the full anchor chord;
     its endpoint amplitudes are uniform and phases are zero.
     """
 
     TAGS = ['generator', 'music']
     INPUTS = {'clock': goofi.InputSlot(goofi.DataType.ARRAY, required=False)}
-    OUTPUTS = {**{name: goofi.DataType.ARRAY for name in ('ratio', 'target', 'tuning', 'step', 'phase')},
-               'transition': goofi.DataType.TABLE, 'label': goofi.DataType.STRING}
+    OUTPUTS = {'transition': goofi.DataType.ARRAY}
     PARAMS = {
         'sequence': {
             'ratios': goofi.StringParam('9/8, 6/5, 5/4, 4/3, 7/5, 3/2, 5/3, 7/4', doc='Ordered steps, as positive ratios or fractions. At most 64.'),
@@ -115,16 +112,11 @@ class RatioSequence(goofi.Node):
         phase = position-step
         amount = float(np.clip((phase-(1.0-glide))/glide, 0, 1)) if glide else 0.0
         amount = amount*amount*(3.0-2.0*amount)
-        ratio = float(np.exp((1.0-amount)*np.log(ratios[current])+amount*np.log(ratios[target])))
-        tuning[voice] = ratio
-        scalar = lambda value: np.asarray([value], dtype=np.float32)
-        def harmonic(value):
-            r = scalar(value) if self.params.chord.state == 'single ratio' else tuning.astype(np.float32).copy()
-            if self.params.chord.state == 'anchor chord':
-                r[voice] = value
-            return {'ratios': r, 'amplitudes': np.full(len(r), 1/len(r), dtype=np.float32),
-                    'phases': np.zeros(len(r), dtype=np.float32)}
-        return {'ratio': scalar(ratio), 'target': scalar(ratios[target]), 'tuning': tuning.astype(np.float32),
-                'step': scalar(current+1), 'phase': scalar(phase),
-                'transition': {'input': harmonic(ratios[current]), 'target': harmonic(ratios[target]), 'mix': scalar(amount)},
-                'label': f'{current+1}/{len(ratios)}  {ratios[current]:.4g} → {ratios[target]:.4g}  |  ratio {ratio:.5f}'}
+        if self.params.chord.state == 'single ratio':
+            endpoints = np.array([[ratios[current]], [ratios[target]]], dtype=np.float32)
+            voice = 0
+        else:
+            endpoints = np.tile(tuning, (2, 1)).astype(np.float32)
+            endpoints[:, voice] = ratios[current], ratios[target]
+        return {'transition': (endpoints, {'mix': amount, 'step': current+1,
+                'phase': phase, 'voice': voice, 'channels': {'dim0': ['input', 'target']}})}

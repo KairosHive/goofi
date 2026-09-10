@@ -1,14 +1,12 @@
-"""HarmonicGeometry: Biotuner generators behind one geometry-frame interface.
+"""HarmonicGeometry: Biotuner generators behind one indexed geometry ARRAY.
 
-Each method emits a TABLE with type, coordinates, optional edges/faces/weights,
-optional grid (numbered arrays), and info (JSON parameters and metadata). Sets
-use a numbered coordinates table. GeometryView, GeometryBlend, GeometryMetrics,
-and HarmonicTransport read this same schema. No Python objects cross a cable.
+Coordinates, connectivity, field grids and masks each occur once in the array.
+GeometryView, GeometryBlend, GeometryMetrics, HarmonicTransport and GPU readers
+consume this shared format. Descriptive parameters remain in metadata.
 
-Closed curves, integer modes, graphs, and fractals can change discretely.
+Closed curves, integer modes, graphs and fractals can change discretely.
 Use lateral/rotary/trace_3d for fixed-duration tuning motion; use GeometryBlend
-between fixed endpoint geometries for integer or topology changes.
-"""
+between fixed endpoint geometries for integer or topology changes."""
 
 import json
 import math
@@ -17,6 +15,7 @@ import numpy as np
 from biotuner.harmonic_input import HarmonicInput
 from biotuner import harmonic_geometry as hg
 import goofi
+from goofi.geometry import encode
 
 
 METHODS = [
@@ -41,35 +40,18 @@ def json_value(value):
     raise TypeError(f"Cannot encode geometry metadata {type(value).__name__}")
 
 
-def geometry_frame(geom):
-    """Encode Biotuner's geometry without pickle or loss of connectivity."""
-    coords = geom.coordinates
-    if isinstance(coords, list) or (isinstance(coords, np.ndarray) and coords.dtype == object):
-        coords = {str(i): np.asarray(v, dtype=np.float32) for i, v in enumerate(coords)}
-    else:
-        coords = np.asarray(coords, dtype=np.float32)
-    frame = {"type": geom.geom_type, "coordinates": coords,
-             "info": json.dumps({"parameters": geom.parameters, "metadata": geom.metadata}, default=json_value)}
-    for key in ("edges", "faces", "weights"):
-        value = getattr(geom, key)
-        if value is not None:
-            frame[key] = np.asarray(value, dtype=np.float32)
-    if geom.field_grid is not None:
-        frame["grid"] = {str(i): np.asarray(v, dtype=np.float32) for i, v in enumerate(geom.field_grid)}
-    return frame
 
 
 class HarmonicGeometry(goofi.Node):
     """Curves, interval graphs, fractals, meshes, plates, and wave fields from one chord.
 
-    Coordinates retain their physical domain. field is a scalar/vector array
-    for shaders; trajectory is [2/3, points] for ordinary trajectory viewers.
-    Non-applicable array outputs are empty, so changing methods clears them.
+    Coordinates retain their physical domain. The sole geometry ARRAY carries the selected method and its connectivity.
+    Changing methods replaces the complete frame.
     """
 
     TAGS = ["transform", "image"]
-    INPUTS = {"input": goofi.InputSlot(goofi.DataType.TABLE, required=True)}
-    OUTPUTS = {"geometry": goofi.DataType.TABLE, "field": goofi.DataType.ARRAY, "trajectory": goofi.DataType.ARRAY}
+    INPUTS = {"input": goofi.InputSlot(goofi.DataType.ARRAY, required=True)}
+    OUTPUTS = {"geometry": goofi.DataType.ARRAY}
     PARAMS = {
         "geometry": {
             "method": goofi.StringParam("trace_3d", METHODS, doc="Biotuner geometry method. See the cookbook for continuous and discrete methods."),
@@ -116,11 +98,10 @@ class HarmonicGeometry(goofi.Node):
                 and 1 <= st.depth <= 5 and 2 <= st.order <= 12 and 3 <= sf.tube_sides <= 16
                 and 0.25 <= tr.duration <= 32 and 1 <= f.max_mode <= 24):
             raise ValueError("Geometry sampling, mode, or recursion setting is outside its supported range")
-        table = input.table
-        try:
-            r, a, ph, damp = [np.asarray(table[k].data, dtype=np.float64) for k in ("ratios", "amplitudes", "phases", "damping")]
-        except KeyError as e:
-            raise ValueError("HarmonicGeometry needs HarmonicMorph.harmonic") from e
+        values = np.asarray(input.data, dtype=np.float64)
+        if values.ndim != 2 or values.shape[0] != 4:
+            raise ValueError("HarmonicGeometry needs a [4,N] harmonic ARRAY")
+        r, a, ph, damp = values
         if r.ndim != 1 or any(v.shape != r.shape for v in (a, ph, damp)) or len(r) > 32:
             raise ValueError("Harmonic components must be aligned vectors with at most 32 entries")
         if not all(np.all(np.isfinite(v)) for v in (r, a, ph, damp)) or np.any(r <= 0) or np.any(a < 0) or np.any(damp < 0):
@@ -253,14 +234,15 @@ class HarmonicGeometry(goofi.Node):
                 raise ValueError(f"Unknown geometry method {m}")
         geom.metadata["method"] = m
         geom.metadata["morph"] = float(input.meta.get("morph", 0.0))
-        trajectory = np.empty((0, 0), dtype=np.float32)
-        field = np.empty((0, 0), dtype=np.float32)
-        if geom.geom_type in ("curve_2d", "curve_3d", "point_cloud_2d", "point_cloud_3d", "polygon"):
-            trajectory = np.asarray(geom.coordinates, dtype=np.float32).T
-        if geom.geom_type in ("field_2d", "vector_field_2d"):
-            field = np.asarray(geom.coordinates, dtype=np.float32)
-        return {"geometry": (geometry_frame(geom), {}), "field": (field, {"geometry_kind": m}),
-                "trajectory": (trajectory, {"channels": {"dim0": ["x", "y", "z"][:len(trajectory)]}})}
+        frame = {"type": geom.geom_type, "coordinates": geom.coordinates,
+                 "info": json.dumps({"parameters": geom.parameters, "metadata": geom.metadata}, default=json_value)}
+        for key in ("edges", "faces", "weights"):
+            value = getattr(geom, key)
+            if value is not None:
+                frame[key] = value
+        if geom.field_grid is not None:
+            frame["grid"] = geom.field_grid
+        return {"geometry": encode(frame)}
 
     @staticmethod
     def _sampling(cycles, points):

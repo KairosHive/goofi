@@ -1,6 +1,7 @@
 //! Harmonic geometry through real node sessions, including GPU uploads and saved examples.
 
 use std::path::{Path, PathBuf};
+use std::collections::BTreeMap;
 
 use goofi_core::Data;
 use goofi_tests::{f32s, install_all, labels, render, require_python, shape, Goofi, OutputProbe, Uid};
@@ -9,11 +10,57 @@ use goofi_tests::{drive, j};
 
 const FILES: &[&str] = &[
     "harmonic_morph.py", "harmonic_geometry.py", "geometry_blend.py", "harmonic_transport.py",
-    "geometry_metrics.py", "geometry_view.py", "harmonic_modes.py", "harmonic_voices.py", "ratio_sequence.py", "geometry_upload.py",
+    "geometry_metrics.py", "geometry_view.py", "harmonic_modes.py", "harmonic_voices.py", "ratio_sequence.py",
 ];
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn array(values: Vec<f32>, dims: Vec<usize>) -> Data {
+    Data::array_f32(dims, values.iter().flat_map(|v| v.to_le_bytes()).collect(), Default::default()).unwrap()
+}
+
+// Inspect the wire independently of the Python encoder. These are test views,
+// not extra node outputs or another application data path.
+fn inspect_frame(d: &Data) -> BTreeMap<String, Data> {
+    let shape = shape(d);
+    let values = f32s(d);
+    let mut result = BTreeMap::new();
+    if shape.len() == 2 && shape[0] == 4 {
+        for (i, name) in ["ratios", "amplitudes", "phases", "damping"].iter().enumerate() {
+            result.insert(name.to_string(), array(values[i*shape[1]..(i+1)*shape[1]].to_vec(), vec![shape[1]]));
+        }
+    } else {
+        assert_eq!(&shape[1..], &[256, 4]);
+        let h: Vec<_> = values[..32].chunks_exact(2).map(|v| (v[0]*1024.0+v[1]) as usize).collect();
+        assert_eq!(h[0], 7319);
+        let names = ["curve_2d", "curve_3d", "point_cloud_2d", "point_cloud_3d", "polygon", "curve_set_2d", "curve_set_3d", "polygon_set", "graph", "tree", "mesh_3d", "field_2d", "vector_field_2d"];
+        result.insert("type".into(), Data::string(names[h[1]], Default::default()));
+        let coords: Vec<_> = values[32..32+h[3]*4].chunks_exact(4).flat_map(|v| v[..h[2]].iter().copied()).collect();
+        let dims = if h[1] == 11 { vec![h[4], h[5]] } else if h[1] == 12 { vec![h[4], h[5], h[2]] } else { vec![h[3], h[2]] };
+        result.insert("coordinates".into(), array(coords, dims));
+        if h[1] >= 11 {
+            result.insert("coverage".into(), array(values[32..32+h[3]*4].chunks_exact(4).map(|v| v[3]).collect(), vec![h[4], h[5]]));
+        }
+        if let Some(goofi_core::MetaValue::Str(info)) = d.meta().get("info") {
+            result.insert("info".into(), Data::string(info.as_str(), Default::default()));
+        }
+    }
+    result
+}
+
+fn active_row(d: &Data, row: usize) -> Vec<f32> {
+    let values = f32s(d);
+    let count = shape(d)[1];
+    (0..count).filter(|i| values[count+i] > 0.0).map(|i| values[row*count+i]).collect()
+}
+
+fn sequence_ratios(d: &Data) -> Vec<f32> {
+    let values = f32s(d);
+    let count = shape(d)[1];
+    let t = match d.meta().get("mix") { Some(goofi_core::MetaValue::Float(v)) => *v as f32, other => panic!("mix: {other:?}") };
+    (0..count).map(|i| ((1.0-t)*values[i].ln()+t*values[count+i].ln()).exp()).collect()
 }
 
 fn install_bundle(g: &Goofi, extra: &[(&str, &str)]) {
@@ -36,7 +83,8 @@ fn frame(g: &Goofi, node: Uid, probe: &OutputProbe, mut want: impl FnMut(&Data) 
 }
 
 fn geometry_kind(data: &Data) -> String {
-    let info = data.as_table().unwrap()["info"].as_str().unwrap();
+    let inspected = inspect_frame(data);
+    let info = inspected["info"].as_str().unwrap();
     let info: serde_json::Value = serde_json::from_str(info).unwrap();
     info["metadata"]["method"].as_str().unwrap_or_default().to_string()
 }
@@ -49,29 +97,74 @@ fn save_frame(name: &str, data: &Data) {
 }
 
 #[test]
+fn geometry_array_preserves_indices_parts_masks_and_rejects_bad_connectivity() {
+    let _py = require_python();
+    let g = Goofi::new();
+    install_bundle(&g, &[("geometry_array_fixture.py", include_str!("fixtures/geometry_array_fixture.py")),
+        ("GeometryField.wgsl", include_str!("fixtures/geometry_field.wgsl"))]);
+    let source = g.add("GeometryArrayFixture");
+    let renderer = g.add("graphics:GeometryRender");
+    let view = g.add("GeometryView");
+    g.set_param(renderer, "common", "width", 64);
+    g.set_param(renderer, "common", "height", 64);
+    g.set_param(renderer, "view", "radius", 1.0);
+    g.link(source, "geometry", renderer, "geometry");
+    g.link(source, "geometry", view, "input");
+    let encoded = g.probe(source, "geometry");
+    let pixels = g.probe(renderer, "out");
+    let capture = |method: &str| {
+        g.set_param(source, "fixture", "kind", method);
+        frame(&g, source, &encoded, |d| geometry_kind(d) == method);
+        let before = pixels.count();
+        g.until("new indexed geometry reaches the GPU", |g| {
+            render(g, 1);
+            assert!(g.error(renderer).is_none(), "{:?}", g.error(renderer));
+            pixels.latest().filter(|_| pixels.count() > before+2)
+        })
+    };
+    let mesh = f32s(&capture("mesh"));
+    assert!(mesh[(32*64+32)*4+3] > 0.9, "indices 4095, 4096 and 4097 remain distinct after upload");
+    let parts = f32s(&capture("parts"));
+    assert!(parts.chunks_exact(4).any(|p| p[3] > 0.5));
+    assert_eq!(parts[(32*64+32)*4+3], 0.0, "separate curves do not acquire a joining segment");
+    capture("invalid");
+    g.until("invalid topology is rejected at the CPU boundary", |g| g.error(view).filter(|e| e.contains("geometry integer digits")));
+    capture("mesh");
+    g.until("valid topology recovers", |g| g.error(view).is_none().then_some(()));
+    let field = g.add("graphics:GeometryField");
+    g.link(source, "geometry", field, "geometry");
+    let output = g.probe(field, "out");
+    g.set_param(source, "fixture", "kind", "field");
+    frame(&g, source, &encoded, |d| geometry_kind(d) == "field");
+    let image = g.until("the field arrives with its mask", |g| {
+        render(g, 1);
+        output.latest().filter(|d| f32s(d)[(32*64+48)*4+3] > 0.9)
+    });
+    let values = f32s(&image);
+    assert_eq!(values[3], 0.0);
+    assert!(values.iter().all(|v| v.is_finite()));
+    assert!((values[(32*64+48)*4]-16.0/63.0).abs() < 0.001);
+}
+
+#[test]
 fn gpu_geometry_renders_curves_graphs_points_and_meshes() {
     let _py = require_python();
     let g = Goofi::new();
     install_bundle(&g, &[("GeometryRender.wgsl", include_str!("../../../node-bundles/harmonic-geometry/GeometryRender.wgsl"))]);
     let source = g.add("HarmonicMorph");
     let geometry = g.add("HarmonicGeometry");
-    let upload = g.add("GeometryUpload");
     let renderer = g.add("graphics:GeometryRender");
     g.set_param(geometry, "geometry", "points", 64);
     g.set_param(geometry, "geometry", "resolution", 16);
     g.set_param(renderer, "common", "width", 64);
     g.set_param(renderer, "common", "height", 48);
     g.link(source, "harmonic", geometry, "input");
-    g.link(geometry, "geometry", upload, "input");
-    g.link(upload, "primitives", renderer, "primitives");
+    g.link(geometry, "geometry", renderer, "geometry");
     let data = g.probe(geometry, "geometry");
-    let packed = g.probe(upload, "primitives");
     let output = g.probe(renderer, "out");
     for method in ["closed_2d", "trace_3d", "interval_graph", "point_cloud", "torus"] {
         g.set_param(geometry, "geometry", "method", method);
         frame(&g, geometry, &data, |d| geometry_kind(d) == method);
-        let before = packed.count();
-        frame(&g, upload, &packed, |d| packed.count() > before+1 && shape(d).last() == Some(&12));
         let before = output.count();
         let image = g.until("GPU geometry has visible finite pixels", |g| {
             render(g, 1);
@@ -133,9 +226,9 @@ fn one_harmonic_frame_runs_every_geometry_family_and_its_dashboard() {
     g.link(source, "harmonic", view, "harmonic");
     g.link(geometry, "geometry", view, "input");
     g.link(geometry, "geometry", metrics, "input");
-    g.link(metrics, "metrics", view, "metrics");
+    g.link(metrics, "values", view, "metrics");
     let generated = g.probe(geometry, "geometry");
-    let dashboard = g.probe(view, "dashboard");
+    let dashboard = g.probe(view, "image");
     let measured = g.probe(metrics, "values");
     let methods = [
         "compound", "lateral", "rotary", "trace_3d", "closed_2d", "closed_3d", "pairwise",
@@ -150,7 +243,7 @@ fn one_harmonic_frame_runs_every_geometry_family_and_its_dashboard() {
     for method in methods {
         g.set_param(geometry, "geometry", "method", method);
         let geom = frame(&g, geometry, &generated, |d| geometry_kind(d) == method);
-        let coordinates = &geom.as_table().unwrap()["coordinates"];
+        let coordinates = &inspect_frame(&geom)["coordinates"];
         if let Ok(parts) = coordinates.as_table() {
             assert!(!parts.is_empty(), "{method} returns its parts");
             for points in parts.values() {
@@ -194,16 +287,17 @@ fn one_harmonic_frame_runs_every_geometry_family_and_its_dashboard() {
     frame(&g, geometry, &generated, |d| geometry_kind(d) == "circular_plate");
     g.link(geometry, "geometry", transport, "input");
     let transported = g.probe(transport, "geometry");
-    let flow = g.probe(transport, "flow");
+    let flow = g.probe(transport, "geometry");
     for method in ["sand", "particles", "tracer", "streaming"] {
         g.set_param(transport, "transport", "method", method);
         let geom = frame(&g, transport, &transported, |d| geometry_kind(d) == method);
-        let kind = geom.as_table().unwrap()["type"].as_str().unwrap();
+        let inspected = inspect_frame(&geom);
+        let kind = inspected["type"].as_str().unwrap();
         assert_eq!(kind, match method { "sand" => "field_2d", "particles" => "point_cloud_2d", _ => "vector_field_2d" });
         if kind == "vector_field_2d" {
-            let pixels = frame(&g, transport, &flow, |d| shape(d) == [96, 96, 4]);
-            assert!(f32s(&pixels).iter().all(|v| v.is_finite()));
-            assert_eq!(f32s(&pixels)[3], 0.0, "the circular domain stays masked");
+            let pixels = frame(&g, transport, &flow, |d| shape(&inspect_frame(d)["coordinates"]) == [96, 96, 2]);
+            assert!(!f32s(&pixels).iter().any(|v| v.is_infinite()));
+            assert_eq!(f32s(&inspect_frame(&pixels)["coverage"])[0], 0.0, "the circular domain stays masked");
         }
     }
 }
@@ -217,8 +311,8 @@ fn peak_rows_morph_without_losing_alignment_or_reviving_silence() {
     let morph = g.add("HarmonicMorph");
     let geometry = g.add("HarmonicGeometry");
     let source = g.probe(morph, "harmonic");
-    let packed = g.probe(morph, "packed");
-    let ratios = g.probe(morph, "tuning");
+    let packed = g.probe(morph, "harmonic");
+    let ratios = g.probe(morph, "harmonic");
     let output = g.probe(geometry, "geometry");
     g.set_param(morph, "source", "row", 1);
     g.set_param(morph, "source", "mode_a", "peaks");
@@ -230,36 +324,36 @@ fn peak_rows_morph_without_losing_alignment_or_reviving_silence() {
     g.link(producer, "phases", morph, "phasesA");
     g.link(morph, "harmonic", geometry, "input");
     let d = frame(&g, morph, &source, |d| {
-        let table = d.as_table().unwrap();
+        let table = inspect_frame(d);
         f32s(&table["ratios"]) == [1.0, 2.5, 4.0]
             && f32s(&table["phases"]).iter().zip([0.1, 0.25, 0.4]).all(|(a, b)| (a-b).abs() < 1e-6)
             && f32s(&table["amplitudes"]).iter().zip([1.0/7.5, 2.5/7.5, 4.0/7.5]).all(|(a, b)| (a-b).abs() < 1e-6)
     });
-    let t = d.as_table().unwrap();
+    let t = inspect_frame(&d);
     assert!(f32s(&t["phases"]).iter().zip([0.1, 0.25, 0.4]).all(|(a, b)| (a-b).abs() < 1e-6));
     assert!(f32s(&t["amplitudes"]).iter().zip([1.0/7.5, 2.5/7.5, 4.0/7.5]).all(|(a, b)| (a-b).abs() < 1e-6));
     assert!(d.meta().sfreq().is_none(), "a harmonic frame is not sampled at its source waveform's rate");
-    let d = frame(&g, morph, &packed, |d| shape(d) == [4, 32] && (f32s(d)[1]-2.5).abs() < 1e-6);
+    let d = frame(&g, morph, &packed, |d| shape(d) == [4, 3] && (f32s(d)[1]-2.5).abs() < 1e-6);
     assert!(f32s(&d).iter().all(|v| v.is_finite()));
     g.set_param(morph, "morph", "mix", 0.5);
     frame(&g, morph, &source, |d| {
-        let table = d.as_table().unwrap();
+        let table = inspect_frame(d);
         let r = f32s(&table["ratios"]);
         r.len() == 3 && (r[1]-(2.5f32*1.5).sqrt()).abs() < 1e-5
     });
     g.set_param(morph, "morph", "mix", 1.0);
-    frame(&g, morph, &ratios, |d| f32s(d) == [1.0, 1.5]);
+    frame(&g, morph, &ratios, |d| active_row(d, 0) == [1.0, 1.5]);
     g.set_param(morph, "morph", "mix", 0.0);
     g.set_param(producer, "source", "state", "silence");
-    frame(&g, morph, &source, |d| f32s(&d.as_table().unwrap()["amplitudes"]).iter().all(|v| *v == 0.0));
-    frame(&g, geometry, &output, |d| f32s(&d.as_table().unwrap()["coordinates"]).is_empty());
+    frame(&g, morph, &source, |d| f32s(&inspect_frame(d)["amplitudes"]).iter().all(|v| *v == 0.0));
+    frame(&g, geometry, &output, |d| f32s(&inspect_frame(d)["coordinates"]).is_empty());
     g.set_param(producer, "source", "state", "empty");
-    frame(&g, morph, &ratios, |d| f32s(d).is_empty());
+    frame(&g, morph, &ratios, |d| active_row(d, 0).is_empty());
     g.set_param(producer, "source", "state", "invalid");
     g.until("invalid peaks to be reported", |g| g.error(morph).filter(|e| e.contains("positive")));
     g.set_param(producer, "source", "state", "short");
     g.until("valid peaks to recover", |g| {
-        (g.error(morph).is_none()).then(|| ratios.latest()).flatten().filter(|d| f32s(d) == [1.0, 2.5])
+        (g.error(morph).is_none()).then(|| ratios.latest()).flatten().filter(|d| active_row(d, 0) == [1.0, 2.5])
     });
 }
 
@@ -276,15 +370,15 @@ fn harmonic_shaders_render_the_same_plate_and_keep_their_state() {
     let modes = g.add("HarmonicModes");
     g.link(source, "harmonic", geometry, "input");
     g.link(source, "harmonic", modes, "input");
-    let field = g.probe(geometry, "field");
-    let cpu = frame(&g, geometry, &field, |d| shape(d) == [64, 64]);
+    let field = g.probe(geometry, "geometry");
+    let cpu = inspect_frame(&frame(&g, geometry, &field, |d| shape(&inspect_frame(d)["coordinates"]) == [64, 64]))["coordinates"].clone();
     let encoded = g.probe(modes, "modes");
     frame(&g, modes, &encoded, |d| shape(d) == [4, 32]);
     let shader = g.add("graphics:HarmonicChladni");
     g.set_param(shader, "common", "width", 64);
     g.set_param(shader, "common", "height", 64);
     g.link(modes, "modes", shader, "modes");
-    g.link(source, "packed", shader, "harmonics");
+    g.link(source, "harmonic", shader, "harmonics");
     let gpu = g.probe(shader, "out");
     let image = g.until("GPU plate matches the CPU field", |g| {
         render(g, 1);
@@ -299,7 +393,7 @@ fn harmonic_shaders_render_the_same_plate_and_keep_their_state() {
     let knot = g.add("graphics:HarmonicLissajous");
     g.set_param(knot, "common", "width", 128);
     g.set_param(knot, "common", "height", 128);
-    g.link(source, "packed", knot, "harmonics");
+    g.link(source, "harmonic", knot, "harmonics");
     let drawn = g.probe(knot, "out");
     for (name, node, probe) in [("gpu-plate", ink, &inked), ("gpu-lissajous", knot, &drawn)] {
         let image = g.until("a nonempty shader image", |g| {
@@ -313,12 +407,12 @@ fn harmonic_shaders_render_the_same_plate_and_keep_their_state() {
     let transport = g.add("HarmonicTransport");
     g.set_param(transport, "transport", "method", "tracer");
     g.link(geometry, "geometry", transport, "input");
-    let flow = g.probe(transport, "flow");
-    frame(&g, transport, &flow, |d| shape(d) == [64, 64, 4]);
+    let flow = g.probe(transport, "geometry");
+    frame(&g, transport, &flow, |d| shape(&inspect_frame(d)["coordinates"]) == [64, 64, 2]);
     let dye = g.add("graphics:HarmonicFlow");
     g.set_param(dye, "common", "width", 64);
     g.set_param(dye, "common", "height", 64);
-    g.link(transport, "flow", dye, "flow");
+    g.link(transport, "geometry", dye, "flow");
     let moving = g.probe(dye, "out");
     let initial = g.until("the seeded ink", |g| {
         render(g, 1);
@@ -361,22 +455,22 @@ fn endpoint_fields_blend_with_masks_and_recover_from_mismatched_domains() {
     g.link(a, "geometry", blend, "a");
     g.link(b, "geometry", blend, "b");
     let generated = g.probe(blend, "geometry");
-    let field_a = g.probe(a, "field");
-    let field_b = g.probe(b, "field");
-    let av = f32s(&frame(&g, a, &field_a, |d| shape(d) == [96, 96]));
-    let bv = f32s(&frame(&g, b, &field_b, |d| shape(d) == [96, 96]));
+    let field_a = g.probe(a, "geometry");
+    let field_b = g.probe(b, "geometry");
+    let av = f32s(&inspect_frame(&frame(&g, a, &field_a, |d| shape(&inspect_frame(d)["coordinates"]) == [96, 96]))["coordinates"]);
+    let bv = f32s(&inspect_frame(&frame(&g, b, &field_b, |d| shape(&inspect_frame(d)["coordinates"]) == [96, 96]))["coordinates"]);
     g.until("different physical domains are refused", |g| g.error(blend).filter(|e| e.contains("grid mismatch")));
     g.set_param(blend, "blend", "space", "image");
     for mix in [0.0, 0.5, 1.0] {
         g.set_param(blend, "blend", "mix", mix);
         let d = g.until("registered endpoint field", |g| {
             generated.latest().filter(|d| {
-                let table = d.as_table().unwrap();
+                let table = inspect_frame(d);
                 let info: serde_json::Value = serde_json::from_str(table["info"].as_str().unwrap()).unwrap();
                 g.error(blend).is_none() && info["metadata"]["morph"] == mix
             })
         });
-        let table = d.as_table().unwrap();
+        let table = inspect_frame(&d);
         let values = f32s(&table["coordinates"]);
         let coverage = f32s(&table["coverage"]);
         assert_eq!(coverage[0], mix as f32);
@@ -392,10 +486,10 @@ fn endpoint_fields_blend_with_masks_and_recover_from_mismatched_domains() {
     g.set_param(a, "geometry", "method", "lateral");
     g.set_param(b, "geometry", "method", "trace_3d");
     let curve = g.until("curve correspondence after fields", |g| {
-        generated.latest().filter(|d| g.error(blend).is_none() && d.as_table().unwrap()["type"].as_str().unwrap() == "curve_3d")
+        generated.latest().filter(|d| g.error(blend).is_none() && inspect_frame(d)["type"].as_str().unwrap() == "curve_3d")
     });
-    assert_eq!(shape(&curve.as_table().unwrap()["coordinates"]), [512, 3]);
-    assert!(f32s(&curve.as_table().unwrap()["coordinates"]).iter().all(|v| v.is_finite()));
+    assert_eq!(shape(&inspect_frame(&curve)["coordinates"]), [512, 3]);
+    assert!(f32s(&inspect_frame(&curve)["coordinates"]).iter().all(|v| v.is_finite()));
 }
 
 #[test]
@@ -417,22 +511,22 @@ fn phase_wrap_extensions_and_mode_walks_keep_their_endpoint_weights() {
     g.link(producer, "opposite", morph, "phasesB");
     let harmonic = g.probe(morph, "harmonic");
     let base = frame(&g, morph, &harmonic, |d| {
-        f32s(&d.as_table().unwrap()["phases"]).iter().all(|v| (v.abs()-std::f32::consts::PI).abs() < 1e-5)
+        f32s(&inspect_frame(d)["phases"]).iter().all(|v| (v.abs()-std::f32::consts::PI).abs() < 1e-5)
     });
-    let tuning = g.probe(morph, "tuning");
-    let amplitudes = g.probe(morph, "amps");
+    let tuning = g.probe(morph, "harmonic");
+    let amplitudes = g.probe(morph, "harmonic");
     for kind in ["harmonics", "subharmonics"] {
         g.set_param(morph, "extension", "amount", 0.0);
         g.set_param(morph, "extension", "kind", kind);
         let count = harmonic.count();
         g.until("an extended frame at its zero endpoint", |_| (harmonic.count() > count+2).then_some(()));
-        let r = f32s(&tuning.latest().unwrap());
+        let r = active_row(&tuning.latest().unwrap(), 0);
         assert_eq!(r, [1.0, 2.0, 3.0], "zero extension retains the original frequencies");
-        let weights = f32s(&amplitudes.latest().unwrap());
-        assert!(weights.iter().zip(f32s(&base.as_table().unwrap()["amplitudes"])).all(|(a, b)| (a-b).abs() < 1e-6));
+        let weights = active_row(&amplitudes.latest().unwrap(), 1);
+        assert!(weights.iter().zip(f32s(&inspect_frame(&base)["amplitudes"])).all(|(a, b)| (a-b).abs() < 1e-6));
         g.set_param(morph, "extension", "amount", 1.0);
-        let extended = frame(&g, morph, &tuning, |d| f32s(d).len() > 3);
-        let r = f32s(&extended);
+        let extended = frame(&g, morph, &tuning, |d| active_row(d, 0).len() > 3);
+        let r = active_row(&extended, 0);
         assert!(r.windows(2).all(|p| p[0] < p[1]), "coincident extension tones are consolidated");
         assert!(if kind == "harmonics" { r.last().unwrap() > &3.0 } else { r[0] < 1.0 });
     }
@@ -440,18 +534,18 @@ fn phase_wrap_extensions_and_mode_walks_keep_their_endpoint_weights() {
     g.set_param(morph, "extension", "amount", 0.0);
     g.set_param(producer, "source", "state", "near");
     let near = frame(&g, morph, &tuning, |d| {
-        let r = f32s(d);
+        let r = active_row(d, 0);
         r.len() == 2 && r[0] == 1.0 && r[1] > 2.0 && r[1] < 2.00001
     });
-    assert_eq!(f32s(&near).len(), 2, "zero growth does not activate a nearby subharmonic");
+    assert_eq!(active_row(&near, 0).len(), 2, "zero growth does not activate a nearby subharmonic");
     g.set_param(morph, "extension", "amount", 0.5);
     let growing = frame(&g, morph, &harmonic, |d| {
-        let table = d.as_table().unwrap();
+        let table = inspect_frame(d);
         let weights = f32s(&table["amplitudes"]);
         weights.iter().filter(|v| **v > 0.0).count() > 2
             && f32s(&table["ratios"]).iter().any(|v| *v > 2.0 && *v < 2.00001)
     });
-    assert!(f32s(&growing.as_table().unwrap()["phases"]).iter()
+    assert!(f32s(&inspect_frame(&growing)["phases"]).iter()
         .all(|v| (v.abs()-std::f32::consts::PI).abs() < 1e-5), "extension phases stay at the wrap boundary");
     // Shared voice columns keep a silent source silent, including an enabled extension.
     let voices = g.add("HarmonicVoices");
@@ -588,8 +682,8 @@ fn check_cookbook_archives(selected: Option<&str>) {
             expected.sort_by(f32::total_cmp);
             expected.dedup();
             g.call("global entry edit", j!({"name": "geometry.mix", "value": 1.0}));
-            let tuning = g.probe(lookup("chord"), "tuning");
-            frame(&g, lookup("chord"), &tuning, |d| {
+            let tuning = g.probe(lookup("chordTuning"), "out");
+            frame(&g, lookup("chordTuning"), &tuning, |d| {
                 let values = f32s(d);
                 values.len() == expected.len() && values.iter().zip(&expected).all(|(a, b)| (a-b).abs() < 1e-5)
             });
@@ -777,22 +871,23 @@ fn ratio_sequence_holds_glides_loops_and_drives_a_harmonic_field() {
     g.set_param(sequence, "sequence", "seconds", 1.0);
     g.set_param(sequence, "sequence", "glide", 0.5);
     g.link(clock, "out", sequence, "clock");
-    let ratio = g.probe(sequence, "ratio");
-    let tuning = g.probe(sequence, "tuning");
+    g.set_param(sequence, "chord", "state", "anchor chord");
+    let ratio = g.probe(sequence, "transition");
+    let tuning = g.probe(sequence, "transition");
     let seek = |time: f64, expected: f32| {
         let before = ratio.count();
         g.set_param(clock, "clock", "time", time);
         g.until(&format!("ratio {expected} at clock {time}"), |g| {
             assert!(g.error(sequence).is_none(), "{:?}", g.error(sequence));
-            ratio.latest().filter(|d| ratio.count() > before+1 && (f32s(d)[0]-expected).abs() < 1e-5)
+            ratio.latest().filter(|d| ratio.count() > before+1 && (sequence_ratios(d)[1]-expected).abs() < 1e-5)
         })
     };
     seek(0.0, 1.0);
     seek(0.25, 1.0);
     seek(0.75, 2.0_f32.sqrt());
     seek(1.0, 2.0);
-    let chord = frame(&g, sequence, &tuning, |d| f32s(d) == [1.0, 2.0, 2.0]);
-    assert_eq!(shape(&chord), [3]);
+    let chord = frame(&g, sequence, &tuning, |d| sequence_ratios(d) == [1.0, 2.0, 2.0]);
+    assert_eq!(shape(&chord), [2, 3]);
     g.set_param(sequence, "sequence", "running", false);
     seek(1.0, 2.0); // Let the pause reach this node before advancing the separate clock node.
     seek(5.0, 2.0);
@@ -814,14 +909,14 @@ fn ratio_sequence_holds_glides_loops_and_drives_a_harmonic_field() {
     g.set_param(sequence, "sequence", "ratios", "9/8, 3/2");
     seek(12.0, 1.125);
     let morph = g.add("HarmonicMorph");
-    g.link(sequence, "tuning", morph, "a");
-    let packed = g.probe(morph, "packed");
+    g.link(sequence, "transition", morph, "transition");
+    let packed = g.probe(morph, "harmonic");
     frame(&g, morph, &packed, |d| (f32s(d)[1]-1.125).abs() < 1e-5);
     let plate = g.add("graphics:HarmonicChladni");
     g.set_param(plate, "common", "width", 128);
     g.set_param(plate, "common", "height", 128);
     g.set_param(plate, "field", "approach", 1.0);
-    g.link(morph, "packed", plate, "harmonics");
+    g.link(morph, "harmonic", plate, "harmonics");
     let output = g.probe(plate, "out");
     let capture = || {
         let before = output.count();

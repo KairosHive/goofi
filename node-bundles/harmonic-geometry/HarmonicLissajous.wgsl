@@ -1,5 +1,5 @@
 /* goofi
-{ "doc": "A projected 3D Lissajous trace from HarmonicMorph.packed.\nThe first three selected components drive x, y, z. Frequencies remain continuous over a fixed exposure; the curve need not close. Phase comes from the harmonic frame. Start at 256 square; samples controls fragment cost. A high frequency or long duration needs more samples. No hidden clock drives the geometry.",
+{ "doc": "A projected 3D Lissajous trace from HarmonicMorph.harmonic.\nThe first three selected components drive x, y, z. Frequencies remain continuous over a fixed exposure; the curve need not close. Phase comes from the harmonic frame. Start at 256 square; samples controls fragment cost. A high frequency or long duration needs more samples. No hidden clock drives the geometry.",
   "tags": ["image", "generator"],
   "inputs": [{"name": "harmonics", "kind": "ARRAY"}],
   "params": [
