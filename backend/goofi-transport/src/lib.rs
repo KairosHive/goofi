@@ -152,7 +152,20 @@ impl Doorbell {
 /// directory and each is counted by every service's `max_nodes`.
 pub fn iox_node() -> Result<IoxNode, String> {
     sweep_once();
+    // Held SHARED for exactly the span in which this node has a directory but not yet a monitor —
+    // iceoryx2 writes the details storage first and the monitor second, so for that span the node
+    // is indistinguishable on disk from an orphan. [`reap_orphan_dirs`] takes the same gate
+    // exclusively, and getting it is its proof that no such span is open anywhere.
+    let _creating = creation_gate().inspect(|gate| drop(gate.lock_shared()));
     NodeBuilder::new().config(iox_config()).create::<Svc>().map_err(|e| format!("iox node: {e}"))
+}
+
+/// The one file a creation locks shared and a reap locks exclusive. In the iceoryx2 root because
+/// the question it answers is machine-wide: two goofi sessions share one node directory.
+fn creation_gate() -> Option<std::fs::File> {
+    let root = String::from_utf8(iox_config().global.root_path().as_bytes().to_vec()).ok()?;
+    let path = format!("{}/goofi_creating.lock", root.trim_end_matches('/'));
+    std::fs::OpenOptions::new().create(true).read(true).write(true).truncate(false).open(path).ok()
 }
 
 /// The iceoryx2 configuration every goofi port is built against: the global defaults with the two
@@ -175,28 +188,182 @@ fn iox_config() -> &'static Config {
 ///
 /// It ASKS, and that is the whole of it. goofi used to delete `<root>/nodes/<id>` itself when the
 /// ask failed — reaching into another library's private layout to finish its bookkeeping. That is
-/// not goofi's to own, and on Windows it never worked anyway: the files carry a protected DACL
-/// with no DELETE, so both the ask and the reach fail alike (upstream #1869).
+/// not goofi's to own.
+///
+/// On Windows the ask is rarely even reached, and the reason is NOT the one this used to give.
+/// Measured 2026-09-10: a monitor file's DACL is `BUILTIN\Users:(W,D,Rc)` — delete is granted, and
+/// always was; what is missing is READ. `ProcessMonitor::state` decides liveness by `fcntl(F_GETLK)`
+/// on the state file, and the Windows PAL implements that as a `LockFileEx` try: it maps SUCCESS to
+/// unlocked and EVERY failure — a denied read among them — to `F_WRLCK`, which is to say ALIVE. So
+/// a node whose process died years of uptime ago still lists as `Alive`, never as `Dead`, and this
+/// sweep walks past it. That is the leak: not resources it cannot delete, but deaths it is never
+/// told about. Granting the owner read on the file flips it to `Dead` and the ordinary reclaim
+/// below then works — 26 of 26, measured.
 pub fn reclaim_stale_resources() {
+    make_monitors_readable();
     let mut refused: Vec<u128> = Vec::new();
+    let mut live: Vec<u128> = Vec::new();
     let _ = IoxNode::list(iox_config(), |state| {
-        if let NodeState::Dead(view) = state {
-            // The id BEFORE the attempt: the reclaim consumes the view.
-            let id = view.id().value();
-            if view.try_remove_stale_resources().is_err() {
-                refused.push(id);
+        match state {
+            NodeState::Dead(view) => {
+                // The id BEFORE the attempt: the reclaim consumes the view.
+                let id = view.id().value();
+                if view.try_remove_stale_resources().is_err() {
+                    refused.push(id);
+                }
             }
+            // Kept so the orphan pass can exclude them by id as well as by monitor. Belt and
+            // braces: a live node HAS a monitor, so it should never reach that filter anyway.
+            NodeState::Alive(view) => live.push(view.id().value()),
+            NodeState::Inaccessible(_) | NodeState::Undefined(_) => {}
         }
         CallbackProgression::Continue
     });
+    refused.extend(reap_orphan_dirs(&live));
     force_remove_refused(&refused);
 }
 
-/// WORKAROUND, and it is one: eclipse-iceoryx/iceoryx2#1869. On Windows a node's bookkeeping files
-/// carry a PROTECTED DACL granting the owner no DELETE, so iceoryx2's own reclaim cannot take them
-/// and the directory strands for good — measured at 1,561 entries a week old, and it is what turns
-/// a later run's service open into `ServiceInCorruptedState`. The owner keeps implicit WRITE_DAC,
-/// so granting first is what makes the removal possible at all.
+/// The directories no monitor names. iceoryx2 enumerates nodes BY monitor, so one without a
+/// monitor is not a dead node to it — it is not a node at all, and no classification above will
+/// ever reach it. It is also the bulk of the pile: 722 of 1,097, measured.
+///
+/// Orphanhood is VERIFIED here, never assumed from age. The single moment a live node's directory
+/// legitimately has no monitor is the span [`iox_node`] holds the creation gate for, so taking
+/// that gate EXCLUSIVELY rules the case out; failing to take it means a node is being born right
+/// now and this pass declines rather than guesses. Answers ids for [`force_remove_refused`], so
+/// everything this module removes still leaves through one door.
+fn reap_orphan_dirs(live: &[u128]) -> Vec<u128> {
+    let Some(gate) = creation_gate() else { return Vec::new() };
+    if gate.try_lock().is_err() {
+        return Vec::new();
+    }
+    let Some(nodes) = nodes_dir() else { return Vec::new() };
+
+    let (mut dirs, mut monitors) = (Vec::new(), Vec::new());
+    for entry in std::fs::read_dir(&nodes).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        match entry.file_type().map(|t| t.is_dir()) {
+            Ok(true) => {
+                if let Ok(id) = name.parse::<u128>() {
+                    dirs.push((name, id));
+                }
+            }
+            Ok(false) => monitors.push(name),
+            Err(_) => (),
+        }
+    }
+    dirs.into_iter()
+        .filter(|(name, id)| !live.contains(id) && !monitors.iter().any(|m| names_id(m, name)))
+        .map(|(_, id)| id)
+        .collect()
+}
+
+/// Whether `file` names `id` as a WHOLE run of digits. A bare substring would let a short id name
+/// a longer one that merely contains it, which is a live node reaped by arithmetic accident.
+fn names_id(file: &str, id: &str) -> bool {
+    file.split(|c: char| !c.is_ascii_digit()).any(|run| run == id)
+}
+
+/// Make every node monitor readable by its owner, so `LockFileEx` can answer and a dead node is
+/// reported DEAD instead of alive. This decides nothing: it makes the question answerable, and a
+/// LIVE node still answers alive, because its lock is genuinely held and the try genuinely fails.
+/// That is the whole difference between this and guessing from an absent answer.
+///
+/// ADDITIVE. The existing DACL is read and one ACE merged into it, unprotected, so a live node
+/// keeps every right it had. Replacing the DACL here would take rights from a running peer.
+#[cfg(windows)]
+fn make_monitors_readable() {
+    let Some(nodes) = nodes_dir() else { return };
+    for entry in std::fs::read_dir(&nodes).into_iter().flatten().flatten() {
+        if entry.file_name().to_string_lossy().contains("node_monitor") {
+            grant_read(&entry.path());
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn make_monitors_readable() {}
+
+/// Merge one OWNER RIGHTS read ACE into a path's existing DACL, leaving inheritance alone.
+#[cfg(windows)]
+fn grant_read(path: &std::path::Path) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, GENERIC_READ, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSidToSidW, EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW,
+        NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SetEntriesInAclW, SetNamedSecurityInfoW,
+        TRUSTEE_IS_SID, TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
+    };
+    use windows_sys::Win32::Security::{ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE};
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    // The CURRENT dacl, so the new ace is merged rather than substituted for it.
+    let mut old: *mut ACL = std::ptr::null_mut();
+    let mut descriptor = std::ptr::null_mut();
+    if unsafe {
+        GetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut old,
+            std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    } != ERROR_SUCCESS
+    {
+        return;
+    }
+    // `S-1-3-4` is OWNER RIGHTS: it grants the object's own owner, which is this user, and nobody else.
+    let sid_text: Vec<u16> = "S-1-3-4".encode_utf16().chain(std::iter::once(0)).collect();
+    let mut sid = std::ptr::null_mut();
+    if unsafe { ConvertStringSidToSidW(sid_text.as_ptr(), &mut sid) } == 0 {
+        unsafe { LocalFree(descriptor.cast()) };
+        return;
+    }
+    let access = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: GENERIC_READ,
+        grfAccessMode: GRANT_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
+            ptstrName: sid.cast(),
+        },
+    };
+    let mut acl: *mut ACL = std::ptr::null_mut();
+    if unsafe { SetEntriesInAclW(1, &access, old, &mut acl) } == ERROR_SUCCESS {
+        unsafe {
+            SetNamedSecurityInfoW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                acl,
+                std::ptr::null(),
+            );
+        }
+    }
+    unsafe {
+        LocalFree(acl.cast());
+        LocalFree(sid.cast());
+        LocalFree(descriptor.cast());
+    }
+}
+
+/// WORKAROUND, and it is one: eclipse-iceoryx/iceoryx2#1869. The directory strands — measured at
+/// 1,561 entries a week old, and again at 1,118 — and a big enough pile is what turns a later run's
+/// service open into `ServiceInCorruptedState`, or overflows the 8 MiB [`STACK`] parsing it.
+///
+/// Note what this does NOT fix, so it is not mistaken for the cure: these files grant delete
+/// already. Reaching one here means iceoryx2 called it dead and then refused, which is the rare
+/// case. The COMMON case never arrives, because an unreadable monitor makes a dead node list as
+/// `Alive` — see [`reclaim_stale_resources`]. Granting the owner full control is what makes the
+/// removal possible when it does arrive, since the DACL is protected and inherits nothing.
 ///
 /// Only a node iceoryx2 has ITSELF declared dead AND then refused reaches here. Never a live peer,
 /// and never a blanket pass over the directory — that is what deleted a directory out from under a
@@ -213,8 +380,7 @@ fn force_remove_refused(refused: &[u128]) {
     // but a bare substring would let a short id name a LIVE node whose own id merely contains it.
     for entry in std::fs::read_dir(&nodes).into_iter().flatten().flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let mut runs = name.split(|c: char| !c.is_ascii_digit());
-        if runs.any(|run| ids.iter().any(|id| run == id)) {
+        if ids.iter().any(|id| names_id(&name, id)) {
             take_path(&entry.path());
         }
     }
@@ -319,7 +485,20 @@ pub fn sweep_once() {
         set_log_level_from_env_or(LogLevel::Error);
         raise_fd_limit();
         ensure_root();
-        reclaim_stale_resources();
+        // Off the caller's stack. A service's static config is parsed by serde and toml, and a
+        // BACKLOG of them nests far past what [`STACK`] allows — measured at 2400 frames of 3392
+        // bytes, which is 8.14 MiB and the exact overflow that killed a start. A reserve is
+        // address space rather than memory, so asking for a large one costs nothing unused.
+        const SWEEP_STACK: usize = 256 * 1024 * 1024;
+        let swept = std::thread::Builder::new()
+            .name("iox-sweep".into())
+            .stack_size(SWEEP_STACK)
+            .spawn(reclaim_stale_resources);
+        match swept {
+            Ok(handle) => drop(handle.join()),
+            // The sweep is best effort, and a start that cannot spawn has worse problems.
+            Err(_) => reclaim_stale_resources(),
+        }
     });
 }
 
