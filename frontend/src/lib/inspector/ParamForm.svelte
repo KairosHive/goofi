@@ -29,7 +29,7 @@
 	import { nodeHealth } from '$lib/editor/nodeHealth';
 	import { isTextEditingTarget } from '$lib/ui/textEditing';
 	import ParamField from './ParamField.svelte';
-	import { expressionFor } from './paramSeed';
+	import { expressionFor, sourceForMode } from './paramSeed';
 	import SubPatchInspector from '$lib/editor/SubPatchInspector.svelte';
 	import { matchParams, type ParamHit } from './paramSearch';
 	import {
@@ -230,18 +230,38 @@
 		};
 	}
 
-	function modulationKey(event: KeyboardEvent): void {
+	function paramKey(event: KeyboardEvent): void {
 		if (
 			event.defaultPrevented || event.repeat || event.ctrlKey || event.metaKey ||
 			event.altKey || event.shiftKey || event.isComposing || menu || isTextEditingTarget(event.target)
 		) return;
-		const kind = event.key === 'l' ? 'lfo' : event.key === 'n' ? 'noi' : null;
-		if (!kind) return;
+		const key = event.key;
+		if (!['l', 'n', 'r', 'c', 'e'].includes(key)) return;
 		const row = document.querySelector<HTMLElement>(`[data-param-form="${formId}"]:hover`);
 		const hit = rows.find((r) => `${r.group}/${r.name}` === row?.dataset.paramKey);
-		if (!hit || (hit.descriptor.type !== 'float' && hit.descriptor.type !== 'int')) return;
-		event.preventDefault();
-		modulate(hit.group, hit.name, kind);
+		if (!hit) return;
+		const { group, name, descriptor: d } = hit;
+		if (key === 'c' || key === 'e') {
+			event.preventDefault();
+			const mode = key === 'c' ? 'constant' : 'expression';
+			if (d.mode !== mode) setSource(group, name, sourceForMode(d, mode));
+			return;
+		}
+		if (d.type !== 'float' && d.type !== 'int') return;
+		if (key === 'r') {
+			const min = d.type === 'int' ? Math.ceil(d.vmin) : d.vmin;
+			const max = d.type === 'int' ? Math.floor(d.vmax) : d.vmax;
+			if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return;
+			event.preventDefault();
+			const fraction = Math.random();
+			const value = d.type === 'int'
+				? Math.min(max, min + Math.floor(fraction * (max - min + 1)))
+				: min * (1 - fraction) + max * fraction;
+			setValue(group, name, value);
+		} else {
+			event.preventDefault();
+			modulate(group, name, key === 'l' ? 'lfo' : 'noi');
+		}
 	}
 
 	/** The row's drop-zone key, or null where this node cannot drive that param. */
@@ -317,7 +337,7 @@
 </script>
 
 <svelte:window
-	onkeydown={modulationKey}
+	onkeydown={paramKey}
 	onpointerdown={(e) => {
 		const row = (e.target as Element).closest<HTMLElement>('[data-param-key]');
 		activeParam = row?.dataset.paramNode === node?.uid ? row?.dataset.paramKey ?? null : null;
