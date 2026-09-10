@@ -410,6 +410,31 @@ test.describe('the control socket', () => {
 				// Copy the FACADE and paste it. A sub-patch is not one type, so what rides the
 				// clipboard has to be its members, its ports and the wiring among them.
 				await selectNode(page, scope);
+				const readClipboard = () => page.evaluate(() => navigator.clipboard.readText());
+				const label = page.getByTestId('node-name');
+				const selectedText = await label.textContent();
+				await label.evaluate((el) => {
+					const range = document.createRange();
+					range.selectNodeContents(el);
+					window.getSelection()!.removeAllRanges();
+					window.getSelection()!.addRange(range);
+				});
+				await page.keyboard.press('Control+c');
+				await expect.poll(readClipboard).toBe(selectedText);
+				await page.keyboard.press('Control+x');
+				expect((await backendDoc(page)).nodes[scope]).toBeDefined();
+				await selectNode(page, scope);
+				await expect.poll(() => page.evaluate(() => window.getSelection()!.toString())).toBe('');
+				await label.focus();
+				await page.keyboard.press('Control+c');
+				expect(await readClipboard()).toBe(selectedText);
+				await page.keyboard.press('Control+x');
+				expect((await backendDoc(page)).nodes[scope]).toBeDefined();
+				await selectNode(page, scope);
+				await page.evaluate(() => (window as any).goofi.commands.select([]));
+				await page.keyboard.press('Control+c');
+				expect(await readClipboard()).toBe(selectedText);
+				await selectNode(page, scope);
 				await page.keyboard.press('Control+c');
 				// Gate on the payload BEING there. A copy asks the manager for the subtree first,
 				// so the clipboard is written a round trip after the key — and a paste that races
@@ -417,6 +442,11 @@ test.describe('the control socket', () => {
 				await expect
 					.poll(() => clipboardHolds(page, scope), { message: 'the copy reached the clipboard' })
 					.toBe(true);
+				await label.focus();
+				const beforePaste = await backendDoc(page);
+				await page.keyboard.press('Control+v');
+				expect(await backendDoc(page)).toEqual(beforePaste);
+				await selectNode(page, scope);
 				await page.keyboard.press('Control+v');
 				await expect
 					.poll(
@@ -1016,11 +1046,31 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 		await undo(page);
 		await expect.poll(source).toEqual(original);
 	}
+	await row.hover();
+	await page.keyboard.press('e');
+	await expect.poll(async () => (await source()).mode).toBe('expression');
+	await expect.poll(async () => (await source()).expr).toBe(String(original.value));
+	await page.keyboard.press('c');
+	await expect.poll(async () => (await source()).mode).toBe('constant');
+	await page.keyboard.press('e');
+	await expect.poll(async () => (await source()).mode).toBe('expression');
+	await page.keyboard.press('r');
+	await expect.poll(async () => (await source()).mode).toBe('constant');
+	const randomized = await source();
+	const bounds = (await nodeParams(page, osc)).lfo.frequency;
+	expect(randomized.value).toBeGreaterThanOrEqual(bounds.vmin);
+	expect(randomized.value).toBeLessThanOrEqual(bounds.vmax);
+	await undo(page);
+	await expect.poll(async () => (await source()).mode).toBe('expression');
+	await undo(page);
+	await undo(page);
+	await undo(page);
+	await expect.poll(source).toEqual(original);
 	const search = page.getByTestId('param-search');
 	await search.focus();
 	await row.hover();
-	await page.keyboard.press('l');
-	await expect(search).toHaveValue('l');
+	await page.keyboard.type('lnrce');
+	await expect(search).toHaveValue('lnrce');
 	expect(await source()).toEqual(original);
 	await search.fill('');
 	await search.blur();
@@ -1030,5 +1080,33 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 	await page.mouse.move(0, 0);
 	await page.keyboard.press('n');
 	expect(await source()).toEqual(original);
+	await clearGraph(page);
+});
+
+test('a node click clears inspector text selection before copying nodes', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+	const uid = await addNode(page, 'LFO');
+	await waitForNode(page, uid);
+	await selectNode(page, uid);
+	await page.getByTestId('docs-toggle').click();
+	const docs = page.getByTestId('docstring');
+	const textSelection = () => page.evaluate(() => window.getSelection()!.toString());
+	await docs.dblclick();
+	await expect.poll(textSelection).not.toBe('');
+	await page.keyboard.press('Control+c');
+	await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(await textSelection());
+	await selectNode(page, uid);
+	await expect.poll(textSelection).toBe('');
+	await page.keyboard.press('Control+c');
+	await expect.poll(() => clipboardHolds(page, uid)).toBe(true);
+	await page.keyboard.press('Control+v');
+	await expect.poll(async () => Object.keys((await backendDoc(page)).nodes).length).toBe(2);
+	await docs.dblclick();
+	await expect.poll(textSelection).not.toBe('');
+	await page.getByTestId('param-search').click();
+	await expect.poll(textSelection).toBe('');
 	await clearGraph(page);
 });
