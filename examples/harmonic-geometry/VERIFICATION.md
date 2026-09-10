@@ -6,6 +6,31 @@ as the existing bundle: `f45570e674d8193c7780891b9053a39bf6168c1e`.
 
 ## Push checkpoint after upstream merge
 
+### GPU geometry and bundle audit
+
+`GeometryUpload` (signal) and `GeometryRender` (graphics) now belong to
+harmonic-geometry. The renderer consumes numerical primitives, not a CPU image.
+The public GPU session passed for 2D curves, 3D traces, graphs, point clouds and
+triangle meshes, including a surface-to-wireframe change (30.65 seconds).
+The updated Breathing lines archive passed live controls and save/reload
+(31.41 seconds). GPU readback images were inspected. These are headless GPU
+and public-session checks; no new browser session was run for this renderer.
+
+Focused clippy passed with `-D warnings`. Its first run found an existing
+codec-list initialization warning in `goofi-record`; using a vector initializer
+removed it without changing codec order or selection.
+
+The three shared nodes HarmonicMorph, RatioSequence and HarmonicVoices moved
+to Biotuner. Recipe 07 now uses TuningReduction as a morph endpoint and shows
+TuningMatrix output. Its dedicated session passed (45.16 seconds), including
+the short-scale reduction fix. The complete 14-test audit was not green:
+9 passed and 5 failed, with Windows iceoryx shared-memory errors among the
+failures. Do not treat the focused passes as a full-suite pass.
+
+The revised push includes these nodes, the ten patches, integration tests,
+bundle ownership changes and required fixes. Unrelated working-tree edits
+remain excluded. The cookbook website transfer follows the goofi push.
+
 The merged branch passed the six-chord, 30-position Biotuner/GPU comparison
 again (41.79 seconds). Its native build completed without compiler warnings.
 The frontend passed Svelte typecheck with zero errors and warnings after

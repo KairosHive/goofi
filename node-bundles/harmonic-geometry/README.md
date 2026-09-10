@@ -1,20 +1,20 @@
 # Harmonic geometry
 
-Nine signal nodes and five shaders connect Biotuner's harmonic geometry to goofi.
+Seven signal nodes and six shaders connect Biotuner's harmonic geometry to goofi.
+They use three shared harmonic nodes from the [Biotuner bundle](../biotuner/README.md).
 The [cookbook](../../examples/harmonic-geometry/Cookbook.html) includes ten working
 patches. The [survey](SURVEY.md) records the source review and implementation plan.
 
 | Node | Role |
 | --- | --- |
-| `RatioSequence` | Timed ratio steps and pitch glides → current ratio, target, anchor chord, step, phase, and text readout |
-| `HarmonicMorph` | Two ratio or peak rows → a shared harmonic frame; phase, stretch, extension, and component fades |
 | `HarmonicGeometry` | 46 methods → curves, graphs, point clouds, meshes, or scalar fields |
 | `HarmonicModes` | Harmonic frame(s) → bounded Chladni mode arrays with optional mode interpolation |
 | `HarmonicTransport` | Scalar field → granular equilibrium, particles, tracer flow, or streaming |
 | `GeometryBlend` | Matched fields, sampled curves, or matched meshes → a geometry transition |
 | `GeometryMetrics` | Geometry → named measurements and a labeled vector |
 | `GeometryView` | Geometry → transparent image, dashboard, and finite RGBA field upload |
-| `HarmonicVoices` | Harmonic frame → fixed pitch/gain columns that retain component fades |
+| `GeometryUpload` | Geometry → validated point, line and triangle primitives for GPU upload |
+| `graphics:GeometryRender` | Primitives → antialiased curves, points, graphs and depth-tested matte meshes |
 | `graphics:HarmonicLissajous` | Packed harmonics → a projected 3D light trace |
 | `graphics:HarmonicChladni` | Packed modes/harmonics → signed plate/open waves or nodal density with D4 symmetry |
 | `graphics:HarmonicInk` | Signed texture + optional BioColors palette → color, nodes, or contours |
@@ -22,6 +22,39 @@ patches. The [survey](SURVEY.md) records the source review and implementation pl
 | `graphics:HarmonicRelief` | Signed texture → twelve morphable organic and material textures, with parallax and directional light |
 
 ## Cable contracts
+
+### GPU geometry
+
+Wire `HarmonicGeometry.geometry` (or `GeometryBlend.geometry`) to
+`GeometryUpload.input`, then `GeometryUpload.primitives` directly to
+`graphics:GeometryRender.primitives`. No `SignalIn` or CPU image renderer is
+needed on this path. The Breathing lines patch includes a `geometryRender` tab.
+
+The upload node validates connectivity and packs up to 4096 points, line
+segments or triangles. It does not draw pixels or change coordinates. The GPU
+uses a fixed oblique projection, which leaves 2D coordinates unchanged, and a
+fixed `view/radius`. There is no automatic fit or camera motion. Meshes support
+matte surfaces or wireframe. Output alpha is transparent outside the geometry.
+
+This renderer uses a fragment shader: cost grows with output pixels times
+primitive count. Start at 256 square and reduce generator sampling for dense
+meshes. It is not a native vertex-buffer rasterizer. Geometry changes still
+arrive at the signal node's update rate; the renderer does not interpolate
+between packets. Scalar/vector fields retain the `GeometryView.field` →
+`SignalIn` → `HarmonicInk` route.
+
+The source and sound adapters belong to Biotuner: `HarmonicMorph` builds and
+morphs a harmonic TABLE; `RatioSequence` supplies timed ratios and endpoint
+packets; `HarmonicVoices` preserves that TABLE's weights in audio controls.
+Their node names and ports do not depend on bundle folder names.
+
+The geometry bundle starts where a harmonic structure becomes coordinates,
+plate modes, geometry measurements, or a rendered field. The CPU generator
+returns reusable geometry and connectivity; shaders draw bounded real-time
+fields and traces. Those are different outputs, not two interchangeable node
+implementations. GeometryBlend blends formed geometry, whereas HarmonicMorph
+changes its harmonic input. GeometryMetrics measures shape; use Harmonicity or
+TuningMatrix for musical interval analysis.
 
 `harmonic` is a TABLE of aligned 1D float32 arrays: `ratios`, `amplitudes`,
 `phases` (radians), and `damping`. Metadata holds `base_freq` (Hz), `equave`, and
