@@ -1,5 +1,5 @@
 /* goofi
-{ "doc": "Persistent ink carried by a harmonic flow field.\nWire HarmonicTransport.flow to flow. Seeded ink is advected by that vector field and by the curl of its own slow memory. There is no hidden time animation. rate 0 freezes the state; reset seeds while held true. diffusion can eventually smooth the image, so injection is available as an explicit control. Output red is ink, green is memory, blue is departure; use HarmonicInk in magnitude mode to color it.",
+{ "doc": "Persistent ink carried by a harmonic flow field.\nWire HarmonicTransport.geometry to flow. Seeded ink is advected by that vector field and by the curl of its own slow memory. There is no hidden time animation. rate 0 freezes the state; reset seeds while held true. diffusion can eventually smooth the image, so injection is available as an explicit control. Output red is ink, green is memory, blue is departure; use HarmonicInk in magnitude mode to color it.",
   "tags": ["image", "simulation"],
   "state": ["dye"],
   "inputs": [{"name": "flow", "kind": "ARRAY"}],
@@ -39,7 +39,7 @@ fn carried(at: vec2f) -> vec4f {
 
 fn next_dye(uv: vec2f) -> vec4f {
     let at = vec2i(floor(uv * resolution));
-    let force = textureSampleLevel(flow, samp, uv, 0.0);
+    let force = goofi_geo_field(flow, uv);
     let coverage = force.a;
     if frame == 0u || p.reset != 0u {
         let seed = noise(vec2f(at));

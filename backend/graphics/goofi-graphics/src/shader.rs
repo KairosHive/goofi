@@ -9,7 +9,8 @@ use goofi_node::{NodeManifest, ParamDecl, ParamSpec};
 
 /// The names the prelude declares. A header that takes one is refused, rather than shadowing it.
 const RESERVED: &[&str] =
-    &["time", "frame", "resolution", "samp", "p", "Params", "Vs", "vs", "fs", "shade", "Frag"];
+    &["time", "frame", "resolution", "samp", "p", "Params", "Vs", "vs", "fs", "shade", "Frag",
+      "goofi_geo_texel", "goofi_geo_uint", "goofi_geo_header", "goofi_geo_valid", "goofi_geo_field"];
 
 /// The one output every graphics node has.
 const OUT: &str = "out";
@@ -101,6 +102,7 @@ pub fn prelude(manifest: &NodeManifest, state: &[String]) -> String {
          @group(0) @binding(1) var<uniform> resolution: vec2f;\n\
          @group(0) @binding(2) var samp: sampler;\n",
     );
+    s.push_str(include_str!("geometry.wgsl"));
     let ranges: Vec<String> = array_inputs(manifest).flat_map(range_fields).collect();
     if !manifest.params.is_empty() || !ranges.is_empty() {
         s.push_str("struct Params {\n");

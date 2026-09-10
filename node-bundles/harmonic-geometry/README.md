@@ -1,6 +1,6 @@
 # Harmonic geometry
 
-Seven signal nodes and six shaders connect Biotuner's harmonic geometry to goofi.
+Six signal nodes and six shaders connect Biotuner's harmonic geometry to goofi.
 They use three shared harmonic nodes from the [Biotuner bundle](../biotuner/README.md).
 The [cookbook](examples/Cookbook.html) includes ten working
 patches. The [survey](SURVEY.md) records the source review and implementation plan.
@@ -11,10 +11,9 @@ patches. The [survey](SURVEY.md) records the source review and implementation pl
 | `HarmonicModes` | Harmonic frame(s) → bounded Chladni mode arrays with optional mode interpolation |
 | `HarmonicTransport` | Scalar field → granular equilibrium, particles, tracer flow, or streaming |
 | `GeometryBlend` | Matched fields, sampled curves, or matched meshes → a geometry transition |
-| `GeometryMetrics` | Geometry → named measurements and a labeled vector |
-| `GeometryView` | Geometry → transparent image, dashboard, and finite RGBA field upload |
-| `GeometryUpload` | Geometry → validated point, line and triangle primitives for GPU upload |
-| `graphics:GeometryRender` | Primitives → antialiased curves, points, graphs and depth-tested matte meshes |
+| `GeometryMetrics` | Geometry → one labeled measurement array |
+| `GeometryView` | Geometry → one image; choose transparent or dashboard layout |
+| `graphics:GeometryRender` | Indexed geometry → antialiased curves, points, graphs and depth-tested matte meshes |
 | `graphics:HarmonicLissajous` | Packed harmonics → a projected 3D light trace |
 | `graphics:HarmonicChladni` | Packed modes/harmonics → signed plate/open waves or nodal density with D4 symmetry |
 | `graphics:HarmonicInk` | Signed texture + optional BioColors palette → color, nodes, or contours |
@@ -23,59 +22,57 @@ patches. The [survey](SURVEY.md) records the source review and implementation pl
 
 ## Cable contracts
 
-### GPU geometry
+### Geometry
 
-Wire `HarmonicGeometry.geometry` (or `GeometryBlend.geometry`) to
-`GeometryUpload.input`, then `GeometryUpload.primitives` directly to
-`graphics:GeometryRender.primitives`. No `SignalIn` or CPU image renderer is
-needed on this path. The Breathing lines patch includes a `geometryRender` tab.
+`HarmonicGeometry`, `GeometryBlend` and `HarmonicTransport` each emit only
+`geometry`: one indexed ARRAY. Coordinates, part boundaries, connectivity,
+weights, field grids and coverage are stored once. Descriptive parameters and
+method names travel in metadata. There are no TABLE, trajectory or field copies.
 
-The upload node validates connectivity and packs up to 4096 points, line
-segments or triangles. It does not draw pixels or change coordinates. The GPU
-uses a fixed oblique projection, which leaves 2D coordinates unchanged, and a
-fixed `view/radius`. There is no automatic fit or camera motion. Meshes support
-matte surfaces or wireframe. Output alpha is transparent outside the geometry.
+Wire geometry directly to `GeometryRender.geometry` for curves, points, graphs
+and triangle meshes. The renderer has a fixed oblique projection and fixed
+`view/radius`; no automatic fit or camera motion. It provides antialiased lines,
+transparent output and matte or wireframe meshes. It reads vertex indices, not
+expanded triangle copies. The Breathing lines patch includes a geometryRender tab.
 
-This renderer uses a fragment shader: cost grows with output pixels times
-primitive count. Start at 256 square and reduce generator sampling for dense
-meshes. It is not a native vertex-buffer rasterizer. Geometry changes still
-arrive at the signal node's update rate; the renderer does not interpolate
-between packets. Scalar/vector fields retain the `GeometryView.field` →
-`SignalIn` → `HarmonicInk` route.
+Rendering cost grows with pixels times primitives. Start at 256 square and
+reduce sampling for dense meshes. This is a fragment renderer, not a native
+vertex-buffer pipeline. It does not interpolate between geometry packets;
+new shapes arrive at the signal source's update rate.
 
-The source and sound adapters belong to Biotuner: `HarmonicMorph` builds and
-morphs a harmonic TABLE; `RatioSequence` supplies timed ratios and endpoint
-packets; `HarmonicVoices` preserves that TABLE's weights in audio controls.
-Their node names and ports do not depend on bundle folder names.
+For scalar fields, wire geometry to `HarmonicInk.geometry` or
+`HarmonicRelief.geometry`. For vector flow, wire it to `HarmonicFlow.flow`.
+These shaders read the same array directly. No CPU image or SignalIn adapter
+is needed. When an Ink/Relief geometry input is present, it takes precedence
+over their texture input. GeometryView emits one image: display/layout selects
+dashboard (RGB) or transparent image (RGBA). GeometryMetrics emits only values,
+with names on its row axis.
 
-The geometry bundle starts where a harmonic structure becomes coordinates,
-plate modes, geometry measurements, or a rendered field. The CPU generator
-returns reusable geometry and connectivity; shaders draw bounded real-time
-fields and traces. Those are different outputs, not two interchangeable node
-implementations. GeometryBlend blends formed geometry, whereas HarmonicMorph
-changes its harmonic input. GeometryMetrics measures shape; use Harmonicity or
-TuningMatrix for musical interval analysis.
+The shared `goofi.geometry.encode/decode` functions and the graphics prelude
+define the format. It is tiled as `[pages,256,4]`. Eight header texels precede
+vertices, part lengths, edges, faces, weights and grids. Integer counts and
+indices use base-1024 digit pairs, preserving exact topology through f16 uploads.
+Coordinates appear once; field coverage occupies the fourth component. Domain
+NaNs remain in CPU data, while coverage preserves their mask on the GPU.
 
-`harmonic` is a TABLE of aligned 1D float32 arrays: `ratios`, `amplitudes`,
-`phases` (radians), and `damping`. Metadata holds `base_freq` (Hz), `equave`, and
-`morph`. At most 32 components are supported. Silent slots stay in this frame;
-ordinary `tuning`, `peaks`, `amps`, and `phases` outputs omit them. No `sfreq`
-is inherited from an analyzed waveform. `packed` is `[4,32]`, with these four
-rows and zero padding. `HarmonicModes.modes` is `[4,32]`, or `[4,64]` for fixed
-field blends: m, n, amplitude, phase.
+### Harmonics
 
-`geometry` is a TABLE with `type` (STRING), `coordinates` (ARRAY or numbered TABLE
-of arrays for sets), and `info` (JSON STRING with parameters and metadata).
-Optional `edges`, `faces`, and `weights` retain connectivity. `grid` is a numbered
-TABLE of coordinate arrays. Optional `coverage` is a 0..1 array matching a field.
-No Python objects, pickle, or null document leaves are used.
+Biotuner's `HarmonicMorph.harmonic` is one `[4,N]` ARRAY, with rows labeled
+ratio, amplitude, phase and damping. Metadata holds base_freq, equave and morph.
+Up to 32 components are supported. Silent slots retain their frequency; their
+column labels start with silent. Active columns start with active. There are no
+duplicate tuning, peaks, amplitude, phase or packed outputs.
 
-Curve coordinates are `[N,2]` or `[N,3]`; `trajectory` transposes them to `[2/3,N]`.
-Scalar fields are `[H,W]`; vector fields are `[H,W,2]`. Mesh coordinates are `[N,3]`
-and faces are `[T,3]` triangle indices. NaN outside a physical domain stays in
-geometry data. `GeometryView.field` and transport `field`/`flow` encode finite
-RGBA arrays: RGB repeats a scalar, or RG holds a vector; A holds coverage.
-Upload these through `graphics:SignalIn`. The Flow shader accepts its ARRAY directly.
+Use the existing Select node on axis 1 with `include=active*`, then another
+Select on axis 0 with `include=ratio` and `squeeze=true`, for an active tuning.
+Examples 06, 07 and 10 use this route. Existing Biotuner nodes still provide
+peak analysis, tuning reduction, colors, interval matrices and rhythms.
+
+HarmonicVoices consumes the same harmonic array and emits pitch and gain only.
+GeometryBlend blends formed geometry; HarmonicMorph changes harmonic inputs.
+GeometryMetrics measures shape; Harmonicity and TuningMatrix measure intervals.
+HarmonicModes.modes remains `[4,32]`, or `[4,64]` for fixed-field blends:
+m, n, amplitude and phase. Its mapping string is a human-readable report.
 
 `HarmonicRelief` reads the same signed texture as Ink. It keeps the harmonic field
 separate from the material. Depth changes the relief; seam changes its metal band;
@@ -97,22 +94,18 @@ two channels to retain height precision. The default is 512 × 512, with at most
 shadow samples per pixel. These sample the prepared height instead of evaluating
 the full relief rule at each ray step.
 
-`RatioSequence.ratio` and `target` are scalar arrays. `tuning` retains the fixed
-anchor chord and replaces its selected voice with the current ratio. `step` is
-one-based; `phase` runs from 0 to 1 inside a step. `label` is a STRING readout.
-Written lists retain their order. The optional `clock` input takes one finite
-time in seconds; otherwise the node uses monotonic elapsed time. Pause holds
-position. Reset, list/direction edits, clock source changes, and backward clock
-jumps restart at step one. Pitch glides join consecutive ratios in log frequency,
-including the loop boundary. See **10 · Living ratios** for a complete example.
+`RatioSequence.transition` is its only output: a `[2,N]` ARRAY with input and
+target endpoint ratios. Eased mix, one-based step, phase and selected voice are
+metadata. Feed this same packet to HarmonicMorph.transition and
+HarmonicModes.transition. This keeps endpoint changes and the mix reset together.
+Consumers derive their current state; the sequence emits no ratio/tuning copies.
+Select single-ratio or anchor-chord endpoints with chord/state.
 
-`RatioSequence.transition` is a TABLE with `input` and `target` harmonic TABLEs
-and an eased scalar `mix`. `chord.state` selects single-ratio endpoints or full
-anchor chords with the moving voice replaced at each endpoint. Connect it to
-`HarmonicModes.transition`. The complete packet keeps a step's endpoint change and
-mix reset together. Use either this packet or the separate input/target/mix
-ports; connecting both routes reports an error. The existing `tuning` output
-still supplies the moving anchor chord for open waves, sound, and other media.
+Written lists retain order. An optional clock supplies elapsed seconds; otherwise
+the node uses monotonic time. Pause holds position. Reset, list/direction edits,
+clock-source changes and backward jumps restart at step one. Log-frequency glides
+join consecutive ratios, including the loop boundary. See **10 · Living ratios**.
+Use either the transition input or the separate endpoint/mix inputs on a consumer.
 
 `HarmonicModes` offers `per ratio` and `chord pairs` mappings. The latter calls
 Biotuner's `chord_to_int_modes` and `chladni_field_pairwise`: `[1, 5/4, 3/2]`

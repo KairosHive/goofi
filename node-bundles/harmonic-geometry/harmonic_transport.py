@@ -1,23 +1,22 @@
-"""HarmonicTransport: sand, powder, tracer flow, or streaming on a supplied field.
+"""HarmonicTransport: sand, powder, tracer flow or streaming from a field.
 
-Granular outputs an equilibrium density, not a particle simulation. Tracer and
-Streaming output a velocity field. Wire flow to HarmonicFlow for persistent ink.
-Native coordinates retain NaN domain masks; field/flow are finite shader arrays
-with alpha in the fourth channel (scalar, scalar, scalar, coverage) or (u,v,0,coverage).
-"""
+One geometry ARRAY carries equilibrium density, particle coordinates or vector
+flow. Native coordinates retain NaN domain masks and coverage. HarmonicInk,
+HarmonicRelief and HarmonicFlow read the array directly on the GPU."""
 
 import json
 import numpy as np
 from biotuner.harmonic_geometry import GeometryData, Granular, Tracer, Streaming
 import goofi
+from goofi.geometry import encode, decode
 
 
 class HarmonicTransport(goofi.Node):
     """Apply Biotuner transport operators to an existing scalar geometry field."""
 
     TAGS = ["transform", "image"]
-    INPUTS = {"input": goofi.InputSlot(goofi.DataType.TABLE, required=True)}
-    OUTPUTS = {"geometry": goofi.DataType.TABLE, "field": goofi.DataType.ARRAY, "flow": goofi.DataType.ARRAY}
+    INPUTS = {"input": goofi.InputSlot(goofi.DataType.ARRAY, required=True)}
+    OUTPUTS = {"geometry": goofi.DataType.ARRAY}
     PARAMS = {"transport": {
         "method": goofi.StringParam("sand", ["sand", "particles", "tracer", "streaming"], doc="Equilibrium grains or a vector flow field."),
         "affinity": goofi.FloatParam(1.0, -2.0, 2.0, doc="Positive collects sand at nodes; negative collects powder at antinodes."),
@@ -31,16 +30,15 @@ class HarmonicTransport(goofi.Node):
     }, "common": {"max_frequency": goofi.FloatParam(10.0, 0.0, 30.0)}}
 
     def process(self, input):
-        p, table = self.params.transport, input.table
-        if "type" not in table or table["type"].text != "field_2d":
+        p, table = self.params.transport, decode(input.data, input.meta)
+        if "type" not in table or table["type"] != "field_2d":
             raise ValueError("HarmonicTransport needs a scalar field_2d geometry")
-        coords = np.asarray(table["coordinates"].data, dtype=np.float64)
+        coords = np.asarray(table["coordinates"], dtype=np.float64)
         if coords.ndim != 2 or min(coords.shape) < 2 or max(coords.shape) > 512 or np.any(np.isinf(coords)):
             raise ValueError("Transport field must be a 2D grid of size 2..512 without infinities")
         grid = None
         if "grid" in table:
-            entries = table["grid"].table
-            grid = tuple(entries[str(i)].data for i in range(len(entries)))
+            grid = table["grid"]
             if len(grid) != 2 or any(x.shape != coords.shape for x in grid):
                 raise ValueError("Transport grid must contain two arrays matching the field")
         else:
@@ -61,21 +59,7 @@ class HarmonicTransport(goofi.Node):
                  "info": json.dumps({"parameters": {"method": p.method, "affinity": p.affinity},
                                      "metadata": {"kind": p.method, "method": p.method}})}
         if result.field_grid is not None:
-            frame["grid"] = {str(i): v.astype(np.float32) for i, v in enumerate(result.field_grid)}
-        field = flow = np.empty((0, 0, 4), dtype=np.float32)
-        values = np.asarray(result.coordinates)
-        if result.geom_type in ("field_2d", "vector_field_2d"):
-            valid = np.isfinite(values) if values.ndim == 2 else np.all(np.isfinite(values), axis=-1)
-            coverage = table["coverage"].data if "coverage" in table else np.ones(coords.shape)
-            if coverage.shape != coords.shape or not np.all(np.isfinite(coverage)):
-                raise ValueError("Transport coverage must be finite and match the field")
-            rgba = np.zeros((*values.shape[:2], 4), dtype=np.float32)
-            rgba[..., 3] = valid * np.clip(coverage, 0, 1)
-            frame["coverage"] = rgba[..., 3]
-            if values.ndim == 2:
-                rgba[..., :3] = np.nan_to_num(values, nan=0.0)[..., None]
-                field = rgba
-            else:
-                rgba[..., :2] = np.nan_to_num(values, nan=0.0)
-                flow = rgba
-        return {"geometry": (frame, {}), "field": (field, {}), "flow": (flow, {})}
+            frame["grid"] = result.field_grid
+        if result.geom_type in ("field_2d", "vector_field_2d") and "coverage" in table:
+            frame["coverage"] = table["coverage"]
+        return {"geometry": encode(frame)}

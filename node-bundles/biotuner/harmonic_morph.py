@@ -6,9 +6,10 @@ NaN padding is removed with its amplitude and phase. Select one input row.
 Unwired inputs use the ratio lists; a wired empty input means silence.
 
 Sorted rank pairs components. Extra components keep their frequency and fade.
-This is not peak tracking. The harmonic TABLE keeps zero-amplitude components
-for stable geometry; tuning omits silent components for the existing bundle.
-packed is [4, 32]: ratios, amplitudes, phases, damping, zero-padded for shaders.
+This is not peak tracking. One [4,N] harmonic ARRAY carries ratios, amplitudes,
+phases and damping. Silent slots retain their ratios. Use Select on the labeled
+row axis when an existing node needs only ratios. There are no duplicate TABLE,
+packed, tuning or component outputs.
 """
 
 from fractions import Fraction
@@ -49,9 +50,8 @@ class HarmonicMorph(goofi.Node):
 
     TAGS = ["generator", "transform"]
     INPUTS = {k: goofi.InputSlot(goofi.DataType.ARRAY, required=False)
-              for k in ("a", "b", "ampsA", "ampsB", "phasesA", "phasesB", "mix")}
-    OUTPUTS = {"harmonic": goofi.DataType.TABLE, **{k: goofi.DataType.ARRAY
-               for k in ("tuning", "peaks", "amps", "phases", "packed", "mix")}}
+              for k in ("a", "b", "ampsA", "ampsB", "phasesA", "phasesB", "mix", "transition")}
+    OUTPUTS = {"harmonic": goofi.DataType.ARRAY}
     PARAMS = {
         "source": {
             "ratios_a": goofi.StringParam("1, 5/4, 3/2", doc="Unwired A: positive ratios, as decimals or fractions."),
@@ -60,7 +60,7 @@ class HarmonicMorph(goofi.Node):
             "mode_b": goofi.StringParam("ratios", ["ratios", "peaks"], doc="Wired B contains ratios or frequencies in Hz."),
             "row": goofi.IntParam(0, 0, 65535, doc="Flattened leading row to select from each input."),
             "amps_scale": goofi.StringParam("linear", ["linear", "db_power", "db_amplitude"], doc="Scale of both amplitude inputs; dB is converted before normalization."),
-            "base_freq": goofi.FloatParam(110.0, 0.1, 2000.0, doc="Hz for ratio 1 at the peaks output; geometry uses relative frequencies."),
+            "base_freq": goofi.FloatParam(110.0, 0.1, 2000.0, doc="Hz for ratio 1 in harmonic metadata; geometry uses relative frequencies."),
             "equave": goofi.FloatParam(2.0, 1.01, 8.0, doc="Pitch-circle period; 2 is an octave, 3 is a tritave."),
         },
         "morph": {
@@ -81,7 +81,7 @@ class HarmonicMorph(goofi.Node):
         "common": {"autotrigger": goofi.BoolParam(True), "max_frequency": goofi.FloatParam(20.0, 0.0, 60.0)},
     }
 
-    def _source(self, data, amp, phase, side):
+    def _source(self, data, amp, phase, side, input_mode=None):
         p = self.params.source
         if data is None:
             text = getattr(p, f"ratios_{side}")
@@ -115,25 +115,34 @@ class HarmonicMorph(goofi.Node):
         if np.any(a < 0):
             raise ValueError("Linear amplitudes cannot be negative; select the correct amps_scale")
         r = r[valid]
-        if data is not None and getattr(p, f"mode_{side}") == "peaks" and r.size:
+        if data is not None and (input_mode or getattr(p, f"mode_{side}")) == "peaks" and r.size:
             r = r / r.min()
         r, a, ph = merge_components(r, a, ph)
         if r.size > 32:
             raise ValueError("HarmonicMorph supports at most 32 components; reduce the tuning first")
         return r, unit_amplitudes(a), ph
 
-    def process(self, a=None, b=None, ampsA=None, ampsB=None, phasesA=None, phasesB=None, mix=None):
+    def process(self, a=None, b=None, ampsA=None, ampsB=None, phasesA=None, phasesB=None, mix=None, transition=None):
         p, source = self.params.morph, self.params.source
+        if transition is not None:
+            if any(v is not None for v in (a, b, ampsA, ampsB, phasesA, phasesB, mix)):
+                raise ValueError("Use transition or separate morph inputs")
+            endpoints = np.asarray(transition.data)
+            if endpoints.ndim != 2 or endpoints.shape[0] != 2:
+                raise ValueError("Transition needs two endpoint ratio rows")
+            a, b = (goofi.Data(row) for row in endpoints)
+            mix = goofi.Data(np.asarray([transition.meta["mix"]], dtype=np.float32))
         t = float(p.mix)
         if mix is not None:
             value = np.asarray(mix.data).ravel()
             if value.size != 1 or not np.isfinite(value[0]):
                 raise ValueError("mix needs one finite value")
             t = float(np.clip(value[0], 0.0, 1.0))
-        if p.easing == "smooth":
+        if p.easing == "smooth" and transition is None:
             t = t * t * (3.0 - 2.0 * t)
-        ra, aa, pa = self._source(a, ampsA, phasesA, "a")
-        rb, ab, pb = self._source(b, ampsB, phasesB, "b")
+        mode = "ratios" if transition is not None else None
+        ra, aa, pa = self._source(a, ampsA, phasesA, "a", mode)
+        rb, ab, pb = self._source(b, ampsB, phasesB, "b", mode)
         chord_a = HarmonicInput(ratios=ra.tolist(), amplitudes=aa.tolist(), phases=pa.tolist())
         chord_b = HarmonicInput(ratios=rb.tolist(), amplitudes=ab.tolist(), phases=pb.tolist())
         chord = interpolate_chords(chord_a, chord_b, t)
@@ -171,17 +180,7 @@ class HarmonicMorph(goofi.Node):
         r, weights, phases = r[order], weights[order], phases[order]
         damping = np.full(len(r), p.damping)
         meta = {"base_freq": source.base_freq, "equave": source.equave, "morph": t}
-        harmonic = {k: v.astype(np.float32) for k, v in
-                    zip(("ratios", "amplitudes", "phases", "damping"), (r, weights, phases, damping))}
-        packed = np.zeros((4, 32), dtype=np.float32)
-        packed[:, :len(r)] = np.stack((r, weights, phases, damping))
-        active = weights > 0
-        return {
-            "harmonic": (harmonic, meta),
-            "tuning": (r[active].astype(np.float32), {**meta, "units": "ratio"}),
-            "peaks": ((r[active]*source.base_freq).astype(np.float32), {**meta, "units": "Hz"}),
-            "amps": (weights[active].astype(np.float32), meta),
-            "phases": (phases[active].astype(np.float32), meta),
-            "packed": (packed, {**meta, "channels": {"dim0": ["ratio", "amplitude", "phase", "damping"]}}),
-            "mix": (np.float32(t), {}),
-        }
+        values = np.stack((r, weights, phases, damping)).astype(np.float32)
+        if not len(r):
+            values = np.array([[1], [0], [0], [0]], dtype=np.float32)
+        return {"harmonic": (values, {**meta, "channels": {"dim0": ["ratio", "amplitude", "phase", "damping"], "dim1": [f"active{i}" if weight > 0 else f"silent{i}" for i, weight in enumerate(values[1])]}})}

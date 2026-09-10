@@ -5,7 +5,7 @@
     "views": [
       [
         "lineStudy",
-        "dashboard",
+        "image",
         "image"
       ],
       [
@@ -19,7 +19,7 @@
         "image"
       ]
     ],
-    "nodes": 7
+    "nodes": 6
   },
   {
     "file": "02-plate-mode-walk.gfi",
@@ -32,7 +32,7 @@
       ],
       [
         "plateStudy",
-        "dashboard",
+        "image",
         "image"
       ]
     ],
@@ -44,7 +44,7 @@
     "views": [
       [
         "mediaStudy",
-        "dashboard",
+        "image",
         "image"
       ],
       [
@@ -53,7 +53,7 @@
         "image"
       ]
     ],
-    "nodes": 8
+    "nodes": 7
   },
   {
     "file": "04-sand-and-memory.gfi",
@@ -61,7 +61,7 @@
     "views": [
       [
         "sandStudy",
-        "dashboard",
+        "image",
         "image"
       ],
       [
@@ -78,7 +78,7 @@
     "views": [
       [
         "knotStudy",
-        "dashboard",
+        "image",
         "image"
       ]
     ],
@@ -90,7 +90,7 @@
     "views": [
       [
         "gardenStudy",
-        "dashboard",
+        "image",
         "image"
       ],
       [
@@ -99,7 +99,7 @@
         "image"
       ]
     ],
-    "nodes": 7
+    "nodes": 9
   },
   {
     "file": "07-peaks-to-worlds.gfi",
@@ -107,7 +107,7 @@
     "views": [
       [
         "peakStudy",
-        "dashboard",
+        "image",
         "image"
       ],
       [
@@ -121,7 +121,7 @@
         "image"
       ]
     ],
-    "nodes": 10
+    "nodes": 12
   },
   {
     "file": "08-common-chord.gfi",
@@ -129,7 +129,7 @@
     "views": [
       [
         "chordStudy",
-        "dashboard",
+        "image",
         "image"
       ]
     ],
@@ -162,11 +162,6 @@
         "line"
       ],
       [
-        "ratios",
-        "label",
-        "string"
-      ],
-      [
         "nodalLines",
         "out",
         "image"
@@ -177,6 +172,6 @@
         "string"
       ]
     ],
-    "nodes": 8
+    "nodes": 10
   }
 ]
