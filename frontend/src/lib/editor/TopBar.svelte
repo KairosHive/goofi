@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { pluginHeaders, activateHeader } from '$lib/plugins/runtime.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
@@ -110,7 +111,8 @@
 	// oscillates; `.tabslot` is the only growable box, which is what makes the plan converge.
 
 	/** Lowest priority first: the order the bar gives its residents up. */
-	const SPILL_ORDER = [
+	const SPILL_ORDER = $derived([
+		...pluginHeaders.entries.map((entry) => entry.key),
 		'topbar-hud',
 		'topbar-record',
 		'topbar-path',
@@ -119,7 +121,7 @@
 		'topbar-save',
 		'topbar-redo',
 		'topbar-undo'
-	];
+	]);
 	/** The floor under the tab reservation, in tap targets, so a one-tab strip stays hittable. */
 	const TABSLOT_HITS = 2;
 
@@ -235,6 +237,7 @@
 	// The residents change width from CONTENT, which no resize reports. The `tick()` is
 	// load-bearing: the tab strip is a sibling tree, so a synchronous replan measures the old one.
 	$effect(() => {
+		void pluginHeaders.entries;
 		void g.savePath;
 		void g.unsavedChanges;
 		void hudActive;
@@ -286,7 +289,9 @@
 
 	/** The bar's own residents, but only the ones that no longer fit. */
 	function spilledItems(): MenuItem[] {
-		const items: MenuItem[] = [];
+		const items: MenuItem[] = pluginHeaders.entries.filter((entry) => isSpilled(entry.key)).map((entry) => ({
+			label: entry.label, disabled: entry.disabled || !entry.onActivate, action: () => activateHeader(entry)
+		}));
 		if (isSpilled('topbar-hud') && hudActive)
 			items.push({ label: `${p.fps.toFixed(0)} fps`, disabled: true, action: () => {} });
 		if (isSpilled('topbar-record') && rec.running)
@@ -377,6 +382,11 @@
 			>
 		{/if}
 		<div class="actions" bind:this={actionsEl}>
+			{#each pluginHeaders.entries as entry (entry.key)}
+				<div class:spilled={isSpilled(entry.key)} data-testid={entry.key}>
+					<Button size="sm" title={entry.title ?? entry.label} disabled={entry.disabled || !entry.onActivate} onclick={() => activateHeader(entry)}>{entry.label}</Button>
+				</div>
+			{/each}
 			<!-- Identity and actions are ONE overflow group with ONE gap. -->
 			{#if rec.running}
 				<span

@@ -960,6 +960,28 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 	await waitForNode(page, osc);
 	await selectNode(page, osc);
 	const row = page.getByTestId('param-field-frequency');
+	const summary = row.getByRole('button', { name: 'frequency', exact: true });
+	const background = () => row.evaluate((el) => getComputedStyle(el).backgroundColor);
+	await page.mouse.move(0, 0);
+	const collapsed = await background();
+	await row.hover({ position: { x: 2, y: 2 } });
+	await expect.poll(background).not.toBe(collapsed);
+	await row.click({ position: { x: 2, y: 2 } });
+	await expect(summary).toHaveAttribute('aria-expanded', 'true');
+	await page.mouse.move(0, 0);
+	await expect.poll(background).not.toBe(collapsed);
+	await row.getByTestId('param-number').click();
+	await expect(summary).toHaveAttribute('aria-expanded', 'true');
+	await row.getByTestId('param-mode-constant').click();
+	await expect(summary).toHaveAttribute('aria-expanded', 'true');
+	const more = await row.getByTestId('param-more').boundingBox();
+	await page.mouse.click(more!.x + 2, more!.y + more!.height / 2);
+	await expect(summary).toHaveAttribute('aria-expanded', 'false');
+	await summary.focus();
+	await page.keyboard.press('Enter');
+	await expect(summary).toHaveAttribute('aria-expanded', 'true');
+	await page.keyboard.press('Space');
+	await expect(summary).toHaveAttribute('aria-expanded', 'false');
 	const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
 	const original = await source();
 	async function expectModulation(kind: string, previous: unknown): Promise<void> {

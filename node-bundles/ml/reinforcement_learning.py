@@ -16,8 +16,8 @@ the environment is a participant who habituates:
 - The input statistics forget, the weights are pulled back toward their initial values, and low
   utility units are recycled. Together these are what stop the network losing the ability to learn.
 
-The policy is a plain Normal. Nothing is squashed inside the density, so `log pi(a|s)` is always
-evaluated on the exact value that was drawn: bounding happens after the sample, on the way out.
+    The policy is a plain Normal. Nothing is squashed inside the density, so `log pi(a|s)` is always
+    evaluated on the exact value that was drawn: bounded shaping happens after the sample, on the way out.
 """
 
 import numpy as np
@@ -264,7 +264,7 @@ class ReinforcementLearning(goofi.Node):
         },
         "learning": {
             "enabled": goofi.BoolParam(True, doc="Learn from what arrives. Off keeps acting on what is known."),
-            "step_size": goofi.FloatParam(1.0, 0.0, 10.0, doc="ObGD bounds its own step, so 1.0 is the working default."),
+            "step_size": goofi.FloatParam(1.0, 0.0, 3.0, doc="ObGD bounds its own step, so 1.0 is the working default."),
             "gamma": goofi.FloatParam(0.9, 0.0, 0.999, doc="How far ahead to look. Seconds-long effects want less than 0.99."),
             "trace_decay": goofi.FloatParam(0.8, 0.0, 0.99, doc="Lambda: how long an action stays credited for what follows."),
             "entropy": goofi.FloatParam(0.01, 0.0, 1.0, doc="Pressure to keep exploring. It only ever pushes exploration up."),
@@ -280,9 +280,10 @@ class ReinforcementLearning(goofi.Node):
         },
         "action": {
             "noise": goofi.StringParam("pink", options=["pink", "white"], doc="Pink is correlated in time, so a slow system can follow it."),
-            "low": goofi.FloatParam(-1.0, -1e6, 1e6, doc="What an action of -1 comes out as."),
-            "high": goofi.FloatParam(1.0, -1e6, 1e6, doc="What an action of +1 comes out as."),
-            "slew": goofi.FloatParam(0.0, 0.0, 1e6, doc="Largest change per step, in output units. 0 does not limit."),
+            "bounded": goofi.BoolParam(True, doc="Use tanh on samples, so output is centered in [-1, 1]. OFF allows slight overflow."),
+            "smoothness": goofi.FloatParam(0.0, 0.0, 10.0, doc="How smooth action transitions are. 0 is sharp, large is very smooth."),
+            "low": goofi.FloatParam(-1.0, -5.0, 5.0, doc="What an action of -1 comes out as."),
+            "high": goofi.FloatParam(1.0, -5.0, 5.0, doc="What an action of +1 comes out as."),
         },
     }
 
@@ -360,14 +361,17 @@ class ReinforcementLearning(goofi.Node):
             self.rank.compute()
 
         # Learning uses the SAMPLE, never what was delivered: the density has to match what was
-        # drawn, and clipping or slewing the output would silently break that.
+        # drawn, and output shaping must stay outside the actor value.
         self.prev = {"state": state, "action": action}
 
         span = 0.5 * (p.action.high - p.action.low)
         mid = 0.5 * (p.action.high + p.action.low)
-        out = mid + span * np.clip(action, -1.0, 1.0)
-        if p.action.slew > 0.0 and self.delivered is not None:
-            out = np.clip(out, self.delivered - p.action.slew, self.delivered + p.action.slew)
+        bounded = np.tanh(action) if p.action.bounded else action
+        out = mid + span * bounded
+        if p.action.smoothness > 0.0 and self.delivered is not None:
+            smoothness = np.clip(p.action.smoothness, 0.0, 10.0)
+            blend = np.exp(-np.log(100.0) * (smoothness / 10.0))
+            out = self.delivered + blend * (out - self.delivered)
         self.delivered = out
 
         entropy = float(np.mean(np.log(std) + 0.5 * np.log(2.0 * np.pi * np.e)))

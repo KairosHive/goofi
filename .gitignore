@@ -107,6 +107,7 @@ ipython_config.py
 
 # uv
 uv.lock
+!backend/goofi-tests/fixtures/plugins/**/uv.lock
 
 # pdm
 #   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.

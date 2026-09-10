@@ -130,6 +130,9 @@ pub(crate) fn compound(
         let op = state
             .find_op(name)
             .ok_or_else(|| format!("compound: step {i}: unknown op `{name}`"))?;
+        if state.plugins.has_hooks(name) || matches!(op.handler, crate::ops::Handler::PluginRead | crate::ops::Handler::PluginEffect) {
+            return Err(format!("compound: `{name}` uses a plugin and must run alone"));
+        }
         if !(op.handler.is_read() || op.handler.is_write()) {
             return Err(format!(
                 "compound: step {i} `{name}` is not a step — a read or an undoable write \
@@ -899,7 +902,7 @@ pub(crate) fn layout_panel_edit(
             g.arrangement().panel_state(&panel).and_then(|s| s.get("node")).and_then(|v| v.as_str())
         })
         .and_then(Uid::from_hex);
-    vocab::check_panel(&g, ty.as_deref(), panel_state.as_ref(), bound)?;
+    vocab::check_panel(&state.plugins, &g, ty.as_deref(), panel_state.as_ref(), bound)?;
     // A control panel is born naming a group of its own, `control0`, `control1`, … — the first
     // that nothing holds — so no panel ever waits on a name.
     let panel_state = match (ty.as_deref(), panel_state) {
@@ -1850,7 +1853,7 @@ pub(crate) fn op_complete(
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
     let line = payload.get("line").and_then(Value::as_str).unwrap_or_default();
-    let rows: Vec<String> = crate::phrase::complete(state.ops(), Some(state), line)
+    let rows: Vec<String> = crate::phrase::complete(&state.ops().iter().collect::<Vec<_>>(), Some(state), line)
         .into_iter()
         .map(|(word, doc)| format!("{word}\t{doc}"))
         .collect();
@@ -1977,7 +1980,7 @@ pub(crate) fn record_start(
     drop(g);
     let folder = state
         .recorder
-        .start(&root, &name, patch.as_deref())
+        .start(&root, &name, patch.as_deref(), payload.get("annotations"))
         .map_err(|e| format!("record start: {e}"))?;
     spawn_record_beat(state, folder.clone());
     events.push(record_changed(state));
