@@ -1,7 +1,7 @@
 <!--
   ParamField — one inspector row: the name, and the one control `controlKind(descriptor)` chooses.
   That control is the row in EVERY mode — driven, it is disabled and reads out what the source
-  produces, since the param's own face is what a reader recognises. The name opens a second row
+  produces, since the param's own face is what a reader recognises. The entry background opens a second row
   holding the three-way switch — constant, expression, reference — and the editor of whichever
   source is active. `vmin/vmax` are SOFT bounds: they scope only the Slider's track, and the
   NumberInput beside it commits what is typed.
@@ -114,6 +114,7 @@
 	data-global-drop
 	class:armed={dropZone !== null || uiStore.globalDrag !== null}
 	class:over
+	class:open
 	data-node-drop={dropZone}
 	{...rest}
 >
@@ -282,10 +283,41 @@
 
 <style>
 	.pf-param {
+		position: relative;
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-2);
+		padding: var(--space-3);
+		margin-inline: calc(-1 * var(--space-3));
+		border-radius: var(--radius-sm);
 		min-width: 0;
+	}
+	.pf-param.open {
+		background: var(--surface-2);
+	}
+	.pf-param:has(:global(.ui-field-summary:hover)) {
+		background: var(--surface-3);
+	}
+	/* Extend the native disclosure button over the entry. Controls stay above it. */
+	.pf-param :global(.ui-field-summary) {
+		overflow: visible;
+	}
+	.pf-param :global(.ui-field-summary::before) {
+		content: '';
+		position: absolute;
+		inset: 0;
+		border-radius: var(--radius-sm);
+	}
+	.pf-param :global(.ui-field-summary:focus-visible) {
+		outline: none;
+	}
+	.pf-param :global(.ui-field-summary:focus-visible::before) {
+		outline: var(--focus-width) solid var(--focus-ink);
+		outline-offset: 2px;
+	}
+	.pf-value > :global(*),
+	.pf-more > :global(*) {
+		position: relative;
 	}
 	/* An `outline` rather than a border: a row that becomes a target must not move the rows under it. */
 	.pf-param.armed {
