@@ -423,7 +423,8 @@ test.describe('the control socket', () => {
 				await expect.poll(readClipboard).toBe(selectedText);
 				await page.keyboard.press('Control+x');
 				expect((await backendDoc(page)).nodes[scope]).toBeDefined();
-				await page.evaluate(() => window.getSelection()!.removeAllRanges());
+				await selectNode(page, scope);
+				await expect.poll(() => page.evaluate(() => window.getSelection()!.toString())).toBe('');
 				await label.focus();
 				await page.keyboard.press('Control+c');
 				expect(await readClipboard()).toBe(selectedText);
@@ -1079,5 +1080,33 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 	await page.mouse.move(0, 0);
 	await page.keyboard.press('n');
 	expect(await source()).toEqual(original);
+	await clearGraph(page);
+});
+
+test('a node click clears inspector text selection before copying nodes', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+	const uid = await addNode(page, 'LFO');
+	await waitForNode(page, uid);
+	await selectNode(page, uid);
+	await page.getByTestId('docs-toggle').click();
+	const docs = page.getByTestId('docstring');
+	const textSelection = () => page.evaluate(() => window.getSelection()!.toString());
+	await docs.dblclick();
+	await expect.poll(textSelection).not.toBe('');
+	await page.keyboard.press('Control+c');
+	await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(await textSelection());
+	await selectNode(page, uid);
+	await expect.poll(textSelection).toBe('');
+	await page.keyboard.press('Control+c');
+	await expect.poll(() => clipboardHolds(page, uid)).toBe(true);
+	await page.keyboard.press('Control+v');
+	await expect.poll(async () => Object.keys((await backendDoc(page)).nodes).length).toBe(2);
+	await docs.dblclick();
+	await expect.poll(textSelection).not.toBe('');
+	await page.getByTestId('param-search').click();
+	await expect.poll(textSelection).toBe('');
 	await clearGraph(page);
 });
