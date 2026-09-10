@@ -1,7 +1,7 @@
 /* goofi
-{ "doc": "Color and contours for a signed harmonic field.\nWire HarmonicChladni.out, or upload GeometryView.field/HarmonicTransport.field through SignalIn. The raw field is unchanged. BioColors.rgb can feed palette directly as an [N,3] array. Alpha preserves domain masks. range is fixed, so morphs do not silently change their contrast.",
+{ "doc": "Color and contours for a signed harmonic field.\nWire HarmonicChladni.out to input, or HarmonicGeometry/GeometryBlend/HarmonicTransport.geometry directly to geometry. A valid geometry array takes precedence over the texture input. The raw field is unchanged. BioColors.rgb can feed palette directly as an [N,3] array. Alpha preserves domain masks. range is fixed, so morphs do not silently change their contrast.",
   "tags": ["image", "transform"],
-  "inputs": [{"name": "input", "kind": "TEXTURE"}, {"name": "palette", "kind": "ARRAY"}],
+  "inputs": [{"name": "input", "kind": "TEXTURE"}, {"name": "geometry", "kind": "ARRAY"}, {"name": "palette", "kind": "ARRAY"}],
   "params": [
     {"group": "ink", "name": "style", "kind": "str", "default": "nodal", "options": ["nodal", "signed", "magnitude", "contours", "density"], "doc": "Zero lines, signed field, absolute value, contours, or an already computed nodal density."},
     {"group": "ink", "name": "range", "kind": "float", "default": 1.0, "min": 0.001, "max": 100.0, "doc": "Absolute field value that fills the color range."},
@@ -29,7 +29,11 @@ fn color_at(t: f32) -> vec3f {
 }
 
 fn shade(uv: vec2f) -> vec4f {
-    let sample = textureSample(input, samp, uv);
+    var sample = textureSample(input, samp, uv);
+    if goofi_geo_valid(geometry) {
+        sample = goofi_geo_field(geometry, uv);
+        if goofi_geo_header(geometry, 1u) == 12u { sample.r = length(sample.rg); }
+    }
     let v = sample.r / p.range;
     var tone = exp(-0.5 * v * v / (p.width * p.width));
     switch p.style {

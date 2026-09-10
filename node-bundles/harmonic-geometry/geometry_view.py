@@ -1,16 +1,15 @@
-"""GeometryView: one renderer for harmonic curves, graphs, surfaces, and fields.
+"""GeometryView: one image renderer for harmonic geometry arrays.
 
-image is a transparent RGBA canvas. dashboard is a labeled RGB plate with
-harmonic context and optional GeometryMetrics. field is a finite RGBA upload
-of scalar/vector data with its domain mask in alpha. Geometry data itself is
-not normalized or recolored. Wire BioColors.rgb to palette to share its colors.
-"""
+display/layout selects a labeled dashboard or a transparent RGBA image.
+Raw field data stays in the input array; shaders read it directly.
+Wire BioColors.rgb to palette to share its colors."""
 
 import json
 from fractions import Fraction
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 import goofi
+from goofi.geometry import decode
 
 
 INK = (11, 20, 32)
@@ -30,13 +29,14 @@ class GeometryView(goofi.Node):
     """Render geometry, camera controls, harmonic components, and measurements."""
 
     TAGS = ["image"]
-    INPUTS = {"input": goofi.InputSlot(goofi.DataType.TABLE, required=True),
-              "harmonic": goofi.InputSlot(goofi.DataType.TABLE, required=False),
-              "metrics": goofi.InputSlot(goofi.DataType.TABLE, required=False),
+    INPUTS = {"input": goofi.InputSlot(goofi.DataType.ARRAY, required=True),
+              "harmonic": goofi.InputSlot(goofi.DataType.ARRAY, required=False),
+              "metrics": goofi.InputSlot(goofi.DataType.ARRAY, required=False),
               "palette": goofi.InputSlot(goofi.DataType.ARRAY, required=False)}
-    OUTPUTS = {k: goofi.DataType.ARRAY for k in ("image", "dashboard", "field")}
+    OUTPUTS = {"image": goofi.DataType.ARRAY}
     PARAMS = {
         "display": {
+            "layout": goofi.StringParam("dashboard", ["dashboard", "image"], doc="One rendered output: labeled dashboard or transparent geometry image."),
             "title": goofi.StringParam("Harmonic geometry", doc="Dashboard title."),
             "caption": goofi.StringParam("One harmonic frame. Many ways to see it.", doc="Short dashboard subtitle."),
             "size": goofi.IntParam(512, 128, 1024, doc="Transparent image side length; dashboard is 960 by 660."),
@@ -70,15 +70,13 @@ class GeometryView(goofi.Node):
         self.small, self.body, self.title = font(14), font(19), font(32)
 
     def process(self, input, harmonic=None, metrics=None, palette=None):
-        table, p, cam = input.table, self.params.display, self.params.camera
-        if "type" not in table or "coordinates" not in table:
-            raise ValueError("GeometryView needs a geometry TABLE")
-        kind = table["type"].text
-        info = json.loads(table["info"].text) if "info" in table else {}
+        table, p, cam = decode(input.data, input.meta), self.params.display, self.params.camera
+        kind = table["type"]
+        info = json.loads(table["info"])
         metadata = info.get("metadata", {})
         method = str(metadata.get("method", metadata.get("kind", kind)))
-        item = table["coordinates"]
-        parts = [item.table[str(i)].data for i in range(len(item.table))] if item.kind == "TABLE" else [item.data]
+        coords = table["coordinates"]
+        parts = coords if isinstance(coords, list) else [coords]
         colors = DEFAULT_PALETTE
         if palette is not None:
             pc = np.asarray(palette.data, dtype=np.float64)
@@ -91,13 +89,12 @@ class GeometryView(goofi.Node):
                 if len(colors) == 1:
                     colors = np.vstack((colors*0.15, colors))
         canvas = Image.new("RGBA", (p.size, p.size))
-        texture = np.empty((0, 0, 4), dtype=np.float32)
         if kind in ("field_2d", "vector_field_2d"):
             values = np.asarray(parts[0], dtype=np.float64)
             valid = np.isfinite(values) if values.ndim == 2 else np.all(np.isfinite(values), axis=-1)
             cover = valid.astype(np.float32)
             if "coverage" in table:
-                cov = table["coverage"].data
+                cov = table["coverage"]
                 if cov.shape != cover.shape or not np.all(np.isfinite(cov)):
                     raise ValueError("Geometry coverage must be finite and match the field")
                 cover *= np.clip(cov, 0, 1)
@@ -116,14 +113,10 @@ class GeometryView(goofi.Node):
                 tone = 0.5+0.5*z
             rgba = np.concatenate((palette_at(tone, colors), cover[..., None]), axis=-1)
             canvas = Image.fromarray(np.uint8(np.clip(rgba, 0, 1)*255)).resize((p.size, p.size), Image.Resampling.BILINEAR)
-            texture = np.zeros((*safe.shape, 4), dtype=np.float32)
-            if values.ndim == 2:
-                texture[..., :3] = safe[..., None]
-            else:
-                texture[..., :2] = np.where(valid[..., None], values, 0)
-            texture[..., 3] = cover
         else:
             self._draw_geometry(canvas, parts, table, kind, colors)
+        if p.layout == "image":
+            return {"image": (np.asarray(canvas, dtype=np.float32)/255, {"geometry_kind": method})}
         dashboard = Image.new("RGB", (960, 660), INK)
         draw = ImageDraw.Draw(dashboard)
         draw.rounded_rectangle((22, 22, 938, 638), radius=20, outline=(38, 59, 74), width=1)
@@ -139,8 +132,7 @@ class GeometryView(goofi.Node):
         draw.text((649, 210), kind.replace("_", " "), font=self.small, fill=MUTED)
         draw.text((649, 249), "HARMONIC COMPONENTS", font=self.small, fill=ACCENT)
         if harmonic is not None:
-            h = harmonic.table
-            r, weights = h["ratios"].data, h["amplitudes"].data
+            r, weights = np.asarray(harmonic.data)[:2]
             if r.ndim != 1 or r.shape != weights.shape or not np.all(np.isfinite(np.r_[r, weights])):
                 raise ValueError("Dashboard harmonic context needs aligned finite ratios and amplitudes")
             maximum = max(float(weights.max()) if weights.size else 0, 1e-12)
@@ -172,9 +164,10 @@ class GeometryView(goofi.Node):
                 draw.ellipse((at-5, 535, at+5, 545), fill=ACCENT)
         if metrics is not None:
             numeric = []
-            for key, value in metrics.table.items():
-                if value.kind == "ARRAY" and value.data.size == 1 and np.isfinite(value.data.ravel()[0]):
-                    numeric.append((key, float(value.data.ravel()[0])))
+            names = metrics.meta.get("channels", {}).get("dim0", [])
+            for key, value in zip(names, np.asarray(metrics.data).ravel()):
+                if np.isfinite(value):
+                    numeric.append((key, float(value)))
             text = "   |   ".join(f"{k.replace('_', ' ')} {v:.3g}" for k, v in numeric[:3])
             draw.text((48, 617), text[:115], font=self.small, fill=MUTED)
         else:
@@ -182,8 +175,7 @@ class GeometryView(goofi.Node):
         if not any(part.size for part in parts):
             draw.text((229, 366), "No harmonic components", font=self.body, fill=MUTED)
         meta = {"geometry_kind": method}
-        return {"image": (np.asarray(canvas, dtype=np.float32)/255, meta),
-                "dashboard": (np.asarray(dashboard, dtype=np.float32)/255, meta), "field": (texture, meta)}
+        return {"image": (np.asarray(dashboard, dtype=np.float32)/255, meta)}
 
     def _draw_geometry(self, canvas, parts, table, kind, colors):
         p, c = self.params.display, self.params.camera
@@ -206,7 +198,7 @@ class GeometryView(goofi.Node):
         color = lambda t, alpha=255: (*tuple(np.uint8(palette_at(t, colors)*255)), alpha)
         first = projected[0]
         if kind == "mesh_3d" and "faces" in table:
-            raw = table["faces"].data
+            raw = table["faces"]
             if raw.ndim != 2 or raw.shape[1] != 3 or not np.all(np.isfinite(raw)) or np.any(raw != np.floor(raw)) or np.any(raw < 0) or np.any(raw >= len(first)):
                 raise ValueError("Mesh faces must contain valid triangle indices")
             faces = raw.astype(int)
@@ -218,10 +210,10 @@ class GeometryView(goofi.Node):
                 triangle = faces[index]
                 draw.polygon([tuple(v) for v in first[triangle]], fill=color(0.2+0.8*abs(light[index])))
         elif kind in ("graph", "tree") and "edges" in table:
-            raw = table["edges"].data
+            raw = table["edges"]
             if raw.ndim != 2 or raw.shape[1] != 2 or not np.all(np.isfinite(raw)) or np.any(raw != np.floor(raw)) or np.any(raw < 0) or np.any(raw >= len(first)):
                 raise ValueError("Graph edges must contain valid vertex indices")
-            weights = table["weights"].data.ravel() if "weights" in table else np.empty(0)
+            weights = table["weights"].ravel() if "weights" in table else np.empty(0)
             weighted = len(weights) == len(raw) and np.all(np.isfinite(weights))
             scale = max(np.max(np.abs(weights)), 1e-12) if weighted and len(weights) else 1.0
             for i, edge in enumerate(raw.astype(int)):
@@ -231,7 +223,7 @@ class GeometryView(goofi.Node):
                 for i, (x, y) in enumerate(first):
                     draw.ellipse((x-p.points, y-p.points, x+p.points, y+p.points), fill=color(0.9))
         elif kind.startswith("point_cloud"):
-            weights = table["weights"].data.ravel() if "weights" in table else np.ones(len(first))
+            weights = table["weights"].ravel() if "weights" in table else np.ones(len(first))
             for i in np.argsort(transformed[0][:, 2]):
                 if len(weights) == len(first) and weights[i] <= 0:
                     continue

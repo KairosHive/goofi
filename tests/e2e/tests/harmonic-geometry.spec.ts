@@ -217,7 +217,7 @@ test('living ratios modulate the organic field with a visible trace and pause co
 		const still = (await page.locator('.vp-body canvas:visible').first().screenshot()).toString('base64');
 		await expect.poll(() => imageMovement(page, still), { timeout: 8_000,
 			message: 'The Chladni picture visibly changes while the texture stays fixed' }).toBeGreaterThan(4);
-		const sample = async () => (await rawCall(page, 'node snapshot', { output: 'ratios/ratio' })).result?.range?.mean;
+		const sample = async () => (await rawCall(page, 'node snapshot', { output: 'chordTuning/out' })).result?.range?.mean;
 		await expect.poll(sample).toBeGreaterThan(1);
 		const first = await sample();
 		await expect.poll(sample, { timeout: 12_000 }).not.toBe(first);
@@ -225,8 +225,6 @@ test('living ratios modulate the organic field with a visible trace and pause co
 		await expect.poll(async () => (await rawCall(page, 'global list')).result.globals.find((g: any) => g.name === 'geometry.running').value).toBe(false);
 		await expect.poll(async () => (await rawCall(page, 'session status')).result.errors).toEqual([]);
 		await page.screenshot({ path: path.join(folder, 'assets', '10-living-ratios-browser.png') });
-		await page.getByRole('tab', { name: 'ratios Close tab', exact: true }).click();
-		await expect(page.locator('.vp-body')).toContainText('ratio');
 		await page.getByRole('tab', { name: 'nodalLines Close tab', exact: true }).click();
 		await expect.poll(() => imageContrast(page)).toBeGreaterThan(15);
 		await page.getByRole('tab', { name: 'modes Close tab', exact: true }).click();

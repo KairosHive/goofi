@@ -8,9 +8,9 @@ Three shared harmonic nodes support both sound and geometry:
 
 | Node | Role |
 | --- | --- |
-| HarmonicMorph | Morph two tuning or peak rows, including aligned weights and phases. Emit a harmonic TABLE, tuning, peaks, and packed shader data. |
-| RatioSequence | Emit timed ratio steps, pitch glides, an anchor chord, and coherent endpoint transition TABLEs. |
-| HarmonicVoices | Convert a weighted harmonic TABLE into fixed pitch/gain columns without dropping silent components. |
+| HarmonicMorph | Morph two tuning or peak rows, including aligned weights and phases. Emit one labeled harmonic ARRAY for signal and graphics consumers. |
+| RatioSequence | Emit one coherent endpoint transition ARRAY with mix and clock metadata. |
+| HarmonicVoices | Convert a weighted harmonic ARRAY into fixed pitch/gain columns without dropping silent components. |
 
 These are useful without a geometry node. HarmonicMorph uses Biotuner's shared
 harmonic descriptor and transition functions. All bundle nodes use the same
@@ -43,3 +43,8 @@ The resulting chord drives geometry, BioColors, and a TuningMatrix display.
 Example 06 uses BioColors and EuclidRhythm. Example 08 uses HarmonicVoices for
 the weighted sound route. These examples share capabilities rather than
 reimplementing peak extraction, scale reduction, color, or rhythm analysis.
+
+The new nodes do not emit alternate copies of their data. HarmonicMorph has
+one [4,N] harmonic output; RatioSequence has one [2,N] transition output;
+HarmonicVoices has pitch and gain outputs. Use Select for harmonic rows and
+active columns. See the harmonic-geometry README for the shared array contract.

@@ -21,6 +21,9 @@ use pyo3::prelude::*;
 /// The `goofi` Python module; `pub` so the host can `append_to_inittab!` it.
 #[pymodule]
 pub fn goofi(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let source = std::ffi::CString::new(include_str!("geometry.py"))?;
+    let geometry = PyModule::from_code(m.py(), source.as_c_str(), c"goofi.geometry", c"goofi.geometry")?;
+    m.add_submodule(&geometry)?;
     m.add_class::<data::Data>()?;
     m.add_class::<data::Ndims>()?;
     m.add_class::<node::Node>()?;

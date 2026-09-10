@@ -1,8 +1,8 @@
 /* goofi
-{ "doc": "Draw a harmonic field as grains, living textures, or sculpted material.\nConnect HarmonicChladni.out to input. Choose any two textures and morph their surface detail, density, color, and light response. Sand, dunes, lichen, coral, cells, spores, pollen, and plankton join jade, brushed metal, woven silk, and porous stone. Organic textures follow the field with small rough features and restrained highlights. A height-field ray march gives parallax and shadows. Mirrored extension fills the view. This is a stateless visual mapping: grains and cells are procedural features, not tracked particles or a biological simulation. Drive texture_mix separately from upstream mode, phase, or tuning changes. An absent or masked field shows the background.",
+{ "doc": "Accepts a signed input texture or a canonical field ARRAY on geometry; a valid geometry input takes precedence. Draw a harmonic field as grains, living textures, or sculpted material.\nConnect HarmonicChladni.out to input. Choose any two textures and morph their surface detail, density, color, and light response. Sand, dunes, lichen, coral, cells, spores, pollen, and plankton join jade, brushed metal, woven silk, and porous stone. Organic textures follow the field with small rough features and restrained highlights. A height-field ray march gives parallax and shadows. Mirrored extension fills the view. This is a stateless visual mapping: grains and cells are procedural features, not tracked particles or a biological simulation. Drive texture_mix separately from upstream mode, phase, or tuning changes. An absent or masked field shows the background.",
   "tags": ["image", "transform"],
   "state": ["reliefmap"],
-  "inputs": [{"name": "input", "kind": "TEXTURE"}],
+  "inputs": [{"name": "input", "kind": "TEXTURE"}, {"name": "geometry", "kind": "ARRAY"}],
   "params": [
     {"group": "form", "name": "input_kind", "kind": "str", "default": "signed", "options": ["signed", "density"], "doc": "Select density when HarmonicChladni outputs nodal density. Its density directly controls organic deposits."},
     {"group": "form", "name": "depth", "kind": "float", "default": 0.22, "min": 0.0, "max": 0.45, "doc": "Height of the harmonic relief. Zero removes harmonic height; texture_depth remains independent."},
@@ -182,7 +182,8 @@ fn blended_surface(q: vec2f, v: f32) -> Surface {
 }
 
 fn field_at(q: vec2f) -> vec2f {
-    let value = textureSampleLevel(input, samp, mirrored_uv(q), 0.0);
+    var value = textureSampleLevel(input, samp, mirrored_uv(q), 0.0);
+    if goofi_geo_valid(geometry) { value = goofi_geo_field(geometry, mirrored_uv(q)); }
     // Saturate extreme external fields before any square or contour calculation.
     var v = clamp(value.r / max(abs(p.range), 0.0001), -8.0, 8.0);
     if p.input_kind == 1u {

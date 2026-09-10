@@ -73,6 +73,16 @@ class Patch:
         if moving: self.wire('slow', 'out', name, 'mix')
         return name
 
+    def tuning(self, source='chord'):
+        name = source+'Tuning'
+        if name not in self.names:
+            active = source+'Active'
+            self.node(active, 'signal:Select', (380, 1100), select={'axis': 1, 'mode': 'name', 'include': 'active*'})
+            self.node(name, 'signal:Select', (760, 1100), select={'axis': 0, 'mode': 'name', 'include': 'ratio', 'squeeze': True})
+            self.wire(source, 'harmonic', active, 'input')
+            self.wire(active, 'out', name, 'input')
+        return name
+
     def geometry(self, name, method, source='chord', pos=(380, 0), **params):
         params.setdefault('geometry', {}).update(method=method)
         self.node(name, 'signal:HarmonicGeometry', pos, **params)
@@ -85,17 +95,13 @@ class Patch:
         if harmonic: self.wire(harmonic, 'harmonic', name, 'harmonic')
         return name
 
-    def display(self, node, slot='dashboard', kind='image'):
+    def display(self, node, slot='image', kind='image'):
         self.views.append((node, slot, kind))
         self.nodes[self.names[node]].setdefault('viewers', {})[slot] = {'kind': kind, 'settings': {}, 'collapsed': True}
 
     def ink(self, source, slot='out', name='ink', upload=False, **params):
-        if upload:
-            self.node(name+'Upload', 'graphics:SignalIn', (1100, 350))
-            self.wire(source, slot, name+'Upload', 'input')
-            source, slot = name+'Upload', 'out'
         self.node(name, 'graphics:HarmonicInk', (1450, 350), **params)
-        self.wire(source, slot, name, 'input')
+        self.wire(source, slot, name, 'geometry' if upload else 'input')
         return name
 
     def save(self):
@@ -154,13 +160,11 @@ def recipes():
     p.view('lineStudy', 'trace', 'Breathing lines', 'Retune the chord, turn the phase, change the drawing instrument.', camera={'autofit': False, 'radius': 1.25})
     p.bind('lineStudy', 'camera', 'yaw', 'globals.geometry.yaw')
     p.node('lightTrace', 'graphics:HarmonicLissajous', (750, 420))
-    p.wire('chord', 'packed', 'lightTrace', 'harmonics')
+    p.wire('chord', 'harmonic', 'lightTrace', 'harmonics')
     p.bind('lightTrace', 'camera', 'yaw', 'globals.geometry.yaw')
     p.display('lineStudy'); p.display('lightTrace', 'out')
-    p.node('geometryUpload', 'signal:GeometryUpload', (750, 740))
     p.node('geometryRender', 'graphics:GeometryRender', (1100, 740), view={'radius': 1.5})
-    p.wire('trace', 'geometry', 'geometryUpload', 'input')
-    p.wire('geometryUpload', 'primitives', 'geometryRender', 'primitives')
+    p.wire('trace', 'geometry', 'geometryRender', 'geometry')
     p.display('geometryRender', 'out')
     yield p.save()
 
@@ -171,7 +175,7 @@ def recipes():
     p.node('modeWalk', 'signal:HarmonicModes', (380, 150))
     p.wire('chordA', 'harmonic', 'modeWalk', 'input'); p.wire('chordB', 'harmonic', 'modeWalk', 'target'); p.wire('slow', 'out', 'modeWalk', 'mix')
     p.node('plateLight', 'graphics:HarmonicChladni', (750, 180))
-    p.wire('modeWalk', 'modes', 'plateLight', 'modes'); p.wire('chord', 'packed', 'plateLight', 'harmonics')
+    p.wire('modeWalk', 'modes', 'plateLight', 'modes'); p.wire('chord', 'harmonic', 'plateLight', 'harmonics')
     p.control('approach', 0.0, 0, 1); p.control('symmetry', .0, 0, 1); p.control('lineWidth', .045, .008, .15)
     for name in ('approach', 'symmetry'): p.bind('plateLight', 'field', name, 'globals.geometry.'+name)
     p.ink('plateLight'); p.bind('ink', 'ink', 'width', 'globals.geometry.lineWidth')
@@ -193,7 +197,7 @@ def recipes():
     p.bind('between', 'blend', 'mix', 'globals.geometry.approach')
     p.view('mediaStudy', 'between', 'Between media', 'Tuning moves inside each medium. Approach blends their normalized images.', pos=(1110, 0), field={'style': 'nodal'})
     p.bind('mediaStudy', 'field', 'style', 'globals.geometry.style')
-    p.ink('mediaStudy', 'field', upload=True)
+    p.ink('between', 'geometry', upload=True)
     p.bind('ink', 'ink', 'style', 'globals.geometry.style')
     p.display('mediaStudy'); p.display('ink', 'out')
     yield p.save()
@@ -210,7 +214,7 @@ def recipes():
     p.node('tracer', 'signal:HarmonicTransport', (750, 500), transport={'method': 'tracer'})
     p.wire('plate', 'geometry', 'tracer', 'input'); p.bind('tracer', 'transport', 'mixing', 'globals.geometry.flowMix')
     p.node('memory', 'graphics:HarmonicFlow', (1110, 500), seed={'grain': 7.0, 'injection': .002})
-    p.wire('tracer', 'flow', 'memory', 'flow')
+    p.wire('tracer', 'geometry', 'memory', 'flow')
     p.bind('memory', 'motion', 'rate', 'globals.geometry.rate'); p.bind('memory', 'seed', 'reset', 'globals.geometry.reset')
     p.ink('memory', name='carriedInk', ink={'style': 'magnitude'})
     p.display('sandStudy'); p.display('carriedInk', 'out')
@@ -237,11 +241,11 @@ def recipes():
     p.geometry('garden', 'chord_graph', geometry={'points': 1600}, structure={'depth': 3})
     p.bind('garden', 'geometry', 'method', 'globals.geometry.form')
     p.node('palette', 'signal:BioColors', (380, 500), color={'source': 'tuning', 'method': 'tonotopic', 'fund': 110.0})
-    p.wire('chord', 'tuning', 'palette', 'input'); p.bind('palette', 'color', 'method', 'globals.geometry.color')
-    p.node('rhythm', 'signal:EuclidRhythm', (760, 500)); p.wire('chord', 'tuning', 'rhythm', 'input')
+    p.wire(p.tuning(), 'out', 'palette', 'input'); p.bind('palette', 'color', 'method', 'globals.geometry.color')
+    p.node('rhythm', 'signal:EuclidRhythm', (760, 500)); p.wire(p.tuning(), 'out', 'rhythm', 'input')
     p.node('metrics', 'signal:GeometryMetrics', (760, 850)); p.wire('garden', 'geometry', 'metrics', 'input')
     p.view('gardenStudy', 'garden', 'Interval garden', 'The same scale draws a graph, grows a structure, colors a palette, and makes rhythms.')
-    p.wire('palette', 'rgb', 'gardenStudy', 'palette'); p.wire('metrics', 'metrics', 'gardenStudy', 'metrics')
+    p.wire('palette', 'rgb', 'gardenStudy', 'palette'); p.wire('metrics', 'values', 'gardenStudy', 'metrics')
     p.display('gardenStudy'); p.display('rhythm', 'patterns')
     yield p.save()
 
@@ -263,9 +267,9 @@ def recipes():
     p.node('reduced', 'signal:TuningReduction', (760, 500), mode={'n_steps': 4})
     p.wire('tuning', 'tuning', 'reduced', 'input'); p.wire('reduced', 'reduced', 'chord', 'b')
     p.node('intervals', 'signal:TuningMatrix', (1110, 500))
-    p.wire('chord', 'tuning', 'intervals', 'input')
+    p.wire(p.tuning(), 'out', 'intervals', 'input')
     p.node('palette', 'signal:BioColors', (380, 850), color={'source': 'tuning', 'method': 'spectral', 'fund': 110.0})
-    p.wire('chord', 'tuning', 'palette', 'input')
+    p.wire(p.tuning(), 'out', 'palette', 'input')
     p.view('peakStudy', 'world', 'Peaks to worlds', 'A synthetic biosignal window becomes harmonic peaks, then a shared geometric frame.')
     p.wire('palette', 'rgb', 'peakStudy', 'palette')
     p.display('peakStudy'); p.display('spectrum', 'matrix'); p.display('intervals', 'matrix')
@@ -344,13 +348,13 @@ def recipes():
     for name, param in [('ratios', 'ratios'), ('running', 'running'), ('stepSeconds', 'seconds'), ('glide', 'glide'), ('direction', 'direction')]:
         p.bind('ratios', 'sequence', param, 'globals.geometry.'+name)
     p.harmonic('chord', '1, 9/8, 2', '1, 9/8, 2', (380, 0), False)
-    p.wire('ratios', 'tuning', 'chord', 'a')
+    p.wire('ratios', 'transition', 'chord', 'transition')
     p.node('modes', 'signal:HarmonicModes', (750, 0),
            modes={'mapping': 'chord pairs', 'interpolation': 'fields', 'max_mode': 24})
     p.wire('ratios', 'transition', 'modes', 'transition')
     p.node('field', 'graphics:HarmonicChladni', (1120, 0),
            field={'approach': 0.0, 'symmetry': 1.0, 'directions': 7, 'period': .5, 'output': 'nodal'}, common={'width': 512, 'height': 512})
-    p.wire('chord', 'packed', 'field', 'harmonics'); p.wire('modes', 'modes', 'field', 'modes')
+    p.wire('chord', 'harmonic', 'field', 'harmonics'); p.wire('modes', 'modes', 'field', 'modes')
     p.node('organism', 'graphics:HarmonicRelief', (1500, 0),
            material={'texture_a': 'sand', 'texture_b': 'spores'}, form={'input_kind': 'density'}, camera={'tilt': 0.0, 'turn': 0.0},
            common={'width': 512, 'height': 512})
@@ -370,9 +374,9 @@ def recipes():
         p.control(name, value, lo, hi, step={'grainSize': .1, 'bandWidth': .0001}.get(name))
         p.bind(node, group, param, 'globals.geometry.'+name)
     p.node('ratioTrace', 'signal:Buffer', (380, 480), buffer={'size': 600})
-    p.wire('ratios', 'ratio', 'ratioTrace', 'input')
+    p.wire(p.tuning(), 'out', 'ratioTrace', 'input')
     p.monitor = ('ratioTrace', 'out', 'line')
-    p.display('organism', 'out'); p.display('ratioTrace', 'out', 'line'); p.display('ratios', 'label', 'string')
+    p.display('organism', 'out'); p.display('ratioTrace', 'out', 'line')
     p.ink('field', name='nodalLines')
     p.nodes[p.names['nodalLines']]['params'].setdefault('ink', {})['style'] = 'density'
     p.display('nodalLines', 'out')
