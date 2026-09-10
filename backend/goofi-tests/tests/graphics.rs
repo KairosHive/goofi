@@ -85,6 +85,83 @@ fn close(a: [f32; 4], b: [f32; 4]) -> bool {
 }
 
 #[test]
+fn blur_modes_spread_a_spot_without_hidden_color() {
+    let g = Goofi::new();
+    let dir = g.state.mount().join("nodes_graphics");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("BlurSpot.wgsl"), include_str!("fixtures/blur_spot.wgsl")).unwrap();
+    g.call("library refresh", j!({}));
+    let spot = g.add("graphics:BlurSpot");
+    let blur = g.add("graphics:Blur");
+    for node in [spot, blur] {
+        g.ready(node);
+        g.set_param(node, "common", "width", 96);
+        g.set_param(node, "common", "height", 48);
+    }
+    g.link(spot, "out", blur, "input");
+    g.set_param(blur, "blur", "radius", 0.0);
+    let original = drawn(&g, blur, "radius zero copies the input", |d| {
+        shape(d) == vec![48, 96, 4] && close(px(d, 24, 62), [1.0, 0.0, 0.0, 1.0])
+    });
+    assert!(close(px(&original, 0, 0), [0.0, 0.0, 1.0, 0.0]));
+    let spread = |d: &goofi_core::Data| {
+        let mut total = 0.0;
+        let mut xx = 0.0;
+        let mut yy = 0.0;
+        let values = f32s(d);
+        for y in 0..48 {
+            for x in 0..96 {
+                let alpha = values[(y * 96 + x) * 4 + 3];
+                total += alpha;
+                xx += alpha * (x as f32 + 0.5 - 62.4).powi(2);
+                yy += alpha * (y as f32 + 0.5 - 24.0).powi(2);
+            }
+        }
+        [xx / total, yy / total]
+    };
+    let baseline = spread(&original);
+    g.set_param(blur, "blur", "radius", 0.125);
+    let mut frames = Vec::new();
+    for mode in ["gaussian", "box", "disk", "directional", "radial", "zoom"] {
+        g.set_param(blur, "blur", "mode", mode);
+        let frame = drawn(&g, blur, mode, |d| {
+            let v = spread(d);
+            let changed = frames.last().is_none_or(|previous| f32s(d) != f32s(previous));
+            changed && (v[0] > baseline[0] + 0.5 || v[1] > baseline[1] + 0.5)
+                && close(px(d, 0, 0), [0.0; 4])
+        });
+        for pixel in f32s(&frame).chunks_exact(4).filter(|p| p[3] > 0.001) {
+            assert!((pixel[0] - 1.0).abs() < 0.001 && pixel[1] == 0.0 && pixel[2] == 0.0,
+                    "{mode} mixed hidden color into the spot: {pixel:?}");
+        }
+        frames.push(frame);
+    }
+    let gaussian = spread(&frames[0]);
+    let box_blur = spread(&frames[1]);
+    let disk = spread(&frames[2]);
+    assert!(gaussian[0] < disk[0] && disk[0] < box_blur[0]);
+    assert!(((box_blur[0] - baseline[0]) - (box_blur[1] - baseline[1])).abs() < 0.5,
+            "equal blur distances on a wide image: {box_blur:?}, source: {baseline:?}");
+    let horizontal = spread(&frames[3]);
+    assert!(horizontal[0] > horizontal[1] * 3.0);
+    let radial = spread(&frames[4]);
+    assert!(radial[1] > radial[0] * 3.0);
+
+    g.set_param(blur, "blur", "mode", "directional");
+    g.set_param(blur, "blur", "angle", 90.0);
+    for quality in ["low", "medium", "high"] {
+        g.set_param(blur, "blur", "quality", quality);
+        drawn(&g, blur, quality, |d| {
+            let v = spread(d);
+            v[1] > v[0] * 3.0
+        });
+    }
+    g.set_param(blur, "blur", "mode", "zoom");
+    g.set_param(blur, "blur", "center_x", 0.65);
+    drawn(&g, blur, "zoom center follows the spot", |d| spread(d)[0] < baseline[0] + 0.5);
+}
+
+#[test]
 fn composite_modes_blend_colors_and_transparency() {
     let g = Goofi::new();
     let a = g.add("graphics:Constant");
