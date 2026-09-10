@@ -587,6 +587,12 @@ fn cookbook_archives_open_with_live_controls_and_sound_without_devices() {
 
 #[test]
 #[cfg(feature = "embed")]
+fn common_chord_archive_drives_native_voices_without_devices() {
+    check_cookbook_archives(Some("08-common-chord.gfi"));
+}
+
+#[test]
+#[cfg(feature = "embed")]
 fn jade_archive_opens_with_independent_texture_controls() {
     check_cookbook_archives(Some("09-jade-resonance.gfi"));
 }
