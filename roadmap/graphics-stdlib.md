@@ -25,9 +25,10 @@ Important limits of that coverage:
   relative RG offsets; neither provides an absolute two-dimensional UV lookup.
 - Feedback supplies the previous tick. It does not provide a configurable frame
   history, indexed playback, or capture/hold controls.
-- Camera/video input exists through `signal:Camera` and `graphics:SignalIn`.
-  The camera node owns the device or file. Native texture input is an optimization
-  and media-control project, not a reason to open the same device twice.
+- Camera/video input currently exists through `signal:Camera` and `graphics:SignalIn`.
+  The intended home is `graphics:Camera`, using Rust/Python texture producers on
+  the graphics engine's own resources. See [host graphics nodes](graphics-host-nodes.md).
+  Move the capture owner; do not open the same device through a second node.
 - `signal:Text` emits a string; it does not render text. Signal Switch and Select
   operate on arrays, not GPU textures.
 - Texture video recording already exists in `goofi-record`. Window already handles
@@ -108,7 +109,9 @@ follow the existing engine and transport ownership rules.
   numeric results once. Preserve HDR values where the operation permits them.
 - Add engine support for multiple internal passes only for a concrete consumer.
   Do not hide large, unbounded loops in a per-pixel shader.
-- First implementation batch: Reorder, Color, Transform/Fit, Switch/Mix, Mask.
+- Add the shared [Rust/Python graphics producer mechanism](graphics-host-nodes.md)
+  before Image/Text and the Camera move. File extension must not define capability.
+- First image-operation batch: Reorder, Color, Transform/Fit, Switch/Mix, Mask.
   Second batch: Function/Operation, Edge/Convolve, Image, Text, Remap/Pattern.
   Build advanced effects and temporal analysis after those foundations.
 - Use real GPU sessions with opaque and transparent images, unequal dimensions,
