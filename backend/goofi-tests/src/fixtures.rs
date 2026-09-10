@@ -493,3 +493,17 @@ static RAMP_PARAMS: &[ParamDecl] = &[
         doc: None,
     },
 ];
+
+/// Copy the folder plugin used by backend and browser sessions into a test home.
+pub fn plugin_package(home: &std::path::Path) {
+    fn copy(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            if matches!(entry.file_name().to_str(), Some("node_modules" | "__pycache__")) { continue }
+            if entry.path().is_dir() { copy(&entry.path(), &to.join(entry.file_name())); }
+            else { std::fs::copy(entry.path(), to.join(entry.file_name())).unwrap(); }
+        }
+    }
+    copy(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/plugins/example"), &home.join("plugins/example"));
+}

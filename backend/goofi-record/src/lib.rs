@@ -339,7 +339,7 @@ impl Recorder {
 
     /// Mint the folder. Refused when a recording already runs — the session lock is the ONE
     /// authority on that, so no caller can check and then act past it.
-    pub fn start(self: &Arc<Self>, root: &Path, name: &str, patch: Option<&Path>) -> Result<PathBuf, String> {
+    pub fn start(self: &Arc<Self>, root: &Path, name: &str, patch: Option<&Path>, annotations: Option<&serde_json::Value>) -> Result<PathBuf, String> {
         let _transition = held(&self.transition);
         if self.running() {
             return Err("a recording already runs".into());
@@ -353,10 +353,41 @@ impl Recorder {
             capture.prepare()?;
             self.settle()?;
         }
+        if name.chars().any(|c| c.is_control() || "/\\:<>\"|?*".contains(c)) {
+            return Err("recording name contains a path separator or unsupported filename character".into());
+        }
+        let annotations = annotations.map(|v| v.as_object().ok_or("annotations must be an object")).transpose()?;
+        if let Some(annotations) = annotations {
+            for (namespace, value) in annotations {
+                if namespace.is_empty() || namespace.len() > 80 || !namespace.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+                    return Err("annotation namespace must contain lowercase letters, digits, or hyphens".into());
+                }
+                if serde_json::to_vec(value).map_err(|e| e.to_string())?.len() > 1024 * 1024 {
+                    return Err("annotation exceeds 1 MiB".into());
+                }
+            }
+        }
         let started = self.time.now();
         let stamped = format!("{}Z", stamp(self.time.utc_at(started)));
         let folder = root.join(if name.is_empty() { stamped } else { format!("{stamped}-{name}") });
-        std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+        std::fs::create_dir(&folder).map_err(|e| e.to_string())?;
+        if let Some(annotations) = annotations {
+            for (namespace, value) in annotations {
+                let write = || -> Result<(), String> {
+                    use std::io::Write;
+                    let path = folder.join("annotations").join(namespace);
+                    std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+                    let mut file = std::fs::File::create(path.join("session.json")).map_err(|e| e.to_string())?;
+                    let bytes = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
+                    file.write_all(&bytes).and_then(|()| file.sync_all()).map_err(|e| e.to_string())
+                };
+                if let Err(error) = write() {
+                    let _ = std::fs::remove_dir_all(&folder);
+                    return Err(error);
+                }
+            }
+        }
         let session = Session {
             folder: folder.clone(),
             name: name.to_string(),
@@ -369,7 +400,10 @@ impl Recorder {
             landed: Arc::new(Mutex::new(0)),
             audio_window: window.clone(),
         };
-        session.manifest(&self.time).write_atomic(&folder)?;
+        if let Err(error) = session.manifest(&self.time).write_atomic(&folder) {
+            let _ = std::fs::remove_dir_all(&folder);
+            return Err(error);
+        }
         *self.held() = Some(Arc::new(Mutex::new(session)));
         *self.writer.lock().unwrap_or_else(PoisonError::into_inner) =
             Some(writer::Writer::new(Arc::downgrade(self)));

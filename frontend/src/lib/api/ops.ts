@@ -3,6 +3,8 @@
 // not in it is a type error here and an `unknown op` refusal there. Regenerate by running
 // `cargo test -p goofi-bridge`, which rewrites this file when it drifts.
 export type OpName =
+	| `plugin ${string}`
+	| 'plugin list'
 	| 'session status'
 	| 'session state'
 	| 'session manifest'

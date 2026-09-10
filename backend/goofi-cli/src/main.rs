@@ -448,6 +448,10 @@ async fn run(
     let Cli { port, bind, extra_nodes, list_nodes, headless, debug, demo, load: _, help: _ } = cli;
     let port = port.unwrap_or(DEFAULT_PORT);
 
+    report("Preparing plugins");
+    if let Err(error) = goofi_bridge::plugins::Plugins::load(&mut state, &goofi_core::home::dir(), std::path::Path::new(&subproc_python)) {
+        eprintln!("Could not load plugins: {error}");
+    }
     state.roots.extend(extra_nodes.iter().map(PathBuf::from));
     // Every root the scan reads, the private library included: a node saved there may name
     // packages exactly as a bundle's does.

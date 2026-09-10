@@ -92,7 +92,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     let dir = tempfile::tempdir().expect("a temp root");
     let time = std::sync::Arc::new(Time::new());
     let rec = std::sync::Arc::new(goofi_record::Recorder::new(time.clone()));
-    rec.start(dir.path(), "probe", None).expect("started");
+    rec.start(dir.path(), "probe", None, None).expect("started");
     let id = goofi_record::StreamId {
         uid: goofi_node::Uid(1),
         node: "src".into(),
@@ -197,7 +197,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     std::fs::write(&cut, &bytes[..bytes.len() - 6]).expect("a truncated copy");
     let (_, body) = npy(&std::fs::read(&cut).expect("the truncated stream"));
     assert_eq!(body.len() / 4, 42, "forty-two whole values survive a kill inside the last frame");
-    rec.start(dir.path(), "audio-formats", None).expect("audio recording started");
+    rec.start(dir.path(), "audio-formats", None, None).expect("audio recording started");
     for (i, (channels, rate, samples)) in
         [(1, 48_000.0, 4), (1, 48_000.0, 6), (2, 48_000.0, 5), (2, 96_000.0, 3)].into_iter().enumerate()
     {
@@ -247,7 +247,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         let inside = std::sync::Arc::new(AtomicBool::new(false));
         let release = std::sync::Arc::new(AtomicBool::new(false));
         rec.set_encoders(std::sync::Arc::new(SlowEncoders { inside: inside.clone(), release: release.clone() }));
-        let old = rec.start(dir.path(), &format!("slow-{restart}"), None).expect("started");
+        let old = rec.start(dir.path(), &format!("slow-{restart}"), None, None).expect("started");
         rec.open(&id, goofi_record::Kind::Video { size: (1, 1), fps: 60.0, quality: Default::default() }, time.now(),
             goofi_record::StreamMeta::measured(None)).expect("video opened");
         let closing = rec.clone();
@@ -260,7 +260,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         let entered = inside.load(Ordering::Relaxed);
         let stopped = if entered { rec.stop() } else { Ok(None) };
         let next = if entered && restart {
-            rec.start(dir.path(), "next", None).map(Some)
+            rec.start(dir.path(), "next", None, None).map(Some)
         } else { Ok(None) };
         release.store(true, Ordering::Relaxed);
         close.join().expect("close joined");
