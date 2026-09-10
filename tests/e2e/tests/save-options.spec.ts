@@ -22,6 +22,15 @@ test('save dialogs and axis presets keep the user in control', async ({ page }) 
 		await number.press('Enter');
 		await expect.poll(async () => (await backendDoc(page)).nodes[uid].params.buffer.axis.value).toBe(5);
 
+		const numbers = page.getByTestId('param-rows').getByTestId('param-number');
+		expect(await numbers.count()).toBeGreaterThan(1);
+		await numbers.nth(0).fill('7');
+		await numbers.nth(0).press('Tab');
+		await expect(numbers.nth(1)).toBeFocused();
+		await numbers.nth(1).press('Shift+Tab');
+		await expect(numbers.nth(0)).toBeFocused();
+		await expect(numbers.nth(0)).toHaveValue('7');
+
 		const target = path.join(dir, 'held.gfi');
 		fs.writeFileSync(target, 'keep this file');
 		await page.getByTestId('topbar-save-caret').click();
