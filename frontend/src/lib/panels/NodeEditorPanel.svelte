@@ -812,8 +812,13 @@
 		return true;
 	}
 
+	/** Text selection and controls keep their native clipboard actions. */
+	function canvasHasClipboard(target: HTMLElement | null): boolean {
+		return isActive() && canvasHasKeys(target) && !window.getSelection()?.toString();
+	}
+
 	function onKeydown(e: KeyboardEvent): void {
-		if (!isActive()) return;
+		if (e.defaultPrevented || !isActive()) return;
 		const t = e.target as HTMLElement | null;
 		// The DOM says a modal owns the keyboard, NOT `ui().modalOpen` — that ref-count is also
 		// raised by a merely expanded in-panel textarea.
@@ -825,11 +830,13 @@
 			e.preventDefault();
 			selectAll();
 		} else if (meta && e.key.toLowerCase() === 'c') {
+			if (!canvasHasClipboard(t) || selectedUids().length === 0) return;
 			// Stop the browser's own copy: it would put the (empty) DOM selection on the clipboard
 			// over the payload. Ctrl+V is deliberately NOT here — the `paste` event is that door.
 			e.preventDefault();
 			void copySelection();
 		} else if (meta && e.key.toLowerCase() === 'x') {
+			if (!canvasHasClipboard(t) || selectedUids().length === 0) return;
 			e.preventDefault();
 			void cutSelection();
 		} else if (meta && e.key.toLowerCase() === 'd') {
@@ -1040,9 +1047,8 @@
 	 * secure context. Guarded exactly as the key handler is: a paste into a text field is that
 	 * field's, and a paste into a panel that is not active is not this editor's. */
 	function onPaste(e: ClipboardEvent): void {
-		if (!isActive()) return;
 		const t = e.target as HTMLElement | null;
-		if (t?.closest?.('dialog[open]') || isTextEditingTarget(t)) return;
+		if (e.defaultPrevented || !canvasHasClipboard(t) || t?.closest?.('dialog[open]')) return;
 		const text = e.clipboardData?.getData('text') ?? '';
 		if (!parseClipboard(text)) return; // not ours: leave it for whatever else is listening
 		e.preventDefault();

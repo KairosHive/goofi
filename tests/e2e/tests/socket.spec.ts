@@ -410,6 +410,30 @@ test.describe('the control socket', () => {
 				// Copy the FACADE and paste it. A sub-patch is not one type, so what rides the
 				// clipboard has to be its members, its ports and the wiring among them.
 				await selectNode(page, scope);
+				const readClipboard = () => page.evaluate(() => navigator.clipboard.readText());
+				const label = page.getByTestId('node-name');
+				const selectedText = await label.textContent();
+				await label.evaluate((el) => {
+					const range = document.createRange();
+					range.selectNodeContents(el);
+					window.getSelection()!.removeAllRanges();
+					window.getSelection()!.addRange(range);
+				});
+				await page.keyboard.press('Control+c');
+				await expect.poll(readClipboard).toBe(selectedText);
+				await page.keyboard.press('Control+x');
+				expect((await backendDoc(page)).nodes[scope]).toBeDefined();
+				await page.evaluate(() => window.getSelection()!.removeAllRanges());
+				await label.focus();
+				await page.keyboard.press('Control+c');
+				expect(await readClipboard()).toBe(selectedText);
+				await page.keyboard.press('Control+x');
+				expect((await backendDoc(page)).nodes[scope]).toBeDefined();
+				await selectNode(page, scope);
+				await page.evaluate(() => (window as any).goofi.commands.select([]));
+				await page.keyboard.press('Control+c');
+				expect(await readClipboard()).toBe(selectedText);
+				await selectNode(page, scope);
 				await page.keyboard.press('Control+c');
 				// Gate on the payload BEING there. A copy asks the manager for the subtree first,
 				// so the clipboard is written a round trip after the key — and a paste that races
@@ -417,6 +441,11 @@ test.describe('the control socket', () => {
 				await expect
 					.poll(() => clipboardHolds(page, scope), { message: 'the copy reached the clipboard' })
 					.toBe(true);
+				await label.focus();
+				const beforePaste = await backendDoc(page);
+				await page.keyboard.press('Control+v');
+				expect(await backendDoc(page)).toEqual(beforePaste);
+				await selectNode(page, scope);
 				await page.keyboard.press('Control+v');
 				await expect
 					.poll(
