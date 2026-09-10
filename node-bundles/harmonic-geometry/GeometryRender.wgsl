@@ -1,7 +1,7 @@
 /* goofi
-{ "doc": "GPU rendering of GeometryUpload.primitives: curves, points, graphs and triangle meshes. Fixed orthographic view, transparent background, antialiased lines and depth-tested matte surfaces. Coordinates retain their domain: set radius to fit the geometry. Cost scales with pixels times primitives; start at 256 square. Fields use HarmonicInk instead.",
+{ "doc": "GPU rendering of HarmonicGeometry.geometry or GeometryBlend.geometry: curves, points, graphs and triangle meshes. Fixed orthographic view, transparent background, antialiased lines and depth-tested matte surfaces. Coordinates retain their domain: set radius to fit the geometry. Cost scales with pixels times primitives; start at 256 square. Fields use HarmonicInk instead.",
   "tags": ["image", "transform"],
-  "inputs": [{"name": "primitives", "kind": "ARRAY"}],
+  "inputs": [{"name": "geometry", "kind": "ARRAY"}],
   "params": [
     {"group": "view", "name": "radius", "kind": "float", "default": 2.0, "min": 0.01, "max": 1000.0, "doc": "Fixed coordinate half-width. No automatic fit or camera animation."},
     {"group": "ink", "name": "thickness", "kind": "float", "default": 1.5, "min": 0.5, "max": 8.0},
@@ -12,14 +12,15 @@
   ] }
 */
 
-fn value(row: i32, col: i32) -> f32 {
-    return textureLoad(primitives, vec2i(col, row), 0).r;
+fn vertex(index: u32) -> vec3f {
+    let q = goofi_geo_texel(geometry, 8u+index).xyz;
+    // Fixed oblique projection leaves 2D coordinates unchanged.
+    return vec3f(q.x+0.35*q.z, -q.y+0.25*q.z, q.z);
 }
 
-fn vertex(row: i32, col: i32) -> vec3f {
-    let q = vec3f(value(row, col), value(row, col+1), value(row, col+2));
-    // Fixed oblique depth projection leaves all 2D coordinates unchanged.
-    return vec3f(q.x + 0.35*q.z, -q.y + 0.25*q.z, q.z);
+fn part_length(index: u32, count: u32) -> u32 {
+    let v = goofi_geo_texel(geometry, 8u+count+index/2u);
+    return goofi_geo_uint(select(v.xy, v.zw, index % 2u == 1u));
 }
 
 fn cross2(a: vec2f, b: vec2f) -> f32 { return a.x*b.y-a.y*b.x; }
@@ -31,16 +32,53 @@ fn edge_at(q: vec2f, a: vec3f, b: vec3f) -> vec2f {
 }
 
 fn shade(uv: vec2f) -> vec4f {
-    let dims = textureDimensions(primitives);
-    if dims.x != 12u || dims.y > 4096u { return vec4f(0.0); }
+    if !goofi_geo_valid(geometry) { return vec4f(0.0); }
+    let form = goofi_geo_header(geometry, 1u);
+    if form >= 11u { return vec4f(0.0); }
+    let count = goofi_geo_header(geometry, 3u);
+    let parts = goofi_geo_header(geometry, 6u);
+    let edges = goofi_geo_header(geometry, 7u);
+    let faces = goofi_geo_header(geometry, 8u);
+    let edge_start = 8u+count+(parts+1u)/2u;
+    let face_start = edge_start+edges;
+    var primitives = count;
+    if form == 8u || form == 9u { primitives = edges; }
+    if form == 10u { primitives = faces; }
+    var part = 0u;
+    var begin = 0u;
+    var end = count;
+    if parts > 0u { end = part_length(0u, count); }
     let scale = min(resolution.x, resolution.y)*0.45/p.radius;
     let q = (uv*resolution-resolution*0.5)/scale;
     var depth = -1e30;
     var result = vec4f(0.0);
-    for (var i = 0; i < i32(dims.y); i = i+1) {
-        let kind = value(i, 9);
-        if kind < 1.0 { continue; }
-        let a = vertex(i, 0); let b = vertex(i, 3); let c = vertex(i, 6);
+    for (var i = 0u; i < primitives; i++) {
+        var indices = vec3u(i);
+        var kind = 1.0;
+        if form == 10u {
+            let first = goofi_geo_texel(geometry, face_start+i*2u);
+            let second = goofi_geo_texel(geometry, face_start+i*2u+1u);
+            indices = vec3u(goofi_geo_uint(first.xy), goofi_geo_uint(first.zw), goofi_geo_uint(second.xy));
+            kind = 3.0;
+        } else if form == 8u || form == 9u {
+            let edge = goofi_geo_texel(geometry, edge_start+i);
+            indices = vec3u(goofi_geo_uint(edge.xy), goofi_geo_uint(edge.zw), goofi_geo_uint(edge.zw));
+            kind = 2.0;
+        } else if form != 2u && form != 3u {
+            while i >= end && part+1u < parts {
+                begin = end;
+                part++;
+                end += part_length(part, count);
+            }
+            var next = i+1u;
+            if next >= end {
+                if form == 4u || form == 7u { next = begin; } else { continue; }
+            }
+            indices = vec3u(i, next, next);
+            kind = 2.0;
+        }
+        if any(indices >= vec3u(count)) { continue; }
+        let a = vertex(indices.x); let b = vertex(indices.y); let c = vertex(indices.z);
         var near = edge_at(q, a, b);
         var light = 1.0;
         var fill = false;
@@ -62,7 +100,7 @@ fn shade(uv: vec2f) -> vec4f {
         }
         let alpha = select(1.0-smoothstep(p.thickness, p.thickness+1.0, near.x*scale), 1.0, fill);
         if alpha > 0.001 && near.y >= depth {
-            let tone = clamp(value(i, 10)*0.65+p.warmth*0.35, 0.0, 1.0);
+            let tone = clamp(f32(i)/f32(max(primitives-1u, 1u))*0.65+p.warmth*0.35, 0.0, 1.0);
             let color = mix(vec3f(0.10, 0.78, 0.70), vec3f(0.98, 0.70, 0.30), tone);
             result = vec4f(color*light, alpha);
             depth = near.y;

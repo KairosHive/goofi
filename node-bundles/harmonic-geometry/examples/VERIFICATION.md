@@ -1,5 +1,38 @@
 # Harmonic geometry verification
 
+## Single-array interface checkpoint
+
+The current bundle has six signal nodes and six graphics nodes. HarmonicMorph,
+RatioSequence and HarmonicVoices belong to Biotuner. GeometryUpload is removed.
+GeometryRender, HarmonicInk, HarmonicRelief and HarmonicFlow read indexed geometry
+arrays directly. GeometryView emits one image selected by its layout parameter.
+
+Both installed Python wheels expose goofi.geometry. The geometry suite passed
+all 46 methods and their dashboards, indexed connectivity through f16 transport,
+part boundaries, field masks, malformed-data recovery, GPU geometry rendering,
+harmonic shader state, peak alignment, phase wrapping, geometry blends, ratio
+sequencing, continuous Chladni transitions and the Biotuner field reference.
+These checks preceded the final upstream merge. The earlier combined archive
+run timed out at recipe 07; recipe 07 passed in a separate process.
+
+The ten archives now live in this bundle's examples directory. After relocation,
+all ten rebuilt byte-for-byte, passed ZIP integrity checks, and retained valid
+local documentation links. Example download integration is deferred.
+
+The frontend checkpoint passed 712 unit tests, type checking with no errors or
+warnings, and desktop disclosure/modulation plus phone touch-and-hold sessions.
+The frontend production build completed with bundle-size and plugin-timing notices.
+The cookbook is a local draft pending transfer to the website repository.
+
+Final pre-push checks passed focused clippy with -D warnings, both Python
+initialization/module-hygiene sessions, and codec imports in both installed
+Python environments. The relocated Breathing lines archive passed its public
+GPU/control/save-reload session (14.86 seconds). A combined run was stopped
+after stalling before its first preview; a fresh process reported Windows
+iceoryx2 cleanup errors but completed the focused session.
+
+The sections below record earlier checkpoints and their interfaces at that time.
+
 Checked on Windows x86_64, 9 September 2026, with Rust 1.97.1, the repository's
 two Python environments, and Chromium. Biotuner is pinned to the same revision
 as the existing bundle: `f45570e674d8193c7780891b9053a39bf6168c1e`.

@@ -25,7 +25,7 @@ causes the apparent corner expansion. The example now blends fixed endpoint
 fields before computing density. This is a visual interpolation choice, not a
 claim to reproduce the notebook's chord animation internals or a dynamic sand
 simulation. RatioSequence can supply a full anchor chord at each endpoint;
-the transition TABLE keeps both endpoints and their blend on one clock.
+the transition ARRAY keeps both endpoints and their blend on one clock.
 
 ## What the module contains
 
@@ -73,7 +73,7 @@ the transition TABLE keeps both endpoints and their blend on one clock.
 - `Granular` gives a Boltzmann equilibrium. `Tracer` and `Streaming` give flow
   fields or steady density. None is a persistent particle integrator.
 - Geometry outputs differ: curves, sets, graphs, meshes, scalar fields, and
-  vector fields. Keep connectivity and grids with each frame in a TABLE.
+  vector fields. Keep connectivity and grids with each frame in one indexed ARRAY.
 - goofi uploads arrays as float32. Bound indices and sample counts so topology
   indices remain exact; sanitize only at the image boundary, not in analysis.
 
@@ -113,20 +113,17 @@ ten patches, not every visualization in the upstream Biotuner notebooks.
 
 1. **HarmonicMorph:** select two tuning or peak rows, or enter ratio presets;
    interpolate in ratio or pitch space, wrap phases, fade extra components, and
-   grow harmonic/subharmonic extensions. Output one harmonic TABLE plus ordinary
-   tuning, peak, amplitude, phase, and packed shader arrays.
+   grow harmonic/subharmonic extensions. Output one labeled harmonic ARRAY; existing Select nodes expose active tuning rows.
 2. **HarmonicGeometry:** a common generator interface across curves, circular
    graphs, fractals, meshes, plates, and wave fields. Instances select a method;
-   all return the same geometry TABLE. Bound sampling and recursion costs.
+   all return the same indexed geometry ARRAY. Bound sampling and recursion costs.
 3. **HarmonicTransport:** apply granular density or tracer/streaming flow to a
    supplied scalar field. Retain the field grid and mask.
 4. **GeometryBlend:** blend common-grid fields, resampled open curves, or meshes
    with identical connectivity. Reject invalid pairings with a useful message.
-5. **GeometryView:** render geometry into a labeled dashboard and a separate
-   transparent image. Support 3D camera controls, weighted graph edges, fields,
+5. **GeometryView:** render one image; select labeled dashboard or transparent layout. Support 3D camera controls, weighted graph edges, fields,
    palette inputs, and harmonic context.
-6. **GeometryMetrics:** expose Biotuner's geometry measurements as a labeled array
-   and table for viewers, references, and recording.
+6. **GeometryMetrics:** expose Biotuner's geometry measurements as one labeled array for viewers, references, and recording.
 7. **HarmonicModes:** expose Biotuner's bounded mode mappings as shader arrays.
    Permit interpolation between two mode sets without claiming that fractional
    modes are eigenmodes of a closed plate.
@@ -152,3 +149,15 @@ ten patches, not every visualization in the upstream Biotuner notebooks.
 - [Metrics and transition examples](https://antoinebellemare.github.io/biotuner/examples/harmonic_geometry/06_metrics_and_transitions.html)
 
 The documentation is useful context but may describe a different revision.
+
+## Final array interface
+
+GeometryUpload is removed. GeometryRender reads the sole geometry output directly.
+Coordinates and indexed connectivity travel together, each stored once. The codec
+tiles the array and uses base-1024 integer pairs because graphics uploads use f16.
+Python and WGSL share the schema; the GPU test checks indices beyond 4096, separate
+curve boundaries, masks and malformed-index recovery. HarmonicMorph, RatioSequence,
+GeometryBlend, HarmonicTransport, GeometryMetrics and GeometryView no longer emit
+alternate copies of their numerical data. HarmonicVoices emits pitch and gain only.
+The bundle now has six signal nodes and six graphics nodes, plus three shared
+Biotuner signal nodes. The cookbook moves to the website after the goofi push.

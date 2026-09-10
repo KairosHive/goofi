@@ -16,8 +16,8 @@ class HarmonicVoices(goofi.Node):
     """Keep component fades when one harmonic frame drives sound and geometry."""
 
     TAGS = ["transform", "music"]
-    INPUTS = {"input": goofi.InputSlot(goofi.DataType.TABLE, required=True)}
-    OUTPUTS = {k: goofi.DataType.ARRAY for k in ("pitch", "gain", "frequencies")}
+    INPUTS = {"input": goofi.InputSlot(goofi.DataType.ARRAY, required=True)}
+    OUTPUTS = {k: goofi.DataType.ARRAY for k in ("pitch", "gain")}
     PARAMS = {"sound": {
         "voices": goofi.IntParam(8, 1, 8, doc="Fixed voice count; takes the lowest components, including fading slots."),
         "level": goofi.FloatParam(0.2, 0.0, 1.0, doc="Total gain ceiling. Zero mutes the sound without changing the geometry."),
@@ -25,11 +25,11 @@ class HarmonicVoices(goofi.Node):
     }}
 
     def process(self, input):
-        p, table = self.params.sound, input.table
-        try:
-            r, a = [np.asarray(table[k].data, dtype=np.float64) for k in ("ratios", "amplitudes")]
-        except KeyError as e:
-            raise ValueError("HarmonicVoices needs HarmonicMorph.harmonic") from e
+        p = self.params.sound
+        values = np.asarray(input.data, dtype=np.float64)
+        if values.ndim != 2 or values.shape[0] != 4:
+            raise ValueError("HarmonicVoices needs a [4,N] harmonic ARRAY")
+        r, a = values[:2]
         base = float(input.meta.get("base_freq", 110.0))
         if r.ndim != 1 or r.shape != a.shape or len(r) > 32 or not np.all(np.isfinite(np.r_[r, a, base])) or base <= 0 or np.any(r <= 0) or np.any(a < 0):
             raise ValueError("Voices need aligned positive ratios and nonnegative amplitudes, with finite positive base_freq")
@@ -41,4 +41,4 @@ class HarmonicVoices(goofi.Node):
             raise ValueError("Voice frequency exceeds 24 kHz; lower base_freq or transpose")
         pitch[:count, 0] = np.log2(hz[:count, 0] / 261.63)
         gain[:count, 0] = a[:count] / max(1.0, a.sum()) * p.level
-        return {"pitch": (pitch, {"units": "V/oct"}), "gain": (gain, {}), "frequencies": (hz, {"units": "Hz"})}
+        return {"pitch": (pitch, {"units": "V/oct"}), "gain": (gain, {})}

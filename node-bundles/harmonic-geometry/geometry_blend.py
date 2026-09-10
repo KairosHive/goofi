@@ -11,13 +11,7 @@ import json
 import numpy as np
 from biotuner.harmonic_geometry import GeometryData, blend_fields
 import goofi
-
-
-def grid_of(table):
-    if "grid" not in table:
-        return None
-    grid = table["grid"].table
-    return tuple(grid[str(i)].data for i in range(len(grid)))
+from goofi.geometry import encode, decode
 
 
 def arc_sample(points, count, align):
@@ -39,10 +33,10 @@ class GeometryBlend(goofi.Node):
     """Blend scalar fields, curves, or meshes with matching connectivity."""
 
     TAGS = ["transform"]
-    INPUTS = {"a": goofi.InputSlot(goofi.DataType.TABLE, required=True),
-              "b": goofi.InputSlot(goofi.DataType.TABLE, required=True),
+    INPUTS = {"a": goofi.InputSlot(goofi.DataType.ARRAY, required=True),
+              "b": goofi.InputSlot(goofi.DataType.ARRAY, required=True),
               "mix": goofi.InputSlot(goofi.DataType.ARRAY, required=False)}
-    OUTPUTS = {"geometry": goofi.DataType.TABLE, "field": goofi.DataType.ARRAY, "trajectory": goofi.DataType.ARRAY}
+    OUTPUTS = {"geometry": goofi.DataType.ARRAY}
     PARAMS = {"blend": {
         "mix": goofi.FloatParam(0.0, 0.0, 1.0, doc="0 is A, 1 is B; wired mix overrides this value."),
         "space": goofi.StringParam("domain", ["domain", "image"], doc="Fields: domain checks physical grids; image blends normalized pictures."),
@@ -58,24 +52,23 @@ class GeometryBlend(goofi.Node):
             if len(v) != 1 or not np.isfinite(v[0]):
                 raise ValueError("GeometryBlend mix needs one finite value")
             t = float(np.clip(v[0], 0, 1))
-        ta, tb = a.table, b.table
+        ta, tb = decode(a.data, a.meta), decode(b.data, b.meta)
         try:
-            ka, kb = ta["type"].text, tb["type"].text
-            ca, cb = ta["coordinates"].data, tb["coordinates"].data
+            ka, kb = ta["type"], tb["type"]
+            ca, cb = ta["coordinates"], tb["coordinates"]
         except (KeyError, TypeError) as e:
             raise ValueError("GeometryBlend needs two geometry frames with array coordinates") from e
         frame = {}
         field = np.empty((0, 0), dtype=np.float32)
-        trajectory = np.empty((0, 0), dtype=np.float32)
         if ka == kb == "field_2d":
             if ca.ndim != 2 or ca.shape != cb.shape:
                 raise ValueError("Field blend requires the same resolution; set both generator resolutions alike")
-            ga, gb = grid_of(ta), grid_of(tb)
+            ga, gb = ta.get("grid"), tb.get("grid")
             if p.space == "image":
                 ga = gb = np.meshgrid(np.linspace(0, 1, ca.shape[1]), np.linspace(0, 1, ca.shape[0]))
             valid_a, valid_b = np.isfinite(ca), np.isfinite(cb)
-            aa = np.where(valid_a, ta["coverage"].data if "coverage" in ta else 1.0, 0.0)
-            ab = np.where(valid_b, tb["coverage"].data if "coverage" in tb else 1.0, 0.0)
+            aa = np.where(valid_a, ta["coverage"] if "coverage" in ta else 1.0, 0.0)
+            ab = np.where(valid_b, tb["coverage"] if "coverage" in tb else 1.0, 0.0)
             if ga is not None and (len(ga) != 2 or any(x.shape != ca.shape for x in ga)):
                 raise ValueError("A has an invalid field grid")
             if gb is not None and (len(gb) != 2 or any(x.shape != cb.shape for x in gb)):
@@ -87,14 +80,13 @@ class GeometryBlend(goofi.Node):
             field[coverage <= 0] = np.nan
             frame = {"type": "field_2d", "coordinates": field, "coverage": coverage}
             if result.field_grid is not None:
-                frame["grid"] = {str(i): v.astype(np.float32) for i, v in enumerate(result.field_grid)}
+                frame["grid"] = result.field_grid
         elif ka in ("curve_2d", "curve_3d") and kb in ("curve_2d", "curve_3d"):
             pa, pb = arc_sample(ca, p.points, p.align), arc_sample(cb, p.points, p.align)
             coords = ((1-t)*pa+t*pb).astype(np.float32)
             frame = {"type": "curve_3d", "coordinates": coords}
-            trajectory = coords.T
         elif ka == kb == "mesh_3d":
-            if ca.shape != cb.shape or "faces" not in ta or "faces" not in tb or not np.array_equal(ta["faces"].data, tb["faces"].data):
+            if ca.shape != cb.shape or "faces" not in ta or "faces" not in tb or not np.array_equal(ta["faces"], tb["faces"]):
                 raise ValueError("Mesh blend needs equal vertex counts and identical triangle indices")
             if not np.all(np.isfinite(ca)) or not np.all(np.isfinite(cb)):
                 raise ValueError("Mesh coordinates must be finite")
@@ -103,5 +95,4 @@ class GeometryBlend(goofi.Node):
             raise ValueError(f"No correspondence for {ka} and {kb}; render both and blend their images with Composite")
         frame["info"] = json.dumps({"parameters": {"mix": t, "space": p.space},
                                     "metadata": {"kind": "blended", "method": "geometry_blend", "morph": t}})
-        return {"geometry": (frame, {}), "field": (field, {}),
-                "trajectory": (trajectory, {"channels": {"dim0": ["x", "y", "z"][:len(trajectory)]}})}
+        return {"geometry": encode(frame)}
