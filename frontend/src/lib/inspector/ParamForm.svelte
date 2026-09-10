@@ -19,7 +19,7 @@
 	import type { ParamDescriptor, ParamMode, SourcePatch } from '$lib/api/types';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { MenuItem } from 'panelty';
-	import { ContextMenu } from 'panelty';
+	import { ContextMenu, createLongPress } from 'panelty';
 	import { graph, paramLive } from '$lib/stores/graph.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
@@ -216,7 +216,7 @@
 		setSource(group, name, { expression: `${kind}(freq=${freq})` });
 	}
 
-	function modulationMenu(event: MouseEvent, group: string, name: string, d: ParamDescriptor): void {
+	function modulationMenu(event: Pick<MouseEvent, 'clientX' | 'clientY' | 'preventDefault' | 'stopPropagation'>, group: string, name: string, d: ParamDescriptor): void {
 		if (d.type !== 'float' && d.type !== 'int') return;
 		event.preventDefault();
 		event.stopPropagation();
@@ -238,6 +238,43 @@
 		const kind = event.key === 'l' ? 'lfo' : event.key === 'n' ? 'noi' : null;
 		if (!kind) return;
 		const row = document.querySelector<HTMLElement>(`[data-param-form="${formId}"]:hover`);
+	/** A held touch opens the same menu as a right click. Movement cancels the hold. */
+	function modulationPress(el: HTMLElement, hit: { group: string; name: string; descriptor: ParamDescriptor }) {
+		let current = hit;
+		let held = false;
+		const press = createLongPress((at) => {
+			held = true;
+			modulationMenu({ ...at, preventDefault() {}, stopPropagation() {} }, current.group, current.name, current.descriptor);
+		});
+		const down = (event: PointerEvent) => {
+			held = false;
+			if (event.pointerType === 'mouse' || (current.descriptor.type !== 'float' && current.descriptor.type !== 'int')) return;
+			press.start(event);
+		};
+		const click = (event: MouseEvent) => {
+			if (!held) return;
+			held = false;
+			event.preventDefault();
+			event.stopPropagation();
+		};
+		el.addEventListener('pointerdown', down);
+		el.addEventListener('click', click, true);
+		window.addEventListener('pointermove', press.move);
+		window.addEventListener('pointerup', press.cancel);
+		window.addEventListener('pointercancel', press.cancel);
+		return {
+			update(next: typeof hit) { current = next; },
+			destroy() {
+				press.cancel();
+				el.removeEventListener('pointerdown', down);
+				el.removeEventListener('click', click, true);
+				window.removeEventListener('pointermove', press.move);
+				window.removeEventListener('pointerup', press.cancel);
+				window.removeEventListener('pointercancel', press.cancel);
+			}
+		};
+	}
+
 		const hit = rows.find((r) => `${r.group}/${r.name}` === row?.dataset.paramKey);
 		if (!hit || (hit.descriptor.type !== 'float' && hit.descriptor.type !== 'int')) return;
 		event.preventDefault();
@@ -546,6 +583,7 @@
 								data-testid={`param-field-${paramName}`}
 								refreshing={node != null && g.isRefreshing(node.uid, group, paramName)}
 								onCommit={(v) => setValue(group, paramName, v)}
+							use:modulationPress={{ group, name: paramName, descriptor }}
 								onSetSource={(source) => setSource(group, paramName, source)}
 								onRefresh={() => refreshOptions(group, paramName)}
 								onPulse={() => pulse(group, paramName)}

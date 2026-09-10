@@ -25,6 +25,30 @@ async function longPress(page: Page, p: { x: number; y: number }, ms = 600): Pro
 	await touch.up();
 }
 
+test('a held parameter opens modulation without toggling its disclosure', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	const uid = await addNode(page, 'LFO');
+	try {
+		await waitForNode(page, uid);
+		await tapNode(page, uid);
+		const field = pane(page).getByTestId('param-field-frequency');
+		await field.scrollIntoViewIfNeeded();
+		const summary = field.getByRole('button', { name: 'frequency', exact: true });
+		const box = await field.boundingBox();
+		await longPress(page, { x: box!.x + 2, y: box!.y + 2 });
+		await expect(summary).toHaveAttribute('aria-expanded', 'false');
+		const choice = page.getByRole('menuitem', { name: 'LFO', exact: true });
+		await expect(choice).toBeVisible();
+		await choice.tap({ timeout: 10_000 });
+		await expect.poll(() => page.evaluate((id) =>
+			(window as any).goofi.query.graph().nodes.find((n: { uid: string }) => n.uid === id)?.params.lfo.frequency.mode, uid
+		)).toBe('expression');
+	} finally {
+		await tearDown(page);
+	}
+});
+
 /** A finger drag from `a` to `b`, coming to REST before it lifts so Chromium reads no fling. */
 async function swipe(
 	page: Page,
