@@ -12,9 +12,14 @@
         "lightTrace",
         "out",
         "image"
+      ],
+      [
+        "geometryRender",
+        "out",
+        "image"
       ]
     ],
-    "nodes": 5
+    "nodes": 7
   },
   {
     "file": "02-plate-mode-walk.gfi",
@@ -109,9 +114,14 @@
         "spectrum",
         "matrix",
         "image"
+      ],
+      [
+        "intervals",
+        "matrix",
+        "image"
       ]
     ],
-    "nodes": 9
+    "nodes": 10
   },
   {
     "file": "08-common-chord.gfi",

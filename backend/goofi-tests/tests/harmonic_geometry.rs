@@ -9,7 +9,7 @@ use goofi_tests::{drive, j};
 
 const FILES: &[&str] = &[
     "harmonic_morph.py", "harmonic_geometry.py", "geometry_blend.py", "harmonic_transport.py",
-    "geometry_metrics.py", "geometry_view.py", "harmonic_modes.py", "harmonic_voices.py", "ratio_sequence.py",
+    "geometry_metrics.py", "geometry_view.py", "harmonic_modes.py", "harmonic_voices.py", "ratio_sequence.py", "geometry_upload.py",
 ];
 
 fn root() -> PathBuf {
@@ -18,7 +18,8 @@ fn root() -> PathBuf {
 
 fn install_bundle(g: &Goofi, extra: &[(&str, &str)]) {
     let mut files: Vec<(String, String)> = FILES.iter().map(|name| {
-        (name.to_string(), std::fs::read_to_string(root().join("node-bundles/harmonic-geometry").join(name)).unwrap())
+        let bundle = if matches!(*name, "harmonic_morph.py" | "harmonic_voices.py" | "ratio_sequence.py") { "biotuner" } else { "harmonic-geometry" };
+        (name.to_string(), std::fs::read_to_string(root().join("node-bundles").join(bundle).join(name)).unwrap())
     }).collect();
     files.extend(extra.iter().map(|(name, source)| (name.to_string(), source.to_string())));
     let pairs: Vec<_> = files.iter().map(|(name, source)| (name.as_str(), source.as_str())).collect();
@@ -45,6 +46,53 @@ fn save_frame(name: &str, data: &Data) {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(format!("{name}.f32")), data.as_array().unwrap().as_bytes()).unwrap();
     std::fs::write(dir.join(format!("{name}.json")), serde_json::to_vec(&shape(data)).unwrap()).unwrap();
+}
+
+#[test]
+fn gpu_geometry_renders_curves_graphs_points_and_meshes() {
+    let _py = require_python();
+    let g = Goofi::new();
+    install_bundle(&g, &[("GeometryRender.wgsl", include_str!("../../../node-bundles/harmonic-geometry/GeometryRender.wgsl"))]);
+    let source = g.add("HarmonicMorph");
+    let geometry = g.add("HarmonicGeometry");
+    let upload = g.add("GeometryUpload");
+    let renderer = g.add("graphics:GeometryRender");
+    g.set_param(geometry, "geometry", "points", 64);
+    g.set_param(geometry, "geometry", "resolution", 16);
+    g.set_param(renderer, "common", "width", 64);
+    g.set_param(renderer, "common", "height", 48);
+    g.link(source, "harmonic", geometry, "input");
+    g.link(geometry, "geometry", upload, "input");
+    g.link(upload, "primitives", renderer, "primitives");
+    let data = g.probe(geometry, "geometry");
+    let packed = g.probe(upload, "primitives");
+    let output = g.probe(renderer, "out");
+    for method in ["closed_2d", "trace_3d", "interval_graph", "point_cloud", "torus"] {
+        g.set_param(geometry, "geometry", "method", method);
+        frame(&g, geometry, &data, |d| geometry_kind(d) == method);
+        let before = packed.count();
+        frame(&g, upload, &packed, |d| packed.count() > before+1 && shape(d).last() == Some(&12));
+        let before = output.count();
+        let image = g.until("GPU geometry has visible finite pixels", |g| {
+            render(g, 1);
+            assert!(g.error(renderer).is_none(), "{:?}", g.error(renderer));
+            output.latest().filter(|d| output.count() > before+1 && shape(d) == [48, 64, 4] && f32s(d).chunks_exact(4).any(|px| px[3] > 0.5))
+        });
+        assert!(f32s(&image).iter().all(|v| v.is_finite()));
+        save_frame(&format!("gpu-geometry-{method}"), &image);
+        if method == "torus" {
+            let surface = f32s(&image);
+            g.set_param(renderer, "ink", "style", "wireframe");
+            g.until("wireframe changes the mesh rendering", |g| {
+                render(g, 1);
+                assert!(g.error(renderer).is_none(), "{:?}", g.error(renderer));
+                output.latest().filter(|d| {
+                    let pixels = f32s(d);
+                    pixels.iter().all(|v| v.is_finite()) && pixels.iter().zip(&surface).any(|(a, b)| (a-b).abs() > 0.05)
+                })
+            });
+        }
+    }
 }
 
 #[test]
@@ -455,6 +503,18 @@ fn living_ratios_archive_opens_with_a_live_trace() {
     check_cookbook_archives(Some("10-living-ratios.gfi"));
 }
 
+#[test]
+#[cfg(feature = "embed")]
+fn gpu_geometry_archive_opens_with_live_controls() {
+    check_cookbook_archives(Some("01-breathing-lines.gfi"));
+}
+
+#[test]
+#[cfg(feature = "embed")]
+fn peak_geometry_archive_uses_the_biotuner_analysis_chain() {
+    check_cookbook_archives(Some("07-peaks-to-worlds.gfi"));
+}
+
 #[cfg(feature = "embed")]
 fn check_cookbook_archives(selected: Option<&str>) {
     let _py = require_python();
@@ -521,6 +581,23 @@ fn check_cookbook_archives(selected: Option<&str>) {
         g.until("manual mix after control bindings settle", |g| {
             slow.latest().filter(|d| g.error(lookup("slow")).is_none() && (f32s(d)[0]-0.75).abs() < 1e-6)
         });
+        if file.starts_with("07-") {
+            let reduced = g.probe(lookup("reduced"), "reduced");
+            let expected = f32s(&frame(&g, lookup("reduced"), &reduced, |d| f32s(d).iter().any(|v| v.is_finite())));
+            let mut expected: Vec<_> = expected.into_iter().filter(|v| v.is_finite()).collect();
+            expected.sort_by(f32::total_cmp);
+            expected.dedup();
+            g.call("global entry edit", j!({"name": "geometry.mix", "value": 1.0}));
+            let tuning = g.probe(lookup("chord"), "tuning");
+            frame(&g, lookup("chord"), &tuning, |d| {
+                let values = f32s(d);
+                values.len() == expected.len() && values.iter().zip(&expected).all(|(a, b)| (a-b).abs() < 1e-5)
+            });
+            let matrix = g.probe(lookup("intervals"), "matrix");
+            frame(&g, lookup("intervals"), &matrix, |d| shape(d) == [expected.len(), expected.len()]);
+            assert!(!doc["nodes"].as_object().unwrap().values().any(|n| n["type"] == "signal:TimbreControls"),
+                "the unused timbre branch is replaced by an analysis route that drives geometry");
+        }
         if file.starts_with("09-") {
             g.call("global entry edit", j!({"name": "geometry.textureAuto", "value": false}));
             g.call("global entry edit", j!({"name": "geometry.textureMix", "value": 0.35}));
