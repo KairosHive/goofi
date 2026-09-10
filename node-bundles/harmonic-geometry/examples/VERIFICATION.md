@@ -31,6 +31,13 @@ GPU/control/save-reload session (14.86 seconds). A combined run was stopped
 after stalling before its first preview; a fresh process reported Windows
 iceoryx2 cleanup errors but completed the focused session.
 
+The final combined archive rerun rendered recipes 01 through 07, then failed
+when iceoryx2 could not create another probe (NodeCreationFailure::InternalError).
+Separate public sessions passed recipe 08 (native voice output and muting without
+a device), recipe 09 (independent texture controls), and recipe 10 (live ratios).
+The combined Windows suite is therefore not reported as passing. Full workspace
+Rust tests and a new ten-recipe browser run were not repeated for this push.
+
 The sections below record earlier checkpoints and their interfaces at that time.
 
 Checked on Windows x86_64, 9 September 2026, with Rust 1.97.1, the repository's
