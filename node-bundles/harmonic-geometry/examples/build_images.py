@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw
 
 
 HERE = Path(__file__).resolve().parent
-FRAMES = HERE.parents[1] / 'target/harmonic-geometry/frames'
+FRAMES = HERE.parents[2] / 'target/harmonic-geometry/frames'
 OUT = HERE / 'assets'
 OUT.mkdir(parents=True, exist_ok=True)
 parser = argparse.ArgumentParser(description=__doc__)
