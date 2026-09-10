@@ -388,6 +388,7 @@ pub fn check_viewers(
 /// Validate a `layout panel edit` write against the vocabularies and the node it binds, BEFORE the layout
 /// is planned. `bound` is the node the panel ENDS UP bound to, since a state write merges.
 pub fn check_panel(
+    plugins: &crate::plugins::Plugins,
     g: &goofi_graph::Graph,
     ty: Option<&str>,
     state: Option<&Value>,
@@ -395,7 +396,9 @@ pub fn check_panel(
 ) -> Result<(), String> {
     const OP: &str = "layout panel edit";
     if let Some(t) = ty {
-        check(OP, "panel type", t, panel_type_ids())?;
+        if !plugins.admits_panel(t) {
+            check(OP, "panel type", t, panel_type_ids())?;
+        }
     }
     let key = |k: &str| state.and_then(|s| s.get(k)).and_then(Value::as_str).filter(|v| !v.is_empty());
     if let Some(kind) = key("kind") {

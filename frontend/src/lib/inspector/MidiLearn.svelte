@@ -4,7 +4,7 @@
 	import { Icon } from '$lib/ui';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
-	import { midiLearn } from './midiLearnState.svelte';
+	import { midiLearn } from '$lib/stores/midiLearn.svelte';
 
 	let { label, target, onLearn, testid = 'param-learn' }: {
 		label: string;

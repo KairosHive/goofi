@@ -175,6 +175,11 @@ jobs:
       run: npm run e2e
       working-directory: tests/e2e
 
+    - name: End-to-end (plugin SDK with test clocks)
+      if: runner.os == 'Linux'
+      run: npm run e2e:plugins
+      working-directory: tests/e2e
+
     # The report and the backends' own logs — a failure here is read from both: the assertion says
     # which spec, the log says what the server did.
     - uses: actions/upload-artifact@v7
