@@ -55,8 +55,8 @@ class TuningReduction(goofi.Node):
         out = np.full((rows.shape[0], p.n_steps), np.nan)
         for i, row in enumerate(rows):
             scale = [float(v) for v in row if np.isfinite(v)]
-            if len(scale) < 2:
+            if not scale:
                 continue
-            reduced = np.asarray(create_mode(scale, p.n_steps, FUNCTIONS[p.function]), dtype=np.float64).ravel()
+            reduced = np.asarray(scale if len(scale) <= p.n_steps else create_mode(scale, p.n_steps, FUNCTIONS[p.function]), dtype=np.float64).ravel()
             out[i, : min(reduced.size, p.n_steps)] = reduced[: p.n_steps]
         return out.reshape(lead + (p.n_steps,)).astype(np.float32), input.drop_axis(-1)

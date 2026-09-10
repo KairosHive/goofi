@@ -20,7 +20,7 @@ cargo run -- --load examples/harmonic-geometry/01-breathing-lines.gfi
 | [04 · Sand and memory](04-sand-and-memory.gfi) | Nodal sand, antinodal powder, tracer flow, persistent GPU ink |
 | [05 · Knot to knot](05-knot-to-knot.gfi) | Fixed mesh correspondence, camera motion, tube radius |
 | [06 · Interval garden](06-interval-garden.gfi) | Graphs, fractals, BioColors palettes, geometry metrics, EuclidRhythm |
-| [07 · Peaks to worlds](07-peaks-to-worlds.gfi) | Synthetic signal → HarmonicSpectrum → geometry; Tuning and TimbreControls |
+| [07 · Peaks to worlds](07-peaks-to-worlds.gfi) | HarmonicSpectrum peaks ↔ TuningReduction; shared BioColors and TuningMatrix views |
 | [08 · A common chord](08-common-chord.gfi) | Shared component fades across geometry and continuous native synth controls |
 | [09 · Jade resonance](09-jade-resonance.gfi) | Full-window Chladni textures; sand, colonies, cells, grains, and mineral surfaces |
 | [10 · Living ratios](10-living-ratios.gfi) | Successive ratio steps and pitch glides drive an organic field, with a live ratio trace |

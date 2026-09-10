@@ -79,6 +79,38 @@ the transition TABLE keeps both endpoints and their blend on one clock.
 
 ## Bundle plan
 
+The ownership audit places HarmonicMorph, RatioSequence, and HarmonicVoices in
+`biotuner`: they describe or control harmonic structures without producing
+geometry. The six geometry signal nodes and five shaders stay in
+`harmonic-geometry`. Node type names are unchanged by these file moves.
+
+The remaining overlaps are deliberate boundaries:
+
+- HarmonicMorph changes harmonic input; GeometryBlend changes formed geometry.
+- HarmonicGeometry emits CPU coordinates, grids, and connectivity. The Chladni
+  and Lissajous shaders emit GPU pictures for bounded real-time synthesis.
+- GeometryView renders CPU geometry and dashboards; HarmonicInk colors GPU
+  scalar textures; HarmonicRelief draws their textured surface.
+- HarmonicTransport computes upstream equilibrium or flow data; HarmonicFlow
+  integrates a persistent GPU ink state using that flow.
+- HarmonicVoices preserves measured weights and silent slots; TimbreControls
+  derives gains and timbre measures from a tuning with its own tilt rule.
+- GeometryMetrics measures the geometry. Harmonicity and TuningMatrix measure
+  musical intervals and remain in Biotuner.
+
+Recipe 07 previously included an unused TimbreControls branch. It now uses
+TuningReduction to supply HarmonicMorph's second endpoint and TuningMatrix to
+display the resulting tuning. The audit exposed a short-scale boundary error
+in TuningReduction; it now returns available degrees when no reduction is
+needed, as its documented contract requires.
+
+The cookbook atlas comes from the HarmonicGeometry method catalog and the
+public test renders. The six harmonograph images are method settings of one
+HarmonicGeometry node, displayed through GeometryView. The cookbook builder
+requires each actual recipe and method image; it cannot substitute a different
+geometry when a render is missing. This covers the cookbook's 46 methods and
+ten patches, not every visualization in the upstream Biotuner notebooks.
+
 1. **HarmonicMorph:** select two tuning or peak rows, or enter ratio presets;
    interpolate in ratio or pitch space, wrap phases, fade extra components, and
    grow harmonic/subharmonic extensions. Output one harmonic TABLE plus ordinary

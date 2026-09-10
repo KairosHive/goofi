@@ -140,29 +140,30 @@ struct Preset {
 
 impl Preset {
     fn candidates() -> Vec<Self> {
-        let mut presets = Vec::new();
-        #[cfg(target_os = "macos")]
-        presets.push(Self {
-            codec: "h264_videotoolbox",
-            options: &["-allow_sw", "0"], device: None,
-        });
-        #[cfg(not(target_os = "macos"))]
-        presets.push(Self {
-            codec: "h264_nvenc",
-            options: &["-preset", "p5", "-tune", "hq", "-rc", "constqp"],
-            device: None,
-        });
-        #[cfg(target_os = "windows")]
-        presets.push(Self {
-            codec: "h264_amf",
-            options: &["-quality", "quality", "-rc", "cqp"],
-            device: None,
-        });
-        #[cfg(not(target_os = "macos"))]
-        presets.push(Self {
-            codec: "h264_qsv",
-            options: &["-preset", "medium"], device: None,
-        });
+        let mut presets = vec![
+            #[cfg(target_os = "macos")]
+            Self {
+                codec: "h264_videotoolbox",
+                options: &["-allow_sw", "0"], device: None,
+            },
+            #[cfg(not(target_os = "macos"))]
+            Self {
+                codec: "h264_nvenc",
+                options: &["-preset", "p5", "-tune", "hq", "-rc", "constqp"],
+                device: None,
+            },
+            #[cfg(target_os = "windows")]
+            Self {
+                codec: "h264_amf",
+                options: &["-quality", "quality", "-rc", "cqp"],
+                device: None,
+            },
+            #[cfg(not(target_os = "macos"))]
+            Self {
+                codec: "h264_qsv",
+                options: &["-preset", "medium"], device: None,
+            },
+            ];
         #[cfg(target_os = "linux")]
         if let Ok(entries) = std::fs::read_dir("/dev/dri") {
             let mut devices: Vec<_> = entries.flatten().map(|entry| entry.path())
