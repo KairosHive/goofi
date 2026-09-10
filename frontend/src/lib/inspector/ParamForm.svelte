@@ -267,6 +267,26 @@
 		};
 	}
 
+	/** Move between the main value controls in the displayed parameter rows. */
+	function paramTabOrder(el: HTMLElement): { destroy(): void } {
+		const keydown = (event: KeyboardEvent): void => {
+			if (event.key !== 'Tab' || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+			const controls = Array.from(el.querySelectorAll<HTMLElement>('[data-param-edit]'))
+				.map((control) => control.matches('input, select, button')
+					? control : control.querySelector<HTMLElement>('input, select, button'))
+				.filter((control): control is HTMLElement =>
+					control !== null && !control.matches(':disabled') && control.getClientRects().length > 0);
+			const index = controls.indexOf(event.target as HTMLElement);
+			if (index < 0) return;
+			const next = controls[index + (event.shiftKey ? -1 : 1)];
+			if (!next) return;
+			event.preventDefault();
+			next.focus();
+		};
+		el.addEventListener('keydown', keydown);
+		return { destroy: () => el.removeEventListener('keydown', keydown) };
+	}
+
 	function paramKey(event: KeyboardEvent): void {
 		if (
 			event.defaultPrevented || event.repeat || event.ctrlKey || event.metaKey ||
@@ -573,6 +593,7 @@
 			<!-- A tabpanel only when a tablist exists: an orphaned `tabpanel` role would have no owning tablist. -->
 			<div
 				class="pf-rows"
+				use:paramTabOrder
 				role={tabItems.length > 0 && !across ? 'tabpanel' : undefined}
 				aria-label={across ? undefined : (activeGroup ?? undefined)}
 				data-testid="param-rows"
