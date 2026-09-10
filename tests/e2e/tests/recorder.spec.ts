@@ -1,7 +1,7 @@
 import { test, expect, type Locator } from '@playwright/test';
-import { waitForApp, splitRight, closeSplit, restorePanelType } from '../lib/app';
+import { appReady, waitForApp, splitRight, closeSplit, restorePanelType } from '../lib/app';
 import { addNode, waitForNode } from '../lib/goofi';
-import { backendDoc, rawCall } from '../lib/raw';
+import { armSocketControl, dropSocket, restoreSocket, backendDoc, rawCall } from '../lib/raw';
 
 for (const narrow of [false, true]) {
 	test.describe(narrow ? 'narrow touch screen' : 'desktop', () => {
@@ -92,3 +92,43 @@ for (const narrow of [false, true]) {
 		});
 	});
 }
+
+test('recorder refreshes after patch load and reconnect', async ({ page }, testInfo) => {
+	await armSocketControl(page);
+	await page.goto('/');
+	await waitForApp(page);
+	const node = await addNode(page, 'signal:Quantize', [30, 60]);
+	await rawCall(page, 'record arm', { output: `${node}/out` });
+	await page.evaluate(() => {
+		const g = (window as any).goofi;
+		g.commands.setPanelType(g.query.panels()[0].panelId, 'recorder');
+	});
+	const toggle = page.getByTestId('recorder-toggle');
+	const root = testInfo.outputPath('recordings');
+	const path = testInfo.outputPath('recording.gfi');
+	try {
+		expect((await rawCall(page, 'record start', { root })).error).toBeUndefined();
+		await expect(toggle).toHaveText('Stop');
+		expect((await rawCall(page, 'session save', { path })).error).toBeUndefined();
+		expect((await rawCall(page, 'session load', { path })).error).toBeUndefined();
+		await expect(toggle).toHaveText('Start');
+		expect((await rawCall(page, 'record status')).result.running).toBe(false);
+		expect((await rawCall(page, 'record start', { root })).error).toBeUndefined();
+		await expect(toggle).toHaveText('Stop');
+		await dropSocket(page);
+		// A separate client stops the recording while this tab cannot receive events.
+		const peer = await page.context().newPage();
+		await peer.goto('/');
+		expect((await rawCall(peer, 'record stop')).error).toBeUndefined();
+		await peer.close();
+		await restoreSocket(page);
+		await expect(toggle).toHaveText('Start');
+		await page.reload();
+		await appReady(page);
+		await expect(toggle).toHaveText('Start');
+	} finally {
+		await restoreSocket(page);
+		await rawCall(page, 'session new');
+		await restorePanelType(page);
+	}
+});

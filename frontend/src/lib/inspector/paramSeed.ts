@@ -1,5 +1,5 @@
 /** What seeds a param's expression: its own value as a Python literal, or a reference read as one. */
-import type { ParamDescriptor } from '$lib/api/types';
+import type { ParamDescriptor, ParamMode, SourcePatch } from '$lib/api/types';
 import { splitReference } from './expr/refs';
 
 export function literalFor(d: ParamDescriptor): string {
@@ -15,4 +15,9 @@ export function literalFor(d: ParamDescriptor): string {
 export function expressionFor(reference: string, outputs: number): string {
 	const [node, slot] = splitReference(reference);
 	return outputs === 1 ? `nd('${node}')` : `nd('${node}').out.${slot}`;
+}
+
+/** Restore a saved source, or seed a new expression from the value. */
+export function sourceForMode(d: ParamDescriptor, mode: ParamMode): SourcePatch {
+	return mode === 'expression' && !d.expression ? { expression: literalFor(d) } : { mode };
 }
