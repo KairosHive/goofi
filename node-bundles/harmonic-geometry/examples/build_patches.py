@@ -14,7 +14,7 @@ import yaml
 
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[1]
+ROOT = HERE.parents[2]
 VERSION = tomllib.loads((ROOT/'Cargo.toml').read_text())['workspace']['package']['version']
 RELIEF_HEADER = json.loads((ROOT/'node-bundles/harmonic-geometry/HarmonicRelief.wgsl').read_text().split('/* goofi', 1)[1].split('*/', 1)[0])
 RELIEF_TEXTURES = next(p['options'] for p in RELIEF_HEADER['params'] if p['name'] == 'texture_a')

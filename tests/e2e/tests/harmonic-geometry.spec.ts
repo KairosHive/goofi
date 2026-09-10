@@ -6,7 +6,7 @@ import { waitForApp, resetPatch } from '../lib/app';
 import { rawCall } from '../lib/raw';
 import { REPO_ROOT } from '../playwright.config';
 
-const folder = path.join(REPO_ROOT, 'examples', 'harmonic-geometry');
+const folder = path.join(REPO_ROOT, 'node-bundles', 'harmonic-geometry', 'examples');
 const textures = ['jade', 'brushed metal', 'woven silk', 'porous stone', 'sand', 'dunes', 'lichen', 'coral', 'cells', 'spores', 'pollen', 'plankton'];
 const recipes = JSON.parse(fs.readFileSync(path.join(folder, 'recipes.json'), 'utf8')) as Array<{
 	file: string; title: string; nodes: number; views: [string, string, string][];

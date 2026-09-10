@@ -521,12 +521,12 @@ fn check_cookbook_archives(selected: Option<&str>) {
     let g = Goofi::new();
     g.state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(
         goofi_python::inproc::PyExprEvaluator::new().expect("the same evaluator as the CLI")));
-    let recipes: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root().join("examples/harmonic-geometry/recipes.json")).unwrap()).unwrap();
+    let recipes: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root().join("node-bundles/harmonic-geometry/examples/recipes.json")).unwrap()).unwrap();
     let mut identities = std::collections::HashSet::new();
     for recipe in recipes.as_array().unwrap() {
         let file = recipe["file"].as_str().unwrap();
         if selected.is_some_and(|selected| file != selected) { continue; }
-        g.call("session load", j!({"path": root().join("examples/harmonic-geometry").join(file).to_string_lossy()}));
+        g.call("session load", j!({"path": root().join("node-bundles/harmonic-geometry/examples").join(file).to_string_lossy()}));
         let doc = g.doc();
         for uid in doc["nodes"].as_object().unwrap().keys() {
             assert!(identities.insert(uid.clone()), "{file} reuses a node identity from another recipe");

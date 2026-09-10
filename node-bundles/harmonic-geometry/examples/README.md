@@ -9,7 +9,7 @@ Extra tabs show the shader or a second analysis view. Turn **auto** off to use *
 
 ```sh
 cargo run -p goofi-init
-cargo run -- --load examples/harmonic-geometry/01-breathing-lines.gfi
+cargo run -- --load node-bundles/harmonic-geometry/examples/01-breathing-lines.gfi
 ```
 
 | Patch | Explore |
@@ -34,8 +34,8 @@ The Python geometry nodes require the same pinned Biotuner revision as the
 existing bundle. The app's default build includes the Python expression evaluator
 used by these controls. A Rust test build needs `--features embed` for recipe tests.
 
-Read the [source survey and design plan](../../node-bundles/harmonic-geometry/SURVEY.md)
-and the [bundle interface](../../node-bundles/harmonic-geometry/README.md).
+Read the [source survey and design plan](../SURVEY.md)
+and the [bundle interface](../README.md).
 `build_patches.py` rebuilds the archives. `build_images.py` converts public-test
 frames to the illustrations. `build_cookbook.py` rebuilds the HTML guide.
 The [verification record](VERIFICATION.md) gives checks and rebuild commands.
