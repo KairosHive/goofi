@@ -16,22 +16,20 @@ def activation_rgb(values, ceiling):
 class HarmonicObservatory(goofi.Node):
     """An evolving atlas of power-weighted harmonic activation and history.
 
-    Matrix is supplied by HarmonicSpectrum: kernel times normalized power
+    Activation is supplied by HarmonicSpectrum: kernel times normalized power
     outer product. Color uses a labelled logarithmic scale with a slowly
     decaying peak ceiling. Matrix values themselves are never rescaled.
 
-    Connect HarmonicSpectrum.activation to matrix. The other required inputs
-    use the matching output names. display/row selects a flattened input row.
+    Connect HarmonicSpectrum.analysis to analysis. All panels use one window.
+    display/channel selects a named channel, or a row number for unlabeled data.
+    Refresh the channel list after connecting a source or changing its channels.
     Connect dashboard to graphics:SignalIn in texture mode, or an image viewer.
-    morph is an optional 0..1 scene control used by the bundled example.
     """
     TAGS = ["image"]
-    INPUTS = {k: goofi.InputSlot(goofi.DataType.ARRAY, required=True)
-              for k in ("spectrum", "freqs", "matrix", "peaks", "harmonicity",
-                        "complexity", "power", "waveform")}
-    INPUTS["morph"] = goofi.InputSlot(goofi.DataType.ARRAY, required=False)
+    INPUTS = {"analysis": goofi.InputSlot(goofi.DataType.TABLE, required=True)}
     OUTPUTS = {"dashboard": goofi.DataType.ARRAY}
-    PARAMS = {"display": {"row": goofi.IntParam(0, 0, 65535, doc="Input row to display, counting from zero."),
+    PARAMS = {"display": {"channel": goofi.StringParam("First channel", ["First channel"], refresh=True,
+                        doc="Channel to display. Refresh the list after connecting; unlabeled channels use row numbers."),
                         "matrix_ceiling": goofi.FloatParam(0.0, 0.0, 100.0,
                         doc="0 tracks a slowly decaying peak; positive fixes the color ceiling.")},
               "common": {"max_frequency": goofi.FloatParam(6.0, 0.0, 30.0)}}
@@ -51,9 +49,45 @@ class HarmonicObservatory(goofi.Node):
         self.ceiling = 0.0
         self.text_cache = {}
         self.last_grid = None
+        self.channel_names = []
 
-    def process(self, spectrum, freqs, matrix, peaks, harmonicity, complexity, power, waveform, morph=None):
-        row = self.params.display.row
+    def refresh_display_channel(self):
+        return ["First channel", *self.channel_names]
+
+    def process(self, analysis):
+        fields = analysis.table
+        required = ("spectrum", "freqs", "activation", "peaks", "harmonicity", "complexity", "power", "waveform")
+        missing = [name for name in required if name not in fields]
+        if missing:
+            raise ValueError("Connect HarmonicSpectrum.analysis; missing fields: " + ", ".join(missing))
+        if any(fields[name].kind != "ARRAY" for name in required):
+            raise ValueError("HarmonicObservatory analysis fields must be arrays")
+        spectrum, freqs, matrix, peaks, harmonicity, complexity, power, waveform = (fields[name] for name in required)
+        wave_shape = waveform.data.shape
+        if not wave_shape or not all(wave_shape):
+            raise ValueError("HarmonicObservatory needs a nonempty waveform")
+        leading = wave_shape[:-1]
+        axes = waveform.meta.get("channels", {})
+        names = []
+        has_labels = any(len(axes.get(f"dim{axis}", [])) == size for axis, size in enumerate(leading))
+        for i, indices in enumerate(np.ndindex(leading)):
+            parts = []
+            for axis, index in enumerate(indices):
+                labels = axes.get(f"dim{axis}", [])
+                parts.append(str(labels[index]) if len(labels) == leading[axis] else str(index + 1))
+            names.append(" / ".join(parts) if has_labels else f"Row {i + 1}")
+        self.channel_names = [name if names.count(name) == 1 and name != "First channel"
+                              else f"{name} [row {i + 1}]" for i, name in enumerate(names)]
+        choice = self.params.display.channel
+        if choice == "First channel":
+            row = 0
+        elif choice in self.channel_names:
+            row = self.channel_names.index(choice)
+        else:
+            raise ValueError(f"Channel '{choice}' is not available. Refresh display/channel to choose from: "
+                             + ", ".join(self.channel_names))
+        channel = self.channel_names[row]
+        image_meta = {"channel": channel}
 
         def selected(frame, tail):
             values = np.asarray(frame.data, dtype=float)
@@ -61,8 +95,8 @@ class HarmonicObservatory(goofi.Node):
                 raise ValueError("HarmonicObservatory needs the outputs of HarmonicSpectrum")
             shape = values.shape[-tail:]
             count = int(np.prod(values.shape[:-tail]))
-            if row >= count:
-                raise ValueError("HarmonicObservatory display/row is outside the input rows")
+            if values.shape[:-tail] != leading:
+                raise ValueError("HarmonicObservatory analysis fields must have matching channel axes")
             return values.reshape((count,) + shape)[row]
 
         s = selected(spectrum, 1)
@@ -73,12 +107,11 @@ class HarmonicObservatory(goofi.Node):
         pk = selected(peaks, 1)
         wave = selected(waveform, 1)
         means = np.asarray(harmonicity.data).ravel()
-        if row >= means.size:
-            raise ValueError("HarmonicObservatory display/row is outside the harmonicity rows")
+        if means.size != len(names):
+            raise ValueError("HarmonicObservatory harmonicity must match the channel count")
         mean = float(means[row])
-        # A changed analysis grid can reach different slots on separate updates.
         if len(f) < 2 or s.shape != f.shape or p.shape != f.shape or a.shape != (len(f), len(f)):
-            return None
+            raise ValueError("HarmonicObservatory analysis fields must use the same frequency grid")
         if len(c) != 4 or not len(wave):
             raise ValueError("HarmonicObservatory needs four complexity values and a nonempty waveform")
         sfreq = waveform.meta.get("sfreq")
@@ -93,9 +126,9 @@ class HarmonicObservatory(goofi.Node):
             self.ceiling = 0.0
             im = Image.new("RGB", (825, 629), (7, 12, 23))
             ImageDraw.Draw(im).text((24, 24), "No valid spectrum for the selected row", font=self.body, fill=(233, 241, 250))
-            return {"dashboard": (np.asarray(im).astype(np.float32) / 255, {})}
+            return {"dashboard": (np.asarray(im).astype(np.float32) / 255, image_meta)}
         a = np.maximum(a, 0)
-        grid = (row, tuple(f))
+        grid = (channel, row, tuple(f))
         if grid != self.last_grid:
             self.history.clear()
             self.trends.clear()
@@ -146,11 +179,7 @@ class HarmonicObservatory(goofi.Node):
                 d.line(xy, fill=color, width=2)
         label(28, 17, "HARMONIC OBSERVATORY", white, self.title)
         label(30, 65, "Harmonic spectrum  /  power-weighted activation  /  complexity  /  history")
-        if morph is not None and np.size(morph.data):
-            m = float(np.clip(np.nan_to_num(morph.data.flat[0], nan=0.0), 0, 1))
-            label(1120, 24, f"HARMONIC  <----  {m:3.0%}  ---->  STRETCHED", gold)
-            d.rounded_rectangle((1120, 59, 1570, 67), radius=4, fill=(34,47,62))
-            d.rounded_rectangle((1120, 59, 1120+max(5,int(450*m)), 67), radius=4, fill=gold)
+        label(1120, 24, f"CHANNEL: {channel}", gold)
 
         card((24, 103, 484, 515), "01 / HARMONICITY ORBIT")
         cx,cy = 254,320
@@ -226,7 +255,7 @@ class HarmonicObservatory(goofi.Node):
             plot(vals,(1182,y,1555,y+42),color)
             label(1100,y+8,title,color)
         label(1100,886,"Each trace auto-ranges over visible history.")
-        label(1100,919,f"Selected input row: {row}",muted)
+        label(1100,919,f"Channel: {channel}",muted)
         card((24, 980, 1064, 1187), "09 / HARMONIC SPECTRUM H(f)  -  why these metrics move")
         x0,y0,x1,y1 = 77,1030,1042,1125
         weights = np.maximum(s,0)/max(float(np.maximum(s,0).sum()),1e-12)
@@ -298,5 +327,5 @@ class HarmonicObservatory(goofi.Node):
         label(28,1195,"Flow: input > power > activation > H(f) > history  |  moving dots show processing direction  |  matrix uses normalized power")
         # Keep the image compact for the live transport/viewer feeds.
         im = im.resize((825, 629), Image.Resampling.BILINEAR)
-        frame = (np.asarray(im).astype(np.float32)/255,{})
+        frame = (np.asarray(im).astype(np.float32)/255,image_meta)
         return {"dashboard": frame}
