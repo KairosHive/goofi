@@ -4,7 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+embed = ["goofi-python/embed"]
+
 [dependencies]
+goofi-host = { path = "../../goofi-host" }
+goofi-host-sdk = { path = "../../goofi-host-sdk", features = ["host"] }
+goofi-python = { path = "../../signal/goofi-python" }
+goofi-build = { path = "../../goofi-build" }
 goofi-core = { path = "../../goofi-core" }
 goofi-view = { path = "../../goofi-view" }
 goofi-node = { path = "../../goofi-node" }

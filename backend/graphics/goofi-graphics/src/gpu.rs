@@ -114,7 +114,7 @@ pub struct Gpu {
     /// What an unwired texture input reads: present, transparent, never an error.
     pub blank: wgpu::TextureView,
     /// One conversion pipeline per [`Want`], and the layout the source texture binds through.
-    blits: [wgpu::RenderPipeline; 4],
+    blits: [wgpu::RenderPipeline; 5],
     blit_group: wgpu::BindGroupLayout,
     group0: [wgpu::BindGroupLayout; 2],
     textures: Mutex<HashMap<usize, Arc<wgpu::BindGroupLayout>>>,
@@ -282,6 +282,7 @@ impl Gpu {
             blit("tap", Want::Tap.format()),
             blit("tap8", Want::TapU8.format()),
             blit("tap8", Want::Record.format()),
+            blit("tap", FORMAT),
         ];
         Ok(Gpu {
             device,
@@ -308,6 +309,16 @@ impl Gpu {
         into: &wgpu::TextureView,
         out_size: &wgpu::Buffer,
     ) {
+        self.blit_index(encoder, want as usize, src, into, out_size);
+    }
+
+    pub fn resize(&self, encoder: &mut wgpu::CommandEncoder, src: &wgpu::TextureView,
+                  into: &wgpu::TextureView, size: &wgpu::Buffer) {
+        self.blit_index(encoder, 4, src, into, size);
+    }
+
+    fn blit_index(&self, encoder: &mut wgpu::CommandEncoder, index: usize, src: &wgpu::TextureView,
+                  into: &wgpu::TextureView, out_size: &wgpu::Buffer) {
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.blit_group,
@@ -329,7 +340,7 @@ impl Gpu {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.blits[want as usize]);
+        pass.set_pipeline(&self.blits[index]);
         pass.set_bind_group(0, &group, &[]);
         pass.draw(0..3, 0..1);
     }

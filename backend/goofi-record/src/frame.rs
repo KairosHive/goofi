@@ -73,6 +73,7 @@ fn cell(d: &goofi_core::Data) -> String {
     match d.value() {
         goofi_core::Value::Str(s) => s.to_string(),
         goofi_core::Value::Table(_) => "<table>".into(),
+        goofi_core::Value::Texture(_) => "<texture submission>".into(),
         goofi_core::Value::Array(a) => {
             let mut it = a.as_bytes().chunks_exact(4);
             match (a.shape().iter().product::<usize>(), it.next()) {

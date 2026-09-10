@@ -122,7 +122,8 @@ pub fn discover_one(path: &Path, python: &str, isolation: Isolation, memo: &Path
     let Some(type_name) = type_name_of(path) else { return Discovery::Skip };
     match introspect_memoised(path, python, memo) {
         Ok(intro) => {
-            if let Some(reason) = illegal_slot(&intro) {
+            let own = (goofi_node::engine_of(path).as_deref() == Some("graphics")).then_some(goofi_core::SlotType::Texture);
+            if let Some(reason) = illegal_slot(&intro).or_else(|| goofi_node::foreign_output(&intro, own)) {
                 return Discovery::Unavailable { type_name, reason };
             }
             match leak_manifest(type_name.clone(), &intro) {

@@ -590,12 +590,13 @@ fn shaders_render_on_the_gpu() {
     drawn(&g, comp, "the sum of a ramp and the constant", |d| px(d, 0, 0)[2] > 1.0 - 1e-3);
     // A row says naga read the file; a FRAME says this device built the pipeline behind it, which
     // is the half a validation pass cannot answer for.
-    let shipped: Vec<String> = g.call("library list", j!({}))["types"]
+    let shipped: Vec<String> = g.call("library list", j!({ "full": true }))["types"]
         .as_array()
         .expect("a palette")
         .iter()
         .filter_map(|r| r["type"].as_str())
         .filter(|t| t.starts_with("graphics:"))
+        .filter(|t| g.call("library get", j!({"type": t}))["tier"] == "shader")
         .map(String::from)
         .collect();
     // Against the bundles on disk, not a number: a fourteenth node must not fail the suite for
@@ -1266,4 +1267,106 @@ fn an_oversized_readback_reports_an_error_and_recovers_after_resize() {
         probe.latest().filter(|d| shape(d) == vec![32, 32, 4])
     });
     g.until("readback error clears", |g| g.error(node).is_none().then_some(()));
+}
+
+#[test]
+fn host_pixels_use_shared_textures_and_explicit_readback() {
+    let g = Goofi::new();
+    let dir = g.state.mount().join("nodes_graphics");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("TextureHost.rs"), include_str!("fixtures/texture_host.rs")).unwrap();
+    g.call("library refresh", j!({}));
+    let source = g.add("graphics:TextureHost");
+    let math = g.add("graphics:Math");
+    let readback = g.add("signal:GraphicsIn");
+    for uid in [source, math, readback] { g.ready(uid); }
+    g.link(source, "out", math, "input");
+    g.link(math, "out", readback, "input");
+    let probe = g.probe(readback, "out");
+    let frame = g.until("host texture reaches a CPU consumer without a viewer", |g| {
+        render(g, 1);
+        probe.latest().filter(|d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]))
+    });
+    assert!(close(px(&frame, 0, 1), [0.0, 1.0, 0.0, 1.0]));
+    assert!(close(px(&frame, 1, 0), [0.0, 0.0, 1.0, 1.0]));
+    assert!(close(px(&frame, 1, 1), [1.0; 4]));
+}
+
+#[test]
+fn python_texture_sources_resize_and_restart() {
+    let _python = goofi_tests::require_python();
+    let g = Goofi::new();
+    let dir = g.state.mount().join("nodes_graphics");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("texture_python.py"), include_str!("fixtures/texture_python.py")).unwrap();
+    g.call("library refresh", j!({}));
+    let row = g.call("library get", j!({"type": "graphics:TexturePython"}));
+    assert_eq!(row["tier"], if goofi_signal::Python::new(_python.py.clone()).free_threaded.is_some() { "in-process" } else { "subprocess" }, "{row}");
+    let source = g.add("graphics:TexturePython");
+    let math = g.add("graphics:Math");
+    g.ready(source);
+    g.ready(math);
+    g.link(source, "out", math, "input");
+    drawn(&g, math, "Python float pixels", |d| shape(d) == vec![2, 3, 4] && close(px(d, 0, 0), [0.25, 0.5, 0.75, 0.5]));
+    g.set_param(source, "image", "width", 7);
+    g.set_param(source, "image", "red", 0.75);
+    drawn(&g, math, "new natural size propagates", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
+    g.set_param(source, "image", "invalid", true);
+    g.until("invalid texture reports a process error", |g| g.error(source));
+    drawn(&g, math, "a failed source keeps its last texture", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
+    g.set_param(source, "image", "invalid", false);
+    g.until("valid texture clears the process error", |g| g.error(source).is_none().then_some(()));
+    g.call("node param pulse", j!({"node": hex(source), "param": "image/flip"}));
+    drawn(&g, math, "pulse reaches the host worker", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 1.0, 0.75, 0.5]));
+    g.call("node restart", j!({"node": hex(source)}));
+    g.ready(source);
+    drawn(&g, math, "replacement producer retains params", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
+    g.set_param(source, "common", "width", 5);
+    drawn(&g, math, "explicit dimensions resize the upload", |d| shape(d) == vec![2, 5, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
+}
+
+#[test]
+fn native_host_program_writes_the_shared_output() {
+    let g = Goofi::new();
+    let dir = g.state.mount().join("nodes_graphics");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("TextureHost.rs"), include_str!("fixtures/texture_host.rs")).unwrap();
+    g.call("library refresh", j!({}));
+    let source = g.add("graphics:TextureHost");
+    let math = g.add("graphics:Math");
+    g.ready(source);
+    g.ready(math);
+    g.link(source, "out", math, "input");
+    g.set_param(source, "image", "mode", "render");
+    let frame = drawn(&g, math, "host GPU program sampled downstream", |d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [0.25, 0.25, 0.5, 1.0]));
+    assert!(close(px(&frame, 1, 1), [0.75, 0.75, 0.5, 1.0]));
+    g.set_param(source, "image", "mode", "broken");
+    g.until("invalid host GPU program reports a fault", |g| g.error(source));
+    g.set_param(source, "image", "mode", "pixels");
+    drawn(&g, math, "CPU submission replaces the failed GPU program", |d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]));
+    g.until("CPU submission clears the GPU program fault", |g| g.error(source).is_none().then_some(()));
+}
+
+#[test]
+fn camera_video_uploads_rgb_and_loops_without_hardware() {
+    let python = goofi_tests::require_python();
+    let g = Goofi::new();
+    let video = g.state.mount().join("camera.avi");
+    let result = std::process::Command::new(&python.py)
+        .args(["-c", "import cv2, numpy as np, sys; w=cv2.VideoWriter(sys.argv[1], cv2.VideoWriter_fourcc(*'MJPG'), 30, (16, 8)); assert w.isOpened(); [w.write(np.full((8, 16, 3), [0, 0, 255], np.uint8)) for _ in range(3)]; w.release()"])
+        .arg(&video).env_remove("PYTHONHOME").env_remove("PYTHONPATH").output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let dir = g.state.mount().join("nodes_graphics");
+    std::fs::create_dir_all(&dir).unwrap();
+    let camera = include_str!("../../../node-bundles/graphics/camera.py")
+        .replace("goofi.StringParam(\"camera\", SOURCES", "goofi.StringParam(\"file\", SOURCES")
+        .replace("goofi.StringParam(\"\", doc=\"The video", &format!("goofi.StringParam({}, doc=\"The video", j!(video.to_str().unwrap())));
+    std::fs::write(dir.join("video_fixture.py"), camera).unwrap();
+    g.call("library refresh", j!({}));
+    let source = g.add("graphics:VideoFixture");
+    g.ready(source);
+    for _ in 0..5 {
+        drawn(&g, source, "video RGB texture", |d| shape(d) == vec![8, 16, 4] && px(d, 0, 0)[0] > 0.95 && px(d, 0, 0)[2] < 0.05);
+    }
+    assert!(g.error(source).is_none());
 }

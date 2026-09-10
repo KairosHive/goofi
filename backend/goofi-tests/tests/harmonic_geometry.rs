@@ -56,6 +56,7 @@ fn active_row(d: &Data, row: usize) -> Vec<f32> {
     (0..count).filter(|i| values[count+i] > 0.0).map(|i| values[row*count+i]).collect()
 }
 
+#[cfg(feature = "embed")]
 fn sequence_ratios(d: &Data) -> Vec<f32> {
     let values = f32s(d);
     let count = shape(d)[1];

@@ -5,6 +5,7 @@
 #![cfg(any(feature = "extension-module", feature = "host"))]
 
 mod data;
+mod texture;
 pub mod exec;
 mod introspect;
 pub mod loader;
@@ -28,6 +29,7 @@ pub fn goofi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<data::Ndims>()?;
     m.add_class::<node::Node>()?;
     m.add_class::<params::DataType>()?;
+    m.add_class::<texture::Texture>()?;
     m.add_class::<params::InputSlot>()?;
     m.add_class::<params::IntParam>()?;
     m.add_class::<params::FloatParam>()?;

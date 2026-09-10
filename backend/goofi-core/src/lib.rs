@@ -18,6 +18,7 @@ pub mod record;
 pub mod startup;
 pub mod stream;
 pub mod time;
+pub mod texture;
 pub mod turtle;
 
 pub use indexmap;
@@ -477,6 +478,7 @@ fn as_f64(v: Option<&MetaValue>) -> Option<f64> {
 
 #[derive(Clone, Debug)]
 pub enum Value {
+    Texture(Arc<texture::Texture>),
     Array(ArrayStore),
     Str(Arc<str>),
     Table(Arc<IndexMap<String, Data>>),
@@ -489,6 +491,7 @@ impl Value {
             Value::Array(_) => 0,
             Value::Str(_) => 1,
             Value::Table(_) => 2,
+            Value::Texture(_) => 3,
         }
     }
 }
@@ -523,6 +526,11 @@ impl goofi_view::Reducible for Data {
 }
 
 impl Data {
+    pub fn texture(texture: texture::Texture, meta: Meta) -> std::result::Result<Data, String> {
+        texture.validate()?;
+        Ok(Data(Arc::new(DataInner { value: Value::Texture(Arc::new(texture)), meta })))
+    }
+
     pub fn value(&self) -> &Value {
         &self.0.value
     }
@@ -611,6 +619,7 @@ impl Data {
 
     pub fn as_array(&self) -> std::result::Result<&ArrayStore, String> {
         match &self.0.value {
+            Value::Texture(_) => Err("expected array, got a texture submission".into()),
             Value::Array(a) => Ok(a),
             Value::Str(_) => Err("expected an array, got a string".into()),
             Value::Table(_) => Err("expected an array, got a table".into()),
@@ -619,6 +628,7 @@ impl Data {
 
     pub fn as_str(&self) -> std::result::Result<&str, String> {
         match &self.0.value {
+            Value::Texture(_) => Err("expected str, got a texture submission".into()),
             Value::Str(s) => Ok(s),
             Value::Array(_) => Err("expected a string, got an array".into()),
             Value::Table(_) => Err("expected a string, got a table".into()),
@@ -627,6 +637,7 @@ impl Data {
 
     pub fn as_table(&self) -> std::result::Result<&IndexMap<String, Data>, String> {
         match &self.0.value {
+            Value::Texture(_) => Err("expected table, got a texture submission".into()),
             Value::Table(t) => Ok(t),
             Value::Array(_) => Err("expected a table, got an array".into()),
             Value::Str(_) => Err("expected a table, got a string".into()),
@@ -712,7 +723,7 @@ impl SlotType {
     pub fn engine_local(self) -> Option<&'static str> {
         match self {
             SlotType::Audio => Some("audio — an audio node is written against goofi_audio_sdk"),
-            SlotType::Texture => Some("a texture — a graphics node is a `.wgsl` file"),
+            SlotType::Texture => Some("a texture — produced by a graphics node"),
             SlotType::Array | SlotType::String | SlotType::Table => None,
         }
     }

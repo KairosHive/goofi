@@ -91,6 +91,7 @@ impl Data {
             Value::Array(_) => "ARRAY",
             Value::Str(_) => "STRING",
             Value::Table(_) => "TABLE",
+            Value::Texture(_) => "TEXTURE",
         }
     }
 

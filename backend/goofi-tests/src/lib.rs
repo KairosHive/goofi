@@ -128,7 +128,10 @@ impl Goofi {
             // The engine's Python door, as the CLI hands it at boot; a machine with none scans a
             // `.py` file as unavailable, which is what a test that needs one then reports.
             if let Some(subproc) = find_python() {
-                goofi_bridge::signal_engine(&mut g).set_python(goofi_signal::Python::new(subproc));
+                goofi_bridge::signal_engine(&mut g).set_python(goofi_signal::Python::new(subproc.clone()));
+                if let Some(graphics) = goofi_bridge::try_graphics_engine(&mut g) {
+                    graphics.set_python(goofi_signal::Python::new(subproc));
+                }
             }
             // The shipped tree is a root like any other: scanned at boot, as the CLI scans it.
             let patch = state.mount();

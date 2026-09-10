@@ -468,6 +468,9 @@ async fn run(
         // Handed to the engine before anything scans, so the boot scan and every rescan share it.
         goofi_bridge::signal_engine(&mut state.graph.lock().unwrap())
             .set_python(goofi_signal::Python::new(subproc_python.clone()));
+        if let Some(graphics) = goofi_bridge::try_graphics_engine(&mut state.graph.lock().unwrap()) {
+            graphics.set_python(goofi_signal::Python::new(subproc_python.clone()));
+        }
         {
             let mut g = state.graph.lock().unwrap();
             if !demo {
