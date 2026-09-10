@@ -51,7 +51,7 @@ pub fn report(message: impl Into<String>) {
     let mut active = ACTIVE.lock().unwrap();
     if let Some(current) = active.as_mut() {
         let message = message.into();
-        line("›", &message);
+        line(">", &message);
         *current = (message, Instant::now());
     }
 }
