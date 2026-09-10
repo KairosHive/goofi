@@ -34,6 +34,8 @@ class HarmonicSpectrum(goofi.Node):
     scores, not the power in dB used by Tuning's diss_curve method.
 
     Outputs:
+      analysis     one table with all outputs below from the same input window;
+                   connect directly to HarmonicObservatory.analysis
       spectrum     H(f), with frequency labels on the last axis
       freqs        the shared frequency grid in Hz, shape [F]
       peaks        peak frequencies in Hz, shape [..., n_peaks]
@@ -51,6 +53,7 @@ class HarmonicSpectrum(goofi.Node):
     OUTPUTS = {name: goofi.DataType.ARRAY for name in (
         "spectrum", "freqs", "peaks", "peakValues", "matrix", "harmonicity", "complexity", "activation", "power", "waveform"
     )}
+    OUTPUTS["analysis"] = goofi.DataType.TABLE
     PARAMS = {
         "spectrum": {
             "f_min": goofi.FloatParam(2.0, 0.1, 1000.0, doc="Lowest analysis frequency, in Hz."),
@@ -136,7 +139,7 @@ class HarmonicSpectrum(goofi.Node):
         spectrum_meta = {**meta, "channels": {**axes, last: hz}}
         matrix_meta = {**meta, "channels": {**axes, last: hz, f"dim{x.ndim}": hz}}
         complexity_meta = {**meta, "channels": {**axes, last: COMPLEXITY}}
-        return {
+        outputs = {
             "activation": ((matrices * powers[:, :, None] * powers[:, None, :]).reshape(lead + (width, width)).astype(np.float32), matrix_meta),
             "power": (powers.reshape(lead + (width,)).astype(np.float32), spectrum_meta),
             "waveform": (x.astype(np.float32), input.meta),
@@ -148,3 +151,6 @@ class HarmonicSpectrum(goofi.Node):
             "harmonicity": (means.reshape(lead or (1,)).astype(np.float32), meta),
             "complexity": (complexity.reshape(lead + (len(COMPLEXITY),)).astype(np.float32), complexity_meta),
         }
+        # Both interfaces use the same results, including each array's metadata.
+        outputs["analysis"] = {name: goofi.Data(*value) for name, value in outputs.items()}
+        return outputs
