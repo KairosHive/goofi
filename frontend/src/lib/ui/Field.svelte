@@ -15,6 +15,7 @@
 		doc,
 		adornment,
 		expanded = false,
+		stretchSummary = false,
 		onExpand,
 		class: klass = '',
 		children,
@@ -27,6 +28,8 @@
 		adornment?: Snippet;
 		/** Whether what this row reveals is open; drawn on the caret, and announced. */
 		expanded?: boolean;
+		/** Extend the disclosure target to its positioned parent with isolated stacking. */
+		stretchSummary?: boolean;
 		/** Makes the label a disclosure summary rather than a `<label>`. */
 		onExpand?: () => void;
 		children?: Snippet;
@@ -38,7 +41,7 @@
 
 <div {...rest} class={`ui-field ${klass}`.trim()} title={doc ?? rest.title}>
 	{#if onExpand}
-		<button type="button" class="ui-field-label ui-field-summary" aria-expanded={expanded} onclick={onExpand}>
+		<button type="button" class="ui-field-label ui-field-summary" class:stretched={stretchSummary} aria-expanded={expanded} onclick={onExpand}>
 			<span class="ui-field-caret" class:open={expanded}><Icon name="chevron-right" /></span>{label}
 		</button>
 	{:else}
@@ -83,10 +86,31 @@
 		font: inherit;
 		text-align: left;
 	}
-	.ui-field-summary:focus-visible {
+	.ui-field-summary:not(.stretched):focus-visible {
 		outline: var(--focus-width) solid var(--focus-ink);
 		outline-offset: 2px;
 		border-radius: var(--radius-sm);
+	}
+	.ui-field-summary.stretched {
+		overflow: visible;
+	}
+	.ui-field-summary.stretched::before,
+	.ui-field-summary.stretched::after {
+		content: '';
+		position: absolute;
+		inset: 0;
+		border-radius: var(--radius-sm);
+	}
+	.ui-field-summary.stretched::after {
+		z-index: -1;
+		pointer-events: none;
+	}
+	.ui-field-summary.stretched:hover::after {
+		background: var(--surface-3);
+	}
+	.ui-field-summary.stretched:focus-visible::before {
+		outline: var(--focus-width) solid var(--focus-ink);
+		outline-offset: 2px;
 	}
 	.ui-field-caret {
 		flex-shrink: 0;

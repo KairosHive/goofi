@@ -965,7 +965,7 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 	await page.mouse.move(0, 0);
 	const collapsed = await background();
 	await row.hover({ position: { x: 2, y: 2 } });
-	await expect.poll(background).not.toBe(collapsed);
+	await expect.poll(() => summary.evaluate((el) => getComputedStyle(el, '::after').backgroundColor)).not.toBe(collapsed);
 	await row.click({ position: { x: 2, y: 2 } });
 	await expect(summary).toHaveAttribute('aria-expanded', 'true');
 	await page.mouse.move(0, 0);
