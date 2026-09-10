@@ -48,6 +48,15 @@ export class FakeControl implements Control {
 
 	/** Synchronously fan an event out to every `on` listener. */
 	emit(ev: ControlEvent): void {
+		if (ev.event === 'hello' || ev.event === 'graph_replaced') {
+			ev = {
+				...ev,
+				payload: {
+					...ev.payload,
+					record: ev.payload.record ?? { running: false, folder: null, elapsed: null, streams: [], error: null }
+				}
+			};
+		}
 		for (const fn of this.listeners) fn(ev);
 	}
 

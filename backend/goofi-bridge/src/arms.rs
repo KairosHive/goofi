@@ -2029,8 +2029,14 @@ pub(crate) fn record_status(
 
 /// The session's recording state — RUNTIME, so it rides this read and the event, never the document.
 pub(crate) fn record_state(state: &AppState) -> Value {
+    let now = state.graph.lock().unwrap().time().now();
+    record_state_at(state, now)
+}
+
+/// Project recorder status without taking the graph lock.
+pub(crate) fn record_state_at(state: &AppState, now: f64) -> Value {
     let s = state.recorder.status();
-    let elapsed = s.started.map(|t0| state.graph.lock().unwrap().time().now() - t0);
+    let elapsed = s.started.map(|t0| now - t0);
     let streams: Vec<Value> = s
         .streams
         .iter()

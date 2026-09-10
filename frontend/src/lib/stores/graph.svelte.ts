@@ -208,6 +208,7 @@ export class GraphStore {
 			node.error = rt.error ?? null;
 			node.runtime = rt.runtime;
 		}
+		this._setRecord(snap.record);
 		this.savePath = snap.save_path;
 		this.unsavedChanges = snap.unsaved_changes;
 		// `hello` alone carries it; a `graph_replaced` snapshot must not clear what the mode is.
