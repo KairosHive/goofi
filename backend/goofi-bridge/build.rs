@@ -69,6 +69,7 @@ fn sdk_of(path: &Path) -> Option<&'static goofi_build::Sdk> {
     match goofi_node::engine_of(path)?.as_str() {
         "signal" => Some(&goofi_build::SIGNAL),
         "audio" => Some(&goofi_build::AUDIO),
+        "graphics" => Some(&goofi_build::GRAPHICS),
         _ => None,
     }
 }

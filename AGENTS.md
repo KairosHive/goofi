@@ -68,7 +68,8 @@ before the first production deployment.
   replay tolerates stale targets. Layout inverses use forward planners.
 - Signal nodes schedule themselves; audio and graphics have their own clocks. Node processing
   does not run under the graph lock. Cross-engine transport is latest-wins shared memory.
-- Rust nodes are `.rs` files built against an engine SDK; graphics nodes are `.wgsl` files.
+- Rust nodes are `.rs` files built against an engine SDK. Graphics supports `.wgsl` shaders and
+  Rust/Python host sources on shared GPU resources; Python graphics uses `# goofi: graphics`.
   Python nodes use the shared marshalling interface in both automatic execution tiers.
 - Each frame counts in full, including a Buffer window. Never infer sample overlap. Resample
   handles independent windows; Epoch captures supplied windows. Input clearing takes effect

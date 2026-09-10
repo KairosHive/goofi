@@ -85,6 +85,213 @@ fn close(a: [f32; 4], b: [f32; 4]) -> bool {
 }
 
 #[test]
+fn texture_math_maps_ranges_and_selected_channels() {
+    let g = Goofi::new();
+    let source = g.add("graphics:Constant");
+    let math = g.add("graphics:Math");
+    for node in [source, math] {
+        g.ready(node);
+        g.set_param(node, "common", "width", 8);
+        g.set_param(node, "common", "height", 4);
+    }
+    for (channel, value) in [("r", 0.25), ("g", 0.5), ("b", 1.0), ("a", 0.75)] {
+        g.set_param(source, "colour", channel, value);
+    }
+    g.link(source, "out", math, "input");
+    let expect = |what: &str, expected: [f32; 4]| {
+        drawn(&g, math, what, |d| shape(d) == vec![4, 8, 4] && close(px(d, 0, 0), expected));
+    };
+    expect("identity", [0.25, 0.5, 1.0, 0.75]);
+    g.set_param(math, "math", "pre_add", -0.5);
+    g.set_param(math, "math", "multiply", 2.0);
+    g.set_param(math, "math", "post_add", 0.25);
+    expect("ordered arithmetic with HDR output", [-0.25, 0.25, 1.25, 0.75]);
+    g.set_param(math, "math", "channels", "rgba");
+    g.set_param(math, "math", "post_add", 0.5);
+    expect("all four channels", [0.0, 0.5, 1.5, 1.0]);
+    g.set_param(math, "math", "channels", "alpha");
+    expect("alpha only", [0.25, 0.5, 1.0, 1.0]);
+    g.set_param(math, "math", "channels", "rgb");
+    g.set_param(math, "math", "pre_add", 0.0);
+    g.set_param(math, "math", "multiply", 1.0);
+    g.set_param(math, "math", "post_add", 0.0);
+    g.set_param(math, "range", "from_low", 0.25);
+    g.set_param(math, "range", "from_high", 0.75);
+    g.set_param(math, "range", "to_low", -1.0);
+    g.set_param(math, "range", "to_high", 1.0);
+    expect("range expansion", [-1.0, 0.0, 2.0, 0.75]);
+    g.set_param(math, "range", "bound", "clamp");
+    expect("clamp", [-1.0, 0.0, 1.0, 0.75]);
+    g.set_param(math, "range", "bound", "wrap");
+    expect("wrap", [-1.0, 0.0, 0.0, 0.75]);
+    g.set_param(math, "range", "to_low", 1.0);
+    g.set_param(math, "range", "to_high", -1.0);
+    g.set_param(math, "range", "bound", "clamp");
+    expect("reversed target", [1.0, 0.0, -1.0, 0.75]);
+    g.set_param(math, "range", "from_high", 0.25);
+    expect("zero-width source", [1.0, 1.0, 1.0, 0.75]);
+    g.set_param(math, "range", "from_low", 0.75);
+    expect("reversed source and target", [-1.0, 0.0, 1.0, 0.75]);
+
+    g.set_param(math, "range", "from_low", 0.0);
+    g.set_param(math, "range", "from_high", 1.0);
+    g.set_param(math, "range", "to_low", 1.0);
+    g.set_param(math, "range", "to_high", 2.0);
+    g.set_param(math, "math", "multiply", 8.0);
+    g.set_param(math, "range", "bound", "fold");
+    expect("octave fold matches signal Math", [1.5, 1.25, 1.125, 0.75]);
+    g.set_param(math, "range", "to_high", 1.0);
+    expect("zero-width target", [1.0, 1.0, 1.0, 0.75]);
+}
+
+#[test]
+fn blur_modes_spread_a_spot_without_hidden_color() {
+    let g = Goofi::new();
+    let dir = g.state.mount().join("nodes_graphics");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("BlurSpot.wgsl"), include_str!("fixtures/blur_spot.wgsl")).unwrap();
+    g.call("library refresh", j!({}));
+    let spot = g.add("graphics:BlurSpot");
+    let blur = g.add("graphics:Blur");
+    for node in [spot, blur] {
+        g.ready(node);
+        g.set_param(node, "common", "width", 96);
+        g.set_param(node, "common", "height", 48);
+    }
+    g.link(spot, "out", blur, "input");
+    g.set_param(blur, "blur", "radius", 0.0);
+    let original = drawn(&g, blur, "radius zero copies the input", |d| {
+        shape(d) == vec![48, 96, 4] && close(px(d, 24, 62), [1.0, 0.0, 0.0, 1.0])
+    });
+    assert!(close(px(&original, 0, 0), [0.0, 0.0, 1.0, 0.0]));
+    let spread = |d: &goofi_core::Data| {
+        let mut total = 0.0;
+        let mut xx = 0.0;
+        let mut yy = 0.0;
+        let values = f32s(d);
+        for y in 0..48 {
+            for x in 0..96 {
+                let alpha = values[(y * 96 + x) * 4 + 3];
+                total += alpha;
+                xx += alpha * (x as f32 + 0.5 - 62.4).powi(2);
+                yy += alpha * (y as f32 + 0.5 - 24.0).powi(2);
+            }
+        }
+        [xx / total, yy / total]
+    };
+    let baseline = spread(&original);
+    g.set_param(blur, "blur", "radius", 0.125);
+    let mut frames = Vec::new();
+    for mode in ["gaussian", "box", "disk", "directional", "radial", "zoom"] {
+        g.set_param(blur, "blur", "mode", mode);
+        let frame = drawn(&g, blur, mode, |d| {
+            let v = spread(d);
+            let changed = frames.last().is_none_or(|previous| f32s(d) != f32s(previous));
+            changed && (v[0] > baseline[0] + 0.5 || v[1] > baseline[1] + 0.5)
+                && close(px(d, 0, 0), [0.0; 4])
+        });
+        for pixel in f32s(&frame).chunks_exact(4).filter(|p| p[3] > 0.001) {
+            assert!((pixel[0] - 1.0).abs() < 0.001 && pixel[1] == 0.0 && pixel[2] == 0.0,
+                    "{mode} mixed hidden color into the spot: {pixel:?}");
+        }
+        frames.push(frame);
+    }
+    let gaussian = spread(&frames[0]);
+    let box_blur = spread(&frames[1]);
+    let disk = spread(&frames[2]);
+    assert!(gaussian[0] < disk[0] && disk[0] < box_blur[0]);
+    assert!(((box_blur[0] - baseline[0]) - (box_blur[1] - baseline[1])).abs() < 0.5,
+            "equal blur distances on a wide image: {box_blur:?}, source: {baseline:?}");
+    let horizontal = spread(&frames[3]);
+    assert!(horizontal[0] > horizontal[1] * 3.0);
+    let radial = spread(&frames[4]);
+    assert!(radial[1] > radial[0] * 3.0);
+
+    g.set_param(blur, "blur", "mode", "directional");
+    g.set_param(blur, "blur", "angle", 90.0);
+    for quality in ["low", "medium", "high"] {
+        g.set_param(blur, "blur", "quality", quality);
+        drawn(&g, blur, quality, |d| {
+            let v = spread(d);
+            v[1] > v[0] * 3.0
+        });
+    }
+    g.set_param(blur, "blur", "mode", "zoom");
+    g.set_param(blur, "blur", "center_x", 0.65);
+    drawn(&g, blur, "zoom center follows the spot", |d| spread(d)[0] < baseline[0] + 0.5);
+}
+
+#[test]
+fn composite_modes_blend_colors_and_transparency() {
+    let g = Goofi::new();
+    let a = g.add("graphics:Constant");
+    let b = g.add("graphics:Constant");
+    let composite = g.add("graphics:Composite");
+    for node in [a, b, composite] {
+        g.ready(node);
+        g.set_param(node, "common", "width", 8);
+        g.set_param(node, "common", "height", 8);
+    }
+    for channel in ["r", "g", "b"] {
+        g.set_param(a, "colour", channel, 0.25);
+        g.set_param(b, "colour", channel, 0.75);
+    }
+    g.link(a, "out", composite, "a");
+    g.link(b, "out", composite, "b");
+    let expect = |mode: &str, expected: [f32; 4]| {
+        g.set_param(composite, "composite", "mode", mode);
+        drawn(&g, composite, mode, |d| close(px(d, 0, 0), expected));
+    };
+    for (mode, value) in [
+        ("over", 0.25), ("under", 0.75), ("add", 1.0), ("subtract", 0.5),
+        ("multiply", 0.1875), ("divide", 3.0), ("minimum", 0.25), ("maximum", 0.75),
+        ("screen", 0.8125), ("overlay", 0.625), ("hard light", 0.375),
+        ("soft light", 0.65625), ("color dodge", 1.0), ("color burn", 0.0),
+        ("difference", 0.5), ("exclusion", 0.625), ("in", 0.25), ("atop", 0.25),
+    ] {
+        expect(mode, [value, value, value, 1.0]);
+    }
+    expect("out", [0.0; 4]);
+    expect("xor", [0.0; 4]);
+
+    // Unequal alpha exposes straight/premultiplied color errors and mask direction.
+    g.set_param(a, "colour", "a", 0.5);
+    g.set_param(b, "colour", "a", 0.25);
+    expect("over", [0.35, 0.35, 0.35, 0.625]);
+    expect("under", [0.45, 0.45, 0.45, 0.625]);
+    expect("multiply", [0.3375, 0.3375, 0.3375, 0.625]);
+    expect("in", [0.25, 0.25, 0.25, 0.125]);
+    expect("out", [0.25, 0.25, 0.25, 0.375]);
+    expect("atop", [0.5, 0.5, 0.5, 0.25]);
+    expect("xor", [0.375, 0.375, 0.375, 0.5]);
+    g.set_param(composite, "composite", "blend", 0.5);
+    expect("over", [0.4642857, 0.4642857, 0.4642857, 0.4375]);
+    g.set_param(composite, "composite", "blend", 0.0);
+    expect("over", [0.75, 0.75, 0.75, 0.25]);
+    g.set_param(composite, "composite", "blend", 1.0);
+
+    // Hidden RGB must not enter the result, even for arithmetic modes.
+    g.set_param(a, "colour", "a", 0.0);
+    expect("add", [0.75, 0.75, 0.75, 0.25]);
+    g.set_param(b, "colour", "a", 0.0);
+    expect("over", [0.0; 4]);
+    for node in [a, b] {
+        g.set_param(node, "colour", "a", 1.0);
+    }
+    for channel in ["r", "g", "b"] {
+        g.set_param(a, "colour", channel, 0.0);
+    }
+    expect("divide", [0.0, 0.0, 0.0, 1.0]);
+    expect("color burn", [0.0, 0.0, 0.0, 1.0]);
+    for channel in ["r", "g", "b"] {
+        g.set_param(a, "colour", channel, 1.0);
+    }
+    expect("color dodge", [1.0; 4]);
+    expect("add", [1.75, 1.75, 1.75, 1.0]);
+    expect("subtract", [-0.25, -0.25, -0.25, 1.0]);
+}
+
+#[test]
 fn shaders_render_on_the_gpu() {
     let g = Goofi::new();
 
@@ -383,12 +590,13 @@ fn shaders_render_on_the_gpu() {
     drawn(&g, comp, "the sum of a ramp and the constant", |d| px(d, 0, 0)[2] > 1.0 - 1e-3);
     // A row says naga read the file; a FRAME says this device built the pipeline behind it, which
     // is the half a validation pass cannot answer for.
-    let shipped: Vec<String> = g.call("library list", j!({}))["types"]
+    let shipped: Vec<String> = g.call("library list", j!({ "full": true }))["types"]
         .as_array()
         .expect("a palette")
         .iter()
         .filter_map(|r| r["type"].as_str())
         .filter(|t| t.starts_with("graphics:"))
+        .filter(|t| g.call("library get", j!({"type": t}))["tier"] == "shader")
         .map(String::from)
         .collect();
     // Against the bundles on disk, not a number: a fourteenth node must not fail the suite for
@@ -1059,4 +1267,106 @@ fn an_oversized_readback_reports_an_error_and_recovers_after_resize() {
         probe.latest().filter(|d| shape(d) == vec![32, 32, 4])
     });
     g.until("readback error clears", |g| g.error(node).is_none().then_some(()));
+}
+
+#[test]
+fn host_pixels_use_shared_textures_and_explicit_readback() {
+    let g = Goofi::new();
+    let dir = g.state.mount().join("nodes_graphics");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("TextureHost.rs"), include_str!("fixtures/texture_host.rs")).unwrap();
+    g.call("library refresh", j!({}));
+    let source = g.add("graphics:TextureHost");
+    let math = g.add("graphics:Math");
+    let readback = g.add("signal:GraphicsIn");
+    for uid in [source, math, readback] { g.ready(uid); }
+    g.link(source, "out", math, "input");
+    g.link(math, "out", readback, "input");
+    let probe = g.probe(readback, "out");
+    let frame = g.until("host texture reaches a CPU consumer without a viewer", |g| {
+        render(g, 1);
+        probe.latest().filter(|d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]))
+    });
+    assert!(close(px(&frame, 0, 1), [0.0, 1.0, 0.0, 1.0]));
+    assert!(close(px(&frame, 1, 0), [0.0, 0.0, 1.0, 1.0]));
+    assert!(close(px(&frame, 1, 1), [1.0; 4]));
+}
+
+#[test]
+fn python_texture_sources_resize_and_restart() {
+    let _python = goofi_tests::require_python();
+    let g = Goofi::new();
+    let dir = g.state.mount().join("nodes_graphics");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("texture_python.py"), include_str!("fixtures/texture_python.py")).unwrap();
+    g.call("library refresh", j!({}));
+    let row = g.call("library get", j!({"type": "graphics:TexturePython"}));
+    assert_eq!(row["tier"], if goofi_signal::Python::new(_python.py.clone()).free_threaded.is_some() { "in-process" } else { "subprocess" }, "{row}");
+    let source = g.add("graphics:TexturePython");
+    let math = g.add("graphics:Math");
+    g.ready(source);
+    g.ready(math);
+    g.link(source, "out", math, "input");
+    drawn(&g, math, "Python float pixels", |d| shape(d) == vec![2, 3, 4] && close(px(d, 0, 0), [0.25, 0.5, 0.75, 0.5]));
+    g.set_param(source, "image", "width", 7);
+    g.set_param(source, "image", "red", 0.75);
+    drawn(&g, math, "new natural size propagates", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
+    g.set_param(source, "image", "invalid", true);
+    g.until("invalid texture reports a process error", |g| g.error(source));
+    drawn(&g, math, "a failed source keeps its last texture", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
+    g.set_param(source, "image", "invalid", false);
+    g.until("valid texture clears the process error", |g| g.error(source).is_none().then_some(()));
+    g.call("node param pulse", j!({"node": hex(source), "param": "image/flip"}));
+    drawn(&g, math, "pulse reaches the host worker", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 1.0, 0.75, 0.5]));
+    g.call("node restart", j!({"node": hex(source)}));
+    g.ready(source);
+    drawn(&g, math, "replacement producer retains params", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
+    g.set_param(source, "common", "width", 5);
+    drawn(&g, math, "explicit dimensions resize the upload", |d| shape(d) == vec![2, 5, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
+}
+
+#[test]
+fn native_host_program_writes_the_shared_output() {
+    let g = Goofi::new();
+    let dir = g.state.mount().join("nodes_graphics");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("TextureHost.rs"), include_str!("fixtures/texture_host.rs")).unwrap();
+    g.call("library refresh", j!({}));
+    let source = g.add("graphics:TextureHost");
+    let math = g.add("graphics:Math");
+    g.ready(source);
+    g.ready(math);
+    g.link(source, "out", math, "input");
+    g.set_param(source, "image", "mode", "render");
+    let frame = drawn(&g, math, "host GPU program sampled downstream", |d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [0.25, 0.25, 0.5, 1.0]));
+    assert!(close(px(&frame, 1, 1), [0.75, 0.75, 0.5, 1.0]));
+    g.set_param(source, "image", "mode", "broken");
+    g.until("invalid host GPU program reports a fault", |g| g.error(source));
+    g.set_param(source, "image", "mode", "pixels");
+    drawn(&g, math, "CPU submission replaces the failed GPU program", |d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]));
+    g.until("CPU submission clears the GPU program fault", |g| g.error(source).is_none().then_some(()));
+}
+
+#[test]
+fn camera_video_uploads_rgb_and_loops_without_hardware() {
+    let python = goofi_tests::require_python();
+    let g = Goofi::new();
+    let video = g.state.mount().join("camera.avi");
+    let result = std::process::Command::new(&python.py)
+        .args(["-c", "import cv2, numpy as np, sys; w=cv2.VideoWriter(sys.argv[1], cv2.VideoWriter_fourcc(*'MJPG'), 30, (16, 8)); assert w.isOpened(); [w.write(np.full((8, 16, 3), [0, 0, 255], np.uint8)) for _ in range(3)]; w.release()"])
+        .arg(&video).env_remove("PYTHONHOME").env_remove("PYTHONPATH").output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let dir = g.state.mount().join("nodes_graphics");
+    std::fs::create_dir_all(&dir).unwrap();
+    let camera = include_str!("../../../node-bundles/graphics/camera.py")
+        .replace("goofi.StringParam(\"camera\", SOURCES", "goofi.StringParam(\"file\", SOURCES")
+        .replace("goofi.StringParam(\"\", doc=\"The video", &format!("goofi.StringParam({}, doc=\"The video", j!(video.to_str().unwrap())));
+    std::fs::write(dir.join("video_fixture.py"), camera).unwrap();
+    g.call("library refresh", j!({}));
+    let source = g.add("graphics:VideoFixture");
+    g.ready(source);
+    for _ in 0..5 {
+        drawn(&g, source, "video RGB texture", |d| shape(d) == vec![8, 16, 4] && px(d, 0, 0)[0] > 0.95 && px(d, 0, 0)[2] < 0.05);
+    }
+    assert!(g.error(source).is_none());
 }

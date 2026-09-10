@@ -5,58 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use goofi_control::{Cx, Half, Ticked};
-use goofi_core::{Data, Value};
-
-/// One arrival as the render thread takes it: `width * height * 4` f16 texels, row 0 the top,
-/// and the range the frame's own values spanned — what a body needs to draw the frame to scale,
-/// and the one thing a shader cannot work out for itself without reading every texel at every
-/// texel.
-pub struct Upload {
-    pub width: u32,
-    pub height: u32,
-    pub texels: Vec<u16>,
-    pub lo: f32,
-    pub hi: f32,
-}
-
-impl Upload {
-    /// A frame as RGBA texels, unclamped. `[N]` is one row; `[H, W]` is gray; `[H, W, C]` fills
-    /// the channels it has, with alpha 1 where it has none.
-    pub fn of(frame: &Data) -> Option<Upload> {
-        let Value::Array(a) = frame.value() else { return None };
-        let (h, w, c) = match *a.shape() {
-            [n] => (1, n, 1),
-            [h, w] => (h, w, 1),
-            [h, w, c] if (1..=4).contains(&c) => (h, w, c),
-            _ => return None,
-        };
-        // A texture the device cannot make invalidates the whole frame's command buffer, so a
-        // frame past the limit is no upload at all.
-        if h == 0 || w == 0 || h > crate::plan::MAX_SIZE as usize || w > crate::plan::MAX_SIZE as usize {
-            return None;
-        }
-        let x: Vec<f32> =
-            a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes"))).collect();
-        let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
-        for v in x.iter().filter(|v| v.is_finite()) {
-            lo = lo.min(*v);
-            hi = hi.max(*v);
-        }
-        let mut texels = Vec::with_capacity(h * w * 4);
-        for i in 0..h * w {
-            let s = &x[i * c..(i + 1) * c];
-            let rgba = match c {
-                1 => [s[0], s[0], s[0], 1.0],
-                2 => [s[0], s[0], s[0], s[1]],
-                3 => [s[0], s[1], s[2], 1.0],
-                _ => [s[0], s[1], s[2], s[3]],
-            };
-            texels.extend(rgba.iter().map(|v| half::f16::from_f32(if v.is_finite() { *v } else { 0.0 }).to_bits()));
-        }
-        let (lo, hi) = if lo.is_finite() { (lo, hi) } else { (0.0, 1.0) };
-        Some(Upload { width: w as u32, height: h as u32, texels, lo, hi })
-    }
-}
+use goofi_core::Data;
+pub use crate::resources::Upload;
 
 /// One frame off the GPU, in the width its readers DRAW. The engine converts on the device, so
 /// neither arm costs the CPU a conversion — and the 8-bit arm never becomes a `Data`, because
@@ -78,6 +28,7 @@ pub struct Tap {
 }
 
 pub struct GraphicsHalf {
+    producer: Option<crate::producer::Worker>,
     uploads: Vec<Arc<Mutex<Option<Upload>>>>,
     readers: Arc<AtomicBool>,
     tap: Arc<Mutex<Tap>>,
@@ -89,13 +40,18 @@ pub struct GraphicsHalf {
 }
 
 impl GraphicsHalf {
+    pub fn with_producer(mut self, producer: Option<crate::producer::Worker>) -> Self {
+        self.producer = producer;
+        self
+    }
+
     pub fn new(
         uploads: Vec<Arc<Mutex<Option<Upload>>>>,
         readers: Arc<AtomicBool>,
         tap: Arc<Mutex<Tap>>,
         size: usize,
     ) -> GraphicsHalf {
-        GraphicsHalf { uploads, readers, tap, size, last: (u32::MAX, u32::MAX) }
+        GraphicsHalf { producer: None, uploads, readers, tap, size, last: (u32::MAX, u32::MAX) }
     }
 }
 
@@ -107,6 +63,7 @@ impl Half for GraphicsHalf {
     /// An arrival replaces whatever the render thread has not taken yet: latest wins, as every
     /// crossing into a scheduled engine is.
     fn arrive(&mut self, inbox: usize, frame: &Data) -> bool {
+        if let Some(producer) = &self.producer { producer.input(inbox, frame.clone()); return false; }
         let Some(cell) = self.uploads.get(inbox) else { return false };
         if let Some(up) = Upload::of(frame) {
             *cell.lock().unwrap() = Some(up);
@@ -114,7 +71,15 @@ impl Half for GraphicsHalf {
         false
     }
 
+    fn unwired(&mut self, inbox: usize) {
+        if let Some(producer) = &self.producer { producer.unwired(inbox); }
+    }
+    fn refresh(&mut self) -> Option<Vec<String>> {
+        if let Some(producer) = &self.producer { producer.refresh(); }
+        None
+    }
     fn tick(&mut self, cx: &Cx<'_>, publish: &mut dyn FnMut(usize, &[u8])) -> Ticked {
+        if let Some(producer) = &mut self.producer { producer.sync(cx); }
         // What the render thread reads to decide whether this node runs at all.
         let readers = cx.readers.first().copied().unwrap_or(false);
         self.readers.store(readers, Ordering::Relaxed);

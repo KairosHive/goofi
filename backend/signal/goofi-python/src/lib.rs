@@ -51,11 +51,11 @@ pub fn routed_node_type(d: Discovered, subproc_python: &str) -> inproc::PyNodeTy
     let out_slots: Vec<&'static str> = manifest.outputs.iter().map(|o| o.name).collect();
     let source = std::fs::read_to_string(&d.source).unwrap_or_default();
     let python = subproc_python.to_string();
-    let factory: goofi_signal_sdk::NodeFactory = Box::new(move |_p| {
+    let factory: goofi_host_sdk::NodeFactory = Box::new(move |_p| {
         match tier.get() {
             goofi_node::Isolation::Subprocess => {
                 Box::new(subproc::RemoteNode::new(&python, &source, in_slots.clone()))
-                    as Box<dyn goofi_signal_sdk::Node>
+                    as Box<dyn goofi_host_sdk::Node>
             }
             // A native tier cannot reach here: this factory only ever backs a discovered file.
             _ => inproc::build_routed(&source, in_slots.clone(), out_slots.clone(), tier),
@@ -63,3 +63,5 @@ pub fn routed_node_type(d: Discovered, subproc_python: &str) -> inproc::PyNodeTy
     });
     inproc::PyNodeType { manifest, isolation: tier, factory }
 }
+
+pub mod catalog;

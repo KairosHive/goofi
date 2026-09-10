@@ -31,6 +31,7 @@ impl Node for TableSelect {
             Value::Array(_) => "array",
             Value::Str(_) => "string",
             Value::Table(_) => "table",
+            Value::Texture(_) => return Err("texture submissions cannot be selected as signal data".into()),
         };
         out.set(slot, here.clone());
         Ok(())

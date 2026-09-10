@@ -135,7 +135,11 @@ raises inside `process()` becomes that node's error, not a crash.
 `goofi library get <type> --source` gives you a shipped node to copy from, in any of the three
 languages: a `.rs` file beside it is a Rust node, built on refresh where `cargo` exists, and a
 `.wgsl` in `nodes_graphics/` is a shader node on the GPU — read `graphics:Life` for one that
-keeps state between ticks.
+keeps state between ticks. Graphics sources can also use Rust (`goofi_graphics_sdk`) or Python.
+A Python graphics file starts with `# goofi: graphics`, declares one `goofi.DataType.TEXTURE`
+output named `out`, and returns `goofi.Texture(pixels)` for RGB/RGBA uint8 or float32 pixels.
+The graphics engine owns the GPU resources for all three languages. `graphics:Camera` is a
+working Python source; `signal:GraphicsIn` reads GPU pixels back for CPU processing.
 
 ## The workspace
 

@@ -63,7 +63,7 @@ pub struct SignalEngine {
     /// The interpreters a `.py` file is probed and run with; none until the host provides them.
     pub(crate) python: Option<crate::scan::Python>,
     /// What the probe decided, by the key that decides it: the file's bytes and its interpreters.
-    pub(crate) probed: HashMap<String, crate::scan::Probed>,
+    pub(crate) probed: HashMap<String, goofi_python::catalog::Probed>,
     /// Every built artifact loaded so far, by path: a library is opened once and never closed.
     pub(crate) rust_loaded: HashMap<std::path::PathBuf, Arc<goofi_signal_sdk::host::Loaded>>,
     /// Readies the drain collected; the settle that follows re-plans each from an empty base.
@@ -361,6 +361,7 @@ impl Engine for SignalEngine {
             .and_then(|transport| Ok((transport, runtime::NodeChannel::open(graph_node, &base)?)))
             .and_then(|(transport, channel)| {
                 let env = runtime::NodeEnv {
+                    engine: "signal",
                     node: Some(uid.to_hex()),
                     evaluator: self.evaluator.clone(),
                     time: self.time.clone(),

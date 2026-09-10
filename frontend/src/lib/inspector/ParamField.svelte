@@ -154,6 +154,7 @@
 					{step}
 					scrub
 					disabled={driven}
+					data-param-edit
 					data-testid="param-number"
 				/>
 			{:else if kind === 'toggle'}
@@ -161,6 +162,7 @@
 					value={Boolean(descriptor.value)}
 					onChange={onCommit}
 					disabled={driven}
+					data-param-edit
 					data-testid="param-toggle"
 				/>
 			{:else if kind === 'select'}
@@ -173,6 +175,7 @@
 					{refreshing}
 					disabled={driven}
 					refreshTestid="param-refresh"
+					data-param-edit
 					data-testid="param-select"
 				/>
 			{:else if kind === 'text'}
@@ -180,12 +183,13 @@
 					value={String(descriptor.value)}
 					onChange={onCommit}
 					disabled={driven}
+					data-param-edit
 					data-testid="param-text"
 				/>
 			{:else if kind === 'pulse'}
 				<!-- A pulse holds no value to read out, so a driven one keeps its button: firing one by
 				     hand is a request, and the source fires on its own edges. -->
-				<Button class="pf-pulse" title="Fire one pulse" onclick={onPulse} data-testid="param-pulse">
+				<Button class="pf-pulse" title="Fire one pulse" onclick={onPulse} data-param-edit data-testid="param-pulse">
 					pulse
 				</Button>
 			{:else if kind === 'unknown'}

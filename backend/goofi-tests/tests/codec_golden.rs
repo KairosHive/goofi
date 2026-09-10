@@ -202,3 +202,19 @@ fn malformed_and_deep_frames_are_refused_before_reduction() {
     assert!(goofi_codec::decode(&frame).unwrap_err().contains("nesting"));
     assert!(goofi_codec::decode(&encode(&Data::string("next frame", Meta::empty()))).is_ok());
 }
+
+#[test]
+fn texture_submission_layout_survives_the_host_wire() {
+    use goofi_core::texture::{PixelFormat, Pixels, Texture};
+    let pixels = Pixels { width: 1, height: 2, stride: 4, format: PixelFormat::Rgb8, bytes: vec![255, 0, 0, 99, 0, 255, 0, 99] };
+    let frame = Data::texture(Texture::Pixels(pixels.clone()), Meta::new().with_index(Some(17))).unwrap();
+    let decoded = goofi_codec::decode(&encode(&frame)).unwrap();
+    assert_eq!(decoded.meta().index(), Some(17));
+    let goofi_core::Value::Texture(texture) = decoded.value() else { panic!("texture submission") };
+    let Texture::Pixels(got) = &**texture else { panic!("CPU pixels") };
+    assert_eq!((got.width, got.height, got.stride, got.format, &got.bytes), (1, 2, 4, PixelFormat::Rgb8, &pixels.bytes));
+    for invalid in [Pixels { width: 0, ..pixels.clone() }, Pixels { height: 8193, ..pixels.clone() },
+                    Pixels { stride: 2, ..pixels.clone() }, Pixels { bytes: vec![0; 7], ..pixels }] {
+        assert!(Data::texture(Texture::Pixels(invalid), Meta::new()).is_err());
+    }
+}

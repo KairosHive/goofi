@@ -1,4 +1,4 @@
-//! The C boundary a built signal node crosses: one vtable of `extern "C"` entries over codec
+//! The C boundary a built host node crosses: one vtable of `extern "C"` entries over codec
 //! bytes, the shim that puts an author's [`Node`] behind it, and the two macros a node file and
 //! its generated crate spell. Only code and plain data cross; never a Rust type.
 
@@ -209,7 +209,7 @@ macro_rules! cdylib {
             on_pulse: $crate::abi::on_pulse,
         };
         #[no_mangle]
-        pub extern "C" fn goofi_signal_node() -> *const $crate::abi::VTable {
+        pub extern "C" fn goofi_host_node() -> *const $crate::abi::VTable {
             &__GOOFI_VTABLE
         }
     };
