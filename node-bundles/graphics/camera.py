@@ -1,3 +1,4 @@
+# goofi: graphics
 """Camera — what a lens or a video file is looking at, as a frame the rest of the patch reads.
 
 The one door in from a camera. Everything that reads a picture takes it from here, so a device is
@@ -16,7 +17,7 @@ class Camera(goofi.Node):
     """Frames from a capture device or a video file."""
 
     TAGS = ["input", "image"]
-    OUTPUTS = {"out": goofi.DataType.ARRAY}
+    OUTPUTS = {"out": goofi.DataType.TEXTURE}
     PRODUCER = True
     PARAMS = {
         "camera": {
@@ -55,8 +56,7 @@ class Camera(goofi.Node):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         if p.mirror:
             rgb = rgb[:, ::-1]
-        out = np.ascontiguousarray(rgb, dtype=np.float32) / 255.0
-        return out, {"channels": {"dim2": ["r", "g", "b"]}}
+        return goofi.Texture(np.ascontiguousarray(rgb))
 
     def open(self, p, want):
         """The device or file the params now name, in place of whatever was open before."""

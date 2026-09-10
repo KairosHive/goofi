@@ -268,7 +268,7 @@ fn the_array_nodes_reshape_a_grid_and_the_rate_follows_the_time_axis() {
     };
 
     // Math and Function are elementwise, so the shape and the whole meta ride through untouched.
-    let math = g.add("Math");
+    let math = g.add("signal:Math");
     set(math, "math", "multiply", j!(2.0));
     set(math, "math", "post_add", j!(1.0));
     let pm = g.probe(math, "out");

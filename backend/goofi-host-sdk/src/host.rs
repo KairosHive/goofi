@@ -22,10 +22,10 @@ impl Loaded {
     /// was read and matched before this is called.
     pub unsafe fn open(library: &'static libloading::Library, manifest: &'static NodeManifest) -> Result<Loaded, String> {
         let entry: libloading::Symbol<unsafe extern "C" fn() -> *const VTable> =
-            library.get(b"goofi_signal_node\0").map_err(|e| format!("no `goofi_signal_node` symbol: {e}"))?;
+            library.get(b"goofi_host_node\0").map_err(|e| format!("no `goofi_host_node` symbol: {e}"))?;
         let vtable = entry();
         if vtable.is_null() {
-            return Err("`goofi_signal_node` answered null".into());
+            return Err("`goofi_host_node` answered null".into());
         }
         Ok(Loaded { vtable: &*vtable, manifest })
     }

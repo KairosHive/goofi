@@ -22,6 +22,8 @@ mod plan;
 mod runtime;
 mod scan;
 mod shader;
+mod producer;
+mod resources;
 
 use gpu::Gpu;
 use half::GraphicsHalf;
@@ -67,6 +69,9 @@ pub(crate) struct Instance {
     /// thread reads it, and nothing between the two holds a copy.
     pub(crate) tap_box: Arc<AtomicU64>,
     control: Handle,
+    pub(crate) source: Option<producer::Source>,
+    producer: Option<producer::Lifetime>,
+    program: Option<(Arc<str>, scan::Built)>,
 }
 
 impl Instance {
@@ -83,6 +88,7 @@ pub struct GraphicsEngine {
     clock: Clock,
     shared: Arc<Shared>,
     pub(crate) compiler: Compiler,
+    pub(crate) python: Option<goofi_python::catalog::Python>,
     pub(crate) classes: HashMap<String, Arc<Class>>,
     live: HashMap<Uid, Instance>,
     runtime: Arc<Mutex<Runtime>>,
@@ -197,6 +203,7 @@ impl GraphicsEngine {
             gpu,
             shared,
             classes: HashMap::new(),
+            python: None,
             live: HashMap::new(),
             runtime,
             inbox,
@@ -363,6 +370,7 @@ impl GraphicsEngine {
 }
 
 impl Engine for GraphicsEngine {
+    fn rust_sdk(&self) -> Option<&'static str> { Some("goofi-graphics-sdk") }
     fn id(&self) -> &'static str {
         "graphics"
     }
@@ -379,7 +387,7 @@ impl Engine for GraphicsEngine {
     fn library(&self) -> Vec<LibraryEntry> {
         self.classes
             .values()
-            .map(|c| LibraryEntry { manifest: c.manifest, isolation: &goofi_node::SHADER })
+            .map(|c| LibraryEntry { manifest: c.manifest, isolation: c.isolation })
             .collect()
     }
 
@@ -395,7 +403,11 @@ impl Engine for GraphicsEngine {
     }
 
     fn universal_decls(&self, manifest: &'static NodeManifest) -> Vec<ParamDecl> {
-        common_decls(manifest).collect()
+        let mut decls: Vec<_> = common_decls(manifest).collect();
+        if self.classes.get(manifest.type_name).is_some_and(|c| matches!(c.kind, scan::Kind::Host(_))) {
+            for d in &mut decls { d.expression = None; }
+        }
+        decls
     }
 
     fn insert(&mut self, uid: Uid, type_name: &str, generation: u64, params: &ParamGroups) -> Option<String> {
@@ -423,15 +435,25 @@ impl Engine for GraphicsEngine {
         };
         let (cells, flag, out) = (uploads.clone(), readers.clone(), tap.clone());
         let size = manifest.params.len();
-        let make = move || GraphicsHalf::new(cells, flag, out, size);
+        let source = matches!(class.kind, scan::Kind::Host(_)).then(producer::Source::default);
+        let producer = match &class.kind {
+            scan::Kind::Shader(_) => None,
+            scan::Kind::Host(factory) => Some(producer::Worker::start(
+                uid, manifest, factory.clone(), params.clone(), self, source.clone().expect("host source"),
+            )),
+        };
+        let lifetime = producer.as_ref().map(producer::Worker::lifetime);
+        let make = move || GraphicsHalf::new(cells, flag, out, size).with_producer(producer);
         let control = match goofi_control::spawn(spawn, self.shared.clone(), &self.bells, make) {
             Ok(handle) => handle,
             Err(e) => return Some(e),
         };
         self.ask(runtime::Cmd::Insert(uid, runtime::params_len(manifest)));
-        self.live.insert(uid, Instance { class, params: atomics, uploads, readers, tap, tap_box, control });
+        self.live.insert(uid, Instance { class: class.clone(), params: atomics, uploads, readers, tap, tap_box, control, source, producer: lifetime, program: None });
         // A synchronous engine is ready the moment its insert answers.
-        self.pending.push((uid, Status::Stage { stage: NodeStage::Ready }));
+        if matches!(class.kind, scan::Kind::Shader(_)) {
+            self.pending.push((uid, Status::Stage { stage: NodeStage::Ready }));
+        }
         self.dirty = true;
         self.shared.waker.notify();
         None
@@ -439,6 +461,8 @@ impl Engine for GraphicsEngine {
 
     fn remove(&mut self, uid: Uid) {
         if let Some(inst) = self.live.remove(&uid) {
+            if let Some(producer) = &inst.producer { producer.stop(); }
+            self.shared.reports.lock().unwrap().retain(|(u, _)| *u != uid);
             inst.control.stop();
             self.ask(runtime::Cmd::Remove(uid));
             gpu::give_back(inst);
@@ -456,6 +480,25 @@ impl Engine for GraphicsEngine {
             let Some(nv) = view.nodes.get(&uid) else { continue };
             let desired = self.desired_of(view, uid, nv);
             self.live[&uid].control.send_if_changed(desired);
+        }
+        // Workers hold CPU descriptions only. Compiled programs belong to the graphics engine.
+        for inst in self.live.values_mut() {
+            let source = inst.source.as_ref().and_then(|s| {
+                s.lock().unwrap().as_ref().and_then(|frame| match &frame.content {
+                    producer::Content::Render(text) => Some(text.clone()),
+                    producer::Content::Pixels(_) => None,
+                })
+            });
+            if inst.program.as_ref().map(|(text, _)| text) == source.as_ref() { continue; }
+            let next = source.map(|text| {
+                let built = self.compiler.program(inst.class.manifest, &text).unwrap_or_else(|why| {
+                    let cell = Arc::new(std::sync::OnceLock::new());
+                    let _ = cell.set(Err(why));
+                    cell
+                });
+                (text, built)
+            });
+            gpu::give_back(std::mem::replace(&mut inst.program, next));
         }
         // Windows first: a screen is a reader, so one opened here must be in THIS plan's demand.
         self.follow_windows(view, &plan::sizes(view, &self.live));
@@ -516,8 +559,9 @@ impl Engine for GraphicsEngine {
                 ui.post(move |host| host.close_window(id));
             }
         }
-        let halts: Vec<Arc<goofi_transport::Halt>> = self.live.values().map(|i| i.control.halt.clone()).collect();
+        let halts: Vec<Arc<goofi_transport::Halt>> = self.live.values().flat_map(|i| std::iter::once(i.control.halt.clone()).chain(i.producer.as_ref().map(|p| p.halt.clone()))).collect();
         for inst in self.live.values() {
+            if let Some(producer) = &inst.producer { producer.stop(); }
             inst.control.stop();
         }
         goofi_transport::wait_released(halts.iter().map(|h| &**h), goofi_transport::SHUTDOWN_WAIT);

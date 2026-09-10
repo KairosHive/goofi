@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::sync::{Arc, OnceLock};
 
-use goofi_node::{Isolation, NodeManifest, Scanned, ScannedType};
+use goofi_node::{NodeManifest, Scanned, ScannedType};
 
 use crate::gpu::Gpu;
 use crate::{shader, GraphicsEngine};
@@ -14,21 +14,27 @@ use crate::{shader, GraphicsEngine};
 /// A pipeline once the compile thread answers, or why the device refused it.
 pub type Built = Arc<OnceLock<Result<Arc<wgpu::RenderPipeline>, String>>>;
 
-/// One `.wgsl` file as the engine holds it.
+/// One graphics source as the engine holds it.
 pub struct Class {
     pub manifest: &'static NodeManifest,
     pub feedback: bool,
     pub window: bool,
     /// The buffers this type carries between two ticks, in the order the prelude binds them.
     pub state: Vec<String>,
-    pub pipeline: Built,
+    pub kind: Kind,
+    pub isolation: &'static goofi_node::IsolationCell,
+}
+
+pub enum Kind {
+    Shader(Built),
+    Host(crate::producer::Factory),
 }
 
 pub(crate) fn scan(engine: &mut GraphicsEngine, dir: &Path) -> Vec<ScannedType> {
     let mut out = Vec::new();
     for (path, type_name, stamp) in goofi_node::node_files(dir, "graphics") {
         let outcome = match engine.register(&path, &type_name) {
-            Ok(replaced) => Scanned::Registered { isolation: Isolation::Shader, replaced },
+            Ok(replaced) => Scanned::Registered { isolation: engine.classes[&type_name].isolation.get(), replaced },
             Err(reason) => {
                 // A file that no longer loads displaces its registration, so the palette greys the
                 // type rather than offering one nothing can build.
@@ -45,6 +51,9 @@ impl GraphicsEngine {
     /// One file: its header is the manifest, its text plus the prelude is what naga judges, and
     /// only then does a pipeline get asked for.
     pub(crate) fn register(&mut self, path: &Path, type_name: &str) -> Result<bool, String> {
+        if path.extension().is_some_and(|ext| ext != "wgsl") {
+            return self.register_host(path, type_name);
+        }
         let source = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let intro = shader::header(&source)?;
         if let Some(reason) = goofi_node::illegal_slot(&intro) {
@@ -61,7 +70,7 @@ impl GraphicsEngine {
         };
         let pipeline = self.compiler.build(job);
         let class =
-            Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, pipeline });
+            Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, kind: Kind::Shader(pipeline), isolation: &goofi_node::SHADER });
         let displaced = self.classes.insert(type_name.to_string(), class);
         let replaced = displaced.is_some();
         crate::gpu::give_back(displaced);
@@ -75,6 +84,14 @@ pub struct Job {
     params: bool,
     inputs: usize,
     state: usize,
+}
+
+impl Compiler {
+    pub fn program(&self, manifest: &'static NodeManifest, source: &str) -> Result<Built, String> {
+        let full = format!("{source}{}", shader::prelude(manifest, &[]));
+        shader::validate(&full)?;
+        Ok(self.build(Job { source: full, params: !manifest.params.is_empty(), inputs: manifest.inputs.len(), state: 0 }))
+    }
 }
 
 /// One job on the compile thread's queue: what to build, and where to leave it.
@@ -110,6 +127,7 @@ fn compiler() -> Option<&'static mpsc::Sender<Order>> {
 }
 
 /// One engine's end of that queue: the shared state a finished compile must wake.
+#[derive(Clone)]
 pub struct Compiler(pub Arc<goofi_control::Shared>);
 
 impl Compiler {

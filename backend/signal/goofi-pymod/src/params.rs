@@ -12,6 +12,7 @@ pub enum DataType {
     ARRAY,
     STRING,
     TABLE,
+    TEXTURE,
 }
 
 #[pymethods]
@@ -22,6 +23,7 @@ impl DataType {
             DataType::ARRAY => "ARRAY",
             DataType::STRING => "STRING",
             DataType::TABLE => "TABLE",
+            DataType::TEXTURE => "TEXTURE",
         }
     }
 }

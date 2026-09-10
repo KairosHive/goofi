@@ -87,7 +87,7 @@ fn data_to_py(py: Python<'_>, d: &Data) -> PyResult<Py<PyAny>> {
             Ok(arr.call_method1("reshape", (shape,))?.unbind())
         }
         Value::Str(st) => Ok(PyString::new(py, st.as_ref()).into_any().unbind()),
-        Value::Table(_) => Ok(py.None()),
+        Value::Table(_) | Value::Texture(_) => Ok(py.None()),
     }
 }
 

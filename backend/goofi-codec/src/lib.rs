@@ -42,6 +42,7 @@ fn frame(dtype_tag: u8, meta: Vec<u8>, body: Vec<u8>) -> Vec<u8> {
 
 fn write_body(d: &Data, out: &mut Vec<u8>) {
     match d.value() {
+        Value::Texture(t) => out.extend(rmp_serde::to_vec(&**t).expect("texture serialization")),
         Value::Array(store) => array_body(b"<f4", store.shape(), store.as_bytes(), out),
         Value::Str(s) => out.extend_from_slice(s.as_bytes()),
         Value::Table(map) => {
@@ -76,6 +77,7 @@ const DERIVED_KEYS: [&str; 2] = ["shape", "dtype"];
 fn pack_meta(d: &Data) -> Vec<u8> {
     let meta = d.meta();
     match d.value() {
+        Value::Texture(_) => pack(carried(meta)),
         Value::Array(store) => pack_array_meta(meta, store.shape(), "float32"),
         Value::Str(_) => {
             let mut entries = carried(meta);
@@ -227,6 +229,7 @@ fn decode_at(frame: &[u8], depth: usize) -> std::result::Result<Data, String> {
             Ok(Data::string(s, meta))
         }
         2 => decode_table(body, meta, depth),
+        3 => Data::texture(rmp_serde::from_slice(body).map_err(|e| e.to_string())?, meta),
         other => Err(format!("unknown dtype tag {other}")),
     }
 }

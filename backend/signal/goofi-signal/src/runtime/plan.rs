@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use goofi_node::ParamKey;
 
-use super::wire::{Control, ControlSink, Envelope};
+use super::{Control, ControlSink, Envelope};
 use goofi_node::Uid;
 
 /// The producer end of a wire: a node, one of its output slots, and the `node.slot` a consumer

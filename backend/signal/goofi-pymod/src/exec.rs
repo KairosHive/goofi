@@ -187,6 +187,7 @@ fn value_to_core(
     primary: Option<&CoreData>,
     warned: &mut HashSet<SrcDtype>,
 ) -> PyResult<CoreData> {
+    if let Ok(texture) = v.cast::<crate::texture::Texture>() { return Ok(texture.borrow().frame.clone()); }
     if let Ok(d) = v.cast::<Data>() {
         return Ok(d.borrow().core().clone());
     }

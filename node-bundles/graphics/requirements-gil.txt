@@ -1,0 +1,2 @@
+# OpenCV capture runs on the subprocess Python tier.
+opencv-contrib-python

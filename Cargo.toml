@@ -6,6 +6,9 @@ members = [
     # interpreters pyo3 links against. It depends on nothing, so it can never trigger that build.
     "backend/goofi-init",
     "backend/goofi-core",
+    "backend/goofi-host-sdk",
+    "backend/goofi-host",
+    "backend/graphics/goofi-graphics-sdk",
     "backend/goofi-codec",
     "backend/goofi-node",
     "backend/goofi-transport",

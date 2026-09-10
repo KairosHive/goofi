@@ -78,7 +78,7 @@ pub use goofi_node::Var;
 
 pub use goofi_node::{NodeStage, Status};
 
-/// What the signal node's wire carries up: the async handshake plus the shared health vocabulary.
+/// What the host node's wire carries up: the async handshake plus the shared health vocabulary.
 /// `Ack` and `Ready` are this engine's own and never cross the engine seam — the drain consumes
 /// them and hands the graph only [`Status`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
