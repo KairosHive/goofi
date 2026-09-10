@@ -122,6 +122,7 @@
 		label={paramName}
 		doc={descriptor.doc ?? undefined}
 		expanded={open}
+		stretchSummary
 		onExpand={() => (open = !open)}
 	>
 		<!-- `display: contents` so the face inherits WITHOUT laying out: Field requires paired controls to
@@ -288,36 +289,18 @@
 		flex-direction: column;
 		gap: var(--space-2);
 		padding: var(--space-3);
-		margin-inline: calc(-1 * var(--space-3));
+		margin-inline: calc(0px - var(--space-3));
+		isolation: isolate;
 		border-radius: var(--radius-sm);
 		min-width: 0;
 	}
 	.pf-param.open {
 		background: var(--surface-2);
 	}
-	.pf-param:has(:global(.ui-field-summary:hover)) {
-		background: var(--surface-3);
-	}
-	/* Extend the native disclosure button over the entry. Controls stay above it. */
-	.pf-param :global(.ui-field-summary) {
-		overflow: visible;
-	}
-	.pf-param :global(.ui-field-summary::before) {
-		content: '';
-		position: absolute;
-		inset: 0;
-		border-radius: var(--radius-sm);
-	}
-	.pf-param :global(.ui-field-summary:focus-visible) {
-		outline: none;
-	}
-	.pf-param :global(.ui-field-summary:focus-visible::before) {
-		outline: var(--focus-width) solid var(--focus-ink);
-		outline-offset: 2px;
-	}
 	.pf-value > :global(*),
 	.pf-more > :global(*) {
 		position: relative;
+		pointer-events: auto;
 	}
 	/* An `outline` rather than a border: a row that becomes a target must not move the rows under it. */
 	.pf-param.armed {
@@ -348,6 +331,7 @@
 	/* The switches sit at the row's end, under the widget they act on; the reading they explain
 	   leads the row. */
 	.pf-more {
+		pointer-events: none;
 		display: flex;
 		align-items: center;
 		justify-content: flex-end;
