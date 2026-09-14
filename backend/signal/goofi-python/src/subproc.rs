@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use iceoryx2::prelude::*;
 
 use goofi_core::Data;
+use goofi_transport::{iox_node, subprocess_service, BytePublisher, ByteSubscriber, IoxNode};
 use goofi_node::{ParamKey, Params};
 use goofi_host_sdk::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
 
@@ -16,7 +17,7 @@ use goofi_host_sdk::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
 static SUBPROC_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// iceoryx2 byte-slice pool ceiling per publisher (matches the child's `serve` config).
-const MAX_PAYLOAD: usize = 64 * 1024;
+pub const MAX_PAYLOAD: usize = 64 * 1024;
 
 /// How long a request waits on a child that has stopped answering.
 pub const TICK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -29,7 +30,7 @@ pub const COLD_START_TIMEOUT: Duration = Duration::from_secs(60);
 struct Ports {
     req_pub: BytePublisher,
     resp_sub: ByteSubscriber,
-    _node: iceoryx2::node::Node<ipc_threadsafe::Service>,
+    _node: IoxNode,
 }
 
 /// The spawned child plus the iceoryx2 ports it talks over.
@@ -43,18 +44,8 @@ struct Running {
 }
 
 fn build_ports(req_name: &str, resp_name: &str) -> std::result::Result<Ports, String> {
-    let node = NodeBuilder::new()
-        .create::<ipc_threadsafe::Service>()
-        .map_err(|e| format!("iox node: {e}"))?;
-    let mk_pubsub = |name: &str| {
-        node.service_builder(&name.try_into().map_err(|e| format!("bad service name `{name}`: {e:?}"))?)
-            .publish_subscribe::<[u8]>()
-            .enable_safe_overflow(true)
-            .max_publishers(1)
-            .max_subscribers(16)
-            .open_or_create()
-            .map_err(|e| format!("service `{name}`: {e}"))
-    };
+    let node = iox_node()?;
+    let mk_pubsub = |name: &str| subprocess_service(&node, name);
     let req_pub = mk_pubsub(req_name)?
         .publisher_builder()
         .initial_max_slice_len(MAX_PAYLOAD)
@@ -78,6 +69,9 @@ impl Running {
             .arg("import goofi; goofi.serve()")
             .env("GOOFI_IOX_REQ", &req_name)
             .env("GOOFI_IOX_RESP", &resp_name)
+            // The child JOINS this session: its ports live under the same root and prefix, so
+            // they are swept with it.
+            .env(goofi_core::session::ENV, goofi_transport::session())
             // The host's PYTHONPATH (the pyo3/FT tier's) must not shadow the child's own numpy/goofi.
             .env_remove("PYTHONPATH")
             .env_remove("PYTHONHOME")
@@ -127,9 +121,6 @@ impl Running {
         let _ = self.child.wait();
     }
 }
-
-type BytePublisher = iceoryx2::port::publisher::Publisher<ipc_threadsafe::Service, [u8], ()>;
-type ByteSubscriber = iceoryx2::port::subscriber::Subscriber<ipc_threadsafe::Service, [u8], ()>;
 
 /// One request/response: publish `[seq][frame]` and poll for the reply with the matching sequence.
 /// Re-published each idle millisecond, because the child's subscriber may still be connecting.

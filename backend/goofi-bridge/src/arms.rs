@@ -1692,7 +1692,7 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
     // Every source mounts FRESH, and the live mount is swapped only once the manifest has parsed,
     // so a refused load leaves the open patch untouched on both planes. Staged and built off the
     // lock: the archive's own Rust nodes may take seconds to build.
-    let fresh = new_mount();
+    let fresh = new_mount(&state.instance_id);
     let (content, from_path) =
         stage_load(&fresh, &state.custom, payload).inspect_err(|_| remove_mount(&fresh))?;
     prebuild(state, &fresh);

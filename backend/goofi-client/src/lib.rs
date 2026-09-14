@@ -6,34 +6,20 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use goofi_core::home::{self, Session};
+use goofi_core::session::{self, Session};
 use serde_json::{json, Value};
 
-/// How a recorded session answered the identity probe.
-#[derive(Debug, PartialEq)]
-pub enum Probed {
-    /// It answered `session status` with the id its file claims.
-    Live,
-    /// Not judged: a busy server, or a shell whose sandbox blocks the connect — kept tentatively.
-    Unresponsive,
-}
-
-const PROBE: Duration = Duration::from_secs(2);
+/// A connect is short: a listener answers a SYN at once or not at all.
+const CONNECT: Duration = Duration::from_secs(2);
 /// Generous: a `session load` provisions nodes, a `library refresh` restarts them.
 const EXEC: Duration = Duration::from_secs(300);
 
-/// Every recorded session and how it probed, sweeping the definitively dead as it goes.
-pub fn list() -> Vec<(Session, Probed)> {
-    home::sessions()
-        .into_iter()
-        .filter_map(|s| match probe(&s) {
-            Some(p) => Some((s, p)),
-            None => {
-                home::remove_session(&s.id);
-                None
-            }
-        })
-        .collect()
+/// Every alive session. A session is alive while its process holds its lock — the one aliveness
+/// answer — and a dead record is swept as it is met.
+pub fn list() -> Vec<Session> {
+    session::sessions(|p| {
+        let _ = std::fs::remove_dir_all(p);
+    })
 }
 
 /// The server this command drives: `GOOFI_SESSION` names one; unset, exactly one candidate is
@@ -43,16 +29,15 @@ pub fn resolve_target() -> Result<Session, String> {
     if let Ok(id) = std::env::var("GOOFI_SESSION") {
         return rows
             .into_iter()
-            .find(|(s, _)| s.id == id)
-            .map(|(s, _)| s)
+            .find(|s| s.id == id)
             .ok_or_else(|| format!("GOOFI_SESSION={id} names no running goofi — `goofi session list` shows them"));
     }
     match rows.len() {
         0 => Err("no running goofi — start one with `goofi`".into()),
-        1 => Ok(rows.remove(0).0),
+        1 => Ok(rows.remove(0)),
         _ => {
             let named: Vec<String> =
-                rows.iter().map(|(s, _)| format!("{} ({})", s.id, s.url)).collect();
+                rows.iter().map(|s| format!("{} ({})", s.id, s.url)).collect();
             Err(format!(
                 "several goofis are running — set GOOFI_SESSION to one of: {}",
                 named.join(", ")
@@ -94,25 +79,6 @@ pub fn rendered(entry: &Value) -> Vec<u8> {
     out
 }
 
-/// Ask the recorded server who it is, through the same `/exec` door every command uses. `None` is
-/// DEFINITIVE — nothing accepts on the address, something not goofi answered, or the id
-/// contradicts the file — and only that sweeps a record the server writes once in its life. A
-/// timeout, a connect blocked on the caller's own side, and every other non-definitive failure
-/// prove nothing and keep the row.
-fn probe(s: &Session) -> Option<Probed> {
-    let body = json!({ "commands": ["session status"] }).to_string();
-    match http_post(&s.url, "/exec", &body, PROBE) {
-        Ok((200, reply)) => {
-            let id = serde_json::from_str::<Value>(&reply)
-                .ok()
-                .and_then(|v| v["results"][0]["result"]["instance_id"].as_str().map(str::to_string));
-            (id.as_deref() == Some(&s.id)).then_some(Probed::Live)
-        }
-        Ok(_) | Err(HttpErr::NoListener) => None,
-        Err(_) => Some(Probed::Unresponsive),
-    }
-}
-
 /// The one distinction a caller acts on: a connect nothing answered is DEFINITIVE, anything after
 /// the connect proves nothing about the server.
 enum HttpErr {
@@ -141,14 +107,11 @@ fn http_post(url: &str, path: &str, body: &str, timeout: Duration) -> Result<(u1
     let addr = host
         .parse::<std::net::SocketAddr>()
         .map_err(|_| HttpErr::After(format!("`{url}` is not `http://ip:port`")))?;
-    // The CONNECT is always short: a listener answers a SYN at once or not at all, and only the
-    // read may lawfully be slow (a `session load` provisions nodes). So the one DEFINITIVE failure
-    // is a refusal — the host answered, and nothing listens there — plus, on Windows, the dropped
-    // SYN a closed port gets, which reads as timed out. Everything else is the caller's OWN side
-    // saying it could not even ask (an agent harness sandboxes shells with no network by default,
-    // and each OS names that its own way), which proves nothing about the server and must never
-    // sweep its record.
-    let mut s = TcpStream::connect_timeout(&addr, PROBE).map_err(|e| {
+    // Only the read may lawfully be slow (a `session load` provisions nodes). A refusal — the
+    // host answered, and nothing listens there — plus, on Windows, the dropped SYN a closed port
+    // gets, is one failure; everything else is the caller's OWN side saying it could not even ask
+    // (an agent harness sandboxes shells with no network by default), and is named as such.
+    let mut s = TcpStream::connect_timeout(&addr, CONNECT).map_err(|e| {
         use std::io::ErrorKind as K;
         match e.kind() {
             K::ConnectionRefused => HttpErr::NoListener,

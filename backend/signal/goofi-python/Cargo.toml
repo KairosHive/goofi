@@ -15,6 +15,7 @@ embed = ["dep:pyo3", "dep:goofi_pymod"]
 [dependencies]
 goofi-build = { path = "../../goofi-build" }
 goofi-core = { path = "../../goofi-core" }
+goofi-transport = { path = "../../goofi-transport" }
 goofi-node = { path = "../../goofi-node" }
 goofi-host-sdk = { path = "../../goofi-host-sdk" }
 # The probe's introspection JSON, and the memo it is kept in.

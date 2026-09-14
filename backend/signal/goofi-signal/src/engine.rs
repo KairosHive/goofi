@@ -77,9 +77,6 @@ pub struct SignalEngine {
 
 impl SignalEngine {
     pub fn new(instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>) -> SignalEngine {
-        // What a crashed run left, reclaimed at engine construction rather than by whoever opens
-        // the first port — which used to be the user's first add.
-        goofi_transport::sweep_once();
         SignalEngine {
             instance,
             evaluator: None,

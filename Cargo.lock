@@ -1042,6 +1042,7 @@ dependencies = [
  "dunce",
  "filedescriptor",
  "flate2",
+ "getrandom 0.4.3",
  "goofi-view",
  "indexmap",
  "libc",
@@ -1143,6 +1144,7 @@ version = "3.1.0"
 dependencies = [
  "goofi-codec",
  "goofi-core",
+ "goofi-transport",
  "iceoryx2",
  "indexmap",
  "pyo3",
@@ -1161,6 +1163,7 @@ dependencies = [
  "goofi-init",
  "goofi-node",
  "goofi-pymod",
+ "goofi-transport",
  "iceoryx2",
  "indexmap",
  "pyo3",
@@ -1242,6 +1245,7 @@ dependencies = [
 name = "goofi-transport"
 version = "3.1.0"
 dependencies = [
+ "goofi-core",
  "goofi-node",
  "iceoryx2",
  "libc",

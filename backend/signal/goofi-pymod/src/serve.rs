@@ -62,17 +62,9 @@ fn run_loop(
     req_name: &str,
     resp_name: &str,
 ) -> Result<(), String> {
-    let node = NodeBuilder::new().create::<ipc::Service>().map_err(|e| format!("iox node: {e}"))?;
-    // Must stay the same service config as the parent's `build_ports`.
-    let mk = |name: &str| {
-        node.service_builder(&name.try_into().map_err(|e| format!("bad service `{name}`: {e:?}"))?)
-            .publish_subscribe::<[u8]>()
-            .enable_safe_overflow(true)
-            .max_publishers(1)
-            .max_subscribers(16)
-            .open_or_create()
-            .map_err(|e| format!("service `{name}`: {e}"))
-    };
+    // The parent's session, joined through `GOOFI_SESSION`: the same root, prefix and limits.
+    let node = goofi_transport::iox_node()?;
+    let mk = |name: &str| goofi_transport::subprocess_service(&node, name);
     let req_sub =
         mk(req_name)?.subscriber_builder().create().map_err(|e| format!("req subscriber: {e}"))?;
     let resp_pub = mk(resp_name)?

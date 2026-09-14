@@ -1,15 +1,7 @@
-//! The `$GOOFI_HOME/.goofi/` folder: path resolution, creation, and the stale-file sweep.
+//! The `$GOOFI_HOME/.goofi/` folder: path resolution and creation. Sessions are `crate::session`.
 //! `GOOFI_HOME` is read PER CALL, so a spawned process is scoped by its environment alone.
 
 use std::path::PathBuf;
-
-/// One running server, as its session file records it: the id the probe verifies, and the HTTP
-/// base every route hangs off.
-#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Session {
-    pub id: String,
-    pub url: String,
-}
 
 /// The `.goofi` folder itself.
 pub fn dir() -> PathBuf {
@@ -30,54 +22,6 @@ pub fn custom_nodes() -> PathBuf {
 /// Where a recording lands, and where a bare playback name is looked for.
 pub fn recordings() -> PathBuf {
     dir().join("recordings")
-}
-
-fn sessions_dir() -> PathBuf {
-    dir().join("sessions")
-}
-
-fn session_file(id: &str) -> PathBuf {
-    sessions_dir().join(format!("{id}.json"))
-}
-
-/// Record a running server. Written BESIDE the folder and renamed in, so a concurrent reader
-/// sees a whole file or none — a torn read would be swept as stale, silently unlisting a live
-/// server. A failure is said once and served through: recording is not what serving needs.
-pub fn write_session(id: &str, url: &str) {
-    let s = Session { id: id.to_string(), url: url.to_string() };
-    let _ = std::fs::create_dir_all(sessions_dir());
-    let tmp = dir().join(format!("{id}.json.part"));
-    let written = std::fs::write(&tmp, serde_json::to_vec_pretty(&s).expect("two strings"))
-        .and_then(|()| std::fs::rename(&tmp, session_file(id)));
-    if let Err(e) = written {
-        eprintln!("  not recorded in {}: {e}", dir().display());
-    }
-}
-
-/// Remove a server's own record — the exit path, and the SWEEP for a file whose id the probe
-/// contradicted or whose url refused the connection.
-pub fn remove_session(id: &str) {
-    let _ = std::fs::remove_file(session_file(id));
-}
-
-/// Every recorded session, unprobed. A file that does not parse is stale by construction and is
-/// swept here; aliveness and identity are the PROBE's questions, answered live by each url.
-pub fn sessions() -> Vec<Session> {
-    let Ok(entries) = std::fs::read_dir(sessions_dir()) else { return Vec::new() };
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let parsed = std::fs::read(entry.path())
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Session>(&b).ok());
-        match parsed {
-            Some(s) => out.push(s),
-            None => {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-    }
-    out.sort_by(|a, b| a.id.cmp(&b.id));
-    out
 }
 
 /// One launchable agent: a display name and the bash command line that starts it.
@@ -130,24 +74,26 @@ pub fn agents() -> (Vec<Agent>, Option<String>) {
     }
 }
 
+/// The one throwaway home every test in this crate shares, so the process-global env is set once.
+#[cfg(test)]
+pub(crate) fn test_home() -> PathBuf {
+    static HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| {
+        let tmp = std::env::temp_dir().join(format!("goofi-core-test-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp); // a crashed run under a recycled pid
+        std::env::set_var("GOOFI_HOME", &tmp);
+        tmp
+    })
+    .clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn a_session_round_trips_and_a_malformed_file_is_swept_on_read() {
-        let tmp = std::env::temp_dir().join(format!("goofi-home-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp); // a crashed run under a recycled pid
-        // The ONE test in this crate touching GOOFI_HOME, so the process-global env is not raced.
-        std::env::set_var("GOOFI_HOME", &tmp);
-        write_session("abc", "http://127.0.0.1:9999");
-        std::fs::write(dir().join("sessions/broken.json"), b"{").unwrap();
-        assert_eq!(sessions(), vec![Session { id: "abc".into(), url: "http://127.0.0.1:9999".into() }]);
-        assert!(!dir().join("sessions/broken.json").exists(), "the malformed file was swept");
-        assert!(dir().join("sessions/abc.json").exists(), "a valid file SURVIVES the read");
-        remove_session("abc");
-        assert_eq!(sessions(), vec![]);
-
+    fn the_config_is_seeded_once_and_a_broken_one_degrades_to_the_default() {
+        test_home();
         // The config: reading never writes; the seed writes once, absent-only; a config that
         // does not parse degrades to the default and says why.
         let (list, warn) = agents();
@@ -163,7 +109,5 @@ mod tests {
         let (list, warn) = agents();
         assert!(list.iter().any(|a| a.name == "codex"), "malformed degrades to the default");
         assert!(warn.is_some_and(|w| w.contains("parse")), "…and says why");
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

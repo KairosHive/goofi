@@ -179,10 +179,16 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     }
     let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo };
     report("Starting signal, audio and graphics engines");
-    let mut state = AppState::new(mode, goofi_bridge::Clock::Device, goofi_bridge::RenderClock::Timer);
+    // The session is held BEFORE the engines exist: every iceoryx2 port they open is its.
+    let session = goofi_transport::session().to_string();
+    let mut state = AppState::with_instance(session, mode, goofi_bridge::Clock::Device, goofi_bridge::RenderClock::Timer);
     state.load = cli.load.clone().or_else(|| named_env("GOOFI_LOAD")).map(PathBuf::from);
     state.demo_base = named_env("GOOFI_DEMO_BASE");
-    std::process::exit(run(cli, python, state, async { let _ = shutdown.await; }, ui, Some(startup)).await);
+    let code = run(cli, python, state, async { let _ = shutdown.await; }, ui, Some(startup)).await;
+    // Last, after every port is gone: the record, then the ephemeral directory and shared memory.
+    // The PROCESS releases its session, never `run` — a test runs several servers in one.
+    goofi_transport::release_session();
+    std::process::exit(code);
 }
 
 /// Send lines to the resolved server and print each entry — decoded NPY bytes when the result
@@ -339,18 +345,11 @@ fn client_stdin(rest: &[String]) -> i32 {
 fn print_sessions(json: bool) -> i32 {
     let rows = goofi_client::list();
     let current = std::env::var("GOOFI_SESSION").ok();
-    let current = |s: &goofi_core::home::Session| current.as_deref() == Some(&s.id);
+    let current = |s: &goofi_core::session::Session| current.as_deref() == Some(&s.id);
     if json {
         let rows: Vec<serde_json::Value> = rows
             .iter()
-            .map(|(s, p)| {
-                serde_json::json!({
-                    "id": s.id,
-                    "url": s.url,
-                    "state": state_word(p),
-                    "current": current(s),
-                })
-            })
+            .map(|s| serde_json::json!({ "id": s.id, "url": s.url, "current": current(s) }))
             .collect();
         println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
         return 0;
@@ -359,28 +358,20 @@ fn print_sessions(json: bool) -> i32 {
         println!("no running goofi — start one with `goofi`");
         return 0;
     }
-    for (s, p) in rows {
+    for s in rows {
         let mark = if current(&s) { "  ← GOOFI_SESSION" } else { "" };
-        println!("{}  {}  {}{mark}", s.id, s.url, state_word(&p));
+        println!("{}  {}{mark}", s.id, s.url);
     }
     0
 }
 
-fn state_word(p: &goofi_client::Probed) -> &'static str {
-    match p {
-        goofi_client::Probed::Live => "live",
-        goofi_client::Probed::Unresponsive => "unresponsive",
-    }
-}
-
-/// `goofi help [words…]`: any LIVE session answers — help does not depend on which — and with
+/// `goofi help [words…]`: any live session answers — help does not depend on which — and with
 /// none, the COMPILED-IN registry answers through the same renderer, so there is one help text.
-/// An unresponsive record must not stall the one command a stuck user reaches for.
 fn help_main(rest: &[String]) -> i32 {
     let mut rest = rest.to_vec();
     take_json(&mut rest); // help is text; the flag is not a word to look up
     let rows = goofi_client::list();
-    let Some((live, _)) = rows.iter().find(|(_, p)| *p == goofi_client::Probed::Live) else {
+    let Some(live) = rows.first() else {
         let words: Vec<String> = std::iter::once("help".to_string()).chain(rest.clone()).collect();
         match goofi_bridge::phrase::help(&goofi_bridge::ops::table(goofi_bridge::Mode::default()), &words) {
             Some(h) => {
@@ -539,7 +530,7 @@ async fn run(
                 state.set_bound(addr);
                 // Only a real server writes into the home: its record, and the config seed.
                 goofi_core::home::seed_config();
-                let _session = SessionFile::write(&state.instance_id, &state.local_url());
+                goofi_transport::record_url(&state.local_url());
                 // The OPENABLE spelling, as the session file records it — `http://0.0.0.0` is
                 // not an address a browser can visit.
                 let url = state.local_url();
@@ -599,24 +590,6 @@ async fn run(
     println!("  Stopped");
     state.release_mount();
     code
-}
-
-/// The `$GOOFI_HOME/.goofi/sessions/<id>.json` record of THIS server, removed when serving ends.
-/// Only the binary's serve path writes one — an in-process test server records nothing — and what
-/// a kill leaves behind, the next reader's probe sweeps.
-struct SessionFile(String);
-
-impl SessionFile {
-    fn write(id: &str, url: &str) -> SessionFile {
-        goofi_core::home::write_session(id, url);
-        SessionFile(id.to_string())
-    }
-}
-
-impl Drop for SessionFile {
-    fn drop(&mut self) {
-        goofi_core::home::remove_session(&self.0);
-    }
 }
 
 fn watch_shutdown() -> tokio::sync::oneshot::Receiver<()> {
