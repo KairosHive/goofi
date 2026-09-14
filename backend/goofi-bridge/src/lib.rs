@@ -765,7 +765,7 @@ pub fn seed_skills(mount: &std::path::Path) {
 /// once and never edited: a file a later build moves cannot stay behind as a second claimant.
 fn materialise_shipped() -> Vec<PathBuf> {
     let home = goofi_core::home::dir();
-    let tree = home.join("shipped").join(goofi_build::VERSION).join(SHIPPED_KEY);
+    let tree = goofi_core::home::system().join("shipped").join(goofi_build::VERSION).join(SHIPPED_KEY);
     let mut roots = Vec::new();
     for (rel, bytes) in SHIPPED_SOURCES {
         goofi_build::write_if_changed(&tree.join(rel), bytes);

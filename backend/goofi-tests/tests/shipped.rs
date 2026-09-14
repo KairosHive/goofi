@@ -12,7 +12,7 @@ fn a_shipped_node_runs_with_no_cargo_and_an_authored_one_says_what_it_needs() {
     std::env::set_var("CARGO", fresh.path().join("no-cargo"));
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("GOOFI_HOME", home.path());
-    let shipped = goofi_core::home::dir().join("shipped").join(env!("CARGO_PKG_VERSION"));
+    let shipped = goofi_core::home::system().join("shipped").join(env!("CARGO_PKG_VERSION"));
     let stale = shipped.join("stale").join("signal");
     std::fs::create_dir_all(&stale).unwrap();
     std::fs::write(stale.join("Stale.rs"), "").unwrap();
