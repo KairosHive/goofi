@@ -51,12 +51,12 @@ pub fn sdk(name: &str) -> Option<&'static Sdk> {
 }
 
 /// Where the extracted SDK, the generated crates, one shared cargo target and every artifact
-/// live: `$GOOFI_BUILD_DIR`, else `<home>/build`.
+/// live: `$GOOFI_BUILD_DIR`, else `<home>/system/build`.
 pub fn base_dir(home: &Path) -> PathBuf {
     std::env::var_os("GOOFI_BUILD_DIR")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| home.join("build"))
+        .unwrap_or_else(|| home.join("system").join("build"))
 }
 
 /// What one source builds to, keyed by everything that decides it: the goofi version, the SDK

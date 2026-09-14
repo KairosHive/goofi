@@ -13,6 +13,12 @@ pub fn dir() -> PathBuf {
         .join(".goofi")
 }
 
+/// Everything goofi keeps for itself — build caches, session records, materialised bundles —
+/// under one folder, so the `.goofi` root shows only what a user edits.
+pub fn system() -> PathBuf {
+    dir().join("system")
+}
+
 /// The private node library: one flat node root the user owns, scanned after every other root
 /// and before the patch's own, so a node saved here beats a shipped one and loses to the patch.
 pub fn custom_nodes() -> PathBuf {

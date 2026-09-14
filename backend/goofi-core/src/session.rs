@@ -3,7 +3,7 @@
 //! on any exit, a crash included, and nothing else is ever asked.
 //!
 //! Three locations belong to a session, and only these:
-//! - `.goofi/sessions/<id>/` — the record: `session.json` (id, url) and `alive.lock`.
+//! - `.goofi/system/sessions/<id>/` — the record: `session.json` (id, url) and `alive.lock`.
 //! - `<temp>/goofi-system/<id>/` — ephemeral resources (the iceoryx2 root), safe to sweep whenever
 //!   the record it `session` references is not alive.
 //! - `<temp>/goofi-workspaces/<id>/` — the patch workspace, removed on a CLEAN shutdown only: what
@@ -28,7 +28,7 @@ pub struct Session {
 }
 
 fn sessions_dir() -> PathBuf {
-    home::dir().join("sessions")
+    home::system().join("sessions")
 }
 
 /// The record directory of session `id`.
