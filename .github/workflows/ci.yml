@@ -1,16 +1,26 @@
 name: Gates
 
+# `main` only, since 2026-09-14: the org pays for Actions minutes now, and a run of this list is
+# 60–180 minutes of one machine — see the timeout below. Every push to every branch was worth it
+# while standard runners were free on a public repo; it is what emptied the org's balance once
+# they were not. A branch is checked when it lands on `main`, and `workflow_dispatch` is the
+# escape hatch for checking one before it does.
 on:
   push:
-    # `**`, not `*`: a single star does not cross a `/`, so a `feat/x` branch ran no gate at all.
-    branches: [ '**' ]
+    branches: [ main ]
+  workflow_dispatch:
 
-# A push replaces the run its branch already has: three 240-minute jobs per push and a branch that
-# is pushed twice in a minute otherwise queues six. The ref is the group, so two branches never
-# cancel each other.
+# One run at a time, and the next push waits rather than cancels: a group admits one run in
+# progress and ONE pending, and a newer run replaces the pending one — so a burst of pushes
+# costs the run under way plus one more, on the newest commit, and never a 90-minute build
+# cancelled at minute 85 to start over. That is the throttle: a run can start no more often
+# than the previous one finishes, which is longer than any timer we would set, and it costs
+# nothing while idle, which no timer can. (A wait timer on a deployment environment would wait
+# for free, but this plan does not sell that rule; a cron tick that polls bills a minute every
+# tick; a runner that sleeps bills every minute it sleeps.)
 concurrency:
-  group: gates-${{ github.ref }}
-  cancel-in-progress: true
+  group: gates
+  cancel-in-progress: false
 
 # `bash` on every machine, so a step written once behaves once: Windows would otherwise run these
 # in PowerShell, which spells a pipe, `&&` and a variable differently. The one pwsh step says so.
