@@ -1,0 +1,77 @@
+diff --git a/src/fluxrt/stream_processor/model_inference_subprocess.py b/src/fluxrt/stream_processor/model_inference_subprocess.py
+index 528f589..b0e21d5 100644
+--- a/src/fluxrt/stream_processor/model_inference_subprocess.py
++++ b/src/fluxrt/stream_processor/model_inference_subprocess.py
+@@ -94 +93,0 @@ class ModelInferenceSubprocess:
+-        from optimum.quanto import requantize
+@@ -96,0 +96,2 @@ class ModelInferenceSubprocess:
++            load_quantized_weights,
++            load_checkpoint,
+@@ -103 +104 @@ class ModelInferenceSubprocess:
+-            int8_models_path, local_files_only=True
++            int8_models_path, local_files_only=True, checkpoint_device=self.device
+@@ -116 +117 @@ class ModelInferenceSubprocess:
+-            text_encoder = Qwen3ForCausalLM(config)
++            text_encoder = Qwen3ForCausalLM(config).to(dtype=self.dtype)
+@@ -120,2 +121,3 @@ class ModelInferenceSubprocess:
+-        state_dict = load_file(f"{int8_models_path}/text_encoder/model.safetensors")
+-        requantize(text_encoder, state_dict=state_dict, quantization_map=qmap)
++        state_dict = load_checkpoint(f"{int8_models_path}/text_encoder/model.safetensors", self.device)
++        load_quantized_weights(text_encoder, state_dict, qmap)
++        text_encoder.tie_weights()
+@@ -133 +135 @@ class ModelInferenceSubprocess:
+-            load_file("RIFE-safetensors/flownet.safetensors")
++            load_file(self.config.get("rife_path", "RIFE-safetensors/flownet.safetensors"))
+@@ -215,0 +218 @@ class ModelInferenceSubprocess:
++    @torch.no_grad()
+diff --git a/src/fluxrt/stream_processor/quantized_flux2.py b/src/fluxrt/stream_processor/quantized_flux2.py
+index 120fafa..b8a5b25 100644
+--- a/src/fluxrt/stream_processor/quantized_flux2.py
++++ b/src/fluxrt/stream_processor/quantized_flux2.py
+@@ -7,0 +8,2 @@ import os
++import torch
++from safetensors import safe_open
+@@ -18 +19,0 @@ from optimum.quanto import (
+-    requantize,
+@@ -23 +23,0 @@ from optimum.quanto.models import is_diffusers_available
+-from diffusers.models.model_loading_utils import load_state_dict
+@@ -34,0 +35,27 @@ from optimum.quanto.models.shared_dict import ShardedStateDict
++def load_checkpoint(path, device):
++    """Read one tensor at a time without memory-mapped PyTorch storage."""
++    state_dict = {}
++    with safe_open(path, framework="pt", device="cpu", backend="pread") as checkpoint:
++        for key in checkpoint.keys():
++            tensor = checkpoint.get_tensor(key)
++            state_dict[key] = tensor.to(device=device,
++                dtype=torch.bfloat16 if tensor.is_floating_point() else tensor.dtype)
++    return state_dict
++
++
++def load_quantized_weights(model, state_dict, qmap):
++    """Assign checkpoint tensors without allocating full-size float placeholders."""
++    for name, config in qmap.items():
++        quantize(model, weights=None if config['weights'] == 'none' else config['weights'],
++                 activations=None if config['activations'] == 'none' else config['activations'],
++                 include=[name])
++    result = model.load_state_dict(state_dict, strict=False, assign=True)
++    expected_missing = {name + '.weight' for name, config in qmap.items()
++                        if config['weights'] != 'none'}
++    missing = set(result.missing_keys) - expected_missing
++    if missing or result.unexpected_keys:
++        raise ValueError(f'Invalid quantized checkpoint: missing={missing}, unexpected={result.unexpected_keys}')
++    if any(p.device.type == 'meta' for p in model.parameters()):
++        raise ValueError('Quantized checkpoint left unassigned model parameters')
++
++
+@@ -91 +118 @@ class QuantizedDiffusersModel(ModelHubMixin):
+-        cls, pretrained_model_name_or_path: Union[str, os.PathLike], **kwargs
++        cls, pretrained_model_name_or_path: Union[str, os.PathLike], checkpoint_device="cpu", **kwargs
+@@ -135 +162 @@ class QuantizedDiffusersModel(ModelHubMixin):
+-            model = cls.base_class.from_config(config)
++            model = cls.base_class.from_config(config).to(dtype=torch.bfloat16)
+@@ -154 +181 @@ class QuantizedDiffusersModel(ModelHubMixin):
+-            state_dict = load_state_dict(checkpoint_file)
++            state_dict = load_checkpoint(checkpoint_file, checkpoint_device)
+@@ -157 +184 @@ class QuantizedDiffusersModel(ModelHubMixin):
+-        requantize(model, state_dict=state_dict, quantization_map=qmap)
++        load_quantized_weights(model, state_dict, qmap)

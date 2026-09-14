@@ -1,0 +1,8 @@
+diffusers==0.37.0
+huggingface-hub>=0.34,<1
+transformers==4.57.5
+optimum-quanto==0.2.7
+accelerate==1.15.0
+safetensors==0.8.0
+peft==0.20.0
+opencv-contrib-python==5.0.0.93

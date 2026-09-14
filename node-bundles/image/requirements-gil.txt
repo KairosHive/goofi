@@ -1,0 +1,2 @@
+# RealESRGAN runs in the standard Python worker. Install a CUDA build for inference.
+torch>=2.6
