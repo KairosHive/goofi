@@ -4,7 +4,7 @@
 //! real binary; nothing here depends on the bin crate.
 
 use goofi_client as client;
-use goofi_core::home;
+use goofi_core::session;
 use goofi_tests::Goofi;
 
 fn lines(cmds: &[&str]) -> Vec<String> {
@@ -30,51 +30,29 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let why = client::resolve_target().unwrap_err();
     assert!(why.contains("no running goofi"), "{why}");
 
-    // The server is in-process (`serve_app`), which records nothing — the RECORDS under test
-    // are written here, as the binary's serve path writes its own.
+    // The server is in-process (`serve_app`): the harness holds THIS process's session, and the
+    // record under test is written here, as the binary's serve path writes its own.
     let g = Goofi::new();
     let base = g.serve().await;
     let url = format!("http://{}", base.trim_start_matches("ws://"));
-    let id = g.state.instance_id.to_string();
-    home::write_session(&id, &url);
+    let id = goofi_transport::session().to_string();
+    goofi_transport::record_url(&url);
 
-    // A record whose id the probe contradicts is swept; the true record resolves alone.
-    home::write_session("an_impostor", &url);
-    // …and a refused connection sweeps too.
-    home::write_session("long_gone", "http://127.0.0.1:1");
+    // A record nobody holds is DEAD and is swept as it is met; the held one resolves alone.
+    let dead = session::entry("long_gone");
+    std::fs::create_dir_all(&dead).unwrap();
+    std::fs::File::create(dead.join("alive.lock")).unwrap();
+    std::fs::write(dead.join("session.json"), r#"{"id":"long_gone","url":"http://127.0.0.1:1"}"#).unwrap();
     let target = tokio::task::spawn_blocking(client::resolve_target).await.unwrap().unwrap();
     assert_eq!((target.id.as_str(), target.url.as_str()), (id.as_str(), url.as_str()));
-    assert_eq!(
-        home::sessions().len(),
-        1,
-        "the impostor and the dead record were swept; the live one stays"
-    );
+    assert!(!dead.exists(), "the dead record was swept; the live one stays");
 
-    // A connect the caller's OWN side blocks (a sandboxed agent shell) proves nothing about the
-    // server: the record survives the probe, still resolves, and the exec failure names the
-    // sandbox instead of declaring no goofi runs. The broadcast address is the portable stand-in —
-    // every platform refuses it on the caller's side.
-    home::write_session("sandbox_jailed", "http://255.255.255.255:1");
+    // A second held session — another goofi on the machine — makes the bare resolution
+    // ambiguous, and it says so by naming both.
+    let peer = session::hold("busy_peer").unwrap();
+    peer.record_url("http://127.0.0.1:1");
     let rows = tokio::task::spawn_blocking(client::list).await.unwrap();
-    assert!(
-        rows.iter().any(|(s, p)| s.id == "sandbox_jailed" && *p == client::Probed::Unresponsive),
-        "kept tentatively, never swept: {rows:?}"
-    );
-    std::env::set_var("GOOFI_SESSION", "sandbox_jailed");
-    let target = tokio::task::spawn_blocking(client::resolve_target).await.unwrap().unwrap();
-    let why = client::exec(&target.url, &lines(&["session status"]), None).unwrap_err();
-    assert!(why.contains("sandbox"), "the failure names the real cause: {why}");
-    std::env::remove_var("GOOFI_SESSION");
-    home::remove_session("sandbox_jailed");
-
-    // A listener that never answers is INCONCLUSIVE: kept, listed unresponsive — and now the
-    // bare resolution is ambiguous and says so by naming both.
-    let mute = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let mute_url = format!("http://{}", mute.local_addr().unwrap());
-    home::write_session("busy_peer", &mute_url);
-    let rows = tokio::task::spawn_blocking(client::list).await.unwrap();
-    assert_eq!(rows.len(), 2, "kept tentatively: {rows:?}");
-    assert!(rows.iter().any(|(s, p)| s.id == "busy_peer" && *p == client::Probed::Unresponsive));
+    assert_eq!(rows.len(), 2, "both alive: {rows:?}");
     let why = tokio::task::spawn_blocking(client::resolve_target).await.unwrap().unwrap_err();
     assert!(why.contains("several") && why.contains("busy_peer") && why.contains(&id), "{why}");
     // GOOFI_SESSION breaks the tie — and one naming NOTHING is refused by pointing at
@@ -83,12 +61,12 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let why = tokio::task::spawn_blocking(client::resolve_target).await.unwrap().unwrap_err();
     assert!(why.contains("no_such_goofi") && why.contains("session list"), "{why}");
     std::env::set_var("GOOFI_SESSION", &id);
-    let rows = tokio::task::spawn_blocking(client::list).await.unwrap();
-    assert!(rows.iter().any(|(s, _)| s.id == id), "{rows:?}");
     let target = tokio::task::spawn_blocking(client::resolve_target).await.unwrap().unwrap();
     assert_eq!(target.id, id);
-    home::remove_session("busy_peer");
-    drop(mute);
+    // Released cleanly: gone from the listing at once.
+    drop(peer);
+    let rows = tokio::task::spawn_blocking(client::list).await.unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
 
     // Every phrase is reachable through the real door: `--help` on each resolves and answers.
     let ops: serde_json::Value = serde_json::from_str(&ok(&url, "default", "op list")).unwrap();

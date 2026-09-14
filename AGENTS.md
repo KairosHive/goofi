@@ -89,8 +89,9 @@ before the first production deployment.
 - Tests must not open audio hardware or native windows. Use the test clocks and hosts.
 - Rebuild both installed Python wheels after changing the Python API. Do not canonicalize venv
   interpreter paths; use the paths provided by setup.
-- Reclaim shared memory through iceoryx2; never script deletion of `/dev/shm/iox2_*`. Declare an
-  iceoryx2 node after its ports so the ports are dropped first.
+- A session (`goofi_core::session`) owns every ephemeral resource; its lock is the one aliveness
+  answer. iceoryx2 ports come from `goofi-transport` under the session's root and prefix. Declare
+  an iceoryx2 node after its ports so the ports are dropped first.
 
 ## Run and test
 

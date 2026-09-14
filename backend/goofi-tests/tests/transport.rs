@@ -307,39 +307,34 @@ fn a_multi_input_keeps_one_cell_per_wire_in_the_order_it_was_given() {
 /// The env var that turns this binary into the child below. Its value is irrelevant.
 const CRASH_HELPER: &str = "GOOFI_TRANSPORT_CRASH_HELPER";
 
-/// The child: open two iceoryx2 nodes, NAME them, then wait to be killed. It names its own ids
-/// because that directory is machine-global and a diff picks up other binaries' entries.
+/// The child: hold a session of its own, open a node with a port in it, NAME the session, then
+/// wait to be killed.
 #[test]
 fn crash_helper() {
     if std::env::var(CRASH_HELPER).is_err() {
         return; // the ordinary run: this test is only the child's entry point
     }
-    let (a, b) = (iox_node().expect("node a"), iox_node().expect("node b"));
-    println!("READY {} {}", a.id().value(), b.id().value());
+    let node = iox_node().expect("a node");
+    let _out = goofi_transport::data_service(&node, "goofi_crash_helper_out").expect("a service");
+    println!("READY {}", goofi_transport::session());
     std::thread::sleep(Duration::from_secs(60));
 }
 
 #[test]
 fn what_a_crash_left_behind_is_gone_by_the_next_start() {
-    // A killed process drops NOTHING, so its node directories and shared memory stay allocated.
-    let dirs = || -> std::collections::HashSet<String> {
-        std::fs::read_dir(goofi_transport::nodes_dir().expect("the nodes directory"))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect()
-    };
+    // A killed process drops NOTHING: its record, its ephemeral directory and its shared memory
+    // stay. Its lock does not — the OS releases it — and that is the one thing the sweep reads.
     let mut child = std::process::Command::new(std::env::current_exe().expect("the test binary"))
         .args(["crash_helper", "--exact", "--nocapture"])
         .env(CRASH_HELPER, "1")
+        // Its OWN session, not this process's.
+        .env_remove(goofi_core::session::ENV)
         .stdout(std::process::Stdio::piped())
         // SIGKILLed mid-test, so its parting "broken pipe" would otherwise read as this test's failure.
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn the child");
 
-    // Its nodes exist once it says so — not once it started, which would race their creation.
     let mut out = std::io::BufReader::new(child.stdout.take().expect("the child's stdout"));
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let mut line = String::new();
@@ -347,20 +342,22 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
         line.clear();
         std::io::BufRead::read_line(&mut out, &mut line).expect("read the child");
     }
-    let ids: Vec<String> = line.split_whitespace().skip(1).map(str::to_string).collect();
-    assert_eq!(ids.len(), 2, "the child named the two nodes it opened: {line:?}");
-    let present = dirs();
-    for id in &ids {
-        assert!(present.contains(id), "the child's node `{id}` has a directory to leave behind");
-    }
+    let id = line.split_whitespace().nth(1).map(str::to_string).unwrap_or_default();
+    assert!(!id.is_empty(), "the child named its session: {line:?}");
+    let entry = goofi_core::session::entry(&id);
+    let system = goofi_core::session::system_dir(&id);
+    assert!(goofi_core::session::alive(&id), "the child holds its session while it lives");
+    assert!(system.join("iox").is_dir(), "its ephemeral directory is where iceoryx2 wrote");
+    assert!(goofi_transport::sessions().iter().any(|s| s.id == id), "listed while alive");
 
     // Killed, because the point is a process that drops nothing: a graceful exit would clean up.
-    // Through `Child::kill`, not a `kill` binary — Windows has none, so the child ran its sleep out
-    // and exited GRACEFULLY, which made this scenario prove the opposite of what it claims.
     let _ = child.kill();
     let _ = child.wait();
+    assert!(!goofi_core::session::alive(&id), "the lock went with the process");
+    assert!(entry.exists() && system.exists(), "…and everything else stayed");
 
-    goofi_transport::reclaim_stale_resources();
-    let left: Vec<&String> = ids.iter().filter(|id| dirs().contains(*id)).collect();
-    assert!(left.is_empty(), "the sweep left {left:?} standing, for every later start to walk again");
+    goofi_transport::sweep_dead();
+    assert!(!entry.exists(), "the record was swept");
+    assert!(!system.exists(), "the ephemeral directory was swept");
+    assert!(goofi_transport::sessions().iter().all(|s| s.id != id));
 }

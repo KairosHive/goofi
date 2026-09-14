@@ -164,15 +164,21 @@ impl Default for AppState {
 }
 
 impl AppState {
+    /// An instance named by a fresh id — a test's, several to a process.
     pub fn new(mode: Mode, clock: Clock, render: RenderClock) -> AppState {
+        Self::with_instance(goofi_core::session::fresh_id(), mode, clock, render)
+    }
+
+    /// An instance named by `instance` — the binary's, which names it after the session it holds,
+    /// so the id a shell sets `GOOFI_SESSION` to is the one `session status` answers.
+    pub fn with_instance(instance: String, mode: Mode, clock: Clock, render: RenderClock) -> AppState {
+        // The session is decided — and what dead ones left is swept — HERE, by the manager,
+        // before any engine exists: never by whoever happens to open the first port.
+        goofi_transport::session();
         let (events, _) = broadcast::channel(256);
-        let iid = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
         // Seeded BEFORE the baseline is taken, or the patch is dirty from boot, having written
         // the seed itself.
-        let mount = new_mount();
+        let mount = new_mount(&instance);
         term::seed_orientation(&mount);
         seed_skills(&mount);
         let workspace_baseline = goofi_graph::archive::fingerprint(&mount);
@@ -193,7 +199,7 @@ impl AppState {
             plugins: Arc::new(plugins::Plugins::default()),
             graph,
             events,
-            instance_id: Arc::from(format!("{iid:x}").as_str()),
+            instance_id: Arc::from(instance.as_str()),
             mode,
             load: None,
             demo_base: None,
@@ -315,10 +321,11 @@ impl AppState {
     }
 }
 
-/// A fresh, empty workspace mount: `<temp>/goofi-<128-bit hex>/workspace`. The nonce directory
-/// wraps it so a load can rename an extracted tree onto `workspace` wholesale.
-fn new_mount() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("goofi-{}", nonce_hex())).join("workspace");
+/// A fresh, empty workspace mount: `<temp>/goofi-workspaces/<instance>/<nonce>/workspace`. The
+/// nonce directory wraps it so a load can rename an extracted tree onto `workspace` wholesale;
+/// the instance directory is what a clean shutdown removes and a crash leaves.
+fn new_mount(instance: &str) -> PathBuf {
+    let dir = goofi_core::session::workspace_dir(instance).join(nonce_hex()).join("workspace");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
