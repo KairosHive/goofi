@@ -155,10 +155,10 @@ impl Service {
         let output = child.stdout.take().ok_or("missing Python stdout")?;
         if let Some(stderr) = child.stderr.take() {
             let source = goofi_core::log::Source::component(&format!("plugin:{id}"));
-            std::thread::spawn(move || goofi_core::log::drain(stderr, source, "stderr"));
+            let _ = goofi_core::worker::spawn("goofi-plugin-stderr", move || goofi_core::log::drain(stderr, source, "stderr"));
         }
         let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
+        let _ = goofi_core::worker::spawn("goofi-plugin-handshake", move || {
             let mut reader = BufReader::new(output);
             let mut line = String::new();
             let result = reader
@@ -190,7 +190,7 @@ impl Service {
         let (sender, messages) = mpsc::channel::<Value>();
         // Pipe writes can block. Keep them off request threads so the deadline can kill a
         // service that stopped reading, including when the first payload exceeds the pipe.
-        std::thread::spawn(move || {
+        let _ = goofi_core::worker::spawn("goofi-plugin-stdin", move || {
             let mut input = input;
             for message in messages {
                 let sent = serde_json::to_writer(&mut input, &message)
@@ -237,7 +237,7 @@ impl Service {
         let pending = self.pending.clone();
         let input = self.input.clone();
         let service = self.clone();
-        std::thread::spawn(move || {
+        let _ = goofi_core::worker::spawn("goofi-plugin-stdout", move || {
             for line in reader.lines() {
                 let message = match line
                     .ok()
@@ -262,7 +262,7 @@ impl Service {
                     let state = state.clone();
                     let input = input.clone();
                     let plugin_id = plugin_id.clone();
-                    std::thread::spawn(move || {
+                    let _ = goofi_core::worker::spawn("goofi-plugin-call", move || {
                         let chain: Vec<String> =
                             serde_json::from_value(message["chain"].clone()).unwrap_or_default();
                         CHAIN.with(|held| *held.borrow_mut() = chain);

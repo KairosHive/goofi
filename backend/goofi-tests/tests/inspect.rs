@@ -79,6 +79,9 @@ names: a node's mermaid id is its name, which every op takes.
     let held = health["resources"].as_array().cloned().unwrap_or_default();
     let ports = held.iter().filter(|r| r["kind"] == "port").count();
     assert!(ports >= 3, "a port per running node, and the graph's own: {held:?}");
+    let workers: Vec<&str> = held.iter().filter(|r| r["kind"] == "worker").filter_map(|r| r["name"].as_str()).collect();
+    assert!(workers.iter().any(|n| n.starts_with("goofi-status-drain")), "the manager's own threads: {workers:?}");
+    assert!(workers.iter().any(|n| n.to_lowercase().contains("lfo")), "each node's thread: {workers:?}");
     assert!(held.iter().all(|r| r["name"].is_string() && r["held_s"].is_number()), "{held:?}");
 }
 

@@ -23,6 +23,7 @@ pub mod stream;
 pub mod time;
 pub mod texture;
 pub mod turtle;
+pub mod worker;
 
 pub use indexmap;
 pub use stream::Stream;

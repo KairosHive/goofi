@@ -149,7 +149,7 @@ impl Harnesses {
         // Drained unconditionally: a child whose output nobody reads blocks on a full buffer. A
         // failed `send` only means no socket is attached, which is the normal state.
         let answering = inst.clone();
-        std::thread::spawn(move || {
+        let _ = goofi_core::worker::spawn("goofi-term-drain", move || {
             let mut buf = [0u8; 8192];
             while let Ok(n) = reader.read(&mut buf) {
                 if n == 0 {
@@ -174,7 +174,7 @@ impl Harnesses {
         self.instances.lock().unwrap().push((id.clone(), inst.clone()));
         let harnesses = self.clone();
         let reaped = id.clone();
-        std::thread::spawn(move || {
+        let _ = goofi_core::worker::spawn("goofi-term-reap", move || {
             let mut child = child;
             let code = child.wait().map(|s| s.exit_code()).unwrap_or(1);
             // The exit is published FIRST — `wait` freed the pid, and the grace thread must see
@@ -232,7 +232,7 @@ impl Harnesses {
 fn begin_stop(inst: Arc<Instance>) -> Result<(), String> {
     inst.stopping.store(true, Ordering::Relaxed);
     signal(&inst, goofi_core::child::request_stop)?;
-    std::thread::spawn(move || {
+    let _ = goofi_core::worker::spawn("goofi-term-stop", move || {
         std::thread::sleep(GRACE);
         let _ = signal(&inst, goofi_core::child::force_kill);
     });

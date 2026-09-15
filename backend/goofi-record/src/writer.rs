@@ -41,7 +41,7 @@ enum Job {
 
 struct Lane {
     jobs: SyncSender<Job>,
-    thread: Option<std::thread::JoinHandle<()>>,
+    thread: Option<goofi_core::worker::Worker>,
 }
 
 pub struct Writer {
@@ -91,8 +91,7 @@ impl Writer {
     fn lane(&self) -> Lane {
         let (tx, rx) = sync_channel(LANE);
         let (rec, free) = (self.rec.clone(), self.free.clone());
-        let thread = std::thread::Builder::new()
-            .name("goofi-record-write".into())
+        let thread = goofi_core::worker::thread("goofi-record-write")
             .spawn(move || run(rx, &rec, &free))
             .ok();
         Lane { jobs: tx, thread }

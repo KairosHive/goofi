@@ -529,7 +529,7 @@ impl Recorder {
         }
         let (rec, mine, said) = (self.clone(), id.clone(), why.to_string());
         let (owner, closing) = (session.clone(), stream.clone());
-        let spawned = std::thread::Builder::new().name("goofi-record-close".into()).spawn(move || {
+        let spawned = goofi_core::worker::thread("goofi-record-close").spawn(move || {
             rec.finish_close(&owner, &mine, &closing, &said);
         });
         if spawned.is_err() {

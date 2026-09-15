@@ -94,7 +94,7 @@ pub struct GraphicsEngine {
     runtime: Arc<Mutex<Runtime>>,
     inbox: Arc<Mutex<Vec<runtime::Cmd>>>,
     stats: Arc<Stats>,
-    ticker: Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>,
+    ticker: Option<(Arc<AtomicBool>, goofi_core::worker::Worker)>,
     faults: goofi_control::Faults,
     ui: Option<goofi_window::Ui>,
     /// The window each window node has open, and the size it was last given.
@@ -176,8 +176,7 @@ impl GraphicsEngine {
         let ticker = (clock == Clock::Timer).then(|| {
             let stop = Arc::new(AtomicBool::new(false));
             let (rt, halt) = (runtime.clone(), stop.clone());
-            let thread = std::thread::Builder::new()
-                .name("goofi-graphics-clock".into())
+            let thread = goofi_core::worker::thread("goofi-graphics-clock")
                 .spawn(move || {
                     let mut next = Instant::now();
                     while !halt.load(Ordering::Relaxed) {

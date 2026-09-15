@@ -48,10 +48,10 @@ pub fn output(name: impl Into<String>, cmd: &mut Command, within: Duration) -> i
     let mut child = spawn(name, cmd)?;
     // Both pipes drained on threads of their own, so a tool that fills one while this waits on
     // the other cannot deadlock against its reader.
-    let stdout = child.inner.stdout.take().map(reader);
-    let stderr = child.inner.stderr.take().map(reader);
+    let stdout = child.inner.stdout.take().and_then(reader);
+    let stderr = child.inner.stderr.take().and_then(reader);
     let status = child.wait_within(within)?;
-    let collect = |r: Option<std::thread::JoinHandle<Vec<u8>>>| r.and_then(|h| h.join().ok()).unwrap_or_default();
+    let collect = |r: Option<crate::worker::Worker<Vec<u8>>>| r.and_then(|h| h.join().ok()).unwrap_or_default();
     let (stdout, stderr) = (collect(stdout), collect(stderr));
     let status = status.ok_or_else(|| {
         io::Error::new(io::ErrorKind::TimedOut, format!("{} did not finish in {within:?}", child.name))
@@ -59,12 +59,13 @@ pub fn output(name: impl Into<String>, cmd: &mut Command, within: Duration) -> i
     Ok(Output { status, stdout, stderr })
 }
 
-fn reader(mut from: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
+fn reader(mut from: impl Read + Send + 'static) -> Option<crate::worker::Worker<Vec<u8>>> {
+    crate::worker::spawn("goofi-child-output", move || {
         let mut bytes = Vec::new();
         let _ = from.read_to_end(&mut bytes);
         bytes
     })
+    .ok()
 }
 
 impl Child {

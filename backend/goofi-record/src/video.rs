@@ -81,7 +81,7 @@ struct Ffmpeg {
     fps: f64,
     quality: VideoQuality,
     closed: bool,
-    stderr: Option<std::thread::JoinHandle<String>>,
+    stderr: Option<goofi_core::worker::Worker<String>>,
 }
 
 /// Settings shared by the trial encode and the recording.
@@ -213,7 +213,7 @@ impl Ffmpeg {
         )
         .map_err(|e| format!("could not start FFmpeg: {e}"))?;
         let mut stderr = child.stderr.take().ok_or("FFmpeg has no error pipe")?;
-        let errors = std::thread::Builder::new().name("goofi-record-errors".into()).spawn(move || {
+        let errors = goofi_core::worker::thread("goofi-record-errors").spawn(move || {
             let mut message = Vec::new();
             let mut buffer = [0u8; 1024];
             while let Ok(n) = stderr.read(&mut buffer) {
@@ -289,7 +289,7 @@ type Free = Arc<Mutex<Vec<Vec<u8>>>>;
 
 pub struct Video {
     frames: Option<SyncSender<Job>>,
-    writer: Option<std::thread::JoinHandle<()>>,
+    writer: Option<goofi_core::worker::Worker>,
     counts: Counts,
     free: Free,
 }
@@ -312,8 +312,7 @@ impl Video {
         let free = Free::default();
         let writer = {
             let (counts, free) = (counts.clone(), free.clone());
-            std::thread::Builder::new()
-                .name("goofi-record-video".into())
+            goofi_core::worker::thread("goofi-record-video")
                 .spawn(move || encode(rx, encoder, beside, &counts, &free))
                 .map_err(|e| e.to_string())?
         };

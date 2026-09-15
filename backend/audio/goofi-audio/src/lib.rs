@@ -120,8 +120,7 @@ impl DeviceClock {
         let (go, on_go) = mpsc::channel::<()>();
         let (done, on_done) = mpsc::channel::<()>();
         let device = name.to_string();
-        std::thread::Builder::new()
-            .name("goofi-audio-clock".into())
+        goofi_core::worker::thread("goofi-audio-clock")
             .spawn(move || {
                 let stream = match open_output(&device, runtime, stats.clone(), waker.clone()) {
                     Ok((stream, rate, channels)) => {

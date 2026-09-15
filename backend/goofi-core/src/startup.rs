@@ -5,7 +5,7 @@ static ACTIVE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 
 pub struct Startup {
     stop: mpsc::Sender<()>,
-    worker: Option<std::thread::JoinHandle<()>>,
+    worker: Option<crate::worker::Worker>,
     started: Instant,
 }
 
@@ -19,7 +19,7 @@ impl Startup {
         line("goofi", &format!("{version} · starting"));
         *ACTIVE.lock().unwrap() = Some(("Starting".into(), started));
         let (stop, receive) = mpsc::channel();
-        let worker = std::thread::Builder::new().name("goofi-startup".into()).spawn(move || {
+        let worker = crate::worker::thread("goofi-startup").spawn(move || {
             while receive.recv_timeout(Duration::from_secs(5)) == Err(mpsc::RecvTimeoutError::Timeout) {
                 let active = ACTIVE.lock().unwrap();
                 if let Some((message, since)) = active.as_ref().filter(|(_, since)| since.elapsed() >= Duration::from_secs(5)) {
