@@ -113,6 +113,17 @@ jobs:
         cache-all-crates: true
         cache-on-failure: true
 
+    # The shipped Rust nodes are compiled at the first boot of every test binary, into
+    # `target/goofi-build` — which rust-cache prunes as "not a dependency", so every run paid the
+    # SDK's whole dependency tree again inside the tests, as eight "running for over 60 seconds"
+    # notices. Keyed loosely on purpose: the artifacts inside are content-addressed, so a stale
+    # entry is still the warm start that makes a changed node the only thing rebuilt.
+    - uses: actions/cache@v4
+      with:
+        path: target/goofi-build
+        key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'backend/goofi-build/**', 'node-bundles/signal/**/*.rs', 'node-bundles/audio/**/*.rs') }}
+        restore-keys: goofi-build-${{ runner.os }}-
+
     # iceoryx2 builds its OS bindings with bindgen, which finds libclang by itself everywhere but
     # here: the runner ships LLVM and does not name it. asio-sys generates the ASIO binding the same
     # way, so this one line is also what lets the Windows leg compile the only host that reaches an
