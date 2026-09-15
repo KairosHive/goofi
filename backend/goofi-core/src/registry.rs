@@ -61,6 +61,25 @@ impl Drop for Lease {
     }
 }
 
+/// A value and its entry in the index, which goes when the value does. For a handle another
+/// crate owns — a device stream, a MIDI port — that has no room of its own for a lease.
+pub struct Leased<T> {
+    pub value: T,
+    _lease: Lease,
+}
+
+impl<T> std::ops::Deref for Leased<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
+/// Enter `value` as a resource of `kind` named `name`.
+pub fn leased<T>(kind: Kind, name: impl Into<String>, value: T) -> Leased<T> {
+    Leased { value, _lease: lease(kind, name) }
+}
+
 /// Enter a resource of `kind` named `name`. The name is for a reader: a command line, a thread
 /// name, a service name, a path.
 pub fn lease(kind: Kind, name: impl Into<String>) -> Lease {

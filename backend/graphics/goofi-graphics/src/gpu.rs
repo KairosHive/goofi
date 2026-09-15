@@ -120,6 +120,8 @@ pub struct Gpu {
     textures: Mutex<HashMap<usize, Arc<wgpu::BindGroupLayout>>>,
     layouts: Mutex<HashMap<(bool, usize, usize), Arc<wgpu::PipelineLayout>>>,
     pub queue: wgpu::Queue,
+    /// The device's entry in the resource index; before the device, so it leaves first.
+    _lease: goofi_core::registry::Lease,
     /// LAST, here and in every struct that holds one: fields drop in declaration order, and a
     /// resource outliving its device is a driver crash rather than an error.
     pub device: wgpu::Device,
@@ -285,6 +287,10 @@ impl Gpu {
             blit("tap", FORMAT),
         ];
         Ok(Gpu {
+            _lease: goofi_core::registry::lease(
+                goofi_core::registry::Kind::Device,
+                format!("gpu {} ({})", info.name, info.backend),
+            ),
             device,
             queue,
             adapter: info.name.clone(),

@@ -50,8 +50,8 @@ pub struct Ports {
 /// on every host. A device is opened at the clock's rate, so the name AND the rate gate a reopen.
 #[derive(Default)]
 struct Io {
-    stream: Option<cpal::Stream>,
-    midi: Option<midir::MidiInputConnection<()>>,
+    stream: Option<goofi_core::registry::Leased<cpal::Stream>>,
+    midi: Option<goofi_core::registry::Leased<midir::MidiInputConnection<()>>>,
     /// The device name, the clock's rate and the channel selection — every input the open
     /// depends on, so a move in any one of them reopens the stream.
     device: Option<(String, f64, String)>,
@@ -193,7 +193,9 @@ impl AudioHalf {
                     },
                 };
                 replan = true;
-                io.stream = stream;
+                io.stream = stream.map(|s| {
+                    goofi_core::registry::leased(goofi_core::registry::Kind::Device, format!("audio in {}", wanted.0), s)
+                });
                 io.device = Some(wanted);
                 errors.push((key_of(manifest, audio_in::P::DEVICE), error));
                 errors.push((key_of(manifest, audio_in::P::CHANNELS), sel_error));
@@ -208,7 +210,11 @@ impl AudioHalf {
                 } else {
                     match open_port(&wanted, producer) {
                         Ok(connection) => {
-                            io.midi = Some(connection);
+                            io.midi = Some(goofi_core::registry::leased(
+                                goofi_core::registry::Kind::Device,
+                                format!("midi in {wanted}"),
+                                connection,
+                            ));
                             None
                         }
                         Err(e) => Some(e),

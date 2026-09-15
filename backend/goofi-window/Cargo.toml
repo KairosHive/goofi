@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# The loop's entry in the process's resource index.
+goofi-core = { path = "../goofi-core" }
 
 # The window thread's platform half: goofi's own windows on the machine it runs on, and no
 # portable crate in the offline registry covers all three.
