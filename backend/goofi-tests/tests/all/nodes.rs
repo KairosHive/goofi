@@ -191,35 +191,86 @@ fn loading_a_patch_registers_the_nodes_it_ships_before_resolving_them() {
     opened.refuse("node add", j!({ "type": "MyThing" }));
 }
 
+/// An audio producer that holds the level it was written with — which FILE a node runs, heard.
+fn write_audio_node(dir: &Path, file: &str, value: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    let source = format!(
+        "use goofi_audio_sdk::goofi_core::SlotType;\n\
+         use goofi_audio_sdk::{{AudioNode, Block, Manifest, OutputDecl}};\n\n\
+         #[derive(Default)]\nstruct Level;\n\n\
+         impl AudioNode for Level {{\n    \
+         fn prepare(&mut self, _rate: f64) {{}}\n    \
+         fn process(&mut self, b: &mut Block<'_>) {{\n        \
+         b.outs[0].chan_mut(0).fill({value}f32);\n    \
+         }}\n}}\n\n\
+         static OUTS: &[OutputDecl] = &[OutputDecl {{ name: \"out\", kind: SlotType::Audio }}];\n\
+         static MANIFEST: Manifest = Manifest {{ tags: &[], doc: \"holds a level\", inputs: &[], outputs: OUTS, params: &[] }};\n\n\
+         goofi_audio_sdk::export!(Level, MANIFEST);\n"
+    );
+    std::fs::write(dir.join(file), source).unwrap();
+}
+
+const PY_LEVEL: &str = "import goofi\nimport numpy as np\nclass Level(goofi.Node):\n    OUTPUTS = {\"out\": goofi.DataType.ARRAY}\n    def process(self):\n        return {\"out\": np.zeros(1, dtype=np.float32)}\n";
+
+/// Drive the audio clock and watch one node's `out` tap until it holds `want`.
+fn holds(g: &Goofi, uid: goofi_tests::Uid, want: f32) {
+    let probe = OutputProbe::open(&g.state.graph.lock().unwrap(), uid, "out");
+    g.until(&format!("{uid} to hold {want}"), |g| {
+        drive(g, 4800);
+        probe.frame(&mut g.state.graph.lock().unwrap()).filter(|d| first_f32(d) == want)
+    });
+}
+
 #[test]
-fn a_rust_node_file_builds_loads_follows_its_edits_and_shadows_a_shipped_one() {
+fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rides_an_archive() {
     let g = Goofi::new();
-    // A shipped node is SOURCE in the shipped root, where `library get` finds it.
+    // A shipped node is SOURCE in the shipped root, where `library get` finds it, in each engine.
     let r = g.call("library get", j!({ "type": "LFO", "source": true }));
     assert_eq!((&r["provenance"], &r["language"], &r["tier"]), (&j!("shipped"), &j!("rust"), &j!("native")), "{r}");
     assert!(r["text"].as_str().is_some_and(|s| s.contains("impl Node for LFO")), "{r}");
     // The entry's own `source` says where the TYPE came from, and the file never overwrites it.
     assert_eq!(r["source"], "builtin", "{r}");
     let shipped_osc = std::path::PathBuf::from(r["path"].as_str().unwrap());
+    let r = g.call("library get", j!({ "type": "Osc", "source": true }));
+    assert_eq!((&r["provenance"], &r["language"], &r["tier"]), (&j!("shipped"), &j!("rust"), &j!("native")), "{r}");
+    assert!(r["text"].as_str().is_some_and(|s| s.contains("impl AudioNode for Osc")), "{r}");
 
-    // An authored file builds through cargo into the same cache, and runs.
+    // An authored file builds through cargo into the same cache, and runs — a signal node and an
+    // audio node in one scan. A signal node with an audio node's stem is another type, and
+    // `library get` finds each one's file.
     let mount = g.state.mount();
     write_rust_node(&mount.join("nodes_signal"), "Twice.rs", "2.0");
-    assert_eq!(rescan(&g)["added"], j!(["signal:Twice"]), "the file becomes a type");
+    write_audio_node(&mount.join("nodes_audio"), "Level.rs", "0.25");
+    std::fs::write(mount.join("nodes_signal").join("Level.py"), PY_LEVEL).unwrap();
+    assert_eq!(rescan(&g)["added"], j!(["audio:Level", "signal:Level", "signal:Twice"]), "each file becomes a type");
     let live = g.add("Twice");
     emits(&g, live, 2.0);
+    let level = g.add("audio:Level");
+    holds(&g, level, 0.25);
+    let read = |ty: &str| g.call("library get", j!({ "type": ty, "source": true }));
+    let (audio, signal) = (read("audio:Level"), read("signal:Level"));
+    assert!(audio["text"].as_str().is_some_and(|s| s.contains("impl AudioNode for Level")), "{audio}");
+    assert!(signal["text"].as_str().is_some_and(|s| s.contains("class Level")), "{signal}");
     write_rust_node(&mount.join("nodes_signal"), "Twice.rs", "3.0");
-    assert_eq!(rescan(&g)["changed"], j!(["signal:Twice"]), "an edited file reports as changed");
+    write_audio_node(&mount.join("nodes_audio"), "Level.rs", "0.5");
+    assert_eq!(rescan(&g)["changed"], j!(["audio:Level", "signal:Twice"]), "an edited file reports as changed");
     emits(&g, live, 3.0); // the running node is the new code
+    holds(&g, level, 0.5);
 
     // A file that does not compile greys the type out with rustc's own words, and the instance
     // built from the last good file runs on.
     std::fs::write(mount.join("nodes_signal").join("Twice.rs"), "fn broken( {\n").unwrap();
+    std::fs::write(mount.join("nodes_audio").join("Level.rs"), "fn broken( {\n").unwrap();
     rescan(&g);
-    let row = g.call("library list", j!({ "full": true }))["types"].as_array().unwrap().iter()
-        .find(|v| v["type"] == "signal:Twice").cloned().expect("the type stays listed, greyed");
-    assert_eq!(row["available"], false, "{row}");
-    assert!(row["doc"].as_str().is_some_and(|d| d.contains("error")), "rustc's words reach the palette: {row}");
+    let listed = g.call("library list", j!({ "full": true }));
+    let greyed = |ty: &str| {
+        listed["types"].as_array().unwrap().iter().find(|v| v["type"] == ty).cloned().expect("the type stays listed, greyed")
+    };
+    let (row, audio_row) = (greyed("signal:Twice"), greyed("audio:Level"));
+    for row in [&row, &audio_row] {
+        assert_eq!(row["available"], false, "{row}");
+        assert!(row["doc"].as_str().is_some_and(|d| d.contains("error")), "rustc's words reach the palette: {row}");
+    }
     // The greyed row keeps the SHAPE it last loaded, because the canvas draws a node's slots and
     // params from it: the instance is still running and still wired, and a row with no slots
     // erased it from every open tab while its data kept flowing.
@@ -227,18 +278,29 @@ fn a_rust_node_file_builds_loads_follows_its_edits_and_shadows_a_shipped_one() {
     assert!(row["params"].as_object().is_some_and(|p| !p.is_empty()), "and its params: {row}");
     let why = g.refuse("node add", j!({ "type": "Twice" }));
     assert!(why.contains("unavailable"), "{why}");
+    assert!(g.refuse("node add", j!({ "type": "audio:Level" })).contains("unavailable"));
     emits(&g, live, 3.0);
+    holds(&g, level, 0.5);
     write_rust_node(&mount.join("nodes_signal"), "Twice.rs", "3.0");
-    assert_eq!(rescan(&g)["changed"], j!(["signal:Twice"]), "the fix is a change, built from the cache");
+    write_audio_node(&mount.join("nodes_audio"), "Level.rs", "0.5");
+    assert_eq!(rescan(&g)["changed"], j!(["audio:Level", "signal:Twice"]), "the fix is a change, built from the cache");
 
-    // A stem the name rule refuses is not a node, in either language, exactly as a `_` stem is not:
-    // nothing is built, nothing is listed.
+    // A stem the name rule refuses is not a node, in either language, exactly as a `_` stem is not,
+    // and neither is a file whose stem is a built-in node's name: nothing is built, nothing is
+    // listed, nothing changes when it is edited, and the built-in's row stands alone as its own.
     write_rust_node(&mount.join("nodes_signal"), "my-node.rs", "1.0");
     write_node(&mount.join("nodes_signal"), "2d.py", "1.0");
-    assert_eq!(rescan(&g)["added"], j!([]));
+    std::fs::write(mount.join("nodes_audio").join("AudioOut.rs"), "fn never_built() {}\n").unwrap();
+    let scanned = rescan(&g);
+    assert_eq!((&scanned["added"], &scanned["changed"]), (&j!([]), &j!([])), "{scanned}");
+    std::fs::write(mount.join("nodes_audio").join("AudioOut.rs"), "fn never_built_either() {}\n").unwrap();
+    assert_eq!(rescan(&g)["changed"], j!([]));
     let listed = g.call("library list", j!({}));
     let names: Vec<&str> = listed["types"].as_array().unwrap().iter().filter_map(|v| v["type"].as_str()).collect();
     assert!(!names.iter().any(|n| ["my-node", "2d", "My-node"].contains(n)), "{names:?}");
+    let rows: Vec<&serde_json::Value> = listed["types"].as_array().unwrap().iter().filter(|v| v["type"] == "audio:AudioOut").collect();
+    assert!(rows.len() == 1 && rows[0].get("available").is_none(), "one row, and it loaded: {rows:?}");
+    assert_ne!(g.call("library get", j!({ "type": "AudioOut" }))["provenance"], "patch");
 
     // An author's `Drop` that panics costs its own instance, never the process: the boundary
     // catches at every entry, teardown included.
@@ -256,7 +318,7 @@ fn a_rust_node_file_builds_loads_follows_its_edits_and_shadows_a_shipped_one() {
     assert_eq!(rescan(&g)["added"], j!(["signal:Doomed"]));
     let doomed = g.add("Doomed");
     g.call("node remove", j!({ "node": goofi_tests::hex(doomed) }));
-    g.until("the doomed instance to be gone", |g| (g.state.graph.lock().unwrap().node_count() == 1).then_some(()));
+    g.until("the doomed instance to be gone", |g| (g.state.graph.lock().unwrap().node_count() == 2).then_some(()));
     assert!(g.call("library list", j!({}))["types"].as_array().is_some(), "the server answers after the drop");
 
     // An audio slot belongs to the audio SDK: a signal node that declares one is greyed out with
@@ -296,8 +358,13 @@ fn a_rust_node_file_builds_loads_follows_its_edits_and_shadows_a_shipped_one() {
     g.call("session save", j!({ "path": target.to_string_lossy() }));
     let opened = Goofi::new();
     opened.call("session load", j!({ "path": target.to_string_lossy() }));
-    let uid = opened.state.graph.lock().unwrap().node_uids()[0];
-    emits(&opened, uid, 3.0);
+    let of_type = |ty: &str| {
+        let doc = opened.doc();
+        let uids = opened.state.graph.lock().unwrap().node_uids();
+        uids.into_iter().find(|u| doc["nodes"][goofi_tests::hex(*u)]["type"] == ty).expect(ty)
+    };
+    emits(&opened, of_type("signal:Twice"), 3.0);
+    holds(&opened, of_type("audio:Level"), 0.5);
 
     std::fs::write(mount.join("nodes_signal").join("Consume.rs"), r#"
 use goofi_core::{Data, Meta, SlotType};
@@ -334,95 +401,6 @@ goofi_signal_sdk::export!(Consume, MANIFEST);
     g.until("the cleared Rust input to receive another frame", |_| {
         consumed.latest().filter(|d| first_f32(d) < first)
     });
-}
-
-/// An audio producer that holds the level it was written with — which FILE a node runs, heard.
-fn write_audio_node(dir: &Path, file: &str, value: &str) {
-    std::fs::create_dir_all(dir).unwrap();
-    let source = format!(
-        "use goofi_audio_sdk::goofi_core::SlotType;\n\
-         use goofi_audio_sdk::{{AudioNode, Block, Manifest, OutputDecl}};\n\n\
-         #[derive(Default)]\nstruct Level;\n\n\
-         impl AudioNode for Level {{\n    \
-         fn prepare(&mut self, _rate: f64) {{}}\n    \
-         fn process(&mut self, b: &mut Block<'_>) {{\n        \
-         b.outs[0].chan_mut(0).fill({value}f32);\n    \
-         }}\n}}\n\n\
-         static OUTS: &[OutputDecl] = &[OutputDecl {{ name: \"out\", kind: SlotType::Audio }}];\n\
-         static MANIFEST: Manifest = Manifest {{ tags: &[], doc: \"holds a level\", inputs: &[], outputs: OUTS, params: &[] }};\n\n\
-         goofi_audio_sdk::export!(Level, MANIFEST);\n"
-    );
-    std::fs::write(dir.join(file), source).unwrap();
-}
-
-const PY_LEVEL: &str = "import goofi\nimport numpy as np\nclass Level(goofi.Node):\n    OUTPUTS = {\"out\": goofi.DataType.ARRAY}\n    def process(self):\n        return {\"out\": np.zeros(1, dtype=np.float32)}\n";
-
-/// Drive the audio clock and watch one node's `out` tap until it holds `want`.
-fn holds(g: &Goofi, uid: goofi_tests::Uid, want: f32) {
-    let probe = OutputProbe::open(&g.state.graph.lock().unwrap(), uid, "out");
-    g.until(&format!("{uid} to hold {want}"), |g| {
-        drive(g, 4800);
-        probe.frame(&mut g.state.graph.lock().unwrap()).filter(|d| first_f32(d) == want)
-    });
-}
-
-#[test]
-fn an_audio_node_file_builds_loads_follows_its_edits_and_rides_an_archive() {
-    let g = Goofi::new();
-    let r = g.call("library get", j!({ "type": "Osc", "source": true }));
-    assert_eq!((&r["provenance"], &r["language"], &r["tier"]), (&j!("shipped"), &j!("rust"), &j!("native")), "{r}");
-    assert!(r["text"].as_str().is_some_and(|s| s.contains("impl AudioNode for Osc")), "{r}");
-
-    let mount = g.state.mount();
-    write_audio_node(&mount.join("nodes_audio"), "Level.rs", "0.25");
-    assert_eq!(rescan(&g)["added"], j!(["audio:Level"]), "the file becomes a type");
-    let live = g.add("audio:Level");
-    holds(&g, live, 0.25);
-    // A signal node with the same stem is another type, and `library get` finds each one's file.
-    std::fs::create_dir_all(mount.join("nodes_signal")).unwrap();
-    std::fs::write(mount.join("nodes_signal").join("Level.py"), PY_LEVEL).unwrap();
-    assert_eq!(rescan(&g)["added"], j!(["signal:Level"]), "another engine offers the name too");
-    let read = |ty: &str| g.call("library get", j!({ "type": ty, "source": true }));
-    let (audio, signal) = (read("audio:Level"), read("signal:Level"));
-    assert!(audio["text"].as_str().is_some_and(|s| s.contains("impl AudioNode for Level")), "{audio}");
-    assert!(signal["text"].as_str().is_some_and(|s| s.contains("class Level")), "{signal}");
-    write_audio_node(&mount.join("nodes_audio"), "Level.rs", "0.5");
-    assert_eq!(rescan(&g)["changed"], j!(["audio:Level"]), "an edited file reports as changed");
-    holds(&g, live, 0.5);
-
-    // A file that does not compile greys the type out with rustc's own words, and the instance
-    // built from the last good file runs on.
-    std::fs::write(mount.join("nodes_audio").join("Level.rs"), "fn broken( {\n").unwrap();
-    rescan(&g);
-    let row = g.call("library list", j!({}))["types"].as_array().unwrap().iter()
-        .find(|v| v["type"] == "audio:Level").cloned().expect("the type stays listed, greyed");
-    assert_eq!(row["available"], false, "{row}");
-    assert!(row["doc"].as_str().is_some_and(|d| d.contains("error")), "rustc's words reach the palette: {row}");
-    assert!(g.refuse("node add", j!({ "type": "audio:Level" })).contains("unavailable"));
-    holds(&g, live, 0.5);
-    write_audio_node(&mount.join("nodes_audio"), "Level.rs", "0.5");
-    assert_eq!(rescan(&g)["changed"], j!(["audio:Level"]), "the fix is a change, built from the cache");
-
-    // A file whose stem is a built-in node's name is not a node file: nothing is added, nothing
-    // changes when it is edited, the built-in's row stands alone and is not the patch's.
-    std::fs::write(mount.join("nodes_audio").join("AudioOut.rs"), "fn never_built() {}\n").unwrap();
-    let scanned = rescan(&g);
-    assert_eq!((&scanned["added"], &scanned["changed"]), (&j!([]), &j!([])), "{scanned}");
-    std::fs::write(mount.join("nodes_audio").join("AudioOut.rs"), "fn never_built_either() {}\n").unwrap();
-    assert_eq!(rescan(&g)["changed"], j!([]));
-    let rows: Vec<serde_json::Value> = g.call("library list", j!({}))["types"].as_array().unwrap().iter()
-        .filter(|v| v["type"] == "audio:AudioOut").cloned().collect();
-    assert!(rows.len() == 1 && rows[0].get("available").is_none(), "one row, and it loaded: {rows:?}");
-    assert_ne!(g.call("library get", j!({ "type": "AudioOut" }))["provenance"], "patch");
-
-    // The archive carries the SOURCE; a second goofi builds or finds the artifact and runs it.
-    let tmp = tempfile::tempdir().unwrap();
-    let target = tmp.path().join("audio.gfi");
-    g.call("session save", j!({ "path": target.to_string_lossy() }));
-    let opened = Goofi::new();
-    opened.call("session load", j!({ "path": target.to_string_lossy() }));
-    let uid = opened.state.graph.lock().unwrap().node_uids()[0];
-    holds(&opened, uid, 0.5);
 }
 
 /// The private library: `$GOOFI_HOME/.goofi/custom/`, the one root goofi writes into. A node

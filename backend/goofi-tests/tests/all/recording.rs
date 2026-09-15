@@ -829,6 +829,34 @@ fn arming_survives_a_rewire_and_rides_the_document() {
             assert_eq!(*y, *x * 0.5, "sample {i} in block {} stays aligned across both WAV files", source.0);
         }
     }
+
+    // Step: take after take on the same armed pair, enough to wrap the audio rings, with no
+    // warm-up drive, poll or sleep to hide a start/stop race: every take is whole and aligned.
+    for take in 0..30 {
+        let taken = g.call("record start", j!({ "root": root.path(), "name": format!("sync-{take}") }))["folder"]
+            .as_str().expect("a folder").to_string();
+        goofi_tests::drive(&g, 64 * 480);
+        g.call("record stop", j!({}));
+        let (a, b) = (mine(&taken, &osc_name), mine(&taken, &gain_name));
+        assert_eq!((a.len(), b.len()), (1, 1), "take {take}: one file per track");
+        for stream in [&a[0], &b[0]] {
+            assert_eq!(stream["frames"], 64 * 480, "take {take}: {stream}");
+            assert_eq!(stream["dropped"], 0, "take {take}: {stream}");
+        }
+        assert_eq!(a[0]["t0_patch"], b[0]["t0_patch"], "the first sample is shared in take {take}");
+        let (a, b) = (blocks_of(&taken, &a[0]), blocks_of(&taken, &b[0]));
+        let index = |blocks: &[(u64, f64, Vec<usize>, Vec<f32>)]| blocks.iter().map(|b| (b.0, b.1)).collect::<Vec<_>>();
+        assert_eq!(index(&a), index(&b), "block numbers and times match in take {take}");
+        let (a, b): (Vec<f32>, Vec<f32>) = (
+            a.iter().flat_map(|b| b.3.iter().copied()).collect(),
+            b.iter().flat_map(|b| b.3.iter().copied()).collect(),
+        );
+        assert_eq!(a.len(), 64 * 480, "take {take} holds exactly what was driven");
+        assert!(a.iter().any(|sample| sample.abs() > 0.5), "take {take} contains audio");
+        for (i, (x, y)) in a.iter().zip(&b).enumerate() {
+            assert_eq!(*y, *x * 0.5, "sample {i} in take {take}");
+        }
+    }
     g.call("record disarm", j!({ "output": goofi_tests::ep(&gain_hex, "out") }));
 
     // …and with no block missing the wav is ONE run of audio, so the crossings are counted across
