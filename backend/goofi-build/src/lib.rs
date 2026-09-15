@@ -287,46 +287,98 @@ pub struct Opened {
 }
 
 /// Load an artifact, once per path: `goofi_version` first — a mismatch is a refusal naming both
-/// versions, never a call into a stale ABI — then `goofi_describe`. Never unloaded: the vtables,
-/// `'static` data and thread-locals it hands out pin it for the life of the process.
+/// versions, never a call into a stale ABI — then `goofi_describe`.
 pub fn open(path: &Path) -> Result<Opened, String> {
-    static OPENED: OnceLock<Mutex<HashMap<PathBuf, (&'static libloading::Library, String)>>> = OnceLock::new();
-    let cache = OPENED.get_or_init(Default::default);
-    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((library, describe)) = cache.get(path) {
+    static DESCRIBED: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
+    let mut described = DESCRIBED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let library = library(path)?;
+    if let Some(describe) = described.get(path) {
         return Ok(Opened { library, describe: describe.clone() });
     }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let library = load(path).map_err(|e| format!("{name}: could not load: {e}"))?;
-    let version = unsafe { c_string(&library, b"goofi_version\0") }?;
+    // SAFETY: the two symbols are the ones `cdylib!` emits, with these signatures, at every version.
+    let version = unsafe { c_string(library, c"goofi_version") }?;
     if version != VERSION {
         return Err(format!("{name}: built for goofi {version}, and this is {VERSION}"));
     }
-    let describe = unsafe { c_string(&library, b"goofi_describe\0") }?;
-    let library: &'static libloading::Library = Box::leak(Box::new(library));
-    cache.insert(path.to_path_buf(), (library, describe.clone()));
+    let describe = unsafe { c_string(library, c"goofi_describe") }?;
+    described.insert(path.to_path_buf(), describe.clone());
     Ok(Opened { library, describe })
 }
 
+/// The library at `path`, opened once per process and never unloaded: its symbols resolved NOW,
+/// kept private, and its own folder searched first. Every dynamic seam loads through here.
+pub fn library(path: &Path) -> Result<&'static libloading::Library, String> {
+    let mut opened = opened();
+    if let Some(library) = opened.get(path) {
+        return Ok(library.0);
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let (library, handle) = load(path).map_err(|e| format!("{name}: could not load: {e}"))?;
+    let library: &'static libloading::Library = Box::leak(Box::new(library));
+    opened.insert(path.to_path_buf(), (library, handle));
+    Ok(library)
+}
+
+/// The OS handle of a library [`library`] opened — what a module's own entry hook is handed.
 #[cfg(unix)]
-fn load(path: &Path) -> Result<libloading::Library, libloading::Error> {
+pub fn handle(path: &Path) -> Option<*mut std::ffi::c_void> {
+    opened().get(path).map(|(_, handle)| *handle as *mut std::ffi::c_void)
+}
+
+/// Sendable across the map: a handle is an address the loader owns for the life of the process.
+type Handle = usize;
+
+fn opened() -> std::sync::MutexGuard<'static, HashMap<PathBuf, (&'static libloading::Library, Handle)>> {
+    static OPENED: OnceLock<Mutex<HashMap<PathBuf, (&'static libloading::Library, Handle)>>> = OnceLock::new();
+    OPENED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A symbol of `library` as the function type `F`.
+/// # Safety
+/// `F` is the symbol's real signature and calling convention.
+pub unsafe fn symbol<F: Copy>(library: &'static libloading::Library, name: &CStr) -> Result<F, String> {
+    let symbol: libloading::Symbol<F> =
+        library.get(name.to_bytes_with_nul()).map_err(|e| format!("no `{}` symbol: {e}", name.to_string_lossy()))?;
+    Ok(*symbol)
+}
+
+/// The table a `fn() -> *const T` entry point hands out, for the life of the process; null is a
+/// refusal.
+/// # Safety
+/// The entry point returns a `T` laid out as this process expects — a version was matched first.
+pub unsafe fn vtable<T>(library: &'static libloading::Library, name: &CStr) -> Result<&'static T, String> {
+    let entry: unsafe extern "C" fn() -> *const T = symbol(library, name)?;
+    let table = entry();
+    if table.is_null() {
+        return Err(format!("`{}` answered null", name.to_string_lossy()));
+    }
+    Ok(&*table)
+}
+
+#[cfg(unix)]
+fn load(path: &Path) -> Result<(libloading::Library, Handle), libloading::Error> {
     use libloading::os::unix::{Library, RTLD_LOCAL, RTLD_NOW};
-    // NOW, not cargo's default LAZY: the first call into a fresh node must not run the resolver.
-    unsafe { Library::open(Some(path), RTLD_NOW | RTLD_LOCAL) }.map(Into::into)
+    // NOW, not cargo's default LAZY: the first call into a fresh library must not run the resolver.
+    let handle = unsafe { Library::open(Some(path), RTLD_NOW | RTLD_LOCAL) }?.into_raw();
+    // SAFETY: the handle `into_raw` just released, taken back by the same type.
+    Ok((unsafe { Library::from_raw(handle) }.into(), handle as Handle))
 }
 
-#[cfg(not(unix))]
-fn load(path: &Path) -> Result<libloading::Library, libloading::Error> {
-    unsafe { libloading::Library::new(path) }
+/// The binary's OWN folder first: a plugin ships its dependencies beside it, and the default order
+/// looks in goofi's folder instead. The flag wants an absolute path, so one is made.
+#[cfg(windows)]
+fn load(path: &Path) -> Result<(libloading::Library, Handle), libloading::Error> {
+    use libloading::os::windows::{Library, LOAD_WITH_ALTERED_SEARCH_PATH};
+    let path = std::path::absolute(path).map_err(libloading::Error::from)?;
+    unsafe { Library::load_with_flags(&path, LOAD_WITH_ALTERED_SEARCH_PATH) }.map(|l| (l.into(), 0))
 }
 
-unsafe fn c_string(library: &libloading::Library, symbol: &[u8]) -> Result<String, String> {
-    let name = String::from_utf8_lossy(&symbol[..symbol.len() - 1]).into_owned();
-    let f: libloading::Symbol<unsafe extern "C" fn() -> *const c_char> =
-        library.get(symbol).map_err(|e| format!("no `{name}` symbol: {e}"))?;
+unsafe fn c_string(library: &'static libloading::Library, name: &CStr) -> Result<String, String> {
+    let f: unsafe extern "C" fn() -> *const c_char = symbol(library, name)?;
     let ptr = f();
     if ptr.is_null() {
-        return Err(format!("`{name}` answered null"));
+        return Err(format!("`{}` answered null", name.to_string_lossy()));
     }
     Ok(CStr::from_ptr(ptr).to_string_lossy().into_owned())
 }

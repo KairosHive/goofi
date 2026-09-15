@@ -2,7 +2,7 @@
 //! at every use, because a factory is a reference of its own and never crosses a thread.
 
 use std::collections::HashMap;
-use std::ffi::c_void;
+use std::ffi::{c_void, CStr};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -11,42 +11,55 @@ use vst3::{ComPtr, Interface};
 
 use super::host::cstr;
 
-/// The factory of the binary at `path`, loading it the first time. Never unloaded: `dlopen`
-/// answers one handle per path for the life of the process, so a bundle REPLACED in place keeps
-/// running its old code until goofi restarts — recorded in the roadmap.
+/// The factory of the binary at `path`, loading and entering it the first time. Never unloaded:
+/// a bundle REPLACED in place keeps running its old code until goofi restarts (see the roadmap).
 pub fn factory(path: &Path) -> Result<Factory, String> {
-    static OPENED: OnceLock<Mutex<HashMap<PathBuf, &'static libloading::Library>>> = OnceLock::new();
-    let mut opened = OPENED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
-    let library = match opened.get(path) {
+    static ENTERED: OnceLock<Mutex<HashMap<PathBuf, &'static libloading::Library>>> = OnceLock::new();
+    let mut entered = ENTERED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let library = match entered.get(path) {
         Some(library) => library,
         None => {
+            let library = goofi_build::library(path)?;
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let library = load(path).map_err(|e| format!("{name}: {e}"))?;
-            opened.entry(path.to_path_buf()).or_insert(library)
+            enter(library, path).map_err(|e| format!("{name}: {e}"))?;
+            entered.entry(path.to_path_buf()).or_insert(library)
         }
     };
-    let get: libloading::Symbol<unsafe extern "system" fn() -> *mut IPluginFactory> =
-        unsafe { library.get(b"GetPluginFactory\0") }.map_err(|e| format!("no `GetPluginFactory`: {e}"))?;
+    // SAFETY: `GetPluginFactory` is the VST3 module entry point, with this signature by contract.
+    let get: unsafe extern "system" fn() -> *mut IPluginFactory = unsafe { goofi_build::symbol(library, c"GetPluginFactory") }?;
     unsafe { ComPtr::from_raw(get()) }.map(Factory).ok_or_else(|| "`GetPluginFactory` answered null".into())
 }
 
+/// Run the module's entry hook once, where the platform's SDK defines one; a module without it
+/// is entered by loading alone.
 #[cfg(unix)]
-fn load(path: &Path) -> Result<&'static libloading::Library, String> {
-    use libloading::os::unix::{Library, RTLD_LOCAL, RTLD_NOW};
-    // NOW, as goofi-build loads a node: the first call into a plugin must not run the resolver.
-    let library = unsafe { Library::open(Some(path), RTLD_NOW | RTLD_LOCAL) }.map_err(|e| format!("could not load: {e}"))?;
-    let handle = library.into_raw();
-    let library: &'static libloading::Library = Box::leak(Box::new(unsafe { Library::from_raw(handle) }.into()));
-    let (entry, argument) = entry_of(path, handle);
-    enter(library, entry, argument)?;
-    Ok(library)
+fn enter(library: &'static libloading::Library, path: &Path) -> Result<(), String> {
+    let (symbol, argument) = entry_of(path);
+    // SAFETY: the entry hook's signature is the VST3 SDK's, and `argument` is what it defines.
+    if let Ok(entry) = unsafe { goofi_build::symbol::<unsafe extern "system" fn(*mut c_void) -> bool>(library, symbol) } {
+        if !unsafe { entry(argument) } {
+            return Err(format!("`{}` refused", symbol.to_string_lossy()));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn enter(library: &'static libloading::Library, _path: &Path) -> Result<(), String> {
+    // SAFETY: `InitDll` is the VST3 SDK's Windows entry hook, with this signature by contract.
+    if let Ok(init) = unsafe { goofi_build::symbol::<unsafe extern "system" fn() -> bool>(library, c"InitDll") } {
+        if !unsafe { init() } {
+            return Err("`InitDll` refused".into());
+        }
+    }
+    Ok(())
 }
 
 /// macOS enters through the BUNDLE, and the ref is what makes it count: the SDK's `bundleEntry`
 /// runs the plugin's own `InitModule` only inside `if (ref)` and answers true either way, so a null
 /// one reads as a plugin that started and never did. Never released — nothing is ever unloaded.
 #[cfg(target_os = "macos")]
-fn entry_of(binary: &Path, _handle: *mut c_void) -> (&'static [u8], *mut c_void) {
+fn entry_of(binary: &Path) -> (&'static CStr, *mut c_void) {
     use std::os::unix::ffi::OsStrExt;
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -79,53 +92,13 @@ fn entry_of(binary: &Path, _handle: *mut c_void) -> (&'static [u8], *mut c_void)
             }
         }
     };
-    (&b"bundleEntry\0"[..], reference)
+    (c"bundleEntry", reference)
 }
 
+/// Linux's `ModuleEntry` takes the module's own handle: the one the loader opened it with.
 #[cfg(all(unix, not(target_os = "macos")))]
-fn entry_of(_binary: &Path, handle: *mut c_void) -> (&'static [u8], *mut c_void) {
-    (&b"ModuleEntry\0"[..], handle)
-}
-
-#[cfg(windows)]
-fn load(path: &Path) -> Result<&'static libloading::Library, String> {
-    use libloading::os::windows::{Library, LOAD_WITH_ALTERED_SEARCH_PATH};
-    // The binary's OWN folder first: a plugin ships its dependencies beside it inside the bundle,
-    // and the default order looks in goofi's folder instead. The flag is defined for an absolute
-    // path alone, which is why one is made rather than assumed.
-    let path = std::path::absolute(path).map_err(|e| format!("could not resolve: {e}"))?;
-    let opened = unsafe { Library::load_with_flags(&path, LOAD_WITH_ALTERED_SEARCH_PATH) };
-    let library = opened.map_err(|e| format!("could not load: {}", because(&e)))?;
-    let library: &'static libloading::Library = Box::leak(Box::new(library.into()));
-    if let Ok(init) = unsafe { library.get::<unsafe extern "system" fn() -> bool>(b"InitDll\0") } {
-        if !unsafe { init() } {
-            return Err("`InitDll` refused".into());
-        }
-    }
-    Ok(library)
-}
-
-/// An error and every cause under it: libloading's Windows arm Displays its own name alone and
-/// keeps the OS error — "The specified module could not be found" — in the source beneath it.
-#[cfg(windows)]
-fn because(error: &dyn std::error::Error) -> String {
-    let mut said = error.to_string();
-    let mut under = error.source();
-    while let Some(cause) = under {
-        said = format!("{said}: {cause}");
-        under = cause.source();
-    }
-    said
-}
-
-#[cfg(unix)]
-fn enter(library: &libloading::Library, symbol: &[u8], argument: *mut c_void) -> Result<(), String> {
-    if let Ok(entry) = unsafe { library.get::<unsafe extern "system" fn(*mut c_void) -> bool>(symbol) } {
-        if !unsafe { entry(argument) } {
-            return Err(format!("`{}` refused", String::from_utf8_lossy(&symbol[..symbol.len() - 1])));
-        }
-    }
-    Ok(())
+fn entry_of(binary: &Path) -> (&'static CStr, *mut c_void) {
+    (c"ModuleEntry", goofi_build::handle(binary).unwrap_or(std::ptr::null_mut()))
 }
 
 /// A class's VST3 subcategories, which name `Instrument` for a synth. A factory older than

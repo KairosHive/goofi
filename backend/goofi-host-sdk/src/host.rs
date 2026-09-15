@@ -21,13 +21,7 @@ impl Loaded {
     /// `library` was built by [`crate::cdylib!`] at this SDK's version — its `goofi_version`
     /// was read and matched before this is called.
     pub unsafe fn open(library: &'static libloading::Library, manifest: &'static NodeManifest) -> Result<Loaded, String> {
-        let entry: libloading::Symbol<unsafe extern "C" fn() -> *const VTable> =
-            library.get(b"goofi_host_node\0").map_err(|e| format!("no `goofi_host_node` symbol: {e}"))?;
-        let vtable = entry();
-        if vtable.is_null() {
-            return Err("`goofi_host_node` answered null".into());
-        }
-        Ok(Loaded { vtable: &*vtable, manifest })
+        Ok(Loaded { vtable: goofi_build::vtable::<VTable>(library, c"goofi_host_node")?, manifest })
     }
 
     pub fn manifest(&self) -> &'static NodeManifest {
