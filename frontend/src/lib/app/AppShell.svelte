@@ -143,15 +143,14 @@
 		if (selection?.toString()) selection.removeAllRanges();
 	}
 
-	function onBeforeUnload(e: BeforeUnloadEvent): void {
+	// No leave-page prompt: the browser holds no state, the manager does, so closing a tab loses
+	// nothing — only the debounced viewpoint push is flushed.
+	function onBeforeUnload(): void {
 		if (pushTimer) {
 			clearTimeout(pushTimer);
 			pushTimer = null;
 			void g.setViewpoint(ws.viewpoint());
 		}
-		if (!g.unsavedChanges) return;
-		e.preventDefault();
-		e.returnValue = '';
 	}
 
 	// The viewpoint is this client's alone: stored, never converged, and it cannot dirty the patch.
