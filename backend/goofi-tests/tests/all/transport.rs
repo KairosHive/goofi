@@ -320,7 +320,7 @@ fn crash_helper() {
 /// alone decides what a boot sweep removes, and a content key is never mistaken for a session.
 #[test]
 fn a_session_owns_its_record_directory_workspace_and_cache_parts() {
-    use goofi_core::session::{alive, entry, hold, sessions, sweep_dead_system, sweep_empty_workspaces, sweep_system, system_dir, workspace_dir, Session};
+    use goofi_core::session::{alive, entry, hold, sessions, sweep_dead_system, sweep_system, system_dir, workspace_dir, Session};
     use std::fs;
     goofi_tests::walled_home();
     let _sole = goofi_tests::sole_session();
@@ -344,14 +344,8 @@ fn a_session_owns_its_record_directory_workspace_and_cache_parts() {
     assert!(!entry("gone").exists() && !system_dir("gone").exists() && !system_dir("orphan").exists());
     assert!(system_dir("abcabcabcabcabc1").exists(), "the live one is untouched");
 
-    // Workspace parents: an empty one goes with its session, a crash's non-empty one stays.
+    // The workspace parent: the session's to remove once its last mount is gone, at its release.
     fs::create_dir_all(workspace_dir("abcabcabcabcabc1")).unwrap();
-    fs::create_dir_all(workspace_dir("crashed").join("mount")).unwrap();
-    fs::create_dir_all(workspace_dir("empty")).unwrap();
-    sweep_empty_workspaces();
-    assert!(workspace_dir("abcabcabcabcabc1").exists() && workspace_dir("crashed").exists());
-    assert!(!workspace_dir("empty").exists(), "an empty dead one is swept");
-    let _ = fs::remove_dir_all(workspace_dir("crashed"));
 
     // The caches: a dead session's part and work dir go, another version's tree goes; a live
     // session's part, this version's tree and a 16-hex CONTENT key stay.

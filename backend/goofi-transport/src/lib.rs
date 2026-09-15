@@ -213,8 +213,8 @@ pub fn record_url(url: &str) {
     }
 }
 
-/// The boot pass: dead records, their directories, empty workspace parents, and every shared
-/// memory segment whose session is not alive — each judged by the lock alone.
+/// The boot pass: dead records, their directories, and every shared memory segment whose session
+/// is not alive — each judged by the lock alone. The workspaces are the manager's to sweep.
 pub fn sweep_dead() -> Swept {
     let mut swept = Swept::default();
     let mut counted = |dir: &std::path::Path| {
@@ -223,7 +223,6 @@ pub fn sweep_dead() -> Swept {
     };
     let _ = goofi_core::session::sessions(&mut counted);
     goofi_core::session::sweep_dead_system(&mut counted);
-    swept.directories += goofi_core::session::sweep_empty_workspaces();
     let mut known = std::collections::HashMap::new();
     swept.segments = sweep_shared_memory(|id| !*known.entry(id.to_string()).or_insert_with(|| goofi_core::session::alive(id)));
     swept

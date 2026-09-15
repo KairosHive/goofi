@@ -1,5 +1,5 @@
-<!-- ConfirmDialog — a modal that asks ONE question: the question, the prose under it, and the row
-     of answers the caller supplies as buttons. -->
+<!-- ConfirmDialog — a modal that asks ONE question: the question, the prose under it, what the
+     question is about when it needs showing, and the row of answers the caller supplies as buttons. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -10,6 +10,7 @@
 		question,
 		detail,
 		onClose,
+		body,
 		children,
 		...rest
 	}: HTMLAttributes<HTMLDialogElement> & {
@@ -18,6 +19,8 @@
 		/** What the answers mean, in a sentence. */
 		detail: string;
 		onClose: () => void;
+		/** What the question is about, between the prose and the answers: a list to pick from. */
+		body?: Snippet;
 		/** The answers, as buttons. */
 		children: Snippet;
 	} = $props();
@@ -26,6 +29,7 @@
 <Dialog {open} {onClose} {...rest}>
 	<h2>{question}</h2>
 	<p>{detail}</p>
+	{@render body?.()}
 	<div class="choices">{@render children()}</div>
 </Dialog>
 

@@ -162,6 +162,14 @@ export interface DemoExample {
 	current: boolean;
 }
 
+/** One autosave a goofi that did not shut down cleanly left behind, as `session recoverable`
+ * lists it: `home` is the `.gfi` the patch was saved as, `at` seconds since the epoch. */
+export interface Recovery {
+	workspace: string;
+	home: string | null;
+	at: number | null;
+}
+
 /** One spawned harness. `stopping` spans the grace period between the stop and the exit. */
 export interface HarnessInstanceInfo {
 	id: string;

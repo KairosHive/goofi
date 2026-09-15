@@ -499,3 +499,108 @@ fn the_file_browser_answers_a_path_the_way_save_and_load_take_it() {
     let why = g.refuse("session load", j!({ "path": "~/definitely-not-a-patch-goofi-wrote.gfi" }));
     assert!(why.contains(&home), "the refusal names the expanded path, not the tilde: {why}");
 }
+
+/// The autosave beside the mount, once it exists: the recovery's nonce directory.
+fn autosave_dir(g: &Goofi) -> std::path::PathBuf {
+    g.state.mount().parent().unwrap().to_path_buf()
+}
+
+/// A copy of `dir` as a session nobody holds left it: what a crash leaves, minted for a test that
+/// cannot let go of its own session's lock. Answers the nonce directory as goofi spells it.
+fn crashed_copy(dir: &std::path::Path) -> String {
+    let dead = goofi_core::session::workspace_dir(&goofi_core::session::fresh_id())
+        .join(dir.file_name().unwrap());
+    fn copy(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap().flatten() {
+            let target = to.join(entry.file_name());
+            if entry.path().is_dir() {
+                copy(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), &target).unwrap();
+            }
+        }
+    }
+    copy(dir, &dead);
+    goofi_core::path::to_slash(&dead)
+}
+
+#[test]
+fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next_manager_to_offer() {
+    let g = Goofi::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home.gfi");
+    let manifest = |g: &Goofi| autosave_dir(g).join(goofi_graph::archive::MANIFEST);
+
+    // A patch with nothing unsaved has no autosave: what a crash leaves is exactly the unsaved work.
+    assert!(g.stays(|g| !manifest(g).exists()), "a fresh patch is clean, so nothing is autosaved");
+    let osc = g.add("LFO");
+    g.call("node edit", j!({ "node": hex(osc), "name": "carrier" }));
+    g.until("an edit to be autosaved", |g| manifest(g).exists().then_some(()));
+    assert!(std::fs::read_to_string(manifest(&g)).unwrap().contains("carrier"), "the manifest is the patch");
+    let unnamed = g.call("session recoverable", j!({}));
+    assert!(unnamed["recoveries"].as_array().unwrap().is_empty(), "a running session's autosave is not a recovery");
+
+    // A save cleans the patch, and the autosave goes with the unsaved work it kept.
+    g.call("session save", j!({ "path": home.to_string_lossy() }));
+    g.until("the autosave to go with the save", |g| (!manifest(g).exists()).then_some(()));
+
+    // Work after the save: the graph AND a workspace file, kept with the patch's home.
+    std::fs::write(g.state.mount().join("notes.md"), b"kept").unwrap();
+    g.set_param(osc, "output", "sfreq", 3.0);
+    g.until("the latest edit to be autosaved", |g| {
+        std::fs::read_to_string(manifest(g)).ok().filter(|m| m.contains("sfreq: 3.0")).map(|_| ())
+    });
+    let dir = autosave_dir(&g);
+
+    // The crash: the same directory, as a dead session left it — twice, one to open and one to drop.
+    let recover = crashed_copy(&dir);
+    let discard = crashed_copy(&dir);
+    let listed = g.call("session recoverable", j!({}));
+    let names: Vec<&str> = listed["recoveries"].as_array().unwrap().iter().map(|r| r["workspace"].as_str().unwrap()).collect();
+    assert!(names.contains(&recover.as_str()) && names.contains(&discard.as_str()), "both offered: {listed}");
+    let entry = listed["recoveries"].as_array().unwrap().iter().find(|r| r["workspace"] == recover).unwrap();
+    assert_eq!(entry["home"], j!(spelled(&home)), "the home the save gave the patch");
+    assert!(entry["at"].as_f64().unwrap() > 0.0, "when it was taken");
+
+    // The one path an op removes wholesale is checked: nothing outside the base, nothing alive.
+    let why = g.refuse("session discard", j!({ "workspace": tmp.path().to_string_lossy() }));
+    assert!(why.contains("not a workspace"), "{why}");
+    let why = g.refuse("session recover", j!({ "workspace": goofi_core::path::to_slash(&dir) }));
+    assert!(why.contains("running"), "this session's own: {why}");
+    g.call("session discard", j!({ "workspace": &discard }));
+    assert!(!std::path::Path::new(&discard).exists(), "discarded");
+    let why = g.refuse("session recover", j!({ "workspace": &discard }));
+    assert!(why.contains("no autosave"), "{why}");
+
+    // Recovered, in another manager: the graph, the workspace file and the home come back, as
+    // UNSAVED work — a plain save writes the home — and the recovery is taken off the list.
+    let opened = Goofi::new();
+    opened.call("session new", j!({}));
+    opened.call("session recover", j!({ "workspace": &recover }));
+    let uid = opened.nodes()[0].clone();
+    assert_eq!(opened.doc()["nodes"][&uid]["name"], "carrier");
+    assert_eq!(opened.doc()["nodes"][&uid]["params"]["output"]["sfreq"]["value"], 3.0);
+    assert_eq!(std::fs::read(opened.state.mount().join("notes.md")).unwrap(), b"kept");
+    assert_eq!(save_path(&opened), Some(spelled(&home)));
+    assert!(dirty(&opened), "a recovery is unsaved work");
+    assert!(!std::path::Path::new(&recover).exists(), "taken up, the recovery is gone");
+    assert!(opened.call("session recoverable", j!({}))["recoveries"].as_array().unwrap().is_empty());
+    opened.call("session save", j!({}));
+    assert!(!dirty(&opened), "and the plain save wrote its home");
+    assert!(std::fs::read(&home).unwrap().starts_with(b"PK"));
+
+    // The boot pass: a dead session's directory with no autosave held nothing and goes; one with
+    // an autosave stays, offered. A clean shutdown leaves neither.
+    let husk = goofi_core::session::workspace_dir(&goofi_core::session::fresh_id()).join("nonce");
+    std::fs::create_dir_all(husk.join("workspace")).unwrap();
+    std::fs::write(husk.join("workspace").join("AGENTS.md"), b"seeded").unwrap();
+    let kept = crashed_copy(&dir);
+    let booted = Goofi::new();
+    assert!(!husk.parent().unwrap().exists(), "a husk goes at boot, its session directory with it");
+    assert!(std::path::Path::new(&kept).exists(), "a recovery is not swept");
+    booted.call("session discard", j!({ "workspace": &kept }));
+    let nonce = autosave_dir(&g);
+    drop(g);
+    assert!(!nonce.exists(), "a clean shutdown releases the mount, autosave and all");
+}

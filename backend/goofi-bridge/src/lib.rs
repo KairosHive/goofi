@@ -5,6 +5,7 @@
 //! the binary.
 
 mod arms;
+pub mod autosave;
 pub mod phrase;
 /// The control-plane document and its deltas — shape-agnostic.
 pub mod doc;
@@ -43,6 +44,7 @@ use axum::response::Response;
 use axum::routing::{any, get, post};
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
+use goofi_graph::archive::Fingerprint;
 use goofi_graph::{Graph, Uid};
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
@@ -113,7 +115,10 @@ pub struct AppState {
     mount: Arc<Mutex<PathBuf>>,
     /// The workspace as it was last packed or unpacked — what [`AppState::is_dirty`] compares the
     /// live mount against. Re-taken at BOTH ends.
-    workspace_baseline: Arc<Mutex<std::collections::BTreeMap<PathBuf, (u64, std::time::SystemTime)>>>,
+    workspace_baseline: Arc<Mutex<Fingerprint>>,
+    /// The patch as YAML at the last settle point — taken where the graph is already locked, so
+    /// the autosave never holds that lock against the audio drain.
+    manifest: Arc<Mutex<String>>,
     /// Where the open patch lives on disk. Manager-owned rather than per tab, so it rides the
     /// snapshot every client connects with.
     save_path: Arc<Mutex<Option<String>>>,
@@ -180,10 +185,11 @@ impl AppState {
         // under `.goofi/system` are swept in the same breath: a crash's part files, old versions.
         goofi_transport::session();
         goofi_core::session::sweep_system(goofi_build::VERSION);
+        autosave::sweep_dead();
         let (events, _) = broadcast::channel(256);
         // Seeded BEFORE the baseline is taken, or the patch is dirty from boot, having written
         // the seed itself.
-        let mount = new_mount(&instance);
+        let mount = new_mount();
         term::seed_orientation(&mount);
         seed_skills(&mount);
         let workspace_baseline = goofi_graph::archive::fingerprint(&mount);
@@ -193,6 +199,7 @@ impl AppState {
         graph_val.set_workspace(&mount);
         let mut doc = crate::doc::GraphDoc::new();
         doc.reconcile_root(&projection::of(&graph_val));
+        let manifest = graph_val.serialize();
         let recorder = Arc::new(goofi_record::Recorder::new(graph_val.time()));
         if let Some(gfx) = try_graphics_engine(&mut graph_val) {
             gfx.set_recorder(recorder.clone());
@@ -219,6 +226,7 @@ impl AppState {
             node_index: Arc::new(Mutex::new(Default::default())),
             mount: Arc::new(Mutex::new(mount)),
             workspace_baseline: Arc::new(Mutex::new(workspace_baseline)),
+            manifest: Arc::new(Mutex::new(manifest)),
             save_path: Arc::new(Mutex::new(None)),
             bound: Arc::new(Mutex::new(([127, 0, 0, 1], 8000).into())),
             harnesses: Arc::new(term::Harnesses::default()),
@@ -228,6 +236,7 @@ impl AppState {
             workers: Arc::new(Mutex::new(Vec::new())),
         };
         spawn_follower(state.clone(), follow_rx);
+        autosave::spawn(state.clone());
         record::spawn(state.graph.clone(), state.recorder.clone(), state.record_drain.clone());
         state
     }
@@ -278,7 +287,7 @@ impl AppState {
     }
 
     /// Where the open patch lives on disk, if anywhere.
-    fn save_path(&self) -> Option<String> {
+    pub(crate) fn save_path(&self) -> Option<String> {
         self.save_path.lock().unwrap().clone()
     }
 
@@ -344,11 +353,12 @@ impl AppState {
     }
 }
 
-/// A fresh, empty workspace mount: `<temp>/goofi-workspaces/<instance>/<nonce>/workspace`. The
-/// nonce directory wraps it so a load can rename an extracted tree onto `workspace` wholesale;
-/// the instance directory is what a clean shutdown removes and a crash leaves.
-fn new_mount(instance: &str) -> PathBuf {
-    let dir = goofi_core::session::workspace_dir(instance).join(nonce_hex()).join("workspace");
+/// A fresh, empty workspace mount: `<workspaces>/<session>/<nonce>/workspace`. The nonce directory
+/// wraps it so a load can rename an extracted tree onto `workspace` wholesale, and the autosave
+/// sits beside it; the session directory is what a clean shutdown removes and a crash leaves.
+fn new_mount() -> PathBuf {
+    let session = goofi_core::session::current().expect("the session is decided before a mount");
+    let dir = goofi_core::session::workspace_dir(session).join(nonce_hex()).join("workspace");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -404,14 +414,26 @@ pub fn save_archive(
 
 /// The front half of a load, against a mount that is not yet live. It stops AT the manifest,
 /// because the patch's own node types must be registered before `load_doc` resolves the graph.
+/// Answers the manifest, the home the patch takes, and the recovery it came from, if one.
 fn stage_load(
     mount: &std::path::Path,
     custom: &std::path::Path,
     payload: &Value,
-) -> Result<(String, Option<String>), String> {
+) -> Result<(String, Option<String>, Option<PathBuf>), String> {
     let from_file = payload.get("path").and_then(|v| v.as_str()).filter(|p| !p.is_empty());
     let inline = payload.get("content").and_then(|v| v.as_str());
-    let (content, from_path, unpacked) = if let Some(p) = from_file {
+    let recover = payload.get("recover").and_then(|v| v.as_str());
+    let mut recovered = None;
+    let (content, from_path, unpacked) = if let Some(dir) = recover {
+        // A crash's autosave: the layout a `.gfi` unpacks to, already unpacked. Its home is the
+        // patch's, so the save that follows lands where the lost session's would have.
+        let dir = autosave::recovery(dir)?;
+        let manifest = goofi_graph::archive::read_unpacked(&dir, mount)
+            .map_err(|e| format!("session recover failed: {e}"))?;
+        let home = autosave::home_of(&dir);
+        recovered = Some(dir);
+        (manifest, home, true)
+    } else if let Some(p) = from_file {
         if inline.is_some() {
             return Err("session load: a `path` to an archive or a `content` manifest, never both".into());
         }
@@ -439,7 +461,7 @@ fn stage_load(
     // not write into it, but a skill goofi has GAINED since the patch was saved is not something
     // the patch has an opinion about. Absent-only, so nothing of the patch's is touched.
     seed_skills(mount);
-    Ok((content, from_path))
+    Ok((content, from_path, recovered))
 }
 
 /// The API routes, unguarded. The ONLY caller is [`app`], because `Router::layer` wraps only what
@@ -1164,8 +1186,12 @@ impl AppState {
     /// Whether the patch differs from its last saved state. TWO sources, because a patch is a graph
     /// AND a workspace, and the workspace half is walked on ask rather than watched.
     pub fn is_dirty(&self) -> bool {
-        self.dirty.load(std::sync::atomic::Ordering::Relaxed)
-            || goofi_graph::archive::fingerprint(&self.mount()) != *self.workspace_baseline.lock().unwrap()
+        self.dirty_against(&goofi_graph::archive::fingerprint(&self.mount()))
+    }
+
+    /// The same, against a walk the caller already took.
+    pub(crate) fn dirty_against(&self, seen: &Fingerprint) -> bool {
+        self.dirty.load(std::sync::atomic::Ordering::Relaxed) || *seen != *self.workspace_baseline.lock().unwrap()
     }
 
     /// Set the dirty flag, returning an `unsaved_changes` event only when it actually changed.
@@ -1457,6 +1483,7 @@ fn resync_and_broadcast(state: &AppState) {
     let mut g = state.graph.lock().unwrap();
     // The settle point: one delivery per batch, before the projection, from settled state.
     g.settle();
+    *state.manifest.lock().unwrap() = g.serialize();
     sync_followers(state, &g);
     let mut doc = state.doc.lock().unwrap();
     remirror_and_broadcast_locked(state, &g, &mut doc);

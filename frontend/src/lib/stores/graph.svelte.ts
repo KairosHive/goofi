@@ -6,6 +6,7 @@ import {
 	type Control,
 	type ControlEvent,
 	type DemoExample,
+	type Recovery,
 	type DirListing,
 	type GraphSnapshot,
 	type LinkInfo,
@@ -94,6 +95,8 @@ export class GraphStore {
 	links = $state<LinkInfo[]>([]);
 	savePath = $state<string | null>(null);
 	unsavedChanges = $state(false);
+	/** What a goofi that did not shut down cleanly left behind, as the manager last listed it. */
+	recoveries = $state<Recovery[]>([]);
 	/** What the server said it is. Every affordance a demo withholds reads THIS, never a list of
 	 * its own. */
 	demo = $state(false);
@@ -706,6 +709,24 @@ export class GraphStore {
 	async save(path: string, overwrite = true): Promise<{ path: string }> {
 		// A given `path` becomes the patch's home; the arrangement is the manager's already.
 		return this.ctl.call<{ path: string }>('session save', { path, overwrite });
+	}
+
+	/** Ask the manager what earlier sessions left unsaved; the list is disk truth, read on ask. */
+	async refreshRecoveries(): Promise<void> {
+		const r = await this.ctl.call<{ recoveries: Recovery[] }>('session recoverable', {});
+		this.recoveries = r.recoveries;
+	}
+
+	/** Open a crash's autosave in place of the open patch: unsaved work, with its old home. */
+	async recover(workspace: string): Promise<void> {
+		await this.ctl.call('session recover', { workspace });
+		this.recoveries = this.recoveries.filter((r) => r.workspace !== workspace);
+	}
+
+	/** Remove a crash's autosave without opening it. */
+	async discardRecovery(workspace: string): Promise<void> {
+		await this.ctl.call('session discard', { workspace });
+		this.recoveries = this.recoveries.filter((r) => r.workspace !== workspace);
 	}
 
 	/** Reset to an empty, unnamed patch. Nothing is written here: a New emits no

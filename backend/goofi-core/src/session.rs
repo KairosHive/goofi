@@ -44,9 +44,10 @@ pub fn system_dir(id: &str) -> PathBuf {
     system_base().join(id)
 }
 
-/// Where every session's workspace lives.
+/// Where every session's workspace lives. Under the home, not `$TMPDIR`: a crash leaves the
+/// workspace behind as the patch's recovery, and a recovery must outlive a reboot.
 pub fn workspaces_base() -> PathBuf {
-    std::env::temp_dir().join("goofi-workspaces")
+    home::system().join("workspaces")
 }
 
 /// The workspace directory of session `id`.
@@ -227,19 +228,4 @@ pub fn sweep_dead_system(mut remove: impl FnMut(&Path)) {
             remove(&dir);
         }
     }
-}
-
-/// Sweep every workspace parent that holds nothing and belongs to no living session. A crash
-/// leaves a workspace behind on purpose; an EMPTY one carries no work and only clutters.
-pub fn sweep_empty_workspaces() -> usize {
-    let Ok(entries) = fs::read_dir(workspaces_base()) else { return 0 };
-    let mut swept = 0;
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        let Some(id) = dir.file_name().and_then(|n| n.to_str()) else { continue };
-        if !alive(id) && fs::remove_dir(&dir).is_ok() {
-            swept += 1;
-        }
-    }
-    swept
 }
