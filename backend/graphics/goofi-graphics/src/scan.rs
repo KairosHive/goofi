@@ -42,6 +42,7 @@ pub(crate) fn scan(engine: &mut GraphicsEngine, dir: &Path) -> Vec<ScannedType> 
                 Scanned::Unavailable(reason)
             }
         };
+        goofi_core::startup::scanned(dir, &path);
         out.push(ScannedType { type_name, stamp, outcome });
     }
     out

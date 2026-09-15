@@ -62,6 +62,13 @@ fn sdk_engine(source: &str) -> Option<String> {
 
 /// Every node file in `dir` that is `engine`'s, sorted: its path, the type it names, and the
 /// stamp a rescan diffs.
+/// How many files in `dir` name a node by extension: what a scan of the folder reads.
+pub fn node_file_count(dir: &Path) -> usize {
+    std::fs::read_dir(dir).map_or(0, |rd| {
+        rd.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "py" || x == "wgsl" || x == "rs")).count()
+    })
+}
+
 pub fn node_files(dir: &Path, engine: &str) -> Vec<(PathBuf, String, Option<crate::Stamp>)> {
     let mut paths: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.path())).collect(),

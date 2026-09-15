@@ -60,6 +60,11 @@ jobs:
     steps:
     - uses: actions/checkout@v7
 
+    # The runner ships toolchains this build never touches, and the disk they take is the disk a
+    # test binary's link runs out of: the linker dies with a bus error, not a message.
+    - if: runner.os == 'Linux'
+      run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/.ghcup && df -h /
+
     # goofi offers every cpal host the machine runs, and on Linux each one links a system library:
     # ALSA always, then PipeWire, JACK and rtkit's D-Bus. Only Linux needs them — `jack` dlopens on
     # Windows and macOS, and cpal target-gates the rest — so this step stays the Linux one it was.
@@ -144,11 +149,10 @@ jobs:
       run: cargo clippy --workspace --all-targets -- -D warnings
 
     # Clippy carries the rustc lints, but NOT cargo's own — the `.pdb` collision was one of those,
-    # and `-D warnings` never saw it. This is the anchored grep AGENTS.md names, which until now
-    # was in the list and in no job.
+    # and `-D warnings` never saw it. Built in the test profile, so the tests below link nothing twice.
     - name: No cargo warnings
       run: |
-        cargo build --workspace --all-targets 2>&1 | tee /tmp/build.log
+        cargo test --workspace --no-run 2>&1 | tee /tmp/build.log
         ! grep -n '^warning' /tmp/build.log
 
     - name: Tests

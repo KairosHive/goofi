@@ -23,6 +23,7 @@ pub(crate) fn scan(engine: &mut AudioEngine, dir: &Path) -> Vec<ScannedType> {
         } else {
             Scanned::Unavailable("an audio node is an `.rs` file".into())
         };
+        goofi_core::startup::scanned(dir, &path);
         out.push(ScannedType { type_name, stamp, outcome });
     }
     out.extend(crate::vst3::scan_dir(engine, dir));
