@@ -18,11 +18,14 @@ fn drawn(g: &Goofi, uid: Uid, what: &str, want: impl Fn(&goofi_core::Data) -> bo
     })
 }
 
-/// The texel at `(row, col)`: four floats, row 0 the top.
+/// The texel at `(row, col)`: four floats, row 0 the top. Read off the bytes in place: a 1024²
+/// frame is 16 MB, and decoding all of it to reach one texel is what made this suite slow.
 fn px(d: &goofi_core::Data, row: usize, col: usize) -> [f32; 4] {
     let s = shape(d);
-    let at = (row * s[1] + col) * 4;
-    f32s(d)[at..at + 4].try_into().expect("four channels")
+    let goofi_core::Value::Array(a) = d.value() else { panic!("not an array: {d:?}") };
+    let at = (row * s[1] + col) * 16;
+    let bytes = &a.as_bytes()[at..at + 16];
+    std::array::from_fn(|i| f32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().expect("four bytes")))
 }
 
 /// The row of the brightest texel in each column, and none where a column was left alone.
@@ -615,12 +618,20 @@ fn shaders_render_on_the_gpu() {
     let mut got = shipped.clone();
     got.sort();
     assert_eq!(got, want, "every shipped `.wgsl` is a type, and nothing else is");
+    // At a small default: the question is whether each pipeline draws, and a 1024² readback per
+    // poll answers it no better in a hundred times the bytes.
+    for side in ["system.default_width", "system.default_height"] {
+        g.call("global entry edit", j!({ "name": side, "value": 64 }));
+    }
     for ty in &shipped {
         let node = g.add(ty);
         g.ready(node);
         drawn(&g, node, ty, |d| shape(d).len() == 3);
         assert!(g.error(node).is_none(), "{ty} stands with an error");
         g.call("node remove", j!({ "node": hex(node) }));
+    }
+    for side in ["system.default_width", "system.default_height"] {
+        g.call("global entry edit", j!({ "name": side, "value": goofi_core::globals::DEFAULT_SIZE }));
     }
 
     // Step: a `.wgsl` that does not compile is a greyed type carrying naga's own line number.
@@ -674,6 +685,8 @@ fn shaders_render_on_the_gpu() {
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["graphics:Count"]));
     let counter = g.add("graphics:Count");
     g.ready(counter);
+    g.set_param(counter, "common", "width", 64);
+    g.set_param(counter, "common", "height", 64);
     let counted = g.probe(counter, "out");
     let read = || counted.latest().map(|d| px(&d, 0, 0));
     let opened = g.until("a frame off the node's own buffer", |g| {

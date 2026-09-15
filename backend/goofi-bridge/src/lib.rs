@@ -119,6 +119,9 @@ pub struct AppState {
     /// The patch as YAML at the last settle point — taken where the graph is already locked, so
     /// the autosave never holds that lock against the audio drain.
     manifest: Arc<Mutex<String>>,
+    /// Pulsed whenever what the autosave keeps may have moved: a settle, a dirty transition, a
+    /// workspace file. The autosave parks on it; nothing polls.
+    changed: Arc<goofi_node::DrainWaker>,
     /// Where the open patch lives on disk. Manager-owned rather than per tab, so it rides the
     /// snapshot every client connects with.
     save_path: Arc<Mutex<Option<String>>>,
@@ -227,6 +230,7 @@ impl AppState {
             mount: Arc::new(Mutex::new(mount)),
             workspace_baseline: Arc::new(Mutex::new(workspace_baseline)),
             manifest: Arc::new(Mutex::new(manifest)),
+            changed: Arc::new(goofi_node::DrainWaker::default()),
             save_path: Arc::new(Mutex::new(None)),
             bound: Arc::new(Mutex::new(([127, 0, 0, 1], 8000).into())),
             harnesses: Arc::new(term::Harnesses::default()),
@@ -249,6 +253,8 @@ impl AppState {
         }
         self.stop_recording();
         self.stopping.stop();
+        // Parked workers read the stop when they wake.
+        self.changed.notify();
         let workers: Vec<_> = std::mem::take(&mut *self.workers.lock().unwrap_or_else(|e| e.into_inner()));
         for worker in workers {
             let _ = worker.join_within(goofi_transport::SHUTDOWN_WAIT);
@@ -1197,7 +1203,11 @@ impl AppState {
     /// Set the dirty flag, returning an `unsaved_changes` event only when it actually changed.
     fn set_dirty(&self, dirty: bool) -> Option<String> {
         let was = self.dirty.swap(dirty, std::sync::atomic::Ordering::Relaxed);
-        (was != dirty).then(|| event("unsaved_changes", json!({ "unsaved_changes": dirty })))
+        if was == dirty {
+            return None;
+        }
+        self.changed.notify();
+        Some(event("unsaved_changes", json!({ "unsaved_changes": dirty })))
     }
 }
 
@@ -1484,6 +1494,7 @@ fn resync_and_broadcast(state: &AppState) {
     // The settle point: one delivery per batch, before the projection, from settled state.
     g.settle();
     *state.manifest.lock().unwrap() = g.serialize();
+    state.changed.notify();
     sync_followers(state, &g);
     let mut doc = state.doc.lock().unwrap();
     remirror_and_broadcast_locked(state, &g, &mut doc);

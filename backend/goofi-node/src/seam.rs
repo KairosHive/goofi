@@ -58,8 +58,9 @@ impl DrainWaker {
         self.cv.notify_one();
     }
 
-    /// Park until a notify or `timeout`, and consume the wake either way.
-    pub fn wait_timeout(&self, timeout: Duration) {
+    /// Park until a notify or `timeout`, and consume the wake either way. Answers whether a
+    /// notify came, so a caller can tell a quiet window from a wake.
+    pub fn wait_timeout(&self, timeout: Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
         let mut woke = self.woke.lock().unwrap();
         while !*woke {
@@ -70,7 +71,7 @@ impl DrainWaker {
             let (guard, _) = self.cv.wait_timeout(woke, left).unwrap();
             woke = guard;
         }
-        *woke = false;
+        std::mem::replace(&mut *woke, false)
     }
 }
 

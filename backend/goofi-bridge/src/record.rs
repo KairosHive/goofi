@@ -14,9 +14,6 @@ use goofi_transport::{record_shape, Halt};
 /// The longest a sweep waits on the door — a CEILING on the park, never a cadence.
 const WAKE: Duration = Duration::from_millis(20);
 
-/// How often the armed set is re-derived from the graph. It is NOT done per wake: the wake rate is
-/// the PUBLISH rate, and resolving there would hold the graph lock in a 32 kHz loop.
-const RESOLVE: Duration = Duration::from_millis(25);
 
 /// The engines whose armed slots publish GOOF frames on a record service, and how each one dates a
 /// frame: a signal node reads the clock at its `process`, and the audio engine counts samples — so
@@ -215,6 +212,10 @@ impl Drain {
     }
 }
 
+fn drain_epoch(graph: &Arc<Mutex<Graph>>) -> Arc<std::sync::atomic::AtomicU64> {
+    graph.lock().unwrap_or_else(|e| e.into_inner()).epoch()
+}
+
 /// Start the one drain. `halt` is what stops it, and what a teardown waits on to a ceiling.
 pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>) {
     recorder.set_capture(Arc::new(AudioCapture(Arc::downgrade(&graph))));
@@ -234,8 +235,11 @@ pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>)
             halt.release();
             return;
         };
+        let epoch = drain_epoch(&graph);
         let mut drain = Drain { graph, recorder, time, feeds: HashMap::new(), listener, node };
-        let mut resolved = Instant::now() - RESOLVE;
+        // The graph epoch the feeds were resolved against; `None` once they were let go. The lock
+        // is taken to resolve ONLY when that epoch moved — never per wake, which is the publish rate.
+        let mut resolved: Option<u64> = None;
         let mut swept = 0;
         let mut ready = false;
         while !halt.stopped() {
@@ -249,11 +253,13 @@ pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>)
                 drain.release();
                 drain.recorder.swept(mark);
                 swept = mark;
+                resolved = None;
                 continue;
             }
-            if resolved.elapsed() >= RESOLVE || drain.feeds.is_empty() || mark != swept {
+            let now = epoch.load(std::sync::atomic::Ordering::Acquire);
+            if resolved != Some(now) || mark != swept {
                 ready = drain.resolve();
-                resolved = Instant::now();
+                resolved = Some(now);
             }
             // Keep subscribers ready during preparation. A requested sweep drains with
             // backpressure so its acknowledgement includes every queued frame.

@@ -90,6 +90,9 @@ pub struct GraphicsEngine {
     pub(crate) compiler: Compiler,
     pub(crate) python: Option<goofi_python::catalog::Python>,
     pub(crate) classes: HashMap<String, Arc<Class>>,
+    /// The file and stamp each class was registered from, so a rescan skips one that did not
+    /// move rather than validating and recompiling every shipped shader for one edit elsewhere.
+    pub(crate) stamps: HashMap<String, (std::path::PathBuf, goofi_node::Stamp)>,
     live: HashMap<Uid, Instance>,
     runtime: Arc<Mutex<Runtime>>,
     inbox: Arc<Mutex<Vec<runtime::Cmd>>>,
@@ -202,6 +205,7 @@ impl GraphicsEngine {
             gpu,
             shared,
             classes: HashMap::new(),
+            stamps: HashMap::new(),
             python: None,
             live: HashMap::new(),
             runtime,
