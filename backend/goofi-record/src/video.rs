@@ -8,7 +8,8 @@
 use std::io::{Read, Write};
 use goofi_core::record::VideoQuality;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use goofi_core::child::Child;
+use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
@@ -72,56 +73,8 @@ pub const CLIP: &str = "H.264 in Matroska: constant quality, 8-bit YUV 4:2:0, va
                         [0,1] clipped, alpha not kept. Odd dimensions are padded on the right \
                         or bottom to even dimensions.";
 
-static CHILDREN: Mutex<Vec<Child>> = Mutex::new(Vec::new());
-static STOPPING: AtomicBool = AtomicBool::new(false);
-
-/// Stop encoder processes without waiting for queued frames.
-pub fn kill_encoders() {
-    STOPPING.store(true, Ordering::Relaxed);
-    for child in CHILDREN.lock().unwrap_or_else(|e| e.into_inner()).iter_mut() {
-        let _ = child.kill();
-    }
-}
-
-fn track(mut child: Child) -> Result<u32, String> {
-    let mut children = CHILDREN.lock().unwrap_or_else(|e| e.into_inner());
-    if STOPPING.load(Ordering::Relaxed) {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err("video encoders are stopping".into());
-    }
-    let id = child.id();
-    children.push(child);
-    Ok(id)
-}
-
-/// Reap the child. A trial has a deadline; a recording drains until it is complete or killed.
-fn wait_encoder(id: u32, deadline: Option<Instant>) -> Result<Option<ExitStatus>, String> {
-    loop {
-        {
-            let mut children = CHILDREN.lock().unwrap_or_else(|e| e.into_inner());
-            let index = children.iter().position(|child| child.id() == id)
-                .ok_or("the encoder is no longer running")?;
-            match children[index].try_wait() {
-                Ok(Some(status)) => {
-                    let _ = children.swap_remove(index).wait();
-                    return Ok(Some(status));
-                }
-                Ok(None) if !deadline.is_some_and(|end| Instant::now() >= end) => {}
-                result => {
-                    let mut child = children.swap_remove(index);
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return result.map(|_| None).map_err(|e| e.to_string());
-                }
-            }
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
 struct Ffmpeg {
-    child: Option<u32>,
+    child: Option<Child>,
     stdin: Option<ChildStdin>,
     file: PathBuf,
     size: (u32, u32),
@@ -214,22 +167,19 @@ impl Preset {
             "nullsrc=size={}x{}:rate={fps},format=rgba", size.0, size.1,
         )]);
         self.output(&mut command, fps, quality);
-        let child = command.args(["-frames:v", "1", "-f", "null", "-"])
-            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
-            .spawn().map_err(|e| format!("{MISSING} ({e})"))?;
-        let id = track(child)?;
-        Ok(wait_encoder(id, Some(Instant::now() + Duration::from_secs(5)))?
+        let mut child = goofi_core::child::spawn(
+            format!("ffmpeg trial {}", self.codec),
+            command.args(["-frames:v", "1", "-f", "null", "-"])
+                .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()),
+        )
+        .map_err(|e| format!("{MISSING} ({e})"))?;
+        Ok(child.wait_within(Duration::from_secs(5)).map_err(|e| e.to_string())?
             .is_some_and(|status| status.success()))
     }
 }
 
 fn ffmpeg() -> Command {
     let mut command = Command::new("ffmpeg");
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -245,9 +195,6 @@ impl Ffmpeg {
     fn start(&mut self) -> Result<(), String> {
         let mut selected = None;
         for preset in Preset::candidates() {
-            if STOPPING.load(Ordering::Relaxed) {
-                return Err("video encoders are stopping".into());
-            }
             if preset.works(self.size, self.fps, self.quality)? {
                 selected = Some(preset);
                 break;
@@ -260,9 +207,11 @@ impl Ffmpeg {
             .args(["-s", &format!("{}x{}", self.size.0, self.size.1), "-r", &format!("{}", self.fps)])
             .args(["-i", "-"]);
         preset.output(&mut command, self.fps, self.quality);
-        let mut child = command.arg(&self.file)
-            .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped())
-            .spawn().map_err(|e| format!("could not start FFmpeg: {e}"))?;
+        let mut child = goofi_core::child::spawn(
+            format!("ffmpeg {}", self.file.display()),
+            command.arg(&self.file).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()),
+        )
+        .map_err(|e| format!("could not start FFmpeg: {e}"))?;
         let mut stderr = child.stderr.take().ok_or("FFmpeg has no error pipe")?;
         let errors = std::thread::Builder::new().name("goofi-record-errors".into()).spawn(move || {
             let mut message = Vec::new();
@@ -276,14 +225,11 @@ impl Ffmpeg {
         });
         match errors {
             Ok(errors) => self.stderr = Some(errors),
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("could not read FFmpeg errors: {error}"));
-            }
+            // `child` drops here: killed and reaped.
+            Err(error) => return Err(format!("could not read FFmpeg errors: {error}")),
         }
         self.stdin = child.stdin.take();
-        self.child = Some(track(child)?);
+        self.child = Some(child);
         Ok(())
     }
 }
@@ -313,13 +259,13 @@ impl Encoder for Ffmpeg {
     fn finish(&mut self) -> Result<(), String> {
         self.closed = true;
         drop(self.stdin.take());
-        let status = self.child.take().map(|id| wait_encoder(id, None)).transpose();
+        // A recording drains until the container is complete, however long that takes.
+        let status = self.child.take().map(|mut child| child.wait().map_err(|e| e.to_string())).transpose();
         let error = self.stderr.take().and_then(|reader| reader.join().ok()).unwrap_or_default();
         match status? {
             None => Ok(()),
-            Some(Some(status)) if status.success() => Ok(()),
-            Some(Some(status)) => Err(format!("ffmpeg left {} unfinished: {status}: {error}", self.file.display())),
-            Some(None) => Err("the encoder did not finish".into()),
+            Some(status) if status.success() => Ok(()),
+            Some(status) => Err(format!("ffmpeg left {} unfinished: {status}: {error}", self.file.display())),
         }
     }
 }

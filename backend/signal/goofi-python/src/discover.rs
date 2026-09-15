@@ -2,7 +2,8 @@
 //! manifest the engine registers — or why it could not.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+use std::time::Duration;
 
 use goofi_core::probe;
 use goofi_node::{illegal_slot, leak_manifest, parse_introspection, type_name_of, Isolation, IsolationCell, NodeManifest};
@@ -32,6 +33,10 @@ fn probe_reason(stderr: &str) -> String {
 }
 
 /// Run `goofi.introspect(path)` in `python` and parse the result; `Err` carries why it failed.
+/// How long one probe may take: an import of a deep learning stack is tens of seconds on a
+/// cold cache, never minutes.
+const PROBE_WAIT: Duration = Duration::from_secs(300);
+
 pub fn probe_introspect(path: &Path, python: &str) -> Result<probe::Introspection, String> {
     goofi_core::startup::report(format!("Indexing Python node {}", path.file_name().unwrap_or_default().to_string_lossy()));
     // The payload is a dup of fd 1 taken before fd 1 is rerouted to stderr, so anything an
@@ -44,16 +49,18 @@ sys.stdout = sys.stderr
 payload.write(goofi.introspect(sys.argv[1]).encode())
 payload.close()
 ";
-    let out = Command::new(python)
-        .arg("-c")
-        .arg(PROBE)
-        .arg(path)
-        // A host `PYTHONPATH` must not shadow the probe interpreter's own goofi and deps.
-        .env_remove("PYTHONPATH")
-        .env_remove("PYTHONHOME")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("could not run `{python}`: {e}"))?;
+    let out = goofi_core::child::output(
+        format!("python probe {}", path.file_name().unwrap_or_default().to_string_lossy()),
+        Command::new(python)
+            .arg("-c")
+            .arg(PROBE)
+            .arg(path)
+            // A host `PYTHONPATH` must not shadow the probe interpreter's own goofi and deps.
+            .env_remove("PYTHONPATH")
+            .env_remove("PYTHONHOME"),
+        PROBE_WAIT,
+    )
+    .map_err(|e| format!("could not run `{python}`: {e}"))?;
     if !out.status.success() {
         return Err(probe_reason(&String::from_utf8_lossy(&out.stderr)));
     }

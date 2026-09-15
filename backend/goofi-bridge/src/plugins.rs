@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -20,6 +20,8 @@ const MAIN: &str = include_str!("../../../sdk/python/goofi_plugin/__main__.py");
 const FRONTEND_SDK: &str = include_str!("../../../sdk/frontend/index.ts");
 const FRONTEND_PACKAGE: &str = include_str!("../../../sdk/frontend/package.json");
 const TIMEOUT: Duration = Duration::from_secs(30);
+/// How long one build tool may run: an `npm ci` over a slow link is minutes, never longer.
+const BUILD_WAIT: Duration = Duration::from_secs(900);
 
 thread_local! { static CHAIN: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) }; }
 
@@ -90,7 +92,7 @@ type Pending = Arc<Mutex<HashMap<u64, mpsc::Sender<Reply>>>>;
 
 struct Service {
     input: mpsc::Sender<Value>,
-    child: Mutex<Child>,
+    child: Mutex<goofi_core::child::Child>,
     pending: Pending,
     sequence: AtomicU64,
     output: Mutex<Option<BufReader<std::process::ChildStdout>>>,
@@ -131,28 +133,28 @@ impl Service {
         sdk: &Path,
         config: Value,
     ) -> Result<(Arc<Self>, Contributions), String> {
-        let mut child = Command::new(python)
-            .args(["-u", "-m", "goofi_plugin"])
-            .arg(config.to_string())
-            .env("PYTHONPATH", sdk)
-            .env_remove("PYTHONHOME")
-            .current_dir(
-                config["package_dir"]
-                    .as_str()
-                    .ok_or("missing package path")?,
-            )
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("start Python: {e}"))?;
+        let id = config["id"].as_str().unwrap_or_default().to_string();
+        let mut child = goofi_core::child::spawn(
+            format!("plugin {id}"),
+            Command::new(python)
+                .args(["-u", "-m", "goofi_plugin"])
+                .arg(config.to_string())
+                .env("PYTHONPATH", sdk)
+                .env_remove("PYTHONHOME")
+                .current_dir(
+                    config["package_dir"]
+                        .as_str()
+                        .ok_or("missing package path")?,
+                )
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .map_err(|e| format!("start Python: {e}"))?;
         let input = child.stdin.take().ok_or("missing Python stdin")?;
         let output = child.stdout.take().ok_or("missing Python stdout")?;
         if let Some(stderr) = child.stderr.take() {
-            let source = goofi_core::log::Source::component(&format!(
-                "plugin:{}",
-                config["id"].as_str().unwrap_or_default()
-            ));
+            let source = goofi_core::log::Source::component(&format!("plugin:{id}"));
             std::thread::spawn(move || goofi_core::log::drain(stderr, source, "stderr"));
         }
         let (tx, rx) = mpsc::channel();
@@ -176,8 +178,7 @@ impl Service {
         let (reader, contributions) = match handshake {
             Ok((reader, Ok(contributions))) => (reader, contributions),
             other => {
-                let _ = child.kill();
-                let _ = child.wait();
+                child.stop(Duration::ZERO);
                 return Err(match other {
                     Ok((_, Err(e))) => e,
                     _ => "plugin startup timed out".into(),
@@ -338,13 +339,13 @@ impl Service {
         }
     }
 
+    /// Ask the service to leave and insist after a short grace, so a Python that is flushing
+    /// its data gets to; a service that stopped answering gets no longer than that.
     fn kill(&self) {
-        let mut child = self
-            .child
+        self.child
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _ = child.kill();
-        let _ = child.wait();
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .stop(Duration::from_secs(2));
     }
 }
 impl Drop for Service {
@@ -353,8 +354,11 @@ impl Drop for Service {
     }
 }
 
+/// One build tool — `npm`, `uv` — to completion, or killed at a ceiling a stuck fetch cannot
+/// hold a load past.
 fn run(command: &mut Command) -> Result<(), String> {
-    let output = command.output().map_err(|e| e.to_string())?;
+    let tool = command.get_program().to_string_lossy().into_owned();
+    let output = goofi_core::child::output(format!("plugin build: {tool}"), command, BUILD_WAIT).map_err(|e| e.to_string())?;
     if output.status.success() {
         Ok(())
     } else {

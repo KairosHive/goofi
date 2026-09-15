@@ -12,7 +12,7 @@ mod node;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use goofi_audio_sdk::{AudioNode, MAX_PORTS};
 use goofi_core::probe;
@@ -357,33 +357,27 @@ fn key_of(binary: &Path, (len, modified): Stamp) -> String {
 /// One child, its output going to a FILE — never a pipe, which a plugin's chatter could fill while
 /// nobody is reading it. A spawn that fails is goofi's own doing rather than the plugin's, which is
 /// why it is the one refusal [`described`] never remembers.
-fn spawn_scanner(scanner: &Path, bundle: &Path, part: &Path, errors: &Path) -> Result<std::process::Child, String> {
+fn spawn_scanner(scanner: &Path, bundle: &Path, part: &Path, errors: &Path) -> Result<goofi_core::child::Child, String> {
     let sink = std::fs::File::create(errors).map_err(|e| format!("{}: {e}", errors.display()))?;
-    std::process::Command::new(scanner)
-        .arg("vst3-scan")
-        .arg(bundle)
-        .arg(part)
-        .stdin(std::process::Stdio::null())
-        .stdout(sink.try_clone().map_err(|e| e.to_string())?)
-        .stderr(sink)
-        .spawn()
-        .map_err(|e| format!("could not run the scanner {}: {e}", scanner.display()))
+    goofi_core::child::spawn(
+        format!("vst3 scan {}", bundle.file_name().unwrap_or_default().to_string_lossy()),
+        std::process::Command::new(scanner)
+            .arg("vst3-scan")
+            .arg(bundle)
+            .arg(part)
+            .stdin(std::process::Stdio::null())
+            .stdout(sink.try_clone().map_err(|e| e.to_string())?)
+            .stderr(sink),
+    )
+    .map_err(|e| format!("could not run the scanner {}: {e}", scanner.display()))
 }
 
 /// The child's verdict, under a ceiling, in its own words where it left any.
-fn answered(child: &mut std::process::Child, errors: &Path) -> Result<(), String> {
-    let deadline = Instant::now() + SCAN_WAIT;
-    let status = loop {
-        match child.try_wait() {
-            Err(e) => break Err(format!("the scanner could not be waited for: {e}")),
-            Ok(Some(status)) => break Ok(status),
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break Err(format!("the scanner did not answer in {}s", SCAN_WAIT.as_secs()));
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-        }
+fn answered(child: &mut goofi_core::child::Child, errors: &Path) -> Result<(), String> {
+    let status = match child.wait_within(SCAN_WAIT) {
+        Err(e) => Err(format!("the scanner could not be waited for: {e}")),
+        Ok(Some(status)) => Ok(status),
+        Ok(None) => Err(format!("the scanner did not answer in {}s", SCAN_WAIT.as_secs())),
     };
     let said = std::fs::read_to_string(errors).unwrap_or_default().trim().to_string();
     let _ = std::fs::remove_file(errors);

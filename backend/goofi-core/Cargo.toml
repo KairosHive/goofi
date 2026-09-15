@@ -25,5 +25,9 @@ toml = "0.8"
 # never depends back on goofi-core.
 goofi-view = { path = "../goofi-view" }
 
-[target.'cfg(windows)'.dependencies]
+# The child's process group and the liveness pipe's fd flag (unix); the log redirect (windows).
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# Marking the liveness pipe's read HANDLE inheritable.
+windows-sys = { version = "0.61", features = ["Win32_Foundation"] }

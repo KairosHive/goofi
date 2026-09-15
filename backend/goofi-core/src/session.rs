@@ -10,6 +10,7 @@
 //!   a crash leaves there is the user's work.
 
 use std::fs::{self, File};
+use std::sync::OnceLock;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -67,6 +68,19 @@ pub fn fresh_id() -> String {
     let mut nonce = [0u8; 8];
     getrandom::fill(&mut nonce).expect("the OS random source");
     format!("{:016x}", u64::from_be_bytes(nonce))
+}
+
+static CURRENT: OnceLock<String> = OnceLock::new();
+
+/// Name the session this process runs under — decided once, by whoever holds or joins it.
+/// A second decision is ignored: the first is the one every child was told.
+pub fn decide(id: &str) {
+    let _ = CURRENT.set(id.to_string());
+}
+
+/// The session this process runs under, once decided.
+pub fn current() -> Option<&'static str> {
+    CURRENT.get().map(String::as_str)
 }
 
 /// The session this process OWNS: alive exactly as long as this value lives.

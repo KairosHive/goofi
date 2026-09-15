@@ -140,6 +140,10 @@ impl Harnesses {
             size: watch::channel(None).0,
             seats: AtomicU64::new(0),
             tail: Mutex::default(),
+            _lease: goofi_core::registry::lease(
+                goofi_core::registry::Kind::Child,
+                format!("harness {agent} (pid {})", child.process_id().unwrap_or_default()),
+            ),
         });
 
         // Drained unconditionally: a child whose output nobody reads blocks on a full buffer. A
@@ -208,7 +212,7 @@ impl Harnesses {
         }
         for (_, inst) in &taken {
             inst.stopping.store(true, Ordering::Relaxed);
-            let _ = signal(inst, crate::proc::request_stop);
+            let _ = signal(inst, goofi_core::child::request_stop);
         }
         Some(move || {
             let deadline = std::time::Instant::now() + GRACE;
@@ -218,7 +222,7 @@ impl Harnesses {
                 std::thread::sleep(std::time::Duration::from_millis(25));
             }
             for (_, inst) in &taken {
-                let _ = signal(inst, crate::proc::force_kill);
+                let _ = signal(inst, goofi_core::child::force_kill);
             }
         })
     }
@@ -227,10 +231,10 @@ impl Harnesses {
 /// Ask a running instance to leave, and insist after the grace.
 fn begin_stop(inst: Arc<Instance>) -> Result<(), String> {
     inst.stopping.store(true, Ordering::Relaxed);
-    signal(&inst, crate::proc::request_stop)?;
+    signal(&inst, goofi_core::child::request_stop)?;
     std::thread::spawn(move || {
         std::thread::sleep(GRACE);
-        let _ = signal(&inst, crate::proc::force_kill);
+        let _ = signal(&inst, goofi_core::child::force_kill);
     });
     Ok(())
 }
@@ -282,6 +286,8 @@ pub struct Instance {
     seats: AtomicU64,
     /// The last [`TAIL_BYTES`] the child wrote, replayed to an attach that arrived after them.
     tail: Mutex<Vec<u8>>,
+    /// Its entry in the resource index, for as long as the roster holds it.
+    _lease: goofi_core::registry::Lease,
 }
 
 /// What an attach hands a `/term` socket: the replayed tail, then the live channels.
