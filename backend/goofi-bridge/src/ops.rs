@@ -168,6 +168,15 @@ pub static TREE: &[Entry] = &[
         Leaf(Op { name: "new", handler: Effect(arms::session_new), args: "", positional: 0,
              doc: "Replace the open patch with the empty one, losing unsaved work. The undo history is cleared, so this cannot be taken back.",
              result: "{ok: true, layout_warning: string | null}" }),
+        Leaf(Op { name: "recoverable", handler: Read(arms::session_recoverable), args: "", positional: 0,
+             doc: "Every autosave a goofi that did not shut down cleanly left behind: unsaved work, kept beside the crashed session's workspace. `workspace` is what `session recover` and `session discard` take; `home` is the `.gfi` the patch was saved as, null for one never saved; `at` is when the autosave was taken, in seconds since the epoch.",
+             result: "{recoveries: [{workspace, home: string | null, at: float | null}]}" }),
+        Leaf(Op { name: "recover", handler: Effect(arms::session_recover), args: "workspace:string", positional: 1,
+             doc: "Replace the open patch with a crash's autosave, losing unsaved work. The recovered patch is UNSAVED work with its old home: a plain Save writes it where the lost session would have. The autosave is removed once it is open.",
+             result: "{ok: true, layout_warning: string | null}" }),
+        Leaf(Op { name: "discard", handler: Effect(arms::session_discard), args: "workspace:string", positional: 1,
+             doc: "Remove a crash's autosave without opening it. Refused for a workspace a running goofi owns.",
+             result: "{ok: true}" }),
     ]),
     Group("node", "one node instance — read it, build it, tune it, remove it", &[
         Leaf(Op { name: "state", handler: Read(arms::node_state),
@@ -464,8 +473,9 @@ pub fn table(mode: crate::Mode) -> Vec<&'static Op<'static>> {
     // What a demo drops: the host's filesystem, the agents it would spawn, the two ops that read
     // or write a `.gfi` beside them, and the one that writes a node file into the host's own home
     // — every visitor shares one process. `session new` stays: it is the visitor's reset.
-    const DEMO_DROPS: [&str; 5] =
-        ["dir", "agent", "session save", "session load", "library save"];
+    const DEMO_DROPS: [&str; 8] =
+        ["dir", "agent", "session save", "session load", "library save",
+         "session recoverable", "session recover", "session discard"];
     let dropped = |name: &str, group: &str| {
         name == group || name.strip_prefix(group).is_some_and(|rest| rest.starts_with(' '))
     };

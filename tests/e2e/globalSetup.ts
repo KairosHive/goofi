@@ -78,10 +78,11 @@ export default async function spawnFleet(config: FullConfig): Promise<() => Prom
 	try {
 		await Promise.all(fleet.map(serving));
 		// The one e2e pin on the session records: a REAL binary spawn under a scoped GOOFI_HOME
-		// writes `sessions/<id>.json` per server, each url naming the port it serves.
+		// writes `system/sessions/<id>/session.json` per server, each url naming the port it serves.
+		const records = path.join(home, '.goofi', 'system', 'sessions');
 		const sessions = fs
-			.readdirSync(path.join(home, '.goofi', 'sessions'))
-			.map((f) => JSON.parse(fs.readFileSync(path.join(home, '.goofi', 'sessions', f), 'utf8')));
+			.readdirSync(records)
+			.map((id) => JSON.parse(fs.readFileSync(path.join(records, id, 'session.json'), 'utf8')));
 		for (const { port } of fleet)
 			if (!sessions.some((s) => s.url === `http://127.0.0.1:${port}`))
 				throw new Error(`no session file names :${port} — got ${JSON.stringify(sessions)}`);

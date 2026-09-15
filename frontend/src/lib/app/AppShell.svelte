@@ -6,6 +6,7 @@
 	import ErrorPanel from '$lib/editor/ErrorPanel.svelte';
 	import Toast from '$lib/app/Toast.svelte';
 	import AgentClose from '$lib/app/AgentClose.svelte';
+	import RecoverDialog from '$lib/app/RecoverDialog.svelte';
 	import TitleTip from '$lib/app/TitleTip.svelte';
 	import { Tabs as WorkspaceTabs } from 'panelty';
 	import { Panels as WorkspaceView } from 'panelty';
@@ -230,6 +231,7 @@
 	<Toast />
 	<!-- Shell chrome, not a panel: it asks about an INSTANCE, and asking must not dirty the patch. -->
 	<AgentClose />
+	<RecoverDialog />
 	<!-- One layer, mounted once, so every `title=` below is reachable without hover. -->
 	<TitleTip />
 	{#if g.disconnected}

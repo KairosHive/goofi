@@ -1685,8 +1685,8 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
     // Every source mounts FRESH, and the live mount is swapped only once the manifest has parsed,
     // so a refused load leaves the open patch untouched on both planes. Staged and built off the
     // lock: the archive's own Rust nodes may take seconds to build.
-    let fresh = new_mount(&state.instance_id);
-    let (content, from_path) =
+    let fresh = new_mount();
+    let (content, from_path, recovered) =
         stage_load(&fresh, &state.custom, payload).inspect_err(|_| remove_mount(&fresh))?;
     prebuild(state, &fresh);
     let result = {
@@ -1719,15 +1719,20 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
             goofi_graph::archive::fingerprint(&state.mount());
         // A load fully resets the session: there is nothing to undo across it.
         state.history.lock().unwrap().clear();
-        if let Some(e) = state.set_dirty(false) {
+        // A recovery IS unsaved work — that is what it was kept for — and, taken up, it is done
+        // with; a load from a file is exactly what the file holds.
+        if let Some(e) = state.set_dirty(recovered.is_some()) {
             let _ = state.events.send(e);
+        }
+        if let Some(dir) = &recovered {
+            let _ = autosave::discard(dir);
         }
         // NONE for an inline load and for `session new`, neither with a file behind it: an
         // inherited path would aim the next silent save at an unrelated `.gfi`.
         *state.save_path.lock().unwrap() = from_path.clone();
         let _ = state.events.send(event(
             "graph_replaced",
-            schemas::snapshot(&g, state, false, false, from_path.as_deref(),
+            schemas::snapshot(&g, state, false, recovered.is_some(), from_path.as_deref(),
                               state.harnesses.roster(&agents)),
         ));
         // The patch brought its own node types, which `graph_replaced` does not carry.
@@ -1761,6 +1766,39 @@ pub(crate) fn session_load(
         return Err("session load: give a `path` or `--content` — `session new` opens the empty patch".into());
     }
     load_patch(state, payload)
+}
+
+/// Every crash's autosave on this machine — read from disk on ask, never mirrored.
+pub(crate) fn session_recoverable(
+    _state: &AppState,
+    _payload: &Value,
+    _actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    Ok(json!({ "recoveries": autosave::recoverable() }))
+}
+
+pub(crate) fn session_recover(
+    state: &AppState,
+    payload: &Value,
+    _actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let dir = payload.get("workspace").and_then(Value::as_str).filter(|p| !p.is_empty())
+        .ok_or("session recover: give the `workspace` a `session recoverable` entry names")?;
+    load_patch(state, &json!({ "recover": dir }))
+}
+
+pub(crate) fn session_discard(
+    _state: &AppState,
+    payload: &Value,
+    _actor: &str,
+    _events: &mut Vec<String>,
+) -> Result<Value, String> {
+    let dir = payload.get("workspace").and_then(Value::as_str).filter(|p| !p.is_empty())
+        .ok_or("session discard: give the `workspace` a `session recoverable` entry names")?;
+    autosave::discard(&autosave::recovery(dir)?)?;
+    Ok(json!({ "ok": true }))
 }
 
 pub(crate) fn session_new(

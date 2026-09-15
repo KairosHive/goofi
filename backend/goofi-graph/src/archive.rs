@@ -1,4 +1,5 @@
-//! The `.gfi` container: a zip holding `patch.yaml` beside a `workspace/` tree.
+//! The `.gfi` container: a zip holding `patch.yaml` beside a `workspace/` tree — and the same
+//! layout unpacked in a directory, which is what an open patch's autosave keeps beside its mount.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
@@ -10,7 +11,7 @@ use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
-const MANIFEST: &str = "patch.yaml";
+pub const MANIFEST: &str = "patch.yaml";
 const WORKSPACE: &str = "workspace";
 
 /// The workspace's own list of what NOT to package. Not named `.ignore`: ripgrep and its kin read
@@ -106,9 +107,12 @@ fn files(dir: &Path) -> impl Iterator<Item = walkdir::Result<walkdir::DirEntry>>
         .filter(|e| e.as_ref().map_or(true, |e| e.file_type().is_file()))
 }
 
-/// What the workspace at `mount` looked like: relative path → (length, mtime), per regular file.
-/// A file whose metadata cannot be read is absent, so it reads as unsaved rather than lost.
-pub fn fingerprint(mount: &Path) -> BTreeMap<PathBuf, (u64, SystemTime)> {
+/// What a workspace looked like: relative path → (length, mtime), per regular file.
+pub type Fingerprint = BTreeMap<PathBuf, (u64, SystemTime)>;
+
+/// What the workspace at `mount` looked like, per regular file. A file whose metadata cannot be
+/// read is absent, so it reads as unsaved rather than lost.
+pub fn fingerprint(mount: &Path) -> Fingerprint {
     files(mount)
         .filter_map(|e| {
             let entry = e.ok()?;
@@ -171,6 +175,42 @@ pub fn write_gfi(
     }
     zip.finish().map_err(|e| at(out, &e))?;
     Ok(())
+}
+
+/// Write `manifest` as the `patch.yaml` of the unpacked layout at `dir`, whole or not at all: a
+/// part file renamed into place, so a crash mid-write leaves the previous one standing.
+pub fn write_manifest(dir: &Path, manifest: &str) -> Result<(), String> {
+    let at = |e: &dyn std::fmt::Display| format!("{}: {e}", dir.join(MANIFEST).display());
+    let part = dir.join(format!("{MANIFEST}.part"));
+    fs::write(&part, manifest)
+        .and_then(|()| fs::rename(&part, dir.join(MANIFEST)))
+        .map_err(|e| at(&e))
+}
+
+/// Whether `dir` holds the unpacked layout: a manifest beside whatever workspace it carries.
+pub fn has_manifest(dir: &Path) -> bool {
+    dir.join(MANIFEST).is_file()
+}
+
+/// Read the unpacked layout at `dir`: the workspace tree is COPIED to `dest` — `dir` stays whole,
+/// so a load that fails after this leaves the recovery where it was — and the manifest returned.
+pub fn read_unpacked(dir: &Path, dest: &Path) -> Result<String, String> {
+    let named = |e: String| format!("{}: {e}", dir.display());
+    let manifest = fs::read_to_string(dir.join(MANIFEST)).map_err(|e| named(e.to_string()))?;
+    let packed = dir.join(WORKSPACE);
+    if packed.is_dir() {
+        for entry in WalkDir::new(&packed).min_depth(1) {
+            let entry = entry.map_err(|e| named(e.to_string()))?;
+            let to = dest.join(entry.path().strip_prefix(&packed).map_err(|e| e.to_string())?);
+            let copied = if entry.file_type().is_dir() {
+                fs::create_dir_all(&to)
+            } else {
+                fs::copy(entry.path(), &to).map(|_| ())
+            };
+            copied.map_err(|e| format!("{}: {e}", to.display()))?;
+        }
+    }
+    Ok(manifest)
 }
 
 /// Unpack a `.gfi`: the workspace tree lands at `dest`, and the manifest text is returned.
