@@ -121,8 +121,7 @@ fn tick(state: &AppState, last: &mut Option<Stamp>) {
     *last = Some((manifest, seen));
 }
 
-/// What a dead session's nonce directory holds: the recovery's path, the patch's home, and when
-/// the autosave was taken.
+/// What a recovery holds: its path, the patch's home, and when the autosave was taken.
 fn entry(dir: &Path) -> Value {
     let sidecar: Value = std::fs::read(dir.join(SIDECAR))
         .ok()
@@ -135,30 +134,47 @@ fn entry(dir: &Path) -> Value {
     })
 }
 
-/// Every dead session's nonce directory, `(session id, directory)`, alive ones never enumerated.
-fn dead() -> Vec<(String, PathBuf)> {
-    let Ok(sessions) = std::fs::read_dir(goofi_core::session::workspaces_base()) else { return Vec::new() };
+/// Every `(session id, nonce directory)` under `base`, sessions filtered by `keep`.
+fn nonces(base: &Path, keep: impl Fn(&str) -> bool) -> Vec<(String, PathBuf)> {
+    let Ok(sessions) = std::fs::read_dir(base) else { return Vec::new() };
     let mut out = Vec::new();
     for session in sessions.flatten() {
         let Some(id) = session.file_name().to_str().map(str::to_string) else { continue };
-        if !session.path().is_dir() || goofi_core::session::alive(&id) {
+        if !session.path().is_dir() || !keep(&id) {
             continue;
         }
-        let Ok(nonces) = std::fs::read_dir(session.path()) else { continue };
-        out.extend(nonces.flatten().map(|n| n.path()).filter(|p| p.is_dir()).map(|p| (id.clone(), p)));
+        let Ok(dirs) = std::fs::read_dir(session.path()) else { continue };
+        out.extend(dirs.flatten().map(|n| n.path()).filter(|p| p.is_dir()).map(|p| (id.clone(), p)));
     }
     out.sort();
     out
 }
 
-/// The boot pass over the workspaces: a dead session's directory that carries no autosave held
-/// no unsaved work and goes; one that does is a recovery and stays. Answers how many went.
+/// Move a tree across filesystems if it must: temp is often one of its own.
+fn move_tree(from: &Path, to: &Path) -> Result<(), String> {
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    archive::copy_tree(from, to)?;
+    std::fs::remove_dir_all(from).map_err(|e| format!("{}: {e}", from.display()))
+}
+
+/// The boot pass over the workspaces: a dead session's directory that carries an autosave is
+/// moved to the recovery base for safekeeping, one that carries none held no unsaved work and
+/// goes. Nothing a living session owns is touched. Answers how many went either way.
 pub fn sweep_dead() -> usize {
     let mut swept = 0;
-    for (id, dir) in dead() {
-        if !archive::has_manifest(&dir) && std::fs::remove_dir_all(&dir).is_ok() {
-            swept += 1;
-        }
+    for (id, dir) in nonces(&goofi_core::session::workspaces_base(), |id| !goofi_core::session::alive(id)) {
+        let Some(nonce) = dir.file_name() else { continue };
+        let done = if archive::has_manifest(&dir) {
+            move_tree(&dir, &goofi_core::session::recovery_base().join(&id).join(nonce)).is_ok()
+        } else {
+            std::fs::remove_dir_all(&dir).is_ok()
+        };
+        swept += usize::from(done);
         let _ = std::fs::remove_dir(goofi_core::session::workspace_dir(&id));
     }
     swept
@@ -166,25 +182,24 @@ pub fn sweep_dead() -> usize {
 
 /// Every recovery on this machine, oldest session first.
 pub fn recoverable() -> Vec<Value> {
-    dead().into_iter().filter(|(_, dir)| archive::has_manifest(dir)).map(|(_, dir)| entry(&dir)).collect()
+    nonces(&goofi_core::session::recovery_base(), |_| true)
+        .into_iter()
+        .filter(|(_, dir)| archive::has_manifest(dir))
+        .map(|(_, dir)| entry(&dir))
+        .collect()
 }
 
-/// The recovery a caller names, checked: a nonce directory under the workspaces base, its
-/// session dead. Anything else is refused — this is the one path an op removes wholesale.
+/// The recovery a caller names, checked: a nonce directory under the recovery base, with an
+/// autosave in it. Anything else is refused — this is the one path an op removes wholesale.
 pub fn recovery(workspace: &str) -> Result<PathBuf, String> {
     let dir = PathBuf::from(crate::fsbrowse::resolve(workspace));
-    let base = goofi_core::path::canonical(&goofi_core::session::workspaces_base()).map_err(|e| e.to_string())?;
-    let id = dir
-        .parent()
-        .filter(|session| session.parent() == Some(base.as_path()))
-        .and_then(|session| session.file_name())
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| format!("{workspace}: not a workspace goofi left behind"))?;
+    let base = goofi_core::path::canonical(&goofi_core::session::recovery_base()).map_err(|e| e.to_string())?;
+    let under = dir.parent().and_then(Path::parent) == Some(base.as_path());
+    if !under {
+        return Err(format!("{workspace}: not a recovery goofi keeps"));
+    }
     if !archive::has_manifest(&dir) {
         return Err(format!("{workspace}: no autosave to recover"));
-    }
-    if goofi_core::session::alive(id) {
-        return Err(format!("{workspace}: that workspace belongs to a running goofi"));
     }
     Ok(dir)
 }

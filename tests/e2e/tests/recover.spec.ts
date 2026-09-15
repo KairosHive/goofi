@@ -6,11 +6,11 @@ import { E2E_HOME } from '../playwright.config';
 import { resetPatch, waitForApp } from '../lib/app';
 import { backendDoc, rawCall } from '../lib/raw';
 
-/** What a goofi that died leaves under the fleet's home: `patch.yaml` beside `workspace/` in a
- * nonce directory of a session nobody holds — the layout the manager's own autosave writes. */
+/** What a goofi that died leaves, once a boot has moved it into the fleet home's recovery
+ * folder: `patch.yaml` beside `workspace/` in a nonce directory of a session nobody holds. */
 function crashed(manifest: string, home: string | null): string {
 	const dir = path.join(
-		E2E_HOME, '.goofi', 'system', 'workspaces',
+		E2E_HOME, '.goofi', 'system', 'recovery',
 		crypto.randomBytes(8).toString('hex'), crypto.randomBytes(16).toString('hex')
 	);
 	fs.mkdirSync(path.join(dir, 'workspace'), { recursive: true });
