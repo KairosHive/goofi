@@ -1,10 +1,7 @@
 name: Gates
 
-# `main` only, since 2026-09-14: the org pays for Actions minutes now, and a run of this list is
-# 60–180 minutes of one machine — see the timeout below. Every push to every branch was worth it
-# while standard runners were free on a public repo; it is what emptied the org's balance once
-# they were not. A branch is checked when it lands on `main`, and `workflow_dispatch` is the
-# escape hatch for checking one before it does.
+# `main` only, since 2026-09-14: the org pays for Actions minutes. `workflow_dispatch` checks a
+# branch before it lands.
 on:
   push:
     branches: [ main ]
@@ -58,10 +55,8 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
-    # What the list costs a standard runner, measured 2026-09-05: the workspace tests alone took
-    # 47 minutes on macOS and were still running at 55 on Linux and Windows, and the in-process
-    # tier then repeats every goofi-tests scenario. Sixty minutes cancelled three green jobs.
-    timeout-minutes: 240
+    # The ceiling a run must fit under; a run past it is stuck, not slow.
+    timeout-minutes: 45
     steps:
     - uses: actions/checkout@v7
 
@@ -159,10 +154,15 @@ jobs:
     - name: Tests
       run: cargo test --workspace --no-fail-fast
 
-    # The other Python tier. Separate because it LINKS libpython — a different build of the same
-    # suite rather than more of it.
+    # The other Python tier LINKS libpython, so it is a second build. Only the situations that run
+    # Python differ between the tiers; the rest were proven above and are not run twice.
     - name: Tests (in-process Python tier)
-      run: cargo test -p goofi-tests --features embed
+      run: >
+        cargo test -p goofi-tests --features embed --
+        python:: plugins:: graphics:: nodes:: agent:: inspect:: probe:: simulation::
+        codec_golden:: filter_golden:: harmonic_geometry:: image_file:: fluxrt::
+        upscaling:: upscaling_fluxrt:: bundles_expr:: param_modulation::
+        python_gil_tripwire:: python_module_hygiene:: python_init_order::
 
     # The e2e suite is its own npm package, and not part of building or running goofi — so it is
     # installed here rather than by goofi-init, which provisions what the two setup commands need.

@@ -24,7 +24,7 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
     let (mut c, hello) = Client::connect(&base).await;
 
     // Bumped in lockstep with `frontend/src/lib/api/control.ts`; a literal here on purpose.
-    assert_eq!(hello["protocol_version"], 4);
+    assert_eq!(hello["protocol_version"], goofi_bridge::schemas::PROTOCOL_VERSION);
     assert!(hello["instance_id"].is_string());
     assert!(hello["runtime"].as_object().is_some_and(|m| m.is_empty()), "{hello}");
 

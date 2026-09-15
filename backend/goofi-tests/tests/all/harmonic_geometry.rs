@@ -101,8 +101,8 @@ fn save_frame(name: &str, data: &Data) {
 fn geometry_array_preserves_indices_parts_masks_and_rejects_bad_connectivity() {
     let _py = require_python();
     let g = Goofi::new();
-    install_bundle(&g, &[("geometry_array_fixture.py", include_str!("fixtures/geometry_array_fixture.py")),
-        ("GeometryField.wgsl", include_str!("fixtures/geometry_field.wgsl"))]);
+    install_bundle(&g, &[("geometry_array_fixture.py", include_str!("../fixtures/geometry_array_fixture.py")),
+        ("GeometryField.wgsl", include_str!("../fixtures/geometry_field.wgsl"))]);
     let source = g.add("GeometryArrayFixture");
     let renderer = g.add("graphics:GeometryRender");
     let view = g.add("GeometryView");
@@ -151,7 +151,7 @@ fn geometry_array_preserves_indices_parts_masks_and_rejects_bad_connectivity() {
 fn gpu_geometry_renders_curves_graphs_points_and_meshes() {
     let _py = require_python();
     let g = Goofi::new();
-    install_bundle(&g, &[("GeometryRender.wgsl", include_str!("../../../node-bundles/harmonic-geometry/GeometryRender.wgsl"))]);
+    install_bundle(&g, &[("GeometryRender.wgsl", include_str!("../../../../node-bundles/harmonic-geometry/GeometryRender.wgsl"))]);
     let source = g.add("HarmonicMorph");
     let geometry = g.add("HarmonicGeometry");
     let renderer = g.add("graphics:GeometryRender");
@@ -196,7 +196,7 @@ fn global_string_selection_reaches_the_shader_as_its_option_index() {
     let g = Goofi::new();
     g.state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(
         goofi_python::inproc::PyExprEvaluator::new().expect("the same evaluator as the CLI")));
-    install_all(&g, &[("EnumColor.wgsl", include_str!("fixtures/enum_color.wgsl"))]);
+    install_all(&g, &[("EnumColor.wgsl", include_str!("../fixtures/enum_color.wgsl"))]);
     let node = g.add("graphics:EnumColor");
     g.call("global entry add", serde_json::json!({"name": "surface.finish", "type": "string", "value": "green"}));
     let bound = g.call("node param edit", serde_json::json!({"node": node.to_string(), "param": "color/choice", "expression": "globals.surface.finish"}));
@@ -307,7 +307,7 @@ fn one_harmonic_frame_runs_every_geometry_family_and_its_dashboard() {
 fn peak_rows_morph_without_losing_alignment_or_reviving_silence() {
     let _py = require_python();
     let g = Goofi::new();
-    install_bundle(&g, &[("geometry_peaks.py", include_str!("fixtures/geometry_peaks.py"))]);
+    install_bundle(&g, &[("geometry_peaks.py", include_str!("../fixtures/geometry_peaks.py"))]);
     let producer = g.add("GeometryPeaks");
     let morph = g.add("HarmonicMorph");
     let geometry = g.add("HarmonicGeometry");
@@ -497,7 +497,7 @@ fn endpoint_fields_blend_with_masks_and_recover_from_mismatched_domains() {
 fn phase_wrap_extensions_and_mode_walks_keep_their_endpoint_weights() {
     let _py = require_python();
     let g = Goofi::new();
-    install_bundle(&g, &[("geometry_peaks.py", include_str!("fixtures/geometry_peaks.py"))]);
+    install_bundle(&g, &[("geometry_peaks.py", include_str!("../fixtures/geometry_peaks.py"))]);
     let producer = g.add("GeometryPeaks");
     let morph = g.add("HarmonicMorph");
     g.set_param(producer, "source", "state", "wrap");
@@ -583,41 +583,11 @@ fn phase_wrap_extensions_and_mode_walks_keep_their_endpoint_weights() {
 #[test]
 #[cfg(feature = "embed")]
 fn cookbook_archives_open_with_live_controls_and_sound_without_devices() {
-    check_cookbook_archives(None);
-}
-
-#[test]
-#[cfg(feature = "embed")]
-fn common_chord_archive_drives_native_voices_without_devices() {
-    check_cookbook_archives(Some("08-common-chord.gfi"));
-}
-
-#[test]
-#[cfg(feature = "embed")]
-fn jade_archive_opens_with_independent_texture_controls() {
-    check_cookbook_archives(Some("09-jade-resonance.gfi"));
-}
-
-#[test]
-#[cfg(feature = "embed")]
-fn living_ratios_archive_opens_with_a_live_trace() {
-    check_cookbook_archives(Some("10-living-ratios.gfi"));
-}
-
-#[test]
-#[cfg(feature = "embed")]
-fn gpu_geometry_archive_opens_with_live_controls() {
-    check_cookbook_archives(Some("01-breathing-lines.gfi"));
-}
-
-#[test]
-#[cfg(feature = "embed")]
-fn peak_geometry_archive_uses_the_biotuner_analysis_chain() {
-    check_cookbook_archives(Some("07-peaks-to-worlds.gfi"));
+    check_cookbook_archives();
 }
 
 #[cfg(feature = "embed")]
-fn check_cookbook_archives(selected: Option<&str>) {
+fn check_cookbook_archives() {
     let _py = require_python();
     let g = Goofi::new();
     g.state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(
@@ -626,7 +596,6 @@ fn check_cookbook_archives(selected: Option<&str>) {
     let mut identities = std::collections::HashSet::new();
     for recipe in recipes.as_array().unwrap() {
         let file = recipe["file"].as_str().unwrap();
-        if selected.is_some_and(|selected| file != selected) { continue; }
         g.call("session load", j!({"path": root().join("node-bundles/harmonic-geometry/examples").join(file).to_string_lossy()}));
         let doc = g.doc();
         for uid in doc["nodes"].as_object().unwrap().keys() {
@@ -871,7 +840,7 @@ fn chladni_relief_follows_the_field_and_relights_without_changing_it() {
 fn ratio_sequence_holds_glides_loops_and_drives_a_harmonic_field() {
     let _py = require_python();
     let g = Goofi::new();
-    install_bundle(&g, &[("ratio_clock.py", include_str!("fixtures/ratio_clock.py"))]);
+    install_bundle(&g, &[("ratio_clock.py", include_str!("../fixtures/ratio_clock.py"))]);
     let clock = g.add("RatioClock");
     let sequence = g.add("RatioSequence");
     g.set_param(sequence, "sequence", "ratios", "1, 2, 4");
@@ -951,7 +920,7 @@ fn ratio_sequence_holds_glides_loops_and_drives_a_harmonic_field() {
 fn sequenced_chladni_states_move_continuously_across_step_boundaries() {
     let _py = require_python();
     let g = Goofi::new();
-    install_bundle(&g, &[("ratio_clock.py", include_str!("fixtures/ratio_clock.py"))]);
+    install_bundle(&g, &[("ratio_clock.py", include_str!("../fixtures/ratio_clock.py"))]);
     let clock = g.add("RatioClock");
     let sequence = g.add("RatioSequence");
     g.set_param(sequence, "sequence", "ratios", "3/2, 5/4, 4/3");
@@ -1005,8 +974,8 @@ fn sequenced_chladni_states_move_continuously_across_step_boundaries() {
 fn every_ratio_drives_a_full_chord_and_fixed_basis_fields_match_biotuner() {
     let _py = require_python();
     let g = Goofi::new();
-    install_bundle(&g, &[("ratio_clock.py", include_str!("fixtures/ratio_clock.py")),
-        ("chladni_reference.py", include_str!("fixtures/chladni_reference.py"))]);
+    install_bundle(&g, &[("ratio_clock.py", include_str!("../fixtures/ratio_clock.py")),
+        ("chladni_reference.py", include_str!("../fixtures/chladni_reference.py"))]);
     let reference = g.add("ChladniReference");
     let fields = g.probe(reference, "fields");
     let pairs = g.probe(reference, "pairs");

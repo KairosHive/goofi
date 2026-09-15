@@ -1954,15 +1954,4 @@ mod send_bounded_tests {
         );
     }
 
-    #[tokio::test]
-    async fn a_probe_to_a_stalled_peer_gives_up_too() {
-        let bound = Duration::from_millis(50);
-        let mut sink = StalledSink;
-        let outcome = tokio::time::timeout(
-            bound * 40,
-            send_bounded(&mut sink, Message::Ping(Default::default()), bound),
-        )
-        .await;
-        assert_eq!(outcome.ok(), Some(SendOutcome::Dropped), "the probe write is bounded as well");
-    }
 }

@@ -1,5 +1,5 @@
 /* goofi
-{ "doc": "Enlarge an SDR image on the GPU. Set common/width and common/height to the output size.\nFSR 1 and NIS preserve edges and sharpen existing detail. They do not reconstruct detail with AI. Input RGB must be in 0..1. Alpha uses linear sampling. Smaller output dimensions use linear sampling.",
+{ "doc": "Enlarge an SDR image on the GPU.\nSet common/width and common/height to the output size.\nFSR 1 and NIS preserve edges and sharpen existing detail. They do not reconstruct detail with AI. Input RGB must be in 0..1. Alpha uses linear sampling. Smaller output dimensions use linear sampling.",
   "tags": ["image", "transform"],
   "inputs": [{"name": "input", "kind": "TEXTURE"}],
   "params": [

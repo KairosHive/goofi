@@ -1,7 +1,6 @@
 //! The bundles goofi's own repo ships under `node-bundles/`, run as a user gets them: the real
 //! `.py` files, installed through the same probe the CLI's scan uses, wired to real producers and
 //! read back.
-#![cfg(not(feature = "embed"))]
 
 use std::path::{Path, PathBuf};
 
@@ -459,7 +458,7 @@ fn biotuner_timbres_drive_audio_voices_and_export_the_same_selected_spectrum() {
     let _py = require_python();
     let g = Goofi::new();
     let mut sources = bundled("biotuner", &["timbre_controls.py", "vital_preset.py"]);
-    sources.push(("timbre_source.py".into(), include_str!("fixtures/timbre_source.py").into()));
+    sources.push(("timbre_source.py".into(), include_str!("../fixtures/timbre_source.py").into()));
     let pairs: Vec<_> = sources.iter().map(|(name, source)| (name.as_str(), source.as_str())).collect();
     let [timbre_ty, preset_ty, source_ty]: [String; 3] = install_all(&g, &pairs).try_into().unwrap();
     let source = g.add(&source_ty);
@@ -614,7 +613,7 @@ fn harmonic_spectrum_feeds_the_biotuner_bundle_and_recovers_as_windows_change() 
     let _py = require_python();
     let g = Goofi::new();
     let mut sources = bundled("biotuner", &["harmonic_spectrum.py", "tuning.py", "harmonicity.py"]);
-    sources.push(("harmonic_signal.py".into(), include_str!("fixtures/harmonic_signal.py").into()));
+    sources.push(("harmonic_signal.py".into(), include_str!("../fixtures/harmonic_signal.py").into()));
     let pairs: Vec<_> = sources.iter().map(|(name, source)| (name.as_str(), source.as_str())).collect();
     let [spectrum_ty, tuning_ty, harm_ty, source_ty]: [String; 4] =
         install_all(&g, &pairs).try_into().expect("one type per file");
@@ -821,7 +820,7 @@ fn harmonic_observatory_example_uses_the_biotuner_bundle_without_local_copies() 
     assert!(!archive.file_names().any(|name| name.ends_with("harmonic_observatory.py") || name.ends_with("harmonic_spectrum.py")));
 
     // Replace the demonstration with labeled channels, using the same single input.
-    let source_ty = install(&g, "harmonic_signal.py", include_str!("fixtures/harmonic_signal.py"));
+    let source_ty = install(&g, "harmonic_signal.py", include_str!("../fixtures/harmonic_signal.py"));
     let source = g.add(&source_ty);
     let scene = node("harmonicScene");
     g.call("link remove", j!({"from": goofi_tests::ep(hex(scene), "out"), "to": goofi_tests::ep(hex(spectrum), "input")}));
@@ -1048,7 +1047,7 @@ fn a_trained_model_reaches_the_patch_as_a_file_and_keeps_saying_so() {
     // The shader is a second implementation of that same rule, and this is the one place the two
     // are held against each other — the failure it exists for is a texture that trains well and
     // runs wrong.
-    std::fs::write(dir.join("stripes.npy"), include_bytes!("fixtures/stripes_nca.npy")).unwrap();
+    std::fs::write(dir.join("stripes.npy"), include_bytes!("../fixtures/stripes_nca.npy")).unwrap();
     g.set_param(node, "weights", "file", named("stripes.npy"));
     // The engine's clock is the test's own, so hundreds of ticks pass inside one beat of a source
     // paced for a static file. The rule has to be on the wire before those ticks mean anything.
@@ -1098,7 +1097,7 @@ fn a_trained_generator_draws_what_the_patch_steers_it_to() {
     let g = Goofi::new();
     let ty = install_bundled(&g, "ml", "decoder.py");
     let model = g.state.mount().join("tiny.onnx");
-    std::fs::write(&model, include_bytes!("fixtures/tiny_generator.onnx")).unwrap();
+    std::fs::write(&model, include_bytes!("../fixtures/tiny_generator.onnx")).unwrap();
 
     let node = g.add(&ty);
     g.set_param(node, "decoder", "file", model.to_string_lossy().to_string());
@@ -1179,7 +1178,7 @@ fn an_onnx_node_runs_a_model_and_routes_each_sender_to_the_input_it_names() {
     let g = Goofi::new();
     let ty = install_bundled(&g, "ml", "onnx.py");
     let model = g.state.mount().join("pair.onnx");
-    std::fs::write(&model, include_bytes!("fixtures/two_inputs.onnx")).unwrap();
+    std::fs::write(&model, include_bytes!("../fixtures/two_inputs.onnx")).unwrap();
 
     let node = g.add(&ty);
     g.set_param(node, "onnx", "file", model.to_string_lossy().to_string());
@@ -1225,7 +1224,7 @@ fn an_onnx_node_hands_back_the_models_own_shape_until_it_is_asked_for_a_picture(
     let g = Goofi::new();
     let ty = install_bundled(&g, "ml", "onnx.py");
     let model = g.state.mount().join("tiny.onnx");
-    std::fs::write(&model, include_bytes!("fixtures/tiny_generator.onnx")).unwrap();
+    std::fs::write(&model, include_bytes!("../fixtures/tiny_generator.onnx")).unwrap();
 
     let node = g.add(&ty);
     g.set_param(node, "onnx", "file", model.to_string_lossy().to_string());

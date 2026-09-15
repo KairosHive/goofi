@@ -47,6 +47,38 @@ impl Drop for Goofi {
     }
 }
 
+/// Wall this test process off from the real `~/.goofi` and the shell's own cargo target: a
+/// developer's config, session records or build dir must not reach an assertion. Once per process.
+pub fn walled_home() {
+    static HOME: std::sync::Once = std::sync::Once::new();
+    HOME.call_once(|| {
+        if std::env::var_os("GOOFI_HOME").is_none() {
+            let dir = std::env::temp_dir().join(format!("goofi-test-home-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir); // a crashed run under a recycled pid
+            std::env::set_var("GOOFI_HOME", dir);
+        }
+        // The suite spawns agents under one known POSIX shell, so a loud profile cannot fail a test.
+        #[cfg(unix)]
+        std::env::set_var("SHELL", "/bin/sh");
+        // Both under THIS binary's target dir, which goofi's own build pre-warmed.
+        let target = std::env::current_exe().ok().and_then(|e| e.ancestors().nth(3).map(Path::to_path_buf));
+        if std::env::var_os("GOOFI_BUILD_DIR").is_none() {
+            if let Some(target) = &target {
+                std::env::set_var("GOOFI_BUILD_DIR", target.join("goofi-build"));
+            }
+        }
+        let nested = target.unwrap_or_else(std::env::temp_dir).join("goofi-test-cargo-target");
+        std::env::set_var("CARGO_TARGET_DIR", nested);
+    });
+}
+
+/// Held by a situation that holds or counts SESSIONS of its own — a second record on the
+/// machine, a killed child's — so two of them never see each other's records.
+pub fn sole_session() -> std::sync::MutexGuard<'static, ()> {
+    static SOLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SOLE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 impl Default for Goofi {
     fn default() -> Self {
         Self::new()
@@ -80,31 +112,7 @@ impl Goofi {
     }
 
     fn boot(mode: goofi_bridge::Mode, render: goofi_bridge::RenderClock) -> Goofi {
-        // Every test process is WALLED OFF from the real `~/.goofi` — a developer's own config
-        // or session records must not reach an assertion. A test that scoped its own home first
-        // keeps it.
-        static HOME: std::sync::Once = std::sync::Once::new();
-        HOME.call_once(|| {
-            if std::env::var_os("GOOFI_HOME").is_none() {
-                let dir = std::env::temp_dir().join(format!("goofi-test-home-{}", std::process::id()));
-                let _ = std::fs::remove_dir_all(&dir); // a crashed run under a recycled pid
-                std::env::set_var("GOOFI_HOME", dir);
-            }
-            // The product spawns agents under the user's own shell; the SUITE spawns them under
-            // one known POSIX shell, so a fish or a loud profile cannot fail a test command.
-            #[cfg(unix)]
-            std::env::set_var("SHELL", "/bin/sh");
-            // Both under THIS binary's target dir, which goofi's own build pre-warmed: a shell's own
-            // target must never reach the nested cargo, and the machine's temp dir is every checkout's.
-            let target = std::env::current_exe().ok().and_then(|e| e.ancestors().nth(3).map(Path::to_path_buf));
-            if std::env::var_os("GOOFI_BUILD_DIR").is_none() {
-                if let Some(target) = &target {
-                    std::env::set_var("GOOFI_BUILD_DIR", target.join("goofi-build"));
-                }
-            }
-            let nested = target.unwrap_or_else(std::env::temp_dir).join("goofi-test-cargo-target");
-            std::env::set_var("CARGO_TARGET_DIR", nested);
-        });
+        walled_home();
         let state = AppState::new(mode, goofi_bridge::Clock::External, render);
         let windows = (!mode.demo).then(window_thread);
         {

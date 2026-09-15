@@ -1,7 +1,7 @@
 //! The optional FluxRT node uses the ordinary graph and graphics interfaces.
 use goofi_tests::{f32s, hex, install, install_all, j, render, require_python, shape, Goofi};
 
-const NODE: &str = include_str!("../../../node-bundles/image-generation/flux_rt.py");
+const NODE: &str = include_str!("../../../../node-bundles/image-generation/flux_rt.py");
 const IMPORT: &str = "from fluxrt.stream_processor.model_inference_subprocess import ModelInferenceSubprocess";
 const MODEL: &str = r#"
 from types import SimpleNamespace

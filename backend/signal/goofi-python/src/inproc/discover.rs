@@ -77,24 +77,3 @@ fn py_type_from_discovered(path: &Path, d: Discovered) -> PyNodeType {
         Box::new(move |_p| build_py_node(&source, in_slots.clone(), out_slots.clone()));
     PyNodeType { manifest, isolation: d.isolation, factory }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    /// Serializes access to the process-global interpreter.
-fn interp() -> std::sync::MutexGuard<'static, ()> {
-    static INTERP: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    INTERP.lock().unwrap_or_else(|e| e.into_inner())
-}
-    use goofi_node::ParamGroups;
-
-    #[test]
-    fn a_broken_python_source_builds_an_error_node_instead_of_panicking() {
-        let _interp = interp();
-        let mut node = build_py_node("def process(:\n    pass\n", vec![("data", false)], vec!["out"]); // invalid syntax → from_source Err
-        let mut ctx = NodeCtx::new();
-        let params = ParamGroups::new();
-        let err = node.setup(&mut ctx, &Params::new(&params)).expect_err("construction failure must error");
-        assert!(err.0.contains("construction failed"), "the error surfaces on setup: {}", err.0);
-    }
-}

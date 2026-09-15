@@ -1,6 +1,5 @@
 //! Linux real-time promotion must not impose a CPU limit when native permission exists.
 
-#![cfg(target_os = "linux")]
 
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -20,7 +19,7 @@ fn native_audio_priority_keeps_the_process_cpu_limits() {
             return;
         }
         let result = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "native_audio_priority_keeps_the_process_cpu_limits", "--nocapture"])
+            .args(["--exact", &format!("{}::native_audio_priority_keeps_the_process_cpu_limits", crate::situation(module_path!())), "--nocapture"])
             .env(CHILD, "1")
             .output()
             .unwrap();

@@ -71,13 +71,13 @@ fn fluxrt_drives_all_upscaling_modes_in_a_live_graph() {
     let files = vec![
         (
             "flux_rt.py",
-            include_str!("../../../node-bundles/image-generation/flux_rt.py"),
+            include_str!("../../../../node-bundles/image-generation/flux_rt.py"),
         ),
         (
             "real_esrgan.py",
-            include_str!("../../../node-bundles/image/real_esrgan.py"),
+            include_str!("../../../../node-bundles/image/real_esrgan.py"),
         ),
-        ("image_file.py", include_str!("../../../node-bundles/image/image_file.py")),
+        ("image_file.py", include_str!("../../../../node-bundles/image/image_file.py")),
     ];
     let types = install_all(&g, &files);
     let noise = g.add("graphics:Noise");

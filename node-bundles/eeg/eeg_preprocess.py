@@ -38,6 +38,7 @@ class EegPreprocess(goofi.Node):
     Wire directly from LslIn, never from an overlapping rolling buffer.
     No clipping, normalization or automatic rereferencing is applied.
     """
+    TAGS = ["analysis", "eeg"]
 
     INPUTS = {"input": goofi.InputSlot(goofi.DataType.ARRAY, required=True)}
     OUTPUTS = {"out": goofi.DataType.ARRAY}

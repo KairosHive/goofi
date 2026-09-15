@@ -1,8 +1,8 @@
 //! Upscaling through the public graph, including the CPU/texture boundary.
 use goofi_tests::{Goofi, f32s, hex, install_all, j, render, require_python, shape};
 
-const SHADER: &str = include_str!("../../../node-bundles/graphics/Upscale.wgsl");
-const ESRGAN: &str = include_str!("../../../node-bundles/image/real_esrgan.py");
+const SHADER: &str = include_str!("../../../../node-bundles/graphics/Upscale.wgsl");
+const ESRGAN: &str = include_str!("../../../../node-bundles/image/real_esrgan.py");
 const SOURCE: &str = r#"
 import goofi
 import numpy as np

@@ -85,7 +85,7 @@ before the first production deployment.
 - `panelty` owns panel mechanics; change that dependency upstream. Shared UI tokens live in
   `:root`; use container queries for panel sizing. UI primitives must not import stores.
 - All Rust tests belong in `goofi-tests` and use public APIs. Prefer named sessions over isolated
-  assertions. Check Svelte changes with typecheck and a relevant Playwright session.
+  assertions; extend the situation that owns a surface rather than adding a unit test. Check Svelte changes with typecheck and a relevant Playwright session.
 - Tests must not open audio hardware or native windows. Use the test clocks and hosts.
 - Rebuild both installed Python wheels after changing the Python API. Do not canonicalize venv
   interpreter paths; use the paths provided by setup.
@@ -117,7 +117,8 @@ npm --prefix frontend run check
 npm --prefix frontend run test
 ```
 
-For a focused Rust session, use `cargo test -p goofi-tests --test <situation>`.
+The situations share one binary, `tests/all` (`cargo test -p goofi-tests <situation>::`); one that
+sets process-wide environment keeps a binary of its own (`--test <situation>`).
 For browser tests:
 
 ```sh

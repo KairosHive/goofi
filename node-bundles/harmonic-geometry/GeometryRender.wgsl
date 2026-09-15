@@ -1,5 +1,5 @@
 /* goofi
-{ "doc": "GPU rendering of HarmonicGeometry.geometry or GeometryBlend.geometry: curves, points, graphs and triangle meshes. Fixed orthographic view, transparent background, antialiased lines and depth-tested matte surfaces. Coordinates retain their domain: set radius to fit the geometry. Cost scales with pixels times primitives; start at 256 square. Fields use HarmonicInk instead.",
+{ "doc": "GPU rendering of a geometry: curves, points, graphs and triangle meshes.\nTakes HarmonicGeometry.geometry or GeometryBlend.geometry. Fixed orthographic view, transparent background, antialiased lines and depth-tested matte surfaces. Coordinates retain their domain: set radius to fit the geometry. Cost scales with pixels times primitives; start at 256 square. Fields use HarmonicInk instead.",
   "tags": ["image", "transform"],
   "inputs": [{"name": "geometry", "kind": "ARRAY"}],
   "params": [

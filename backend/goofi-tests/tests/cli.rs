@@ -35,6 +35,7 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let g = Goofi::new();
     let base = g.serve().await;
     let url = format!("http://{}", base.trim_start_matches("ws://"));
+    let _sole = goofi_tests::sole_session();
     let id = goofi_transport::session().to_string();
     goofi_transport::record_url(&url);
 
@@ -43,7 +44,7 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     std::fs::create_dir_all(&dead).unwrap();
     std::fs::File::create(dead.join("alive.lock")).unwrap();
     std::fs::write(dead.join("session.json"), r#"{"id":"long_gone","url":"http://127.0.0.1:1"}"#).unwrap();
-    let target = tokio::task::spawn_blocking(client::resolve_target).await.unwrap().unwrap();
+    let target = client::resolve_target().unwrap();
     assert_eq!((target.id.as_str(), target.url.as_str()), (id.as_str(), url.as_str()));
     assert!(!dead.exists(), "the dead record was swept; the live one stays");
 
@@ -51,21 +52,21 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     // ambiguous, and it says so by naming both.
     let peer = session::hold("busy_peer").unwrap();
     peer.record_url("http://127.0.0.1:1");
-    let rows = tokio::task::spawn_blocking(client::list).await.unwrap();
+    let rows = client::list();
     assert_eq!(rows.len(), 2, "both alive: {rows:?}");
-    let why = tokio::task::spawn_blocking(client::resolve_target).await.unwrap().unwrap_err();
+    let why = client::resolve_target().unwrap_err();
     assert!(why.contains("several") && why.contains("busy_peer") && why.contains(&id), "{why}");
     // GOOFI_SESSION breaks the tie — and one naming NOTHING is refused by pointing at
     // the listing.
     std::env::set_var("GOOFI_SESSION", "no_such_goofi");
-    let why = tokio::task::spawn_blocking(client::resolve_target).await.unwrap().unwrap_err();
+    let why = client::resolve_target().unwrap_err();
     assert!(why.contains("no_such_goofi") && why.contains("session list"), "{why}");
     std::env::set_var("GOOFI_SESSION", &id);
-    let target = tokio::task::spawn_blocking(client::resolve_target).await.unwrap().unwrap();
+    let target = client::resolve_target().unwrap();
     assert_eq!(target.id, id);
     // Released cleanly: gone from the listing at once.
     drop(peer);
-    let rows = tokio::task::spawn_blocking(client::list).await.unwrap();
+    let rows = client::list();
     assert_eq!(rows.len(), 1, "{rows:?}");
 
     // Every phrase is reachable through the real door: `--help` on each resolves and answers.

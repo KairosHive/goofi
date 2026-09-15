@@ -149,7 +149,7 @@ fn blur_modes_spread_a_spot_without_hidden_color() {
     let g = Goofi::new();
     let dir = g.state.mount().join("nodes_graphics");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("BlurSpot.wgsl"), include_str!("fixtures/blur_spot.wgsl")).unwrap();
+    std::fs::write(dir.join("BlurSpot.wgsl"), include_str!("../fixtures/blur_spot.wgsl")).unwrap();
     g.call("library refresh", j!({}));
     let spot = g.add("graphics:BlurSpot");
     let blur = g.add("graphics:Blur");
@@ -1274,7 +1274,7 @@ fn host_pixels_use_shared_textures_and_explicit_readback() {
     let g = Goofi::new();
     let dir = g.state.mount().join("nodes_graphics");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("TextureHost.rs"), include_str!("fixtures/texture_host.rs")).unwrap();
+    std::fs::write(dir.join("TextureHost.rs"), include_str!("../fixtures/texture_host.rs")).unwrap();
     g.call("library refresh", j!({}));
     let source = g.add("graphics:TextureHost");
     let math = g.add("graphics:Math");
@@ -1298,7 +1298,7 @@ fn python_texture_sources_resize_and_restart() {
     let g = Goofi::new();
     let dir = g.state.mount().join("nodes_graphics");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("texture_python.py"), include_str!("fixtures/texture_python.py")).unwrap();
+    std::fs::write(dir.join("texture_python.py"), include_str!("../fixtures/texture_python.py")).unwrap();
     g.call("library refresh", j!({}));
     let row = g.call("library get", j!({"type": "graphics:TexturePython"}));
     assert_eq!(row["tier"], if goofi_signal::Python::new(_python.py.clone()).free_threaded.is_some() { "in-process" } else { "subprocess" }, "{row}");
@@ -1330,7 +1330,7 @@ fn native_host_program_writes_the_shared_output() {
     let g = Goofi::new();
     let dir = g.state.mount().join("nodes_graphics");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("TextureHost.rs"), include_str!("fixtures/texture_host.rs")).unwrap();
+    std::fs::write(dir.join("TextureHost.rs"), include_str!("../fixtures/texture_host.rs")).unwrap();
     g.call("library refresh", j!({}));
     let source = g.add("graphics:TextureHost");
     let math = g.add("graphics:Math");
@@ -1358,7 +1358,7 @@ fn camera_video_uploads_rgb_and_loops_without_hardware() {
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
     let dir = g.state.mount().join("nodes_graphics");
     std::fs::create_dir_all(&dir).unwrap();
-    let camera = include_str!("../../../node-bundles/graphics/camera.py")
+    let camera = include_str!("../../../../node-bundles/graphics/camera.py")
         .replace("goofi.StringParam(\"camera\", SOURCES", "goofi.StringParam(\"file\", SOURCES")
         .replace("goofi.StringParam(\"\", doc=\"The video", &format!("goofi.StringParam({}, doc=\"The video", j!(video.to_str().unwrap())));
     std::fs::write(dir.join("video_fixture.py"), camera).unwrap();

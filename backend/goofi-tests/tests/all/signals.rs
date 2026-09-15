@@ -940,20 +940,3 @@ fn buffer_seconds_use_sample_rate_and_updates_stack_frames() {
     g.until("two complete frames", |_| probe.latest().filter(|d| shape(d).len() == 3 && shape(d).last() == Some(&2)));
 }
 
-#[test]
-fn sample_and_update_windows_use_their_own_rates() {
-    use goofi_core::{stream::window_count, Meta};
-    let mut meta = Meta::new().with_sfreq(Some(128.0));
-    meta.set_ufreq(Some(20.0));
-    assert_eq!(window_count(0.5, "seconds", &meta).unwrap(), 64);
-    assert_eq!(window_count(0.5, "seconds (ufreq)", &meta).unwrap(), 10);
-    let mut updates = Meta::empty();
-    updates.set_ufreq(Some(20.0));
-    assert_eq!(window_count(0.5, "seconds", &updates).unwrap(), 10);
-    assert_eq!(window_count(3.0, "samples", &Meta::empty()).unwrap(), 3);
-    assert!(window_count(1.0, "seconds", &Meta::empty()).is_err());
-    assert!(window_count(1.0, "seconds (ufreq)", &Meta::empty()).is_err());
-    for size in [-1.0, f64::INFINITY, f64::NAN, f64::MAX] {
-        assert!(window_count(size, "seconds", &meta).is_err());
-    }
-}

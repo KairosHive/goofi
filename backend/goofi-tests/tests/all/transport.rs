@@ -51,6 +51,8 @@ fn manifest() -> &'static NodeManifest {
 
 /// This run's service-name scope.
 fn instance() -> String {
+    // The process is walled off from the real home before its session is decided.
+    goofi_tests::walled_home();
     format!("t{:x}", std::process::id())
 }
 
@@ -325,10 +327,81 @@ fn crash_helper() {
     std::thread::sleep(Duration::from_secs(60));
 }
 
+/// A session owns a record, an ephemeral directory, a workspace and its cache parts; the lock
+/// alone decides what a boot sweep removes, and a content key is never mistaken for a session.
+#[test]
+fn a_session_owns_its_record_directory_workspace_and_cache_parts() {
+    use goofi_core::session::{alive, entry, hold, sessions, sweep_dead_system, sweep_empty_workspaces, sweep_system, system_dir, workspace_dir, Session};
+    use std::fs;
+    goofi_tests::walled_home();
+    let _sole = goofi_tests::sole_session();
+    let remove: goofi_core::session::RemoveTree = |p| {
+        let _ = fs::remove_dir_all(p);
+    };
+    let held = hold("abcabcabcabcabc1").unwrap();
+    held.record_url("http://127.0.0.1:9999");
+    assert!(alive("abcabcabcabcabc1"), "held from within the same process still reads alive");
+    assert!(sessions(remove).contains(&Session { id: "abcabcabcabcabc1".into(), url: "http://127.0.0.1:9999".into() }));
+    assert!(system_dir("abcabcabcabcabc1").is_dir());
+
+    // A dead record: the lock file exists and nobody holds it. A system dir with no record at all.
+    fs::create_dir_all(entry("gone")).unwrap();
+    fs::File::create(entry("gone").join("alive.lock")).unwrap();
+    fs::create_dir_all(system_dir("gone")).unwrap();
+    fs::create_dir_all(system_dir("orphan").join("iox")).unwrap();
+    assert!(!alive("gone"));
+    assert!(sessions(remove).iter().all(|s| s.id != "gone"), "the dead record is swept");
+    sweep_dead_system(remove);
+    assert!(!entry("gone").exists() && !system_dir("gone").exists() && !system_dir("orphan").exists());
+    assert!(system_dir("abcabcabcabcabc1").exists(), "the live one is untouched");
+
+    // Workspace parents: an empty one goes with its session, a crash's non-empty one stays.
+    fs::create_dir_all(workspace_dir("abcabcabcabcabc1")).unwrap();
+    fs::create_dir_all(workspace_dir("crashed").join("mount")).unwrap();
+    fs::create_dir_all(workspace_dir("empty")).unwrap();
+    sweep_empty_workspaces();
+    assert!(workspace_dir("abcabcabcabcabc1").exists() && workspace_dir("crashed").exists());
+    assert!(!workspace_dir("empty").exists(), "an empty dead one is swept");
+    let _ = fs::remove_dir_all(workspace_dir("crashed"));
+
+    // The caches: a dead session's part and work dir go, another version's tree goes; a live
+    // session's part, this version's tree and a 16-hex CONTENT key stay.
+    let live = hold("0123456789abcdef").unwrap();
+    let system = goofi_core::home::system();
+    let out = system.join("build").join("out").join("k");
+    fs::create_dir_all(&out).unwrap();
+    fs::write(out.join(".node.so.s0123456789abcdef"), b"").unwrap();
+    fs::write(out.join(".node.so.sfedcba9876543210"), b"").unwrap();
+    fs::write(out.join("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef.json"), b"").unwrap();
+    let work = system.join("build").join("plugins").join("x").join("work-sfedcba9876543210-0");
+    fs::create_dir_all(&work).unwrap();
+    // The RUNNING version, since every other situation in this process reads that shipped tree.
+    let version = env!("CARGO_PKG_VERSION");
+    fs::create_dir_all(system.join("shipped").join(version).join("fedcba9876543210")).unwrap();
+    fs::create_dir_all(system.join("build").join("sdk").join("0.0.1")).unwrap();
+    fs::create_dir_all(system.join("build").join("sdk").join(version)).unwrap();
+    sweep_system(version);
+    assert!(out.join(".node.so.s0123456789abcdef").exists(), "a live session's part stays");
+    assert!(!out.join(".node.so.sfedcba9876543210").exists() && !work.exists(), "a dead session's go");
+    assert!(system.join("shipped").join(version).join("fedcba9876543210").exists(), "a content key stays");
+    assert!(out.join("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef.json").exists());
+    assert!(!system.join("build").join("sdk").join("0.0.1").exists(), "another version's tree goes");
+    assert!(system.join("build").join("sdk").join(version).exists());
+    let _ = fs::remove_dir_all(system.join("shipped").join(version).join("fedcba9876543210"));
+    drop(live);
+
+    drop(held);
+    assert!(!alive("abcabcabcabcabc1") && !entry("abcabcabcabcabc1").exists());
+    assert!(!workspace_dir("abcabcabcabcabc1").exists(), "the empty workspace parent went with it");
+    let _ = fs::remove_dir_all(system_dir("abcabcabcabcabc1"));
+}
+
 #[test]
 fn a_process_that_exits_without_releasing_leaves_no_record() {
+    goofi_tests::walled_home();
+    let _sole = goofi_tests::sole_session();
     let out = std::process::Command::new(std::env::current_exe().expect("the test binary"))
-        .args(["crash_helper", "--exact", "--nocapture"])
+        .args([&format!("{}::crash_helper", crate::situation(module_path!())), "--exact", "--nocapture"])
         .env(CRASH_HELPER, "exit")
         .env_remove(goofi_core::session::ENV)
         .stderr(std::process::Stdio::null())
@@ -343,10 +416,12 @@ fn a_process_that_exits_without_releasing_leaves_no_record() {
 
 #[test]
 fn what_a_crash_left_behind_is_gone_by_the_next_start() {
+    goofi_tests::walled_home();
+    let _sole = goofi_tests::sole_session();
     // A killed process drops NOTHING: its record, its ephemeral directory and its shared memory
     // stay. Its lock does not — the OS releases it — and that is the one thing the sweep reads.
     let mut child = std::process::Command::new(std::env::current_exe().expect("the test binary"))
-        .args(["crash_helper", "--exact", "--nocapture"])
+        .args([&format!("{}::crash_helper", crate::situation(module_path!())), "--exact", "--nocapture"])
         .env(CRASH_HELPER, "1")
         // Its OWN session, not this process's.
         .env_remove(goofi_core::session::ENV)

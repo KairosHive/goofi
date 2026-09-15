@@ -1,7 +1,6 @@
 //! The eeg bundle's declared expression, on the real evaluator: `file` follows
 //! `globals.system.goofi_home` and `me.params.playback.sample`, and editing the dropdown re-aims it.
 //! Embed-gated for the evaluator; the node itself still runs on the subprocess tier.
-#![cfg(feature = "embed")]
 
 use std::path::Path;
 
