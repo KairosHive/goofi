@@ -112,6 +112,8 @@ struct DeviceClock {
     channels: u16,
     go: Option<mpsc::Sender<()>>,
     done: mpsc::Receiver<()>,
+    /// The output stream's entry in the resource index, for as long as the clock holds it.
+    _lease: goofi_core::registry::Lease,
 }
 
 impl DeviceClock {
@@ -151,7 +153,8 @@ impl DeviceClock {
         let (rate, channels) = on_open
             .recv_timeout(wait)
             .map_err(|_| format!("`{name}` did not open within {} s", wait.as_secs()))??;
-        Ok((DeviceClock { name: name.to_string(), channels, go: Some(go), done: on_done }, rate))
+        let lease = goofi_core::registry::lease(goofi_core::registry::Kind::Device, format!("audio out {name}"));
+        Ok((DeviceClock { name: name.to_string(), channels, go: Some(go), done: on_done, _lease: lease }, rate))
     }
 
     /// Start the callbacks — only once the runtime is cut to this stream's rate and width.

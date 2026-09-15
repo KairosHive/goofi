@@ -108,6 +108,8 @@ impl Ui {
 pub struct Loop {
     jobs: mpsc::Receiver<Job>,
     host: Host,
+    /// The loop's entry in the resource index, for as long as it runs.
+    _lease: goofi_core::registry::Lease,
 }
 
 impl Loop {
@@ -137,7 +139,8 @@ impl Loop {
             dead: false,
             stopped: false,
         };
-        (Loop { jobs: rx, host }, ui)
+        let lease = goofi_core::registry::lease(goofi_core::registry::Kind::Device, "window loop");
+        (Loop { jobs: rx, host, _lease: lease }, ui)
     }
 
     /// Pump until [`Ui::stop`]. A display that goes away ends no server: jobs are still answered,

@@ -92,6 +92,10 @@ before the first production deployment.
 - A session (`goofi_core::session`) owns every ephemeral resource; its lock is the one aliveness
   answer. iceoryx2 ports come from `goofi-transport` under the session's root and prefix. Declare
   an iceoryx2 node after its ports so the ports are dropped first.
+- Every child process, long-lived thread, iceoryx2 node, scratch path and device is minted through
+  `goofi_core::{child, worker, registry}` and `goofi_transport`, and listed by `session status`.
+  A part file beside a cache entry carries the session id. `AppState::shutdown` is the one
+  release order; the process releases the session last.
 
 ## Run and test
 

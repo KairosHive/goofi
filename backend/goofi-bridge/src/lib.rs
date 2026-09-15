@@ -232,6 +232,24 @@ impl AppState {
         state
     }
 
+    /// Release everything this manager holds, in the one order that is safe: the agents leave
+    /// before their workspace goes; the recording drains and the plugins stop; the manager's own
+    /// workers stop reading the graph; every engine stops its nodes, whose threads release their
+    /// shared memory before the mount goes. The session itself is the process's to release.
+    pub fn shutdown(&self) {
+        if let Some(insist) = self.harnesses.reap_all() {
+            insist();
+        }
+        self.stop_recording();
+        self.stopping.store(true, std::sync::atomic::Ordering::Relaxed);
+        let workers: Vec<_> = std::mem::take(&mut *self.workers.lock().unwrap_or_else(|e| e.into_inner()));
+        for worker in workers {
+            let _ = worker.join_within(goofi_transport::SHUTDOWN_WAIT);
+        }
+        self.graph.lock().unwrap_or_else(|e| e.into_inner()).shutdown();
+        self.release_mount();
+    }
+
     /// Close the capture interval and drain its queues before the engines stop.
     pub fn stop_recording(&self) {
         if let Err(error) = self.recorder.stop() {

@@ -1263,6 +1263,7 @@ dependencies = [
 name = "goofi-window"
 version = "3.1.0"
 dependencies = [
+ "goofi-core",
  "libc",
  "objc2",
  "objc2-foundation",

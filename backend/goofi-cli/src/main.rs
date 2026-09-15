@@ -125,10 +125,12 @@ fn main() {
     // Always a goofi thread, never the process's own: a main-thread stack is the PE header's on
     // Windows, and opening a service needs more than that.
     let served = goofi_transport::thread("goofi-serve").spawn(serve).expect("the serve thread");
-    match windows {
-        Some(windows) => windows.run(),
-        None => served.join().expect("the serve thread"),
+    if let Some(windows) = windows {
+        windows.run();
     }
+    // The server decides the exit code and leaves through `process::exit`; the loop's end is
+    // never the process's.
+    served.join().expect("the serve thread");
 }
 
 async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
@@ -184,7 +186,12 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     let mut state = AppState::with_instance(session, mode, goofi_bridge::Clock::Device, goofi_bridge::RenderClock::Timer);
     state.load = cli.load.clone().or_else(|| named_env("GOOFI_LOAD")).map(PathBuf::from);
     state.demo_base = named_env("GOOFI_DEMO_BASE");
+    let window = ui.clone();
     let code = run(cli, python, state, async { let _ = shutdown.await; }, ui, Some(startup)).await;
+    // The window loop ends once every plugin editor and window was unmade by the shutdown above.
+    if let Some(window) = window {
+        window.stop();
+    }
     // Last, after every port is gone: the record, then the ephemeral directory and shared memory.
     // The PROCESS releases its session, never `run` — a test runs several servers in one.
     goofi_transport::release_session();
@@ -576,19 +583,13 @@ async fn run(
         }
     };
     drop(startup);
-    // The order is load-bearing: the agents leave before their workspace goes, and a node's
-    // thread releases its shared memory before the mount goes.
     println!("  Stopping engines · press Ctrl+C again to force exit");
-    if let Some(insist) = state.harnesses.reap_all() {
-        insist();
-    }
     if state.recorder.running() {
         println!("  Draining recording · waiting for queued frames to reach disk");
     }
-    state.stop_recording();
-    state.graph.lock().unwrap().shutdown();
+    // The manager releases what it holds, in its one order; the window loop is the process's.
+    state.shutdown();
     println!("  Stopped");
-    state.release_mount();
     code
 }
 
