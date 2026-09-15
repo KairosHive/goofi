@@ -19,27 +19,16 @@ pub const OVERRUNS: u8 = 8;
 /// and cost no underrun at all, so a budget with no margin ejects on the scheduler's noise.
 pub const BUDGET: u32 = 4;
 
-/// Publish one complete frame, or drop it if the ring is full. Copy each part in
-/// bulk, including when the header or samples cross the ring's wrap point.
+/// Publish one complete frame, or drop it if the ring is full: the header and the samples land
+/// in one reserved chunk, so no partial frame is ever visible.
 fn publish(ring: &mut rtrb::Producer<f32>, header: &[f32], samples: &[f32]) {
-    let Ok(mut chunk) = ring.write_chunk_uninit(header.len() + samples.len()) else { return };
+    let Ok(mut chunk) = ring.write_chunk(header.len() + samples.len()) else { return };
     let (first, second) = chunk.as_mut_slices();
-    let mut offset = 0;
-    for source in [header, samples] {
-        let at = offset.min(first.len());
-        let count = source.len().min(first.len() - at);
-        let rest = offset.saturating_sub(first.len());
-        // The reserved chunk has exactly header.len() + samples.len() slots.
-        // These two non-overlapping copies initialize this source's part, and
-        // neither source aliases the ring. No partial frame is published.
-        unsafe {
-            std::ptr::copy_nonoverlapping(source.as_ptr(), first.as_mut_ptr().add(at).cast::<f32>(), count);
-            std::ptr::copy_nonoverlapping(source.as_ptr().add(count), second.as_mut_ptr().add(rest).cast::<f32>(), source.len() - count);
-        }
-        offset += source.len();
+    let mut values = header.iter().chain(samples).copied();
+    for slot in first.iter_mut().chain(second.iter_mut()) {
+        *slot = values.next().unwrap_or(0.0);
     }
-    // Both parts, including every slot on either side of the wrap, are initialized.
-    unsafe { chunk.commit_all() };
+    chunk.commit_all();
 }
 
 pub struct Slot {
@@ -372,24 +361,26 @@ impl Runtime {
         self.apply_pending();
         let n = self.anchor.blocks.load(Ordering::Relaxed);
         let epoch = self.anchor.epoch();
-        let base = self.arena.as_mut_ptr();
-        let len = self.arena.len();
+        let width = self.channels() as usize;
+        let budget = self.budget;
+        let arena: &mut [f32] = &mut self.arena;
         for stage in &self.plan.stages {
             let Some(slot) = self.slab[stage.idx].as_mut().filter(|s| s.serial == stage.serial) else { continue };
             for src in stage.params.iter().chain(&stage.ins) {
                 match src {
                     Source::Scalar { at, param } => {
                         let v = f64::from_bits(slot.params[*param].load(Ordering::Relaxed)) as f32;
-                        let region = unsafe { region_mut(base, len, *at, 1) };
+                        let region = carve(arena, &[(*at, BLOCK)]).take(0);
                         if region[0] != v {
                             region.fill(v);
                         }
                     }
                     Source::Sum { at, channels, parts } => {
-                        let dst = unsafe { region_mut(base, len, *at, *channels) };
+                        let mut carved = carve(arena, &[(*at, *channels as usize * BLOCK)]);
+                        let dst = carved.take(0);
                         dst.fill(0.0);
                         for (part, pc) in parts {
-                            let src = Port::new(unsafe { region(base, len, *part, *pc) }, *pc, true);
+                            let src = Port::new(carved.read(*part, *pc as usize * BLOCK), *pc, true);
                             for c in 0..*channels as usize {
                                 let from = src.chan(c);
                                 for i in 0..BLOCK {
@@ -399,31 +390,36 @@ impl Runtime {
                         }
                     }
                     Source::Inbox { at, channels, inbox } => {
-                        let region = unsafe { region_mut(base, len, *at, *channels) };
+                        let region = carve(arena, &[(*at, *channels as usize * BLOCK)]).take(0);
                         slot.inboxes[*inbox].fill(&mut PortMut::new(region, *channels));
                     }
                     Source::Silence | Source::Region { .. } => {}
                 }
             }
-            // Every param's one value for this block, settled after the sources above, so a control
-            // rate param reaches the node without costing a port.
-            let scalars = unsafe { strip(base, len, stage.scalars_at, stage.params.len()) };
-            for (i, src) in stage.params.iter().enumerate() {
-                scalars[i] = unsafe { first(base, len, src) };
+            // The stage writes its outputs and its scalar strip; everything else it reads.
+            let mut wants = [(0, 0); MAX_PORTS + 1];
+            for (k, (at, channels)) in stage.outs.iter().enumerate() {
+                wants[k] = (*at, *channels as usize * BLOCK);
             }
-            let fault = if slot.dead {
-                None
-            } else {
+            wants[stage.outs.len()] = (stage.scalars_at, stage.params.len());
+            let (ran, started) = {
+                let mut carved = carve(arena, &wants[..stage.outs.len() + 1]);
+                // Every param's one value for this block, settled after the sources above, so a
+                // control rate param reaches the node without costing a port.
+                let scalars = carved.take(stage.outs.len());
+                for (i, src) in stage.params.iter().enumerate() {
+                    scalars[i] = carved.first(src);
+                }
                 let ins: [Port<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.ins.get(i) {
-                    Some(s) => unsafe { port(base, len, s) },
+                    Some(s) => carved.port(s),
                     None => Port::new(&[], 0, false),
                 });
                 let params: [Port<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.params.get(i).filter(|_| i < stage.audio_params) {
-                    Some(s) => unsafe { port(base, len, s) },
+                    Some(s) => carved.port(s),
                     None => Port::new(&[], 0, false),
                 });
                 let mut outs: [PortMut<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.outs.get(i) {
-                    Some((at, channels)) => PortMut::new(unsafe { region_mut(base, len, *at, *channels) }, *channels),
+                    Some((_, channels)) => PortMut::new(carved.take(i), *channels),
                     None => PortMut::new(&mut [], 0),
                 });
                 let mut block = Block {
@@ -433,20 +429,23 @@ impl Runtime {
                     scalars,
                 };
                 let started = Instant::now();
-                let ran = catch_unwind(AssertUnwindSafe(|| slot.node.process(&mut block)));
-                match ran {
-                    Err(p) => Some(Fault::Panic(goofi_node::panic_message(p))),
-                    Ok(()) if stage.outs.iter().any(|(at, ch)| unsafe { region(base, len, *at, *ch) }.iter().any(|v| !v.is_finite())) => {
-                        Some(Fault::NotANumber)
-                    }
-                    Ok(()) if started.elapsed() > self.budget => {
-                        slot.overruns = slot.overruns.saturating_add(1);
-                        (slot.overruns >= OVERRUNS).then_some(Fault::Overrun)
-                    }
-                    Ok(()) => {
-                        slot.overruns = 0;
-                        None
-                    }
+                (if slot.dead { None } else { Some(catch_unwind(AssertUnwindSafe(|| slot.node.process(&mut block)))) }, started)
+            };
+            // The outputs again, now the node is done with them: judged, silenced if need be, published.
+            let mut outs = carve(arena, &wants[..stage.outs.len()]);
+            let fault = match ran {
+                None => None,
+                Some(Err(p)) => Some(Fault::Panic(goofi_node::panic_message(p))),
+                Some(Ok(())) if outs.writes[..stage.outs.len()].iter().flatten().any(|o| o.iter().any(|v| !v.is_finite())) => {
+                    Some(Fault::NotANumber)
+                }
+                Some(Ok(())) if started.elapsed() > budget => {
+                    slot.overruns = slot.overruns.saturating_add(1);
+                    (slot.overruns >= OVERRUNS).then_some(Fault::Overrun)
+                }
+                Some(Ok(())) => {
+                    slot.overruns = 0;
+                    None
                 }
             };
             // Dead only once the fault is on its way: a full outbox means it faults again next block.
@@ -454,13 +453,11 @@ impl Runtime {
             if let Some(fault) = fault {
                 slot.dead = self.outbox.push(Retired::Faulted { uid: slot.uid, serial: slot.serial, fault }).is_ok();
             }
-            if slot.dead || faulted {
-                for (at, channels) in &stage.outs {
-                    unsafe { region_mut(base, len, *at, *channels) }.fill(0.0);
+            for (k, (_, channels)) in stage.outs.iter().enumerate() {
+                let out = outs.take(k);
+                if slot.dead || faulted {
+                    out.fill(0.0);
                 }
-            }
-            for (k, (at, channels)) in stage.outs.iter().enumerate() {
-                let out = unsafe { region(base, len, *at, *channels) };
                 if let Some(tap) = slot.taps.get_mut(k) {
                     publish(tap, &[*channels as f32], out);
                 }
@@ -475,10 +472,11 @@ impl Runtime {
         }
         let (at, channels) = self.plan.output;
         {
-            let dst = unsafe { region_mut(base, len, at, channels) };
+            let mut carved = carve(arena, &[(at, channels as usize * BLOCK)]);
+            let dst = carved.take(0);
             dst.fill(0.0);
             for (input, gain, sel) in &self.plan.sinks {
-                let (input, gain) = unsafe { (port(base, len, input), port(base, len, gain)) };
+                let (input, gain) = (carved.port(input), carved.port(gain));
                 match sel {
                     // No selection: every device channel is fed by the port's channel of the same
                     // number, and `Port::chan` spreads a narrower port across all of them.
@@ -512,8 +510,7 @@ impl Runtime {
             }
         }
         self.anchor.blocks.store(n + 1, Ordering::Relaxed);
-        let out = Port::new(unsafe { region(base, len, at, channels) }, channels, true);
-        let width = self.channels() as usize;
+        let out = Port::new(&arena[at..at + channels as usize * BLOCK], channels, true);
         for i in 0..BLOCK {
             for c in 0..width {
                 self.fifo.push(out.chan(c)[i]);
@@ -522,54 +519,80 @@ impl Runtime {
     }
 }
 
-/// # Safety
-/// `at .. at + channels * BLOCK` lies inside the arena, and no live `region_mut` overlaps it —
-/// the plan lays every region out disjoint.
-unsafe fn region<'a>(base: *mut f32, len: usize, at: usize, channels: u16) -> &'a [f32] {
-    let n = channels as usize * BLOCK;
-    debug_assert!(at + n <= len);
-    std::slice::from_raw_parts(base.add(at), n)
+/// What a read lands on when the plan put it inside a written region, which it never does.
+static QUIET: [f32; MAX_CHANNELS as usize * BLOCK] = [0.0; MAX_CHANNELS as usize * BLOCK];
+
+/// The arena carved for one pass: every region asked for as its own exclusive slice, answered
+/// in the order asked, and the gaps between them as the shared slices every read comes from.
+struct Carved<'a> {
+    writes: [Option<&'a mut [f32]>; MAX_PORTS + 1],
+    gaps: [Option<(usize, &'a [f32])>; MAX_PORTS + 2],
 }
 
-/// # Safety
-/// As [`region`], and nothing else views this region while the slice lives.
-unsafe fn region_mut<'a>(base: *mut f32, len: usize, at: usize, channels: u16) -> &'a mut [f32] {
-    let n = channels as usize * BLOCK;
-    debug_assert!(at + n <= len);
-    std::slice::from_raw_parts_mut(base.add(at), n)
-}
-
-/// A strip of plain floats: one value per param rather than one per frame.
-///
-/// # Safety
-/// As [`region`].
-unsafe fn strip<'a>(base: *mut f32, len: usize, at: usize, n: usize) -> &'a mut [f32] {
-    debug_assert!(at + n <= len);
-    std::slice::from_raw_parts_mut(base.add(at), n)
-}
-
-/// This block's one value for a param, whatever it is sourced from.
-///
-/// # Safety
-/// As [`region`].
-unsafe fn first(base: *mut f32, len: usize, src: &Source) -> f32 {
-    match src {
-        Source::Silence => 0.0,
-        Source::Region { at, channels } | Source::Sum { at, channels, .. } | Source::Inbox { at, channels, .. } => {
-            region(base, len, *at, *channels)[0]
-        }
-        Source::Scalar { at, .. } => region(base, len, *at, 1)[0],
+/// Split `arena` at each wanted `(at, len)`, in address order. The plan lays regions out
+/// disjoint, which is what lets this hand out exclusive slices with no pointer arithmetic.
+fn carve<'a>(arena: &'a mut [f32], wants: &[(usize, usize)]) -> Carved<'a> {
+    let mut order = [(0, 0, 0); MAX_PORTS + 1];
+    for (i, (at, len)) in wants.iter().enumerate() {
+        order[i] = (*at, *len, i);
     }
+    let order = &mut order[..wants.len()];
+    order.sort_unstable();
+    let mut writes: [Option<&'a mut [f32]>; MAX_PORTS + 1] = std::array::from_fn(|_| None);
+    let mut gaps = [None; MAX_PORTS + 2];
+    let mut rest: &'a mut [f32] = arena;
+    let mut start = 0;
+    let mut g = 0;
+    for &(at, len, i) in order.iter() {
+        debug_assert!(at >= start && at + len <= start + rest.len(), "the plan lays regions out disjoint");
+        let (gap, tail) = rest.split_at_mut(at - start);
+        let (region, tail) = tail.split_at_mut(len);
+        let gap: &'a [f32] = gap;
+        gaps[g] = Some((start, gap));
+        g += 1;
+        writes[i] = Some(region);
+        rest = tail;
+        start = at + len;
+    }
+    let rest: &'a [f32] = rest;
+    gaps[g] = Some((start, rest));
+    Carved { writes, gaps }
 }
 
-/// # Safety
-/// As [`region`].
-unsafe fn port<'a>(base: *mut f32, len: usize, src: &Source) -> Port<'a> {
-    match src {
-        Source::Silence => Port::new(region(base, len, SILENCE, 1), 1, false),
-        Source::Region { at, channels } | Source::Sum { at, channels, .. } | Source::Inbox { at, channels, .. } => {
-            Port::new(region(base, len, *at, *channels), *channels, true)
+impl<'a> Carved<'a> {
+    /// The `i`th wanted region, once.
+    fn take(&mut self, i: usize) -> &'a mut [f32] {
+        self.writes[i].take().expect("a region is taken once")
+    }
+
+    /// `len` floats from `at`, which lie in one gap.
+    fn read(&self, at: usize, len: usize) -> &'a [f32] {
+        for (start, gap) in self.gaps.iter().flatten() {
+            if at >= *start && at + len <= *start + gap.len() {
+                return &gap[at - start..at - start + len];
+            }
         }
-        Source::Scalar { at, .. } => Port::new(region(base, len, *at, 1), 1, true),
+        debug_assert!(false, "a read region lies inside a written one");
+        &QUIET[..len.min(QUIET.len())]
+    }
+
+    fn port(&self, src: &Source) -> Port<'a> {
+        match src {
+            Source::Silence => Port::new(self.read(SILENCE, BLOCK), 1, false),
+            Source::Region { at, channels } | Source::Sum { at, channels, .. } | Source::Inbox { at, channels, .. } => {
+                Port::new(self.read(*at, *channels as usize * BLOCK), *channels, true)
+            }
+            Source::Scalar { at, .. } => Port::new(self.read(*at, BLOCK), 1, true),
+        }
+    }
+
+    /// This block's one value for a param, whatever it is sourced from.
+    fn first(&self, src: &Source) -> f32 {
+        match src {
+            Source::Silence => 0.0,
+            Source::Region { at, .. } | Source::Sum { at, .. } | Source::Inbox { at, .. } | Source::Scalar { at, .. } => {
+                self.read(*at, BLOCK)[0]
+            }
+        }
     }
 }
