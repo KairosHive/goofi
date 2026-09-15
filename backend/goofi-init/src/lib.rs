@@ -2,6 +2,7 @@
 //! that does it. It must depend on no goofi crate and no pyo3, or it triggers the build it configures.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::process::Command;
 
 /// The GIL venv the subprocess tier runs on. Pinned *non*-free-threaded on purpose: that tier
@@ -107,7 +108,52 @@ pub fn init(root: &Path) -> Result<(), String> {
         println!("  installing the frontend's dependencies");
         run(npm(["install"]).current_dir(&frontend), "install the frontend's dependencies")?;
     }
+    let (entries, bytes) = sweep_target(&root.join("target"), STALE_AFTER);
+    if entries > 0 {
+        println!("  removed {entries} build artifacts untouched for {} days ({} MB)", STALE_AFTER.as_secs() / 86_400, bytes >> 20);
+    }
     Ok(())
+}
+
+/// How long a build artifact may go unused before the next provision removes it.
+pub const STALE_AFTER: Duration = Duration::from_secs(3 * 86_400);
+
+/// Remove every artifact under `target/<profile>/{incremental,deps,build,.fingerprint}` that no
+/// build has touched for `stale`. Cargo never removes a superseded one, so a hash that moved on —
+/// a feature set, a profile, a dependency — leaves its whole output behind; cargo rebuilds what
+/// this takes and it still needs. Answers how many entries went and how many bytes with them.
+pub fn sweep_target(target: &Path, stale: Duration) -> (usize, u64) {
+    let Ok(profiles) = std::fs::read_dir(target) else { return (0, 0) };
+    let now = std::time::SystemTime::now();
+    let (mut entries, mut bytes) = (0, 0);
+    for profile in profiles.flatten().filter(|p| p.path().is_dir()) {
+        for kind in ["incremental", "deps", "build", ".fingerprint"] {
+            let Ok(artifacts) = std::fs::read_dir(profile.path().join(kind)) else { continue };
+            for artifact in artifacts.flatten() {
+                let path = artifact.path();
+                let touched = artifact.metadata().and_then(|m| m.modified()).ok();
+                let old = touched.and_then(|t| now.duration_since(t).ok()).is_some_and(|age| age > stale);
+                if !old {
+                    continue;
+                }
+                let size = size_of(&path);
+                let removed = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+                if removed.is_ok() {
+                    entries += 1;
+                    bytes += size;
+                }
+            }
+        }
+    }
+    (entries, bytes)
+}
+
+fn size_of(path: &Path) -> u64 {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_dir() => std::fs::read_dir(path).map(|d| d.flatten().map(|e| size_of(&e.path())).sum()).unwrap_or(0),
+        Ok(m) => m.len(),
+        Err(_) => 0,
+    }
 }
 
 /// `npm`, spelled the way this platform spells it: Windows needs the `.cmd` shim by name.

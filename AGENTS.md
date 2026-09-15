@@ -88,6 +88,8 @@ before the first production deployment.
 - All Rust tests belong in `goofi-tests` and use public APIs. Prefer named sessions over isolated
   assertions; extend the situation that owns a surface rather than adding a unit test. Check Svelte changes with typecheck and a relevant Playwright session.
 - Tests must not open audio hardware or native windows. Use the test clocks and hosts.
+- `goofi-init` also removes build artifacts under `target/` untouched for three days, so a moved
+  hash does not leave its output behind for good.
 - Rebuild both installed Python wheels after changing the Python API. Do not canonicalize venv
   interpreter paths; use the paths provided by setup.
 - A session (`goofi_core::session`) owns every ephemeral resource; its lock is the one aliveness
