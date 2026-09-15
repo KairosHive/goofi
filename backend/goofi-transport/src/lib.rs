@@ -441,6 +441,141 @@ pub fn subprocess_service(node: &IoxNode, name: &str) -> Result<ByteService, Str
         .map_err(|e| format!("service `{name}`: {e}"))
 }
 
+/// The largest frame an exchange carries in one sample; a publisher grows to it by powers of two.
+pub const EXCHANGE_PAYLOAD: usize = 64 * 1024;
+
+/// A spawned child's request/response pair, the parent's end: `[u32 seq][frame]` each way. A
+/// request is re-published each idle millisecond, since the child's subscriber may still be
+/// connecting; the reply is the one carrying the same sequence.
+pub struct Exchange {
+    request: BytePublisher,
+    reply: ByteSubscriber,
+    seq: u32,
+    _node: IoxNode,
+}
+
+impl Exchange {
+    /// Open the pair under `base`: `<base>_req` and `<base>_resp`, the names the child is told.
+    pub fn open(base: &str) -> Result<Exchange, String> {
+        let node = iox_node()?;
+        let request = subprocess_service(&node, &format!("{base}_req"))?
+            .publisher_builder()
+            .initial_max_slice_len(EXCHANGE_PAYLOAD)
+            .allocation_strategy(AllocationStrategy::PowerOfTwo)
+            .create()
+            .map_err(|e| format!("request publisher: {e}"))?;
+        let reply = subprocess_service(&node, &format!("{base}_resp"))?
+            .subscriber_builder()
+            .create()
+            .map_err(|e| format!("reply subscriber: {e}"))?;
+        Ok(Exchange { request, reply, seq: 0, _node: node })
+    }
+
+    /// One request to `child`, answered within `timeout`; a child that exited or fell silent is
+    /// the error, so the owner can start a fresh one.
+    pub fn ask(&mut self, child: &mut goofi_core::child::Child, frame: &[u8], timeout: Duration) -> Result<Vec<u8>, String> {
+        self.seq = self.seq.wrapping_add(1);
+        let seq = self.seq;
+        while matches!(self.reply.receive(), Ok(Some(_))) {}
+        let mut msg = Vec::with_capacity(4 + frame.len());
+        msg.extend_from_slice(&seq.to_le_bytes());
+        msg.extend_from_slice(frame);
+        let deadline = Instant::now() + timeout;
+        loop {
+            let sample = self.request.loan_slice_uninit(msg.len()).map_err(|e| format!("iox publish: {e}"))?;
+            let _ = sample.write_from_slice(msg.as_slice()).send();
+            loop {
+                match self.reply.receive() {
+                    Ok(Some(sample)) => {
+                        let payload = sample.payload();
+                        if payload.len() >= 4 && u32::from_le_bytes(payload[0..4].try_into().unwrap()) == seq {
+                            return Ok(payload[4..].to_vec());
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => return Err(format!("iox receive: {e}")),
+                }
+            }
+            // Checked AFTER draining, so a child that answered and then exited still gets its answer through.
+            if let Ok(Some(status)) = child.try_wait() {
+                return Err(format!("the child exited: {status}"));
+            }
+            if Instant::now() >= deadline {
+                return Err("the child did not answer in time".into());
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
+/// The child's end of an [`Exchange`]: the newest request not yet answered, and its answer.
+pub struct Served {
+    request: ByteSubscriber,
+    reply: BytePublisher,
+    answered: Option<u32>,
+    _node: IoxNode,
+}
+
+impl Served {
+    /// The names the parent gave: `GOOFI_IOX_REQ` and `GOOFI_IOX_RESP` in the environment.
+    pub fn open_from_env() -> Result<Served, String> {
+        let name = |key: &str| std::env::var(key).map_err(|_| format!("{key} is not set: not started by goofi"));
+        Served::open(&name("GOOFI_IOX_REQ")?, &name("GOOFI_IOX_RESP")?)
+    }
+
+    pub fn open(request: &str, reply: &str) -> Result<Served, String> {
+        let node = iox_node()?;
+        let request = subprocess_service(&node, request)?
+            .subscriber_builder()
+            .create()
+            .map_err(|e| format!("request subscriber: {e}"))?;
+        let reply = subprocess_service(&node, reply)?
+            .publisher_builder()
+            .initial_max_slice_len(EXCHANGE_PAYLOAD)
+            .allocation_strategy(AllocationStrategy::PowerOfTwo)
+            .create()
+            .map_err(|e| format!("reply publisher: {e}"))?;
+        Ok(Served { request, reply, answered: None, _node: node })
+    }
+
+    /// The latest request, if a new one arrived: latest wins, and a re-publish of the one already
+    /// answered is not a request.
+    pub fn request(&mut self) -> Result<Option<(u32, Vec<u8>)>, String> {
+        let mut latest = None;
+        loop {
+            match self.request.receive() {
+                Ok(Some(s)) => latest = Some(s),
+                Ok(None) => break,
+                Err(e) => return Err(format!("iox receive: {e}")),
+            }
+        }
+        let Some(sample) = latest else { return Ok(None) };
+        let payload = sample.payload();
+        if payload.len() < 4 {
+            return Ok(None);
+        }
+        let seq = u32::from_le_bytes(payload[0..4].try_into().unwrap());
+        if self.answered == Some(seq) {
+            return Ok(None);
+        }
+        Ok(Some((seq, payload[4..].to_vec())))
+    }
+
+    pub fn answer(&mut self, seq: u32, reply: &[u8]) -> Result<(), String> {
+        let mut msg = Vec::with_capacity(4 + reply.len());
+        msg.extend_from_slice(&seq.to_le_bytes());
+        msg.extend_from_slice(reply);
+        self.reply
+            .loan_slice_uninit(msg.len())
+            .map_err(|e| format!("iox loan: {e}"))?
+            .write_from_slice(msg.as_slice())
+            .send()
+            .map_err(|e| format!("iox send: {e}"))?;
+        self.answered = Some(seq);
+        Ok(())
+    }
+}
+
 /// The event service every door is: §3.2's three id ranges against one ceiling, and one listener.
 pub fn event_service(node: &IoxNode, name: &str) -> Result<EventService, String> {
     node.service_builder(&parse_name(name)?)

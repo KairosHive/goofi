@@ -69,7 +69,9 @@ before the first production deployment.
 - Signal nodes schedule themselves; audio and graphics have their own clocks. Node processing
   does not run under the graph lock. Cross-engine transport is latest-wins shared memory.
 - Rust nodes are `.rs` files built against an engine SDK. Every dynamic library — a built node,
-  a host program, a VST3 module — is opened and its entry symbols read through `goofi_build`. Graphics supports `.wgsl` shaders and
+  a host program, a VST3 module — is opened and its entry symbols read through `goofi_build`.
+  A signal node file built after the boot scan runs HOSTED: in a child of goofi's own binary
+  (`goofi host`), over the same exchange the Python subprocess tier uses, so its newest build runs. Graphics supports `.wgsl` shaders and
   Rust/Python host sources on shared GPU resources; Python graphics uses `# goofi: graphics`.
   Python nodes use the shared marshalling interface in both automatic execution tiers.
 - Each frame counts in full, including a Buffer window. Never infer sample overlap. Resample

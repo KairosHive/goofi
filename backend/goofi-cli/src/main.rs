@@ -106,6 +106,8 @@ fn main() {
         // The binary is its own plugin scanner: a child per bundle, so a crash there is a
         // refusal here.
         Some("vst3-scan") => std::process::exit(goofi_audio::vst3::scan_main(&argv[1..])),
+        // …and its own native node host: a node built after boot runs in a child of this binary.
+        Some("host") => std::process::exit(goofi_signal::hosted::host_main(&argv[1..])),
         Some(first) if first.starts_with('-') => argv,
         Some(_) => std::process::exit(client_main(argv)),
     };
@@ -477,6 +479,10 @@ async fn run(
         }
         {
             let mut g = state.graph.lock().unwrap();
+            // This binary is its own node host and its own plugin scanner.
+            if let Ok(own) = std::env::current_exe() {
+                goofi_bridge::signal_engine(&mut g).set_host(own);
+            }
             if !demo {
                 let audio = goofi_bridge::audio_engine(&mut g);
                 if let Ok(own) = std::env::current_exe() {
@@ -776,7 +782,9 @@ fn boot_scan(state: &AppState) {
     let found = {
         let mut g = state.graph.lock().unwrap();
         let patch = state.mount();
-        goofi_bridge::rescan(state, &mut g, &patch).1
+        let found = goofi_bridge::rescan(state, &mut g, &patch).1;
+        g.boot_done();
+        found
     };
     let (mut n_native, mut n_in, mut n_sub, mut n_shader, mut n_bad) = (0u32, 0u32, 0u32, 0u32, 0u32);
     for t in found {
@@ -784,7 +792,8 @@ fn boot_scan(state: &AppState) {
             Scanned::Registered { isolation, replaced } => {
                 note_replaced(&t.type_name, replaced);
                 match isolation {
-                    Isolation::Native => n_native += 1,
+                    // Nothing at boot is hosted: a hosted node is one authored later.
+                    Isolation::Native | Isolation::Hosted => n_native += 1,
                     Isolation::InProcess => n_in += 1,
                     Isolation::Subprocess => n_sub += 1,
                     Isolation::Shader => n_shader += 1,

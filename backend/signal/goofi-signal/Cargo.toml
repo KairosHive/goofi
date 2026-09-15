@@ -17,4 +17,7 @@ goofi-signal-sdk = { path = "../goofi-signal-sdk", features = ["host"] }
 # The scan's Rust door: build a node file, load the artifact.
 goofi-build = { path = "../../goofi-build" }
 goofi-transport = { path = "../../goofi-transport" }
+# The hosted tier speaks the codec across its exchange, as the host SDK does across its ABI.
+goofi-codec = { path = "../../goofi-codec" }
+rmp-serde = "1"
 goofi-host = { path = "../../goofi-host" }

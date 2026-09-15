@@ -4,20 +4,15 @@
 use std::io::Write;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
-
-use iceoryx2::prelude::*;
+use std::time::Duration;
 
 use goofi_core::Data;
-use goofi_transport::{iox_node, subprocess_service, BytePublisher, ByteSubscriber, IoxNode};
+use goofi_transport::Exchange;
 use goofi_node::{ParamKey, Params};
 use goofi_host_sdk::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
 
 /// Unique iceoryx2 service-name base per spawned subprocess, so concurrent nodes never collide.
 static SUBPROC_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// iceoryx2 byte-slice pool ceiling per publisher (matches the child's `serve` config).
-pub const MAX_PAYLOAD: usize = 64 * 1024;
 
 /// How long a request waits on a child that has stopped answering.
 pub const TICK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -26,48 +21,22 @@ pub const TICK_TIMEOUT: Duration = Duration::from_secs(10);
 /// module's imports and `setup()` — seconds, not milliseconds, for a heavy import like numba.
 pub const COLD_START_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// The iceoryx2 node + its ports. The node must outlive the ports it created.
-struct Ports {
-    req_pub: BytePublisher,
-    resp_sub: ByteSubscriber,
-    _node: IoxNode,
-}
-
-/// The spawned child plus the iceoryx2 ports it talks over.
+/// The spawned child plus the exchange it answers on.
 struct Running {
     child: goofi_core::child::Child,
-    ports: Ports,
-    seq: u32,
-}
-
-fn build_ports(req_name: &str, resp_name: &str) -> std::result::Result<Ports, String> {
-    let node = iox_node()?;
-    let mk_pubsub = |name: &str| subprocess_service(&node, name);
-    let req_pub = mk_pubsub(req_name)?
-        .publisher_builder()
-        .initial_max_slice_len(MAX_PAYLOAD)
-        .allocation_strategy(AllocationStrategy::PowerOfTwo)
-        .create()
-        .map_err(|e| format!("req publisher: {e}"))?;
-    let resp_sub = mk_pubsub(resp_name)?
-        .subscriber_builder()
-        .create()
-        .map_err(|e| format!("resp subscriber: {e}"))?;
-    Ok(Ports { _node: node, req_pub, resp_sub })
+    exchange: Exchange,
 }
 
 impl Running {
     fn spawn(python: &str, source: &str) -> std::result::Result<Running, String> {
-        let id = format!("goofi_sub_{}_{}", std::process::id(), SUBPROC_SEQ.fetch_add(1, Ordering::Relaxed));
-        let req_name = format!("{id}_req");
-        let resp_name = format!("{id}_resp");
+        let base = format!("goofi_sub_{}_{}", std::process::id(), SUBPROC_SEQ.fetch_add(1, Ordering::Relaxed));
         // The child JOINS this session — `spawn` tells it which — so its ports live under the
         // same root and prefix and are swept with it.
         let mut cmd = Command::new(python);
         cmd.arg("-c")
             .arg("import goofi; goofi.serve()")
-            .env("GOOFI_IOX_REQ", &req_name)
-            .env("GOOFI_IOX_RESP", &resp_name)
+            .env("GOOFI_IOX_REQ", format!("{base}_req"))
+            .env("GOOFI_IOX_RESP", format!("{base}_resp"))
             // The host's PYTHONPATH (the pyo3/FT tier's) must not shadow the child's own numpy/goofi.
             .env_remove("PYTHONPATH")
             .env_remove("PYTHONHOME")
@@ -85,67 +54,16 @@ impl Running {
             None => Err("the child took no stdin".to_string()),
         };
         // A failure here drops `child`, which kills and reaps it.
-        let ports = handed.and_then(|()| build_ports(&req_name, &resp_name))?;
-        Ok(Running { child, ports, seq: 0 })
+        let exchange = handed.and_then(|()| Exchange::open(&base))?;
+        Ok(Running { child, exchange })
     }
 
     fn roundtrip(&mut self, frame: &[u8], timeout: Duration) -> std::result::Result<Vec<u8>, String> {
-        self.seq = self.seq.wrapping_add(1);
-        one_roundtrip(&self.ports.req_pub, &self.ports.resp_sub, &mut self.child, self.seq, frame, timeout)
-            .map_err(|e| format!("subprocess io: {e}"))
+        self.exchange.ask(&mut self.child, frame, timeout).map_err(|e| format!("subprocess io: {e}"))
     }
 
     fn shutdown(&mut self) {
         self.child.stop(Duration::ZERO);
-    }
-}
-
-/// One request/response: publish `[seq][frame]` and poll for the reply with the matching sequence.
-/// Re-published each idle millisecond, because the child's subscriber may still be connecting.
-fn one_roundtrip(
-    req_pub: &BytePublisher,
-    resp_sub: &ByteSubscriber,
-    child: &mut goofi_core::child::Child,
-    seq: u32,
-    frame: &[u8],
-    timeout: Duration,
-) -> std::io::Result<Vec<u8>> {
-    while matches!(resp_sub.receive(), Ok(Some(_))) {}
-
-    let mut msg = Vec::with_capacity(4 + frame.len());
-    msg.extend_from_slice(&seq.to_le_bytes());
-    msg.extend_from_slice(frame);
-
-    let deadline = Instant::now() + timeout;
-    loop {
-        match req_pub.loan_slice_uninit(msg.len()) {
-            Ok(sample) => {
-                let _ = sample.write_from_slice(msg.as_slice()).send();
-            }
-            Err(e) => return Err(std::io::Error::other(format!("iox publish: {e}"))),
-        }
-        loop {
-            match resp_sub.receive() {
-                Ok(Some(sample)) => {
-                    let payload = sample.payload();
-                    if payload.len() >= 4
-                        && u32::from_le_bytes(payload[0..4].try_into().unwrap()) == seq
-                    {
-                        return Ok(payload[4..].to_vec());
-                    }
-                }
-                Ok(None) => break, // drained; re-publish + wait
-                Err(e) => return Err(std::io::Error::other(format!("iox receive: {e}"))),
-            }
-        }
-        // Checked AFTER draining, so a child that answered and then exited still gets its answer returned.
-        if let Ok(Some(status)) = child.try_wait() {
-            return Err(std::io::Error::other(format!("subprocess exited: {status}")));
-        }
-        if Instant::now() >= deadline {
-            return Err(std::io::Error::other("subprocess did not respond in time"));
-        }
-        std::thread::sleep(Duration::from_millis(1));
     }
 }
 

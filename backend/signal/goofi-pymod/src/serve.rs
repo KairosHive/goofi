@@ -7,15 +7,12 @@ use std::time::Duration;
 
 use goofi_codec::{decode_request, encode_error_response, encode_options_response, encode_response, Request};
 use goofi_core::{Data as CoreData, SrcDtype};
-use iceoryx2::prelude::*;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::exec::SlotIn;
 use crate::loader::{find_node_class, module_from_source};
 
-/// iceoryx2 byte-slice pool ceiling — matches the parent publisher's default.
-const MAX_PAYLOAD: usize = 64 * 1024;
 
 /// The subprocess entry point (`import goofi; goofi.serve()`); returns only on a fatal error.
 #[pyfunction]
@@ -63,59 +60,19 @@ fn run_loop(
     resp_name: &str,
 ) -> Result<(), String> {
     // The parent's session, joined through `GOOFI_SESSION`: the same root, prefix and limits.
-    let node = goofi_transport::iox_node()?;
-    let mk = |name: &str| goofi_transport::subprocess_service(&node, name);
-    let req_sub =
-        mk(req_name)?.subscriber_builder().create().map_err(|e| format!("req subscriber: {e}"))?;
-    let resp_pub = mk(resp_name)?
-        .publisher_builder()
-        .initial_max_slice_len(MAX_PAYLOAD)
-        .allocation_strategy(AllocationStrategy::PowerOfTwo)
-        .create()
-        .map_err(|e| format!("resp publisher: {e}"))?;
-
+    let mut served = goofi_transport::Served::open(req_name, resp_name)?;
     let mut warned: HashSet<SrcDtype> = HashSet::new();
     let mut did_setup = false;
-    let mut last_seq: Option<u32> = None;
-
     loop {
-        // Latest-wins, mirroring the parent + iceoryx2 semantics.
-        let mut latest = None;
-        loop {
-            match req_sub.receive() {
-                Ok(Some(s)) => latest = Some(s),
-                Ok(None) => break,
-                Err(e) => return Err(format!("iox receive: {e}")),
-            }
-        }
-        let Some(sample) = latest else {
+        let Some((seq, body)) = served.request()? else {
             // DETACHED: holding the GIL over the idle poll would starve a node's own Python
             // threads, and a receiver thread started in `setup()` is this tier's canonical shape.
             py.detach(|| std::thread::sleep(Duration::from_micros(500)));
             continue;
         };
-        let payload = sample.payload();
-        if payload.len() < 4 {
-            continue; // not a framed request
-        }
-        let seq = u32::from_le_bytes(payload[0..4].try_into().unwrap());
-        if last_seq == Some(seq) {
-            continue; // a re-publish of an already-answered request — its response is in the buffer
-        }
-        let resp = handle(py, instance, in_slots, out_slots, &mut warned, &mut did_setup, &payload[4..])
+        let resp = handle(py, instance, in_slots, out_slots, &mut warned, &mut did_setup, &body)
             .map_err(|e| format!("node process: {e}"))?;
-
-        // [u32 seq][response frame]
-        let mut msg = Vec::with_capacity(4 + resp.len());
-        msg.extend_from_slice(&seq.to_le_bytes());
-        msg.extend_from_slice(&resp);
-        resp_pub
-            .loan_slice_uninit(msg.len())
-            .map_err(|e| format!("iox loan: {e}"))?
-            .write_from_slice(msg.as_slice())
-            .send()
-            .map_err(|e| format!("iox send: {e}"))?;
-        last_seq = Some(seq);
+        served.answer(seq, &resp)?;
     }
 }
 

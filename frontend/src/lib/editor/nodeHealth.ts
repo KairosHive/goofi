@@ -8,7 +8,8 @@ const RUNTIME: Record<NodeRuntime, { token: string; title: string }> = {
 	native: { token: 'rs.ip', title: 'Rust, in-process' },
 	'in-process': { token: 'py.ip', title: 'Python, in-process' },
 	subprocess: { token: 'py.sp', title: 'Python, in a subprocess' },
-	shader: { token: 'wg.gp', title: 'WGSL, on the GPU' }
+	shader: { token: 'wg.gp', title: 'WGSL, on the GPU' },
+	hosted: { token: 'rs.sp', title: 'Rust, in a subprocess' }
 };
 
 /** The status token, one per kind — three characters each, so the pill's width does not move with

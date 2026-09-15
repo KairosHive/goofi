@@ -210,6 +210,8 @@ pub trait Engine: Send {
     fn rust_sdk(&self) -> Option<&'static str> {
         None
     }
+    /// The boot scan is over: a Rust node registered from now on was authored in the session.
+    fn boot_done(&mut self) {}
     /// The open patch's workspace: where a node's opaque state is kept between two births.
     fn set_workspace(&mut self, _dir: &Path) {}
     /// Write every live node's opaque state where the next birth at its uid will find it.

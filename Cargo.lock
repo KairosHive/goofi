@@ -1207,12 +1207,14 @@ name = "goofi-signal"
 version = "3.1.0"
 dependencies = [
  "goofi-build",
+ "goofi-codec",
  "goofi-core",
  "goofi-host",
  "goofi-node",
  "goofi-python",
  "goofi-signal-sdk",
  "goofi-transport",
+ "rmp-serde",
 ]
 
 [[package]]

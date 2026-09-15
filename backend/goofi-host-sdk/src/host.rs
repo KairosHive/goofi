@@ -16,6 +16,23 @@ pub struct Loaded {
     manifest: &'static NodeManifest,
 }
 
+/// Which entry of the vtable a request is for — the byte a hosted child reads it as.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entry {
+    Setup = 0,
+    Process = 1,
+    ParamChanged = 2,
+    Refresh = 3,
+    Pulse = 4,
+}
+
+impl Entry {
+    pub fn from_u8(byte: u8) -> Option<Entry> {
+        [Entry::Setup, Entry::Process, Entry::ParamChanged, Entry::Refresh, Entry::Pulse].into_iter().find(|e| *e as u8 == byte)
+    }
+}
+
 impl Loaded {
     /// # Safety
     /// `library` was built by [`crate::cdylib!`] at this SDK's version — its `goofi_version`
@@ -29,28 +46,58 @@ impl Loaded {
     }
 
     pub fn instantiate(&self) -> Box<dyn Node> {
-        let node = unsafe { (self.vtable.create)() };
-        Box::new(Handle { node, vtable: self.vtable, manifest: self.manifest })
+        Box::new(Handle { raw: self.raw(), manifest: self.manifest })
+    }
+
+    /// A fresh instance called by entry, request bytes in and reply bytes out — what a hosted
+    /// child forwards across its exchange.
+    pub fn raw(&self) -> Raw {
+        Raw { node: unsafe { (self.vtable.create)() }, vtable: self.vtable }
+    }
+}
+
+/// One instance behind the vtable, spoken to in codec bytes.
+pub struct Raw {
+    node: *mut c_void,
+    vtable: &'static VTable,
+}
+
+// The instance is used from the one thread that runs it, as every node is.
+unsafe impl Send for Raw {}
+
+impl Raw {
+    pub fn call(&mut self, entry: Entry, now: f64, request: &[u8]) -> Result<Vec<u8>, String> {
+        if self.node.is_null() {
+            return Err("the node's constructor panicked".into());
+        }
+        let call: Call = match entry {
+            Entry::Setup => self.vtable.setup,
+            Entry::Process => self.vtable.process,
+            Entry::ParamChanged => self.vtable.on_param_changed,
+            Entry::Refresh => self.vtable.on_param_refreshed,
+            Entry::Pulse => self.vtable.on_pulse,
+        };
+        let mut reply: Vec<u8> = Vec::new();
+        // SAFETY: the entry is the node's own, `request` and the sink live for the call.
+        unsafe { call(self.node, Ctx { now }, Bytes::of(request), &mut reply as *mut Vec<u8> as *mut c_void, collect) };
+        Ok(reply)
+    }
+}
+
+impl Drop for Raw {
+    fn drop(&mut self) {
+        unsafe { (self.vtable.destroy)(self.node) }
     }
 }
 
 struct Handle {
-    node: *mut c_void,
-    vtable: &'static VTable,
+    raw: Raw,
     manifest: &'static NodeManifest,
 }
 
-// The instance is used from the one thread that runs it, as every node is.
-unsafe impl Send for Handle {}
-
 impl Handle {
-    fn call(&mut self, entry: Call, now: f64, request: &[u8]) -> Result<Response, String> {
-        if self.node.is_null() {
-            return Err("the node's constructor panicked".into());
-        }
-        let mut reply: Vec<u8> = Vec::new();
-        unsafe { entry(self.node, Ctx { now }, Bytes::of(request), &mut reply as *mut Vec<u8> as *mut c_void, collect) };
-        goofi_codec::decode_response(&reply)
+    fn call(&mut self, entry: Entry, now: f64, request: &[u8]) -> Result<Response, String> {
+        goofi_codec::decode_response(&self.raw.call(entry, now, request)?)
     }
 
     fn done(answer: Result<Response, String>) -> NodeResult {
@@ -65,7 +112,7 @@ impl Handle {
 
 impl Node for Handle {
     fn setup(&mut self, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
-        Self::done(self.call(self.vtable.setup, ctx.now, &goofi_codec::encode_request(p.groups(), &[])))
+        Self::done(self.call(Entry::Setup, ctx.now, &goofi_codec::encode_request(p.groups(), &[])))
     }
 
     fn process(&mut self, inp: &Inputs<'_>, out: &mut Outputs<'_>, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
@@ -79,7 +126,7 @@ impl Node for Handle {
                 present.push((slot.name, "", d));
             }
         }
-        match self.call(self.vtable.process, ctx.now, &goofi_codec::encode_request(p.groups(), &present)) {
+        match self.call(Entry::Process, ctx.now, &goofi_codec::encode_request(p.groups(), &present)) {
             Ok(Response::Process(result)) => {
                 for slot in result.clear_inputs {
                     ctx.clear_input(&slot);
@@ -95,12 +142,12 @@ impl Node for Handle {
 
     fn on_param_changed(&mut self, key: &ParamKey, v: &goofi_core::Param) -> NodeResult {
         let request = rmp_serde::to_vec(&(&key.group, &key.name, v)).map_err(|e| NodeError(e.to_string()))?;
-        Self::done(self.call(self.vtable.on_param_changed, 0.0, &request))
+        Self::done(self.call(Entry::ParamChanged, 0.0, &request))
     }
 
     fn on_param_refreshed(&mut self, key: &ParamKey, p: &Params<'_>) -> Option<Vec<String>> {
         let request = goofi_codec::encode_refresh_request(p.groups(), &key.group, &key.name);
-        match self.call(self.vtable.on_param_refreshed, 0.0, &request) {
+        match self.call(Entry::Refresh, 0.0, &request) {
             Ok(Response::Options(options)) => options,
             _ => None,
         }
@@ -108,12 +155,6 @@ impl Node for Handle {
 
     fn on_pulse(&mut self, key: &ParamKey, p: &Params<'_>) -> NodeResult {
         let request = goofi_codec::encode_pulse_request(p.groups(), &key.group, &key.name);
-        Self::done(self.call(self.vtable.on_pulse, 0.0, &request))
-    }
-}
-
-impl Drop for Handle {
-    fn drop(&mut self) {
-        unsafe { (self.vtable.destroy)(self.node) }
+        Self::done(self.call(Entry::Pulse, 0.0, &request))
     }
 }

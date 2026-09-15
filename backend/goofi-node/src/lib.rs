@@ -344,11 +344,13 @@ pub enum Isolation {
     Subprocess,
     /// A `.wgsl` file, run on the GPU by the graphics engine.
     Shader,
+    /// Rust, built after boot and run in a child of goofi's own binary.
+    Hosted,
 }
 
 impl Isolation {
-    pub const ALL: [Isolation; 4] =
-        [Isolation::Native, Isolation::InProcess, Isolation::Subprocess, Isolation::Shader];
+    pub const ALL: [Isolation; 5] =
+        [Isolation::Native, Isolation::InProcess, Isolation::Subprocess, Isolation::Shader, Isolation::Hosted];
 
     /// The wire name, shared by `inspect_type`'s `tier` and the per-node runtime overlay.
     pub fn wire(self) -> &'static str {
@@ -357,12 +359,13 @@ impl Isolation {
             Isolation::InProcess => "in-process",
             Isolation::Subprocess => "subprocess",
             Isolation::Shader => "shader",
+            Isolation::Hosted => "hosted",
         }
     }
     /// Which language the node is written in — a reading of the tier, never a second field.
     pub fn language(self) -> &'static str {
         match self {
-            Isolation::Native => "rust",
+            Isolation::Native | Isolation::Hosted => "rust",
             Isolation::InProcess | Isolation::Subprocess => "python",
             Isolation::Shader => "wgsl",
         }
@@ -402,6 +405,8 @@ impl IsolationCell {
 /// The cell every native node points at. Shared because a native tier is fixed — only a Python
 /// type, whose cell is leaked per type at discovery, is ever written.
 pub static NATIVE: IsolationCell = IsolationCell::new(Isolation::Native);
+/// A Rust node registered after boot runs hosted, since a library once loaded is never unloaded.
+pub static HOSTED: IsolationCell = IsolationCell::new(Isolation::Hosted);
 /// Every graphics node is one, so the engine advertises this rather than minting a cell per class.
 pub static SHADER: IsolationCell = IsolationCell::new(Isolation::Shader);
 
