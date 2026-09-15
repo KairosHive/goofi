@@ -50,6 +50,10 @@ pub fn sdk(name: &str) -> Option<&'static Sdk> {
     [&SIGNAL, &AUDIO, &GRAPHICS].into_iter().find(|s| s.name == name)
 }
 
+/// How long one node build may run. A first build compiles the SDK's dependency tree, which is
+/// minutes on a slow machine; a build past this is stuck, not slow.
+const BUILD_WAIT: std::time::Duration = std::time::Duration::from_secs(1800);
+
 /// Where the extracted SDK, the generated crates, one shared cargo target and every artifact
 /// live: `$GOOFI_BUILD_DIR`, else `<home>/system/build`.
 pub fn base_dir(home: &Path) -> PathBuf {
@@ -157,7 +161,8 @@ fn build(sdk: &Sdk, source: &Path, base: &Path, key: &str, artifact: &Path) -> R
         }
     }
     cmd.env("CARGO_TARGET_DIR", base.join("target"));
-    let output = cmd.output().map_err(|e| format!("could not run cargo: {e}"))?;
+    let output = goofi_core::child::output(format!("cargo build {crate_name}"), &mut cmd, BUILD_WAIT)
+        .map_err(|e| format!("could not run cargo: {e}"))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }

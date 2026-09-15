@@ -2,7 +2,7 @@
 //! request/response over iceoryx2 shared memory.
 
 use std::io::Write;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -35,12 +35,9 @@ struct Ports {
 
 /// The spawned child plus the iceoryx2 ports it talks over.
 struct Running {
-    child: Child,
+    child: goofi_core::child::Child,
     ports: Ports,
     seq: u32,
-    /// Never written to: holding this end open IS the signal, and its close — including one the
-    /// OS does on a crash, where no `Drop` runs — is the EOF the child exits on.
-    parent_alive: Option<std::io::PipeWriter>,
 }
 
 fn build_ports(req_name: &str, resp_name: &str) -> std::result::Result<Ports, String> {
@@ -64,14 +61,13 @@ impl Running {
         let id = format!("goofi_sub_{}_{}", std::process::id(), SUBPROC_SEQ.fetch_add(1, Ordering::Relaxed));
         let req_name = format!("{id}_req");
         let resp_name = format!("{id}_resp");
+        // The child JOINS this session — `spawn` tells it which — so its ports live under the
+        // same root and prefix and are swept with it.
         let mut cmd = Command::new(python);
         cmd.arg("-c")
             .arg("import goofi; goofi.serve()")
             .env("GOOFI_IOX_REQ", &req_name)
             .env("GOOFI_IOX_RESP", &resp_name)
-            // The child JOINS this session: its ports live under the same root and prefix, so
-            // they are swept with it.
-            .env(goofi_core::session::ENV, goofi_transport::session())
             // The host's PYTHONPATH (the pyo3/FT tier's) must not shadow the child's own numpy/goofi.
             .env_remove("PYTHONPATH")
             .env_remove("PYTHONHOME")
@@ -81,10 +77,8 @@ impl Running {
             .env("PYTHONUNBUFFERED", "1")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        // Armed BEFORE the spawn it guards, so a Ctrl-C or a crash here cannot orphan the child.
-        let armed = goofi_codec::liveness::arm(&mut cmd).map_err(|e| format!("liveness pipe: {e}"))?;
-        let mut child = cmd.spawn().map_err(|e| format!("spawn `{python}`: {e}"))?;
-        let parent_alive = Some(armed.into_writer());
+        let mut child = goofi_core::child::spawn(format!("python node ({python})"), &mut cmd)
+            .map_err(|e| format!("spawn `{python}`: {e}"))?;
         if let Some(out) = child.stdout.take() {
             let source = goofi_core::log::source();
             std::thread::spawn(move || goofi_core::log::drain(out, source, "stdout"));
@@ -98,14 +92,9 @@ impl Running {
             Some(mut w) => w.write_all(source.as_bytes()).map_err(|e| format!("hand the source over: {e}")),
             None => Err("the child took no stdin".to_string()),
         };
-        match handed.and_then(|()| build_ports(&req_name, &resp_name)) {
-            Ok(ports) => Ok(Running { child, ports, seq: 0, parent_alive }),
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                Err(e)
-            }
-        }
+        // A failure here drops `child`, which kills and reaps it.
+        let ports = handed.and_then(|()| build_ports(&req_name, &resp_name))?;
+        Ok(Running { child, ports, seq: 0 })
     }
 
     fn roundtrip(&mut self, frame: &[u8], timeout: Duration) -> std::result::Result<Vec<u8>, String> {
@@ -115,10 +104,7 @@ impl Running {
     }
 
     fn shutdown(&mut self) {
-        // Closed first: this stop reaches the child even where a signal or a dead handle defeats `kill`.
-        drop(self.parent_alive.take());
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.child.stop(Duration::ZERO);
     }
 }
 
@@ -127,7 +113,7 @@ impl Running {
 fn one_roundtrip(
     req_pub: &BytePublisher,
     resp_sub: &ByteSubscriber,
-    child: &mut Child,
+    child: &mut goofi_core::child::Child,
     seq: u32,
     frame: &[u8],
     timeout: Duration,
@@ -298,12 +284,11 @@ fn subproc_type_from_discovered(python: &str, d: Discovered) -> SubprocNodeType 
     SubprocNodeType { manifest, isolation: d.isolation, factory }
 }
 
-#[cfg(test)]
+/// The orphan guard, proven end to end: a parent killed with no chance to clean up still takes
+/// its child with it. Linux only, for `/proc` and `kill -9`.
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
-    use goofi_core::{Data, Meta, Value};
-    use goofi_node::ParamGroups;
-    use indexmap::IndexMap;
 
     /// Doubles its `data` input into `out`.
     const DOUBLE: &str = r#"
@@ -315,59 +300,6 @@ class Double(goofi.Node):
         return {"out": data.data * 2.0}
 "#;
 
-    fn f32s(v: &[f32]) -> Vec<u8> {
-        v.iter().flat_map(|x| x.to_le_bytes()).collect()
-    }
-    fn arr(shape: Vec<usize>, v: &[f32], meta: Meta) -> Data {
-        Data::array_f32(shape, f32s(v), meta).unwrap()
-    }
-    fn floats(d: &Data) -> Vec<f32> {
-        match d.value() {
-            Value::Array(s) => s
-                .as_bytes()
-                .chunks_exact(4)
-                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-                .collect(),
-            _ => panic!("not array"),
-        }
-    }
-
-    /// Tick a node once, returning the output slot map or the node error.
-    fn tick(
-        node: &mut RemoteNode,
-        inputs: Vec<(&'static str, Data)>,
-        out_names: &[&'static str],
-        params: &ParamGroups,
-    ) -> Result<IndexMap<&'static str, Option<Data>>, String> {
-        let mut inmap: IndexMap<&'static str, Option<Data>> = IndexMap::new();
-        for (n, d) in inputs {
-            inmap.insert(n, Some(d));
-        }
-        let inp = Inputs::new(&inmap);
-        let mut outmap: IndexMap<&'static str, Option<Data>> = IndexMap::new();
-        for n in out_names {
-            outmap.insert(n, None);
-        }
-        let mut ctx = NodeCtx::new();
-        let r = {
-            let mut out = Outputs::new(&mut outmap);
-            node.process(&inp, &mut out, &mut ctx, &Params::new(params))
-        };
-        r.map_err(|e| e.0)?;
-        Ok(outmap)
-    }
-
-    /// The common `data -> out` single-slot, no-param tick; returns the `out` frame.
-    fn run(node: &mut RemoteNode, d: Data) -> Data {
-        try_run(node, d).expect("remote process")
-    }
-    fn try_run(node: &mut RemoteNode, d: Data) -> Result<Data, String> {
-        let m = tick(node, vec![("data", d)], &["out"], &ParamGroups::new())?;
-        Ok(m.get("out").unwrap().clone().expect("output frame"))
-    }
-
-    /// A python with both goofi and numpy, or None. It strips `PYTHONPATH` exactly like the real
-    /// child spawn, so a host `PYTHONPATH` cannot produce a false negative.
     fn usable_python() -> Option<String> {
         let mut cands: Vec<String> = Vec::new();
         if let Ok(p) = std::env::var("GOOFI_SUBPROC_TEST_PYTHON") {
@@ -427,45 +359,11 @@ class Double(goofi.Node):
         Tier { py, _lock }
     }
 
-    /// Bounded poll for a child to exit — never an unbounded wait that would hang the suite.
-    fn child_exits_within(child: &mut Child, bound: Duration) -> bool {
-        let deadline = Instant::now() + bound;
-        loop {
-            if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
-                return true;
-            }
-            if Instant::now() >= deadline {
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    #[test]
-    fn the_child_stops_when_the_parents_liveness_pipe_closes() {
-        let py = require_python();
-        let mut node = RemoteNode::new(&*py, DOUBLE, vec![("data", false)]);
-        // A real tick first, so the child is fully up and inside its serve loop.
-        assert_eq!(floats(&run(&mut node, arr(vec![1], &[2.0], Meta::empty()))), vec![4.0]);
-
-        let running = node.proc.as_mut().expect("the tick spawned a child");
-        drop(running.parent_alive.take()); // the parent "dies"
-
-        let exited = child_exits_within(&mut running.child, Duration::from_secs(5));
-        if !exited {
-            let _ = running.child.kill();
-            let _ = running.child.wait();
-        }
-        assert!(exited, "the child must exit on the liveness pipe's EOF; it was still alive after 5s");
-    }
-
     /// The interpreter the helper process spawns its grandchild with.
-    #[cfg(target_os = "linux")]
     const HELPER_ENV: &str = "GOOFI_LIVENESS_HELPER_PYTHON";
 
     /// The intermediate parent for the hard-kill test, re-entered as a separate process: with
     /// [`HELPER_ENV`] set it spawns a child, announces its pid and blocks; unset it does nothing.
-    #[cfg(target_os = "linux")]
     #[test]
     fn liveness_helper_process() {
         let Ok(py) = std::env::var(HELPER_ENV) else { return };
@@ -479,7 +377,6 @@ class Double(goofi.Node):
     }
 
     /// Alive = present in /proc and not already a reaped-pending zombie.
-    #[cfg(target_os = "linux")]
     fn pid_alive(pid: u32) -> bool {
         let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return false };
         // `pid (comm) STATE …`, and comm may itself contain spaces or parens — scan past the last ')'.
@@ -488,7 +385,6 @@ class Double(goofi.Node):
             .is_some_and(|state| state != "Z")
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_hard_killed_parent_still_stops_the_child() {
         let py = require_python();

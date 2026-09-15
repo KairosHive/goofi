@@ -186,6 +186,7 @@ pub fn session() -> &'static str {
                 id
             }
         };
+        goofi_core::session::decide(&id);
         let _ = std::fs::create_dir_all(iox_root(&id));
         sweep_dead();
         id

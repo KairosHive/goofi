@@ -22,7 +22,7 @@ const MAX_PAYLOAD: usize = 64 * 1024;
 pub fn serve(py: Python<'_>) -> PyResult<()> {
     // FIRST, before the user module is even compiled, so a child orphaned during a slow import
     // still stops instead of reaching the poll loop.
-    goofi_codec::liveness::watch_parent(&env(goofi_codec::liveness::ENV_VAR)?)
+    goofi_core::child::watch_parent()
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("parent-liveness watcher: {e}")))?;
 
     // The source comes on stdin rather than in the environment, which Windows caps as a block.

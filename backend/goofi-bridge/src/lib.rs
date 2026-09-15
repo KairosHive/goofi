@@ -16,7 +16,6 @@ pub mod ops;
 pub mod plugins;
 mod origin;
 mod patchfile;
-mod proc;
 mod record;
 pub mod reducer;
 pub mod schemas;

@@ -1017,10 +1017,8 @@ version = "3.1.0"
 dependencies = [
  "goofi-core",
  "indexmap",
- "libc",
  "rmp-serde",
  "rmpv",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1049,6 +1047,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml 0.8.23",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

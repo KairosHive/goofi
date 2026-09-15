@@ -603,7 +603,7 @@ fn watch_shutdown() -> tokio::sync::oneshot::Receiver<()> {
                 shutdown_signal().await;
                 let _ = stop.send(());
                 shutdown_signal().await;
-                goofi_record::video::kill_encoders();
+                // Every child goofi spawned watches its liveness pipe, which this exit closes.
                 std::process::exit(130);
             });
     }).expect("the signal thread");

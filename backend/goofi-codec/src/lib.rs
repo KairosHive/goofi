@@ -3,7 +3,6 @@
 //! Frame: `magic "GOOF" | u8 version | u8 dtype tag | u32 meta_len | u32 body_len | meta | body`,
 //! little-endian, with the meta dict projected from the typed `Meta` plus derived shape/dtype.
 
-pub mod liveness;
 
 use goofi_core::{Coord, Data, MetaValue, Value};
 use rmpv::Value as Mp;
