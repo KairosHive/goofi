@@ -1041,7 +1041,7 @@ fn eight_writers_all_land_and_none_deadlock() {
 #[test]
 fn clearing_the_touched_baseline_moves_the_zero_point_and_breaks_no_binding() {
     let g = Goofi::new();
-    let osc = g.add("Oscillator");
+    let osc = g.add("LFO");
 
     // Nothing cleared yet: no baseline key at all, so the zero is each type's declared default.
     // The blob rides as a json STRING, as every merge-patch-safe blob does.
@@ -1054,8 +1054,8 @@ fn clearing_the_touched_baseline_moves_the_zero_point_and_breaks_no_binding() {
     assert!(baseline(&g).is_null(), "a node nobody has cleared carries no baseline: {}", baseline(&g));
 
     // Move one param off its default and bind another — the two kinds of change the filter counts.
-    g.call("node param edit", j!({ "node": hex(osc), "param": "oscillator/frequency", "value": "3.5" }));
-    g.call("node param edit", j!({ "node": hex(osc), "param": "oscillator/damping", "expression": "1 + 1" }));
+    g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/frequency", "value": "3.5" }));
+    g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude", "expression": "1 + 1" }));
 
     let cleared = g.call("node baseline", j!({ "node": hex(osc) }));
     assert_eq!(cleared["ok"], j!(true));
@@ -1065,18 +1065,18 @@ fn clearing_the_touched_baseline_moves_the_zero_point_and_breaks_no_binding() {
     // The zero point records the VALUE and the SOURCE: a param moving from a constant to an
     // expression is a change even when the number it evaluates to is the same.
     let base = baseline(&g);
-    assert_eq!(base["oscillator/frequency"]["value"], j!(3.5), "the moved value is the new zero: {base}");
-    assert_eq!(base["oscillator/damping"]["mode"], j!("expression"), "the source is recorded too: {base}");
-    assert_eq!(base["oscillator/damping"]["expression"], j!("1 + 1"), "…and the expression text with it");
+    assert_eq!(base["lfo/frequency"]["value"], j!(3.5), "the moved value is the new zero: {base}");
+    assert_eq!(base["lfo/amplitude"]["mode"], j!("expression"), "the source is recorded too: {base}");
+    assert_eq!(base["lfo/amplitude"]["expression"], j!("1 + 1"), "…and the expression text with it");
 
     // Nothing was edited: the expression still drives, so the Expression filter still finds it.
     let params = g.doc()["nodes"][hex(osc)]["params"].clone();
-    assert_eq!(params["oscillator"]["damping"]["expr"], j!("1 + 1"), "the binding survived the clear");
-    assert_eq!(params["oscillator"]["frequency"]["value"], j!(3.5), "and the value is untouched");
+    assert_eq!(params["lfo"]["amplitude"]["expr"], j!("1 + 1"), "the binding survived the clear");
+    assert_eq!(params["lfo"]["frequency"]["value"], j!(3.5), "and the value is untouched");
 
     // Undoable like any other document edit.
     assert_eq!(g.call("undo", j!({}))["changed"], true);
     assert!(baseline(&g).is_null(), "undo took the zero point back: {}", baseline(&g));
     assert_eq!(g.call("redo", j!({}))["changed"], true);
-    assert_eq!(baseline(&g)["oscillator/frequency"]["value"], j!(3.5), "redo put it back");
+    assert_eq!(baseline(&g)["lfo/frequency"]["value"], j!(3.5), "redo put it back");
 }

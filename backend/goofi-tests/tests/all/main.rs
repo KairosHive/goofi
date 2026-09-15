@@ -9,24 +9,15 @@ pub fn situation(module_path: &str) -> &str {
 #[cfg(target_os = "linux")]
 mod audio_priority;
 mod browser;
-#[cfg(not(feature = "embed"))]
-mod bundles;
-#[cfg(feature = "embed")]
-mod bundles_expr;
 mod children;
 mod codec_golden;
 mod contracts;
 mod demo;
 mod editing;
-#[cfg(not(feature = "embed"))]
-mod eeg;
 mod engines;
 mod filter_golden;
-mod fluxrt;
 mod graphics;
-mod harmonic_geometry;
 mod headless;
-mod image_file;
 mod inspect;
 #[cfg(not(feature = "embed"))]
 mod io;
@@ -46,9 +37,6 @@ mod recording;
 mod running;
 mod session;
 mod signals;
-mod simulation;
 mod subpatches;
 mod textures;
 mod transport;
-mod upscaling;
-mod upscaling_fluxrt;

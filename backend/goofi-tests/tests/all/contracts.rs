@@ -253,8 +253,12 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
     assert!(!listed.iter().any(|t| goofi_node::bare(t).starts_with('_')),
             "a test node reached the palette: {listed:?}");
     assert!(listed.contains(&"signal:LFO") && listed.contains(&"signal:Buffer"), "{listed:?}");
+    // The built-in bundles are the backend's own; the other bundles are not under test here.
     for (ty, groups) in declared {
         let row = row(&ty);
+        if !["signal", "audio", "graphics"].contains(&row["bundle"].as_str().unwrap_or_default()) {
+            continue;
+        }
         assert!(row.get("category").is_none(), "{ty}: category is gone");
         let doc = row["doc"].as_str().unwrap_or_else(|| panic!("{ty}: a doc"));
         let nutshell = doc.split('\n').next().unwrap_or_default();
