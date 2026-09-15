@@ -5,7 +5,7 @@
 //! Three locations belong to a session, and only these:
 //! - `.goofi/system/sessions/<id>/` — the record: `session.json` (id, url) and `alive.lock`.
 //! - `<temp>/goofi-system/<id>/` — ephemeral resources (the iceoryx2 root), safe to sweep whenever
-//!   the record it `session` references is not alive.
+//!   the record of the same id is not alive.
 //! - `<temp>/goofi-workspaces/<id>/` — the patch workspace, removed on a CLEAN shutdown only: what
 //!   a crash leaves there is the user's work.
 
@@ -114,9 +114,7 @@ pub fn hold(id: &str) -> io::Result<Held> {
     lock.lock()?;
     fs::write(part.join("session.json"), serde_json::to_vec_pretty(&Session { id: id.into(), url: String::new() })?)?;
     fs::rename(&part, &at)?;
-    let system = system_dir(id);
-    fs::create_dir_all(&system)?;
-    fs::write(system.join("session"), at.to_string_lossy().as_bytes())?;
+    fs::create_dir_all(system_dir(id))?;
     Ok(Held { id: id.to_string(), lock: Some(lock) })
 }
 
@@ -171,15 +169,15 @@ pub fn sessions(remove: RemoveTree) -> Vec<Session> {
     out
 }
 
-/// Sweep every ephemeral directory whose referenced record is not alive — a record that was
-/// already swept, a home that is gone, or a session that died. A directory with no reference yet
-/// is being born and is left alone.
+/// Sweep every ephemeral directory whose session is not alive: a record already swept, a home
+/// that is gone, a session that died. The record is locked and in place before its directory
+/// is made, so a directory with no alive record is dead, whatever it holds.
 pub fn sweep_dead_system(remove: RemoveTree) {
     let Ok(entries) = fs::read_dir(system_base()) else { return };
     for entry in entries.flatten() {
         let dir = entry.path();
-        let Ok(reference) = fs::read_to_string(dir.join("session")) else { continue };
-        if !alive_at(Path::new(reference.trim())) {
+        let Some(id) = dir.file_name().and_then(|n| n.to_str()) else { continue };
+        if !alive(id) {
             remove(&dir);
         }
     }
@@ -213,20 +211,18 @@ mod tests {
         held.record_url("http://127.0.0.1:9999");
         assert!(alive("abc"), "held from within the same process still reads alive");
         assert_eq!(sessions(remove), vec![Session { id: "abc".into(), url: "http://127.0.0.1:9999".into() }]);
-        assert!(system_dir("abc").join("session").exists());
+        assert!(system_dir("abc").is_dir());
 
         // A dead record: the lock file exists and nobody holds it.
         fs::create_dir_all(entry("gone")).unwrap();
         File::create(entry("gone").join("alive.lock")).unwrap();
         fs::create_dir_all(system_dir("gone")).unwrap();
-        fs::write(system_dir("gone").join("session"), entry("gone").to_string_lossy().as_bytes()).unwrap();
         assert!(!alive("gone"));
         assert_eq!(sessions(remove).len(), 1, "the dead record is swept, the live one stays");
         assert!(!entry("gone").exists() && !system_dir("gone").exists());
 
         // A system dir whose record is gone entirely is swept by the boot pass.
-        fs::create_dir_all(system_dir("orphan")).unwrap();
-        fs::write(system_dir("orphan").join("session"), entry("orphan").to_string_lossy().as_bytes()).unwrap();
+        fs::create_dir_all(system_dir("orphan").join("iox")).unwrap();
         sweep_dead_system(remove);
         assert!(!system_dir("orphan").exists());
         assert!(system_dir("abc").exists(), "the live one is untouched");
