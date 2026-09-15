@@ -371,7 +371,7 @@ fn a_python_pulse_param_is_a_request_the_node_answers_with_a_hook() {
     free_run(&g, node, 50.0);
     let under = |c: f32| probe.latest().map(|d| f32s(&d)[0]).is_some_and(|v| v < c);
     let before = f32s(&g.until("a count past twenty", |_| probe.latest().filter(|d| f32s(d)[0] > 20.0)))[0];
-    g.call("node param pulse", j!({ "node": hex(node), "param": "count/reset" }));
+    g.call("node param request", j!({ "node": hex(node), "param": "count/reset", "request": "pulse" }));
     g.until("the count to start over", |_| under(before).then_some(()));
     assert!(g.error(node).is_none(), "a pulse leaves no error");
 }
@@ -412,7 +412,7 @@ fn a_python_node_stitches_its_inputs_past_and_a_pulse_forgets_it() {
     };
     g.until("the stitched past to reach back four samples", all_four);
 
-    g.call("node param pulse", j!({ "node": hex(node), "param": "stitcher/reset" }));
+    g.call("node param request", j!({ "node": hex(node), "param": "stitcher/reset", "request": "pulse" }));
     g.until("the forgotten past to read short", |_| {
         probe.latest().filter(|d| f32s(d).iter().any(|v| *v < 4.0)).map(|_| ())
     });

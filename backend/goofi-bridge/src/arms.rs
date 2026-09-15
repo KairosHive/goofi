@@ -544,21 +544,26 @@ pub(crate) fn link_remove(
     Ok(json!({ "removed": existed }))
 }
 
-/// NOT a command: options are runtime-only, so there is nothing to undo. They do not ride this
-/// reply either — the hook runs on the node's own thread.
-pub(crate) fn node_param_refresh(
+/// NOT a command: a request holds no state, so there is nothing to undo, and the node acts on it
+/// on its own thread, so the reply says only that it was dispatched. A refresh's options do not
+/// ride the reply either: `node state` reports them once the hook has run.
+pub(crate) fn node_param_request(
     state: &AppState,
     payload: &Value,
     _actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
+    let kind: goofi_node::RequestKind = serde_json::from_value(payload["request"].clone())
+        .map_err(|_| "node param request: `request` is `refresh` or `pulse`".to_string())?;
     {
         let mut g = state.graph.lock().unwrap();
         let uid = parse_uid(&g, payload, "node")?;
-        let (group, name) = parse_param_addr(payload, "node param refresh")?;
-        g.refresh_param(uid, &group, &name)?;
+        let (group, name) = parse_param_addr(payload, "node param request")?;
+        g.request(uid, &group, &name, kind)?;
     }
-    resync_and_broadcast(state);
+    if kind == goofi_node::RequestKind::Refresh {
+        resync_and_broadcast(state);
+    }
     Ok(json!({ "ok": true }))
 }
 
@@ -587,21 +592,6 @@ pub(crate) fn node_touched_clear(
     drop(g);
     resync_and_broadcast(state);
     Ok(json!({ "ok": true, "cleared": cleared }))
-}
-
-/// NOT a command either: a pulse holds no state, so there is nothing to undo. The node acts on it
-/// on its own thread, so this reply says only that the request was dispatched.
-pub(crate) fn node_param_pulse(
-    state: &AppState,
-    payload: &Value,
-    _actor: &str,
-    _events: &mut Vec<String>,
-) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
-    let uid = parse_uid(&g, payload, "node")?;
-    let (group, name) = parse_param_addr(payload, "node param pulse")?;
-    g.pulse_param(uid, &group, &name)?;
-    Ok(json!({ "ok": true }))
 }
 
 /// The joined `param_addr` — `group/param`, split on the FIRST `/` — one spelling on both surfaces.

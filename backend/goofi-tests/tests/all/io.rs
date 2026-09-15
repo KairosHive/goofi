@@ -36,7 +36,7 @@ fn a_patch_publishes_what_it_made_and_reads_it_back_off_the_machine() {
 
     // The ⟳ on the stream picker lists what is on the network, this patch's own stream included.
     let mut ev = g.events();
-    g.call("node param refresh", j!({ "node": hex(inn), "param": "lsl/name" }));
+    g.call("node param request", j!({ "node": hex(inn), "param": "lsl/name", "request": "refresh" }));
     let echo = g.until("the picker's echo", |_| {
         let p = ev.next("state_update");
         (p["node"] == hex(inn) && p["refreshed_params"] == j!([["lsl", "name"]])).then_some(p)
@@ -82,7 +82,7 @@ fn a_patch_publishes_what_it_made_and_reads_it_back_off_the_machine() {
         let n = g.add(ty);
         g.ready(n);
         assert!(g.error(n).is_none(), "{ty} with no port is silent, not broken: {:?}", g.error(n));
-        g.call("node param refresh", j!({ "node": hex(n), "param": "midi/port" }));
+        g.call("node param request", j!({ "node": hex(n), "param": "midi/port", "request": "refresh" }));
         g.until("the port picker to answer", |_| {
             let p = ev.next("state_update");
             (p["node"] == hex(n) && p["refreshed_params"] == j!([["midi", "port"]])).then_some(())

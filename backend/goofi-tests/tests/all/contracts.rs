@@ -65,9 +65,9 @@ fn every_op_and_vocabulary_row_is_well_formed_documented_and_reachable() {
     // The `!` has to reach the parse, or every argument is advertised as optional.
     let add: Vec<_> = find("node add").expect("node add is registered").args().collect();
     assert_eq!((add[0], add[1]), (("type", "string", true), ("pos", "float2", false)));
-    // A pulse is addressed exactly as every other param is: one spelling for every param op.
-    assert_eq!(find("node param pulse").expect("node param pulse is registered").args,
-               "node:uid! param:param_addr!");
+    // A request is addressed exactly as every other param op is, and names its kind.
+    assert_eq!(find("node param request").expect("node param request is registered").args,
+               "node:uid! param:param_addr! request:string!");
 
     // A row with no dispatch arm answers `unknown op` while palette and tool list advertise it.
     let g = Goofi::new();
