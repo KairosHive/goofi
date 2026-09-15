@@ -83,6 +83,55 @@ pub fn current() -> Option<&'static str> {
     CURRENT.get().map(String::as_str)
 }
 
+/// What names a file this process writes beside a cache entry before renaming it in: the session
+/// id, so the boot pass can tell a crash's leftover from a neighbour's work in progress. A
+/// process with no session yet — a tool run before the manager decides one — is named by pid.
+pub fn tag() -> String {
+    current().map(str::to_string).unwrap_or_else(|| format!("p{}", std::process::id()))
+}
+
+/// Sweep what dead sessions left in the caches under `.goofi/system`: every file or directory
+/// whose name carries a session id that is not alive — a part file a crash left beside its cache
+/// entry, a plugin build's work directory — and every versioned tree that is not `version`'s.
+/// The build's own `target`, `crates` and `sdk` trees are not walked: they are cargo's, and large.
+pub fn sweep_system(version: &str) {
+    let system = home::system();
+    for (dir, skip) in [("build", &["target", "crates", "sdk"][..]), ("shipped", &[][..])] {
+        sweep_dead_parts(&system.join(dir), skip, 5);
+    }
+    for versioned in [system.join("shipped"), system.join("build").join("sdk")] {
+        let Ok(entries) = fs::read_dir(versioned) else { continue };
+        for entry in entries.flatten() {
+            if entry.file_name() != *version {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+}
+
+fn sweep_dead_parts(dir: &Path, skip: &[&str], depth: usize) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some(id) = session_id_in(&name) {
+            if !alive(id) {
+                let _ = if path.is_dir() { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };
+            }
+            continue;
+        }
+        if depth > 0 && path.is_dir() && !skip.contains(&name.as_str()) {
+            sweep_dead_parts(&path, skip, depth - 1);
+        }
+    }
+}
+
+/// The session id a part name carries, as one `.`- or `-`-separated segment of 16 hex digits —
+/// a length no content key shares.
+fn session_id_in(name: &str) -> Option<&str> {
+    name.split(['.', '-']).find(|s| s.len() == 16 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 /// The session this process OWNS: alive exactly as long as this value lives.
 pub struct Held {
     id: String,
@@ -250,6 +299,27 @@ mod tests {
         assert!(workspace_dir("crashed").exists(), "a workspace with content is the user's");
         assert!(!workspace_dir("empty").exists(), "an empty dead one is swept");
         let _ = fs::remove_dir_all(workspace_dir("crashed"));
+        // The caches: a part file a crash left, a work directory, and a tree of another version
+        // go; a live session's part and this version's tree stay.
+        let live = hold("0123456789abcdef").unwrap();
+        let out = home::system().join("build").join("out").join("k");
+        fs::create_dir_all(&out).unwrap();
+        fs::write(out.join(".node.so.0123456789abcdef"), b"").unwrap();
+        fs::write(out.join(".node.so.fedcba9876543210"), b"").unwrap();
+        fs::create_dir_all(home::system().join("build").join("plugins").join("x").join("work-fedcba9876543210-0")).unwrap();
+        fs::create_dir_all(home::system().join("build").join("sdk").join("0.0.1")).unwrap();
+        fs::create_dir_all(home::system().join("build").join("sdk").join("9.9.9")).unwrap();
+        fs::create_dir_all(home::system().join("shipped").join("9.9.9")).unwrap();
+        fs::write(out.join("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef.json"), b"").unwrap();
+        sweep_system("9.9.9");
+        assert!(out.join(".node.so.0123456789abcdef").exists(), "a live session's part stays");
+        assert!(!out.join(".node.so.fedcba9876543210").exists(), "a dead session's part goes");
+        assert!(!home::system().join("build").join("plugins").join("x").join("work-fedcba9876543210-0").exists());
+        assert!(!home::system().join("build").join("sdk").join("0.0.1").exists(), "another version's tree goes");
+        assert!(home::system().join("build").join("sdk").join("9.9.9").exists() && home::system().join("shipped").join("9.9.9").exists());
+        assert!(out.join("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef.json").exists(), "a content key is not a session id");
+        drop(live);
+
         drop(held);
         assert!(!alive("abc") && !entry("abc").exists() && !system_dir("abc").exists());
         assert!(!workspace_dir("abc").exists(), "the empty workspace parent went with the session");

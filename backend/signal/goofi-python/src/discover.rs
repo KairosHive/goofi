@@ -104,7 +104,7 @@ fn introspect_memoised(path: &Path, python: &str, memo: &Path) -> Result<probe::
     }
     let answer = probe_introspect(path, python);
     if let (Ok(_), Ok(json)) = (&answer, serde_json::to_string(&answer)) {
-        let tmp = memo.join(format!("{key}.{}.tmp", std::process::id()));
+        let tmp = memo.join(format!("{key}.{}.tmp", goofi_core::session::tag()));
         let _ = std::fs::create_dir_all(memo)
             .and_then(|()| std::fs::write(&tmp, json))
             .and_then(|()| std::fs::rename(&tmp, &entry));

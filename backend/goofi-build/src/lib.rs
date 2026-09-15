@@ -269,7 +269,8 @@ pub fn place(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
     let dir = path.parent().expect("an artifact has a directory");
     std::fs::create_dir_all(dir)?;
-    let part = dir.join(format!(".{}.{}", path.file_name().unwrap().to_string_lossy(), std::process::id()));
+    // Named by the session, so the boot pass can sweep what a crash left here.
+    let part = dir.join(format!(".{}.{}", path.file_name().unwrap().to_string_lossy(), goofi_core::session::tag()));
     std::fs::write(&part, bytes)?;
     // A lost race is not a failure: another builder put the artifact there. Windows refuses to
     // rename onto a mapped DLL, which is that same case seen from the loser's side.
