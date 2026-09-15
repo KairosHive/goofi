@@ -758,3 +758,34 @@ class Sleeper(goofi.Node):
         });
     }
 }
+
+#[test]
+fn nodes_sharing_a_cyclic_package_all_construct_when_added_at_once() {
+    // A package whose `__init__` imports a submodule that imports back through the package. Under
+    // the GIL that cycle is legal; without one, two threads entering it at different points can
+    // each hold the module lock the other wants, and CPython raises `_DeadlockError`. Four nodes
+    // added in a burst is what loading a `.gfi` does, so it is the shape that must survive; only
+    // `--features embed` puts them on the in-process tier, where the module bodies share an interpreter.
+    let _py = require_python();
+    let g = Goofi::new();
+    let package = g.state.mount().join("cyc");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("__init__.py"), "from . import rings\nfrom .rings import tone\n").unwrap();
+    std::fs::write(package.join("rings.py"), "import cyc\n\ndef tone(n):\n    return n * 2\n").unwrap();
+    let root = g.state.mount().to_string_lossy().replace('\\', "/");
+    let files: Vec<(String, String)> = [("cyc_one", "CycOne"), ("cyc_two", "CycTwo"), ("cyc_three", "CycThree"), ("cyc_four", "CycFour")]
+        .iter().enumerate().map(|(i, (stem, class))| {
+            let source = format!(
+                "import sys\nsys.path.insert(0, {root:?})\nfrom cyc import tone\nimport goofi\nimport numpy as np\n\
+                 class {class}(goofi.Node):\n    OUTPUTS = {{\"out\": goofi.DataType.ARRAY}}\n    PRODUCER = True\n\
+                 \x20   def process(self):\n        return {{\"out\": np.array([tone({i})], dtype=np.float32)}}\n",
+            );
+            (format!("{stem}.py"), source)
+        }).collect();
+    let names = goofi_tests::install_all(&g, &files.iter().map(|(f, s)| (f.as_str(), s.as_str())).collect::<Vec<_>>());
+    let added: Vec<Uid> = names.iter().map(|n| g.add(n)).collect();
+    for (name, uid) in names.iter().zip(&added) {
+        g.ready(*uid);
+        assert!(g.error(*uid).is_none(), "{name} constructed: {:?}", g.error(*uid));
+    }
+}
