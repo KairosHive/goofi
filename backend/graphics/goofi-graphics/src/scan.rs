@@ -33,12 +33,23 @@ pub enum Kind {
 pub(crate) fn scan(engine: &mut GraphicsEngine, dir: &Path) -> Vec<ScannedType> {
     let mut out = Vec::new();
     for (path, type_name, stamp) in goofi_node::node_files(dir, "graphics") {
-        let outcome = match engine.register(&path, &type_name) {
-            Ok(replaced) => Scanned::Registered { isolation: engine.classes[&type_name].isolation.get(), replaced },
+        // A file with no stamp to compare is read again: unreadable metadata proves nothing.
+        let seen = stamp.map(|s| (path.clone(), s));
+        let unchanged = seen.is_some() && engine.stamps.get(&type_name) == seen.as_ref() && engine.classes.contains_key(&type_name);
+        let registered = if unchanged { Ok(false) } else { engine.register(&path, &type_name) };
+        let outcome = match registered {
+            Ok(replaced) => {
+                match seen {
+                    Some(s) => engine.stamps.insert(type_name.clone(), s),
+                    None => engine.stamps.remove(&type_name),
+                };
+                Scanned::Registered { isolation: engine.classes[&type_name].isolation.get(), replaced }
+            }
             Err(reason) => {
                 // A file that no longer loads displaces its registration, so the palette greys the
                 // type rather than offering one nothing can build.
                 crate::gpu::give_back(engine.classes.remove(type_name.as_str()));
+                engine.stamps.remove(&type_name);
                 Scanned::Unavailable(reason)
             }
         };

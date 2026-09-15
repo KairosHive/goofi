@@ -454,6 +454,9 @@ pub struct Graph {
     /// node's service names clear of its predecessor's, whose teardown does not block. Survives
     /// `clear()` and `load_doc`; never enters the archive.
     generations: HashMap<Uid, u64>,
+    /// Bumped by every settle that delivers and every birth: what a listener compares to know
+    /// the graph it resolved against is gone, without taking the lock to look.
+    epoch: Arc<std::sync::atomic::AtomicU64>,
     /// Params whose options a node has re-enumerated since anyone looked. Options are the one
     /// thing a node reports that the doc has no field for, so the worker must be TOLD to echo them.
     refreshed: Vec<(Uid, ParamKey)>,
@@ -529,6 +532,7 @@ impl Graph {
             globals: goofi_core::globals::GlobalStore::new(),
             instance: mint_instance(),
             generations: HashMap::new(),
+            epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             refreshed: Vec::new(),
             touched: Vec::new(),
             open_batches: 0,
@@ -821,6 +825,11 @@ impl Graph {
     /// on it between paced duties — the alternative to a poll-to-discover.
     pub fn drain_waker(&self) -> Arc<DrainWaker> {
         self.waker.clone()
+    }
+
+    /// The change epoch, readable without the lock; see the field.
+    pub fn epoch(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        self.epoch.clone()
     }
 
     fn engines(&self) -> impl Iterator<Item = &dyn Engine> {
@@ -2971,6 +2980,7 @@ impl Graph {
     fn bump_generation(&mut self, uid: Uid) -> u64 {
         let next = self.generations.get(&uid).map_or(0, |g| g + 1);
         self.generations.insert(uid, next);
+        self.epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
         next
     }
 
@@ -2998,6 +3008,7 @@ impl Graph {
         if raw.is_empty() && !self.engines().any(|e| e.dirty()) {
             return;
         }
+        self.epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
         // Port consumers expand to the leaf inputs behind them, a node the batch also removed is
         // owed nothing, and each item is delivered once however often the batch touched it.
         let mut touched: Vec<Touched> = Vec::new();

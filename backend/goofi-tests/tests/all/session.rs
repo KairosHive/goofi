@@ -545,8 +545,10 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
     g.call("session save", j!({ "path": home.to_string_lossy() }));
     g.until("the autosave to go with the save", |g| (!manifest(g).exists()).then_some(()));
 
-    // Work after the save: the graph AND a workspace file, kept with the patch's home.
+    // Work after the save: a workspace file ALONE — no op, so only the watcher on the mount can
+    // say it moved — and then the graph, both kept with the patch's home.
     std::fs::write(g.state.mount().join("notes.md"), b"kept").unwrap();
+    g.until("a workspace edit to be autosaved", |g| manifest(g).exists().then_some(()));
     g.set_param(osc, "output", "sfreq", 3.0);
     g.until("the latest edit to be autosaved", |g| {
         std::fs::read_to_string(manifest(g)).ok().filter(|m| m.contains("sfreq: 3.0")).map(|_| ())

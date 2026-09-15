@@ -694,9 +694,11 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     let written = |g: &goofi_tests::Goofi| -> u64 {
         g.state.recorder.status().streams.iter().filter(|s| s.node == fast_name).map(|s| s.frames).sum()
     };
-    // The drain resolves under the GRAPH lock, so holding it freezes the drain while the producer
-    // fills the record service's buffer behind it.
+    // The drain resolves under the GRAPH lock whenever the graph's epoch moved, so holding the
+    // lock and moving the epoch freezes the drain while the producer fills the record service's
+    // buffer behind it.
     let graph = g.state.graph.lock().expect("the graph");
+    graph.epoch().fetch_add(1, std::sync::atomic::Ordering::Release);
     std::thread::sleep(std::time::Duration::from_millis(200));
     let frozen = written(&g);
     std::thread::sleep(std::time::Duration::from_millis(80));

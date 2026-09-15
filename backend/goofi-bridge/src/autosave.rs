@@ -1,17 +1,24 @@
 //! The autosave: the open patch written beside its mount, in the `.gfi` layout unpacked, whenever
 //! it holds unsaved work — so a crash leaves a recovery, and the next manager can offer it. It
 //! carries the manifest and the workspace files; a node's opaque state is persisted by a save.
+//! Nothing polls: the worker parks on `AppState::changed`, which every settle, every dirty
+//! transition and a watcher on the mount pulse, and writes once the pulses go quiet.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use goofi_graph::archive;
+use notify::Watcher;
 use serde_json::{json, Value};
 
 use crate::AppState;
 
-/// How often the autosave looks: the most an unsaved edit can be behind the disk.
-pub const PERIOD: Duration = Duration::from_millis(2000);
+/// How long the pulses must be quiet before a write: a drag settles within it.
+const QUIET: Duration = Duration::from_millis(500);
+/// The most a write waits under pulses that never go quiet — a script editing at a steady pace.
+const CAP: Duration = Duration::from_secs(5);
+/// A park with no ceiling worth naming: the stop pulses the waker too.
+const PARK: Duration = Duration::from_secs(86_400);
 
 /// The sidecar beside the manifest: the patch's home and when the autosave was taken.
 const SIDECAR: &str = "autosave.json";
@@ -30,19 +37,57 @@ pub(crate) fn spawn(state: AppState) {
     let owner = state.clone();
     let worker = goofi_core::worker::spawn("goofi-autosave", move || {
         let mut last: Option<Stamp> = None;
+        let mut watch = Watch::new(&state);
         loop {
-            // In slices, so a stop is read within a shutdown's wait rather than a period's.
-            for _ in 0..20 {
-                if state.stopping.stopped() {
-                    return;
+            state.changed.wait_timeout(PARK);
+            // Debounce: wait for a quiet window, but no longer than the cap since the first pulse.
+            let first = Instant::now();
+            loop {
+                let left = (first + CAP).saturating_duration_since(Instant::now());
+                if left.is_zero() || !state.changed.wait_timeout(QUIET.min(left)) {
+                    break;
                 }
-                std::thread::sleep(PERIOD / 20);
             }
+            if state.stopping.stopped() {
+                return;
+            }
+            watch.follow(&state);
             tick(&state, &mut last);
         }
     });
     if let Ok(worker) = worker {
         owner.workers.lock().unwrap().push(worker);
+    }
+}
+
+/// The watcher on the mount, re-aimed when a load replaces it. Every event pulses `changed`; the
+/// tick then walks, so an ignored file's churn costs a walk and never a write.
+struct Watch {
+    watcher: Option<notify::RecommendedWatcher>,
+    at: Option<PathBuf>,
+}
+
+impl Watch {
+    fn new(state: &AppState) -> Watch {
+        let changed = state.changed.clone();
+        let watcher = notify::recommended_watcher(move |_: notify::Result<notify::Event>| changed.notify());
+        let mut w = Watch { watcher: watcher.ok(), at: None };
+        w.follow(state);
+        w
+    }
+
+    fn follow(&mut self, state: &AppState) {
+        let mount = state.mount();
+        if self.at.as_ref() == Some(&mount) {
+            return;
+        }
+        let Some(watcher) = self.watcher.as_mut() else { return };
+        if let Some(old) = self.at.take() {
+            let _ = watcher.unwatch(&old);
+        }
+        if watcher.watch(&mount, notify::RecursiveMode::Recursive).is_ok() {
+            self.at = Some(mount);
+        }
     }
 }
 
