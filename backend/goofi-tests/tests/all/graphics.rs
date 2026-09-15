@@ -1316,7 +1316,7 @@ fn python_texture_sources_resize_and_restart() {
     drawn(&g, math, "a failed source keeps its last texture", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
     g.set_param(source, "image", "invalid", false);
     g.until("valid texture clears the process error", |g| g.error(source).is_none().then_some(()));
-    g.call("node param pulse", j!({"node": hex(source), "param": "image/flip"}));
+    g.call("node param request", j!({ "node": hex(source), "param": "image/flip", "request": "pulse" }));
     drawn(&g, math, "pulse reaches the host worker", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 1.0, 0.75, 0.5]));
     g.call("node restart", j!({"node": hex(source)}));
     g.ready(source);

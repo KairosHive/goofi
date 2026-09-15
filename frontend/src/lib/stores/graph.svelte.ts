@@ -626,7 +626,7 @@ export class GraphStore {
 		const key = refreshKey(node, group, name);
 		this._beginRefresh(key);
 		try {
-			await this.ctl.call('node param refresh', { node, param: `${group}/${name}` });
+			await this.ctl.call('node param request', { node, param: `${group}/${name}`, request: 'refresh' });
 		} catch (e) {
 			// A failed dispatch means the node never re-scans, so do not wait out the safety timeout.
 			this._endRefresh(key);
@@ -645,8 +645,8 @@ export class GraphStore {
 	/** Fire a pulse param: a request the node acts on, with no value and so no inverse to undo. */
 	async pulse(node: string, group: string, name: string): Promise<void> {
 		const param = this.nodeById(node)?.params?.[group]?.[name];
-		if (!param) throw new Error(`node param pulse: no param ${group}.${name} on node ${node}`);
-		await this.ctl.call('node param pulse', { node, param: `${group}/${name}` });
+		if (!param) throw new Error(`node param request: no param ${group}.${name} on node ${node}`);
+		await this.ctl.call('node param request', { node, param: `${group}/${name}`, request: 'pulse' });
 	}
 
 	/** Whether a ⟳ refresh is in flight for this param. */

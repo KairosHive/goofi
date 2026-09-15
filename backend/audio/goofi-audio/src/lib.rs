@@ -945,9 +945,9 @@ impl Engine for AudioEngine {
     /// Both reach the control half; a pulse raises the param for one control tick.
     fn request(&mut self, uid: Uid, request: goofi_node::Request) {
         if let Some(inst) = self.live.get(&uid) {
-            match request {
-                goofi_node::Request::Refresh(key) => inst.control.refresh(key),
-                goofi_node::Request::Pulse(key) => inst.control.pulse(key),
+            match request.kind {
+                goofi_node::RequestKind::Refresh => inst.control.refresh(request.key),
+                goofi_node::RequestKind::Pulse => inst.control.pulse(request.key),
             }
         }
     }

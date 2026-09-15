@@ -231,7 +231,7 @@ fn the_generators_answer_on_their_own_and_a_settled_one_answers_when_asked() {
     set(clock, "clock", "rate", j!(20.0));
     let pcl = g.probe(clock, "count");
     g.until("the clock to count several ticks", |_| pcl.latest().filter(|d| f32s(d)[0] >= 3.0));
-    g.call("node param pulse", j!({ "node": hex(clock), "param": "clock/reset" }));
+    g.call("node param request", j!({ "node": hex(clock), "param": "clock/reset", "request": "pulse" }));
     g.until("the count to start again from zero", |_| pcl.latest().filter(|d| f32s(d)[0] < 3.0));
 
     // Stopping holds the place it had reached rather than rewinding it, so starting again
@@ -466,7 +466,7 @@ fn the_control_nodes_turn_a_signal_into_a_decision_a_route_and_a_label() {
     set(level, "constant", "value", j!(7.0));
     assert!(g.stays(|_| pl.latest().is_some_and(|d| f32s(&d).iter().all(|v| *v == 0.0))),
             "a held value does not follow its input");
-    g.call("node param pulse", j!({ "node": hex(latch), "param": "hold/take" }));
+    g.call("node param request", j!({ "node": hex(latch), "param": "hold/take", "request": "pulse" }));
     let caught = g.until("the value the take caught", |_| {
         pl.latest().filter(|d| f32s(d).iter().all(|v| *v == 7.0))
     });

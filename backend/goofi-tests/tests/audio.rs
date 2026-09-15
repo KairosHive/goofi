@@ -51,7 +51,7 @@ fn state(g: &Goofi, uid: Uid) -> String {
 /// Ask for a param's list and read it off the `state_update` every client gets — the echo that
 /// clears the spinner — rather than through any door of the test's own.
 fn refreshed(g: &Goofi, ev: &mut goofi_tests::Events, uid: Uid, group: &str, name: &str) -> Vec<String> {
-    g.call("node param refresh", j!({ "node": hex(uid), "param": format!("{group}/{name}") }));
+    g.call("node param request", j!({ "node": hex(uid), "param": format!("{group}/{name}"), "request": "refresh" }));
     let p = g.until("the refresh echo", |_| {
         let p = ev.next("state_update");
         (p["node"] == hex(uid) && p["refreshed_params"] == j!([[group, name]])).then_some(p)
@@ -368,7 +368,7 @@ fn a_patch_sounds_under_the_external_clock() {
     sounds(&g, "…which looping starts over", |x| peak(x) > 0.5);
     g.set_param(player, "play", "loop", false);
     sounds(&g, "…and without it, out again", |x| peak(x) < 0.01);
-    g.call("node param pulse", j!({ "node": hex(player), "param": "play/reset" }));
+    g.call("node param request", j!({ "node": hex(player), "param": "play/reset", "request": "pulse" }));
     sounds(&g, "…until reset plays it from the start", |x| near(crossings(x), 88) && peak(x) > 0.5);
     g.set_param(player, "play", "file", "not-a-take");
     let missing = g.until("the file that is not there to say so", |g| g.error(player));
@@ -415,7 +415,7 @@ fn a_patch_sounds_under_the_external_clock() {
             "and a patch never carries it");
 
     // A pulse is refused on a param that is not one; no shipped audio node declares a pulse yet.
-    let why = g.refuse("node param pulse", j!({ "node": hex(gain3), "param": "gain/gain" }));
+    let why = g.refuse("node param request", j!({ "node": hex(gain3), "param": "gain/gain", "request": "pulse" }));
     assert!(why.contains("not a pulse"), "{why}");
 
     // Step: a device or a port that is not there is an error on the param that named it, and

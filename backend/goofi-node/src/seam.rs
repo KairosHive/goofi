@@ -177,13 +177,21 @@ pub struct LibraryEntry {
     pub isolation: &'static IsolationCell,
 }
 
-/// What a node is asked to do once, on its own thread, and stores nothing of.
+/// What a node is asked to do once, on its own thread, and stores nothing of. The `node param
+/// request` op is this, word for word.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Request {
+pub struct Request {
+    pub kind: RequestKind,
+    pub key: ParamKey,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RequestKind {
     /// Re-enumerate a refreshable `Str` param's options; they come back as a `RefreshOptions` status.
-    Refresh(ParamKey),
+    Refresh,
     /// Fire a pulse param.
-    Pulse(ParamKey),
+    Pulse,
 }
 
 /// An engine: the runtime authority for its nodes. The graph applies every op to the MODEL and

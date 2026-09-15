@@ -123,7 +123,7 @@ fn the_filter_answers_what_scipy_answers_in_either_phase() {
     g.until("silence reaches the far end of the chain", |_| {
         held.latest().filter(|d| shape(d) == vec![input.len()])
     });
-    g.call("node param pulse", j!({ "node": hex(stream), "param": "chunks/start" }));
+    g.call("node param request", j!({ "node": hex(stream), "param": "chunks/start", "request": "pulse" }));
 
     let out = g.until("the chunked stream reaches the same 512 samples", |_| {
         held.latest().filter(|d| {

@@ -133,8 +133,8 @@ describe('GraphStore.refreshParam — asks the node to re-evaluate options', () 
 		history().reset();
 
 		await g.refreshParam('uidA', 'audio', 'device');
-		const call = fc.recordedCalls().find((c) => c.op === 'node param refresh');
-		expect(call?.payload).toEqual({ node: 'uidA', param: 'audio/device' });
+		const call = fc.recordedCalls().find((c) => c.op === 'node param request');
+		expect(call?.payload).toEqual({ node: 'uidA', param: 'audio/device', request: 'refresh' });
 		// A refresh recomputes options, not values — it is not an undoable graph edit.
 		expect(history().canUndo).toBe(false);
 	});
@@ -150,8 +150,8 @@ describe('GraphStore.pulse — fires a param that holds no value', () => {
 		history().reset();
 
 		await g.pulse('uidA', 'count', 'reset');
-		const call = fc.recordedCalls().find((c) => c.op === 'node param pulse');
-		expect(call?.payload).toEqual({ node: 'uidA', param: 'count/reset' });
+		const call = fc.recordedCalls().find((c) => c.op === 'node param request');
+		expect(call?.payload).toEqual({ node: 'uidA', param: 'count/reset', request: 'pulse' });
 		// A pulse carries no value, so it has no inverse — it is not an undoable graph edit.
 		expect(history().canUndo).toBe(false);
 	});
@@ -217,7 +217,7 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 
 	it('drops the spinner if the RPC dispatch itself fails (the node will never push)', async () => {
 		const fc = new FakeControl();
-		fc.failNext('node param refresh');
+		fc.failNext('node param request');
 		const g = new GraphStore(fc);
 		const d = seed(fc);
 		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });

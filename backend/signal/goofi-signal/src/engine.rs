@@ -463,9 +463,10 @@ impl Engine for SignalEngine {
     }
 
     fn request(&mut self, uid: Uid, request: goofi_node::Request) {
-        let control = match request {
-            goofi_node::Request::Refresh(key) => runtime::Control::RefreshParam { key },
-            goofi_node::Request::Pulse(key) => runtime::Control::PulseParam { key },
+        let goofi_node::Request { kind, key } = request;
+        let control = match kind {
+            goofi_node::RequestKind::Refresh => runtime::Control::RefreshParam { key },
+            goofi_node::RequestKind::Pulse => runtime::Control::PulseParam { key },
         };
         self.wire.send(uid, control);
     }

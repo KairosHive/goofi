@@ -551,7 +551,7 @@ fn a_refreshable_param_is_re_enumerated_on_the_nodes_own_thread() {
     g.ready(mute);
     let mut ev = g.events();
 
-    g.call("node param refresh", j!({ "node": hex(picker), "param": "io/device" }));
+    g.call("node param request", j!({ "node": hex(picker), "param": "io/device", "request": "refresh" }));
     let p = g.until("the picker's echo", |_| {
         let p = ev.next("state_update");
         (p["node"] == hex(picker)).then_some(p)
@@ -562,7 +562,7 @@ fn a_refreshable_param_is_re_enumerated_on_the_nodes_own_thread() {
     assert_eq!(p["refreshed_params"], j!([["io", "device"]]), "…and the spinner is cleared");
 
     // A node with no hook must still get its echo, or the button spins for its full safety timeout.
-    g.call("node param refresh", j!({ "node": hex(mute), "param": "io/device" }));
+    g.call("node param request", j!({ "node": hex(mute), "param": "io/device", "request": "refresh" }));
     let p = g.until("the mute picker's echo", |_| {
         let p = ev.next("state_update");
         (p["node"] == hex(mute)).then_some(p)
@@ -572,8 +572,7 @@ fn a_refreshable_param_is_re_enumerated_on_the_nodes_own_thread() {
 
     // A fixed list is refused, which is what lifts the spinner on the frontend's side.
     let osc = g.add("LFO");
-    let why = g.refuse("node param refresh",
-                       j!({ "node": hex(osc), "param": "lfo/waveform" }));
+    let why = g.refuse("node param request", j!({ "node": hex(osc), "param": "lfo/waveform", "request": "refresh" }));
     assert!(why.contains("not refreshable"), "{why}");
 }
 
@@ -596,14 +595,14 @@ fn a_pulse_fires_from_the_op_and_from_a_rising_edge_and_holds_no_value() {
     g.until("a count past twenty", |_| past(20.0).then_some(()));
 
     // The op fires it: the count starts over, and the document leaf holds no value.
-    g.call("node param pulse", j!({ "node": hex(n), "param": "count/reset" }));
+    g.call("node param request", j!({ "node": hex(n), "param": "count/reset", "request": "pulse" }));
     g.until("the count to start over", |_| under(20.0).then_some(()));
     let leaf = g.doc()["nodes"][hex(n)]["params"]["count"]["reset"].clone();
     assert!(leaf["value"].is_null(), "a pulse holds no value: {leaf}");
     let why = g.refuse("node param edit",
                        j!({ "node": hex(n), "param": "count/reset", "value": true }));
     assert!(why.contains("pulse"), "{why}");
-    let why = g.refuse("node param pulse", j!({ "node": hex(n), "param": "common/max_frequency" }));
+    let why = g.refuse("node param request", j!({ "node": hex(n), "param": "common/max_frequency", "request": "pulse" }));
     assert!(why.contains("not a pulse"), "{why}");
 
     // A reference on a pulse is a gate, and a low one fires nothing.
@@ -652,7 +651,7 @@ fn a_pulse_fires_from_the_op_and_from_a_rising_edge_and_holds_no_value() {
 
     // A pulse is no command: the edit BEFORE it is what one undo takes back.
     g.set_param(n, "common", "max_frequency", 25.0);
-    g.call("node param pulse", j!({ "node": hex(n), "param": "count/reset" }));
+    g.call("node param request", j!({ "node": hex(n), "param": "count/reset", "request": "pulse" }));
     assert_eq!(g.call("undo", j!({}))["changed"], j!(true));
     assert_eq!(g.doc()["nodes"][hex(n)]["params"]["common"]["max_frequency"]["value"], j!(50.0),
                "the undo took back the param edit, so the pulse left nothing on the stack");

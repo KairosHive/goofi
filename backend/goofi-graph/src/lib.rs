@@ -231,7 +231,7 @@ fn coerced_value(existing: &Param, v: &serde_json::Value) -> Param {
 
 /// What every writer hears when it offers a pulse a value, whichever shape it came in.
 const PULSE_HOLDS_NO_VALUE: &str =
-    "this param is a pulse and holds no value; fire it with `node param pulse`";
+    "this param is a pulse and holds no value; fire it with `node param request`";
 
 /// One `params.<group>.<name>` entry: a bare literal, or `{value, expression, reference, mode,
 /// triggers}`. No param type is an object, so the two forms cannot be confused. A text given names
@@ -2483,36 +2483,25 @@ impl Graph {
         Ok(())
     }
 
-    /// Ask the node to re-enumerate a refreshable `Str` param's options — the ⟳ button. It answers
-    /// only that the request was DISPATCHED; the options arrive as a later `RefreshOptions` status.
-    pub fn refresh_param(&mut self, uid: Uid, group: &str, name: &str) -> Result<(), String> {
+    /// One request to a node's own thread, addressed by param: a refresh re-enumerates a
+    /// refreshable `Str`'s options (they arrive as a later `RefreshOptions` status), a pulse
+    /// fires a pulse param. Not a command: a request holds no state, so there is nothing to undo.
+    pub fn request(&mut self, uid: Uid, group: &str, name: &str, kind: goofi_node::RequestKind) -> Result<(), String> {
         let entry = self.leaf(uid).ok_or_else(|| format!("no such node {uid}"))?;
         let param = goofi_node::param(&entry.params, group, name)
             .ok_or_else(|| format!("no such param `{group}.{name}`"))?;
-        if !matches!(param, Param::Str { refresh: true, .. }) {
-            return Err(format!("param `{group}.{name}` is not refreshable"));
+        match kind {
+            goofi_node::RequestKind::Refresh if !matches!(param, Param::Str { refresh: true, .. }) => {
+                return Err(format!("param `{group}.{name}` is not refreshable"));
+            }
+            goofi_node::RequestKind::Pulse if !matches!(param, Param::Pulse) => {
+                return Err(format!("param `{group}.{name}` is not a pulse"));
+            }
+            _ => {}
         }
         let engine = entry.engine;
-        let key = ParamKey::new(group, name);
         if let Some(e) = self.engine_mut(engine) {
-            e.request(uid, goofi_node::Request::Refresh(key));
-        }
-        Ok(())
-    }
-
-    /// Fire a pulse param on the node's own thread — the button, and what a rising edge asks for.
-    /// Not a command: a pulse holds no state, so there is nothing to undo.
-    pub fn pulse_param(&mut self, uid: Uid, group: &str, name: &str) -> Result<(), String> {
-        let entry = self.leaf(uid).ok_or_else(|| format!("no such node {uid}"))?;
-        let param = goofi_node::param(&entry.params, group, name)
-            .ok_or_else(|| format!("no such param `{group}.{name}`"))?;
-        if !matches!(param, Param::Pulse) {
-            return Err(format!("param `{group}.{name}` is not a pulse"));
-        }
-        let engine = entry.engine;
-        let key = ParamKey::new(group, name);
-        if let Some(e) = self.engine_mut(engine) {
-            e.request(uid, goofi_node::Request::Pulse(key));
+            e.request(uid, goofi_node::Request { kind, key: ParamKey::new(group, name) });
         }
         Ok(())
     }
