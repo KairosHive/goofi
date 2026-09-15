@@ -182,7 +182,7 @@ pub fn release_session() {
         let id = held.id().to_string();
         drop(held);
         remove_tree(&goofi_core::session::system_dir(&id));
-        remove_shared_memory(&id);
+        sweep_shared_memory(|owner| owner == id);
     }
 }
 
@@ -193,23 +193,15 @@ pub fn record_url(url: &str) {
     }
 }
 
-/// The boot pass: dead records, then ephemeral directories whose record is dead or gone, then
-/// the shared memory their prefixes name. Anything alive is skipped by its lock alone.
+/// The boot pass: dead records, ephemeral directories whose record is dead or gone, empty
+/// workspace parents, and every shared-memory segment whose session is not alive — each judged
+/// by the lock alone, so a segment whose record was swept long ago still goes.
 pub fn sweep_dead() {
     let _ = goofi_core::session::sessions(remove_tree);
-    let Ok(entries) = std::fs::read_dir(goofi_core::session::system_base()) else { return };
-    let dead: Vec<String> = entries
-        .flatten()
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|id| {
-            let reference = std::fs::read_to_string(goofi_core::session::system_dir(id).join("session"));
-            reference.is_ok_and(|r| !goofi_core::session::alive_at(std::path::Path::new(r.trim())))
-        })
-        .collect();
-    for id in dead {
-        remove_tree(&goofi_core::session::system_dir(&id));
-        remove_shared_memory(&id);
-    }
+    goofi_core::session::sweep_dead_system(remove_tree);
+    goofi_core::session::sweep_empty_workspaces();
+    let mut known = std::collections::HashMap::new();
+    sweep_shared_memory(|id| !*known.entry(id.to_string()).or_insert_with(|| goofi_core::session::alive(id)));
 }
 
 /// Every alive session, dead ones swept as they are met.
@@ -239,11 +231,18 @@ fn shm_dir() -> std::path::PathBuf {
     }
 }
 
-fn remove_shared_memory(id: &str) {
-    let prefix = shm_prefix(id);
+/// The session id a segment name carries, when the name is one of ours.
+fn shm_owner(name: &str) -> Option<&str> {
+    let id = name.strip_prefix('g')?.split_once('_')?.0;
+    (id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit())).then_some(id)
+}
+
+/// Remove every segment of ours whose owning session `dead` says so of.
+fn sweep_shared_memory(mut dead: impl FnMut(&str) -> bool) {
     let Ok(entries) = std::fs::read_dir(shm_dir()) else { return };
     for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+        let name = entry.file_name();
+        if shm_owner(&name.to_string_lossy()).is_some_and(&mut dead) {
             let _ = std::fs::remove_file(entry.path());
         }
     }

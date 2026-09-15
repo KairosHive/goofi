@@ -52,9 +52,14 @@ pub fn system_dir(id: &str) -> PathBuf {
     system_base().join(id)
 }
 
+/// Where every session's workspace lives.
+pub fn workspaces_base() -> PathBuf {
+    std::env::temp_dir().join("goofi-workspaces")
+}
+
 /// The workspace directory of session `id`.
 pub fn workspace_dir(id: &str) -> PathBuf {
-    std::env::temp_dir().join("goofi-workspaces").join(id)
+    workspaces_base().join(id)
 }
 
 /// A 64-bit random id, hex. Short on purpose: it is a path segment under the socket cap above.
@@ -92,6 +97,9 @@ impl Drop for Held {
         drop(self.lock.take());
         let _ = fs::remove_dir_all(entry(&self.id));
         let _ = fs::remove_dir_all(system_dir(&self.id));
+        // The workspace parent, when the owner has already taken its mount away: an empty
+        // directory is nobody's work. A non-empty one stays, and `remove_dir` refuses it.
+        let _ = fs::remove_dir(workspace_dir(&self.id));
     }
 }
 
@@ -177,6 +185,19 @@ pub fn sweep_dead_system(remove: RemoveTree) {
     }
 }
 
+/// Sweep every workspace parent that holds nothing and belongs to no living session. A crash
+/// leaves a workspace behind on purpose; an EMPTY one carries no work and only clutters.
+pub fn sweep_empty_workspaces() {
+    let Ok(entries) = fs::read_dir(workspaces_base()) else { return };
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        let Some(id) = dir.file_name().and_then(|n| n.to_str()) else { continue };
+        if !alive(id) {
+            let _ = fs::remove_dir(&dir);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,7 +231,17 @@ mod tests {
         assert!(!system_dir("orphan").exists());
         assert!(system_dir("abc").exists(), "the live one is untouched");
 
+        // Workspace parents: an empty one goes with its session, a crash's non-empty one stays.
+        fs::create_dir_all(workspace_dir("abc")).unwrap();
+        fs::create_dir_all(workspace_dir("crashed").join("mount")).unwrap();
+        fs::create_dir_all(workspace_dir("empty")).unwrap();
+        sweep_empty_workspaces();
+        assert!(workspace_dir("abc").exists(), "alive: untouched");
+        assert!(workspace_dir("crashed").exists(), "a workspace with content is the user's");
+        assert!(!workspace_dir("empty").exists(), "an empty dead one is swept");
+        let _ = fs::remove_dir_all(workspace_dir("crashed"));
         drop(held);
         assert!(!alive("abc") && !entry("abc").exists() && !system_dir("abc").exists());
+        assert!(!workspace_dir("abc").exists(), "the empty workspace parent went with the session");
     }
 }
