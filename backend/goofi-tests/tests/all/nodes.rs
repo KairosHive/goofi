@@ -245,6 +245,16 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
     assert_eq!(rescan(&g)["added"], j!(["audio:Level", "signal:Level", "signal:Twice"]), "each file becomes a type");
     let live = g.add("Twice");
     emits(&g, live, 2.0);
+    // Authored after boot, so it runs HOSTED: its library in a child of goofi's own binary, which
+    // is listed while it lives, and never in this process, whose loader could not unload it.
+    let r = g.call("library get", j!({ "type": "Twice" }));
+    assert_eq!((&r["provenance"], &r["language"], &r["tier"]), (&j!("patch"), &j!("rust"), &j!("hosted")), "{r}");
+    let hosts = |g: &Goofi| -> Vec<String> {
+        g.call("session status", j!({}))["resources"].as_array().into_iter().flatten()
+            .filter(|e| e["kind"] == "child")
+            .filter_map(|e| e["name"].as_str()).filter(|n| n.starts_with("native node Twice")).map(str::to_string).collect()
+    };
+    assert_eq!(hosts(&g).len(), 1, "one host child for the one instance: {:?}", hosts(&g));
     let level = g.add("audio:Level");
     holds(&g, level, 0.25);
     let read = |ty: &str| g.call("library get", j!({ "type": ty, "source": true }));
@@ -320,6 +330,24 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
     g.call("node remove", j!({ "node": goofi_tests::hex(doomed) }));
     g.until("the doomed instance to be gone", |g| (g.state.graph.lock().unwrap().node_count() == 2).then_some(()));
     assert!(g.call("library list", j!({}))["types"].as_array().is_some(), "the server answers after the drop");
+
+    // A hosted node that ABORTS takes its child, not goofi: the node reports the exit, and the
+    // next run starts a fresh child.
+    std::fs::write(
+        mount.join("nodes_signal").join("Crash.rs"),
+        "use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, Outputs, Params};\n\
+         #[derive(Default)]\nstruct Crash;\n\
+         impl Node for Crash {\n    \
+         fn process(&mut self, _i: &Inputs<'_>, _o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult { std::process::abort() }\n}\n\
+         static MANIFEST: Manifest = Manifest { tags: &[], doc: \"aborts\", inputs: &[], outputs: &[], params: &[], producer: true };\n\
+         goofi_signal_sdk::export!(Crash, MANIFEST);\n",
+    )
+    .unwrap();
+    assert_eq!(rescan(&g)["added"], j!(["signal:Crash"]));
+    let crash = g.add("Crash");
+    g.until("the abort to be reported on the node", |g| g.error(crash).filter(|e| e.contains("exited")).map(drop));
+    assert!(g.call("library list", j!({}))["types"].as_array().is_some(), "goofi answers after the child died");
+    emits(&g, live, 3.0);
 
     // An audio slot belongs to the audio SDK: a signal node that declares one is greyed out with
     // the SDK named, never registered.

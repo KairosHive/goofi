@@ -126,6 +126,8 @@ impl Goofi {
                 audio.set_vst3(scanner(), Vec::new());
                 audio.set_ui(windows.as_ref().map(|(ui, _)| ui.clone()));
             }
+            // The same stand-in hosts a node built after boot.
+            goofi_bridge::signal_engine(&mut g).set_host(scanner());
             // The graphics engine gets the same screenless host, so a `Window` node opens a window
             // the loop knows about and no test reaches a desktop.
             if let Some(graphics) = goofi_bridge::try_graphics_engine(&mut g) {
@@ -142,6 +144,7 @@ impl Goofi {
             // The shipped tree is a root like any other: scanned at boot, as the CLI scans it.
             let patch = state.mount();
             goofi_bridge::rescan(&state, &mut g, &patch);
+            g.boot_done();
         }
         goofi_bridge::spawn_workers(&state);
         Goofi { state, actor: "test".into(), patience: WAIT, owner: true, windows }

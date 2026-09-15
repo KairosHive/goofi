@@ -1011,6 +1011,13 @@ impl Graph {
         }
     }
 
+    /// Tell every engine the boot scan is over.
+    pub fn boot_done(&mut self) {
+        for engine in &mut self.engines {
+            engine.boot_done();
+        }
+    }
+
     /// Every live node's opaque state written into the workspace, so a pack carries it as it is.
     pub fn persist(&mut self) {
         for engine in &mut self.engines {

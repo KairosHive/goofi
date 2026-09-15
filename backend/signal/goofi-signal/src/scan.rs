@@ -78,15 +78,32 @@ impl SignalEngine {
     /// not load displaces a stale registration and greys the type out with the reason.
     fn register_rust(&mut self, path: &Path, type_name: &str) -> Scanned {
         let base = goofi_build::base_dir(&goofi_core::home::dir());
-        let loaded = goofi_build::built(&goofi_build::SIGNAL, path, &base)
-            .and_then(|artifact| self.load_rust(&artifact, type_name));
+        let hosted = self.booted;
+        let loaded = goofi_build::built(&goofi_build::SIGNAL, path, &base).and_then(|artifact| {
+            if hosted { self.host_rust(&artifact, type_name) } else { self.load_rust(&artifact, type_name) }
+        });
         match loaded {
-            Ok(replaced) => Scanned::Registered { isolation: Isolation::Native, replaced },
+            Ok(replaced) => Scanned::Registered { isolation: if hosted { Isolation::Hosted } else { Isolation::Native }, replaced },
             Err(reason) => {
                 self.remove_dyn_type(type_name);
                 Scanned::Unavailable(reason)
             }
         }
+    }
+
+    /// After boot: the library is described by a child and run by one, so this process never
+    /// loads it — a re-authored node's newest build is what runs.
+    fn host_rust(&mut self, artifact: &Path, type_name: &str) -> Result<bool, String> {
+        let host = self.host.clone().ok_or("no host executable was named, so a node built after boot cannot run")?;
+        let intro = goofi_node::parse_introspection(&crate::hosted::describe(&host, artifact)?)?;
+        if let Some(reason) = goofi_node::illegal_slot(&intro).or_else(|| goofi_node::foreign_output(&intro, None)) {
+            return Err(reason);
+        }
+        let manifest = goofi_node::leak_manifest(type_name.to_string(), &intro)?;
+        let artifact = artifact.to_path_buf();
+        let factory: goofi_signal_sdk::NodeFactory =
+            Box::new(move |_| Box::new(crate::hosted::HostedNode::new(host.clone(), artifact.clone(), manifest)));
+        Ok(self.register_dyn_type(manifest, factory, &goofi_node::HOSTED))
     }
 
     fn load_rust(&mut self, artifact: &Path, type_name: &str) -> Result<bool, String> {

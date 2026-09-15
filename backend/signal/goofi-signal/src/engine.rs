@@ -66,6 +66,10 @@ pub struct SignalEngine {
     pub(crate) probed: HashMap<String, goofi_python::catalog::Probed>,
     /// Every built artifact loaded so far, by path: a library is opened once and never closed.
     pub(crate) rust_loaded: HashMap<std::path::PathBuf, Arc<goofi_signal_sdk::host::Loaded>>,
+    /// Set once the boot scan is over: a Rust node registered after that runs hosted.
+    pub(crate) booted: bool,
+    /// The executable that hosts a node built after boot — goofi's own binary, or the harness's.
+    pub(crate) host: Option<std::path::PathBuf>,
     /// Readies the drain collected; the settle that follows re-plans each from an empty base.
     pending_ready: Vec<Uid>,
     /// Sequences whose phase an ack completed; the settle that follows advances each.
@@ -76,6 +80,11 @@ pub struct SignalEngine {
 }
 
 impl SignalEngine {
+    /// Name the executable whose `host` mode runs a node built after boot.
+    pub fn set_host(&mut self, exe: std::path::PathBuf) {
+        self.host = Some(exe);
+    }
+
     pub fn new(instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>) -> SignalEngine {
         SignalEngine {
             instance,
@@ -88,6 +97,8 @@ impl SignalEngine {
             python: None,
             probed: HashMap::new(),
             rust_loaded: HashMap::new(),
+            booted: false,
+            host: None,
             pending_ready: Vec::new(),
             pending_advance: Vec::new(),
             graph_node: None,
@@ -309,6 +320,10 @@ impl Engine for SignalEngine {
 
     fn dirty(&self) -> bool {
         !self.pending_ready.is_empty() || !self.pending_advance.is_empty()
+    }
+
+    fn boot_done(&mut self) {
+        self.booted = true;
     }
 
     fn scan(&mut self, dir: &std::path::Path) -> Vec<goofi_node::ScannedType> {
