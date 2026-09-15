@@ -356,8 +356,18 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
     assert!(!goofi_core::session::alive(&id), "the lock went with the process");
     assert!(entry.exists() && system.exists(), "…and everything else stayed");
 
+    let segments = || -> usize {
+        std::fs::read_dir("/dev/shm")
+            .map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().starts_with(&format!("g{id}_"))).count())
+            .unwrap_or(0)
+    };
+    if cfg!(target_os = "linux") {
+        assert!(segments() > 0, "the child's shared memory stayed too");
+    }
+
     goofi_transport::sweep_dead();
     assert!(!entry.exists(), "the record was swept");
     assert!(!system.exists(), "the ephemeral directory was swept");
+    assert_eq!(segments(), 0, "the shared memory its prefix names was swept");
     assert!(goofi_transport::sessions().iter().all(|s| s.id != id));
 }
