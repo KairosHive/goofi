@@ -47,6 +47,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+# Startup checks node requirements with the same uv used to provision the image.
+COPY --from=build /usr/local/bin/uv /usr/local/bin/uv
+RUN uv --version
 COPY --from=build /opt/uv-python /opt/uv-python
 COPY --from=build /app/.gfivenv /app/.gfivenv
 COPY --from=build /app/.gfivenv-ft /app/.gfivenv-ft
