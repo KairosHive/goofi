@@ -63,7 +63,7 @@ boundary port resolves to the stream behind it. `--raw` answers the numbers, as 
 
 The first ask on a never-watched slot opens its feed and answers null; ask again after the node's
 next emit. A monitor is a loop over it. `goofi layout inspect` names the tabs and panel ids the
-layout ops address; `goofi global list` says what an expression can read.
+layout ops address; `goofi variable list` says what an expression can read.
 Design layout in the tab that is open — a new tab hides your work behind a click, so add one only
 when the human asks for one. And you are often ON that layout yourself: an agent terminal is a
 panel, so mind the one the human watches you through.
@@ -84,7 +84,7 @@ give none, and yours to set with `--name`. The uid beside it is for keying recor
 `node param edit`
 answers the param **as stored** — coerced to its declared type, so a fraction into an int comes
 back rounded; the declared min/max are the editor's range, not a clamp. `--expression
-"nd('other_node').out.sfreq"` — or `globals.x`, or `t` — binds instead of a literal; a bound param
+"nd('other_node').out.sfreq"` — or `variables.x`, or `t` — binds instead of a literal; a bound param
 reads back as `expr: <source> → <value> (on)`, and `--expression` takes the source half. A bare
 `nd('x')` is the single output; `.out.<slot>` names one of several; `nd('x').params.<group>.<param>`
 reads a param, re-read when it is edited; and `me` is this node in every position `nd('x')` has. `node edit` is

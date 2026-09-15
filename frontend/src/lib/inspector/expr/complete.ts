@@ -27,8 +27,8 @@ export type ExprContext =
 	| { kind: 'slot'; target: RefTarget; from: number; to: number }
 	| { kind: 'group'; target: RefTarget; from: number; to: number }
 	| { kind: 'param'; target: RefTarget; group: string; from: number; to: number }
-	| { kind: 'globals'; from: number; to: number }
-	| { kind: 'globalGroup'; group: string; from: number; to: number }
+	| { kind: 'variables'; from: number; to: number }
+	| { kind: 'variableGroup'; group: string; from: number; to: number }
 	| { kind: 'numpy'; from: number; to: number }
 	| { kind: 'scope'; from: number; to: number };
 
@@ -109,15 +109,15 @@ function memberContext(state: EditorState, node: SyntaxNode, pos: number): ExprC
 	if (!obj) return null;
 	if (obj.name === 'VariableName') {
 		const name = text(state, obj);
-		if (name === 'globals') return { kind: 'globals', from, to };
+		if (name === 'variables') return { kind: 'variables', from, to };
 		if (name === 'np') return { kind: 'numpy', from, to };
 	}
-	// `globals.<group>.` — a global's name has two halves, so the head here is itself a member.
+	// `variables.<group>.` — a variable's name has two halves, so the head here is itself a member.
 	if (obj.name === 'MemberExpression') {
 		const head = obj.firstChild;
 		const group = head?.nextSibling?.nextSibling ?? null;
-		if (head && head.name === 'VariableName' && text(state, head) === 'globals' && group) {
-			return { kind: 'globalGroup', group: text(state, group), from, to };
+		if (head && head.name === 'VariableName' && text(state, head) === 'variables' && group) {
+			return { kind: 'variableGroup', group: text(state, group), from, to };
 		}
 	}
 	const head = refHead(state, obj);
@@ -144,7 +144,7 @@ export function exprContext(state: EditorState, pos: number): ExprContext | null
 	return null;
 }
 
-/** The evaluator's injected scope (`expr.rs`'s `eval` globals): goofi's own four names, then
+/** The evaluator's injected scope (`expr.rs`'s `eval` variables): goofi's own four names, then
  * `time()` and `from math import *` — the common slice of math's namespace, since the full list
  * lives Python-side and only eval is authoritative. */
 const SCOPE: Completion[] = [
@@ -154,7 +154,7 @@ const SCOPE: Completion[] = [
 	{ label: 'noi', type: 'function', detail: 'smooth noise — noi(freq=1, src=t, vmin=slider min, vmax=slider max)', boost: 1 },
 	{ label: 't', type: 'variable', detail: 'seconds since start', boost: 1 },
 	{ label: 'np', type: 'namespace', detail: 'numpy', boost: 1 },
-	{ label: 'globals', type: 'namespace', detail: 'patch globals — globals.group.element', boost: 1 },
+	{ label: 'variables', type: 'namespace', detail: 'patch variables — variables.group.element', boost: 1 },
 	{ label: 'time', type: 'function', detail: 'wall-clock seconds — time()', boost: 1 },
 	...'sin cos tan asin acos atan atan2 sinh cosh tanh exp expm1 log log2 log10 sqrt hypot floor ceil fabs fmod copysign degrees radians'
 		.split(' ')
@@ -214,19 +214,19 @@ export function entriesFor(ctx: ExprContext, cat: ExprCatalogue): Completion[] {
 			return (nodeOf(cat, ctx.target)?.params ?? [])
 				.filter((g) => g.group === ctx.group)
 				.flatMap((g) => g.names.map((n) => ({ label: n, type: 'property' })));
-		case 'globals': {
+		case 'variables': {
 			const groups: string[] = [];
-			for (const g of cat.globals) if (!groups.includes(g.group)) groups.push(g.group);
+			for (const g of cat.variables) if (!groups.includes(g.group)) groups.push(g.group);
 			return groups.map((group) => ({
 				label: group,
-				detail: `${cat.globals.filter((g) => g.group === group).length} global${
-					cat.globals.filter((g) => g.group === group).length === 1 ? '' : 's'
+				detail: `${cat.variables.filter((g) => g.group === group).length} variable${
+					cat.variables.filter((g) => g.group === group).length === 1 ? '' : 's'
 				}`,
 				type: 'namespace'
 			}));
 		}
-		case 'globalGroup':
-			return cat.globals
+		case 'variableGroup':
+			return cat.variables
 				.filter((g) => g.group === ctx.group)
 				.map((g) => ({ label: g.element, detail: g.type, type: 'variable' }));
 		case 'numpy':

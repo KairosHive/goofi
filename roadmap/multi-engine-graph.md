@@ -12,7 +12,7 @@ by a skeptic, thirteen confirmed findings folded in below, four refuted and kept
 exact inverse, serialized under one lock, producing one delta and one undo history — so op parsing
 and execution stay graph-side, shared across engines, once. The graph holds what the `.gfi`
 persists: nodes, names, positions, links, params-as-record, bindings-as-authored, scopes, layout,
-globals, viewpoint — plus two process-lifetime birth facts the resolver needs: the `instance`
+variables, viewpoint — plus two process-lifetime birth facts the resolver needs: the `instance`
 scope and every uid's generation. It routes each op's PROPAGATION to the engine that owns the
 node, through one trait. It depends on nothing above `goofi-node` — `goofi-core` and `goofi-node` alone, never
 `goofi-transport` or an engine — so the boundary is enforced by its manifest, not discipline: the graph provably never computes a service
@@ -104,7 +104,7 @@ and expression edits do NOT reduce to a view diff: a `SetParam` is a write with 
 unbind, wake a parked node, re-fire `on_param_changed`), so the engine must know WHICH key moved,
 and an engine-side last-shipped copy of every record would be the third mirror this design
 forbids. So the op path — the one writer — records `Touched` entries naming the `(uid, ParamKey)`
-and `(uid, slot)` items the batch changed, including the bindings the batch INVALIDATED (a globals
+and `(uid, slot)` items the batch changed, including the bindings the batch INVALIDATED (a variables
 edit or a rename re-resolves `Value` vars on bindings whose own keys the batch never touched; the
 op path already enumerates exactly these sets in the invalidation walk). One settle per batch,
 from settled state, with the batch's change list — a list written by the one op path is not a

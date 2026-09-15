@@ -163,7 +163,7 @@ tuning reaches HarmonicMorph and changes an actual GPU Chladni field. Recipe
 10 adds a live ratio history and numeric readout to this route.
 
 The dropdown investigation found a shared binding defect: a bare string
-global replaced the target parameter's option metadata. A graphics parameter
+variable replaced the target parameter's option metadata. A graphics parameter
 then received option index zero regardless of the selected text. The shared
 mailbox now preserves target options and copies the source value, as string
 references already do. Earlier browser checks verified selected values but
@@ -175,7 +175,7 @@ did not establish that each selected string reached the GPU as its index.
   at 384 × 216 and 216 × 384.
 - The final deterministic RatioSequence session passed in 13.00 seconds,
   including reset from a later step back to the first ratio.
-- The new string-binding regression passed in 3.88 seconds. A global selects
+- The new string-binding regression passed in 3.88 seconds. A variable selects
   green, blue, and red; the session verifies the actual GPU pixels.
 - Both embedded archive sessions passed in 17.68 seconds, including load,
   controls, output, and save/reload. A further recipe 09 capture check passed
@@ -191,7 +191,7 @@ did not establish that each selected string reached the GPU as its index.
   and a twelve-finish gallery.
 
 Initial regression attempts exposed a missing test evaluator and invalid
-global names; the final fixture uses the app's evaluator and grouped names.
+variable names; the final fixture uses the app's evaluator and grouped names.
 One sequence run timed out during a transition. The final session waits for
 pause and resume to reach the ratio node before advancing the separate clock.
 One queued build hit a Windows executable lock; subsequent builds ran in
@@ -249,7 +249,7 @@ camera, and light controls separate from the mode walk. The saved patch uses a
   when controls are held, a different picture after retuning, the control
   limits, and external controls that pass through zero.
 - The final embedded archive session passed for all **nine** patches in 147.61 seconds,
-  including live globals, save/reload, and the original audio example.
+  including live variables, save/reload, and the original audio example.
 - Clippy for the embedded geometry test and its dependencies passed with
   warnings denied. The E2E TypeScript check also passed.
 - The final app build passed without compiler warnings.
@@ -300,7 +300,7 @@ test clock, and the audio test clock.
   Flow evolves from its seed, then freezes exactly when its rate is zero.
 - Field blends check endpoints, masks, and a domain mismatch. The same session
   switches to a 2D/3D curve blend and checks its common sample count.
-- All eight `.gfi` archives load, render, respond to manual global controls,
+- All eight `.gfi` archives load, render, respond to manual variable controls,
   save, and reload. The sound example emits and mutes native audio on test clocks.
   Each archive has distinct node identities. Image captures wait for visible
   spatial variation after shader inputs arrive.

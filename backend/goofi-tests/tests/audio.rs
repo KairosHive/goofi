@@ -393,23 +393,23 @@ fn a_patch_sounds_under_the_external_clock() {
     // Step: the engine PUBLISHES what it decided into `system.*`, off the same read the status
     // answers from — so the two cannot drift, and an expression in any engine reads the rate with
     // no door of its own. It is goofi's to say: a hand edit is refused, and no patch carries it.
-    let listed = g.call("global list", j!({}))["globals"].as_array().unwrap().clone();
-    let global = |name: &str| listed.iter().find(|e| e["name"] == name).unwrap_or_else(|| panic!("{name} is seeded")).clone();
-    assert_eq!(global("system.audio_rate")["value"], status["audio"]["rate"], "the rate the engine published");
-    assert_eq!(global("system.audio_channels")["value"], status["audio"]["channels"], "the channels it published");
-    assert_eq!(global("system.audio_device")["value"], j!(""), "no device under the external clock");
-    assert_eq!(global("system.audio_driver")["value"], j!(""), "and no ASIO driver holds this process");
+    let listed = g.call("variable list", j!({}))["variables"].as_array().unwrap().clone();
+    let variable = |name: &str| listed.iter().find(|e| e["name"] == name).unwrap_or_else(|| panic!("{name} is seeded")).clone();
+    assert_eq!(variable("system.audio_rate")["value"], status["audio"]["rate"], "the rate the engine published");
+    assert_eq!(variable("system.audio_channels")["value"], status["audio"]["channels"], "the channels it published");
+    assert_eq!(variable("system.audio_device")["value"], j!(""), "no device under the external clock");
+    assert_eq!(variable("system.audio_driver")["value"], j!(""), "and no ASIO driver holds this process");
     // The APIs this build carries are published too, and every device a refresh offers is prefixed
     // with one of them — the name IS the host choice, so a name from an API outside the list would
     // be one nobody can resolve. It is also the only place a whole API missing from a build says so.
-    let hosts = global("system.audio_hosts")["value"].as_str().unwrap_or_default().to_string();
+    let hosts = variable("system.audio_hosts")["value"].as_str().unwrap_or_default().to_string();
     assert!(!hosts.is_empty(), "a build carries at least one audio host");
     for name in devices.iter().filter(|n| *n != "default") {
         assert!(hosts.split(", ").any(|h| name.starts_with(&format!("{h}: "))),
                 "`{name}` names an audio host outside `{hosts}`");
     }
-    assert_eq!(global("system.audio_rate")["lock"]["value"], j!(true), "an ephemeral global is value-locked");
-    let why = g.refuse("global entry edit", j!({ "name": "system.audio_rate", "value": 22_050.0 }));
+    assert_eq!(variable("system.audio_rate")["lock"]["value"], j!(true), "an ephemeral variable is value-locked");
+    let why = g.refuse("variable entry edit", j!({ "name": "system.audio_rate", "value": 22_050.0 }));
     assert!(why.contains("ephemeral"), "the engine's own fact refuses a hand edit: {why}");
     assert!(!g.call("session manifest", j!({}))["yaml"].as_str().unwrap().contains("audio_rate"),
             "and a patch never carries it");

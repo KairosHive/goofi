@@ -4,7 +4,7 @@ use goofi_graph::Graph;
 use serde_json::{json, Map, Value};
 
 /// `g`'s whole control-plane state, in the shape a `.gfi` holds it: one node map carrying leaves,
-/// sub-patch facades and boundary ports alike, one link list, globals, and the panel arrangement.
+/// sub-patch facades and boundary ports alike, one link list, variables, and the panel arrangement.
 /// The sub-patch forest is not a block of its own — a member names its scope, and that is the only
 /// place membership lives.
 pub fn of(g: &Graph) -> Value {
@@ -81,9 +81,9 @@ pub fn of(g: &Graph) -> Value {
         })
         .collect();
 
-    let mut globals = Map::new();
-    for (name, value, lock, control, source) in g.globals().entries() {
-        let mut entry = goofi_graph::global_to_json(value);
+    let mut variables = Map::new();
+    for (name, value, lock, control, source) in g.variables().entries() {
+        let mut entry = goofi_graph::variable_to_json(value);
         if let Value::Object(m) = &mut entry {
             if let Some(c) = control {
                 m.insert("control".into(), serde_json::to_value(c).expect("a plain record"));
@@ -95,11 +95,11 @@ pub fn of(g: &Graph) -> Value {
                 m.insert("lock".into(), serde_json::to_value(lock).expect("a plain record"));
             }
         }
-        globals.insert(name.to_string(), entry);
+        variables.insert(name.to_string(), entry);
     }
-    let global_groups: Map<String, Value> =
-        g.globals().groups().map(|(group, lock)| (group.to_string(), json!({ "lock": lock }))).collect();
+    let variable_groups: Map<String, Value> =
+        g.variables().groups().map(|(group, lock)| (group.to_string(), json!({ "lock": lock }))).collect();
 
     json!({ "nodes": nodes, "links": links,
-        "globals": globals, "global_groups": global_groups, "arrangement": g.arrangement().to_json() })
+        "variables": variables, "variable_groups": variable_groups, "arrangement": g.arrangement().to_json() })
 }

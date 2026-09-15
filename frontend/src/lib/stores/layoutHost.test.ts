@@ -203,8 +203,8 @@ describe('a frozen gesture is a layout command', () => {
 		// nothing is going to send left the new tab sitting behind the one it was added from.
 		const ws = boot();
 		fc.setCallResult('layout panel add', { tab: 'tab-3', id: 'panel-4' });
-		ws.addTab('globals');
-		ws.syncFromDoc([...oneTab(), tab('tab-3', 'Tab 2', 'panel-4', 'globals')]);
+		ws.addTab('variables');
+		ws.syncFromDoc([...oneTab(), tab('tab-3', 'Tab 2', 'panel-4', 'variables')]);
 		expect(ws.state.activeWorkspaceId, 'not off a delta alone — the ids are still in flight').toBe(
 			'tab-1'
 		);

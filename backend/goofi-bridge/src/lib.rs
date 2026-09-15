@@ -196,7 +196,7 @@ impl AppState {
         term::seed_orientation(&mount);
         seed_skills(&mount);
         let workspace_baseline = goofi_graph::archive::fingerprint(&mount);
-        // Project the INITIAL graph — no nodes, but the seeded system globals — so a client that
+        // Project the INITIAL graph — no nodes, but the seeded system variables — so a client that
         // connects to a fresh backend has the current state at once.
         let mut graph_val = fresh_graph((!mode.demo).then_some(clock), render);
         graph_val.set_workspace(&mount);
@@ -1442,7 +1442,7 @@ fn doc_state(state: &AppState) -> String {
     event("doc_state", json!({ "v": doc.version(), "doc": doc.to_json() }))
 }
 
-/// The follower: every tap's pick lands here, a batch at a time, and what changed a global is
+/// The follower: every tap's pick lands here, a batch at a time, and what changed a variable is
 /// written under the graph lock and broadcast as any edit is. It is the manager writing, not a
 /// caller, so it is no command and leaves no undo entry.
 fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Followed>) {
@@ -1465,7 +1465,7 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
                 batch.push(more);
             }
             let mut g = state.graph.lock().unwrap();
-            let changed = batch.into_iter().fold(false, |acc, (name, value)| g.follow_global(&name, value) || acc);
+            let changed = batch.into_iter().fold(false, |acc, (name, value)| g.follow_variable(&name, value) || acc);
             if changed {
                 g.settle();
                 let mut doc = state.doc.lock().unwrap();
@@ -1481,8 +1481,8 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
 /// Hand the reducers every followed slot, from settled state, after each mutation.
 fn sync_followers(state: &AppState, g: &Graph) {
     let mut taps: HashMap<reducer::SlotKey, Vec<reducer::Tap>> = HashMap::new();
-    for (global, uid, slot, index) in g.global_sources() {
-        taps.entry((uid, slot)).or_default().push(reducer::Tap { global, index });
+    for (variable, uid, slot, index) in g.variable_sources() {
+        taps.entry((uid, slot)).or_default().push(reducer::Tap { variable, index });
     }
     state.reducers.set_taps(taps);
 }

@@ -1,5 +1,5 @@
 /** Per-variant virtual-keyboard and editing hints. `search` is the IDENTIFIER variant — a node,
- * tab or global name is machine-read — and `path` maps to the `url` keyboard, which carries `/`. */
+ * tab or variable name is machine-read — and `path` maps to the `url` keyboard, which carries `/`. */
 
 export type InputModeVariant = 'text' | 'decimal' | 'search' | 'path';
 

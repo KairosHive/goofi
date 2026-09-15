@@ -244,16 +244,16 @@ pub fn node(
     Ok(out)
 }
 
-/// `global list`: what an expression can read and the global writes can set.
-pub fn globals(g: &Graph) -> Value {
+/// `variable list`: what an expression can read and the variable writes can set.
+pub fn variables(g: &Graph) -> Value {
     let entries: Vec<Value> = g
-        .globals()
+        .variables()
         .entries()
         .map(|(name, v, _, control, source)| {
-            let mut e = goofi_graph::global_to_json(v);
+            let mut e = goofi_graph::variable_to_json(v);
             e["name"] = json!(name);
             // What holds it, its own lock and its group's together — the answer a writer needs.
-            e["lock"] = serde_json::to_value(g.globals().lock_of(name)).expect("a plain record");
+            e["lock"] = serde_json::to_value(g.variables().lock_of(name)).expect("a plain record");
             if let Some(c) = control {
                 e["control"] = serde_json::to_value(c).expect("a plain record");
             }
@@ -264,8 +264,8 @@ pub fn globals(g: &Graph) -> Value {
         })
         .collect();
     let groups: serde_json::Map<String, Value> =
-        g.globals().groups().map(|(group, lock)| (group.to_string(), json!({ "lock": lock }))).collect();
-    json!({ "globals": entries, "groups": groups })
+        g.variables().groups().map(|(group, lock)| (group.to_string(), json!({ "lock": lock }))).collect();
+    json!({ "variables": entries, "groups": groups })
 }
 
 /// `library get`: one type's provenance, what its file hides, and — when `source` asks — the file

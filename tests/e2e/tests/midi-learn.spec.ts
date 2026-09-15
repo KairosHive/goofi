@@ -87,8 +87,8 @@ class LearnMidi(goofi.Node):
 
 		await page.evaluate(async () => {
 			const g = (window as any).goofi;
-			await g.commands.addGlobal('desk.level', 0.25, 'float', { kind: 'knob', x: 0, y: 0, w: 3, h: 3 });
-			await g.commands.addGlobal('desk.text', '', 'string', { kind: 'text', x: 3, y: 0, w: 3, h: 3 });
+			await g.commands.addVariable('desk.level', 0.25, 'float', { kind: 'knob', x: 0, y: 0, w: 3, h: 3 });
+			await g.commands.addVariable('desk.text', '', 'string', { kind: 'text', x: 3, y: 0, w: 3, h: 3 });
 			const panel = g.query.panels()[0];
 			g.commands.setPanelType(panel.panelId, 'control');
 			g.commands.setPanelState(panel.panelId, { group: 'desk' });
@@ -104,7 +104,7 @@ class LearnMidi(goofi.Node):
 		await expect(widget).toHaveAttribute('aria-pressed', 'false');
 		await expect.poll(async () => {
 			const doc = await backendDoc(page);
-			return doc.globals?.['desk.level']?.source;
+			return doc.variables?.['desk.level']?.source;
 		}).toEqual({ reference: 'keys.cc', index: 74 });
 		// Relearn always selects a MIDI node, even when a source already exists.
 		await widget.click();
@@ -118,9 +118,9 @@ class LearnMidi(goofi.Node):
 		await expect(page.getByRole('menu')).toHaveCount(0);
 		await page.waitForTimeout(500);
 		await updateParam(page, midi, 'test', 'note', 0.375);
-		await expect.poll(async () => (await backendDoc(page)).globals?.['desk.level']?.source)
+		await expect.poll(async () => (await backendDoc(page)).variables?.['desk.level']?.source)
 			.toEqual({ reference: 'keys.notes', index: 60 });
-		await rawCall(page, 'node param edit', { node: consumer, param: 'common/max_frequency', expression: 'globals.desk.level' });
+		await rawCall(page, 'node param edit', { node: consumer, param: 'common/max_frequency', expression: 'variables.desk.level' });
 		await page.evaluate(() => {
 			const g = (window as any).goofi;
 			g.commands.setPanelType(g.query.panels()[0].panelId, 'node-editor');

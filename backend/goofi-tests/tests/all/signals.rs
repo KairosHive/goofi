@@ -887,18 +887,18 @@ fn texel(d: &Data, row: usize, col: usize) -> [f32; 4] {
 }
 
 /// What a hand leaves on a drawing widget, and what `control paint` leaves beside it, is a frame
-/// like any other: the node reads the global the widget IS — the way a knob's value is read — and
+/// like any other: the node reads the variable the widget IS — the way a knob's value is read — and
 /// answers pixels, which is what `graphics:SignalIn` then puts on the GPU.
 #[test]
 fn a_drawing_widget_reaches_the_patch_as_a_frame() {
     let g = Goofi::new();
-    // Binding an expression COMPILES it, which wants an evaluator present; reading a bare global
-    // does not, so this one is never asked what `globals.pad.sketch` means.
+    // Binding an expression COMPILES it, which wants an evaluator present; reading a bare variable
+    // does not, so this one is never asked what `variables.pad.sketch` means.
     g.state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(goofi_tests::FirstVar));
     g.call("control add", j!({ "group": "pad", "kind": "paint", "element": "sketch" }));
     let node = g.add("Drawing");
     let bound = g.call("node param edit", j!({ "node": hex(node), "param": "drawing/image",
-                                               "expression": "globals.pad.sketch" }));
+                                               "expression": "variables.pad.sketch" }));
     assert!(bound["error"].is_null(), "the pad is pointed at the way a knob's value is: {bound}");
     let probe = g.probe(node, "out");
     g.ready(node);
@@ -908,7 +908,7 @@ fn a_drawing_widget_reaches_the_patch_as_a_frame() {
     assert!(g.stays(|_| probe.latest().is_none()), "an empty pad emitted a frame");
 
     // Step: the pad takes a drawing, and its pixels arrive — [H, W, 4], row 0 the top.
-    g.call("global entry edit", j!({ "name": "pad.sketch", "value": PAD }));
+    g.call("variable entry edit", j!({ "name": "pad.sketch", "value": PAD }));
     let frame = g.until("the drawing as a frame", |_| probe.latest().filter(|d| shape(d) == vec![5, 4, 4]));
     let close = |got: [f32; 4], want: [f32; 4]| got.iter().zip(want).all(|(a, b)| (a - b).abs() < 2e-3);
     let by = |r: f32, gr: f32, b: f32, a: f32| [r / 255.0, gr / 255.0, b / 255.0, a / 255.0];
@@ -918,7 +918,7 @@ fn a_drawing_widget_reaches_the_patch_as_a_frame() {
     assert!(g.error(node).is_none(), "a decoded pad is not a fault");
 
     // Step: what is not a picture is the NODE's error, in words, and never a panic.
-    g.call("global entry edit", j!({ "name": "pad.sketch", "value": "data:image/png;base64,bm90YXBuZw==" }));
+    g.call("variable entry edit", j!({ "name": "pad.sketch", "value": "data:image/png;base64,bm90YXBuZw==" }));
     let why = g.until("the node says what it could not read", |_| g.error(node));
     assert!(why.contains("PNG"), "{why}");
 }

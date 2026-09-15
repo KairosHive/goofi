@@ -1,4 +1,4 @@
-//! The expression rewrite (spec §5.3): `nd('lfo').out.sig.mean() * globals.gain` becomes
+//! The expression rewrite (spec §5.3): `nd('lfo').out.sig.mean() * variables.gain` becomes
 //! `__v0.mean() * __v1` plus the variable map the graph resolves. Slots live behind `.out`,
 //! params behind `.params`, a bare reference is the single output, and `me` is this node.
 
@@ -15,7 +15,7 @@ pub enum VarRef {
     MeOut { var: String, slot: Option<String> },
     /// `me.params.group.param` — this node's own param.
     MeParam { var: String, group: String, param: String },
-    Global { var: String, key: String },
+    Variable { var: String, key: String },
 }
 
 impl VarRef {
@@ -25,7 +25,7 @@ impl VarRef {
             | VarRef::NodeParam { var, .. }
             | VarRef::MeOut { var, .. }
             | VarRef::MeParam { var, .. }
-            | VarRef::Global { var, .. } => var,
+            | VarRef::Variable { var, .. } => var,
         }
     }
 }
@@ -37,7 +37,7 @@ enum Target {
     NodeParam { name: String, group: String, param: String },
     MeOut { slot: Option<String> },
     MeParam { group: String, param: String },
-    Global { key: String },
+    Variable { key: String },
 }
 
 impl Target {
@@ -47,7 +47,7 @@ impl Target {
             Target::NodeParam { name, group, param } => VarRef::NodeParam { var, name, group, param },
             Target::MeOut { slot } => VarRef::MeOut { var, slot },
             Target::MeParam { group, param } => VarRef::MeParam { var, group, param },
-            Target::Global { key } => VarRef::Global { var, key },
+            Target::Variable { key } => VarRef::Variable { var, key },
         }
     }
 }
@@ -92,7 +92,7 @@ fn path_after(source: &str, end: usize, head: &str) -> Result<Path, ExprError> {
     }
 }
 
-/// Rewrite every `nd(..)`, `me` and `globals.*` term into a generated variable, answering the
+/// Rewrite every `nd(..)`, `me` and `variables.*` term into a generated variable, answering the
 /// rewritten source and the variables it names, in first-seen order.
 pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
     let mut terms: Vec<Term> = Vec::new();
@@ -130,11 +130,11 @@ pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
         };
         terms.push(Term { start, end: target.0, target: target.1 });
     }
-    for read in goofi_node::scan_globals(source) {
+    for read in goofi_node::scan_variables(source) {
         terms.push(Term {
             start: read.start,
             end: read.end,
-            target: Target::Global { key: read.name.to_string() },
+            target: Target::Variable { key: read.name.to_string() },
         });
     }
     let terms = merge(terms);
@@ -248,11 +248,11 @@ pub fn rename_refs(
     Some(out)
 }
 
-/// Rewrite the `globals.<group>.<element>` terms `rename` answers for, leaving every other byte
+/// Rewrite the `variables.<group>.<element>` terms `rename` answers for, leaving every other byte
 /// alone.
-pub fn rename_globals(source: &str, rename: impl Fn(&str) -> Option<String>) -> Option<String> {
+pub fn rename_variables(source: &str, rename: impl Fn(&str) -> Option<String>) -> Option<String> {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
-    for read in goofi_node::scan_globals(source) {
+    for read in goofi_node::scan_variables(source) {
         if let Some(to) = rename(read.name) {
             edits.push((read.end - read.name.len(), read.end, to));
         }

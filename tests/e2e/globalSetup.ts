@@ -1,6 +1,7 @@
 import type { FullConfig } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { BASE_PORT, BIN, E2E_HOME, LOG_DIR, REPO_ROOT } from './playwright.config';
 
@@ -10,7 +11,7 @@ type Backend = { child: ChildProcess; port: number; log: string };
  * One PREBUILT backend per worker slot, on `BASE_PORT + slot`.
  *
  * This replaces `webServer`, which can only ever spawn one — and one backend is why the suite ran
- * `workers: 1`. A single backend is shared global state (`expectPristineWorkspace` and the save-path
+ * `workers: 1`. A single backend is shared variable state (`expectPristineWorkspace` and the save-path
  * guard in `lib/app.ts` are written against exactly that), so a second worker against it trips them:
  * measured, `--workers=4` on the shared backend failed 132 of 343. A backend per SLOT keeps the
  * contract intact rather than weakening it — a worker still owns its backend alone, so every
@@ -30,9 +31,14 @@ export default async function spawnFleet(config: FullConfig): Promise<() => Prom
 		throw new Error(`${BIN} is missing — \`npm run build:backend\` builds it and the SPA it serves`);
 	fs.mkdirSync(LOG_DIR, { recursive: true });
 	// A test-scoped `GOOFI_HOME`, wiped up front: the fleet's session files and the test agent
-	// config land here, never in the runner's real home. The fleet dies by SIGKILL, so the files
-	// it leaves are exactly what a reader's probe must sweep — deliberately not cleaned up here.
+	// config land here, never in the runner's real home. A last run's fleet that had to be killed
+	// left its mounts in temp; with its session records gone they read as dead and would be
+	// offered as recoveries, so they go too — by the ids the records name, nothing else's.
 	const home = E2E_HOME;
+	const records = path.join(home, '.goofi', 'system', 'sessions');
+	if (fs.existsSync(records))
+		for (const id of fs.readdirSync(records))
+			fs.rmSync(path.join(os.tmpdir(), 'goofi-workspaces', id), { recursive: true, force: true });
 	fs.rmSync(home, { recursive: true, force: true });
 	fs.mkdirSync(path.join(home, '.goofi'), { recursive: true });
 	// `_sh` is a CONFIG entry a test writes, exactly as a user's own entry would be; the servers'
@@ -69,20 +75,24 @@ export default async function spawnFleet(config: FullConfig): Promise<() => Prom
 		fs.closeSync(fd);
 		fleet.push({ child, port, log });
 	}
-	// SIGKILL, not SIGTERM: nothing here has teardown to do that the next run's sweep does not
-	// already cover, and a signal that cannot be ignored is what keeps a run from leaving a backend
+	// SIGTERM first: a clean shutdown drops the mount, so a dirty patch a spec left behind is not
+	// what the next run's boot sweep offers to recover. SIGKILL after a grace, so no backend stays
 	// on a fixed port for the next run to collide with.
 	const reap = async () => {
-		for (const { child } of fleet) child.kill('SIGKILL');
+		for (const { child } of fleet) child.kill('SIGTERM');
+		const gone = fleet.map(({ child }) => new Promise<void>((done) => child.once('exit', () => done())));
+		const grace = new Promise<void>((done) => setTimeout(done, 5000).unref());
+		await Promise.race([Promise.all(gone), grace]);
+		for (const { child } of fleet) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
 	};
 	try {
 		await Promise.all(fleet.map(serving));
 		// The one e2e pin on the session records: a REAL binary spawn under a scoped GOOFI_HOME
 		// writes `system/sessions/<id>/session.json` per server, each url naming the port it serves.
-		const records = path.join(home, '.goofi', 'system', 'sessions');
+		const written = path.join(home, '.goofi', 'system', 'sessions');
 		const sessions = fs
-			.readdirSync(records)
-			.map((id) => JSON.parse(fs.readFileSync(path.join(records, id, 'session.json'), 'utf8')));
+			.readdirSync(written)
+			.map((id) => JSON.parse(fs.readFileSync(path.join(written, id, 'session.json'), 'utf8')));
 		for (const { port } of fleet)
 			if (!sessions.some((s) => s.url === `http://127.0.0.1:${port}`))
 				throw new Error(`no session file names :${port} — got ${JSON.stringify(sessions)}`);

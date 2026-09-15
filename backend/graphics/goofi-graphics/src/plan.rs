@@ -16,7 +16,7 @@ use crate::Instance;
 
 /// What a slot's readers asked for, in the ONE cell [`Stage::wants`] reads: the box on two 16-bit
 /// axes — [`MAX_SIZE`] is 8192, so they fit — and the depth on one bit above them. Zero is the
-/// frame itself at f32, which is what a snapshot and a global following the slot need. One packer
+/// frame itself at f32, which is what a snapshot and a variable following the slot need. One packer
 /// and one reader, so the cell has one owner and no second field to keep in step.
 pub fn pack(want: Option<goofi_view::ViewWant>) -> u64 {
     want.map_or(0, |w| {
@@ -33,9 +33,9 @@ fn unpack(cell: u64) -> Option<goofi_view::ViewWant> {
     })
 }
 
-/// What a chain that can follow nothing falls back to. It is what the two default-size globals
+/// What a chain that can follow nothing falls back to. It is what the two default-size variables
 /// start at, so the floor and the patch's own default cannot drift apart.
-pub const GENERATOR: u32 = goofi_core::globals::DEFAULT_SIZE;
+pub const GENERATOR: u32 = goofi_core::variables::DEFAULT_SIZE;
 /// The widest a node may ask for on either axis.
 pub const MAX_SIZE: u32 = goofi_core::texture::MAX_SIZE;
 

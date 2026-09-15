@@ -165,13 +165,13 @@ async fn a_tab_mirrors_the_graph_off_the_document_events_and_follows_a_peer_edit
     assert_eq!(born.map(|n| n["panel_type"].clone()), Some(j!("empty")),
                "the peer's split converged, and a split births an EMPTY panel");
 
-    assert_eq!(c.doc().read_at(&["global_groups", "system", "lock", "config"]), Some(j!(true)),
+    assert_eq!(c.doc().read_at(&["variable_groups", "system", "lock", "config"]), Some(j!(true)),
                "the system group's lock rides the replica");
-    peer.call("global entry add", j!({ "name": "patch.subject", "value": "P07", "type": "string" })).await;
-    c.until_doc(|d| d.read_at(&["globals", "patch.subject", "value"]).is_some()).await;
-    assert_eq!(c.doc().read_at(&["globals", "patch.subject", "value"]), Some(j!("P07")));
-    assert_eq!(c.doc().read_at(&["globals", "patch.subject", "lock"]), None,
-               "a user global carries no lock until one is set");
+    peer.call("variable entry add", j!({ "name": "patch.subject", "value": "P07", "type": "string" })).await;
+    c.until_doc(|d| d.read_at(&["variables", "patch.subject", "value"]).is_some()).await;
+    assert_eq!(c.doc().read_at(&["variables", "patch.subject", "value"]), Some(j!("P07")));
+    assert_eq!(c.doc().read_at(&["variables", "patch.subject", "lock"]), None,
+               "a user variable carries no lock until one is set");
 
     // A merge patch spells a delete as an explicit `null`, and the gate compares the whole projection.
     peer.call("node remove", j!({ "node": uid.clone() })).await;
@@ -410,7 +410,7 @@ async fn three_devices_edit_one_patch_at_once_and_end_on_the_same_document() {
     });
     let tb = tokio::spawn(async move {
         for i in 0..BURST {
-            b.call("global entry add", j!({ "name": format!("patch.g{i}"), "value": i as f64, "type": "float" })).await;
+            b.call("variable entry add", j!({ "name": format!("patch.g{i}"), "value": i as f64, "type": "float" })).await;
         }
         b
     });
@@ -422,7 +422,7 @@ async fn three_devices_edit_one_patch_at_once_and_end_on_the_same_document() {
     let mut b = tb.await.expect("device B's task");
 
     let want = g.call("session state", j!({}));
-    for (device, client) in [("built the graph", &mut a), ("edited the globals", &mut b),
+    for (device, client) in [("built the graph", &mut a), ("edited the variables", &mut b),
                              ("joined mid-flight", &mut c)] {
         client.until_doc(|d| d.to_json() == want).await;
         assert_eq!(client.doc().to_json(), want, "the device that {device}");
@@ -436,7 +436,7 @@ async fn three_devices_edit_one_patch_at_once_and_end_on_the_same_document() {
             .unwrap_or_else(|| panic!("osc{i} is missing from the replica"));
         assert_eq!(d.read_at(&["nodes", uid.as_str(), "params", "lfo", "amplitude", "value"]),
                    Some(j!(0.1 * i as f64)), "A's rename and its param edit both landed on osc{i}");
-        assert_eq!(d.read_at(&["globals", &format!("patch.g{i}"), "value"]), Some(j!(i as f64)),
-                   "device B's global g{i}");
+        assert_eq!(d.read_at(&["variables", &format!("patch.g{i}"), "value"]), Some(j!(i as f64)),
+                   "device B's variable g{i}");
     }
 }

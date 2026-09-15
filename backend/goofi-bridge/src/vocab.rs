@@ -60,10 +60,10 @@ pub static PANEL_TYPES: &[PanelType] = &[
                 doc: "live frames from one output slot, drawn by `state.kind`" },
     PanelType { id: "console", title: "Console", icon: "terminal", accepts_node: true,
                 doc: "the patch log; a bound node filters it to that node" },
-    PanelType { id: "globals", title: "Globals", icon: "globe", accepts_node: false,
-                doc: "the patch globals, which any expression can read" },
+    PanelType { id: "variables", title: "Variables", icon: "globe", accepts_node: false,
+                doc: "the patch variables, which any expression can read" },
     PanelType { id: "control", title: "Control", icon: "sliders-vertical", accepts_node: false,
-                doc: "knobs, sliders and text widgets over one group of globals" },
+                doc: "knobs, sliders and text widgets over one group of variables" },
     PanelType { id: "agent", title: "Agent", icon: "bot", accepts_node: false,
                 doc: "a terminal on an agent harness, running in the patch workspace" },
     PanelType { id: "recorder", title: "Recorder", icon: "circle-dot", accepts_node: true,
@@ -183,15 +183,15 @@ pub fn typescript() -> String {
         })
         .collect::<String>();
     let tags = goofi_node::Tag::ALL.iter().map(|t| format!("'{}'", t.as_str())).collect::<Vec<_>>().join(", ");
-    let control_ids = goofi_core::globals::ControlKind::ALL.iter().map(|k| format!("\n\t| '{}'", k.as_str())).collect::<String>();
-    let controls = goofi_core::globals::ControlKind::ALL
+    let control_ids = goofi_core::variables::ControlKind::ALL.iter().map(|k| format!("\n\t| '{}'", k.as_str())).collect::<String>();
+    let controls = goofi_core::variables::ControlKind::ALL
         .iter()
         .map(|k| {
             let (w, h) = k.born_box();
             format!("\t{{ id: '{}', type: '{}', w: {w}, h: {h} }},\n", k.as_str(), k.born_value().type_name())
         })
         .collect::<String>();
-    let columns = goofi_core::globals::CONTROL_COLUMNS;
+    let columns = goofi_core::variables::CONTROL_COLUMNS;
     let boundaries = BOUNDARY_TYPES
         .iter()
         .map(|(name, dir, dtype)| {
@@ -252,7 +252,7 @@ pub fn typescript() -> String {
          \n\
          export interface ControlKindInfo {{\n\
          \treadonly id: ControlKindId;\n\
-         \t/** The value type a widget of this kind draws, which is the global's type at birth. */\n\
+         \t/** The value type a widget of this kind draws, which is the variable's type at birth. */\n\
          \treadonly type: 'float' | 'int' | 'bool' | 'string';\n\
          \t/** The box it is born in, in grid units. */\n\
          \treadonly w: number;\n\

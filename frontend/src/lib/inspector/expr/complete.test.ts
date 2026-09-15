@@ -35,7 +35,7 @@ const CAT: ExprCatalogue = {
 		}
 	],
 	self: 'buffer0',
-	globals: [
+	variables: [
 		{ name: 'system.default_ufreq', group: 'system', element: 'default_ufreq', type: 'float' },
 		{ name: 'mixer.gain', group: 'mixer', element: 'gain', type: 'float' },
 		{ name: 'mixer.pan', group: 'mixer', element: 'pan', type: 'float' }
@@ -203,16 +203,16 @@ describe('the reference paths: .out, .params, and me', () => {
 	});
 });
 
-describe('globals. and np.', () => {
-	it('offers the GROUPS after globals., and the group’s elements after one', () => {
-		expect(labels('globals.')).toEqual(['system', 'mixer']);
-		expect(labels('globals.mi'), 'partially typed').toEqual(['system', 'mixer']);
-		expect(labels('globals.mixer.')).toEqual(['gain', 'pan']);
-		expect(labels('globals.mixer.ga'), 'partially typed').toEqual(['gain', 'pan']);
+describe('variables. and np.', () => {
+	it('offers the GROUPS after variables., and the group’s elements after one', () => {
+		expect(labels('variables.')).toEqual(['system', 'mixer']);
+		expect(labels('variables.mi'), 'partially typed').toEqual(['system', 'mixer']);
+		expect(labels('variables.mixer.')).toEqual(['gain', 'pan']);
+		expect(labels('variables.mixer.ga'), 'partially typed').toEqual(['gain', 'pan']);
 	});
 
 	it('carries the element’s declared type as the detail', () => {
-		expect(entriesFor(at('globals.mixer.')!, CAT)[0].detail).toBe('float');
+		expect(entriesFor(at('variables.mixer.')!, CAT)[0].detail).toBe('float');
 	});
 
 	it('offers the curated numpy surface after np.', () => {
@@ -228,8 +228,8 @@ describe('globals. and np.', () => {
 		expect(labels("nd('a').out.data.")).toEqual([]);
 	});
 
-	it('reads globals. as the right operand of an expression', () => {
-		expect(labels("nd('a').out + globals.")).toEqual(['system', 'mixer']);
+	it('reads variables. as the right operand of an expression', () => {
+		expect(labels("nd('a').out + variables.")).toEqual(['system', 'mixer']);
 	});
 });
 
@@ -240,7 +240,7 @@ describe('globals. and np.', () => {
 describe('the injected scope', () => {
 	it('offers the evaluator scope at a partially-typed name', () => {
 		const got = labels('n');
-		for (const name of ['nd', 'me', 't', 'np', 'globals', 'time', 'sin', 'pi', 'lfo', 'noi']) {
+		for (const name of ['nd', 'me', 't', 'np', 'variables', 'time', 'sin', 'pi', 'lfo', 'noi']) {
 			expect(got, `\`${name}\` is in the scope`).toContain(name);
 		}
 	});

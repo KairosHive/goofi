@@ -36,11 +36,11 @@ test('console groups repeats, filters history and runs the shared op vocabulary'
 		await expect(rows.nth(1).getByTestId('console-count')).toHaveText('×2');
 		await filter.fill('');
 		const input = panel.getByRole('textbox', { name: 'Console command' });
-		await input.fill('global entry add console.value --value 7 --type int');
+		await input.fill('variable entry add console.value --value 7 --type int');
 		await input.press('Enter');
-		await expect.poll(async () => (await rawCall(page, 'global list')).result.globals?.some((e: any) => e.name === 'console.value')).toBe(true);
+		await expect.poll(async () => (await rawCall(page, 'variable list')).result.variables?.some((e: any) => e.name === 'console.value')).toBe(true);
 		await input.press('ArrowUp');
-		await expect(input).toHaveValue('global entry add console.value --value 7 --type int');
+		await expect(input).toHaveValue('variable entry add console.value --value 7 --type int');
 		await input.fill('invalid-command');
 		await expect(panel.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
 		await input.press('Enter');
@@ -100,7 +100,7 @@ test('console groups repeats, filters history and runs the shared op vocabulary'
 		await expect(panel.getByRole('button', { name: 'Clear console', exact: true })).toHaveCount(0);
 		expect((await rawCall(page, 'log clear')).error).toContain('unknown op');
 	} finally {
-		await rawCall(page, 'global entry remove', { name: 'console.value' });
+		await rawCall(page, 'variable entry remove', { name: 'console.value' });
 		await restorePanelType(page);
 	}
 });

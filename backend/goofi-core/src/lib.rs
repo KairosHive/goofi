@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 
 pub mod child;
 pub mod log;
-pub mod globals;
+pub mod variables;
 pub mod home;
 pub mod normalize;
 pub mod path;

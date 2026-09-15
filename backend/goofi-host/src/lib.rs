@@ -99,7 +99,7 @@ fn autotrigger(m: &NodeManifest) -> ParamDecl {
     }
 }
 
-/// The rate cap, carried by every node as a `globals.system.default_ufreq` expression and live on a
+/// The rate cap, carried by every node as a `variables.system.default_ufreq` expression and live on a
 /// producer. `trigger: true` is inert here — a `common.*` arrival never sets `trigger_pending`.
 fn max_frequency(m: &NodeManifest) -> ParamDecl {
     ParamDecl {
@@ -107,7 +107,7 @@ fn max_frequency(m: &NodeManifest) -> ParamDecl {
         name: "max_frequency",
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 100.0 },
         expression: Some(ExprDecl {
-            source: "globals.system.default_ufreq",
+            source: "variables.system.default_ufreq",
             mode: if m.producer { ExprMode::On } else { ExprMode::Off },
             trigger: true,
         }),

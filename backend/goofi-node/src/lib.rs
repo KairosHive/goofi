@@ -286,16 +286,16 @@ pub fn scan_nd_calls(source: &str) -> Vec<NdCall<'_>> {
     out
 }
 
-/// One `globals.<group>.<element>` read [`scan_globals`] found; the span covers the prefix too.
-pub struct GlobalRead<'a> {
+/// One `variables.<group>.<element>` read [`scan_variables`] found; the span covers the prefix too.
+pub struct VariableRead<'a> {
     pub start: usize,
     pub end: usize,
     pub name: &'a str,
 }
 
-/// Scan `source` for `globals.<group>.<element>` reads, on the same word-boundary rule.
-pub fn scan_globals(source: &str) -> Vec<GlobalRead<'_>> {
-    const PREFIX: &str = "globals.";
+/// Scan `source` for `variables.<group>.<element>` reads, on the same word-boundary rule.
+pub fn scan_variables(source: &str) -> Vec<VariableRead<'_>> {
+    const PREFIX: &str = "variables.";
     let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
     let bytes = source.as_bytes();
     let mut out = Vec::new();
@@ -312,7 +312,7 @@ pub fn scan_globals(source: &str) -> Vec<GlobalRead<'_>> {
             end += 1;
         }
         if end > name_start && !bytes[name_start].is_ascii_digit() {
-            // Every global is `group.element`, so one identifier alone names nothing.
+            // Every variable is `group.element`, so one identifier alone names nothing.
             let Some(el_start) = (bytes.get(end) == Some(&b'.')).then(|| end + 1) else {
                 i = end;
                 continue;
@@ -325,7 +325,7 @@ pub fn scan_globals(source: &str) -> Vec<GlobalRead<'_>> {
                 i = end;
                 continue;
             }
-            out.push(GlobalRead { start, end: el_end, name: &source[name_start..el_end] });
+            out.push(VariableRead { start, end: el_end, name: &source[name_start..el_end] });
             i = el_end;
         }
     }
@@ -438,7 +438,7 @@ pub struct NodeManifest {
     /// Declared params; the runtime `ParamGroups` is built on demand by [`Self::default_params`].
     pub params: &'static [ParamDecl],
     /// This type is a SOURCE: it makes frames on its own schedule, so `common.autotrigger` and the
-    /// carried `globals.system.default_ufreq` expression both default on.
+    /// carried `variables.system.default_ufreq` expression both default on.
     pub producer: bool,
 }
 

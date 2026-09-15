@@ -45,7 +45,7 @@ export async function waitForApp(page: Page): Promise<void> {
  * What it deliberately does NOT check is the DIRTY flag. Editing anything sets it, so asserting it
  * clean would force a patch reset into all 37 specs that touch the graph — and a universal reset
  * would take the node guard above with it, since a reset can never leave a node behind to find.
- * The five globals below are all leaks a spec chooses to make; `unsaved_changes` is a byproduct of
+ * The five variables below are all leaks a spec chooses to make; `unsaved_changes` is a byproduct of
  * doing any work at all.
  */
 export async function expectPristineWorkspace(page: Page): Promise<void> {

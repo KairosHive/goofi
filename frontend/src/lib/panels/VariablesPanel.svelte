@@ -2,13 +2,13 @@
 	import { tick } from 'svelte';
 	import type { PanelProps } from 'panelty';
 	import { graph } from '$lib/stores/graph.svelte';
-	import { effectiveLock, groupedGlobals, isValidIdentifier, type GlobalType, type GlobalView } from '$lib/crdt/graphDoc';
+	import { effectiveLock, groupedVariables, isValidIdentifier, type VariableType, type VariableView } from '$lib/crdt/graphDoc';
 	import { Button, Icon, IconButton, MODE_ATTRS, NumberInput, ScrollArea, Select, TextInput, Toggle } from '$lib/ui';
 
 	let {}: PanelProps = $props();
 	const g = graph();
-	const globals = $derived(g.globals);
-	const groups = $derived(groupedGlobals(globals, g.globalGroups));
+	const variables = $derived(g.variables);
+	const groups = $derived(groupedVariables(variables, g.variableGroups));
 	let panel: HTMLDivElement;
 	let open = $state<Record<string, boolean>>({});
 	let editing = $state<string | null>(null);
@@ -19,10 +19,10 @@
 
 	$effect(() => {
 		const name = focusEntry;
-		if (name && globals.some((entry) => entry.name === name)) {
+		if (name && variables.some((entry) => entry.name === name)) {
 			focusEntry = null;
 			void tick().then(() => {
-				const input = panel.querySelector<HTMLInputElement>(`[data-name="${name}"] [data-testid="global-name"]`);
+				const input = panel.querySelector<HTMLInputElement>(`[data-name="${name}"] [data-testid="variable-name"]`);
 				input?.focus();
 				input?.select();
 			});
@@ -48,7 +48,7 @@
 		busy = true;
 		error = '';
 		try {
-			editGroup(await g.addGlobalGroup());
+			editGroup(await g.addVariableGroup());
 		} catch (reason) {
 			report(reason);
 		} finally {
@@ -68,7 +68,7 @@
 			return;
 		}
 		try {
-			await g.renameGlobalGroup(from, to);
+			await g.renameVariableGroup(from, to);
 			open[to] = open[from] === true;
 			delete open[from];
 			editing = null;
@@ -82,7 +82,7 @@
 		busy = true;
 		error = '';
 		try {
-			focusEntry = await g.addGlobalEntry(group);
+			focusEntry = await g.addVariableEntry(group);
 		} catch (reason) {
 			report(reason);
 		} finally {
@@ -90,7 +90,7 @@
 		}
 	}
 
-	function commitValue(entry: GlobalView, raw: string | number | boolean): void {
+	function commitValue(entry: VariableView, raw: string | number | boolean): void {
 		let value: number | string | boolean;
 		if (entry.type === 'bool') value = raw === true;
 		else if (entry.type === 'string') value = String(raw);
@@ -99,30 +99,30 @@
 			if (!Number.isFinite(number)) return;
 			value = entry.type === 'int' ? Math.round(number) : number;
 		}
-		void g.setGlobalValue(entry.name, value).catch(report);
+		void g.setVariableValue(entry.name, value).catch(report);
 	}
 
-	function commitName(entry: GlobalView, raw: string): void {
+	function commitName(entry: VariableView, raw: string): void {
 		const name = raw.trim();
-		if (name !== entry.element) void g.renameGlobal(entry.name, `${entry.group}.${name}`).catch(report);
+		if (name !== entry.element) void g.renameVariable(entry.name, `${entry.group}.${name}`).catch(report);
 	}
 </script>
 
-<div class="wrap" data-testid="globals-panel" bind:this={panel}>
+<div class="wrap" data-testid="variables-panel" bind:this={panel}>
 	<ScrollArea>
 		<div class="gp-body">
 			{#each groups as grp (grp.group)}
 				{@const controlled = grp.entries.some((entry) => entry.control)}
 				{@const lock = { ...grp.lock, config: grp.lock.config || controlled }}
-				<section class="grp" data-testid="global-group" data-group={grp.group}
+				<section class="grp" data-testid="variable-group" data-group={grp.group}
 					data-lock-config={lock.config} data-lock-value={grp.lock.value}>
 					<div class="grp-head">
 						<button class="grp-toggle" aria-label={`${open[grp.group] ? 'Collapse' : 'Expand'} ${grp.group}`}
-							aria-expanded={open[grp.group] === true} data-testid="global-group-toggle"
+							aria-expanded={open[grp.group] === true} data-testid="variable-group-toggle"
 							onclick={() => (open[grp.group] = !open[grp.group])}></button>
 						<span class="grp-caret"><Icon name={open[grp.group] ? 'chevron-down' : 'chevron-right'} /></span>
 						{#if editing === grp.group}
-							<input {...MODE_ATTRS.search} class="group-name-input" data-testid="global-group-name"
+							<input {...MODE_ATTRS.search} class="group-name-input" data-testid="variable-group-name"
 								aria-label="Group name" bind:value={groupName} use:selectName
 								onblur={() => void renameGroup(grp.group)}
 								onkeydown={(event) => {
@@ -133,7 +133,7 @@
 							<span class="grp-name">{grp.group}</span>
 							{#if !lock.config}
 								<IconButton variant="ghost" size="sm" label={`Rename ${grp.group}`} title="Rename group"
-									class="grp-edit" data-testid="global-group-edit" onclick={() => editGroup(grp.group)}><Icon name="pencil" /></IconButton>
+									class="grp-edit" data-testid="variable-group-edit" onclick={() => editGroup(grp.group)}><Icon name="pencil" /></IconButton>
 							{/if}
 						{/if}
 						<span class="grp-tags">
@@ -150,49 +150,49 @@
 						<div class="grp-body">
 							{#each grp.entries as entry (entry.name)}
 								{@const held = effectiveLock(entry, lock)}
-								<div class="entry" data-testid="global-row" data-name={entry.name}
+								<div class="entry" data-testid="variable-row" data-name={entry.name}
 									data-lock-config={held.config} data-lock-value={held.value}
 									data-control={entry.control?.kind}>
 									<div class="entry-name">
 										{#if held.config}
 											<span class="fixed">{entry.element}</span>
 										{:else}
-											<TextInput inputmode="search" data-testid="global-name" aria-label="Entry name"
+											<TextInput inputmode="search" data-testid="variable-name" aria-label="Entry name"
 												value={entry.element} autocomplete="off" onChange={(value) => commitName(entry, value)} />
 										{/if}
 									</div>
 									<div class="entry-value">
 										{#if held.value || entry.source}
-											<span class="ro-value" data-testid="global-value">{String(entry.value)}</span>
+											<span class="ro-value" data-testid="variable-value">{String(entry.value)}</span>
 										{:else if entry.type === 'bool'}
-											<Toggle data-testid="global-value" value={entry.value === true} onChange={(value) => commitValue(entry, value)} />
+											<Toggle data-testid="variable-value" value={entry.value === true} onChange={(value) => commitValue(entry, value)} />
 										{:else if entry.type === 'string'}
-											<TextInput inputmode="search" data-testid="global-value" aria-label="Entry value"
+											<TextInput inputmode="search" data-testid="variable-value" aria-label="Entry value"
 												value={String(entry.value)} autocomplete="off" onChange={(value) => commitValue(entry, value)} />
 										{:else}
-											<NumberInput data-testid="global-value" aria-label="Entry value" value={Number(entry.value)}
+											<NumberInput data-testid="variable-value" aria-label="Entry value" value={Number(entry.value)}
 												onChange={(value) => commitValue(entry, value)} />
 										{/if}
 									</div>
-									<Select data-testid="global-type" aria-label="Entry type" value={entry.type}
+									<Select data-testid="variable-type" aria-label="Entry type" value={entry.type}
 										disabled={held.config || held.value || !!entry.source}
 										options={['float', 'int', 'bool', 'string']}
-										onChange={(value) => void g.setGlobalType(entry.name, value as GlobalType).catch(report)} />
+										onChange={(value) => void g.setVariableType(entry.name, value as VariableType).catch(report)} />
 									{#if !held.config}
-										<IconButton variant="ghost" size="sm" data-testid="global-delete" title="Delete entry"
-											label={`Delete ${entry.name}`} onclick={() => void g.removeGlobal(entry.name).catch(report)}><Icon name="x" /></IconButton>
+										<IconButton variant="ghost" size="sm" data-testid="variable-delete" title="Delete entry"
+											label={`Delete ${entry.name}`} onclick={() => void g.removeVariable(entry.name).catch(report)}><Icon name="x" /></IconButton>
 									{/if}
 								</div>
 							{/each}
 							{#if !lock.config}
-								<Button class="add-row" variant="ghost" size="sm" data-testid="global-add-in" disabled={busy}
+								<Button class="add-row" variant="ghost" size="sm" data-testid="variable-add-in" disabled={busy}
 									onclick={() => void addEntry(grp.group)}><Icon name="plus" />entry</Button>
 							{/if}
 						</div>
 					{/if}
 				</section>
 			{/each}
-			<Button class="add-row new-group" variant="ghost" size="sm" data-testid="global-add-group-btn"
+			<Button class="add-row new-group" variant="ghost" size="sm" data-testid="variable-add-group-btn"
 				disabled={busy} onclick={() => void addGroup()}><Icon name="plus" />group</Button>
 			{#if error}<p class="error" role="alert">{error}</p>{/if}
 		</div>

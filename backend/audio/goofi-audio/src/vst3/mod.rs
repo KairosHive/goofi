@@ -394,7 +394,7 @@ impl AudioEngine {
     /// taken. A registration from the same binary at the same stamp is kept.
     fn register_plugin(&mut self, vendor: &str, binary: &Path, stamp: Stamp, class: ClassInfo) -> ScannedType {
         let Some(bare) = camel(&class.name) else {
-            let reason = format!("`{}` is not a legal name: {}", class.name, goofi_core::globals::NAME_RULE);
+            let reason = format!("`{}` is not a legal name: {}", class.name, goofi_core::variables::NAME_RULE);
             return ScannedType { type_name: class.name, stamp: None, outcome: Scanned::Unavailable(reason) };
         };
         let cid: TUID = class.cid.map(|b| b as std::ffi::c_char);
@@ -579,7 +579,7 @@ fn group_name(s: &str) -> Option<String> {
         true => return None,
         false => name[..1].to_ascii_lowercase() + &name[1..],
     };
-    goofi_core::globals::is_valid_name(&name).then_some(name)
+    goofi_core::variables::is_valid_name(&name).then_some(name)
 }
 
 /// The `room` params worth showing, out of everything the plugin offers. A named unit's params come
@@ -626,11 +626,11 @@ fn camel(s: &str) -> Option<String> {
         .filter(|w| !w.is_empty())
         .map(|w| w[..1].to_ascii_uppercase() + &w[1..])
         .collect();
-    goofi_core::globals::is_valid_name(&name).then_some(name)
+    goofi_core::variables::is_valid_name(&name).then_some(name)
 }
 
 fn lower_camel(s: &str) -> Option<String> {
-    camel(s).map(|n| n[..1].to_ascii_lowercase() + &n[1..]).filter(|n| goofi_core::globals::is_valid_name(n))
+    camel(s).map(|n| n[..1].to_ascii_lowercase() + &n[1..]).filter(|n| goofi_core::variables::is_valid_name(n))
 }
 
 fn numbered(base: &str, i: usize) -> String {

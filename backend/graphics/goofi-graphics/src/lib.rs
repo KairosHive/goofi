@@ -135,11 +135,11 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
 }
 
 fn width(m: &NodeManifest) -> ParamDecl {
-    size_decl("width", "globals.system.default_width", m)
+    size_decl("width", "variables.system.default_width", m)
 }
 
 fn height(m: &NodeManifest) -> ParamDecl {
-    size_decl("height", "globals.system.default_height", m)
+    size_decl("height", "variables.system.default_height", m)
 }
 
 /// The universal `common` group every graphics node carries; a third param is added here and

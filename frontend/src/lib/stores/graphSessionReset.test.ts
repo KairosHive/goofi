@@ -11,7 +11,7 @@ import { typeInfo } from '$lib/test/typeInfo';
  * A fresh backend session is a GENERATION boundary, not merely a document swap.
  *
  * `SyncClient.reset()` correctly hands the store an empty replica — but the Svelte projections
- * assembled from the OLD document (`nodes`, `links`, `globals` — and the per-slot
+ * assembled from the OLD document (`nodes`, `links`, `variables` — and the per-slot
  * viewer state each node record carries) are plain state that nothing clears. Reconciliation runs
  * only from the doc observer, and only when `txn.changed.size > 0`.
  *
@@ -45,7 +45,7 @@ describe('GraphStore — a new backend session clears what the old one drew', ()
 
 		expect(g.nodes, 'nodes').toEqual([]);
 		expect(g.links, 'links').toEqual([]);
-		expect(g.globals, 'globals').toEqual([]);
+		expect(g.variables, 'variables').toEqual([]);
 		expect(g.sessionEpoch, 'the startup hook fired once per server session').toBe(2);
 		expect(g.nodeById('n1'), 'and no node record survives to carry its view state').toBeNull();
 

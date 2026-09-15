@@ -20,14 +20,14 @@ use tokio::sync::broadcast;
 pub type SlotKey = (Uid, String);
 /// A unique id per `/data` connection, so its spec contribution can be tracked + removed.
 pub type ConnId = u64;
-/// One global following this slot, and the number it reads out of each frame.
+/// One variable following this slot, and the number it reads out of each frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tap {
-    pub global: String,
+    pub variable: String,
     pub index: Option<usize>,
 }
-/// What a tap delivers: the global, and the value its frame held.
-pub type Followed = (String, goofi_core::globals::GlobalValue);
+/// What a tap delivers: the variable, and the value its frame held.
+pub type Followed = (String, goofi_core::variables::VariableValue);
 
 /// Flatten every connection's `ViewSpec`s into the single list the planner merges; a slot nobody
 /// has declared for folds to the undeclared preview rather than to the full frame.
@@ -38,7 +38,7 @@ fn union_specs(by_conn: &HashMap<ConnId, Vec<ViewSpec>>) -> Vec<ViewSpec> {
 
 struct SlotReducer {
     specs: Arc<Mutex<HashMap<ConnId, Vec<ViewSpec>>>>,
-    /// The globals that follow this slot, fed the RAW frame — never a reduction.
+    /// The variables that follow this slot, fed the RAW frame — never a reduction.
     taps: Arc<Mutex<Vec<Tap>>>,
     /// `Bytes` so the socket task forwards the SHARED buffer — a per-subscriber copy undoes dedup.
     tx: broadcast::Sender<Bytes>,
@@ -47,7 +47,7 @@ struct SlotReducer {
     /// Serve generation: bumped on every spec change and subscriber join, so the loop re-serves
     /// the current frame once even when the producer has not emitted.
     gen: Arc<AtomicU64>,
-    /// The latest frame as it arrived — what serves a re-attaching viewer, and what the globals
+    /// The latest frame as it arrived — what serves a re-attaching viewer, and what the variables
     /// following this slot read. Reduced only where nothing but viewers is watching.
     latest: Arc<Mutex<Option<goofi_core::Data>>>,
     /// The last frame that arrived at FULL resolution. A producer that shrinks its output for the
@@ -77,7 +77,7 @@ pub struct SlotReducers {
     /// One iceoryx2 node behind every feed: the reducers are ONE port owner, and a node per feed
     /// made each viewer's attach mint a node directory — a create that can fail hard on Windows.
     iox: SharedIox,
-    /// Where every tap's pick goes: the follower, which writes the global and broadcasts.
+    /// Where every tap's pick goes: the follower, which writes the variable and broadcasts.
     follow: std::sync::mpsc::Sender<Followed>,
 }
 
@@ -93,7 +93,7 @@ impl SlotReducers {
     }
 
     /// Declare every followed slot at once, from settled state: a slot in `taps` feeds its
-    /// globals from here on, and every other slot feeds none.
+    /// variables from here on, and every other slot feeds none.
     pub fn set_taps(&self, taps: HashMap<SlotKey, Vec<Tap>>) {
         let mut map = self.inner.lock().unwrap();
         for (key, reducer) in map.iter() {
@@ -386,7 +386,7 @@ fn spawn_reducer(
                 if let (false, Some(d)) = (taps.is_empty(), latest.lock().unwrap().clone()) {
                     for tap in taps {
                         if let Some(v) = pick(&d, tap.index) {
-                            let _ = follow.send((tap.global, v));
+                            let _ = follow.send((tap.variable, v));
                         }
                     }
                 }
@@ -397,7 +397,7 @@ fn spawn_reducer(
             if fresh && full.lock().unwrap().is_some() {
                 full_res = false;
             }
-            // A demand is what a reader ASKED for: the raw frame for a global or a snapshot, and a
+            // A demand is what a reader ASKED for: the raw frame for a variable or a snapshot, and a
             // box for a declared viewer. A reader that declared nothing asked for no pixels, so it
             // gets one texel — never the whole frame, which is the most expensive thing an engine
             // can be told to make.
@@ -521,10 +521,10 @@ impl Peek {
 
 /// The one number a tap reads out of a frame: the indexed element of an array, the only element
 /// of a one-element array, or a string whole. A wider array with no index answers nothing.
-fn pick(d: &goofi_core::Data, index: Option<usize>) -> Option<goofi_core::globals::GlobalValue> {
-    use goofi_core::globals::GlobalValue;
+fn pick(d: &goofi_core::Data, index: Option<usize>) -> Option<goofi_core::variables::VariableValue> {
+    use goofi_core::variables::VariableValue;
     match d.value() {
-        goofi_core::Value::Str(s) => Some(GlobalValue::Str(s.to_string())),
+        goofi_core::Value::Str(s) => Some(VariableValue::Str(s.to_string())),
         goofi_core::Value::Array(a) => {
             let bytes = a.as_bytes();
             let i = match index {
@@ -534,7 +534,7 @@ fn pick(d: &goofi_core::Data, index: Option<usize>) -> Option<goofi_core::global
             };
             let start = i.checked_mul(4)?;
             let chunk: [u8; 4] = bytes.get(start..start.checked_add(4)?)?.try_into().ok()?;
-            Some(GlobalValue::Float(f32::from_le_bytes(chunk) as f64))
+            Some(VariableValue::Float(f32::from_le_bytes(chunk) as f64))
         }
         _ => None,
     }

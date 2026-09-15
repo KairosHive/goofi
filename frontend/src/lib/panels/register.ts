@@ -7,7 +7,7 @@ import NodeEditorPanel from './NodeEditorPanel.svelte';
 import InspectorPanel from './InspectorPanel.svelte';
 import ViewerPanel from './ViewerPanel.svelte';
 import ConsolePanel from './ConsolePanel.svelte';
-import GlobalsPanel from './GlobalsPanel.svelte';
+import VariablesPanel from './VariablesPanel.svelte';
 import ControlPanel from './ControlPanel.svelte';
 import AgentPanel from './AgentPanel.svelte';
 import RecorderPanel from './RecorderPanel.svelte';
@@ -18,7 +18,7 @@ const components: Record<PanelTypeId, Component<PanelProps>> = {
 	inspector: InspectorPanel,
 	viewer: ViewerPanel,
 	console: ConsolePanel,
-	globals: GlobalsPanel,
+	variables: VariablesPanel,
 	control: ControlPanel,
 	agent: AgentPanel,
 	recorder: RecorderPanel

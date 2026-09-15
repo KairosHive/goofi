@@ -7,10 +7,10 @@ import {
 	linkViews,
 	facadeFaces,
 	docParams,
-	globalViews,
-	globalGroupLocks,
+	variableViews,
+	variableGroupLocks,
 	effectiveLock,
-	groupedGlobals,
+	groupedVariables,
 	isValidIdentifier,
 	isValidName,
 	arrangementTabs,
@@ -35,7 +35,7 @@ function seedDoc(): Doc {
 			b: { type: 'Buffer', name: 'buf0' }
 		},
 		links: [{ node_out: 'a', slot_out: 'out', node_in: 'b', slot_in: 'data' }],
-		globals: {},
+		variables: {},
 		arrangement: {}
 	};
 }
@@ -149,7 +149,7 @@ describe('graphDoc readers', () => {
 		// half-drawn graph reports that better than a blank page does.
 		expect(nodeViews({})).toEqual([]);
 		expect(linkViews({ links: 'not an array' })).toEqual([]);
-		expect(globalViews({ globals: null })).toEqual([]);
+		expect(variableViews({ variables: null })).toEqual([]);
 		expect(facadeFaces({ nodes: 7 }).size).toBe(0);
 	});
 });
@@ -184,11 +184,11 @@ describe('graphDoc.setParamSource — the test-seed source write', () => {
 	});
 });
 
-describe('graphDoc globals', () => {
-	it('reads global views (system-first, typed, with the lock each carries)', () => {
+describe('graphDoc variables', () => {
+	it('reads variable views (system-first, typed, with the lock each carries)', () => {
 		const doc: Doc = {
 			...seedDoc(),
-			globals: {
+			variables: {
 				'system.default_ufreq': { value: 30, type: 'float' },
 				'system.goofi_home': { value: '/home/u/.goofi', type: 'string', lock: { value: true } },
 				'patch.subject': { value: 'P07', type: 'string' },
@@ -197,13 +197,13 @@ describe('graphDoc globals', () => {
 					type: 'float',
 					control: { kind: 'knob', min: 0, max: 1, x: 2, y: 1, w: 2, h: 2 }
 				},
-				// Every global is `group.element`; one without a group is malformed and is skipped,
+				// Every variable is `group.element`; one without a group is malformed and is skipped,
 				// exactly as one with an unreadable type is.
 				loose: { value: 1, type: 'float' }
 			}
 		};
 		const free = { config: false, value: false };
-		expect(globalViews(doc)).toEqual([
+		expect(variableViews(doc)).toEqual([
 			{ name: 'system.default_ufreq', group: 'system', element: 'default_ufreq', value: 30, type: 'float', control: undefined, lock: free },
 			{ name: 'system.goofi_home', group: 'system', element: 'goofi_home', value: '/home/u/.goofi', type: 'string', control: undefined, lock: { config: false, value: true } },
 			{ name: 'patch.subject', group: 'patch', element: 'subject', value: 'P07', type: 'string', control: undefined, lock: free },
@@ -214,16 +214,16 @@ describe('graphDoc globals', () => {
 	it('keeps explicit groups before groups inferred from entries, including empty groups', () => {
 		const doc: Doc = {
 			...seedDoc(),
-			globals: {
+			variables: {
 				'mixer.gain': { value: 1, type: 'float' },
 				'patch.subject': { value: 'P07', type: 'string' },
 				'mixer.pan': { value: 0, type: 'float', lock: { value: true } }
 			},
-			global_groups: { system: { lock: { config: true } }, mixer: { lock: { config: true } } }
+			variable_groups: { system: { lock: { config: true } }, mixer: { lock: { config: true } } }
 		};
-		const views = globalViews(doc);
-		const locks = globalGroupLocks(doc);
-		const groups = groupedGlobals(views, locks);
+		const views = variableViews(doc);
+		const locks = variableGroupLocks(doc);
+		const groups = groupedVariables(views, locks);
 		expect(groups.map((g) => [g.group, g.entries.map((e) => e.element), g.lock])).toEqual([
 			['system', [], { config: true, value: false }],
 			['mixer', ['gain', 'pan'], { config: true, value: false }],
@@ -250,15 +250,15 @@ describe('graphDoc globals', () => {
 		expect(isValidIdentifier('a b')).toBe(false);
 		expect(isValidIdentifier('a.b')).toBe(false);
 		// A keyword passes the character rule and fails the parser, and every namespace is read as
-		// an ATTRIBUTE in an expression — `globals.gain`, `nd('chain').drain` — so all refuse one.
+		// an ATTRIBUTE in an expression — `variables.gain`, `nd('chain').drain` — so all refuse one.
 		expect(isValidIdentifier('drain')).toBe(true);
 		expect(isValidIdentifier('class')).toBe(false);
 		expect(isValidIdentifier('None')).toBe(false);
 		expect(isValidIdentifier('nd()')).toBe(false);
 		expect(isValidIdentifier("it's")).toBe(false);
 		expect(isValidIdentifier('lambda')).toBe(false);
-		// `globals` is goofi's own namespace token, reserved for globals AND node names alike.
-		expect(isValidIdentifier('globals')).toBe(false);
+		// `variables` is goofi's own namespace token, reserved for variables AND node names alike.
+		expect(isValidIdentifier('variables')).toBe(false);
 	});
 
 	/* The arrangement parser. It reads a tree straight into the shape the panel system draws, so it

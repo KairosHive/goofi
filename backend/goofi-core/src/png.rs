@@ -1,5 +1,5 @@
 //! The pixels inside a drawing widget's value. A pad's value is a `data:image/png;base64,…` URL —
-//! a STRING, so it crosses the wire and saves into the patch like every other global — and this is
+//! a STRING, so it crosses the wire and saves into the patch like every other variable — and this is
 //! the one door back to its texels.
 //!
 //! It reads what a browser canvas writes and says no to the rest: 8 bits a sample, no interlacing.

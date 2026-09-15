@@ -12,7 +12,7 @@ export type PanelTypeId =
 	| 'inspector'
 	| 'viewer'
 	| 'console'
-	| 'globals'
+	| 'variables'
 	| 'control'
 	| 'agent'
 	| 'recorder';
@@ -61,8 +61,8 @@ export const PANEL_TYPES: readonly PanelTypeInfo[] = [
 	{ id: 'inspector', title: 'Inspector', icon: 'sliders-horizontal', acceptsNode: true, doc: 'the parameters, metadata and errors of one node' },
 	{ id: 'viewer', title: 'Viewer', icon: 'activity', acceptsNode: true, doc: 'live frames from one output slot, drawn by `state.kind`' },
 	{ id: 'console', title: 'Console', icon: 'terminal', acceptsNode: true, doc: 'the patch log; a bound node filters it to that node' },
-	{ id: 'globals', title: 'Globals', icon: 'globe', acceptsNode: false, doc: 'the patch globals, which any expression can read' },
-	{ id: 'control', title: 'Control', icon: 'sliders-vertical', acceptsNode: false, doc: 'knobs, sliders and text widgets over one group of globals' },
+	{ id: 'variables', title: 'Variables', icon: 'globe', acceptsNode: false, doc: 'the patch variables, which any expression can read' },
+	{ id: 'control', title: 'Control', icon: 'sliders-vertical', acceptsNode: false, doc: 'knobs, sliders and text widgets over one group of variables' },
 	{ id: 'agent', title: 'Agent', icon: 'bot', acceptsNode: false, doc: 'a terminal on an agent harness, running in the patch workspace' },
 	{ id: 'recorder', title: 'Recorder', icon: 'circle-dot', acceptsNode: true, doc: 'capture the output slots of any node to disk, on one clock' },
 ];
@@ -90,7 +90,7 @@ export type ControlKindId =
 
 export interface ControlKindInfo {
 	readonly id: ControlKindId;
-	/** The value type a widget of this kind draws, which is the global's type at birth. */
+	/** The value type a widget of this kind draws, which is the variable's type at birth. */
 	readonly type: 'float' | 'int' | 'bool' | 'string';
 	/** The box it is born in, in grid units. */
 	readonly w: number;

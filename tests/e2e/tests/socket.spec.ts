@@ -206,10 +206,10 @@ test.describe('the control socket', () => {
 				await page.getByTestId('param-search').fill('');
 			});
 
-			await test.step('a global is patch state, and lands the same way', async () => {
-				await page.evaluate(() => (window as any).goofi.commands.addGlobal('patch.seam_probe', 7, 'float'));
+			await test.step('a variable is patch state, and lands the same way', async () => {
+				await page.evaluate(() => (window as any).goofi.commands.addVariable('patch.seam_probe', 7, 'float'));
 				await expect
-					.poll(async () => (await backendDoc(page)).globals['patch.seam_probe']?.value)
+					.poll(async () => (await backendDoc(page)).variables['patch.seam_probe']?.value)
 					.toBe(7);
 			});
 
@@ -217,8 +217,8 @@ test.describe('the control socket', () => {
 				const before = await backendNodes(page);
 				await undo(page);
 				await expect
-					.poll(async () => (await backendDoc(page)).globals['patch.seam_probe'], {
-						message: 'the undone global is gone from the manager'
+					.poll(async () => (await backendDoc(page)).variables['patch.seam_probe'], {
+						message: 'the undone variable is gone from the manager'
 					})
 					.toBeUndefined();
 				expect(await backendNodes(page), 'and nothing else moved').toEqual(before);
@@ -227,7 +227,7 @@ test.describe('the control socket', () => {
 
 			await test.step('…and redo puts it back, through the same door', async () => {
 				await redo(page);
-				await expect.poll(async () => (await backendDoc(page)).globals['patch.seam_probe']?.value).toBe(7);
+				await expect.poll(async () => (await backendDoc(page)).variables['patch.seam_probe']?.value).toBe(7);
 				await expectAgreement(page, 'after redo');
 			});
 
@@ -542,7 +542,7 @@ test.describe('the control socket', () => {
 			await test.step('a drawing restores its pixels through undo, redo and replacement', async () => {
 				await page.evaluate(async () => {
 					const g = (window as any).goofi;
-					await g.commands.addGlobal('review.picture', '', 'string', { kind: 'paint', x: 0, y: 0, w: 5, h: 5 });
+					await g.commands.addVariable('review.picture', '', 'string', { kind: 'paint', x: 0, y: 0, w: 5, h: 5 });
 					const panel = g.query.panels()[0];
 					g.commands.setPanelType(panel.panelId, 'control');
 					g.commands.setPanelState(panel.panelId, { group: 'review' });
@@ -557,7 +557,7 @@ test.describe('the control socket', () => {
 				await page.mouse.up();
 				const picture = await canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL());
 				expect(picture).not.toBe(empty);
-				await expect.poll(async () => (await backendDoc(page)).globals['review.picture']?.value).toBe(picture);
+				await expect.poll(async () => (await backendDoc(page)).variables['review.picture']?.value).toBe(picture);
 				await undo(page);
 				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(empty);
 				await redo(page);
@@ -566,8 +566,8 @@ test.describe('the control socket', () => {
 				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(empty);
 				await undo(page);
 				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(picture);
-				await rawCall(page, 'global entry edit', { name: 'review.picture', value: empty });
-				await rawCall(page, 'global entry edit', { name: 'review.picture', value: picture });
+				await rawCall(page, 'variable entry edit', { name: 'review.picture', value: empty });
+				await rawCall(page, 'variable entry edit', { name: 'review.picture', value: picture });
 				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(picture);
 				await rawCall(page, 'control paint', {
 					group: 'review', element: 'picture', steps: 'clear\npen #ff0000\nwidth 40\ngoto 100 100\nforward 200'
@@ -575,7 +575,7 @@ test.describe('the control socket', () => {
 				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).not.toBe(picture);
 				await page.evaluate(async () => {
 					const g = (window as any).goofi;
-					await g.commands.removeGlobal('review.picture');
+					await g.commands.removeVariable('review.picture');
 				});
 			});
 
@@ -918,7 +918,7 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 	try {
 		await page.evaluate(async () => {
 			const g = (window as any).goofi;
-			await g.commands.addGlobal('desk.level', 0.5, 'float', {
+			await g.commands.addVariable('desk.level', 0.5, 'float', {
 				kind: 'knob', min: 0, max: 1, x: 0, y: 0, w: 3, h: 3
 			});
 			const panel = g.query.panels()[1];
@@ -930,7 +930,7 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		const row = page.getByTestId('param-field-frequency');
 		await expect(widget).toBeVisible();
 		await expect(row).toBeVisible();
-		const before = (await backendDoc(page)).globals['desk.level'];
+		const before = (await backendDoc(page)).variables['desk.level'];
 		const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
 		const original = await source();
 		async function dragLabel(body = false): Promise<void> {
@@ -944,9 +944,9 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		}
 		await dragLabel();
 		await page.mouse.up();
-		await expect.poll(async () => (await source()).expr).toBe('globals.desk.level');
+		await expect.poll(async () => (await source()).expr).toBe('variables.desk.level');
 		expect((await source()).mode).toBe('expression');
-		expect((await backendDoc(page)).globals['desk.level']).toEqual(before);
+		expect((await backendDoc(page)).variables['desk.level']).toEqual(before);
 		await undo(page);
 		await expect.poll(source).toEqual(original);
 		await dragLabel();
@@ -962,8 +962,8 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		await page.getByTestId('control-edit-toggle').click();
 		await dragLabel(true);
 		await page.mouse.up();
-		await expect.poll(async () => (await source()).expr).toBe('globals.desk.level');
-		expect((await backendDoc(page)).globals['desk.level']).toEqual(before);
+		await expect.poll(async () => (await source()).expr).toBe('variables.desk.level');
+		expect((await backendDoc(page)).variables['desk.level']).toEqual(before);
 		await undo(page);
 		await expect.poll(source).toEqual(original);
 		const finger = await touchSession(page);
@@ -973,12 +973,12 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		await finger.moveTo({ x: target.x + target.width / 2, y: target.y + target.height / 2 });
 		await expect(row).toHaveClass(/over/);
 		await finger.up();
-		await expect.poll(async () => (await source()).expr).toBe('globals.desk.level');
-		expect((await backendDoc(page)).globals['desk.level']).toEqual(before);
+		await expect.poll(async () => (await source()).expr).toBe('variables.desk.level');
+		expect((await backendDoc(page)).variables['desk.level']).toEqual(before);
 	} finally {
 		await clearGraph(page);
 		await closeSplit(page);
-		await page.evaluate(() => (window as any).goofi.commands.removeGlobal('desk.level'));
+		await page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.level'));
 	}
 });
 

@@ -2,7 +2,7 @@
  * GRID units, never pixels: the panel's width decides what a unit is worth. The drag LAW that turns
  * a widget lives with the widget, in `$lib/ui/knob`. */
 
-import type { GlobalType } from '$lib/crdt/graphDoc';
+import type { VariableType } from '$lib/crdt/graphDoc';
 import { CONTROL_COLUMNS, CONTROL_KINDS, type ControlKindId } from '$lib/api/vocab';
 
 export { turnedBy } from '$lib/ui/knob';
@@ -11,7 +11,7 @@ export type Kind = ControlKindId;
 export const KINDS: Kind[] = CONTROL_KINDS.map((k) => k.id);
 
 /** The value type each widget draws, so a widget asks for one thing, not two. */
-export const TYPE_OF: Record<Kind, GlobalType> = Object.fromEntries(CONTROL_KINDS.map((k) => [k.id, k.type])) as Record<Kind, GlobalType>;
+export const TYPE_OF: Record<Kind, VariableType> = Object.fromEntries(CONTROL_KINDS.map((k) => [k.id, k.type])) as Record<Kind, VariableType>;
 
 /** The box a widget is born in, in grid units. */
 export const BORN: Record<Kind, { w: number; h: number }> = Object.fromEntries(

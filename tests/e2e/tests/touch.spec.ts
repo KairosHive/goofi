@@ -263,7 +263,7 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			// still has its canvas.
 			await page.evaluate(async () => {
 				const g = (window as any).goofi;
-				await g.commands.addGlobal('desk.level', 0.5, 'float', {
+				await g.commands.addVariable('desk.level', 0.5, 'float', {
 					kind: 'knob', min: 0, max: 1, step: 0.01, x: 0, y: 0, w: 3, h: 3
 				});
 				const panel = g.query.panels()[0];
@@ -276,7 +276,7 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			await expect(knob).toBeVisible();
 			const level = () =>
 				page.evaluate(
-					() => (window as any).goofi.query.globals().find((g: { name: string }) => g.name === 'desk.level').value
+					() => (window as any).goofi.query.variables().find((g: { name: string }) => g.name === 'desk.level').value
 				);
 
 			// The claim is the GESTURE, so the finger does it: a drag up turns the knob.
@@ -324,8 +324,8 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 		await restorePanelType(page);
 		await page.evaluate(async () => {
 			const g = (window as any).goofi;
-			for (const v of g.query.globals().filter((v: { name: string }) => v.name.startsWith('desk.')))
-				await g.commands.removeGlobal(v.name);
+			for (const v of g.query.variables().filter((v: { name: string }) => v.name.startsWith('desk.')))
+				await g.commands.removeVariable(v.name);
 		});
 		await tearDown(page);
 	}

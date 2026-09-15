@@ -60,9 +60,9 @@ export class DocSeed {
 		return this.patch({ links: list });
 	}
 
-	/** One global, `{value, type, system}`. */
-	global(name: string, rec: Obj): this {
-		return this.patch({ globals: { [name]: rec } });
+	/** One variable, `{value, type, system}`. */
+	variable(name: string, rec: Obj): this {
+		return this.patch({ variables: { [name]: rec } });
 	}
 
 	arrangement(id: string, rec: Obj): this {

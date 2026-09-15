@@ -61,7 +61,7 @@ impl Envelope {
 pub enum ParamValue {
     Literal(Param),
     Expr {
-        /// Graph-rewritten source: every `nd(..)` / `globals.*` term replaced by a variable the
+        /// Graph-rewritten source: every `nd(..)` / `variables.*` term replaced by a variable the
         /// evaluator receives as a local.
         source: String,
         vars: Vec<(VarName, Var)>,

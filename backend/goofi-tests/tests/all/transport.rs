@@ -1,7 +1,7 @@
 //! The iceoryx2 transport, against real shared memory (spec §3).
 //!
 //! Every test picks its own [`Uid`] and [`instance`] scopes the target by pid: a service name is
-//! global to the MACHINE, and `open_or_create` means a colliding loser reads the winner's config.
+//! variable to the MACHINE, and `open_or_create` means a colliding loser reads the winner's config.
 
 use std::sync::Arc;
 use std::time::Duration;
