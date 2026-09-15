@@ -1,13 +1,13 @@
-//! Patch-scoped globals — named typed scalars shared across a patch.
+//! Patch-scoped variables — named typed scalars shared across a patch.
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-/// A patch global's value — a typed scalar. The serde shape is the `{type, value}` of the `.gfi`
+/// A patch variable's value — a typed scalar. The serde shape is the `{type, value}` of the `.gfi`
 /// and the doc: the tag is what preserves float-vs-int through JSON's whole-float normalization.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "lowercase")]
-pub enum GlobalValue {
+pub enum VariableValue {
     Float(f64),
     Int(i64),
     Bool(bool),
@@ -15,32 +15,32 @@ pub enum GlobalValue {
     Str(String),
 }
 
-impl GlobalValue {
+impl VariableValue {
     /// The type's name, as the doc and every op spell it.
     pub fn type_name(&self) -> &'static str {
         match self {
-            GlobalValue::Float(_) => "float",
-            GlobalValue::Int(_) => "int",
-            GlobalValue::Bool(_) => "bool",
-            GlobalValue::Str(_) => "string",
+            VariableValue::Float(_) => "float",
+            VariableValue::Int(_) => "int",
+            VariableValue::Bool(_) => "bool",
+            VariableValue::Str(_) => "string",
         }
     }
 
     /// Convert to a named type, using an empty value when conversion is not possible.
-    pub fn converted_to(&self, ty: &str) -> Option<GlobalValue> {
+    pub fn converted_to(&self, ty: &str) -> Option<VariableValue> {
         let template = match ty {
-            "float" => GlobalValue::Float(0.0),
-            "int" => GlobalValue::Int(0),
-            "bool" => GlobalValue::Bool(false),
-            "string" => GlobalValue::Str(String::new()),
+            "float" => VariableValue::Float(0.0),
+            "int" => VariableValue::Int(0),
+            "bool" => VariableValue::Bool(false),
+            "string" => VariableValue::Str(String::new()),
             _ => return None,
         };
         Some(self.clone().coerced_like(&template))
     }
 
-    /// Coerce to `template`'s variant, so an existing global's declared type stays stable on set.
-    fn coerced_like(self, template: &GlobalValue) -> GlobalValue {
-        use GlobalValue as G;
+    /// Coerce to `template`'s variant, so an existing variable's declared type stays stable on set.
+    fn coerced_like(self, template: &VariableValue) -> VariableValue {
+        use VariableValue as G;
         match (template, self) {
             (G::Float(_), G::Int(v)) => G::Float(v as f64),
             (G::Float(_), G::Bool(v)) => G::Float(if v { 1.0 } else { 0.0 }),
@@ -95,13 +95,13 @@ impl ControlKind {
     }
 
     /// The value a widget of this kind is born holding — which is also its type.
-    pub fn born_value(self) -> GlobalValue {
+    pub fn born_value(self) -> VariableValue {
         match self {
-            ControlKind::Knob | ControlKind::Slider | ControlKind::Number => GlobalValue::Float(0.0),
-            ControlKind::Toggle => GlobalValue::Bool(false),
+            ControlKind::Knob | ControlKind::Slider | ControlKind::Number => VariableValue::Float(0.0),
+            ControlKind::Toggle => VariableValue::Bool(false),
             // A drawing is a `data:image/png;base64,…` URL, which is a STRING like any other: the
             // widget draws it, an expression reads it, and nothing new crosses the wire for it.
-            ControlKind::Text | ControlKind::Dropdown | ControlKind::Paint => GlobalValue::Str(String::new()),
+            ControlKind::Text | ControlKind::Dropdown | ControlKind::Paint => VariableValue::Str(String::new()),
         }
     }
 
@@ -145,8 +145,8 @@ pub fn free_cell(taken: &[(f64, f64, f64, f64)], w: f64, h: f64) -> (f64, f64) {
     }
 }
 
-/// A global drawn in a control panel: the widget, its range, and its place in the grid. Carrying
-/// one is what makes a global an ELEMENT — there is no second list of what a panel holds.
+/// A variable drawn in a control panel: the widget, its range, and its place in the grid. Carrying
+/// one is what makes a variable an ELEMENT — there is no second list of what a panel holds.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Control {
     pub kind: ControlKind,
@@ -170,9 +170,9 @@ pub struct Control {
 
 impl Control {
     /// Whether this widget can draw `value`'s type.
-    pub fn fits(&self, value: &GlobalValue) -> bool {
+    pub fn fits(&self, value: &VariableValue) -> bool {
         use ControlKind as K;
-        use GlobalValue as G;
+        use VariableValue as G;
         match self.kind {
             K::Knob | K::Slider | K::Number => matches!(value, G::Float(_) | G::Int(_)),
             K::Toggle => matches!(value, G::Bool(_)),
@@ -181,12 +181,12 @@ impl Control {
     }
 
     /// Why this widget cannot draw `value`, in the words a refusal uses.
-    pub fn mismatch(&self, value: &GlobalValue) -> String {
+    pub fn mismatch(&self, value: &VariableValue) -> String {
         format!("a `{}` cannot draw a {}", self.kind.as_str(), value.type_name())
     }
 }
 
-/// A lock on a global or a whole group: `config` freezes the name, the type, the widget and
+/// A lock on a variable or a whole group: `config` freezes the name, the type, the widget and
 /// membership; `value` freezes the value alone. A group's lock reaches every member.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lock {
@@ -206,94 +206,94 @@ impl Lock {
     }
 }
 
-/// What a global follows: one producer output, `node.slot`, and for a frame wider than one
-/// number the index it reads. A followed global is written by the manager on every frame and by
+/// What a variable follows: one producer output, `node.slot`, and for a frame wider than one
+/// number the index it reads. A followed variable is written by the manager on every frame and by
 /// nobody else — a MIDI knob bound to a widget is one.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct GlobalSource {
+pub struct VariableSource {
     pub reference: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
 }
 
-/// A code-owned system global: its group is config-locked for life. An EPHEMERAL one is
+/// A code-owned system variable: its group is config-locked for life. An EPHEMERAL one is
 /// value-locked too — goofi derives its value, it is re-derived at every reassert, and a `.gfi`
 /// never carries it.
-pub struct GlobalDef {
+pub struct VariableDef {
     pub name: &'static str,
-    pub value: fn() -> GlobalValue,
+    pub value: fn() -> VariableValue,
     pub doc: &'static str,
     /// Whether goofi owns the value outright: nobody may set it, and no patch carries it.
     pub ephemeral: bool,
 }
 
-/// What a texture is when nothing says otherwise: the two default-size globals start here, and a
+/// What a texture is when nothing says otherwise: the two default-size variables start here, and a
 /// graphics chain with nothing to follow falls back to it.
 pub const DEFAULT_SIZE: u32 = 1024;
 
-pub static SYSTEM_GLOBALS: &[GlobalDef] = &[
-    GlobalDef {
+pub static SYSTEM_VARIABLES: &[VariableDef] = &[
+    VariableDef {
         name: "system.default_ufreq",
-        value: || GlobalValue::Float(30.0),
+        value: || VariableValue::Float(30.0),
         doc: "Default update rate (Hz) for producer nodes that have not overridden it.",
         ephemeral: false,
     },
-    GlobalDef {
+    VariableDef {
         name: "system.default_width",
-        value: || GlobalValue::Int(DEFAULT_SIZE as i64),
+        value: || VariableValue::Int(DEFAULT_SIZE as i64),
         doc: "Default texture width (pixels) for graphics nodes that make their own frames.",
         ephemeral: false,
     },
-    GlobalDef {
+    VariableDef {
         name: "system.default_height",
-        value: || GlobalValue::Int(DEFAULT_SIZE as i64),
+        value: || VariableValue::Int(DEFAULT_SIZE as i64),
         doc: "Default texture height (pixels) for graphics nodes that make their own frames.",
         ephemeral: false,
     },
-    GlobalDef {
+    VariableDef {
         name: "system.audio_rate",
-        value: || GlobalValue::Float(0.0),
+        value: || VariableValue::Float(0.0),
         doc: "The audio clock's sample rate. The audio engine says it; 0 where no engine runs.",
         ephemeral: true,
     },
-    GlobalDef {
+    VariableDef {
         name: "system.audio_channels",
-        value: || GlobalValue::Int(0),
+        value: || VariableValue::Int(0),
         doc: "How many channels the audio clock carries. The audio engine says it; 0 where no engine runs.",
         ephemeral: true,
     },
-    GlobalDef {
+    VariableDef {
         name: "system.audio_device",
-        value: || GlobalValue::Str(String::new()),
+        value: || VariableValue::Str(String::new()),
         doc: "The device driving the audio clock, empty under the external clock or where none is open.",
         ephemeral: true,
     },
-    GlobalDef {
+    VariableDef {
         name: "system.audio_driver",
-        value: || GlobalValue::Str(String::new()),
+        value: || VariableValue::Str(String::new()),
         doc: "The ASIO driver holding the process, empty where none does — one loads at a time, so it is the patch's.",
         ephemeral: true,
     },
-    GlobalDef {
+    VariableDef {
         name: "system.audio_hosts",
-        value: || GlobalValue::Str(String::new()),
+        value: || VariableValue::Str(String::new()),
         doc: "The audio APIs this build carries, comma separated. Every device name begins with one of them, so this is the whole of what a device can be chosen from.",
         ephemeral: true,
     },
-    GlobalDef {
+    VariableDef {
         name: "system.goofi_home",
-        value: || GlobalValue::Str(crate::path::to_slash(&crate::home::dir())),
+        value: || VariableValue::Str(crate::path::to_slash(&crate::home::dir())),
         doc: "The .goofi folder, where goofi keeps its own files. The machine says where it is.",
         ephemeral: true,
     },
 ];
 
-/// Python's keywords, plus goofi's own namespace token `globals`. A regex reads each as an
+/// Python's keywords, plus goofi's own namespace token `variables`. A regex reads each as an
 /// identifier and a parser does not, so a name that is one cannot be an attribute — which is the
 /// position every name here is read in.
 const RESERVED: &[&str] = &[
-    "globals", "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class",
-    "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if",
+    "variables", "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class",
+    "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "variable", "if",
     "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try",
     "while", "with", "yield",
 ];
@@ -301,7 +301,7 @@ const RESERVED: &[&str] = &[
 /// A legal name in the ONE expression namespace: `[A-Za-z_][A-Za-z0-9_]*` and not reserved.
 ///
 /// Every name an expression can spell is held to this, because an expression reads one as an
-/// ATTRIBUTE — `globals.gain`, and a sub-patch's slot in `nd('chain').drain`. A name Python cannot
+/// ATTRIBUTE — `variables.gain`, and a sub-patch's slot in `nd('chain').drain`. A name Python cannot
 /// parse there breaks every reference to it and takes the rewrite with it: the next rename has no
 /// `nd('<old>')` left to follow, so the damage cannot be undone by renaming back.
 pub fn is_valid_identifier(name: &str) -> bool {
@@ -320,8 +320,8 @@ pub fn is_valid_identifier(name: &str) -> bool {
 pub const NAME_RULE: &str =
     "a letter then letters or digits, and not a Python keyword — an expression reads a name as an attribute, and a reference spells `node.slot`";
 
-/// The group and the element of a global's name, or `None` when it is not `group.element`.
-pub fn split_global(name: &str) -> Option<(&str, &str)> {
+/// The group and the element of a variable's name, or `None` when it is not `group.element`.
+pub fn split_variable(name: &str) -> Option<(&str, &str)> {
     let (group, element) = name.split_once('.')?;
     match is_valid_identifier(group) && is_valid_identifier(element) {
         true => Some((group, element)),
@@ -329,16 +329,16 @@ pub fn split_global(name: &str) -> Option<(&str, &str)> {
     }
 }
 
-/// A legal global name: a group and an element, each an identifier. Every global is in a group.
-pub fn is_valid_global_name(name: &str) -> bool {
-    split_global(name).is_some()
+/// A legal variable name: a group and an element, each an identifier. Every variable is in a group.
+pub fn is_valid_variable_name(name: &str) -> bool {
+    split_variable(name).is_some()
 }
 
-/// What a global's name has to be, said once — it is the tail of every refusal about one.
-pub const GLOBAL_NAME_RULE: &str =
+/// What a variable's name has to be, said once — it is the tail of every refusal about one.
+pub const VARIABLE_NAME_RULE: &str =
     "a group and an element, `group.element`, each a letter or underscore then letters, digits or underscores, and neither a Python keyword";
 
-/// A legal node or slot name: `[A-Za-z][A-Za-z0-9]*` and not reserved. Narrower than a global's
+/// A legal node or slot name: `[A-Za-z][A-Za-z0-9]*` and not reserved. Narrower than a variable's
 /// identifier so that `node.slot` needs no quoting anywhere it is spelled.
 pub fn is_valid_name(name: &str) -> bool {
     if RESERVED.contains(&name) {
@@ -353,33 +353,33 @@ pub fn is_valid_name(name: &str) -> bool {
 pub const SYSTEM_GROUP: &str = "system";
 
 fn is_ephemeral(name: &str) -> bool {
-    SYSTEM_GLOBALS.iter().any(|d| d.ephemeral && d.name == name)
+    SYSTEM_VARIABLES.iter().any(|d| d.ephemeral && d.name == name)
 }
 
 fn group_of(name: &str) -> &str {
-    split_global(name).map(|(g, _)| g).unwrap_or(name)
+    split_variable(name).map(|(g, _)| g).unwrap_or(name)
 }
 
-/// The authoritative globals map. Locks decide what a caller may change, and the insertion order
+/// The authoritative variables map. Locks decide what a caller may change, and the insertion order
 /// is observable (the panel, the `.gfi` and the mirror all read it).
 #[derive(Clone)]
-pub struct GlobalStore {
-    values: IndexMap<String, GlobalValue>,
+pub struct VariableStore {
+    values: IndexMap<String, VariableValue>,
     controls: IndexMap<String, Control>,
-    sources: IndexMap<String, GlobalSource>,
+    sources: IndexMap<String, VariableSource>,
     locks: IndexMap<String, Lock>,
     groups: IndexMap<String, Lock>,
 }
 
-impl Default for GlobalStore {
-    fn default() -> GlobalStore {
-        GlobalStore::new()
+impl Default for VariableStore {
+    fn default() -> VariableStore {
+        VariableStore::new()
     }
 }
 
-impl GlobalStore {
-    pub fn new() -> GlobalStore {
-        let mut s = GlobalStore {
+impl VariableStore {
+    pub fn new() -> VariableStore {
+        let mut s = VariableStore {
             values: IndexMap::new(),
             controls: IndexMap::new(),
             sources: IndexMap::new(),
@@ -390,11 +390,11 @@ impl GlobalStore {
         s
     }
 
-    /// Back-fill any missing system global with its default — on construction and after a load —
+    /// Back-fill any missing system variable with its default — on construction and after a load —
     /// and re-lock the system group. An EPHEMERAL one is overwritten instead: goofi says what it
     /// holds, never a file.
     pub fn reassert_system(&mut self) {
-        for def in SYSTEM_GLOBALS {
+        for def in SYSTEM_VARIABLES {
             if def.ephemeral {
                 self.values.insert(def.name.to_string(), (def.value)());
                 self.locks.insert(def.name.to_string(), Lock { config: false, value: true });
@@ -405,29 +405,29 @@ impl GlobalStore {
         self.groups.insert(SYSTEM_GROUP.to_string(), Lock { config: true, value: false });
     }
 
-    pub fn get(&self, name: &str) -> Option<&GlobalValue> {
+    pub fn get(&self, name: &str) -> Option<&VariableValue> {
         self.values.get(name)
     }
     pub fn contains(&self, name: &str) -> bool {
         self.values.contains_key(name)
     }
 
-    /// Every global in order, with its OWN lock, the control record that makes it an element, and
+    /// Every variable in order, with its OWN lock, the control record that makes it an element, and
     /// the source it follows.
-    pub fn entries(&self) -> impl Iterator<Item = (&str, &GlobalValue, Lock, Option<&Control>, Option<&GlobalSource>)> {
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &VariableValue, Lock, Option<&Control>, Option<&VariableSource>)> {
         self.values.iter().map(|(k, v)| {
             (k.as_str(), v, self.locks.get(k).copied().unwrap_or_default(), self.controls.get(k), self.sources.get(k))
         })
     }
 
-    pub fn source(&self, name: &str) -> Option<&GlobalSource> {
+    pub fn source(&self, name: &str) -> Option<&VariableSource> {
         self.sources.get(name)
     }
 
-    /// Set or clear what a global follows, answering what it followed. A source is config.
-    pub fn set_source(&mut self, name: &str, source: Option<GlobalSource>) -> Result<Option<GlobalSource>, String> {
+    /// Set or clear what a variable follows, answering what it followed. A source is config.
+    pub fn set_source(&mut self, name: &str, source: Option<VariableSource>) -> Result<Option<VariableSource>, String> {
         if !self.values.contains_key(name) {
-            return Err(format!("no such global `{name}`"));
+            return Err(format!("no such variable `{name}`"));
         }
         self.config_locked(name)?;
         Ok(match source {
@@ -437,9 +437,9 @@ impl GlobalStore {
     }
 
     /// The follower's own write: what the source delivered, coerced to the type held. It answers
-    /// whether the value CHANGED, and a value-locked global takes nothing, silently.
-    pub fn follow(&mut self, name: &str, value: GlobalValue) -> bool {
-        // A global with no source has no follower: a pick already in flight when one is cleared
+    /// whether the value CHANGED, and a value-locked variable takes nothing, silently.
+    pub fn follow(&mut self, name: &str, value: VariableValue) -> bool {
+        // A variable with no source has no follower: a pick already in flight when one is cleared
         // would otherwise land after, and overwrite the value the clearing author then typed.
         if is_ephemeral(name) || self.lock_of(name).value || !self.sources.contains_key(name) {
             return false;
@@ -456,7 +456,7 @@ impl GlobalStore {
     /// An ENGINE's own published fact, which is why it passes the value lock: the lock exists to
     /// keep every other writer out, and the engine is the one it is held for. Only an ephemeral
     /// name takes one. Answers whether the value MOVED, which is what a rebind is worth doing for.
-    pub fn publish(&mut self, name: &str, value: GlobalValue) -> bool {
+    pub fn publish(&mut self, name: &str, value: VariableValue) -> bool {
         if !is_ephemeral(name) {
             return false;
         }
@@ -474,12 +474,12 @@ impl GlobalStore {
         self.groups.iter().map(|(g, l)| (g.as_str(), *l))
     }
 
-    /// Whether a `.gfi` must leave `name` out: an ephemeral global's value is goofi's own.
+    /// Whether a `.gfi` must leave `name` out: an ephemeral variable's value is goofi's own.
     pub fn is_ephemeral(&self, name: &str) -> bool {
         is_ephemeral(name)
     }
 
-    /// A global's OWN lock, apart from its group's.
+    /// A variable's OWN lock, apart from its group's.
     pub fn own_lock(&self, name: &str) -> Lock {
         self.locks.get(name).copied().unwrap_or_default()
     }
@@ -493,13 +493,13 @@ impl GlobalStore {
         self.locks.get(name).copied().unwrap_or_default().or(self.group_lock(group_of(name)))
     }
 
-    /// Set a global's own lock, answering the one it held. The system group's are not a caller's.
+    /// Set a variable's own lock, answering the one it held. The system group's are not a caller's.
     pub fn set_lock(&mut self, name: &str, lock: Lock) -> Result<Lock, String> {
         if group_of(name) == SYSTEM_GROUP {
             return Err(format!("`{name}` is goofi's own; its lock is not yours to set"));
         }
         if !self.values.contains_key(name) {
-            return Err(format!("no such global `{name}`"));
+            return Err(format!("no such variable `{name}`"));
         }
         let old = self.locks.get(name).copied().unwrap_or_default();
         match lock.is_default() {
@@ -515,7 +515,7 @@ impl GlobalStore {
             return Err(format!("`{SYSTEM_GROUP}` is goofi's own; its lock is not yours to set"));
         }
         if !is_valid_identifier(group) {
-            return Err(format!("invalid group name `{group}`: {GLOBAL_NAME_RULE}"));
+            return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
         }
         Ok(match lock {
             Some(lock) => self.groups.insert(group.to_string(), lock),
@@ -526,10 +526,10 @@ impl GlobalStore {
     /// Create an empty group at its saved position.
     pub fn add_group(&mut self, group: &str, at: Option<usize>) -> Result<(), String> {
         if !is_valid_identifier(group) {
-            return Err(format!("invalid group name `{group}`: {GLOBAL_NAME_RULE}"));
+            return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
         }
         if self.has_group(group) {
-            return Err(format!("global group `{group}` already exists"));
+            return Err(format!("variable group `{group}` already exists"));
         }
         let at = at.unwrap_or(self.groups.len()).min(self.groups.len());
         self.groups.shift_insert(at, group.to_string(), Lock::default());
@@ -543,19 +543,19 @@ impl GlobalStore {
     /// Remove an empty, unlocked group.
     pub fn remove_group(&mut self, group: &str) -> Result<(), String> {
         if self.group_lock(group).config || self.group_lock(group).value {
-            return Err(format!("global group `{group}` is locked"));
+            return Err(format!("variable group `{group}` is locked"));
         }
         if self.values.keys().any(|name| group_of(name) == group) {
-            return Err(format!("global group `{group}` is not empty"));
+            return Err(format!("variable group `{group}` is not empty"));
         }
-        self.groups.shift_remove(group).ok_or_else(|| format!("no global group `{group}`"))?;
+        self.groups.shift_remove(group).ok_or_else(|| format!("no variable group `{group}`"))?;
         Ok(())
     }
 
     fn config_locked(&self, name: &str) -> Result<(), String> {
         match self.lock_of(name).config {
-            true if group_of(name) == SYSTEM_GROUP => Err(format!("`{name}` is a system global; its name is goofi's")),
-            true => Err(format!("global `{name}` is config-locked")),
+            true if group_of(name) == SYSTEM_GROUP => Err(format!("`{name}` is a system variable; its name is goofi's")),
+            true => Err(format!("variable `{name}` is config-locked")),
             false => Ok(()),
         }
     }
@@ -564,7 +564,7 @@ impl GlobalStore {
         self.controls.get(name)
     }
 
-    pub fn check_control(&self, name: &str, value: &GlobalValue, control: Option<&Control>) -> Result<(), String> {
+    pub fn check_control(&self, name: &str, value: &VariableValue, control: Option<&Control>) -> Result<(), String> {
         self.config_locked(name)?;
         match control {
             Some(c) if !c.fits(value) => Err(c.mismatch(value)),
@@ -573,7 +573,7 @@ impl GlobalStore {
     }
 
     pub fn set_control(&mut self, name: &str, control: Option<Control>) -> Result<(), String> {
-        let value = self.values.get(name).ok_or_else(|| format!("no such global `{name}`"))?;
+        let value = self.values.get(name).ok_or_else(|| format!("no such variable `{name}`"))?;
         self.check_control(name, value, control.as_ref())?;
         match control {
             Some(c) => { self.controls.insert(name.to_string(), c); }
@@ -582,16 +582,16 @@ impl GlobalStore {
         Ok(())
     }
 
-    /// Set an existing global. A type change also requires an unlocked configuration.
-    pub fn set(&mut self, name: &str, value: GlobalValue) -> Result<(), String> {
+    /// Set an existing variable. A type change also requires an unlocked configuration.
+    pub fn set(&mut self, name: &str, value: VariableValue) -> Result<(), String> {
         if is_ephemeral(name) {
-            return Err(format!("global `{name}` is read-only: it is ephemeral, and goofi says what it holds"));
+            return Err(format!("variable `{name}` is read-only: it is ephemeral, and goofi says what it holds"));
         }
         if self.lock_of(name).value {
-            return Err(format!("global `{name}` is value-locked"));
+            return Err(format!("variable `{name}` is value-locked"));
         }
         if let Some(s) = self.sources.get(name) {
-            return Err(format!("global `{name}` follows `{}`; clear its source to set it", s.reference));
+            return Err(format!("variable `{name}` follows `{}`; clear its source to set it", s.reference));
         }
         match self.values.get(name) {
             Some(existing) => {
@@ -601,18 +601,18 @@ impl GlobalStore {
                 self.values.insert(name.to_string(), value);
                 Ok(())
             }
-            None => Err(format!("no such global `{name}`")),
+            None => Err(format!("no such variable `{name}`")),
         }
     }
 
-    /// Add a NEW user global, at ordered position `at` (clamped) when given — the re-add a
+    /// Add a NEW user variable, at ordered position `at` (clamped) when given — the re-add a
     /// delete/rename undo needs. Errors on an invalid name or a collision.
-    pub fn add(&mut self, name: &str, value: GlobalValue, at: Option<usize>) -> Result<(), String> {
-        if !is_valid_global_name(name) {
-            return Err(format!("invalid global name `{name}`: {GLOBAL_NAME_RULE}"));
+    pub fn add(&mut self, name: &str, value: VariableValue, at: Option<usize>) -> Result<(), String> {
+        if !is_valid_variable_name(name) {
+            return Err(format!("invalid variable name `{name}`: {VARIABLE_NAME_RULE}"));
         }
         if self.values.contains_key(name) {
-            return Err(format!("global `{name}` already exists"));
+            return Err(format!("variable `{name}` already exists"));
         }
         if self.group_lock(group_of(name)).config {
             return Err(format!("group `{}` is config-locked", group_of(name)));
@@ -627,10 +627,10 @@ impl GlobalStore {
         self.values.get_index_of(name)
     }
 
-    /// Remove a global; errors when it is config-locked or absent.
+    /// Remove a variable; errors when it is config-locked or absent.
     pub fn remove(&mut self, name: &str) -> Result<(), String> {
         if !self.values.contains_key(name) {
-            return Err(format!("no such global `{name}`"));
+            return Err(format!("no such variable `{name}`"));
         }
         self.config_locked(name)?;
         self.values.shift_remove(name);
@@ -640,17 +640,17 @@ impl GlobalStore {
         Ok(())
     }
 
-    /// Rename a global, keeping its ordered position; its own lock travels with it.
+    /// Rename a variable, keeping its ordered position; its own lock travels with it.
     pub fn rename(&mut self, from: &str, to: &str) -> Result<(), String> {
         if !self.values.contains_key(from) {
-            return Err(format!("no such global `{from}`"));
+            return Err(format!("no such variable `{from}`"));
         }
         self.config_locked(from)?;
-        if !is_valid_global_name(to) {
-            return Err(format!("invalid global name `{to}`: {GLOBAL_NAME_RULE}"));
+        if !is_valid_variable_name(to) {
+            return Err(format!("invalid variable name `{to}`: {VARIABLE_NAME_RULE}"));
         }
         if self.values.contains_key(to) {
-            return Err(format!("global `{to}` already exists"));
+            return Err(format!("variable `{to}` already exists"));
         }
         if self.group_lock(group_of(to)).config && group_of(to) != group_of(from) {
             return Err(format!("group `{}` is config-locked", group_of(to)));
@@ -675,7 +675,7 @@ impl GlobalStore {
     /// sees panels.
     pub fn rename_group(&mut self, from: &str, to: &str) -> Result<Vec<(String, String)>, String> {
         if !is_valid_identifier(to) {
-            return Err(format!("invalid group name `{to}`: {GLOBAL_NAME_RULE}"));
+            return Err(format!("invalid group name `{to}`: {VARIABLE_NAME_RULE}"));
         }
         if from == SYSTEM_GROUP {
             return Err(format!("`{SYSTEM_GROUP}` is goofi's own; it keeps its name"));
@@ -684,16 +684,16 @@ impl GlobalStore {
             return Err(format!("group `{from}` is config-locked"));
         }
         if self.has_group(to) {
-            return Err(format!("global group `{to}` already exists"));
+            return Err(format!("variable group `{to}` already exists"));
         }
         let moved: Vec<(String, String)> = self
             .values
             .keys()
-            .filter_map(|k| split_global(k).filter(|(g, _)| *g == from).map(|(_, e)| (k.clone(), format!("{to}.{e}"))))
+            .filter_map(|k| split_variable(k).filter(|(g, _)| *g == from).map(|(_, e)| (k.clone(), format!("{to}.{e}"))))
             .collect();
         for (old, new) in &moved {
             if self.values.contains_key(new.as_str()) {
-                return Err(format!("global `{new}` already exists"));
+                return Err(format!("variable `{new}` already exists"));
             }
             self.config_locked(old)?;
         }
@@ -712,19 +712,19 @@ impl GlobalStore {
         self.groups.contains_key(group) || self.values.keys().any(|k| group_of(k) == group)
     }
 
-    /// Apply one change: `Some(v)` sets or adds (a NEW global lands at `at`); `None` leaves the
+    /// Apply one change: `Some(v)` sets or adds (a NEW variable lands at `at`); `None` leaves the
     /// value alone, which is what an edit to the widget beside it means.
     pub fn apply_change(
         &mut self,
         name: &str,
-        value: Option<GlobalValue>,
+        value: Option<VariableValue>,
         at: Option<usize>,
     ) -> Result<(), String> {
         match value {
             Some(v) if self.values.contains_key(name) => self.set(name, v),
             Some(v) => self.add(name, v, at),
             None if self.values.contains_key(name) => Ok(()),
-            None => Err(format!("no such global `{name}`")),
+            None => Err(format!("no such variable `{name}`")),
         }
     }
 }

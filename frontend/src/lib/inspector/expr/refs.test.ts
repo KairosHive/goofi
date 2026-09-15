@@ -16,7 +16,7 @@ const cat: ExprCatalogue = {
 		{ name: 'sink', slots: [], params: [] },
 		{ name: 'synth', slots: [{ name: 'out', dtype: 'AUDIO' }], params: [] }
 	],
-	globals: []
+	variables: []
 };
 
 describe('the reference picker offers only what the param may reference', () => {

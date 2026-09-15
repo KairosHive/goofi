@@ -10,7 +10,7 @@ const stateWith = (nodes: Record<string, unknown>) => ({
 	nodes,
 	links: [],
 	instances: {},
-	globals: {},
+	variables: {},
 	arrangement: {}
 });
 

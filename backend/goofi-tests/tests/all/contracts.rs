@@ -412,26 +412,26 @@ fn every_slot_name_is_letters_and_digits() {
         let m = l.manifest;
         let slots = m.inputs.iter().map(|s| s.name).chain(m.outputs.iter().map(|o| o.name));
         for slot in slots {
-            assert!(goofi_core::globals::is_valid_name(slot),
-                    "{}: slot `{slot}` — {}", m.type_name, goofi_core::globals::NAME_RULE);
+            assert!(goofi_core::variables::is_valid_name(slot),
+                    "{}: slot `{slot}` — {}", m.type_name, goofi_core::variables::NAME_RULE);
         }
     }
-    assert!(goofi_core::globals::is_valid_name("out") && goofi_core::globals::is_valid_name("cutoff2"));
+    assert!(goofi_core::variables::is_valid_name("out") && goofi_core::variables::is_valid_name("cutoff2"));
     for bad in ["in", "max_frequency", "2x", "", "a.b"] {
-        assert!(!goofi_core::globals::is_valid_name(bad), "`{bad}` must be refused");
+        assert!(!goofi_core::variables::is_valid_name(bad), "`{bad}` must be refused");
     }
     // The graph mints a display name from the type, `_Test*` included: what it mints must pass
     // its own rule, or a node is born under a name nothing can reference.
     for (_, l) in graph.library_entries() {
         let m = l.manifest;
         let minted = format!("{}0", goofi_graph::name_base(m.type_name));
-        assert!(goofi_core::globals::is_valid_name(&minted), "{}: minted `{minted}`", m.type_name);
+        assert!(goofi_core::variables::is_valid_name(&minted), "{}: minted `{minted}`", m.type_name);
     }
 }
 
 #[test]
-fn every_declared_expression_reads_only_a_global_a_fresh_patch_has() {
-    // Cheap and evaluator-free: a typo'd `globals.defualt_ufreq` compiles, binds, then errors on every
+fn every_declared_expression_reads_only_a_variable_a_fresh_patch_has() {
+    // Cheap and evaluator-free: a typo'd `variables.defualt_ufreq` compiles, binds, then errors on every
     // instance. Read AS EACH TYPE SEES IT, since a declaration may condition on the manifest.
     let g = Goofi::new();
     let graph = g.state.graph.lock().unwrap();
@@ -443,9 +443,9 @@ fn every_declared_expression_reads_only_a_global_a_fresh_patch_has() {
         let Some(expr) = decl.expression else { continue };
         assert!(!expr.source.trim().is_empty(),
                 "{owner}: {}/{} has an empty expression", decl.group, decl.name);
-        for read in goofi_node::scan_globals(expr.source) {
-            assert!(goofi_core::globals::SYSTEM_GLOBALS.iter().any(|g| g.name == read.name),
-                    "{owner}: the expression on {}/{} reads `globals.{}`, which no fresh patch has",
+        for read in goofi_node::scan_variables(expr.source) {
+            assert!(goofi_core::variables::SYSTEM_VARIABLES.iter().any(|g| g.name == read.name),
+                    "{owner}: the expression on {}/{} reads `variables.{}`, which no fresh patch has",
                     decl.group, decl.name, read.name);
         }
     }
@@ -462,8 +462,8 @@ fn the_control_plane_document_carries_no_null_leaf() {
     g.add("_TestResettable");
     g.link(osc, "out", buf, "input");
     g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/frequency",
-                                   "expression": "globals.system.default_ufreq" }));
-    g.call("global entry add", j!({ "name": "patch.subject", "value": "P07", "type": "string" }));
+                                   "expression": "variables.system.default_ufreq" }));
+    g.call("variable entry add", j!({ "name": "patch.subject", "value": "P07", "type": "string" }));
     let inst = g.call("nodes group", j!({ "nodes": [hex(buf)], "pos": [0.0, 0.0] }))["inst_id"]
         .as_str().unwrap().to_string();
     // Grouping a node fed from outside mints a WIRED port, which is how this reaches the two
@@ -479,7 +479,7 @@ fn the_control_plane_document_carries_no_null_leaf() {
     g.call("layout panel add", j!({ "beside": panel_id(&g), "side": "right", "ratio": 0.5 }));
 
     let doc = g.doc();
-    for root in ["nodes", "links", "globals", "arrangement"] {
+    for root in ["nodes", "links", "variables", "arrangement"] {
         assert!(doc.get(root).is_some(), "the document is missing its `{root}` root: {doc}");
     }
     let mut nulls = Vec::new();

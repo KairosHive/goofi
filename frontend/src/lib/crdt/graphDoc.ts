@@ -10,7 +10,7 @@ import type { LayoutNode, Workspace } from 'panelty';
 export type Doc = Record<string, unknown>;
 
 export function emptyDoc(): Doc {
-	return { nodes: {}, links: [], globals: {}, arrangement: {} };
+	return { nodes: {}, links: [], variables: {}, arrangement: {} };
 }
 
 export interface NodeView {
@@ -63,8 +63,8 @@ function scopeOf(rec: Obj | undefined): string {
 	return optStr(rec, 'scope') ?? ROOT_ID;
 }
 
-function globalsMap(doc: Doc): Record<string, Obj> {
-	return obj(doc.globals) as Record<string, Obj>;
+function variablesMap(doc: Doc): Record<string, Obj> {
+	return obj(doc.variables) as Record<string, Obj>;
 }
 
 function pos2(m: Obj | undefined): [number, number] {
@@ -244,8 +244,8 @@ export function linkViews(doc: Doc): LinkView[] {
 	}));
 }
 
-/** A global's declared scalar type — it disambiguates float↔int after JS's number normalization. */
-export type GlobalType = 'float' | 'int' | 'bool' | 'string';
+/** A variable's declared scalar type — it disambiguates float↔int after JS's number normalization. */
+export type VariableType = 'float' | 'int' | 'bool' | 'string';
 
 /** A control element's widget, its range and its place in the panel's grid. */
 export interface ControlView {
@@ -262,30 +262,30 @@ export interface ControlView {
 	h: number;
 }
 
-/** What holds a global or a group: `config` its name, widget and membership, `value` its value. */
+/** What holds a variable or a group: `config` its name, widget and membership, `value` its value. */
 export interface LockView {
 	config: boolean;
 	value: boolean;
 }
 
-/** What a global follows: one producer output, and the number it reads out of a wide frame. */
+/** What a variable follows: one producer output, and the number it reads out of a wide frame. */
 export interface SourceView {
 	reference: string;
 	index?: number;
 }
 
-export interface GlobalView {
+export interface VariableView {
 	/** The full `group.element` — what an expression spells and every op names. */
 	name: string;
 	group: string;
 	element: string;
 	value: number | string | boolean;
-	type: GlobalType;
-	/** Present when this global is a control-panel element. */
+	type: VariableType;
+	/** Present when this variable is a control-panel element. */
 	control?: ControlView;
-	/** Present when the manager writes this global from a producer; nobody else may set it. */
+	/** Present when the manager writes this variable from a producer; nobody else may set it. */
 	source?: SourceView;
-	/** The global's OWN lock; its group's reaches it too — see `effectiveLock`. */
+	/** The variable's OWN lock; its group's reaches it too — see `effectiveLock`. */
 	lock: LockView;
 }
 
@@ -301,21 +301,21 @@ function lockOf(raw: unknown): LockView {
 }
 
 /** Explicit groups and their built-in flags, by name. */
-export function globalGroupLocks(doc: Doc): Record<string, LockView> {
+export function variableGroupLocks(doc: Doc): Record<string, LockView> {
 	const out: Record<string, LockView> = {};
-	for (const [group, rec] of Object.entries(obj(doc.global_groups))) out[group] = lockOf(obj(rec).lock);
+	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) out[group] = lockOf(obj(rec).lock);
 	return out;
 }
 
 /** What holds `gv` right now: its own lock and its group's together. */
-export function effectiveLock(gv: GlobalView, group: LockView | undefined): LockView {
+export function effectiveLock(gv: VariableView, group: LockView | undefined): LockView {
 	return { config: gv.lock.config || group?.config === true, value: gv.lock.value || group?.value === true };
 }
 
-/** All globals, in the document's key order (system-first, then user in creation order). */
-export function globalViews(doc: Doc): GlobalView[] {
-	const out: GlobalView[] = [];
-	for (const [name, raw] of Object.entries(globalsMap(doc))) {
+/** All variables, in the document's key order (system-first, then user in creation order). */
+export function variableViews(doc: Doc): VariableView[] {
+	const out: VariableView[] = [];
+	for (const [name, raw] of Object.entries(variablesMap(doc))) {
 		const g = obj(raw);
 		const value = g.value;
 		const type = g.type;
@@ -340,15 +340,15 @@ export function globalViews(doc: Doc): GlobalView[] {
 	return out;
 }
 
-export interface GlobalGroupView {
+export interface VariableGroupView {
 	group: string;
-	entries: GlobalView[];
+	entries: VariableView[];
 	lock: LockView;
 }
 
 /** Explicit groups keep their order even when empty; groups inferred from entries follow them. */
-export function groupedGlobals(views: GlobalView[], locks: Record<string, LockView> = {}): GlobalGroupView[] {
-	const out: GlobalGroupView[] = Object.entries(locks).map(([group, lock]) => ({ group, entries: [], lock }));
+export function groupedVariables(views: VariableView[], locks: Record<string, LockView> = {}): VariableGroupView[] {
+	const out: VariableGroupView[] = Object.entries(locks).map(([group, lock]) => ({ group, entries: [], lock }));
 	for (const entry of views) {
 		const group = out.find((group) => group.group === entry.group);
 		if (group) group.entries.push(entry);
@@ -412,23 +412,23 @@ export function arrangementTabs(doc: Doc): Workspace[] {
 	return out;
 }
 
-/** Python's keywords, plus goofi's own namespace token `globals`: a regex reads each as an
+/** Python's keywords, plus goofi's own namespace token `variables`: a regex reads each as an
  * identifier and a parser does not. */
 const RESERVED = new Set(
-	`globals False None True and as assert async await break class continue def del elif else
+	`variables False None True and as assert async await break class continue def del elif else
 	 except finally for from global if import in is lambda nonlocal not or pass raise return try
 	 while with yield`.split(/\s+/)
 );
 
 /** Whether `name` is legal in the ONE expression namespace — the exact mirror of the Rust
  * `is_valid_identifier`. Every name an expression can spell is held to it, because an expression
- * reads one as an ATTRIBUTE: `globals.gain`, and a sub-patch's slot in `nd('chain').drain`. */
+ * reads one as an ATTRIBUTE: `variables.gain`, and a sub-patch's slot in `nd('chain').drain`. */
 export function isValidIdentifier(name: string): boolean {
 	return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !RESERVED.has(name);
 }
 
 /** The NODE name rule, the mirror of the Rust `is_valid_name`: a letter then letters or digits, not
- * a keyword — a reference spells `node.slot`, so no underscore either. Globals keep the rule above. */
+ * a keyword — a reference spells `node.slot`, so no underscore either. Variables keep the rule above. */
 export function isValidName(name: string): boolean {
 	return /^[A-Za-z][A-Za-z0-9]*$/.test(name) && !RESERVED.has(name);
 }

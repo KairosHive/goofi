@@ -113,10 +113,10 @@ static PARAMS: &[ParamDecl] = &[
         group: "common",
         name: "max_frequency",
         spec: ParamSpec::Float { default: 30.0, min: 0.0, max: 1000.0 },
-        expression: Some(ExprDecl { source: "globals.system.default_ufreq", mode: ExprMode::On, trigger: true }),
+        expression: Some(ExprDecl { source: "variables.system.default_ufreq", mode: ExprMode::On, trigger: true }),
         doc: Some(
-            "How many frames a second to emit. Bound to the patch's `default_ufreq` global, so \
-             editing that global re-rates every generator at once.",
+            "How many frames a second to emit. Bound to the patch's `default_ufreq` variable, so \
+             editing that variable re-rates every generator at once.",
         ),
     },
 ];

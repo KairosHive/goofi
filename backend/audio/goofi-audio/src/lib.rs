@@ -914,19 +914,19 @@ impl Engine for AudioEngine {
     }
 
     /// What the audio plane alone decides, off the same `status()` the report reads — so the
-    /// globals and `session status` cannot drift, and a node in any engine can bind to the rate
+    /// variables and `session status` cannot drift, and a node in any engine can bind to the rate
     /// or the driver without a door of its own.
-    fn published(&self) -> Vec<(&'static str, goofi_core::globals::GlobalValue)> {
-        use goofi_core::globals::GlobalValue;
+    fn published(&self) -> Vec<(&'static str, goofi_core::variables::VariableValue)> {
+        use goofi_core::variables::VariableValue;
         let s = self.status();
         let device = s.device.unwrap_or_default();
         let driver = host::asio_driver(&device).unwrap_or_default().to_string();
         vec![
-            ("system.audio_rate", GlobalValue::Float(s.rate)),
-            ("system.audio_channels", GlobalValue::Int(i64::from(s.channels))),
-            ("system.audio_driver", GlobalValue::Str(driver)),
-            ("system.audio_device", GlobalValue::Str(device)),
-            ("system.audio_hosts", GlobalValue::Str(host::hosts())),
+            ("system.audio_rate", VariableValue::Float(s.rate)),
+            ("system.audio_channels", VariableValue::Int(i64::from(s.channels))),
+            ("system.audio_driver", VariableValue::Str(driver)),
+            ("system.audio_device", VariableValue::Str(device)),
+            ("system.audio_hosts", VariableValue::Str(host::hosts())),
         ]
     }
 

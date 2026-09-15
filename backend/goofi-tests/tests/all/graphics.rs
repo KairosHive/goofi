@@ -621,7 +621,7 @@ fn shaders_render_on_the_gpu() {
     // At a small default: the question is whether each pipeline draws, and a 1024² readback per
     // poll answers it no better in a hundred times the bytes.
     for side in ["system.default_width", "system.default_height"] {
-        g.call("global entry edit", j!({ "name": side, "value": 64 }));
+        g.call("variable entry edit", j!({ "name": side, "value": 64 }));
     }
     for ty in &shipped {
         let node = g.add(ty);
@@ -631,7 +631,7 @@ fn shaders_render_on_the_gpu() {
         g.call("node remove", j!({ "node": hex(node) }));
     }
     for side in ["system.default_width", "system.default_height"] {
-        g.call("global entry edit", j!({ "name": side, "value": goofi_core::globals::DEFAULT_SIZE }));
+        g.call("variable entry edit", j!({ "name": side, "value": goofi_core::variables::DEFAULT_SIZE }));
     }
 
     // Step: a `.wgsl` that does not compile is a greyed type carrying naga's own line number.
@@ -859,20 +859,20 @@ fn shaders_render_on_the_gpu() {
     drawn(&g, c, "the constant still renders", |d| close(px(d, 0, 0), [0.25, 0.5, 1.0, 1.0]));
 
     // Step: a node that makes its own frames carries the patch's default size as a live
-    // expression, so ONE global re-sizes every producer at once. The seeding wants an evaluator
-    // present; reading a bare global does not, which is why this one needs no interpreter.
+    // expression, so ONE variable re-sizes every producer at once. The seeding wants an evaluator
+    // present; reading a bare variable does not, which is why this one needs no interpreter.
     g.state.graph.lock().unwrap().set_evaluator(Arc::new(goofi_tests::FirstVar));
     let gen = g.add("graphics:Noise");
     g.ready(gen);
     let bound = g.doc()["nodes"][hex(gen)]["params"]["common"]["width"].clone();
-    assert_eq!((&bound["expr"], &bound["mode"]), (&j!("globals.system.default_width"), &j!("expression")),
+    assert_eq!((&bound["expr"], &bound["mode"]), (&j!("variables.system.default_width"), &j!("expression")),
                "the declared binding was seeded live, not flattened to a literal: {bound}");
     drawn(&g, gen, "the patch's default size", |d| shape(d) == vec![1024, 1024, 4]);
-    g.call("global entry edit", j!({ "name": "system.default_width", "value": 96 }));
-    g.call("global entry edit", j!({ "name": "system.default_height", "value": 48 }));
-    drawn(&g, gen, "every producer follows the global", |d| shape(d) == vec![48, 96, 4]);
+    g.call("variable entry edit", j!({ "name": "system.default_width", "value": 96 }));
+    g.call("variable entry edit", j!({ "name": "system.default_height", "value": 48 }));
+    drawn(&g, gen, "every producer follows the variable", |d| shape(d) == vec![48, 96, 4]);
 
-    // Step: the noise itself, walked one param at a time on the small frame the global just made.
+    // Step: the noise itself, walked one param at a time on the small frame the variable just made.
     // Speed 0 stops the drift, which is the only thing that lets one frame be compared with the
     // next at all — every reading after this one rests on it.
     let probe = g.probe(gen, "out");

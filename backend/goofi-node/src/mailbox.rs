@@ -7,7 +7,7 @@ use indexmap::IndexMap;
 use crate::{BindingId, EvalCtx, ExprEvaluator, Local};
 
 /// One variable's cell. It holds a [`Local`] because that is what the evaluator's locals channel
-/// takes: a `globals.*` term is a scalar, an `nd()` term a whole frame.
+/// takes: a `variables.*` term is a scalar, an `nd()` term a whole frame.
 #[derive(Clone, Debug, Default)]
 pub struct Mailbox {
     value: Option<Local>,
@@ -20,7 +20,7 @@ impl Mailbox {
     pub fn empty() -> Mailbox {
         Mailbox::default()
     }
-    /// A variable the graph resolved and delivered inline (a `globals.*` read).
+    /// A variable the graph resolved and delivered inline (a `variables.*` read).
     pub fn seeded(value: Param) -> Mailbox {
         Mailbox { value: Some(Local::Value(value)), unresolved: None }
     }
@@ -55,7 +55,7 @@ pub fn gate(x: f64) -> bool {
     x > 0.0
 }
 
-/// A global's value read into `target`'s shape, so a bare variable is coerced like any other source.
+/// A variable's value read into `target`'s shape, so a bare variable is coerced like any other source.
 fn value_as(value: &Param, target: &Param) -> Result<Param, String> {
     if let (Param::Str { value, .. }, Param::Str { options, refresh, .. }) = (value, target) {
         return Ok(Param::Str { value: value.clone(), options: options.clone(), refresh: *refresh });
@@ -166,7 +166,7 @@ impl Expression {
         if let Some(reason) = self.vars.values().find_map(Mailbox::unresolved) {
             return Err(reason.to_string());
         }
-        // A bare variable is read without the evaluator: a global's value as it is, and a
+        // A bare variable is read without the evaluator: a variable's value as it is, and a
         // referenced producer's frame as the one element it must hold.
         let (variable, index) = if self.id.is_none() {
             split_index(self.source.trim())?

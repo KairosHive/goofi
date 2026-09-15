@@ -1,4 +1,4 @@
-/** What the expression completion source knows about the patch: node names, output slots, globals. */
+/** What the expression completion source knows about the patch: node names, output slots, variables. */
 import { graph, type GraphStore } from '$lib/stores/graph.svelte';
 
 export interface CatalogueSlot {
@@ -20,7 +20,7 @@ export interface CatalogueNode {
 	params: CatalogueGroup[];
 }
 
-export interface CatalogueGlobal {
+export interface CatalogueVariable {
 	/** The full `group.element`. */
 	name: string;
 	group: string;
@@ -30,7 +30,7 @@ export interface CatalogueGlobal {
 
 export interface ExprCatalogue {
 	nodes: CatalogueNode[];
-	globals: CatalogueGlobal[];
+	variables: CatalogueVariable[];
 	/** The editing node's own display name — what `me` reads. */
 	self?: string;
 }
@@ -57,6 +57,6 @@ export function liveCatalogue(g: GraphStore = graph()): ExprCatalogue {
 				}))
 			}];
 		}),
-		globals: g.globals.map((gv) => ({ name: gv.name, group: gv.group, element: gv.element, type: gv.type }))
+		variables: g.variables.map((gv) => ({ name: gv.name, group: gv.group, element: gv.element, type: gv.type }))
 	};
 }

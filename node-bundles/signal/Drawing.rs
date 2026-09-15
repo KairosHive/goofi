@@ -1,5 +1,5 @@
 //! Drawing — a drawing widget's picture, as a frame. Point `image` at the pad the way a knob's
-//! value is pointed at a global — an expression of `globals.<panel>.<pad>` — and every stroke it
+//! value is pointed at a variable — an expression of `variables.<panel>.<pad>` — and every stroke it
 //! holds arrives here as RGBA. `graphics:SignalIn` is what puts it on the GPU.
 
 use goofi_core::{png, Data, Meta, SlotType};
@@ -51,8 +51,8 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
     spec: ParamSpec::Str { default: "", options: &[], refresh: false },
     expression: None,
     doc: Some(
-        "The pad to read, as an expression of `globals.<panel>.<pad>` — the same way a knob's \
-         value is pointed at a global. It holds the drawing as a PNG data URL.",
+        "The pad to read, as an expression of `variables.<panel>.<pad>` — the same way a knob's \
+         value is pointed at a variable. It holds the drawing as a PNG data URL.",
     ),
 }];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];

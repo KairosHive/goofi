@@ -88,15 +88,15 @@ test('the harmonic geometry cookbook opens as live dashboards with usable contro
 				const auto = page.getByTestId('control-geometry-auto');
 				await auto.getByRole('checkbox').uncheck();
 				await expect.poll(async () => {
-					const state = await rawCall(page, 'global list');
-					return state.result?.globals?.find((g: any) => g.name === 'geometry.auto')?.value;
+					const state = await rawCall(page, 'variable list');
+					return state.result?.variables?.find((g: any) => g.name === 'geometry.auto')?.value;
 				}).toBe(false);
 				const slider = page.getByTestId('control-geometry-mix').getByRole('slider');
 				await slider.focus();
 				await page.keyboard.press('End');
 				await expect.poll(async () => {
-					const state = await rawCall(page, 'global list');
-					return state.result?.globals?.find((g: any) => g.name === 'geometry.mix')?.value;
+					const state = await rawCall(page, 'variable list');
+					return state.result?.variables?.find((g: any) => g.name === 'geometry.mix')?.value;
 				}).toBe(1);
 				await expect.poll(async () => (await rawCall(page, 'session status')).result.errors,
 					{ message: `${recipe.file}: control expressions settle without node errors` }).toEqual([]);
@@ -107,8 +107,8 @@ test('the harmonic geometry cookbook opens as live dashboards with usable contro
 						await control.focus();
 						await page.keyboard.press('End');
 						await expect.poll(async () => {
-							const state = await rawCall(page, 'global list');
-							return state.result?.globals?.find((g: any) => g.name === `geometry.${name}`)?.value;
+							const state = await rawCall(page, 'variable list');
+							return state.result?.variables?.find((g: any) => g.name === `geometry.${name}`)?.value;
 						}).toBe(end);
 					}
 					await expect.poll(async () => (await rawCall(page, 'session status')).result.errors).toEqual([]);
@@ -179,8 +179,8 @@ test('jade fills the window and its texture controls morph independently', async
 		await slider.focus();
 		await page.keyboard.press('End');
 		await expect.poll(async () => {
-			const state = await rawCall(page, 'global list');
-			return state.result.globals.filter((g: any) => ['geometry.textureMix', 'geometry.mix'].includes(g.name)).map((g: any) => [g.name, g.value]);
+			const state = await rawCall(page, 'variable list');
+			return state.result.variables.filter((g: any) => ['geometry.textureMix', 'geometry.mix'].includes(g.name)).map((g: any) => [g.name, g.value]);
 		}).toEqual([['geometry.mix', 0.3], ['geometry.textureMix', 1]]);
 		await expect.poll(async () => (await rawCall(page, 'session status')).result.errors).toEqual([]);
 		// Return to the saved finish for the cookbook picture, with manual controls held.
@@ -222,7 +222,7 @@ test('living ratios modulate the organic field with a visible trace and pause co
 		const first = await sample();
 		await expect.poll(sample, { timeout: 12_000 }).not.toBe(first);
 		await page.getByTestId('control-geometry-running').getByRole('checkbox').uncheck();
-		await expect.poll(async () => (await rawCall(page, 'global list')).result.globals.find((g: any) => g.name === 'geometry.running').value).toBe(false);
+		await expect.poll(async () => (await rawCall(page, 'variable list')).result.variables.find((g: any) => g.name === 'geometry.running').value).toBe(false);
 		await expect.poll(async () => (await rawCall(page, 'session status')).result.errors).toEqual([]);
 		await page.screenshot({ path: path.join(folder, 'assets', '10-living-ratios-browser.png') });
 		await page.getByRole('tab', { name: 'nodalLines Close tab', exact: true }).click();

@@ -51,7 +51,7 @@ pub fn header(source: &str) -> Result<Introspection, String> {
     }
     let mut taken: Vec<String> = RESERVED.iter().map(|s| (*s).to_string()).collect();
     for buffer in &intro.state {
-        if !goofi_core::globals::is_valid_name(buffer) {
+        if !goofi_core::variables::is_valid_name(buffer) {
             return Err(format!("state buffer `{buffer}`: a letter, then letters or digits"));
         }
         if taken.contains(buffer) {

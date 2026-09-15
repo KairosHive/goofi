@@ -11,7 +11,7 @@ import { reconstructMeta } from '$lib/editor/metaFormat';
 import { summaryOf } from '$lib/viewers/viewMeta';
 
 import type { LinkInfo, NodeInstanceInfo, NodeTypeInfo } from '$lib/api/control';
-import type { GlobalView } from '$lib/crdt/graphDoc';
+import type { VariableView } from '$lib/crdt/graphDoc';
 
 export interface FrameSummary {
 	dtype: string;
@@ -74,8 +74,8 @@ export const query = {
 	nodeTypes: (): NodeTypeInfo[] | null => graph().nodeTypes,
 	/** Whether the replica has pulled from the manager yet; until true, `graph()` reads describe an EMPTY replica. */
 	docSynced: (): boolean => graph().docSynced,
-	/** Every patch global (system + user), in system-first/creation order. */
-	globals: (): GlobalView[] => graph().globals,
+	/** Every patch variable (system + user), in system-first/creation order. */
+	variables: (): VariableView[] => graph().variables,
 	node: (uid: string): NodeInstanceInfo | null => graph().nodeById(uid),
 	nodeParams: (uid: string): NodeInstanceInfo['params'] | null =>
 		graph().nodeById(uid)?.params ?? null,

@@ -20,7 +20,7 @@ pub fn type_name_of(path: &Path) -> Option<String> {
         "rs" | "wgsl" => stem.to_string(),
         _ => return None,
     };
-    goofi_core::globals::is_valid_name(&name).then_some(name)
+    goofi_core::variables::is_valid_name(&name).then_some(name)
 }
 
 /// The folder under a patch's workspace that holds `engine`'s authored files.
@@ -173,8 +173,8 @@ pub fn illegal_slot(intro: &probe::Introspection) -> Option<String> {
         .iter()
         .map(|s| &s.name)
         .chain(intro.outputs.iter().map(|s| &s.name))
-        .find(|n| !goofi_core::globals::is_valid_name(n))
-        .map(|bad| format!("slot `{bad}` is not a legal name: {}", goofi_core::globals::NAME_RULE))
+        .find(|n| !goofi_core::variables::is_valid_name(n))
+        .map(|bad| format!("slot `{bad}` is not a legal name: {}", goofi_core::variables::NAME_RULE))
 }
 
 /// The first OUTPUT whose kind belongs to an engine other than `own`, phrased for the palette. A

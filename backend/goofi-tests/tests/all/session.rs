@@ -25,18 +25,18 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     g.link(osc, "out", buf, "input");
     g.link(buf, "out", sink, "input");
 
-    g.call("global entry add", j!({ "name": "patch.gain", "value": 2.0, "type": "float" }));
+    g.call("variable entry add", j!({ "name": "patch.gain", "value": 2.0, "type": "float" }));
     g.call("node param edit", j!({ "node": hex(sink), "param": "buffer/size",
-                                   "expression": "globals.patch.gain * 64" }));
-    // A control element is a global that carries a widget, and the archive carries the record.
-    g.call("global entry edit", j!({ "name": "patch.gain", "control":
+                                   "expression": "variables.patch.gain * 64" }));
+    // A control element is a variable that carries a widget, and the archive carries the record.
+    g.call("variable entry edit", j!({ "name": "patch.gain", "control":
         { "kind": "knob", "min": 0.0, "max": 4.0, "step": 0.01, "x": 2.0, "y": 1.0, "w": 2.0, "h": 2.0 } }));
-    let why = g.refuse("global entry edit", j!({ "name": "patch.gain", "control": { "kind": "toggle" } }));
+    let why = g.refuse("variable entry edit", j!({ "name": "patch.gain", "control": { "kind": "toggle" } }));
     assert!(why.contains("toggle") && why.contains("float"), "a widget that cannot draw the type: {why}");
     // A lock rides the archive too, the entry's own and its group's, and so does what it follows.
-    g.call("global entry lock", j!({ "name": "patch.gain", "value": true }));
-    g.call("global entry source", j!({ "name": "patch.gain", "reference": "level.out", "index": 0 }));
-    g.call("global group lock", j!({ "group": "patch", "config": true }));
+    g.call("variable entry lock", j!({ "name": "patch.gain", "value": true }));
+    g.call("variable entry source", j!({ "name": "patch.gain", "reference": "level.out", "index": 0 }));
+    g.call("variable group lock", j!({ "group": "patch", "config": true }));
     // …and a reference over it: the archive carries the whole record, the expression retained.
     let level = g.add("_TestScalar");
     g.call("node edit", j!({ "node": hex(level), "name": "level" }));
@@ -67,16 +67,16 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     assert_eq!(recs[&scope]["scope"], outer, "membership rides the record it belongs to");
     let source = &recs[&hex(sink)]["sources"][0];
     assert_eq!((&source["mode"], &source["expression"], &source["reference"]),
-               (&j!("reference"), &j!("globals.patch.gain * 64"), &j!("level.out")), "{source}");
+               (&j!("reference"), &j!("variables.patch.gain * 64"), &j!("level.out")), "{source}");
 
-    let saved_gain = saved["globals"].as_array().unwrap().iter()
+    let saved_gain = saved["variables"].as_array().unwrap().iter()
         .find(|e| e["name"] == "patch.gain").cloned().expect("the element is in the file");
     assert_eq!((&saved_gain["control"]["kind"], &saved_gain["control"]["x"]), (&j!("knob"), &j!(2.0)),
                "the widget and its place ride the archive: {saved_gain}");
     assert_eq!(saved_gain["lock"], j!({ "config": false, "value": true }), "{saved_gain}");
     assert_eq!(saved_gain["source"], j!({ "reference": "level.out", "index": 0 }), "{saved_gain}");
-    assert_eq!(saved["global_groups"]["patch"]["lock"]["config"], true, "{}", saved["global_groups"]);
-    assert!(saved["global_groups"].get("system").is_none(), "the system group's lock is goofi's, not the file's");
+    assert_eq!(saved["variable_groups"]["patch"]["lock"]["config"], true, "{}", saved["variable_groups"]);
+    assert!(saved["variable_groups"].get("system").is_none(), "the system group's lock is goofi's, not the file's");
 
     g.call("layout panel edit", j!({ "panel": panel(&g), "type": "viewer",
                                         "state": { "node": hex(osc), "slot": "out" } }));
@@ -115,7 +115,7 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     assert_eq!(after["nodes"], before["nodes"],
                "every node came back as it was, uid for uid — facades and ports among them");
     assert_eq!(after["links"], before["links"], "and so did every wire, inner ones included");
-    assert_eq!(after["globals"], before["globals"]);
+    assert_eq!(after["variables"], before["variables"]);
     assert_eq!(after["arrangement"], before["arrangement"],
                "…so the panel still names a node that exists");
     assert_eq!(std::fs::read(other.state.mount().join("notes.md")).unwrap(),
@@ -163,24 +163,24 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     g.call("session save", j!({ "path": path.to_string_lossy() }));
     g.call("session load", j!({ "path": path.to_string_lossy() }));
 
-    // An EPHEMERAL global is goofi's own: the manifest never carries it, and the load re-derives it.
+    // An EPHEMERAL variable is goofi's own: the manifest never carries it, and the load re-derives it.
     let manifest = g.call("session manifest", j!({}));
     assert!(!manifest["yaml"].as_str().unwrap().contains("goofi_home"),
             "a machine path in a patch file travels to the wrong machine");
     // An archive from before groups existed cannot come up half-alive: every expression reading
-    // its globals would be broken, so the load stops and names the global.
+    // its variables would be broken, so the load stops and names the variable.
     let flat = g.call("session manifest", j!({}))["yaml"].as_str().unwrap()
         .replace("name: patch.gain", "name: gain");
     let why = g.refuse("session load", j!({ "content": flat }));
-    assert!(why.contains("gain") && why.contains("group.element"), "the load names the global: {why}");
+    assert!(why.contains("gain") && why.contains("group.element"), "the load names the variable: {why}");
 
-    let reborn = g.call("global list", j!({}))["globals"].as_array().unwrap().iter()
+    let reborn = g.call("variable list", j!({}))["variables"].as_array().unwrap().iter()
         .find(|e| e["name"] == "patch.gain").cloned().expect("the element came back");
     assert_eq!((&reborn["control"]["kind"], &reborn["control"]["w"]), (&j!("knob"), &j!(2.0)),
                "the load restored the widget and its place: {reborn}");
     assert_eq!(reborn["lock"], j!({ "config": true, "value": true }), "the load restored both locks: {reborn}");
     assert_eq!(reborn["source"]["reference"], "level.out", "…and what it follows: {reborn}");
-    let held = g.call("global list", j!({}))["globals"].as_array().unwrap().iter()
+    let held = g.call("variable list", j!({}))["variables"].as_array().unwrap().iter()
         .find(|e| e["name"] == "system.goofi_home").cloned().unwrap();
     assert_eq!(held["value"], j!(goofi_core::path::to_slash(&goofi_core::home::dir())));
 

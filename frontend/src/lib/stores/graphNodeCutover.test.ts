@@ -317,7 +317,7 @@ describe('inline viewer state — the document is the one holder, so it follows 
 		// A patch is loaded INTO the running session: same backend (so no generation reset), and it
 		// restores the uids it was saved with — so `n1` is a SURVIVOR carrying a different node.
 		fc.emit({ event: 'graph_replaced', payload: helloSnap() });
-		d.push({ nodes: { n1: { type: 'signal:Buffer', name: 'buf0', pos: { x: 0, y: 0 } } }, links: [], instances: {}, globals: {}, arrangement: {} });
+		d.push({ nodes: { n1: { type: 'signal:Buffer', name: 'buf0', pos: { x: 0, y: 0 } } }, links: [], instances: {}, variables: {}, arrangement: {} });
 
 		expect(g.nodeById('n1')!.type, 'precondition: the uid now carries the loaded node').toBe('signal:Buffer');
 		expect(isSlotExpanded(g.nodeById('n1'), 'out'), 'the outgoing collapse did not stick').toBe(true);

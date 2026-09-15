@@ -15,7 +15,7 @@
 	const uiStore = ui();
 
 	// The next start's arguments, not a copy of backend state: empty is what makes the backend
-	// fall back to the `record.*` globals.
+	// fall back to the `record.*` variables.
 	let name = $state('');
 	let root = $state('');
 	let failure = $state<string | null>(null);

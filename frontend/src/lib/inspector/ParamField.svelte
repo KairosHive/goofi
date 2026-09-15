@@ -58,16 +58,16 @@
 	let row = $state<HTMLDivElement>();
 	const over = $derived(
 		(dropZone !== null && uiStore.nodeDragZone === dropZone) ||
-		(uiStore.globalDrag !== null && uiStore.globalDrag.target === row)
+		(uiStore.variableDrag !== null && uiStore.variableDrag.target === row)
 	);
 
-	function acceptGlobal(el: HTMLDivElement): { destroy(): void } {
+	function acceptVariable(el: HTMLDivElement): { destroy(): void } {
 		const drop = (event: Event): void => {
 			picking = false;
 			onSetSource({ expression: (event as CustomEvent<string>).detail });
 		};
-		el.addEventListener('global-expression-drop', drop);
-		return { destroy: () => el.removeEventListener('global-expression-drop', drop) };
+		el.addEventListener('variable-expression-drop', drop);
+		return { destroy: () => el.removeEventListener('variable-expression-drop', drop) };
 	}
 
 	const kind = $derived(controlKind(descriptor));
@@ -108,9 +108,9 @@
 <div
 	class={`pf-param ${klass}`.trim()}
 	bind:this={row}
-	use:acceptGlobal
-	data-global-drop
-	class:armed={dropZone !== null || uiStore.globalDrag !== null}
+	use:acceptVariable
+	data-variable-drop
+	class:armed={dropZone !== null || uiStore.variableDrag !== null}
 	class:over
 	class:open
 	data-node-drop={dropZone}
@@ -253,7 +253,7 @@
 						id: 'expression',
 						label: 'E',
 						name: 'Expression',
-						title: 'Expression — Python over nd(), globals and me, evaluated at control rate',
+						title: 'Expression — Python over nd(), variables and me, evaluated at control rate',
 						testid: 'param-mode-expression'
 					},
 					{

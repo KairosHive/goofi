@@ -108,8 +108,8 @@ export function redo(page: Page): Promise<void> {
 export function canUndo(page: Page): Promise<boolean> {
 	return page.evaluate(() => (window as any).goofi.query.canUndo());
 }
-/** Add a user global; returns whether it landed. */
-export function addGlobal(
+/** Add a user variable; returns whether it landed. */
+export function addVariable(
 	page: Page,
 	name: string,
 	value: number | string | boolean,
@@ -117,13 +117,13 @@ export function addGlobal(
 ): Promise<void> {
 	// A command op — resolves void on success, rejects on a server refusal (invalid/collision).
 	return page.evaluate(
-		([n, v, t]) => (window as any).goofi.commands.addGlobal(n, v, t),
+		([n, v, t]) => (window as any).goofi.commands.addVariable(n, v, t),
 		[name, value, type] as const
 	);
 }
-/** All patch globals (system + user). */
-export function globals(
+/** All patch variables (system + user). */
+export function variables(
 	page: Page
 ): Promise<Array<{ name: string; value: unknown; type: string; system: boolean }>> {
-	return page.evaluate(() => (window as any).goofi.query.globals());
+	return page.evaluate(() => (window as any).goofi.query.variables());
 }

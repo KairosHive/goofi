@@ -2,7 +2,7 @@
 
 use goofi_core::record::RecordedOutput;
 use crate::{Graph, Uid};
-use goofi_core::globals::{Control, GlobalValue};
+use goofi_core::variables::{Control, VariableValue};
 use goofi_core::Param;
 
 use crate::Mode;
@@ -121,46 +121,46 @@ pub enum Command {
         value: Option<Param>,
         source: Option<SourceState>,
     },
-    /// Add or edit a global: `Some(value)` upserts, `None` leaves the value alone — an edit to the
+    /// Add or edit a variable: `Some(value)` upserts, `None` leaves the value alone — an edit to the
     /// widget beside it. `at` is the ordered slot to re-add at — only a delete's captured inverse
     /// carries one, since order is observable.
-    EditGlobal {
+    EditVariable {
         name: String,
-        value: Option<GlobalValue>,
+        value: Option<VariableValue>,
         at: Option<usize>,
         /// The control record: outer `None` leaves it alone, inner `None` clears it.
         control: Option<Option<Control>>,
     },
-    /// Delete a global, and with it everything that rode on the entry.
-    RemoveGlobal {
+    /// Delete a variable, and with it everything that rode on the entry.
+    RemoveVariable {
         name: String,
     },
-    /// Rename a global, or a whole group of them. Each inverts as the reverse rename, planned
+    /// Rename a variable, or a whole group of them. Each inverts as the reverse rename, planned
     /// forward, so nothing puts back raw state.
-    RenameGlobal {
+    RenameVariable {
         from: String,
         to: String,
     },
-    AddGlobalGroup { group: String, at: Option<usize> },
-    RemoveGlobalGroup { group: String },
-    RenameGlobalGroup {
+    AddVariableGroup { group: String, at: Option<usize> },
+    RemoveVariableGroup { group: String },
+    RenameVariableGroup {
         from: String,
         to: String,
         members: Option<(Vec<String>, Vec<String>)>,
     },
-    /// Lock or unlock one global, or a whole group. Each inverts as the lock it replaced.
-    LockGlobal {
+    /// Lock or unlock one variable, or a whole group. Each inverts as the lock it replaced.
+    LockVariable {
         name: String,
-        lock: goofi_core::globals::Lock,
+        lock: goofi_core::variables::Lock,
     },
-    LockGlobalGroup {
+    LockVariableGroup {
         group: String,
-        lock: Option<goofi_core::globals::Lock>,
+        lock: Option<goofi_core::variables::Lock>,
     },
-    /// Set or clear what a global follows. Inverts as the source it replaced.
-    SourceGlobal {
+    /// Set or clear what a variable follows. Inverts as the source it replaced.
+    SourceVariable {
         name: String,
-        source: Option<goofi_core::globals::GlobalSource>,
+        source: Option<goofi_core::variables::VariableSource>,
     },
     /// Move a tab to a position in the strip. Its CONTENT is a position, so it cannot ride
     /// [`Command::LayoutContents`]; it inverts as another reorder, aimed at where the tab is now.
@@ -267,10 +267,10 @@ impl Command {
         if fresh {
             self.precondition(g)?;
         }
-        let global = matches!(self, Self::EditGlobal { .. } | Self::RemoveGlobal { .. }
-            | Self::RenameGlobal { .. } | Self::RenameGlobalGroup { .. } | Self::LockGlobal { .. }
-            | Self::LockGlobalGroup { .. } | Self::SourceGlobal { .. }
-            | Self::AddGlobalGroup { .. } | Self::RemoveGlobalGroup { .. });
+        let variable = matches!(self, Self::EditVariable { .. } | Self::RemoveVariable { .. }
+            | Self::RenameVariable { .. } | Self::RenameVariableGroup { .. } | Self::LockVariable { .. }
+            | Self::LockVariableGroup { .. } | Self::SourceVariable { .. }
+            | Self::AddVariableGroup { .. } | Self::RemoveVariableGroup { .. });
         let result = (|| match self {
             Command::Compound(cmds) => {
                 let mut inverses = Vec::with_capacity(cmds.len());
@@ -494,31 +494,31 @@ impl Command {
                 Ok((Outcome::Ok, Command::EditParam { uid, group, name, value: old_value, source: old_source }))
             }
 
-            Command::EditGlobal { name, value, at, control } => {
-                let old = g.globals().get(&name).cloned();
-                let old_control = control.is_some().then(|| g.globals().control(&name).cloned());
+            Command::EditVariable { name, value, at, control } => {
+                let old = g.variables().get(&name).cloned();
+                let old_control = control.is_some().then(|| g.variables().control(&name).cloned());
                 let set_value = value.is_some();
-                g.apply_global_change(&name, value, at, control)?;
+                g.apply_variable_change(&name, value, at, control)?;
                 Ok((Outcome::Ok, match old {
-                    None => Command::RemoveGlobal { name },
-                    Some(held) => Command::EditGlobal { name, value: set_value.then_some(held), at: None, control: old_control },
+                    None => Command::RemoveVariable { name },
+                    Some(held) => Command::EditVariable { name, value: set_value.then_some(held), at: None, control: old_control },
                 }))
             }
 
-            Command::RemoveGlobal { name } => {
+            Command::RemoveVariable { name } => {
                 // The inverse re-adds at the removed index, with everything that rode on the entry
                 // — its widget, what it followed, its own lock.
-                let old = g.globals().get(&name).cloned();
-                let at = g.globals().index_of(&name);
-                let old_control = Some(g.globals().control(&name).cloned());
-                let (old_source, old_lock) = (g.globals().source(&name).cloned(), g.globals().own_lock(&name));
-                g.remove_global(&name)?;
-                let mut inverse = vec![Command::EditGlobal { name: name.clone(), value: old, at, control: old_control }];
+                let old = g.variables().get(&name).cloned();
+                let at = g.variables().index_of(&name);
+                let old_control = Some(g.variables().control(&name).cloned());
+                let (old_source, old_lock) = (g.variables().source(&name).cloned(), g.variables().own_lock(&name));
+                g.remove_variable(&name)?;
+                let mut inverse = vec![Command::EditVariable { name: name.clone(), value: old, at, control: old_control }];
                 if old_source.is_some() {
-                    inverse.push(Command::SourceGlobal { name: name.clone(), source: old_source });
+                    inverse.push(Command::SourceVariable { name: name.clone(), source: old_source });
                 }
                 if !old_lock.is_default() {
-                    inverse.push(Command::LockGlobal { name, lock: old_lock });
+                    inverse.push(Command::LockVariable { name, lock: old_lock });
                 }
                 Ok((Outcome::Ok, match inverse.len() {
                     1 => inverse.pop().expect("one"),
@@ -526,44 +526,44 @@ impl Command {
                 }))
             }
 
-            Command::RenameGlobal { from, to } => {
-                let touched = g.rename_global(&from, &to)?;
-                Ok((Outcome::Nodes(touched), Command::RenameGlobal { from: to, to: from }))
+            Command::RenameVariable { from, to } => {
+                let touched = g.rename_variable(&from, &to)?;
+                Ok((Outcome::Nodes(touched), Command::RenameVariable { from: to, to: from }))
             }
 
-            Command::AddGlobalGroup { group, at } => {
-                g.add_global_group(&group, at)?;
-                Ok((Outcome::Ok, Command::RemoveGlobalGroup { group }))
+            Command::AddVariableGroup { group, at } => {
+                g.add_variable_group(&group, at)?;
+                Ok((Outcome::Ok, Command::RemoveVariableGroup { group }))
             }
 
-            Command::RemoveGlobalGroup { group } => {
-                let at = g.globals().group_index(&group);
-                g.remove_global_group(&group)?;
-                Ok((Outcome::Ok, Command::AddGlobalGroup { group, at }))
+            Command::RemoveVariableGroup { group } => {
+                let at = g.variables().group_index(&group);
+                g.remove_variable_group(&group)?;
+                Ok((Outcome::Ok, Command::AddVariableGroup { group, at }))
             }
 
-            Command::RenameGlobalGroup { from, to, members } => {
-                if members.is_some_and(|held| held != global_group_members(g, &from)) {
-                    return Err(format!("global group `{from}` has different members"));
+            Command::RenameVariableGroup { from, to, members } => {
+                if members.is_some_and(|held| held != variable_group_members(g, &from)) {
+                    return Err(format!("variable group `{from}` has different members"));
                 }
-                let touched = g.rename_global_group(&from, &to)?;
-                let members = Some(global_group_members(g, &to));
-                Ok((Outcome::Nodes(touched), Command::RenameGlobalGroup { from: to, to: from, members }))
+                let touched = g.rename_variable_group(&from, &to)?;
+                let members = Some(variable_group_members(g, &to));
+                Ok((Outcome::Nodes(touched), Command::RenameVariableGroup { from: to, to: from, members }))
             }
 
-            Command::LockGlobal { name, lock } => {
-                let old = g.set_global_lock(&name, lock)?;
-                Ok((Outcome::Ok, Command::LockGlobal { name, lock: old }))
+            Command::LockVariable { name, lock } => {
+                let old = g.set_variable_lock(&name, lock)?;
+                Ok((Outcome::Ok, Command::LockVariable { name, lock: old }))
             }
 
-            Command::LockGlobalGroup { group, lock } => {
-                let old = g.set_global_group_lock(&group, lock)?;
-                Ok((Outcome::Ok, Command::LockGlobalGroup { group, lock: old }))
+            Command::LockVariableGroup { group, lock } => {
+                let old = g.set_variable_group_lock(&group, lock)?;
+                Ok((Outcome::Ok, Command::LockVariableGroup { group, lock: old }))
             }
 
-            Command::SourceGlobal { name, source } => {
-                let old = g.set_global_source(&name, source)?;
-                Ok((Outcome::Ok, Command::SourceGlobal { name, source: old }))
+            Command::SourceVariable { name, source } => {
+                let old = g.set_variable_source(&name, source)?;
+                Ok((Outcome::Ok, Command::SourceVariable { name, source: old }))
             }
 
             Command::LayoutReorderTab { tab, to_index } => {
@@ -760,15 +760,15 @@ impl Command {
 
         })();
         match result {
-            // Global boundary refusals during replay leave a peer's current state in place.
-            Err(_) if global && !fresh => Ok((Outcome::Ok, Command::Compound(vec![]))),
+            // Variable boundary refusals during replay leave a peer's current state in place.
+            Err(_) if variable && !fresh => Ok((Outcome::Ok, Command::Compound(vec![]))),
             other => other,
         }
     }
 }
 
-fn global_group_members(g: &Graph, group: &str) -> (Vec<String>, Vec<String>) {
-    let mut entries: Vec<String> = g.globals().entries()
+fn variable_group_members(g: &Graph, group: &str) -> (Vec<String>, Vec<String>) {
+    let mut entries: Vec<String> = g.variables().entries()
         .filter(|(name, ..)| name.split_once('.').is_some_and(|(held, _)| held == group))
         .map(|(name, ..)| name.to_string()).collect();
     let mut panels: Vec<String> = g.arrangement().control_panels().into_iter()

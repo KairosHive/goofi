@@ -31,7 +31,7 @@ pub use goofi_node::Uid;
 /// archive somebody actually holds — not once per change while the format is still moving.
 const MANIFEST_VERSION: i64 = 1;
 
-use goofi_core::globals::NAME_RULE;
+use goofi_core::variables::NAME_RULE;
 
 /// What a node IS. The thin distinction the backend keeps and the frontend never sees: a leaf runs,
 /// so it carries a thread and params; a facade and a port do not, so they carry neither.
@@ -313,17 +313,17 @@ fn param_change(
     Ok((value, Some(state)))
 }
 
-/// A global as `{value, type}` — the shape in the `.gfi` and the doc.
-pub fn global_to_json(v: &goofi_core::globals::GlobalValue) -> serde_json::Value {
+/// A variable as `{value, type}` — the shape in the `.gfi` and the doc.
+pub fn variable_to_json(v: &goofi_core::variables::VariableValue) -> serde_json::Value {
     serde_json::to_value(v).expect("a scalar enum serializes")
 }
 
-/// The inverse of [`global_to_json`]; `None` if malformed. Type-directed on purpose: a fraction
-/// offered to an `int` global rounds instead of failing.
-pub fn global_from_json(entry: &serde_json::Value) -> Option<goofi_core::globals::GlobalValue> {
-    use goofi_core::globals::GlobalValue;
+/// The inverse of [`variable_to_json`]; `None` if malformed. Type-directed on purpose: a fraction
+/// offered to an `int` variable rounds instead of failing.
+pub fn variable_from_json(entry: &serde_json::Value) -> Option<goofi_core::variables::VariableValue> {
+    use goofi_core::variables::VariableValue;
     serde_json::from_value(entry.clone()).ok().or_else(|| match entry.get("type")?.as_str()? {
-        "int" => Some(GlobalValue::Int(entry.get("value")?.as_f64()?.round() as i64)),
+        "int" => Some(VariableValue::Int(entry.get("value")?.as_f64()?.round() as i64)),
         _ => None,
     })
 }
@@ -355,7 +355,7 @@ struct ParamSource {
     /// Derived: one entry per variable `rewritten` names, resolved against the graph.
     vars: Vec<BoundVar>,
     /// The rewrite's variable list BEFORE resolution — a variable that failed to resolve no longer
-    /// says what it was looking for, and that is what a new node or global has to re-resolve.
+    /// says what it was looking for, and that is what a new node or variable has to re-resolve.
     terms: Vec<expr_rewrite::VarRef>,
     /// Why the GRAPH could not bind this source. Written by `set_source` and nowhere else — it
     /// describes the SOURCE, so it outlives any one instance.
@@ -440,8 +440,8 @@ pub struct Graph {
     evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>>,
     /// uid → parent scope (absent = ROOT). The ONE source of truth for parentage and membership.
     scope_of: HashMap<Uid, Option<Uid>>,
-    /// Patch-scoped globals, system ones seeded and re-asserted by every `clear`/load.
-    globals: goofi_core::globals::GlobalStore,
+    /// Patch-scoped variables, system ones seeded and re-asserted by every `clear`/load.
+    variables: goofi_core::variables::VariableStore,
     /// The registered engines, signal first, reached only through the trait. Registered at the
     /// composition root, so an empty set is a bare MODEL — it serializes, and runs nothing.
     engines: Vec<Box<dyn Engine>>,
@@ -487,10 +487,10 @@ fn edit_params(leaf: &mut Leaf, edit: impl FnOnce(&mut ParamGroups)) {
     edit(Arc::make_mut(&mut leaf.params));
 }
 
-/// A global as the [`Param`] an expression variable carries. The bounds are a carrier's, not a
+/// A variable as the [`Param`] an expression variable carries. The bounds are a carrier's, not a
 /// control's: the evaluator coerces the RESULT to the target param's own type and range.
-fn global_as_param(value: &goofi_core::globals::GlobalValue) -> Param {
-    use goofi_core::globals::GlobalValue as G;
+fn variable_as_param(value: &goofi_core::variables::VariableValue) -> Param {
+    use goofi_core::variables::VariableValue as G;
     match value {
         G::Float(v) => Param::float(*v, f64::NEG_INFINITY, f64::INFINITY),
         G::Int(v) => Param::int(*v, i64::MIN, i64::MAX),
@@ -529,7 +529,7 @@ impl Graph {
             time: Arc::new(goofi_core::time::Time::new()),
             evaluator: None,
             scope_of: HashMap::new(),
-            globals: goofi_core::globals::GlobalStore::new(),
+            variables: goofi_core::variables::VariableStore::new(),
             instance: mint_instance(),
             generations: HashMap::new(),
             epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -549,77 +549,77 @@ impl Graph {
         self.touched.clear();
     }
 
-    /// The authoritative globals store — `entries()` serves the CRDT mirror and the `.gfi`, and an
+    /// The authoritative variables store — `entries()` serves the CRDT mirror and the `.gfi`, and an
     /// expression binding resolves through `get`.
-    pub fn globals(&self) -> &goofi_core::globals::GlobalStore {
-        &self.globals
+    pub fn variables(&self) -> &goofi_core::variables::VariableStore {
+        &self.variables
     }
 
-    /// Apply one global change (a NEW global lands at ordered position `at` — a delete/rename undo
+    /// Apply one variable change (a NEW variable lands at ordered position `at` — a delete/rename undo
     /// re-adds at the original slot; `None` leaves the value alone). Every binding that READS this
-    /// global is re-resolved and re-sent — a global's value is shipped inline.
-    pub fn apply_global_change(
+    /// variable is re-resolved and re-sent — a variable's value is shipped inline.
+    pub fn apply_variable_change(
         &mut self,
         name: &str,
-        value: Option<goofi_core::globals::GlobalValue>,
+        value: Option<goofi_core::variables::VariableValue>,
         at: Option<usize>,
-        control: Option<Option<goofi_core::globals::Control>>,
+        control: Option<Option<goofi_core::variables::Control>>,
     ) -> Result<(), String> {
         if let Some(c) = &control {
-            let held = value.as_ref().or_else(|| self.globals.get(name)).ok_or_else(|| format!("no such global `{name}`"))?;
-            self.globals.check_control(name, held, c.as_ref())?;
+            let held = value.as_ref().or_else(|| self.variables.get(name)).ok_or_else(|| format!("no such variable `{name}`"))?;
+            self.variables.check_control(name, held, c.as_ref())?;
         }
         if let Some(value) = &value {
-            let next_control = control.as_ref().map(|c| c.as_ref()).unwrap_or_else(|| self.globals.control(name));
+            let next_control = control.as_ref().map(|c| c.as_ref()).unwrap_or_else(|| self.variables.control(name));
             if let Some(c) = next_control {
                 if !c.fits(value) {
                     return Err(c.mismatch(value));
                 }
             }
         }
-        self.globals.apply_change(name, value, at)?;
+        self.variables.apply_change(name, value, at)?;
         if let Some(c) = control {
-            self.globals.set_control(name, c)?;
+            self.variables.set_control(name, c)?;
         }
         self.invalidate_bindings_reading(name);
         Ok(())
     }
 
-    /// Delete a global, and with it the widget, the source and the lock that rode on it. A system
+    /// Delete a variable, and with it the widget, the source and the lock that rode on it. A system
     /// one is refused.
-    pub fn remove_global(&mut self, name: &str) -> Result<(), String> {
-        self.globals.remove(name)?;
+    pub fn remove_variable(&mut self, name: &str) -> Result<(), String> {
+        self.variables.remove(name)?;
         self.invalidate_bindings_reading(name);
         Ok(())
     }
 
-    /// Set or clear what a global follows, answering what it followed. The reference is held to
+    /// Set or clear what a variable follows, answering what it followed. The reference is held to
     /// the spelling a param's is; what it names is resolved by the follower, as nodes come and go.
-    pub fn set_global_source(
+    pub fn set_variable_source(
         &mut self,
         name: &str,
-        source: Option<goofi_core::globals::GlobalSource>,
-    ) -> Result<Option<goofi_core::globals::GlobalSource>, String> {
+        source: Option<goofi_core::variables::VariableSource>,
+    ) -> Result<Option<goofi_core::variables::VariableSource>, String> {
         if let Some(s) = &source {
             parse_reference(&s.reference)?;
         }
-        self.globals.set_source(name, source)
+        self.variables.set_source(name, source)
     }
 
-    /// The follower's write: what a global's source delivered. Answers whether anything changed,
+    /// The follower's write: what a variable's source delivered. Answers whether anything changed,
     /// and re-sends every binding that reads it when it did.
-    pub fn follow_global(&mut self, name: &str, value: goofi_core::globals::GlobalValue) -> bool {
-        let changed = self.globals.follow(name, value);
+    pub fn follow_variable(&mut self, name: &str, value: goofi_core::variables::VariableValue) -> bool {
+        let changed = self.variables.follow(name, value);
         if changed {
             self.invalidate_bindings_reading(name);
         }
         changed
     }
 
-    /// Every followed global, resolved: the global, the producer's uid and slot, and the index.
+    /// Every followed variable, resolved: the variable, the producer's uid and slot, and the index.
     /// A reference naming no node is left out — the follower re-asks as nodes come and go.
-    pub fn global_sources(&self) -> Vec<(String, Uid, String, Option<usize>)> {
-        self.globals
+    pub fn variable_sources(&self) -> Vec<(String, Uid, String, Option<usize>)> {
+        self.variables
             .entries()
             .filter_map(|(name, _, _, _, source)| {
                 let s = source?;
@@ -629,51 +629,51 @@ impl Graph {
             .collect()
     }
 
-    /// Lock or unlock one global, answering the lock it held.
-    pub fn set_global_lock(&mut self, name: &str, lock: goofi_core::globals::Lock) -> Result<goofi_core::globals::Lock, String> {
-        self.globals.set_lock(name, lock)
+    /// Lock or unlock one variable, answering the lock it held.
+    pub fn set_variable_lock(&mut self, name: &str, lock: goofi_core::variables::Lock) -> Result<goofi_core::variables::Lock, String> {
+        self.variables.set_lock(name, lock)
     }
 
     /// Lock or unlock a whole group, answering the lock it held.
-    pub fn set_global_group_lock(&mut self, group: &str, lock: Option<goofi_core::globals::Lock>) -> Result<Option<goofi_core::globals::Lock>, String> {
-        self.globals.set_group_lock(group, lock)
+    pub fn set_variable_group_lock(&mut self, group: &str, lock: Option<goofi_core::variables::Lock>) -> Result<Option<goofi_core::variables::Lock>, String> {
+        self.variables.set_group_lock(group, lock)
     }
 
     /// Add an empty group.
-    pub fn add_global_group(&mut self, group: &str, at: Option<usize>) -> Result<(), String> {
+    pub fn add_variable_group(&mut self, group: &str, at: Option<usize>) -> Result<(), String> {
         if self.arrangement.control_panels().iter().any(|(_, held)| held == group) {
-            return Err(format!("global group `{group}` already exists"));
+            return Err(format!("variable group `{group}` already exists"));
         }
-        self.globals.add_group(group, at)
+        self.variables.add_group(group, at)
     }
 
     /// Remove an empty group that no panel uses.
-    pub fn remove_global_group(&mut self, group: &str) -> Result<(), String> {
+    pub fn remove_variable_group(&mut self, group: &str) -> Result<(), String> {
         if self.arrangement.control_panels().iter().any(|(_, held)| held == group) {
-            return Err(format!("global group `{group}` is used by a control panel"));
+            return Err(format!("variable group `{group}` is used by a control panel"));
         }
-        self.globals.remove_group(group)
+        self.variables.remove_group(group)
     }
 
-    /// Rename one global, and rewrite every expression that reads it.
-    pub fn rename_global(&mut self, from: &str, to: &str) -> Result<Vec<Uid>, String> {
-        self.globals.rename(from, to)?;
-        let touched = self.rewrite_global_reads(&[(from.to_string(), to.to_string())]);
+    /// Rename one variable, and rewrite every expression that reads it.
+    pub fn rename_variable(&mut self, from: &str, to: &str) -> Result<Vec<Uid>, String> {
+        self.variables.rename(from, to)?;
+        let touched = self.rewrite_variable_reads(&[(from.to_string(), to.to_string())]);
         self.invalidate_bindings_reading(to);
         Ok(touched)
     }
 
     /// Rename a group, and rewrite every expression that reads any member.
-    pub fn rename_global_group(&mut self, from: &str, to: &str) -> Result<Vec<Uid>, String> {
+    pub fn rename_variable_group(&mut self, from: &str, to: &str) -> Result<Vec<Uid>, String> {
         if self.arrangement.control_panels().iter().any(|(_, group)| group == to) {
-            return Err(format!("global group `{to}` already exists"));
+            return Err(format!("variable group `{to}` already exists"));
         }
         let writes = self.arrangement.regroup(from, to);
-        if writes.is_empty() && !self.globals.has_group(from) {
-            return Err(format!("no global group `{from}`"));
+        if writes.is_empty() && !self.variables.has_group(from) {
+            return Err(format!("no variable group `{from}`"));
         }
-        let moved = self.globals.rename_group(from, to)?;
-        let touched = self.rewrite_global_reads(&moved);
+        let moved = self.variables.rename_group(from, to)?;
+        let touched = self.rewrite_variable_reads(&moved);
         self.arrangement.set_contents(&writes);
         for (_, new) in &moved {
             self.invalidate_bindings_reading(new);
@@ -681,16 +681,16 @@ impl Graph {
         Ok(touched)
     }
 
-    /// Follow a set of global renames into every expression that spells one, answering the nodes
+    /// Follow a set of variable renames into every expression that spells one, answering the nodes
     /// whose source text changed.
-    fn rewrite_global_reads(&mut self, moved: &[(String, String)]) -> Vec<Uid> {
+    fn rewrite_variable_reads(&mut self, moved: &[(String, String)]) -> Vec<Uid> {
         let rename = |name: &str| {
             moved.iter().find(|(old, _)| old == name).map(|(_, new)| new.clone())
         };
         let mut edits: Vec<(Uid, ParamKey, SourceState)> = Vec::new();
         for (uid, entry) in self.leaves() {
             for (key, b) in &entry.sources {
-                if let Some(expression) = expr_rewrite::rename_globals(&b.state.expression, rename) {
+                if let Some(expression) = expr_rewrite::rename_variables(&b.state.expression, rename) {
                     let mut state = b.state.clone();
                     state.expression = expression;
                     edits.push((uid, key.clone(), state));
@@ -729,11 +729,11 @@ impl Graph {
         self.rebind(&all);
     }
 
-    /// Re-resolve and re-send every expression binding that reads global `name`, so its new value
-    /// reaches the nodes reading it (only those bindings pay). Shared by the global mutators.
+    /// Re-resolve and re-send every expression binding that reads variable `name`, so its new value
+    /// reaches the nodes reading it (only those bindings pay). Shared by the variable mutators.
     fn invalidate_bindings_reading(&mut self, name: &str) {
         let reading = self.sources_where(|b| {
-            b.terms.iter().any(|t| matches!(t, expr_rewrite::VarRef::Global { key, .. } if key == name))
+            b.terms.iter().any(|t| matches!(t, expr_rewrite::VarRef::Variable { key, .. } if key == name))
         });
         self.rebind(&reading);
     }
@@ -1373,7 +1373,7 @@ impl Graph {
     /// empty, already worn, or not a legal name. A CREATE degrades where a rename refuses, because
     /// this is also the restore path — a hand-edited archive must cost one name, not the patch.
     fn pick_name(&self, want: &str, base: &str, except: Option<Uid>) -> String {
-        match self.name_taken(want, except) || !goofi_core::globals::is_valid_name(want) {
+        match self.name_taken(want, except) || !goofi_core::variables::is_valid_name(want) {
             true => self.fresh_name(base),
             false => want.to_string(),
         }
@@ -1529,7 +1529,7 @@ impl Graph {
     /// Rename a node. Every `nd('old')` in the patch follows to `nd('new')`, and the referrer uids
     /// come back so the bridge can rebroadcast them. The rewrite happens only on success.
     pub fn rename_node(&mut self, uid: Uid, name: &str) -> Result<Vec<Uid>, String> {
-        if !goofi_core::globals::is_valid_name(name) {
+        if !goofi_core::variables::is_valid_name(name) {
             return Err(format!("`{name}` is not a legal name: {NAME_RULE}"));
         }
         if self.name_in_use(name) {
@@ -1586,18 +1586,18 @@ impl Graph {
                 referrers.push(ruid);
             }
         }
-        // A global follows a producer by the same spelling, so the one rename reaches it too.
-        let followed: Vec<(String, goofi_core::globals::GlobalSource)> = self
-            .globals
+        // A variable follows a producer by the same spelling, so the one rename reaches it too.
+        let followed: Vec<(String, goofi_core::variables::VariableSource)> = self
+            .variables
             .entries()
             .filter_map(|(name, _, _, _, source)| {
                 let s = source?;
                 let reference = expr_rewrite::rename_reference(&s.reference, rename)?;
-                Some((name.to_string(), goofi_core::globals::GlobalSource { reference, index: s.index }))
+                Some((name.to_string(), goofi_core::variables::VariableSource { reference, index: s.index }))
             })
             .collect();
         for (name, source) in followed {
-            let _ = self.globals.set_source(&name, Some(source));
+            let _ = self.variables.set_source(&name, Some(source));
         }
         // Expressions live only on the live flat nodes now (no def templates) — the loop above has
         // already followed the rename into every one.
@@ -2550,7 +2550,7 @@ impl Graph {
             return Err(format!("no such param `{group}/{name}`"));
         };
         // Both retained texts are scanned whatever the mode, because `terms` is what a later
-        // rename or globals edit re-resolves against. Only the active one gets variables and a handle.
+        // rename or variables edit re-resolves against. Only the active one gets variables and a handle.
         let scanned = (!state.expression.is_empty()).then(|| expr_rewrite::rewrite(&state.expression));
         let reference = (!state.reference.is_empty()).then(|| goofi_node::mailbox::split_index(&state.reference)
             .and_then(|(base, index)| parse_reference(base).map(|r| (r, index))));
@@ -2647,7 +2647,7 @@ impl Graph {
         self.touched.push(Touched::Param(uid, key.clone()));
     }
 
-    /// Resolve a rewrite's variables against the graph: a producer output, a global's value, or the
+    /// Resolve a rewrite's variables against the graph: a producer output, a variable's value, or the
     /// reason neither was found. Event ids come from §3.2's `65..=128` budget, lowest free first.
     fn resolve_vars(&self, consumer: Uid, key: &ParamKey, refs: &[expr_rewrite::VarRef]) -> Vec<BoundVar> {
         let mut taken: Vec<EventId> = self
@@ -2680,11 +2680,11 @@ impl Graph {
         };
         refs.iter()
             .map(|r| match r {
-                expr_rewrite::VarRef::Global { var, key } => match self.globals.get(key) {
-                    Some(v) => BoundVar::Value { var: var.clone(), value: global_as_param(v) },
+                expr_rewrite::VarRef::Variable { var, key } => match self.variables.get(key) {
+                    Some(v) => BoundVar::Value { var: var.clone(), value: variable_as_param(v) },
                     None => BoundVar::Missing {
                         var: var.clone(),
-                        reason: format!("global `{key}` is not defined"),
+                        reason: format!("variable `{key}` is not defined"),
                     },
                 },
                 expr_rewrite::VarRef::Node { var, name, slot } => {
@@ -3058,7 +3058,7 @@ impl Graph {
         // not a command and never becomes one: the user's undoable act is the param they moved,
         // and this is what that param MEANS once the engine has answered.
         for (name, value) in published {
-            if self.globals.publish(name, value) {
+            if self.variables.publish(name, value) {
                 self.invalidate_bindings_reading(name);
             }
         }
@@ -3132,9 +3132,9 @@ impl Graph {
         // An un-echoed refresh names a node the patch no longer holds — and a load restores uids,
         // so that number can come back and the echo be read as an answer nobody asked for.
         self.refreshed.clear();
-        // Globals are patch CONTENT, so a load starts from a fresh seeded store; `dyn_types` is
+        // Variables are patch CONTENT, so a load starts from a fresh seeded store; `dyn_types` is
         // catalog and stays.
-        self.globals = goofi_core::globals::GlobalStore::new();
+        self.variables = goofi_core::variables::VariableStore::new();
         // Time belongs to the PATCH: one loaded an hour in must read what it would at boot. Every
         // engine holds this same object, so there is nothing to push.
         self.time.restart();
@@ -3151,7 +3151,7 @@ impl Graph {
     }
 
     /// The `patch.yaml` manifest inside the archive: `nodes`/`links` and a flat `scopes` block
-    /// under `root`, `globals` at the top. A plain flat patch has an empty `scopes` block.
+    /// under `root`, `variables` at the top. A plain flat patch has an empty `scopes` block.
     /// Every uid `roots` reaches: the roots, whatever their scopes hold to any depth, and those
     /// scopes' ports. The subtree a copy, a delete and an export all mean by "these nodes".
     pub fn subtree_of(&self, roots: &[Uid]) -> Vec<Uid> {
@@ -3392,14 +3392,14 @@ impl Graph {
         let root = self.fragment(&self.all_uids());
         // An ORDERED array, because the order is observable and a keyed map would alphabetize it
         // away. On load, `reassert_system` back-fills — so an older patch picks up a new default.
-        let globals: Vec<Value> = self
-            .globals
+        let variables: Vec<Value> = self
+            .variables
             .entries()
-            // An ephemeral global is goofi's own to say; writing it into a patch would carry one
+            // An ephemeral variable is goofi's own to say; writing it into a patch would carry one
             // machine's answer onto another.
-            .filter(|(name, ..)| !self.globals.is_ephemeral(name))
+            .filter(|(name, ..)| !self.variables.is_ephemeral(name))
             .map(|(name, value, lock, control, source)| {
-                let mut e = global_to_json(value); // {value, type}
+                let mut e = variable_to_json(value); // {value, type}
                 if let Value::Object(ref mut m) = e {
                     m.insert("name".to_string(), Value::String(name.to_string()));
                     if let Some(c) = control {
@@ -3416,17 +3416,17 @@ impl Graph {
             })
             .collect();
         // The system group's lock is goofi's own and re-asserted on load, so a file never carries it.
-        let global_groups: serde_json::Map<String, Value> = self
-            .globals
+        let variable_groups: serde_json::Map<String, Value> = self
+            .variables
             .groups()
-            .filter(|(g, _)| *g != goofi_core::globals::SYSTEM_GROUP)
+            .filter(|(g, _)| *g != goofi_core::variables::SYSTEM_GROUP)
             .map(|(g, lock)| (g.to_string(), json!({ "lock": lock })))
             .collect();
         let mut doc = json!({
             "version": MANIFEST_VERSION,
             "goofi": env!("CARGO_PKG_VERSION"),
-            "globals": Value::Array(globals),
-            "global_groups": global_groups,
+            "variables": Value::Array(variables),
+            "variable_groups": variable_groups,
             "root": root,
         });
         if let Value::Object(ref mut m) = doc {
@@ -3472,15 +3472,15 @@ impl Graph {
             self.resolve_type(ty)?;
         }
 
-        // Every global name is checked BEFORE the swap: a refusal after `clear` would leave the
+        // Every variable name is checked BEFORE the swap: a refusal after `clear` would leave the
         // patch destroyed, and a load is graph and workspace or neither.
-        if let Some(serde_json::Value::Array(arr)) = doc.get("globals") {
+        if let Some(serde_json::Value::Array(arr)) = doc.get("variables") {
             for entry in arr {
                 if let Some(name) = entry.get("name").and_then(|v| v.as_str()) {
-                    if !goofi_core::globals::is_valid_global_name(name) {
+                    if !goofi_core::variables::is_valid_variable_name(name) {
                         return Err(format!(
-                            "this patch holds the global `{name}`, which is not `group.element`: {}",
-                            goofi_core::globals::GLOBAL_NAME_RULE
+                            "this patch holds the variable `{name}`, which is not `group.element`: {}",
+                            goofi_core::variables::VARIABLE_NAME_RULE
                         ));
                     }
                 }
@@ -3489,32 +3489,32 @@ impl Graph {
 
         self.clear();
         self.set_workspace(workspace);
-        // Globals load BEFORE nodes so a node's `globals.*` default-expression resolves at
+        // Variables load BEFORE nodes so a node's `variables.*` default-expression resolves at
         // instantiation, IN FILE ORDER. Malformed entries are skipped (best-effort load).
-        if let Some(serde_json::Value::Array(arr)) = doc.get("globals") {
+        if let Some(serde_json::Value::Array(arr)) = doc.get("variables") {
             for entry in arr {
                 if let (Some(name), Some(value)) =
-                    (entry.get("name").and_then(|v| v.as_str()), global_from_json(entry))
+                    (entry.get("name").and_then(|v| v.as_str()), variable_from_json(entry))
                 {
-                    let _ = self.globals.apply_change(name, Some(value), None);
+                    let _ = self.variables.apply_change(name, Some(value), None);
                     if let Some(c) = entry.get("control") {
                         if let Ok(c) = serde_json::from_value(c.clone()) {
-                            let _ = self.globals.set_control(name, Some(c));
+                            let _ = self.variables.set_control(name, Some(c));
                         }
                     }
                     if let Some(s) = entry.get("source").and_then(|s| serde_json::from_value(s.clone()).ok()) {
-                        let _ = self.globals.set_source(name, Some(s));
+                        let _ = self.variables.set_source(name, Some(s));
                     }
                     if let Some(l) = entry.get("lock").and_then(|l| serde_json::from_value(l.clone()).ok()) {
-                        let _ = self.globals.set_lock(name, l);
+                        let _ = self.variables.set_lock(name, l);
                     }
                 }
             }
         }
-        if let Some(serde_json::Value::Object(groups)) = doc.get("global_groups") {
+        if let Some(serde_json::Value::Object(groups)) = doc.get("variable_groups") {
             for (group, rec) in groups {
                 if let Some(l) = rec.get("lock").and_then(|l| serde_json::from_value(l.clone()).ok()) {
-                    let _ = self.globals.set_group_lock(group, Some(l));
+                    let _ = self.variables.set_group_lock(group, Some(l));
                 }
             }
         }
@@ -3724,7 +3724,7 @@ fn parse_reference(reference: &str) -> Result<expr_rewrite::VarRef, String> {
     let Some((name, slot)) = reference.split_once('.') else {
         return Err(format!("a reference spells `node.slot`, not `{reference}`"));
     };
-    if !goofi_core::globals::is_valid_name(name) || !goofi_core::globals::is_valid_name(slot) {
+    if !goofi_core::variables::is_valid_name(name) || !goofi_core::variables::is_valid_name(slot) {
         return Err(format!("`{reference}` is not a legal reference: {NAME_RULE}"));
     }
     Ok(expr_rewrite::VarRef::Node {

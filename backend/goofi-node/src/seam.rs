@@ -27,10 +27,10 @@ pub type EventId = u8;
 pub enum BoundVar {
     /// A producer's output slot, and the doorbell id it rings this consumer with.
     Stream { var: String, producer: Uid, slot: &'static str, event_id: EventId },
-    /// A `globals.*` read, resolved and shipped inline — a globals edit re-sends the binding.
+    /// A `variables.*` read, resolved and shipped inline — a variables edit re-sends the binding.
     Value { var: String, value: Param },
     /// The graph could not resolve it: an unknown node, a slot that does not exist, an ambiguous
-    /// bare `nd()` on a multi-output producer, a global that is not defined.
+    /// bare `nd()` on a multi-output producer, a variable that is not defined.
     Missing { var: String, reason: String },
 }
 
@@ -285,11 +285,11 @@ pub trait Engine: Send {
     fn settle(&mut self, view: &GraphView<'_>, touched: &[Touched]);
     /// Hand over every queued health report. A pull: the caller owns the pace.
     fn drain(&mut self, apply: &mut dyn FnMut(Uid, Status)) -> usize;
-    /// The facts this engine ALONE decides, for the `system.*` globals to carry — a rate, a
+    /// The facts this engine ALONE decides, for the `system.*` variables to carry — a rate, a
     /// a driver. A pull like the drain, and the graph is the only writer, so an engine never needs
     /// a store of its own for what the whole patch may read. Every name must be an ephemeral
-    /// global: goofi says what it holds and no patch carries it.
-    fn published(&self) -> Vec<(&'static str, goofi_core::globals::GlobalValue)> {
+    /// variable: goofi says what it holds and no patch carries it.
+    fn published(&self) -> Vec<(&'static str, goofi_core::variables::VariableValue)> {
         Vec::new()
     }
     /// One imperative to a node's own thread — what settled state cannot express. The answer, if
@@ -311,7 +311,7 @@ pub trait Engine: Send {
     }
     /// What a slot's readers want of its frames: the box every reader is a viewer of would reduce
     /// to anyway and the sample width they draw, or `None` for the frame itself — which is what a
-    /// global following the slot, or a snapshot, requires. A producer that can make exactly that
+    /// variable following the slot, or a snapshot, requires. A producer that can make exactly that
     /// spends nothing downstream; one that cannot ignores this. A strictly one-way projection of
     /// the bridge's own plan, never a second owner of it.
     fn view_demand(&mut self, _uid: Uid, _slot: &str, _want: Option<goofi_view::ViewWant>) {}

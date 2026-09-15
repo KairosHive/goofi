@@ -7,7 +7,7 @@ import { workspace } from 'panelty';
 import { history } from '$lib/stores/history.svelte';
 import type { LinkInfo } from '$lib/api/control';
 import type { ControlView } from '$lib/crdt/graphDoc';
-import type { GlobalType, LockView } from '$lib/crdt/graphDoc';
+import type { VariableType, LockView } from '$lib/crdt/graphDoc';
 
 /** The editor panel that viewport/selection verbs default to. */
 function activeEditor(): string | null {
@@ -31,19 +31,19 @@ export const commands = {
 		graph().groupNodes(names, pos),
 	expandInstance: (instId: string): Promise<void> => graph().expandInstance(instId),
 
-	addGlobal: (
+	addVariable: (
 		name: string,
 		value: number | string | boolean,
-		type: GlobalType,
+		type: VariableType,
 		control?: ControlView
-	): Promise<void> => graph().addGlobal(name, value, type, control),
-	removeGlobal: (name: string): Promise<void> => graph().removeGlobal(name),
-	setGlobalControl: (name: string, control: ControlView): Promise<void> =>
-		graph().setGlobalControl(name, control),
-	renameGlobal: (from: string, to: string): Promise<void> => graph().renameGlobal(from, to),
-	renameGlobalGroup: (from: string, to: string): Promise<void> => graph().renameGlobalGroup(from, to),
-	setGlobalSource: (name: string, reference: string, index?: number): Promise<void> =>
-		graph().setGlobalSource(name, reference, index),
+	): Promise<void> => graph().addVariable(name, value, type, control),
+	removeVariable: (name: string): Promise<void> => graph().removeVariable(name),
+	setVariableControl: (name: string, control: ControlView): Promise<void> =>
+		graph().setVariableControl(name, control),
+	renameVariable: (from: string, to: string): Promise<void> => graph().renameVariable(from, to),
+	renameVariableGroup: (from: string, to: string): Promise<void> => graph().renameVariableGroup(from, to),
+	setVariableSource: (name: string, reference: string, index?: number): Promise<void> =>
+		graph().setVariableSource(name, reference, index),
 	addControl: (group: string, kind: ControlView['kind'], cell?: Cell): Promise<string> =>
 		graph().addControl(group, kind, cell),
 	editControl: (group: string, element: string, patch: ControlPatch): Promise<void> =>
@@ -51,12 +51,12 @@ export const commands = {
 	removeControl: (group: string, element: string): Promise<void> => graph().removeControl(group, element),
 	sourceControl: (group: string, element: string, reference: string, index?: number): Promise<void> =>
 		graph().sourceControl(group, element, reference, index),
-	lockGlobal: (name: string, lock: Partial<LockView>): Promise<void> => graph().lockGlobal(name, lock),
-	addGlobalEntry: (group: string): Promise<string> => graph().addGlobalEntry(group),
-	addGlobalGroup: (): Promise<string> => graph().addGlobalGroup(),
-	setGlobalType: (name: string, type: GlobalType): Promise<void> => graph().setGlobalType(name, type),
-	lockGlobalGroup: (group: string, lock: Partial<LockView>): Promise<void> =>
-		graph().lockGlobalGroup(group, lock),
+	lockVariable: (name: string, lock: Partial<LockView>): Promise<void> => graph().lockVariable(name, lock),
+	addVariableEntry: (group: string): Promise<string> => graph().addVariableEntry(group),
+	addVariableGroup: (): Promise<string> => graph().addVariableGroup(),
+	setVariableType: (name: string, type: VariableType): Promise<void> => graph().setVariableType(name, type),
+	lockVariableGroup: (group: string, lock: Partial<LockView>): Promise<void> =>
+		graph().lockVariableGroup(group, lock),
 
 	armSlot: (node: string, slot: string): Promise<void> => graph().armSlot(node, slot),
 	setRecordQuality: (node: string, slot: string, quality: VideoQuality): Promise<void> =>

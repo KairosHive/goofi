@@ -395,7 +395,7 @@ impl NodeRuntime {
     /// Write a param. A `Literal` on a bound param unbinds it (§3.4); an `Expr` binds it and is
     /// evaluated once here, or a binding error could never appear on a node that never runs.
     pub fn set_param(&mut self, key: ParamKey, value: ParamValue) {
-        // §5.2: a re-send carrying a resolved value IS an arrival — that is how a globals edit
+        // §5.2: a re-send carrying a resolved value IS an arrival — that is how a variables edit
         // reaches a bound param — while binding a bare `nd()` reference only subscribes.
         let triggering = match &value {
             ParamValue::Literal(_) => false,

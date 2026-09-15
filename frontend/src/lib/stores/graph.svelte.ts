@@ -33,13 +33,13 @@ import {
 	viewersJson,
 	baselineJson,
 	recordedSlots,
-	globalViews,
-	globalGroupLocks,
+	variableViews,
+	variableGroupLocks,
 	arrangementTabs,
 	type Doc,
-	type GlobalView,
+	type VariableView,
 	type ControlView,
-	type GlobalType,
+	type VariableType,
 	type LockView
 } from '$lib/crdt/graphDoc';
 
@@ -124,10 +124,10 @@ export class GraphStore {
 	/** What each stream's cumulative `dropped` was on the last report. */
 	private _droppedCounts: Record<string, number> = {};
 
-	/** Patch globals (system + user), doc-authoritative, in system-first/creation order. */
-	globals = $state<GlobalView[]>([]);
-	/** Every global group that carries a lock, by name. */
-	globalGroups = $state<Record<string, LockView>>({});
+	/** Patch variables (system + user), doc-authoritative, in system-first/creation order. */
+	variables = $state<VariableView[]>([]);
+	/** Every variable group that carries a lock, by name. */
+	variableGroups = $state<Record<string, LockView>>({});
 
 	/** Bumps on every WHOLESALE graph load, never on an incremental add/remove; editors re-fit on it. */
 	loadEpoch = $state(0);
@@ -191,8 +191,8 @@ export class GraphStore {
 	private _syncFromDoc(): void {
 		const doc = this._sync.doc;
 		this.links = linkViews(doc);
-		this.globals = globalViews(doc);
-		this.globalGroups = globalGroupLocks(doc);
+		this.variables = variableViews(doc);
+		this.variableGroups = variableGroupLocks(doc);
 		this.armed = recordedSlots(doc);
 		// The workspace store rebuilds its tree from this; the client holds no second copy.
 		workspace().syncFromDoc(arrangementTabs(doc));
@@ -236,8 +236,8 @@ export class GraphStore {
 	private _resetProjection(): void {
 		this.nodes = [];
 		this.links = [];
-		this.globals = [];
-		this.globalGroups = {};
+		this.variables = [];
+		this.variableGroups = {};
 		this.armed = [];
 		// `_snapshotRuntime` is NOT cleared: `_replaceSnapshot` ran first, so it already holds the
 		// INCOMING session's overlay. The arrangement store is a separate singleton, so it is here.
@@ -441,7 +441,7 @@ export class GraphStore {
 		if (r?.changed) this._recordGraphCmd(`Disarm ${slot}`);
 	}
 
-	/** Start a recording. Both fields fall back to the `record.*` globals in the backend. */
+	/** Start a recording. Both fields fall back to the `record.*` variables in the backend. */
 	async startRecording(name: string, root: string): Promise<string> {
 		const r = await this.ctl.call<{ folder: string }>('record start', { name, root });
 		return r?.folder ?? '';
@@ -500,72 +500,72 @@ export class GraphStore {
 		this._recordGraphCmd(`Set ${name}`);
 	}
 
-	/** Add a NEW user global; the server refuses a name the patch already holds. A `control` makes
+	/** Add a NEW user variable; the server refuses a name the patch already holds. A `control` makes
 	 * it a control-panel element. */
-	async addGlobal(
+	async addVariable(
 		name: string,
 		value: number | string | boolean,
-		type: GlobalType,
+		type: VariableType,
 		control?: ControlView
 	): Promise<void> {
-		if (this.globals.some((g) => g.name === name)) throw new Error(`global ${name} already exists`);
-		await this.ctl.call('global entry add', control ? { name, value, type, control } : { name, value, type });
-		this._recordGraphCmd(`Add global ${name}`);
+		if (this.variables.some((g) => g.name === name)) throw new Error(`variable ${name} already exists`);
+		await this.ctl.call('variable entry add', control ? { name, value, type, control } : { name, value, type });
+		this._recordGraphCmd(`Add variable ${name}`);
 	}
 
-	/** Edit an existing global's value, keeping its type. */
-	async setGlobalValue(name: string, value: number | string | boolean): Promise<void> {
-		if (!this.globals.some((g) => g.name === name)) throw new Error(`no global ${name}`);
-		await this.ctl.call('global entry edit', { name, value });
-		this._recordGraphCmd(`Set global ${name}`);
+	/** Edit an existing variable's value, keeping its type. */
+	async setVariableValue(name: string, value: number | string | boolean): Promise<void> {
+		if (!this.variables.some((g) => g.name === name)) throw new Error(`no variable ${name}`);
+		await this.ctl.call('variable entry edit', { name, value });
+		this._recordGraphCmd(`Set variable ${name}`);
 	}
 
-	async setGlobalType(name: string, type: GlobalType): Promise<void> {
-		await this.ctl.call('global entry edit', { name, type });
-		this._recordGraphCmd(`Change global ${name} type`);
+	async setVariableType(name: string, type: VariableType): Promise<void> {
+		await this.ctl.call('variable entry edit', { name, type });
+		this._recordGraphCmd(`Change variable ${name} type`);
 	}
 
-	async addGlobalEntry(group: string): Promise<string> {
-		const result = await this.ctl.call('global entry add', { group }) as { name: string };
-		this._recordGraphCmd(`Add global ${result.name}`);
+	async addVariableEntry(group: string): Promise<string> {
+		const result = await this.ctl.call('variable entry add', { group }) as { name: string };
+		this._recordGraphCmd(`Add variable ${result.name}`);
 		return result.name;
 	}
 
-	async addGlobalGroup(): Promise<string> {
-		const result = await this.ctl.call('global group add', {}) as { group: string };
-		this._recordGraphCmd(`Add global group ${result.group}`);
+	async addVariableGroup(): Promise<string> {
+		const result = await this.ctl.call('variable group add', {}) as { group: string };
+		this._recordGraphCmd(`Add variable group ${result.group}`);
 		return result.group;
 	}
 
-	/** Remove a user global (a system global is refused by the server). */
-	async removeGlobal(name: string): Promise<void> {
-		await this.ctl.call('global entry remove', { name });
-		this._recordGraphCmd(`Remove global ${name}`);
+	/** Remove a user variable (a system variable is refused by the server). */
+	async removeVariable(name: string): Promise<void> {
+		await this.ctl.call('variable entry remove', { name });
+		this._recordGraphCmd(`Remove variable ${name}`);
 	}
 
-	/** Rename a user global; every expression that reads it is rewritten by the manager. */
-	async renameGlobal(oldName: string, newName: string): Promise<void> {
-		if (!this.globals.some((g) => g.name === oldName)) throw new Error(`no global ${oldName}`);
-		await this.ctl.call('global entry rename', { name: oldName, to: newName });
-		this._recordGraphCmd(`Rename global ${oldName} → ${newName}`);
+	/** Rename a user variable; every expression that reads it is rewritten by the manager. */
+	async renameVariable(oldName: string, newName: string): Promise<void> {
+		if (!this.variables.some((g) => g.name === oldName)) throw new Error(`no variable ${oldName}`);
+		await this.ctl.call('variable entry rename', { name: oldName, to: newName });
+		this._recordGraphCmd(`Rename variable ${oldName} → ${newName}`);
 	}
 
 	/** Set a control element's widget, its range or its place. */
-	async setGlobalControl(name: string, control: ControlView): Promise<void> {
-		await this.ctl.call('global entry edit', { name, control });
+	async setVariableControl(name: string, control: ControlView): Promise<void> {
+		await this.ctl.call('variable entry edit', { name, control });
 		this._recordGraphCmd(`Edit control ${name}`);
 	}
 
 	/** Rename a group, moving every member with it. */
-	async renameGlobalGroup(from: string, to: string): Promise<void> {
-		await this.ctl.call('global group rename', { from, to });
-		this._recordGraphCmd(`Rename global group ${from} → ${to}`);
+	async renameVariableGroup(from: string, to: string): Promise<void> {
+		await this.ctl.call('variable group rename', { from, to });
+		this._recordGraphCmd(`Rename variable group ${from} → ${to}`);
 	}
 
-	/** Make a global follow `node.slot` (and `index` into a wide frame); an empty reference clears. */
-	async setGlobalSource(name: string, reference: string, index?: number): Promise<void> {
-		await this.ctl.call('global entry source', index === undefined ? { name, reference } : { name, reference, index });
-		this._recordGraphCmd(`Source global ${name}`);
+	/** Make a variable follow `node.slot` (and `index` into a wide frame); an empty reference clears. */
+	async setVariableSource(name: string, reference: string, index?: number): Promise<void> {
+		await this.ctl.call('variable entry source', index === undefined ? { name, reference } : { name, reference, index });
+		this._recordGraphCmd(`Source variable ${name}`);
 	}
 
 	/** Bear a widget in a control panel's group through the `control` door, which lifts the
@@ -588,13 +588,13 @@ export class GraphStore {
 		this._recordGraphCmd(`Source ${group}.${element}`);
 	}
 
-	/** The first output of node `uid` that can feed the global named `name`, as `node.slot`. */
+	/** The first output of node `uid` that can feed the variable named `name`, as `node.slot`. */
 	feedFor(name: string, uid: string): string | null {
-		const gv = this.globals.find((v) => v.name === name);
+		const gv = this.variables.find((v) => v.name === name);
 		return gv ? this.referenceFor(uid, gv.type) : null;
 	}
 
-	/** The `node.slot` a param or a global of `type` may follow on node `uid`, or null for none. A
+	/** The `node.slot` a param or a variable of `type` may follow on node `uid`, or null for none. A
 	 * facade keys its slots by port uid and a reference names the port, so the LABEL is the half. */
 	referenceFor(uid: string, type: string): string | null {
 		const node = this.nodeById(uid);
@@ -606,7 +606,7 @@ export class GraphStore {
 
 	/** Make the widget named `name` follow the first output of node `uid` that can feed it. */
 	async linkControl(name: string, uid: string): Promise<string | null> {
-		const gv = this.globals.find((v) => v.name === name);
+		const gv = this.variables.find((v) => v.name === name);
 		const reference = this.feedFor(name, uid);
 		if (gv && reference) await this.sourceControl(gv.group, gv.element, reference);
 		return reference;
@@ -617,16 +617,16 @@ export class GraphStore {
 		this._recordGraphCmd(`Remove ${group}.${element}`);
 	}
 
-	/** Lock or unlock one global on its own account; an axis not named keeps what it has. */
-	async lockGlobal(name: string, lock: Partial<LockView>): Promise<void> {
-		await this.ctl.call('global entry lock', { name, ...lock });
-		this._recordGraphCmd(`Lock global ${name}`);
+	/** Lock or unlock one variable on its own account; an axis not named keeps what it has. */
+	async lockVariable(name: string, lock: Partial<LockView>): Promise<void> {
+		await this.ctl.call('variable entry lock', { name, ...lock });
+		this._recordGraphCmd(`Lock variable ${name}`);
 	}
 
 	/** Lock or unlock a whole group; an axis not named keeps what it has. */
-	async lockGlobalGroup(group: string, lock: Partial<LockView>): Promise<void> {
-		await this.ctl.call('global group lock', { group, ...lock });
-		this._recordGraphCmd(`Lock global group ${group}`);
+	async lockVariableGroup(group: string, lock: Partial<LockView>): Promise<void> {
+		await this.ctl.call('variable group lock', { group, ...lock });
+		this._recordGraphCmd(`Lock variable group ${group}`);
 	}
 
 	/** Ask a live node to re-evaluate a param's options. Options only, never the value, so it is

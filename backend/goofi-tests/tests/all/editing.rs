@@ -84,26 +84,26 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("node edit", j!({ "node": hex(osc), "name": "carrier", "pos": [40.0, 60.0],
                              "viewer": [{ "slot": "out", "kind": "line" }] }));
     g.set_param(osc, "output", "sfreq", 128.0);
-    g.call("global entry add", j!({ "name": "patch.subj", "value": "P01", "type": "string" }));
-    // Every global is in a group, so a bare name names nothing and is refused.
-    let why = g.refuse("global entry add", j!({ "name": "loose", "value": 1.0, "type": "float" }));
-    assert!(why.contains("group"), "an ungrouped global names the rule: {why}");
+    g.call("variable entry add", j!({ "name": "patch.subj", "value": "P01", "type": "string" }));
+    // Every variable is in a group, so a bare name names nothing and is refused.
+    let why = g.refuse("variable entry add", j!({ "name": "loose", "value": 1.0, "type": "float" }));
+    assert!(why.contains("group"), "an ungrouped variable names the rule: {why}");
     // A rename is a compound: set the new name, delete the old, ONE undo step.
     g.call("compound", j!({ "ops": [
-        { "op": "global entry add", "payload": { "name": "patch.participant", "value": "P01", "type": "string" } },
-        { "op": "global entry remove", "payload": { "name": "patch.subj" } },
+        { "op": "variable entry add", "payload": { "name": "patch.participant", "value": "P01", "type": "string" } },
+        { "op": "variable entry remove", "payload": { "name": "patch.subj" } },
     ] }));
     // A rename of an element or of its group follows into every expression that reads it, and
     // each is ONE command with an exact inverse.
     g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude",
-                                   "expression": "globals.patch.participant * 2" }));
+                                   "expression": "variables.patch.participant * 2" }));
     let expr = |g: &Goofi| g.doc()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["expr"].clone();
-    g.call("global entry rename", j!({ "name": "patch.participant", "to": "patch.handle" }));
-    assert_eq!(expr(&g), j!("globals.patch.handle * 2"), "the element rename followed");
-    g.call("global group rename", j!({ "from": "patch", "to": "desk" }));
-    assert_eq!(expr(&g), j!("globals.desk.handle * 2"), "the group rename followed");
-    assert!(g.doc()["globals"]["desk.handle"].is_object(), "the member moved with its group");
-    let why = g.refuse("global entry rename", j!({ "name": "desk.handle", "to": "loose" }));
+    g.call("variable entry rename", j!({ "name": "patch.participant", "to": "patch.handle" }));
+    assert_eq!(expr(&g), j!("variables.patch.handle * 2"), "the element rename followed");
+    g.call("variable group rename", j!({ "from": "patch", "to": "desk" }));
+    assert_eq!(expr(&g), j!("variables.desk.handle * 2"), "the group rename followed");
+    assert!(g.doc()["variables"]["desk.handle"].is_object(), "the member moved with its group");
+    let why = g.refuse("variable entry rename", j!({ "name": "desk.handle", "to": "loose" }));
     assert!(why.contains("group"), "a rename out of every group is refused: {why}");
 
     // A control panel names its group the way an expression does, so the ONE rename moves both.
@@ -114,34 +114,34 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
         let raw = entries(g)[&first_panel(g)]["state"].as_str().unwrap_or("null").to_string();
         serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null)["group"].clone()
     };
-    g.call("global group rename", j!({ "from": "desk", "to": "board" }));
+    g.call("variable group rename", j!({ "from": "desk", "to": "board" }));
     assert_eq!(group_of(&g), j!("board"), "the panel followed its group");
-    g.call("global group rename", j!({ "from": "board", "to": "desk" }));
+    g.call("variable group rename", j!({ "from": "board", "to": "desk" }));
     // A group a panel names is a group with no member yet, and it renames like any other; one
     // that nothing names is not a group at all.
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "state": { "group": "solo" } }));
-    g.call("global group rename", j!({ "from": "solo", "to": "duo" }));
+    g.call("variable group rename", j!({ "from": "solo", "to": "duo" }));
     assert_eq!(group_of(&g), j!("duo"), "the memberless group renamed through its panel");
-    let why = g.refuse("global group rename", j!({ "from": "nobody", "to": "somebody" }));
-    assert!(why.contains("no global group"), "{why}");
-    // A global can FOLLOW a producer: the manager writes it on every frame that changes it, and
+    let why = g.refuse("variable group rename", j!({ "from": "nobody", "to": "somebody" }));
+    assert!(why.contains("no variable group"), "{why}");
+    // A variable can FOLLOW a producer: the manager writes it on every frame that changes it, and
     // nobody else may set it until the source is cleared. The reference follows a node rename.
-    g.call("global entry add", j!({ "name": "desk.level", "value": 0.0, "type": "float" }));
-    g.call("global entry source", j!({ "name": "desk.level", "reference": "carrier.out" }));
-    g.until("the followed global to take the LFO's value", |g| {
-        g.doc()["globals"]["desk.level"]["value"].as_f64().filter(|v| *v != 0.0)
+    g.call("variable entry add", j!({ "name": "desk.level", "value": 0.0, "type": "float" }));
+    g.call("variable entry source", j!({ "name": "desk.level", "reference": "carrier.out" }));
+    g.until("the followed variable to take the LFO's value", |g| {
+        g.doc()["variables"]["desk.level"]["value"].as_f64().filter(|v| *v != 0.0)
     });
-    let why = g.refuse("global entry edit", j!({ "name": "desk.level", "value": 0.5 }));
+    let why = g.refuse("variable entry edit", j!({ "name": "desk.level", "value": 0.5 }));
     assert!(why.contains("follows") && why.contains("carrier.out"), "{why}");
     g.call("node edit", j!({ "node": hex(osc), "name": "lfo" }));
-    assert_eq!(g.doc()["globals"]["desk.level"]["source"]["reference"], j!("lfo.out"), "the source followed the rename");
+    assert_eq!(g.doc()["variables"]["desk.level"]["source"]["reference"], j!("lfo.out"), "the source followed the rename");
     g.call("node edit", j!({ "node": hex(osc), "name": "carrier" }));
-    g.call("global entry source", j!({ "name": "desk.level", "reference": "" }));
-    assert!(g.doc()["globals"]["desk.level"].get("source").is_none(), "an empty reference clears it");
-    assert_eq!(g.call("global entry edit", j!({ "name": "desk.level", "value": 0.5 }))["value"], 0.5);
+    g.call("variable entry source", j!({ "name": "desk.level", "reference": "" }));
+    assert!(g.doc()["variables"]["desk.level"].get("source").is_none(), "an empty reference clears it");
+    assert_eq!(g.call("variable entry edit", j!({ "name": "desk.level", "value": 0.5 }))["value"], 0.5);
     // …and it STAYS: the producer is still running, and a pick it made before the clear must not
     // land on top of what the author typed after it.
-    assert!(g.stays(|g| g.doc()["globals"]["desk.level"]["value"] == j!(0.5)), "the cleared source writes no more");
+    assert!(g.stays(|g| g.doc()["variables"]["desk.level"]["value"] == j!(0.5)), "the cleared source writes no more");
 
     // A panel made a control panel with no group of its own is born naming a fresh one.
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "viewer" }));
@@ -155,17 +155,17 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     assert_eq!((&born["name"], &born["control"]["x"], &born["control"]["y"]), (&j!("control0.slider0"), &j!(4.0), &j!(0.0)),
                "placed in the first free cell beside the knob: {born}");
     g.call("control edit", j!({ "group": "control0", "element": "slider0", "name": "level", "max": 10.0 }));
-    assert_eq!(g.doc()["globals"]["control0.level"]["control"]["max"], 10.0);
+    assert_eq!(g.doc()["variables"]["control0.level"]["control"]["max"], 10.0);
     g.call("control source", j!({ "group": "control0", "element": "level", "reference": "carrier.out" }));
     let listed = g.call("control list", j!({}));
     assert_eq!(listed["groups"]["control0"]["elements"][1]["source"]["reference"], "carrier.out", "{listed}");
     assert_eq!(listed["panels"][0]["group"], "control0", "{listed}");
     // A widget that FOLLOWS a producer is still a widget: a move edits the record BESIDE the value
     // and never the value, so neither a source nor a value lock refuses the drag that made it.
-    g.call("global entry lock", j!({ "name": "control0.level", "value": true }));
+    g.call("variable entry lock", j!({ "name": "control0.level", "value": true }));
     g.call("control edit", j!({ "group": "control0", "element": "level", "x": 0.0, "y": 3.0 }));
-    assert_eq!(g.doc()["globals"]["control0.level"]["control"]["y"], 3.0, "the followed widget moved");
-    g.call("global entry lock", j!({ "name": "control0.level", "value": false }));
+    assert_eq!(g.doc()["variables"]["control0.level"]["control"]["y"], 3.0, "the followed widget moved");
+    g.call("variable entry lock", j!({ "name": "control0.level", "value": false }));
     // A `paint` widget takes turtle steps from the CLI. The op PARSES — so a refusal names the line
     // — and answers the strokes it made of them; the WIDGET paints those, by the code a hand
     // reaches, so a script and a mouse are one painter and never two.
@@ -180,19 +180,19 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let why = g.refuse("control paint", j!({ "group": "control0", "element": "knob0", "steps": "forward 10" }));
     assert!(why.contains("knob"), "only a `paint` widget takes steps: {why}");
 
-    for kind in goofi_core::globals::ControlKind::ALL {
+    for kind in goofi_core::variables::ControlKind::ALL {
         let born = g.call("control add", j!({ "group": "kinds", "kind": kind.as_str() }));
         assert_eq!(born["name"], format!("kinds.{}0", kind.as_str()));
         let record = &born["control"];
-        assert!(record["w"].as_f64().is_some_and(|w| (1.0..=goofi_core::globals::CONTROL_COLUMNS).contains(&w)));
+        assert!(record["w"].as_f64().is_some_and(|w| (1.0..=goofi_core::variables::CONTROL_COLUMNS).contains(&w)));
         assert!(record["h"].as_f64().is_some_and(|h| h >= 1.0));
         assert_eq!(record["kind"], kind.as_str());
         g.call("control remove", j!({ "group": "kinds", "element": born["name"].as_str().unwrap().split_once('.').unwrap().1 }));
     }
 
     // A panel's edit mode is the panel's own view and no state of the manager's, so the widget door
-    // is held by a config lock exactly as every other globals door is.
-    g.call("global group lock", j!({ "group": "control0", "config": true }));
+    // is held by a config lock exactly as every other variables door is.
+    g.call("variable group lock", j!({ "group": "control0", "config": true }));
     for (op, payload) in [
         ("control add", j!({ "group": "control0", "kind": "toggle" })),
         ("control edit", j!({ "group": "control0", "element": "level", "max": 4.0 })),
@@ -202,74 +202,74 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
         let why = g.refuse(op, payload);
         assert!(why.contains("config-locked"), "`{op}` under a config lock: {why}");
     }
-    g.call("global group lock", j!({ "group": "control0", "config": false }));
+    g.call("variable group lock", j!({ "group": "control0", "config": false }));
     g.call("control remove", j!({ "group": "control0", "element": "level" }));
-    assert!(g.doc()["globals"]["control0.level"].is_null());
+    assert!(g.doc()["variables"]["control0.level"].is_null());
     // A lock holds what it names: a group's `config` freezes every name and the membership, an
     // entry's `value` freezes its value — and each lock is ONE undoable command.
-    g.call("global group lock", j!({ "group": "desk", "config": true }));
+    g.call("variable group lock", j!({ "group": "desk", "config": true }));
     for (op, payload) in [
-        ("global entry add", j!({ "name": "desk.more", "value": 1.0, "type": "float" })),
-        ("global entry rename", j!({ "name": "desk.handle", "to": "desk.grip" })),
-        ("global entry remove", j!({ "name": "desk.handle" })),
-        ("global group rename", j!({ "from": "desk", "to": "bench" })),
+        ("variable entry add", j!({ "name": "desk.more", "value": 1.0, "type": "float" })),
+        ("variable entry rename", j!({ "name": "desk.handle", "to": "desk.grip" })),
+        ("variable entry remove", j!({ "name": "desk.handle" })),
+        ("variable group rename", j!({ "from": "desk", "to": "bench" })),
     ] {
         let why = g.refuse(op, payload);
         assert!(why.contains("config-locked"), "`{op}` under a config lock: {why}");
     }
-    assert_eq!(g.call("global entry edit", j!({ "name": "desk.handle", "value": "P02" }))["value"], "P02",
+    assert_eq!(g.call("variable entry edit", j!({ "name": "desk.handle", "value": "P02" }))["value"], "P02",
                "a config lock leaves the value free");
-    g.call("global entry lock", j!({ "name": "desk.handle", "value": true }));
-    let why = g.refuse("global entry edit", j!({ "name": "desk.handle", "value": "P03" }));
+    g.call("variable entry lock", j!({ "name": "desk.handle", "value": true }));
+    let why = g.refuse("variable entry edit", j!({ "name": "desk.handle", "value": "P03" }));
     assert!(why.contains("value-locked"), "{why}");
-    let held = g.call("global list", j!({}))["globals"].as_array().unwrap().iter()
+    let held = g.call("variable list", j!({}))["variables"].as_array().unwrap().iter()
         .find(|e| e["name"] == "desk.handle").cloned().unwrap()["lock"].clone();
     assert_eq!(held, j!({ "config": true, "value": true }), "the list answers what holds it, both locks together");
-    g.call("global entry lock", j!({ "name": "desk.handle", "value": false }));
-    g.call("global group lock", j!({ "group": "desk", "config": false }));
-    let why = g.refuse("global group lock", j!({ "group": "system", "config": false }));
+    g.call("variable entry lock", j!({ "name": "desk.handle", "value": false }));
+    g.call("variable group lock", j!({ "group": "desk", "config": false }));
+    let why = g.refuse("variable group lock", j!({ "group": "system", "config": false }));
     assert!(why.contains("goofi's own"), "the system group's lock is nobody's to set: {why}");
     // A group can be EMPTY, minted at the first free `groupN`, and an entry born with no value
     // is a float until retyped; each is ONE step, and a retype carries the value across.
-    assert_eq!(g.call("global group add", j!({}))["group"], "group0");
-    assert!(g.doc()["global_groups"]["group0"].is_object());
+    assert_eq!(g.call("variable group add", j!({}))["group"], "group0");
+    assert!(g.doc()["variable_groups"]["group0"].is_object());
     g.call("undo", j!({}));
-    assert!(g.doc()["global_groups"].get("group0").is_none());
+    assert!(g.doc()["variable_groups"].get("group0").is_none());
     g.call("redo", j!({}));
-    assert_eq!(g.call("global group add", j!({}))["group"], "group1");
-    g.call("global group rename", j!({ "from": "group0", "to": "bench" }));
-    assert_eq!(g.call("global group add", j!({}))["group"], "group0", "the freed name is minted again");
-    g.refuse("global group add", j!({ "group": "bench" }));
-    g.refuse("global group add", j!({ "group": "bad name" }));
-    assert_eq!(g.call("global entry add", j!({ "group": "bench" }))["name"], "bench.entry0");
-    assert_eq!(g.call("global entry add", j!({ "group": "bench" }))["name"], "bench.entry1");
-    g.call("global entry edit", j!({ "name": "bench.entry0", "type": "string", "value": "hello" }));
-    assert_eq!(g.doc()["globals"]["bench.entry0"]["type"], "string");
-    assert_eq!(g.doc()["globals"]["bench.entry0"]["value"], "hello");
+    assert_eq!(g.call("variable group add", j!({}))["group"], "group1");
+    g.call("variable group rename", j!({ "from": "group0", "to": "bench" }));
+    assert_eq!(g.call("variable group add", j!({}))["group"], "group0", "the freed name is minted again");
+    g.refuse("variable group add", j!({ "group": "bench" }));
+    g.refuse("variable group add", j!({ "group": "bad name" }));
+    assert_eq!(g.call("variable entry add", j!({ "group": "bench" }))["name"], "bench.entry0");
+    assert_eq!(g.call("variable entry add", j!({ "group": "bench" }))["name"], "bench.entry1");
+    g.call("variable entry edit", j!({ "name": "bench.entry0", "type": "string", "value": "hello" }));
+    assert_eq!(g.doc()["variables"]["bench.entry0"]["type"], "string");
+    assert_eq!(g.doc()["variables"]["bench.entry0"]["value"], "hello");
     g.call("undo", j!({}));
-    assert_eq!(g.doc()["globals"]["bench.entry0"]["type"], "float");
+    assert_eq!(g.doc()["variables"]["bench.entry0"]["type"], "float");
     g.call("redo", j!({}));
-    g.call("global entry edit", j!({ "name": "bench.entry1", "type": "bool", "value": true }));
-    assert_eq!(g.doc()["globals"]["bench.entry1"]["value"], true);
-    g.call("global entry edit", j!({ "name": "bench.entry1", "type": "int" }));
-    assert_eq!(g.doc()["globals"]["bench.entry1"]["value"], 1, "a retype carries the value across");
+    g.call("variable entry edit", j!({ "name": "bench.entry1", "type": "bool", "value": true }));
+    assert_eq!(g.doc()["variables"]["bench.entry1"]["value"], true);
+    g.call("variable entry edit", j!({ "name": "bench.entry1", "type": "int" }));
+    assert_eq!(g.doc()["variables"]["bench.entry1"]["value"], 1, "a retype carries the value across");
     g.call("undo", j!({}));
-    assert_eq!(g.doc()["globals"]["bench.entry1"]["type"], "bool");
-    g.refuse("global entry edit", j!({ "name": "system.default_ufreq", "type": "string", "value": "no" }));
-    g.call("global entry add", j!({ "name": "bench.knob", "type": "float", "value": 1.0,
+    assert_eq!(g.doc()["variables"]["bench.entry1"]["type"], "bool");
+    g.refuse("variable entry edit", j!({ "name": "system.default_ufreq", "type": "string", "value": "no" }));
+    g.call("variable entry add", j!({ "name": "bench.knob", "type": "float", "value": 1.0,
         "control": { "kind": "knob", "x": 0, "y": 0, "w": 3, "h": 3 } }));
-    let before = g.doc()["globals"]["bench.knob"].clone();
-    g.refuse("global entry edit", j!({ "name": "bench.knob", "type": "string", "value": "no" }));
-    assert_eq!(g.doc()["globals"]["bench.knob"], before, "a widget's entry keeps its type");
+    let before = g.doc()["variables"]["bench.knob"].clone();
+    g.refuse("variable entry edit", j!({ "name": "bench.knob", "type": "string", "value": "no" }));
+    assert_eq!(g.doc()["variables"]["bench.knob"], before, "a widget's entry keeps its type");
 
     // …and a compound is a UNIT: a refused step takes back the one that landed, and records nothing,
     // which is what the step count below would catch.
     let why = g.refuse("compound", j!({ "ops": [
-        { "op": "global entry add", "payload": { "name": "patch.tmp", "value": 1.0, "type": "float" } },
+        { "op": "variable entry add", "payload": { "name": "patch.tmp", "value": 1.0, "type": "float" } },
         { "op": "node edit", "payload": { "node": GHOST, "name": "renamed" } },
     ] }));
     assert!(why.contains("step 1"), "the refusal names the step that failed: {why}");
-    assert!(g.doc()["globals"]["patch.tmp"].is_null(), "the step that landed was taken back: {why}");
+    assert!(g.doc()["variables"]["patch.tmp"].is_null(), "the step that landed was taken back: {why}");
     // A READ rides a batch — its result in the bare list the batch answers — while an EFFECT is
     // refused: its consequences are not the history's to take back, so it runs alone.
     let ridden = g.call("compound", j!({ "ops": [
@@ -307,14 +307,14 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let built = g.doc();
 
     // A compound is ONE step though it is an add plus a remove composed.
-    let expected_steps = 54 + 2 * goofi_core::globals::ControlKind::ALL.len();
+    let expected_steps = 54 + 2 * goofi_core::variables::ControlKind::ALL.len();
     let mut steps = 0;
     while g.call("undo", j!({}))["changed"] == true {
         steps += 1;
         assert!(steps <= expected_steps, "the stack never emptied");
     }
     assert!(g.nodes().is_empty() && g.instances().is_empty(), "back to an empty patch");
-    assert!(g.doc()["globals"]["desk.handle"].is_null() && g.doc()["globals"]["patch.subj"].is_null());
+    assert!(g.doc()["variables"]["desk.handle"].is_null() && g.doc()["variables"]["patch.subj"].is_null());
     assert_eq!(steps, expected_steps, "one step per command — a compound (the rename, the two-edit batch) and a three-field node edit are each ONE");
 
     while g.call("redo", j!({}))["changed"] == true {}
@@ -336,9 +336,9 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // Empty groups and the retyped entries reach the file and come back.
     let saved = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
     g.call("session load", j!({ "content": saved }));
-    assert!(g.doc()["global_groups"]["group0"].is_object() && g.doc()["global_groups"]["group1"].is_object());
-    assert_eq!(g.doc()["globals"]["bench.entry0"]["value"], "hello");
-    assert_eq!(g.doc()["globals"]["bench.entry1"]["type"], "bool");
+    assert!(g.doc()["variable_groups"]["group0"].is_object() && g.doc()["variable_groups"]["group1"].is_object());
+    assert_eq!(g.doc()["variables"]["bench.entry0"]["value"], "hello");
+    assert_eq!(g.doc()["variables"]["bench.entry1"]["type"], "bool");
 
     // The NAME is the arrangement's to mint: a caller that asks for none gets the first free
     // `Tab n`, so nobody has to reserve one against a strip they cannot see settle.
@@ -402,52 +402,52 @@ fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
 
     let before = one.doc();
     let bad_control = j!({ "kind": "toggle", "x": 0, "y": 0, "w": 2, "h": 2 });
-    one.refuse("global entry add", j!({ "name": "audit.bad", "type": "float", "value": 1.0, "control": bad_control }));
+    one.refuse("variable entry add", j!({ "name": "audit.bad", "type": "float", "value": 1.0, "control": bad_control }));
     assert_eq!(one.doc(), before);
-    one.call("global entry add", j!({ "name": "audit.bad", "type": "float", "value": 1.0 }));
-    one.refuse("global entry edit", j!({ "name": "audit.bad", "value": 2.0, "control": bad_control }));
-    one.call("global entry add", j!({ "name": "audit.after", "type": "float", "value": 3.0 }));
-    assert_eq!(one.doc()["globals"]["audit.bad"]["value"], 1.0);
+    one.call("variable entry add", j!({ "name": "audit.bad", "type": "float", "value": 1.0 }));
+    one.refuse("variable entry edit", j!({ "name": "audit.bad", "value": 2.0, "control": bad_control }));
+    one.call("variable entry add", j!({ "name": "audit.after", "type": "float", "value": 3.0 }));
+    assert_eq!(one.doc()["variables"]["audit.bad"]["value"], 1.0);
     one.refuse("compound", j!({ "ops": [
-        { "op": "global entry edit", "payload": { "name": "audit.after", "value": 4.0 } },
-        { "op": "global entry edit", "payload": { "name": "audit.bad", "value": 5.0, "control": bad_control } }
+        { "op": "variable entry edit", "payload": { "name": "audit.after", "value": 4.0 } },
+        { "op": "variable entry edit", "payload": { "name": "audit.bad", "value": 5.0, "control": bad_control } }
     ] }));
-    assert_eq!(one.doc()["globals"]["audit.after"]["value"], 3.0);
+    assert_eq!(one.doc()["variables"]["audit.after"]["value"], 3.0);
     one.call("undo", j!({}));
-    assert!(one.doc()["globals"].get("audit.after").is_none());
-    two.call("global entry remove", j!({ "name": "audit.bad" }));
+    assert!(one.doc()["variables"].get("audit.after").is_none());
+    two.call("variable entry remove", j!({ "name": "audit.bad" }));
     one.call("undo", j!({}));
     one.call("redo", j!({}));
-    assert!(one.doc()["globals"].get("audit.bad").is_none());
+    assert!(one.doc()["variables"].get("audit.bad").is_none());
 
-    one.call("global entry add", j!({ "name": "first.one", "type": "float", "value": 1.0 }));
-    two.call("global entry add", j!({ "name": "second.two", "type": "float", "value": 2.0 }));
+    one.call("variable entry add", j!({ "name": "first.one", "type": "float", "value": 1.0 }));
+    two.call("variable entry add", j!({ "name": "second.two", "type": "float", "value": 2.0 }));
     let before = one.doc();
-    one.refuse("global group rename", j!({ "from": "first", "to": "second" }));
+    one.refuse("variable group rename", j!({ "from": "first", "to": "second" }));
     assert_eq!(one.doc(), before);
-    two.call("global group lock", j!({ "group": "locked", "value": true }));
-    one.refuse("global group rename", j!({ "from": "first", "to": "locked" }));
+    two.call("variable group lock", j!({ "group": "locked", "value": true }));
+    one.refuse("variable group rename", j!({ "from": "first", "to": "locked" }));
     two.call("layout panel edit", j!({ "panel": first_panel(&one), "type": "control", "state": { "group": "panelonly" } }));
-    one.refuse("global group rename", j!({ "from": "first", "to": "panelonly" }));
-    one.call("global group rename", j!({ "from": "first", "to": "renamed" }));
+    one.refuse("variable group rename", j!({ "from": "first", "to": "panelonly" }));
+    one.call("variable group rename", j!({ "from": "first", "to": "renamed" }));
     one.call("undo", j!({}));
-    assert_eq!(one.doc()["globals"]["first.one"]["value"], 1.0);
+    assert_eq!(one.doc()["variables"]["first.one"]["value"], 1.0);
     one.call("redo", j!({}));
-    two.call("global entry add", j!({ "name": "renamed.peer", "type": "float", "value": 2.0 }));
+    two.call("variable entry add", j!({ "name": "renamed.peer", "type": "float", "value": 2.0 }));
     one.call("undo", j!({}));
-    assert_eq!(one.doc()["globals"]["renamed.peer"]["value"], 2.0);
-    assert_eq!(one.doc()["globals"]["renamed.one"]["value"], 1.0);
-    assert!(one.doc()["globals"].get("first.peer").is_none());
+    assert_eq!(one.doc()["variables"]["renamed.peer"]["value"], 2.0);
+    assert_eq!(one.doc()["variables"]["renamed.one"]["value"], 1.0);
+    assert!(one.doc()["variables"].get("first.peer").is_none());
 
-    one.call("global entry edit", j!({ "name": "renamed.one", "value": 4.0 }));
-    two.call("global entry lock", j!({ "name": "renamed.one", "value": true }));
+    one.call("variable entry edit", j!({ "name": "renamed.one", "value": 4.0 }));
+    two.call("variable entry lock", j!({ "name": "renamed.one", "value": true }));
     one.call("undo", j!({}));
-    assert_eq!(one.doc()["globals"]["renamed.one"]["value"], 4.0);
-    one.refuse("global entry edit", j!({ "name": "renamed.one", "value": 5.0 }));
-    one.call("global entry rename", j!({ "name": "second.two", "to": "second.moved" }));
-    two.call("global entry rename", j!({ "name": "second.moved", "to": "second.peer" }));
+    assert_eq!(one.doc()["variables"]["renamed.one"]["value"], 4.0);
+    one.refuse("variable entry edit", j!({ "name": "renamed.one", "value": 5.0 }));
+    one.call("variable entry rename", j!({ "name": "second.two", "to": "second.moved" }));
+    two.call("variable entry rename", j!({ "name": "second.moved", "to": "second.peer" }));
     one.call("undo", j!({}));
-    assert_eq!(one.doc()["globals"]["second.peer"]["value"], 2.0);
+    assert_eq!(one.doc()["variables"]["second.peer"]["value"], 2.0);
 }
 
 #[test]
@@ -715,23 +715,23 @@ fn a_refusal_names_what_the_caller_could_try_instead() {
     let g = Goofi::new();
     let osc = g.add("LFO");
 
-    // A global's TYPE is what every expression reading it depends on, so it is immutable: an
+    // A variable's TYPE is what every expression reading it depends on, so it is immutable: an
     // edit coerces to the type held, and a value the type cannot read is refused by naming it.
-    let why = g.refuse("global entry edit", j!({ "name": "system.default_ufreq", "value": "fast" }));
+    let why = g.refuse("variable entry edit", j!({ "name": "system.default_ufreq", "value": "fast" }));
     assert!(why.contains("float") && why.contains("fast"), "{why}");
-    let why = g.refuse("global entry add", j!({ "name": "system.default_ufreq", "value": 9.0, "type": "float" }));
-    assert!(why.contains("already exists") && why.contains("global entry edit"), "{why}");
-    assert_eq!(g.call("global entry edit", j!({ "name": "system.default_ufreq", "value": 12.5 }))["value"], 12.5);
+    let why = g.refuse("variable entry add", j!({ "name": "system.default_ufreq", "value": 9.0, "type": "float" }));
+    assert!(why.contains("already exists") && why.contains("variable entry edit"), "{why}");
+    assert_eq!(g.call("variable entry edit", j!({ "name": "system.default_ufreq", "value": 12.5 }))["value"], 12.5);
 
-    // An EPHEMERAL global is goofi's own: the value refuses the edit the way the name refuses the
+    // An EPHEMERAL variable is goofi's own: the value refuses the edit the way the name refuses the
     // remove, and what it holds is this machine's .goofi folder, not anything a patch said.
-    let home = g.call("global list", j!({}))["globals"].as_array().unwrap().iter()
+    let home = g.call("variable list", j!({}))["variables"].as_array().unwrap().iter()
         .find(|e| e["name"] == "system.goofi_home").cloned().expect("goofi_home is seeded");
     assert_eq!((&home["lock"]["value"], &home["type"]), (&j!(true), &j!("string")), "{home}");
     assert_eq!(home["value"], j!(goofi_core::path::to_slash(&goofi_core::home::dir())));
-    let why = g.refuse("global entry edit", j!({ "name": "system.goofi_home", "value": "/tmp/elsewhere" }));
+    let why = g.refuse("variable entry edit", j!({ "name": "system.goofi_home", "value": "/tmp/elsewhere" }));
     assert!(why.contains("read-only"), "{why}");
-    let why = g.refuse("global entry remove", j!({ "name": "system.goofi_home" }));
+    let why = g.refuse("variable entry remove", j!({ "name": "system.goofi_home" }));
     assert!(why.contains("system"), "{why}");
 
     let why = g.refuse("agent start", j!({ "name": "claude-code" }));
@@ -749,7 +749,7 @@ fn a_refusal_names_what_the_caller_could_try_instead() {
         g.refuse(op, payload);
     }
 
-    // An expression reads a name as an ATTRIBUTE — `globals.gain`, `nd('sub').out.slot` — so a name
+    // An expression reads a name as an ATTRIBUTE — `variables.gain`, `nd('sub').out.slot` — so a name
     // Python cannot parse as one is refused, whatever makes it unparseable. The refusal says the
     // rule rather than the one character it caught.
     for bad in ["a'b", "a\\b", "a\"b", "a b-2", "a_b", "nd()", "1st", "class", ""] {
@@ -997,11 +997,11 @@ fn a_viewer_bag_persists_and_refuses_a_word_outside_its_vocabulary() {
     g.call("node edit", j!({ "node": hex(osc), "viewer": [{ "slot": "out", "clear": true }] }));
     assert!(!view(&g).contains("yScale"), "the clear dropped the stored view: {}", view(&g));
 
-    g.call("global entry add", j!({ "name": "patch.subject", "value": "P01", "type": "string" }));
+    g.call("variable entry add", j!({ "name": "patch.subject", "value": "P01", "type": "string" }));
     // The doc carries a lock only where one is held: the system group's, the machine value's.
-    assert_eq!(g.doc()["global_groups"]["system"]["lock"]["config"], true);
-    assert_eq!(g.doc()["globals"]["system.goofi_home"]["lock"]["value"], true);
-    assert!(g.doc()["globals"]["patch.subject"].get("lock").is_none());
+    assert_eq!(g.doc()["variable_groups"]["system"]["lock"]["config"], true);
+    assert_eq!(g.doc()["variables"]["system.goofi_home"]["lock"]["value"], true);
+    assert!(g.doc()["variables"]["patch.subject"].get("lock").is_none());
 }
 
 #[test]

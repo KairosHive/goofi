@@ -27,7 +27,7 @@ def available_commit():
                 'available_page_file', 'total_virtual', 'available_virtual', 'extended')]
     status = MemoryStatus()
     status.length = ctypes.sizeof(status)
-    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+    if not ctypes.windll.kernel32.VariableMemoryStatusEx(ctypes.byref(status)):
         raise OSError('Cannot check Windows memory before loading FluxRT')
     return status.available_page_file
 

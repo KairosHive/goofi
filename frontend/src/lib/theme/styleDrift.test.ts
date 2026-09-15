@@ -245,7 +245,7 @@ function rules(css: string): { sel: string; body: string; media: string | null }
  *  Balanced, not `[^)]*`: an argument can CONTAIN a `)` (`:global(.row:not(.hdr) .ui-btn)`, a
  *  spelling `PanelHeader.svelte` already ships), and Svelte 5's block form carries no `(` at all.
  *  Both readers below share this one scan so neither can drift back to the naive spelling. */
-function globalArgs(css: string): { open: string; body: string }[] {
+function variableArgs(css: string): { open: string; body: string }[] {
 	const out: { open: string; body: string }[] = [];
 	for (const m of css.matchAll(/:global\s*[({]/g)) {
 		const at = m.index + m[0].length - 1;
@@ -265,7 +265,7 @@ function globalArgs(css: string): { open: string; body: string }[] {
  *  selector that names what the rule actually paints. */
 function keyCompounds(sel: string): string[] {
 	let flat = sel;
-	for (const { open, body } of globalArgs(sel))
+	for (const { open, body } of variableArgs(sel))
 		if (open === '(') flat = flat.replace(`:global(${body})`, body);
 	return flat.split(',').map(
 		(one) =>
@@ -401,7 +401,7 @@ function pointerQueries(css: string): string[] {
 /** Every `:global()` selector — or `:global {}` block — in `css` that names a `$lib/ui`
  *  primitive's own `.ui-*` class. */
 function uiReachIns(css: string): string[] {
-	return globalArgs(css)
+	return variableArgs(css)
 		.filter((g) => /\.ui-[\w-]+/.test(g.body))
 		.map((g) => `:global${g.open}${g.body.replace(/\s+/g, ' ').trim()}${g.open === '(' ? ')' : '}'}`);
 }

@@ -1,14 +1,14 @@
-<!-- Control panel — knobs, sliders and text widgets over ONE group of globals. Edit mode is this panel's
+<!-- Control panel — knobs, sliders and text widgets over ONE group of variables. Edit mode is this panel's
      own view and nothing else: out of it a drag turns a widget; in it the same drag moves it, the
      corner resizes it, a strip above the board holds the name and the palette, and the picked
-     widget's form opens beside the widget itself. Every change it makes is a globals op, so the
+     widget's form opens beside the widget itself. Every change it makes is a variables op, so the
      manager owns the state and this panel owns only the drawing and the gesture in flight. -->
 <script lang="ts">
 	import { onDestroy, tick } from 'svelte';
 	import type { PanelProps } from 'panelty';
 	import { asStateObject } from 'panelty';
 	import { graph } from '$lib/stores/graph.svelte';
-	import type { ControlView, GlobalView, LockView } from '$lib/crdt/graphDoc';
+	import type { ControlView, VariableView, LockView } from '$lib/crdt/graphDoc';
 	import { effectiveLock, isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { getControl, type Mark } from '$lib/api/control';
@@ -61,8 +61,8 @@
 	const st = $derived(asStateObject(props.state) as ControlState);
 	const group = $derived(st.group ?? '');
 	const named = $derived(group !== '');
-	const groupLock = $derived<LockView>(g.globalGroups[group] ?? { config: false, value: false });
-	const elements = $derived(g.globals.filter((gv) => gv.group === group && gv.control));
+	const groupLock = $derived<LockView>(g.variableGroups[group] ?? { config: false, value: false });
+	const elements = $derived(g.variables.filter((gv) => gv.group === group && gv.control));
 	// What a node dropped on one of this panel's widgets means, said by the panel that draws them.
 	$effect(() =>
 		uiStore.onNodeDrop(props.panelId, (uid, name) => {
@@ -99,12 +99,12 @@
 		if (p && elements.some((el) => el.name === p.name && sameCell(cellOf(el), p.to))) pending = null;
 	});
 
-	function cellOf(gv: GlobalView): Cell {
+	function cellOf(gv: VariableView): Cell {
 		const c = gv.control as ControlView;
 		return { x: c.x, y: c.y, w: c.w, h: c.h };
 	}
 
-	function placed(gv: GlobalView): Cell {
+	function placed(gv: VariableView): Cell {
 		if (drag?.name === gv.name && drag.to) return drag.to;
 		if (pending?.name === gv.name) return pending.to;
 		return cellOf(gv);
@@ -152,7 +152,7 @@
 	function nameGroup(raw: string): void {
 		const to = raw.trim();
 		if (to === group || !isValidIdentifier(to)) return;
-		void g.renameGlobalGroup(group, to).catch(() => {});
+		void g.renameVariableGroup(group, to).catch(() => {});
 	}
 
 	function setEdit(on: boolean): void {
@@ -161,12 +161,12 @@
 		editing = on;
 	}
 
-	function setControl(gv: GlobalView, patch: Partial<ControlView>): void {
+	function setControl(gv: VariableView, patch: Partial<ControlView>): void {
 		void g.editControl(group, gv.element, patch).catch(() => {});
 	}
 
-	function commitValue(gv: GlobalView, v: Value): void {
-		void g.setGlobalValue(gv.name, v).catch(() => {});
+	function commitValue(gv: VariableView, v: Value): void {
+		void g.setVariableValue(gv.name, v).catch(() => {});
 	}
 
 	function num(v: Value): number {
@@ -189,45 +189,45 @@
 		};
 	}
 
-	let globalGrab: { name: string; x: number; y: number; pointer: number } | null = $state(null);
+	let variableGrab: { name: string; x: number; y: number; pointer: number } | null = $state(null);
 
-	function grabGlobal(e: PointerEvent, gv: GlobalView): void {
+	function grabVariable(e: PointerEvent, gv: VariableView): void {
 		if (e.button !== 0) return;
-		globalGrab = { name: gv.name, x: e.clientX, y: e.clientY, pointer: e.pointerId };
+		variableGrab = { name: gv.name, x: e.clientX, y: e.clientY, pointer: e.pointerId };
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 		e.stopPropagation();
 	}
 
-	function moveGlobal(e: PointerEvent): void {
-		if (!globalGrab || globalGrab.pointer !== e.pointerId) return;
-		if (!uiStore.globalDrag && Math.hypot(e.clientX - globalGrab.x, e.clientY - globalGrab.y) < 4) return;
-		uiStore.globalDrag = {
-			name: globalGrab.name, x: e.clientX, y: e.clientY,
-			target: document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-global-drop]') ?? null
+	function moveVariable(e: PointerEvent): void {
+		if (!variableGrab || variableGrab.pointer !== e.pointerId) return;
+		if (!uiStore.variableDrag && Math.hypot(e.clientX - variableGrab.x, e.clientY - variableGrab.y) < 4) return;
+		uiStore.variableDrag = {
+			name: variableGrab.name, x: e.clientX, y: e.clientY,
+			target: document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-variable-drop]') ?? null
 		};
 	}
 
-	function cancelGlobal(): void {
-		globalGrab = null;
-		uiStore.globalDrag = null;
+	function cancelVariable(): void {
+		variableGrab = null;
+		uiStore.variableDrag = null;
 	}
 
-	function dropGlobal(e: PointerEvent): void {
-		if (!globalGrab || globalGrab.pointer !== e.pointerId) return;
-		moveGlobal(e);
-		const dropped = uiStore.globalDrag;
-		cancelGlobal();
+	function dropVariable(e: PointerEvent): void {
+		if (!variableGrab || variableGrab.pointer !== e.pointerId) return;
+		moveVariable(e);
+		const dropped = uiStore.variableDrag;
+		cancelVariable();
 		if (dropped && elements.some((gv) => gv.name === dropped.name)) {
-			dropped.target?.dispatchEvent(new CustomEvent('global-expression-drop', { detail: `globals.${dropped.name}` }));
+			dropped.target?.dispatchEvent(new CustomEvent('variable-expression-drop', { detail: `variables.${dropped.name}` }));
 		}
 	}
 
-	onDestroy(() => { if (globalGrab) cancelGlobal(); });
+	onDestroy(() => { if (variableGrab) cancelVariable(); });
 
-	function down(e: PointerEvent, gv: GlobalView, resize: boolean): void {
+	function down(e: PointerEvent, gv: VariableView, resize: boolean): void {
 		if (!edit || !board) return;
 		picked = gv.name;
-		if (!resize) grabGlobal(e, gv);
+		if (!resize) grabVariable(e, gv);
 		drag = { name: gv.name, from: cellOf(gv), x: e.clientX, y: e.clientY, units: unitsOf(board), resize, to: null };
 		const el = e.currentTarget as HTMLElement;
 		el.setPointerCapture(e.pointerId);
@@ -239,11 +239,11 @@
 	function move(e: PointerEvent): void {
 		if (!drag) return;
 		if (!drag.resize && !onBoard(e)) {
-			moveGlobal(e);
+			moveVariable(e);
 			drag.to = null;
 			return;
 		}
-		uiStore.globalDrag = null;
+		uiStore.variableDrag = null;
 		const [dx, dy] = [e.clientX - drag.x, e.clientY - drag.y];
 		drag.to = drag.resize
 			? resizedBy(drag.from, dx, dy, drag.units, COLUMNS)
@@ -254,11 +254,11 @@
 	function up(e: PointerEvent): void {
 		if (!drag) return;
 		if (!drag.resize && !onBoard(e)) {
-			dropGlobal(e);
+			dropVariable(e);
 			drag = null;
 			return;
 		}
-		cancelGlobal();
+		cancelVariable();
 		const { name, from, to } = drag;
 		drag = null;
 		const gv = elements.find((el) => el.name === name);
@@ -267,7 +267,7 @@
 		void g.editControl(group, gv.element, to).catch(() => (pending = null));
 	}
 
-	function zap(e: KeyboardEvent, gv: GlobalView): void {
+	function zap(e: KeyboardEvent, gv: VariableView): void {
 		if (!edit || isTextEditingTarget(e.target) || (e.key !== 'Delete' && e.key !== 'Backspace')) return;
 		e.preventDefault();
 		void g.removeControl(group, gv.element);
@@ -311,11 +311,11 @@
 		}
 	}
 
-	function zero(type: GlobalView['type']): Value {
+	function zero(type: VariableView['type']): Value {
 		return type === 'bool' ? false : type === 'string' ? '' : 0;
 	}
 
-	async function rename(gv: GlobalView, raw: string): Promise<void> {
+	async function rename(gv: VariableView, raw: string): Promise<void> {
 		renaming = null;
 		const element = raw.trim();
 		if (element === gv.element || !isValidIdentifier(element)) return;
@@ -327,7 +327,7 @@
 		}
 	}
 
-	async function startRename(gv: GlobalView, cell: HTMLElement): Promise<void> {
+	async function startRename(gv: VariableView, cell: HTMLElement): Promise<void> {
 		renaming = gv.name;
 		await tick();
 		const input = cell.querySelector<HTMLInputElement>('[data-testid="control-rename"]');
@@ -358,20 +358,20 @@
 		linking = false;
 	});
 
-	function setSource(pv: GlobalView, reference: string): void {
+	function setSource(pv: VariableView, reference: string): void {
 		if (midiLearn.target === `control:${pv.name}`) midiLearn.stop();
 		linking = false;
 		void g.sourceControl(group, pv.element, reference).catch(() => {});
 	}
 
-	function setIndex(pv: GlobalView, index: number): void {
+	function setIndex(pv: VariableView, index: number): void {
 		const ref = pv.source?.reference;
 		if (!ref) return;
 		void g.sourceControl(group, pv.element, ref, Math.max(0, Math.round(index))).catch(() => {});
 	}
 
 
-	/** `control paint` reaches the pad that holds that global, and nothing else: the op parses a
+	/** `control paint` reaches the pad that holds that variable, and nothing else: the op parses a
 	    turtle script and the WIDGET makes the strokes, so a script and a hand paint by one code. */
 	let painting = $state<{ id: number; name: string; marks: Mark[] } | null>(null);
 	let batch = 0;
@@ -383,7 +383,7 @@
 	onDestroy(stopPainting);
 </script>
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && globalGrab) { drag = null; cancelGlobal(); } }} />
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && variableGrab) { drag = null; cancelVariable(); } }} />
 
 {#snippet widget(c: ControlView, value: Value, label: string, onChange: (v: Value) => void, name = '')}
 	{#if c.kind === 'knob'}
@@ -423,7 +423,7 @@
 				<TextInput
 					inputmode="search"
 					data-testid="control-group-name"
-					title="The group its globals live in: globals.name.element"
+					title="The group its variables live in: variables.name.element"
 					value={group}
 					autocomplete="off"
 					onChange={nameGroup}
@@ -458,8 +458,8 @@
 				style={`--columns: ${COLUMNS}`}
 				onpointermove={move}
 				onpointerup={up}
-				onpointercancel={() => { drag = null; cancelGlobal(); }}
-				onlostpointercapture={() => { drag = null; cancelGlobal(); }}
+				onpointercancel={() => { drag = null; cancelVariable(); }}
+				onlostpointercapture={() => { drag = null; cancelVariable(); }}
 			>
 				{#if elements.length === 0}
 					<div class="fill">
@@ -496,11 +496,11 @@
 						<span
 							class="label"
 							title="Drag onto a parameter to set its expression. Double-click to rename"
-							use:grab={(e) => grabGlobal(e, gv)}
-							onpointermove={moveGlobal}
-							onpointerup={dropGlobal}
-							onpointercancel={cancelGlobal}
-							onlostpointercapture={cancelGlobal}
+							use:grab={(e) => grabVariable(e, gv)}
+							onpointermove={moveVariable}
+							onpointerup={dropVariable}
+							onpointercancel={cancelVariable}
+							onlostpointercapture={cancelVariable}
 							ondblclick={(e) => startRename(gv, (e.currentTarget as HTMLElement).parentElement as HTMLElement)}
 							>{gv.element}</span
 						>
@@ -660,8 +660,8 @@
 		{/key}
 	{/if}
 
-	{#if globalGrab && uiStore.globalDrag}
-		<div class="global-ghost" style={`left: ${uiStore.globalDrag.x + 12}px; top: ${uiStore.globalDrag.y + 12}px`} aria-hidden="true">globals.{uiStore.globalDrag.name}</div>
+	{#if variableGrab && uiStore.variableDrag}
+		<div class="variable-ghost" style={`left: ${uiStore.variableDrag.x + 12}px; top: ${uiStore.variableDrag.y + 12}px`} aria-hidden="true">variables.{uiStore.variableDrag.name}</div>
 	{/if}
 
 	{#if lift}
@@ -682,7 +682,7 @@
 </div>
 
 <style>
-	.global-ghost {
+	.variable-ghost {
 		position: fixed;
 		z-index: 10000;
 		pointer-events: none;

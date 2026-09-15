@@ -10,10 +10,10 @@ use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator, Local};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyModule, PyString};
 
-/// The Python harness. The graph has already rewritten every `nd(..)` and `globals.*` term into a
+/// The Python harness. The graph has already rewritten every `nd(..)` and `variables.*` term into a
 /// generated variable, so the expression is plain math over ordinary locals — with `np`, `math`'s
-/// whole namespace and `time()` simply there. ONE dict as eval's globals, deliberately: a split
-/// globals/locals pair breaks name lookup inside comprehensions. Locals land last, so a node
+/// whole namespace and `time()` simply there. ONE dict as eval's variables, deliberately: a split
+/// variables/locals pair breaks name lookup inside comprehensions. Locals land last, so a node
 /// named `sin` shadows math's.
 const EVAL_SRC: &str = r#"
 import numpy as np

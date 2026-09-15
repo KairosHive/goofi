@@ -7,7 +7,7 @@
 use serde_json::{Map, Value};
 
 /// The roots, in the order a fresh document declares them.
-const ROOTS: [&str; 4] = ["nodes", "links", "globals", "arrangement"];
+const ROOTS: [&str; 4] = ["nodes", "links", "variables", "arrangement"];
 
 /// The RFC 7386 merge patch that turns `before` into `after`, or `None` when they are equal.
 pub fn merge_patch(before: &Value, after: &Value) -> Option<Value> {
