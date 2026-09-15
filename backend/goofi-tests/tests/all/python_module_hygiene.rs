@@ -1,6 +1,5 @@
 //! Module hygiene, in its own process so `sys.modules` is not polluted by other tests.
 //! `from_source` must pop the unique module it minted; the instance keeps it alive via `__globals__`.
-#![cfg(feature = "embed")]
 
 use goofi_python::inproc::PyNode;
 use pyo3::prelude::*;

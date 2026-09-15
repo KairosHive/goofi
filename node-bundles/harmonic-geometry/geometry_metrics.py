@@ -10,7 +10,7 @@ from goofi.geometry import decode
 
 
 class GeometryMetrics(goofi.Node):
-    """Measure geometry size, field structure, connectivity, and method-specific features."""
+    """Measure geometry size, field structure, connectivity and method features."""
 
     TAGS = ["analysis"]
     INPUTS = {"input": goofi.InputSlot(goofi.DataType.ARRAY, required=True)}

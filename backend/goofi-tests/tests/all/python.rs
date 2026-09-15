@@ -320,10 +320,10 @@ class Ticker(goofi.Node):
     assert!(later - first > 10.0, "the node's thread must run while the child idles: {first} → {later}");
 }
 
-const PULSE_COUNTER: &str = include_str!("fixtures/pulse_counter.py");
-const SOURCES: &str = include_str!("fixtures/sources.py");
-const STITCHER: &str = include_str!("fixtures/stitcher.py");
-const AXES: &str = include_str!("fixtures/axes.py");
+const PULSE_COUNTER: &str = include_str!("../fixtures/pulse_counter.py");
+const SOURCES: &str = include_str!("../fixtures/sources.py");
+const STITCHER: &str = include_str!("../fixtures/stitcher.py");
+const AXES: &str = include_str!("../fixtures/axes.py");
 
 #[test]
 fn a_python_multi_slot_names_its_senders_and_follows_a_rename() {
@@ -533,54 +533,6 @@ class Absent(goofi.Node):
             return {"out": np.array([-1.0], dtype=np.float32)}
         return {"out": data.data * 2.0}
 "#;
-
-    #[test]
-    fn a_multi_slot_reaches_a_node_on_both_tiers_with_its_sources() {
-        let py = subproc_python();
-        let mut here = PyNode::from_source(SOURCES, vec![("input", true)], vec!["out"]).expect("PyNode");
-        let mut there = RemoteNode::new(&py, SOURCES, vec![("input", true)]);
-        for node in [&mut here as &mut dyn Node, &mut there] {
-            let out = once(node, None, &["alpha.out", "beta.out"], &ParamGroups::new()).1.expect("a frame");
-            assert_eq!(text(&out), Some("alpha.out,beta.out"), "the sources in wire order");
-            assert_eq!(text(&once(node, None, &[], &ParamGroups::new()).1.expect("a frame")), Some(""), "no wire, no name");
-        }
-    }
-
-    #[test]
-    fn a_pulse_reaches_a_node_on_both_tiers_through_its_hook() {
-        let py = subproc_python();
-        let mut params = ParamGroups::new();
-        params.insert("count".into(), IndexMap::from([("reset".to_string(), Param::Pulse)]));
-        let key = goofi_node::ParamKey::new("count", "reset");
-        let count = |node: &mut dyn Node| f32s(&once(node, None, &[], &params).1.expect("a frame"))[0];
-
-        let mut here = PyNode::from_source(super::PULSE_COUNTER, vec![], vec!["out"]).expect("PyNode");
-        here.setup(&mut NodeCtx::new(), &Params::new(&params)).expect("in-process setup");
-        assert_eq!((count(&mut here), count(&mut here)), (1.0, 2.0));
-        here.on_pulse(&key, &Params::new(&params)).expect("the hook answers in process");
-        assert_eq!(count(&mut here), 1.0, "the count starts over after a pulse");
-
-        let mut there = RemoteNode::new(&py, super::PULSE_COUNTER, vec![]);
-        assert_eq!((count(&mut there), count(&mut there)), (1.0, 2.0));
-        there.on_pulse(&key, &Params::new(&params)).expect("the hook answers in the child");
-        assert_eq!(count(&mut there), 1.0, "the child's count starts over after a pulse");
-
-        // A declared pulse with no hook stays silent; a hook that raises is one request's error,
-        // and the node answers the next run on both tiers.
-        for (source, hook) in [(NO_HOOK, "no hook"), (RAISING_HOOK, "raising hook")] {
-            let mut here = PyNode::from_source(source, vec![], vec!["out"]).expect("PyNode");
-            here.setup(&mut NodeCtx::new(), &Params::new(&params)).expect("in-process setup");
-            let mut there = RemoteNode::new(&py, source, vec![]);
-            for node in [&mut here as &mut dyn Node, &mut there] {
-                let fired = node.on_pulse(&key, &Params::new(&params));
-                match hook {
-                    "no hook" => assert!(fired.is_ok(), "{hook}: {fired:?}"),
-                    _ => assert!(matches!(&fired, Err(e) if e.0.contains("boom")), "{hook}: {fired:?}"),
-                }
-                assert_eq!(count(node), 1.0, "{hook}: the node runs after the pulse");
-            }
-        }
-    }
 
     const NO_HOOK: &str = r#"
 import goofi

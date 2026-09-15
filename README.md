@@ -182,7 +182,7 @@ test are transports over one entry point, never four surfaces with four sets of 
 
 ```bash
 cargo test --workspace --no-fail-fast         # backend
-cargo test -p goofi-tests --features embed    # …plus the in-process Python tier
+cargo test -p goofi-tests --features embed -- python::   # …plus the in-process Python tier
 cargo clippy --workspace --all-targets        # prints nothing
 cd frontend && npm run check && npm run test  # svelte-check, then vitest
 cd tests/e2e && npm install && npm run e2e    # Playwright against the real binary

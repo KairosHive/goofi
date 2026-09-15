@@ -1,6 +1,5 @@
 //! Interpreter-bootstrap ordering, in its own process so the embedded interpreter starts
 //! uninitialized: the evaluator initializes it FIRST, then a Python node is built.
-#![cfg(feature = "embed")]
 
 use goofi_python::inproc::{PyExprEvaluator, PyNode};
 

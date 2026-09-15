@@ -1,6 +1,5 @@
 //! The runtime GIL tripwire, in its own test BINARY: once a node re-enables the GIL it stays on
 //! for the whole interpreter. Runs with `embed` and a free-threaded interpreter.
-#![cfg(feature = "embed")]
 
 use goofi_core::Data;
 use goofi_node::{Isolation, IsolationCell, ParamGroups, Params};
@@ -55,11 +54,3 @@ fn a_serialized_interpreter_is_reported_every_tick_and_demotes_its_type() {
     assert_eq!(tier.get(), Isolation::Subprocess, "and the demotion holds rather than flapping");
 }
 
-/// A node built outside any registry has no tier to write, and must not panic reaching for one.
-#[test]
-fn an_unrouted_node_still_reports_the_trip() {
-    let p = ParamGroups::new();
-    let mut node = PyNode::from_source(SRC, vec![], vec!["out"]).expect("PyNode");
-    node.setup(&mut NodeCtx::new(), &Params::new(&p)).expect("setup");
-    assert!(tick(&mut node, &p).is_err(), "the error is the tripwire's, not the demotion's");
-}

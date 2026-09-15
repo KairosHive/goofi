@@ -83,7 +83,7 @@ fn native_process_output_reaches_logs_and_never_the_launch_shell() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("logs.json");
     let output = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "process_capture_child", "--nocapture"])
+        .args(["--exact", &format!("{}::process_capture_child", crate::situation(module_path!())), "--nocapture"])
         .env("GOOFI_LOG_CAPTURE_RESULT", &file).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("native stdout marker"));

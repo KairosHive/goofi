@@ -13,7 +13,7 @@ fn image_file_loads_resizes_reloads_and_recovers() {
     };
     write([255, 128, 0]);
     let g = Goofi::new();
-    let ty = install(&g, "image_file.py", include_str!("../../../node-bundles/image/image_file.py"));
+    let ty = install(&g, "image_file.py", include_str!("../../../../node-bundles/image/image_file.py"));
     let node = g.add(&ty);
     let probe = g.probe(node, "image");
     g.set_param(node, "file", "path", path.to_string_lossy().as_ref());

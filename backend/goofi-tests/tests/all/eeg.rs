@@ -1,7 +1,6 @@
 //! The EEG bundle's analysis chain, run as a user gets it: a montage is re-referenced, related
 //! channel by channel, and read as a graph — plus the two nodes that measure a signal rather than
 //! relate it. Every node here is judged on a property of the answer, never on a pinned number.
-#![cfg(not(feature = "embed"))]
 
 use std::path::Path;
 use std::time::{Duration, Instant};

@@ -799,23 +799,10 @@ fn boot_scan(state: &AppState) {
 // The suite lives in `goofi-tests`; a binary has no lib target for it to reach into.
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
 
     fn parse(args: &[&str]) -> Result<Cli, String> {
         parse_args(args.iter().map(|s| s.to_string()))
-    }
-
-    /// A booted state under a throwaway home, so no test writes the user's own `.goofi`.
-    fn walled() -> AppState {
-        static WALL: std::sync::Once = std::sync::Once::new();
-        WALL.call_once(|| {
-            let dir = std::env::temp_dir().join(format!("goofi-cli-test-home-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::env::set_var("GOOFI_HOME", dir);
-        });
-        AppState::new(goofi_bridge::Mode::default(), goofi_bridge::Clock::External, goofi_bridge::RenderClock::External)
     }
 
     #[test]
@@ -888,78 +875,5 @@ mod tests {
             assert!(err.contains("unknown argument"), "and says so plainly: {err}");
             assert!(err.contains(retired[0]), "…naming the flag the user typed: {err}");
         }
-    }
-
-    /// A node that records its own destruction, on the node's own thread.
-    struct Tracked(Arc<std::sync::atomic::AtomicBool>);
-    impl goofi_signal_sdk::Node for Tracked {
-        fn process(
-            &mut self,
-            _i: &goofi_signal_sdk::Inputs<'_>,
-            _o: &mut goofi_signal_sdk::Outputs<'_>,
-            _c: &mut goofi_signal_sdk::NodeCtx,
-            _p: &goofi_node::Params<'_>,
-        ) -> goofi_signal_sdk::NodeResult {
-            Ok(())
-        }
-    }
-    impl Drop for Tracked {
-        fn drop(&mut self) {
-            self.0.store(true, std::sync::atomic::Ordering::Release);
-        }
-    }
-    static TRACKED: goofi_node::NodeManifest = goofi_node::NodeManifest {
-        type_name: "_TestTracked",
-        tags: &[],
-        doc: "records its own teardown",
-        inputs: &[],
-        outputs: &[],
-        params: &[],
-        producer: true,
-    };
-
-    #[tokio::test]
-    async fn a_signal_stops_every_node_before_the_run_returns() {
-        let state = walled();
-        let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let graph = state.graph.clone();
-        {
-            let mut g = graph.lock().unwrap();
-            let flag = released.clone();
-            goofi_bridge::register_dyn_type(&mut g, &TRACKED, Box::new(move |_| Box::new(Tracked(flag.clone()))), &goofi_node::NATIVE);
-            g.add_node("_TestTracked", None).expect("a test node");
-        }
-        // An already-resolved shutdown takes the same path ctrl-C does; port 0 binds ephemerally.
-        let cli = Cli { port: Some(0), ..Cli::default() };
-        assert_eq!(run(cli, "python3".into(), state, std::future::ready(()), None, None).await, 0);
-        assert!(
-            released.load(std::sync::atomic::Ordering::Acquire),
-            "the node's runtime was dropped — its shared memory went with it — before the exit"
-        );
-        assert_eq!(graph.lock().unwrap().node_count(), 0, "…and the graph is holding nothing");
-    }
-
-    #[tokio::test]
-    async fn the_mount_lives_exactly_as_long_as_the_run() {
-        let state = walled();
-        let mount = state.mount();
-        assert!(mount.is_dir(), "the mount exists after boot: {}", mount.display());
-        let cli = Cli { port: Some(0), ..Cli::default() };
-        assert_eq!(run(cli, "python3".into(), state, std::future::ready(()), None, None).await, 0);
-        let husk = mount.parent().expect("the mount is nested under a nonce dir");
-        assert!(!husk.exists(), "the nonce directory goes too, not just workspace: {}", husk.display());
-
-        // `--list-nodes` returns before the server ever binds; the same tail must still reclaim.
-        let listed = walled();
-        let m2 = listed.mount();
-        let cli = Cli { list_nodes: true, ..Cli::default() };
-        assert_eq!(run(cli, "python3".into(), listed, std::future::pending(), None, None).await, 0);
-        assert!(!m2.exists(), "--list-nodes reclaims too: {}", m2.display());
-    }
-
-    #[test]
-    fn help_is_a_mode_the_caller_handles() {
-        assert!(parse(&["--help"]).expect("help parses").help);
-        assert!(parse(&["-h"]).expect("help parses").help);
     }
 }

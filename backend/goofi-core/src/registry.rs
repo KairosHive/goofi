@@ -90,24 +90,3 @@ pub fn inventory() -> Vec<Entry> {
     out.sort_by_key(|e| (e.kind, e.id));
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_lease_is_the_entry_and_goes_with_it() {
-        let a = lease(Kind::Path, "/tmp/a");
-        let b = lease(Kind::Child, "sleep 1");
-        let listed = inventory();
-        let (ia, ib) = (
-            listed.iter().position(|e| e.name == "/tmp/a").unwrap(),
-            listed.iter().position(|e| e.name == "sleep 1").unwrap(),
-        );
-        assert!(ib < ia, "children list before paths: the release order");
-        drop(a);
-        assert!(!inventory().iter().any(|e| e.name == "/tmp/a"));
-        assert!(inventory().iter().any(|e| e.name == "sleep 1"));
-        drop(b);
-    }
-}

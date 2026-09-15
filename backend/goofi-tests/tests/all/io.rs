@@ -3,7 +3,6 @@
 //!
 //! Every stream and port is named for THIS process, because a suite run must not find — or feed —
 //! another goofi on the same machine.
-#![cfg(not(feature = "embed"))]
 
 use goofi_tests::{f32s, hex, j, labels, require_python, shape, text, Goofi};
 

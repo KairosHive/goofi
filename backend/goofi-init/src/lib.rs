@@ -384,6 +384,8 @@ fn write_config(root: &Path, ft: &Path) -> Result<(), String> {
          # true; cargo expands both to absolute paths. Delete this file (and {FT_VENV}) and re-run\n\
          # goofi-init to reprovision.\n\
          [env]\n\
+         # Every situation is one test binary; more threads than this only make cold starts collide.\n\
+         RUST_TEST_THREADS = \"8\"\n\
          PYO3_PYTHON = {{ value = {py:?}, relative = true }}\n\
          PYTHONPATH = {{ value = {purelib:?}, relative = true }}\n\
          {home}{rpath}",

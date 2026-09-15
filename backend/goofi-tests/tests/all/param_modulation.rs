@@ -1,5 +1,4 @@
 //! Parameter modulation through the public expression interface.
-#![cfg(feature = "embed")]
 
 use std::collections::HashMap;
 use goofi_core::Param;

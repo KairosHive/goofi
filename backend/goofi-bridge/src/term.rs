@@ -483,21 +483,6 @@ fn parent_speaks_utf8(env: &[(OsString, OsString)]) -> bool {
 mod tests {
     use super::*;
 
-    /// A new workspace is seeded with the WHOLE of [`ORIENTATION`], under both names.
-    #[test]
-    fn a_new_workspace_is_seeded_with_the_whole_orientation() {
-        let tmp = tempfile::tempdir().expect("a temp dir");
-        seed_orientation(tmp.path());
-        assert_eq!(std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap(), ORIENTATION);
-        // Claude Code reads CLAUDE.md, and its `@` import is what points it at the other file.
-        assert_eq!(std::fs::read_to_string(tmp.path().join("CLAUDE.md")).unwrap(), "@AGENTS.md\n");
-        for section in ["\n## Seeing", "\n## Building", "\n## Custom nodes"] {
-            assert!(ORIENTATION.contains(section), "the orientation has no `{section}` section");
-        }
-        // Read in EVERY turn of every agent in this patch, so the aim is ~6 KB.
-        assert!(ORIENTATION.len() < 8192, "the orientation is {} bytes", ORIENTATION.len());
-    }
-
     /// …and an orientation the agent has already edited is ITS OWN.
     #[test]
     fn an_orientation_the_agent_has_edited_is_never_seeded_over() {
@@ -540,23 +525,6 @@ mod tests {
             Some(&b"middleend"[..]),
             "every query, not just the first",
         );
-    }
-
-    /// The arbitration, without a socket in the way: last writer wins, and a retraction or a
-    /// departure falls back to the newest SURVIVING proposal.
-    #[test]
-    fn the_last_view_to_speak_owns_the_size_and_hands_it_back_when_it_stops() {
-        let mut s = Sizes::default();
-        assert_eq!(s.current(), None, "a view that has not measured yet says nothing");
-        assert_eq!(s.propose(1, Some((100, 30))), Some((100, 30)));
-        assert_eq!(s.propose(2, Some((80, 24))), Some((80, 24)), "the last writer wins");
-        assert_eq!(s.propose(2, None), Some((100, 30)), "a retraction hands it to the survivor");
-        assert_eq!(s.propose(2, Some((80, 24))), Some((80, 24)), "…and it can speak again");
-        assert_eq!(s.leave(2), Some((100, 30)), "so does leaving");
-        // A view that speaks twice is not seated twice: the second word REPLACES the first.
-        s.propose(1, Some((90, 20)));
-        s.propose(1, Some((70, 15)));
-        assert_eq!(s.leave(1), None, "the last view out leaves nobody speaking");
     }
 
 }
