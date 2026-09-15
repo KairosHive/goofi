@@ -183,6 +183,35 @@ pub fn capture_stdio() -> Result<(), String> {
 
 static TERMINAL: OnceLock<Mutex<filedescriptor::FileDescriptor>> = OnceLock::new();
 
+/// Write raw bytes to the saved terminal, or to stdout before the capture.
+pub fn terminal_write(bytes: &[u8]) -> std::io::Result<()> {
+    match TERMINAL.get() {
+        Some(out) => out.lock().unwrap_or_else(|e| e.into_inner()).write_all(bytes),
+        None => std::io::stdout().lock().write_all(bytes),
+    }
+}
+
+/// Whether the terminal is one, and how wide: `None` when output goes to a file or a pipe.
+pub fn terminal_width() -> Option<u16> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        let fd = match TERMINAL.get() {
+            Some(out) => out.lock().unwrap_or_else(|e| e.into_inner()).as_raw_fd(),
+            None => std::io::stdout().as_raw_fd(),
+        };
+        let mut size: libc::winsize = unsafe { std::mem::zeroed() };
+        // SAFETY: a query on an fd this process holds, into a struct of the size it expects.
+        (unsafe { libc::isatty(fd) == 1 && libc::ioctl(fd, libc::TIOCGWINSZ, &mut size) == 0 })
+            .then_some(size.ws_col.max(40))
+    }
+    #[cfg(not(unix))]
+    {
+        use std::io::IsTerminal;
+        std::io::stdout().is_terminal().then_some(100)
+    }
+}
+
 pub fn terminal_line(text: &str) -> std::io::Result<()> {
     match TERMINAL.get() {
         Some(out) => writeln!(out.lock().unwrap_or_else(|e| e.into_inner()), "{text}"),

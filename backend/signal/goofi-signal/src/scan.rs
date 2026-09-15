@@ -46,7 +46,11 @@ pub(crate) fn scan(engine: &mut SignalEngine, dir: &Path) -> Vec<ScannedType> {
                     s.spawn(move || hit.clone().unwrap_or_else(|| probe(p, python)).at(p))
                 })
                 .collect();
-            handles.into_iter().map(|h| h.join().ok()).collect()
+            handles.into_iter().zip(chunk).map(|(h, (p, _, _))| {
+                let decided = h.join().ok();
+                goofi_core::startup::scanned(dir, p);
+                decided
+            }).collect()
         });
         for (key, probed) in keyed.into_iter().zip(decided) {
             if let (Some(key), Some(probed)) = (key, &probed) {
@@ -63,6 +67,7 @@ pub(crate) fn scan(engine: &mut SignalEngine, dir: &Path) -> Vec<ScannedType> {
     }
     for (path, type_name, stamp) in rust {
         let outcome = engine.register_rust(&path, &type_name);
+        goofi_core::startup::scanned(dir, &path);
         out.push(ScannedType { type_name, stamp, outcome });
     }
     out

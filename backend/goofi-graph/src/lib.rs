@@ -932,9 +932,12 @@ impl Graph {
         let held = self.held_manifests();
         let mut out = Vec::new();
         if root.is_dir() {
+            goofi_core::startup::scanning(root, goofi_node::node_file_count(root));
             for engine in &mut self.engines {
                 out.extend(qualified(engine.id(), engine.scan(root)));
             }
+            let unavailable = out.iter().filter(|t| matches!(t.outcome, goofi_node::Scanned::Unavailable(_))).count();
+            goofi_core::startup::indexed(root, out.len() - unavailable, unavailable);
         }
         self.note_scanned(&out, &held);
         out

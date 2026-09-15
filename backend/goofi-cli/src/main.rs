@@ -180,9 +180,15 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
         }
     }
     let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo };
-    report("Starting signal, audio and graphics engines");
+    report("Cleaning up after earlier sessions");
     // The session is held BEFORE the engines exist: every iceoryx2 port they open is its.
     let session = goofi_transport::session().to_string();
+    let swept = goofi_transport::swept_at_boot();
+    goofi_core::startup::note(match (swept.directories, swept.segments) {
+        (0, 0) => "nothing left behind".to_string(),
+        (d, s) => format!("removed {d} directories and {s} shared-memory segments of dead sessions"),
+    });
+    report("Starting signal, audio and graphics engines");
     let mut state = AppState::with_instance(session, mode, goofi_bridge::Clock::Device, goofi_bridge::RenderClock::Timer);
     state.load = cli.load.clone().or_else(|| named_env("GOOFI_LOAD")).map(PathBuf::from);
     state.demo_base = named_env("GOOFI_DEMO_BASE");
@@ -486,7 +492,7 @@ async fn run(
         boot_scan(&state);
         if !demo {
             report("Checking audio hosts");
-            println!("  audio hosts: {}{}", goofi_audio::hosts(), goofi_audio::NO_ASIO_NOTE);
+            goofi_core::startup::note(format!("{}{}", goofi_audio::hosts(), goofi_audio::NO_ASIO_NOTE));
         }
     }
 
@@ -792,8 +798,8 @@ fn boot_scan(state: &AppState) {
     }
     let bad = if n_bad > 0 { format!(", {n_bad} unavailable") } else { String::new() };
     let total = n_native + n_in + n_sub + n_shader;
-    println!("  Node library: {total} available{bad}");
-    println!("    {n_native} native · {n_in} in-process · {n_sub} subprocess · {n_shader} shaders{NO_PYTHON_NOTE}");
+    goofi_core::startup::note(format!("Node library: {total} available{bad}"));
+    goofi_core::startup::note(format!("{n_native} native · {n_in} in-process · {n_sub} subprocess · {n_shader} shaders{NO_PYTHON_NOTE}"));
 }
 
 // The suite lives in `goofi-tests`; a binary has no lib target for it to reach into.

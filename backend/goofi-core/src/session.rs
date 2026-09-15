@@ -187,13 +187,9 @@ pub fn alive(id: &str) -> bool {
     alive_at(&entry(id))
 }
 
-/// Remove a directory tree this session owns. Platform-specific where iceoryx2's own files refuse
-/// their owner — see the transport crate, which supplies that removal.
-pub type RemoveTree = fn(&Path);
-
 /// Every alive session, its record read; dead records are swept as they are met, together with
 /// the ephemeral directory each names. `remove` is how a tree goes.
-pub fn sessions(remove: RemoveTree) -> Vec<Session> {
+pub fn sessions(mut remove: impl FnMut(&Path)) -> Vec<Session> {
     let Ok(entries) = fs::read_dir(sessions_dir()) else { return Vec::new() };
     let mut out = Vec::new();
     for entry in entries.flatten() {
@@ -222,7 +218,7 @@ pub fn sessions(remove: RemoveTree) -> Vec<Session> {
 
 /// Sweep every ephemeral directory whose session is not alive. The record is locked and in place
 /// before its directory is made, so a directory with no alive record is dead, whatever it holds.
-pub fn sweep_dead_system(remove: RemoveTree) {
+pub fn sweep_dead_system(mut remove: impl FnMut(&Path)) {
     let Ok(entries) = fs::read_dir(system_base()) else { return };
     for entry in entries.flatten() {
         let dir = entry.path();
@@ -235,13 +231,15 @@ pub fn sweep_dead_system(remove: RemoveTree) {
 
 /// Sweep every workspace parent that holds nothing and belongs to no living session. A crash
 /// leaves a workspace behind on purpose; an EMPTY one carries no work and only clutters.
-pub fn sweep_empty_workspaces() {
-    let Ok(entries) = fs::read_dir(workspaces_base()) else { return };
+pub fn sweep_empty_workspaces() -> usize {
+    let Ok(entries) = fs::read_dir(workspaces_base()) else { return 0 };
+    let mut swept = 0;
     for entry in entries.flatten() {
         let dir = entry.path();
         let Some(id) = dir.file_name().and_then(|n| n.to_str()) else { continue };
-        if !alive(id) {
-            let _ = fs::remove_dir(&dir);
+        if !alive(id) && fs::remove_dir(&dir).is_ok() {
+            swept += 1;
         }
     }
+    swept
 }

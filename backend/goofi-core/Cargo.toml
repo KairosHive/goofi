@@ -25,6 +25,9 @@ toml = "0.8"
 # never depends back on goofi-core.
 goofi-view = { path = "../goofi-view" }
 
+# The startup screen: one progress bar per folder the node library scan is in.
+indicatif = "0.18"
+
 # The child's process group and the liveness pipe's fd flag (unix); the log redirect (windows).
 libc = "0.2"
 

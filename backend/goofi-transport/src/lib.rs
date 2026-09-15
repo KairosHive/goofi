@@ -183,7 +183,7 @@ pub fn session() -> &'static str {
         };
         goofi_core::session::decide(&id);
         let _ = std::fs::create_dir_all(iox_root(&id));
-        sweep_dead();
+        let _ = SWEPT.set(sweep_dead());
         id
     })
 }
@@ -215,13 +215,34 @@ pub fn record_url(url: &str) {
 
 /// The boot pass: dead records, their directories, empty workspace parents, and every shared
 /// memory segment whose session is not alive — each judged by the lock alone.
-pub fn sweep_dead() {
-    let _ = goofi_core::session::sessions(remove_tree);
-    goofi_core::session::sweep_dead_system(remove_tree);
-    goofi_core::session::sweep_empty_workspaces();
+pub fn sweep_dead() -> Swept {
+    let mut swept = Swept::default();
+    let mut counted = |dir: &std::path::Path| {
+        swept.directories += 1;
+        remove_tree(dir);
+    };
+    let _ = goofi_core::session::sessions(&mut counted);
+    goofi_core::session::sweep_dead_system(&mut counted);
+    swept.directories += goofi_core::session::sweep_empty_workspaces();
     let mut known = std::collections::HashMap::new();
-    sweep_shared_memory(|id| !*known.entry(id.to_string()).or_insert_with(|| goofi_core::session::alive(id)));
+    swept.segments = sweep_shared_memory(|id| !*known.entry(id.to_string()).or_insert_with(|| goofi_core::session::alive(id)));
+    swept
 }
+
+/// What a sweep removed: directories of dead sessions, and shared-memory segments they left.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Swept {
+    pub directories: usize,
+    pub segments: usize,
+}
+
+/// What the boot pass swept, once the session is decided.
+pub fn swept_at_boot() -> Swept {
+    session();
+    *SWEPT.get().expect("the boot pass ran")
+}
+
+static SWEPT: OnceLock<Swept> = OnceLock::new();
 
 /// Every alive session, dead ones swept as they are met.
 pub fn sessions() -> Vec<goofi_core::session::Session> {
@@ -265,14 +286,16 @@ fn shm_owner(name: &str) -> Option<&str> {
 }
 
 /// Remove every segment of ours whose owning session `dead` says so of.
-fn sweep_shared_memory(mut dead: impl FnMut(&str) -> bool) {
-    let Ok(entries) = std::fs::read_dir(shm_dir()) else { return };
+fn sweep_shared_memory(mut dead: impl FnMut(&str) -> bool) -> usize {
+    let Ok(entries) = std::fs::read_dir(shm_dir()) else { return 0 };
+    let mut swept = 0;
     for entry in entries.flatten() {
         let name = entry.file_name();
-        if shm_owner(&name.to_string_lossy()).is_some_and(&mut dead) {
-            let _ = std::fs::remove_file(entry.path());
+        if shm_owner(&name.to_string_lossy()).is_some_and(&mut dead) && std::fs::remove_file(entry.path()).is_ok() {
+            swept += 1;
         }
     }
+    swept
 }
 
 /// The iceoryx2 configuration every goofi port is built against: the session's own root and

@@ -1005,9 +1005,6 @@ pub fn rescan(
     let roots = (state.node_roots().into_iter())
         .chain(workspace.into_iter().map(|d| (d, goofi_graph::Origin::Patch)));
     for (root, origin) in roots {
-        if root.is_dir() {
-            goofi_core::startup::report(format!("Scanning {}", root.display()));
-        }
         for t in g.scan_root(&root) {
             origins.insert(t.type_name.clone(), origin.clone());
             found.insert(t.type_name.clone(), (Some(root.clone()), t.stamp));
