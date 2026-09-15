@@ -2495,7 +2495,7 @@ impl Graph {
         let engine = entry.engine;
         let key = ParamKey::new(group, name);
         if let Some(e) = self.engine_mut(engine) {
-            e.refresh_param(uid, key);
+            e.request(uid, goofi_node::Request::Refresh(key));
         }
         Ok(())
     }
@@ -2512,7 +2512,7 @@ impl Graph {
         let engine = entry.engine;
         let key = ParamKey::new(group, name);
         if let Some(e) = self.engine_mut(engine) {
-            e.pulse_param(uid, key);
+            e.request(uid, goofi_node::Request::Pulse(key));
         }
         Ok(())
     }

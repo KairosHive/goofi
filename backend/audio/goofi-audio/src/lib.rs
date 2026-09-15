@@ -942,16 +942,13 @@ impl Engine for AudioEngine {
     }
 
     /// A refresh runs on the node's own thread, never under the graph lock.
-    fn refresh_param(&mut self, uid: Uid, key: ParamKey) {
+    /// Both reach the control half; a pulse raises the param for one control tick.
+    fn request(&mut self, uid: Uid, request: goofi_node::Request) {
         if let Some(inst) = self.live.get(&uid) {
-            inst.control.refresh(key);
-        }
-    }
-
-    /// A pulse rings the control half, which raises the param for one control tick.
-    fn pulse_param(&mut self, uid: Uid, key: ParamKey) {
-        if let Some(inst) = self.live.get(&uid) {
-            inst.control.pulse(key);
+            match request {
+                goofi_node::Request::Refresh(key) => inst.control.refresh(key),
+                goofi_node::Request::Pulse(key) => inst.control.pulse(key),
+            }
         }
     }
 

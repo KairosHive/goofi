@@ -152,9 +152,7 @@ impl Engine for LibraryEngine {
         n
     }
 
-    fn refresh_param(&mut self, _uid: Uid, _key: ParamKey) {}
-
-    fn pulse_param(&mut self, _uid: Uid, _key: ParamKey) {}
+    fn request(&mut self, _uid: Uid, _request: goofi_node::Request) {}
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self

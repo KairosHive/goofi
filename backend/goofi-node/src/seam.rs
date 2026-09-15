@@ -177,9 +177,19 @@ pub struct LibraryEntry {
     pub isolation: &'static IsolationCell,
 }
 
+/// What a node is asked to do once, on its own thread, and stores nothing of.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Request {
+    /// Re-enumerate a refreshable `Str` param's options; they come back as a `RefreshOptions` status.
+    Refresh(ParamKey),
+    /// Fire a pulse param.
+    Pulse(ParamKey),
+}
+
 /// An engine: the runtime authority for its nodes. The graph applies every op to the MODEL and
 /// propagates through these doors; an engine owns instances, health reporting, within-engine
-/// transport and its own library, and the graph sees none of them.
+/// transport and its own library, and the graph sees none of them. Engines run in the manager's
+/// process (decided 2026-09-15): the seam is in-memory, and the view it hands over is borrowed.
 pub trait Engine: Send {
     /// The id a registration is keyed by, and the palette's provenance for this library.
     fn id(&self) -> &'static str;
@@ -273,11 +283,9 @@ pub trait Engine: Send {
     fn published(&self) -> Vec<(&'static str, goofi_core::globals::GlobalValue)> {
         Vec::new()
     }
-    /// Re-enumerate a `Str` param's options on the node's own thread — the one imperative
-    /// settled state cannot express.
-    fn refresh_param(&mut self, uid: Uid, key: ParamKey);
-    /// Fire a pulse param on the node's own thread: a request the node acts on and stores nothing of.
-    fn pulse_param(&mut self, uid: Uid, key: ParamKey);
+    /// One imperative to a node's own thread — what settled state cannot express. The answer, if
+    /// any, arrives through the drain.
+    fn request(&mut self, uid: Uid, request: Request);
     /// Whether a node of this type has an editor window of its own — on the machine goofi runs
     /// on, so a platform with no window host answers false.
     fn has_editor(&self, _type_name: &str) -> bool {
