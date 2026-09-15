@@ -159,10 +159,8 @@ impl Doorbell {
     }
 }
 
-/// The session this process mints under, decided once: `GOOFI_SESSION` names a parent's to JOIN
-/// — a spawned node child, a test's crash helper — and with none set the process holds one of its
-/// own. Deciding it also runs the boot pass: every dead session's ephemeral directory and shared
-/// memory go, and nothing a living session owns is ever enumerated.
+/// The session this process mints under, decided once: `GOOFI_SESSION` names a parent's to JOIN,
+/// else the process holds its own. Deciding it runs the boot pass over what dead sessions left.
 pub fn session() -> &'static str {
     static SESSION: OnceLock<String> = OnceLock::new();
     SESSION.get_or_init(|| {
@@ -175,11 +173,8 @@ pub fn session() -> &'static str {
                 let held = goofi_core::session::hold(&goofi_core::session::fresh_id()).expect("hold a session");
                 let id = held.id().to_string();
                 *HELD.lock().unwrap_or_else(|e| e.into_inner()) = Some(held);
-                // A process that never calls `release_session` — a test binary, a `process::exit`
-                // on a second Ctrl-C — releases at exit, where every thread is past the point of
-                // caring. The binary's own release, earlier, makes this a no-op.
-                // SAFETY: registers a plain `extern "C"` function with no arguments; the C
-                // runtime calls it once, on this process's own exit.
+                // A process that never calls `release_session` releases at exit; an earlier
+                // release makes this a no-op. SAFETY: a plain `extern "C"` hook the CRT calls once.
                 unsafe {
                     libc::atexit(release_at_exit);
                 }
@@ -218,9 +213,8 @@ pub fn record_url(url: &str) {
     }
 }
 
-/// The boot pass: dead records, ephemeral directories whose record is dead or gone, empty
-/// workspace parents, and every shared-memory segment whose session is not alive — each judged
-/// by the lock alone, so a segment whose record was swept long ago still goes.
+/// The boot pass: dead records, their directories, empty workspace parents, and every shared
+/// memory segment whose session is not alive — each judged by the lock alone.
 pub fn sweep_dead() {
     let _ = goofi_core::session::sessions(remove_tree);
     goofi_core::session::sweep_dead_system(remove_tree);
@@ -234,9 +228,8 @@ pub fn sessions() -> Vec<goofi_core::session::Session> {
     goofi_core::session::sessions(remove_tree)
 }
 
-/// A path for a file this process needs for a moment — a `.gfi` packed for a download, one
-/// uploaded for a load — under the session's ephemeral directory, so a crash's leftover is swept
-/// with the session and never outlives it in the system temp.
+/// A path for a file needed for a moment — a `.gfi` packed or uploaded — under the session's
+/// ephemeral directory, so a crash's leftover is swept with the session.
 pub fn scratch(name: &str) -> std::path::PathBuf {
     let dir = goofi_core::session::system_dir(session()).join("scratch");
     let _ = std::fs::create_dir_all(&dir);

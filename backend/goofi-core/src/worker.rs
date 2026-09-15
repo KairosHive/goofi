@@ -1,6 +1,5 @@
-//! The one way goofi starts a thread that outlives the call that started it: named, entered in
-//! the resource index for as long as it runs, and joinable within a deadline — so a shutdown
-//! can wait for it without a thread that hangs holding the process hostage.
+//! The one way goofi starts a thread that outlives its caller: named, listed while it runs, and
+//! joinable within a deadline so a hung thread cannot hold a shutdown hostage.
 
 use std::io;
 use std::sync::{Arc, Condvar, Mutex};
@@ -46,7 +45,7 @@ impl Builder {
             let _ending = Ending(finished);
             f()
         })?;
-        Ok(Worker { name: self.name, handle: Some(handle), done })
+        Ok(Worker { handle: Some(handle), done })
     }
 }
 
@@ -63,20 +62,11 @@ impl Drop for Ending {
 
 /// A running thread. Dropping the handle detaches it; the thread stays listed until it ends.
 pub struct Worker<T = ()> {
-    name: String,
     handle: Option<JoinHandle<T>>,
     done: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl<T> Worker<T> {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn is_finished(&self) -> bool {
-        *self.done.0.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
     /// Wait for the thread to end, however long that takes.
     pub fn join(mut self) -> std::thread::Result<T> {
         self.handle.take().expect("joined once").join()
