@@ -1,10 +1,5 @@
-//! The one index of every resource this process holds open: a child process, a thread, an
-//! iceoryx2 port, a file it will remove, a device. A resource is minted with a [`Lease`] and the
-//! lease IS the entry — dropped, the entry goes — so the index is never a mirror that can drift
-//! from what exists. `session status` answers it, and a shutdown reads it to know what is left.
-//!
-//! One index per process, rooted in the session the process runs under: an engine that becomes
-//! a process of its own keeps one of these too, under the same session id.
+//! The one index of every resource this process holds: a [`Lease`] IS the entry, so the index
+//! cannot drift from what exists. One per process; `session status` lists it.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -49,12 +44,6 @@ pub struct Lease {
     id: u64,
 }
 
-impl Lease {
-    pub fn id(&self) -> u64 {
-        self.id
-    }
-}
-
 impl Drop for Lease {
     fn drop(&mut self) {
         ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.id);
@@ -64,7 +53,7 @@ impl Drop for Lease {
 /// A value and its entry in the index, which goes when the value does. For a handle another
 /// crate owns — a device stream, a MIDI port — that has no room of its own for a lease.
 pub struct Leased<T> {
-    pub value: T,
+    value: T,
     _lease: Lease,
 }
 
@@ -102,30 +91,23 @@ pub fn inventory() -> Vec<Entry> {
     out
 }
 
-/// How many of `kind` are held.
-pub fn count(kind: Kind) -> usize {
-    ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).values().filter(|e| e.kind == kind).count()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn a_lease_is_the_entry_and_goes_with_it() {
-        let before = count(Kind::Path);
         let a = lease(Kind::Path, "/tmp/a");
         let b = lease(Kind::Child, "sleep 1");
-        assert_eq!(count(Kind::Path), before + 1);
         let listed = inventory();
         let (ia, ib) = (
-            listed.iter().position(|e| e.id == a.id()).unwrap(),
-            listed.iter().position(|e| e.id == b.id()).unwrap(),
+            listed.iter().position(|e| e.name == "/tmp/a").unwrap(),
+            listed.iter().position(|e| e.name == "sleep 1").unwrap(),
         );
         assert!(ib < ia, "children list before paths: the release order");
-        assert_eq!(listed[ib].name, "sleep 1");
         drop(a);
-        assert_eq!(count(Kind::Path), before);
-        assert!(inventory().iter().any(|e| e.id == b.id()));
+        assert!(!inventory().iter().any(|e| e.name == "/tmp/a"));
+        assert!(inventory().iter().any(|e| e.name == "sleep 1"));
+        drop(b);
     }
 }

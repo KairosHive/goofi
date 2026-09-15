@@ -128,7 +128,7 @@ pub struct AppState {
     /// The drain thread's stop flag, and what [`AppState::stop_recording`] waits on.
     record_drain: Arc<goofi_transport::Halt>,
     /// Raised once, at shutdown: every worker of the manager's own reads it and leaves.
-    stopping: Arc<std::sync::atomic::AtomicBool>,
+    stopping: Arc<goofi_transport::Halt>,
     /// The manager's own threads — the status drain, the tap follower — joined at shutdown.
     workers: Arc<Mutex<Vec<goofi_core::worker::Worker>>>,
 }
@@ -224,7 +224,7 @@ impl AppState {
             harnesses: Arc::new(term::Harnesses::default()),
             recorder,
             record_drain: Arc::new(goofi_transport::Halt::default()),
-            stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            stopping: Arc::new(goofi_transport::Halt::default()),
             workers: Arc::new(Mutex::new(Vec::new())),
         };
         spawn_follower(state.clone(), follow_rx);
@@ -232,16 +232,14 @@ impl AppState {
         state
     }
 
-    /// Release everything this manager holds, in the one order that is safe: the agents leave
-    /// before their workspace goes; the recording drains and the plugins stop; the manager's own
-    /// workers stop reading the graph; every engine stops its nodes, whose threads release their
-    /// shared memory before the mount goes. The session itself is the process's to release.
+    /// Release everything this manager holds, in the one safe order: agents, recording and
+    /// plugins, the manager's workers, the engines, then the mount. The session is the process's.
     pub fn shutdown(&self) {
         if let Some(insist) = self.harnesses.reap_all() {
             insist();
         }
         self.stop_recording();
-        self.stopping.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.stopping.stop();
         let workers: Vec<_> = std::mem::take(&mut *self.workers.lock().unwrap_or_else(|e| e.into_inner()));
         for worker in workers {
             let _ = worker.join_within(goofi_transport::SHUTDOWN_WAIT);
@@ -560,7 +558,7 @@ pub fn spawn_workers(state: &AppState) {
             // Parked until a report lands or the broadcast pace comes due — pacing, not polling.
             let wait = next_broadcast.saturating_duration_since(Instant::now()).min(period);
             waker.wait_timeout(wait);
-            if state.stopping.load(std::sync::atomic::Ordering::Relaxed) {
+            if state.stopping.stopped() {
                 return;
             }
             let due = Instant::now() >= next_broadcast;
@@ -1422,7 +1420,7 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
             let first = match rx.recv_timeout(BROADCAST_PERIOD) {
                 Ok(first) => first,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if state.stopping.load(std::sync::atomic::Ordering::Relaxed) {
+                    if state.stopping.stopped() {
                         return;
                     }
                     continue;

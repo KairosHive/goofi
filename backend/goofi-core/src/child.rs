@@ -1,11 +1,5 @@
-//! The one way goofi runs a process. Every child joins the session, inherits a liveness pipe
-//! that ends it when this process dies — a crash included, where no `Drop` runs — leads a
-//! process group of its own so a stop reaches what it spawned, and is entered in the resource
-//! index while it lives. A dropped [`Child`] is killed and reaped: no child outlives its owner.
-//!
-//! Two stop policies cover every child: [`Child::stop`] asks the group to leave and insists
-//! after a grace, for a service; [`Child::wait_within`] waits for a one-shot tool and kills it
-//! at a deadline. The child side of the liveness pipe is [`watch_parent`].
+//! The one way goofi runs a process: a child joins the session, watches a liveness pipe, leads
+//! its own process group, is listed while it lives, and is killed when its [`Child`] drops.
 
 use std::io::{self, PipeReader, PipeWriter, Read};
 use std::process::{Command, ExitStatus, Output, Stdio};
@@ -69,10 +63,6 @@ fn reader(mut from: impl Read + Send + 'static) -> Option<crate::worker::Worker<
 }
 
 impl Child {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
     /// Ask the child's group to leave, wait `grace`, then insist. Returns how it ended, or `None`
     /// when it had to be killed.
     pub fn stop(&mut self, grace: Duration) -> Option<ExitStatus> {
@@ -241,12 +231,8 @@ fn arm(cmd: &mut Command) -> io::Result<Armed> {
     Ok(Armed { writer, reader })
 }
 
-/// The read end is made inheritable in THIS process, not in a `pre_exec` hook: a hook forces
-/// std onto fork-and-exec, and a bare program name is then searched along `PATH` inside the
-/// forked child, where the allocation that takes can wait for ever on a lock another thread
-/// held at the fork. Without a hook std uses `posix_spawn`, which has no such child. The window
-/// in which a cousin spawned at the same moment inherits the read end too is harmless: the
-/// child's EOF depends on the WRITE end alone, which stays close-on-exec and is this process's.
+/// Made inheritable HERE, not in a `pre_exec` hook: a hook forces fork-and-exec, whose child can
+/// deadlock on a PATH search. A cousin inheriting the read end too is harmless: EOF is the writer's.
 #[cfg(unix)]
 fn share_read_end(_cmd: &mut Command, reader: &PipeReader) -> io::Result<String> {
     use std::os::fd::AsRawFd;
@@ -293,9 +279,8 @@ fn reader_from_raw(raw: &str) -> io::Result<std::fs::File> {
     Ok(unsafe { std::fs::File::from_raw_handle(value as _) })
 }
 
-/// The child side: start the watcher on the read end [`LIVENESS_ENV`] names, which blocks until
-/// the parent dies and then ends this process at once. A child with no pipe in its environment
-/// was not started by goofi and is left alone.
+/// The child side: end this process the moment the parent dies. A child with no pipe in its
+/// environment was not started by goofi and is left alone.
 pub fn watch_parent() -> io::Result<()> {
     let Ok(raw) = std::env::var(LIVENESS_ENV) else { return Ok(()) };
     let reader = reader_from_raw(&raw)?;
@@ -308,7 +293,7 @@ pub fn watch_parent() -> io::Result<()> {
 }
 
 /// Block until the parent's write end closes. The parent never writes, so a byte is not a death.
-pub fn wait_for_parent_exit(mut reader: impl Read) {
+fn wait_for_parent_exit(mut reader: impl Read) {
     let mut scratch = [0u8; 64];
     loop {
         match reader.read(&mut scratch) {
