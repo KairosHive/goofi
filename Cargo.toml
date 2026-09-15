@@ -45,6 +45,18 @@ rust-version = "1.89"
 lto = "thin"
 codegen-units = 1
 
+# A test binary links the whole tree; with full debug info each of seventy was 470 MB, a fresh
+# target 24 GB, and CI ran out of disk. Workspace crates keep line tables; dependencies carry none.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# A test target is a small crate against the big ones; its incremental cache is all cost.
+[profile.test]
+incremental = false
+
 # The sound-server client zero-fills a 1 MB read buffer on every socket wakeup; unoptimized, that
 # byte-by-byte fill alone pins a core, so a `cargo run` build cannot hold a stream in real time.
 [profile.dev.package.pulseaudio]
