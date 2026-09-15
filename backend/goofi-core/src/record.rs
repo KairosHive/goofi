@@ -67,4 +67,7 @@ impl VideoQuality {
 pub struct RecordedOutput {
     pub slot: String,
     pub quality: VideoQuality,
+    /// Which arming this is, minted by the graph: a slot armed again records on a fresh service.
+    #[serde(skip)]
+    pub serial: u64,
 }

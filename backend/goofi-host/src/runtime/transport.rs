@@ -39,6 +39,16 @@ struct InputWire {
     subscriber: ByteSubscriber,
 }
 
+/// The armed slots' ports by slot, each with the arming it serves, and the ports a newer arming
+/// replaced — kept until the recorder has let go of them.
+#[derive(Default)]
+struct Records {
+    live: HashMap<String, (u64, goofi_transport::RecordPort)>,
+    retired: Vec<goofi_transport::RecordPort>,
+    /// The node's one bell on the recorder's door, opened by the first arming and kept for its life.
+    bell: Option<std::sync::Arc<goofi_transport::Doorbell>>,
+}
+
 /// A node's end of every service it owns.
 pub struct IoxTransport {
     /// The name every service of this node is derived from.
@@ -54,7 +64,7 @@ pub struct IoxTransport {
     /// The recorder's one door, by name; a bell onto it is opened with the slot that rings it.
     record_door: ServiceName,
     /// The armed slots' second publishers, reconciled by `RecSlot` and released by the recorder.
-    records: Mutex<HashMap<String, goofi_transport::RecordPort>>,
+    records: Mutex<Records>,
     /// What the recording last cost and why — the count and the cause a node wears as a fault.
     trouble: Mutex<Option<(u64, String)>>,
     /// Must outlive every port built from it, so it is declared LAST — Rust drops a struct's fields
@@ -104,7 +114,7 @@ impl IoxTransport {
             outputs,
             inputs: Mutex::new(Vec::new()),
             record_door,
-            records: Mutex::new(HashMap::new()),
+            records: Mutex::new(Records::default()),
             trouble: Mutex::new(None),
         })
     }
@@ -231,33 +241,54 @@ impl Transport for IoxTransport {
         out
     }
 
-    fn record_out(&self, slots: &[String]) -> Result<(), String> {
+    fn record_out(&self, slots: &[(String, u64)]) -> Result<(), String> {
         let mut records = self.records.lock().unwrap();
-        for (slot, port) in records.iter_mut() {
-            match slots.contains(slot) {
-                true => port.armed(),
-                false => port.retire(),
+        let Records { live, retired, bell } = &mut *records;
+        // A new arming is a new service: the old port keeps the name the recorder may already
+        // have let go of, and is dropped once nobody reads it.
+        for (slot, (held, port)) in live.iter_mut() {
+            match slots.iter().find(|(s, _)| s == slot) {
+                Some((_, serial)) if serial == held => port.armed(),
+                _ => port.retire(),
             }
         }
-        records.retain(|_, port| !port.spent());
+        let superseded: Vec<String> = live
+            .iter()
+            .filter(|(slot, (held, _))| slots.iter().any(|(s, serial)| s == *slot && serial != held))
+            .map(|(slot, _)| slot.clone())
+            .collect();
+        for slot in superseded {
+            if let Some((_, port)) = live.remove(&slot) {
+                retired.push(port);
+            }
+        }
+        live.retain(|_, (_, port)| !port.spent());
+        retired.retain(|port| !port.spent());
         let mut failed = Vec::new();
-        let wanted: Vec<&String> = slots.iter().filter(|s| !records.contains_key(*s)).collect();
-        for slot in wanted {
+        let wanted: Vec<&(String, u64)> = slots.iter().filter(|(s, _)| !live.contains_key(s)).collect();
+        if !wanted.is_empty() && bell.is_none() {
+            match goofi_transport::Doorbell::open(&self.node, &self.record_door) {
+                Ok(opened) => *bell = Some(std::sync::Arc::new(opened)),
+                Err(e) => failed.push(e),
+            }
+        }
+        for (slot, serial) in wanted {
             if !self.outputs.contains_key(slot.as_str()) {
                 failed.push(format!("no output slot `{slot}`"));
                 continue;
             }
+            let Some(bell) = bell.as_ref() else { continue };
             let shape = record_shape("signal");
             let opened = goofi_transport::RecordPort::open(
                 &self.node,
-                &record_service(&self.base, slot),
-                &self.record_door,
+                &record_service(&self.base, slot, *serial),
+                bell,
                 slot,
                 shape,
             );
             match opened {
                 Ok(port) => {
-                    records.insert(slot.clone(), port);
+                    live.insert(slot.clone(), (*serial, port));
                 }
                 Err(e) => failed.push(e),
             }
@@ -289,8 +320,10 @@ impl Transport for IoxTransport {
         let mut records = self.records.lock().unwrap();
         // A retired port is dropped HERE rather than at the disarm, so the release follows the
         // recorder's own reading and never outruns it.
-        records.retain(|_, port| !port.spent());
-        if let Some(rec) = records.get(slot) {
+        let Records { live, retired, .. } = &mut *records;
+        live.retain(|_, (_, port)| !port.spent());
+        retired.retain(|port| !port.spent());
+        if let Some((_, rec)) = live.get(slot) {
             let ok = rec.send(&bytes);
             if !ok && !rec.retired() {
                 let mut trouble = self.trouble.lock().unwrap();

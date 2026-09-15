@@ -411,6 +411,14 @@ test.describe('the control socket', () => {
 				// clipboard has to be its members, its ports and the wiring among them.
 				await selectNode(page, scope);
 				const readClipboard = () => page.evaluate(() => navigator.clipboard.readText());
+				// The keys must leave the selection alone — asked, not clicked: a second press on the
+				// still-selected facade inside the double-click window would ENTER the sub-patch.
+				const stillSelected = () =>
+					expect
+						.poll(() =>
+							page.evaluate((u) => (window as any).goofi.query.selection().nodes.includes(u), scope)
+						)
+						.toBe(true);
 				const label = page.getByTestId('node-name');
 				const selectedText = await label.textContent();
 				await label.evaluate((el) => {
@@ -423,6 +431,7 @@ test.describe('the control socket', () => {
 				await expect.poll(readClipboard).toBe(selectedText);
 				await page.keyboard.press('Control+x');
 				expect((await backendDoc(page)).nodes[scope]).toBeDefined();
+				// The press is the gesture under test here: it clears the stale text selection.
 				await selectNode(page, scope);
 				await expect.poll(() => page.evaluate(() => window.getSelection()!.toString())).toBe('');
 				await label.focus();
@@ -430,7 +439,7 @@ test.describe('the control socket', () => {
 				expect(await readClipboard()).toBe(selectedText);
 				await page.keyboard.press('Control+x');
 				expect((await backendDoc(page)).nodes[scope]).toBeDefined();
-				await selectNode(page, scope);
+				await stillSelected();
 				await page.evaluate(() => (window as any).goofi.commands.select([]));
 				await page.keyboard.press('Control+c');
 				expect(await readClipboard()).toBe(selectedText);
@@ -549,6 +558,8 @@ test.describe('the control socket', () => {
 				});
 				const canvas = page.getByTestId('paint-canvas');
 				await expect(canvas).toBeVisible();
+				// A panel opens in edit mode, where a widget takes no pointer: leave it to draw.
+				await page.getByTestId('control-edit-toggle').click();
 				const empty = await canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL());
 				const box = (await canvas.boundingBox())!;
 				await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);

@@ -35,8 +35,8 @@ pub struct Desired {
     pub subs: Vec<Sub>,
     /// Per output: the doors it rings, by name, once something is published on it.
     pub targets: Vec<Vec<(String, EventId)>>,
-    /// The output slots armed for recording, by name.
-    pub record: Vec<String>,
+    /// The output slots armed for recording, by name, each with its arming's serial.
+    pub record: Vec<(String, u64)>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -190,7 +190,7 @@ impl Handle {
     pub fn flush(&self) -> std::sync::mpsc::Receiver<Result<(), String>> {
         let (ack, done) = std::sync::mpsc::sync_channel(1);
         let armed = self.last.lock().expect("the last desired").as_ref()
-            .map(|d| d.record.clone()).unwrap_or_default();
+            .map(|d| d.record.iter().map(|(slot, _)| slot.clone()).collect()).unwrap_or_default();
         self.mail.lock().unwrap().flush.push(Flush { armed, ack });
         let _ = self.bell.ring(0);
         done
@@ -273,11 +273,13 @@ pub fn spawn<H: Half + 'static>(
                     engine: spawn.engine,
                     base: spawn.base,
                     record_door: record_door_service(&spawn.instance),
+                    record_bell: None,
                     manifest: spawn.manifest,
                     time: spawn.time.clone(),
                     params: spawn.params,
                     consts: Vec::new(),
                     outs,
+                    retired: Vec::new(),
                     slots: Vec::new(),
                     binds: Vec::new(),
                     evaluated: IndexMap::new(),
@@ -306,7 +308,8 @@ struct Out {
     service: ByteService,
     publisher: BytePublisher,
     bells: Vec<(String, Doorbell, EventId)>,
-    record: Option<goofi_transport::RecordPort>,
+    /// The armed port and the arming it serves; a new arming replaces it under a new name.
+    record: Option<(u64, goofi_transport::RecordPort)>,
 }
 
 struct SlotSub {
@@ -328,6 +331,8 @@ struct Control<H: Half> {
     engine: &'static str,
     base: String,
     record_door: ServiceName,
+    /// The node's one bell on that door, opened by the first arming and kept for its life.
+    record_bell: Option<Arc<goofi_transport::Doorbell>>,
     manifest: &'static NodeManifest,
     time: Arc<goofi_core::time::Time>,
     params: Arc<[AtomicU64]>,
@@ -346,6 +351,8 @@ struct Control<H: Half> {
     last_tick: Instant,
     listener: Listener,
     half: H,
+    /// Ports a newer arming replaced, each kept until the recorder has let go of it.
+    retired: Vec<goofi_transport::RecordPort>,
     /// Last: every port above is built from it, and fields drop in declaration order.
     node: IoxNode,
 }
@@ -379,6 +386,7 @@ impl<H: Half> Control<H> {
                 }
             }
             self.receive();
+            self.retired.retain(|port| !port.spent());
             if !mail.flush.is_empty() || self.last_tick.elapsed() >= TICK {
                 self.last_tick = Instant::now();
                 self.tick();
@@ -386,7 +394,7 @@ impl<H: Half> Control<H> {
             for Flush { armed, ack } in mail.flush {
                 let missing: Vec<_> = armed.iter().filter(|name| {
                     !self.manifest.outputs.iter().zip(&self.outs).any(|(decl, out)| {
-                        decl.name == name.as_str() && out.record.as_ref().is_some_and(|p| !p.retired())
+                        decl.name == name.as_str() && out.record.as_ref().is_some_and(|(_, p)| !p.retired())
                     })
                 }).cloned().collect();
                 let result = if missing.is_empty() { Ok(()) } else {
@@ -491,31 +499,49 @@ impl<H: Half> Control<H> {
     /// here rather than at birth because the segment is a whole budget and an unarmed slot owes
     /// none of it — and it is let go by the RECORDER's reading rather than by the disarm, or the
     /// frames already delivered would go with it.
-    fn apply_records(&mut self, armed: &[String]) {
+    fn apply_records(&mut self, armed: &[(String, u64)]) {
         let shape = record_shape(self.engine);
+        if !armed.is_empty() && self.record_bell.is_none() {
+            match goofi_transport::Doorbell::open(&self.node, &self.record_door) {
+                Ok(bell) => self.record_bell = Some(Arc::new(bell)),
+                Err(e) => goofi_core::log::record(goofi_core::log::Source::component("control"), goofi_core::log::Level::Error, None, format!("{}: could not reach the recorder's door: {e}", self.engine)),
+            }
+        }
         for (out, decl) in self.outs.iter_mut().zip(self.manifest.outputs) {
-            if let Some(port) = out.record.as_mut() {
-                match armed.iter().any(|s| s == decl.name) {
-                    true => port.armed(),
-                    false => port.retire(),
-                }
-                if !port.spent() {
+            let wanted = armed.iter().find(|(slot, _)| slot == decl.name).map(|(_, serial)| *serial);
+            match (out.record.as_mut(), wanted) {
+                (Some((held, port)), Some(serial)) if *held == serial => {
+                    port.armed();
                     continue;
                 }
-                out.record = None;
+                // A new arming is a new service: the old port keeps the name the recorder may
+                // already have let go of, and is dropped once nobody reads it.
+                (Some(_), Some(_)) => {
+                    let (_, mut port) = out.record.take().expect("matched above");
+                    port.retire();
+                    self.retired.push(port);
+                }
+                (Some((_, port)), None) => {
+                    port.retire();
+                    if port.spent() {
+                        out.record = None;
+                    }
+                    continue;
+                }
+                (None, None) => continue,
+                (None, Some(_)) => {}
             }
-            if !armed.iter().any(|s| s == decl.name) {
-                continue;
-            }
+            let serial = wanted.expect("armed above");
+            let Some(bell) = &self.record_bell else { continue };
             let opened = goofi_transport::RecordPort::open(
                 &self.node,
-                &record_service(&self.base, decl.name),
-                &self.record_door,
+                &record_service(&self.base, decl.name, serial),
+                bell,
                 decl.name,
                 shape,
             );
             match opened {
-                Ok(port) => out.record = Some(port),
+                Ok(port) => out.record = Some((serial, port)),
                 Err(e) => goofi_core::log::record(goofi_core::log::Source::component("control"), goofi_core::log::Level::Error, None, format!("{}: could not arm `{}`: {e}", self.engine, decl.name)),
             }
         }
@@ -607,10 +633,10 @@ impl<H: Half> Control<H> {
             }
         }
         let readers: Vec<bool> = self.outs.iter().map(|o| goofi_transport::subscribers(&o.service) > 0).collect();
-        let recorded: Vec<bool> = self.outs.iter().map(|o| o.record.as_ref().is_some_and(|r| !r.retired())).collect();
+        let recorded: Vec<bool> = self.outs.iter().map(|o| o.record.as_ref().is_some_and(|(_, r)| !r.retired())).collect();
         let outs = &self.outs;
         let record = |i: usize, bytes: &[u8]| {
-            let Some(port) = outs[i].record.as_ref() else { return };
+            let Some((_, port)) = outs[i].record.as_ref() else { return };
             port.send(bytes);
         };
         let values = self.consts.iter().enumerate().map(|(i, value)| {

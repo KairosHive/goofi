@@ -117,9 +117,10 @@ pub fn output_service(base: &str, slot: &str) -> ServiceName {
     format!("goofi_{base}_out_{slot}")
 }
 
-/// One output slot's recording service — the recorder's own deep buffer, never the shared wire.
-pub fn record_service(base: &str, slot: &str) -> ServiceName {
-    format!("goofi_{base}_rec_{slot}")
+/// One output slot's recording service, one per ARMING: a name whose subscriber left is never
+/// reopened, which iceoryx2 can answer with a second service under the same name.
+pub fn record_service(base: &str, slot: &str, serial: u64) -> ServiceName {
+    format!("goofi_{base}_rec_{slot}_{serial}")
 }
 
 /// The ONE door every armed slot rings once its frame is out. It is the recorder's, not a node's,
@@ -656,12 +657,14 @@ pub fn open_output_subscriber(node: &IoxNode, service: &str) -> Result<ByteSubsc
 pub struct RecordPort {
     service: ByteService,
     publisher: BytePublisher,
-    bell: Doorbell,
+    /// The node's ONE bell on the recorder's door, shared by every port it arms: a door opened
+    /// twice on one node is a second service state iceoryx2 can drop out from under the first.
+    bell: std::sync::Arc<Doorbell>,
     retired: bool,
 }
 
 impl RecordPort {
-    pub fn open(node: &IoxNode, service: &str, door: &str, what: &str, shape: RecordShape) -> Result<RecordPort, String> {
+    pub fn open(node: &IoxNode, service: &str, bell: &std::sync::Arc<Doorbell>, what: &str, shape: RecordShape) -> Result<RecordPort, String> {
         let service = record_data_service(node, service, shape)?;
         let publisher = service
             .publisher_builder()
@@ -669,14 +672,13 @@ impl RecordPort {
             .allocation_strategy(AllocationStrategy::Static)
             .create()
             .map_err(|e| format!("record publisher `{what}`: {e}"))?;
-        let bell = Doorbell::open(node, door)?;
-        Ok(RecordPort { service, publisher, bell, retired: false })
+        Ok(RecordPort { service, publisher, bell: bell.clone(), retired: false })
     }
 
     /// One frame onto the service, and the recorder's door rung. `false` is a refused loan, which
     /// the next frame's own number witnesses. A retired port sends nothing.
     pub fn send(&self, bytes: &[u8]) -> bool {
-        !self.retired && publish(&self.publisher, bytes, std::iter::once((&self.bell, RECORD_EVENT_ID)))
+        !self.retired && publish(&self.publisher, bytes, std::iter::once((&*self.bell, RECORD_EVENT_ID)))
     }
 
     /// Disarmed: stop publishing, but stay open while the recorder still reads.
@@ -743,12 +745,6 @@ pub fn door_of(view: &GraphView<'_>, uid: Uid) -> Option<ServiceName> {
 pub fn output_of(view: &GraphView<'_>, uid: Uid, slot: &str) -> Option<ServiceName> {
     let node = view.nodes.get(&uid)?;
     Some(output_service(&service_base(view.instance, uid, node.generation), slot))
-}
-
-/// One output slot's recording service name, from the view's birth facts.
-pub fn record_of(view: &GraphView<'_>, uid: Uid, slot: &str) -> Option<ServiceName> {
-    let node = view.nodes.get(&uid)?;
-    Some(record_service(&service_base(view.instance, uid, node.generation), slot))
 }
 
 /// A resolved variable as a node receives it: a service rather than a uid, because a node
