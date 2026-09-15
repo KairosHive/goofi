@@ -229,6 +229,38 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("global group lock", j!({ "group": "desk", "config": false }));
     let why = g.refuse("global group lock", j!({ "group": "system", "config": false }));
     assert!(why.contains("goofi's own"), "the system group's lock is nobody's to set: {why}");
+    // A group can be EMPTY, minted at the first free `groupN`, and an entry born with no value
+    // is a float until retyped; each is ONE step, and a retype carries the value across.
+    assert_eq!(g.call("global group add", j!({}))["group"], "group0");
+    assert!(g.doc()["global_groups"]["group0"].is_object());
+    g.call("undo", j!({}));
+    assert!(g.doc()["global_groups"].get("group0").is_none());
+    g.call("redo", j!({}));
+    assert_eq!(g.call("global group add", j!({}))["group"], "group1");
+    g.call("global group rename", j!({ "from": "group0", "to": "bench" }));
+    assert_eq!(g.call("global group add", j!({}))["group"], "group0", "the freed name is minted again");
+    g.refuse("global group add", j!({ "group": "bench" }));
+    g.refuse("global group add", j!({ "group": "bad name" }));
+    assert_eq!(g.call("global entry add", j!({ "group": "bench" }))["name"], "bench.entry0");
+    assert_eq!(g.call("global entry add", j!({ "group": "bench" }))["name"], "bench.entry1");
+    g.call("global entry edit", j!({ "name": "bench.entry0", "type": "string", "value": "hello" }));
+    assert_eq!(g.doc()["globals"]["bench.entry0"]["type"], "string");
+    assert_eq!(g.doc()["globals"]["bench.entry0"]["value"], "hello");
+    g.call("undo", j!({}));
+    assert_eq!(g.doc()["globals"]["bench.entry0"]["type"], "float");
+    g.call("redo", j!({}));
+    g.call("global entry edit", j!({ "name": "bench.entry1", "type": "bool", "value": true }));
+    assert_eq!(g.doc()["globals"]["bench.entry1"]["value"], true);
+    g.call("global entry edit", j!({ "name": "bench.entry1", "type": "int" }));
+    assert_eq!(g.doc()["globals"]["bench.entry1"]["value"], 1, "a retype carries the value across");
+    g.call("undo", j!({}));
+    assert_eq!(g.doc()["globals"]["bench.entry1"]["type"], "bool");
+    g.refuse("global entry edit", j!({ "name": "system.default_ufreq", "type": "string", "value": "no" }));
+    g.call("global entry add", j!({ "name": "bench.knob", "type": "float", "value": 1.0,
+        "control": { "kind": "knob", "x": 0, "y": 0, "w": 3, "h": 3 } }));
+    let before = g.doc()["globals"]["bench.knob"].clone();
+    g.refuse("global entry edit", j!({ "name": "bench.knob", "type": "string", "value": "no" }));
+    assert_eq!(g.doc()["globals"]["bench.knob"], before, "a widget's entry keeps its type");
 
     // …and a compound is a UNIT: a refused step takes back the one that landed, and records nothing,
     // which is what the step count below would catch.
@@ -275,7 +307,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let built = g.doc();
 
     // A compound is ONE step though it is an add plus a remove composed.
-    let expected_steps = 45 + 2 * goofi_core::globals::ControlKind::ALL.len();
+    let expected_steps = 54 + 2 * goofi_core::globals::ControlKind::ALL.len();
     let mut steps = 0;
     while g.call("undo", j!({}))["changed"] == true {
         steps += 1;
@@ -288,6 +320,25 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     while g.call("redo", j!({}))["changed"] == true {}
     assert_eq!(g.doc(), built, "redo rebuilt the patch it undid, uid for uid");
     let _ = scope;
+
+    // The history is per session: s1's undo takes back s1's newest step and leaves a peer's node
+    // standing, and a fresh command discards the redo run.
+    let two = g.client("s2");
+    let peer = two.add("Buffer");
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    assert!(g.instances().is_empty() && g.nodes().contains(&hex(peer)), "s1's undo left s2's node standing");
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    g.call("undo", j!({}));
+    g.add("Buffer");
+    let r = g.call("redo", j!({}));
+    assert_eq!(r["changed"], false, "the redo run went with the new command");
+    assert_eq!(r["can_redo"], false);
+    // Empty groups and the retyped entries reach the file and come back.
+    let saved = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
+    g.call("session load", j!({ "content": saved }));
+    assert!(g.doc()["global_groups"]["group0"].is_object() && g.doc()["global_groups"]["group1"].is_object());
+    assert_eq!(g.doc()["globals"]["bench.entry0"]["value"], "hello");
+    assert_eq!(g.doc()["globals"]["bench.entry1"]["type"], "bool");
 
     // The NAME is the arrangement's to mint: a caller that asks for none gets the first free
     // `Tab n`, so nobody has to reserve one against a strip they cannot see settle.
@@ -322,27 +373,6 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
 }
 
 #[test]
-fn a_fresh_command_clears_the_redo_run_and_a_session_undoes_only_its_own_work() {
-    let one = Goofi::new();
-    let two = one.client("s2");
-    let a = one.add("LFO");
-    let b = two.add("Buffer");
-
-    one.call("undo", j!({}));
-    assert_eq!(one.nodes(), vec![hex(b)], "s1's undo left s2's node standing");
-    let r = one.call("redo", j!({}));
-    assert_eq!(r["changed"], true);
-    assert_eq!(one.nodes().len(), 2);
-
-    one.call("undo", j!({}));
-    one.add("Buffer"); // a fresh command discards the redo future
-    let r = one.call("redo", j!({}));
-    assert_eq!(r["changed"], false, "the redo run went with the new command");
-    assert_eq!(r["can_redo"], false);
-    let _ = a;
-}
-
-#[test]
 fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
     let one = Goofi::new();
     let two = one.client("s2");
@@ -358,6 +388,17 @@ fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
     for _ in 0..4 {
         assert_eq!(one.call("undo", j!({}))["changed"], true, "the stack stays walkable to empty");
     }
+
+    // The same rule for a boundary port: a peer removed the port under s1's newest rename.
+    let osc = one.add("LFO");
+    let inst = one.call("nodes group", j!({ "nodes": [hex(osc)], "pos": [0.0, 0.0] }))["inst_id"]
+        .as_str().unwrap().to_string();
+    let port = one.call("node add", j!({ "type": "InArray", "inst_id": inst, "pos": [0.0, 0.0] }))
+        ["uid"].as_str().expect("a port uid").to_string();
+    one.call("node edit", j!({ "node": port, "name": "left" }));
+    two.call("node remove", j!({ "node": port }));
+    assert_eq!(one.call("undo", j!({}))["changed"], true, "the stale port rename still flips");
+    assert_eq!(one.call("redo", j!({}))["changed"], true);
 
     let before = one.doc();
     let bad_control = j!({ "kind": "toggle", "x": 0, "y": 0, "w": 2, "h": 2 });
@@ -449,12 +490,11 @@ fn a_deleted_sub_patch_comes_back_whole_with_the_panels_that_named_it() {
                "and the panel names its node again");
 }
 
-/// Every SHAPE a layout write comes in, driven through the one interleaving that shows a raw-state
-/// restore: a peer edits between the op and its undo. The merged ops each carry several — a tab's
-/// name and a split's shares are both `edit_panel` — so the rows are shapes, and the op list from
-/// the REGISTRY is what proves no op slipped past without one.
+/// Two people undo layout: every SHAPE a layout write comes in, driven through the one
+/// interleaving that shows a raw-state restore, and the op list from the REGISTRY proves no op
+/// slipped past without one. Then a peer's panel through a foreign undo, and a drag as one step.
 #[test]
-fn no_layout_undo_puts_back_a_slot_a_peer_has_since_built_over() {
+fn two_people_undo_layout_and_no_slot_is_put_back_no_panel_is_lost_and_a_drag_is_one_step() {
     let ops: Vec<&str> = goofi_bridge::ops::registry().iter()
         .filter(|o| o.handler.is_write() && o.name.starts_with("layout "))
         .map(|o| o.name)
@@ -523,10 +563,8 @@ fn no_layout_undo_puts_back_a_slot_a_peer_has_since_built_over() {
     }
     let empty: [&str; 0] = [];
     assert_eq!(stranded, empty, "an undo left an arrangement the manager cannot itself open");
-}
 
-#[test]
-fn a_peers_panel_survives_every_shape_of_foreign_undo() {
+    // A peer's panel survives every shape of foreign undo and redo.
     let one = Goofi::new();
     let two = one.client("s2");
     let a = first_panel(&one);
@@ -551,37 +589,33 @@ fn a_peers_panel_survives_every_shape_of_foreign_undo() {
     assert_eq!(one.call("undo", j!({}))["changed"], true);
     assert!(panels(&one).contains(&peer3), "the peer's panel survived a foreign undo");
     assert_eq!(reload_warning(&one), Value::Null);
-}
 
-#[test]
-fn each_frozen_drag_gesture_is_one_op_and_therefore_one_undo() {
     // The drag feel is FROZEN UX; as primitive ops one drop would cost three to five commands.
-    let g = Goofi::new();
-    let first = first_panel(&g);
-    let mine = split(&g, &first);
-    g.call("layout panel add", j!({ "name": "Signals", "index": 0 }));
-    let target = panels(&g).into_iter().find(|p| *p != first && *p != mine).expect("its panel");
-    let before = entries(&g);
+    let mover = split(&one, &a);
+    one.call("layout panel add", j!({ "name": "Drops", "index": 0 }));
+    let target = panels(&one).into_iter()
+        .find(|p| ![&a, &mine, &theirs, &peer2, &peer3, &over, &far, &mover].contains(&p)).expect("its panel");
+    let before = entries(&one);
 
-    g.call("layout move", j!({ "entry": mine, "beside": target,
-                               "side": "top", "ratio": 0.3 }));
-    assert_ne!(entries(&g), before, "the drop moved something");
+    one.call("layout move", j!({ "entry": mover, "beside": target,
+                                 "side": "top", "ratio": 0.3 }));
+    assert_ne!(entries(&one), before, "the drop moved something");
     // The SIDE really landed: `top` means a column split with the mover FIRST. This is the pin
     // that caught `--side` being read off a dead key and every drop silently going right.
-    let parent = entries(&g)[&mine]["parent"].as_str().unwrap().to_string();
-    let split = &entries(&g)[&parent];
+    let parent = entries(&one)[&mover]["parent"].as_str().unwrap().to_string();
+    let split = &entries(&one)[&parent];
     assert_eq!(split["axis"], "column", "a `top` drop splits vertically: {split}");
-    assert_eq!(split["children"][0]["id"], j!(mine.as_str()),
+    assert_eq!(split["children"][0]["id"], j!(mover.as_str()),
                "…with the mover on the side it was dropped on: {split}");
-    g.refuse("layout move", j!({ "entry": mine, "beside": target, "side": "sideways" }));
-    assert_eq!(g.call("undo", j!({}))["changed"], true);
-    assert_eq!(entries(&g), before, "ONE ctrl-Z put the whole drag back");
+    one.refuse("layout move", j!({ "entry": mover, "beside": target, "side": "sideways" }));
+    assert_eq!(one.call("undo", j!({}))["changed"], true);
+    assert_eq!(entries(&one), before, "ONE ctrl-Z put the whole drag back");
 
-    g.call("layout move", j!({ "entry": mine, "name": "Torn off", "index": 0 }));
-    assert_eq!(g.doc()["arrangement"]["tabs"][0]["root"]["id"], mine.as_str(),
+    one.call("layout move", j!({ "entry": mover, "name": "Torn off", "index": 0 }));
+    assert_eq!(one.doc()["arrangement"]["tabs"][0]["root"]["id"], mover.as_str(),
                "the dragged panel is the new tab's whole root");
-    g.call("undo", j!({}));
-    assert_eq!(entries(&g), before, "and one ctrl-Z put that back too");
+    one.call("undo", j!({}));
+    assert_eq!(entries(&one), before, "and one ctrl-Z put that back too");
 }
 
 #[test]
@@ -1045,45 +1079,4 @@ fn clearing_the_touched_baseline_moves_the_zero_point_and_breaks_no_binding() {
     assert!(baseline(&g).is_null(), "undo took the zero point back: {}", baseline(&g));
     assert_eq!(g.call("redo", j!({}))["changed"], true);
     assert_eq!(baseline(&g)["oscillator/frequency"]["value"], j!(3.5), "redo put it back");
-}
-
-#[test]
-fn empty_global_groups_and_entry_types_survive_editing_and_reload() {
-    let g = Goofi::new();
-    assert_eq!(g.call("global group add", j!({}))["group"], "group0");
-    assert!(g.doc()["global_groups"]["group0"].is_object());
-    g.call("undo", j!({}));
-    assert!(g.doc()["global_groups"].get("group0").is_none());
-    g.call("redo", j!({}));
-    assert_eq!(g.call("global group add", j!({}))["group"], "group1");
-    g.call("global group rename", j!({ "from": "group0", "to": "desk" }));
-    assert_eq!(g.call("global group add", j!({}))["group"], "group0");
-    g.refuse("global group add", j!({ "group": "desk" }));
-    g.refuse("global group add", j!({ "group": "bad name" }));
-    assert_eq!(g.call("global entry add", j!({ "group": "desk" }))["name"], "desk.entry0");
-    assert_eq!(g.call("global entry add", j!({ "group": "desk" }))["name"], "desk.entry1");
-    g.call("global entry edit", j!({ "name": "desk.entry0", "type": "string", "value": "hello" }));
-    assert_eq!(g.doc()["globals"]["desk.entry0"]["type"], "string");
-    assert_eq!(g.doc()["globals"]["desk.entry0"]["value"], "hello");
-    g.call("undo", j!({}));
-    assert_eq!(g.doc()["globals"]["desk.entry0"]["type"], "float");
-    g.call("redo", j!({}));
-    g.call("global entry edit", j!({ "name": "desk.entry1", "type": "bool", "value": true }));
-    assert_eq!(g.doc()["globals"]["desk.entry1"]["value"], true);
-    g.call("global entry edit", j!({ "name": "desk.entry1", "type": "int" }));
-    assert_eq!(g.doc()["globals"]["desk.entry1"]["value"], 1);
-    g.call("undo", j!({}));
-    assert_eq!(g.doc()["globals"]["desk.entry1"]["type"], "bool");
-    g.refuse("global entry edit", j!({ "name": "system.default_ufreq", "type": "string", "value": "no" }));
-    g.call("global entry add", j!({ "name": "desk.knob", "type": "float", "value": 1.0,
-        "control": { "kind": "knob", "x": 0, "y": 0, "w": 3, "h": 3 } }));
-    let before = g.doc()["globals"]["desk.knob"].clone();
-    g.refuse("global entry edit", j!({ "name": "desk.knob", "type": "string", "value": "no" }));
-    assert_eq!(g.doc()["globals"]["desk.knob"], before);
-    let saved = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
-    g.call("session load", j!({ "content": saved }));
-    assert!(g.doc()["global_groups"]["group0"].is_object());
-    assert!(g.doc()["global_groups"]["group1"].is_object());
-    assert_eq!(g.doc()["globals"]["desk.entry0"]["value"], "hello");
-    assert_eq!(g.doc()["globals"]["desk.entry1"]["type"], "bool");
 }

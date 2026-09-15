@@ -198,89 +198,6 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     }
 }
 
-#[test]
-fn a_refused_load_leaves_the_open_patch_exactly_as_it_was() {
-    let g = Goofi::new();
-    g.add("LFO");
-    std::fs::write(g.state.mount().join("notes.md"), b"work in progress").unwrap();
-    let before = g.doc();
-    let mount = g.state.mount();
-
-    let dir = tempfile::tempdir().unwrap();
-    // In the order the arm reaches them; the third pins commit-AFTER-parse.
-    let junk = dir.path().join("junk.gfi");
-    std::fs::write(&junk, "this: is: not: a patch").unwrap();
-    let packed = dir.path().join("ws");
-    std::fs::create_dir(&packed).unwrap();
-    std::fs::write(packed.join("intruder.txt"), b"from the refused archive").unwrap();
-    let bad = dir.path().join("bad.gfi");
-    goofi_graph::archive::write_gfi(&bad, "this: is: not: a patch", &packed, &[]).unwrap();
-    for target in [dir.path().join("absent.gfi"), junk, bad] {
-        g.refuse("session load", j!({ "path": target.to_string_lossy() }));
-    }
-    // Valid YAML from a FUTURE goofi: the version gate refuses, and the refusal names the writer.
-    let future = dir.path().join("future.gfi");
-    goofi_graph::archive::write_gfi(&future, "version: 99\ngoofi: \"9.9.9\"\nroot: {}", &packed, &[]).unwrap();
-    let refusal = g.refuse("session load", j!({ "path": future.to_string_lossy() }));
-    assert!(refusal.contains("written by goofi 9.9.9"), "the writer is named: {refusal}");
-
-    assert_eq!(g.doc(), before, "the open patch is untouched");
-    assert_eq!(g.state.mount(), mount, "on the mount it was already using");
-    assert_eq!(std::fs::read(mount.join("notes.md")).unwrap(), b"work in progress");
-    assert!(!mount.join("intruder.txt").exists(), "and nothing from the refused archive landed");
-}
-
-#[test]
-fn a_new_patch_inherits_nothing_from_the_one_before_it() {
-    // New is reached from a patch with a graph, an arrangement and a file; each half fails separately.
-    let g = Goofi::new();
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("patch.gfi");
-    g.add("LFO");
-    g.call("layout panel add", j!({ "name": "Second" }));
-    g.call("session save", j!({ "path": path.to_string_lossy() }));
-    let old_mount = g.state.mount();
-    std::fs::write(old_mount.join("notes.md"), b"the previous patch's").unwrap();
-
-    g.call("session new", j!({}));
-
-    assert!(g.nodes().is_empty(), "no nodes");
-    assert_eq!(g.call("layout inspect", j!({}))["text"].as_str().unwrap().matches("tab `").count(), 1,
-               "no tabs of the previous patch");
-    assert_eq!(g.call("session status", j!({}))["save_path"], Value::Null, "no file behind it");
-    assert_eq!(g.call("session status", j!({}))["dirty"], false, "and nothing to save");
-    assert_eq!(g.call("undo", j!({}))["changed"], false, "the history went with the patch");
-
-    let mount = g.state.mount();
-    assert_ne!(mount, old_mount, "a fresh workspace");
-    assert!(!old_mount.exists(), "and the one it replaced is released, not leaked");
-    // `new` MINTS the workspace, so it seeds the orientation while `load`, one line away, must not.
-    assert!(!mount.join("notes.md").exists());
-    assert!(std::fs::read_to_string(mount.join("AGENTS.md")).unwrap().contains("goofi is a live"));
-    assert_eq!(std::fs::read_to_string(mount.join("CLAUDE.md")).unwrap(), "@AGENTS.md\n");
-}
-
-#[test]
-fn a_patch_whose_arrangement_cannot_be_rendered_still_opens() {
-    // A layout the flat model admits but cannot render must never make a patch unopenable.
-    let g = Goofi::new();
-    g.add("LFO");
-    let yaml = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
-    // A DUPLICATE id is the one corruption the tree admits and a flat map could not.
-    let broken = yaml.replace("id: panel-2", "id: tab-1");
-    assert_ne!(broken, yaml, "the fixture actually corrupted something");
-
-    // The two doors are one op, and never both at once: a manifest inline, or an archive at a path.
-    let why = g.refuse("session load", j!({ "content": yaml.clone(), "path": "/tmp/nope.gfi" }));
-    assert!(why.contains("never both"), "{why}");
-
-    let r = g.call("session load", j!({ "content": broken }));
-    assert_eq!(r["ok"], true, "the patch still opens: {r}");
-    assert!(r["layout_warning"].as_str().is_some_and(|w| w.contains("appears twice")),
-            "…and says why the arrangement was dropped: {r}");
-    assert_eq!(g.nodes().len(), 1, "with the graph intact");
-}
-
 fn save_path(g: &Goofi) -> Option<String> {
     g.call("session status", j!({}))["save_path"].as_str().map(str::to_string)
 }
@@ -296,7 +213,7 @@ fn spelled(p: &std::path::Path) -> String {
 }
 
 #[test]
-fn only_a_patch_with_a_file_behind_it_keeps_a_name_and_every_tab_is_told_which() {
+fn only_a_file_gives_a_patch_a_home_a_refused_load_changes_nothing_and_a_broken_layout_still_opens() {
     // The manager owns the stored path, because a plain Save overwrites it silently from any tab.
     let g = Goofi::new();
     assert_eq!(save_path(&g), None, "an unsaved patch has no home yet");
@@ -323,9 +240,47 @@ fn only_a_patch_with_a_file_behind_it_keeps_a_name_and_every_tab_is_told_which()
     g.refuse("session save", j!({ "path": nowhere.to_string_lossy() }));
     assert_eq!(save_path(&g).as_deref(), Some(spelled(&path).as_str()), "the old home stands");
 
+    // A refused load leaves the open patch exactly as it was, workspace included.
+    std::fs::write(g.state.mount().join("notes.md"), b"work in progress").unwrap();
+    let before = g.doc();
+    let mount = g.state.mount();
+    // In the order the arm reaches them; the third pins commit-AFTER-parse.
+    let junk = dir.path().join("junk.gfi");
+    std::fs::write(&junk, "this: is: not: a patch").unwrap();
+    let packed = dir.path().join("ws");
+    std::fs::create_dir(&packed).unwrap();
+    std::fs::write(packed.join("intruder.txt"), b"from the refused archive").unwrap();
+    let bad = dir.path().join("bad.gfi");
+    goofi_graph::archive::write_gfi(&bad, "this: is: not: a patch", &packed, &[]).unwrap();
+    for target in [dir.path().join("absent.gfi"), junk, bad] {
+        g.refuse("session load", j!({ "path": target.to_string_lossy() }));
+    }
+    // Valid YAML from a FUTURE goofi: the version gate refuses, and the refusal names the writer.
+    let future = dir.path().join("future.gfi");
+    goofi_graph::archive::write_gfi(&future, "version: 99\ngoofi: \"9.9.9\"\nroot: {}", &packed, &[]).unwrap();
+    let refusal = g.refuse("session load", j!({ "path": future.to_string_lossy() }));
+    assert!(refusal.contains("written by goofi 9.9.9"), "the writer is named: {refusal}");
+    // The two doors are one op, and never both at once: a manifest inline, or an archive at a path.
+    let yaml = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
+    let why = g.refuse("session load", j!({ "content": yaml.clone(), "path": "/tmp/nope.gfi" }));
+    assert!(why.contains("never both"), "{why}");
+
+    assert_eq!(g.doc(), before, "the open patch is untouched");
+    assert_eq!(g.state.mount(), mount, "on the mount it was already using");
+    assert_eq!(std::fs::read(mount.join("notes.md")).unwrap(), b"work in progress");
+    assert!(!mount.join("intruder.txt").exists(), "and nothing from the refused archive landed");
+    assert_eq!(save_path(&g).as_deref(), Some(spelled(&path).as_str()), "and the home stands");
+
+    // A layout the flat model admits but cannot render must never make a patch unopenable.
+    // A DUPLICATE id is the one corruption the tree admits and a flat map could not.
+    let broken = yaml.replace("id: panel-2", "id: tab-1");
+    assert_ne!(broken, yaml, "the fixture actually corrupted something");
+    let r = g.call("session load", j!({ "content": broken }));
+    assert_eq!(r["ok"], true, "the patch still opens: {r}");
+    assert!(r["layout_warning"].as_str().is_some_and(|w| w.contains("appears twice")),
+            "…and says why the arrangement was dropped: {r}");
+    assert_eq!(g.nodes().len(), 1, "with the graph intact");
     // An upload carries no file, so inheriting the previous path would save a different patch over it.
-    let content = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
-    g.call("session load", j!({ "content": content }));
     assert_eq!(save_path(&g), None, "an uploaded patch has no home");
 }
 
@@ -390,11 +345,13 @@ fn a_save_packs_the_live_mount_refuses_to_pack_into_it_and_never_truncates_a_goo
 }
 
 #[test]
-fn the_workspace_counts_as_unsaved_work_and_a_fresh_load_is_clean() {
+fn the_workspace_counts_as_unsaved_work_a_load_is_clean_and_a_new_patch_inherits_nothing() {
     // There is no watcher: the manager compares the mount against the fingerprint of the last pack.
     let g = Goofi::new();
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("patch.gfi");
+    g.add("LFO");
+    g.call("layout panel add", j!({ "name": "Second" }));
     std::fs::write(g.state.mount().join("agent.md"), b"notes").unwrap();
     g.call("session save", j!({ "path": target.to_string_lossy() }));
     assert!(!dirty(&g), "the patch was just written to disk, workspace and all");
@@ -427,10 +384,25 @@ fn the_workspace_counts_as_unsaved_work_and_a_fresh_load_is_clean() {
     goofi_bridge::open_load(&booted.state).unwrap();
     assert_eq!(std::fs::read(booted.state.mount().join("agent.md")).unwrap(), b"NOTES");
     assert!(!dirty(&booted), "a boot load is no more unsaved work than any other load");
-    // `new` is the EMPTY patch here. Only a demo, which has no Load to find the file again,
-    // reads the reset as a return to what it booted into.
-    booted.call("session new", j!({}));
-    assert!(booted.nodes().is_empty(), "`session new` is the empty patch on a local goofi");
+
+    // `new` is the EMPTY patch, reached from a patch with a graph, an arrangement, a history and a
+    // file; each half fails separately. Only a demo reads the reset as a return to what it booted into.
+    let old_mount = g.state.mount();
+    g.call("session new", j!({}));
+    assert!(g.nodes().is_empty(), "no nodes");
+    assert_eq!(g.call("layout inspect", j!({}))["text"].as_str().unwrap().matches("tab `").count(), 1,
+               "no tabs of the previous patch");
+    assert_eq!(save_path(&g), None, "no file behind it");
+    assert!(!dirty(&g), "and nothing to save");
+    assert_eq!(g.call("undo", j!({}))["changed"], false, "the history went with the patch");
+
+    let mount = g.state.mount();
+    assert_ne!(mount, old_mount, "a fresh workspace");
+    assert!(!old_mount.exists(), "and the one it replaced is released, not leaked");
+    // `new` MINTS the workspace, so it seeds the orientation while `load`, one line away, must not.
+    assert!(!mount.join("agent.md").exists());
+    assert!(std::fs::read_to_string(mount.join("AGENTS.md")).unwrap().contains("goofi is a live"));
+    assert_eq!(std::fs::read_to_string(mount.join("CLAUDE.md")).unwrap(), "@AGENTS.md\n");
 }
 
 #[test]

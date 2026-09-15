@@ -218,28 +218,13 @@ fn a_frame_larger_than_the_initial_slice_still_lands() {
 }
 
 #[test]
-fn a_wire_the_new_set_omits_stops_delivering() {
-    // The slot set is DECLARATIVE: what a message does not name is dropped, wire displacement included.
+fn a_re_sent_wire_set_keeps_what_it_names_and_drops_what_it_omits() {
+    // The slot set is DECLARATIVE, and the FULL set is re-sent on every change: a surviving wire
+    // must be kept rather than rebuilt, and what the set no longer names is dropped.
     let producer = IoxTransport::create(&instance(), Uid(9), 0, manifest()).unwrap();
     let consumer = IoxTransport::create(&instance(), Uid(10), 0, manifest()).unwrap();
-    let service = output_service(&base_of(Uid(9)), "out");
-    consumer.wire_in("input", &[service]).unwrap();
-    producer.publish("out", &frame(&[1.0]));
-    assert_eq!(consumer.drain_inputs().len(), 1);
-
-    consumer.wire_in("input", &[]).unwrap();
-    producer.publish("out", &frame(&[2.0]));
-    assert!(consumer.drain_inputs().is_empty(), "the dropped wire delivers nothing");
-}
-
-#[test]
-fn a_wire_the_new_set_still_names_keeps_what_it_is_holding() {
-    // The FULL set is re-sent on every change to a slot, so a surviving wire must be kept rather than
-    // rebuilt — a rebuild would discard whatever its producer has already sent.
-    let producer = IoxTransport::create(&instance(), Uid(11), 0, manifest()).unwrap();
-    let consumer = IoxTransport::create(&instance(), Uid(12), 0, manifest()).unwrap();
-    let held = output_service(&base_of(Uid(11)), "out");
-    let added = output_service(&base_of(Uid(13)), "out");
+    let held = output_service(&base_of(Uid(9)), "out");
+    let added = output_service(&base_of(Uid(11)), "out");
     consumer.wire_in("input", std::slice::from_ref(&held)).unwrap();
     producer.publish("out", &frame(&[1.0])); // in flight, unread
 
@@ -247,6 +232,10 @@ fn a_wire_the_new_set_still_names_keeps_what_it_is_holding() {
     let got = consumer.drain_inputs();
     assert_eq!(got.len(), 1, "the second wire has nothing yet");
     assert_eq!(f32s(&got[0].2), vec![1.0], "and the first still holds what it was sent");
+
+    consumer.wire_in("input", &[]).unwrap();
+    producer.publish("out", &frame(&[2.0]));
+    assert!(consumer.drain_inputs().is_empty(), "the dropped wire delivers nothing");
 }
 
 #[test]
@@ -335,7 +324,7 @@ fn a_session_owns_its_record_directory_workspace_and_cache_parts() {
     use std::fs;
     goofi_tests::walled_home();
     let _sole = goofi_tests::sole_session();
-    let remove: goofi_core::session::RemoveTree = |p| {
+    let remove = |p: &std::path::Path| {
         let _ = fs::remove_dir_all(p);
     };
     let held = hold("abcabcabcabcabc1").unwrap();

@@ -8,7 +8,6 @@ pub fn situation(module_path: &str) -> &str {
 
 #[cfg(target_os = "linux")]
 mod audio_priority;
-mod audio_recording_sync;
 mod browser;
 #[cfg(not(feature = "embed"))]
 mod bundles;

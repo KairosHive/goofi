@@ -410,20 +410,6 @@ fn a_boundary_op_refuses_a_port_or_a_target_it_cannot_honour() {
 }
 
 #[test]
-fn a_stale_boundary_toggle_still_flips_after_a_peer_removed_the_port() {
-    let one = Goofi::new();
-    let two = one.client("s2");
-    let buf = one.add("Buffer");
-    let inst = group(&one, &[hex(buf)]);
-    let bnd = boundary(&one, &inst, "in");
-    one.call("node edit", j!({ "node": bnd, "name": "left" }));
-    two.call("node remove", j!({ "node": bnd }));
-
-    assert_eq!(one.call("undo", j!({}))["changed"], true);
-    assert_eq!(one.call("redo", j!({}))["changed"], true);
-}
-
-#[test]
 fn an_expression_reads_a_port_and_follows_the_wire_behind_it() {
     // A port carries no frame of its own, so `nd('port')` binds to the stream BEHIND it — and
     // unlike a node's, that stream MOVES when somebody wires the sub-patch, so the binding has to

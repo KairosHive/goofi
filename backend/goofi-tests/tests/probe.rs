@@ -284,7 +284,7 @@ fn every_param_kind_carries_its_doc_across_the_probe() {
 }
 
 #[test]
-fn the_probe_itself_is_the_gil_routing_gate() {
+fn the_probe_is_the_gil_routing_gate_and_samples_after_the_whole_import() {
     // `Discovered.gil_safe` is the ONE oracle deciding which tier a Python node runs on; a wrong
     // answer either quarantines a fast node or re-enables the GIL for every in-process node.
     let node = fixtures().join("negate.py");
@@ -298,16 +298,13 @@ fn the_probe_itself_is_the_gil_routing_gate() {
         panic!("negate.py discovers on the GIL interpreter")
     };
     assert!(!gil.gil_safe, "a GIL interpreter can never host in-process → subprocess tier");
-}
 
-#[test]
-fn the_gil_sample_covers_the_whole_import() {
     // The GIL state is read after the module has been IMPORTED: a C extension built without
     // free-threading support re-enables it, and sampled earlier such a node routes to the wrong tier.
-    let Discovery::Found(d) =
+    let Discovery::Found(flip) =
         discover_one(&fixtures().join("gil_flip.py"), &ft_python(), Isolation::InProcess, &memo())
     else {
         panic!("gil_flip.py discovers on the free-threaded interpreter")
     };
-    assert!(!d.gil_safe, "an import that re-enabled the GIL must route to the subprocess tier");
+    assert!(!flip.gil_safe, "an import that re-enabled the GIL must route to the subprocess tier");
 }

@@ -1,12 +1,12 @@
 //! The contracts between goofi and everything that reads it: the op registry (which GENERATES the
-//! frontend's op union, its word vocabulary and the MCP tool list), the palette a client builds
-//! every node from, and the GOOF frame the browser decodes.
+//! frontend's op union, its word vocabulary and the MCP tool list) and the palette a client builds
+//! every node from.
 
 use std::collections::HashSet;
 
 use goofi_bridge::ops::{find, registry, typescript};
 use goofi_bridge::vocab;
-use goofi_core::{Data, Meta, SlotType, Value as DataValue};
+use goofi_core::SlotType;
 use goofi_node::{NodeManifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl};
 use goofi_tests::{fixtures::LibraryEngine, hex, j, Client, Goofi};
 use serde_json::Value;
@@ -21,7 +21,7 @@ fn regenerated(rel: &str, want: String) {
 }
 
 #[test]
-fn every_op_row_is_well_formed_and_reachable() {
+fn every_op_and_vocabulary_row_is_well_formed_documented_and_reachable() {
     // An op's name is its phrase, words joined with single spaces. The phrase layer resolves a
     // line by the FIRST complete phrase it finds, so the set must be PREFIX-FREE: a phrase that
     // is a word-prefix of another would swallow it whole.
@@ -77,46 +77,7 @@ fn every_op_row_is_well_formed_and_reachable() {
                     "`{}` is in the registry but dispatch has no arm for it: {e}", op.name);
         }
     }
-}
 
-#[test]
-fn the_generated_frontend_artifacts_still_match_the_tables_they_come_from() {
-    regenerated("frontend/src/lib/api/ops.ts", typescript());
-    regenerated("frontend/src/lib/api/vocab.ts", vocab::typescript());
-
-    // `PROTOCOL_VERSION` is the one number both halves declare by hand, and each comments that the
-    // other must be bumped with it — which is the definition of a pair that drifts. A client one
-    // version behind still connects and then half-works, so neither side's suite can catch it.
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../frontend/src/lib/api/control.ts");
-    let src = std::fs::read_to_string(&path).expect("the control client");
-    let declared: i64 = src
-        .split("export const PROTOCOL_VERSION")
-        .nth(1)
-        .and_then(|rest| rest.split(';').next())
-        .and_then(|rest| rest.trim_start_matches([' ', '=', ':']).trim().parse().ok())
-        .unwrap_or_else(|| panic!("no PROTOCOL_VERSION in {}", path.display()));
-    assert_eq!(
-        declared,
-        goofi_bridge::schemas::PROTOCOL_VERSION,
-        "the client declares protocol {declared} and this manager speaks {} — bump both together",
-        goofi_bridge::schemas::PROTOCOL_VERSION
-    );
-
-    // The other pair declared by hand on both sides: a tier the client's union does not name
-    // types as `never`, and its health pill silently draws nothing.
-    let union = src
-        .split("export type NodeRuntime =")
-        .nth(1)
-        .and_then(|rest| rest.split(';').next())
-        .unwrap_or_else(|| panic!("no NodeRuntime in {}", path.display()));
-    let named: Vec<&str> = union.split('|').map(|w| w.trim().trim_matches('\'')).collect();
-    let ours: Vec<&str> = goofi_node::Isolation::ALL.iter().map(|i| i.wire()).collect();
-    assert_eq!(named, ours, "the client's tiers and this manager's — declare a new one in both");
-}
-
-#[test]
-fn a_vocabulary_word_is_emittable_documented_and_offered_where_it_is_asked_for() {
     // A tier crosses its shared cell as a byte, and must come back as itself.
     for tier in goofi_node::Isolation::ALL {
         let cell = goofi_node::IsolationCell::new(tier);
@@ -164,6 +125,42 @@ fn a_vocabulary_word_is_emittable_documented_and_offered_where_it_is_asked_for()
     }
 }
 
+#[test]
+fn the_generated_frontend_artifacts_still_match_the_tables_they_come_from() {
+    regenerated("frontend/src/lib/api/ops.ts", typescript());
+    regenerated("frontend/src/lib/api/vocab.ts", vocab::typescript());
+
+    // `PROTOCOL_VERSION` is the one number both halves declare by hand, and each comments that the
+    // other must be bumped with it — which is the definition of a pair that drifts. A client one
+    // version behind still connects and then half-works, so neither side's suite can catch it.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../frontend/src/lib/api/control.ts");
+    let src = std::fs::read_to_string(&path).expect("the control client");
+    let declared: i64 = src
+        .split("export const PROTOCOL_VERSION")
+        .nth(1)
+        .and_then(|rest| rest.split(';').next())
+        .and_then(|rest| rest.trim_start_matches([' ', '=', ':']).trim().parse().ok())
+        .unwrap_or_else(|| panic!("no PROTOCOL_VERSION in {}", path.display()));
+    assert_eq!(
+        declared,
+        goofi_bridge::schemas::PROTOCOL_VERSION,
+        "the client declares protocol {declared} and this manager speaks {} — bump both together",
+        goofi_bridge::schemas::PROTOCOL_VERSION
+    );
+
+    // The other pair declared by hand on both sides: a tier the client's union does not name
+    // types as `never`, and its health pill silently draws nothing.
+    let union = src
+        .split("export type NodeRuntime =")
+        .nth(1)
+        .and_then(|rest| rest.split(';').next())
+        .unwrap_or_else(|| panic!("no NodeRuntime in {}", path.display()));
+    let named: Vec<&str> = union.split('|').map(|w| w.trim().trim_matches('\'')).collect();
+    let ours: Vec<&str> = goofi_node::Isolation::ALL.iter().map(|i| i.wire()).collect();
+    assert_eq!(named, ours, "the client's tiers and this manager's — declare a new one in both");
+}
+
 static OUT: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];
 fn never() -> Box<dyn goofi_signal_sdk::Node> {
     unreachable!("the catalog never instantiates")
@@ -203,38 +200,114 @@ fn row(g: &Goofi, type_name: &str) -> Value {
 }
 
 #[test]
-fn a_palette_row_carries_everything_a_client_renders_a_node_from() {
-    // Registering a type is boot-time configuration, and there is no op for "a type that failed to load".
+fn every_palette_row_carries_what_a_client_renders_a_node_from() {
+    // The vocabulary is closed, so a palette facet is a set the client already knows — a free-text
+    // category was one string per author. A page order is a statement the author makes; the
+    // client draws what it is given.
     let g = Goofi::new();
+    // The lock is DROPPED before the first op: `library list` takes the same one.
+    let (declared, names): (Vec<(String, Vec<String>)>, Vec<&str>) = {
+        let graph = g.state.graph.lock().unwrap();
+        let declared = graph.library_entries().into_iter()
+            .filter(|(_, l)| !l.manifest.type_name.starts_with('_'))
+            .map(|(engine, l)| {
+                let mut universal: Vec<String> = Vec::new();
+                for d in graph.universal_decls(engine, l.manifest) {
+                    if !universal.contains(&d.group.to_string()) {
+                        universal.push(d.group.to_string());
+                    }
+                }
+                let mut groups: Vec<String> = Vec::new();
+                for d in l.manifest.params {
+                    if !universal.contains(&d.group.to_string()) && !groups.contains(&d.group.to_string()) {
+                        groups.push(d.group.to_string());
+                    }
+                }
+                groups.extend(universal);
+                (goofi_node::qualify(engine, l.manifest.type_name), groups)
+            })
+            .collect();
+        (declared, graph.library_entries().into_iter().map(|(_, l)| l.manifest.type_name).collect())
+    };
+    assert!(!declared.is_empty(), "a fresh goofi offers a library");
+    // Both or neither: registering without the `_` prefix ships a product node, and the prefix
+    // without registration is invisible to the tests it exists for.
+    for want in ["_TestEcho", "_TestSink", "_TestFail", "_TestPanic", "_TestSetupFail", "_TestSlow",
+                 "_TestCounter", "_TestRequired", "_TestPicker", "_TestMute", "_TestConst"] {
+        assert!(names.contains(&want), "{want} is not in the catalog: {names:?}");
+        assert!(want.starts_with('_'), "{want} would show in the palette");
+    }
+    // Registering a type is boot-time configuration, and there is no op for "a type that failed to load".
     g.register_dyn(&SOURCE, Box::new(|_| never()), &goofi_node::NATIVE);
     g.register_dyn(&TRANSFORM, Box::new(|_| never()), &goofi_node::NATIVE);
     g.register_dyn(&DOCUMENTED, Box::new(|_| never()), &goofi_node::NATIVE);
     g.register_dyn(&OVERRIDES_COMMON, Box::new(|_| never()), &goofi_node::NATIVE);
     g.register_dyn(&PULSING, Box::new(|_| never()), &goofi_node::NATIVE);
 
+    let palette = g.call("library list", j!({ "full": true }))["types"].as_array().expect("a palette").clone();
+    let row = |ty: &str| palette.iter().find(|v| v["type"] == ty).unwrap_or_else(|| panic!("{ty} is in the palette"));
+    // The index is what a chooser reads, so what it shows of a type is the doc's FIRST LINE: a
+    // nutshell, short enough that seventy-five of them are a list and not a manual.
+    let index = g.call("library list", j!({}))["types"].as_array().expect("an index").clone();
+    let listed: Vec<&str> = index.iter().map(|t| t["type"].as_str().unwrap()).collect();
+    assert!(!listed.iter().any(|t| goofi_node::bare(t).starts_with('_')),
+            "a test node reached the palette: {listed:?}");
+    assert!(listed.contains(&"signal:LFO") && listed.contains(&"signal:Buffer"), "{listed:?}");
+    for (ty, groups) in declared {
+        let row = row(&ty);
+        assert!(row.get("category").is_none(), "{ty}: category is gone");
+        let doc = row["doc"].as_str().unwrap_or_else(|| panic!("{ty}: a doc"));
+        let nutshell = doc.split('\n').next().unwrap_or_default();
+        assert!(!nutshell.is_empty() && nutshell.len() <= 80,
+                "{ty}: the doc opens with a nutshell of 80 characters or less, not {}: {nutshell}", nutshell.len());
+        let listed = index.iter().find(|v| v["type"] == ty).unwrap_or_else(|| panic!("{ty} is in the index"));
+        assert_eq!(listed["doc"], j!(nutshell), "{ty}: the index shows the nutshell and stops there");
+        for key in ["tags", "source", "params", "input_slots", "output_slots"] {
+            assert!(listed.get(key).is_none(), "{ty}: the index carries `{key}`, which is `library get`'s");
+        }
+        let tags = row["tags"].as_array().expect("a tags list");
+        // Every entry here is a SHIPPED type, and each declares one. An empty list is how a stale
+        // wheel looks: the probe emits no tags and the feature is inert while the suite is green.
+        assert!(!tags.is_empty(), "{ty}: a shipped type declares a tag");
+        for t in tags {
+            assert!(goofi_node::Tag::parse(t.as_str().unwrap()).is_some(), "{ty}: tag {t}");
+        }
+        let pages: Vec<&str> = row["params"].as_object().expect("pages").keys().map(String::as_str).collect();
+        assert_eq!(pages, groups, "{ty}: the author's pages in declared order, then the engine's own");
+        assert!(!pages.contains(&"common") || pages.last() == Some(&"common"), "{ty}: common is the last page: {pages:?}");
+    }
+    // An author who declares `common` FIRST, with a default of their own for one universal param,
+    // still gets it last, in the engine's order, holding their default.
+    let got = g.call("library get", j!({ "type": "_TestCommonFirst" }));
+    let pages: Vec<&str> = got["params"].as_object().expect("pages").keys().map(String::as_str).collect();
+    assert_eq!(pages, ["own", "common"], "{got}");
+    let common: Vec<&str> = got["params"]["common"].as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(common, ["autotrigger", "max_frequency", "frequency_mode"], "the engine's order: {common:?}");
+    assert_eq!(got["params"]["common"]["max_frequency"]["value"], j!(5.0), "the author's default: {got}");
+
     // The two fixtures differ only in the `producer` flag, and it decides who paces the node.
-    assert_eq!(row(&g, "signal:MyPyThing")["params"]["common"]["autotrigger"]["value"], true,
+    assert_eq!(row("signal:MyPyThing")["params"]["common"]["autotrigger"]["value"], true,
                "a source paces itself");
-    assert_eq!(row(&g, "signal:MultiThing")["params"]["common"]["autotrigger"]["value"], false,
+    assert_eq!(row("signal:MultiThing")["params"]["common"]["autotrigger"]["value"], false,
                "a transform is driven by its input");
-    let common = row(&g, "signal:MyPyThing")["params"]["common"].clone();
+    let common = &row("signal:MyPyThing")["params"]["common"];
     assert_eq!((&common["max_frequency"]["type"], &common["autotrigger"]["type"],
                 &common["frequency_mode"]["type"]), (&j!("float"), &j!("bool"), &j!("string")));
-    assert_eq!(row(&g, "signal:MultiThing")["input_multi"], j!(["many"]));
-    assert_eq!(row(&g, "signal:MyPyThing")["input_multi"], j!([]));
+    assert_eq!(row("signal:MultiThing")["input_multi"], j!(["many"]));
+    assert_eq!(row("signal:MyPyThing")["input_multi"], j!([]));
 
     // A tooltip is rendered from the CATALOG descriptor, so a node that redeclares a `common.*`
     // param owns its help text too.
-    assert_eq!(row(&g, "signal:DocumentedThing")["params"]["welch"]["nperseg"]["doc"],
+    assert_eq!(row("signal:DocumentedThing")["params"]["welch"]["nperseg"]["doc"],
                "Samples per Welch segment: longer means finer frequency resolution.");
-    let overridden = row(&g, "signal:OverridesCommon");
+    let overridden = row("signal:OverridesCommon");
     assert_eq!(overridden["params"]["common"]["autotrigger"]["doc"],
                "On by default: this node is a source.");
     assert!(overridden["params"]["common"]["max_frequency"]["doc"].as_str().unwrap()
                 .contains("Rate cap"), "the fallback still applies to the rest of the group");
 
     // A pulse is a request: the row a client renders its button from carries a type and no value.
-    let pulse = row(&g, "signal:PulsingThing")["params"]["count"]["reset"].clone();
+    let pulse = &row("signal:PulsingThing")["params"]["count"]["reset"];
     assert_eq!((&pulse["type"], &pulse["value"]), (&j!("pulse"), &j!(null)), "{pulse}");
 }
 
@@ -292,47 +365,6 @@ async fn the_palette_rides_the_snapshot_and_the_graph_never_does() {
     assert!(ev.next("graph_replaced").get("node_types").is_none(), "the echo omits the catalog");
     assert!(ev.next("node_types")["types"].as_array().is_some_and(|a| !a.is_empty()),
             "…and a separate event carries it");
-}
-
-// The GOOF frame — mirrored in `frontend/src/lib/codec/`.
-
-#[test]
-fn a_frame_survives_the_round_trip_the_browser_makes_it_do() {
-    // Array data is ALWAYS f32 on the wire, and a meta entry shadowing a header key is written once.
-    let labels = goofi_core::Axes::new()
-        .with(0, goofi_core::Axis::coords(vec![goofi_core::Coord::Str("Fz".into()),
-                                               goofi_core::Coord::Str("Cz".into())]));
-    let meta = Meta::new().with_sfreq(Some(250.0)).with_channels(labels.clone());
-    let body: Vec<u8> = (0..8).flat_map(|i| (i as f32).to_le_bytes()).collect();
-    let d = Data::array_f32(vec![2, 4], body.clone(), meta).unwrap();
-    let back = goofi_codec::decode(&goofi_codec::encode(&d)).expect("a frame goofi wrote");
-    let DataValue::Array(a) = back.value() else { panic!("not an array") };
-    assert_eq!((a.shape(), a.as_bytes()), (&[2usize, 4][..], &body[..]));
-    assert_eq!(back.meta().sfreq(), Some(250.0));
-    assert_eq!(back.meta().channels(), &labels, "positional axis labels ride the frame");
-
-    for (name, d) in [("a string", Data::string(String::from("hello"), Meta::new())),
-                      ("a table", Data::table(Default::default(), Meta::new()))] {
-        let raw = goofi_codec::encode(&d);
-        assert!(goofi_codec::decode(&raw).is_ok(), "{name} did not survive the round trip");
-    }
-}
-
-#[test]
-fn a_malformed_frame_is_refused_rather_than_trusted() {
-    // The decoder reads lengths out of the frame, and runs in the browser: it must refuse, never panic.
-    let good = goofi_codec::encode(&Data::array_f32(
-        vec![2], vec![0u8; 8], Meta::new().with_sfreq(Some(1.0))).unwrap());
-    assert!(goofi_codec::decode(&good).is_ok(), "the fixture is a frame that DOES decode");
-
-    assert!(goofi_codec::decode(b"NOPE").is_err(), "bad magic");
-    for cut in 0..good.len() {
-        // Every prefix — the shape a partially-flushed socket delivers.
-        assert!(goofi_codec::decode(&good[..cut]).is_err(), "a truncated frame decoded at {cut}");
-    }
-    let mut wrong_tag = good.clone();
-    wrong_tag[5] = 0x7f;
-    assert!(goofi_codec::decode(&wrong_tag).is_err(), "an unknown dtype tag");
 }
 
 #[test]
@@ -394,73 +426,6 @@ fn every_slot_name_is_letters_and_digits() {
 }
 
 #[test]
-fn every_palette_row_carries_standard_tags_and_its_pages_in_declared_order() {
-    // The vocabulary is closed, so a palette facet is a set the client already knows — a free-text
-    // category was one string per author. A page order is a statement the author makes; the
-    // client draws what it is given.
-    let g = Goofi::new();
-    // The lock is DROPPED before the first op: `library list` takes the same one.
-    let declared: Vec<(String, Vec<String>)> = {
-        let graph = g.state.graph.lock().unwrap();
-        graph.library_entries().into_iter()
-            .filter(|(_, l)| !l.manifest.type_name.starts_with('_'))
-            .map(|(engine, l)| {
-                let mut universal: Vec<String> = Vec::new();
-                for d in graph.universal_decls(engine, l.manifest) {
-                    if !universal.contains(&d.group.to_string()) {
-                        universal.push(d.group.to_string());
-                    }
-                }
-                let mut groups: Vec<String> = Vec::new();
-                for d in l.manifest.params {
-                    if !universal.contains(&d.group.to_string()) && !groups.contains(&d.group.to_string()) {
-                        groups.push(d.group.to_string());
-                    }
-                }
-                groups.extend(universal);
-                (goofi_node::qualify(engine, l.manifest.type_name), groups)
-            })
-            .collect()
-    };
-    assert!(!declared.is_empty(), "a fresh goofi offers a library");
-    let palette = g.call("library list", j!({ "full": true }))["types"].as_array().expect("a palette").clone();
-    // The index is what a chooser reads, so what it shows of a type is the doc's FIRST LINE: a
-    // nutshell, short enough that seventy-five of them are a list and not a manual.
-    let index = g.call("library list", j!({}))["types"].as_array().expect("an index").clone();
-    for (ty, groups) in declared {
-        let row = palette.iter().find(|v| v["type"] == ty).unwrap_or_else(|| panic!("{ty} is in the palette"));
-        assert!(row.get("category").is_none(), "{ty}: category is gone");
-        let doc = row["doc"].as_str().unwrap_or_else(|| panic!("{ty}: a doc"));
-        let nutshell = doc.split('\n').next().unwrap_or_default();
-        assert!(!nutshell.is_empty() && nutshell.len() <= 80,
-                "{ty}: the doc opens with a nutshell of 80 characters or less, not {}: {nutshell}", nutshell.len());
-        let listed = index.iter().find(|v| v["type"] == ty).unwrap_or_else(|| panic!("{ty} is in the index"));
-        assert_eq!(listed["doc"], j!(nutshell), "{ty}: the index shows the nutshell and stops there");
-        for key in ["tags", "source", "params", "input_slots", "output_slots"] {
-            assert!(listed.get(key).is_none(), "{ty}: the index carries `{key}`, which is `library get`'s");
-        }
-        let tags = row["tags"].as_array().expect("a tags list");
-        // Every entry here is a SHIPPED type, and each declares one. An empty list is how a stale
-        // wheel looks: the probe emits no tags and the feature is inert while the suite is green.
-        assert!(!tags.is_empty(), "{ty}: a shipped type declares a tag");
-        for t in tags {
-            assert!(goofi_node::Tag::parse(t.as_str().unwrap()).is_some(), "{ty}: tag {t}");
-        }
-        let pages: Vec<&str> = row["params"].as_object().expect("pages").keys().map(String::as_str).collect();
-        assert_eq!(pages, groups, "{ty}: the author's pages in declared order, then the engine's own");
-        assert!(!pages.contains(&"common") || pages.last() == Some(&"common"), "{ty}: common is the last page: {pages:?}");
-    }
-    // An author who declares `common` FIRST, with a default of their own for one universal param,
-    // still gets it last, in the engine's order, holding their default.
-    let row = g.call("library get", j!({ "type": "_TestCommonFirst" }));
-    let pages: Vec<&str> = row["params"].as_object().expect("pages").keys().map(String::as_str).collect();
-    assert_eq!(pages, ["own", "common"], "{row}");
-    let common: Vec<&str> = row["params"]["common"].as_object().unwrap().keys().map(String::as_str).collect();
-    assert_eq!(common, ["autotrigger", "max_frequency", "frequency_mode"], "the engine's order: {common:?}");
-    assert_eq!(row["params"]["common"]["max_frequency"]["value"], j!(5.0), "the author's default: {row}");
-}
-
-#[test]
 fn every_declared_expression_reads_only_a_global_a_fresh_patch_has() {
     // Cheap and evaluator-free: a typo'd `globals.defualt_ufreq` compiles, binds, then errors on every
     // instance. Read AS EACH TYPE SEES IT, since a declaration may condition on the manifest.
@@ -480,25 +445,6 @@ fn every_declared_expression_reads_only_a_global_a_fresh_patch_has() {
                     decl.group, decl.name, read.name);
         }
     }
-}
-
-#[test]
-fn every_test_node_is_registered_and_hidden_from_the_palette() {
-    // Both or neither: registering without the `_` prefix ships a product node, and the prefix
-    // without registration is invisible to the tests it exists for.
-    let g = Goofi::new();
-    let names: Vec<&str> = g.state.graph.lock().unwrap().library_entries().into_iter().map(|(_, l)| l.manifest.type_name).collect();
-    for want in ["_TestEcho", "_TestSink", "_TestFail", "_TestPanic", "_TestSetupFail", "_TestSlow",
-                 "_TestCounter", "_TestRequired", "_TestPicker", "_TestMute", "_TestConst"] {
-        assert!(names.contains(&want), "{want} is not in the catalog: {names:?}");
-        assert!(want.starts_with('_'), "{want} would show in the palette");
-    }
-    let palette = g.state.call("library list", j!({}), "t").unwrap();
-    let listed: Vec<&str> = palette["types"].as_array().unwrap().iter()
-        .map(|t| t["type"].as_str().unwrap()).collect();
-    assert!(!listed.iter().any(|t| goofi_node::bare(t).starts_with('_')),
-            "a test node reached the palette: {listed:?}");
-    assert!(listed.contains(&"signal:LFO") && listed.contains(&"signal:Buffer"), "{listed:?}");
 }
 
 #[test]

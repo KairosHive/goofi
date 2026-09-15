@@ -148,6 +148,15 @@ fn goof_encoder_matches_python_golden() {
             canon(&decode_meta(py_meta)),
             "[{name}] meta must be semantically equal"
         );
+
+        // The browser decodes the same bytes: what comes back re-encodes to the frame it came
+        // from, sfreq and positional axis labels included.
+        if let Case::Frame(d) = case {
+            let back = goofi_codec::decode(&rust_frame).unwrap_or_else(|e| panic!("[{name}] {e}"));
+            assert_eq!(encode(&back), rust_frame, "[{name}] did not survive the round trip");
+            assert_eq!(back.meta().sfreq(), d.meta().sfreq(), "[{name}] sfreq");
+            assert_eq!(back.meta().channels(), d.meta().channels(), "[{name}] axis labels ride the frame");
+        }
     }
 }
 
@@ -174,6 +183,18 @@ fn a_request_carries_each_multi_frame_with_its_source() {
 
 #[test]
 fn malformed_and_deep_frames_are_refused_before_reduction() {
+    // The decoder reads lengths out of the frame, and runs in the browser: it must refuse, never panic.
+    let good = encode(&arr(&[2], vec![0u8; 8], Meta::new().with_sfreq(Some(1.0))));
+    assert!(goofi_codec::decode(&good).is_ok(), "the fixture is a frame that DOES decode");
+    assert!(goofi_codec::decode(b"NOPE").is_err(), "bad magic");
+    for cut in 0..good.len() {
+        // Every prefix — the shape a partially-flushed socket delivers.
+        assert!(goofi_codec::decode(&good[..cut]).is_err(), "a truncated frame decoded at {cut}");
+    }
+    let mut wrong_tag = good.clone();
+    wrong_tag[5] = 0x7f;
+    assert!(goofi_codec::decode(&wrong_tag).is_err(), "an unknown dtype tag");
+
     use goofi_core::reduce::{reduce_axis, ReduceMethod};
     for method in [ReduceMethod::Area, ReduceMethod::Envelope, ReduceMethod::Subsample] {
         for shape in [vec![usize::MAX, 2], vec![10], vec![0, usize::MAX]] {

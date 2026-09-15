@@ -111,31 +111,7 @@ names: a node's mermaid id is its name, which every op takes.
 }
 
 #[test]
-fn a_wire_inside_a_collapsed_sub_patch_is_not_drawn_as_a_self_loop_on_its_facade() {
-    // Both ends of an internal wire fold onto the same facade; the wire is a fact one level down.
-    let g = Goofi::new();
-    let a = g.add("LFO");
-    let b = g.add("Buffer");
-    g.link(a, "out", b, "input");
-    g.call("nodes group", j!({ "nodes": [hex(a), hex(b)], "pos": [0.0, 0.0] }));
-
-    let out = text(&g, "nodes inspect", j!({}));
-    assert!(out.contains("[["), "the facade is drawn: {out}");
-    assert!(!out.contains("-->"), "…with no edge at all at this level: {out}");
-}
-
-#[test]
-fn a_node_wired_to_itself_keeps_its_edge() {
-    // A node wired to its OWN input folds onto itself honestly, and the engine tolerates the cycle.
-    let g = Goofi::new();
-    let buf = g.add("Buffer");
-    g.link(buf, "out", buf, "input");
-    let out = text(&g, "nodes inspect", j!({}));
-    assert!(out.contains("buffer0 -- out→input --> buffer0\n"), "{out}");
-}
-
-#[test]
-fn an_empty_scope_says_so_rather_than_drawing_an_empty_diagram() {
+fn inspect_patch_draws_only_the_edges_that_are_facts_at_this_level() {
     let g = Goofi::new();
     let out = text(&g, "nodes inspect", j!({}));
     assert!(out.contains("(no nodes)"), "{out}");
@@ -145,6 +121,22 @@ fn an_empty_scope_says_so_rather_than_drawing_an_empty_diagram() {
     // A scope uid that names a LEAF is refused rather than drawn as empty.
     let n = g.add("LFO");
     g.refuse("nodes inspect", j!({ "scope": hex(n) }));
+
+    // A node wired to its OWN input folds onto itself honestly, and the engine tolerates the cycle.
+    let buf = g.add("Buffer");
+    g.link(buf, "out", buf, "input");
+    let out = text(&g, "nodes inspect", j!({}));
+    assert!(out.contains("buffer0 -- out→input --> buffer0\n"), "{out}");
+
+    // Both ends of an internal wire fold onto the same facade; the wire is a fact one level down.
+    let a = g.add("LFO");
+    let b = g.add("Buffer");
+    g.link(a, "out", b, "input");
+    g.call("nodes group", j!({ "nodes": [hex(a), hex(b)], "pos": [0.0, 0.0] }));
+    let out = text(&g, "nodes inspect", j!({}));
+    assert!(out.contains("[["), "the facade is drawn: {out}");
+    assert_eq!(out.matches("-->").count(), 1, "…with no edge of its own at this level: {out}");
+    assert!(out.contains("buffer0 -- out→input --> buffer0\n"), "the self-loop is the one edge: {out}");
 }
 
 const BLEW_UP: &str = "the expression blew up";
