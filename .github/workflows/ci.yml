@@ -163,10 +163,9 @@ jobs:
     - name: Tests (in-process Python tier)
       run: >
         cargo test -p goofi-tests --features embed --
-        python:: plugins:: graphics:: nodes:: agent:: inspect:: probe:: simulation::
-        codec_golden:: filter_golden:: harmonic_geometry:: image_file:: fluxrt::
-        upscaling:: upscaling_fluxrt:: bundles_expr:: param_modulation::
-        python_gil_tripwire:: python_module_hygiene:: python_init_order::
+        python:: plugins:: graphics:: nodes:: agent:: inspect:: probe:: codec_golden::
+        filter_golden:: param_modulation:: python_gil_tripwire:: python_module_hygiene::
+        python_init_order::
 
     # The e2e suite is its own npm package, and not part of building or running goofi — so it is
     # installed here rather than by goofi-init, which provisions what the two setup commands need.

@@ -85,50 +85,32 @@ fn close(a: [f32; 4], b: [f32; 4]) -> bool {
 }
 
 #[test]
-fn the_texture_nodes_map_blur_and_composite_a_picture() {
+fn texture_math_maps_ranges_and_selected_channels() {
     let g = Goofi::new();
-    let dir = g.state.mount().join("nodes_graphics");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("BlurSpot.wgsl"), include_str!("../fixtures/blur_spot.wgsl")).unwrap();
-    g.call("library refresh", j!({}));
     let source = g.add("graphics:Constant");
     let math = g.add("graphics:Math");
-    let other = g.add("graphics:Constant");
-    let composite = g.add("graphics:Composite");
-    let spot = g.add("graphics:BlurSpot");
-    let blur = g.add("graphics:Blur");
-    for node in [source, math, other, composite] {
+    for node in [source, math] {
         g.ready(node);
         g.set_param(node, "common", "width", 8);
         g.set_param(node, "common", "height", 4);
     }
-    for node in [spot, blur] {
-        g.ready(node);
-        g.set_param(node, "common", "width", 96);
-        g.set_param(node, "common", "height", 48);
-    }
-    g.link(source, "out", math, "input");
-    g.link(source, "out", composite, "a");
-    g.link(other, "out", composite, "b");
-    g.link(spot, "out", blur, "input");
-
-    // Step: Math maps ranges and the channels it is told to.
     for (channel, value) in [("r", 0.25), ("g", 0.5), ("b", 1.0), ("a", 0.75)] {
         g.set_param(source, "colour", channel, value);
     }
-    let mapped = |what: &str, expected: [f32; 4]| {
+    g.link(source, "out", math, "input");
+    let expect = |what: &str, expected: [f32; 4]| {
         drawn(&g, math, what, |d| shape(d) == vec![4, 8, 4] && close(px(d, 0, 0), expected));
     };
-    mapped("identity", [0.25, 0.5, 1.0, 0.75]);
+    expect("identity", [0.25, 0.5, 1.0, 0.75]);
     g.set_param(math, "math", "pre_add", -0.5);
     g.set_param(math, "math", "multiply", 2.0);
     g.set_param(math, "math", "post_add", 0.25);
-    mapped("ordered arithmetic with HDR output", [-0.25, 0.25, 1.25, 0.75]);
+    expect("ordered arithmetic with HDR output", [-0.25, 0.25, 1.25, 0.75]);
     g.set_param(math, "math", "channels", "rgba");
     g.set_param(math, "math", "post_add", 0.5);
-    mapped("all four channels", [0.0, 0.5, 1.5, 1.0]);
+    expect("all four channels", [0.0, 0.5, 1.5, 1.0]);
     g.set_param(math, "math", "channels", "alpha");
-    mapped("alpha only", [0.25, 0.5, 1.0, 1.0]);
+    expect("alpha only", [0.25, 0.5, 1.0, 1.0]);
     g.set_param(math, "math", "channels", "rgb");
     g.set_param(math, "math", "pre_add", 0.0);
     g.set_param(math, "math", "multiply", 1.0);
@@ -137,19 +119,19 @@ fn the_texture_nodes_map_blur_and_composite_a_picture() {
     g.set_param(math, "range", "from_high", 0.75);
     g.set_param(math, "range", "to_low", -1.0);
     g.set_param(math, "range", "to_high", 1.0);
-    mapped("range expansion", [-1.0, 0.0, 2.0, 0.75]);
+    expect("range expansion", [-1.0, 0.0, 2.0, 0.75]);
     g.set_param(math, "range", "bound", "clamp");
-    mapped("clamp", [-1.0, 0.0, 1.0, 0.75]);
+    expect("clamp", [-1.0, 0.0, 1.0, 0.75]);
     g.set_param(math, "range", "bound", "wrap");
-    mapped("wrap", [-1.0, 0.0, 0.0, 0.75]);
+    expect("wrap", [-1.0, 0.0, 0.0, 0.75]);
     g.set_param(math, "range", "to_low", 1.0);
     g.set_param(math, "range", "to_high", -1.0);
     g.set_param(math, "range", "bound", "clamp");
-    mapped("reversed target", [1.0, 0.0, -1.0, 0.75]);
+    expect("reversed target", [1.0, 0.0, -1.0, 0.75]);
     g.set_param(math, "range", "from_high", 0.25);
-    mapped("zero-width source", [1.0, 1.0, 1.0, 0.75]);
+    expect("zero-width source", [1.0, 1.0, 1.0, 0.75]);
     g.set_param(math, "range", "from_low", 0.75);
-    mapped("reversed source and target", [-1.0, 0.0, 1.0, 0.75]);
+    expect("reversed source and target", [-1.0, 0.0, 1.0, 0.75]);
 
     g.set_param(math, "range", "from_low", 0.0);
     g.set_param(math, "range", "from_high", 1.0);
@@ -157,69 +139,26 @@ fn the_texture_nodes_map_blur_and_composite_a_picture() {
     g.set_param(math, "range", "to_high", 2.0);
     g.set_param(math, "math", "multiply", 8.0);
     g.set_param(math, "range", "bound", "fold");
-    mapped("octave fold matches signal Math", [1.5, 1.25, 1.125, 0.75]);
+    expect("octave fold matches signal Math", [1.5, 1.25, 1.125, 0.75]);
     g.set_param(math, "range", "to_high", 1.0);
-    mapped("zero-width target", [1.0, 1.0, 1.0, 0.75]);
+    expect("zero-width target", [1.0, 1.0, 1.0, 0.75]);
+}
 
-    // Step: Composite blends the same source with a brighter one, colour and transparency alike.
-    for channel in ["r", "g", "b"] {
-        g.set_param(source, "colour", channel, 0.25);
-        g.set_param(other, "colour", channel, 0.75);
+#[test]
+fn blur_modes_spread_a_spot_without_hidden_color() {
+    let g = Goofi::new();
+    let dir = g.state.mount().join("nodes_graphics");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("BlurSpot.wgsl"), include_str!("../fixtures/blur_spot.wgsl")).unwrap();
+    g.call("library refresh", j!({}));
+    let spot = g.add("graphics:BlurSpot");
+    let blur = g.add("graphics:Blur");
+    for node in [spot, blur] {
+        g.ready(node);
+        g.set_param(node, "common", "width", 96);
+        g.set_param(node, "common", "height", 48);
     }
-    g.set_param(source, "colour", "a", 1.0);
-    let blended = |mode: &str, expected: [f32; 4]| {
-        g.set_param(composite, "composite", "mode", mode);
-        drawn(&g, composite, mode, |d| close(px(d, 0, 0), expected));
-    };
-    for (mode, value) in [
-        ("over", 0.25), ("under", 0.75), ("add", 1.0), ("subtract", 0.5),
-        ("multiply", 0.1875), ("divide", 3.0), ("minimum", 0.25), ("maximum", 0.75),
-        ("screen", 0.8125), ("overlay", 0.625), ("hard light", 0.375),
-        ("soft light", 0.65625), ("color dodge", 1.0), ("color burn", 0.0),
-        ("difference", 0.5), ("exclusion", 0.625), ("in", 0.25), ("atop", 0.25),
-    ] {
-        blended(mode, [value, value, value, 1.0]);
-    }
-    blended("out", [0.0; 4]);
-    blended("xor", [0.0; 4]);
-
-    // Unequal alpha exposes straight/premultiplied color errors and mask direction.
-    g.set_param(source, "colour", "a", 0.5);
-    g.set_param(other, "colour", "a", 0.25);
-    blended("over", [0.35, 0.35, 0.35, 0.625]);
-    blended("under", [0.45, 0.45, 0.45, 0.625]);
-    blended("multiply", [0.3375, 0.3375, 0.3375, 0.625]);
-    blended("in", [0.25, 0.25, 0.25, 0.125]);
-    blended("out", [0.25, 0.25, 0.25, 0.375]);
-    blended("atop", [0.5, 0.5, 0.5, 0.25]);
-    blended("xor", [0.375, 0.375, 0.375, 0.5]);
-    g.set_param(composite, "composite", "blend", 0.5);
-    blended("over", [0.4642857, 0.4642857, 0.4642857, 0.4375]);
-    g.set_param(composite, "composite", "blend", 0.0);
-    blended("over", [0.75, 0.75, 0.75, 0.25]);
-    g.set_param(composite, "composite", "blend", 1.0);
-
-    // Hidden RGB must not enter the result, even for arithmetic modes.
-    g.set_param(source, "colour", "a", 0.0);
-    blended("add", [0.75, 0.75, 0.75, 0.25]);
-    g.set_param(other, "colour", "a", 0.0);
-    blended("over", [0.0; 4]);
-    for node in [source, other] {
-        g.set_param(node, "colour", "a", 1.0);
-    }
-    for channel in ["r", "g", "b"] {
-        g.set_param(source, "colour", channel, 0.0);
-    }
-    blended("divide", [0.0, 0.0, 0.0, 1.0]);
-    blended("color burn", [0.0, 0.0, 0.0, 1.0]);
-    for channel in ["r", "g", "b"] {
-        g.set_param(source, "colour", channel, 1.0);
-    }
-    blended("color dodge", [1.0; 4]);
-    blended("add", [1.75, 1.75, 1.75, 1.0]);
-    blended("subtract", [-0.25, -0.25, -0.25, 1.0]);
-
-    // Step: every Blur mode spreads a spot without mixing in the colour its alpha hides.
+    g.link(spot, "out", blur, "input");
     g.set_param(blur, "blur", "radius", 0.0);
     let original = drawn(&g, blur, "radius zero copies the input", |d| {
         shape(d) == vec![48, 96, 4] && close(px(d, 24, 62), [1.0, 0.0, 0.0, 1.0])
@@ -280,6 +219,76 @@ fn the_texture_nodes_map_blur_and_composite_a_picture() {
     g.set_param(blur, "blur", "mode", "zoom");
     g.set_param(blur, "blur", "center_x", 0.65);
     drawn(&g, blur, "zoom center follows the spot", |d| spread(d)[0] < baseline[0] + 0.5);
+}
+
+#[test]
+fn composite_modes_blend_colors_and_transparency() {
+    let g = Goofi::new();
+    let a = g.add("graphics:Constant");
+    let b = g.add("graphics:Constant");
+    let composite = g.add("graphics:Composite");
+    for node in [a, b, composite] {
+        g.ready(node);
+        g.set_param(node, "common", "width", 8);
+        g.set_param(node, "common", "height", 8);
+    }
+    for channel in ["r", "g", "b"] {
+        g.set_param(a, "colour", channel, 0.25);
+        g.set_param(b, "colour", channel, 0.75);
+    }
+    g.link(a, "out", composite, "a");
+    g.link(b, "out", composite, "b");
+    let expect = |mode: &str, expected: [f32; 4]| {
+        g.set_param(composite, "composite", "mode", mode);
+        drawn(&g, composite, mode, |d| close(px(d, 0, 0), expected));
+    };
+    for (mode, value) in [
+        ("over", 0.25), ("under", 0.75), ("add", 1.0), ("subtract", 0.5),
+        ("multiply", 0.1875), ("divide", 3.0), ("minimum", 0.25), ("maximum", 0.75),
+        ("screen", 0.8125), ("overlay", 0.625), ("hard light", 0.375),
+        ("soft light", 0.65625), ("color dodge", 1.0), ("color burn", 0.0),
+        ("difference", 0.5), ("exclusion", 0.625), ("in", 0.25), ("atop", 0.25),
+    ] {
+        expect(mode, [value, value, value, 1.0]);
+    }
+    expect("out", [0.0; 4]);
+    expect("xor", [0.0; 4]);
+
+    // Unequal alpha exposes straight/premultiplied color errors and mask direction.
+    g.set_param(a, "colour", "a", 0.5);
+    g.set_param(b, "colour", "a", 0.25);
+    expect("over", [0.35, 0.35, 0.35, 0.625]);
+    expect("under", [0.45, 0.45, 0.45, 0.625]);
+    expect("multiply", [0.3375, 0.3375, 0.3375, 0.625]);
+    expect("in", [0.25, 0.25, 0.25, 0.125]);
+    expect("out", [0.25, 0.25, 0.25, 0.375]);
+    expect("atop", [0.5, 0.5, 0.5, 0.25]);
+    expect("xor", [0.375, 0.375, 0.375, 0.5]);
+    g.set_param(composite, "composite", "blend", 0.5);
+    expect("over", [0.4642857, 0.4642857, 0.4642857, 0.4375]);
+    g.set_param(composite, "composite", "blend", 0.0);
+    expect("over", [0.75, 0.75, 0.75, 0.25]);
+    g.set_param(composite, "composite", "blend", 1.0);
+
+    // Hidden RGB must not enter the result, even for arithmetic modes.
+    g.set_param(a, "colour", "a", 0.0);
+    expect("add", [0.75, 0.75, 0.75, 0.25]);
+    g.set_param(b, "colour", "a", 0.0);
+    expect("over", [0.0; 4]);
+    for node in [a, b] {
+        g.set_param(node, "colour", "a", 1.0);
+    }
+    for channel in ["r", "g", "b"] {
+        g.set_param(a, "colour", channel, 0.0);
+    }
+    expect("divide", [0.0, 0.0, 0.0, 1.0]);
+    expect("color burn", [0.0, 0.0, 0.0, 1.0]);
+    for channel in ["r", "g", "b"] {
+        g.set_param(a, "colour", channel, 1.0);
+    }
+    expect("color dodge", [1.0; 4]);
+    expect("add", [1.75, 1.75, 1.75, 1.0]);
+    expect("subtract", [-0.25, -0.25, -0.25, 1.0]);
 }
 
 #[test]

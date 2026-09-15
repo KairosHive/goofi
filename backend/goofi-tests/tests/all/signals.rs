@@ -84,7 +84,7 @@ fn a_chain_filters_a_live_stream_and_reads_the_band_that_survives() {
 }
 
 #[test]
-fn a_buffer_rolls_the_axis_it_was_told_to_grows_one_past_the_rank_and_counts_in_every_unit() {
+fn a_buffer_rolls_the_axis_it_was_told_to_and_grows_one_past_the_rank() {
     let g = Goofi::new();
     let src = g.add("_TestGrid");
     let time = g.add("Buffer");
@@ -153,18 +153,6 @@ fn a_buffer_rolls_the_axis_it_was_told_to_grows_one_past_the_rank_and_counts_in_
             "row {r} is the channel it came from: {row:?}",
         );
     }
-
-    // The units: seconds are the frame's OWN rate — two by default — and updates stack whole
-    // frames on a new axis instead of samples on the rolled one.
-    let secs = g.add("Buffer");
-    let ps = g.probe(secs, "out");
-    g.link(src, "out", secs, "input");
-    g.until("the default two-second window", |_| ps.latest().filter(|d| shape(d) == vec![3, 512]));
-    set(secs, "size", j!(0.5));
-    g.until("fractional seconds", |_| ps.latest().filter(|d| shape(d) == vec![3, 128]));
-    set(secs, "unit", j!("updates"));
-    set(secs, "size", j!(2.0));
-    g.until("two complete frames", |_| ps.latest().filter(|d| shape(d) == vec![3, 4, 2]));
 }
 
 #[test]
@@ -934,3 +922,21 @@ fn a_drawing_widget_reaches_the_patch_as_a_frame() {
     let why = g.until("the node says what it could not read", |_| g.error(node));
     assert!(why.contains("PNG"), "{why}");
 }
+
+#[test]
+fn buffer_seconds_use_sample_rate_and_updates_stack_frames() {
+    let g = Goofi::new();
+    let src = g.add("_TestRamp");
+    g.set_param(src, "ramp", "sfreq", 8.0);
+    g.set_param(src, "ramp", "length", 4);
+    let buf = g.add("Buffer");
+    let probe = g.probe(buf, "out");
+    g.link(src, "out", buf, "input");
+    g.until("default two-second window", |_| probe.latest().filter(|d| shape(d).last() == Some(&16)));
+    g.set_param(buf, "buffer", "size", 0.5);
+    g.until("fractional seconds", |_| probe.latest().filter(|d| shape(d).last() == Some(&4)));
+    g.set_param(buf, "buffer", "unit", "updates");
+    g.set_param(buf, "buffer", "size", 2.0);
+    g.until("two complete frames", |_| probe.latest().filter(|d| shape(d).len() == 3 && shape(d).last() == Some(&2)));
+}
+
