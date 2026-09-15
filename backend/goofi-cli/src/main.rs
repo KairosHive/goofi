@@ -454,7 +454,7 @@ async fn run(
 
     report("Preparing plugins");
     if let Err(error) = goofi_bridge::plugins::Plugins::load(&mut state, &goofi_core::home::dir(), std::path::Path::new(&subproc_python)) {
-        eprintln!("Could not load plugins: {error}");
+        let _ = goofi_core::log::terminal_line(&format!("Could not load plugins: {error}"));
     }
     state.roots.extend(extra_nodes.iter().map(PathBuf::from));
     // Every root the scan reads, the private library included: a node saved there may name
@@ -572,14 +572,14 @@ async fn run(
                 println!("  Ctrl+C to stop\n");
                 // Last, and on stderr, so it is the line still on screen and survives a `> log`.
                 if let Some(warning) = exposure_warning(&bind).filter(|_| !demo) {
-                    eprintln!("{warning}");
+                    let _ = goofi_core::log::terminal_line(&warning);
                 }
                 // The stop is here, not in `serve_app`, whose other callers serve forever.
                 tokio::select! {
                     served = serve_app(listener, state.clone(), spa, debug) => match served {
                         Ok(()) => 0,
                         Err(e) => {
-                            eprintln!("server error: {e}");
+                            let _ = goofi_core::log::terminal_line(&format!("server error: {e}"));
                             1
                         }
                     },
@@ -589,13 +589,13 @@ async fn run(
         }
     };
     drop(startup);
-    println!("  Stopping engines · press Ctrl+C again to force exit");
+    let _ = goofi_core::log::terminal_line("  Stopping engines · press Ctrl+C again to force exit");
     if state.recorder.running() {
-        println!("  Draining recording · waiting for queued frames to reach disk");
+        let _ = goofi_core::log::terminal_line("  Draining recording · waiting for queued frames to reach disk");
     }
     // The manager releases what it holds, in its one order; the window loop is the process's.
     state.shutdown();
-    println!("  Stopped");
+    let _ = goofi_core::log::terminal_line("  Stopped");
     code
 }
 
