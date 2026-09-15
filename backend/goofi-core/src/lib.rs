@@ -15,6 +15,7 @@ pub mod png;
 pub mod probe;
 pub mod reduce;
 pub mod record;
+pub mod registry;
 pub mod session;
 pub mod startup;
 pub mod stream;

@@ -13,7 +13,7 @@ goofi-core = { path = "../goofi-core" }
 # caret requirement, as in the other crates that already depend on it).
 iceoryx2 = "0.9.3"
 
-[target.'cfg(unix)'.dependencies]
+# `atexit`, on every platform: the session's release when nothing else ran it.
 libc = "0.2"
 
 # Taking a refused node's DACL back so its owner can unlink it — see `grant_owner`.

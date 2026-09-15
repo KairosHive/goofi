@@ -19,7 +19,19 @@ pub type ServiceName = String;
 type Svc = ipc_threadsafe::Service;
 /// The iceoryx2 node every port of one owner is built from. It must outlive them, and it is what
 /// `max_nodes` counts on each service — so owners share one rather than minting one per port.
-pub type IoxNode = iceoryx2::node::Node<Svc>;
+/// An iceoryx2 node under the session's root and prefix, entered in the process's resource index
+/// for as long as it lives. Declare it AFTER the ports it minted, so they are dropped first.
+pub struct IoxNode {
+    node: iceoryx2::node::Node<Svc>,
+    _lease: goofi_core::registry::Lease,
+}
+
+impl std::ops::Deref for IoxNode {
+    type Target = iceoryx2::node::Node<Svc>;
+    fn deref(&self) -> &Self::Target {
+        &self.node
+    }
+}
 pub type BytePublisher = iceoryx2::port::publisher::Publisher<Svc, [u8], ()>;
 pub type ByteSubscriber = iceoryx2::port::subscriber::Subscriber<Svc, [u8], ()>;
 pub type ByteService = iceoryx2::service::port_factory::publish_subscribe::PortFactory<Svc, [u8], ()>;
@@ -163,6 +175,14 @@ pub fn session() -> &'static str {
                 let held = goofi_core::session::hold(&goofi_core::session::fresh_id()).expect("hold a session");
                 let id = held.id().to_string();
                 *HELD.lock().unwrap_or_else(|e| e.into_inner()) = Some(held);
+                // A process that never calls `release_session` — a test binary, a `process::exit`
+                // on a second Ctrl-C — releases at exit, where every thread is past the point of
+                // caring. The binary's own release, earlier, makes this a no-op.
+                // SAFETY: registers a plain `extern "C"` function with no arguments; the C
+                // runtime calls it once, on this process's own exit.
+                unsafe {
+                    libc::atexit(release_at_exit);
+                }
                 id
             }
         };
@@ -184,6 +204,10 @@ pub fn release_session() {
         remove_tree(&goofi_core::session::system_dir(&id));
         sweep_shared_memory(|owner| owner == id);
     }
+}
+
+extern "C" fn release_at_exit() {
+    release_session();
 }
 
 /// Record where this session serves, for `goofi session list` and the shell.
@@ -269,7 +293,10 @@ fn iox_config() -> &'static Config {
 /// One iceoryx2 node per port OWNER, never per port: each is a directory under the session's
 /// root and each is counted by every service's `max_nodes`.
 pub fn iox_node() -> Result<IoxNode, String> {
-    NodeBuilder::new().config(iox_config()).create::<Svc>().map_err(|e| format!("iox node: {e}"))
+    let node = NodeBuilder::new().config(iox_config()).create::<Svc>().map_err(|e| format!("iox node: {e}"))?;
+    // Named by the thread that opened it, which is what a reader of the inventory can act on.
+    let owner = std::thread::current().name().unwrap_or("?").to_string();
+    Ok(IoxNode { node, _lease: goofi_core::registry::lease(goofi_core::registry::Kind::Port, owner) })
 }
 
 /// Remove a tree this session owns.

@@ -317,7 +317,28 @@ fn crash_helper() {
     let node = iox_node().expect("a node");
     let _out = goofi_transport::data_service(&node, "goofi_crash_helper_out").expect("a service");
     println!("READY {}", goofi_transport::session());
+    if std::env::var(CRASH_HELPER).as_deref() == Ok("exit") {
+        // A process that leaves through `exit`, with its ports still open and no release called:
+        // the way a test binary or a second Ctrl-C ends.
+        std::process::exit(0);
+    }
     std::thread::sleep(Duration::from_secs(60));
+}
+
+#[test]
+fn a_process_that_exits_without_releasing_leaves_no_record() {
+    let out = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args(["crash_helper", "--exact", "--nocapture"])
+        .env(CRASH_HELPER, "exit")
+        .env_remove(goofi_core::session::ENV)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .expect("run the child");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let id = stdout.lines().find_map(|l| l.strip_prefix("READY ")).map(str::trim).unwrap_or_default().to_string();
+    assert!(!id.is_empty(), "the child named its session: {stdout:?}");
+    assert!(!goofi_core::session::entry(&id).exists(), "the record went at exit, with no release called");
+    assert!(!goofi_core::session::system_dir(&id).exists(), "so did the ephemeral directory");
 }
 
 #[test]
