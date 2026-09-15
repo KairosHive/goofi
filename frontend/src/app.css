@@ -1,7 +1,7 @@
 /* goofi — global styles. Single dark theme.
  *
- * Palette borrowed from `~/projects/goofi-next/goofi3/frontend/.../theme.ts`
- * (#111 background, #50d0a0 accent). Type is two-faced: Inter for chrome, JetBrains
+ * User palette trial 05: teal system controls, orange user widgets, blue audio.
+ * Type is two-faced: Inter for chrome, JetBrains
  * Mono for data (spec D-T2/D-T3, the faces below). The token names match the earlier
  * scheme so every component restyles automatically.
  */
@@ -33,7 +33,7 @@
 	   Exact values approved in the design mockup; each adjacent step ≥1.08:1 (see tokens.test.ts). */
 	--surface-1: #1c1c1c;
 	--surface-2: #262626;
-	--surface-3: #303030;
+	--surface-3: var(--hover-surface);
 	/* No rule paints --surface-4 today (Chip's neutral tone was its last, and became a ghost). It
 	   STAYS: it is the top rung of the approved D5 ladder, and it is what `tokens.test.ts` measures
 	   the palette against as the lightest surface anything can sit on — the ≥1.08:1 top step, both
@@ -52,14 +52,16 @@
 	--text: #d6d6d6;
 	--text-dim: #9a9a9a;
 	--text-muted: #7a7a7a;
-	--accent: #50d0a0;
-	--accent-strong: #3fb88a;
+	--accent: #63bfb8;
+	--accent-strong: color-mix(in srgb, var(--accent) 85%, black);
+	--secondary: #e49449;
+	--hover-surface: #303030;
 	/* A grass-green shifted off the mint --accent (D-M1) so "healthy/OK" reads distinct from
 	   "selected/accent" where they meet (a selected+healthy node's ring vs its health dot).
 	   Kept above the 3:1 floor on --surface-4; --success-fill color-mixes from it. */
 	--success: #6bdd8c;
 	--warning: #f0c050;
-	--danger: #f06080;
+	--danger: #ff5277;
 	--info: #6ab0ff;
 	--accent-fill: color-mix(in srgb, var(--accent) 18%, transparent);
 	--danger-fill: color-mix(in srgb, var(--danger) 16%, transparent);
@@ -154,22 +156,19 @@
 	--chrome-control-h: 20px;
 
 	/* dtype palette — slot pins/labels colour-code at a glance. */
-	/* --dtype-array is byte-identical to --accent. Deliberate and safe: the two never co-occur on
-	   one element — a slot pin is dtype ink, never the state ink the ring (#1) and focus (#2)
-	   meanings below own. Recorded because the coincidence looks like drift and is not; the
-	   --dtype-* channel is frozen, so any nudge is the user's call, not a sweep's. */
-	--dtype-array: #50d0a0;
-	--dtype-string: #f0c050;
-	--dtype-table: #e08060;
-	--dtype-audio: #c080f0;
-	--dtype-texture: #5ec8e0;
+	/* Signal data types share a warm family; audio and texture match their engines. */
+	--dtype-array: #DDA477;
+	--dtype-string: #D6BC74;
+	--dtype-table: #D88E79;
+	--dtype-audio: #89C6F5;
+	--dtype-texture: #79B8AE;
 
 	/* engine palette — a node's header and its palette row read as its engine at a glance.
 	   `vst` is a plugin FORMAT, not an engine; it wears the set's shape because it is a palette tab. */
-	--engine-signal: #c29c34;
-	--engine-audio: #3f88e2;
-	--engine-graphics: #529c51;
-	--engine-vst: #c76f63;
+	--engine-signal: #DDA477;
+	--engine-audio: #89c6f5;
+	--engine-graphics: #79B8AE;
+	--engine-vst: #D783A0;
 
 	/* Syntax highlighting for the param expression editor (X, D-X2). The ONE place in the app where
 	   the reduced-saliency brief deliberately does not apply: code is scanned by colour, and a muted
