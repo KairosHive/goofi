@@ -43,7 +43,7 @@ FROM debian:bookworm-slim
 # The runtime halves of the build stage's audio libraries: cpal links all four, so the binary
 # needs them present to start even where no device is ever opened.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates libasound2 libpipewire-0.3-0 libjack-jackd2-0 libdbus-1-3 \
+        ca-certificates git libasound2 libpipewire-0.3-0 libjack-jackd2-0 libdbus-1-3 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
