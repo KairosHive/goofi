@@ -18,9 +18,10 @@ A session — `goofi_core::session` — is the one owner of every ephemeral reso
 - `<system>/goofi-system/<id>/iox/` is the iceoryx2 ROOT for that session, and every segment
   carries the prefix `g<id>_`. `/tmp/goofi-system` on unix (a unix socket path is capped at 108
   bytes, which a macOS `$TMPDIR` alone half spends), `%TEMP%\goofi-system` on Windows.
-- `.goofi/system/workspaces/<id>/` is the patch workspace: removed on a clean shutdown only. What a
-  crash leaves there is the autosave the next manager offers (`session recoverable`); a leftover
-  with no autosave held no unsaved work, and the manager's boot pass removes it.
+- `<temp>/goofi-workspaces/<id>/` is the patch workspace: removed on a clean shutdown only. What a
+  crash leaves there with an autosave in it, the manager's boot pass moves to
+  `.goofi/system/recovery/<id>/` and offers (`session recoverable`); a leftover with no autosave
+  held no unsaved work, and the boot pass removes it.
 
 The boot pass (`goofi_transport::session`, run by the manager before any engine exists) removes
 every record whose lock is free, every system directory whose record is dead or gone, and the

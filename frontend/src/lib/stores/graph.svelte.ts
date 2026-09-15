@@ -106,6 +106,11 @@ export class GraphStore {
 	/** Latches on the first connect and never clears — see {@link disconnected}. */
 	private _everConnected = $state(false);
 	hadHello = $state(false);
+	/** The startup hook: counts the SERVER sessions this page has connected to, bumped on the
+	 * first hello from a manager it has not seen. Startup UI keys on this — an offer made "at the
+	 * start" is made at the start of a session, which a page that outlived the last server sees
+	 * without a reload. Never on page load, and never on a transient reconnect. */
+	sessionEpoch = $state(0);
 
 	/** Every armed output slot, doc-authoritative: the document is the one owner of what is armed. */
 	armed = $state<{ uid: string; slot: string; quality: VideoQuality }[]>([]);
@@ -273,6 +278,7 @@ export class GraphStore {
 					this._resetProjection();
 					this._sync.reset();
 					this._onWholesaleLoad();
+					this.sessionEpoch += 1;
 				}
 				break;
 			}

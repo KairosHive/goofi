@@ -46,6 +46,7 @@ describe('GraphStore — a new backend session clears what the old one drew', ()
 		expect(g.nodes, 'nodes').toEqual([]);
 		expect(g.links, 'links').toEqual([]);
 		expect(g.globals, 'globals').toEqual([]);
+		expect(g.sessionEpoch, 'the startup hook fired once per server session').toBe(2);
 		expect(g.nodeById('n1'), 'and no node record survives to carry its view state').toBeNull();
 
 		// The new session mints `n1` again, and what it draws is the fresh document's alone: no kind,
@@ -70,6 +71,7 @@ describe('GraphStore — a new backend session clears what the old one drew', ()
 
 		expect(g.nodes.length, 'the graph survives a reconnect to the same backend').toBe(2);
 		expect(g.links.length).toBe(1);
+		expect(g.sessionEpoch, 'a reconnect is not a start').toBe(1);
 	});
 });
 

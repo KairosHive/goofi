@@ -44,10 +44,15 @@ pub fn system_dir(id: &str) -> PathBuf {
     system_base().join(id)
 }
 
-/// Where every session's workspace lives. Under the home, not `$TMPDIR`: a crash leaves the
-/// workspace behind as the patch's recovery, and a recovery must outlive a reboot.
+/// Where every live session's workspace lives: ephemeral, so the OS temp directory. What a crash
+/// leaves here is moved to [`recovery_base`] by the next boot, so it outlives a reboot.
 pub fn workspaces_base() -> PathBuf {
-    home::system().join("workspaces")
+    std::env::temp_dir().join("goofi-workspaces")
+}
+
+/// Where a dead session's autosaved workspace is kept for the user to recover or discard.
+pub fn recovery_base() -> PathBuf {
+    home::system().join("recovery")
 }
 
 /// The workspace directory of session `id`.

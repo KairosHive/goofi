@@ -195,22 +195,28 @@ pub fn has_manifest(dir: &Path) -> bool {
 /// Read the unpacked layout at `dir`: the workspace tree is COPIED to `dest` — `dir` stays whole,
 /// so a load that fails after this leaves the recovery where it was — and the manifest returned.
 pub fn read_unpacked(dir: &Path, dest: &Path) -> Result<String, String> {
-    let named = |e: String| format!("{}: {e}", dir.display());
-    let manifest = fs::read_to_string(dir.join(MANIFEST)).map_err(|e| named(e.to_string()))?;
+    let manifest = fs::read_to_string(dir.join(MANIFEST)).map_err(|e| format!("{}: {e}", dir.display()))?;
     let packed = dir.join(WORKSPACE);
     if packed.is_dir() {
-        for entry in WalkDir::new(&packed).min_depth(1) {
-            let entry = entry.map_err(|e| named(e.to_string()))?;
-            let to = dest.join(entry.path().strip_prefix(&packed).map_err(|e| e.to_string())?);
-            let copied = if entry.file_type().is_dir() {
-                fs::create_dir_all(&to)
-            } else {
-                fs::copy(entry.path(), &to).map(|_| ())
-            };
-            copied.map_err(|e| format!("{}: {e}", to.display()))?;
-        }
+        copy_tree(&packed, dest)?;
     }
     Ok(manifest)
+}
+
+/// Every file and directory under `from`, copied under `to`, which is made if absent.
+pub fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
+    fs::create_dir_all(to).map_err(|e| format!("{}: {e}", to.display()))?;
+    for entry in WalkDir::new(from).min_depth(1) {
+        let entry = entry.map_err(|e| format!("{}: {e}", from.display()))?;
+        let dest = to.join(entry.path().strip_prefix(from).map_err(|e| e.to_string())?);
+        let copied = if entry.file_type().is_dir() {
+            fs::create_dir_all(&dest)
+        } else {
+            fs::copy(entry.path(), &dest).map(|_| ())
+        };
+        copied.map_err(|e| format!("{}: {e}", dest.display()))?;
+    }
+    Ok(())
 }
 
 /// Unpack a `.gfi`: the workspace tree lands at `dest`, and the manifest text is returned.
