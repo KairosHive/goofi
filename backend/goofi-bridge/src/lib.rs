@@ -176,8 +176,10 @@ impl AppState {
     /// so the id a shell sets `GOOFI_SESSION` to is the one `session status` answers.
     pub fn with_instance(instance: String, mode: Mode, clock: Clock, render: RenderClock) -> AppState {
         // The session is decided — and what dead ones left is swept — HERE, by the manager,
-        // before any engine exists: never by whoever happens to open the first port.
+        // before any engine exists: never by whoever happens to open the first port. The caches
+        // under `.goofi/system` are swept in the same breath: a crash's part files, old versions.
         goofi_transport::session();
+        goofi_core::session::sweep_system(goofi_build::VERSION);
         let (events, _) = broadcast::channel(256);
         // Seeded BEFORE the baseline is taken, or the patch is dirty from boot, having written
         // the seed itself.

@@ -234,6 +234,15 @@ pub fn sessions() -> Vec<goofi_core::session::Session> {
     goofi_core::session::sessions(remove_tree)
 }
 
+/// A path for a file this process needs for a moment — a `.gfi` packed for a download, one
+/// uploaded for a load — under the session's ephemeral directory, so a crash's leftover is swept
+/// with the session and never outlives it in the system temp.
+pub fn scratch(name: &str) -> std::path::PathBuf {
+    let dir = goofi_core::session::system_dir(session()).join("scratch");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join(name)
+}
+
 /// Where iceoryx2 keeps a session's files: node directories, service configs, monitors.
 fn iox_root(id: &str) -> std::path::PathBuf {
     goofi_core::session::system_dir(id).join("iox")

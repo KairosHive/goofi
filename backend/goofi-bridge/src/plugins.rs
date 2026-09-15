@@ -391,7 +391,7 @@ impl Plugins {
         for (name, source) in [("__init__.py", SDK), ("__main__.py", MAIN)] {
             let destination = sdk.join("goofi_plugin").join(name);
             if !destination.is_file() {
-                let temporary = destination.with_extension(format!("{}.tmp", std::process::id()));
+                let temporary = destination.with_extension(format!("{}.tmp", goofi_core::session::tag()));
                 std::fs::write(&temporary, source)
                     .and_then(|()| std::fs::rename(temporary, destination))
                     .map_err(|e| e.to_string())?;
@@ -689,7 +689,7 @@ impl Package {
                 static BUILD_ID: AtomicU64 = AtomicU64::new(0);
                 let work = cache.join(format!(
                     "work-{}-{}",
-                    std::process::id(),
+                    goofi_core::session::tag(),
                     BUILD_ID.fetch_add(1, Ordering::Relaxed)
                 ));
                 let prepared = || -> Result<(), String> {

@@ -29,7 +29,7 @@ fn download_name(state: &AppState) -> String {
 /// manifest and the workspace describe one moment.
 pub(crate) async fn download(State(state): State<AppState>) -> Response {
     let mount = state.mount();
-    let tmp = std::env::temp_dir().join(format!("goofi-export-{}.gfi", crate::nonce_hex()));
+    let tmp = goofi_transport::scratch(&format!("export-{}.gfi", crate::nonce_hex()));
     // Scoped so the guard is gone before this function can yield — a std MutexGuard held across an
     // await makes the handler's future non-Send, and axum will not take it.
     let packed = {
@@ -59,7 +59,7 @@ pub(crate) async fn download(State(state): State<AppState>) -> Response {
 /// `POST /patch.gfi` — replace the open patch with the uploaded archive, through the real `load`
 /// op. `adopt: false`, because the staged copy is deleted the moment the load returns.
 pub(crate) async fn upload(State(state): State<AppState>, body: Bytes) -> Response {
-    let tmp = std::env::temp_dir().join(format!("goofi-import-{}.gfi", crate::nonce_hex()));
+    let tmp = goofi_transport::scratch(&format!("import-{}.gfi", crate::nonce_hex()));
     if let Err(e) = std::fs::write(&tmp, &body) {
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("{}: {e}", tmp.display())).into_response();
     }
