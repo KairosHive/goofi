@@ -462,12 +462,12 @@ impl Engine for SignalEngine {
         applied
     }
 
-    fn refresh_param(&mut self, uid: Uid, key: ParamKey) {
-        self.wire.send(uid, runtime::Control::RefreshParam { key });
-    }
-
-    fn pulse_param(&mut self, uid: Uid, key: ParamKey) {
-        self.wire.send(uid, runtime::Control::PulseParam { key });
+    fn request(&mut self, uid: Uid, request: goofi_node::Request) {
+        let control = match request {
+            goofi_node::Request::Refresh(key) => runtime::Control::RefreshParam { key },
+            goofi_node::Request::Pulse(key) => runtime::Control::PulseParam { key },
+        };
+        self.wire.send(uid, control);
     }
 
     /// Every node born after computes from the new origin.

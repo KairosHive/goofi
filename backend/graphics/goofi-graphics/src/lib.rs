@@ -13,7 +13,7 @@ use goofi_control::{Desired, Handle, Shared, Sub};
 use goofi_core::SlotType;
 use goofi_node::{
     DrainWaker, Engine, ExprDecl, ExprMode, GraphView, LibraryEntry, NodeManifest, NodeStage, NodeView,
-    ParamDecl, ParamGroups, ParamKey, ParamSpec, ScannedType, Status, Touched, Uid,
+    ParamDecl, ParamGroups, ParamSpec, ScannedType, Status, Touched, Uid,
 };
 
 mod gpu;
@@ -516,15 +516,12 @@ impl Engine for GraphicsEngine {
         self.shared.drain(&mut self.pending, apply)
     }
 
-    fn refresh_param(&mut self, uid: Uid, key: ParamKey) {
+    fn request(&mut self, uid: Uid, request: goofi_node::Request) {
         if let Some(inst) = self.live.get(&uid) {
-            inst.control.refresh(key);
-        }
-    }
-
-    fn pulse_param(&mut self, uid: Uid, key: ParamKey) {
-        if let Some(inst) = self.live.get(&uid) {
-            inst.control.pulse(key);
+            match request {
+                goofi_node::Request::Refresh(key) => inst.control.refresh(key),
+                goofi_node::Request::Pulse(key) => inst.control.pulse(key),
+            }
         }
     }
 

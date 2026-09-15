@@ -56,12 +56,21 @@ decisions-from-unsettled-state:
     library() -> ...          // the engine's node classes, advertised on request
     shutdown()
 
-Three defaulted doors landed beside these: `reset_clock` (a clear moved the patch origin),
-`set_evaluator` (shared with every engine that evaluates bindings on its own thread), and
-`universal_decls` (the engine's own universal group as DECLARATIONS — `with_common` moved behind
-`normalize_params` for values, and the palette's tooltips read declarations through this). Plus
-`as_any_mut`: the composition root's reach to a concrete engine's own surface — the runtime type
-registry stays signal-concrete rather than growing trait vocabulary for one engine.
+Defaulted doors beside these, as the trait stands (2026-09-15): the library's (`scan`,
+`scan_own`, `remove_type`, `rust_sdk`, `boot_done`), the workspace's (`set_workspace`,
+`persist`), the editor's (`has_editor`, `editor`, `take_edits`), `published` and `dirty` for
+the drain, `view_demand`, `set_evaluator` (shared with every engine that evaluates bindings on
+its own thread), and `universal_decls` (the engine's own universal group as DECLARATIONS —
+`with_common` moved behind `normalize_params` for values, and the palette's tooltips read
+declarations through this). Plus `as_any_mut`: the composition root's reach to a concrete
+engine's own surface — the runtime type registry stays signal-concrete rather than growing
+trait vocabulary for one engine.
+
+**Engines stay in the manager's process** (decided 2026-09-15, after the design of a process
+per engine was written out). The seam is in-memory and the view it hands over is borrowed. What
+needs isolation is isolated per node — a Python node in a subprocess, a Rust node built after
+boot in a host child — and the one crasher an engine boundary would not fix is a VST3 instance,
+which is a plugin-hosting question of its own.
 
 Create and remove stay explicit, because a birth mints a generation and is not derivable from
 settled state — and `insert` carries that graph-minted generation, plus type identity the engine
