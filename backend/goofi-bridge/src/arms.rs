@@ -1630,6 +1630,9 @@ pub(crate) fn session_status(
             "stages": a.stages,
             "tick_max_us": a.tick_max_us,
         })),
+        // Every resource this process holds — children, workers, ports, paths, devices — from the
+        // one index a lease enters and leaves. What is held at ANY moment, not what was made.
+        "resources": goofi_core::registry::inventory(),
     }))
 }
 

@@ -74,6 +74,12 @@ names: a node's mermaid id is its name, which every op takes.
     assert_eq!(errs[0]["path"], "testfail0");
     assert_eq!(errs[0]["error"], "the sensor is unplugged");
     assert!(errs[0]["standing"].as_f64().is_some(), "and how long it has stood: {health}");
+    // What the process HOLDS: every running node has a port of its own, each one an entry in
+    // the resource index a lease enters and leaves.
+    let held = health["resources"].as_array().cloned().unwrap_or_default();
+    let ports = held.iter().filter(|r| r["kind"] == "port").count();
+    assert!(ports >= 3, "a port per running node, and the graph's own: {held:?}");
+    assert!(held.iter().all(|r| r["name"].is_string() && r["held_s"].is_number()), "{held:?}");
 }
 
 #[test]
