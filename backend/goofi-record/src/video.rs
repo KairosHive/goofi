@@ -8,8 +8,8 @@
 use std::io::{Read, Write};
 use goofi_core::record::VideoQuality;
 use std::path::{Path, PathBuf};
-use goofi_core::child::Child;
-use std::process::{ChildStdin, Command, Stdio};
+use goofi_core::child::{Child, Out};
+use std::process::{ChildStdin, Command};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
@@ -40,14 +40,9 @@ pub struct FfmpegEncoders;
 
 impl Encoders for FfmpegEncoders {
     fn probe(&self) -> Result<(), String> {
-        Command::new("ffmpeg")
-            .arg("-version")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
+        goofi_core::child::output("ffmpeg probe", Command::new("ffmpeg").arg("-version"), Duration::from_secs(10))
             .map_err(|_| MISSING.to_string())
-            .and_then(|s| if s.success() { Ok(()) } else { Err(MISSING.to_string()) })
+            .and_then(|out| if out.status.success() { Ok(()) } else { Err(MISSING.to_string()) })
     }
 
     fn extension(&self) -> &'static str {
@@ -167,12 +162,12 @@ impl Preset {
             "nullsrc=size={}x{}:rate={fps},format=rgba", size.0, size.1,
         )]);
         self.output(&mut command, fps, quality);
-        let mut child = goofi_core::child::spawn(
-            format!("ffmpeg trial {}", self.codec),
-            command.args(["-frames:v", "1", "-f", "null", "-"])
-                .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()),
-        )
-        .map_err(|e| format!("{MISSING} ({e})"))?;
+        // A trial that fails is the expected answer for most candidates, not something to log.
+        let mut child = goofi_core::child::run(format!("ffmpeg trial {}", self.codec), command.args(["-frames:v", "1", "-f", "null", "-"]))
+            .stdout(Out::Null)
+            .stderr(Out::Null)
+            .spawn()
+            .map_err(|e| format!("{MISSING} ({e})"))?;
         Ok(child.wait_within(Duration::from_secs(5)).map_err(|e| e.to_string())?
             .is_some_and(|status| status.success()))
     }
@@ -207,11 +202,13 @@ impl Ffmpeg {
             .args(["-s", &format!("{}x{}", self.size.0, self.size.1), "-r", &format!("{}", self.fps)])
             .args(["-i", "-"]);
         preset.output(&mut command, self.fps, self.quality);
-        let mut child = goofi_core::child::spawn(
-            format!("ffmpeg {}", self.file.display()),
-            command.arg(&self.file).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()),
-        )
-        .map_err(|e| format!("could not start FFmpeg: {e}"))?;
+        // stderr is read by the owner: an encoder's last words are the error the recording reports.
+        let mut child = goofi_core::child::run(format!("ffmpeg {}", self.file.display()), command.arg(&self.file))
+            .stdin_piped()
+            .stdout(Out::Null)
+            .stderr(Out::Pipe)
+            .spawn()
+            .map_err(|e| format!("could not start FFmpeg: {e}"))?;
         let mut stderr = child.stderr.take().ok_or("FFmpeg has no error pipe")?;
         let errors = goofi_core::worker::thread("goofi-record-errors").spawn(move || {
             let mut message = Vec::new();

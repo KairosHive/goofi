@@ -359,16 +359,14 @@ fn key_of(binary: &Path, (len, modified): Stamp) -> String {
 /// why it is the one refusal [`described`] never remembers.
 fn spawn_scanner(scanner: &Path, bundle: &Path, part: &Path, errors: &Path) -> Result<goofi_core::child::Child, String> {
     let sink = std::fs::File::create(errors).map_err(|e| format!("{}: {e}", errors.display()))?;
-    goofi_core::child::spawn(
+    let both = sink.try_clone().map_err(|e| e.to_string())?;
+    goofi_core::child::run(
         format!("vst3 scan {}", bundle.file_name().unwrap_or_default().to_string_lossy()),
-        std::process::Command::new(scanner)
-            .arg("vst3-scan")
-            .arg(bundle)
-            .arg(part)
-            .stdin(std::process::Stdio::null())
-            .stdout(sink.try_clone().map_err(|e| e.to_string())?)
-            .stderr(sink),
+        std::process::Command::new(scanner).arg("vst3-scan").arg(bundle).arg(part),
     )
+    .stdout(goofi_core::child::Out::File(both))
+    .stderr(goofi_core::child::Out::File(sink))
+    .spawn()
     .map_err(|e| format!("could not run the scanner {}: {e}", scanner.display()))
 }
 

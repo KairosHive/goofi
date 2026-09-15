@@ -94,6 +94,8 @@ before the first production deployment.
   an iceoryx2 node after its ports so the ports are dropped first.
 - Every child process, long-lived thread, iceoryx2 node, scratch path and device is minted through
   `goofi_core::{child, worker, registry}` and `goofi_transport`, and listed by `session status`.
+  A child's stdout and stderr go to the process log under its source unless its owner wires a
+  stream as a pipe (a protocol channel) or a file.
   A part file beside a cache entry carries the session id. `AppState::shutdown` is the one
   release order; the process releases the session last.
 

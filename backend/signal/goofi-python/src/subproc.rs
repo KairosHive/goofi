@@ -2,7 +2,7 @@
 //! request/response over iceoryx2 shared memory.
 
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -71,22 +71,14 @@ impl Running {
             // The host's PYTHONPATH (the pyo3/FT tier's) must not shadow the child's own numpy/goofi.
             .env_remove("PYTHONPATH")
             .env_remove("PYTHONHOME")
-            // The source rides stdin, never the environment: Windows caps a whole environment
-            // block at 32767 characters, and a node file is text of no stated size.
-            .stdin(Stdio::piped())
-            .env("PYTHONUNBUFFERED", "1")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = goofi_core::child::spawn(format!("python node ({python})"), &mut cmd)
+            .env("PYTHONUNBUFFERED", "1");
+        // The source rides stdin, never the environment: Windows caps a whole environment
+        // block at 32767 characters, and a node file is text of no stated size.
+        let mut child = goofi_core::child::run(format!("python node ({python})"), &mut cmd)
+            .source(goofi_core::log::source())
+            .stdin_piped()
+            .spawn()
             .map_err(|e| format!("spawn `{python}`: {e}"))?;
-        if let Some(out) = child.stdout.take() {
-            let source = goofi_core::log::source();
-            let _ = goofi_core::worker::spawn("goofi-python-stdout", move || goofi_core::log::drain(out, source, "stdout"));
-        }
-        if let Some(err) = child.stderr.take() {
-            let source = goofi_core::log::source();
-            let _ = goofi_core::worker::spawn("goofi-python-stderr", move || goofi_core::log::drain(err, source, "stderr"));
-        }
         // The write end is dropped as this ends, and that EOF is where the child stops reading.
         let handed = match child.stdin.take() {
             Some(mut w) => w.write_all(source.as_bytes()).map_err(|e| format!("hand the source over: {e}")),
