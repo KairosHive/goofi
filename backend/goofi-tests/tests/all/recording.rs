@@ -737,8 +737,9 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         .expect("a folder")
         .to_string();
     let osc_name = name_of(&g, &osc_hex);
+    // ONE drive, then a wait: a poll that drives again outruns the drain by fifty to one.
+    goofi_tests::drive(&g, 4_800);
     g.until("the audio engine's blocks to reach the disk", |g| {
-        goofi_tests::drive(g, 4_800);
         (frames(g, &osc_name) >= 64 && frames(g, &gain_name) >= 64).then_some(())
     });
 
@@ -877,10 +878,8 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         .as_str()
         .expect("a folder")
         .to_string();
-    g.until("the second audio recording to reach the disk", |g| {
-        goofi_tests::drive(g, 4_800);
-        (frames(g, &osc_name) >= 64).then_some(())
-    });
+    goofi_tests::drive(&g, 4_800);
+    g.until("the second audio recording to reach the disk", |g| (frames(g, &osc_name) >= 64).then_some(()));
     g.call("record stop", j!({}));
     let later = blocks_of(&sixth, &mine(&sixth, &osc_name).pop().expect("the second entry"));
     let apart = later[0].1 - held[0].1;
@@ -979,34 +978,33 @@ fn arming_survives_a_rewire_and_rides_the_document() {
 
 #[test]
 fn an_armed_signal_slot_loses_no_tick_to_the_viewer_plane() {
-    // The recorder's own service, drained by hand where Task 5 will put the recorder. Contiguity
-    // of `index` is the oracle: a frame count alone would pass against the latest-wins wire.
+    // The recorder's own service carries every tick. Contiguity of `index` in what reached the
+    // disk is the oracle: a frame count alone would pass against the latest-wins wire.
     let g = goofi_tests::Goofi::new();
     let fast = g.add("_TestConst");
     let hex = goofi_tests::hex(fast);
     g.set_param(fast, "common", "max_frequency", 200.0);
     g.ready(fast);
     g.call("record arm", j!({ "output": goofi_tests::ep(&hex, "out") }));
-
-    let service = {
-        let graph = g.state.graph.lock().unwrap();
-        goofi_transport::record_service(
-            &goofi_transport::service_base(graph.instance(), fast, graph.node_generation(fast)),
-            "out",
-        )
+    let root = tempfile::tempdir().expect("a temp root");
+    let folder = g.call("record start", j!({ "root": root.path() }))["folder"].as_str().expect("a folder").to_string();
+    let frames = |g: &goofi_tests::Goofi| -> u64 {
+        g.call("record status", j!({}))["streams"]
+            .as_array()
+            .map(|s| s.iter().filter_map(|e| e["frames"].as_u64()).sum())
+            .unwrap_or(0)
     };
-    let node = goofi_transport::iox_node().expect("an iceoryx2 node");
-    let sub = goofi_transport::open_record_subscriber(&node, &service, goofi_transport::record_shape("signal"))
-        .expect("the recorder's end");
-
-    let mut seen: Vec<u64> = Vec::new();
-    g.until("the armed slot to publish a run of frames", |_| {
-        while let Ok(Some(sample)) = sub.receive() {
-            let frame = goofi_codec::decode(sample.payload()).expect("a frame decodes");
-            seen.push(frame.meta().index().expect("the engine stamps every frame"));
-        }
-        (seen.len() >= 32).then_some(())
-    });
+    g.until("the armed slot to publish a run of frames", |g| (frames(g) >= 32).then_some(()));
+    g.call("record stop", j!({}));
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(std::path::Path::new(&folder).join("manifest.json")).expect("a manifest")).expect("json");
+    let file = manifest["streams"][0]["file"].as_str().expect("the one stream's file");
+    let beside = std::fs::read_to_string(std::path::Path::new(&folder).join(file).with_extension("jsonl")).expect("the sidecar");
+    let seen: Vec<u64> = beside
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("a json line")["meta"]["index"].as_u64().expect("the engine stamps every frame"))
+        .collect();
+    assert!(seen.len() >= 32, "a run of frames reached the disk: {seen:?}");
     for pair in seen.windows(2) {
         assert_eq!(pair[1], pair[0] + 1, "the recording service loses no tick: {seen:?}");
     }

@@ -15,7 +15,7 @@ use goofi_core::time::{stamp, stamp_nanos, Time};
 use goofi_node::Uid;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -36,16 +36,6 @@ const SETTLE: Duration = Duration::from_secs(3);
 pub trait Capture: Send + Sync {
     fn prepare(&self) -> Result<(), String>;
     fn boundary(&self, window: Arc<goofi_core::record::FrameWindow>, begin: bool) -> Result<(), String>;
-}
-
-/// Preparation needs subscribers before a session exists. Clear this transient
-/// state on every return path, including a refused start.
-struct Preparing<'a>(&'a AtomicBool);
-
-impl Drop for Preparing<'_> {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
 }
 
 /// How often a sweep's counts reach the manifest. The manifest is a PROJECTION and every stream
@@ -245,7 +235,6 @@ pub struct Recorder {
     swept: AtomicU64,
     transition: Mutex<()>,
     capture: Mutex<Option<Arc<dyn Capture>>>,
-    preparing: AtomicBool,
 }
 
 impl Recorder {
@@ -260,7 +249,6 @@ impl Recorder {
             swept: AtomicU64::new(0),
             transition: Mutex::new(()),
             capture: Mutex::new(None),
-            preparing: AtomicBool::new(false),
         }
     }
 
@@ -344,8 +332,6 @@ impl Recorder {
         if self.running() {
             return Err("a recording already runs".into());
         }
-        self.preparing.store(true, Ordering::Release);
-        let _preparing = Preparing(&self.preparing);
         let capture = held(&self.capture).clone();
         let window = Arc::new(goofi_core::record::FrameWindow::default());
         if let Some(capture) = &capture {
@@ -455,10 +441,6 @@ impl Recorder {
 
     pub fn running(&self) -> bool {
         self.held().is_some()
-    }
-
-    pub fn receiving(&self) -> bool {
-        self.preparing.load(Ordering::Acquire) || self.running()
     }
 
     /// Open a file for a stream, closing whatever that stream held. Everything queued for it

@@ -100,7 +100,7 @@ fn armed(g: &Graph) -> HashMap<(Uid, String), (String, StreamId)> {
                 continue;
             }
             let base = goofi_transport::service_base(g.instance(), uid, g.node_generation(uid));
-            out.insert((uid, slot.clone()), (goofi_transport::record_service(&base, slot), id));
+            out.insert((uid, slot.clone()), (goofi_transport::record_service(&base, slot, output.serial), id));
         }
     }
     out
@@ -249,20 +249,13 @@ pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>)
             // Read BEFORE the sweep: a sweep already under way when a stop asked is not an answer
             // to it.
             let mark = drain.recorder.sweeping();
-            if !drain.recorder.receiving() {
-                drain.release();
-                drain.recorder.swept(mark);
-                swept = mark;
-                resolved = None;
-                continue;
-            }
             let now = epoch.load(std::sync::atomic::Ordering::Acquire);
             if resolved != Some(now) || mark != swept {
                 ready = drain.resolve();
                 resolved = Some(now);
             }
-            // Keep subscribers ready during preparation. A requested sweep drains with
-            // backpressure so its acknowledgement includes every queued frame.
+            // A feed is held for as long as its slot is armed: a subscriber let go and reopened
+            // under one name can land on a second service its publisher never sees.
             drain.sweep(mark != swept);
             if ready {
                 drain.recorder.swept(mark);

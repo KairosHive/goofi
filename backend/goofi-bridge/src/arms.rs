@@ -1914,7 +1914,7 @@ fn set_armed(
     let mut record = g.recorded(uid).unwrap_or(&[]).to_vec();
     let held = record.iter().position(|s| s.slot == slot);
     match (arm, held) {
-        (true, None) => record.push(goofi_core::record::RecordedOutput { slot: slot.clone(), quality: Default::default() }),
+        (true, None) => record.push(goofi_core::record::RecordedOutput { slot: slot.clone(), quality: Default::default(), serial: 0 }),
         (false, Some(i)) => {
             record.remove(i);
         }

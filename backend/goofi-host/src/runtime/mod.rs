@@ -33,7 +33,7 @@ impl Transport for WakingTransport {
     fn wire_out(&self, slot: &str, targets: &[(ServiceName, EventId)]) -> Result<(), String> {
         self.inner.wire_out(slot, targets)
     }
-    fn record_out(&self, slots: &[String]) -> Result<(), String> {
+    fn record_out(&self, slots: &[(String, u64)]) -> Result<(), String> {
         self.inner.record_out(slots)
     }
     fn record_trouble(&self) -> Option<String> {

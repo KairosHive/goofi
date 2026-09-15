@@ -24,9 +24,9 @@ pub enum Control {
     /// Every doorbell to ring after publishing on this output slot, with the [`EventId`] that
     /// says WHY the far node woke.
     OutSlot { slot: String, targets: Vec<(ServiceName, EventId)> },
-    /// Every output slot armed for recording, the complete set. An armed slot publishes each frame
-    /// a second time, on a deep service of the recorder's own.
-    RecSlot { slots: Vec<String> },
+    /// Every output slot armed for recording, the complete set, each with its arming's serial. An
+    /// armed slot publishes each frame a second time, on a deep service of the recorder's own.
+    RecSlot { slots: Vec<(String, u64)> },
     /// Write a param: a literal, or the expression to bind it to. The NOTIFICATION path — a bare
     /// param-record swap never rings a parked node.
     SetParam { key: ParamKey, value: ParamValue },
@@ -116,7 +116,7 @@ pub trait Transport: Send + Sync {
     /// the producer's position in the last `wire_in` set for that slot.
     fn drain_inputs(&self) -> Vec<(String, usize, Data)>;
     /// Hold a recording publisher for exactly `slots` — again the full desired set.
-    fn record_out(&self, slots: &[String]) -> Result<(), String>;
+    fn record_out(&self, slots: &[(String, u64)]) -> Result<(), String>;
     /// What the recording has cost this node, as the fault it is worn as. `None` while it is well.
     fn record_trouble(&self) -> Option<String>;
     /// Emit a frame on an output slot, to every consumer of that slot at once.

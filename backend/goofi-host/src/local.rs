@@ -114,7 +114,7 @@ impl Transport for Local {
     fn wire_out(&self, _: &str, _: &[(ServiceName, EventId)]) -> Result<(), String> {
         Ok(())
     }
-    fn record_out(&self, _: &[String]) -> Result<(), String> {
+    fn record_out(&self, _: &[(String, u64)]) -> Result<(), String> {
         Ok(())
     }
     fn record_trouble(&self) -> Option<String> {

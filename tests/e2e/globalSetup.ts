@@ -1,7 +1,6 @@
 import type { FullConfig } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { BASE_PORT, BIN, E2E_HOME, LOG_DIR, REPO_ROOT } from './playwright.config';
 
@@ -31,16 +30,13 @@ export default async function spawnFleet(config: FullConfig): Promise<() => Prom
 		throw new Error(`${BIN} is missing — \`npm run build:backend\` builds it and the SPA it serves`);
 	fs.mkdirSync(LOG_DIR, { recursive: true });
 	// A test-scoped `GOOFI_HOME`, wiped up front: the fleet's session files and the test agent
-	// config land here, never in the runner's real home. A last run's fleet that had to be killed
-	// left its mounts in temp; with its session records gone they read as dead and would be
-	// offered as recoveries, so they go too — by the ids the records name, nothing else's.
+	// config land here, never in the runner's real home. The fleet's TEMP lives inside it too, so
+	// a mount a killed backend left is wiped with the home rather than offered as a recovery.
 	const home = E2E_HOME;
-	const records = path.join(home, '.goofi', 'system', 'sessions');
-	if (fs.existsSync(records))
-		for (const id of fs.readdirSync(records))
-			fs.rmSync(path.join(os.tmpdir(), 'goofi-workspaces', id), { recursive: true, force: true });
+	const tmp = path.join(home, 'tmp');
 	fs.rmSync(home, { recursive: true, force: true });
 	fs.mkdirSync(path.join(home, '.goofi'), { recursive: true });
+	fs.mkdirSync(tmp, { recursive: true });
 	// `_sh` is a CONFIG entry a test writes, exactly as a user's own entry would be; the servers'
 	// own seeding is absent-only, so this file stands.
 	fs.writeFileSync(
@@ -67,6 +63,9 @@ export default async function spawnFleet(config: FullConfig): Promise<() => Prom
 			env: {
 				...process.env,
 				GOOFI_HOME: home,
+				TMPDIR: tmp,
+				TMP: tmp,
+				TEMP: tmp,
 				GOOFI_BUILD_DIR: path.join(REPO_ROOT, 'target', 'goofi-build'),
 				SHELL: '/bin/sh'
 			},

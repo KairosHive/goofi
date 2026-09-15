@@ -454,6 +454,8 @@ pub struct Graph {
     /// node's service names clear of its predecessor's, whose teardown does not block. Survives
     /// `clear()` and `load_doc`; never enters the archive.
     generations: HashMap<Uid, u64>,
+    /// The last arming serial minted; every arming of a slot gets the next one.
+    arm_serial: u64,
     /// Bumped by every settle that delivers and every birth: what a listener compares to know
     /// the graph it resolved against is gone, without taking the lock to look.
     epoch: Arc<std::sync::atomic::AtomicU64>,
@@ -532,6 +534,7 @@ impl Graph {
             variables: goofi_core::variables::VariableStore::new(),
             instance: mint_instance(),
             generations: HashMap::new(),
+            arm_serial: 0,
             epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             refreshed: Vec::new(),
             touched: Vec::new(),
@@ -1670,8 +1673,21 @@ impl Graph {
 
     /// Replace the output slots armed for recording. The whole vector, which is what makes the
     /// command's inverse exact.
-    pub fn set_recorded(&mut self, uid: Uid, record: Vec<RecordedOutput>) -> Result<(), String> {
+    pub fn set_recorded(&mut self, uid: Uid, mut record: Vec<RecordedOutput>) -> Result<(), String> {
         let e = self.nodes.get_mut(&uid).ok_or_else(|| format!("no such node {uid}"))?;
+        // A slot still armed keeps its serial; every other arming is a new one, an undo's re-arm
+        // included: its old service name is one the recorder may already have let go of.
+        let mut next = self.arm_serial;
+        for output in &mut record {
+            output.serial = match e.record.iter().find(|held| held.slot == output.slot) {
+                Some(held) => held.serial,
+                None => {
+                    next += 1;
+                    next
+                }
+            };
+        }
+        self.arm_serial = next;
         e.record = record;
         self.touched.push(Touched::Record(uid));
         Ok(())
