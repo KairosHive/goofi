@@ -1,5 +1,7 @@
 //! One goofi session owns every process-scoped resource; its held `alive.lock` is the ONE
 //! aliveness answer. It has a record, an ephemeral directory, and a workspace a crash keeps.
+//! The lock lives IN the ephemeral directory, on the machine-wide base every sweep reads, so a
+//! boot under another `GOOFI_HOME` sees the same answer and never sweeps a live session.
 
 use std::fs::{self, File};
 use std::sync::OnceLock;
@@ -24,7 +26,7 @@ fn sessions_dir() -> PathBuf {
     home::system().join("sessions")
 }
 
-/// The record directory of session `id`.
+/// The record directory of session `id`: its `session.json`, scoped to this home.
 pub fn entry(id: &str) -> PathBuf {
     sessions_dir().join(id)
 }
@@ -149,10 +151,11 @@ impl Held {
 }
 
 impl Drop for Held {
-    /// A clean shutdown: the record goes first, so no reader sees the session alive while its
-    /// resources go. The ephemeral directory is the transport's to remove.
+    /// A clean shutdown: the lock and the record go first, so no reader sees the session alive
+    /// while its resources go. The ephemeral directory is the transport's to remove.
     fn drop(&mut self) {
         drop(self.lock.take());
+        let _ = fs::remove_file(system_dir(&self.id).join("alive.lock"));
         let _ = fs::remove_dir_all(entry(&self.id));
         // The workspace parent, when the owner has already taken its mount away: an empty
         // directory is nobody's work. A non-empty one stays, and `remove_dir` refuses it.
@@ -160,25 +163,28 @@ impl Drop for Held {
     }
 }
 
-/// Hold a new session under `id`. The record is built under a part name and renamed into place
-/// with its lock already held, so no reader ever sees an entry that is neither locked nor dead.
+/// Hold a new session under `id`. The ephemeral directory is built under a part name and renamed
+/// into place with its lock already held, so no sweep ever sees one that is neither locked nor
+/// dead; the record follows, so a listed session is always a locked one.
 pub fn hold(id: &str) -> io::Result<Held> {
-    let at = entry(id);
-    let part = sessions_dir().join(format!("{id}.part"));
+    let part = system_base().join(format!("{id}.part"));
     let _ = fs::remove_dir_all(&part);
     fs::create_dir_all(&part)?;
     let lock = File::create(part.join("alive.lock"))?;
     lock.lock()?;
-    fs::write(part.join("session.json"), serde_json::to_vec_pretty(&Session { id: id.into(), url: String::new() })?)?;
-    fs::rename(&part, &at)?;
-    fs::create_dir_all(system_dir(id))?;
-    Ok(Held { id: id.to_string(), lock: Some(lock) })
+    fs::rename(&part, system_dir(id))?;
+    let held = Held { id: id.to_string(), lock: Some(lock) };
+    let at = entry(id);
+    let _ = fs::remove_dir_all(&at);
+    fs::create_dir_all(&at)?;
+    fs::write(at.join("session.json"), serde_json::to_vec_pretty(&Session { id: id.into(), url: String::new() })?)?;
+    Ok(held)
 }
 
-/// Whether the session recorded at `entry` is alive: its lock is held by a living process. A
-/// missing lock file is a dead session; a lock this process can take is one nobody holds.
-pub fn alive_at(entry: &Path) -> bool {
-    let Ok(file) = File::options().read(true).write(true).open(entry.join("alive.lock")) else {
+/// Whether the session whose ephemeral directory is `dir` is alive: its lock is held by a living
+/// process. A missing lock file is a dead session; a lock this process can take is nobody's.
+pub fn alive_at(dir: &Path) -> bool {
+    let Ok(file) = File::options().read(true).write(true).open(dir.join("alive.lock")) else {
         return false;
     };
     match file.try_lock() {
@@ -190,7 +196,7 @@ pub fn alive_at(entry: &Path) -> bool {
 }
 
 pub fn alive(id: &str) -> bool {
-    alive_at(&entry(id))
+    alive_at(&system_dir(id))
 }
 
 /// Every alive session, its record read; dead records are swept as they are met, together with
@@ -204,10 +210,9 @@ pub fn sessions(mut remove: impl FnMut(&Path)) -> Vec<Session> {
             let _ = fs::remove_file(&path);
             continue;
         }
-        if !alive_at(&path) {
-            if let Some(id) = path.file_name().and_then(|n| n.to_str()) {
-                remove(&system_dir(id));
-            }
+        let Some(id) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        if !alive(id) {
+            remove(&system_dir(id));
             remove(&path);
             continue;
         }
@@ -222,14 +227,13 @@ pub fn sessions(mut remove: impl FnMut(&Path)) -> Vec<Session> {
     out
 }
 
-/// Sweep every ephemeral directory whose session is not alive. The record is locked and in place
-/// before its directory is made, so a directory with no alive record is dead, whatever it holds.
+/// Sweep every ephemeral directory whose lock nobody holds — a part still being built holds
+/// its lock too. The lock is the FIRST thing in a directory, so one without it is dead.
 pub fn sweep_dead_system(mut remove: impl FnMut(&Path)) {
     let Ok(entries) = fs::read_dir(system_base()) else { return };
     for entry in entries.flatten() {
         let dir = entry.path();
-        let Some(id) = dir.file_name().and_then(|n| n.to_str()) else { continue };
-        if !alive(id) {
+        if dir.is_dir() && !alive_at(&dir) {
             remove(&dir);
         }
     }
