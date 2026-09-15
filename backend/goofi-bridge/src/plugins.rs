@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -134,7 +134,8 @@ impl Service {
         config: Value,
     ) -> Result<(Arc<Self>, Contributions), String> {
         let id = config["id"].as_str().unwrap_or_default().to_string();
-        let mut child = goofi_core::child::spawn(
+        // stdout is the protocol channel; what the plugin says on stderr is its log.
+        let mut child = goofi_core::child::run(
             format!("plugin {id}"),
             Command::new(python)
                 .args(["-u", "-m", "goofi_plugin"])
@@ -145,18 +146,15 @@ impl Service {
                     config["package_dir"]
                         .as_str()
                         .ok_or("missing package path")?,
-                )
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped()),
+                ),
         )
+        .source(goofi_core::log::Source::component(&format!("plugin:{id}")))
+        .stdin_piped()
+        .stdout(goofi_core::child::Out::Pipe)
+        .spawn()
         .map_err(|e| format!("start Python: {e}"))?;
         let input = child.stdin.take().ok_or("missing Python stdin")?;
         let output = child.stdout.take().ok_or("missing Python stdout")?;
-        if let Some(stderr) = child.stderr.take() {
-            let source = goofi_core::log::Source::component(&format!("plugin:{id}"));
-            let _ = goofi_core::worker::spawn("goofi-plugin-stderr", move || goofi_core::log::drain(stderr, source, "stderr"));
-        }
         let (tx, rx) = mpsc::channel();
         let _ = goofi_core::worker::spawn("goofi-plugin-handshake", move || {
             let mut reader = BufReader::new(output);

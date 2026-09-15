@@ -30,7 +30,7 @@ fn sleeper() {
 
 fn sleeper_command() -> Command {
     let mut cmd = Command::new(std::env::current_exe().expect("this test binary"));
-    cmd.args([&format!("{}::sleeper", crate::situation(module_path!())), "--exact", "--nocapture"]).env(SLEEPER, "1").stderr(std::process::Stdio::null());
+    cmd.args([&format!("{}::sleeper", crate::situation(module_path!())), "--exact", "--nocapture"]).env(SLEEPER, "1");
     cmd
 }
 
@@ -102,23 +102,26 @@ fn a_child_is_listed_while_it_lives_and_leaves_when_stopped() {
     goofi_transport::session();
     let listed = || registry::inventory().into_iter().filter(|e| e.kind == Kind::Child).map(|e| e.name).collect::<Vec<_>>();
 
-    let mut cmd = sleeper_command();
-    cmd.stdout(std::process::Stdio::piped());
-    let mut child = child::spawn("sleeper", &mut cmd).expect("spawn");
+    let mut child = child::spawn("sleeper", &mut sleeper_command()).expect("spawn");
     let pid = child.id();
     // Other situations in this binary spawn their own; this one's entry is the one checked.
     let mine = |n: &String| n.starts_with("sleeper") && n.contains(&format!("pid {pid})"));
     assert!(listed().iter().any(mine), "{:?}", listed());
 
-    // It was told the session — the same one this process runs under.
-    let mut line = String::new();
-    let mut out = std::io::BufReader::new(child.stdout.take().expect("piped"));
+    // It was told the session — the same one this process runs under — and what it printed is
+    // in the process log under its name, on the stream it used, without a pipe of the owner's.
+    let said = || {
+        goofi_core::log::global().lock().unwrap().since(None).groups.into_iter()
+            .filter_map(|g| g.message)
+            .find(|m| m.source.component == "sleeper" && m.text.starts_with("SLEEPING"))
+    };
     let deadline = Instant::now() + Duration::from_secs(30);
-    while !line.starts_with("SLEEPING") && Instant::now() < deadline {
-        line.clear();
-        std::io::BufRead::read_line(&mut out, &mut line).expect("read the child");
+    while said().is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
     }
-    assert_eq!(line.trim(), format!("SLEEPING {}", goofi_transport::session()));
+    let line = said().expect("the child's line reached the log");
+    assert_eq!(line.text, format!("SLEEPING {}", goofi_transport::session()));
+    assert_eq!(line.stream.as_deref(), Some("stdout"));
 
     // Deaf to the ask; the stop closes the pipe first, which is what ends it, and insists after
     // the grace for a child that watches nothing. Either way it is gone when `stop` returns.

@@ -1,11 +1,13 @@
 //! The one way goofi runs a process: a child joins the session, watches a liveness pipe, leads
-//! its own process group, is listed while it lives, and is killed when its [`Child`] drops.
+//! its own process group, is listed while it lives, logs what it prints, and dies with its [`Child`].
 
 use std::io::{self, PipeReader, PipeWriter, Read};
 use std::process::{Command, ExitStatus, Output, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::log::Source;
 use crate::registry::{self, Kind, Lease};
+use crate::worker::Worker;
 
 /// Env var carrying the liveness pipe's read end: a unix fd number, or a Windows HANDLE.
 pub const LIVENESS_ENV: &str = "GOOFI_PARENT_PIPE";
@@ -18,28 +20,104 @@ pub struct Child {
     /// OS does on a crash — is the EOF the child exits on.
     alive: Option<PipeWriter>,
     reaped: bool,
+    /// The threads copying a logged stream into the log; joined once the process has ended.
+    drains: Vec<Worker>,
     _lease: Lease,
 }
 
-/// Spawn `cmd` as `name` — the words a reader of the inventory sees. The command's own stdio
-/// settings stand; the session, the liveness pipe and the process group are added here.
-pub fn spawn(name: impl Into<String>, cmd: &mut Command) -> io::Result<Child> {
+/// Where one of a child's output streams goes.
+pub enum Out {
+    /// Into the process log, line by line, under the child's source: the default.
+    Log,
+    /// A pipe the owner reads — a protocol channel, or a message it will report itself.
+    Pipe,
+    Null,
+    File(std::fs::File),
+}
+
+/// A child being described: its name, the log source its output is filed under, and its wiring.
+pub struct Spawn<'a> {
+    name: String,
+    cmd: &'a mut Command,
+    source: Source,
+    stdin: bool,
+    stdout: Out,
+    stderr: Out,
+}
+
+/// Describe `cmd` as `name` — the words a reader of the inventory sees. By default stdin is
+/// closed and both output streams go to the log under a source of that name.
+pub fn run(name: impl Into<String>, cmd: &mut Command) -> Spawn<'_> {
     let name = name.into();
-    if let Some(session) = crate::session::current() {
-        cmd.env(crate::session::ENV, session);
+    let source = Source::component(&name);
+    Spawn { name, cmd, source, stdin: false, stdout: Out::Log, stderr: Out::Log }
+}
+
+/// Spawn `cmd` as `name` with the default wiring.
+pub fn spawn(name: impl Into<String>, cmd: &mut Command) -> io::Result<Child> {
+    run(name, cmd).spawn()
+}
+
+impl Spawn<'_> {
+    /// File what the child prints under `source` — a node's, say — instead of its name.
+    pub fn source(mut self, source: Source) -> Self {
+        self.source = source;
+        self
     }
-    #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(cmd, 0);
-    let armed = arm(cmd)?;
-    let inner = cmd.spawn()?;
-    let lease = registry::lease(Kind::Child, format!("{name} (pid {})", inner.id()));
-    Ok(Child { inner, name, alive: Some(armed.into_writer()), reaped: false, _lease: lease })
+
+    /// Keep a pipe to the child's stdin for the owner to write.
+    pub fn stdin_piped(mut self) -> Self {
+        self.stdin = true;
+        self
+    }
+
+    pub fn stdout(mut self, out: Out) -> Self {
+        self.stdout = out;
+        self
+    }
+
+    pub fn stderr(mut self, out: Out) -> Self {
+        self.stderr = out;
+        self
+    }
+
+    /// Start the child: the session, the liveness pipe and the process group are added here.
+    pub fn spawn(self) -> io::Result<Child> {
+        let Spawn { name, cmd, source, stdin, stdout, stderr } = self;
+        if let Some(session) = crate::session::current() {
+            cmd.env(crate::session::ENV, session);
+        }
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(cmd, 0);
+        cmd.stdin(if stdin { Stdio::piped() } else { Stdio::null() });
+        let wire = |out: Out| match out {
+            Out::Log | Out::Pipe => Stdio::piped(),
+            Out::Null => Stdio::null(),
+            Out::File(file) => Stdio::from(file),
+        };
+        let (log_out, log_err) = (matches!(stdout, Out::Log), matches!(stderr, Out::Log));
+        cmd.stdout(wire(stdout)).stderr(wire(stderr));
+        let armed = arm(cmd)?;
+        let mut inner = cmd.spawn()?;
+        let lease = registry::lease(Kind::Child, format!("{name} (pid {})", inner.id()));
+        let mut drains = Vec::new();
+        if log_out {
+            drains.extend(inner.stdout.take().and_then(|out| drain(&name, out, source.clone(), "stdout")));
+        }
+        if log_err {
+            drains.extend(inner.stderr.take().and_then(|err| drain(&name, err, source, "stderr")));
+        }
+        Ok(Child { inner, name, alive: Some(armed.into_writer()), reaped: false, drains, _lease: lease })
+    }
+}
+
+fn drain(name: &str, from: impl Read + Send + 'static, source: Source, stream: &'static str) -> Option<Worker> {
+    crate::worker::spawn(format!("{name} {stream}"), move || crate::log::drain(from, source, stream)).ok()
 }
 
 /// Run a one-shot tool as `name` to completion, its output captured, killed at `within`.
 pub fn output(name: impl Into<String>, cmd: &mut Command, within: Duration) -> io::Result<Output> {
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = spawn(name, cmd)?;
+    let mut child = run(name, cmd).stdout(Out::Pipe).stderr(Out::Pipe).spawn()?;
     // Both pipes drained on threads of their own, so a tool that fills one while this waits on
     // the other cannot deadlock against its reader.
     let stdout = child.inner.stdout.take().and_then(reader);
@@ -53,7 +131,7 @@ pub fn output(name: impl Into<String>, cmd: &mut Command, within: Duration) -> i
     Ok(Output { status, stdout, stderr })
 }
 
-fn reader(mut from: impl Read + Send + 'static) -> Option<crate::worker::Worker<Vec<u8>>> {
+fn reader(mut from: impl Read + Send + 'static) -> Option<Worker<Vec<u8>>> {
     crate::worker::spawn("goofi-child-output", move || {
         let mut bytes = Vec::new();
         let _ = from.read_to_end(&mut bytes);
@@ -75,14 +153,20 @@ impl Child {
         let _ = request_stop(self.inner.id());
         let ended = self.poll(Instant::now() + grace);
         self.reaped = true;
-        match ended {
-            Some(status) => Some(status),
-            None => {
-                let _ = force_kill(self.inner.id());
-                let _ = self.inner.kill();
-                let _ = self.inner.wait();
-                None
-            }
+        if ended.is_none() {
+            let _ = force_kill(self.inner.id());
+            let _ = self.inner.kill();
+            let _ = self.inner.wait();
+        }
+        self.settle_log();
+        ended
+    }
+
+    /// The last lines a dead child printed are in the log before its end is reported. A
+    /// grandchild holding the pipe open is not waited for.
+    fn settle_log(&mut self) {
+        for drain in self.drains.drain(..) {
+            let _ = drain.join_within(Duration::from_secs(1));
         }
     }
 
@@ -98,6 +182,7 @@ impl Child {
             let _ = self.inner.kill();
             let _ = self.inner.wait();
         }
+        self.settle_log();
         Ok(ended)
     }
 
@@ -105,6 +190,7 @@ impl Child {
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
         let status = self.inner.wait()?;
         self.reaped = true;
+        self.settle_log();
         Ok(status)
     }
 
@@ -141,6 +227,7 @@ impl Drop for Child {
             let _ = self.inner.kill();
             let _ = self.inner.wait();
         }
+        self.settle_log();
     }
 }
 
