@@ -166,6 +166,15 @@ jobs:
         cargo test --workspace --no-run 2>&1 | tee /tmp/build.log
         ! grep -n '^warning' /tmp/build.log
 
+    # ONE boot before the tests: it compiles every shipped Rust node and probes every shipped
+    # Python node into the cached build directory, serially, as a step with a name — where the
+    # test binaries would otherwise do it in parallel, each behind the same lock, as eight
+    # "running for over 60 seconds" notices. `--list-nodes` is the boot that scans and exits.
+    - name: Build the shipped nodes once
+      run: cargo run -p goofi-cli -- --headless --list-nodes
+      env:
+        GOOFI_BUILD_DIR: ${{ github.workspace }}/target/goofi-build
+
     - name: Tests
       run: cargo test --workspace --no-fail-fast
 
