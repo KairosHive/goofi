@@ -241,23 +241,22 @@ fn arm(cmd: &mut Command) -> io::Result<Armed> {
     Ok(Armed { writer, reader })
 }
 
+/// The read end is made inheritable in THIS process, not in a `pre_exec` hook: a hook forces
+/// std onto fork-and-exec, and a bare program name is then searched along `PATH` inside the
+/// forked child, where the allocation that takes can wait for ever on a lock another thread
+/// held at the fork. Without a hook std uses `posix_spawn`, which has no such child. The window
+/// in which a cousin spawned at the same moment inherits the read end too is harmless: the
+/// child's EOF depends on the WRITE end alone, which stays close-on-exec and is this process's.
 #[cfg(unix)]
-fn share_read_end(cmd: &mut Command, reader: &PipeReader) -> io::Result<String> {
+fn share_read_end(_cmd: &mut Command, reader: &PipeReader) -> io::Result<String> {
     use std::os::fd::AsRawFd;
-    use std::os::unix::process::CommandExt;
 
     let fd = reader.as_raw_fd();
-    // SAFETY: `fcntl` is async-signal-safe, so it is legal in `pre_exec`; clearing FD_CLOEXEC
-    // there rather than in the parent keeps the fd private to THIS child.
-    unsafe {
-        cmd.pre_exec(move || {
-            if libc::fcntl(fd, libc::F_SETFD, 0) == -1 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        });
+    // SAFETY: a plain fcntl on a descriptor `reader` owns for the whole call.
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, 0) } == -1 {
+        return Err(io::Error::last_os_error());
     }
-    // fork copies the descriptor table verbatim, so the child sees the same number.
+    // A spawn copies the descriptor table verbatim, so the child sees the same number.
     Ok(fd.to_string())
 }
 
