@@ -1718,7 +1718,7 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         // Off this thread wherever there IS a wait: this runs under the graph lock, and a harness
         // that will not leave takes the whole grace — five seconds no op may be held for.
         if let Some(finish) = state.reclaim(replaced) {
-            std::thread::spawn(finish);
+            let _ = goofi_core::worker::spawn("goofi-reclaim", finish);
         }
         // Sent under the lock, not queued for the dispatcher: the status worker's next stage delta
         // needs this lock, so nothing it says can overtake the snapshot it is a delta over.
@@ -1999,7 +1999,7 @@ const RECORD_BEAT: std::time::Duration = std::time::Duration::from_secs(1);
 /// it, so a stop and a fresh start inside one beat cannot leave two threads talking.
 fn spawn_record_beat(state: &AppState, folder: std::path::PathBuf) {
     let state = state.clone();
-    std::thread::spawn(move || {
+    let _ = goofi_core::worker::spawn("goofi-record-beat", move || {
         loop {
             std::thread::sleep(RECORD_BEAT);
             let s = state.recorder.status();

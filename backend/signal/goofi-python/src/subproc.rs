@@ -81,11 +81,11 @@ impl Running {
             .map_err(|e| format!("spawn `{python}`: {e}"))?;
         if let Some(out) = child.stdout.take() {
             let source = goofi_core::log::source();
-            std::thread::spawn(move || goofi_core::log::drain(out, source, "stdout"));
+            let _ = goofi_core::worker::spawn("goofi-python-stdout", move || goofi_core::log::drain(out, source, "stdout"));
         }
         if let Some(err) = child.stderr.take() {
             let source = goofi_core::log::source();
-            std::thread::spawn(move || goofi_core::log::drain(err, source, "stderr"));
+            let _ = goofi_core::worker::spawn("goofi-python-stderr", move || goofi_core::log::drain(err, source, "stderr"));
         }
         // The write end is dropped as this ends, and that EOF is where the child stops reading.
         let handed = match child.stdin.take() {

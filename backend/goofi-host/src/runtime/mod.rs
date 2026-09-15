@@ -850,7 +850,7 @@ pub fn spawn(
     transport: Arc<dyn Transport>,
     env: NodeEnv,
     halt: Arc<Halt>,
-) -> std::io::Result<std::thread::JoinHandle<()>> {
+) -> std::io::Result<goofi_core::worker::Worker> {
     goofi_transport::thread(format!("goofi-{}", manifest.type_name))
         .spawn(move || {
             struct Release(Arc<Halt>);

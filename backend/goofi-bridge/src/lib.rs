@@ -127,6 +127,10 @@ pub struct AppState {
     pub recorder: Arc<goofi_record::Recorder>,
     /// The drain thread's stop flag, and what [`AppState::stop_recording`] waits on.
     record_drain: Arc<goofi_transport::Halt>,
+    /// Raised once, at shutdown: every worker of the manager's own reads it and leaves.
+    stopping: Arc<std::sync::atomic::AtomicBool>,
+    /// The manager's own threads — the status drain, the tap follower — joined at shutdown.
+    workers: Arc<Mutex<Vec<goofi_core::worker::Worker>>>,
 }
 
 /// How a `/data` socket detects a dead-but-not-closed peer, which a socket with no traffic cannot
@@ -218,6 +222,8 @@ impl AppState {
             harnesses: Arc::new(term::Harnesses::default()),
             recorder,
             record_drain: Arc::new(goofi_transport::Halt::default()),
+            stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            workers: Arc::new(Mutex::new(Vec::new())),
         };
         spawn_follower(state.clone(), follow_rx);
         record::spawn(state.graph.clone(), state.recorder.clone(), state.record_drain.clone());
@@ -519,9 +525,10 @@ const LIVE_PERIOD: Duration = Duration::from_millis(50);
 /// It must never `set_dirty(true)` — a node reporting its own state is not a user edit — and must
 /// FORGET a uid on removal, so a stale error cannot outlive its node.
 pub fn spawn_workers(state: &AppState) {
+    let owner = state.clone();
     let state = state.clone();
     let (graph, events) = (state.graph.clone(), state.events.clone());
-    std::thread::spawn(move || {
+    let worker = goofi_core::worker::spawn("goofi-status-drain", move || {
         let waker = graph.lock().unwrap().drain_waker();
         let period = BROADCAST_PERIOD;
         let mut last_errors: HashMap<String, (u64, Option<String>)> = HashMap::new();
@@ -533,6 +540,9 @@ pub fn spawn_workers(state: &AppState) {
             // Parked until a report lands or the broadcast pace comes due — pacing, not polling.
             let wait = next_broadcast.saturating_duration_since(Instant::now()).min(period);
             waker.wait_timeout(wait);
+            if state.stopping.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
             let due = Instant::now() >= next_broadcast;
             let (edits, collected) = {
                 let mut g = graph.lock().unwrap();
@@ -621,6 +631,9 @@ pub fn spawn_workers(state: &AppState) {
             }
         }
     });
+    if let Ok(worker) = worker {
+        owner.workers.lock().unwrap().push(worker);
+    }
 }
 
 /// One node's live pair as the wire carries it: the node it belongs to, beside the two maps.
@@ -1382,8 +1395,20 @@ fn doc_state(state: &AppState) -> String {
 /// written under the graph lock and broadcast as any edit is. It is the manager writing, not a
 /// caller, so it is no command and leaves no undo entry.
 fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Followed>) {
-    std::thread::spawn(move || {
-        while let Ok(first) = rx.recv() {
+    let owner = state.clone();
+    let worker = goofi_core::worker::spawn("goofi-follower", move || {
+        loop {
+            // A bounded wait, so the stop is read between batches.
+            let first = match rx.recv_timeout(BROADCAST_PERIOD) {
+                Ok(first) => first,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if state.stopping.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    continue;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+            };
             let mut batch = vec![first];
             while let Ok(more) = rx.try_recv() {
                 batch.push(more);
@@ -1397,6 +1422,9 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
             }
         }
     });
+    if let Ok(worker) = worker {
+        owner.workers.lock().unwrap().push(worker);
+    }
 }
 
 /// Hand the reducers every followed slot, from settled state, after each mutation.

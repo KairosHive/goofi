@@ -555,8 +555,8 @@ pub const STACK: usize = 8 * 1024 * 1024;
 
 /// A named thread with the stack [`STACK`] states. Every goofi thread that can reach this crate is
 /// built here, so the platform default never decides.
-pub fn thread(name: impl Into<String>) -> std::thread::Builder {
-    std::thread::Builder::new().name(name.into()).stack_size(STACK)
+pub fn thread(name: impl Into<String>) -> goofi_core::worker::Builder {
+    goofi_core::worker::thread(name).stack_size(STACK)
 }
 
 /// A publisher that can grow past its initial pool: a GOOF frame is variable-size, and `Static`

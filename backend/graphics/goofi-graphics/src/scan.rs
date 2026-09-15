@@ -108,8 +108,7 @@ fn compiler() -> Option<&'static mpsc::Sender<Order>> {
     ONE.get_or_init(|| {
         let gpu = crate::gpu::shared().ok()?;
         let (jobs, take) = mpsc::channel::<Order>();
-        std::thread::Builder::new()
-            .name("goofi-graphics-compile".into())
+        goofi_core::worker::thread("goofi-graphics-compile")
             .spawn(move || {
                 while let Ok(order) = take.recv() {
                     let _ = order.cell.set(compile(&gpu, &order.job));

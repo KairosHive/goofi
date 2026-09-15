@@ -165,8 +165,7 @@ pub fn capture_stdio() -> Result<(), String> {
         let _ = TERMINAL.set(Mutex::new(terminal));
         for (stream, descriptor) in [("stdout", StdioDescriptor::Stdout), ("stderr", StdioDescriptor::Stderr)] {
             let pipe = Pipe::new().map_err(|e| e.to_string())?;
-            std::thread::Builder::new().name(format!("goofi-{stream}"))
-                .spawn(move || drain(pipe.read, Source::component("goofi"), stream)).map_err(|e| e.to_string())?;
+            crate::worker::thread(format!("goofi-{stream}")).spawn(move || drain(pipe.read, Source::component("goofi"), stream)).map_err(|e| e.to_string())?;
             let original = FileDescriptor::redirect_stdio(&pipe.write, descriptor).map_err(|e| e.to_string())?;
             #[cfg(windows)]
             {
