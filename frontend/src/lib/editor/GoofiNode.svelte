@@ -198,7 +198,7 @@
 		align-items: center;
 		gap: 8px;
 		padding: 0 10px;
-		background: color-mix(in srgb, var(--engine) 18%, var(--surface-2));
+		background: color-mix(in srgb, var(--engine) 50%, var(--surface-2));
 		border-bottom: 1px solid var(--border);
 		cursor: pointer;
 		user-select: none;

@@ -828,6 +828,9 @@
 		outline: var(--focus-width) solid var(--focus-ink);
 	}
 	.widget {
+		--accent: var(--secondary);
+		--accent-strong: color-mix(in srgb, var(--secondary) 85%, black);
+		--accent-fill: color-mix(in srgb, var(--secondary) 18%, transparent);
 		flex: 1;
 		min-width: 0;
 		min-height: 0;
