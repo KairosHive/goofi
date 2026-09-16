@@ -1,5 +1,5 @@
 //! The CLI session: the client library against the real `/exec` door — target resolution over
-//! `$GOOFI_HOME`, every phrase reachable, the batch as one undo step per actor, and the raw
+//! the machine's sessions, every phrase reachable, the batch as one undo step per actor, and the raw
 //! read round-tripped through NPY. The true argv-to-process path is e2e's, which spawns the
 //! real binary; nothing here depends on the bin crate.
 
@@ -26,9 +26,11 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     std::env::set_var("GOOFI_HOME", &tmp);
     std::env::remove_var("GOOFI_SESSION");
 
-    // 0 sessions: refused by telling how to start one.
+    // No session of ours yet: refused by telling how to start one, or — the listing is machine-wide
+    // — by naming the developer's own goofi as the several to choose from.
+    let others = client::list().len();
     let why = client::resolve_target().unwrap_err();
-    assert!(why.contains("no running goofi"), "{why}");
+    assert!(why.contains(if others == 0 { "no running goofi" } else { "several" }), "{why}");
 
     // The server is in-process (`serve_app`): the harness holds THIS process's session, and the
     // record under test is written here, as the binary's serve path writes its own.
@@ -39,21 +41,25 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let id = goofi_transport::session().to_string();
     goofi_transport::record_url(&url);
 
-    // A record nobody holds is DEAD and is swept as it is met; the held one resolves alone.
-    let dead = session::entry("long_gone");
+    // A record nobody holds is DEAD and is swept as it is met; the held one is listed.
+    let dead = session::system_dir("long_gone");
     std::fs::create_dir_all(&dead).unwrap();
     std::fs::File::create(dead.join("alive.lock")).unwrap();
     std::fs::write(dead.join("session.json"), r#"{"id":"long_gone","url":"http://127.0.0.1:1"}"#).unwrap();
-    let target = client::resolve_target().unwrap();
-    assert_eq!((target.id.as_str(), target.url.as_str()), (id.as_str(), url.as_str()));
+    let rows = client::list();
+    assert!(rows.iter().any(|s| s.id == id && s.url == url), "{rows:?}");
     assert!(!dead.exists(), "the dead record was swept; the live one stays");
+    if others == 0 {
+        let target = client::resolve_target().unwrap();
+        assert_eq!(target.id, id);
+    }
 
     // A second held session — another goofi on the machine — makes the bare resolution
     // ambiguous, and it says so by naming both.
     let peer = session::hold("busy_peer").unwrap();
     peer.record_url("http://127.0.0.1:1");
     let rows = client::list();
-    assert_eq!(rows.len(), 2, "both alive: {rows:?}");
+    assert_eq!(rows.len(), others + 2, "both alive: {rows:?}");
     let why = client::resolve_target().unwrap_err();
     assert!(why.contains("several") && why.contains("busy_peer") && why.contains(&id), "{why}");
     // GOOFI_SESSION breaks the tie — and one naming NOTHING is refused by pointing at
@@ -67,7 +73,7 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     // Released cleanly: gone from the listing at once.
     drop(peer);
     let rows = client::list();
-    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows.len(), others + 1, "{rows:?}");
 
     // Every phrase is reachable through the real door: `--help` on each resolves and answers.
     let ops: serde_json::Value = serde_json::from_str(&ok(&url, "default", "op list")).unwrap();

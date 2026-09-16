@@ -13,7 +13,7 @@ pub fn dir() -> PathBuf {
         .join(".goofi")
 }
 
-/// Everything goofi keeps for itself — build caches, session records, materialised bundles —
+/// Everything goofi keeps for itself — build caches, the recovery, materialised bundles —
 /// under one folder, so the `.goofi` root shows only what a user edits.
 pub fn system() -> PathBuf {
     dir().join("system")
