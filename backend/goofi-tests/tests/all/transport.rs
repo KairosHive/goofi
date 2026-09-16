@@ -316,11 +316,11 @@ fn crash_helper() {
     std::thread::sleep(Duration::from_secs(60));
 }
 
-/// A session owns a record, an ephemeral directory, a workspace and its cache parts; the lock
-/// alone decides what a boot sweep removes, and a content key is never mistaken for a session.
+/// A session owns one ephemeral directory, a workspace and its cache parts; the lock alone
+/// decides what a boot sweep removes, and a content key is never mistaken for a session.
 #[test]
-fn a_session_owns_its_record_directory_workspace_and_cache_parts() {
-    use goofi_core::session::{alive, entry, hold, sessions, sweep_dead_system, sweep_system, system_dir, workspace_dir, Session};
+fn a_session_owns_its_directory_workspace_and_cache_parts() {
+    use goofi_core::session::{alive, hold, sessions, sweep_system, system_dir, workspace_dir, Session};
     use std::fs;
     goofi_tests::walled_home();
     let _sole = goofi_tests::sole_session();
@@ -335,16 +335,14 @@ fn a_session_owns_its_record_directory_workspace_and_cache_parts() {
 
     // A dead session: its lock file exists in its directory and nobody holds it. An orphan
     // directory with no lock at all. A part a crashed hold left behind.
-    fs::create_dir_all(entry("gone")).unwrap();
     fs::create_dir_all(system_dir("gone")).unwrap();
     fs::File::create(system_dir("gone").join("alive.lock")).unwrap();
     fs::create_dir_all(system_dir("orphan").join("iox")).unwrap();
     fs::create_dir_all(system_dir("stale.part")).unwrap();
     fs::File::create(system_dir("stale.part").join("alive.lock")).unwrap();
     assert!(!alive("gone"));
-    assert!(sessions(remove).iter().all(|s| s.id != "gone"), "the dead record is swept");
-    sweep_dead_system(remove);
-    assert!(!entry("gone").exists() && !system_dir("gone").exists() && !system_dir("orphan").exists());
+    assert!(sessions(remove).iter().all(|s| s.id != "gone"), "the dead one is not listed");
+    assert!(!system_dir("gone").exists() && !system_dir("orphan").exists(), "…and is swept as it is met");
     assert!(!system_dir("stale.part").exists(), "a crashed hold's part is swept");
     assert!(system_dir("abcabcabcabcabc1").join("alive.lock").exists(), "the live one is untouched");
 
@@ -378,7 +376,7 @@ fn a_session_owns_its_record_directory_workspace_and_cache_parts() {
     drop(live);
 
     drop(held);
-    assert!(!alive("abcabcabcabcabc1") && !entry("abcabcabcabcabc1").exists());
+    assert!(!alive("abcabcabcabcabc1"));
     assert!(!workspace_dir("abcabcabcabcabc1").exists(), "the empty workspace parent went with it");
     let _ = fs::remove_dir_all(system_dir("abcabcabcabcabc1"));
 }
@@ -397,8 +395,7 @@ fn a_process_that_exits_without_releasing_leaves_no_record() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let id = stdout.lines().find_map(|l| l.strip_prefix("READY ")).map(str::trim).unwrap_or_default().to_string();
     assert!(!id.is_empty(), "the child named its session: {stdout:?}");
-    assert!(!goofi_core::session::entry(&id).exists(), "the record went at exit, with no release called");
-    assert!(!goofi_core::session::system_dir(&id).exists(), "so did the ephemeral directory");
+    assert!(!goofi_core::session::system_dir(&id).exists(), "the directory went at exit, with no release called");
 }
 
 #[test]
@@ -432,11 +429,10 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
     }
     let id = line.split_whitespace().nth(1).map(str::to_string).unwrap_or_default();
     assert!(!id.is_empty(), "the child named its session: {line:?}");
-    let entry = foreign.join(".goofi").join("system").join("sessions").join(&id);
     let system = goofi_core::session::system_dir(&id);
     assert!(goofi_core::session::alive(&id), "the child holds its session while it lives");
     assert!(system.join("iox").is_dir(), "its ephemeral directory is where iceoryx2 wrote");
-    assert!(entry.is_dir(), "its record is under its own home");
+    assert!(goofi_transport::sessions().iter().any(|s| s.id == id), "listed from any home");
     let workspace = goofi_core::session::workspace_dir(&id).join("nonce");
     std::fs::create_dir_all(&workspace).unwrap();
     goofi_transport::sweep_dead();
@@ -447,7 +443,7 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
     let _ = child.kill();
     let _ = child.wait();
     assert!(!goofi_core::session::alive(&id), "the lock went with the process");
-    assert!(entry.exists() && system.exists(), "…and everything else stayed");
+    assert!(system.exists(), "…and everything else stayed");
 
     let segments = || -> usize {
         std::fs::read_dir("/dev/shm")
@@ -460,7 +456,6 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
 
     goofi_transport::sweep_dead();
     goofi_bridge::autosave::sweep_dead();
-    assert!(entry.exists(), "the record under another home is not this sweep's to read");
     assert!(!system.exists(), "the ephemeral directory was swept");
     assert!(!workspace.exists(), "the workspace was swept");
     assert_eq!(segments(), 0, "the shared memory its prefix names was swept");

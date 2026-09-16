@@ -1,7 +1,7 @@
 //! One goofi session owns every process-scoped resource; its held `alive.lock` is the ONE
-//! aliveness answer. It has a record, an ephemeral directory, and a workspace a crash keeps.
-//! The lock lives IN the ephemeral directory, on the machine-wide base every sweep reads, so a
-//! boot under another `GOOFI_HOME` sees the same answer and never sweeps a live session.
+//! aliveness answer. Everything ephemeral — the lock, the record, the iceoryx2 root — lives in
+//! one machine-wide directory every sweep reads, so a boot under any `GOOFI_HOME` sees the same
+//! answer and never sweeps a live session. Only a crash's workspace is kept, under recovery.
 
 use std::fs::{self, File};
 use std::sync::OnceLock;
@@ -20,15 +20,6 @@ pub struct Session {
     /// The HTTP base every route hangs off; empty until the server has bound.
     #[serde(default)]
     pub url: String,
-}
-
-fn sessions_dir() -> PathBuf {
-    home::system().join("sessions")
-}
-
-/// The record directory of session `id`: its `session.json`, scoped to this home.
-pub fn entry(id: &str) -> PathBuf {
-    sessions_dir().join(id)
 }
 
 /// Where every session's ephemeral directory lives. A FIXED short path on unix, not `$TMPDIR`:
@@ -143,29 +134,31 @@ impl Held {
     /// Record where this session serves. Written beside the record and renamed in, so a reader
     /// sees a whole file or none.
     pub fn record_url(&self, url: &str) {
-        let s = Session { id: self.id.clone(), url: url.to_string() };
-        let part = entry(&self.id).join("session.json.part");
-        let _ = fs::write(&part, serde_json::to_vec_pretty(&s).expect("two strings"))
-            .and_then(|()| fs::rename(&part, entry(&self.id).join("session.json")));
+        let _ = write_record(&self.id, url);
     }
 }
 
+fn write_record(id: &str, url: &str) -> io::Result<()> {
+    let dir = system_dir(id);
+    let part = dir.join("session.json.part");
+    fs::write(&part, serde_json::to_vec_pretty(&Session { id: id.into(), url: url.into() })?)?;
+    fs::rename(&part, dir.join("session.json"))
+}
+
 impl Drop for Held {
-    /// A clean shutdown: the lock and the record go first, so no reader sees the session alive
-    /// while its resources go. The ephemeral directory is the transport's to remove.
+    /// A clean shutdown: the lock goes first, so no reader sees the session alive while its
+    /// resources go. The ephemeral directory is the transport's to remove.
     fn drop(&mut self) {
         drop(self.lock.take());
         let _ = fs::remove_file(system_dir(&self.id).join("alive.lock"));
-        let _ = fs::remove_dir_all(entry(&self.id));
         // The workspace parent, when the owner has already taken its mount away: an empty
         // directory is nobody's work. A non-empty one stays, and `remove_dir` refuses it.
         let _ = fs::remove_dir(workspace_dir(&self.id));
     }
 }
 
-/// Hold a new session under `id`. The ephemeral directory is built under a part name and renamed
-/// into place with its lock already held, so no sweep ever sees one that is neither locked nor
-/// dead; the record follows, so a listed session is always a locked one.
+/// Hold a new session under `id`. Its directory is built under a part name and renamed into
+/// place with its lock already held, so no sweep ever sees one that is neither locked nor dead.
 pub fn hold(id: &str) -> io::Result<Held> {
     let part = system_base().join(format!("{id}.part"));
     let _ = fs::remove_dir_all(&part);
@@ -174,10 +167,7 @@ pub fn hold(id: &str) -> io::Result<Held> {
     lock.lock()?;
     fs::rename(&part, system_dir(id))?;
     let held = Held { id: id.to_string(), lock: Some(lock) };
-    let at = entry(id);
-    let _ = fs::remove_dir_all(&at);
-    fs::create_dir_all(&at)?;
-    fs::write(at.join("session.json"), serde_json::to_vec_pretty(&Session { id: id.into(), url: String::new() })?)?;
+    write_record(id, "")?;
     Ok(held)
 }
 
@@ -199,24 +189,23 @@ pub fn alive(id: &str) -> bool {
     alive_at(&system_dir(id))
 }
 
-/// Every alive session, its record read; dead records are swept as they are met, together with
-/// the ephemeral directory each names. `remove` is how a tree goes.
+/// Every alive session on the machine, its record read; a directory whose lock nobody holds is
+/// dead — a part still being built holds its lock too — and `remove` takes it as it is met.
+/// The lock is the FIRST thing in a directory, so one without it is dead, whatever it holds.
 pub fn sessions(mut remove: impl FnMut(&Path)) -> Vec<Session> {
-    let Ok(entries) = fs::read_dir(sessions_dir()) else { return Vec::new() };
+    let Ok(entries) = fs::read_dir(system_base()) else { return Vec::new() };
     let mut out = Vec::new();
     for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            let _ = fs::remove_file(&path);
+        let dir = entry.path();
+        if !dir.is_dir() {
+            let _ = fs::remove_file(&dir);
             continue;
         }
-        let Some(id) = path.file_name().and_then(|n| n.to_str()) else { continue };
-        if !alive(id) {
-            remove(&system_dir(id));
-            remove(&path);
+        if !alive_at(&dir) {
+            remove(&dir);
             continue;
         }
-        let parsed = fs::read(path.join("session.json"))
+        let parsed = fs::read(dir.join("session.json"))
             .ok()
             .and_then(|b| serde_json::from_slice::<Session>(&b).ok());
         if let Some(s) = parsed {
@@ -225,16 +214,4 @@ pub fn sessions(mut remove: impl FnMut(&Path)) -> Vec<Session> {
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out
-}
-
-/// Sweep every ephemeral directory whose lock nobody holds — a part still being built holds
-/// its lock too. The lock is the FIRST thing in a directory, so one without it is dead.
-pub fn sweep_dead_system(mut remove: impl FnMut(&Path)) {
-    let Ok(entries) = fs::read_dir(system_base()) else { return };
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        if dir.is_dir() && !alive_at(&dir) {
-            remove(&dir);
-        }
-    }
 }

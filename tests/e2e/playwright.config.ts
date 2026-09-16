@@ -12,7 +12,7 @@ export const BASE_URL = `http://127.0.0.1:${PORT}`;
 export const REPO_ROOT = path.resolve(__dirname, '../..');
 export const LOG_DIR = path.join(__dirname, 'test-results', 'backend');
 export const BIN = process.env.GOOFI_E2E_BIN ?? path.join(REPO_ROOT, 'target', 'debug', `goofi${process.platform === 'win32' ? '.exe' : ''}`);
-// The fleet's test-scoped home: session records and the test agent config land here.
+// The fleet's test-scoped home: the build cache and the test agent config land here.
 export const E2E_HOME = path.join(__dirname, 'test-results', 'goofi-home');
 
 // Half the cores, capped at 8, so a small machine scales DOWN rather than up; the other gate anyone

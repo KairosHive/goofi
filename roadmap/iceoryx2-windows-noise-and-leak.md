@@ -14,8 +14,8 @@ goofi no longer asks iceoryx2 who is alive, and no longer sweeps iceoryx2's mach
 A session — `goofi_core::session` — is the one owner of every ephemeral resource, and its
 `alive.lock` is the one aliveness answer, released by the OS on any exit:
 
-- `.goofi/system/sessions/<id>/` holds the record (`session.json`, `alive.lock`).
-- `<system>/goofi-system/<id>/iox/` is the iceoryx2 ROOT for that session, and every segment
+- `<system>/goofi-system/<id>/` holds the record (`session.json`, `alive.lock`), machine-wide, and
+  its `iox/` is the iceoryx2 ROOT for that session, and every segment
   carries the prefix `g<id>_`. `/tmp/goofi-system` on unix (a unix socket path is capped at 108
   bytes, which a macOS `$TMPDIR` alone half spends), `%TEMP%\goofi-system` on Windows.
 - `<temp>/goofi-workspaces/<id>/` is the patch workspace: removed on a clean shutdown only. What a
