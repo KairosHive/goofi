@@ -4,7 +4,7 @@ import path from 'node:path';
 const port = Number(process.env.GOOFI_PLUGIN_TEST_PORT ?? 8599);
 export default defineConfig({
 	testDir: './plugin-tests',
-	testMatch: 'session.spec.ts',
+	testMatch: ['session.spec.ts', 'cables.spec.ts'],
 	workers: 1,
 	timeout: 60_000,
 	use: { baseURL: `http://127.0.0.1:${port}` },

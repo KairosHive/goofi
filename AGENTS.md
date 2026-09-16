@@ -92,6 +92,7 @@ before the first production deployment.
 - Tests must not open audio hardware or native windows. Use the test clocks and hosts.
 - `goofi-init` also removes build artifacts under `target/` untouched for three days, so a moved
   hash does not leave its output behind for good.
+- `plugins/` holds the plugins goofi ships as source; `sdk/README.md` is the plugin interface.
 - Rebuild both installed Python wheels after changing the Python API. Do not canonicalize venv
   interpreter paths; use the paths provided by setup.
 - A session (`goofi_core::session`) owns every ephemeral resource; its lock is the one aliveness

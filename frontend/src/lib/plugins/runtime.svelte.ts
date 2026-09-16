@@ -36,6 +36,7 @@ export function activatePlugin(id: string): { plugin: Plugin; ctx: Context; comm
 		register_panel(panel) {
 			identifier(panel.id);
 			if (typeof panel.title !== 'string' || typeof panel.mount !== 'function') throw new Error('A panel needs a title and mount function');
+			if (panel.accepts_node !== undefined && typeof panel.accepts_node !== 'boolean') throw new Error('accepts_node must be a boolean');
 			if (disposed) throw new Error('Plugin frontend is disposed');
 			if (committed) throw new Error('Panels must register during activation');
 			const key = `plugin:${id}:${panel.id}`;
@@ -43,7 +44,7 @@ export function activatePlugin(id: string): { plugin: Plugin; ctx: Context; comm
 			registered.add(key);
 			// The adapter supplies the framework's existing panel props to arbitrary DOM content.
 			const component: Component<PanelProps> = (internals, props) => PluginPanel(internals, { get panelId() { return props.panelId; }, get state() { return props.state; }, get setState() { return props.setState; }, panel, ctx });
-			panels.push({ id: key, title: panel.title, icon: 'square-dashed', component });
+			panels.push({ id: key, title: panel.title, icon: 'square-dashed', component, acceptsNode: panel.accepts_node === true });
 		},
 		register_header(entry) {
 			identifier(entry.id);
