@@ -44,7 +44,7 @@ export default function (plugin) {
 		<button class="primary" data-testid="cables-create">+ Create</button>
 	</form>
 	<div class="failure" role="alert" hidden></div>
-	<div class="list"><p class="hint">No cable yet. Create one above, then drag an AudioOut or AudioIn node onto it.</p></div>
+	<div class="list"><p class="hint">No cable yet. Create one above, then drag an AudioOut or AudioIn node onto it. Desktop sound settings hide virtual devices until you turn them on.</p></div>
 </div>`;
 			const status = root.querySelector('.status');
 			const dot = root.querySelector('.dot');
@@ -64,7 +64,7 @@ export default function (plugin) {
 
 			const render = () => {
 				if (cables.length === 0) {
-					list.innerHTML = '<p class="hint">No cable yet. Create one above, then drag an AudioOut or AudioIn node onto it.</p>';
+					list.innerHTML = '<p class="hint">No cable yet. Create one above, then drag an AudioOut or AudioIn node onto it. Desktop sound settings hide virtual devices until you turn them on.</p>';
 					return;
 				}
 				const rows = cables.map((cable) => {
