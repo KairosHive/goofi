@@ -1,5 +1,5 @@
 //! A folder plugin prepares recordings through the same operations as every client.
-use goofi_tests::{j, require_python, Goofi};
+use goofi_tests::{hex, j, require_python, Goofi};
 use std::path::Path;
 
 #[test]
@@ -170,4 +170,83 @@ fn conflicting_hooks_and_invalid_packages_leave_the_recorder_idle() {
         .unwrap_err();
     assert!(error.contains("pre_op conflict"), "{error}");
     assert_eq!(goofi.call("record status", j!({}))["running"], false);
+}
+
+/// Whether this machine can make a PipeWire cable at all — the plugin's own answer, so the
+/// situation skips where CI has no sound server rather than failing on it.
+fn pipewire_here() -> bool {
+    let runtime = std::env::var("PIPEWIRE_RUNTIME_DIR").or_else(|_| std::env::var("XDG_RUNTIME_DIR"));
+    let on_path = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d.join("pw-cli").is_file()))
+        .unwrap_or(false);
+    cfg!(target_os = "linux")
+        && on_path
+        && runtime.map(|r| Path::new(&r).join("pipewire-0").exists()).unwrap_or(false)
+}
+
+#[test]
+fn a_virtual_cable_is_a_device_the_audio_nodes_can_name() {
+    let python = require_python();
+    let home = tempfile::tempdir().unwrap();
+    goofi_tests::fixtures::virtual_cables(home.path());
+    let goofi = {
+        let mut goofi = Goofi::new();
+        goofi_bridge::plugins::Plugins::load(&mut goofi.state, home.path(), Path::new(&python.py)).unwrap();
+        goofi
+    };
+    let listing = goofi.call("plugin list", j!({}));
+    assert!(listing["plugins"][0]["error"].is_null(), "{listing}; {:?}", goofi.call("log list", j!({})));
+    let status = goofi.call("plugin virtual-cables list", j!({}));
+    assert_eq!(status["cables"], j!([]));
+    if !pipewire_here() {
+        assert!(status["unsupported"].is_string(), "no PipeWire here, and the panel is told: {status}");
+        eprintln!("skipping: {}", status["unsupported"]);
+        return;
+    }
+    assert!(status["unsupported"].is_null(), "{status}");
+    let cable = format!("goofi test {}", std::process::id());
+    let made = goofi.call("plugin virtual-cables create", j!({"name": cable, "channels": 4}));
+    let device = format!("PipeWire: {cable}");
+    assert_eq!(made["device"], j!(device));
+    assert!(goofi.refuse("plugin virtual-cables create", j!({"name": cable})).contains("exists"));
+
+    // A node's own picker offers the cable, spelled as the plugin said it would be.
+    let inn = goofi.add("audio:AudioIn");
+    let mut ev = goofi.events();
+    goofi.call("node param request", j!({"node": hex(inn), "param": "audio/device", "request": "refresh"}));
+    let echo = goofi.until("the picker's echo", |_| {
+        let p = ev.next("state_update");
+        (p["node"] == hex(inn) && p["refreshed_params"] == j!([["audio", "device"]])).then_some(p)
+    });
+    let options = echo["params"]["audio"]["device"]["options"].as_array().cloned().unwrap_or_default();
+    assert!(options.contains(&j!(device)), "the cable is an input device: {options:?}");
+
+    // An AudioIn drop points that node at the cable; an AudioOut drop moves EVERY AudioOut,
+    // because the engine's clock is one device.
+    let out_a = goofi.add("audio:AudioOut");
+    let out_b = goofi.add("audio:AudioOut");
+    let routed = goofi.call("plugin virtual-cables route", j!({"node": hex(inn), "cable": cable}));
+    assert_eq!(routed["nodes"], j!([hex(inn)]));
+    let routed = goofi.call("plugin virtual-cables route", j!({"node": hex(out_a), "cable": cable}));
+    let mut moved: Vec<String> = routed["nodes"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().into()).collect();
+    moved.sort();
+    let mut both = vec![hex(out_a), hex(out_b)];
+    both.sort();
+    assert_eq!(moved, both);
+    let doc = goofi.doc();
+    for uid in [inn, out_a, out_b] {
+        assert_eq!(doc["nodes"][hex(uid)]["params"]["audio"]["device"]["value"], j!(device), "{uid:?}");
+    }
+    // One undo step takes the AudioOut move back whole.
+    goofi.call("undo", j!({}));
+    let doc = goofi.doc();
+    assert_eq!(doc["nodes"][hex(out_a)]["params"]["audio"]["device"]["value"], j!("default"));
+    assert_eq!(doc["nodes"][hex(out_b)]["params"]["audio"]["device"]["value"], j!("default"));
+    assert_eq!(doc["nodes"][hex(inn)]["params"]["audio"]["device"]["value"], j!(device));
+    let signal = goofi.add("signal:Constant");
+    assert!(goofi.refuse("plugin virtual-cables route", j!({"node": hex(signal), "cable": cable})).contains("not an AudioIn"));
+
+    assert_eq!(goofi.call("plugin virtual-cables remove", j!({"name": cable}))["removed"], true);
+    assert_eq!(goofi.call("plugin virtual-cables list", j!({}))["cables"], j!([]));
+    assert!(goofi.refuse("plugin virtual-cables route", j!({"node": hex(inn), "cable": cable})).contains("no cable"));
 }

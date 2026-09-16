@@ -550,9 +550,18 @@
 		return null;
 	}
 
-	/** The marked drop zone under a screen point — a control widget, a param row. */
+	/** Every marked drop zone — a control widget, a param row — including those a plugin panel
+	 * keeps behind its shadow root, which `document.querySelectorAll` does not enter. */
+	function* dropZones(): Iterable<HTMLElement> {
+		yield* document.querySelectorAll<HTMLElement>('[data-node-drop]');
+		for (const host of document.querySelectorAll<HTMLElement>('[data-plugin-panel]')) {
+			if (host.shadowRoot) yield* host.shadowRoot.querySelectorAll<HTMLElement>('[data-node-drop]');
+		}
+	}
+
+	/** The marked drop zone under a screen point. */
 	function dropZoneUnder(x: number, y: number): string | null {
-		for (const el of document.querySelectorAll<HTMLElement>('[data-node-drop]')) {
+		for (const el of dropZones()) {
 			const r = el.getBoundingClientRect();
 			if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) return el.dataset.nodeDrop ?? null;
 		}

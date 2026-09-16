@@ -494,6 +494,15 @@ static RAMP_PARAMS: &[ParamDecl] = &[
 
 /// Copy the folder plugin used by backend and browser sessions into a test home.
 pub fn plugin_package(home: &std::path::Path) {
+    install_plugin(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/plugins/example"), home, "example");
+}
+
+/// The shipped virtual-cables plugin, from `plugins/` at the repository root, into `home`.
+pub fn virtual_cables(home: &std::path::Path) {
+    install_plugin(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/virtual-cables"), home, "virtual-cables");
+}
+
+fn install_plugin(from: &std::path::Path, home: &std::path::Path, id: &str) {
     fn copy(from: &std::path::Path, to: &std::path::Path) {
         std::fs::create_dir_all(to).unwrap();
         for entry in std::fs::read_dir(from).unwrap() {
@@ -503,5 +512,5 @@ pub fn plugin_package(home: &std::path::Path) {
             else { std::fs::copy(entry.path(), to.join(entry.file_name())).unwrap(); }
         }
     }
-    copy(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/plugins/example"), &home.join("plugins/example"));
+    copy(from, &home.join("plugins").join(id));
 }

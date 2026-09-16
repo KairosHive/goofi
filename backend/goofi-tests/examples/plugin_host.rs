@@ -6,6 +6,7 @@ async fn main() {
     let python = require_python();
     let home = tempfile::tempdir().unwrap();
     goofi_tests::fixtures::plugin_package(home.path());
+    goofi_tests::fixtures::virtual_cables(home.path());
     let mut goofi = Goofi::new();
     goofi_bridge::plugins::Plugins::load(
         &mut goofi.state,

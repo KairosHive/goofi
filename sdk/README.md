@@ -159,7 +159,16 @@ export default function (plugin, ctx) {
 Panel IDs become `plugin:<plugin-id>:<panel-id>`. Users add and focus panels through goofi's
 normal panel UI. The framework owns layout and gestures. Panel registration lasts for the browser
 page; there is no panel-open or panel-removal API. The mount context has `call`, `log`, `panel_id`,
-a getter for `state`, and `set_state(value, intent)`. Intent is `edit` by default or `navigation`.
+a getter for `state`, `set_state(value, intent)`, `on_node_drop`, and `on_node_drag`. Intent is
+`edit` by default or `navigation`.
+
+A panel registered with `accepts_node: true` is a drop target for a node dragged from the editor,
+and goofi draws the same drop hint it draws on its own panels. `on_node_drop(handler)` receives
+`{node, zone, x, y}`: `node` is the node's uid, and `zone` is the part after `#` of the
+`data-node-drop="<panel_id>#<zone>"` attribute of the element the drop landed on, or empty for the
+panel itself. Goofi finds those elements inside a shadow root. `on_node_drag(handler)` receives
+`{node, over, zone}` while a drag runs and `null` when it ends, so a row can highlight itself.
+Both return a function that removes the handler.
 Do not store credentials or database contents in panel state: authored panel state is part of the
 patch. Use CSS custom properties for theme values and container queries for panel sizing. A shadow
 root can contain plugin styles.
@@ -185,6 +194,12 @@ packages into node interpreters.
 A plugin can provide its own playback node and configure it through `ctx.call`. Downloads and
 database access must stay outside audio callbacks and other time-critical processing. Prefer stable
 recording IDs or portable paths in saved node parameters. No resource-provider API is required.
+
+## Shipped plugins
+
+`plugins/` at the repository root holds plugins goofi ships as source. Install one by copying or
+linking its folder into `.goofi/plugins/`. `plugins/virtual-cables` creates PipeWire virtual audio
+devices on Linux and points AudioIn and AudioOut nodes at them by drag and drop.
 
 ## Validation
 
