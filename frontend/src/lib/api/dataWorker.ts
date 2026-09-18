@@ -1,9 +1,8 @@
-/** Data-plane Web Worker: one WebSocket per (node, slot), latest-wins, decoded on a tick and
- * posted to the main thread with its array buffer transferred. */
+/** Data-plane Web Worker: one WebSocket per (node, slot), each frame decoded on arrival and
+ * posted to the main thread with its array buffer transferred. `frames.ts` owns latest-wins. */
 import { decodeData, type DataFrame } from '$lib/codec/decode';
 import { dataUrl } from './dataUrl';
 import { streamKey } from './streamKey';
-import { DemandTicker } from './demandTicker';
 
 interface SlotState {
 	node: string;
@@ -12,14 +11,11 @@ interface SlotState {
 	url: string;
 	closed: boolean;
 	reconnectMs: number;
-	latestRaw: ArrayBuffer | null;
 	/** The ViewSpecs every viewer of this slot has contributed; empty means full resolution. */
 	specs: unknown[];
 }
 
 const slots = new Map<string, SlotState>();
-const TICK_MS = 16; // ~60 Hz; workers have no requestAnimationFrame
-
 
 function sendSpecs(st: SlotState): void {
 	if (!st.ws || st.ws.readyState !== WebSocket.OPEN) return;
@@ -40,7 +36,7 @@ function openWs(st: SlotState): void {
 		sendSpecs(st); // no server resume
 	});
 	ws.addEventListener('message', (e) => {
-		if (e.data instanceof ArrayBuffer) st.latestRaw = e.data; // overwrite — latest wins
+		if (e.data instanceof ArrayBuffer) post(st, e.data);
 	});
 	ws.addEventListener('close', (e) => {
 		st.ws = null;
@@ -74,9 +70,8 @@ self.addEventListener('message', (e: MessageEvent) => {
 		if (!st) {
 			const proto = self.location.protocol === 'https:' ? 'wss:' : 'ws:';
 			const url = dataUrl(proto, self.location.host, m.node, m.slot);
-			st = { node: m.node, slot: m.slot, ws: null, url, closed: false, reconnectMs: 250, latestRaw: null, specs: [] };
+			st = { node: m.node, slot: m.slot, ws: null, url, closed: false, reconnectMs: 250, specs: [] };
 			slots.set(k, st);
-			syncTicker();
 			openWs(st);
 		}
 	} else if (m.op === 'spec') {
@@ -92,33 +87,21 @@ self.addEventListener('message', (e: MessageEvent) => {
 		st.closed = true;
 		st.ws?.close();
 		slots.delete(k);
-		syncTicker();
 	}
 });
 
-/** Drain every slot's latest-wins frame to the main thread. Armed only while slots exist. */
-function drain(): void {
-	for (const st of slots.values()) {
-		const raw = st.latestRaw;
-		if (!raw) continue;
-		st.latestRaw = null;
-		let frame: DataFrame;
-		try {
-			frame = decodeData(raw);
-		} catch {
-			continue; // a corrupt frame shouldn't kill the slot
-		}
-		const transfer = new Set<ArrayBufferLike>();
-		collectBuffers(frame, transfer);
-		(self as unknown as Worker).postMessage(
-			{ node: st.node, slot: st.slot, frame },
-			Array.from(transfer) as Transferable[]
-		);
+/** Decode one frame and hand it to the main thread, its buffers transferred. */
+function post(st: SlotState, raw: ArrayBuffer): void {
+	let frame: DataFrame;
+	try {
+		frame = decodeData(raw);
+	} catch {
+		return; // a corrupt frame shouldn't kill the slot
 	}
-}
-
-/** Call after every `slots` insert/delete; `DemandTicker.sync` is idempotent. */
-const ticker = new DemandTicker(drain, TICK_MS);
-function syncTicker(): void {
-	ticker.sync(slots.size);
+	const transfer = new Set<ArrayBufferLike>();
+	collectBuffers(frame, transfer);
+	(self as unknown as Worker).postMessage(
+		{ node: st.node, slot: st.slot, frame },
+		Array.from(transfer) as Transferable[]
+	);
 }
