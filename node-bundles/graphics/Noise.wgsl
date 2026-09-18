@@ -28,7 +28,7 @@ const VOL_GAIN: f32 = 2.0;
 
 fn mix32(cell: vec3i, salt: u32) -> u32 {
     let q = vec3u(cell + 65536);
-    var h = q.x * 1597334673u ^ q.y * 3812015801u ^ q.z * 2654435761u ^ salt;
+    var h = (q.x * 1597334673u) ^ (q.y * 3812015801u) ^ (q.z * 2654435761u) ^ salt;
     h = (h ^ (h >> 16u)) * 2246822519u;
     h = (h ^ (h >> 13u)) * 3266489917u;
     return h ^ (h >> 16u);

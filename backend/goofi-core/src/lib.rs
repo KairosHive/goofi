@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod child;
 pub mod log;
 pub mod variables;
@@ -17,7 +18,9 @@ pub mod probe;
 pub mod reduce;
 pub mod record;
 pub mod registry;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod session;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod startup;
 pub mod stream;
 pub mod time;
@@ -790,6 +793,17 @@ impl Param {
             Param::Bool { value } => Some(if *value { 1.0 } else { 0.0 }),
             _ => None,
         }
+    }
+
+    /// The scalar an engine reads: a number as itself, a bool as 0/1, an option as its index,
+    /// free text as 0, and a pulse — which holds no value — as 0.
+    pub fn scalar(&self) -> f64 {
+        self.as_f64().unwrap_or_else(|| match self {
+            Param::Str { value, options: Some(options), .. } => {
+                options.iter().position(|o| o == value).map_or(0.0, |i| i as f64)
+            }
+            _ => 0.0,
+        })
     }
     pub fn as_i64(&self) -> Option<i64> {
         match self {

@@ -1,7 +1,9 @@
 //! Process logs, grouped by source, level, stream and exact text.
 
 use std::collections::{BTreeMap, HashMap};
-use std::io::{Read, Write};
+use std::io::Read;
+#[cfg(not(target_arch = "wasm32"))]
+use std::io::Write;
 use std::sync::{Mutex, OnceLock};
 use serde::Serialize;
 
@@ -156,6 +158,7 @@ pub fn drain(mut reader: impl Read, source: Source, stream: &str) {
     if !pending.is_empty() { emit(&pending); }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Capture native writes too. The saved terminal keeps startup prompts and the launch URL visible.
 pub fn capture_stdio() -> Result<(), String> {
     use filedescriptor::{FileDescriptor, Pipe, StdioDescriptor};
@@ -181,8 +184,10 @@ pub fn capture_stdio() -> Result<(), String> {
     }).clone()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 static TERMINAL: OnceLock<Mutex<filedescriptor::FileDescriptor>> = OnceLock::new();
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Write raw bytes to the saved terminal, or to stdout before the capture.
 pub fn terminal_write(bytes: &[u8]) -> std::io::Result<()> {
     match TERMINAL.get() {
@@ -191,6 +196,7 @@ pub fn terminal_write(bytes: &[u8]) -> std::io::Result<()> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Whether the terminal is one, and how wide: `None` when output goes to a file or a pipe.
 pub fn terminal_width() -> Option<u16> {
     #[cfg(unix)]
@@ -212,6 +218,7 @@ pub fn terminal_width() -> Option<u16> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn terminal_line(text: &str) -> std::io::Result<()> {
     match TERMINAL.get() {
         Some(out) => writeln!(out.lock().unwrap_or_else(|e| e.into_inner()), "{text}"),
@@ -219,6 +226,7 @@ pub fn terminal_line(text: &str) -> std::io::Result<()> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn print_url(url: &str) -> std::io::Result<()> { terminal_line(&format!("goofi → {url}")) }
 
 

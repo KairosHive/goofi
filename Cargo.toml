@@ -21,6 +21,7 @@ members = [
     "backend/audio/goofi-audio-sdk",
     "backend/audio/goofi-audio",
     "backend/graphics/goofi-graphics",
+    "backend/graphics/goofi-graphics-web",
     "backend/signal/goofi-signal",
     "backend/signal/goofi-python",
     "backend/signal/goofi-pymod",
