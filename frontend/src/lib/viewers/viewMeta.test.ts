@@ -5,7 +5,7 @@ import { summaryOf } from './viewMeta';
 const arr = (dtype: string, shape: number[], values: number[]): ArrayData => ({
 	dtype,
 	shape,
-	values
+	values: Float32Array.from(values)
 });
 
 describe('summaryOf', () => {

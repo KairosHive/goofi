@@ -3,7 +3,7 @@
 Decided 2026-09-16 from the performance audit. The owner reports the browser's frame rate falling
 as a patch grows. The audit measured the shipped viewers on the owner's own patches and found the
 cost in HOW the viewers paint, not in what they are sent. This file is the render architecture
-that replaces uPlot and the per-viewer canvases, and the order to build it in.
+that replaced uPlot and the per-viewer canvases (`glance/`), and what remains of it.
 
 ## What was measured
 
@@ -118,24 +118,26 @@ worth doing in the current viewers, since the package will take weeks and each i
 - Let the worker decode and post on arrival and delete its 16 ms tick (`dataWorker.ts` `drain`,
   `DemandTicker`): `frames.ts` is the one latest-wins owner (`data-plane-bandwidth.md`).
 
-## Order
+## Done
 
-1. The cheap cuts above.
-2. The package: surface, line plots, hit testing, its own vitest for the pure parts (rect packing,
-   envelope layout, autoscale, hit test) and a Playwright pixel check in `tests/e2e` (a sine draws
-   a band that is not flat; a collapsed viewer draws nothing; a pan keeps every plot inside its
-   card; a raised card occludes the plot under it).
-3. `ArrayViewer` migrated behind `ViewBinding`; uPlot removed.
-4. Images, then topomap and trajectory; `imageGL.ts` removed.
-5. Worker-side rendering.
+The cheap cuts; `glance/` (surface, line and image plots, hit test, vitest over the pure parts,
+`tests/e2e/tests/viewer.spec.ts` for the pixels); `ArrayViewer` and `ImageViewer` migrated behind
+`ViewBinding`, uPlot and `imageGL.ts` removed. The docked `viewer` panel keeps a surface of its own
+at zoom 1. `valueAt` reads the CPU copy on the main thread.
 
-## Open
+## Remaining
 
-- Whether the docked `viewer` panel shares the editor's surface type (one plot, one surface) or
-  keeps a simpler component; one surface type is the smaller design.
-- A raised card occludes by DOM order, but a plot's OWN card corners are rounded: the plot rect is
-  inset by the radius where it meets a corner, or the fragment shader rounds it. Decide on sight.
-- Readouts on hover need the value under the pointer; `valueAt` reads the CPU copy of the series,
-  which is fine on the main thread and a round trip once rendering moves to the worker.
-- Whether the envelope band is drawn as min/max pairs or as two lines depends on how the bridge
-  lays out `envelope` output; read `goofi_core::reduce` before fixing the buffer layout.
+1. Topomap and trajectory onto the surface: the interpolation (`topomapInterp.ts`, CPU today) as a
+   fragment shader over the electrode positions; the trajectory as a line plot with two series per
+   pair. Then `ViewerSurface` keeps only the string and table kinds.
+2. Worker-side rendering; hover readouts become a round trip.
+3. A WebGPU backend behind the same seam, when the browser graphics engine wants the shared device.
+
+## Accepted
+
+- Occlusion is by DOM order and plot z order: a raised card covers the plot beneath it because its
+  plot draws later with an opaque background. Two unraised cards with equal z stack by DOM order
+  while their plots draw in insertion order, so a body dragged over a neighbour's body can show the
+  neighbour's plot until one card is raised.
+- The body's padding is an opaque frame in the card colour, so the plot stays inside the card's
+  rounded corners and the pane never shows through it.
