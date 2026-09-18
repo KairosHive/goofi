@@ -655,10 +655,13 @@ impl Viewer {
             .unwrap();
     }
 
-    /// The next GOOF frame, raw.
+    /// The next GOOF frame, raw. One deadline for the whole wait: the bridge's keepalive pings
+    /// would otherwise keep a socket that serves nothing waiting for ever.
     pub async fn frame(&mut self) -> Vec<u8> {
+        let deadline = Instant::now() + WAIT;
         loop {
-            match tokio::time::timeout(WAIT, self.ws.next()).await {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match tokio::time::timeout(left, self.ws.next()).await {
                 Ok(Some(Ok(Message::Binary(b)))) => return b.to_vec(),
                 Ok(Some(Ok(_))) => {}
                 other => panic!("the data socket stopped before a frame arrived: {other:?}"),
@@ -681,6 +684,20 @@ impl Viewer {
                 return d;
             }
             assert!(Instant::now() < deadline, "no frame matched before the deadline");
+        }
+    }
+
+    /// Whether NO frame arrives within `window` — what a suppressed re-emit looks like from here.
+    pub async fn silent_for(&mut self, window: Duration) -> bool {
+        let deadline = Instant::now() + window;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match tokio::time::timeout(left, self.ws.next()).await {
+                Ok(Some(Ok(Message::Binary(_)))) => return false,
+                Ok(Some(Ok(_))) => continue,
+                Ok(other) => panic!("the data socket stopped: {other:?}"),
+                Err(_) => return true,
+            }
         }
     }
 

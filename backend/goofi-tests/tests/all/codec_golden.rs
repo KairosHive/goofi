@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use goofi_codec::{encode, encode_u8, split_frame};
+use goofi_codec::{encode, encode_f16, encode_u8, split_frame};
 use goofi_core::{Axes, Axis, Coord, Data, Meta};
 use indexmap::IndexMap;
 
@@ -11,15 +11,19 @@ fn arr(shape: &[usize], buf: Vec<u8>, meta: Meta) -> Data {
     Data::array_f32(shape.to_vec(), buf, meta).unwrap()
 }
 
+/// Values a half float holds exactly: one, its largest, its smallest normal and its smallest subnormal.
+const HALVES: [f32; 4] = [1.0, 65504.0, 6.103_515_6e-5, 5.960_464_5e-8];
+
 fn le_bytes(vals: &[f32]) -> Vec<u8> {
     vals.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
-/// A golden case, by which encoder writes it: the wire's f32 `Data`, or the viewer hop's texels,
-/// which no `Data` can hold.
+/// A golden case, by which encoder writes it: the wire's f32 `Data`, the viewer hop's texels,
+/// which no `Data` can hold, or the same hop's half floats of an f32 `Data`.
 enum Case {
     Frame(Data),
     Texels(Vec<usize>, Vec<u8>, Meta),
+    Halves(Data),
 }
 
 impl Case {
@@ -27,6 +31,7 @@ impl Case {
         match self {
             Case::Frame(d) => encode(d),
             Case::Texels(shape, texels, meta) => encode_u8(shape, texels, meta),
+            Case::Halves(d) => encode_f16(d).expect("every sample fits a half"),
         }
     }
 }
@@ -58,10 +63,10 @@ fn build_cases() -> Vec<(&'static str, Case)> {
     ]
     .into_iter()
     .map(|(name, d)| (name, Case::Frame(d)))
-    .chain([(
-        "u8_image",
-        Case::Texels(vec![1, 2, 3], vec![0, 255, 128, 255, 0, 128], Meta::empty()),
-    )])
+    .chain([
+        ("u8_image", Case::Texels(vec![1, 2, 3], vec![0, 255, 128, 255, 0, 128], Meta::empty())),
+        ("f16_line", Case::Halves(arr(&[4], le_bytes(&HALVES), Meta::empty()))),
+    ])
     .collect()
 }
 
@@ -156,6 +161,11 @@ fn goof_encoder_matches_python_golden() {
             assert_eq!(encode(&back), rust_frame, "[{name}] did not survive the round trip");
             assert_eq!(back.meta().sfreq(), d.meta().sfreq(), "[{name}] sfreq");
             assert_eq!(back.meta().channels(), d.meta().channels(), "[{name}] axis labels ride the frame");
+        }
+        // The half-float hop comes back as the f32 it was made from: these values it holds exactly.
+        if let Case::Halves(d) = case {
+            let back = goofi_codec::decode(&rust_frame).unwrap_or_else(|e| panic!("[{name}] {e}"));
+            assert_eq!(encode(&back), encode(d), "[{name}] did not survive the half-float hop");
         }
     }
 }

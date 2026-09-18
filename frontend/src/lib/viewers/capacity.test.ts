@@ -10,7 +10,8 @@ describe('viewSpecForKind', () => {
 			reduce: [
 				{ dim: 0, max: 300, method: 'subsample' },
 				{ dim: -1, max: 1600, method: 'envelope' }
-			]
+			],
+			depth: 'f16'
 		});
 	});
 

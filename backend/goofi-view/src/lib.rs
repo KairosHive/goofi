@@ -118,14 +118,15 @@ pub const UNDECLARED_MAX: usize = 512;
 /// the whole product.
 pub const UNDECLARED_BOX: (u32, u32) = (1, 1);
 
-/// The sample depth a viewer can draw: the wire's f32, or 8-bit texels, which cost a quarter of
-/// the bytes and are all an image viewer can show.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// The sample depth a viewer can draw, narrowest first: 8-bit texels are all an image shows, a
+/// half float is more than a plot's pixel resolves, and f32 is the wire itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Depth {
+    U8,
+    F16,
     #[default]
     F32,
-    U8,
 }
 
 /// One viewer's full declaration: what it can draw + what it wants reduced.
@@ -142,8 +143,8 @@ pub struct ViewSpec {
     /// Desired per-axis reductions.
     #[serde(default)]
     pub reduce: Vec<AxisReduce>,
-    /// The depth this viewer can draw. One stream serves every viewer, so 8-bit is sent only
-    /// where every admitted one accepts it.
+    /// The depth this viewer can draw. One stream serves every viewer, so it is as narrow as
+    /// the widest admitted ask.
     #[serde(default)]
     pub depth: Depth,
 }
@@ -239,13 +240,13 @@ fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<(Ve
     let mut order: Vec<usize> = Vec::new(); // first-seen dim order → stable output
     let mut folded: HashMap<usize, (usize, MethodSet)> = HashMap::new();
     let mut admitted = 0usize;
-    let mut every_u8 = true;
+    let mut depth = Depth::U8;
     for spec in specs {
         if !spec.admits(frame) {
             continue;
         }
         admitted += 1;
-        every_u8 &= spec.depth == Depth::U8;
+        depth = depth.max(spec.depth);
         for r in &spec.reduce {
             let Some(d) = canon_dim(r.dim, ndim) else {
                 continue;
@@ -265,7 +266,7 @@ fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<(Ve
             PlannedAxis { dim: d, max: mx, method: set.resolve() }
         })
         .collect();
-    (admitted > 0).then_some((axes, if every_u8 { Depth::U8 } else { Depth::F32 }))
+    (admitted > 0).then_some((axes, depth))
 }
 
 /// What a slot's readers want of its frames: the box to fit the readback into, and the sample

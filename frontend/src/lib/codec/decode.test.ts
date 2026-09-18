@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { decodeData, type ArrayData, type DataFrame } from './decode';
 
 /**
@@ -19,7 +19,8 @@ interface Decoded {
 	meta: Record<string, unknown>;
 	arrayDtype?: string;
 	shape?: number[];
-	values?: number[];
+	/** JSON has no NaN or infinity: the fixture spells those as the strings `Number` reads. */
+	values?: (number | string)[];
 	value?: string;
 	entries?: Record<string, Decoded>;
 }
@@ -38,7 +39,7 @@ function checkDecoded(frame: DataFrame, exp: Decoded): void {
 		expect(a.dtype).toBe(exp.arrayDtype);
 		expect(a.shape).toEqual(exp.shape);
 		// Number() coerces BigInt64Array (i8/u8) elements; all fixture values < 2^53.
-		expect(Array.from(a.values, (v) => Number(v))).toEqual(exp.values);
+		expect(Array.from(a.values, (v) => Number(v))).toEqual(exp.values!.map(Number));
 	} else if (exp.dtype === 'STRING') {
 		expect(frame.data).toBe(exp.value);
 	} else {
@@ -55,6 +56,17 @@ describe('codec golden parity (py encode → ts decode)', () => {
 
 	for (const entry of GOLDEN.entries) {
 		it(`decodes ${entry.name} identically to the Python encoder`, () => {
+			checkDecoded(decodeData(hexToBytes(entry.hex)), entry.decoded);
+		});
+	}
+});
+
+describe('codec golden parity on an engine without Float16Array', () => {
+	beforeAll(() => vi.stubGlobal('Float16Array', undefined));
+	afterAll(() => vi.unstubAllGlobals());
+
+	for (const entry of GOLDEN.entries.filter((e) => e.name.includes('f16'))) {
+		it(`widens ${entry.name} bit by bit`, () => {
 			checkDecoded(decodeData(hexToBytes(entry.hex)), entry.decoded);
 		});
 	}
