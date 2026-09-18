@@ -1,3 +1,6 @@
+# The browser graphics engine: `backend/graphics/goofi-graphics-web/build.sh` writes it.
+frontend/static/dev/graphics/
+
 # Node tooling artifacts. frontend/ has its own .gitignore for its node_modules;
 # this also catches stray root caches (e.g. node_modules/.vite created by running
 # Vite from the repo root instead of frontend/).

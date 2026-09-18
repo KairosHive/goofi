@@ -595,7 +595,7 @@ impl AudioEngine {
             .iter()
             .enumerate()
             .map(|(i, (id, kind))| {
-                let raw = goofi_control::scalar(&consts[voice + i]);
+                let raw = consts[voice + i].scalar();
                 let normalized = match kind {
                     vst3::Kind::Float => raw,
                     vst3::Kind::Stepped(steps) => raw / steps,

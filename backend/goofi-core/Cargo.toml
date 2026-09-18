@@ -5,7 +5,6 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-filedescriptor = "0.8.3"
 indexmap = "2"
 # A drawing widget's value is a `data:image/png;base64,…` URL and a node has to read the pixels out
 # of it; `src/png.rs` is that door, and these are the two halves it does not hand-roll.
@@ -17,7 +16,6 @@ flate2 = "1"
 dunce = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-getrandom = "0.4"
 # The config file's format.
 toml = "0.8"
 # The shared, payload-free ViewSpec algebra. goofi-core (signal payload) implements its
@@ -25,9 +23,12 @@ toml = "0.8"
 # never depends back on goofi-core.
 goofi-view = { path = "../goofi-view" }
 
+# A page has no processes, sessions or terminal: these stay with the native build.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+filedescriptor = "0.8.3"
+getrandom = "0.4"
 # The startup screen: one progress bar per folder the node library scan is in.
 indicatif = "0.18"
-
 # The child's process group and the liveness pipe's fd flag (unix); the log redirect (windows).
 libc = "0.2"
 

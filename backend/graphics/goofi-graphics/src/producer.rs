@@ -188,7 +188,7 @@ impl Worker {
         Lifetime { halt: self.halt.clone(), local: self.local.clone() }
     }
     pub fn sync(&mut self, cx: &goofi_control::Cx<'_>) {
-        let decls = crate::decls_of(self.manifest);
+        let decls = crate::engine::decls_of(self.manifest);
         let mut next = ParamGroups::new();
         for (d, value) in decls.iter().zip(&cx.values) {
             next.entry(d.group.into()).or_default().insert(d.name.into(), value.clone());
