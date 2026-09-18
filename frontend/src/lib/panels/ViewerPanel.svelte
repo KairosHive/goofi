@@ -10,6 +10,8 @@
 	import { asStateObject } from 'panelty';
 	import { workspace } from 'panelty';
 	import { Select } from '$lib/ui';
+	import { createSurface, type Surface } from 'glance';
+	import { provideAnchor, provideSurface } from '$lib/viewers/plotHost';
 
 	interface ViewerState {
 		node?: string | null;
@@ -18,6 +20,45 @@
 
 	let props: PanelProps = $props();
 	const ws = workspace();
+
+	// This panel's own plot surface, at zoom 1, covering the body under the feed.
+	let body = $state<HTMLElement | null>(null);
+	let canvas = $state<HTMLCanvasElement | null>(null);
+	let surface = $state.raw<Surface | null>(null);
+	provideSurface({
+		get surface() {
+			return surface;
+		}
+	});
+	provideAnchor({
+		x: 0,
+		y: 0,
+		z: 0,
+		get el() {
+			return body;
+		}
+	});
+	$effect(() => {
+		const c = canvas;
+		const b = body;
+		if (!c || !b) return;
+		let s: Surface | null = null;
+		try {
+			s = createSurface(c);
+		} catch (err) {
+			console.warn(err);
+		}
+		surface = s;
+		const ro = new ResizeObserver(() =>
+			s?.setView({ x: 0, y: 0, zoom: 1, width: b.clientWidth, height: b.clientHeight, dpr: window.devicePixelRatio || 1 })
+		);
+		ro.observe(b);
+		return () => {
+			ro.disconnect();
+			s?.dispose();
+			surface = null;
+		};
+	});
 
 	function st(): ViewerState {
 		return asStateObject(props.state) as ViewerState;
@@ -67,15 +108,26 @@
 
 	{#snippet content(node)}
 		{@const { slot, binding } = view(node)}
-		<div class="vp-body"><ViewerFeed node={node.uid} {slot} {binding} /></div>
+		<div class="vp-body" bind:this={body}>
+			<canvas class="plot-surface" bind:this={canvas}></canvas>
+			<ViewerFeed node={node.uid} {slot} {binding} />
+		</div>
 	{/snippet}
 </NodeLinkedPanel>
 
 <style>
 	.vp-body {
+		position: relative;
 		flex: 1;
 		min-height: 0;
 		display: flex;
 		padding: var(--space-3);
+	}
+	.plot-surface {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
 	}
 </style>

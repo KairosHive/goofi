@@ -15,7 +15,7 @@ describe('decimateMinMax', () => {
 		expect(out.ys[0]).toEqual([0, 5, 0, 9]);
 	});
 
-	it('keeps x strictly increasing (uPlot requires it)', () => {
+	it('keeps x strictly increasing (the hit test walks a sorted x)', () => {
 		const ch = Array.from({ length: 777 }, (_, i) => Math.sin(i));
 		const out = decimateMinMax([ch], 777, 80);
 		for (let i = 1; i < out.xs.length; i++) {
@@ -24,10 +24,8 @@ describe('decimateMinMax', () => {
 	});
 
 	it('offsets every x by base so log-x has no x <= 0', () => {
-		// Under Log X the viewer sets uPlot x.distr=3 (log10); log10(0) is -Infinity,
-		// which collapses the whole x-scale and blanks the plot. Bucket 0 starts at
-		// sample 0, so without a base decimation emits xs[0]=0 — the log-x empty-plot
-		// bug. `base` mirrors indexAxis's 1-based rule so the decimated path stays >0.
+		// log10(0) is -Infinity, which collapses a log x-window: bucket 0 starts at sample 0,
+		// so `base` (1 under log x) keeps every decimated x above 0.
 		const ch = Array.from({ length: 1000 }, (_, i) => i);
 		const out = decimateMinMax([ch], 1000, 100, 1);
 		expect(out.xs[0]).toBe(1);

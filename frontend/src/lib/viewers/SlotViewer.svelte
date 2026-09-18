@@ -104,7 +104,10 @@
 	</header>
 
 	{#if expanded}
-		<div class="body"><ViewerFeed {node} {slot} {binding} /></div>
+		<!-- A line or image body is transparent: the editor's plot surface paints it from beneath. -->
+		<div class="body" class:plot={binding.kind === 'line' || binding.kind === 'image'}>
+			<ViewerFeed {node} {slot} {binding} />
+		</div>
 	{/if}
 </div>
 
@@ -195,6 +198,13 @@
 		justify-content: stretch;
 		padding: 4px 6px 7px;
 		background: var(--bg);
+	}
+	/* The surface draws through the body; its padding is an opaque frame the card clips at the corners. */
+	.body.plot {
+		background: transparent;
+		padding: 0;
+		border: solid var(--bg);
+		border-width: 4px 6px 7px;
 	}
 	.body > :global(*) {
 		flex-grow: 1;

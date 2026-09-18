@@ -29,6 +29,24 @@ async function imageContrast(page: Page): Promise<number> {
 	}, png.toString('base64'));
 }
 
+/** Contrast in a strip along the canvas's left edge, inside the panel padding: content there means the
+ * picture was stretched to the panel, since a letterboxed square leaves the strip flat. */
+async function edgeContrast(page: Page): Promise<number> {
+	const png = await page.locator('.vp-body canvas:visible').first().screenshot();
+	return page.evaluate(async (encoded) => {
+		const bytes = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
+		const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+		const canvas = new OffscreenCanvas(32, 32);
+		const ctx = canvas.getContext('2d')!;
+		ctx.drawImage(bitmap, bitmap.width*0.04, bitmap.height/4, bitmap.width*0.04, bitmap.height/2, 0, 0, 32, 32);
+		bitmap.close();
+		const pixels = ctx.getImageData(0, 0, 32, 32).data;
+		let low = 255, high = 0;
+		for (let i = 0; i < pixels.length; i += 4) { low = Math.min(low, pixels[i]); high = Math.max(high, pixels[i]); }
+		return high-low;
+	}, png.toString('base64'));
+}
+
 async function imageMovement(page: Page, previous: string): Promise<number> {
 	const current = (await page.locator('.vp-body canvas:visible').first().screenshot()).toString('base64');
 	return page.evaluate(async ([previous, current]) => {
@@ -48,7 +66,7 @@ async function imageMovement(page: Page, previous: string): Promise<number> {
 	}, [previous, current]);
 }
 
-test('the harmonic geometry cookbook opens as live dashboards with usable controls', async ({ page }) => {
+test('the harmonic geometry cookbook opens as live dashboards with usable controls', async ({ page }, info) => {
 	test.setTimeout(360_000);
 	page.setDefaultTimeout(15_000);
 	const thrown: string[] = [];
@@ -71,7 +89,7 @@ test('the harmonic geometry cookbook opens as live dashboards with usable contro
 						const node = g.query.graph().nodes.find((n: any) => n.name === name);
 						return node && g.query.frameSummary(node.uid, slot) !== null;
 					}, { name, slot }), { timeout: 45_000, message: `${recipe.file}: ${name}.${slot} reaches the browser` }).toBe(true);
-					if (kind !== 'string') await expect(page.locator('.vp-body canvas').first()).toBeVisible();
+					if (kind !== 'string') await expect(page.locator('.vp-body canvas.plot-surface').first()).toBeVisible();
 					if (!index) {
 						if (slot === 'out') await expect.poll(() => imageContrast(page),
 							{ timeout: 45_000, message: 'The plate viewer shows a pattern after its shader inputs arrive' }).toBeGreaterThan(8);
@@ -81,7 +99,7 @@ test('the harmonic geometry cookbook opens as live dashboards with usable contro
 							const frame = g.query.frameSummary(node.uid, slot);
 							return frame && (frame.reducedLength === undefined || frame.reducedLength >= 300_000);
 						}, { name, slot })).toBe(true);
-						await page.screenshot({ path: path.join(folder, 'assets', recipe.file.replace('.gfi', '-browser.png')) });
+						await page.screenshot({ path: info.outputPath(recipe.file.replace('.gfi', '-browser.png')) });
 					}
 				}
 				await page.getByRole('tab', { name: 'Play Close tab', exact: true }).click();
@@ -137,7 +155,7 @@ test('the harmonic geometry cookbook opens as live dashboards with usable contro
 	}
 });
 
-test('jade fills the window and its texture controls morph independently', async ({ page }) => {
+test('jade fills the window and its texture controls morph independently', async ({ page }, info) => {
 	test.setTimeout(120_000);
 	const errors: string[] = [];
 	page.on('pageerror', (e) => errors.push(String(e)));
@@ -159,7 +177,7 @@ test('jade fills the window and its texture controls morph independently', async
 		for (const size of [{ width: 1440, height: 1000 }, { width: 820, height: 1180 }]) {
 			await page.setViewportSize(size);
 			await expect(canvas).toBeVisible();
-			await expect(canvas).toHaveCSS('object-fit', 'fill');
+			await expect.poll(() => edgeContrast(page), { timeout: 30_000, message: 'the picture is stretched to the panel edge' }).toBeGreaterThan(8);
 			const box = (await canvas.boundingBox())!;
 			expect(box.width).toBeGreaterThan(size.width*0.9);
 			expect(box.height).toBeGreaterThan(size.height*0.75);
@@ -190,14 +208,14 @@ test('jade fills the window and its texture controls morph independently', async
 		await page.keyboard.press('Home');
 		await canvasTab.click();
 		await expect.poll(() => imageContrast(page), { timeout: 30_000 }).toBeGreaterThan(15);
-		await page.screenshot({ path: path.join(folder, 'assets', '09-jade-resonance-browser.png') });
+		await page.screenshot({ path: info.outputPath('09-jade-resonance-browser.png') });
 		expect(errors).toEqual([]);
 	} finally {
 		await resetPatch(page);
 	}
 });
 
-test('living ratios modulate the organic field with a visible trace and pause control', async ({ page }) => {
+test('living ratios modulate the organic field with a visible trace and pause control', async ({ page }, info) => {
 	test.setTimeout(120_000);
 	await page.setViewportSize({ width: 1440, height: 1000 });
 	await page.goto('/');
@@ -212,7 +230,7 @@ test('living ratios modulate the organic field with a visible trace and pause co
 		await expect(page.getByTestId('control-geometry-mapping').getByRole('combobox')).toHaveValue('chord pairs');
 		await expect(page.getByTestId('control-geometry-motion').getByRole('combobox')).toHaveValue('fields');
 		await expect(page.getByTestId('control-geometry-squareSymmetry').getByRole('combobox')).toHaveValue('d4_max');
-		await expect.poll(() => page.locator('.vp-body canvas:visible').count()).toBeGreaterThanOrEqual(2);
+		await expect.poll(() => page.locator('.vp-body canvas.plot-surface:visible').count()).toBeGreaterThanOrEqual(2);
 		await expect.poll(() => imageContrast(page), { timeout: 45_000 }).toBeGreaterThan(15);
 		const still = (await page.locator('.vp-body canvas:visible').first().screenshot()).toString('base64');
 		await expect.poll(() => imageMovement(page, still), { timeout: 8_000,
@@ -224,7 +242,7 @@ test('living ratios modulate the organic field with a visible trace and pause co
 		await page.getByTestId('control-geometry-running').getByRole('checkbox').uncheck();
 		await expect.poll(async () => (await rawCall(page, 'variable list')).result.variables.find((g: any) => g.name === 'geometry.running').value).toBe(false);
 		await expect.poll(async () => (await rawCall(page, 'session status')).result.errors).toEqual([]);
-		await page.screenshot({ path: path.join(folder, 'assets', '10-living-ratios-browser.png') });
+		await page.screenshot({ path: info.outputPath('10-living-ratios-browser.png') });
 		await page.getByRole('tab', { name: 'nodalLines Close tab', exact: true }).click();
 		await expect.poll(() => imageContrast(page)).toBeGreaterThan(15);
 		await page.getByRole('tab', { name: 'modes Close tab', exact: true }).click();

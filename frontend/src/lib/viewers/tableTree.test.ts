@@ -5,12 +5,12 @@ import { leafSummary, tableChildren } from './tableTree';
 const str = (s: string): DataFrame => ({ dtype: 'STRING', data: s, meta: {} });
 const scalar = (n: number): DataFrame => ({
 	dtype: 'ARRAY',
-	data: { dtype: '<f4', shape: [1], values: [n] },
+	data: { dtype: '<f4', shape: [1], values: new Float32Array([n]) },
 	meta: {}
 });
 const arr = (shape: number[]): DataFrame => ({
 	dtype: 'ARRAY',
-	data: { dtype: '<f4', shape, values: [] },
+	data: { dtype: '<f4', shape, values: new Float32Array() },
 	meta: {}
 });
 const table = (fields: Record<string, DataFrame>): DataFrame => ({

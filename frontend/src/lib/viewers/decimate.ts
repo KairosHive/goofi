@@ -1,6 +1,6 @@
 /**
  * Min/max decimation for line plots: each channel folds to two points per target column.
- * `base` is the sample-index origin — 1 under log-x, since log10(0) collapses uPlot's x-scale.
+ * `base` is the sample-index origin — 1 under log-x, since log10(0) has no place on the axis.
  */
 export interface Decimated {
 	xs: number[];
