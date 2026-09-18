@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use goofi_tests::{hex, host, http, j, panels, tool, Client, Goofi, Message, Viewer};
+use goofi_tests::{f32s, hex, host, http, j, panels, tool, Client, Goofi, Message, Viewer};
 use serde_json::Value;
 
 #[tokio::test]
@@ -89,6 +89,39 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
     let axis = at(&reduced(meta), "0").expect("the reduced axis stands beside the depth");
     assert_eq!(at(&axis, "orig_len").and_then(|v| v.as_u64()), Some(4));
     assert_eq!(at(&axis, "method").and_then(|v| v.as_str().map(str::to_string)), Some("area".into()));
+
+    // Step: a line viewer draws half floats and is served them — half the bytes of an f32
+    // envelope — and the codec widens them back to the f32 the producer emitted.
+    v.view(j!([{ "dtype": "array", "ndim": [], "dims": [],
+                 "reduce": [{ "dim": -1, "max": 8, "method": "envelope" }], "depth": "f16" }])).await;
+    let frame = raw_until(&mut v, |dtype, _| dtype == "<f2").await;
+    let (_, _, body) = goofi_codec::split_frame(&frame).unwrap();
+    let (_, shape, halves) = array_body(body);
+    assert_eq!(halves.len(), 2 * shape.iter().product::<usize>(), "two bytes per sample, not four");
+    let back = goofi_codec::decode(&frame).expect("the half-float hop decodes");
+    let goofi_core::Value::Array(a) = back.value() else { panic!("an array") };
+    assert!(a.as_bytes().chunks_exact(4).all(|b| f32::from_le_bytes(b.try_into().unwrap()).abs() <= 1.0),
+            "a unit LFO's samples, widened");
+
+    // Step: a frame that says what the last one said is not sent: a Constant re-emits a held
+    // value, stamped afresh, and the socket sees ONE frame — while a joiner is served regardless.
+    let konst = g.add("signal:Constant");
+    g.set_param(konst, "common", "max_frequency", 20.0);
+    g.set_param(konst, "constant", "value", 3.0);
+    let mut held = Viewer::open(&base, &hex(konst), "out").await;
+    held.until(|d| f32s(d) == [3.0]).await;
+    assert!(held.silent_for(Duration::from_millis(700)).await, "a held value was sent again");
+    let mut joiner = Viewer::open(&base, &hex(konst), "out").await;
+    assert_eq!(f32s(&joiner.until(|d| f32s(d) == [3.0]).await), [3.0], "a joiner gets the held frame");
+    g.set_param(konst, "constant", "value", 4.0);
+    held.until(|d| f32s(d) == [4.0]).await;
+
+    // Step: on a half-float ask, a value no half holds arrives as the f32 it is — THAT frame alone.
+    held.view(j!([{ "dtype": "array", "ndim": [], "dims": [], "reduce": [], "depth": "f16" }])).await;
+    raw_until(&mut held, |dtype, _| dtype == "<f2").await;
+    g.set_param(konst, "constant", "value", 1e6);
+    let wide = raw_until(&mut held, |dtype, _| dtype == "<f4").await;
+    assert_eq!(f32s(&goofi_codec::decode(&wide).unwrap()), [1e6], "beyond a half's range, unchanged");
 }
 
 /// A GOOF array body: `[u8 ndim][u8 len][dtype][ndim x u32 shape][samples]`.

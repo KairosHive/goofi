@@ -68,7 +68,14 @@ function decodeInto(view: DataView, off: number): DataFrame {
 	const bodyEnd = bodyStart + bodyLen;
 	let data: ArrayData | string | Record<string, DataFrame>;
 	if (dtype === 'ARRAY') {
-		data = decodeArray(view, bodyStart, bodyEnd);
+		const arr = decodeArray(view, bodyStart, bodyEnd);
+		// A half-float hop leaves here as f32, body and meta, so nothing downstream learns a
+		// second float width.
+		if (arr.dtype === '<f2') {
+			arr.dtype = '<f4';
+			meta['dtype'] = 'float32';
+		}
+		data = arr;
 	} else if (dtype === 'STRING') {
 		data = decoder.decode(new Uint8Array(view.buffer, view.byteOffset + bodyStart, bodyLen));
 	} else {
@@ -130,9 +137,33 @@ function readTypedArray(
 	// Slice into a fresh buffer: the consumer outlives the WS message frame, which may be reused.
 	const slice = buffer.slice(byteOffset, byteOffset + nBytes);
 	if (kind + itemsize === 'f4') return new Float32Array(slice, 0, count);
-	// The one exception to an f32 wire: the reducer's 8-bit hop for an image viewer.
+	// The two exceptions to an f32 wire: the reducer's 8-bit hop for an image viewer, and its
+	// half-float hop for a line viewer.
 	if (kind + itemsize === 'u1') return new Uint8Array(slice, 0, count);
-	throw new Error(`Unsupported numpy dtype: ${dtypeStr} (the wire is f32, and u8 on the viewer hop)`);
+	if (kind + itemsize === 'f2') return expandHalf(slice, count);
+	throw new Error(`Unsupported numpy dtype: ${dtypeStr} (the wire is f32, and u8 or f16 on the viewer hop)`);
+}
+
+/** `count` half floats at the start of `buf`, widened to f32 by the engine where it has
+ * `Float16Array` and bit by bit where it does not. */
+function expandHalf(buf: ArrayBufferLike, count: number): Float32Array {
+	const F16 = (globalThis as { Float16Array?: new (b: ArrayBufferLike, o: number, n: number) => ArrayLike<number> })
+		.Float16Array;
+	if (F16) return new Float32Array(new F16(buf, 0, count));
+	const bits = new Uint16Array(buf, 0, count);
+	const out = new Float32Array(count);
+	for (let i = 0; i < count; i++) out[i] = halfToFloat(bits[i]);
+	return out;
+}
+
+/** One IEEE 754 half float, from its bits. */
+function halfToFloat(bits: number): number {
+	const sign = bits & 0x8000 ? -1 : 1;
+	const exp = (bits >> 10) & 0x1f;
+	const frac = bits & 0x3ff;
+	if (exp === 0) return sign * frac * 2 ** -24;
+	if (exp === 0x1f) return frac ? NaN : sign * Infinity;
+	return sign * (1 + frac / 1024) * 2 ** (exp - 15);
 }
 
 export function isArrayFrame(f: DataFrame): f is DataFrame & { data: ArrayData } {

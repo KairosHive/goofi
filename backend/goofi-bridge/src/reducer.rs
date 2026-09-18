@@ -44,8 +44,8 @@ struct SlotReducer {
     tx: broadcast::Sender<Bytes>,
     stop: Arc<AtomicBool>,
     reductions: Arc<AtomicU64>,
-    /// Serve generation: bumped on every spec change and subscriber join, so the loop re-serves
-    /// the current frame once even when the producer has not emitted.
+    /// Serve generation: bumped on every spec change, join and leave, so the loop re-serves the
+    /// current frame once even when the producer has not emitted or the frame did not change.
     gen: Arc<AtomicU64>,
     /// The latest frame as it arrived — what serves a re-attaching viewer, and what the variables
     /// following this slot read. Reduced only where nothing but viewers is watching.
@@ -186,10 +186,12 @@ impl SlotReducers {
         }
     }
 
-    /// Withdraw `conn`'s contribution to `key`'s spec union; the reducer itself STAYS.
+    /// Withdraw `conn`'s contribution to `key`'s spec union; the reducer itself STAYS. The union
+    /// changed, so the frame is served once more under the plan that remains.
     pub fn unsubscribe(&self, key: &SlotKey, conn: ConnId) {
         if let Some(r) = self.inner.lock().unwrap().get(key) {
             r.specs.lock().unwrap().remove(&conn);
+            r.gen.fetch_add(1, Ordering::Release);
         }
     }
 
@@ -298,6 +300,8 @@ fn spawn_reducer(
         // A snapshot needs ONE full-resolution frame, so the demand is held wide until one lands
         // rather than for the single sweep the ask was seen on — the producer needs a tick to answer.
         let mut full_res = false;
+        // What the raw frame last reduced and served SAID, so one that says it again is not sent.
+        let mut sent: Option<u64> = None;
         loop {
             std::thread::sleep(crate::vocab::REDUCER_TICK);
             if stop.load(Ordering::Relaxed) {
@@ -347,6 +351,7 @@ fn spawn_reducer(
                     *full.lock().unwrap() = None;
                     pending = false;
                     served = None;
+                    sent = None;
                 }
                 if asked_at.elapsed() <= IDLE && feed.as_ref().is_none_or(|f| f.service != current) {
                     feed = open_feed(&graph, &iox, uid, &slot);
@@ -442,28 +447,42 @@ fn spawn_reducer(
             if now < next_serve {
                 continue;
             }
+            let bytes = match &made {
+                // Already exactly what the viewers asked for: one buffer, shared by every
+                // subscriber, and no pass over a texel anywhere in this process.
+                Some(ready) => {
+                    sent = None;
+                    ready.clone()
+                }
+                None => {
+                    let Some(d) = latest.lock().unwrap().clone() else { continue };
+                    // A frame that says what the last one said ends here, before the reduce —
+                    // unless a joiner, a leaver, a spec change or a re-offer asked for it regardless.
+                    let hash = goofi_codec::content_hash(&d);
+                    if served == Some(g_now) && sent == Some(hash) {
+                        pending = false;
+                        continue;
+                    }
+                    sent = Some(hash);
+                    let plan = goofi_view::plan(&union_specs(&specs.lock().unwrap()), &d);
+                    let out = goofi_core::reduce::reduce_for_view(&d, &plan);
+                    reductions.fetch_add(1, Ordering::Relaxed);
+                    // As narrow as the widest viewer of the slot draws; the reduction itself is
+                    // f32 either way, and a half or a texel only for a frame they can hold.
+                    let narrowed = match plan.depth {
+                        goofi_view::Depth::U8 => goofi_core::reduce::quantize_u8(&out)
+                            .map(|(shape, texels, meta)| goofi_codec::encode_u8(&shape, &texels, &meta)),
+                        goofi_view::Depth::F16 => goofi_codec::encode_f16(&out),
+                        goofi_view::Depth::F32 => None,
+                    };
+                    Bytes::from(narrowed.unwrap_or_else(|| goofi_codec::encode(&out)))
+                }
+            };
+            // The serve slot is taken by a frame served, never by one this tick held back.
             next_serve += crate::vocab::VIEWER_INTERVAL;
             if next_serve < now {
                 next_serve = now + crate::vocab::VIEWER_INTERVAL;
             }
-            let bytes = match &made {
-                // Already exactly what the viewers asked for: one buffer, shared by every
-                // subscriber, and no pass over a texel anywhere in this process.
-                Some(ready) => ready.clone(),
-                None => {
-                    let Some(d) = latest.lock().unwrap().clone() else { continue };
-                    let plan = goofi_view::plan(&union_specs(&specs.lock().unwrap()), &d);
-                    let out = goofi_core::reduce::reduce_for_view(&d, &plan);
-                    reductions.fetch_add(1, Ordering::Relaxed);
-                    // 8-bit only where every viewer of the slot draws it, and only for a frame that
-                    // has texels; the reduction itself is f32 either way.
-                    let quantized = (plan.depth == goofi_view::Depth::U8)
-                        .then(|| goofi_core::reduce::quantize_u8(&out))
-                        .flatten()
-                        .map(|(shape, texels, meta)| goofi_codec::encode_u8(&shape, &texels, &meta));
-                    Bytes::from(quantized.unwrap_or_else(|| goofi_codec::encode(&out)))
-                }
-            };
             let _ = tx.send(bytes); // Err only if all receivers are momentarily gone — harmless.
             served = Some(g_now);
             pending = false;

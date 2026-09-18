@@ -9,7 +9,8 @@ costs, and the order of the levers that remain.
 ## What the stream already does
 
 - One reducer per watched `(node, slot)`, shared by every viewer of it, serving at most 30 fps
-  and only when the producer emitted or a viewer joined or resized (`goofi-bridge/src/reducer.rs`).
+  and only a frame that changed — or the current one once, when a viewer joined, left or resized
+  (`goofi-bridge/src/reducer.rs`).
 - Every viewer declares a `ViewSpec` at its box in device pixels, quantized to 32 px
   (`viewers/capacity.ts`): a line asks for a min/max **envelope at its pixel width** and a
   subsample of rows, an image asks for an **area reduction to its box at 8 bits**, a viewer that
@@ -50,29 +51,24 @@ The desktop's cost is the paint, owned by `viewer-render-surface.md`. The first 
 track is the same measurement over the LAN to the tablet — frames/s and bytes/s per path, and the
 tablet's own frame rate — so a lever is chosen against a number, not a suspicion.
 
-**One owner of latest-wins, and it is `frames.ts`.** The worker samples every slot on a 16 ms tick
-and posts one message per slot; the tick is a second latest-wins stage that silently dropped
-10–19 % of frames at 30–60 viewers and added up to 16 ms of latency, while the backend already
-caps a slot at 30/s and `frames.ts` already coalesces under the paint cap. The worker will decode
-and post on arrival, and the tick, `latestRaw` and `DemandTicker` go. Batching frames into one
-post per tick was considered and rejected: it needs the tick, and the ~5–10 µs of dispatch it
-saves per frame is bounded by the backend cap. The per-slot `/data` sockets stay: their liveness,
-re-homing and per-connection specs are worth more than the message header they cost.
-
-**A frame that changed nothing is not sent.** The reducer serves on producer emit; a producer
-that re-emits an identical frame (a held value, a `Constant`, a paused source) still costs a
-reduce, an encode, a socket write, a decode and a paint. A 64-bit hash of the encoded bytes,
-compared before the broadcast, ends that chain at the reducer. The join-serve and re-offer paths
-bypass the check, because a joiner needs the frame whether it changed or not.
-
-**Sample width is negotiated the way 8-bit already is.** `ViewSpec.depth` grows from `f32 | u8`
-to `f32 | f16 | i16 | u8`. A line viewer declares `f16`; a `u8`-only fold stays for images. The
-bridge quantizes after the reduction — `i16` with a per-frame scale and offset in the meta, `f16`
-as-is — and the codec's numpy dtype string already spells both (`<f2`, `<i2`); the worker's
-`readTypedArray` learns them (`Float16Array` is in every current engine; a small loop is the
-fallback). That halves the envelope stream at no visible cost: a plot is drawn in device pixels
-and 11 significant bits are more than a pixel resolves. Anything that is not a viewer — a
-recorder, a `node snapshot`, a variable tap — reads the raw frame as it does now.
+**Done (2026-09-18): one latest-wins owner, no frame that says nothing new, half floats for
+lines.** The worker decodes and posts on arrival; the tick, `latestRaw` and `DemandTicker` are
+gone, and `frames.ts` coalesces under the paint cap alone. The reducer hashes the raw frame
+(`goofi_codec::content_hash`) and ends the chain before the reduce when it says what the last one
+served said, without taking a serve slot; a joiner, a leaver, a spec change or a re-offer is served
+regardless. The hash skips the engine's per-emit stamps (`time`, `index`, `ufreq`) — every signal
+node carries them, so a hash of the encoded bytes would never have matched. Accepted with it: the
+metadata panel binds a null-spec viewer on the same stream, so a held frame's `time`, `index` and
+`ufreq` freeze there while the node's rate still moves in the card header. `drift` is not skipped,
+so an audio-clocked slot never suppresses. A recorder, a snapshot and a variable tap read the raw
+frame as before. A producer's own ready-made (8-bit) frame is forwarded unchecked. `ViewSpec.depth`
+is `f32 | f16 | u8`, folded to the widest admitted ask; a line viewer declares `f16`, the bridge
+converts after the reduction — a frame with a finite sample beyond a half's range goes as f32 —
+the wire spells it `<f2`, and the worker's decoder widens body and meta to f32 so nothing
+downstream learns a second float width. `f16` was chosen over
+`i16` with scale and offset: it is simpler, the frame needs no extra meta, and 11 significant bits
+are more than a pixel resolves. Batching frames into one post per tick was rejected: it needs the
+tick, and the dispatch it saves is bounded by the backend cap. The per-slot `/data` sockets stay.
 
 **Generic compression comes last, and only shuffled LZ4.** WebSocket `permessage-deflate` is
 rejected: floats compress ~1.3× under deflate and it costs the tablet CPU it does not have.
@@ -95,17 +91,10 @@ being N² per period. Owned by `frontend-performance.md`, listed here so the two
 
 ## Order
 
-1. The worker decodes and posts on arrival; the tick and `DemandTicker` are deleted.
-2. The tablet measurement over LAN, recorded here.
-3. Identical-frame suppression at the reducer.
-4. `f16`/`i16` depth negotiation for line viewers.
-5. Shuffled LZ4, if step 2 still asks for it after step 4.
+1. The tablet measurement over LAN, recorded here.
+2. Shuffled LZ4, if step 1 still asks for it.
 
 ## Open
 
-- Whether `i16` with scale/offset or `f16` is the better line depth: `f16` is simpler and enough
-  for a plot; `i16` keeps 16 bits over the frame's own range and suits a topomap's scalar per
-  channel better. Measure the visible difference on the surface before choosing one for both.
-- The reducer's hash covers the encoded bytes, so a frame whose META alone changed (a new
-  timestamp) is a new frame. That is correct and it means a producer stamping every frame gains
-  nothing from suppression; whether such producers should stop stamping is theirs to decide.
+- Whether a topomap's scalar per channel wants `i16` with scale and offset over the frame's own
+  range: measure the visible difference on the surface before adding a second narrow depth.
