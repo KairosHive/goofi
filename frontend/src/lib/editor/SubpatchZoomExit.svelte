@@ -25,16 +25,21 @@
 		return () => clearTimeout(t);
 	});
 
-	$effect(() => {
-		const z = vp.current.zoom;
-		if (!entered || !armed) return;
+	// On the nodes and the pane size, not on the zoom: a pinch must not re-measure every node per step.
+	const fitZoom = $derived.by(() => {
 		const w = store.width;
 		const h = store.height;
-		const ids = store.nodes.map((n) => n.id);
-		if (!w || !h || ids.length === 0) return;
+		// A node is measured after it is listed, and the bounds read the measurement untracked.
+		const ids = store.nodes.filter((n) => n.measured?.width).map((n) => n.id);
+		if (!w || !h || ids.length === 0) return null;
 		const bounds = getNodesBounds(ids);
-		if (!bounds.width || !bounds.height) return;
-		const fitZoom = getViewportForBounds(bounds, w, h, 0.05, FIT_MAX_ZOOM, FIT_PADDING).zoom;
+		if (!bounds.width || !bounds.height) return null;
+		return getViewportForBounds(bounds, w, h, 0.05, FIT_MAX_ZOOM, FIT_PADDING).zoom;
+	});
+
+	$effect(() => {
+		const z = vp.current.zoom;
+		if (!entered || !armed || fitZoom === null) return;
 		if (z < fitZoom * EXIT_RATIO) {
 			armed = false; // one-shot; the exit re-fit restores a higher zoom
 			onExit();

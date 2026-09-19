@@ -329,14 +329,29 @@
 			if (!n) continue;
 			const was = previous.get(uid);
 			const handles = handlesOf(n);
+			const position = pinned.get(uid) ?? { x: n.pos?.[0] ?? 0, y: n.pos?.[1] ?? 0 };
+			// A live marquee's flags are Flow's, on these very objects: re-deriving them from
+			// the store mid-drag hands the release an empty selection.
+			const selected = boxSelecting ? (was?.selected ?? false) : sel.nodes(panelId).has(uid);
+			// The same object while nothing it carries changed, so Flow's identity checks short-circuit.
+			if (
+				was &&
+				was.data.node === n &&
+				was.data.label === n.name &&
+				was.data.handles === handles &&
+				was.selected === selected &&
+				was.position.x === position.x &&
+				was.position.y === position.y
+			) {
+				next.push(was);
+				continue;
+			}
 			next.push({
 				id: uid,
 				type: 'goofi',
-				position: pinned.get(uid) ?? { x: n.pos?.[0] ?? 0, y: n.pos?.[1] ?? 0 },
+				position,
 				data: { node: n, label: n.name, handles },
-				// A live marquee's flags are Flow's, on these very objects: re-deriving them from
-				// the store mid-drag hands the release an empty selection.
-				selected: boxSelecting ? (was?.selected ?? false) : sel.nodes(panelId).has(uid),
+				selected,
 				measured: was?.data.handles === handles ? was.measured : undefined
 			});
 		}
@@ -355,13 +370,26 @@
 			if (!src || !dst) continue;
 			if (src.node === dst.node && l.node_out !== l.node_in) continue; // internal to one collapsed child -> hidden (but keep a real self-loop)
 			const id = linkKey(l);
+			const was = previous.get(id);
+			const selected = boxSelecting ? (was?.selected ?? false) : sel.edges(panelId).has(id);
+			if (
+				was &&
+				was.source === src.node &&
+				was.sourceHandle === src.handle &&
+				was.target === dst.node &&
+				was.targetHandle === dst.handle &&
+				was.selected === selected
+			) {
+				next.push(was);
+				continue;
+			}
 			next.push({
 				id,
 				source: src.node,
 				sourceHandle: src.handle,
 				target: dst.node,
 				targetHandle: dst.handle,
-				selected: boxSelecting ? (previous.get(id)?.selected ?? false) : sel.edges(panelId).has(id),
+				selected,
 				animated: false
 			});
 		}
@@ -498,8 +526,7 @@
 		return { width: DEFAULT_NODE_W, height: DEFAULT_NODE_H };
 	}
 
-	function nodeBoundsFromFlow(id: string, x: number, y: number): Bounds {
-		const flowNode = flowNodes.find((n) => n.id === id);
+	function nodeBoundsFromFlow(flowNode: Node | undefined, x: number, y: number): Bounds {
 		let w = flowNode?.measured?.width;
 		let h = flowNode?.measured?.height;
 		if (w == null || h == null) {
@@ -516,18 +543,14 @@
 		const targets: Bounds[] = [];
 		for (const n of flowNodes) {
 			if (exclude.has(n.id)) continue;
-			targets.push(nodeBoundsFromFlow(n.id, n.position.x, n.position.y));
+			targets.push(nodeBoundsFromFlow(n, n.position.x, n.position.y));
 		}
 		return targets;
 	}
 
-	function dragSnapDelta(
-		current: Map<string, { x: number; y: number }>,
-		altKey: boolean
-	): { dx: number; dy: number; guides: Guide[] } {
-		const draggedBounds: Bounds[] = [];
-		for (const [id, pos] of current) draggedBounds.push(nodeBoundsFromFlow(id, pos.x, pos.y));
-		return computeSnapDelta(draggedBounds, snapTargetBounds(new Set(current.keys())), altKey);
+	function dragSnapDelta(nodes: Node[], altKey: boolean): { dx: number; dy: number; guides: Guide[] } {
+		const draggedBounds = nodes.map((n) => nodeBoundsFromFlow(n, n.position.x, n.position.y));
+		return computeSnapDelta(draggedBounds, snapTargetBounds(new Set(nodes.map((n) => n.id))), altKey);
 	}
 
 	// Positions at drag start, so a node snaps back when the drag turns into a panel-link.
@@ -538,16 +561,24 @@
 	// The chip that follows the cursor while a drag is a reference; null = a reposition drag.
 	let linkGhost = $state<{ x: number; y: number; name: string } | null>(null);
 
+	// Every panel's and drop zone's screen rect, measured ONCE per drag: neither moves during a
+	// node drag, and measuring them per pointer move forced a layout each.
+	let panelRects: { id: string; type: string; r: DOMRect }[] = [];
+	let zoneRects: { zone: string; r: DOMRect }[] = [];
+	function measureTargets(): void {
+		panelRects = [...document.querySelectorAll<HTMLElement>('[data-panel-id]')].map((el) => ({
+			id: el.dataset.panelId ?? '',
+			type: el.dataset.panelType ?? '',
+			r: el.getBoundingClientRect()
+		}));
+		zoneRects = [...dropZones()].map((el) => ({ zone: el.dataset.nodeDrop ?? '', r: el.getBoundingClientRect() }));
+	}
+	const hits = (r: DOMRect, x: number, y: number): boolean => x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+
 	/** The leaf panel under a screen point. Geometric, not `elementFromPoint`: the dragged node sits
 	 * under the cursor and would mask the panel beneath it. */
 	function panelUnder(x: number, y: number): { id: string; type: string } | null {
-		for (const el of document.querySelectorAll<HTMLElement>('[data-panel-id]')) {
-			const r = el.getBoundingClientRect();
-			if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) {
-				return { id: el.dataset.panelId ?? '', type: el.dataset.panelType ?? '' };
-			}
-		}
-		return null;
+		return panelRects.find((p) => hits(p.r, x, y)) ?? null;
 	}
 
 	/** Every marked drop zone — a control widget, a param row — including those a plugin panel
@@ -561,11 +592,7 @@
 
 	/** The marked drop zone under a screen point. */
 	function dropZoneUnder(x: number, y: number): string | null {
-		for (const el of dropZones()) {
-			const r = el.getBoundingClientRect();
-			if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) return el.dataset.nodeDrop ?? null;
-		}
-		return null;
+		return zoneRects.find((z) => hits(z.r, x, y))?.zone ?? null;
 	}
 
 	type LinkTarget = { panel: string } | { zone: string };
@@ -598,6 +625,10 @@
 			pinned.set(n.id, { x: n.position.x, y: n.position.y });
 		}
 		uiStore.nodeDrag = args.nodes[0]?.id ?? null;
+		// The param rows that take this node render on `nodeDrag`, so the rects are read after that flush.
+		panelRects = [];
+		zoneRects = [];
+		void tick().then(measureTargets);
 	}
 
 	function onNodeDrag(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): void {
@@ -620,7 +651,7 @@
 		const current = new Map<string, { x: number; y: number }>();
 		for (const n of args.nodes) current.set(n.id, { x: n.position.x, y: n.position.y });
 		const alt = (args.event as MouseEvent).altKey === true;
-		const { dx, dy, guides } = dragSnapDelta(current, alt);
+		const { dx, dy, guides } = dragSnapDelta(args.nodes, alt);
 		snapGuides = guides;
 		for (const [id, c] of current) pinned.set(id, { x: c.x + dx, y: c.y + dy });
 		if (dx === 0 && dy === 0) return;
@@ -653,7 +684,7 @@
 			const current = new Map<string, { x: number; y: number }>();
 			for (const n of args.nodes) current.set(n.id, { x: n.position.x, y: n.position.y });
 			const alt = (args.event as MouseEvent).altKey === true;
-			const { dx, dy } = dragSnapDelta(current, alt);
+			const { dx, dy } = dragSnapDelta(args.nodes, alt);
 			if (dx !== 0 || dy !== 0) {
 				flowNodes = flowNodes.map((n) => {
 					if (!dragged.has(n.id)) return n;
@@ -662,21 +693,12 @@
 					return { ...n, position: { x: c.x + dx, y: c.y + dy } };
 				});
 			}
-			// One transaction, so moving N nodes is a single undo. Each set*Pos records AFTER its RPC
-			// resolves, so the calls must be AWAITED inside it or the buffer is empty at flush.
-			for (const n of args.nodes) {
-				pinned.set(n.id, { x: Math.round(n.position.x + dx), y: Math.round(n.position.y + dy) });
-			}
-			const label = args.nodes.length > 1 ? `Move ${args.nodes.length} nodes` : 'Move node';
-			void history().transaction(label, async () => {
-				try {
-					for (const n of args.nodes) {
-						const pos: [number, number] = [Math.round(n.position.x + dx), Math.round(n.position.y + dy)];
-						await g.setNodePos(n.id, pos);
-					}
-				} finally {
-					for (const n of args.nodes) pinned.delete(n.id);
-				}
+			const moves = args.nodes.map(
+				(n) => [n.id, [Math.round(n.position.x + dx), Math.round(n.position.y + dy)]] as [string, [number, number]]
+			);
+			for (const [id, [x, y]] of moves) pinned.set(id, { x, y });
+			void g.setNodePositions(moves).finally(() => {
+				for (const [id] of moves) pinned.delete(id);
 			});
 		}
 		uiStore.nodeDrag = null;

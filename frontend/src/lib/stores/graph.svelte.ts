@@ -82,6 +82,37 @@ function linkEndpoints(link: LinkInfo): { from: string; to: string } {
 	};
 }
 
+/** Equal by identity, or — for the small doc-derived objects a node carries — by content. */
+function sameValue(a: unknown, b: unknown): boolean {
+	if (Object.is(a, b)) return true;
+	if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+	return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Write the fields of `next` onto `cur` where they differ, so an unchanged field keeps its identity. */
+function assignChanged(cur: Record<string, unknown>, next: Record<string, unknown>): void {
+	for (const key of Object.keys(next)) {
+		if (!sameValue(cur[key], next[key])) cur[key] = next[key];
+	}
+}
+
+/** Reconcile a node's params LEAF BY LEAF, so a widget bound to one param is not re-rendered for another. */
+function assignParams(cur: NodeInstanceInfo['params'], next: NodeInstanceInfo['params']): void {
+	for (const group of Object.keys(cur)) if (!(group in next)) delete cur[group];
+	for (const [group, names] of Object.entries(next)) {
+		const cg = cur[group];
+		if (!cg) {
+			cur[group] = names;
+			continue;
+		}
+		for (const name of Object.keys(cg)) if (!(name in names)) delete cg[name];
+		for (const [name, p] of Object.entries(names)) {
+			if (cg[name]) assignChanged(cg[name] as unknown as Record<string, unknown>, p as unknown as Record<string, unknown>);
+			else cg[name] = p;
+		}
+	}
+}
+
 const IDLE_RECORD: RecordStatus = {
 	running: false,
 	folder: null,
@@ -92,6 +123,9 @@ const IDLE_RECORD: RecordStatus = {
 
 export class GraphStore {
 	nodes = $state<NodeInstanceInfo[]>([]);
+	/** uid → node, replaced with `nodes` by `_reconcileNodes`; the O(1) side of `nodeById`, and a
+	 * signal so a reader of a removed node re-runs. */
+	private _byUid = $state.raw(new Map<string, NodeInstanceInfo>());
 	links = $state<LinkInfo[]>([]);
 	savePath = $state<string | null>(null);
 	unsavedChanges = $state(false);
@@ -132,7 +166,7 @@ export class GraphStore {
 	/** Bumps on every WHOLESALE graph load, never on an incremental add/remove; editors re-fit on it. */
 	loadEpoch = $state(0);
 
-	nodeTypes = $state<NodeTypeInfo[] | null>(null);
+	nodeTypes = $state.raw<NodeTypeInfo[] | null>(null);
 
 	/** Params with a ⟳ refresh in flight → its safety-timeout handle. Cleared when the node reports
 	 * the param done (`refreshed_params`), never on the fire-and-forget RPC ack. */
@@ -172,7 +206,7 @@ export class GraphStore {
 		});
 		ctl.on((ev) => this._handle(ev));
 		this._sync = new SyncClient(ctl);
-		this._sync.onDocChange(() => this._syncFromDoc());
+		this._sync.onDocChange((patch) => this._syncFromDoc(patch));
 		this._sync.start();
 	}
 
@@ -186,18 +220,21 @@ export class GraphStore {
 		return this._sync.synced;
 	}
 
-	/** Re-derive every document-owned subtree, after each applied change. Runtime state
-	 * (error/stage/ufreq) and catalog metadata (slots/tags) stay event-sourced. */
-	private _syncFromDoc(): void {
+	/** Re-derive the document-owned subtrees the applied patch names — every one for a whole
+	 * document. Runtime state (error/stage/ufreq) and catalog metadata (slots/tags) stay event-sourced. */
+	private _syncFromDoc(patch: Record<string, unknown> | null): void {
 		const doc = this._sync.doc;
-		this.links = linkViews(doc);
-		this.variables = variableViews(doc);
-		this.variableGroups = variableGroupLocks(doc);
-		this.armed = recordedSlots(doc);
+		const moved = (root: string) => !patch || root in patch;
+		if (moved('links')) this.links = linkViews(doc);
+		if (moved('variables')) this.variables = variableViews(doc);
+		if (moved('variable_groups')) this.variableGroups = variableGroupLocks(doc);
 		// The workspace store rebuilds its tree from this; the client holds no second copy.
-		workspace().syncFromDoc(arrangementTabs(doc));
-		// No-ops until the catalog lands, then rebuilds from the doc.
-		this._reconcileNodesFromDoc();
+		if (moved('arrangement')) workspace().syncFromDoc(arrangementTabs(doc));
+		if (moved('nodes')) {
+			this.armed = recordedSlots(doc);
+			// No-ops until the catalog lands, then rebuilds from the doc.
+			this._reconcileNodesFromDoc(patch && (patch.nodes as Record<string, unknown>));
+		}
 	}
 
 	/** Apply a wholesale snapshot, returning whether it came from a NEW backend session — which is
@@ -235,6 +272,7 @@ export class GraphStore {
 	 * doc observer, and a fresh manager with an EMPTY graph answers our SV with no change at all. */
 	private _resetProjection(): void {
 		this.nodes = [];
+		this._byUid = new Map();
 		this.links = [];
 		this.variables = [];
 		this.variableGroups = {};
@@ -323,13 +361,14 @@ export class GraphStore {
 				}
 				break;
 			}
-			case 'node_stats': {
-				const t = this.nodeById(ev.payload.node);
-				if (t) t.stats = ev.payload.stats;
+			case 'node_stats':
+				for (const [uid, stats] of Object.entries(ev.payload.stats)) {
+					const t = this.nodeById(uid);
+					if (t && t.stats?.updates_per_second !== stats.updates_per_second) t.stats = stats;
+				}
 				break;
-			}
 			case 'param_values':
-				this.applyLiveSource(ev.payload.node, ev.payload);
+				for (const [uid, live] of Object.entries(ev.payload.nodes)) this.applyLiveSource(uid, live);
 				break;
 			case 'logs':
 				consoleStore().apply(ev.payload);
@@ -359,7 +398,7 @@ export class GraphStore {
 	/** Adopt a palette catalog. It supplies the descriptors, so the nodes rebuild here. */
 	private _applyNodeTypes(types: NodeTypeInfo[]): void {
 		this.nodeTypes = types;
-		this._reconcileNodesFromDoc();
+		this._reconcileNodesFromDoc(null);
 	}
 
 	/** Re-derive the node registry from disk and report what changed; explicit, since there is no
@@ -692,6 +731,14 @@ export class GraphStore {
 		this._recordGraphCmd(`Move ${this.nodeById(uid)?.name ?? uid}`);
 	}
 
+	/** Move several nodes as ONE command — one op, one resync, one undo step. */
+	async setNodePositions(moves: [string, [number, number]][]): Promise<void> {
+		if (moves.length === 1) return this.setNodePos(...moves[0]);
+		const ops = moves.map(([node, pos]) => ({ op: 'node edit', payload: { node, pos } }));
+		await this.ctl.call('compound', { ops });
+		this._recordGraphCmd(`Move ${moves.length} nodes`);
+	}
+
 	/** Set a node's mutable display name (uid identity is unchanged). */
 	async renameNode(uid: string, name: string): Promise<void> {
 		const oldName = this.nodeById(uid)?.name ?? '';
@@ -771,7 +818,7 @@ export class GraphStore {
 
 	/** Resolve a node by uid — the ONE accessor, and every kind of node record answers it. */
 	nodeById(id: string): NodeInstanceInfo | null {
-		return this.nodes.find((n) => n.uid === id) ?? null;
+		return this._byUid.get(id) ?? null;
 	}
 
 	/** Every node a panel can bind or a picker can list. ROOT is the canvas, and it is not one. */
@@ -779,16 +826,21 @@ export class GraphStore {
 		return this.nodes.map((n) => ({ uid: n.uid, name: n.name }));
 	}
 
-	/** Reconcile the flat node list IN PLACE by uid, so a survivor keeps its object reference and
-	 * with it its inline-viewer subscription. */
+	/** Reconcile the node list IN PLACE by uid: a survivor keeps its reference (and its inline-viewer
+	 * subscription) and takes only the fields that differ; the list keeps its identity while its membership does. */
 	private _reconcileNodes(next: NodeInstanceInfo[]): void {
-		const byUid = new Map(this.nodes.map((n) => [n.uid, n]));
-		this.nodes = next.map((n) => {
-			const cur = byUid.get(n.uid);
-			if (!cur) return n;
-			Object.assign(cur, n);
+		const list = next.map((n) => {
+			const cur = this._byUid.get(n.uid);
+			if (!cur || cur === n) return cur ?? n;
+			const { params, ...rest } = n;
+			assignChanged(cur as unknown as Record<string, unknown>, rest);
+			assignParams(cur.params, params);
 			return cur;
 		});
+		const same = list.length === this.nodes.length && list.every((n, i) => n === this.nodes[i]);
+		if (same) return;
+		this.nodes = list;
+		this._byUid = new Map(this.nodes.map((n) => [n.uid, n]));
 	}
 
 	/** The runtime overlay for a node materializing from the doc for the FIRST time. A leaf is
@@ -853,10 +905,9 @@ export class GraphStore {
 		}
 	}
 
-	/** Build `this.nodes` from the doc: each record is the doc's own fields, plus the catalog
-	 * descriptor for its type, plus the runtime overlay the doc never holds. A facade has no
-	 * catalog entry — it runs nothing — so its ports supply its slots instead. */
-	private _reconcileNodesFromDoc(): void {
+	/** Build `this.nodes` from the doc: the doc's fields, the catalog descriptor and the runtime overlay
+	 * per record; a facade's ports supply its slots. Only a touched node or a facade is re-assembled; `null` = every one. */
+	private _reconcileNodesFromDoc(touched: Record<string, unknown> | null): void {
 		if (!this.nodeTypes?.length) return; // no catalog yet → keep the current nodes; rebuild when it lands
 		const doc = this._sync.doc;
 		// Both indexes are built ONCE per reconcile rather than per node.
@@ -864,6 +915,7 @@ export class GraphStore {
 		const faces = facadeFaces(doc);
 		const next: NodeInstanceInfo[] = nodeViews(doc).map((nv) => {
 			const existing = this.nodeById(nv.uid);
+			if (existing && touched && !(nv.uid in touched) && !faces.has(nv.uid)) return existing;
 			const catalog = byType.get(nv.type);
 			const runtime: RuntimeOverlay = existing
 				? this._extractRuntime(existing)

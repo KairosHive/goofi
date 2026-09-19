@@ -140,10 +140,10 @@ describe('node-identity read cutover — nodes built from the doc when the catal
 		// tick that omits the param is the one that says the expression is working again.
 		fc.emit({
 			event: 'param_values',
-			payload: { node: 'n1', values: {}, errors: { common: { max_frequency: 'NameError' } } }
+			payload: { nodes: { n1: { values: {}, errors: { common: { max_frequency: 'NameError' } } } } }
 		});
 		expect(g.nodeById('n1')!.params.common.max_frequency.error).toBe('NameError');
-		fc.emit({ event: 'param_values', payload: { node: 'n1', values: {}, errors: {} } });
+		fc.emit({ event: 'param_values', payload: { nodes: { n1: { values: {}, errors: {} } } } });
 		expect(
 			g.nodeById('n1')!.params.common.max_frequency.error,
 			'a failure that cleared with no op behind it still reaches the replica'
@@ -188,7 +188,7 @@ describe('expression live value survives a doc rebuild', () => {
 		});
 
 		// A param_values event delivers the live evaluated value (7) — never written to the doc.
-		fc.emit({ event: 'param_values', payload: { node: 'n1', values: { common: { max_frequency: 7 } }, errors: {} } });
+		fc.emit({ event: 'param_values', payload: { nodes: { n1: { values: { common: { max_frequency: 7 } }, errors: {} } } } });
 		expect(g.nodeById('n1')!.params.common.max_frequency.value).toBe(7);
 
 		// An unrelated doc change rebuilds every node from the doc. The live value must NOT revert to
@@ -201,7 +201,7 @@ describe('expression live value survives a doc rebuild', () => {
 
 		// The map is the node's WHOLE live state: one that no longer names the param withdraws its
 		// value, and the committed literal shows again — a re-pointed reference leaves exactly this.
-		fc.emit({ event: 'param_values', payload: { node: 'n1', values: {}, errors: {} } });
+		fc.emit({ event: 'param_values', payload: { nodes: { n1: { values: {}, errors: {} } } } });
 		expect(g.nodeById('n1')!.params.common.max_frequency.value, 'withdrawn').toBe(99);
 	});
 });
@@ -216,7 +216,7 @@ describe('node runtime survives a doc rebuild', () => {
 
 		// The three node-level fields the doc never holds, each from its own event.
 		fc.emit({ event: 'state_update', payload: { node: 'n1', params: {}, stage: 'ready', error: 'boom' } });
-		fc.emit({ event: 'node_stats', payload: { node: 'n1', stats: { updates_per_second: 12.4 } } });
+		fc.emit({ event: 'node_stats', payload: { stats: { n1: { updates_per_second: 12.4 } } } });
 		expect([g.nodeById('n1')!.stage, g.nodeById('n1')!.error]).toEqual(['ready', 'boom']);
 
 		// An unrelated doc write rebuilds every node from doc + catalog. The rebuild carries the

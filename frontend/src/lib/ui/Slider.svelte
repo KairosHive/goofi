@@ -16,7 +16,7 @@
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
 		value: number;
-		onChange: (v: number) => void;
+		onChange: (v: number) => unknown;
 		min?: number;
 		max?: number;
 		step?: number;

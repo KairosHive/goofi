@@ -19,14 +19,25 @@
 	let glCanvas: HTMLCanvasElement | null = $state(null);
 	let canvas2d: HTMLCanvasElement | null = $state(null);
 	let useGl = $state(false);
-	let renderer: GLImageRenderer | null = null;
+	// Raw state: the draw effect re-runs when the context is lost or comes back.
+	let renderer = $state.raw<GLImageRenderer | null>(null);
 	let cssW = 300;
 	let cssH = 150;
 	let ro: ResizeObserver | null = null;
+	let live = true;
 
 	onMount(() => {
 		if (glCanvas) {
 			renderer = GLImageRenderer.tryCreate(glCanvas);
+			// Past the context cap the browser evicts the oldest; asking for a restore brings it back.
+			// Not after destroy: the dispose below loses the context on purpose.
+			glCanvas.addEventListener('webglcontextlost', (e) => {
+				if (live) e.preventDefault();
+				renderer = null;
+			});
+			glCanvas.addEventListener('webglcontextrestored', () => {
+				if (live && glCanvas) renderer = GLImageRenderer.tryCreate(glCanvas);
+			});
 			ro = new ResizeObserver((entries) => {
 				for (const e of entries) {
 					cssW = e.contentRect.width || cssW;
@@ -37,6 +48,7 @@
 		}
 	});
 	onDestroy(() => {
+		live = false;
 		ro?.disconnect();
 		renderer?.dispose();
 	});

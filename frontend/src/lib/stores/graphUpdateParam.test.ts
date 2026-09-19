@@ -3,7 +3,7 @@ import { FakeControl } from '$lib/test/fakeControl';
 import { seed, type DocSeed } from '$lib/test/docSeed';
 import { GraphStore } from './graph.svelte';
 import { history } from './history.svelte';
-import { docParams, nodesMap, setParamValue } from '$lib/crdt/graphDoc';
+import { docParams, setParamValue } from '$lib/crdt/graphDoc';
 import type { NodeInstanceInfo, NodeTypeInfo } from '$lib/api/control';
 import { typeInfo } from '$lib/test/typeInfo';
 
@@ -224,5 +224,56 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 
 		await expect(g.refreshParam('uidA', 'audio', 'device')).rejects.toThrow();
 		expect(g.isRefreshing('uidA', 'audio', 'device')).toBe(false);
+	});
+});
+
+describe('GraphStore doc sync — a patch touches only what it names', () => {
+	it('a variables-only patch leaves node, params, pos and viewers identities untouched', () => {
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		const d = seed(fc);
+		g.nodeTypes = catalog();
+		d.node('uidA', 'Oscillator', 'osc0', [0, 0], { viewers: '{"out":{"collapsed":false}}' });
+		const nodes = g.nodes;
+		const node = g.nodeById('uidA')!;
+		const { params, pos, viewers } = node;
+		const frequency = params.common.frequency;
+
+		d.variable('patch.gain', { value: 1, type: 'float' });
+		expect(g.variables.map((v) => v.name)).toContain('patch.gain');
+		d.patch({ variable_groups: { patch: { lock: { config: true, value: false } } } });
+		expect(g.variableGroups.patch, 'a group lock rides its own root').toEqual({ config: true, value: false });
+		expect(g.nodes).toBe(nodes);
+		expect(g.nodeById('uidA')).toBe(node);
+		expect(node.params).toBe(params);
+		expect(node.params.common.frequency).toBe(frequency);
+		expect(node.pos).toBe(pos);
+		expect(node.viewers).toBe(viewers);
+
+		// A leaf write on the node moves that leaf and nothing beside it.
+		d.patch({ nodes: { uidA: { params: { common: { frequency: { value: 7 } } } } } });
+		expect(node.params.common.frequency).toBe(frequency);
+		expect(frequency.value).toBe(7);
+		expect(node.viewers).toBe(viewers);
+		expect(g.nodes).toBe(nodes);
+	});
+
+	it('a member scope patch refreshes its facade', () => {
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		const d = seed(fc);
+		g.nodeTypes = catalog();
+		d.instance('sub', 'sub');
+		d.port('inA', 'InArray', 'a', 'sub');
+		const facade = g.nodeById('sub')!;
+		expect(Object.keys(facade.input_slots)).toEqual(['inA']);
+		expect(facade.subpatch?.memberCount).toBe(1);
+
+		// Only the port's record moves, but the facade's face is drawn from it.
+		d.patch({ nodes: { inA: { name: 'b' } } });
+		expect(g.nodeById('sub')).toBe(facade);
+		expect(facade.slot_labels?.inA).toBe('b');
+		d.node('uidB', 'Oscillator', 'osc1', [0, 0], { scope: 'sub' });
+		expect(facade.subpatch?.memberCount).toBe(2);
 	});
 });

@@ -28,6 +28,5 @@ export function envelopeBand(channels: ArrayLike<number>[], origLen: number, bas
 		xs[b * 2] = start + base;
 		xs[b * 2 + 1] = Math.max(start, end - 1) + base;
 	}
-	const ys = channels.map((ch) => Array.from(ch, Number));
-	return { xs, ys };
+	return { xs, ys: channels };
 }

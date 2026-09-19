@@ -166,14 +166,15 @@ test.describe('the control socket', () => {
 
 			await test.step('a mounted inspector resumes its parameter stream after a close', async () => {
 				await selectNode(page, osc);
-				await expect.poll(() => page.evaluate(() => (window as any).__paramFrames)).toBeGreaterThan(2);
+				// An idle node's pair is sent once per connection; a further frame says a socket reopened.
+				await expect.poll(() => page.evaluate(() => (window as any).__paramFrames)).toBeGreaterThan(0);
 				const before = await page.evaluate(() => {
 					const w = window as any;
 					for (const ws of w.__paramSockets) ws.close();
 					return { sockets: w.__paramSockets.length, frames: w.__paramFrames };
 				});
 				await expect.poll(() => page.evaluate(() => (window as any).__paramSockets.length)).toBe(before.sockets + 1);
-				await expect.poll(() => page.evaluate(() => (window as any).__paramFrames)).toBeGreaterThan(before.frames + 2);
+				await expect.poll(() => page.evaluate(() => (window as any).__paramFrames)).toBeGreaterThan(before.frames);
 			});
 
 			await test.step('a filtered row stays through a drag and leaves when the gesture ends', async () => {

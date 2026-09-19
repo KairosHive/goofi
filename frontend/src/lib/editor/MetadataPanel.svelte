@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { NodeInstanceInfo } from '$lib/api/control';
-	import { bindViewer, dropRate } from '$lib/api/frames';
+	import { bindViewer, dropRate, latestFrame } from '$lib/api/frames';
 	import type { DataFrame } from '$lib/codec/decode';
 	import { metaEntries, formatMetaValue, formatMetaInline } from './metaFormat';
 	import MetadataField from './MetadataField.svelte';
@@ -14,7 +14,7 @@
 
 	const slots = $derived(Object.keys(node.output_slots ?? {}));
 	let internalSlot = $state<string | null>(null);
-	let lastFrame = $state<DataFrame | null>(null);
+	let lastFrame = $state.raw<DataFrame | null>(null);
 	/** This panel's identity in the slot's viewer registry; it binds with a null spec, so it
 	 *  constrains nothing a real viewer asked for. */
 	const token =
@@ -24,16 +24,14 @@
 		if (internalSlot === null || !slots.includes(internalSlot)) internalSlot = fst;
 	});
 
+	// The binding keeps the stream served; the callback writes nothing, the interval below reads.
 	$effect(() => {
-		lastFrame = null;
 		const slot = internalSlot;
 		if (!slot) return;
-		return bindViewer(node.uid, slot, token, null, (f: DataFrame) => {
-			lastFrame = f;
-		});
+		return bindViewer(node.uid, slot, token, null, () => {});
 	});
 
-	// Format once per frame, not per render: this panel re-renders at the data rate.
+	// Format once per polled frame, not per render.
 	const fields = $derived(
 		metaEntries(lastFrame?.meta).map(([key, value]) => ({
 			key,
@@ -42,13 +40,18 @@
 		}))
 	);
 
-	// Polled, not derived: a rate must keep falling when frames stop, and only a frame re-renders.
+	// Polled, not derived: a rate must keep falling when frames stop, and the panel re-renders at
+	// the poll rate rather than the data rate.
 	let drops = $state<number | null>(null);
 	$effect(() => {
 		const slot = internalSlot;
 		drops = null;
+		lastFrame = null;
 		if (!slot) return;
-		const id = setInterval(() => (drops = dropRate(node.uid, slot)), 250);
+		const id = setInterval(() => {
+			drops = dropRate(node.uid, slot);
+			lastFrame = latestFrame(node.uid, slot);
+		}, 250);
 		return () => clearInterval(id);
 	});
 

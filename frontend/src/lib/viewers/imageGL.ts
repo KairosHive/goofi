@@ -176,5 +176,7 @@ export class GLImageRenderer {
 		gl.deleteTexture(this.tex);
 		gl.deleteTexture(this.lutTex);
 		gl.deleteProgram(this.prog);
+		// Released now, not when the GC gets to the canvas: the browser caps live contexts.
+		gl.getExtension('WEBGL_lose_context')?.loseContext();
 	}
 }

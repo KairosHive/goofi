@@ -10,7 +10,8 @@ export class SyncClient {
 	}
 	private control: Control;
 	private unsub: (() => void) | null = null;
-	private docObserver: (() => void) | null = null;
+	/** Told what moved: the applied merge patch, or `null` when the whole document was replaced. */
+	private docObserver: ((patch: Record<string, unknown> | null) => void) | null = null;
 	/** The version `_doc` is at, or `-1` before the first `doc_state`. */
 	private _version = -1;
 	get version(): number {
@@ -25,7 +26,7 @@ export class SyncClient {
 		this.control = control;
 	}
 
-	onDocChange(fn: () => void): void {
+	onDocChange(fn: (patch: Record<string, unknown> | null) => void): void {
 		this.docObserver = fn;
 	}
 
@@ -33,7 +34,7 @@ export class SyncClient {
 	reset(): void {
 		this._doc = emptyDoc();
 		this._version = -1;
-		this.docObserver?.();
+		this.docObserver?.(null);
 	}
 
 	/** Begin following the document. Idempotent. */
@@ -43,7 +44,7 @@ export class SyncClient {
 			if (ev.event === 'doc_state') {
 				this._doc = ev.payload.doc;
 				this._version = ev.payload.v;
-				this.docObserver?.();
+				this.docObserver?.(null);
 			} else if (ev.event === 'doc_patch') {
 				this.applyPatch(ev.payload.from, ev.payload.v, ev.payload.patch);
 			}
@@ -67,6 +68,6 @@ export class SyncClient {
 		}
 		applyMerge(this._doc, patch);
 		this._version = to;
-		this.docObserver?.();
+		this.docObserver?.(patch);
 	}
 }

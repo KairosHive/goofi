@@ -240,15 +240,20 @@ export type ControlEvent =
 			event: 'node_stage';
 			payload: { node: string; stage: NodeStage; error?: string | null; runtime?: NodeRuntime | null };
 	  }
-	| { event: 'node_stats'; payload: { node: string; stats: NodeStats } }
-	// One node's LIVE source state, both maps whole: what its driven params evaluate to, and what
-	// they fail with. Applied surgically, never a wholesale params replace.
+	// Every node's rate, one message per period.
+	| { event: 'node_stats'; payload: { stats: Record<string, NodeStats> } }
+	// Every driven node's LIVE source state, both maps whole: what its driven params evaluate to,
+	// and what they fail with. Applied surgically, never a wholesale params replace.
 	| {
 			event: 'param_values';
 			payload: {
-				node: string;
-				values: Record<string, Record<string, number | string | boolean>>;
-				errors: Record<string, Record<string, string>>;
+				nodes: Record<
+					string,
+					{
+						values: Record<string, Record<string, number | string | boolean>>;
+						errors: Record<string, Record<string, string>>;
+					}
+				>;
 			};
 	  }
 	| { event: 'unsaved_changes'; payload: { unsaved_changes: boolean } }
