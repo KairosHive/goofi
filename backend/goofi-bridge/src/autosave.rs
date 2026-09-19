@@ -104,9 +104,7 @@ fn tick(state: &AppState, last: &mut Option<Stamp>) {
         }
         return;
     }
-    // The manifest is the op path's, not read off the graph here: the graph lock is the audio
-    // drain's too, and a serialize held against it loses blocks.
-    let manifest = state.manifest.lock().unwrap().clone();
+    let manifest = state.graph.lock().unwrap().serialize();
     if last.as_ref().is_some_and(|(m, fp)| *m == manifest && *fp == seen) {
         return;
     }

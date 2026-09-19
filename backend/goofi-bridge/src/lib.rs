@@ -25,7 +25,7 @@ pub mod vocab;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use goofi_node::{ScannedType, Stamp};
@@ -116,9 +116,6 @@ pub struct AppState {
     /// The workspace as it was last packed or unpacked — what [`AppState::is_dirty`] compares the
     /// live mount against. Re-taken at BOTH ends.
     workspace_baseline: Arc<Mutex<Fingerprint>>,
-    /// The patch as YAML at the last settle point — taken where the graph is already locked, so
-    /// the autosave never holds that lock against the audio drain.
-    manifest: Arc<Mutex<String>>,
     /// Pulsed whenever what the autosave keeps may have moved: a settle, a dirty transition, a
     /// workspace file. The autosave parks on it; nothing polls.
     changed: Arc<goofi_node::DrainWaker>,
@@ -201,8 +198,7 @@ impl AppState {
         let mut graph_val = fresh_graph((!mode.demo).then_some(clock), render);
         graph_val.set_workspace(&mount);
         let mut doc = crate::doc::GraphDoc::new();
-        doc.reconcile_root(&projection::of(&graph_val));
-        let manifest = graph_val.serialize();
+        doc.reconcile_root(projection::of(&graph_val));
         let recorder = Arc::new(goofi_record::Recorder::new(graph_val.time()));
         if let Some(gfx) = try_graphics_engine(&mut graph_val) {
             gfx.set_recorder(recorder.clone());
@@ -229,7 +225,6 @@ impl AppState {
             node_index: Arc::new(Mutex::new(Default::default())),
             mount: Arc::new(Mutex::new(mount)),
             workspace_baseline: Arc::new(Mutex::new(workspace_baseline)),
-            manifest: Arc::new(Mutex::new(manifest)),
             changed: Arc::new(goofi_node::DrainWaker::default()),
             save_path: Arc::new(Mutex::new(None)),
             bound: Arc::new(Mutex::new(([127, 0, 0, 1], 8000).into())),
@@ -582,6 +577,7 @@ pub fn spawn_workers(state: &AppState) {
         // too, because a facade HAS health and never reports one.
         let mut last_stages: HashMap<String, NodeState> = HashMap::new();
         let mut next_broadcast = Instant::now() + period;
+        let mut next_drain = Instant::now();
         loop {
             // Parked until a report lands or the broadcast pace comes due — pacing, not polling.
             let wait = next_broadcast.saturating_duration_since(Instant::now()).min(period);
@@ -589,6 +585,9 @@ pub fn spawn_workers(state: &AppState) {
             if state.stopping.stopped() {
                 return;
             }
+            // Every report notifies; the lock is taken at most once per live period.
+            std::thread::sleep(next_drain.saturating_duration_since(Instant::now()));
+            next_drain = Instant::now() + LIVE_PERIOD;
             let due = Instant::now() >= next_broadcast;
             let (edits, collected) = {
                 let mut g = graph.lock().unwrap();
@@ -644,19 +643,17 @@ pub fn spawn_workers(state: &AppState) {
             for ev in refreshed {
                 let _ = events.send(ev);
             }
-            // The values and errors a source is producing, RELIABLY: the whole pair, restated, so a
-            // client that just connected is current within one period and none of this is a delta
-            // anybody has to have heard. `/params` carries the same pairs faster for whoever looks.
-            for (hex, pair) in live {
-                let _ = events.send(event("param_values", pair_payload(&hex, &pair)));
+            // Every source's values and errors, whole, in ONE message: a client that just connected
+            // is current within one period, and none of this is a delta it had to have heard.
+            if !live.is_empty() {
+                let nodes: serde_json::Map<String, Value> = live.into_iter().collect();
+                let _ = events.send(event("param_values", json!({ "nodes": nodes })));
             }
             let changed = error_transitions(&errs, &mut last_errors);
-            for (node, ufreq) in rates {
-                let ev = json!({
-                    "event": "node_stats",
-                    "payload": { "node": node, "stats": { "updates_per_second": ufreq } }
-                });
-                let _ = events.send(ev.to_string());
+            let stats: serde_json::Map<String, Value> =
+                rates.into_iter().map(|(node, ufreq)| (node, json!({ "updates_per_second": ufreq }))).collect();
+            if !stats.is_empty() {
+                let _ = events.send(event("node_stats", json!({ "stats": stats })));
             }
             for hex in changed {
                 let err = errs.iter().find(|(h, ..)| *h == hex).and_then(|(.., e)| e.clone());
@@ -1140,31 +1137,29 @@ async fn handle_control(socket: WebSocket, state: AppState) {
         return;
     }
 
+    // Ops run on a worker of this socket's own, in order: a slow op must not park the event
+    // drain here, which is what turns a backlog into a lagged ring and a re-seed.
+    let (requests, queue) = std::sync::mpsc::channel::<String>();
+    let (answers, mut replies) = tokio::sync::mpsc::unbounded_channel::<Option<String>>();
+    let worker = state.clone();
+    tokio::task::spawn_blocking(move || {
+        while let Ok(text) = queue.recv() {
+            if answers.send(dispatch(&worker, &text)).is_err() {
+                return;
+            }
+        }
+    });
+
+    // While this socket's op runs, the events it causes wait behind its reply: the reply
+    // precedes them, as it did when the op ran inline, so a caller reading past it loses none.
+    let mut in_flight = 0usize;
+    let mut held: Vec<String> = Vec::new();
     let mut log_cursor = None;
     let mut log_tick = tokio::time::interval(Duration::from_millis(50));
     loop {
         tokio::select! {
-            _ = log_tick.tick() => {
-                let batch = goofi_core::log::global().lock().unwrap_or_else(|e| e.into_inner()).since(log_cursor);
-                if log_cursor != Some(batch.cursor) {
-                    log_cursor = Some(batch.cursor);
-                    let msg = event("logs", serde_json::to_value(batch).unwrap());
-                    if tx.send(Message::Text(msg.into())).await.is_err() { break; }
-                }
-            },
-            incoming = rx.next() => match incoming {
-                Some(Ok(Message::Text(t))) => {
-                    if let Some(reply) = dispatch(&state, t.as_str()) {
-                        if tx.send(Message::Text(reply.into())).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-                Some(Ok(Message::Close(_))) | None => break,
-                Some(Err(_)) => break,
-                _ => {}
-            },
             broadcasted = events.recv() => match broadcasted {
+                Ok(e) if in_flight > 0 => held.push(e),
                 Ok(e) => {
                     if tx.send(Message::Text(e.into())).await.is_err() {
                         break;
@@ -1173,6 +1168,7 @@ async fn handle_control(socket: WebSocket, state: AppState) {
                 // Lagged past the shared ring, so both halves are re-seeded exactly as a fresh
                 // connection seeds them.
                 Err(broadcast::error::RecvError::Lagged(_)) => {
+                    held.clear();
                     let (hello, doc) = control_seeds(&state);
                     if tx.send(Message::Text(hello.into())).await.is_err() {
                         break;
@@ -1182,6 +1178,41 @@ async fn handle_control(socket: WebSocket, state: AppState) {
                     }
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
+            },
+            reply = replies.recv() => match reply {
+                Some(reply) => {
+                    in_flight -= 1;
+                    let mut sent = true;
+                    for m in reply.into_iter().chain(held.drain(..)) {
+                        if tx.send(Message::Text(m.into())).await.is_err() {
+                            sent = false;
+                            break;
+                        }
+                    }
+                    if !sent {
+                        break;
+                    }
+                }
+                None => break,
+            },
+            incoming = rx.next() => match incoming {
+                Some(Ok(Message::Text(t))) => {
+                    in_flight += 1;
+                    if requests.send(t.to_string()).is_err() {
+                        break;
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None => break,
+                Some(Err(_)) => break,
+                _ => {}
+            },
+            _ = log_tick.tick() => {
+                let batch = goofi_core::log::global().lock().unwrap_or_else(|e| e.into_inner()).since(log_cursor);
+                if log_cursor != Some(batch.cursor) {
+                    log_cursor = Some(batch.cursor);
+                    let msg = event("logs", serde_json::to_value(batch).unwrap());
+                    if tx.send(Message::Text(msg.into())).await.is_err() { break; }
+                }
             },
         }
     }
@@ -1426,11 +1457,11 @@ fn dispatch(state: &AppState, text: &str) -> Option<String> {
     }
 }
 
-/// Re-project the already-locked graph into the already-locked document and broadcast the delta.
-/// The caller holds `graph` then `doc` — the canonical order — which keeps apply→re-project atomic.
-fn remirror_and_broadcast_locked(state: &AppState, g: &Graph, doc: &mut crate::doc::GraphDoc) {
+/// Take the document to `projection` and broadcast the delta. The caller projected under the graph
+/// lock and took `doc` before releasing it, so apply→re-project is atomic and the diff runs unlocked.
+fn reconcile_and_broadcast(state: &AppState, mut doc: MutexGuard<crate::doc::GraphDoc>, projection: Value) {
     let from = doc.version();
-    let Some(patch) = doc.reconcile_root(&projection::of(g)) else { return };
+    let Some(patch) = doc.reconcile_root(projection) else { return };
     let _ = state
         .events
         .send(event("doc_patch", json!({ "from": from, "v": doc.version(), "patch": patch })));
@@ -1460,16 +1491,28 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             };
-            let mut batch = vec![first];
-            while let Ok(more) = rx.try_recv() {
-                batch.push(more);
+            // One write per viewer interval: a followed slot at its full rate re-projects the
+            // document once, with each variable's newest pick.
+            let mut latest: HashMap<String, goofi_core::variables::VariableValue> = HashMap::new();
+            latest.insert(first.0, first.1);
+            let deadline = Instant::now() + crate::vocab::VIEWER_INTERVAL;
+            loop {
+                let left = deadline.saturating_duration_since(Instant::now());
+                match rx.recv_timeout(left) {
+                    Ok((name, value)) => {
+                        latest.insert(name, value);
+                    }
+                    Err(_) => break,
+                }
             }
             let mut g = state.graph.lock().unwrap();
-            let changed = batch.into_iter().fold(false, |acc, (name, value)| g.follow_variable(&name, value) || acc);
+            let changed = latest.into_iter().fold(false, |acc, (name, value)| g.follow_variable(&name, value) || acc);
             if changed {
                 g.settle();
-                let mut doc = state.doc.lock().unwrap();
-                remirror_and_broadcast_locked(&state, &g, &mut doc);
+                let projection = projection::of(&g);
+                let doc = state.doc.lock().unwrap();
+                drop(g);
+                reconcile_and_broadcast(&state, doc, projection);
             }
         }
     });
@@ -1493,11 +1536,12 @@ fn resync_and_broadcast(state: &AppState) {
     let mut g = state.graph.lock().unwrap();
     // The settle point: one delivery per batch, before the projection, from settled state.
     g.settle();
-    *state.manifest.lock().unwrap() = g.serialize();
     state.changed.notify();
     sync_followers(state, &g);
-    let mut doc = state.doc.lock().unwrap();
-    remirror_and_broadcast_locked(state, &g, &mut doc);
+    let projection = projection::of(&g);
+    let doc = state.doc.lock().unwrap();
+    drop(g);
+    reconcile_and_broadcast(state, doc, projection);
 }
 
 /// The inband control a `/term` client sends; resize is the only one there is.
@@ -1717,6 +1761,8 @@ async fn handle_params(socket: WebSocket, state: AppState, node: String) {
     // A readout has no catch-up: a peer that took its time is sent the value NOW, never the burst
     // of ticks it was too slow to receive.
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // A pair equal to the last one sent says nothing new; the peer holds it.
+    let mut sent: Option<String> = None;
     loop {
         tokio::select! {
             _ = tick.tick() => {
@@ -1725,9 +1771,13 @@ async fn handle_params(socket: WebSocket, state: AppState, node: String) {
                     live_pair(&g, uid)
                 };
                 let text = pair_payload(&uid.to_hex(), &pair).to_string();
-                if tx.send(Message::Text(text.into())).await.is_err() {
+                if sent.as_deref() == Some(text.as_str()) {
+                    continue;
+                }
+                if tx.send(Message::Text(text.clone().into())).await.is_err() {
                     return;
                 }
+                sent = Some(text);
             }
             incoming = rx.next() => match incoming {
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
