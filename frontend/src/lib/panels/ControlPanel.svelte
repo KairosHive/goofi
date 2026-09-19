@@ -165,8 +165,8 @@
 		void g.editControl(group, gv.element, patch).catch(() => {});
 	}
 
-	function commitValue(gv: VariableView, v: Value): void {
-		void g.setVariableValue(gv.name, v).catch(() => {});
+	function commitValue(gv: VariableView, v: Value): Promise<void> {
+		return g.setVariableValue(gv.name, v).catch(() => {});
 	}
 
 	function num(v: Value): number {
@@ -385,7 +385,7 @@
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape' && variableGrab) { drag = null; cancelVariable(); } }} />
 
-{#snippet widget(c: ControlView, value: Value, label: string, onChange: (v: Value) => void, name = '')}
+{#snippet widget(c: ControlView, value: Value, label: string, onChange: (v: Value) => unknown, name = '')}
 	{#if c.kind === 'knob'}
 		<Knob {label} value={num(value)} min={c.min ?? 0} max={c.max ?? 1} step={c.step ?? 0} {onChange} />
 	{:else if c.kind === 'slider'}

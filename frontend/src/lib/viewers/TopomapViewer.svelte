@@ -27,6 +27,10 @@
 	let resizer: ResizeObserver | null = null;
 	let imageData: ImageData | null = null;
 	let size = $state({ w: 200, h: 200 });
+	// The field is evaluated on a grid of at most this many cells a side, then drawn scaled: its
+	// cost is per grid cell and per channel, so it must not grow with the canvas.
+	const GRID = 128;
+	let grid: HTMLCanvasElement | null = null;
 
 	let layout: TopoLayout | null = null;
 	let pixelCache: PixelCache | null = null;
@@ -112,16 +116,24 @@
 			drawMessage(ctx, w, h, 'topomap layout failed');
 			return;
 		}
+		// The grid keeps the canvas aspect, so the scale is uniform and the head stays a circle.
+		const gw = Math.max(1, Math.round((GRID * w) / Math.max(w, h)));
+		const gh = Math.max(1, Math.round((GRID * h) / Math.max(w, h)));
 		if (
 			!pixelCache ||
-			pixelCache.width !== w ||
-			pixelCache.height !== h ||
+			pixelCache.width !== gw ||
+			pixelCache.height !== gh ||
 			pixelCache.layoutKey !== layoutKey
 		) {
-			pixelCache = buildPixelCache(layout, w, h);
+			pixelCache = buildPixelCache(layout, gw, gh);
 			field = new Float32Array(pixelCache.count);
 		}
 		if (!field) return;
+		grid ??= document.createElement('canvas');
+		if (grid.width !== gw) grid.width = gw;
+		if (grid.height !== gh) grid.height = gh;
+		const gctx = grid.getContext('2d');
+		if (!gctx) return;
 
 		const realVals = new Float64Array(knownIdx.length);
 		for (let i = 0; i < knownIdx.length; i++) {
@@ -131,8 +143,8 @@
 		const weights = solveWeights(layout, realVals);
 		evaluateField(layout, pixelCache, weights, field);
 
-		if (!imageData || imageData.width !== w || imageData.height !== h) {
-			imageData = ctx.createImageData(w, h);
+		if (!imageData || imageData.width !== gw || imageData.height !== gh) {
+			imageData = gctx.createImageData(gw, gh);
 		}
 		const data = imageData.data;
 		data.fill(0);
@@ -168,7 +180,10 @@
 			data[off + 2] = L[idx + 2];
 			data[off + 3] = 255;
 		}
-		ctx.putImageData(imageData, 0, 0);
+		gctx.putImageData(imageData, 0, 0);
+		ctx.clearRect(0, 0, w, h);
+		ctx.imageSmoothingEnabled = true;
+		ctx.drawImage(grid, 0, 0, w, h);
 		drawHeadDecor(ctx, w, h, knownPos);
 	}
 

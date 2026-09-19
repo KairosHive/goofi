@@ -55,6 +55,7 @@ export default function (plugin) {
 			let cables = [];
 			let drag = null;
 			let alive = true;
+			let shown = '';
 
 			const fail = (error) => {
 				failure.textContent = String(error && error.message ? error.message : error);
@@ -92,6 +93,10 @@ export default function (plugin) {
 			const refresh = async () => {
 				const reply = await panel.call('plugin virtual-cables list');
 				if (!alive) return;
+				// The poll answers the same list almost every time; an unchanged reply redraws nothing.
+				const text = JSON.stringify(reply);
+				if (text === shown) return;
+				shown = text;
 				cables = reply.cables;
 				const supported = !reply.unsupported;
 				dot.classList.toggle('ok', supported);

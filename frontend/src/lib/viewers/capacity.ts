@@ -33,7 +33,8 @@ export interface ViewSpec {
 
 /** Floor so a 0-px / collapsed layout never asks for a degenerate reduction. */
 export const CAP_FLOOR = 64;
-const MAX_ROWS = 512;
+/** Traces one line plot can show apart; more only saturate it and cost a redraw each. */
+const MAX_ROWS = 32;
 const MAX_POINTS = 4096;
 
 function px(v: number): number {

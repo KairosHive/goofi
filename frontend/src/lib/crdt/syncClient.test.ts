@@ -103,14 +103,17 @@ describe('SyncClient', () => {
 		expect(nodeView(client.doc, '1')).toMatchObject({ type: 'Buffer' });
 	});
 
-	it('fires the change callback on a seed, on a delta and on a reset', () => {
+	it('fires the change callback on a seed, on a delta and on a reset, naming what moved', () => {
+		// A seed and a reset replace the whole document (`null`); a delta hands over its own patch,
+		// so the store re-derives only the roots — and under `nodes`, the uids — it names.
 		const { ctl, client } = started();
-		let changes = 0;
-		client.onDocChange(() => (changes += 1));
+		const changes: unknown[] = [];
+		client.onDocChange((patch) => changes.push(patch));
+		const patch = { nodes: { '1': { name: 'renamed' } } };
 		ctl.emit({ event: 'doc_state', payload: { v: 1, doc: stateWith({ '1': OSC }) } });
-		ctl.emit({ event: 'doc_patch', payload: { from: 1, v: 2, patch: { nodes: { '1': { name: 'renamed' } } } } });
+		ctl.emit({ event: 'doc_patch', payload: { from: 1, v: 2, patch } });
 		client.reset();
-		expect(changes).toBe(3);
+		expect(changes).toEqual([null, patch, null]);
 	});
 
 	it('stop() unsubscribes, so a later event no longer moves the replica', () => {

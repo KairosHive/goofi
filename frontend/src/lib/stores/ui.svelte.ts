@@ -53,7 +53,7 @@ export class UIStore {
 	nodeDragZone = $state<string | null>(null);
 
 	/** Variable being dragged from a widget label to a parameter. */
-	variableDrag = $state<{ name: string; x: number; y: number; target: Element | null } | null>(null);
+	variableDrag = $state.raw<{ name: string; x: number; y: number; target: Element | null } | null>(null);
 
 	/** Input slots an in-flight cable drag is near ({@link slotKey} keys); replaced, never mutated. */
 	cableNear = $state.raw<ReadonlySet<string>>(new Set());

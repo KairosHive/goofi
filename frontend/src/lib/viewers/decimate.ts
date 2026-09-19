@@ -4,7 +4,7 @@
  */
 export interface Decimated {
 	xs: number[];
-	ys: number[][];
+	ys: ArrayLike<number>[];
 }
 
 export function decimateMinMax(

@@ -18,7 +18,7 @@
 		...rest
 	}: Omit<HTMLInputAttributes, 'value' | 'type' | 'inputmode' | 'min' | 'max' | 'step' | 'oninput'> & {
 		value: number;
-		onChange: (v: number) => void;
+		onChange: (v: number) => unknown;
 		min?: number;
 		max?: number;
 		step?: number;

@@ -160,19 +160,27 @@ describe('HistoryStore — transaction atomicity on throw', () => {
 		expect(h.undoLabel).toBe('Add'); // two children → one compound under the tx label
 	});
 
-	it('folds records that land only AFTER an awaited step (the store records post-RPC)', async () => {
+	it('folds records that land only AFTER an awaited step, and an undo issued meanwhile waits for the step', async () => {
 		// A store mutator records its graph_cmd only after its command RPC resolves; the caller
 		// (e.g. a multi-node drag transaction) MUST await each mutator so the records land in the
 		// buffer before flush. Awaited async records fold into one compound; un-awaited would leak
 		// out as separate top-level steps.
+		const fc = new FakeControl();
 		const h = history();
-		await h.transaction('Move 2 nodes', async () => {
+		h.configureDeps(() => ({ control: fc, graph: new GraphStore(fc), workspace: workspace() }));
+		const tx = h.transaction('Move 2 nodes', async () => {
 			for (const label of ['a', 'b']) {
 				await Promise.resolve(); // stands in for the awaited command RPC
 				h.record(mk(label));
 			}
 		});
-		expect(h.canUndo).toBe(true);
-		expect(h.undoLabel).toBe('Move 2 nodes'); // folded, not two separate 'Move' steps
+		// The document shows the first move before the transaction closes: an undo issued now takes
+		// back the whole step once it has recorded, rather than racing the manager for its last command.
+		const undone = h.undo();
+		await tx;
+		await undone;
+		expect(fc.recordedCalls().filter((c) => c.op === 'undo'), 'one manager undo per folded child').toHaveLength(2);
+		expect(h.canUndo).toBe(false);
+		expect(h.redoLabel).toBe('Move 2 nodes'); // folded, not two separate 'Move' steps
 	});
 });

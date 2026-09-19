@@ -14,6 +14,7 @@
 		if (preview) overflow = preview.scrollWidth > preview.clientWidth;
 	}
 
+	// A ResizeObserver sees the box, not the text: a value that shortens in place re-measures here.
 	$effect(() => {
 		firstLine;
 		measure();

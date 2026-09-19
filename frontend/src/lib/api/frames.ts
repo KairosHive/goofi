@@ -7,6 +7,7 @@ import { RateMeter } from './rateMeter';
 import type { DataFrame } from '$lib/codec/decode';
 import type { ViewSpec } from '$lib/viewers/capacity';
 import { streamKey } from './streamKey';
+import { flushSync } from 'svelte';
 
 type FrameCallback = (frame: DataFrame) => void;
 
@@ -89,6 +90,8 @@ function flush(): void {
 				console.error('frame consumer crashed', err);
 			}
 		}
+		// The draws a delivery causes run here, so the budget measures them and not the callbacks alone.
+		flushSync();
 	}
 	// ONE paint per flush, not one per slot: that is the quantity the cap bounds and the HUD names.
 	if (painted > 0) perfStats().delivered();
