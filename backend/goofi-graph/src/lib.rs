@@ -732,13 +732,13 @@ impl Graph {
         self.rebind(&all);
     }
 
-    /// Re-resolve and re-send every expression binding that reads variable `name`, so its new value
+    /// Refresh and re-send every expression binding that reads variable `name`, so its new value
     /// reaches the nodes reading it (only those bindings pay). Shared by the variable mutators.
     fn invalidate_bindings_reading(&mut self, name: &str) {
         let reading = self.sources_where(|b| {
             b.terms.iter().any(|t| matches!(t, expr_rewrite::VarRef::Variable { key, .. } if key == name))
         });
-        self.rebind(&reading);
+        self.refresh_values(&reading);
     }
 
     /// Re-resolve and re-send every binding whose source SPELLS the display name `name` — in either
@@ -778,7 +778,7 @@ impl Graph {
             })
             .map(|(uid, k, _)| (uid, k))
             .collect();
-        self.rebind(&reading);
+        self.refresh_values(&reading);
     }
 
     /// Every source matching a predicate, as `(node, param)` — the addressing `rebind` takes.
@@ -796,6 +796,36 @@ impl Graph {
         for (uid, key) in sources {
             let Some(state) = self.source_state(*uid, key) else { continue };
             let _ = self.set_source(*uid, &key.group, &key.name, state);
+        }
+    }
+
+    /// A VALUE moved under these records: re-resolve and re-send what each live one reads, keeping
+    /// its compiled expression and wires; one not live, or now missing a name, takes the full `rebind`.
+    fn refresh_values(&mut self, sources: &[(Uid, ParamKey)]) {
+        for (uid, key) in sources {
+            let Some(record) = self.leaf(*uid).and_then(|e| e.sources.get(key)) else { continue };
+            let refs = match (record.live(), record.state.mode) {
+                (true, Mode::Expression) => expr_rewrite::rewrite(&record.state.expression).ok().map(|(_, refs)| refs),
+                (true, Mode::Reference) => goofi_node::mailbox::split_index(&record.state.reference)
+                    .and_then(|(base, _)| parse_reference(base))
+                    .ok()
+                    .map(|r| vec![r]),
+                _ => None,
+            };
+            let fresh = refs.map(|refs| self.resolve_vars(*uid, key, &refs));
+            match fresh {
+                Some(vars) if !vars.iter().any(|v| matches!(v, BoundVar::Missing { .. })) => {
+                    if let Some(record) = self.leaf_mut(*uid).and_then(|e| e.sources.get_mut(key)) {
+                        for (held, new) in record.vars.iter_mut().zip(vars) {
+                            if matches!(new, BoundVar::Value { .. }) {
+                                *held = new;
+                            }
+                        }
+                    }
+                    self.notify_param(*uid, key);
+                }
+                _ => self.rebind(std::slice::from_ref(&(*uid, key.clone()))),
+            }
         }
     }
 

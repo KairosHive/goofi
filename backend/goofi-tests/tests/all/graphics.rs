@@ -861,7 +861,7 @@ fn shaders_render_on_the_gpu() {
     // Step: a node that makes its own frames carries the patch's default size as a live
     // expression, so ONE variable re-sizes every producer at once. The seeding wants an evaluator
     // present; reading a bare variable does not, which is why this one needs no interpreter.
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(goofi_tests::FirstVar));
+    g.state.graph.lock().unwrap().set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
     let gen = g.add("graphics:Noise");
     g.ready(gen);
     let bound = g.doc()["nodes"][hex(gen)]["params"]["common"]["width"].clone();

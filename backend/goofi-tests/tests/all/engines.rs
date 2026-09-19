@@ -343,7 +343,7 @@ fn gfx_frame() -> goofi_core::Data {
 fn register_skeletons(t: &Goofi) {
     let mut g = t.state.graph.lock().unwrap();
     let waker = g.drain_waker();
-    g.set_evaluator(Arc::new(goofi_tests::FirstVar));
+    g.set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
     g.register_engine(Box::new(Skeleton::new(
         "skel",
         &AUDIO,

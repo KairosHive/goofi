@@ -655,10 +655,13 @@ impl Viewer {
             .unwrap();
     }
 
-    /// The next GOOF frame, raw.
+    /// The next GOOF frame, raw. One deadline for the whole wait: the bridge's keepalive pings
+    /// would otherwise keep a socket that serves nothing waiting for ever.
     pub async fn frame(&mut self) -> Vec<u8> {
+        let deadline = Instant::now() + WAIT;
         loop {
-            match tokio::time::timeout(WAIT, self.ws.next()).await {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match tokio::time::timeout(left, self.ws.next()).await {
                 Ok(Some(Ok(Message::Binary(b)))) => return b.to_vec(),
                 Ok(Some(Ok(_))) => {}
                 other => panic!("the data socket stopped before a frame arrived: {other:?}"),
@@ -890,10 +893,15 @@ pub fn install_all(g: &Goofi, files: &[(&str, &str)]) -> Vec<String> {
 
 /// The one-variable evaluator a modulation step needs: the freshest frame's first sample,
 /// coerced to the target's own type — no interpreter, so a scenario runs in the default suite.
-pub struct FirstVar;
+/// It counts its compiles, so a test can tell a refreshed binding from a rebuilt one.
+#[derive(Default)]
+pub struct FirstVar {
+    pub compiles: std::sync::atomic::AtomicUsize,
+}
 
 impl goofi_node::ExprEvaluator for FirstVar {
     fn compile(&self, _source: &str) -> Result<goofi_node::Compiled, goofi_node::ExprError> {
+        self.compiles.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(goofi_node::Compiled { id: 1 })
     }
     fn eval(

@@ -57,10 +57,13 @@ const BUILD_WAIT: std::time::Duration = std::time::Duration::from_secs(1800);
 /// Where the extracted SDK, the generated crates, one shared cargo target and every artifact
 /// live: `$GOOFI_BUILD_DIR`, else `<home>/system/build`.
 pub fn base_dir(home: &Path) -> PathBuf {
-    std::env::var_os("GOOFI_BUILD_DIR")
+    let dir = std::env::var_os("GOOFI_BUILD_DIR")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| home.join("system").join("build"))
+        .unwrap_or_else(|| home.join("system").join("build"));
+    // A generated crate names the SDK by path, and cargo resolves that against the crate's own
+    // directory: only an absolute base survives the trip.
+    std::path::absolute(&dir).unwrap_or(dir)
 }
 
 /// What one source builds to, keyed by everything that decides it: the goofi version, the SDK

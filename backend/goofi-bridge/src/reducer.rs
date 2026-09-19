@@ -29,11 +29,10 @@ pub struct Tap {
 /// What a tap delivers: the variable, and the value its frame held.
 pub type Followed = (String, goofi_core::variables::VariableValue);
 
-/// Flatten every connection's `ViewSpec`s into the single list the planner merges; a slot nobody
-/// has declared for folds to the undeclared preview rather than to the full frame.
+/// Flatten every connection's `ViewSpec`s into the single list the planner merges; an empty
+/// list plans to the undeclared preview rather than to the full frame.
 fn union_specs(by_conn: &HashMap<ConnId, Vec<ViewSpec>>) -> Vec<ViewSpec> {
-    let merged: Vec<ViewSpec> = by_conn.values().flatten().cloned().collect();
-    if merged.is_empty() { vec![ViewSpec::undeclared()] } else { merged }
+    by_conn.values().flatten().cloned().collect()
 }
 
 struct SlotReducer {
@@ -58,12 +57,20 @@ struct SlotReducer {
     /// wanted RAW. Never set at birth: warming a fresh reducer is `asked_at`'s job, and starting
     /// here would spend one full-resolution frame on every slot the first time it is watched.
     asked: Arc<AtomicBool>,
+    /// What wakes the loop between its ticks: a joiner, a spec, a tap, an ask, the stop.
+    poke: std::sync::mpsc::Sender<()>,
+}
+
+impl SlotReducer {
+    fn poke(&self) {
+        let _ = self.poke.send(());
+    }
 }
 
 impl Drop for SlotReducer {
     fn drop(&mut self) {
         // Signalled, never joined: the slot's own loop is what removes its entry, and a join
-        // from there would be a join on itself.
+        // from there would be a join on itself. The poke channel closing is its wake.
         self.stop.store(true, Ordering::Relaxed);
     }
 }
@@ -99,11 +106,13 @@ impl SlotReducers {
         for (key, reducer) in map.iter() {
             if !taps.contains_key(key) {
                 reducer.taps.lock().unwrap().clear();
+                reducer.poke();
             }
         }
         for (key, list) in taps {
             let reducer = self.ensure(&mut map, &key);
             *reducer.taps.lock().unwrap() = list;
+            reducer.poke();
         }
     }
 
@@ -123,6 +132,7 @@ impl SlotReducers {
             map.remove(key);
         }
         map.entry(key.clone()).or_insert_with(|| {
+            let (poke, poked) = std::sync::mpsc::channel();
             let reducer = SlotReducer {
                 specs: Arc::new(Mutex::new(HashMap::new())),
                 taps: Arc::new(Mutex::new(Vec::new())),
@@ -133,9 +143,10 @@ impl SlotReducers {
                 latest: Arc::new(Mutex::new(None)),
                 full: Arc::new(Mutex::new(None)),
                 asked: Arc::new(AtomicBool::new(false)),
+                poke,
             };
             let (graph, iox) = (self.graph.clone(), self.iox.clone());
-            spawn_reducer(key.clone(), &reducer, graph, iox, slots, self.follow.clone());
+            spawn_reducer(key.clone(), &reducer, poked, graph, iox, slots, self.follow.clone());
             reducer
         })
     }
@@ -153,6 +164,7 @@ impl SlotReducers {
         // broadcasts the join-serve into a fan-out this joiner is not yet part of.
         let rx = reducer.tx.subscribe();
         reducer.gen.fetch_add(1, Ordering::Release);
+        reducer.poke();
         rx
     }
 
@@ -164,6 +176,7 @@ impl SlotReducers {
             let mut map = self.inner.lock().unwrap();
             let r = self.ensure(&mut map, &key);
             r.asked.store(true, Ordering::Release);
+            r.poke();
             (r.full.clone(), r.latest.clone())
         };
         let frame = full.lock().unwrap().clone();
@@ -175,6 +188,7 @@ impl SlotReducers {
         if let Some(r) = self.inner.lock().unwrap().get(key) {
             r.specs.lock().unwrap().insert(conn, specs);
             r.gen.fetch_add(1, Ordering::Release);
+            r.poke();
         }
     }
 
@@ -183,6 +197,7 @@ impl SlotReducers {
     pub fn reoffer(&self, key: &SlotKey) {
         if let Some(r) = self.inner.lock().unwrap().get(key) {
             r.gen.fetch_add(1, Ordering::Release);
+            r.poke();
         }
     }
 
@@ -257,13 +272,12 @@ fn open_feed(graph: &Mutex<Graph>, iox: &SharedIox, uid: Uid, slot: &str) -> Opt
     Some(SlotFeed { _node: node, subscriber, service })
 }
 
-/// Spawn the per-slot reducer loop, on a PLAIN thread so any transport's thread can open one:
-/// every ~16 ms take whatever the producer has published and — only when it emitted, a subscriber
-/// joined, or the spec union changed — reduce, encode once, and broadcast to all. The sweep is a
-/// sampling deadline, never a send cadence.
+/// Spawn the per-slot reducer loop on a PLAIN thread: while frames are wanted it sweeps every
+/// ~16 ms and reduces, encodes once and broadcasts on a change; idle, it sleeps until a poke.
 fn spawn_reducer(
     key: SlotKey,
     reducer: &SlotReducer,
+    poked: std::sync::mpsc::Receiver<()>,
     graph: Arc<Mutex<Graph>>,
     iox: SharedIox,
     slots: Weak<Mutex<HashMap<SlotKey, SlotReducer>>>,
@@ -298,8 +312,14 @@ fn spawn_reducer(
         // A snapshot needs ONE full-resolution frame, so the demand is held wide until one lands
         // rather than for the single sweep the ask was seen on — the producer needs a tick to answer.
         let mut full_res = false;
+        let mut wanted = true;
         loop {
-            std::thread::sleep(crate::vocab::REDUCER_TICK);
+            let sleep = if wanted { crate::vocab::REDUCER_TICK } else { REHOME_INTERVAL };
+            if poked.recv_timeout(sleep) == Err(std::sync::mpsc::RecvTimeoutError::Disconnected) {
+                return;
+            }
+            // A burst of pokes is one sweep.
+            while poked.try_recv().is_ok() {}
             if stop.load(Ordering::Relaxed) {
                 return;
             }
@@ -311,7 +331,7 @@ fn spawn_reducer(
                 *full.lock().unwrap() = None;
             }
             full_res |= snapshot;
-            let wanted = snapshot || !specs.lock().unwrap().is_empty() || !taps.lock().unwrap().is_empty();
+            wanted = snapshot || !specs.lock().unwrap().is_empty() || !taps.lock().unwrap().is_empty();
             if wanted {
                 asked_at = std::time::Instant::now();
             }
@@ -452,12 +472,19 @@ fn spawn_reducer(
                 Some(ready) => ready.clone(),
                 None => {
                     let Some(d) = latest.lock().unwrap().clone() else { continue };
-                    let plan = goofi_view::plan(&union_specs(&specs.lock().unwrap()), &d);
-                    let out = goofi_core::reduce::reduce_for_view(&d, &plan);
+                    let specs = union_specs(&specs.lock().unwrap());
+                    // A table has no texels to plan; an array is reduced to its viewers' plan.
+                    let (out, depth) = match d.value() {
+                        goofi_core::Value::Table(_) => (goofi_core::reduce::reduce_table(&d, &specs), goofi_view::Depth::F32),
+                        _ => {
+                            let plan = goofi_view::plan(&specs, &d);
+                            (goofi_core::reduce::reduce_for_view(&d, &plan), plan.depth)
+                        }
+                    };
                     reductions.fetch_add(1, Ordering::Relaxed);
                     // 8-bit only where every viewer of the slot draws it, and only for a frame that
                     // has texels; the reduction itself is f32 either way.
-                    let quantized = (plan.depth == goofi_view::Depth::U8)
+                    let quantized = (depth == goofi_view::Depth::U8)
                         .then(|| goofi_core::reduce::quantize_u8(&out))
                         .flatten()
                         .map(|(shape, texels, meta)| goofi_codec::encode_u8(&shape, &texels, &meta));

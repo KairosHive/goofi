@@ -94,9 +94,9 @@ impl GraphDoc {
 
     /// Take the document to `target`, answering the patch that gets a replica there, or `None`
     /// when nothing changed; the version advances only on a real change.
-    pub fn reconcile_root(&mut self, target: &Value) -> Option<Value> {
-        let patch = merge_patch(&self.state, target)?;
-        self.state = target.clone();
+    pub fn reconcile_root(&mut self, target: Value) -> Option<Value> {
+        let patch = merge_patch(&self.state, &target)?;
+        self.state = target;
         self.version += 1;
         Some(patch)
     }
