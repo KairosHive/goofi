@@ -25,9 +25,9 @@ const SETTLE: Duration = Duration::from_millis(250);
 /// naming what still ran, rather than holding a CI runner to its hour.
 const STUCK: Duration = Duration::from_secs(600);
 
-/// Every live owner by its test thread's name and boot instant, for the watchdog to read.
-fn running() -> &'static std::sync::Mutex<Vec<(String, Instant)>> {
-    static RUNNING: std::sync::Mutex<Vec<(String, Instant)>> = std::sync::Mutex::new(Vec::new());
+/// Every live owner by a token of its own, the test thread that booted it and the boot instant.
+fn running() -> &'static std::sync::Mutex<Vec<(u64, String, Instant)>> {
+    static RUNNING: std::sync::Mutex<Vec<(u64, String, Instant)>> = std::sync::Mutex::new(Vec::new());
     &RUNNING
 }
 
@@ -42,13 +42,13 @@ fn watchdog() {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .iter()
-                    .map(|(name, since)| format!("{name} ({}s)", since.elapsed().as_secs()))
+                    .map(|(_, name, since)| format!("{name} ({}s)", since.elapsed().as_secs()))
                     .collect();
                 let stuck = running()
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .iter()
-                    .any(|(_, since)| since.elapsed() > STUCK);
+                    .any(|(_, _, since)| since.elapsed() > STUCK);
                 if stuck {
                     // The raw handle: libtest's capture, inherited from the test thread that
                     // spawned this one, would swallow `eprintln!` along with the process.
@@ -74,6 +74,8 @@ pub struct Goofi {
     owner: bool,
     /// The window thread, with no screen: what the binary's main thread is where a display answers.
     windows: Option<(goofi_window::Ui, std::thread::JoinHandle<()>)>,
+    /// This owner's entry in the watchdog's roll; a borrower carries none.
+    token: u64,
 }
 
 /// A situation ends the way a process exits: every node stopped and waited for, so no test leaves
@@ -81,12 +83,7 @@ pub struct Goofi {
 impl Drop for Goofi {
     fn drop(&mut self) {
         if self.owner {
-            let name = thread_name();
-            let mut live = running().lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(i) = live.iter().position(|(n, _)| *n == name) {
-                live.remove(i);
-            }
-            drop(live);
+            running().lock().unwrap_or_else(|e| e.into_inner()).retain(|(t, _, _)| *t != self.token);
             self.state.shutdown();
             // Last: every plugin was unmade on it by the shutdown above.
             if let Some((ui, thread)) = self.windows.take() {
@@ -198,8 +195,10 @@ impl Goofi {
         }
         goofi_bridge::spawn_workers(&state);
         watchdog();
-        running().lock().unwrap_or_else(|e| e.into_inner()).push((thread_name(), Instant::now()));
-        Goofi { state, actor: "test".into(), patience: WAIT, owner: true, windows }
+        static TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let token = TOKENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        running().lock().unwrap_or_else(|e| e.into_inner()).push((token, thread_name(), Instant::now()));
+        Goofi { state, actor: "test".into(), patience: WAIT, owner: true, windows, token }
     }
 
     /// Boot one whose `/data` sockets probe on a short clock. Through [`Goofi::with_mode`], so
@@ -223,7 +222,7 @@ impl Goofi {
 
     /// A second client of the SAME instance, with its own undo stack — what two browser tabs are.
     pub fn client(&self, actor: &str) -> Goofi {
-        Goofi { state: self.state.clone(), actor: actor.into(), patience: self.patience, owner: false, windows: None }
+        Goofi { state: self.state.clone(), actor: actor.into(), patience: self.patience, owner: false, windows: None, token: 0 }
     }
 
     /// Run an op and unwrap it; an unexpected refusal is a failure here.
