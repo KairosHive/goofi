@@ -80,10 +80,10 @@ jobs:
       - uses: ./.github/actions/setup
       - run: cargo run -p goofi-cli -- --headless --list-nodes
       - run: >
-          cargo test -p goofi-tests --features embed --
-          python:: plugins:: graphics:: nodes:: agent:: inspect:: probe:: codec_golden::
-          filter_golden:: param_modulation:: python_gil_tripwire:: python_module_hygiene::
-          python_init_order::
+          cargo test -p goofi-tests --features embed --test all --
+          python:: plugins:: graphics:: nodes:: inspect:: codec_golden:: filter_golden::
+          param_modulation:: python_module_hygiene:: python_init_order::
+      - run: cargo test -p goofi-tests --features embed --test python_gil_tripwire
 
   e2e:
     runs-on: ubuntu-latest
