@@ -92,10 +92,12 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: cargo run -p goofi-cli -- --headless --list-nodes
+      # Of the graphics situations, the three that put Python on the GPU's side.
       - run: >
           cargo test -p goofi-tests --features embed --test all --
-          python:: plugins:: graphics:: nodes:: inspect:: codec_golden:: filter_golden::
+          python:: plugins:: nodes:: inspect:: codec_golden:: filter_golden::
           param_modulation:: python_module_hygiene:: python_init_order::
+          graphics::python_texture graphics::host_pixels graphics::camera_video
       - run: cargo test -p goofi-tests --features embed --test python_gil_tripwire
 
   e2e:
