@@ -1,0 +1,53 @@
+name: Set up a goofi build
+description: The toolchains, the caches and `goofi-init`, the same on every runner.
+runs:
+  using: composite
+  steps:
+    # The runner's unused SDKs hold the disk a test binary's link needs.
+    - if: runner.os == 'Linux'
+      shell: bash
+      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+
+    # cpal's Linux hosts link system libraries; lavapipe is the GPU the graphics scenario renders on.
+    - if: runner.os == 'Linux'
+      shell: bash
+      run: >
+        sudo apt-get update -q && sudo apt-get install -y --no-install-recommends
+        libasound2-dev libpipewire-0.3-dev libjack-jackd2-dev libdbus-1-dev mesa-vulkan-drivers ffmpeg
+
+    - uses: actions/setup-node@v7
+      with:
+        node-version: '24'
+        cache: npm
+        cache-dependency-path: |
+          frontend/package-lock.json
+          tests/e2e/package-lock.json
+
+    - uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: false
+
+    # rustup reads rust-toolchain.toml; the job name is part of the key, so each job caches its own build.
+    - uses: Swatinem/rust-cache@v2
+      with:
+        cache-all-crates: true
+        cache-on-failure: true
+
+    # bindgen finds no libclang on its own here; asio-sys needs the same path.
+    - if: runner.os == 'Windows'
+      shell: bash
+      run: echo 'LIBCLANG_PATH=C:\Program Files\LLVM\bin' >> "$GITHUB_ENV"
+
+    # The shipped nodes' build dir, outside target/ so rust-cache does not prune it. Restored here,
+    # saved by the job's last step, so a red run still warms the next one.
+    - shell: bash
+      run: echo 'GOOFI_BUILD_DIR=${{ runner.temp }}/goofi-build' >> "$GITHUB_ENV"
+    - uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/goofi-build
+        key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+        restore-keys: goofi-build-${{ runner.os }}-
+
+    - name: Provision (cargo run -p goofi-init)
+      shell: bash
+      run: cargo run -p goofi-init
