@@ -94,6 +94,9 @@ pub struct AppState {
     dirty: Arc<std::sync::atomic::AtomicBool>,
     /// One reduction per active (node, slot), fanned out to every viewer.
     pub reducers: reducer::SlotReducers,
+    /// Pulsed after every settle, for whoever derives its address from the graph: a `/data`
+    /// socket re-asks which physical slot stands behind its port on the pulse, not on a clock.
+    settled: Arc<tokio::sync::watch::Sender<u64>>,
     /// The central per-session command history. Locked AFTER `graph`, BEFORE `doc`.
     pub history: Arc<Mutex<goofi_graph::CommandHistory>>,
     /// Liveness policy for `/data` sockets, injectable so a test need not sit through a
@@ -218,6 +221,7 @@ impl AppState {
             doc: Arc::new(Mutex::new(doc)),
             dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reducers,
+            settled: Arc::new(tokio::sync::watch::channel(0).0),
             history: Arc::new(Mutex::new(goofi_graph::CommandHistory::new())),
             data_liveness: DataLiveness::DEFAULT,
             roots: materialise_shipped(),
@@ -588,6 +592,7 @@ pub fn spawn_workers(state: &AppState) {
             let (edits, collected) = {
                 let mut g = graph.lock().unwrap();
                 g.drain_status();
+                state.settled_now();
                 let edits = g.take_edits();
                 (edits, if !due {
                     None
@@ -1182,6 +1187,13 @@ async fn handle_control(socket: WebSocket, state: AppState) {
 }
 
 impl AppState {
+    /// The graph settled: wake every reducer and pulse every `/data` socket, so each re-reads
+    /// what it derives from the graph — an address, a generation, a node's very existence.
+    pub(crate) fn settled_now(&self) {
+        self.reducers.poke_all();
+        self.settled.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
     /// Whether the patch differs from its last saved state. TWO sources, because a patch is a graph
     /// AND a workspace, and the workspace half is walked on ask rather than watched.
     pub fn is_dirty(&self) -> bool {
@@ -1503,6 +1515,7 @@ fn resync_and_broadcast(state: &AppState) {
     let projection = projection::of(&g);
     let doc = state.doc.lock().unwrap();
     drop(g);
+    state.settled_now();
     reconcile_and_broadcast(state, doc, projection);
 }
 
@@ -1781,7 +1794,7 @@ async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: Str
     let mut key = stream_behind(&state.graph.lock().unwrap(), uid, &slot);
     let mut frames = key.clone().map(|k| state.reducers.subscribe(k, conn));
     let mut specs: Vec<goofi_view::ViewSpec> = Vec::new();
-    let mut rehome = tokio::time::interval(reducer::REHOME_INTERVAL);
+    let mut settled = state.settled.subscribe();
 
     // A dead-but-not-closed peer produces NO socket error, so without an active probe this
     // connection would live forever.
@@ -1827,7 +1840,10 @@ async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: Str
                 Some(Ok(Message::Pong(_))) => live.pong(),
                 _ => {}
             },
-            _ = rehome.tick() => recheck = true,
+            pulsed = settled.changed() => match pulsed {
+                Ok(()) => recheck = true,
+                Err(_) => break,
+            },
             // The bounded send above stops the loop parking on a BACKED-UP peer; this catches an
             // IDLE dead one, where no frames means no send and a write timeout never fires.
             _ = keepalive.tick() => match live.beat(std::time::Instant::now()) {

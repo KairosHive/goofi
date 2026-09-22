@@ -295,11 +295,8 @@ impl GraphicsEngine {
             .outputs
             .iter()
             .map(|o| {
-                view.ringers(uid, o.name)
-                    .into_iter()
-                    .filter(|r| !self.rides_the_plan(r))
-                    .filter_map(|r| Some((goofi_transport::door_of(view, r.consumer)?, r.event_id)))
-                    .collect()
+                let ringers = view.ringers(uid, o.name).into_iter().filter(|r| !self.rides_the_plan(r));
+                goofi_transport::targets_of(view, uid, o.name, ringers)
             })
             .collect();
         // No recording door yet: a graphics frame is a texture, and what a recorder takes off one

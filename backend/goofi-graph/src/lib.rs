@@ -464,6 +464,9 @@ pub struct Graph {
     refreshed: Vec<(Uid, ParamKey)>,
     /// What the current batch changed and [`Self::settle`] has not yet delivered.
     touched: Vec<Touched>,
+    /// The output slots a reducer watches; each producer rings the slot's view door once its
+    /// frame is out, so the reducer wakes on the frame rather than on a clock.
+    watched: HashSet<(Uid, String)>,
     /// Raised while a multi-step batch is mid-flight, so the drain-side settle cannot deliver its
     /// intermediates. On the GRAPH, not a thread-local: the drain is another thread.
     open_batches: u32,
@@ -539,6 +542,7 @@ impl Graph {
             refreshed: Vec::new(),
             touched: Vec::new(),
             open_batches: 0,
+            watched: HashSet::new(),
         }
     }
 
@@ -732,13 +736,13 @@ impl Graph {
         self.rebind(&all);
     }
 
-    /// Refresh and re-send every expression binding that reads variable `name`, so its new value
+    /// Re-resolve and re-send every expression binding that reads variable `name`, so its new value
     /// reaches the nodes reading it (only those bindings pay). Shared by the variable mutators.
     fn invalidate_bindings_reading(&mut self, name: &str) {
         let reading = self.sources_where(|b| {
             b.terms.iter().any(|t| matches!(t, expr_rewrite::VarRef::Variable { key, .. } if key == name))
         });
-        self.refresh_values(&reading);
+        self.rebind(&reading);
     }
 
     /// Re-resolve and re-send every binding whose source SPELLS the display name `name` — in either
@@ -778,7 +782,7 @@ impl Graph {
             })
             .map(|(uid, k, _)| (uid, k))
             .collect();
-        self.refresh_values(&reading);
+        self.rebind(&reading);
     }
 
     /// Every source matching a predicate, as `(node, param)` — the addressing `rebind` takes.
@@ -796,36 +800,6 @@ impl Graph {
         for (uid, key) in sources {
             let Some(state) = self.source_state(*uid, key) else { continue };
             let _ = self.set_source(*uid, &key.group, &key.name, state);
-        }
-    }
-
-    /// A VALUE moved under these records: re-resolve and re-send what each live one reads, keeping
-    /// its compiled expression and wires; one not live, or now missing a name, takes the full `rebind`.
-    fn refresh_values(&mut self, sources: &[(Uid, ParamKey)]) {
-        for (uid, key) in sources {
-            let Some(record) = self.leaf(*uid).and_then(|e| e.sources.get(key)) else { continue };
-            let refs = match (record.live(), record.state.mode) {
-                (true, Mode::Expression) => expr_rewrite::rewrite(&record.state.expression).ok().map(|(_, refs)| refs),
-                (true, Mode::Reference) => goofi_node::mailbox::split_index(&record.state.reference)
-                    .and_then(|(base, _)| parse_reference(base))
-                    .ok()
-                    .map(|r| vec![r]),
-                _ => None,
-            };
-            let fresh = refs.map(|refs| self.resolve_vars(*uid, key, &refs));
-            match fresh {
-                Some(vars) if !vars.iter().any(|v| matches!(v, BoundVar::Missing { .. })) => {
-                    if let Some(record) = self.leaf_mut(*uid).and_then(|e| e.sources.get_mut(key)) {
-                        for (held, new) in record.vars.iter_mut().zip(vars) {
-                            if matches!(new, BoundVar::Value { .. }) {
-                                *held = new;
-                            }
-                        }
-                    }
-                    self.notify_param(*uid, key);
-                }
-                _ => self.rebind(std::slice::from_ref(&(*uid, key.clone()))),
-            }
         }
     }
 
@@ -885,6 +859,20 @@ impl Graph {
         for e in self.engines_mut() {
             e.view_demand(uid, slot, want);
         }
+    }
+
+    /// Start or stop watching a producer's output: while watched, its every frame rings the
+    /// slot's view door. Answers whether that moved, which the settle then delivers.
+    pub fn set_view_watch(&mut self, uid: Uid, slot: &str, on: bool) -> bool {
+        let key = (uid, slot.to_string());
+        let changed = if on { self.watched.insert(key) } else { self.watched.remove(&key) };
+        if changed {
+            let name = self.leaf(uid).and_then(|l| l.manifest.outputs.iter().find(|o| o.name == slot)).map(|o| o.name);
+            if let Some(name) = name {
+                self.touched.push(Touched::Watch(uid, name));
+            }
+        }
+        changed
     }
 
     pub fn engine_mut(&mut self, id: &str) -> Option<&mut dyn Engine> {
@@ -2387,6 +2375,7 @@ impl Graph {
         let Some(removed) = self.nodes.shift_remove(&uid) else {
             return Err(format!("no such node {uid}"));
         };
+        self.watched.retain(|(u, _)| *u != uid);
         self.release_entry_bindings(&removed);
         // The planner holds its OWN handle on this node's channel, which is the graph's end of its
         // services. `forget` rather than `detach`: this uid is retired, so nothing queued applies.
@@ -2582,12 +2571,12 @@ impl Graph {
             self.notify_param(uid, &key);
             return Ok(());
         }
-        // Release any prior compiled handle first — this path REPLACES it.
-        if let Some(prev) = self.leaf(uid).and_then(|e| e.sources.get(&key)) {
-            if let (Some(ev), Some(id)) = (&self.evaluator, prev.id) {
-                ev.release(id);
-            }
-        }
+        // The prior compiled handle, kept below when the text it compiled is the text this
+        // record rewrites to, and released otherwise: this path REPLACES the record either way.
+        let prior = self
+            .leaf(uid)
+            .and_then(|e| e.sources.get(&key))
+            .and_then(|p| p.id.map(|id| (id, p.rewritten.clone())));
         // A record binds a real param: a dangling one is invisible in the descriptor and
         // unclearable from the UI.
         let Some(param) =
@@ -2632,19 +2621,35 @@ impl Graph {
                 None => (String::new(), Vec::new(), Some("no reference to follow".to_string())),
             },
         };
-        let id = match (&self.evaluator, state.mode, error.is_none()) {
-            (Some(ev), Mode::Expression, true) => match ev.compile(&rewritten) {
-                Ok(c) => Some(c.id),
-                Err(e) => {
-                    error = Some(e.0);
-                    None
+        let evaluator = self.evaluator.clone();
+        let id = match (&evaluator, state.mode, error.is_none()) {
+            // Compiled once per text: a rebind for a moved name, value or variable keeps the handle
+            // the node already evaluates, and only a changed text pays a compile.
+            (Some(_), Mode::Expression, true) if prior.as_ref().is_some_and(|(_, text)| *text == rewritten) => {
+                prior.map(|(id, _)| id)
+            }
+            (Some(ev), Mode::Expression, true) => {
+                if let Some((id, _)) = prior {
+                    ev.release(id);
                 }
-            },
+                match ev.compile(&rewritten) {
+                    Ok(c) => Some(c.id),
+                    Err(e) => {
+                        error = Some(e.0);
+                        None
+                    }
+                }
+            }
             (None, Mode::Expression, _) => {
                 error = Some("no expression evaluator available".to_string());
                 None
             }
-            _ => None,
+            _ => {
+                if let (Some(ev), Some((id, _))) = (&evaluator, prior) {
+                    ev.release(id);
+                }
+                None
+            }
         };
         let record = ParamSource {
             state,
@@ -3087,14 +3092,20 @@ impl Graph {
                         touched.push(Touched::Record(uid));
                     }
                 }
+                Touched::Watch(uid, slot) => {
+                    let t = Touched::Watch(uid, slot);
+                    if self.leaf(uid).is_some() && !touched.contains(&t) {
+                        touched.push(t);
+                    }
+                }
             }
         }
         let edges = self.resolved_edges();
         let rings: HashMap<&'static str, bool> =
             self.engines().map(|e| (e.id(), e.doorbell_driven())).collect();
         let published = {
-            let Graph { nodes, generations, instance, engines, .. } = self;
-            let view = build_view(nodes, generations, instance, &edges, &rings);
+            let Graph { nodes, generations, instance, engines, watched, .. } = self;
+            let view = build_view(nodes, generations, instance, &edges, &rings, watched);
             for e in engines.iter_mut() {
                 e.settle(&view, &touched);
             }
@@ -3857,6 +3868,7 @@ fn build_view<'a>(
     instance: &'a str,
     edges: &'a [Edge],
     rings: &HashMap<&'static str, bool>,
+    watched: &HashSet<(Uid, String)>,
 ) -> GraphView<'a> {
     let nodes = nodes
         .iter()
@@ -3885,6 +3897,7 @@ fn build_view<'a>(
                     params: leaf.params.as_ref(),
                     bindings,
                     recorded: e.record.as_slice(),
+                    watched: leaf.manifest.outputs.iter().filter(|o| watched.contains(&(*uid, o.name.to_string()))).map(|o| o.name).collect(),
                 },
             ))
         })
