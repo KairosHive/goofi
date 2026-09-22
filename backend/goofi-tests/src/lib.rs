@@ -21,6 +21,42 @@ pub use serde_json::json as j;
 const WAIT: Duration = Duration::from_secs(180);
 /// How long [`Goofi::stays`] watches a negative.
 const SETTLE: Duration = Duration::from_millis(250);
+/// A situation blocked under a lock never reaches its deadline; past this the process aborts,
+/// naming what still ran, rather than holding a CI runner to its hour.
+const STUCK: Duration = Duration::from_secs(600);
+
+/// Every live owner by its test thread's name and boot instant, for the watchdog to read.
+fn running() -> &'static std::sync::Mutex<Vec<(String, Instant)>> {
+    static RUNNING: std::sync::Mutex<Vec<(String, Instant)>> = std::sync::Mutex::new(Vec::new());
+    &RUNNING
+}
+
+fn watchdog() {
+    static ONE: std::sync::Once = std::sync::Once::new();
+    ONE.call_once(|| {
+        std::thread::Builder::new()
+            .name("goofi-tests-watchdog".into())
+            .spawn(|| loop {
+                std::thread::sleep(Duration::from_secs(10));
+                let stuck: Vec<String> = running()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .iter()
+                    .filter(|(_, since)| since.elapsed() > STUCK)
+                    .map(|(name, since)| format!("{name} ({}s)", since.elapsed().as_secs()))
+                    .collect();
+                if !stuck.is_empty() {
+                    eprintln!("goofi-tests: stuck for over {STUCK:?}, aborting: {}", stuck.join(", "));
+                    std::process::abort();
+                }
+            })
+            .expect("the watchdog thread");
+    });
+}
+
+fn thread_name() -> String {
+    std::thread::current().name().unwrap_or("?").to_string()
+}
 
 /// A running goofi: the graph, the runtime, the document, the status-drain worker.
 pub struct Goofi {
@@ -38,6 +74,12 @@ pub struct Goofi {
 impl Drop for Goofi {
     fn drop(&mut self) {
         if self.owner {
+            let name = thread_name();
+            let mut live = running().lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(i) = live.iter().position(|(n, _)| *n == name) {
+                live.remove(i);
+            }
+            drop(live);
             self.state.shutdown();
             // Last: every plugin was unmade on it by the shutdown above.
             if let Some((ui, thread)) = self.windows.take() {
@@ -148,6 +190,8 @@ impl Goofi {
             g.boot_done();
         }
         goofi_bridge::spawn_workers(&state);
+        watchdog();
+        running().lock().unwrap_or_else(|e| e.into_inner()).push((thread_name(), Instant::now()));
         Goofi { state, actor: "test".into(), patience: WAIT, owner: true, windows }
     }
 
