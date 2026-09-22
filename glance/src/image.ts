@@ -25,6 +25,9 @@ interface ImageGpu {
 	lutTex: WebGLTexture;
 	uploaded: ImageData | null;
 	lutUploaded: Uint8Array | null;
+	/** The storage `tex` holds, so a frame of the same shape uploads in place. */
+	shape: [number, number, number] | null;
+	floatLinear: boolean;
 }
 
 export class ImagePlot {
@@ -57,6 +60,12 @@ export class ImagePlot {
 		this.detach(this);
 		this.release();
 	}
+	/** Drop the image: `draw` paints the background alone until the next push. */
+	clear(): void {
+		this.data = null;
+		if (this.gpu) this.gpu.uploaded = null;
+		this.invalidate();
+	}
 
 	/** The caller's array is kept, not copied: a frame is never written after it is decoded. */
 	push(data: ImageData): void {
@@ -73,7 +82,7 @@ export class ImagePlot {
 		gl.activeTexture(gl.TEXTURE0);
 		gl.bindTexture(gl.TEXTURE_2D, gpu.tex);
 		if (gpu.uploaded !== data) {
-			upload(gl, data);
+			upload(gl, gpu, data);
 			gpu.uploaded = data;
 		}
 		gl.activeTexture(gl.TEXTURE1);
@@ -99,7 +108,11 @@ export class ImagePlot {
 		const lutTex = gl.createTexture()!;
 		gl.bindTexture(gl.TEXTURE_2D, lutTex);
 		clampTexture(gl, gl.LINEAR, gl.LINEAR);
-		this.gpu = { gl, prog, tex: gl.createTexture()!, lutTex, uploaded: null, lutUploaded: null };
+		const tex = gl.createTexture()!;
+		gl.bindTexture(gl.TEXTURE_2D, tex);
+		clampTexture(gl, gl.LINEAR, gl.NEAREST);
+		const floatLinear = gl.getExtension('OES_texture_float_linear') !== null;
+		this.gpu = { gl, prog, tex, lutTex, uploaded: null, lutUploaded: null, shape: null, floatLinear };
 		return this.gpu;
 	}
 
@@ -121,18 +134,25 @@ function clampTexture(gl: WebGL2RenderingContext, min: number, mag: number): voi
 	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 }
 
-/** Smooth when shrinking, blocky when enlarging: a texel stays a texel. */
-function upload(gl: WebGL2RenderingContext, d: ImageData): void {
+/** Smooth when shrinking, blocky when enlarging: a texel stays a texel. The storage is
+ *  allocated once per shape; a frame of the same shape is written into it. */
+function upload(gl: WebGL2RenderingContext, gpu: ImageGpu, d: ImageData): void {
 	const u8 = d.values instanceof Uint8Array;
 	const c = d.channels;
 	const internal = u8
 		? [gl.R8, gl.RG8, gl.RGB8, gl.RGBA8][c - 1]
 		: [gl.R32F, gl.RG32F, gl.RGB32F, gl.RGBA32F][c - 1];
 	const format = [gl.RED, gl.RG, gl.RGB, gl.RGBA][c - 1];
-	const linear = u8 || gl.getExtension('OES_texture_float_linear') !== null;
-	clampTexture(gl, linear ? gl.LINEAR : gl.NEAREST, gl.NEAREST);
+	const type = u8 ? gl.UNSIGNED_BYTE : gl.FLOAT;
 	gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-	gl.texImage2D(gl.TEXTURE_2D, 0, internal, d.width, d.height, 0, format, u8 ? gl.UNSIGNED_BYTE : gl.FLOAT, d.values);
+	const s = gpu.shape;
+	if (s && s[0] === d.width && s[1] === d.height && s[2] === internal) {
+		gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, d.width, d.height, format, type, d.values);
+		return;
+	}
+	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, u8 || gpu.floatLinear ? gl.LINEAR : gl.NEAREST);
+	gl.texImage2D(gl.TEXTURE_2D, 0, internal, d.width, d.height, 0, format, type, d.values);
+	gpu.shape = [d.width, d.height, internal];
 }
 
 function grayLut(): Uint8Array {

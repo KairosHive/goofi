@@ -76,6 +76,7 @@
 		frame = null;
 		labels = [];
 		labelKey = '';
+		untrack(() => plot?.clear());
 		if (!visible || !slot) return;
 		// Kind is not part of the stream's identity, but it IS part of what this viewer needs.
 		const specs = capW > 0 && capH > 0 ? viewSpecsForKind(kind, capW, capH) : null;

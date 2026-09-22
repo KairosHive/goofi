@@ -97,7 +97,7 @@ const ALLOW_VALUE: { file?: string; prop?: RegExp; value: RegExp; why: string }[
 const ALLOW_DUPLICATE: { sel: string; why: string }[] = [
 	{
 		sel: '.container',
-		why: 'ArrayViewer and TrajectoryViewer each size their OWN canvas host to fill its slot with a sane minimum — a private box, not a shared affordance. The agreement is what "fill your slot" means, not a vocabulary either of them could look up; hoisting a viewer-internal frame into the CENTRAL stylesheet is the opposite of what that module is for'
+		why: 'TrajectoryViewer and TableViewer each size their OWN body to fill its slot with a sane minimum — a private box, not a shared affordance. The agreement is what "fill your slot" means, not a vocabulary either of them could look up; hoisting a viewer-internal frame into the CENTRAL stylesheet is the opposite of what that module is for'
 	}
 ];
 
@@ -529,7 +529,7 @@ describe('style vocabulary', () => {
 		// a `:global()` naming someone else's class — including one that merely starts `.u`.
 		for (const css of [
 			'.ui-btn { color: red; }',
-			':global(.uplot, .uplot *) { color: red; }',
+			':global(.unknown, .unknown *) { color: red; }',
 			'.md :global(pre code) { color: red; }',
 			'.tab :global(.close) { width: 0; }'
 		])

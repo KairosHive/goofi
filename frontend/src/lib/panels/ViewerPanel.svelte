@@ -10,8 +10,8 @@
 	import { asStateObject } from 'panelty';
 	import { workspace } from 'panelty';
 	import { Select } from '$lib/ui';
-	import { createSurface, type Surface } from 'glance';
-	import { provideAnchor, provideSurface } from '$lib/viewers/plotHost';
+	import type { Surface } from 'glance';
+	import { mountSurface, provideAnchor, provideSurface } from '$lib/viewers/plotHost';
 
 	interface ViewerState {
 		node?: string | null;
@@ -42,20 +42,15 @@
 		const c = canvas;
 		const b = body;
 		if (!c || !b) return;
-		let s: Surface | null = null;
-		try {
-			s = createSurface(c);
-		} catch (err) {
-			console.warn(err);
-		}
-		surface = s;
+		const m = mountSurface(c);
+		surface = m.surface;
 		const ro = new ResizeObserver(() =>
-			s?.setView({ x: 0, y: 0, zoom: 1, width: b.clientWidth, height: b.clientHeight, dpr: window.devicePixelRatio || 1 })
+			m.setView({ x: 0, y: 0, zoom: 1, width: b.clientWidth, height: b.clientHeight })
 		);
 		ro.observe(b);
 		return () => {
 			ro.disconnect();
-			s?.dispose();
+			m.dispose();
 			surface = null;
 		};
 	});

@@ -141,3 +141,5 @@ at zoom 1. `valueAt` reads the CPU copy on the main thread.
   neighbour's plot until one card is raised.
 - The body's padding is an opaque frame in the card colour, so the plot stays inside the card's
   rounded corners and the pane never shows through it.
+- `.goofi-node.booting .surface { opacity }` no longer dims a line or image plot: its pixels are on
+  the panel surface under the card, not in the card's DOM.

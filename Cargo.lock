@@ -1117,6 +1117,7 @@ dependencies = [
  "half",
  "naga",
  "pollster",
+ "web-sys",
  "wgpu",
 ]
 

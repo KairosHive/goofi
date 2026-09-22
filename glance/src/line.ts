@@ -96,6 +96,14 @@ export class LinePlot {
 		this.detach(this);
 		this.release();
 	}
+	/** Drop the series: `draw` paints the background alone and `range()` is null until the next push. */
+	clear(): void {
+		this.buf = null;
+		this.m = 0;
+		this.scalar = false;
+		if (this.gpu) this.gpu.uploaded = null;
+		this.invalidate();
+	}
 
 	push(data: LineData): void {
 		const { rows } = data;

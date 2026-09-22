@@ -26,6 +26,7 @@ line.push({ rows: [Float32Array, ...], xs?, base? });
 line.range();                                    // { xMin, xMax, yMin, yMax, scalar } for labels
 line.valueAt(xFromLeft);                         // { x, values } nearest a pointer
 line.setOrder(z);                                // overlapping plots draw in z order
+line.clear();                                    // background alone until the next push
 line.remove();
 
 const image = surface.addImage();

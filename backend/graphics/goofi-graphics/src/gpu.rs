@@ -189,7 +189,11 @@ impl Gpu {
             })
             .await
             .map_err(|e| format!("`{}` refused a device: {e}", info.name))?;
+        // The process log's clock does not exist on wasm32; the page's console is the log there.
+        #[cfg(not(target_arch = "wasm32"))]
         device.on_uncaptured_error(Arc::new(|e| goofi_core::log::record(goofi_core::log::Source::component("graphics"), goofi_core::log::Level::Error, None, format!("graphics: {e}"))));
+        #[cfg(target_arch = "wasm32")]
+        device.on_uncaptured_error(Arc::new(|e| web_sys::console::error_1(&format!("graphics: {e}").into())));
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("goofi-sampler"),

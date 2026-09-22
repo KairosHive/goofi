@@ -84,8 +84,7 @@ def main():
         <div class="eyebrow">RECIPE {i+1:02d} / {r['nodes']} NODES</div><h2>{escape(r['title'])}</h2>
         <p class="deck">{escape(subtitle)}</p><figure><img loading="lazy" src="{picture}" alt="Rendered output of {escape(r['title'])}"><figcaption>Rendered from a real goofi node session.</figcaption></figure>
         <p>{escape(body)}</p>{finishes}<div class="route">{escape(route)}</div><table>{rows}</table>
-        <aside class="note">{escape(limit)}</aside><a class="button" href="{r['file']}">Open patch archive ↗</a>
-        <a class="quiet" href="assets/{stem}-browser.png">Browser view ↗</a></section>''')
+        <aside class="note">{escape(limit)}</aside><a class="button" href="{r['file']}">Open patch archive ↗</a></section>''')
     atlas = []
     bundle = HERE.parents[2]/'node-bundles/harmonic-geometry'
     source = ast.parse((bundle/'harmonic_geometry.py').read_text())

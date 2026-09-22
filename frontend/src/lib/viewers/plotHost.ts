@@ -1,6 +1,6 @@
 /** How a viewer finds the surface it draws on and the card it sits in: two Svelte contexts. */
 import { getContext, setContext } from 'svelte';
-import type { Rect, Surface } from 'glance';
+import { createSurface, type Rect, type Surface, type View } from 'glance';
 
 export interface PlotHost {
 	readonly surface: Surface | null;
@@ -39,4 +39,49 @@ export function offsetIn(el: HTMLElement, anchor: HTMLElement): Rect {
 		y += e.offsetTop;
 	}
 	return { x, y, w: el.offsetWidth, h: el.offsetHeight };
+}
+
+export interface SurfaceMount {
+	/** Null where WebGL2 is missing; the mount then holds no view. */
+	readonly surface: Surface | null;
+	setView(v: Omit<View, 'dpr'>): void;
+	dispose(): void;
+}
+
+/** A surface on `canvas`; the last view is re-applied when the device pixel ratio changes. */
+export function mountSurface(canvas: HTMLCanvasElement): SurfaceMount {
+	let surface: Surface | null = null;
+	try {
+		surface = createSurface(canvas);
+	} catch (err) {
+		console.warn(err);
+	}
+	let last: Omit<View, 'dpr'> | null = null;
+	let media: MediaQueryList | null = null;
+	const dpr = () => window.devicePixelRatio || 1;
+	const apply = () => {
+		if (last) surface?.setView({ ...last, dpr: dpr() });
+	};
+	// The query matches the ratio of the moment, so it is re-armed after every change.
+	const arm = () => {
+		media?.removeEventListener('change', changed);
+		media = window.matchMedia(`(resolution: ${dpr()}dppx)`);
+		media.addEventListener('change', changed);
+	};
+	function changed(): void {
+		arm();
+		apply();
+	}
+	arm();
+	return {
+		surface,
+		setView(v) {
+			last = v;
+			apply();
+		},
+		dispose() {
+			media?.removeEventListener('change', changed);
+			surface?.dispose();
+		}
+	};
 }
