@@ -323,22 +323,9 @@
 		pushData(arr, readEnvelope(f.meta, arr.shape.length));
 	}
 
-	/** The values last drawn — the previous frame's own buffer, which nothing writes to. */
-	let drawn: ArrayData | null = null;
-	function sameAsDrawn(arr: ArrayData): boolean {
-		const a = drawn?.values;
-		const b = arr.values;
-		if (!a || a.length !== b.length || String(drawn?.shape) !== String(arr.shape)) return false;
-		for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-		return true;
-	}
-
 	$effect(() => {
 		if (!frame) return;
-		const arr = frame.data as ArrayData;
-		if (sameAsDrawn(arr)) return; // a byte-identical payload has nothing new to draw
 		if (!plot) return; // before mount: `onMount` draws the frame it finds once the plot exists
-		drawn = arr;
 		drawFrame(frame);
 	});
 
@@ -385,10 +372,7 @@
 		makePlot(container.clientWidth || 200, container.clientHeight || 120, 1);
 		// The data effect ran before this and had no plot to draw on, so the frame it saw is drawn here.
 		const f = untrack(() => frame);
-		if (f) {
-			drawn = f.data as ArrayData;
-			drawFrame(f);
-		}
+		if (f) drawFrame(f);
 		// `pointerdown` too: a tap is a press with no motion, and it is the whole gesture on touch.
 		container.addEventListener('pointermove', captureMove, true);
 		container.addEventListener('pointerdown', captureMove, true);
