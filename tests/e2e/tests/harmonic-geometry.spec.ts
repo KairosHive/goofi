@@ -6,6 +6,14 @@ import { waitForApp, resetPatch } from '../lib/app';
 import { rawCall } from '../lib/raw';
 import { REPO_ROOT } from '../playwright.config';
 
+/** Bring the Play panel to the front, out of the edit mode every panel starts in, so its controls take input. */
+async function play(page: Page): Promise<void> {
+	await page.getByRole('tab', { name: 'Play Close tab', exact: true }).click();
+	const panel = page.getByTestId('control-panel');
+	if ((await panel.getAttribute('data-edit')) === 'true') await page.getByTestId('control-edit-toggle').click();
+	await expect(panel).toHaveAttribute('data-edit', 'false');
+}
+
 const folder = path.join(REPO_ROOT, 'node-bundles', 'harmonic-geometry', 'examples');
 const textures = ['jade', 'brushed metal', 'woven silk', 'porous stone', 'sand', 'dunes', 'lichen', 'coral', 'cells', 'spores', 'pollen', 'plankton'];
 const recipes = JSON.parse(fs.readFileSync(path.join(folder, 'recipes.json'), 'utf8')) as Array<{
@@ -84,7 +92,7 @@ test('the harmonic geometry cookbook opens as live dashboards with usable contro
 						await page.screenshot({ path: path.join(folder, 'assets', recipe.file.replace('.gfi', '-browser.png')) });
 					}
 				}
-				await page.getByRole('tab', { name: 'Play Close tab', exact: true }).click();
+				await play(page);
 				const auto = page.getByTestId('control-geometry-auto');
 				await auto.getByRole('checkbox').uncheck();
 				await expect.poll(async () => {
@@ -168,7 +176,7 @@ test('jade fills the window and its texture controls morph independently', async
 			expect(bounds[1]).toBeLessThanOrEqual(size.height);
 		}
 		await page.setViewportSize({ width: 1440, height: 1000 });
-		await page.getByRole('tab', { name: 'Play Close tab', exact: true }).click();
+		await play(page);
 		for (const name of ['auto', 'textureAuto']) await page.getByTestId(`control-geometry-${name}`).getByRole('checkbox').uncheck();
 		for (const [name, value] of [['textureA', 'cells'], ['textureB', 'plankton']]) {
 			const select = page.getByTestId(`control-geometry-${name}`).getByRole('combobox');
@@ -221,6 +229,7 @@ test('living ratios modulate the organic field with a visible trace and pause co
 		await expect.poll(sample).toBeGreaterThan(1);
 		const first = await sample();
 		await expect.poll(sample, { timeout: 12_000 }).not.toBe(first);
+		await play(page);
 		await page.getByTestId('control-geometry-running').getByRole('checkbox').uncheck();
 		await expect.poll(async () => (await rawCall(page, 'variable list')).result.variables.find((g: any) => g.name === 'geometry.running').value).toBe(false);
 		await expect.poll(async () => (await rawCall(page, 'session status')).result.errors).toEqual([]);
