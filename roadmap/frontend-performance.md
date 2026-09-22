@@ -2,13 +2,15 @@
 
 Audit of 2026-09-16, run against the owner's report that the browser's frame rate falls as a
 patch grows. Six static reviews and two live measurements produced 44 verified findings; the
-fixes that fit the current design landed on 2026-09-18 (patch-scoped document sync with an O(1)
-uid index, one owner of a gesture's send rate, the write path off the graph lock with `dispatch`
-off the socket task, the follower coalesced and its rebind split, the inspector's blur and
-per-frame layout removed, the viewer chrome cuts, zoom-aware viewer demand, one control message
-per period, the reducer wake channel, table reduction and the undeclared element budget). The
-two structural answers have entries of their own: `viewer-render-surface.md` and
-`data-plane-bandwidth.md`. This file is what remains, and what must not be looked at again.
+fixes that fit the current design landed on 2026-09-18 and were reworked on 2026-09-22 to the
+shape they should have had (the document replica as reactive state with one live view per node,
+so a patch wakes the readers of the leaves it names and nothing is diffed; the write path off the
+graph lock; the follower coalesced and an expression's compiled handle kept across rebinds; the
+reducer woken by the producer's doorbell and never clocked; the inspector's blur and per-frame
+layout removed; the viewer chrome cuts; zoom-aware viewer demand; one control message per period;
+table reduction and the undeclared element budget). The two structural answers have entries of
+their own: `viewer-render-surface.md` and `data-plane-bandwidth.md`. This file is what remains,
+and what must not be looked at again.
 
 ## What was measured, for the record
 
@@ -27,6 +29,14 @@ the absolute frame rates.
 
 ## Remaining
 
+- **Ops that do not block** — every op is the standard interaction, so only a write should hold
+  the graph, every op must stay atomic, and a slow op must not park a socket's event drain. The
+  first attempt (a per-socket queue with the op's events held behind its reply) was taken out:
+  a queue beside the op path is not the design. To be designed whole, with the op table.
+- **Continuous-motion edits** — a knob, a slider or a number field under a pointer emits an op
+  per event today. A rate limiter in the control was built and taken out: the edit path for a
+  gesture (what is sent, when, and what the control shows meanwhile) is one design, to be made
+  after the op path above.
 - **The dev profile** — `Cargo.toml`: `[profile.dev] opt-level = 1` and
   `[profile.dev.package."*"] opt-level = 2` give 6–9× on the serve path and drop the status
   drain from 15–20 % of a core to ~2 %. It was built and REVERTED: with either half alone, two
@@ -53,7 +63,7 @@ the absolute frame rates.
 ## Refuted — do not re-investigate
 
 - "The reducer decodes every producer sample it drains": the subscriber is one-deep with safe
-  overflow, so it drains at most one sample per tick.
+  overflow, so it drains at most one sample per wake.
 - "Per-frame `clientWidth` reads force layout after the same microtask's writes": Svelte's batch
   runs render effects before user effects, and the read sites are not reached by envelope or
   scalar frames.

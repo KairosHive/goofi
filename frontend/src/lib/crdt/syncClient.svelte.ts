@@ -1,10 +1,12 @@
-/** The document driver: follows `doc_state` / `doc_patch` so the replica equals the manager's document. */
+/** The document driver: follows `doc_state` / `doc_patch` so the replica equals the manager's document.
+ * The replica is reactive state, so a merge patch writes exactly the leaves it names and a reader
+ * of a leaf re-runs for that leaf alone. */
 import type { Control } from '$lib/api/control';
 import { applyMerge } from './mergePatch';
 import { emptyDoc, type Doc } from './graphDoc';
 
 export class SyncClient {
-	private _doc: Doc = emptyDoc();
+	private _doc = $state<Doc>(emptyDoc());
 	get doc(): Doc {
 		return this._doc;
 	}

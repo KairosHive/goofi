@@ -24,14 +24,11 @@ import { workspace } from 'panelty';
 import type { SlotView } from '$lib/viewers/inlineView';
 import { history, type Action } from './history.svelte';
 import { captureNavContext } from '$lib/stores/navContext';
-import { SyncClient } from '$lib/crdt/syncClient';
+import { SyncClient } from '$lib/crdt/syncClient.svelte';
 import {
 	linkViews,
-	nodeViews,
+	nodesMap,
 	facadeFaces,
-	docParams,
-	viewersJson,
-	baselineJson,
 	recordedSlots,
 	variableViews,
 	variableGroupLocks,
@@ -60,9 +57,9 @@ export interface ControlPatch extends Partial<Cell> {
 	step?: number;
 	options?: string[];
 }
-import { applyLiveParams, assembleNode, type RuntimeOverlay } from '$lib/crdt/nodeAssembly';
+import { liveNode, type RuntimeOverlay, type ViewSources } from '$lib/crdt/liveNode.svelte';
 import { ParamLive, type LiveSource } from '$lib/api/paramLive';
-import type { StringParam, SourcePatch } from '$lib/api/types';
+import type { SourcePatch } from '$lib/api/types';
 import type { GraphFragment } from '$lib/editor/clipboard';
 
 /** Safety net: lift a ⟳ spinner after this long when a node never reports the refresh done.
@@ -74,52 +71,24 @@ function refreshKey(node: string, group: string, name: string): string {
 	return `${node}\u001f${group}\u001f${name}`;
 }
 
+/** Take `held` to `next`, a two-level map, leaf by leaf: a leaf `next` lacks is deleted, and one it
+ * carries unchanged is left alone — which is what keeps its readers asleep. */
+function follow<T>(held: Record<string, Record<string, T>>, next: Record<string, Record<string, T>>): Record<string, Record<string, T>> {
+	for (const group of Object.keys(held)) if (!(group in next)) delete held[group];
+	for (const [group, names] of Object.entries(next)) {
+		const g = (held[group] ??= {});
+		for (const name of Object.keys(g)) if (!(name in names)) delete g[name];
+		for (const [name, v] of Object.entries(names)) g[name] = v;
+	}
+	return held;
+}
+
 /** A doc link as the wire ops spell it: two `uid/slot` endpoints. */
 function linkEndpoints(link: LinkInfo): { from: string; to: string } {
 	return {
 		from: `${link.node_out}/${link.slot_out}`,
 		to: `${link.node_in}/${link.slot_in}`
 	};
-}
-
-/** Equal by identity, or — for the small doc-derived objects a node carries — by content,
- * whatever order their keys came in. */
-function sameValue(a: unknown, b: unknown): boolean {
-	if (Object.is(a, b)) return true;
-	if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
-	if (Array.isArray(a) || Array.isArray(b)) {
-		if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-		return a.every((v, i) => sameValue(v, b[i]));
-	}
-	const ka = Object.keys(a);
-	const kb = Object.keys(b);
-	if (ka.length !== kb.length) return false;
-	const o = b as Record<string, unknown>;
-	return ka.every((k) => k in o && sameValue((a as Record<string, unknown>)[k], o[k]));
-}
-
-/** Write the fields of `next` onto `cur` where they differ, so an unchanged field keeps its identity. */
-function assignChanged(cur: Record<string, unknown>, next: Record<string, unknown>): void {
-	for (const key of Object.keys(next)) {
-		if (!sameValue(cur[key], next[key])) cur[key] = next[key];
-	}
-}
-
-/** Reconcile a node's params LEAF BY LEAF, so a widget bound to one param is not re-rendered for another. */
-function assignParams(cur: NodeInstanceInfo['params'], next: NodeInstanceInfo['params']): void {
-	for (const group of Object.keys(cur)) if (!(group in next)) delete cur[group];
-	for (const [group, names] of Object.entries(next)) {
-		const cg = cur[group];
-		if (!cg) {
-			cur[group] = names;
-			continue;
-		}
-		for (const name of Object.keys(cg)) if (!(name in names)) delete cg[name];
-		for (const [name, p] of Object.entries(names)) {
-			if (cg[name]) assignChanged(cg[name] as unknown as Record<string, unknown>, p as unknown as Record<string, unknown>);
-			else cg[name] = p;
-		}
-	}
 }
 
 const IDLE_RECORD: RecordStatus = {
@@ -131,11 +100,29 @@ const IDLE_RECORD: RecordStatus = {
 };
 
 export class GraphStore {
-	nodes = $state<NodeInstanceInfo[]>([]);
-	/** uid → node, replaced with `nodes` by `_reconcileNodes`; the O(1) side of `nodeById`, and a
-	 * signal so a reader of a removed node re-runs. */
-	private _byUid = $state.raw(new Map<string, NodeInstanceInfo>());
-	links = $state<LinkInfo[]>([]);
+	nodeTypes = $state.raw<NodeTypeInfo[] | null>(null);
+
+	/** One live view per node the document holds, in the document's order; each is the one object
+	 * its uid ever answers with, and its fields are reads of the document, the catalog and the
+	 * runtime overlay. The list itself follows the document's membership alone. */
+	nodes: NodeInstanceInfo[] = $derived(Object.keys(nodesMap(this.doc)).flatMap((uid) => this._views.get(uid) ?? []));
+	/** The live views, by uid — made as a node enters the document, dropped as it leaves. */
+	private _views = new Map<string, NodeInstanceInfo>();
+	/** What the runtime planes reported per node the document holds. */
+	private _rt = $state<Record<string, RuntimeOverlay>>({});
+	/** The same, for a node the runtime planes named before the document materialized it: the
+	 * stage and error planes ride their own channel in no defined order against the doc, so a
+	 * report outrunning the doc is routine. Taken by the node's view when it is made. */
+	private _stash: Record<string, RuntimeOverlay> = {};
+	private _byType = $derived(new Map((this.nodeTypes ?? []).map((t) => [t.type, t])));
+	private _faces = $derived(facadeFaces(this.doc));
+	private _sources: ViewSources = {
+		doc: () => this.doc,
+		catalog: (type) => this._byType.get(type),
+		face: (uid) => this._faces.get(uid),
+		runtime: (uid) => this._rt[uid]
+	};
+	links: LinkInfo[] = $derived(linkViews(this.doc));
 	savePath = $state<string | null>(null);
 	unsavedChanges = $state(false);
 	/** What a goofi that did not shut down cleanly left behind, as the manager last listed it. */
@@ -156,7 +143,7 @@ export class GraphStore {
 	sessionEpoch = $state(0);
 
 	/** Every armed output slot, doc-authoritative: the document is the one owner of what is armed. */
-	armed = $state<{ uid: string; slot: string; quality: VideoQuality }[]>([]);
+	armed: { uid: string; slot: string; quality: VideoQuality }[] = $derived(recordedSlots(this.doc));
 
 	/** The recording SESSION, as the backend last reported it. Pushed, never derived here. */
 	record = $state<RecordStatus>(IDLE_RECORD);
@@ -168,14 +155,12 @@ export class GraphStore {
 	private _droppedCounts: Record<string, number> = {};
 
 	/** Patch variables (system + user), doc-authoritative, in system-first/creation order. */
-	variables = $state<VariableView[]>([]);
+	variables: VariableView[] = $derived(variableViews(this.doc));
 	/** Every variable group that carries a lock, by name. */
-	variableGroups = $state<Record<string, LockView>>({});
+	variableGroups: Record<string, LockView> = $derived(variableGroupLocks(this.doc));
 
 	/** Bumps on every WHOLESALE graph load, never on an incremental add/remove; editors re-fit on it. */
 	loadEpoch = $state(0);
-
-	nodeTypes = $state.raw<NodeTypeInfo[] | null>(null);
 
 	/** Params with a ⟳ refresh in flight → its safety-timeout handle. Cleared when the node reports
 	 * the param done (`refreshed_params`), never on the fire-and-forget RPC ack. */
@@ -183,17 +168,6 @@ export class GraphStore {
 
 	/** instance_id of the manager we last hydrated from; a change is a fresh session, not a reconnect. */
 	private _lastInstanceId: string | null = null;
-
-	/** Per-node runtime for nodes the runtime planes named but the doc has not yet materialized.
-	 * One-shot: `_seedRuntime` takes its entry, so a later node at the same uid seeds fresh. */
-	private _snapshotRuntime: GraphSnapshot['runtime'] = {};
-
-	/** Hold a runtime plane's report for a node still to materialize — the stage and error planes
-	 * ride their own channel in no defined order against the doc, so a report outrunning the doc
-	 * is routine, and dropping it would wedge the seed's `creating` guess for good. */
-	private _stashRuntime(uid: string, rt: GraphSnapshot['runtime'][string]): void {
-		this._snapshotRuntime[uid] = { ...this._snapshotRuntime[uid], ...rt };
-	}
 
 	/** The control client (injectable for tests; defaults to the live WS one). */
 	private ctl: Control;
@@ -229,21 +203,35 @@ export class GraphStore {
 		return this._sync.synced;
 	}
 
-	/** Re-derive the document-owned subtrees the applied patch names — every one for a whole
-	 * document. Runtime state (error/stage/ufreq) and catalog metadata (slots/tags) stay event-sourced. */
+	/** Follow the document's membership: a view per node that entered, none for one that left.
+	 * Everything else a view shows is read live, so nothing here re-derives it. */
 	private _syncFromDoc(patch: Record<string, unknown> | null): void {
 		const doc = this._sync.doc;
-		const moved = (root: string) => !patch || root in patch;
-		if (moved('links')) this.links = linkViews(doc);
-		if (moved('variables')) this.variables = variableViews(doc);
-		if (moved('variable_groups')) this.variableGroups = variableGroupLocks(doc);
 		// The workspace store rebuilds its tree from this; the client holds no second copy.
-		if (moved('arrangement')) workspace().syncFromDoc(arrangementTabs(doc));
-		if (moved('nodes')) {
-			this.armed = recordedSlots(doc);
-			// No-ops until the catalog lands, then rebuilds from the doc.
-			this._reconcileNodesFromDoc(patch && (patch.nodes as Record<string, unknown>));
+		if (!patch || 'arrangement' in patch) workspace().syncFromDoc(arrangementTabs(doc));
+		const held = nodesMap(doc);
+		for (const uid of this._views.keys()) {
+			if (!(uid in held)) {
+				this._views.delete(uid);
+				delete this._rt[uid];
+			}
 		}
+		for (const uid of Object.keys(held)) {
+			if (this._views.has(uid)) continue;
+			// The view takes whatever the runtime planes said of this uid before the doc held it,
+			// once: a later node at the same uid starts fresh.
+			const early = this._stash[uid];
+			delete this._stash[uid];
+			this._rt[uid] = early ?? {};
+			this._views.set(uid, liveNode(uid, this._sources));
+		}
+	}
+
+	/** The runtime overlay to write for `uid`: the node's own while the document holds it, else the
+	 * stash its view takes when it is made. */
+	private _runtimeOf(uid: string): RuntimeOverlay {
+		if (this._views.has(uid)) return (this._rt[uid] ??= {});
+		return (this._stash[uid] ??= {});
 	}
 
 	/** Apply a wholesale snapshot, returning whether it came from a NEW backend session — which is
@@ -253,14 +241,16 @@ export class GraphStore {
 		// is what re-announces it there.
 		if (snap.node_types?.length) this.nodeTypes = snap.node_types;
 		// The snapshot and the doc delta ride separate channels in no defined order, so the runtime
-		// overlay is both stashed for nodes still to materialize and applied to those already here.
-		this._snapshotRuntime = snap.runtime ?? {};
-		for (const [uid, rt] of Object.entries(this._snapshotRuntime)) {
-			const node = this.nodeById(uid);
-			if (!node) continue;
-			node.stage = rt.stage;
-			node.error = rt.error ?? null;
-			node.runtime = rt.runtime;
+		// overlay lands on the node's own entry, or on the stash its view will take. A NEW session's
+		// nodes are all still to come — its document follows this hello, and the reset between
+		// drops every view — so its whole overlay is stashed. The stash is this snapshot's alone.
+		const freshSession = snap.instance_id !== this._lastInstanceId;
+		this._stash = {};
+		for (const [uid, rt] of Object.entries(snap.runtime ?? {})) {
+			const own = !freshSession && this._views.has(uid) ? (this._rt[uid] ??= {}) : (this._stash[uid] ??= {});
+			own.stage = rt.stage;
+			own.error = rt.error ?? null;
+			own.runtime = rt.runtime;
 		}
 		this._setRecord(snap.record);
 		this.savePath = snap.save_path;
@@ -271,7 +261,6 @@ export class GraphStore {
 
 		// The arrangement rides the doc; what the snapshot carries is the VIEWPOINT, this client's
 		// alone — persisted, never converged.
-		const freshSession = snap.instance_id !== this._lastInstanceId;
 		this._lastInstanceId = snap.instance_id;
 		if (snap.viewpoint != null) workspace().restoreViewpoint(snap.viewpoint);
 		return freshSession;
@@ -280,14 +269,10 @@ export class GraphStore {
 	/** Drop every projection assembled from the OUTGOING document. Reconciliation runs only from the
 	 * doc observer, and a fresh manager with an EMPTY graph answers our SV with no change at all. */
 	private _resetProjection(): void {
-		this.nodes = [];
-		this._byUid = new Map();
-		this.links = [];
-		this.variables = [];
-		this.variableGroups = {};
-		this.armed = [];
-		// `_snapshotRuntime` is NOT cleared: `_replaceSnapshot` ran first, so it already holds the
-		// INCOMING session's overlay. The arrangement store is a separate singleton, so it is here.
+		this._views.clear();
+		this._rt = {};
+		// `_stash` is NOT cleared: `_replaceSnapshot` ran first, so it already holds the INCOMING
+		// session's overlay. The arrangement store is a separate singleton, so it is here.
 		workspace().syncFromDoc([]);
 	}
 
@@ -334,17 +319,21 @@ export class GraphStore {
 				this._onWholesaleLoad();
 				break;
 			case 'state_update': {
-				const t = this.nodeById(ev.payload.node);
-				if (t) {
-					// Params are doc-owned: merge ONLY the runtime bits, never wholesale-replace, which
-					// would clobber the reconcile's value+descriptor assembly.
-					this._mergeParamRuntime(t, ev.payload.params);
-					if (ev.payload.stage) t.stage = ev.payload.stage;
-					// The state plane re-pushes the current error, so backend truth wins here even
-					// when no diff-driven `error` event fired.
-					if ('error' in ev.payload) t.error = ev.payload.error ?? null;
-					if (ev.payload.runtime !== undefined) t.runtime = ev.payload.runtime ?? undefined;
+				const t = this._runtimeOf(ev.payload.node);
+				// Params are doc-owned: only the refreshed options are the runtime's. NOT the error:
+				// an echo is taken before the node has re-evaluated the source the op just moved,
+				// so it would carry the PREVIOUS source's failure. The live plane owns that field.
+				for (const [group, names] of Object.entries(ev.payload.params ?? {})) {
+					for (const [name, desc] of Object.entries(names)) {
+						const d = desc as { options?: string[] | null };
+						if (d.options !== undefined) ((t.options ??= {})[group] ??= {})[name] = d.options ?? null;
+					}
 				}
+				if (ev.payload.stage) t.stage = ev.payload.stage;
+				// The state plane re-pushes the current error, so backend truth wins here even
+				// when no diff-driven `error` event fired.
+				if ('error' in ev.payload) t.error = ev.payload.error ?? null;
+				if (ev.payload.runtime !== undefined) t.runtime = ev.payload.runtime ?? undefined;
 				// Lift each spinner exactly when the fresh options land. Keyed by node, not by `t`.
 				for (const [group, name] of ev.payload.refreshed_params ?? []) {
 					this._endRefresh(refreshKey(ev.payload.node, group, name));
@@ -352,27 +341,19 @@ export class GraphStore {
 				break;
 			}
 			case 'node_stage': {
-				const t = this.nodeById(ev.payload.node);
-				if (t) {
-					t.stage = ev.payload.stage;
-					if (ev.payload.error !== undefined) t.error = ev.payload.error ?? null;
-					// The tier arrives here as well as on the snapshot: a node added after connecting
-					// is in no snapshot, and a GIL demotion moves it while the session is live.
-					if (ev.payload.runtime !== undefined) t.runtime = ev.payload.runtime ?? undefined;
-				} else {
-					// The stage plane pushes each transition ONCE, so one outrun by its node's own
-					// doc delta is stashed for the seed, never dropped.
-					this._stashRuntime(ev.payload.node, {
-						stage: ev.payload.stage,
-						error: ev.payload.error,
-						runtime: ev.payload.runtime ?? undefined
-					});
-				}
+				// The stage plane pushes each transition ONCE, so one outrun by its node's own doc
+				// delta lands on the stash its view takes, never dropped.
+				const t = this._runtimeOf(ev.payload.node);
+				t.stage = ev.payload.stage;
+				if (ev.payload.error !== undefined) t.error = ev.payload.error ?? null;
+				// The tier arrives here as well as on the snapshot: a node added after connecting
+				// is in no snapshot, and a GIL demotion moves it while the session is live.
+				if (ev.payload.runtime !== undefined) t.runtime = ev.payload.runtime ?? undefined;
 				break;
 			}
 			case 'node_stats':
 				for (const [uid, stats] of Object.entries(ev.payload.stats)) {
-					const t = this.nodeById(uid);
+					const t = this._rt[uid];
 					if (t && t.stats?.updates_per_second !== stats.updates_per_second) t.stats = stats;
 				}
 				break;
@@ -382,13 +363,10 @@ export class GraphStore {
 			case 'logs':
 				consoleStore().apply(ev.payload);
 				break;
-			case 'error': {
+			case 'error':
 				// A REPORT, so only a node that RUNS raises one — a facade's health rides `node_stage`.
-				const t = this.nodeById(ev.payload.node);
-				if (t) t.error = ev.payload.error;
-				else this._stashRuntime(ev.payload.node, { error: ev.payload.error });
+				this._runtimeOf(ev.payload.node).error = ev.payload.error;
 				break;
-			}
 			case 'unsaved_changes':
 				this.unsavedChanges = ev.payload.unsaved_changes;
 				break;
@@ -404,10 +382,9 @@ export class GraphStore {
 		}
 	}
 
-	/** Adopt a palette catalog. It supplies the descriptors, so the nodes rebuild here. */
+	/** Adopt a palette catalog; the views read their descriptors off it. */
 	private _applyNodeTypes(types: NodeTypeInfo[]): void {
 		this.nodeTypes = types;
-		this._reconcileNodesFromDoc(null);
 	}
 
 	/** Re-derive the node registry from disk and report what changed; explicit, since there is no
@@ -826,9 +803,10 @@ export class GraphStore {
 		await this.ctl.call('session load', { path });
 	}
 
-	/** Resolve a node by uid — the ONE accessor, and every kind of node record answers it. */
+	/** Resolve a node by uid — the ONE accessor, and every kind of node record answers it. Read
+	 * off the document, so a reader re-runs when the node enters or leaves it. */
 	nodeById(id: string): NodeInstanceInfo | null {
-		return this._byUid.get(id) ?? null;
+		return nodesMap(this.doc)[id] === undefined ? null : (this._views.get(id) ?? null);
 	}
 
 	/** Every node a panel can bind or a picker can list. ROOT is the canvas, and it is not one. */
@@ -836,105 +814,15 @@ export class GraphStore {
 		return this.nodes.map((n) => ({ uid: n.uid, name: n.name }));
 	}
 
-	/** Reconcile the node list IN PLACE by uid: a survivor keeps its reference (and its inline-viewer
-	 * subscription) and takes only the fields that differ; the list keeps its identity while its membership does. */
-	private _reconcileNodes(next: NodeInstanceInfo[]): void {
-		const list = next.map((n) => {
-			const cur = this._byUid.get(n.uid);
-			if (!cur || cur === n) return cur ?? n;
-			const { params, ...rest } = n;
-			assignChanged(cur as unknown as Record<string, unknown>, rest);
-			assignParams(cur.params, params);
-			return cur;
-		});
-		const same = list.length === this.nodes.length && list.every((n, i) => n === this.nodes[i]);
-		if (same) return;
-		this.nodes = list;
-		this._byUid = new Map(this.nodes.map((n) => [n.uid, n]));
-	}
-
-	/** The runtime overlay for a node materializing from the doc for the FIRST time. A leaf is
-	 * `creating` until its own thread says otherwise; a virtual node runs nothing, so it is born at
-	 * the stage the backend already answers for it rather than waiting a stats period to hear so. */
-	private _seedRuntime(uid: string, virtual: boolean): RuntimeOverlay {
-		const seed = this._snapshotRuntime[uid];
-		delete this._snapshotRuntime[uid];
-		return {
-			stage: seed?.stage ?? (virtual ? 'ready' : 'creating'),
-			error: seed?.error ?? null,
-			runtime: seed?.runtime
-		};
-	}
-
 	/** One node's live source state, both maps WHOLE: a driven param neither names has no live value
-	 * and shows its literal again, and no standing error. Written in place — a READOUT must not
-	 * re-assemble a node — and the one door the control plane's own event and the faster `/params`
-	 * socket both come through. */
+	 * and shows its literal again, and no standing error. Written leaf by leaf, so a param whose
+	 * value did not move wakes nobody; the one door the control plane's own event and the faster
+	 * `/params` socket both come through. */
 	applyLiveSource(node: string, live: LiveSource): void {
-		const t = this.nodeById(node);
-		if (t) applyLiveParams(t, docParams(this._sync.doc, t.uid), live.values, live.errors);
-	}
-
-	/** Pull the RUNTIME (event-sourced, never-in-the-doc) fields off a node so a re-assemble keeps them. */
-	private _extractRuntime(node: NodeInstanceInfo): RuntimeOverlay {
-		const params: NonNullable<RuntimeOverlay['params']> = {};
-		for (const group of Object.keys(node.params)) {
-			params[group] = {};
-			for (const name of Object.keys(node.params[group])) {
-				const p = node.params[group][name];
-				const pr: NonNullable<RuntimeOverlay['params']>[string][string] = { error: p.error };
-				if (p.type === 'string') pr.options = (p as StringParam).options;
-				// A driven param DISPLAYS its live evaluated value, which never reaches the doc.
-				if (p.mode !== 'constant') pr.liveValue = p.value;
-				params[group][name] = pr;
-			}
-		}
-		return {
-			error: node.error,
-			stage: node.stage,
-			runtime: node.runtime,
-			stats: node.stats,
-			params
-		};
-	}
-
-	/** Merge ONLY the runtime param bits from a state_update's descriptor map onto an existing node.
-	 * NOT the error: an echo is taken before the node has re-evaluated the source the op just moved,
-	 * so it would carry the PREVIOUS source's failure. The live plane owns that field. */
-	private _mergeParamRuntime(
-		t: NodeInstanceInfo,
-		params: Record<string, Record<string, unknown>>
-	): void {
-		for (const [group, names] of Object.entries(params)) {
-			for (const [name, desc] of Object.entries(names)) {
-				const p = t.params[group]?.[name];
-				if (!p) continue;
-				const d = desc as { options?: string[] | null };
-				if (p.type === 'string') (p as StringParam).options = d.options ?? null;
-			}
-		}
-	}
-
-	/** Build `this.nodes` from the doc: the doc's fields, the catalog descriptor and the runtime overlay
-	 * per record; a facade's ports supply its slots. Only a touched node or a facade is re-assembled; `null` = every one. */
-	private _reconcileNodesFromDoc(touched: Record<string, unknown> | null): void {
-		if (!this.nodeTypes?.length) return; // no catalog yet → keep the current nodes; rebuild when it lands
-		const doc = this._sync.doc;
-		// Both indexes are built ONCE per reconcile rather than per node.
-		const byType = new Map(this.nodeTypes.map((t) => [t.type, t]));
-		const faces = facadeFaces(doc);
-		const next: NodeInstanceInfo[] = nodeViews(doc).map((nv) => {
-			const existing = this.nodeById(nv.uid);
-			if (existing && touched && !(nv.uid in touched) && !faces.has(nv.uid)) return existing;
-			const catalog = byType.get(nv.type);
-			const runtime: RuntimeOverlay = existing
-				? this._extractRuntime(existing)
-				: this._seedRuntime(nv.uid, !!boundaryType(nv.type) || faces.has(nv.uid));
-			const viewers = (viewersJson(doc, nv.uid) ?? {}) as NodeInstanceInfo['viewers'];
-			const baseline = baselineJson(doc, nv.uid) as NodeInstanceInfo['baseline'];
-			return assembleNode(nv, docParams(doc, nv.uid), viewers, baseline, catalog, runtime, faces.get(nv.uid));
-		});
-		this._reconcileNodes(next);
+		const t = this._rt[node];
+		if (!t) return;
+		t.values = follow(t.values ?? {}, live.values);
+		t.errors = follow(t.errors ?? {}, live.errors);
 	}
 
 	/** Read `uids` and everything they hold — members, ports and nested sub-patches, to any depth —

@@ -329,29 +329,14 @@
 			if (!n) continue;
 			const was = previous.get(uid);
 			const handles = handlesOf(n);
-			const position = pinned.get(uid) ?? { x: n.pos?.[0] ?? 0, y: n.pos?.[1] ?? 0 };
-			// A live marquee's flags are Flow's, on these very objects: re-deriving them from
-			// the store mid-drag hands the release an empty selection.
-			const selected = boxSelecting ? (was?.selected ?? false) : sel.nodes(panelId).has(uid);
-			// The same object while nothing it carries changed, so Flow's identity checks short-circuit.
-			if (
-				was &&
-				was.data.node === n &&
-				was.data.label === n.name &&
-				was.data.handles === handles &&
-				was.selected === selected &&
-				was.position.x === position.x &&
-				was.position.y === position.y
-			) {
-				next.push(was);
-				continue;
-			}
 			next.push({
 				id: uid,
 				type: 'goofi',
-				position,
+				position: pinned.get(uid) ?? { x: n.pos?.[0] ?? 0, y: n.pos?.[1] ?? 0 },
 				data: { node: n, label: n.name, handles },
-				selected,
+				// A live marquee's flags are Flow's, on these very objects: re-deriving them from
+				// the store mid-drag hands the release an empty selection.
+				selected: boxSelecting ? (was?.selected ?? false) : sel.nodes(panelId).has(uid),
 				measured: was?.data.handles === handles ? was.measured : undefined
 			});
 		}
@@ -370,26 +355,13 @@
 			if (!src || !dst) continue;
 			if (src.node === dst.node && l.node_out !== l.node_in) continue; // internal to one collapsed child -> hidden (but keep a real self-loop)
 			const id = linkKey(l);
-			const was = previous.get(id);
-			const selected = boxSelecting ? (was?.selected ?? false) : sel.edges(panelId).has(id);
-			if (
-				was &&
-				was.source === src.node &&
-				was.sourceHandle === src.handle &&
-				was.target === dst.node &&
-				was.targetHandle === dst.handle &&
-				was.selected === selected
-			) {
-				next.push(was);
-				continue;
-			}
 			next.push({
 				id,
 				source: src.node,
 				sourceHandle: src.handle,
 				target: dst.node,
 				targetHandle: dst.handle,
-				selected,
+				selected: boxSelecting ? (previous.get(id)?.selected ?? false) : sel.edges(panelId).has(id),
 				animated: false
 			});
 		}

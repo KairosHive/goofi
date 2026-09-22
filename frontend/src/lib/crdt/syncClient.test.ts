@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { FakeControl } from '$lib/test/fakeControl';
-import { SyncClient } from './syncClient';
+import { SyncClient } from './syncClient.svelte';
 import { nodeView } from './graphDoc';
 
 const OSC = { type: 'Oscillator', name: 'osc', pos: { x: 0, y: 0 } };

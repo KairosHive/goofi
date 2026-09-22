@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { flushSync } from 'svelte';
 import { FakeControl } from '$lib/test/fakeControl';
 import { seed, type DocSeed } from '$lib/test/docSeed';
 import { GraphStore } from './graph.svelte';
@@ -227,35 +228,63 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 	});
 });
 
-describe('GraphStore doc sync — a patch touches only what it names', () => {
-	it('a variables-only patch leaves node, params, pos and viewers identities untouched', () => {
+describe('GraphStore doc sync — a reader re-runs for the leaves it read', () => {
+	it('a patch wakes the readers of the leaves it names, and nobody else', () => {
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
 		const d = seed(fc);
 		g.nodeTypes = catalog();
-		d.node('uidA', 'Oscillator', 'osc0', [0, 0], { viewers: '{"out":{"collapsed":false}}' });
-		const nodes = g.nodes;
+		d.node('uidA', 'Oscillator', 'osc0', [0, 0], {
+			params: { common: { frequency: { value: 1 } }, count: { reset: {} } },
+			viewers: '{"out":{"collapsed":false}}'
+		});
 		const node = g.nodeById('uidA')!;
-		const { params, pos, viewers } = node;
-		const frequency = params.common.frequency;
+		let list = 0;
+		let names = 0;
+		let frequency = 0;
+		let reset = 0;
+		const stop = $effect.root(() => {
+			$effect(() => {
+				void g.nodes.length;
+				list++;
+			});
+			$effect(() => {
+				void node.name;
+				names++;
+			});
+			$effect(() => {
+				void node.params.common.frequency.value;
+				frequency++;
+			});
+			$effect(() => {
+				void node.params.count.reset.value;
+				reset++;
+			});
+		});
+		flushSync();
+		expect([list, names, frequency, reset]).toEqual([1, 1, 1, 1]);
 
 		d.variable('patch.gain', { value: 1, type: 'float' });
-		expect(g.variables.map((v) => v.name)).toContain('patch.gain');
 		d.patch({ variable_groups: { patch: { lock: { config: true, value: false } } } });
+		flushSync();
+		expect(g.variables.map((v) => v.name)).toContain('patch.gain');
 		expect(g.variableGroups.patch, 'a group lock rides its own root').toEqual({ config: true, value: false });
-		expect(g.nodes).toBe(nodes);
-		expect(g.nodeById('uidA')).toBe(node);
-		expect(node.params).toBe(params);
-		expect(node.params.common.frequency).toBe(frequency);
-		expect(node.pos).toBe(pos);
-		expect(node.viewers).toBe(viewers);
+		expect([list, names, frequency, reset], 'nothing a node reader read moved').toEqual([1, 1, 1, 1]);
 
-		// A leaf write on the node moves that leaf and nothing beside it.
+		// A leaf write on the node wakes that leaf's reader and nothing beside it.
 		d.patch({ nodes: { uidA: { params: { common: { frequency: { value: 7 } } } } } });
-		expect(node.params.common.frequency).toBe(frequency);
-		expect(frequency.value).toBe(7);
-		expect(node.viewers).toBe(viewers);
-		expect(g.nodes).toBe(nodes);
+		flushSync();
+		expect(node.params.common.frequency.value).toBe(7);
+		expect([list, names, frequency, reset]).toEqual([1, 1, 2, 1]);
+		d.patch({ nodes: { uidA: { name: 'osc1' } } });
+		flushSync();
+		expect(node.name).toBe('osc1');
+		expect([list, names, frequency, reset]).toEqual([1, 2, 2, 1]);
+		d.node('uidB', 'Oscillator', 'osc2');
+		flushSync();
+		expect([list, names, frequency, reset], 'membership wakes the list alone').toEqual([2, 2, 2, 1]);
+		expect(g.nodeById('uidA'), 'one object per uid, for as long as the document holds it').toBe(node);
+		stop();
 	});
 
 	it('a member scope patch refreshes its facade', () => {
