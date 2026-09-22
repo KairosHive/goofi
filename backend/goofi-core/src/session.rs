@@ -160,14 +160,15 @@ impl Drop for Held {
 /// Hold a new session under `id`. Its directory is built under a part name and renamed into
 /// place with its lock already held, so no sweep ever sees one that is neither locked nor dead.
 pub fn hold(id: &str) -> io::Result<Held> {
+    let at = |what: &'static str| move |e: io::Error| io::Error::new(e.kind(), format!("{what}: {e}"));
     let part = system_base().join(format!("{id}.part"));
     let _ = fs::remove_dir_all(&part);
-    fs::create_dir_all(&part)?;
-    let lock = File::create(part.join("alive.lock"))?;
-    lock.lock()?;
-    fs::rename(&part, system_dir(id))?;
+    fs::create_dir_all(&part).map_err(at("create the part"))?;
+    let lock = File::create(part.join("alive.lock")).map_err(at("create the lock"))?;
+    lock.lock().map_err(at("take the lock"))?;
+    fs::rename(&part, system_dir(id)).map_err(at("move the part into place"))?;
     let held = Held { id: id.to_string(), lock: Some(lock) };
-    write_record(id, "")?;
+    write_record(id, "").map_err(at("write the record"))?;
     Ok(held)
 }
 
