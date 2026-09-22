@@ -21,8 +21,9 @@ env:
   SCCACHE_GHA_ENABLED: 'true'
   # Where the bridge's build script puts the shipped nodes, so the harness and the fleet share it.
   GOOFI_BUILD_DIR: ${{ github.workspace }}/target/goofi-build
-  # Two test threads on four cores: lavapipe compiles a shader on the cores the situations leave it.
-  RUST_TEST_THREADS: 2
+  # One situation at a time: two of them on four cores starve each other's locks and lavapipe's
+  # shader compiles. Slow, and the suite's own speed is the next piece of work.
+  RUST_TEST_THREADS: 1
 
 jobs:
   # One job, one build: every gate in the order a fresh clone meets them.

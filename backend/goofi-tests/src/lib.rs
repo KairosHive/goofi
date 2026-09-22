@@ -38,15 +38,22 @@ fn watchdog() {
             .name("goofi-tests-watchdog".into())
             .spawn(|| loop {
                 std::thread::sleep(Duration::from_secs(10));
-                let stuck: Vec<String> = running()
+                let live: Vec<String> = running()
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .iter()
-                    .filter(|(_, since)| since.elapsed() > STUCK)
                     .map(|(name, since)| format!("{name} ({}s)", since.elapsed().as_secs()))
                     .collect();
-                if !stuck.is_empty() {
-                    eprintln!("goofi-tests: stuck for over {STUCK:?}, aborting: {}", stuck.join(", "));
+                let stuck = running()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .iter()
+                    .any(|(_, since)| since.elapsed() > STUCK);
+                if stuck {
+                    // The raw handle: libtest's capture, inherited from the test thread that
+                    // spawned this one, would swallow `eprintln!` along with the process.
+                    use std::io::Write;
+                    let _ = writeln!(std::io::stderr(), "goofi-tests: a situation is stuck past {STUCK:?}; aborting with these live: {}", live.join(", "));
                     std::process::abort();
                 }
             })
