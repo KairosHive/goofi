@@ -1141,7 +1141,9 @@ fn one_signal_speaks_through_another_band_by_band() {
     let carrier = g.add("Osc");
     let bank = g.add("BandFilter");
     g.link(carrier, "out", bank, "input");
-    let open = heard(&g, bank, "a tone through a bank with every band open", |x| peak(x) > 0.3);
+    // Past the onset tenth, whose half-silence would count as a lower pitch.
+    let open = settled(&g, bank, "a tone through a bank with every band open");
+    assert!(peak(&open) > 0.3, "the open bands add up: peak {}", peak(&open));
     assert!(near(per_tenth(&open), 88), "A4 leaves as A4: {} crossings", per_tenth(&open));
 
     // Step: `harmonic` stands the bands on the partials of `pitch` rather than spreading them.
