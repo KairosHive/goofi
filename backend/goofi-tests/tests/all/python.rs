@@ -109,19 +109,21 @@ import goofi
 import numpy as np
 class Consume(goofi.Node):
     INPUTS = {"data": goofi.InputSlot(goofi.DataType.ARRAY, multi=True)}
-    OUTPUTS = {"out": goofi.DataType.ARRAY}
+    OUTPUTS = {"out": goofi.DataType.ARRAY, "ran": goofi.DataType.ARRAY}
     PARAMS = {"consume": {"mode": goofi.IntParam(0, 0, 4)}}
     def process(self, data):
         mode = self.params.consume.mode
+        ran = np.array([mode], dtype=np.float32)
         if mode:
             self.clear_input("data")
         if mode == 2:
-            return None
+            return {"ran": ran}
         if mode == 3:
             raise ValueError("consume failed")
         if mode == 4:
             self.clear_input("missing")
-        return np.array([mode, sum(float(d.data[0]) for _, d in data if d is not None)], dtype=np.float32)
+        held = sum(float(d.data[0]) for _, d in data if d is not None)
+        return {"out": np.array([mode, held], dtype=np.float32), "ran": ran}
 "#);
     let first = g.add("Once");
     let second = g.add("Once");
@@ -130,6 +132,7 @@ class Consume(goofi.Node):
     }
     let consume = g.add("Consume");
     let consumed = g.probe(consume, "out");
+    let ran = g.probe(consume, "ran");
     free_run(&g, consume, 20.0);
     g.link(first, "out", consume, "data");
     g.link(second, "out", consume, "data");
@@ -137,7 +140,7 @@ class Consume(goofi.Node):
     g.ready(second);
     let sees = |mode: f32, sum: f32| {
         let before = consumed.latest().and_then(|d| d.meta().index());
-        g.until("the held input readout", |_| {
+        g.until(&format!("the held input readout [{mode}, {sum}]"), |_| {
             consumed.latest().filter(|d| d.meta().index() > before && f32s(d) == [mode, sum])
         });
     };
@@ -164,8 +167,10 @@ class Consume(goofi.Node):
     g.set_param(consume, "consume", "mode", 0);
     sees(0.0, 10.0);
     g.until("clear failure recovery", |g| g.error(consume).is_none().then_some(()));
+    // A run that clears and answers no `out` frame is seen on the slot it does answer: a fixed
+    // wait here let a starved child miss the mode before it moved on, and the inputs stayed held.
     g.set_param(consume, "consume", "mode", 2);
-    std::thread::sleep(Duration::from_millis(200));
+    g.until("a clearing run that answers nothing", |_| ran.latest().filter(|d| f32s(d)[0] == 2.0));
     g.set_param(consume, "consume", "mode", 0);
     sees(0.0, 0.0);
     g.set_param(second, "send", "value", 7);
