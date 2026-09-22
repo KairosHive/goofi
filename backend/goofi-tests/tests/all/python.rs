@@ -242,6 +242,18 @@ class LateBoot(goofi.Node):
 fn a_node_missing_a_dependency_is_listed_greyed_rather_than_vanishing() {
     let py = require_python();
     let g = Goofi::new();
+    // An interpreter of this test's own: the install below touches its site-packages, and a file
+    // put in the shared venv's would move the memo key of every probed node for every boot after.
+    let own = tempfile::tempdir().unwrap();
+    let venv = own.path().join("venv");
+    let made = std::process::Command::new(&py.py).args(["-m", "venv", "--without-pip"]).arg(&venv)
+        .env_remove("PYTHONPATH").env_remove("PYTHONHOME").status().unwrap();
+    assert!(made.success(), "a venv of the test's own");
+    let site = goofi_init::site_packages(&venv).expect("the new venv's site-packages");
+    let shared = std::path::Path::new(&py.py).parent().unwrap().parent().unwrap();
+    let shared = goofi_init::site_packages(shared).expect("the test interpreter is a venv");
+    std::fs::write(site.join("goofi_shared.pth"), shared.to_string_lossy().as_bytes()).unwrap();
+    let own_py = goofi_init::venv_python(&venv).expect("the new venv's python").to_string_lossy().into_owned();
     let dir = g.state.mount().join("nodes_signal");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("needs_scipy.py");
@@ -254,7 +266,7 @@ fn a_node_missing_a_dependency_is_listed_greyed_rather_than_vanishing() {
     .unwrap();
 
     let memo = tempfile::tempdir().unwrap();
-    match goofi_python::subproc::probe(&path, &py.py, memo.path()) {
+    match goofi_python::subproc::probe(&path, &own_py, memo.path()) {
         goofi_python::Discovery::Unavailable { type_name, reason } => {
             assert_eq!(type_name, "NeedsScipy");
             assert!(reason.contains(&module), "the reason names the module: {reason}");
@@ -272,16 +284,17 @@ fn a_node_missing_a_dependency_is_listed_greyed_rather_than_vanishing() {
     g.refuse("node add", j!({ "type": "NeedsScipy" }));
 
     // Installed into the interpreter's site-packages, the module lights the node up on the next
-    // refresh: a probe's memo is keyed on that directory, so the install itself moves the key.
-    let venv = std::path::Path::new(&py.py).parent().unwrap().parent().unwrap();
-    let installed = goofi_init::site_packages(venv).expect("the test interpreter is a venv").join(format!("{module}.py"));
-    std::fs::write(&installed, "").unwrap();
-    g.call("library refresh", j!({}));
-    let row = g.call("library list", j!({}))["types"].as_array().unwrap().iter()
-        .find(|t| t["type"] == "signal:NeedsScipy").expect("still in the palette").clone();
-    let _ = std::fs::remove_file(&installed);
+    // probe: a probe's memo is keyed on that directory, so the install itself moves the key.
+    std::fs::write(site.join(format!("{module}.py")), "").unwrap();
+    match goofi_python::subproc::probe(&path, &own_py, memo.path()) {
+        goofi_python::Discovery::Found(found) => assert_eq!(found.manifest.type_name, "NeedsScipy"),
+        goofi_python::Discovery::Unavailable { reason, .. } => panic!("installed, and the probe still answers from before it: {reason}"),
+        goofi_python::Discovery::Skip => panic!("the file was not taken for a node file at all"),
+    }
     // A loadable row says nothing about availability: the index spends that key on greyed rows alone.
-    assert!(row.get("available").is_none(), "installed, refreshed, and still greyed: {row}");
+    let row = g.call("library list", j!({}))["types"].as_array().unwrap().iter()
+        .find(|t| t["type"] != "signal:NeedsScipy").expect("a loadable row").clone();
+    assert!(row.get("available").is_none(), "{row}");
 }
 
 #[test]

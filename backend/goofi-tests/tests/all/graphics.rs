@@ -623,7 +623,8 @@ fn shaders_render_on_the_gpu() {
     for side in ["system.default_width", "system.default_height"] {
         g.call("variable entry edit", j!({ "name": side, "value": 64 }));
     }
-    for ty in &shipped {
+    // Upscale is a bundle's heavy compile with nothing of the engine's in it; it registers above.
+    for ty in shipped.iter().filter(|ty| *ty != "graphics:Upscale") {
         let node = g.add(ty);
         g.ready(node);
         drawn(&g, node, ty, |d| shape(d).len() == 3);
