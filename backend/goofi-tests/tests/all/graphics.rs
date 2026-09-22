@@ -1245,11 +1245,15 @@ fn the_mosaic_walks_its_cells_onto_the_picture() {
 
     // Step: told to follow the edges, the same solver walks the same sites onto the one edge the
     // picture has. Nothing about the fold changed — only what the quadrature weighs.
+    // The solver converges in frames, so the wait is a frame budget and not a clock: a loaded
+    // machine renders the same frames more slowly, and a deadline fails it only for being slow.
     g.set_param(t, "mosaic", "density", "edges");
-    let found = g.until("the cells find the rim", |g| {
-        render(g, 60);
-        probe.latest().filter(|d| ring(d) > 1.2)
-    });
+    let found = (0..20)
+        .find_map(|_| {
+            render(&g, 60);
+            probe.latest().filter(|d| ring(d) > 1.2)
+        })
+        .expect("the cells find the rim within 1200 frames");
     assert!(ring(&found) > ring(&even) * 1.15, "the rim is no finer than the middle: {}", ring(&found));
     assert!(seams(&found, false) > 0.0, "the middle lost its cells entirely");
     assert!(g.error(t).is_none(), "{:?}", g.error(t));
