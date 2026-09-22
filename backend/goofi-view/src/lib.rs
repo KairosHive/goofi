@@ -226,7 +226,9 @@ pub fn plan<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> MergedViewS
 /// [`UNDECLARED_MAX`], then the largest halved until the frame fits [`UNDECLARED_BUDGET`].
 pub fn undeclared_axes(shape: &[usize]) -> Vec<PlannedAxis> {
     let mut caps: Vec<usize> = shape.iter().map(|&n| n.clamp(1, UNDECLARED_MAX)).collect();
-    while caps.iter().product::<usize>() > UNDECLARED_BUDGET {
+    // Checked: eight axes at the cap overflow a plain product, and an overflow reads as "fits".
+    let over = |caps: &[usize]| caps.iter().try_fold(1usize, |p, &c| p.checked_mul(c)).is_none_or(|p| p > UNDECLARED_BUDGET);
+    while over(&caps) {
         let Some((largest, _)) = caps.iter().enumerate().max_by_key(|(_, &c)| c) else { break };
         caps[largest] = (caps[largest] / 2).max(1);
     }

@@ -42,7 +42,9 @@
 
 	$effect(() => {
 		const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-		const scale = dpr * zoom;
+		// Half-octave zoom steps, rounded up: a pinch crosses a few of them, not one per pointer
+		// event, and the demand overshoots the drawn size by at most 41%.
+		const scale = dpr * Math.pow(2, Math.ceil(Math.log2(zoom) * 2) / 2);
 		const w = boxW;
 		const h = boxH;
 		if (!w || !h) return; // unmeasured: a 0 quantized to 32 would hold through the first real size

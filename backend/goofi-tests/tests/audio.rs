@@ -520,11 +520,11 @@ fn a_patch_sounds_under_the_external_clock() {
     });
     let reported = loop {
         let ev = events.next("param_values");
-        if ev["node"] == hex(gain3) && !ev["values"]["gain"].is_null() {
+        if !ev["nodes"][hex(gain3)]["values"]["gain"].is_null() {
             break ev;
         }
     };
-    assert_eq!(reported["values"]["gain"]["gain"], 0.25, "{reported}");
+    assert_eq!(reported["nodes"][hex(gain3)]["values"]["gain"]["gain"], 0.25, "{reported}");
     g.set_param(source, "constant", "value", 0.75);
     sounds(&g, "the gain to follow its source", |x| (peak(x) - 0.75).abs() < 0.01);
 

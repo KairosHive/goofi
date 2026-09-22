@@ -82,11 +82,20 @@ function linkEndpoints(link: LinkInfo): { from: string; to: string } {
 	};
 }
 
-/** Equal by identity, or — for the small doc-derived objects a node carries — by content. */
+/** Equal by identity, or — for the small doc-derived objects a node carries — by content,
+ * whatever order their keys came in. */
 function sameValue(a: unknown, b: unknown): boolean {
 	if (Object.is(a, b)) return true;
 	if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
-	return JSON.stringify(a) === JSON.stringify(b);
+	if (Array.isArray(a) || Array.isArray(b)) {
+		if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+		return a.every((v, i) => sameValue(v, b[i]));
+	}
+	const ka = Object.keys(a);
+	const kb = Object.keys(b);
+	if (ka.length !== kb.length) return false;
+	const o = b as Record<string, unknown>;
+	return ka.every((k) => k in o && sameValue((a as Record<string, unknown>)[k], o[k]));
 }
 
 /** Write the fields of `next` onto `cur` where they differ, so an unchanged field keeps its identity. */
@@ -733,6 +742,7 @@ export class GraphStore {
 
 	/** Move several nodes as ONE command — one op, one resync, one undo step. */
 	async setNodePositions(moves: [string, [number, number]][]): Promise<void> {
+		if (moves.length === 0) return; // an empty compound records nothing, so no undo entry either
 		if (moves.length === 1) return this.setNodePos(...moves[0]);
 		const ops = moves.map(([node, pos]) => ({ op: 'node edit', payload: { node, pos } }));
 		await this.ctl.call('compound', { ops });

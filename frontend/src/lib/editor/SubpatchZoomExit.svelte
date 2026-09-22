@@ -29,8 +29,9 @@
 	const fitZoom = $derived.by(() => {
 		const w = store.width;
 		const h = store.height;
-		// A node is measured after it is listed, and the bounds read the measurement untracked.
-		const ids = store.nodes.filter((n) => n.measured?.width).map((n) => n.id);
+		// The bounds read the store untracked, so what moves them is read here: a node's measure
+		// (it is listed before it is measured) and its position.
+		const ids = store.nodes.filter((n) => n.measured?.width && Number.isFinite(n.position.x + n.position.y)).map((n) => n.id);
 		if (!w || !h || ids.length === 0) return null;
 		const bounds = getNodesBounds(ids);
 		if (!bounds.width || !bounds.height) return null;

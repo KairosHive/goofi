@@ -331,7 +331,9 @@ fn spawn_reducer(
                 *full.lock().unwrap() = None;
             }
             full_res |= snapshot;
-            wanted = snapshot || !specs.lock().unwrap().is_empty() || !taps.lock().unwrap().is_empty();
+            // `full_res` too: the demand stays wide until the snapshot's frame lands, and the
+            // sweep that collects it must come at the tick, not at the rehome.
+            wanted = snapshot || full_res || !specs.lock().unwrap().is_empty() || !taps.lock().unwrap().is_empty();
             if wanted {
                 asked_at = std::time::Instant::now();
             }

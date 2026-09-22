@@ -44,13 +44,14 @@
 	// the poll rate rather than the data rate.
 	let drops = $state<number | null>(null);
 	$effect(() => {
+		const uid = node.uid;
 		const slot = internalSlot;
 		drops = null;
 		lastFrame = null;
 		if (!slot) return;
 		const id = setInterval(() => {
-			drops = dropRate(node.uid, slot);
-			lastFrame = latestFrame(node.uid, slot);
+			drops = dropRate(uid, slot);
+			lastFrame = latestFrame(uid, slot);
 		}, 250);
 		return () => clearInterval(id);
 	});

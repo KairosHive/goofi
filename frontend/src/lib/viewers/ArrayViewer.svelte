@@ -337,6 +337,7 @@
 		if (!frame) return;
 		const arr = frame.data as ArrayData;
 		if (sameAsDrawn(arr)) return; // a byte-identical payload has nothing new to draw
+		if (!plot) return; // before mount: `onMount` draws the frame it finds once the plot exists
 		drawn = arr;
 		drawFrame(frame);
 	});
@@ -382,6 +383,12 @@
 	onMount(() => {
 		if (!container) return;
 		makePlot(container.clientWidth || 200, container.clientHeight || 120, 1);
+		// The data effect ran before this and had no plot to draw on, so the frame it saw is drawn here.
+		const f = untrack(() => frame);
+		if (f) {
+			drawn = f.data as ArrayData;
+			drawFrame(f);
+		}
 		// `pointerdown` too: a tap is a press with no motion, and it is the whole gesture on touch.
 		container.addEventListener('pointermove', captureMove, true);
 		container.addEventListener('pointerdown', captureMove, true);

@@ -34,6 +34,7 @@ export interface ViewSpec {
 /** Floor so a 0-px / collapsed layout never asks for a degenerate reduction. */
 export const CAP_FLOOR = 64;
 /** Traces one line plot can show apart; more only saturate it and cost a redraw each. */
+/** The traces a line plot can tell apart, whatever its height: past this, channels are subsampled. */
 const MAX_ROWS = 32;
 const MAX_POINTS = 4096;
 
@@ -92,7 +93,7 @@ export function viewSpecForKind(kind: ViewerKind, width: number, height: number)
 			ndim,
 			dims: [],
 			reduce: [
-				{ dim: 0, max: Math.min(h, MAX_ROWS), method: 'subsample' },
+				{ dim: 0, max: MAX_ROWS, method: 'subsample' },
 				{ dim: -1, max: w, method: 'envelope' }
 			]
 		};

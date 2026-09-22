@@ -23,7 +23,7 @@ pub mod schemas;
 pub mod term;
 pub mod vocab;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -186,7 +186,7 @@ impl AppState {
         goofi_transport::session();
         goofi_core::session::sweep_system(goofi_build::VERSION);
         autosave::sweep_dead();
-        let (events, _) = broadcast::channel(256);
+        let (events, _) = broadcast::channel(EVENT_RING);
         // Seeded BEFORE the baseline is taken, or the patch is dirty from boot, having written
         // the seed itself.
         let mount = new_mount();
@@ -551,6 +551,9 @@ fn error_transitions(
     changed
 }
 
+/// The shared event ring: what a `/control` socket can fall behind by, and what one holds
+/// behind a running op, before it is re-seeded.
+const EVENT_RING: usize = 256;
 /// How often the drained reports are broadcast — the event rate, distinct from the drain, which
 /// is EVENT-WOKEN: a node's report notifies the waker, so nothing polls to discover one.
 const BROADCAST_PERIOD: Duration = Duration::from_millis(500);
@@ -1137,39 +1140,48 @@ async fn handle_control(socket: WebSocket, state: AppState) {
         return;
     }
 
-    // Ops run on a worker of this socket's own, in order: a slow op must not park the event
-    // drain here, which is what turns a backlog into a lagged ring and a re-seed.
-    let (requests, queue) = std::sync::mpsc::channel::<String>();
-    let (answers, mut replies) = tokio::sync::mpsc::unbounded_channel::<Option<String>>();
-    let worker = state.clone();
-    tokio::task::spawn_blocking(move || {
-        while let Ok(text) = queue.recv() {
-            if answers.send(dispatch(&worker, &text)).is_err() {
-                return;
-            }
-        }
-    });
-
+    // Ops run off this task, one at a time and in the order they came: a slow op must not park
+    // the event drain here, which is what turns a backlog into a lagged ring and a re-seed. ONE
+    // at a time, so the events held while it runs are exactly the ones its reply must precede.
+    let mut pending: VecDeque<String> = VecDeque::new();
+    let mut running: Option<tokio::task::JoinHandle<Option<String>>> = None;
     // While this socket's op runs, the events it causes wait behind its reply: the reply
     // precedes them, as it did when the op ran inline, so a caller reading past it loses none.
-    let mut in_flight = 0usize;
+    // Bounded by the ring: past that the socket has lagged, and is re-seeded as a lagged one is.
     let mut held: Vec<String> = Vec::new();
     let mut log_cursor = None;
     let mut log_tick = tokio::time::interval(Duration::from_millis(50));
     loop {
+        if running.is_none() {
+            if let Some(text) = pending.pop_front() {
+                let state = state.clone();
+                running = Some(tokio::task::spawn_blocking(move || dispatch(&state, &text)));
+            }
+        }
         tokio::select! {
             broadcasted = events.recv() => match broadcasted {
-                Ok(e) if in_flight > 0 => held.push(e),
+                Ok(e) if running.is_some() && held.len() < EVENT_RING => held.push(e),
+                Ok(_) if running.is_some() => {
+                    held.clear();
+                    let (hello, doc) = control_seeds(&state);
+                    held.push(hello);
+                    held.push(doc);
+                }
                 Ok(e) => {
                     if tx.send(Message::Text(e.into())).await.is_err() {
                         break;
                     }
                 }
                 // Lagged past the shared ring, so both halves are re-seeded exactly as a fresh
-                // connection seeds them.
+                // connection seeds them; behind the reply, when an op is running.
                 Err(broadcast::error::RecvError::Lagged(_)) => {
                     held.clear();
                     let (hello, doc) = control_seeds(&state);
+                    if running.is_some() {
+                        held.push(hello);
+                        held.push(doc);
+                        continue;
+                    }
                     if tx.send(Message::Text(hello.into())).await.is_err() {
                         break;
                     }
@@ -1179,29 +1191,22 @@ async fn handle_control(socket: WebSocket, state: AppState) {
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             },
-            reply = replies.recv() => match reply {
-                Some(reply) => {
-                    in_flight -= 1;
-                    let mut sent = true;
-                    for m in reply.into_iter().chain(held.drain(..)) {
-                        if tx.send(Message::Text(m.into())).await.is_err() {
-                            sent = false;
-                            break;
-                        }
-                    }
-                    if !sent {
+            reply = async { running.as_mut().unwrap().await }, if running.is_some() => {
+                running = None;
+                let Ok(reply) = reply else { break };
+                let mut sent = true;
+                for m in reply.into_iter().chain(held.drain(..)) {
+                    if tx.send(Message::Text(m.into())).await.is_err() {
+                        sent = false;
                         break;
                     }
                 }
-                None => break,
+                if !sent {
+                    break;
+                }
             },
             incoming = rx.next() => match incoming {
-                Some(Ok(Message::Text(t))) => {
-                    in_flight += 1;
-                    if requests.send(t.to_string()).is_err() {
-                        break;
-                    }
-                }
+                Some(Ok(Message::Text(t))) => pending.push_back(t.to_string()),
                 Some(Ok(Message::Close(_))) | None => break,
                 Some(Err(_)) => break,
                 _ => {}

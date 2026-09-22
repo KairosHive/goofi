@@ -833,6 +833,9 @@ pub(crate) fn layout_viewpoint_edit(
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
     state.graph.lock().unwrap().set_viewpoint(payload.get("value").cloned().unwrap_or(Value::Null));
+    // No projection: the viewpoint is the manifest's alone. The pulse is for the autosave, which
+    // takes the new viewpoint on its next tick of an already dirty patch.
+    state.changed.notify();
     Ok(json!({ "ok": true }))
 }
 

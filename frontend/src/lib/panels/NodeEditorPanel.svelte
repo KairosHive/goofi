@@ -561,8 +561,8 @@
 	// The chip that follows the cursor while a drag is a reference; null = a reposition drag.
 	let linkGhost = $state<{ x: number; y: number; name: string } | null>(null);
 
-	// Every panel's and drop zone's screen rect, measured ONCE per drag: neither moves during a
-	// node drag, and measuring them per pointer move forced a layout each.
+	// Every panel's and drop zone's screen rect, measured once per drag and again on a scroll:
+	// nothing else moves them during a node drag, and measuring per pointer move forced a layout each.
 	let panelRects: { id: string; type: string; r: DOMRect }[] = [];
 	let zoneRects: { zone: string; r: DOMRect }[] = [];
 	function measureTargets(): void {
@@ -602,6 +602,7 @@
 	function linkTargetAt(event: MouseEvent | TouchEvent): LinkTarget | null {
 		const p = eventPoint(event);
 		if (!p) return null;
+		if (panelRects.length === 0) measureTargets(); // a flick moves before the post-flush measure
 		const zone = dropZoneUnder(p.clientX, p.clientY);
 		if (zone) return { zone };
 		const t = panelUnder(p.clientX, p.clientY);
@@ -629,6 +630,7 @@
 		panelRects = [];
 		zoneRects = [];
 		void tick().then(measureTargets);
+		document.addEventListener('scroll', measureTargets, { capture: true, passive: true });
 	}
 
 	function onNodeDrag(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): void {
@@ -701,6 +703,7 @@
 				for (const [id] of moves) pinned.delete(id);
 			});
 		}
+		document.removeEventListener('scroll', measureTargets, { capture: true });
 		uiStore.nodeDrag = null;
 		uiStore.nodeDragTarget = null;
 		uiStore.nodeDragZone = null;
