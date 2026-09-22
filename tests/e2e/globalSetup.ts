@@ -67,7 +67,7 @@ export default async function spawnFleet(config: FullConfig): Promise<() => Prom
 				TMPDIR: tmp,
 				TMP: tmp,
 				TEMP: tmp,
-				GOOFI_BUILD_DIR: path.join(REPO_ROOT, 'target', 'goofi-build'),
+				GOOFI_BUILD_DIR: process.env.GOOFI_BUILD_DIR ?? path.join(REPO_ROOT, 'target', 'goofi-build'),
 				SHELL: '/bin/sh'
 			},
 			stdio: ['ignore', fd, fd]

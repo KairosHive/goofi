@@ -99,6 +99,8 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/package.json') }}
       - run: npx playwright install --with-deps chromium
         working-directory: tests/e2e
+      # The fleet boots against the same build dir, so the nodes and the Python probes are warm.
+      - run: cargo run -p goofi-cli -- --headless --list-nodes
       - run: npm run e2e
         working-directory: tests/e2e
       - run: npm run e2e:plugins
@@ -110,6 +112,11 @@ jobs:
           path: |
             tests/e2e/playwright-report/
             tests/e2e/test-results/
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ${{ runner.temp }}/goofi-build
+          key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
 
   # Only what a platform can answer differently: processes, paths, dynamic libraries, PTYs, audio
   # hosts. The rest was proven on Linux above.

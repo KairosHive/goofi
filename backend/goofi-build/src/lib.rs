@@ -370,7 +370,8 @@ fn load(path: &Path) -> Result<(libloading::Library, Handle), libloading::Error>
 #[cfg(windows)]
 fn load(path: &Path) -> Result<(libloading::Library, Handle), libloading::Error> {
     use libloading::os::windows::{Library, LOAD_WITH_ALTERED_SEARCH_PATH};
-    let path = std::path::absolute(path).map_err(libloading::Error::from)?;
+    // `absolute` fails only on an empty path, which no loader could open either.
+    let path = std::path::absolute(path).map_err(|_| libloading::Error::LoadLibraryExWUnknown)?;
     unsafe { Library::load_with_flags(&path, LOAD_WITH_ALTERED_SEARCH_PATH) }.map(|l| (l.into(), 0))
 }
 
