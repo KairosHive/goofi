@@ -91,12 +91,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
-      - run: npm ci
+      - run: npm install
         working-directory: tests/e2e
       - uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/package-lock.json') }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/package.json') }}
       - run: npx playwright install --with-deps chromium
         working-directory: tests/e2e
       - run: npm run e2e
