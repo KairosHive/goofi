@@ -47,12 +47,12 @@ jobs:
           path: ${{ runner.temp }}/goofi-build
           key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
 
-  # `tests/all` split three ways by file name, so a new situation lands in a shard by itself.
+  # `tests/all` split four ways by file name, so a new situation lands in a shard by itself.
   situations:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        shard: [0, 1, 2, 3]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -62,7 +62,7 @@ jobs:
         run: cargo run -p goofi-cli -- --headless --list-nodes
       - name: Shard ${{ matrix.shard }}
         run: |
-          filters=$(ls backend/goofi-tests/tests/all/*.rs | grep -v main.rs | awk -v s=${{ matrix.shard }} 'NR % 3 == s' | xargs -n1 basename | sed 's/\.rs$/::/')
+          filters=$(ls backend/goofi-tests/tests/all/*.rs | grep -v main.rs | awk -v s=${{ matrix.shard }} 'NR % 4 == s' | xargs -n1 basename | sed 's/\.rs$/::/')
           echo "$filters"
           cargo test -p goofi-tests --test all -- $filters
       - uses: actions/cache/save@v4

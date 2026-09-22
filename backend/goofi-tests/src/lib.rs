@@ -16,8 +16,9 @@ pub use probe::OutputProbe;
 pub use serde_json::json as j;
 
 /// How long [`Goofi::until`] waits before it calls a condition unmet. Only a FAILING assertion
-/// pays it, so the number clears the slowest machine that runs the suite rather than the fastest.
-const WAIT: Duration = Duration::from_secs(90);
+/// pays it, so the number clears the slowest machine that runs the suite: a four-core CI runner
+/// compiling a shader on lavapipe beside three other situations.
+const WAIT: Duration = Duration::from_secs(180);
 /// How long [`Goofi::stays`] watches a negative.
 const SETTLE: Duration = Duration::from_millis(250);
 
