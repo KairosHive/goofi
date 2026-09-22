@@ -43,11 +43,23 @@ jobs:
           ! grep -n '^warning' build.log
       # One boot fills the node build dir with the Python probes every test binary would otherwise take.
       - run: cargo run -p goofi-cli -- --headless --list-nodes
-      # One situation at a time: two of them on four cores starve each other's locks and lavapipe's
-      # shader compiles. As a flag, not `RUST_TEST_THREADS`, which the helper children a situation
-      # spawns would inherit. Slow, and the suite's own speed is the next piece of work.
-      - name: Tests
-        run: cargo test --workspace --no-fail-fast -- --test-threads=1
+      - name: Unit tests and the situations with a binary of their own
+        run: cargo test --workspace --exclude goofi-tests --no-fail-fast && cargo test -p goofi-tests --no-fail-fast --test agent --test audio --test cli --test probe --test shipped
+      # One situation FILE per process, four threads each: a file's situations share the runner
+      # alone, so lavapipe's shader compiles and the Python children are not starved by the rest,
+      # and an hour-long process is not what the last file inherits. The flag, not
+      # `RUST_TEST_THREADS`, which the helper children a situation spawns would inherit.
+      - name: Situations
+        run: |
+          status=0
+          for file in backend/goofi-tests/tests/all/*.rs; do
+            situation=$(basename "$file" .rs)
+            [ "$situation" = main ] && continue
+            echo "::group::$situation"
+            cargo test -p goofi-tests --test all -- "$situation::" --test-threads=4 || status=1
+            echo "::endgroup::"
+          done
+          exit $status
       # The other Python tier links libpython: only the situations that run Python, and of the
       # graphics ones the three that put Python on the GPU's side.
       - name: Tests (in-process Python tier)
@@ -55,7 +67,7 @@ jobs:
           cargo test -p goofi-tests --features embed --test all --
           python:: plugins:: nodes:: inspect:: codec_golden:: filter_golden::
           param_modulation:: python_module_hygiene:: python_init_order::
-          graphics::python_texture graphics::host_pixels graphics::camera_video --test-threads=1
+          graphics::python_texture graphics::host_pixels graphics::camera_video --test-threads=4
       - run: cargo test -p goofi-tests --features embed --test python_gil_tripwire
       - run: npm install
         working-directory: tests/e2e
