@@ -1,4 +1,4 @@
-# `/data` bandwidth: the tablet measurement, and whether compression pays
+# `/data` bandwidth: the tablet measurement
 
 The `/data` stream is not the desktop's frame-rate problem — the paint is — but it may be the
 tablet's, and a LAN client draws from the same stream. What is left is chosen against a number,
@@ -8,9 +8,6 @@ not a suspicion.
 
 1. **The tablet measurement over LAN.** Repeat the desktop baseline below against the tablet:
    frames/s and bytes/s per path, and the tablet's own frame rate. Record it here.
-2. **Shuffled LZ4, if step 1 asks for it.** Byte-shuffle + LZ4 on frames above a few KB,
-   negotiated by a `compress` flag in the `view` message. WebSocket `permessage-deflate` is
-   rejected: floats compress ~1.3× under deflate and it costs the tablet CPU it does not have.
 
 The desktop baseline (headless Chromium, debug backend, 2026-09-16, before half floats and
 frame silence):
@@ -23,6 +20,11 @@ frame silence):
 | `music` (57 nodes), all viewers collapsed | 0 | 0 | 67 msgs/s, 6 KB/s |
 
 ## Not to be done
+
+**No generic compression.** Measured 2026-09-23 on 400 px envelope frames: byte-shuffled LZ4
+buys 1.05× on EEG-like data and 1.4× on a sine, f16 or f32 alike; only a held constant compresses,
+and frame silence already keeps that off the wire. `permessage-deflate` reaches the same ceiling
+and costs the tablet CPU. Depth is the lever that pays, and it is taken.
 
 **No inferring overlap between frames.** A `Buffer` window re-sends ~1000 samples a frame when
 ~33 are new, and a delta against the previous frame would cut that 30×. Refused: "each frame
