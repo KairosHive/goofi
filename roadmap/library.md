@@ -47,16 +47,25 @@ publishes, and updates a complete package. There is no per-node install.
 scanned after shipped and extra roots, before `.goofi/custom/` and the patch workspace. The plugin
 ID supplies the node bundle's provenance. There is no separate installed-bundle directory.
 
-**The repo's own bundles live in `node-bundles/<name>/`**, and they publish through the same door a
-third party's do. There is no shipped tree beside them any more: every node goofi ships is in a
-bundle, and `nodes_<engine>/` now names the PATCH's own folder alone. A first-party bundle that
-needs a private path is the defect that proves the door is not finished. Until the install half
-exists, `--extra-nodes node-bundles/<name>` is how one is loaded.
+**The repo's own bundles live in `node-bundles/<name>/`** for now, and they publish through the
+same door a third party's do. `nodes_<engine>/` names the PATCH's own folder alone. Until the
+install half exists, `--extra-nodes node-bundles/<name>` is how one is loaded.
 
-**A source is a git repo, and publishing pins a commit.** An author registers a repo URL. A
-published bundle names the repo, the commit and the paths it takes from it; an install fetches
-exactly that; an update is a new pin. A bundle may take nodes from several of its author's repos,
-or one repo may publish as one bundle — the latter is the default the author gets for nothing.
+**The bundles leave this repo** (decided 2026-09-23). goofi keeps its builtin nodes; every other
+bundle moves to a node repo registered through the library like anyone else's, and the tests that
+exercise a bundle's nodes move with it (`goofi-tests` situations use signal, audio and graphics
+nodes only; the tests that read bundle files directly are gone, and the graphics situation still
+adds the graphics bundle's shaders by type until it brings its own). The CI cost this removes, measured on the last green Linux run: the bundles' Python
+packages installed at provisioning (60 s, CUDA and cuDNN wheels among them), the node-library
+indexing at every boot (70 s, the biotuner probe alone 38 s), and the bundle build in the bridge's
+build script.
+
+**A source is a git repo, and its folders are its bundles.** An author registers a repo URL.
+goofi parses the repo as folders: each folder that holds a goofi-parsable node is one bundle, and a
+folder that holds none is ignored. By default every folder with a node is registered. The author's
+one control is to deselect folders; ignoring is the only pattern, there is no include list and no
+manifest that names bundles. A published bundle names the repo, the commit and the folder; an
+install fetches exactly that; an update is a new pin.
 
 **Detection is ONE static scan, and the real probe stays on the user's machine.** The service
 never imports a stranger's code. It parses a repo for `goofi.Node` subclasses and their declared
@@ -78,10 +87,13 @@ has a local half and a remote half:
 An agent authors and publishes a bundle with exactly the CLI a human uses: log in, link a public
 repo, define the bundle, publish.
 
-**The panel is the website.** One Svelte panel — browse the catalog, see what is installed, and
-for the logged-in author, the sources and the bundling — registered through `registerPanel` like
-every panel. It is built inside goofi first, driven by the ops through the socket, and exported
-to the website once it is solid, where the same code drives the same phrases over HTTP.
+**The library panel is one component, in goofi and on the website.** A user logs in inside their
+local goofi and browses one library: their own custom nodes, the installed nodes, the bundles
+available to install, and a search over all of it. An author who has registered a repo gets one
+more tab that manages it: the repo's folders, with the ones goofi detected nodes in selected and
+deselectable. The panel is built inside goofi first, driven by the `library` ops over the socket,
+registered through `registerPanel` like every panel, and the exact same code renders in
+`../goofi-website/`, where it drives the same phrases over HTTP.
 
 **Login is OAuth against the forge that hosts the repo** (GitHub, GitLab). The library holds no
 passwords: the login exists to prove the author owns the repo they link, and the forge already
@@ -117,6 +129,9 @@ second panel loader or service protocol.
 4. **The panel**, inside goofi, against the local half.
 5. **The service and the remote half**: accounts, sources, bundles, publish, search. Then the
    panel exports to the website.
+6. **The bundles move out**: each `node-bundles/<name>` that is not builtin becomes a folder of a
+   registered node repo, its situations and e2e specs go with it, and provisioning, the boot
+   scan and CI keep only the builtin nodes.
 
 ## Open
 
@@ -124,6 +139,8 @@ second panel loader or service protocol.
   scanner with goofi, so Rust is the default; nothing else is decided.
 - Published Rust nodes use the existing engine SDKs and build allowlists through the package
   `nodes/` directory. Verify that the published package contains every required source.
+- Which bundles are builtin and stay in this repo, and whether a builtin node is anything but a
+  bundle that ships inside the binary.
 - Whether a first-party bundle is ever privileged over a third party's — pinned, unremovable, or
   exempt from naming itself in a patch's manifest. Nothing is today, and the door is only proved
   while nothing is.

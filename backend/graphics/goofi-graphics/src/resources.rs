@@ -1,9 +1,7 @@
 //! GPU texture allocation, upload, state, and readback resources shared by every graphics stage.
 use crate::gpu::{Gpu, Want, padded_row, target};
-use crate::shader;
-use goofi_node::ParamDecl;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 /// One texture the engine owns, with the size it was made for.
 pub(crate) struct Target {
@@ -249,56 +247,6 @@ impl State {
         write_upload(gpu, &held.texture, up);
     }
 
-    /// This tick's group 0: the patch time, the frame count, the size, and the params in the
-    /// one order [`shader::uniform_bytes`] lays them out in.
-    pub(crate) fn write_uniforms(&self, gpu: &Gpu, t: f64, size: (u32, u32), decls: &[ParamDecl], params: &[AtomicU64]) {
-        gpu.queue.write_buffer(&self.time, 0, &(t as f32).to_le_bytes());
-        gpu.queue.write_buffer(&self.frame, 0, &self.count.to_le_bytes());
-        let res = [(size.0 as f32).to_le_bytes(), (size.1 as f32).to_le_bytes()].concat();
-        gpu.queue.write_buffer(&self.resolution, 0, &res);
-        if let Some(buf) = &self.params {
-            gpu.queue.write_buffer(buf, 0, &shader::uniform_bytes(decls, params, &self.ranges));
-        }
-    }
-
-    /// The stage's pass, encoded: `shade` into `out`, and each state writer into the buffer the
-    /// next tick reads. `inputs` are group 1 in the manifest's order.
-    pub(crate) fn draw(&self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, pipeline: &wgpu::RenderPipeline, inputs: &[wgpu::TextureView]) {
-        let group0 = self.group0(gpu);
-        let group1 = gpu.texture_group(inputs);
-        let held: Vec<wgpu::TextureView> = self.buffers.iter().map(|b| b[0].view.clone()).collect();
-        let group2 = gpu.texture_group(&held);
-        let out_view = &self.out.as_ref().expect("ensure_out made it").view;
-        // The output, then one target per state buffer — the order the prelude writes them in.
-        let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = std::iter::once(out_view)
-            .chain(self.buffers.iter().map(|b| &b[1].view))
-            .map(|view| {
-                Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })
-            })
-            .collect();
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: None,
-            color_attachments: &attachments,
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &group0, &[]);
-        pass.set_bind_group(1, &group1, &[]);
-        pass.set_bind_group(2, &group2, &[]);
-        pass.draw(0..3, 0..1);
-    }
-
     pub(crate) fn group0(&self, gpu: &Gpu) -> wgpu::BindGroup {
         let mut entries = vec![
             wgpu::BindGroupEntry { binding: 0, resource: self.time.as_entire_binding() },
@@ -375,7 +323,7 @@ impl Upload {
         };
         // A texture the device cannot make invalidates the whole frame's command buffer, so a
         // frame past the limit is no upload at all.
-        if h == 0 || w == 0 || h > goofi_core::texture::MAX_SIZE as usize || w > goofi_core::texture::MAX_SIZE as usize {
+        if h == 0 || w == 0 || h > crate::plan::MAX_SIZE as usize || w > crate::plan::MAX_SIZE as usize {
             return None;
         }
         let x: Vec<f32> =

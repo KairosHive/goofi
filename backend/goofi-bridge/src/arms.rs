@@ -719,14 +719,18 @@ pub(crate) fn node_param_edit(
             entry.insert(key.into(), v.clone());
         }
     }
+    // A value rides the doc patch and its error the live plane; a source edit changes the
+    // descriptor, which only the echo carries.
+    let describes = entry.keys().any(|k| k != "value");
     let bag = json!({ &group: { &name: entry } });
     let cmd = goofi_graph::param_commands(&g, uid, &bag)
         .map_err(|e| format!("node param edit: {e}"))?
         .pop()
         .ok_or("node param edit: nothing to change")?;
     state.history.lock().unwrap().apply(&mut g, actor, cmd)?;
-    // The runtime `error` is doc-invisible, so echo the descriptor.
-    events.push(param_state_update(&g, uid, &[]));
+    if describes {
+        events.push(param_state_update(&g, uid, &[]));
+    }
     Ok(json!({
         "value": g.params(uid)
             .and_then(|p| goofi_node::param(&p, &group, &name).cloned())
@@ -828,11 +832,10 @@ pub(crate) fn layout_viewpoint_edit(
     _actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    {
-        let mut g = state.graph.lock().unwrap();
-        g.set_viewpoint(payload.get("value").cloned().unwrap_or(Value::Null));
-    }
-    resync_and_broadcast(state);
+    state.graph.lock().unwrap().set_viewpoint(payload.get("value").cloned().unwrap_or(Value::Null));
+    // No projection: the viewpoint is the manifest's alone. The pulse is for the autosave, which
+    // takes the new viewpoint on its next tick of an already dirty patch.
+    state.changed.notify();
     Ok(json!({ "ok": true }))
 }
 

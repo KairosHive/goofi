@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use goofi_tests::{hex, host, http, j, panels, tool, Client, Goofi, Message, Viewer};
+use goofi_tests::{f32s, hex, host, http, j, panels, tool, Client, Goofi, Message, Viewer};
 use serde_json::Value;
 
 #[tokio::test]
@@ -89,6 +89,43 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
     let axis = at(&reduced(meta), "0").expect("the reduced axis stands beside the depth");
     assert_eq!(at(&axis, "orig_len").and_then(|v| v.as_u64()), Some(4));
     assert_eq!(at(&axis, "method").and_then(|v| v.as_str().map(str::to_string)), Some("area".into()));
+
+    // Step: a line viewer draws half floats and is served them — half the bytes of an f32
+    // envelope — and the codec widens them back to the f32 the producer emitted.
+    v.view(j!([{ "dtype": "array", "ndim": [], "dims": [],
+                 "reduce": [{ "dim": -1, "max": 8, "method": "envelope" }], "depth": "f16" }])).await;
+    let frame = raw_until(&mut v, |dtype, _| dtype == "<f2").await;
+    let (_, _, body) = goofi_codec::split_frame(&frame).unwrap();
+    let (_, shape, halves) = array_body(body);
+    assert_eq!(halves.len(), 2 * shape.iter().product::<usize>(), "two bytes per sample, not four");
+    let back = goofi_codec::decode(&frame).expect("the half-float hop decodes");
+    let goofi_core::Value::Array(a) = back.value() else { panic!("an array") };
+    assert!(a.as_bytes().chunks_exact(4).all(|b| f32::from_le_bytes(b.try_into().unwrap()).abs() <= 1.0),
+            "a unit LFO's samples, widened");
+
+    // Step: a frame that says what the last one said is not sent: a Constant re-emits a held
+    // value, stamped afresh, and the socket sees ONE frame with data — then its stamps alone,
+    // still moving — while a joiner is served regardless.
+    let konst = g.add("signal:Constant");
+    g.set_param(konst, "common", "max_frequency", 20.0);
+    g.set_param(konst, "constant", "value", 3.0);
+    let mut held = Viewer::open(&base, &hex(konst), "out").await;
+    held.until(|d| f32s(d) == [3.0]).await;
+    assert!(held.silent_for(Duration::from_millis(700)).await, "a held value was sent again");
+    let (first, next) = (held.stamps().await, held.stamps().await);
+    assert!(next.index() > first.index(), "the held frame's stamps keep moving: {first:?} then {next:?}");
+    assert!(next.time() > first.time(), "in time as well as in count");
+    let mut joiner = Viewer::open(&base, &hex(konst), "out").await;
+    assert_eq!(f32s(&joiner.until(|d| f32s(d) == [3.0]).await), [3.0], "a joiner gets the held frame");
+    g.set_param(konst, "constant", "value", 4.0);
+    held.until(|d| f32s(d) == [4.0]).await;
+
+    // Step: on a half-float ask, a value no half holds arrives as the f32 it is — THAT frame alone.
+    held.view(j!([{ "dtype": "array", "ndim": [], "dims": [], "reduce": [], "depth": "f16" }])).await;
+    raw_until(&mut held, |dtype, _| dtype == "<f2").await;
+    g.set_param(konst, "constant", "value", 1e6);
+    let wide = raw_until(&mut held, |dtype, _| dtype == "<f4").await;
+    assert_eq!(f32s(&goofi_codec::decode(&wide).unwrap()), [1e6], "beyond a half's range, unchanged");
 }
 
 /// A GOOF array body: `[u8 ndim][u8 len][dtype][ndim x u32 shape][samples]`.
@@ -173,9 +210,48 @@ async fn a_tab_mirrors_the_graph_off_the_document_events_and_follows_a_peer_edit
     assert_eq!(c.doc().read_at(&["variables", "patch.subject", "lock"]), None,
                "a user variable carries no lock until one is set");
 
+    // A value rides the doc patch alone; the descriptor echo is a source edit's. The first
+    // `state_update` this node sends is the expression's.
+    let mut ev = g.events();
+    c.call("node param edit", j!({ "node": uid.clone(), "param": "lfo/amplitude", "value": 0.25 })).await;
+    c.until_doc(|d| d.read_at(&["nodes", uid.as_str(), "params", "lfo", "amplitude", "value"]) == Some(j!(0.25))).await;
+    c.call("node param edit", j!({ "node": uid.clone(), "param": "lfo/amplitude", "expression": "7" })).await;
+    let echo = ev.next("state_update");
+    assert_eq!((&echo["node"], &echo["params"]["lfo"]["amplitude"]["mode"]), (&j!(uid), &j!("expression")),
+               "the value edit echoed a descriptor: {echo}");
+
+    // `/params` restates a pair only when it moved: the peer holds the last one it was sent.
+    let level = g.add("_TestScalar");
+    g.call("node edit", j!({ "node": hex(level), "name": "level" }));
+    g.set_param(level, "control", "value", 0.25);
+    c.call("node param edit", j!({ "node": uid.clone(), "param": "lfo/amplitude", "reference": "level.out" })).await;
+    let (mut live, _) = tokio_tungstenite::connect_async(format!("{base}/params/{uid}")).await.unwrap();
+    let pair = |m: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>| -> Value {
+        let Some(Ok(Message::Text(t))) = m else { panic!("the params socket stopped: {m:?}") };
+        serde_json::from_str::<Value>(t.as_str()).unwrap()["values"]["lfo"]["amplitude"].clone()
+    };
+    while pair(live.next().await) != j!(0.25) {}
+    assert!(tokio::time::timeout(Duration::from_millis(250), live.next()).await.is_err(),
+            "an unchanged pair was restated");
+    g.set_param(level, "control", "value", 0.5);
+    while pair(live.next().await) != j!(0.5) {}
+
     // A merge patch spells a delete as an explicit `null`, and the gate compares the whole projection.
     peer.call("node remove", j!({ "node": uid.clone() })).await;
     c.until_doc(|d| !d.node_ids().contains(&uid)).await;
+
+    // One socket's ops are answered in the order sent, the slow one first: they run on the
+    // socket's own worker, in turn, while its event drain goes on.
+    let adds: Vec<Value> = (0..24).map(|_| j!({ "op": "node add", "payload": { "type": "LFO" } })).collect();
+    c.send(j!({ "id": 9001, "op": "compound", "payload": { "ops": adds } }).to_string()).await;
+    c.send(j!({ "id": 9002, "op": "session state", "payload": {} }).to_string()).await;
+    let mut answered = Vec::new();
+    while answered.len() < 2 {
+        if let Some(id) = c.text().await.get("id").and_then(Value::as_i64) {
+            answered.push(id);
+        }
+    }
+    assert_eq!(answered, [9001, 9002]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -122,6 +122,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "audio_thread_priority"
 version = "0.35.1"
+source = "git+https://github.com/dav0dea/audio_thread_priority?branch=goofi-direct-first#c9a2ea2aece1a044342db1ecbbd368dce78af834"
 dependencies = [
  "cfg-if",
  "dbus",
@@ -401,8 +402,6 @@ version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
- "serde",
- "termcolor",
  "unicode-width",
 ]
 
@@ -1047,6 +1046,7 @@ name = "goofi-codec"
 version = "3.1.0"
 dependencies = [
  "goofi-core",
+ "half",
  "indexmap",
  "rmp-serde",
  "rmpv",
@@ -1117,7 +1117,6 @@ dependencies = [
  "half",
  "naga",
  "pollster",
- "web-sys",
  "wgpu",
 ]
 
@@ -1126,16 +1125,6 @@ name = "goofi-graphics-sdk"
 version = "3.1.0"
 dependencies = [
  "goofi-host-sdk",
-]
-
-[[package]]
-name = "goofi-graphics-web"
-version = "3.1.0"
-dependencies = [
- "goofi-graphics",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
@@ -3249,15 +3238,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "termcolor"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
-dependencies = [
- "winapi-util",
-]
-
-[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3721,7 +3701,6 @@ dependencies = [
  "hashbrown 0.17.1",
  "js-sys",
  "log",
- "naga",
  "portable-atomic",
  "profiling",
  "raw-window-handle",

@@ -8,9 +8,11 @@ use std::sync::{Arc, OnceLock};
 
 use goofi_node::{NodeManifest, Scanned, ScannedType};
 
-pub use crate::pipeline::Built;
-use crate::pipeline::{compile, Job};
-use crate::GraphicsEngine;
+use crate::gpu::Gpu;
+use crate::{shader, GraphicsEngine};
+
+/// A pipeline once the compile thread answers, or why the device refused it.
+pub type Built = Arc<OnceLock<Result<Arc<wgpu::RenderPipeline>, String>>>;
 
 /// One graphics source as the engine holds it.
 pub struct Class {
@@ -65,7 +67,19 @@ impl GraphicsEngine {
             return self.register_host(path, type_name);
         }
         let source = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let (intro, manifest, job) = Job::shader(type_name, &source)?;
+        let intro = shader::header(&source)?;
+        if let Some(reason) = goofi_node::illegal_slot(&intro) {
+            return Err(reason);
+        }
+        let manifest = goofi_node::leak_manifest(type_name.to_string(), &intro)?;
+        let full = format!("{source}{}", shader::prelude(manifest, &intro.state));
+        shader::validate(&full)?;
+        let job = Job {
+            source: full,
+            params: !manifest.params.is_empty() || shader::array_inputs(manifest).next().is_some(),
+            inputs: manifest.inputs.len(),
+            state: intro.state.len(),
+        };
         let pipeline = self.compiler.build(job);
         let class =
             Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, kind: Kind::Shader(pipeline), isolation: &goofi_node::SHADER });
@@ -76,9 +90,19 @@ impl GraphicsEngine {
     }
 }
 
+/// What one pipeline is built from: the whole text naga passed, and the shape of its layout.
+pub struct Job {
+    source: String,
+    params: bool,
+    inputs: usize,
+    state: usize,
+}
+
 impl Compiler {
     pub fn program(&self, manifest: &'static NodeManifest, source: &str) -> Result<Built, String> {
-        Ok(self.build(Job::program(manifest, source)?))
+        let full = format!("{source}{}", shader::prelude(manifest, &[]));
+        shader::validate(&full)?;
+        Ok(self.build(Job { source: full, params: !manifest.params.is_empty(), inputs: manifest.inputs.len(), state: 0 }))
     }
 }
 
@@ -99,7 +123,7 @@ fn compiler() -> Option<&'static mpsc::Sender<Order>> {
         goofi_core::worker::thread("goofi-graphics-compile")
             .spawn(move || {
                 while let Ok(order) = take.recv() {
-                    let _ = order.cell.set(pollster::block_on(compile(&gpu, &order.job)));
+                    let _ = order.cell.set(compile(&gpu, &order.job));
                     // The tick picks the cell up by itself; the settle is for a refusal, which
                     // only a plan can turn into the node's standing error.
                     order.shared.ask_settle();
@@ -130,5 +154,46 @@ impl Compiler {
             }
         }
         cell
+    }
+}
+
+fn compile(gpu: &Gpu, job: &Job) -> Result<Arc<wgpu::RenderPipeline>, String> {
+    let _gate = crate::gpu::gate();
+    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let module = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(job.source.as_str().into()),
+    });
+    let layout = gpu.layout(job.params, job.inputs, job.state);
+    // The output, then one target per state buffer — the order [`shader::prelude`] writes them in.
+    let targets: Vec<Option<wgpu::ColorTargetState>> = (0..1 + job.state)
+        .map(|_| {
+            Some(wgpu::ColorTargetState { format: crate::gpu::FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })
+        })
+        .collect();
+    let pipeline = gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None,
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vs"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs"),
+            targets: &targets,
+            compilation_options: Default::default(),
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    match pollster::block_on(scope.pop()) {
+        Some(e) => Err(format!("the device refused the pipeline: {e}")),
+        None => Ok(Arc::new(pipeline)),
     }
 }

@@ -5,6 +5,9 @@
 //! graph, because a closing socket is no evidence that a slot stopped being watched. Its
 //! SUBSCRIPTION follows demand though: an attached subscriber is what a scheduled engine reads as
 //! "somebody wants frames", so a reducer nobody asks of lets its feed go.
+//!
+//! A reducer is woken, never clocked: while it holds a feed the producer rings the slot's view
+//! door with every frame, and the bridge rings it for whatever else changes what it should do.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -29,11 +32,10 @@ pub struct Tap {
 /// What a tap delivers: the variable, and the value its frame held.
 pub type Followed = (String, goofi_core::variables::VariableValue);
 
-/// Flatten every connection's `ViewSpec`s into the single list the planner merges; a slot nobody
-/// has declared for folds to the undeclared preview rather than to the full frame.
+/// Flatten every connection's `ViewSpec`s into the single list the planner merges; an empty
+/// list plans to the undeclared preview rather than to the full frame.
 fn union_specs(by_conn: &HashMap<ConnId, Vec<ViewSpec>>) -> Vec<ViewSpec> {
-    let merged: Vec<ViewSpec> = by_conn.values().flatten().cloned().collect();
-    if merged.is_empty() { vec![ViewSpec::undeclared()] } else { merged }
+    by_conn.values().flatten().cloned().collect()
 }
 
 struct SlotReducer {
@@ -44,8 +46,8 @@ struct SlotReducer {
     tx: broadcast::Sender<Bytes>,
     stop: Arc<AtomicBool>,
     reductions: Arc<AtomicU64>,
-    /// Serve generation: bumped on every spec change and subscriber join, so the loop re-serves
-    /// the current frame once even when the producer has not emitted.
+    /// Serve generation: bumped on every spec change, join and leave, so the loop re-serves the
+    /// current frame once even when the producer has not emitted or the frame did not change.
     gen: Arc<AtomicU64>,
     /// The latest frame as it arrived — what serves a re-attaching viewer, and what the variables
     /// following this slot read. Reduced only where nothing but viewers is watching.
@@ -58,13 +60,25 @@ struct SlotReducer {
     /// wanted RAW. Never set at birth: warming a fresh reducer is `asked_at`'s job, and starting
     /// here would spend one full-resolution frame on every slot the first time it is watched.
     asked: Arc<AtomicBool>,
+    /// The bridge's bell on the slot's view door — the same door the producer rings once a frame
+    /// is out. A joiner, a spec, a tap, an ask, a settle and the stop all ring it; nothing polls.
+    bell: Option<goofi_transport::Doorbell>,
+}
+
+impl SlotReducer {
+    fn poke(&self) {
+        if let Some(bell) = &self.bell {
+            let _ = bell.ring(goofi_transport::VIEW_POKE_ID);
+        }
+    }
 }
 
 impl Drop for SlotReducer {
     fn drop(&mut self) {
         // Signalled, never joined: the slot's own loop is what removes its entry, and a join
-        // from there would be a join on itself.
+        // from there would be a join on itself. The stop is set first, then the loop is rung.
         self.stop.store(true, Ordering::Relaxed);
+        self.poke();
     }
 }
 
@@ -79,16 +93,28 @@ pub struct SlotReducers {
     iox: SharedIox,
     /// Where every tap's pick goes: the follower, which writes the variable and broadcasts.
     follow: std::sync::mpsc::Sender<Followed>,
+    /// The graph's instance, which every view door is named under.
+    instance: Arc<str>,
 }
 
 impl SlotReducers {
     pub fn new(graph: Arc<Mutex<Graph>>, follow: std::sync::mpsc::Sender<Followed>) -> SlotReducers {
+        let instance = Arc::from(graph.lock().unwrap().instance());
         SlotReducers {
             inner: Arc::new(Mutex::new(HashMap::new())),
             graph,
             next_conn: Arc::new(AtomicU64::new(1)),
             iox: Arc::new(Mutex::new(None)),
             follow,
+            instance,
+        }
+    }
+
+    /// The graph settled: every loop re-reads its slot's address on its next wake, so a restart
+    /// re-homes the feed and a removed node ends its reducer.
+    pub fn poke_all(&self) {
+        for reducer in self.inner.lock().unwrap().values() {
+            reducer.poke();
         }
     }
 
@@ -99,11 +125,13 @@ impl SlotReducers {
         for (key, reducer) in map.iter() {
             if !taps.contains_key(key) {
                 reducer.taps.lock().unwrap().clear();
+                reducer.poke();
             }
         }
         for (key, list) in taps {
             let reducer = self.ensure(&mut map, &key);
             *reducer.taps.lock().unwrap() = list;
+            reducer.poke();
         }
     }
 
@@ -123,19 +151,25 @@ impl SlotReducers {
             map.remove(key);
         }
         map.entry(key.clone()).or_insert_with(|| {
+            let door = goofi_transport::view_door_service(&self.instance, key.0, &key.1);
+            let bell = shared_iox(&self.iox).and_then(|n| goofi_transport::Doorbell::open(&n, &door).ok());
             let reducer = SlotReducer {
                 specs: Arc::new(Mutex::new(HashMap::new())),
                 taps: Arc::new(Mutex::new(Vec::new())),
                 tx: broadcast::channel(16).0,
-                stop: Arc::new(AtomicBool::new(false)),
+                // No door is no wake: the stream is closed, and the next request tries again.
+                stop: Arc::new(AtomicBool::new(bell.is_none())),
                 reductions: Arc::new(AtomicU64::new(0)),
                 gen: Arc::new(AtomicU64::new(0)),
                 latest: Arc::new(Mutex::new(None)),
                 full: Arc::new(Mutex::new(None)),
                 asked: Arc::new(AtomicBool::new(false)),
+                bell,
             };
-            let (graph, iox) = (self.graph.clone(), self.iox.clone());
-            spawn_reducer(key.clone(), &reducer, graph, iox, slots, self.follow.clone());
+            if reducer.bell.is_some() {
+                let (graph, iox) = (self.graph.clone(), self.iox.clone());
+                spawn_reducer(key.clone(), &reducer, door, graph, iox, slots, self.follow.clone());
+            }
             reducer
         })
     }
@@ -153,6 +187,7 @@ impl SlotReducers {
         // broadcasts the join-serve into a fan-out this joiner is not yet part of.
         let rx = reducer.tx.subscribe();
         reducer.gen.fetch_add(1, Ordering::Release);
+        reducer.poke();
         rx
     }
 
@@ -164,6 +199,7 @@ impl SlotReducers {
             let mut map = self.inner.lock().unwrap();
             let r = self.ensure(&mut map, &key);
             r.asked.store(true, Ordering::Release);
+            r.poke();
             (r.full.clone(), r.latest.clone())
         };
         let frame = full.lock().unwrap().clone();
@@ -175,6 +211,7 @@ impl SlotReducers {
         if let Some(r) = self.inner.lock().unwrap().get(key) {
             r.specs.lock().unwrap().insert(conn, specs);
             r.gen.fetch_add(1, Ordering::Release);
+            r.poke();
         }
     }
 
@@ -183,13 +220,18 @@ impl SlotReducers {
     pub fn reoffer(&self, key: &SlotKey) {
         if let Some(r) = self.inner.lock().unwrap().get(key) {
             r.gen.fetch_add(1, Ordering::Release);
+            r.poke();
         }
     }
 
-    /// Withdraw `conn`'s contribution to `key`'s spec union; the reducer itself STAYS.
+    /// Withdraw `conn`'s contribution to `key`'s spec union; the reducer itself STAYS, and is
+    /// rung so a feed nobody reads any more starts its idle clock rather than waiting on a frame.
+    /// The union changed, so the frame is served once more under the plan that remains.
     pub fn unsubscribe(&self, key: &SlotKey, conn: ConnId) {
         if let Some(r) = self.inner.lock().unwrap().get(key) {
             r.specs.lock().unwrap().remove(&conn);
+            r.gen.fetch_add(1, Ordering::Release);
+            r.poke();
         }
     }
 
@@ -215,12 +257,11 @@ impl SlotReducers {
     }
 }
 
-/// How often the slot's subscribe address is re-derived from the graph: a service name carries the
-/// node's GENERATION, so a restart re-homes the stream to a name this task has never opened.
-pub const REHOME_INTERVAL: Duration = Duration::from_secs(1);
-/// How long a reducer nobody asks of keeps its subscription. WALL TIME, not a count of sleeps: a
-/// platform whose sleep rounds up would otherwise hold on for as much longer.
+/// How long a reducer nobody asks of keeps its subscription, and with it the producer's ring.
 pub const IDLE: Duration = Duration::from_secs(1);
+/// One wake after a watch begins: the producer takes the door on its own thread, so a frame it
+/// published between the feed opening and that landing rang nobody, and is collected here.
+const WATCH_GRACE: Duration = Duration::from_millis(250);
 
 /// The reducers' ONE iceoryx2 node, minted on first feed and shared by every later one.
 type SharedIox = Arc<Mutex<Option<Arc<goofi_transport::IoxNode>>>>;
@@ -234,11 +275,9 @@ fn shared_iox(iox: &SharedIox) -> Option<Arc<goofi_transport::IoxNode>> {
     held.clone()
 }
 
-/// One end of a slot's data service: the subscriber, its iceoryx2 node, and the service name it
-/// was opened on.
+/// One end of a slot's data service: the subscriber and its iceoryx2 node.
 struct SlotFeed {
     subscriber: goofi_transport::ByteSubscriber,
-    service: String,
     /// Declared LAST: fields drop in order, and a node dropped before its subscriber cannot remove
     /// its own directory.
     _node: Arc<goofi_transport::IoxNode>,
@@ -254,16 +293,19 @@ fn open_feed(graph: &Mutex<Graph>, iox: &SharedIox, uid: Uid, slot: &str) -> Opt
     };
     let node = shared_iox(iox)?;
     let subscriber = goofi_transport::open_output_subscriber(&node, &service).ok()?;
-    Some(SlotFeed { _node: node, subscriber, service })
+    Some(SlotFeed { _node: node, subscriber })
 }
 
-/// Spawn the per-slot reducer loop, on a PLAIN thread so any transport's thread can open one:
-/// every ~16 ms take whatever the producer has published and — only when it emitted, a subscriber
-/// joined, or the spec union changed — reduce, encode once, and broadcast to all. The sweep is a
-/// sampling deadline, never a send cadence.
+/// Spawn the per-slot reducer loop on a PLAIN thread. It parks on the slot's view door: the
+/// producer rings it once a frame is out, the bridge rings it (with its own id) for a joiner, a
+/// spec, a tap, an ask or a settle, and the duties a wake cannot bring — a serve the rate cap held
+/// back, the idle expiry of a feed nobody reads, a fresh watch's grace — are the only deadlines it
+/// wakes to on its own.
+#[allow(clippy::too_many_arguments)]
 fn spawn_reducer(
     key: SlotKey,
     reducer: &SlotReducer,
+    door: String,
     graph: Arc<Mutex<Graph>>,
     iox: SharedIox,
     slots: Weak<Mutex<HashMap<SlotKey, SlotReducer>>>,
@@ -277,13 +319,27 @@ fn spawn_reducer(
     let (uid, slot) = key.clone();
     let failed = stop.clone();
     if let Err(error) = goofi_transport::thread(format!("goofi-reduce-{slot}")).spawn(move || {
-        let mut feed = open_feed(&graph, &iox, uid, &slot);
+        let listener = shared_iox(&iox)
+            .and_then(|n| goofi_transport::event_service(&n, &door).ok())
+            .and_then(|d| d.listener_builder().create().ok());
+        let Some(listener) = listener else {
+            stop.store(true, Ordering::Relaxed);
+            return;
+        };
+        let mut feed: Option<SlotFeed> = None;
         // The cache still belongs to this service after an idle port is dropped.
-        let mut source = feed.as_ref().map(|f| f.service.clone());
-        let mut rehomed = std::time::Instant::now();
+        let mut source: Option<String> = None;
+        // Whether the address has been read at all: it is read again on every poke, and a poke is
+        // what every change to what this loop should do arrives as.
+        let mut homed = false;
+        // Whether the graph has been told this slot is watched — the producer's ring follows it —
+        // and the one wake a fresh watch owes itself.
+        let mut watching = false;
+        let mut grace: Option<std::time::Instant> = None;
         // An attached subscriber is what a scheduled engine reads as demand, so a feed nobody
         // wants keeps a GPU node rendering for ever.
         let mut asked_at = std::time::Instant::now();
+        let mut wanted = true;
         // `served: None` means "never broadcast", which is what sends the first frame without a bump.
         let mut served: Option<u64> = None;
         let mut pending = false;
@@ -296,12 +352,34 @@ fn spawn_reducer(
         let mut peeked: Option<Peek> = None;
         let mut made: Option<Bytes> = None;
         // A snapshot needs ONE full-resolution frame, so the demand is held wide until one lands
-        // rather than for the single sweep the ask was seen on — the producer needs a tick to answer.
+        // rather than for the single wake the ask was seen on — the producer needs time to answer.
         let mut full_res = false;
+        // What the raw frame last reduced and served SAID, so one that says it again is not sent.
+        let mut sent: Option<u64> = None;
+        let mut stamped: Option<u64> = None;
         loop {
-            std::thread::sleep(crate::vocab::REDUCER_TICK);
+            let now = std::time::Instant::now();
+            let owed = {
+                let watched = !specs.lock().unwrap().is_empty();
+                let held = made.is_some() || latest.lock().unwrap().is_some();
+                watched && held && (pending || served != Some(gen.load(Ordering::Acquire)))
+            };
+            let duties = [
+                (owed && next_serve > now).then_some(next_serve),
+                (feed.is_some() && !wanted).then_some(asked_at + IDLE),
+                grace.filter(|at| *at > now),
+            ];
+            let mut poked = false;
+            let mut note = |id: goofi_transport::WakeId| poked |= id.as_value() == goofi_transport::VIEW_POKE_ID as usize;
+            let _ = match duties.into_iter().flatten().min() {
+                Some(at) => listener.timed_wait_all(&mut note, at.saturating_duration_since(now)),
+                None => listener.blocking_wait_all(&mut note),
+            };
             if stop.load(Ordering::Relaxed) {
                 return;
+            }
+            if grace.is_some_and(|at| std::time::Instant::now() >= at) {
+                grace = None;
             }
             // Read ONCE: the swap consumes it, so a second reader downstream would always miss.
             let snapshot = asked.swap(false, Ordering::Acquire);
@@ -311,21 +389,20 @@ fn spawn_reducer(
                 *full.lock().unwrap() = None;
             }
             full_res |= snapshot;
-            let wanted = snapshot || !specs.lock().unwrap().is_empty() || !taps.lock().unwrap().is_empty();
+            // `full_res` too: the demand stays wide until the snapshot's frame lands.
+            wanted = snapshot || full_res || !specs.lock().unwrap().is_empty() || !taps.lock().unwrap().is_empty();
             if wanted {
                 asked_at = std::time::Instant::now();
             }
-            if asked_at.elapsed() > IDLE {
-                feed = None;
-            }
-            if rehomed.elapsed() >= REHOME_INTERVAL {
-                rehomed = std::time::Instant::now();
+            // The graph may have moved: the slot's service carries the node's GENERATION, so a
+            // restart re-homes the feed, and the node leaving the graph is the reducer's ONE death.
+            if poked || !homed {
+                homed = true;
                 let current = {
                     let g = graph.lock().unwrap();
                     g.manifest(uid).map(|_| crate::output_service_of(&g, uid, &slot))
                 };
                 let Some(current) = current else {
-                    // The node left the graph: the reducer's ONE death.
                     if let Some(slots) = slots.upgrade() {
                         // Only THIS task's entry: an undo puts a removed node back at the same uid,
                         // and a viewer that re-subscribed since holds a reducer this one must keep.
@@ -337,7 +414,7 @@ fn spawn_reducer(
                     return;
                 };
                 if source.as_ref() != Some(&current) {
-                    source = Some(current.clone());
+                    source = Some(current);
                     // A new generation is a new producer, and its readback starts at the frame's
                     // own size — so what this loop believes it asked for holds nowhere any more.
                     demanded = None;
@@ -347,13 +424,25 @@ fn spawn_reducer(
                     *full.lock().unwrap() = None;
                     pending = false;
                     served = None;
-                }
-                if asked_at.elapsed() <= IDLE && feed.as_ref().is_none_or(|f| f.service != current) {
-                    feed = open_feed(&graph, &iox, uid, &slot);
+                    sent = None;
+                    stamped = None;
+                    feed = None;
                 }
             }
-            if feed.is_none() && asked_at.elapsed() <= IDLE {
+            if asked_at.elapsed() > IDLE {
+                feed = None;
+            } else if feed.is_none() {
                 feed = open_feed(&graph, &iox, uid, &slot);
+            }
+            // Watched exactly while the feed is open: the producer rings this door once each
+            // frame is out, and stops when nobody reads them.
+            if watching != feed.is_some() {
+                watching = feed.is_some();
+                grace = watching.then(|| std::time::Instant::now() + WATCH_GRACE);
+                let mut g = graph.lock().unwrap();
+                if g.set_view_watch(uid, &slot, watching) {
+                    g.settle();
+                }
             }
             let mut fresh = false;
             if let Some(f) = &feed {
@@ -435,16 +524,28 @@ fn spawn_reducer(
             if !pending && served == Some(g_now) {
                 continue; // nothing new to say — no emit, no joiner, no spec change
             }
+            // A frame is two things on the wire, each sent when its own hash moved: what it says,
+            // and the engine's stamps on it. One that says what the last one said goes as its stamps
+            // alone, or not at all — unless a joiner, a leaver, a spec change or a re-offer asked for
+            // it regardless.
+            let (hash, stamps) = match &made {
+                Some(_) => (None, None),
+                None => {
+                    let held = latest.lock().unwrap();
+                    (held.as_ref().map(goofi_codec::content_hash), held.as_ref().map(goofi_codec::stamp_hash))
+                }
+            };
+            let same = hash.is_some() && served == Some(g_now) && hash == sent;
+            if same && stamps == stamped {
+                pending = false;
+                continue;
+            }
             // The viewer rate, held HERE because this is the one place N viewers became one
             // stream. A producer emitting faster than the browser paints is bytes nobody draws.
-            // The loop's own tick is the quantum, so the real ceiling is one tick coarser.
+            // A serve held back is the duty the loop wakes to at the interval's end.
             let now = std::time::Instant::now();
             if now < next_serve {
                 continue;
-            }
-            next_serve += crate::vocab::VIEWER_INTERVAL;
-            if next_serve < now {
-                next_serve = now + crate::vocab::VIEWER_INTERVAL;
             }
             let bytes = match &made {
                 // Already exactly what the viewers asked for: one buffer, shared by every
@@ -452,19 +553,39 @@ fn spawn_reducer(
                 Some(ready) => ready.clone(),
                 None => {
                     let Some(d) = latest.lock().unwrap().clone() else { continue };
-                    let plan = goofi_view::plan(&union_specs(&specs.lock().unwrap()), &d);
-                    let out = goofi_core::reduce::reduce_for_view(&d, &plan);
-                    reductions.fetch_add(1, Ordering::Relaxed);
-                    // 8-bit only where every viewer of the slot draws it, and only for a frame that
-                    // has texels; the reduction itself is f32 either way.
-                    let quantized = (plan.depth == goofi_view::Depth::U8)
-                        .then(|| goofi_core::reduce::quantize_u8(&out))
-                        .flatten()
-                        .map(|(shape, texels, meta)| goofi_codec::encode_u8(&shape, &texels, &meta));
-                    Bytes::from(quantized.unwrap_or_else(|| goofi_codec::encode(&out)))
+                    if same {
+                        Bytes::from(goofi_codec::encode_stamps(d.meta()))
+                    } else {
+                        let specs = union_specs(&specs.lock().unwrap());
+                        // A table has no texels to plan; an array is reduced to its viewers' plan.
+                        let (out, depth) = match d.value() {
+                            goofi_core::Value::Table(_) => (goofi_core::reduce::reduce_table(&d, &specs), goofi_view::Depth::F32),
+                            _ => {
+                                let plan = goofi_view::plan(&specs, &d);
+                                (goofi_core::reduce::reduce_for_view(&d, &plan), plan.depth)
+                            }
+                        };
+                        reductions.fetch_add(1, Ordering::Relaxed);
+                        // As narrow as the widest viewer of the slot draws; the reduction itself is
+                        // f32 either way, and a half or a texel only for a frame they can hold.
+                        let narrowed = match depth {
+                            goofi_view::Depth::U8 => goofi_core::reduce::quantize_u8(&out)
+                                .map(|(shape, texels, meta)| goofi_codec::encode_u8(&shape, &texels, &meta)),
+                            goofi_view::Depth::F16 => goofi_codec::encode_f16(&out),
+                            goofi_view::Depth::F32 => None,
+                        };
+                        Bytes::from(narrowed.unwrap_or_else(|| goofi_codec::encode(&out)))
+                    }
                 }
             };
+            // The serve slot is taken by a frame served, never by one this tick held back.
+            next_serve += crate::vocab::VIEWER_INTERVAL;
+            if next_serve < now {
+                next_serve = now + crate::vocab::VIEWER_INTERVAL;
+            }
             let _ = tx.send(bytes); // Err only if all receivers are momentarily gone — harmless.
+            sent = hash;
+            stamped = stamps;
             served = Some(g_now);
             pending = false;
         }

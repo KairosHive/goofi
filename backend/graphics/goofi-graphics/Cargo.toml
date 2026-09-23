@@ -7,30 +7,20 @@ license.workspace = true
 [features]
 embed = ["goofi-python/embed"]
 
-# What plans, compiles and draws: one code base for the process and the page.
 [dependencies]
-goofi-core = { path = "../../goofi-core" }
-goofi-view = { path = "../../goofi-view" }
-goofi-node = { path = "../../goofi-node" }
-wgpu = { version = "30", default-features = false, features = ["wgsl", "std"] }
-naga = { version = "30", features = ["wgsl-in"] }
-half = "2"
-
-# The native host: processes, shared memory, windows, the recorder and the blocking executor.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 goofi-host = { path = "../../goofi-host" }
 goofi-host-sdk = { path = "../../goofi-host-sdk", features = ["host"] }
 goofi-python = { path = "../../signal/goofi-python" }
 goofi-build = { path = "../../goofi-build" }
+goofi-core = { path = "../../goofi-core" }
+goofi-view = { path = "../../goofi-view" }
+goofi-node = { path = "../../goofi-node" }
 goofi-codec = { path = "../../goofi-codec" }
 goofi-transport = { path = "../../goofi-transport" }
 goofi-control = { path = "../../goofi-control" }
 goofi-window = { path = "../../goofi-window" }
 goofi-record = { path = "../../goofi-record" }
-wgpu = { version = "30", default-features = false, features = ["vulkan", "metal", "dx12"] }
+wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan", "metal", "dx12", "std"] }
+naga = { version = "30", features = ["wgsl-in"] }
 pollster = "0.4"
-
-# The browser host: WebGPU through the page's own device.
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wgpu = { version = "30", default-features = false, features = ["webgpu"] }
-web-sys = { version = "0.3", features = ["console"] }
+half = "2"

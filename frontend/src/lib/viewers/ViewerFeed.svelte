@@ -11,26 +11,37 @@
 	import { LinePlot, type Plot } from 'glance';
 	import { offsetIn, useAnchor, useSurface } from './plotHost';
 	import { pushImage, pushLine } from './plotFeed';
-	import { isRenderable } from './kind';
+	import { drawsOnSurface, isRenderable } from './kind';
 	import { makeLUTCache } from './colormaps';
 	import { formatTick } from './format';
 
-	let { node, slot, binding }: { node: string; slot: string | null; binding: ViewBinding } =
-		$props();
+	/** `zoom` is the flow zoom the viewer is drawn under; a docked panel draws at 1. */
+	let {
+		node,
+		slot,
+		binding,
+		zoom = 1
+	}: { node: string; slot: string | null; binding: ViewBinding; zoom?: number } = $props();
 
 	const kind = $derived(binding.kind);
 	const settings = $derived(binding.settings);
 	const host = useSurface();
 	const anchor = useAnchor();
-	const onSurface = $derived(kind === 'line' || kind === 'image');
+	const onSurface = $derived(drawsOnSurface(kind));
 
 	let frame = $state.raw<DataFrame | null>(null);
 	let visible = $state(false);
 	let container: HTMLDivElement | null = $state(null);
+	// The content box in CSS px; the device box below is derived from it, the DPR and the zoom.
+	let boxW = $state(0);
+	let boxH = $state(0);
 	// Quantized to 32-px steps so a 1-px resize does not renegotiate the reduction.
 	let capW = $state(0);
 	let capH = $state(0);
+	// Bumped when this body or its card moved, so the plot rect is measured again.
 	let layout = $state(0);
+	// Below a readable zoom the viewer unsubscribes and keeps its last frame as a thumbnail.
+	let frozen = $state(false);
 	// Stable per-instance token so multiple viewers of one slot collect (not evict).
 	const token =
 		typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `vf-${Math.random()}`;
@@ -41,10 +52,26 @@
 	let labelKey = '';
 	const lutFor = makeLUTCache();
 
-	function quantize(px: number): number {
-		const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-		return Math.max(32, Math.round((px * dpr) / 32) * 32);
+	/** The 32-px step for `px`, left where it is until `px` is a quarter step past the held one's edge. */
+	function quantize(px: number, held: number): number {
+		return held > 0 && Math.abs(px - held) < 24 ? held : Math.max(32, Math.round(px / 32) * 32);
 	}
+
+	$effect(() => {
+		const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+		// Half-octave zoom steps, rounded up: a pinch crosses a few of them, not one per pointer
+		// event, and the demand overshoots the drawn size by at most 41%.
+		const scale = dpr * Math.pow(2, Math.ceil(Math.log2(zoom) * 2) / 2);
+		const w = boxW;
+		const h = boxH;
+		if (!w || !h) return; // unmeasured: a 0 quantized to 32 would hold through the first real size
+		untrack(() => {
+			capW = quantize(w * scale, capW);
+			capH = quantize(h * scale, capH);
+			frozen = zoom < (frozen ? 0.34 : 0.3);
+		});
+	});
+
 	// Subscribe only while in the viewport; the ResizeObserver tracks the pixel budget and the rect.
 	$effect(() => {
 		const el = container;
@@ -57,8 +84,8 @@
 		);
 		io.observe(el);
 		const ro = new ResizeObserver(() => {
-			capW = quantize(el.clientWidth);
-			capH = quantize(el.clientHeight);
+			boxW = el.clientWidth;
+			boxH = el.clientHeight;
 			layout++;
 		});
 		ro.observe(el);
@@ -71,6 +98,7 @@
 
 	/** ONE hook for this viewer's stream, visibility and reduction; the registry settles what is sent. */
 	$effect(() => {
+		if (frozen) return;
 		frame = null;
 		labels = [];
 		labelKey = '';
@@ -133,7 +161,15 @@
 
 	function drawFrame(f: DataFrame): void {
 		const p = plot;
-		if (!p || !isArrayFrame(f) || !isRenderable(kind, f.data)) return;
+		if (!p || !isArrayFrame(f)) return;
+		// A frame this kind cannot draw takes the fallback text; the trace before it must not stay under it.
+		if (!isRenderable(kind, f.data)) {
+			p.clear();
+			labels = [];
+			labelKey = '';
+			return;
+		}
+		if (capW === 0) return; // unmeasured: the re-bind on the first size replays the frame
 		if (p instanceof LinePlot) {
 			pushLine(p, f, capW, Boolean(settings.logX));
 			const r = p.range();

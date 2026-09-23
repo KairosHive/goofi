@@ -1,0 +1,308 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { flushSync } from 'svelte';
+import { FakeControl } from '$lib/test/fakeControl';
+import { seed, type DocSeed } from '$lib/test/docSeed';
+import { GraphStore } from './graph.svelte';
+import { history } from './history.svelte';
+import { docParams, setParamValue } from '$lib/crdt/graphDoc';
+import type { NodeInstanceInfo, NodeTypeInfo } from '$lib/api/control';
+import { typeInfo } from '$lib/test/typeInfo';
+
+/** Seed a node — a param leaf-write targets the replica's node, so it no-ops unless it is there. */
+function docAddNode(d: DocSeed, uid: string): void {
+	d.node(uid, 'Oscillator', uid);
+}
+
+/** The catalog (list_nodes) the manager provides — `g.nodeTypes = catalog()` flips the store
+ * doc-authoritative, so node identity + params come from the doc + these descriptors. */
+function catalog(): NodeTypeInfo[] {
+	return [
+		typeInfo({
+			type: 'Oscillator',
+			input_slots: { in: 'ARRAY' },
+			output_slots: { out: 'ARRAY' },
+			params: {
+				common: {
+					frequency: {
+						type: 'float',
+						value: 1,
+						default: 1,
+						vmin: 0,
+						vmax: 1000,
+						doc: null,
+						refreshable: false,
+						expression: null,
+						mode: 'constant',
+						reference: null,
+						triggers: false,
+						error: null
+					}
+				},
+				count: {
+					reset: {
+						type: 'pulse',
+						value: null,
+						default: null,
+						doc: null,
+						refreshable: false,
+						expression: null,
+						mode: 'constant',
+						reference: null,
+						triggers: false,
+						error: null
+					}
+				}
+			}
+		})
+	];
+}
+
+
+function nodeWithParam(uid: string, value: unknown): NodeInstanceInfo {
+	return {
+		uid,
+		name: 'osc0',
+		type: 'Oscillator',
+		doc: '',
+		input_slots: { in: 'ARRAY' },
+		output_slots: { out: 'ARRAY' },
+		// One param group with a single param carrying `value`.
+		params: { common: { frequency: { value } } } as unknown as NodeInstanceInfo['params'],
+		pos: [0, 0],
+		viewers: {},
+		scope: '__root__',
+		error: null
+	};
+}
+
+describe('GraphStore.updateParam — guards a non-existent param', () => {
+	beforeEach(() => history().reset());
+
+	it('throws (recording nothing, sending no RPC) when the param does not exist', async () => {
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		const d = seed(fc);
+		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
+
+		// A missing group/name (agent typo, or a pre-hydration race) must not record a
+		// poisoned undo entry whose inverse would send value:undefined → backend KeyError.
+		await expect(g.updateParam('uidA', 'nope', 'missing', 5)).rejects.toThrow();
+		expect(fc.recordedCalls().some((c) => c.op === 'node param edit')).toBe(false);
+		expect(history().canUndo).toBe(false);
+	});
+
+	it('treats a falsy current value (0) as present, not missing', async () => {
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		const d = seed(fc);
+		g.nodeTypes = catalog(); // catalog present → node identity + params come from the doc
+		d.node('uidA', 'Oscillator', 'osc0', [0, 0]);
+		setParamValue(g.doc, 'uidA', 'common', 'frequency', 0); // the current value the guard must treat as present
+
+		// The guard keys on the param's EXISTENCE, not the truthiness of its value, so editing a
+		// param whose current value is 0/false/'' still issues the command (a missing param throws).
+		await g.updateParam('uidA', 'common', 'frequency', 5);
+		const call = fc.recordedCalls().find((c) => c.op === 'node param edit');
+		expect(call?.payload).toEqual({ node: 'uidA', param: 'common/frequency', value: 5 });
+		expect(history().canUndo).toBe(true);
+	});
+});
+
+describe('GraphStore.setSource — guards a non-existent param', () => {
+	beforeEach(() => history().reset());
+
+	it('throws (recording nothing, minting no phantom doc binding) when the param does not exist', async () => {
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		const d = seed(fc);
+		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
+		docAddNode(d, 'uidA'); // the node exists in the doc; the PARAM does not
+
+		// A missing group/name (agent typo, or a call racing hydration) must not leaf-write an
+		// `expr` onto a phantom param entry — the graph rejects it and the re-mirror never prunes it.
+		await expect(g.setSource('uidA', 'nope', 'missing', { expression: "nd('x')" })).rejects.toThrow();
+		expect(history().canUndo).toBe(false);
+		expect(docParams(g.doc, 'uidA').nope?.missing?.source).toBeUndefined();
+	});
+});
+
+describe('GraphStore.refreshParam — asks the node to re-evaluate options', () => {
+	it('sends the refresh with the uid and joined address, and records no undo entry', async () => {
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		const d = seed(fc);
+		history().reset();
+
+		await g.refreshParam('uidA', 'audio', 'device');
+		const call = fc.recordedCalls().find((c) => c.op === 'node param request');
+		expect(call?.payload).toEqual({ node: 'uidA', param: 'audio/device', request: 'refresh' });
+		// A refresh recomputes options, not values — it is not an undoable graph edit.
+		expect(history().canUndo).toBe(false);
+	});
+});
+
+describe('GraphStore.pulse — fires a param that holds no value', () => {
+	it('sends the pulse with the uid and joined address, and records no undo entry', async () => {
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		const d = seed(fc);
+		g.nodeTypes = catalog(); // catalog present → node identity + params come from the doc
+		d.node('uidA', 'Oscillator', 'osc0', [0, 0]);
+		history().reset();
+
+		await g.pulse('uidA', 'count', 'reset');
+		const call = fc.recordedCalls().find((c) => c.op === 'node param request');
+		expect(call?.payload).toEqual({ node: 'uidA', param: 'count/reset', request: 'pulse' });
+		// A pulse carries no value, so it has no inverse — it is not an undoable graph edit.
+		expect(history().canUndo).toBe(false);
+	});
+});
+
+describe('GraphStore refresh spinner — the entry stays disabled until fresh options land', () => {
+	it('marks the param refreshing on refreshParam, then clears it when the node reports done', async () => {
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		const d = seed(fc);
+		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
+
+		expect(g.isRefreshing('uidA', 'audio', 'device')).toBe(false);
+
+		await g.refreshParam('uidA', 'audio', 'device');
+		// The RPC only *dispatches* the ctrl message; the node re-scans asynchronously
+		// (LSL resolve is ~4s), so the entry stays disabled after the RPC resolves.
+		expect(g.isRefreshing('uidA', 'audio', 'device')).toBe(true);
+
+		// The node's post-refresh state push names the completed param → spinner clears.
+		fc.emit({
+			event: 'state_update',
+			payload: {
+				node: 'uidA',
+				params: {},
+				refreshed_params: [['audio', 'device']]
+			}
+		});
+		expect(g.isRefreshing('uidA', 'audio', 'device')).toBe(false);
+	});
+
+	it('clears only the completed param, leaving other in-flight refreshes disabled', async () => {
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		const d = seed(fc);
+		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
+
+		await g.refreshParam('uidA', 'audio', 'device');
+		await g.refreshParam('uidA', 'lsl', 'source_name');
+
+		// A state push completing an *unrelated* param must not lift this one's spinner.
+		fc.emit({
+			event: 'state_update',
+			payload: {
+				node: 'uidA',
+				params: {},
+				refreshed_params: [['lsl', 'source_name']]
+			}
+		});
+		expect(g.isRefreshing('uidA', 'lsl', 'source_name')).toBe(false);
+		expect(g.isRefreshing('uidA', 'audio', 'device')).toBe(true);
+
+		// Clean up the still-pending safety timeout so it can't outlive the test.
+		fc.emit({
+			event: 'state_update',
+			payload: {
+				node: 'uidA',
+				params: {},
+				refreshed_params: [['audio', 'device']]
+			}
+		});
+	});
+
+	it('drops the spinner if the RPC dispatch itself fails (the node will never push)', async () => {
+		const fc = new FakeControl();
+		fc.failNext('node param request');
+		const g = new GraphStore(fc);
+		const d = seed(fc);
+		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
+
+		await expect(g.refreshParam('uidA', 'audio', 'device')).rejects.toThrow();
+		expect(g.isRefreshing('uidA', 'audio', 'device')).toBe(false);
+	});
+});
+
+describe('GraphStore doc sync — a reader re-runs for the leaves it read', () => {
+	it('a patch wakes the readers of the leaves it names, and nobody else', () => {
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		const d = seed(fc);
+		g.nodeTypes = catalog();
+		d.node('uidA', 'Oscillator', 'osc0', [0, 0], {
+			params: { common: { frequency: { value: 1 } }, count: { reset: {} } },
+			viewers: '{"out":{"collapsed":false}}'
+		});
+		const node = g.nodeById('uidA')!;
+		let list = 0;
+		let names = 0;
+		let frequency = 0;
+		let reset = 0;
+		const stop = $effect.root(() => {
+			$effect(() => {
+				void g.nodes.length;
+				list++;
+			});
+			$effect(() => {
+				void node.name;
+				names++;
+			});
+			$effect(() => {
+				void node.params.common.frequency.value;
+				frequency++;
+			});
+			$effect(() => {
+				void node.params.count.reset.value;
+				reset++;
+			});
+		});
+		flushSync();
+		expect([list, names, frequency, reset]).toEqual([1, 1, 1, 1]);
+
+		d.variable('patch.gain', { value: 1, type: 'float' });
+		d.patch({ variable_groups: { patch: { lock: { config: true, value: false } } } });
+		flushSync();
+		expect(g.variables.map((v) => v.name)).toContain('patch.gain');
+		expect(g.variableGroups.patch, 'a group lock rides its own root').toEqual({ config: true, value: false });
+		expect([list, names, frequency, reset], 'nothing a node reader read moved').toEqual([1, 1, 1, 1]);
+
+		// A leaf write on the node wakes that leaf's reader and nothing beside it.
+		d.patch({ nodes: { uidA: { params: { common: { frequency: { value: 7 } } } } } });
+		flushSync();
+		expect(node.params.common.frequency.value).toBe(7);
+		expect([list, names, frequency, reset]).toEqual([1, 1, 2, 1]);
+		d.patch({ nodes: { uidA: { name: 'osc1' } } });
+		flushSync();
+		expect(node.name).toBe('osc1');
+		expect([list, names, frequency, reset]).toEqual([1, 2, 2, 1]);
+		d.node('uidB', 'Oscillator', 'osc2');
+		flushSync();
+		expect([list, names, frequency, reset], 'membership wakes the list alone').toEqual([2, 2, 2, 1]);
+		expect(g.nodeById('uidA'), 'one object per uid, for as long as the document holds it').toBe(node);
+		stop();
+	});
+
+	it('a member scope patch refreshes its facade', () => {
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		const d = seed(fc);
+		g.nodeTypes = catalog();
+		d.instance('sub', 'sub');
+		d.port('inA', 'InArray', 'a', 'sub');
+		const facade = g.nodeById('sub')!;
+		expect(Object.keys(facade.input_slots)).toEqual(['inA']);
+		expect(facade.subpatch?.memberCount).toBe(1);
+
+		// Only the port's record moves, but the facade's face is drawn from it.
+		d.patch({ nodes: { inA: { name: 'b' } } });
+		expect(g.nodeById('sub')).toBe(facade);
+		expect(facade.slot_labels?.inA).toBe('b');
+		d.node('uidB', 'Oscillator', 'osc1', [0, 0], { scope: 'sub' });
+		expect(facade.subpatch?.memberCount).toBe(2);
+	});
+});

@@ -3,18 +3,21 @@
 	import ViewerControls from './ViewerControls.svelte';
 	import { slotView, isSlotExpanded } from './inlineView';
 	import { recordViewChange } from './viewExecutors';
-	import { resolveKind, type ViewerKind } from './kind';
+	import { drawsOnSurface, resolveKind, type ViewerKind } from './kind';
 	import { resolveSettings, type SettingsMap } from './settingsSchema';
 	import type { ViewBinding } from './viewBinding';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { dtypeColor } from '$lib/editor/categoryColor';
+	import { useViewport } from '@xyflow/svelte';
 
 	// `label` overrides the displayed slot name for a sub-patch portal; the handle id stays `slot`.
 	type Props = { node: string; slot: string; dtype: string; label?: string };
 	const { node, slot, dtype, label }: Props = $props();
 
 	const g = graph();
+	// Inside the flow, so the viewer can size its demand to the zoom it is drawn under.
+	const vp = useViewport();
 
 	// Built here, its single use site, so viewBinding.ts stays rune-free.
 	const rec = $derived(g.nodeById(node));
@@ -105,8 +108,8 @@
 
 	{#if expanded}
 		<!-- A line or image body is transparent: the editor's plot surface paints it from beneath. -->
-		<div class="body" class:plot={binding.kind === 'line' || binding.kind === 'image'}>
-			<ViewerFeed {node} {slot} {binding} />
+		<div class="body" class:plot={drawsOnSurface(binding.kind)}>
+			<ViewerFeed {node} {slot} {binding} zoom={vp.current.zoom} />
 		</div>
 	{/if}
 </div>

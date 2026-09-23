@@ -76,9 +76,9 @@
 	$effect(() => (node ? live.watch(node.uid) : undefined));
 
 	// Each RPC is fire-and-forget with a logged failure, so a rejection is never unhandled.
-	function setValue(group: string, name: string, value: unknown): void {
+	function setValue(group: string, name: string, value: unknown): Promise<void> | void {
 		if (!node) return;
-		void g.updateParam(node.uid, group, name, value).catch((e) => console.warn('update failed', e));
+		return g.updateParam(node.uid, group, name, value).catch((e) => console.warn('update failed', e));
 	}
 	function refreshOptions(group: string, name: string): void {
 		if (!node) return;

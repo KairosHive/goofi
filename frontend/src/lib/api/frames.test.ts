@@ -23,6 +23,7 @@ class MockWorker {
 
 let bindViewer: typeof import('./frames').bindViewer;
 let dropRate: typeof import('./frames').dropRate;
+let latestFrame: typeof import('./frames').latestFrame;
 
 /** Let the reconcile microtask run. */
 const settle = (): Promise<void> => Promise.resolve();
@@ -52,7 +53,7 @@ beforeEach(async () => {
 	vi.stubGlobal('Worker', MockWorker as unknown as typeof Worker);
 	vi.stubGlobal('URL', URL);
 	seq = 0;
-	({ bindViewer, dropRate } = await import('./frames'));
+	({ bindViewer, dropRate, latestFrame } = await import('./frames'));
 });
 
 afterEach(() => {
@@ -94,6 +95,33 @@ describe('paint-rate accounting', () => {
 	});
 });
 
+describe('the per-flush budget', () => {
+	it('defers the second slot when the first one’s draw spends the budget', async () => {
+		// The callbacks run synchronously inside the flush, so a slow draw is what the budget sees;
+		// a draw that ran in a later microtask would measure microseconds and never engage.
+		let t = 0;
+		vi.spyOn(performance, 'now').mockImplementation(() => t);
+		const gotA: DataFrame[] = [];
+		const gotB: DataFrame[] = [];
+		const offA = bind('osc-a', 'out', (f) => {
+			gotA.push(f);
+			t += 10; // a draw past the 8 ms budget
+		});
+		const offB = bind('osc-b', 'out', (f) => gotB.push(f));
+		await settle();
+		const w = MockWorker.instances[0];
+		w.emit({ node: 'osc-a', slot: 'out', frame: { shape: [1] } as unknown as DataFrame });
+		w.emit({ node: 'osc-b', slot: 'out', frame: { shape: [2] } as unknown as DataFrame });
+		await vi.advanceTimersByTimeAsync(20);
+		expect(gotA.length, 'the first slot painted').toBe(1);
+		expect(gotB.length, 'the second waits for the next flush').toBe(0);
+		await vi.advanceTimersByTimeAsync(100);
+		expect(gotB.length, 'and is not forgotten').toBe(1);
+		offA();
+		offB();
+	});
+});
+
 describe('a joining viewer', () => {
 	it('replays the slot’s current frame to a late-joining consumer, immediately and once', async () => {
 		// The bridge only sends when something changed (an emit, a joiner IT can see, a spec
@@ -129,6 +157,31 @@ describe('a joining viewer', () => {
 		const got: DataFrame[] = [];
 		const off = bind('osc', 'out', (f) => got.push(f));
 		expect(got).toEqual([]);
+		off();
+	});
+});
+
+describe('a held frame’s stamps', () => {
+	it('land on the latest frame as a new object, without a paint', async () => {
+		// The reducer sends a frame that says what the last one said as its stamps alone. The
+		// metadata panel polls `latestFrame`, so the stamps must show there; the viewers drew
+		// nothing new, so no callback runs and no paint is counted.
+		const got: DataFrame[] = [];
+		const off = bind('osc', 'out', (f) => got.push(f));
+		await settle();
+		const w = MockWorker.instances[0];
+		const frame = { dtype: 'ARRAY', data: { dtype: '<f4', shape: [1], values: [3] }, meta: { time: 1, index: 1 } };
+		w.emit({ node: 'osc', slot: 'out', frame });
+		await vi.advanceTimersByTimeAsync(40);
+		expect(got.length).toBe(1);
+		const before = latestFrame('osc', 'out');
+		w.emit({ node: 'osc', slot: 'out', stamps: { time: 2, index: 2 } });
+		await vi.advanceTimersByTimeAsync(40);
+		const after = latestFrame('osc', 'out');
+		expect(after).not.toBe(before);
+		expect(after?.meta).toEqual({ time: 2, index: 2 });
+		expect(after?.data, 'the body is the held one').toBe(frame.data);
+		expect(got.length, 'stamps alone paint nothing').toBe(1);
 		off();
 	});
 });

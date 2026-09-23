@@ -88,6 +88,8 @@ class Boom(goofi.Node):
     assert!(f32s(&d)[0] > 1.0, "the child survived the raise with its state: {:?}", f32s(&d));
     g.until("the error to clear", |g| g.error(node).is_none().then_some(()));
 
+    // Streams its idle zero until the first edit, so a consumer can prove the wire carries before
+    // the one-shot sends: a frame published before the consumer's subscribe phase lands is gone.
     install(&g, "once.py", r#"
 import goofi
 import numpy as np
@@ -99,7 +101,7 @@ class Once(goofi.Node):
         self.last = 0
     def process(self):
         value = self.params.send.value
-        if value == self.last:
+        if value == self.last and value != 0:
             return None
         self.last = value
         return np.array([value], dtype=np.float32)
@@ -109,19 +111,21 @@ import goofi
 import numpy as np
 class Consume(goofi.Node):
     INPUTS = {"data": goofi.InputSlot(goofi.DataType.ARRAY, multi=True)}
-    OUTPUTS = {"out": goofi.DataType.ARRAY}
+    OUTPUTS = {"out": goofi.DataType.ARRAY, "ran": goofi.DataType.ARRAY}
     PARAMS = {"consume": {"mode": goofi.IntParam(0, 0, 4)}}
     def process(self, data):
         mode = self.params.consume.mode
+        ran = np.array([mode], dtype=np.float32)
         if mode:
             self.clear_input("data")
         if mode == 2:
-            return None
+            return {"ran": ran}
         if mode == 3:
             raise ValueError("consume failed")
         if mode == 4:
             self.clear_input("missing")
-        return np.array([mode, sum(float(d.data[0]) for _, d in data if d is not None)], dtype=np.float32)
+        held = [d for _, d in data if d is not None]
+        return {"out": np.array([mode, sum(float(d.data[0]) for d in held), len(held)], dtype=np.float32), "ran": ran}
 "#);
     let first = g.add("Once");
     let second = g.add("Once");
@@ -130,46 +134,51 @@ class Consume(goofi.Node):
     }
     let consume = g.add("Consume");
     let consumed = g.probe(consume, "out");
+    let ran = g.probe(consume, "ran");
     free_run(&g, consume, 20.0);
     g.link(first, "out", consume, "data");
     g.link(second, "out", consume, "data");
     g.ready(first);
     g.ready(second);
-    let sees = |mode: f32, sum: f32| {
+    // `[mode, sum of the held inputs, how many are held]`.
+    let sees = |mode: f32, sum: f32, held: f32| {
         let before = consumed.latest().and_then(|d| d.meta().index());
-        g.until("the held input readout", |_| {
-            consumed.latest().filter(|d| d.meta().index() > before && f32s(d) == [mode, sum])
+        g.until(&format!("the held input readout [{mode}, {sum}, {held}]"), |_| {
+            consumed.latest().filter(|d| d.meta().index() > before && f32s(d) == [mode, sum, held])
         });
     };
-    sees(0.0, 0.0);
+    // Both wires carry before a value is sent once: what is published before that is lost.
+    sees(0.0, 0.0, 2.0);
     g.set_param(first, "send", "value", 2);
     g.set_param(second, "send", "value", 3);
-    sees(0.0, 5.0);
+    sees(0.0, 5.0, 2.0);
     g.set_param(consume, "consume", "mode", 1);
-    sees(1.0, 0.0);
+    sees(1.0, 0.0, 0.0);
     g.set_param(consume, "consume", "mode", 0);
-    sees(0.0, 0.0);
+    sees(0.0, 0.0, 0.0);
     g.set_param(first, "send", "value", 4);
     g.set_param(second, "send", "value", 6);
-    sees(0.0, 10.0);
+    sees(0.0, 10.0, 2.0);
     g.set_param(consume, "consume", "mode", 3);
     let why = g.until("a failed consumption", |g| g.error(consume));
     assert!(why.contains("consume failed"), "{why}");
     g.set_param(consume, "consume", "mode", 0);
-    sees(0.0, 10.0);
+    sees(0.0, 10.0, 2.0);
     g.until("failed process recovery", |g| g.error(consume).is_none().then_some(()));
     g.set_param(consume, "consume", "mode", 4);
     let why = g.until("an invalid clear request", |g| g.error(consume));
     assert!(why.contains("missing"), "{why}");
     g.set_param(consume, "consume", "mode", 0);
-    sees(0.0, 10.0);
+    sees(0.0, 10.0, 2.0);
     g.until("clear failure recovery", |g| g.error(consume).is_none().then_some(()));
+    // A run that clears and answers no `out` frame is seen on the slot it does answer: a fixed
+    // wait here let a starved child miss the mode before it moved on, and the inputs stayed held.
     g.set_param(consume, "consume", "mode", 2);
-    std::thread::sleep(Duration::from_millis(200));
+    g.until("a clearing run that answers nothing", |_| ran.latest().filter(|d| f32s(d)[0] == 2.0));
     g.set_param(consume, "consume", "mode", 0);
-    sees(0.0, 0.0);
+    sees(0.0, 0.0, 0.0);
     g.set_param(second, "send", "value", 7);
-    sees(0.0, 7.0);
+    sees(0.0, 7.0, 1.0);
 }
 
 #[test]
@@ -242,6 +251,18 @@ class LateBoot(goofi.Node):
 fn a_node_missing_a_dependency_is_listed_greyed_rather_than_vanishing() {
     let py = require_python();
     let g = Goofi::new();
+    // An interpreter of this test's own: the install below touches its site-packages, and a file
+    // put in the shared venv's would move the memo key of every probed node for every boot after.
+    let own = tempfile::tempdir().unwrap();
+    let venv = own.path().join("venv");
+    let made = std::process::Command::new(&py.py).args(["-m", "venv", "--without-pip"]).arg(&venv)
+        .env_remove("PYTHONPATH").env_remove("PYTHONHOME").status().unwrap();
+    assert!(made.success(), "a venv of the test's own");
+    let site = goofi_init::site_packages(&venv).expect("the new venv's site-packages");
+    let shared = std::path::Path::new(&py.py).parent().unwrap().parent().unwrap();
+    let shared = goofi_init::site_packages(shared).expect("the test interpreter is a venv");
+    std::fs::write(site.join("goofi_shared.pth"), shared.to_string_lossy().as_bytes()).unwrap();
+    let own_py = goofi_init::venv_python(&venv).expect("the new venv's python").to_string_lossy().into_owned();
     let dir = g.state.mount().join("nodes_signal");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("needs_scipy.py");
@@ -254,7 +275,7 @@ fn a_node_missing_a_dependency_is_listed_greyed_rather_than_vanishing() {
     .unwrap();
 
     let memo = tempfile::tempdir().unwrap();
-    match goofi_python::subproc::probe(&path, &py.py, memo.path()) {
+    match goofi_python::subproc::probe(&path, &own_py, memo.path()) {
         goofi_python::Discovery::Unavailable { type_name, reason } => {
             assert_eq!(type_name, "NeedsScipy");
             assert!(reason.contains(&module), "the reason names the module: {reason}");
@@ -272,16 +293,17 @@ fn a_node_missing_a_dependency_is_listed_greyed_rather_than_vanishing() {
     g.refuse("node add", j!({ "type": "NeedsScipy" }));
 
     // Installed into the interpreter's site-packages, the module lights the node up on the next
-    // refresh: a probe's memo is keyed on that directory, so the install itself moves the key.
-    let venv = std::path::Path::new(&py.py).parent().unwrap().parent().unwrap();
-    let installed = goofi_init::site_packages(venv).expect("the test interpreter is a venv").join(format!("{module}.py"));
-    std::fs::write(&installed, "").unwrap();
-    g.call("library refresh", j!({}));
-    let row = g.call("library list", j!({}))["types"].as_array().unwrap().iter()
-        .find(|t| t["type"] == "signal:NeedsScipy").expect("still in the palette").clone();
-    let _ = std::fs::remove_file(&installed);
+    // probe: a probe's memo is keyed on that directory, so the install itself moves the key.
+    std::fs::write(site.join(format!("{module}.py")), "").unwrap();
+    match goofi_python::subproc::probe(&path, &own_py, memo.path()) {
+        goofi_python::Discovery::Found(found) => assert_eq!(found.manifest.type_name, "NeedsScipy"),
+        goofi_python::Discovery::Unavailable { reason, .. } => panic!("installed, and the probe still answers from before it: {reason}"),
+        goofi_python::Discovery::Skip => panic!("the file was not taken for a node file at all"),
+    }
     // A loadable row says nothing about availability: the index spends that key on greyed rows alone.
-    assert!(row.get("available").is_none(), "installed, refreshed, and still greyed: {row}");
+    let row = g.call("library list", j!({}))["types"].as_array().unwrap().iter()
+        .find(|t| t["type"] != "signal:NeedsScipy").expect("a loadable row").clone();
+    assert!(row.get("available").is_none(), "{row}");
 }
 
 #[test]

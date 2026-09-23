@@ -2,9 +2,7 @@
 //! layouts every pipeline shares, and the 1x1 transparent texture an unwired input samples.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Every texture in the engine.
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -123,7 +121,6 @@ pub struct Gpu {
     layouts: Mutex<HashMap<(bool, usize, usize), Arc<wgpu::PipelineLayout>>>,
     pub queue: wgpu::Queue,
     /// The device's entry in the resource index; before the device, so it leaves first.
-    #[cfg(not(target_arch = "wasm32"))]
     _lease: goofi_core::registry::Lease,
     /// LAST, here and in every struct that holds one: fields drop in declaration order, and a
     /// resource outliving its device is a driver crash rather than an error.
@@ -131,21 +128,9 @@ pub struct Gpu {
 }
 
 /// The ONE device this process renders on, opened at the first ask. Nothing destroys it.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn shared() -> Result<Arc<Gpu>, String> {
     static ONE: OnceLock<Result<Arc<Gpu>, String>> = OnceLock::new();
-    ONE.get_or_init(|| pollster::block_on(Gpu::open(instance())).map(Arc::new)).clone()
-}
-
-/// The instance a device is asked of, and a page's canvas surface is made on.
-pub fn instance() -> wgpu::Instance {
-    // No display handle: this engine never opens a window, and asking for one would refuse
-    // the device on a headless machine — a server, a CI runner — that has a GPU regardless.
-    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-    desc.backends = wgpu::Backends::PRIMARY;
-    // `with_env` LAST, so `WGPU_BACKEND` overrides rather than is overridden — Windows is the
-    // platform with two backends, and a broken ICD on one is a driver away from either.
-    wgpu::Instance::new(desc.with_env())
+    ONE.get_or_init(|| Gpu::open().map(Arc::new)).clone()
 }
 
 /// Held for EVERY operation on that device: a compile, a tick, a birth, a teardown. Lock order is
@@ -162,38 +147,37 @@ pub fn give_back<T>(x: T) {
 }
 
 impl Gpu {
-    /// The device, asked of `instance`: the process blocks on this, a page awaits it.
-    pub async fn open(instance: wgpu::Instance) -> Result<Gpu, String> {
+    fn open() -> Result<Gpu, String> {
+        // No display handle: this engine never opens a window, and asking for one would refuse
+        // the device on a headless machine — a server, a CI runner — that has a GPU regardless.
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::PRIMARY;
+        // `with_env` LAST, so `WGPU_BACKEND` overrides rather than is overridden — Windows is the
+        // platform with two backends, and a broken ICD on one is a driver away from either.
+        let instance = wgpu::Instance::new(desc.with_env());
         let ask = |fallback| {
-            instance.request_adapter(&wgpu::RequestAdapterOptions {
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: fallback,
                 compatible_surface: None,
                 ..Default::default()
-            })
+            }))
         };
         // The software adapter is a slow answer, never no answer — and on Windows it is WARP.
-        let adapter = match ask(false).await {
-            Ok(adapter) => adapter,
-            Err(refused) => ask(true).await.map_err(|_| format!("no GPU adapter answered: {refused}"))?,
-        };
+        let adapter = ask(false)
+            .or_else(|refused| ask(true).map_err(|_| refused))
+            .map_err(|e| format!("no GPU adapter answered: {e}"))?;
         let info = adapter.get_info();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("goofi-graphics"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: wgpu::Trace::Off,
-            })
-            .await
-            .map_err(|e| format!("`{}` refused a device: {e}", info.name))?;
-        // The process log's clock does not exist on wasm32; the page's console is the log there.
-        #[cfg(not(target_arch = "wasm32"))]
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("goofi-graphics"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+        }))
+        .map_err(|e| format!("`{}` refused a device: {e}", info.name))?;
         device.on_uncaptured_error(Arc::new(|e| goofi_core::log::record(goofi_core::log::Source::component("graphics"), goofi_core::log::Level::Error, None, format!("graphics: {e}"))));
-        #[cfg(target_arch = "wasm32")]
-        device.on_uncaptured_error(Arc::new(|e| web_sys::console::error_1(&format!("graphics: {e}").into())));
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("goofi-sampler"),
@@ -303,7 +287,6 @@ impl Gpu {
             blit("tap", FORMAT),
         ];
         Ok(Gpu {
-            #[cfg(not(target_arch = "wasm32"))]
             _lease: goofi_core::registry::lease(
                 goofi_core::registry::Kind::Device,
                 format!("gpu {} ({})", info.name, info.backend),

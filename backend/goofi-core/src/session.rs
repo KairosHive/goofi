@@ -160,14 +160,28 @@ impl Drop for Held {
 /// Hold a new session under `id`. Its directory is built under a part name and renamed into
 /// place with its lock already held, so no sweep ever sees one that is neither locked nor dead.
 pub fn hold(id: &str) -> io::Result<Held> {
+    let at = |what: &'static str| move |e: io::Error| io::Error::new(e.kind(), format!("{what}: {e}"));
     let part = system_base().join(format!("{id}.part"));
     let _ = fs::remove_dir_all(&part);
-    fs::create_dir_all(&part)?;
-    let lock = File::create(part.join("alive.lock"))?;
-    lock.lock()?;
-    fs::rename(&part, system_dir(id))?;
+    fs::create_dir_all(&part).map_err(at("create the part"))?;
+    let lock = File::create(part.join("alive.lock")).map_err(at("create the lock"))?;
+    // Windows refuses to move a folder while a file inside it is open, so there the lock is
+    // taken once the folder is in place; the window before it is the time of one open.
+    let held = (!cfg!(windows)).then_some(lock);
+    if let Some(lock) = &held {
+        lock.lock().map_err(at("take the lock"))?;
+    }
+    fs::rename(&part, system_dir(id)).map_err(at("move the part into place"))?;
+    let lock = match held {
+        Some(lock) => lock,
+        None => {
+            let lock = File::options().read(true).write(true).open(system_dir(id).join("alive.lock")).map_err(at("open the lock"))?;
+            lock.lock().map_err(at("take the lock"))?;
+            lock
+        }
+    };
     let held = Held { id: id.to_string(), lock: Some(lock) };
-    write_record(id, "")?;
+    write_record(id, "").map_err(at("write the record"))?;
     Ok(held)
 }
 

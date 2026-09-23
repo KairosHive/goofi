@@ -6,8 +6,8 @@ import type { ViewerKind } from './kind';
 import { VIEWER_KINDS } from '$lib/api/vocab';
 
 export type ReduceMethod = 'envelope' | 'subsample' | 'area';
-/** The sample width a viewer can draw; the stream is 8-bit only where every viewer accepts it. */
-export type Depth = 'f32' | 'u8';
+/** The sample width a viewer can draw; the stream is as narrow as the widest viewer's ask. */
+export type Depth = 'f32' | 'f16' | 'u8';
 export type DimCmp = 'lt' | 'le' | 'eq' | 'ge' | 'gt';
 export type ViewDtype = 'array' | 'string' | 'table';
 
@@ -33,7 +33,9 @@ export interface ViewSpec {
 
 /** Floor so a 0-px / collapsed layout never asks for a degenerate reduction. */
 export const CAP_FLOOR = 64;
-const MAX_ROWS = 512;
+/** Traces one line plot can show apart; more only saturate it and cost a redraw each. */
+/** The traces a line plot can tell apart, whatever its height: past this, channels are subsampled. */
+const MAX_ROWS = 32;
 const MAX_POINTS = 4096;
 
 function px(v: number): number {
@@ -86,14 +88,16 @@ export function viewSpecForKind(kind: ViewerKind, width: number, height: number)
 	const ndim = ndimOf(kind);
 	if (kind === 'line') {
 		// For 1-D, dim 0 and -1 collide on the bridge; it resolves by richness (envelope wins).
+		// Half floats: 11 significant bits are more than a device pixel resolves, for half the bytes.
 		return {
 			dtype: 'array',
 			ndim,
 			dims: [],
 			reduce: [
-				{ dim: 0, max: Math.min(h, MAX_ROWS), method: 'subsample' },
+				{ dim: 0, max: MAX_ROWS, method: 'subsample' },
 				{ dim: -1, max: w, method: 'envelope' }
-			]
+			],
+			depth: 'f16'
 		};
 	}
 	if (kind === 'image') {

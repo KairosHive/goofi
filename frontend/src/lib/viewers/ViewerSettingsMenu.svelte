@@ -143,6 +143,5 @@
 		max-height: 70dvh;
 		display: flex;
 		flex-direction: column;
-		backdrop-filter: blur(10px);
 	}
 </style>

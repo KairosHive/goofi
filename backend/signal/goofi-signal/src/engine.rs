@@ -264,17 +264,24 @@ impl SignalEngine {
     ) -> Vec<(runtime::ServiceName, EventId)> {
         // The ordering guarantee is per TARGET, not per sequence: a consumer whose own sequence
         // has not applied this wire is not a subscriber yet, which is what the phases prevent.
-        view.ringers(producer, slot)
-            .into_iter()
-            .filter(|r| {
-                let key = match r.via {
-                    Via::Slot(s) => Slot::In(s),
-                    Via::Binding(b) => Slot::Bind(b.key.clone()),
-                };
-                !self.wire.unapplied(&(r.consumer, key), (producer, slot))
-            })
-            .filter_map(|r| Some((goofi_transport::door_of(view, r.consumer)?, r.event_id)))
-            .collect()
+        let ringers = view.ringers(producer, slot).into_iter().filter(|r| {
+            let key = match r.via {
+                Via::Slot(s) => Slot::In(s),
+                Via::Binding(b) => Slot::Bind(b.key.clone()),
+            };
+            !self.wire.unapplied(&(r.consumer, key), (producer, slot))
+        });
+        goofi_transport::targets_of(view, producer, slot, ringers)
+    }
+
+    /// Tell a node of this engine the doors one output rings NOW: a watch moved, outside any wire
+    /// sequence, so the set is sent whole.
+    fn retarget(&mut self, view: &GraphView<'_>, uid: Uid, slot: &'static str) {
+        if !view.nodes.get(&uid).is_some_and(|n| n.engine == self.id()) {
+            return;
+        }
+        let targets = self.out_targets(view, uid, slot);
+        self.wire.send(uid, runtime::Control::OutSlot { slot: slot.to_string(), targets });
     }
 }
 
@@ -414,14 +421,20 @@ impl Engine for SignalEngine {
                 self.wire.forget_planned(&key);
                 self.replan(view, key);
             }
-            // A reborn node owns none of its predecessor's ports, so it is told the set again.
+            // A reborn node owns none of its predecessor's ports, so it is told the set again —
+            // its recordings, and the view doors its watched outputs ring.
             self.record_slots(view, uid);
+            let watched = view.nodes.get(&uid).map(|n| n.watched.clone()).unwrap_or_default();
+            for slot in watched {
+                self.retarget(view, uid, slot);
+            }
         }
         for t in touched {
             match t {
                 Touched::Slot(uid, slot) => self.replan(view, (*uid, Slot::In(slot))),
                 Touched::Param(uid, key) => self.replan(view, (*uid, Slot::Bind(key.clone()))),
                 Touched::Record(uid) => self.record_slots(view, *uid),
+                Touched::Watch(uid, slot) => self.retarget(view, *uid, slot),
             }
         }
         for key in std::mem::take(&mut self.pending_advance) {

@@ -126,7 +126,14 @@ fn main() {
     // there — and the server runs beside it; where none does, it serves as it always did.
     // Always a goofi thread, never the process's own: a main-thread stack is the PE header's on
     // Windows, and opening a service needs more than that.
-    let served = goofi_transport::thread("goofi-serve").spawn(serve).expect("the serve thread");
+    // A server that dies must end the process: the window loop below would otherwise outlive it.
+    let served = goofi_transport::thread("goofi-serve")
+        .spawn(|| {
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(serve)).is_err() {
+                std::process::exit(101);
+            }
+        })
+        .expect("the serve thread");
     if let Some(windows) = windows {
         windows.run();
     }

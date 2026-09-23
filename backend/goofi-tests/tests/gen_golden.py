@@ -53,9 +53,10 @@ cases["table"] = Data(
     {},
 )
 cases["table_empty"] = Data(DataType.TABLE, {}, {})
-# The viewer hop's 8-bit frame — what `goofi_codec::encode_u8` writes, and the one array case
-# whose body is not <f4.
+# The viewer hop's 8-bit frame — what `goofi_codec::encode_u8` writes.
 cases["u8_image"] = arr(np.array([[[0, 255, 128], [255, 0, 128]]], dtype=np.uint8))
+# The line viewers' half-float hop — what `goofi_codec::encode_f16` writes.
+cases["f16_line"] = arr(np.array([1.0, 65504.0, 2.0**-14, 2.0**-24], dtype=np.float16))
 
 out = {}
 for name, d in cases.items():

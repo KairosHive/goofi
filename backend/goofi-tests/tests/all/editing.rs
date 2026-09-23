@@ -133,6 +133,22 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     });
     let why = g.refuse("variable entry edit", j!({ "name": "desk.level", "value": 0.5 }));
     assert!(why.contains("follows") && why.contains("carrier.out"), "{why}");
+    // An expression READING the followed variable is handed each pick through the expression it
+    // compiled once: a moved value refreshes the binding, it does not rebuild it.
+    let evaluator = std::sync::Arc::new(goofi_tests::FirstVar::default());
+    g.state.graph.lock().unwrap().set_evaluator(evaluator.clone());
+    let reader = g.add("LFO");
+    g.call("node param edit", j!({ "node": hex(reader), "param": "lfo/amplitude", "expression": "variables.desk.level" }));
+    let mut ev = g.events();
+    let mut amplitude = |_: &Goofi| {
+        ev.next("param_values")["nodes"][hex(reader)]["values"]["lfo"]["amplitude"].as_f64()
+    };
+    let first = g.until("the reader to take the followed value", |g| amplitude(g).filter(|v| *v != 0.0));
+    let compiled = evaluator.compiles.load(std::sync::atomic::Ordering::Relaxed);
+    g.until("the reader to take the next pick", |g| amplitude(g).filter(|v| *v != first));
+    assert_eq!(evaluator.compiles.load(std::sync::atomic::Ordering::Relaxed), compiled,
+               "a moved value recompiled the reader's expression");
+    g.call("node remove", j!({ "node": hex(reader) }));
     g.call("node edit", j!({ "node": hex(osc), "name": "lfo" }));
     assert_eq!(g.doc()["variables"]["desk.level"]["source"]["reference"], j!("lfo.out"), "the source followed the rename");
     g.call("node edit", j!({ "node": hex(osc), "name": "carrier" }));
@@ -307,7 +323,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let built = g.doc();
 
     // A compound is ONE step though it is an add plus a remove composed.
-    let expected_steps = 54 + 2 * goofi_core::variables::ControlKind::ALL.len();
+    let expected_steps = 57 + 2 * goofi_core::variables::ControlKind::ALL.len();
     let mut steps = 0;
     while g.call("undo", j!({}))["changed"] == true {
         steps += 1;
@@ -844,8 +860,7 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
                (&j!("reference"), &j!("nd('signal')"), &j!(null)), "{d}");
     // The value lands with NO evaluator in this process: the runtime copied the frame's one element.
     g.until("the referenced value lands", |_| {
-        let p = ev.next("param_values");
-        (p["node"] == hex(consumer) && p["values"]["common"]["max_frequency"] == j!(0.25)).then_some(())
+        (ev.next("param_values")["nodes"][hex(consumer)]["values"]["common"]["max_frequency"] == j!(0.25)).then_some(())
     });
     // A rename follows into the reference, as it does into an expression.
     g.call("node edit", j!({ "node": hex(level), "name": "gain" }));
@@ -856,8 +871,7 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     g.set_param(wide, "constant", "length", 8);
     param(&g, j!({ "reference": "wide.out[7]" }));
     g.until("an indexed reference reads a wide frame without Python", |_| {
-        let p = ev.next("param_values");
-        (p["node"] == hex(consumer) && p["values"]["common"]["max_frequency"] == j!(0.75)).then_some(())
+        (ev.next("param_values")["nodes"][hex(consumer)]["values"]["common"]["max_frequency"] == j!(0.75)).then_some(())
     });
     g.call("node edit", j!({ "node": hex(wide), "name": "bank" }));
     field(&mut ev, "the indexed reference follows a rename", &|d| d["reference"] == j!("bank.out[7]"));
@@ -871,12 +885,15 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     g.until("the shape error", |g| line(g).contains("one element").then_some(()));
     // A literal on a driven param switches it to constant; both texts stay retained, and a mode
     // alone brings the reference back.
+    // A value edit echoes no descriptor: the document carries the mode it switched.
     param(&g, j!({ "value": 7 }));
-    let d = field(&mut ev, "the literal took over", &|d| d["mode"] == j!("constant"));
-    assert_eq!((&d["value"], &d["reference"], &d["expression"]),
-               (&j!(7.0), &j!("signal.out"), &j!("nd('signal')")), "{d}");
+    let d = g.doc()["nodes"][hex(consumer)]["params"]["common"]["max_frequency"].clone();
+    assert_eq!((&d["value"], &d["mode"], &d["ref"], &d["expr"]),
+               (&j!(7.0), &j!("constant"), &j!("signal.out"), &j!("nd('signal')")), "{d}");
     // A mode alone switches among what is retained: the reference is still `signal.out`, so its
-    // shape error comes back. An empty reference clears that text and nothing else.
+    // shape error comes back. An empty reference clears that text and nothing else. The echoes
+    // of the reference edits above are still queued, so the subscription is taken afresh.
+    ev = g.events();
     param(&g, j!({ "mode": "reference" }));
     let d = field(&mut ev, "the retained reference is live", &|d| d["mode"] == j!("reference"));
     assert_eq!(d["reference"], j!("signal.out"), "{d}");
@@ -897,13 +914,13 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     let errors_of = |p: &serde_json::Value| p["errors"]["common"].get("max_frequency").cloned();
     param(&g, j!({ "reference": "signal.out" }));
     g.until("the shape error reaches the live plane", |_| {
-        let p = live.next("param_values");
-        (p["node"] == hex(consumer) && errors_of(&p).is_some_and(|e| e.as_str().is_some_and(|m| m.contains("one element")))).then_some(())
+        let p = live.next("param_values")["nodes"][hex(consumer)].take();
+        errors_of(&p).is_some_and(|e| e.as_str().is_some_and(|m| m.contains("one element"))).then_some(())
     });
     param(&g, j!({ "reference": "gain.out" }));
     g.until("…and the clear does too", |_| {
-        let p = live.next("param_values");
-        (p["node"] == hex(consumer) && errors_of(&p).is_none()).then_some(())
+        let p = live.next("param_values")["nodes"][hex(consumer)].take();
+        (!p.is_null() && errors_of(&p).is_none()).then_some(())
     });
     // A deleted producer leaves the reference standing with its error; undo clears it.
     g.call("node remove", j!({ "node": hex(level) }));
@@ -917,8 +934,7 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     });
     let value_of = |p: &serde_json::Value| p["values"]["common"].get("max_frequency").cloned();
     g.until("…and its value lands again", |_| {
-        let p = fresh.next("param_values");
-        (p["node"] == hex(consumer) && value_of(&p) == Some(j!(0.25))).then_some(())
+        (value_of(&fresh.next("param_values")["nodes"][hex(consumer)]) == Some(j!(0.25))).then_some(())
     });
     // Re-pointing a reference at a SILENT producer must not hand it the old producer's last frame:
     // the mailbox starts empty, the literal stands, and the preview is withdrawn.
@@ -926,8 +942,8 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     g.call("node edit", j!({ "node": hex(quiet), "name": "quiet" }));
     param(&g, j!({ "reference": "quiet.out" }));
     g.until("the value is withdrawn", |_| {
-        let p = fresh.next("param_values");
-        (p["node"] == hex(consumer) && value_of(&p).is_none()).then_some(())
+        let p = fresh.next("param_values")["nodes"][hex(consumer)].take();
+        (!p.is_null() && value_of(&p).is_none()).then_some(())
     });
 }
 

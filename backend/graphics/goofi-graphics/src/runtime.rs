@@ -14,7 +14,7 @@ use crate::gpu::{padded_row, Gpu, Want};
 use crate::half::Tapped;
 use crate::resources::{State, Slot, Spare, give_back, rows_into};
 use crate::plan::{Input, Plan, Pass};
-use crate::Host;
+use crate::shader;
 
 /// What the graph asks of the render thread. Applied at the top of a tick, so no op waits on one.
 pub enum Cmd {
@@ -35,7 +35,7 @@ pub struct Stats {
 pub struct Runtime {
     plan: Plan,
     states: HashMap<Uid, State>,
-    host: Arc<dyn Host>,
+    time: Arc<goofi_core::time::Time>,
     stats: Arc<Stats>,
     /// The window thread, where a stage with a window on the machine's screen sends its frame.
     pub ui: Option<goofi_window::Ui>,
@@ -57,7 +57,7 @@ pub struct Runtime {
 impl Runtime {
     pub fn new(
         gpu: Arc<Gpu>,
-        host: Arc<dyn Host>,
+        time: Arc<goofi_core::time::Time>,
         stats: Arc<Stats>,
         troubles: Troubles,
         shared: Arc<goofi_control::Shared>,
@@ -66,7 +66,7 @@ impl Runtime {
             gpu,
             plan: Plan::default(),
             states: HashMap::new(),
-            host,
+            time,
             stats,
             ui: None,
             presenting: HashMap::new(),
@@ -121,12 +121,19 @@ impl Runtime {
         }
     }
 
+    /// Wait for the device to draw what the ticks so far submitted: what makes a tick under the
+    /// external clock mean one drawn frame, where the timer clock lets the device run behind.
+    pub fn finish(&mut self) {
+        let _gate = crate::gpu::gate();
+        let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
     /// One tick: upload what arrived, write the uniforms, draw every demanded stage, and read
     /// back the ones with a reader.
     pub fn tick(&mut self) {
         self.drain_inbox();
         let began = Instant::now();
-        let t = self.host.now();
+        let t = self.time.now();
         let recording = self.recorder.as_ref().is_some_and(|r| r.running());
         self.follow_record(recording, t);
         let want = self.plan.demanded(recording);
@@ -183,7 +190,14 @@ impl Runtime {
                     state.upload(&self.gpu, k, &up);
                 }
             }
-            state.write_uniforms(&self.gpu, t, stage.size, stage.decls, &stage.params);
+            self.gpu.queue.write_buffer(&state.time, 0, &(t as f32).to_le_bytes());
+            self.gpu.queue.write_buffer(&state.frame, 0, &state.count.to_le_bytes());
+            let res = [(stage.size.0 as f32).to_le_bytes(), (stage.size.1 as f32).to_le_bytes()].concat();
+            self.gpu.queue.write_buffer(&state.resolution, 0, &res);
+            if let Some(buf) = &state.params {
+                let bytes = shader::uniform_bytes(stage.decls, &stage.params, &state.ranges);
+                self.gpu.queue.write_buffer(buf, 0, &bytes);
+            }
             if let Some(produced) = &produced {
                 if state.submitted != Some(produced.index) {
                     if let crate::producer::Content::Pixels(pixels) = &produced.content {
@@ -212,7 +226,45 @@ impl Runtime {
                     })
                     .cloned()
                     .collect();
-                self.states[&stage.uid].draw(&self.gpu, &mut encoder, pipeline, &views);
+                let state = &self.states[&stage.uid];
+                let group0 = state.group0(&self.gpu);
+                let group1 = self.gpu.texture_group(&views);
+                let held: Vec<wgpu::TextureView> = state.buffers.iter().map(|b| b[0].view.clone()).collect();
+                let group2 = self.gpu.texture_group(&held);
+                // Cloned, so the readback below may take `states` mutably.
+                let out_view = state.out.as_ref().expect("ensure_out made it").view.clone();
+                // The output, then one target per state buffer — the order the prelude writes them in.
+                let targets: Vec<wgpu::TextureView> =
+                    std::iter::once(out_view.clone()).chain(state.buffers.iter().map(|b| b[1].view.clone())).collect();
+                {
+                    let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = targets
+                        .iter()
+                        .map(|view| {
+                            Some(wgpu::RenderPassColorAttachment {
+                                view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })
+                        })
+                        .collect();
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: None,
+                        color_attachments: &attachments,
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, &group0, &[]);
+                    pass.set_bind_group(1, &group1, &[]);
+                    pass.set_bind_group(2, &group2, &[]);
+                    pass.draw(0..3, 0..1);
+                }
             }
             let out_view = self.states[&stage.uid].out.as_ref().expect("output allocated").view.clone();
             self.stats.stages.fetch_add(1, Ordering::Relaxed);
@@ -469,4 +521,11 @@ fn present(
         // other jobs. What arrived while this drew is picked up by the next tick's post.
         cell.posted.store(false, Ordering::Release);
     });
+}
+
+/// A stage's uniform block length, measured by the writer so there is one layout.
+pub fn params_len(manifest: &goofi_node::NodeManifest) -> usize {
+    let zeros: Vec<AtomicU64> = manifest.params.iter().map(|_| AtomicU64::new(0)).collect();
+    let ranges = vec![[0.0, 1.0]; shader::array_inputs(manifest).count()];
+    shader::uniform_bytes(manifest.params, &zeros, &ranges).len()
 }

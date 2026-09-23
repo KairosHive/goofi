@@ -5,6 +5,7 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { turnedBy } from './knob';
 	import { claimFieldControlId } from './field';
+	import { useLiveValue } from './liveValue.svelte';
 
 	let {
 		value,
@@ -18,7 +19,7 @@
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
 		value: number;
-		onChange: (v: number) => void;
+		onChange: (v: number) => unknown;
 		min?: number;
 		max?: number;
 		step?: number;
@@ -28,9 +29,13 @@
 
 	const ownId = $props.id();
 	const fieldId = claimFieldControlId(ownId);
+	const live = useLiveValue<number>(
+		() => value,
+		(v) => onChange(v)
+	);
 
 	const span = $derived(max - min || 1);
-	const fraction = $derived(Math.min(1, Math.max(0, (value - min) / span)));
+	const fraction = $derived(Math.min(1, Math.max(0, (live.value - min) / span)));
 	// A knob sweeps 270°, from the lower left round to the lower right.
 	const angle = $derived(-135 + fraction * 270);
 	const stp = $derived(step > 0 ? step : span / 200);
@@ -39,18 +44,20 @@
 
 	function down(e: PointerEvent): void {
 		if (disabled) return;
-		from = { y: e.clientY, value };
+		live.begin();
+		from = { y: e.clientY, value: live.value };
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 		e.preventDefault();
 	}
 
 	function move(e: PointerEvent): void {
 		if (!from) return;
-		onChange(turnedBy(from.value, e.clientY - from.y, min, max, stp));
+		live.commit(turnedBy(from.value, e.clientY - from.y, min, max, stp));
 	}
 
 	function up(): void {
 		from = null;
+		live.end();
 	}
 
 	function key(e: KeyboardEvent): void {
@@ -58,7 +65,7 @@
 		const by = e.key === 'ArrowUp' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowDown' || e.key === 'ArrowLeft' ? -1 : 0;
 		if (by === 0) return;
 		e.preventDefault();
-		onChange(turnedBy(value + by * stp, 0, min, max, stp));
+		live.commit(turnedBy(live.value + by * stp, 0, min, max, stp));
 	}
 </script>
 
@@ -71,7 +78,7 @@
 		aria-label={label}
 		aria-valuemin={min}
 		aria-valuemax={max}
-		aria-valuenow={value}
+		aria-valuenow={live.value}
 		aria-disabled={disabled}
 		onpointerdown={down}
 		onpointermove={move}

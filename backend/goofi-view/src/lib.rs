@@ -113,19 +113,24 @@ pub struct AxisReduce {
 /// the one kernel every viewer family can draw.
 pub const UNDECLARED_MAX: usize = 512;
 
+/// The most elements an undeclared preview carries over ALL its axes — a 512² image — so a frame
+/// with many axes cannot cost the stream's whole rate through the two the cap misses.
+pub const UNDECLARED_BUDGET: usize = UNDECLARED_MAX * UNDECLARED_MAX;
+
 /// What a producer is asked to fit its readback into for a reader that declared nothing: ONE
 /// texel, the cheapest frame that is still a frame. No pixels were asked for, so the metadata is
 /// the whole product.
 pub const UNDECLARED_BOX: (u32, u32) = (1, 1);
 
-/// The sample depth a viewer can draw: the wire's f32, or 8-bit texels, which cost a quarter of
-/// the bytes and are all an image viewer can show.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// The sample depth a viewer can draw, narrowest first: 8-bit texels are all an image shows, a
+/// half float is more than a plot's pixel resolves, and f32 is the wire itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Depth {
+    U8,
+    F16,
     #[default]
     F32,
-    U8,
 }
 
 /// One viewer's full declaration: what it can draw + what it wants reduced.
@@ -142,8 +147,8 @@ pub struct ViewSpec {
     /// Desired per-axis reductions.
     #[serde(default)]
     pub reduce: Vec<AxisReduce>,
-    /// The depth this viewer can draw. One stream serves every viewer, so 8-bit is sent only
-    /// where every admitted one accepts it.
+    /// The depth this viewer can draw. One stream serves every viewer, so it is as narrow as
+    /// the widest admitted ask.
     #[serde(default)]
     pub depth: Depth,
 }
@@ -165,19 +170,6 @@ pub fn canon_dim(dim: i32, ndim: usize) -> Option<usize> {
 }
 
 impl ViewSpec {
-    /// What stands in for a viewer that has declared nothing yet: a preview, never the full frame,
-    /// so a slot nobody has sized cannot cost the stream's whole rate.
-    pub fn undeclared() -> ViewSpec {
-        let cap = |dim| AxisReduce { dim, max: UNDECLARED_MAX, method: ReduceMethod::Subsample };
-        ViewSpec {
-            dtype: ViewDtype::Array,
-            ndim: Vec::new(),
-            dims: Vec::new(),
-            reduce: vec![cap(0), cap(-1)],
-            depth: Depth::F32,
-        }
-    }
-
     /// Whether this viewer can draw `frame`, and so joins the merge.
     pub fn admits<R: Reducible + ?Sized>(&self, frame: &R) -> bool {
         if frame.dtype_tag() != self.dtype.tag() {
@@ -223,12 +215,31 @@ pub struct MergedViewSpec {
 /// Merge N viewers' specs into ONE concrete plan for THIS frame: specs that do not admit the
 /// frame drop out, and each canonical dim folds to `max(max)` plus the union of the kernels.
 pub fn plan<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> MergedViewSpec {
-    // Nothing here can draw this frame, so nothing here has asked for it: the undeclared cap
+    // Nothing here can draw this frame, so nothing here has asked for it: the undeclared preview
     // stands in, exactly as it does for a reader that declared nothing at all.
     let (mut axes, depth) =
-        fold_axes(specs, frame).or_else(|| fold_axes(&[ViewSpec::undeclared()], frame)).unwrap_or_default();
+        fold_axes(specs, frame).unwrap_or_else(|| (undeclared_axes(frame.shape()), Depth::F32));
     aspect_preserve_area(&mut axes, frame.shape());
     MergedViewSpec { axes, depth }
+}
+
+/// The preview for a reader that declared nothing, never the full frame: every axis capped at
+/// [`UNDECLARED_MAX`], then the largest halved until the frame fits [`UNDECLARED_BUDGET`].
+pub fn undeclared_axes(shape: &[usize]) -> Vec<PlannedAxis> {
+    let mut caps: Vec<usize> = shape.iter().map(|&n| n.clamp(1, UNDECLARED_MAX)).collect();
+    // Checked: eight axes at the cap overflow a plain product, and an overflow reads as "fits".
+    let over = |caps: &[usize]| caps.iter().try_fold(1usize, |p, &c| p.checked_mul(c)).is_none_or(|p| p > UNDECLARED_BUDGET);
+    while over(&caps) {
+        let Some((largest, _)) = caps.iter().enumerate().max_by_key(|(_, &c)| c) else { break };
+        caps[largest] = (caps[largest] / 2).max(1);
+    }
+    shape
+        .iter()
+        .zip(caps)
+        .enumerate()
+        .filter(|(_, (&n, cap))| *cap < n)
+        .map(|(dim, (_, max))| PlannedAxis { dim, max, method: ReduceMethod::Subsample })
+        .collect()
 }
 
 /// Every admitted viewer's asks, folded per dim: `max(max)` and the union of the kernels. What a
@@ -239,13 +250,13 @@ fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<(Ve
     let mut order: Vec<usize> = Vec::new(); // first-seen dim order → stable output
     let mut folded: HashMap<usize, (usize, MethodSet)> = HashMap::new();
     let mut admitted = 0usize;
-    let mut every_u8 = true;
+    let mut depth = Depth::U8;
     for spec in specs {
         if !spec.admits(frame) {
             continue;
         }
         admitted += 1;
-        every_u8 &= spec.depth == Depth::U8;
+        depth = depth.max(spec.depth);
         for r in &spec.reduce {
             let Some(d) = canon_dim(r.dim, ndim) else {
                 continue;
@@ -265,7 +276,7 @@ fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<(Ve
             PlannedAxis { dim: d, max: mx, method: set.resolve() }
         })
         .collect();
-    (admitted > 0).then_some((axes, if every_u8 { Depth::U8 } else { Depth::F32 }))
+    (admitted > 0).then_some((axes, depth))
 }
 
 /// What a slot's readers want of its frames: the box to fit the readback into, and the sample

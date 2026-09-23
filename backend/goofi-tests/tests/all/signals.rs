@@ -894,7 +894,7 @@ fn a_drawing_widget_reaches_the_patch_as_a_frame() {
     let g = Goofi::new();
     // Binding an expression COMPILES it, which wants an evaluator present; reading a bare variable
     // does not, so this one is never asked what `variables.pad.sketch` means.
-    g.state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(goofi_tests::FirstVar));
+    g.state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(goofi_tests::FirstVar::default()));
     g.call("control add", j!({ "group": "pad", "kind": "paint", "element": "sketch" }));
     let node = g.add("Drawing");
     let bound = g.call("node param edit", j!({ "node": hex(node), "param": "drawing/image",

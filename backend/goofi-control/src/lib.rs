@@ -416,7 +416,7 @@ impl<H: Half> Control<H> {
             let bound = self.binds.iter().any(|b| b.param == i);
             let raised = self.pulsed.iter().any(|(p, _)| *p == i);
             if !bound && !raised {
-                self.params[i].store(c.scalar().to_bits(), Ordering::Relaxed);
+                self.params[i].store(scalar(c).to_bits(), Ordering::Relaxed);
             }
         }
         let mut pass = Pass::default();
@@ -681,7 +681,7 @@ impl<H: Half> Control<H> {
         let evaluator = self.shared.evaluator.lock().unwrap().clone();
         let t = self.time.now();
         let (value, error) = match b.expr.evaluate(evaluator.as_deref(), t, target) {
-            Ok(Some(v)) if !v.scalar().is_finite() => (None, Some(format!("evaluated to {}", v.scalar()))),
+            Ok(Some(v)) if !scalar(&v).is_finite() => (None, Some(format!("evaluated to {}", scalar(&v)))),
             Ok(v) => (v, None),
             Err(e) => (None, Some(e)),
         };
@@ -698,7 +698,7 @@ impl<H: Half> Control<H> {
             self.record_error(key, error, pass);
             return;
         }
-        self.params[param].store(value.as_ref().unwrap_or(target).scalar().to_bits(), Ordering::Relaxed);
+        self.params[param].store(scalar(value.as_ref().unwrap_or(target)).to_bits(), Ordering::Relaxed);
         pass.values |= match value {
             Some(v) => self.evaluated.insert(key.clone(), v.clone()).as_ref() != Some(&v),
             None => self.evaluated.shift_remove(&key).is_some(),
@@ -716,13 +716,24 @@ struct Pass {
     errors: Vec<(ParamKey, Option<String>)>,
 }
 
+/// A param's scalar as an engine reads it: a number as itself, a bool as 0/1, an option as its
+/// index, free text as 0, and a pulse — which holds no value — as 0.
+pub fn scalar(p: &Param) -> f64 {
+    p.as_f64().unwrap_or_else(|| match p {
+        Param::Str { value, options: Some(options), .. } => {
+            options.iter().position(|o| o == value).map_or(0.0, |i| i as f64)
+        }
+        _ => 0.0,
+    })
+}
+
 /// The record's value for one declared param, the declared default where the record has none.
 pub fn param_of(params: &ParamGroups, d: &ParamDecl) -> Param {
     goofi_node::param(params, d.group, d.name).cloned().unwrap_or_else(|| d.spec.to_param())
 }
 
 pub fn scalar_of(params: &ParamGroups, d: &ParamDecl) -> f64 {
-    param_of(params, d).scalar()
+    scalar(&param_of(params, d))
 }
 
 /// A `Str` param's text; every other kind — a number, a bool, a valueless pulse — has none, and

@@ -39,6 +39,20 @@ function checkMagic(view: DataView, off: number): void {
 	}
 }
 
+/** The tag of a frame that carries a held frame's per-emit stamps (`time`, `index`, `ufreq`) and
+ * no body: the reducer sends it in place of a frame that says what the last one said. */
+const STAMPS_TAG = 4;
+
+/** The stamps of a stamps frame, or null for a frame with data in it. */
+export function decodeStamps(buf: ArrayBuffer): Record<string, unknown> | null {
+	const view = new DataView(buf);
+	checkMagic(view, 0);
+	if (view.getUint8(5) !== STAMPS_TAG) return null;
+	const metaLen = view.getUint32(6, true);
+	const m = metaLen > 0 ? msgpackDecode(new Uint8Array(buf, 14, metaLen)) : {};
+	return m && typeof m === 'object' ? (m as Record<string, unknown>) : {};
+}
+
 /** Decode an encoded GOOF buffer into a DataFrame. */
 export function decodeData(buf: ArrayBuffer | Uint8Array): DataFrame {
 	const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
@@ -68,7 +82,14 @@ function decodeInto(view: DataView, off: number): DataFrame {
 	const bodyEnd = bodyStart + bodyLen;
 	let data: ArrayData | string | Record<string, DataFrame>;
 	if (dtype === 'ARRAY') {
-		data = decodeArray(view, bodyStart, bodyEnd);
+		const arr = decodeArray(view, bodyStart, bodyEnd);
+		// A half-float hop leaves here as f32, body and meta, so nothing downstream learns a
+		// second float width.
+		if (arr.dtype === '<f2') {
+			arr.dtype = '<f4';
+			meta['dtype'] = 'float32';
+		}
+		data = arr;
 	} else if (dtype === 'STRING') {
 		data = decoder.decode(new Uint8Array(view.buffer, view.byteOffset + bodyStart, bodyLen));
 	} else {
@@ -127,12 +148,37 @@ function readTypedArray(
 	const kind = tail.charAt(0);
 	const itemsize = parseInt(tail.slice(1), 10);
 	const count = nBytes / itemsize;
-	// Slice into a fresh buffer: the consumer outlives the WS message frame, which may be reused.
+	// The reducer's 8-bit hop for an image viewer: bytes need no alignment, so the view sits on the
+	// message buffer itself.
+	if (kind + itemsize === 'u1') return new Uint8Array(buffer, byteOffset, count);
+	// Slice into a fresh buffer: an f32 view must be 4-byte aligned, which the body offset is not.
 	const slice = buffer.slice(byteOffset, byteOffset + nBytes);
 	if (kind + itemsize === 'f4') return new Float32Array(slice, 0, count);
-	// The one exception to an f32 wire: the reducer's 8-bit hop for an image viewer.
-	if (kind + itemsize === 'u1') return new Uint8Array(slice, 0, count);
-	throw new Error(`Unsupported numpy dtype: ${dtypeStr} (the wire is f32, and u8 on the viewer hop)`);
+	// The reducer's half-float hop for a line viewer, widened here so nothing downstream changes.
+	if (kind + itemsize === 'f2') return expandHalf(slice, count);
+	throw new Error(`Unsupported numpy dtype: ${dtypeStr} (the wire is f32, and u8 or f16 on the viewer hop)`);
+}
+
+/** `count` half floats at the start of `buf`, widened to f32 by the engine where it has
+ * `Float16Array` and bit by bit where it does not. */
+function expandHalf(buf: ArrayBufferLike, count: number): Float32Array {
+	const F16 = (globalThis as { Float16Array?: new (b: ArrayBufferLike, o: number, n: number) => ArrayLike<number> })
+		.Float16Array;
+	if (F16) return new Float32Array(new F16(buf, 0, count));
+	const bits = new Uint16Array(buf, 0, count);
+	const out = new Float32Array(count);
+	for (let i = 0; i < count; i++) out[i] = halfToFloat(bits[i]);
+	return out;
+}
+
+/** One IEEE 754 half float, from its bits. */
+function halfToFloat(bits: number): number {
+	const sign = bits & 0x8000 ? -1 : 1;
+	const exp = (bits >> 10) & 0x1f;
+	const frac = bits & 0x3ff;
+	if (exp === 0) return sign * frac * 2 ** -24;
+	if (exp === 0x1f) return frac ? NaN : sign * Infinity;
+	return sign * (1 + frac / 1024) * 2 ** (exp - 15);
 }
 
 export function isArrayFrame(f: DataFrame): f is DataFrame & { data: ArrayData } {

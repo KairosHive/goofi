@@ -28,8 +28,6 @@ mod param_modulation;
 mod plugins;
 mod python;
 #[cfg(feature = "embed")]
-mod python_gil_tripwire;
-#[cfg(feature = "embed")]
 mod python_init_order;
 #[cfg(feature = "embed")]
 mod python_module_hygiene;

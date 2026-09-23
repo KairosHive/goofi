@@ -54,7 +54,7 @@ class HarmonicGeometry(goofi.Node):
     OUTPUTS = {"geometry": goofi.DataType.ARRAY}
     PARAMS = {
         "geometry": {
-            "method": goofi.StringParam("trace_3d", METHODS, doc="Biotuner geometry method. See the cookbook for continuous and discrete methods."),
+            "method": goofi.StringParam("trace_3d", METHODS, doc="Biotuner geometry method, continuous or discrete."),
             "points": goofi.IntParam(512, 32, 4096, doc="Curve or point-cloud sample count. More points cost more CPU and transport."),
             "resolution": goofi.IntParam(96, 16, 256, doc="Field side length; meshes use at most 64 samples per side."),
             "denominator": goofi.IntParam(8, 1, 16, doc="Largest rational denominator for closed curves, knots, surfaces, and integer structure."),

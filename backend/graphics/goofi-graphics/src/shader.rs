@@ -158,13 +158,6 @@ pub fn validate(full: &str) -> Result<(), String> {
         .map_err(|e| e.emit_to_string(full))
 }
 
-/// A stage's uniform block length, measured by the writer so there is one layout.
-pub fn params_len(manifest: &NodeManifest) -> usize {
-    let zeros: Vec<AtomicU64> = manifest.params.iter().map(|_| AtomicU64::new(0)).collect();
-    let ranges = vec![[0.0, 1.0]; array_inputs(manifest).count()];
-    uniform_bytes(manifest.params, &zeros, &ranges).len()
-}
-
 /// One stage's `Params` buffer: a 4-byte scalar per declared param, then the range each ARRAY
 /// input's last frame spanned, padded to 16. Every field is a scalar, so the layout needs no
 /// layouter.

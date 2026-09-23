@@ -1,6 +1,5 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/audio_thread_priority"]
 members = [
     # First, because it is what makes the rest buildable: `cargo run -p goofi-init` provisions the
     # interpreters pyo3 links against. It depends on nothing, so it can never trigger that build.
@@ -21,7 +20,6 @@ members = [
     "backend/audio/goofi-audio-sdk",
     "backend/audio/goofi-audio",
     "backend/graphics/goofi-graphics",
-    "backend/graphics/goofi-graphics-web",
     "backend/signal/goofi-signal",
     "backend/signal/goofi-python",
     "backend/signal/goofi-pymod",
@@ -69,4 +67,4 @@ opt-level = 2
 
 [patch.crates-io]
 # Direct Linux scheduling must not install RTKit's process-wide CPU limit.
-audio_thread_priority = { path = "vendor/audio_thread_priority" }
+audio_thread_priority = { git = "https://github.com/dav0dea/audio_thread_priority", branch = "goofi-direct-first" }

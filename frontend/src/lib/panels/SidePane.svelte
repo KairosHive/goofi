@@ -118,8 +118,7 @@
 		/* `inline-size`, never `size`: an (orientation:) query needs the block axis uncontained, or
 		   the portrait branch below would answer against the pane instead of `.panel-body`. */
 		container-type: inline-size;
-		background: color-mix(in srgb, var(--surface-1) 96%, transparent);
-		backdrop-filter: blur(8px);
+		background: var(--surface-1);
 		border-left: 1px solid var(--border);
 		display: flex;
 		flex-direction: column;
