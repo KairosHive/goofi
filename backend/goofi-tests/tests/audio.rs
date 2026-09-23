@@ -1400,14 +1400,15 @@ fn an_audio_out_lands_on_the_channels_it_names() {
     g.link(osc, "out", out2, "input");
     g.set_param(out2, "audio", "channels", "3-4");
     g.set_param(out2, "audio", "gain", 0.5);
+    // Three edits land on the running nodes one control tick apart, so the wait is for all three:
+    // the width alone can be seen a tenth before the second output's gain.
     let channels = 4;
-    let x = wide(&g, "two outputs holding different pairs", channels);
-    for c in [0, 1] {
-        assert!((peak(&lane(&x, c, channels)) - 1.0).abs() < 0.01, "channel {} is the first output", c + 1);
-    }
-    for c in [2, 3] {
-        assert!((peak(&lane(&x, c, channels)) - 0.5).abs() < 0.01, "channel {} is the second, at its own gain", c + 1);
-    }
+    let at = |x: &[f32], c: usize, level: f32| (peak(&lane(x, c, channels)) - level).abs() < 0.01;
+    let x = g.until("two outputs holding different pairs, the second at its own gain", |g| {
+        let (x, c) = drive(g, TENTH);
+        (c == channels && at(&x, 0, 1.0) && at(&x, 1, 1.0) && at(&x, 2, 0.5) && at(&x, 3, 0.5)).then_some(x)
+    });
+    assert!(peak(&x) > 0.99, "the first output is heard at full level");
 
     // A selection that does not parse is a FAULT and plays nothing: silently falling back to the
     // whole device would put a signal on channels the patch took care to keep clear.
