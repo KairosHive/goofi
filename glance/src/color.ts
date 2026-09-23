@@ -4,10 +4,11 @@
  * lightness and chroma a step, so a ninth series differs from the first in more than hue. */
 
 const BASE_HUE = 250;
+// Mid lightness: many lines over a dark surface stay a picture, not a glare.
 const RING: [number, number][] = [
-	[0.78, 0.13],
-	[0.68, 0.16],
-	[0.86, 0.09]
+	[0.7, 0.115],
+	[0.6, 0.14],
+	[0.78, 0.085]
 ];
 
 /** The greedy widest-arc bisection on the unit circle from 0: the binary van der Corput sequence. */
