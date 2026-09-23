@@ -244,7 +244,9 @@ impl GraphicsEngine {
     /// The external clock: run `frames` ticks on the caller's thread. The harness's door.
     pub fn render(&mut self, frames: usize) {
         for _ in 0..frames {
-            self.runtime.lock().expect("the runtime").tick();
+            let mut runtime = self.runtime.lock().expect("the runtime");
+            runtime.tick();
+            runtime.finish();
         }
     }
 
@@ -295,11 +297,8 @@ impl GraphicsEngine {
             .outputs
             .iter()
             .map(|o| {
-                view.ringers(uid, o.name)
-                    .into_iter()
-                    .filter(|r| !self.rides_the_plan(r))
-                    .filter_map(|r| Some((goofi_transport::door_of(view, r.consumer)?, r.event_id)))
-                    .collect()
+                let ringers = view.ringers(uid, o.name).into_iter().filter(|r| !self.rides_the_plan(r));
+                goofi_transport::targets_of(view, uid, o.name, ringers)
             })
             .collect();
         // No recording door yet: a graphics frame is a texture, and what a recorder takes off one

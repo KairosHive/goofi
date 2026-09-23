@@ -16,10 +16,54 @@ pub use probe::OutputProbe;
 pub use serde_json::json as j;
 
 /// How long [`Goofi::until`] waits before it calls a condition unmet. Only a FAILING assertion
-/// pays it, so the number clears the slowest machine that runs the suite rather than the fastest.
-const WAIT: Duration = Duration::from_secs(90);
+/// pays it, so the number clears the slowest machine that runs the suite: a four-core CI runner
+/// compiling a shader on lavapipe beside three other situations.
+const WAIT: Duration = Duration::from_secs(180);
 /// How long [`Goofi::stays`] watches a negative.
 const SETTLE: Duration = Duration::from_millis(250);
+/// A situation blocked under a lock never reaches its deadline; past this the process aborts,
+/// naming what still ran, rather than holding a CI runner to its hour.
+const STUCK: Duration = Duration::from_secs(600);
+
+/// Every live owner by a token of its own, the test thread that booted it and the boot instant.
+fn running() -> &'static std::sync::Mutex<Vec<(u64, String, Instant)>> {
+    static RUNNING: std::sync::Mutex<Vec<(u64, String, Instant)>> = std::sync::Mutex::new(Vec::new());
+    &RUNNING
+}
+
+fn watchdog() {
+    static ONE: std::sync::Once = std::sync::Once::new();
+    ONE.call_once(|| {
+        std::thread::Builder::new()
+            .name("goofi-tests-watchdog".into())
+            .spawn(|| loop {
+                std::thread::sleep(Duration::from_secs(10));
+                let live: Vec<String> = running()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .iter()
+                    .map(|(_, name, since)| format!("{name} ({}s)", since.elapsed().as_secs()))
+                    .collect();
+                let stuck = running()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .iter()
+                    .any(|(_, _, since)| since.elapsed() > STUCK);
+                if stuck {
+                    // The raw handle: libtest's capture, inherited from the test thread that
+                    // spawned this one, would swallow `eprintln!` along with the process.
+                    use std::io::Write;
+                    let _ = writeln!(std::io::stderr(), "goofi-tests: a situation is stuck past {STUCK:?}; aborting with these live: {}", live.join(", "));
+                    std::process::abort();
+                }
+            })
+            .expect("the watchdog thread");
+    });
+}
+
+fn thread_name() -> String {
+    std::thread::current().name().unwrap_or("?").to_string()
+}
 
 /// A running goofi: the graph, the runtime, the document, the status-drain worker.
 pub struct Goofi {
@@ -30,6 +74,8 @@ pub struct Goofi {
     owner: bool,
     /// The window thread, with no screen: what the binary's main thread is where a display answers.
     windows: Option<(goofi_window::Ui, std::thread::JoinHandle<()>)>,
+    /// This owner's entry in the watchdog's roll; a borrower carries none.
+    token: u64,
 }
 
 /// A situation ends the way a process exits: every node stopped and waited for, so no test leaves
@@ -37,6 +83,7 @@ pub struct Goofi {
 impl Drop for Goofi {
     fn drop(&mut self) {
         if self.owner {
+            running().lock().unwrap_or_else(|e| e.into_inner()).retain(|(t, _, _)| *t != self.token);
             self.state.shutdown();
             // Last: every plugin was unmade on it by the shutdown above.
             if let Some((ui, thread)) = self.windows.take() {
@@ -147,7 +194,11 @@ impl Goofi {
             g.boot_done();
         }
         goofi_bridge::spawn_workers(&state);
-        Goofi { state, actor: "test".into(), patience: WAIT, owner: true, windows }
+        watchdog();
+        static TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let token = TOKENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        running().lock().unwrap_or_else(|e| e.into_inner()).push((token, thread_name(), Instant::now()));
+        Goofi { state, actor: "test".into(), patience: WAIT, owner: true, windows, token }
     }
 
     /// Boot one whose `/data` sockets probe on a short clock. Through [`Goofi::with_mode`], so
@@ -171,7 +222,7 @@ impl Goofi {
 
     /// A second client of the SAME instance, with its own undo stack — what two browser tabs are.
     pub fn client(&self, actor: &str) -> Goofi {
-        Goofi { state: self.state.clone(), actor: actor.into(), patience: self.patience, owner: false, windows: None }
+        Goofi { state: self.state.clone(), actor: actor.into(), patience: self.patience, owner: false, windows: None, token: 0 }
     }
 
     /// Run an op and unwrap it; an unexpected refusal is a failure here.
@@ -907,10 +958,15 @@ pub fn install_all(g: &Goofi, files: &[(&str, &str)]) -> Vec<String> {
 
 /// The one-variable evaluator a modulation step needs: the freshest frame's first sample,
 /// coerced to the target's own type — no interpreter, so a scenario runs in the default suite.
-pub struct FirstVar;
+/// It counts its compiles, so a test can tell a refreshed binding from a rebuilt one.
+#[derive(Default)]
+pub struct FirstVar {
+    pub compiles: std::sync::atomic::AtomicUsize,
+}
 
 impl goofi_node::ExprEvaluator for FirstVar {
     fn compile(&self, _source: &str) -> Result<goofi_node::Compiled, goofi_node::ExprError> {
+        self.compiles.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(goofi_node::Compiled { id: 1 })
     }
     fn eval(

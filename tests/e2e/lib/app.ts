@@ -135,18 +135,34 @@ export async function splitRight(page: Page): Promise<void> {
 	const item = page.locator('.context-menu .item', { hasText: 'Split Right' }).first();
 	await expect(item).toBeVisible();
 	await item.click();
-	await expect(page.locator('.panel')).toHaveCount(2);
+	await expect(page.getByTestId('panel-header')).toHaveCount(2);
 }
 
 /**
- * Put the workspace back, through the split panel's own ✕. A split is a command against the RUNNING
+ * Put the workspace back, through each extra panel's own ✕. A split is a command against the RUNNING
  * PATCH — one backend per worker — so a spec that splits and leaves early persists a 2-panel
  * workspace that every later spec there boots into. It passes alone and depends on nothing but
- * screenshot latency, which is why it must be a `finally`.
+ * screenshot latency, which is why it must be a `finally`. It closes whatever a failed body or a
+ * retry stacked up, so a `finally` may call it without knowing how many panels are open.
  */
 export async function closeSplit(page: Page): Promise<void> {
-	await page.getByTestId('panel-header').nth(1).getByRole('button', { name: 'Close panel' }).click();
-	await expect(page.locator('.panel'), 'the workspace is back to one panel').toHaveCount(1);
+	await releasePointer(page);
+	// Counted by header: `.panel` also matches the inspector's pane when it is open.
+	const headers = page.getByTestId('panel-header');
+	let open = await headers.count();
+	while (open > 1) {
+		await headers.nth(1).getByRole('button', { name: 'Close panel' }).click();
+		// A closed panel leaves the DOM a beat later; a second click before that lands on it.
+		await expect(headers).toHaveCount(open - 1);
+		open -= 1;
+	}
+	await expect(headers, 'the workspace is back to one panel').toHaveCount(1);
+}
+
+/** Let go of a drag a failed step left mid-air: a held button swallows the clicks a cleanup makes. */
+export async function releasePointer(page: Page): Promise<void> {
+	await page.keyboard.press('Escape');
+	await page.mouse.up();
 }
 
 /**

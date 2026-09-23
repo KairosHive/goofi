@@ -37,6 +37,8 @@ pub type ByteSubscriber = iceoryx2::port::subscriber::Subscriber<Svc, [u8], ()>;
 pub type ByteService = iceoryx2::service::port_factory::publish_subscribe::PortFactory<Svc, [u8], ()>;
 pub type EventService = iceoryx2::service::port_factory::event::PortFactory<Svc>;
 pub type Listener = iceoryx2::port::listener::Listener<Svc>;
+/// The id a listener is handed per wake, as iceoryx2 spells it.
+pub type WakeId = iceoryx2::prelude::EventId;
 
 /// `EventId(0)` is a control message; `1..=64` an input slot; `65..=128` an `nd()` channel (§3.2).
 /// 255 is the ceiling those three ranges are budgeted against.
@@ -90,6 +92,11 @@ pub fn record_shape(engine: &str) -> RecordShape {
 
 /// The id every armed slot rings the recorder's door with; the drain ignores it, so one is enough.
 pub const RECORD_EVENT_ID: EventId = 0;
+/// The id a producer rings a slot's view door with: a frame is out.
+pub const VIEW_EVENT_ID: EventId = 0;
+/// The id the bridge rings a view door with: what the reducer should do may have moved — a
+/// reader, a spec, a tap, an ask, or the graph itself.
+pub const VIEW_POKE_ID: EventId = 1;
 
 /// The name every service of one node is derived from: `<instance>_<uid>_<gen>`. `gen` is bumped on
 /// EVERY birth, because teardown never blocks and a rebirth would else race its predecessor.
@@ -115,6 +122,12 @@ pub fn status_service(base: &str) -> ServiceName {
 /// One output slot's data service — the name a consumer is given in its `InSlot` set.
 pub fn output_service(base: &str, slot: &str) -> ServiceName {
     format!("goofi_{base}_out_{slot}")
+}
+
+/// The door a slot's reducer parks on, rung by whichever generation of the node produces the
+/// slot: named without the generation, so a restart rings the same reducer.
+pub fn view_door_service(instance: &str, uid: Uid, slot: &str) -> ServiceName {
+    format!("goofi_{instance}_{}_view_{slot}", uid.to_hex())
 }
 
 /// One output slot's recording service, one per ARMING: a name whose subscriber left is never
@@ -574,14 +587,16 @@ impl Served {
     }
 }
 
-/// The event service every door is: §3.2's three id ranges against one ceiling, and one listener.
+/// The event service every door is: §3.2's three id ranges against one ceiling. ONE configuration
+/// for every door, because whichever side opens a door first fixes it for the other: two listeners,
+/// so a reducer reborn on a slot can park on its view door before the one it replaces has left.
 pub fn event_service(node: &IoxNode, name: &str) -> Result<EventService, String> {
     node.service_builder(&parse_name(name)?)
         .event()
         .max_nodes(MAX_NODES)
         .event_id_max_value(EVENT_ID_MAX)
         .max_notifiers(MAX_NOTIFIERS)
-        .max_listeners(1)
+        .max_listeners(2)
         .open_or_create()
         .map_err(|e| format!("event service `{name}`: {e}"))
 }
@@ -737,6 +752,22 @@ fn parse_name(name: &str) -> Result<iceoryx2::service::service_name::ServiceName
 pub fn door_of(view: &GraphView<'_>, uid: Uid) -> Option<ServiceName> {
     let node = view.nodes.get(&uid)?;
     Some(door_service(&service_base(view.instance, uid, node.generation)))
+}
+
+/// Every door one output rings: its ringers' doors, and the slot's view door while a reducer
+/// watches it. The one derivation, so every engine's producers ring the same set.
+pub fn targets_of<'a>(
+    view: &GraphView<'_>,
+    producer: Uid,
+    slot: &str,
+    ringers: impl IntoIterator<Item = goofi_node::Ringer<'a>>,
+) -> Vec<(ServiceName, EventId)> {
+    let mut targets: Vec<(ServiceName, EventId)> =
+        ringers.into_iter().filter_map(|r| Some((door_of(view, r.consumer)?, r.event_id))).collect();
+    if view.nodes.get(&producer).is_some_and(|n| n.watched.contains(&slot)) {
+        targets.push((view_door_service(view.instance, producer, slot), VIEW_EVENT_ID));
+    }
+    targets
 }
 
 /// One output slot's data service name, from the view's birth facts.

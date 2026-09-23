@@ -103,11 +103,8 @@ fn a_chain_runs_streams_and_follows_the_params_edited_under_it() {
     assert!((v - want).abs() < 1e-4, "the wave at its own stamp: {v} vs sin(2\u{3c0}\u{b7}2\u{b7}{t}) = {want}");
 
     let mut ev = g.events();
-    let stats = g.until("a node_stats broadcast", |_| {
-        let p = ev.next("node_stats");
-        (p["node"] == hex(osc)).then_some(p)
-    });
-    assert!(stats["stats"]["updates_per_second"].as_f64().is_some_and(|r| r > 0.0), "{stats}");
+    let stats = g.until("a node_stats broadcast", |_| ev.next("node_stats")["stats"].get(hex(osc)).cloned());
+    assert!(stats["updates_per_second"].as_f64().is_some_and(|r| r > 0.0), "{stats}");
 }
 
 #[test]
@@ -286,16 +283,15 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     g.set_param(osc, "common", "max_frequency", 20.0);
     let key = (osc, "out".to_string());
 
-    // Every viewer passes through the undeclared state on its way in, and a slot nobody has sized
-    // yet must answer it with a preview rather than with the producer's whole rate.
+    // Every viewer passes through the undeclared state, which a slot nobody has sized answers with
+    // a preview; the first frame may predate the params, so wait for one that says it was reduced.
     let mut undeclared = Viewer::open(&base, &hex(osc), "out").await;
-    let preview = undeclared.until(|d| !f32s(d).is_empty()).await;
+    let preview = undeclared.until(|d| d.meta().reduced().is_some()).await;
     let raw = g.state.reducers.latest(key.clone()).expect("the slot keeps its raw frame");
     assert!(f32s(&raw).len() > goofi_view::UNDECLARED_MAX,
             "the fixture has to out-run the cap for the cap to be visible at all");
     assert!(f32s(&preview).len() <= goofi_view::UNDECLARED_MAX,
             "an undeclared viewer draws a preview, never the full frame");
-    assert!(preview.meta().reduced().is_some(), "and the frame says it was reduced");
     drop(undeclared);
     assert!(holds_within(Duration::from_secs(5), || g.state.reducers.subscribers(&key) == 0).await,
             "it left before the counted viewers arrive");
@@ -425,6 +421,21 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
         assert_eq!(g.state.reducers.iox_node_id(), iox, "round {round}: the re-open minted a node");
         drop(v);
     }
+
+    // A TABLE is reduced entry by entry: the array inside it takes the undeclared preview, as the
+    // bare array did above, rather than riding whole under a viewer that declared nothing.
+    g.set_param(osc, "common", "max_frequency", 20.0);
+    let table = g.add("Table");
+    g.set_param(table, "table", "keys", "wave");
+    g.link(osc, "out", table, "arrays");
+    let mut cell = Viewer::open(&base, &hex(table), "out").await;
+    let d = cell.until(|d| matches!(d.value(), goofi_core::Value::Table(t) if t.contains_key("wave"))).await;
+    let goofi_core::Value::Table(fields) = d.value() else { unreachable!("matched above") };
+    let wave = &fields["wave"];
+    assert!(f32s(wave).len() <= goofi_view::UNDECLARED_MAX, "the nested array is a preview: {} samples", f32s(wave).len());
+    assert!(wave.meta().reduced().is_some(), "and it says it was reduced");
+    drop(cell);
+    g.call("node remove", j!({ "node": hex(table) }));
 
     g.call("node remove", j!({ "node": hex(osc) }));
     assert!(holds_within(Duration::from_secs(5), || g.state.reducers.active_slots() == 0).await,
@@ -582,7 +593,7 @@ fn a_pulse_fires_from_the_op_and_from_a_rising_edge_and_holds_no_value() {
     // A pulse is a REQUEST: the op makes it once, a source makes it on every rising edge, and
     // neither leaves a value behind.
     let g = Goofi::new();
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(goofi_tests::FirstVar));
+    g.state.graph.lock().unwrap().set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
     let n = g.add("_TestResettable");
     let gate = g.add("_TestScalar");
     let gate_name = g.doc()["nodes"][hex(gate)]["name"].as_str().expect("a minted name").to_string();

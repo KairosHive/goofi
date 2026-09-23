@@ -113,6 +113,10 @@ pub struct AxisReduce {
 /// the one kernel every viewer family can draw.
 pub const UNDECLARED_MAX: usize = 512;
 
+/// The most elements an undeclared preview carries over ALL its axes — a 512² image — so a frame
+/// with many axes cannot cost the stream's whole rate through the two the cap misses.
+pub const UNDECLARED_BUDGET: usize = UNDECLARED_MAX * UNDECLARED_MAX;
+
 /// What a producer is asked to fit its readback into for a reader that declared nothing: ONE
 /// texel, the cheapest frame that is still a frame. No pixels were asked for, so the metadata is
 /// the whole product.
@@ -166,19 +170,6 @@ pub fn canon_dim(dim: i32, ndim: usize) -> Option<usize> {
 }
 
 impl ViewSpec {
-    /// What stands in for a viewer that has declared nothing yet: a preview, never the full frame,
-    /// so a slot nobody has sized cannot cost the stream's whole rate.
-    pub fn undeclared() -> ViewSpec {
-        let cap = |dim| AxisReduce { dim, max: UNDECLARED_MAX, method: ReduceMethod::Subsample };
-        ViewSpec {
-            dtype: ViewDtype::Array,
-            ndim: Vec::new(),
-            dims: Vec::new(),
-            reduce: vec![cap(0), cap(-1)],
-            depth: Depth::F32,
-        }
-    }
-
     /// Whether this viewer can draw `frame`, and so joins the merge.
     pub fn admits<R: Reducible + ?Sized>(&self, frame: &R) -> bool {
         if frame.dtype_tag() != self.dtype.tag() {
@@ -224,12 +215,31 @@ pub struct MergedViewSpec {
 /// Merge N viewers' specs into ONE concrete plan for THIS frame: specs that do not admit the
 /// frame drop out, and each canonical dim folds to `max(max)` plus the union of the kernels.
 pub fn plan<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> MergedViewSpec {
-    // Nothing here can draw this frame, so nothing here has asked for it: the undeclared cap
+    // Nothing here can draw this frame, so nothing here has asked for it: the undeclared preview
     // stands in, exactly as it does for a reader that declared nothing at all.
     let (mut axes, depth) =
-        fold_axes(specs, frame).or_else(|| fold_axes(&[ViewSpec::undeclared()], frame)).unwrap_or_default();
+        fold_axes(specs, frame).unwrap_or_else(|| (undeclared_axes(frame.shape()), Depth::F32));
     aspect_preserve_area(&mut axes, frame.shape());
     MergedViewSpec { axes, depth }
+}
+
+/// The preview for a reader that declared nothing, never the full frame: every axis capped at
+/// [`UNDECLARED_MAX`], then the largest halved until the frame fits [`UNDECLARED_BUDGET`].
+pub fn undeclared_axes(shape: &[usize]) -> Vec<PlannedAxis> {
+    let mut caps: Vec<usize> = shape.iter().map(|&n| n.clamp(1, UNDECLARED_MAX)).collect();
+    // Checked: eight axes at the cap overflow a plain product, and an overflow reads as "fits".
+    let over = |caps: &[usize]| caps.iter().try_fold(1usize, |p, &c| p.checked_mul(c)).is_none_or(|p| p > UNDECLARED_BUDGET);
+    while over(&caps) {
+        let Some((largest, _)) = caps.iter().enumerate().max_by_key(|(_, &c)| c) else { break };
+        caps[largest] = (caps[largest] / 2).max(1);
+    }
+    shape
+        .iter()
+        .zip(caps)
+        .enumerate()
+        .filter(|(_, (&n, cap))| *cap < n)
+        .map(|(dim, (_, max))| PlannedAxis { dim, max, method: ReduceMethod::Subsample })
+        .collect()
 }
 
 /// Every admitted viewer's asks, folded per dim: `max(max)` and the union of the kernels. What a

@@ -12,7 +12,8 @@ use goofi_core::child::{Child, Out};
 use std::process::{ChildStdin, Command};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 /// One video file being written. A frame is `width * height` tight-packed texels of four 8-bit
@@ -185,17 +186,31 @@ fn ffmpeg() -> Command {
     command
 }
 
+/// The candidate that encoded at each frame size, so a later stream at that size opens with
+/// no trial: a trial is a child per candidate, and an armed slot reopens on every resize.
+static WORKING: LazyLock<Mutex<HashMap<(u32, u32), usize>>> = LazyLock::new(Default::default);
+
 impl Ffmpeg {
     /// Select and start the encoder on the writer thread, without blocking the graphics clock.
     fn start(&mut self) -> Result<(), String> {
-        let mut selected = None;
-        for preset in Preset::candidates() {
-            if preset.works(self.size, self.fps, self.quality)? {
-                selected = Some(preset);
-                break;
+        let candidates = Preset::candidates();
+        let known = WORKING.lock().expect("the working presets").get(&self.size).copied();
+        let index = match known {
+            Some(i) if i < candidates.len() => i,
+            _ => {
+                let mut found = None;
+                for (i, preset) in candidates.iter().enumerate() {
+                    if preset.works(self.size, self.fps, self.quality)? {
+                        found = Some(i);
+                        break;
+                    }
+                }
+                let i = found.ok_or("FFmpeg has no working H.264 encoder for this frame size; install an FFmpeg build with libx264 or a supported hardware encoder")?;
+                WORKING.lock().expect("the working presets").insert(self.size, i);
+                i
             }
-        }
-        let preset = selected.ok_or("FFmpeg has no working H.264 encoder for this frame size; install an FFmpeg build with libx264 or a supported hardware encoder")?;
+        };
+        let preset = &candidates[index];
         let mut command = ffmpeg();
         preset.input(&mut command);
         command.args(["-f", "rawvideo", "-pix_fmt", "rgba"])

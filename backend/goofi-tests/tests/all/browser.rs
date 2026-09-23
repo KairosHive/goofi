@@ -206,9 +206,48 @@ async fn a_tab_mirrors_the_graph_off_the_document_events_and_follows_a_peer_edit
     assert_eq!(c.doc().read_at(&["variables", "patch.subject", "lock"]), None,
                "a user variable carries no lock until one is set");
 
+    // A value rides the doc patch alone; the descriptor echo is a source edit's. The first
+    // `state_update` this node sends is the expression's.
+    let mut ev = g.events();
+    c.call("node param edit", j!({ "node": uid.clone(), "param": "lfo/amplitude", "value": 0.25 })).await;
+    c.until_doc(|d| d.read_at(&["nodes", uid.as_str(), "params", "lfo", "amplitude", "value"]) == Some(j!(0.25))).await;
+    c.call("node param edit", j!({ "node": uid.clone(), "param": "lfo/amplitude", "expression": "7" })).await;
+    let echo = ev.next("state_update");
+    assert_eq!((&echo["node"], &echo["params"]["lfo"]["amplitude"]["mode"]), (&j!(uid), &j!("expression")),
+               "the value edit echoed a descriptor: {echo}");
+
+    // `/params` restates a pair only when it moved: the peer holds the last one it was sent.
+    let level = g.add("_TestScalar");
+    g.call("node edit", j!({ "node": hex(level), "name": "level" }));
+    g.set_param(level, "control", "value", 0.25);
+    c.call("node param edit", j!({ "node": uid.clone(), "param": "lfo/amplitude", "reference": "level.out" })).await;
+    let (mut live, _) = tokio_tungstenite::connect_async(format!("{base}/params/{uid}")).await.unwrap();
+    let pair = |m: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>| -> Value {
+        let Some(Ok(Message::Text(t))) = m else { panic!("the params socket stopped: {m:?}") };
+        serde_json::from_str::<Value>(t.as_str()).unwrap()["values"]["lfo"]["amplitude"].clone()
+    };
+    while pair(live.next().await) != j!(0.25) {}
+    assert!(tokio::time::timeout(Duration::from_millis(250), live.next()).await.is_err(),
+            "an unchanged pair was restated");
+    g.set_param(level, "control", "value", 0.5);
+    while pair(live.next().await) != j!(0.5) {}
+
     // A merge patch spells a delete as an explicit `null`, and the gate compares the whole projection.
     peer.call("node remove", j!({ "node": uid.clone() })).await;
     c.until_doc(|d| !d.node_ids().contains(&uid)).await;
+
+    // One socket's ops are answered in the order sent, the slow one first: they run on the
+    // socket's own worker, in turn, while its event drain goes on.
+    let adds: Vec<Value> = (0..24).map(|_| j!({ "op": "node add", "payload": { "type": "LFO" } })).collect();
+    c.send(j!({ "id": 9001, "op": "compound", "payload": { "ops": adds } }).to_string()).await;
+    c.send(j!({ "id": 9002, "op": "session state", "payload": {} }).to_string()).await;
+    let mut answered = Vec::new();
+    while answered.len() < 2 {
+        if let Some(id) = c.text().await.get("id").and_then(Value::as_i64) {
+            answered.push(id);
+        }
+    }
+    assert_eq!(answered, [9001, 9002]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

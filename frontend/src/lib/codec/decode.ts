@@ -134,12 +134,13 @@ function readTypedArray(
 	const kind = tail.charAt(0);
 	const itemsize = parseInt(tail.slice(1), 10);
 	const count = nBytes / itemsize;
-	// Slice into a fresh buffer: the consumer outlives the WS message frame, which may be reused.
+	// The reducer's 8-bit hop for an image viewer: bytes need no alignment, so the view sits on the
+	// message buffer itself.
+	if (kind + itemsize === 'u1') return new Uint8Array(buffer, byteOffset, count);
+	// Slice into a fresh buffer: an f32 view must be 4-byte aligned, which the body offset is not.
 	const slice = buffer.slice(byteOffset, byteOffset + nBytes);
 	if (kind + itemsize === 'f4') return new Float32Array(slice, 0, count);
-	// The two exceptions to an f32 wire: the reducer's 8-bit hop for an image viewer, and its
-	// half-float hop for a line viewer.
-	if (kind + itemsize === 'u1') return new Uint8Array(slice, 0, count);
+	// The reducer's half-float hop for a line viewer, widened here so nothing downstream changes.
 	if (kind + itemsize === 'f2') return expandHalf(slice, count);
 	throw new Error(`Unsupported numpy dtype: ${dtypeStr} (the wire is f32, and u8 or f16 on the viewer hop)`);
 }

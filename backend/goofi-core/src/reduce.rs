@@ -2,7 +2,7 @@
 //! a frame's f32 LE bytes. Each returns `None` when it would not shrink the axis.
 
 use crate::{Coord, Data, Meta, MetaValue, Value};
-use goofi_view::MergedViewSpec;
+use goofi_view::{MergedViewSpec, ViewSpec};
 /// The kernels' own vocabulary, re-exported so a node file — which reaches goofi-core through its
 /// SDK and never `goofi-view` — can name the method it asks for.
 pub use goofi_view::ReduceMethod;
@@ -67,6 +67,26 @@ pub fn reduce_for_view(frame: &Data, plan: &MergedViewSpec) -> Data {
     meta.set_channels(axes);
     meta.set_reduced(Some(MetaValue::Map(reduced)));
     Data::array_f32(shape, bytes.into_owned(), meta).unwrap_or_else(|_| frame.clone())
+}
+
+/// A table's arrays reduced entry by entry, to any depth, each planned against `specs` as a frame
+/// of its own — a table has no axes to plan. Fail-open like [`reduce_for_view`].
+pub fn reduce_table(frame: &Data, specs: &[ViewSpec]) -> Data {
+    let Value::Table(map) = frame.value() else {
+        return frame.clone();
+    };
+    let mut shrunk = false;
+    let mut out = indexmap::IndexMap::with_capacity(map.len());
+    for (key, entry) in map.iter() {
+        let reduced = match entry.value() {
+            Value::Table(_) => reduce_table(entry, specs),
+            Value::Array(_) => reduce_for_view(entry, &goofi_view::plan(specs, entry)),
+            _ => entry.clone(),
+        };
+        shrunk |= !std::sync::Arc::ptr_eq(&reduced.0, &entry.0);
+        out.insert(key.clone(), reduced);
+    }
+    if shrunk { Data::table(out, frame.meta().clone()) } else { frame.clone() }
 }
 
 /// One axis's reduction, as `meta.reduced` records it. The ONE writer of that shape, so a
@@ -249,11 +269,13 @@ fn envelope_axis(bytes: &[u8], shape: &[usize], dim: usize, max: usize) -> Optio
     let edges = bin_edges(axis, w);
     let mut out = Vec::with_capacity(outer * 2 * w * inner * 4);
     let mut centers = Vec::with_capacity(2 * w);
+    let mut mn = vec![f32::INFINITY; inner];
+    let mut mx = vec![f32::NEG_INFINITY; inner];
     for o in 0..outer {
         for b in 0..w {
             let (lo, hi) = (edges[b], edges[b + 1].max(edges[b] + 1).min(axis));
-            let mut mn = vec![f32::INFINITY; inner];
-            let mut mx = vec![f32::NEG_INFINITY; inner];
+            mn.fill(f32::INFINITY);
+            mx.fill(f32::NEG_INFINITY);
             for a in lo..hi {
                 for i in 0..inner {
                     let v = read_f32(bytes, (o * axis + a) * inner + i);

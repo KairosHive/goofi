@@ -123,6 +123,8 @@ pub struct NodeView<'a> {
     pub bindings: Vec<BindingView<'a>>,
     /// The output slots armed for recording.
     pub recorded: &'a [RecordedOutput],
+    /// The output slots a reducer watches: each rings the slot's view door once its frame is out.
+    pub watched: Vec<&'static str>,
 }
 
 /// The settled graph, as every engine reads it after a batch: the WHOLE graph — engines filter.
@@ -167,6 +169,8 @@ pub enum Touched {
     Param(Uid, ParamKey),
     /// A node whose armed output slots moved.
     Record(Uid),
+    /// A producer output a reducer started or stopped watching.
+    Watch(Uid, &'static str),
 }
 
 /// One node class an engine advertises: the shared manifest plus the display tier. The engine a

@@ -42,7 +42,7 @@
 	}: HTMLAttributes<HTMLDivElement> & {
 		paramName: string;
 		descriptor: ParamDescriptor;
-		onCommit: (value: unknown) => void;
+		onCommit: (value: unknown) => unknown;
 		onSetSource: (source: SourcePatch) => void;
 		onRefresh?: () => void;
 		onPulse?: () => void;

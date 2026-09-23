@@ -2,13 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { viewSpecForKind, viewSpecsForKind, CAP_FLOOR } from './capacity';
 
 describe('viewSpecForKind', () => {
-	it('line → the array it DRAWS (≤2-D), channel subsample + sample envelope sized to width', () => {
+	it('line → the array it DRAWS (≤2-D), channels capped at what a plot can tell apart, samples enveloped to width', () => {
 		expect(viewSpecForKind('line', 1600, 300)).toEqual({
 			dtype: 'array',
 			ndim: [['le', 2]],
 			dims: [],
 			reduce: [
-				{ dim: 0, max: 300, method: 'subsample' },
+				{ dim: 0, max: 32, method: 'subsample' },
 				{ dim: -1, max: 1600, method: 'envelope' }
 			],
 			depth: 'f16'
@@ -92,7 +92,7 @@ describe('viewSpecForKind', () => {
 
 	it('clamps degenerate (0-px / collapsed) sizes to the floor', () => {
 		const spec = viewSpecForKind('line', 0, 0);
-		expect(spec.reduce[0].max).toBe(CAP_FLOOR); // channel axis
+		expect(spec.reduce[0].max).toBe(32); // channel axis: the trace cap is below the floor
 		expect(spec.reduce[1].max).toBe(CAP_FLOOR); // sample axis
 	});
 });
