@@ -17,7 +17,7 @@
 	<span
 		class="hud"
 		data-testid="perf-hud"
-		title="Screen paints per second, app-wide — capped at 30, and it does not climb with node count."
+		title="Viewer paints per second: how often the page draws a new batch of frames, whatever the node count."
 	>
 		<span class="fps">{p.fps.toFixed(0)} fps</span>
 	</span>
