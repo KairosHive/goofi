@@ -43,8 +43,8 @@ plot follows a pan or zoom when the view changes and the rects do not.
 A single row of length 1 is a scalar: it draws as a bar at `x = value` over a running range.
 Rows of interleaved min/max pairs with two `xs` per pair draw as the band they describe.
 
-The grid follows the window: 1-2-5 steps on a linear axis, decades on a log axis, each axis on
-its own. Text is not drawn. `range()` gives the numbers the host puts in its own labels.
+The grid follows the window: 1-2-5 steps on a linear axis, decades with fainter mantissa lines on
+a log axis, each axis on its own. Text is not drawn. `range()` gives the numbers the host puts in its own labels.
 
 ## How goofi uses it
 

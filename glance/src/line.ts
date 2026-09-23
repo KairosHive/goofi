@@ -37,6 +37,7 @@ export interface Range {
 }
 
 const GRID_COLOR = new Float32Array(32).map((_, i) => (i % 4 === 3 ? 0.05 : 1));
+const MINOR_COLOR = new Float32Array(32).map((_, i) => (i % 4 === 3 ? 0.02 : 1));
 
 /** Grid segments in rect fractions: a NaN pad after each line keeps the instanced draw from joining them. */
 function gridSegments(xs: number[], ys: number[]): Float32Array {
@@ -52,8 +53,10 @@ interface LineGpu {
 	prog: Program;
 	vbo: WebGLBuffer;
 	grid: WebGLBuffer;
+	minor: WebGLBuffer;
 	uploaded: Float32Array | null;
 	gridUploaded: Float32Array | null;
+	minorUploaded: Float32Array | null;
 }
 
 export class LinePlot {
@@ -72,6 +75,7 @@ export class LinePlot {
 	private xw: [number, number] = [0, 1];
 	private yw: [number, number] = [0, 1];
 	private grid = gridSegments([], []);
+	private minor = gridSegments([], []);
 	private gpu: LineGpu | null = null;
 
 	constructor(private readonly invalidate: () => void, private readonly detach: (p: LinePlot) => void) {
@@ -188,10 +192,10 @@ export class LinePlot {
 			}
 		}
 		const log = this.scalar ? [false, false] : [logX, logY];
-		this.grid = gridSegments(
-			gridLines(this.xw[0], this.xw[1], log[0]),
-			gridLines(this.yw[0], this.yw[1], log[1], 3)
-		);
+		const gx = gridLines(this.xw[0], this.xw[1], log[0]);
+		const gy = gridLines(this.yw[0], this.yw[1], log[1], 3);
+		this.grid = gridSegments(gx.major, gy.major);
+		this.minor = gridSegments(gx.minor, gy.minor);
 	}
 
 	private fitScalar(buf: Float32Array, yAuto: boolean, yMin: number, yMax: number): void {
@@ -221,19 +225,15 @@ export class LinePlot {
 		gl.uniform4f(u.u_rect, d.x + pad, d.y + pad, d.w - 2 * pad, d.h - 2 * pad);
 		gl.uniform2f(u.u_canvas, canvas[0], canvas[1]);
 
-		bindSegments(gl, gpu.grid);
-		if (gpu.gridUploaded !== this.grid) {
-			gl.bufferData(gl.ARRAY_BUFFER, this.grid, gl.DYNAMIC_DRAW);
-			gpu.gridUploaded = this.grid;
-		}
 		gl.uniform2f(u.u_x, 0, 1);
 		gl.uniform2f(u.u_y, 0, 1);
 		gl.uniform2i(u.u_log, 0, 0);
 		gl.uniform1f(u.u_width, Math.max(1, Math.round(dpr)));
-		gl.uniform1i(u.u_stride, this.grid.length);
 		gl.uniform1i(u.u_point, 0);
-		gl.uniform4fv(u.u_colors, GRID_COLOR);
-		if (this.grid.length > 2) gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.grid.length / 2 - 1);
+		this.drawGrid(gl, u, gpu.minor, this.minor, gpu.minorUploaded, MINOR_COLOR);
+		gpu.minorUploaded = this.minor;
+		this.drawGrid(gl, u, gpu.grid, this.grid, gpu.gridUploaded, GRID_COLOR);
+		gpu.gridUploaded = this.grid;
 
 		bindSegments(gl, gpu.vbo);
 		gl.uniform2f(u.u_x, this.xw[0], this.xw[1]);
@@ -251,9 +251,34 @@ export class LinePlot {
 		}
 	}
 
+	private drawGrid(
+		gl: WebGL2RenderingContext,
+		u: Program['u'],
+		vbo: WebGLBuffer,
+		lines: Float32Array,
+		uploaded: Float32Array | null,
+		color: Float32Array
+	): void {
+		if (lines.length <= 2) return;
+		bindSegments(gl, vbo);
+		if (uploaded !== lines) gl.bufferData(gl.ARRAY_BUFFER, lines, gl.DYNAMIC_DRAW);
+		gl.uniform1i(u.u_stride, lines.length);
+		gl.uniform4fv(u.u_colors, color);
+		gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, lines.length / 2 - 1);
+	}
+
 	private attach(gl: WebGL2RenderingContext, prog: Program): LineGpu {
 		if (this.gpu && this.gpu.gl === gl && this.gpu.prog === prog) return this.gpu;
-		this.gpu = { gl, prog, vbo: gl.createBuffer()!, grid: gl.createBuffer()!, uploaded: null, gridUploaded: null };
+		this.gpu = {
+			gl,
+			prog,
+			vbo: gl.createBuffer()!,
+			grid: gl.createBuffer()!,
+			minor: gl.createBuffer()!,
+			uploaded: null,
+			gridUploaded: null,
+			minorUploaded: null
+		};
 		return this.gpu;
 	}
 
@@ -263,6 +288,7 @@ export class LinePlot {
 		if (g && !g.gl.isContextLost()) {
 			g.gl.deleteBuffer(g.vbo);
 			g.gl.deleteBuffer(g.grid);
+			g.gl.deleteBuffer(g.minor);
 		}
 		this.gpu = null;
 	}

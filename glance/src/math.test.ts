@@ -97,18 +97,20 @@ describe('colour', () => {
 });
 
 describe('gridLines', () => {
-	it('places 1-2-5 steps inside a linear window, never on its edges', () => {
-		const t = gridLines(0, 10, false);
-		expect(t.map((v) => Math.round(v * 10))).toEqual([2, 4, 6, 8]);
-		expect(gridLines(-1.05, 1.05, false).length).toBeGreaterThan(2);
-		expect(gridLines(3, 3, false)).toEqual([]);
+	it('places 1-2-5 major steps inside a linear window, never on its edges', () => {
+		const g = gridLines(0, 10, false);
+		expect(g.major.map((v) => Math.round(v * 10))).toEqual([2, 4, 6, 8]);
+		expect(g.minor).toEqual([]);
+		expect(gridLines(-1.05, 1.05, false).major.length).toBeGreaterThan(2);
+		expect(gridLines(3, 3, false).major).toEqual([]);
 	});
-	it('marks decades on a log window, and mantissa steps inside a single decade', () => {
-		const decades = gridLines(-0.1, 3.1, true);
-		expect(decades.length).toBe(4);
-		expect(decades[0]).toBeCloseTo(0.1 / 3.2);
-		const fine = gridLines(0, 1, true);
-		expect(fine.length).toBe(8);
-		expect(fine[0]).toBeCloseTo(Math.log10(2));
+	it('marks decades as major and mantissa steps as minor on a log window', () => {
+		const g = gridLines(-0.1, 3.1, true);
+		expect(g.major.length).toBe(4);
+		expect(g.major[0]).toBeCloseTo(0.1 / 3.2);
+		expect(g.minor.length).toBe(3 * 8 + 1); // three full decades, plus the 9 of the one below
+		expect(g.minor.some((v) => Math.abs(v - (0.1 + Math.log10(2)) / 3.2) < 1e-9)).toBe(true);
+		expect(g.minor.every((v) => v > 0 && v < 1)).toBe(true);
+		expect(gridLines(0, 12, true).minor).toEqual([]);
 	});
 });
