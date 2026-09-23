@@ -70,7 +70,7 @@ void main() {
 	gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
 }`;
 
-/** `u_mode` 0 = one channel through the LUT, 1 = rgb, 2 = rgba. */
+/** `u_mode` 0 = one channel through the LUT, 1 = rgb, 2 = rgba, 3 = two channels as red and green. */
 export const IMAGE_FS = `#version 300 es
 precision highp float;
 in vec2 v_uv;
@@ -86,7 +86,9 @@ void main() {
 		o = vec4(texture(u_lut, vec2(t, 0.5)).rgb, 1.0);
 	} else if (u_mode == 1) {
 		o = vec4(texture(u_tex, v_uv).rgb, 1.0);
-	} else {
+	} else if (u_mode == 2) {
 		o = texture(u_tex, v_uv);
+	} else {
+		o = vec4(clamp((texture(u_tex, v_uv).rg - u_lo) / u_span, 0.0, 1.0), 0.0, 1.0);
 	}
 }`;

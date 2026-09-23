@@ -11,9 +11,9 @@ export interface ImageData {
 	values: Uint8Array | Float32Array;
 	width: number;
 	height: number;
-	/** 1, 2, 3 or 4 interleaved channels; 1 and 2 draw the first through the LUT. */
+	/** 1, 2, 3 or 4 interleaved channels: LUT, red and green, rgb, rgba. */
 	channels: number;
-	/** The window the first channel is mapped over, in texture sample units. */
+	/** The window a windowed channel (modes 1 and 2) is mapped over, in texture sample units. */
 	lo: number;
 	hi: number;
 }
@@ -97,9 +97,10 @@ export class ImagePlot {
 		gl.uniform2f(u.u_canvas, canvas[0], canvas[1]);
 		gl.uniform1i(u.u_tex, 0);
 		gl.uniform1i(u.u_lut, 1);
-		gl.uniform1i(u.u_mode, data.channels === 3 ? 1 : data.channels === 4 ? 2 : 0);
+		gl.uniform1i(u.u_mode, [0, 3, 1, 2][data.channels - 1]);
 		gl.uniform1f(u.u_lo, data.lo);
-		gl.uniform1f(u.u_span, data.hi - data.lo || 1);
+		// A window that is flat or inverted saturates instead of flipping the map.
+		gl.uniform1f(u.u_span, data.hi > data.lo ? data.hi - data.lo : 1e-9);
 		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 	}
 

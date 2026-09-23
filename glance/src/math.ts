@@ -86,6 +86,31 @@ export function axisWindow(lo: number, hi: number, log: boolean, pad = 0.05): [n
 	return [a - p, b + p];
 }
 
+/** Grid positions for an axis window `[a, b]` in axis space, as fractions of the span. A linear
+ * axis takes a 1-2-5 step near `target` lines; a log axis one line per decade, or per mantissa
+ * step 2..9 when no decade falls inside the window. */
+export function gridLines(a: number, b: number, log: boolean, target = 4): number[] {
+	if (!(b > a) || !Number.isFinite(a) || !Number.isFinite(b)) return [];
+	const span = b - a;
+	const out: number[] = [];
+	const add = (v: number): void => {
+		const t = (v - a) / span;
+		if (t > 1e-3 && t < 1 - 1e-3) out.push(t);
+	};
+	if (log) {
+		for (let k = Math.ceil(a); k <= Math.floor(b); k++) add(k);
+		if (out.length) return out;
+		for (let k = Math.floor(a); k <= Math.floor(b); k++) for (let d = 2; d <= 9; d++) add(k + Math.log10(d));
+		return out;
+	}
+	const raw = span / target;
+	const mag = 10 ** Math.floor(Math.log10(raw));
+	const unit = raw / mag;
+	const step = (unit < 1.5 ? 1 : unit < 3.5 ? 2 : unit < 7.5 ? 5 : 10) * mag;
+	for (let v = Math.ceil(a / step) * step; v <= b; v += step) add(v);
+	return out;
+}
+
 /** The index of the sample nearest `x` in ascending `xAt(0..n)`, or -1 when there is none. */
 export function nearestIndex(xAt: (i: number) => number, n: number, x: number): number {
 	if (n <= 0) return -1;

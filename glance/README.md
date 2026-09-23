@@ -31,7 +31,7 @@ line.remove();
 
 const image = surface.addImage();
 image.setSettings({ lut: Uint8Array /* 256×3 */, stretch });
-image.push({ values, width, height, channels, lo, hi });
+image.push({ values, width, height, channels, lo, hi }); // 1: LUT, 2: red+green, 3: rgb, 4: rgba
 
 surface.dispose();
 ```
@@ -43,7 +43,8 @@ plot follows a pan or zoom when the view changes and the rects do not.
 A single row of length 1 is a scalar: it draws as a bar at `x = value` over a running range.
 Rows of interleaved min/max pairs with two `xs` per pair draw as the band they describe.
 
-Text is not drawn. `range()` gives the numbers the host puts in its own labels.
+The grid follows the window: 1-2-5 steps on a linear axis, decades on a log axis, each axis on
+its own. Text is not drawn. `range()` gives the numbers the host puts in its own labels.
 
 ## How goofi uses it
 

@@ -33,7 +33,8 @@ export function pushLine(plot: LinePlot, frame: DataFrame, cols: number, logX: b
 	}
 }
 
-/** Only the wire's f32 and the reducer's 8-bit hop are textures; nothing else reaches an image viewer. */
+/** Only the wire's f32 and the reducer's 8-bit hop are textures; nothing else reaches an image viewer.
+ * One and two channels share one window: the LUT input, or red and green alike. */
 export function pushImage(plot: ImagePlot, frame: DataFrame, settings: SettingsMap): void {
 	const arr = frame.data as ArrayData;
 	const values = arr.values;
@@ -50,7 +51,7 @@ export function pushImage(plot: ImagePlot, frame: DataFrame, settings: SettingsM
 		lo = (Number(settings.vmin ?? 0) - t0) / tw;
 		hi = (Number(settings.vmax ?? 1) - t0) / tw;
 	} else if (channels <= 2 && !u8) {
-		[lo, hi] = extent(values, 0, channels) ?? [0, 1];
+		[lo, hi] = extent(values) ?? [0, 1];
 	}
 	plot.push({ values, width, height, channels, lo, hi });
 }

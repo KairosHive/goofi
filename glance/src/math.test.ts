@@ -4,6 +4,7 @@ import {
 	deviceRect,
 	extent,
 	fitImage,
+	gridLines,
 	layoutSeries,
 	logSafe,
 	nearestIndex,
@@ -92,5 +93,22 @@ describe('colour', () => {
 		expect(rgba('#ff0000')).toEqual([1, 0, 0, 1]);
 		expect(rgba('#111')).toEqual(rgba('#111111'));
 		expect(rgba('#00ff0080')[3]).toBeCloseTo(0.502, 3);
+	});
+});
+
+describe('gridLines', () => {
+	it('places 1-2-5 steps inside a linear window, never on its edges', () => {
+		const t = gridLines(0, 10, false);
+		expect(t.map((v) => Math.round(v * 10))).toEqual([2, 4, 6, 8]);
+		expect(gridLines(-1.05, 1.05, false).length).toBeGreaterThan(2);
+		expect(gridLines(3, 3, false)).toEqual([]);
+	});
+	it('marks decades on a log window, and mantissa steps inside a single decade', () => {
+		const decades = gridLines(-0.1, 3.1, true);
+		expect(decades.length).toBe(4);
+		expect(decades[0]).toBeCloseTo(0.1 / 3.2);
+		const fine = gridLines(0, 1, true);
+		expect(fine.length).toBe(8);
+		expect(fine[0]).toBeCloseTo(Math.log10(2));
 	});
 });

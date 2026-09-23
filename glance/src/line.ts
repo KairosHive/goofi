@@ -6,6 +6,7 @@ import {
 	rgba,
 	unmapped,
 	axisWindow,
+	gridLines,
 	type Rect
 } from './math';
 
@@ -35,10 +36,15 @@ export interface Range {
 	scalar: boolean;
 }
 
-const GRID = new Float32Array(
-	[0.25, 0.5, 0.75].flatMap((t) => [t, 0, t, 1, NaN, NaN, 0, t, 1, t, NaN, NaN])
-);
 const GRID_COLOR = new Float32Array(32).map((_, i) => (i % 4 === 3 ? 0.05 : 1));
+
+/** Grid segments in rect fractions: a NaN pad after each line keeps the instanced draw from joining them. */
+function gridSegments(xs: number[], ys: number[]): Float32Array {
+	return new Float32Array([
+		...xs.flatMap((t) => [t, 0, t, 1, NaN, NaN]),
+		...ys.flatMap((t) => [0, t, 1, t, NaN, NaN])
+	]);
+}
 
 /** The GL handles a line plot owns; rebuilt after a context loss from the CPU copy. */
 interface LineGpu {
@@ -47,6 +53,7 @@ interface LineGpu {
 	vbo: WebGLBuffer;
 	grid: WebGLBuffer;
 	uploaded: Float32Array | null;
+	gridUploaded: Float32Array | null;
 }
 
 export class LinePlot {
@@ -64,6 +71,7 @@ export class LinePlot {
 	private scalarHi = -Infinity;
 	private xw: [number, number] = [0, 1];
 	private yw: [number, number] = [0, 1];
+	private grid = gridSegments([], []);
 	private gpu: LineGpu | null = null;
 
 	constructor(private readonly invalidate: () => void, private readonly detach: (p: LinePlot) => void) {
@@ -169,22 +177,31 @@ export class LinePlot {
 		if (!buf || this.m === 0) return;
 		const { logX, logY, yAuto, yMin, yMax } = this.settings;
 		if (this.scalar) {
-			this.yw = [0, 1];
-			if (!yAuto && Number.isFinite(yMin) && Number.isFinite(yMax) && yMin !== yMax) {
-				this.xw = yMin < yMax ? [yMin, yMax] : [yMax, yMin];
-			} else if (this.scalarLo <= this.scalarHi) {
-				this.xw = axisWindow(this.scalarLo, this.scalarHi, false);
-			} else {
-				this.xw = [buf[0] - 1, buf[0] + 1];
-			}
-			return;
-		}
-		this.xw = axisWindow(buf[0], buf[(this.m - 1) * 2], logX, 0);
-		if (yAuto) {
-			const e = extent(buf, 1, 2, logY) ?? [-1, 1];
-			this.yw = axisWindow(e[0], e[1], logY);
+			this.fitScalar(buf, yAuto, yMin, yMax);
 		} else {
-			this.yw = axisWindow(yMin, yMax, logY, 0);
+			this.xw = axisWindow(buf[0], buf[(this.m - 1) * 2], logX, 0);
+			if (yAuto) {
+				const e = extent(buf, 1, 2, logY) ?? [-1, 1];
+				this.yw = axisWindow(e[0], e[1], logY);
+			} else {
+				this.yw = axisWindow(yMin, yMax, logY, 0);
+			}
+		}
+		const log = this.scalar ? [false, false] : [logX, logY];
+		this.grid = gridSegments(
+			gridLines(this.xw[0], this.xw[1], log[0]),
+			gridLines(this.yw[0], this.yw[1], log[1], 3)
+		);
+	}
+
+	private fitScalar(buf: Float32Array, yAuto: boolean, yMin: number, yMax: number): void {
+		this.yw = [0, 1];
+		if (!yAuto && Number.isFinite(yMin) && Number.isFinite(yMax) && yMin !== yMax) {
+			this.xw = yMin < yMax ? [yMin, yMax] : [yMax, yMin];
+		} else if (this.scalarLo <= this.scalarHi) {
+			this.xw = axisWindow(this.scalarLo, this.scalarHi, false);
+		} else {
+			this.xw = [buf[0] - 1, buf[0] + 1];
 		}
 	}
 
@@ -205,14 +222,18 @@ export class LinePlot {
 		gl.uniform2f(u.u_canvas, canvas[0], canvas[1]);
 
 		bindSegments(gl, gpu.grid);
+		if (gpu.gridUploaded !== this.grid) {
+			gl.bufferData(gl.ARRAY_BUFFER, this.grid, gl.DYNAMIC_DRAW);
+			gpu.gridUploaded = this.grid;
+		}
 		gl.uniform2f(u.u_x, 0, 1);
 		gl.uniform2f(u.u_y, 0, 1);
 		gl.uniform2i(u.u_log, 0, 0);
 		gl.uniform1f(u.u_width, Math.max(1, Math.round(dpr)));
-		gl.uniform1i(u.u_stride, GRID.length);
+		gl.uniform1i(u.u_stride, this.grid.length);
 		gl.uniform1i(u.u_point, 0);
 		gl.uniform4fv(u.u_colors, GRID_COLOR);
-		gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, GRID.length / 2 - 1);
+		if (this.grid.length > 2) gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.grid.length / 2 - 1);
 
 		bindSegments(gl, gpu.vbo);
 		gl.uniform2f(u.u_x, this.xw[0], this.xw[1]);
@@ -232,10 +253,7 @@ export class LinePlot {
 
 	private attach(gl: WebGL2RenderingContext, prog: Program): LineGpu {
 		if (this.gpu && this.gpu.gl === gl && this.gpu.prog === prog) return this.gpu;
-		const grid = gl.createBuffer()!;
-		gl.bindBuffer(gl.ARRAY_BUFFER, grid);
-		gl.bufferData(gl.ARRAY_BUFFER, GRID, gl.STATIC_DRAW);
-		this.gpu = { gl, prog, vbo: gl.createBuffer()!, grid, uploaded: null };
+		this.gpu = { gl, prog, vbo: gl.createBuffer()!, grid: gl.createBuffer()!, uploaded: null, gridUploaded: null };
 		return this.gpu;
 	}
 

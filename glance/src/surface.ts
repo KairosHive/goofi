@@ -71,8 +71,13 @@ export function createSurface(canvas: HTMLCanvasElement): Surface {
 		lost = true;
 	});
 	canvas.addEventListener('webglcontextrestored', () => {
+		try {
+			programs = build(gl);
+		} catch (err) {
+			console.warn(err);
+			return;
+		}
 		lost = false;
-		programs = build(gl);
 		invalidate();
 	});
 
