@@ -244,7 +244,9 @@ impl GraphicsEngine {
     /// The external clock: run `frames` ticks on the caller's thread. The harness's door.
     pub fn render(&mut self, frames: usize) {
         for _ in 0..frames {
-            self.runtime.lock().expect("the runtime").tick();
+            let mut runtime = self.runtime.lock().expect("the runtime");
+            runtime.tick();
+            runtime.finish();
         }
     }
 
