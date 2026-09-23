@@ -356,6 +356,7 @@ fn spawn_reducer(
         let mut full_res = false;
         // What the raw frame last reduced and served SAID, so one that says it again is not sent.
         let mut sent: Option<u64> = None;
+        let mut stamped: Option<u64> = None;
         loop {
             let now = std::time::Instant::now();
             let owed = {
@@ -424,6 +425,7 @@ fn spawn_reducer(
                     pending = false;
                     served = None;
                     sent = None;
+                    stamped = None;
                     feed = None;
                 }
             }
@@ -522,13 +524,19 @@ fn spawn_reducer(
             if !pending && served == Some(g_now) {
                 continue; // nothing new to say — no emit, no joiner, no spec change
             }
-            // A frame that says what the last one said ends here, before the rate cap and the
-            // reduce — unless a joiner, a leaver, a spec change or a re-offer asked for it regardless.
-            let hash = match &made {
-                Some(_) => None,
-                None => latest.lock().unwrap().as_ref().map(goofi_codec::content_hash),
+            // A frame is two things on the wire, each sent when its own hash moved: what it says,
+            // and the engine's stamps on it. One that says what the last one said goes as its stamps
+            // alone, or not at all — unless a joiner, a leaver, a spec change or a re-offer asked for
+            // it regardless.
+            let (hash, stamps) = match &made {
+                Some(_) => (None, None),
+                None => {
+                    let held = latest.lock().unwrap();
+                    (held.as_ref().map(goofi_codec::content_hash), held.as_ref().map(goofi_codec::stamp_hash))
+                }
             };
-            if hash.is_some() && served == Some(g_now) && hash == sent {
+            let same = hash.is_some() && served == Some(g_now) && hash == sent;
+            if same && stamps == stamped {
                 pending = false;
                 continue;
             }
@@ -545,25 +553,29 @@ fn spawn_reducer(
                 Some(ready) => ready.clone(),
                 None => {
                     let Some(d) = latest.lock().unwrap().clone() else { continue };
-                    let specs = union_specs(&specs.lock().unwrap());
-                    // A table has no texels to plan; an array is reduced to its viewers' plan.
-                    let (out, depth) = match d.value() {
-                        goofi_core::Value::Table(_) => (goofi_core::reduce::reduce_table(&d, &specs), goofi_view::Depth::F32),
-                        _ => {
-                            let plan = goofi_view::plan(&specs, &d);
-                            (goofi_core::reduce::reduce_for_view(&d, &plan), plan.depth)
-                        }
-                    };
-                    reductions.fetch_add(1, Ordering::Relaxed);
-                    // As narrow as the widest viewer of the slot draws; the reduction itself is
-                    // f32 either way, and a half or a texel only for a frame they can hold.
-                    let narrowed = match depth {
-                        goofi_view::Depth::U8 => goofi_core::reduce::quantize_u8(&out)
-                            .map(|(shape, texels, meta)| goofi_codec::encode_u8(&shape, &texels, &meta)),
-                        goofi_view::Depth::F16 => goofi_codec::encode_f16(&out),
-                        goofi_view::Depth::F32 => None,
-                    };
-                    Bytes::from(narrowed.unwrap_or_else(|| goofi_codec::encode(&out)))
+                    if same {
+                        Bytes::from(goofi_codec::encode_stamps(d.meta()))
+                    } else {
+                        let specs = union_specs(&specs.lock().unwrap());
+                        // A table has no texels to plan; an array is reduced to its viewers' plan.
+                        let (out, depth) = match d.value() {
+                            goofi_core::Value::Table(_) => (goofi_core::reduce::reduce_table(&d, &specs), goofi_view::Depth::F32),
+                            _ => {
+                                let plan = goofi_view::plan(&specs, &d);
+                                (goofi_core::reduce::reduce_for_view(&d, &plan), plan.depth)
+                            }
+                        };
+                        reductions.fetch_add(1, Ordering::Relaxed);
+                        // As narrow as the widest viewer of the slot draws; the reduction itself is
+                        // f32 either way, and a half or a texel only for a frame they can hold.
+                        let narrowed = match depth {
+                            goofi_view::Depth::U8 => goofi_core::reduce::quantize_u8(&out)
+                                .map(|(shape, texels, meta)| goofi_codec::encode_u8(&shape, &texels, &meta)),
+                            goofi_view::Depth::F16 => goofi_codec::encode_f16(&out),
+                            goofi_view::Depth::F32 => None,
+                        };
+                        Bytes::from(narrowed.unwrap_or_else(|| goofi_codec::encode(&out)))
+                    }
                 }
             };
             // The serve slot is taken by a frame served, never by one this tick held back.
@@ -573,6 +585,7 @@ fn spawn_reducer(
             }
             let _ = tx.send(bytes); // Err only if all receivers are momentarily gone — harmless.
             sent = hash;
+            stamped = stamps;
             served = Some(g_now);
             pending = false;
         }

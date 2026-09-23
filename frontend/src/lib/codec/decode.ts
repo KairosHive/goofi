@@ -39,6 +39,20 @@ function checkMagic(view: DataView, off: number): void {
 	}
 }
 
+/** The tag of a frame that carries a held frame's per-emit stamps (`time`, `index`, `ufreq`) and
+ * no body: the reducer sends it in place of a frame that says what the last one said. */
+const STAMPS_TAG = 4;
+
+/** The stamps of a stamps frame, or null for a frame with data in it. */
+export function decodeStamps(buf: ArrayBuffer): Record<string, unknown> | null {
+	const view = new DataView(buf);
+	checkMagic(view, 0);
+	if (view.getUint8(5) !== STAMPS_TAG) return null;
+	const metaLen = view.getUint32(6, true);
+	const m = metaLen > 0 ? msgpackDecode(new Uint8Array(buf, 14, metaLen)) : {};
+	return m && typeof m === 'object' ? (m as Record<string, unknown>) : {};
+}
+
 /** Decode an encoded GOOF buffer into a DataFrame. */
 export function decodeData(buf: ArrayBuffer | Uint8Array): DataFrame {
 	const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);

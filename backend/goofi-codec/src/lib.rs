@@ -45,6 +45,12 @@ pub fn encode_f16(d: &Data) -> Option<Vec<u8>> {
     Some(frame(0, pack_array_meta(d.meta(), store.shape(), "float16"), body))
 }
 
+/// The tag of a frame that carries the engine's per-emit stamps alone, with no body: sent when
+/// the frame they belong to already reached the viewers, and merged into it there.
+pub const STAMPS_TAG: u8 = 4;
+/// What the engine writes afresh on every emit, and what [`content_hash`] leaves out.
+const STAMP_KEYS: [&str; 3] = [META_TIME, META_INDEX, META_UFREQ];
+
 /// A 64-bit hash of what a frame SAYS: its kind, its body, and its meta without the engine's
 /// per-emit stamps — so a held value emitted again hashes as the frame before it.
 pub fn content_hash(d: &Data) -> u64 {
@@ -53,11 +59,32 @@ pub fn content_hash(d: &Data) -> u64 {
     h.finish()
 }
 
+/// A 64-bit hash of the stamps alone, the other half of [`content_hash`].
+pub fn stamp_hash(d: &Data) -> u64 {
+    let mut h = DefaultHasher::new();
+    h.write(&pack(stamps(d.meta())));
+    h.finish()
+}
+
+/// The stamps of `meta` as a frame of their own, under [`STAMPS_TAG`].
+pub fn encode_stamps(meta: &goofi_core::Meta) -> Vec<u8> {
+    frame(STAMPS_TAG, pack(stamps(meta)), Vec::new())
+}
+
+/// Whether `frame` is a stamps frame: its meta is read with [`frame_meta`], and it has no data.
+pub fn is_stamps(frame: &[u8]) -> bool {
+    split_frame(frame).is_ok_and(|(tag, _, _)| tag == STAMPS_TAG)
+}
+
+fn stamps(meta: &goofi_core::Meta) -> Vec<(Mp, Mp)> {
+    carried(meta).into_iter().filter(|(k, _)| k.as_str().is_some_and(|k| STAMP_KEYS.contains(&k))).collect()
+}
+
 fn hash_into(d: &Data, h: &mut DefaultHasher) {
     h.write_u8(d.dtype_tag());
     let mut said: Vec<(Mp, Mp)> = carried(d.meta())
         .into_iter()
-        .filter(|(k, _)| !matches!(k.as_str(), Some(META_TIME | META_INDEX | META_UFREQ)))
+        .filter(|(k, _)| !k.as_str().is_some_and(|k| STAMP_KEYS.contains(&k)))
         .collect();
     said.push((Mp::from(META_CHANNELS), channels_to_mp(d.meta().channels())));
     h.write(&pack(said));
@@ -284,6 +311,7 @@ fn decode_at(frame: &[u8], depth: usize) -> std::result::Result<Data, String> {
         }
         2 => decode_table(body, meta, depth),
         3 => Data::texture(rmp_serde::from_slice(body).map_err(|e| e.to_string())?, meta),
+        STAMPS_TAG => Err("a stamps frame carries no data".into()),
         other => Err(format!("unknown dtype tag {other}")),
     }
 }

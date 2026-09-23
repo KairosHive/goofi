@@ -104,13 +104,17 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
             "a unit LFO's samples, widened");
 
     // Step: a frame that says what the last one said is not sent: a Constant re-emits a held
-    // value, stamped afresh, and the socket sees ONE frame — while a joiner is served regardless.
+    // value, stamped afresh, and the socket sees ONE frame with data — then its stamps alone,
+    // still moving — while a joiner is served regardless.
     let konst = g.add("signal:Constant");
     g.set_param(konst, "common", "max_frequency", 20.0);
     g.set_param(konst, "constant", "value", 3.0);
     let mut held = Viewer::open(&base, &hex(konst), "out").await;
     held.until(|d| f32s(d) == [3.0]).await;
     assert!(held.silent_for(Duration::from_millis(700)).await, "a held value was sent again");
+    let (first, next) = (held.stamps().await, held.stamps().await);
+    assert!(next.index() > first.index(), "the held frame's stamps keep moving: {first:?} then {next:?}");
+    assert!(next.time() > first.time(), "in time as well as in count");
     let mut joiner = Viewer::open(&base, &hex(konst), "out").await;
     assert_eq!(f32s(&joiner.until(|d| f32s(d) == [3.0]).await), [3.0], "a joiner gets the held frame");
     g.set_param(konst, "constant", "value", 4.0);

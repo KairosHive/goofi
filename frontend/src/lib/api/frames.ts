@@ -1,6 +1,6 @@
 /** The viewer registry and display-rate frame delivery: ONE rAF flush per tick, most-starved
  * slot first, with a per-frame time budget. */
-import { closeStream, openStream, sendSpecs, setFrameSink } from './data';
+import { closeStream, openStream, sendSpecs, setFrameSink, setStampsSink } from './data';
 import { paintDelay } from './paintCap';
 import { perfStats } from './perfStats.svelte';
 import { RateMeter } from './rateMeter';
@@ -203,6 +203,17 @@ setFrameSink((node, slot, frame) => {
 	s.pending = frame;
 	dirty.add(s);
 	requestFlush();
+});
+
+/** A held frame's fresh stamps land on the frame they belong to — the one waiting to paint, or
+ * else the one painted — as a new object, so a poll of the latest frame sees them; nothing is
+ * marked dirty, because nothing on screen changed. */
+setStampsSink((node, slot, stamps) => {
+	const s = slots.get(streamKey(node, slot));
+	if (!s) return;
+	const restamp = (f: DataFrame): DataFrame => ({ ...f, meta: { ...f.meta, ...stamps } });
+	if (s.pending) s.pending = restamp(s.pending);
+	else if (s.current) s.current = restamp(s.current);
 });
 
 /** Coalesced-frame rate for ONE stream. Null when nothing is subscribed: absent is not zero. */

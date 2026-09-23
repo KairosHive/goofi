@@ -5,21 +5,30 @@ import type { ViewSpec } from '$lib/viewers/capacity';
 
 /** Where decoded frames go. One sink, registered once by `frames.ts`. */
 type FrameSink = (node: string, slot: string, frame: DataFrame) => void;
+/** Where a held frame's fresh stamps go: the same registry, which folds them into that frame. */
+type StampsSink = (node: string, slot: string, stamps: Record<string, unknown>) => void;
 
 let worker: Worker | null = null;
 let sink: FrameSink | null = null;
+let stampsSink: StampsSink | null = null;
 
 /** Route decoded frames to `f`. Called once, at `frames.ts` module init. */
 export function setFrameSink(f: FrameSink): void {
 	sink = f;
 }
 
+/** Route a held frame's stamps to `f`. Called once, at `frames.ts` module init. */
+export function setStampsSink(f: StampsSink): void {
+	stampsSink = f;
+}
+
 function ensureWorker(): Worker {
 	if (worker) return worker;
 	worker = new Worker(new URL('./dataWorker.ts', import.meta.url), { type: 'module' });
 	worker.addEventListener('message', (e: MessageEvent) => {
-		const { node, slot, frame } = e.data as { node: string; slot: string; frame: DataFrame };
-		sink?.(node, slot, frame);
+		const m = e.data as { node: string; slot: string; frame?: DataFrame; stamps?: Record<string, unknown> };
+		if (m.frame) sink?.(m.node, m.slot, m.frame);
+		else if (m.stamps) stampsSink?.(m.node, m.slot, m.stamps);
 	});
 	return worker;
 }

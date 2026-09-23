@@ -33,10 +33,11 @@ the frame in the backend, the recorder, the snapshot and the variable tap stay f
 `i16` with scale and offset was set aside for the same reason: simpler wins until a measurement
 asks otherwise.
 
-**Silence is judged on what a frame says.** The reducer's hash skips the engine's per-emit stamps
-(`time`, `index`, `ufreq`) and keeps `drift`, so a held value is silent and an audio-clocked slot
-never is. Accepted with it: the metadata panel reads the same stream, so a held frame's stamps
-freeze there while the node's rate keeps moving in the card header.
+**A frame is two things on the wire, each sent when its own hash moved.** What a frame says —
+body and descriptive meta, `drift` included, so an audio-clocked slot is never silent — and the
+engine's per-emit stamps (`time`, `index`, `ufreq`). A held value goes once with its data and then
+as a stamps frame per emit, which the browser folds into the frame it holds without a paint, so the
+metadata panel keeps moving while the plot is left alone.
 
 **Generic compression comes last, and only shuffled LZ4.** WebSocket `permessage-deflate` is
 rejected: floats compress ~1.3× under deflate and it costs the tablet CPU it does not have.

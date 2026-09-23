@@ -1,6 +1,6 @@
 /** Data-plane Web Worker: one WebSocket per (node, slot), each frame decoded on arrival and
  * posted to the main thread with its array buffer transferred. `frames.ts` owns latest-wins. */
-import { decodeData, type DataFrame } from '$lib/codec/decode';
+import { decodeData, decodeStamps, type DataFrame } from '$lib/codec/decode';
 import { dataUrl } from './dataUrl';
 import { streamKey } from './streamKey';
 
@@ -90,10 +90,16 @@ self.addEventListener('message', (e: MessageEvent) => {
 	}
 });
 
-/** Decode one frame and hand it to the main thread, its buffers transferred. */
+/** Decode one frame and hand it to the main thread, its buffers transferred; a held frame's
+ * stamps go as the small message they are. */
 function post(st: SlotState, raw: ArrayBuffer): void {
 	let frame: DataFrame;
 	try {
+		const stamps = decodeStamps(raw);
+		if (stamps) {
+			(self as unknown as Worker).postMessage({ node: st.node, slot: st.slot, stamps });
+			return;
+		}
 		frame = decodeData(raw);
 	} catch {
 		return; // a corrupt frame shouldn't kill the slot
