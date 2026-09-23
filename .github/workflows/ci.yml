@@ -73,7 +73,7 @@ jobs:
           cargo test -p goofi-tests --features embed --test all --
           python:: plugins:: nodes:: inspect:: codec_golden:: filter_golden::
           param_modulation:: python_module_hygiene:: python_init_order::
-          graphics::python_texture graphics::host_pixels graphics::camera_video --test-threads=4
+          graphics::python_texture graphics::host_pixels --test-threads=4
       - run: cargo test -p goofi-tests --features embed --test python_gil_tripwire
       - run: npm install
         working-directory: tests/e2e

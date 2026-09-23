@@ -54,8 +54,8 @@ install half exists, `--extra-nodes node-bundles/<name>` is how one is loaded.
 **The bundles leave this repo** (decided 2026-09-23). goofi keeps its builtin nodes; every other
 bundle moves to a node repo registered through the library like anyone else's, and the tests that
 exercise a bundle's nodes move with it (`goofi-tests` situations use signal, audio and graphics
-nodes only; today `all/graphics.rs` and `e2e/tests/harmonic-geometry.spec.ts` still reach into
-bundles). The CI cost this removes, measured on the last green Linux run: the bundles' Python
+nodes only; the tests that read bundle files directly are gone, and the graphics situation still
+adds the graphics bundle's shaders by type until it brings its own). The CI cost this removes, measured on the last green Linux run: the bundles' Python
 packages installed at provisioning (60 s, CUDA and cuDNN wheels among them), the node-library
 indexing at every boot (70 s, the biotuner probe alone 38 s), and the bundle build in the bridge's
 build script.

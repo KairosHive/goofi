@@ -582,7 +582,7 @@ fn shaders_render_on_the_gpu() {
         g.call("node remove", j!({ "node": hex(solo) }));
     }
 
-    // Step: the shipped set composes, and every one of it compiles on this machine.
+    // Step: two shaders compose.
     let ramp = g.add("graphics:Ramp");
     g.ready(ramp);
     let comp = g.add("graphics:Composite");
@@ -591,49 +591,6 @@ fn shaders_render_on_the_gpu() {
     g.link(ramp, "out", comp, "a");
     g.link(c, "out", comp, "b");
     drawn(&g, comp, "the sum of a ramp and the constant", |d| px(d, 0, 0)[2] > 1.0 - 1e-3);
-    // A row says naga read the file; a FRAME says this device built the pipeline behind it, which
-    // is the half a validation pass cannot answer for.
-    let shipped: Vec<String> = g.call("library list", j!({ "full": true }))["types"]
-        .as_array()
-        .expect("a palette")
-        .iter()
-        .filter_map(|r| r["type"].as_str())
-        .filter(|t| t.starts_with("graphics:"))
-        .filter(|t| g.call("library get", j!({"type": t}))["tier"] == "shader")
-        .map(String::from)
-        .collect();
-    // Against the bundles on disk, not a number: a fourteenth node must not fail the suite for
-    // existing, and a node that stops registering must fail it. EVERY bundle, because a `.wgsl`
-    // is the graphics engine's wherever it is shipped from — the simulation pack ships the
-    // graphics half of each of its models beside the model.
-    let bundles = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../node-bundles");
-    let mut want: Vec<String> = std::fs::read_dir(&bundles)
-        .expect("the shipped bundles")
-        .filter_map(|e| e.ok())
-        .flat_map(|bundle| std::fs::read_dir(bundle.path()).into_iter().flatten().flatten())
-        .filter(|e| e.path().extension().is_some_and(|x| x == "wgsl"))
-        .map(|e| format!("graphics:{}", e.path().file_stem().unwrap().to_string_lossy()))
-        .collect();
-    want.sort();
-    let mut got = shipped.clone();
-    got.sort();
-    assert_eq!(got, want, "every shipped `.wgsl` is a type, and nothing else is");
-    // At a small default: the question is whether each pipeline draws, and a 1024² readback per
-    // poll answers it no better in a hundred times the bytes.
-    for side in ["system.default_width", "system.default_height"] {
-        g.call("variable entry edit", j!({ "name": side, "value": 64 }));
-    }
-    // Upscale is a bundle's heavy compile with nothing of the engine's in it; it registers above.
-    for ty in shipped.iter().filter(|ty| *ty != "graphics:Upscale") {
-        let node = g.add(ty);
-        g.ready(node);
-        drawn(&g, node, ty, |d| shape(d).len() == 3);
-        assert!(g.error(node).is_none(), "{ty} stands with an error");
-        g.call("node remove", j!({ "node": hex(node) }));
-    }
-    for side in ["system.default_width", "system.default_height"] {
-        g.call("variable entry edit", j!({ "name": side, "value": goofi_core::variables::DEFAULT_SIZE }));
-    }
 
     // Step: a `.wgsl` that does not compile is a greyed type carrying naga's own line number.
     let dir = g.state.mount().join("nodes_graphics");
@@ -1370,28 +1327,4 @@ fn native_host_program_writes_the_shared_output() {
     g.set_param(source, "image", "mode", "pixels");
     drawn(&g, math, "CPU submission replaces the failed GPU program", |d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]));
     g.until("CPU submission clears the GPU program fault", |g| g.error(source).is_none().then_some(()));
-}
-
-#[test]
-fn camera_video_uploads_rgb_and_loops_without_hardware() {
-    let python = goofi_tests::require_python();
-    let g = Goofi::new();
-    let video = g.state.mount().join("camera.avi");
-    let result = std::process::Command::new(&python.py)
-        .args(["-c", "import cv2, numpy as np, sys; w=cv2.VideoWriter(sys.argv[1], cv2.VideoWriter_fourcc(*'MJPG'), 30, (16, 8)); assert w.isOpened(); [w.write(np.full((8, 16, 3), [0, 0, 255], np.uint8)) for _ in range(3)]; w.release()"])
-        .arg(&video).env_remove("PYTHONHOME").env_remove("PYTHONPATH").output().unwrap();
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
-    let dir = g.state.mount().join("nodes_graphics");
-    std::fs::create_dir_all(&dir).unwrap();
-    let camera = include_str!("../../../../node-bundles/graphics/camera.py")
-        .replace("goofi.StringParam(\"camera\", SOURCES", "goofi.StringParam(\"file\", SOURCES")
-        .replace("goofi.StringParam(\"\", doc=\"The video", &format!("goofi.StringParam({}, doc=\"The video", j!(video.to_str().unwrap())));
-    std::fs::write(dir.join("video_fixture.py"), camera).unwrap();
-    g.call("library refresh", j!({}));
-    let source = g.add("graphics:VideoFixture");
-    g.ready(source);
-    for _ in 0..5 {
-        drawn(&g, source, "video RGB texture", |d| shape(d) == vec![8, 16, 4] && px(d, 0, 0)[0] > 0.95 && px(d, 0, 0)[2] < 0.05);
-    }
-    assert!(g.error(source).is_none());
 }
