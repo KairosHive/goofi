@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SERIES } from './palette';
+import { seriesColor } from './palette';
 
 const VIEWERS = fileURLToPath(new URL('.', import.meta.url));
 
@@ -16,14 +16,10 @@ function consumers(): { rel: string; src: string }[] {
 }
 
 describe('canvas series palette', () => {
-	it('SERIES is one non-empty list of distinct #rrggbb', () => {
-		expect(SERIES.length).toBeGreaterThan(0);
-		for (const c of SERIES) expect(c).toMatch(/^#[0-9a-fA-F]{6}$/);
-		// A repeat would silently give two series the same line — the palette's whole job is to
-		// tell them apart. Its LENGTH is deliberately unpinned: with one exported const and its
-		// importers, the 8-vs-7 drift is impossible by construction, and pinning it would only
-		// fail the next deliberate extension.
-		expect(new Set(SERIES).size, 'no two series share a colour').toBe(SERIES.length);
+	it('gives every series its own #rrggbb, the same one the surface draws', () => {
+		const seen = new Set(Array.from({ length: 32 }, (_, i) => seriesColor(i)));
+		expect(seen.size, 'no two series share a colour').toBe(32);
+		for (const c of seen) expect(c).toMatch(/^#[0-9a-f]{6}$/);
 	});
 });
 

@@ -3,7 +3,7 @@
 	import ViewerControls from './ViewerControls.svelte';
 	import { slotView, isSlotExpanded } from './inlineView';
 	import { recordViewChange } from './viewExecutors';
-	import { resolveKind, type ViewerKind } from './kind';
+	import { drawsOnSurface, resolveKind, type ViewerKind } from './kind';
 	import { resolveSettings, type SettingsMap } from './settingsSchema';
 	import type { ViewBinding } from './viewBinding';
 	import { ui } from '$lib/stores/ui.svelte';
@@ -107,7 +107,10 @@
 	</header>
 
 	{#if expanded}
-		<div class="body"><ViewerFeed {node} {slot} {binding} zoom={vp.current.zoom} /></div>
+		<!-- A line or image body is transparent: the editor's plot surface paints it from beneath. -->
+		<div class="body" class:plot={drawsOnSurface(binding.kind)}>
+			<ViewerFeed {node} {slot} {binding} zoom={vp.current.zoom} />
+		</div>
 	{/if}
 </div>
 
@@ -198,6 +201,13 @@
 		justify-content: stretch;
 		padding: 4px 6px 7px;
 		background: var(--bg);
+	}
+	/* The surface draws through the body; its padding is an opaque frame the card clips at the corners. */
+	.body.plot {
+		background: transparent;
+		padding: 0;
+		border: solid var(--bg);
+		border-width: 4px 6px 7px;
 	}
 	.body > :global(*) {
 		flex-grow: 1;

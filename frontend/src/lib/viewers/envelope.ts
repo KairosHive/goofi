@@ -15,7 +15,7 @@ export function readEnvelope(meta: unknown, ndim: number): { origLen: number } |
 }
 
 /**
- * Build the uPlot min/max band from already-enveloped channels, re-deriving only the x-grid.
+ * Build the min/max band from already-enveloped channels, re-deriving only the x-grid.
  * `origLen` is the pre-reduction sample count; `base` is the x origin, as in `decimateMinMax`.
  */
 export function envelopeBand(channels: ArrayLike<number>[], origLen: number, base = 0): Decimated {

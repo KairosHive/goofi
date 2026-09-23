@@ -11,8 +11,25 @@
 	import { StatusDot } from '$lib/ui';
 	import { formatUpdateRate } from './nodeStats';
 	import type { NodeInstanceInfo } from '$lib/api/control';
+	import { provideAnchor } from '$lib/viewers/plotHost';
 
-	let { data, selected }: NodeProps = $props();
+	let { data, selected, positionAbsoluteX, positionAbsoluteY, zIndex }: NodeProps = $props();
+	// Where this card sits in flow units, for the viewers that draw on the editor's plot surface.
+	let card = $state<HTMLElement | null>(null);
+	provideAnchor({
+		get x() {
+			return positionAbsoluteX;
+		},
+		get y() {
+			return positionAbsoluteY;
+		},
+		get z() {
+			return zIndex;
+		},
+		get el() {
+			return card;
+		}
+	});
 	const node = $derived(data.node as NodeInstanceInfo);
 	const label = $derived((data.label as string | undefined) ?? node?.name);
 	const inputs = $derived(Object.keys(node?.input_slots ?? {}));
@@ -62,6 +79,7 @@
 
 <div
 	class="goofi-node"
+	bind:this={card}
 	class:selected
 	class:has-error={isError}
 	class:booting={isBooting}
@@ -151,12 +169,18 @@
 		overflow: hidden;
 		display: flex;
 		flex-direction: column;
-		background: var(--surface-1);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-md);
 		transition:
 			border-color var(--dur-fast) var(--ease),
 			box-shadow var(--dur-fast) var(--ease);
+	}
+	/* Header and slots paint their own backgrounds, and a plot body stays transparent for the
+	   surface beneath; only the room below the last slot needs a fill. */
+	.surface::after {
+		content: '';
+		flex: 1 1 auto;
+		background: var(--surface-1);
 	}
 	.goofi-node.selected .surface {
 		border-color: var(--accent);

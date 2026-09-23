@@ -21,7 +21,7 @@ export interface ArrayData {
 	dtype: string;
 	shape: number[];
 	/** Linear element buffer in row-major order. */
-	values: ArrayLike<number> & { length: number };
+	values: Float32Array | Uint8Array;
 }
 
 const MAGIC = new Uint8Array([0x47, 0x4f, 0x4f, 0x46]); // 'GOOF'
@@ -139,7 +139,7 @@ function readTypedArray(
 	buffer: ArrayBufferLike,
 	byteOffset: number,
 	nBytes: number
-): ArrayLike<number> & { length: number } {
+): Float32Array | Uint8Array {
 	const bo = dtypeStr.charAt(0);
 	if (bo === '>') {
 		throw new Error(`Big-endian arrays unsupported: ${dtypeStr}`);
@@ -183,9 +183,6 @@ function halfToFloat(bits: number): number {
 
 export function isArrayFrame(f: DataFrame): f is DataFrame & { data: ArrayData } {
 	return f.dtype === 'ARRAY';
-}
-export function isFloatDtype(dtype: string): boolean {
-	return dtype.startsWith('<f') || dtype.startsWith('|f') || dtype.startsWith('=f');
 }
 export function isStringFrame(f: DataFrame): f is DataFrame & { data: string } {
 	return f.dtype === 'STRING';

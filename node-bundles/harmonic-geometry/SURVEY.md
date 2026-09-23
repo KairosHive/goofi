@@ -104,13 +104,6 @@ display the resulting tuning. The audit exposed a short-scale boundary error
 in TuningReduction; it now returns available degrees when no reduction is
 needed, as its documented contract requires.
 
-The cookbook atlas comes from the HarmonicGeometry method catalog and the
-public test renders. The six harmonograph images are method settings of one
-HarmonicGeometry node, displayed through GeometryView. The cookbook builder
-requires each actual recipe and method image; it cannot substitute a different
-geometry when a render is missing. This covers the cookbook's 46 methods and
-ten patches, not every visualization in the upstream Biotuner notebooks.
-
 1. **HarmonicMorph:** select two tuning or peak rows, or enter ratio presets;
    interpolate in ratio or pitch space, wrap phases, fade extra components, and
    grow harmonic/subharmonic extensions. Output one labeled harmonic ARRAY; existing Select nodes expose active tuning rows.
@@ -136,10 +129,9 @@ ten patches, not every visualization in the upstream Biotuner notebooks.
    transitions, flow and sand, knots and surfaces, interval/fractal geometry,
    and live peaks connected to the existing Biotuner bundle. Include controls,
    readable dashboard layouts, and no audio hardware or native windows.
-10. **Verification and cookbook:** run the real nodes through public sessions;
-    check every exposed method, empty/malformed data, changing counts, morph
-    endpoints, shader rendering, and patch reloads. Inspect browser dashboards.
-    Deliver an illustrated cookbook with recipes, source links, and limits.
+10. **Verification:** run the real nodes through public sessions; check every exposed method,
+    empty/malformed data, changing counts, morph endpoints, shader rendering, and patch
+    reloads. Inspect browser dashboards.
 
 ## Source links
 
@@ -160,4 +152,4 @@ curve boundaries, masks and malformed-index recovery. HarmonicMorph, RatioSequen
 GeometryBlend, HarmonicTransport, GeometryMetrics and GeometryView no longer emit
 alternate copies of their numerical data. HarmonicVoices emits pitch and gain only.
 The bundle now has six signal nodes and six graphics nodes, plus three shared
-Biotuner signal nodes. The cookbook moves to the website after the goofi push.
+Biotuner signal nodes. The cookbook lives in its own repository.

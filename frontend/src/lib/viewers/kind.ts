@@ -21,6 +21,11 @@ export function resolveKind(dtype: string | null, stored: ViewerKind | undefined
 	return pinnedKind(dtype) ?? stored ?? DEFAULT_KIND[(dtype ?? 'ARRAY') as SlotDtype] ?? 'line';
 }
 
+/** The kinds the panel's plot surface draws; their card body is a transparent frame over it. */
+export function drawsOnSurface(kind: ViewerKind): boolean {
+	return kind === 'line' || kind === 'image';
+}
+
 /** Whether an array of the given shape can be drawn by `kind`; a non-array frame always can. */
 export function isRenderable(kind: ViewerKind, spec: ArrayData | null): boolean {
 	if (!spec) return true;

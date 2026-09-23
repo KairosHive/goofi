@@ -18,6 +18,9 @@
 	import FitToGraph from '$lib/editor/FitToGraph.svelte';
 	import { camera } from '$lib/editor/camera';
 	import FlowApi from '$lib/editor/FlowApi.svelte';
+	import FlowSurface from '$lib/editor/FlowSurface.svelte';
+	import { provideSurface } from '$lib/viewers/plotHost';
+	import type { Surface } from 'glance';
 	import SubpatchZoomExit from '$lib/editor/SubpatchZoomExit.svelte';
 	import SnapGuides from '$lib/editor/SnapGuides.svelte';
 	import {
@@ -1025,6 +1028,14 @@
 		mouseY = e.clientY;
 	}
 
+	// The plot surface the node cards' viewers draw on; bound from <FlowSurface> inside <SvelteFlow>.
+	let plotSurface = $state.raw<Surface | null>(null);
+	provideSurface({
+		get surface() {
+			return plotSurface;
+		}
+	});
+
 	// Bound from <FlowApi> inside <SvelteFlow>.
 	let screenToFlow = $state<((p: { x: number; y: number }) => { x: number; y: number }) | undefined>(
 		undefined
@@ -1174,6 +1185,7 @@
 			<Controls showLock={false} />
 			<FitToGraph {panelId} options={FIT_OPTIONS} />
 			<FlowApi bind:screenToFlowPosition={screenToFlow} bind:getViewport bind:setViewport />
+			<FlowSurface bind:surface={plotSurface} />
 			<SubpatchZoomExit {entered} onExit={() => exitToDepth(enteredPath.length - 1)} />
 			{#if pendingPlacement}
 				<PlacementPreview

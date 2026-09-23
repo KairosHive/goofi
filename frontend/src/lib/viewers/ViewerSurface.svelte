@@ -1,12 +1,11 @@
-<!-- The single owner of the frame→component dispatch; subscription is the caller's concern. -->
+<!-- The frame→component dispatch for the kinds a component draws; lines and images go to the
+     plot surface in ViewerFeed. Subscription is the caller's concern. -->
 <script lang="ts">
 	import { isArrayFrame, isStringFrame, isTableFrame, type DataFrame } from '$lib/codec/decode';
 	import { isRenderable, type ViewerKind } from './kind';
 	import { summaryOf } from './viewMeta';
 	import type { SettingsMap } from './settingsSchema';
 	import { EmptyState } from '$lib/ui';
-	import ArrayViewer from './ArrayViewer.svelte';
-	import ImageViewer from './ImageViewer.svelte';
 	import TrajectoryViewer from './TrajectoryViewer.svelte';
 	import TopomapViewer from './TopomapViewer.svelte';
 	import StringViewer from './StringViewer.svelte';
@@ -36,11 +35,7 @@
 {:else if summary}
 	<HighDimFallback {summary} />
 {:else if isArrayFrame(frame)}
-	{#if kind === 'line'}
-		<ArrayViewer {frame} {settings} />
-	{:else if kind === 'image'}
-		<ImageViewer {frame} {settings} />
-	{:else if kind === 'trajectory'}
+	{#if kind === 'trajectory'}
 		<TrajectoryViewer {frame} {settings} />
 	{:else if kind === 'topomap'}
 		<TopomapViewer {frame} {settings} />

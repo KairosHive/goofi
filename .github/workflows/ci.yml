@@ -83,7 +83,7 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/package.json') }}
       - run: npx playwright install --with-deps chromium
         working-directory: tests/e2e
-      # One backend: two cookbook patches rendering on lavapipe at once starve each other's frames.
+      # One backend: two graphics patches rendering on lavapipe at once starve each other's frames.
       - run: npm run e2e
         working-directory: tests/e2e
         env:
