@@ -17,6 +17,9 @@ env:
   CARGO_TERM_COLOR: always
   # sccache keeps every compiled crate across runs; incremental compilation would split them.
   CARGO_INCREMENTAL: 0
+  # The test profile declares `incremental = false`; dev must say the same, or the two profiles'
+  # units share one uplifted cdylib and rebuild six crates after each other on every step.
+  CARGO_PROFILE_DEV_INCREMENTAL: 'false'
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: 'true'
   # Where the bridge's build script puts the shipped nodes, so the harness and the fleet share it.
@@ -43,18 +46,21 @@ jobs:
           ! grep -n '^warning' build.log
       # One boot fills the node build dir with the Python probes every test binary would otherwise take.
       - run: cargo run -p goofi-cli -- --headless --list-nodes
+      # One invocation over the whole workspace, so the package set and its unified features match
+      # the builds above and nothing is compiled a second time.
       - name: Unit tests and the situations with a binary of their own
-        run: cargo test --workspace --exclude goofi-tests --no-fail-fast && cargo test -p goofi-tests --no-fail-fast --test agent --test audio --test cli --test probe --test shipped
+        run: cargo test --workspace --no-fail-fast --lib --bins --test agent --test audio --test cli --test probe --test shipped
       # One situation FILE per process, four threads each: a file's situations share the runner
       # alone, so lavapipe's shader compiles and the Python children are not starved by the rest,
       # and an hour-long process is not what the last file inherits. The flag, not
       # `RUST_TEST_THREADS`, which the helper children a situation spawns would inherit.
+      # The files whose situations all need `embed` run in the Python-tier step below, not here.
       - name: Situations
         run: |
           status=0
           for file in backend/goofi-tests/tests/all/*.rs; do
             situation=$(basename "$file" .rs)
-            [ "$situation" = main ] && continue
+            case $situation in main|codec_golden|filter_golden|param_modulation|python_init_order|python_module_hygiene) continue;; esac
             echo "::group::$situation"
             cargo test -p goofi-tests --test all -- "$situation::" --test-threads=4 || status=1
             echo "::endgroup::"
