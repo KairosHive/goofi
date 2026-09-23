@@ -29,14 +29,8 @@ the absolute frame rates.
 
 ## Remaining
 
-- **Ops that do not block** — every op is the standard interaction, so only a write should hold
-  the graph, every op must stay atomic, and a slow op must not park a socket's event drain. The
-  first attempt (a per-socket queue with the op's events held behind its reply) was taken out:
-  a queue beside the op path is not the design. To be designed whole, with the op table.
-- **Continuous-motion edits** — a knob, a slider or a number field under a pointer emits an op
-  per event today. A rate limiter in the control was built and taken out: the edit path for a
-  gesture (what is sent, when, and what the control shows meanwhile) is one design, to be made
-  after the op path above.
+- **The op path** — ops that do not block, and edits under continuous motion: one design, in
+  `op-path.md`.
 - **The dev profile** — `Cargo.toml`: `[profile.dev] opt-level = 1` and
   `[profile.dev.package."*"] opt-level = 2` give 6–9× on the serve path and drop the status
   drain from 15–20 % of a core to ~2 %. It was built and REVERTED: with either half alone, two
