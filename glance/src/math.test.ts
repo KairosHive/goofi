@@ -7,7 +7,6 @@ import {
 	gridLines,
 	layoutSeries,
 	logSafe,
-	nearestIndex,
 	rgba,
 	visible
 } from './math';
@@ -76,15 +75,6 @@ describe('series layout', () => {
 		const again = layoutSeries([[6]], [7], 0, first.buf);
 		expect(again.buf).toBe(first.buf);
 		expect([...again.buf].slice(0, 2)).toEqual([7, 6]);
-	});
-	it('finds the nearest sample by x', () => {
-		const xs = [0, 10, 20, 30];
-		const at = (i: number) => xs[i];
-		expect(nearestIndex(at, 4, -5)).toBe(0);
-		expect(nearestIndex(at, 4, 14)).toBe(1);
-		expect(nearestIndex(at, 4, 16)).toBe(2);
-		expect(nearestIndex(at, 4, 99)).toBe(3);
-		expect(nearestIndex(at, 0, 1)).toBe(-1);
 	});
 });
 

@@ -23,7 +23,6 @@ line.setBackground('#111111');
 line.setSettings({ logX, logY, yAuto, yMin, yMax, points });
 line.push({ rows: [Float32Array, ...], xs?, base? });
 line.range();                                    // { xMin, xMax, yMin, yMax, scalar } for labels
-line.valueAt(xFromLeft);                         // { x, values } nearest a pointer
 line.setOrder(z);                                // overlapping plots draw in z order
 line.clear();                                    // background alone until the next push
 line.remove();
@@ -59,6 +58,6 @@ into. A docked viewer panel keeps a surface of its own at zoom 1.
 
 ```sh
 npm install
-npm test      # vitest over the pure parts: rects, windows, layout, hit test
+npm test      # vitest over the pure parts: rects, windows, layout, palette
 npm run check
 ```

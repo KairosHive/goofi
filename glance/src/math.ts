@@ -114,20 +114,6 @@ export function gridLines(a: number, b: number, log: boolean, target = 4): { maj
 	return { major, minor };
 }
 
-/** The index of the sample nearest `x` in ascending `xAt(0..n)`, or -1 when there is none. */
-export function nearestIndex(xAt: (i: number) => number, n: number, x: number): number {
-	if (n <= 0) return -1;
-	let lo = 0;
-	let hi = n - 1;
-	while (lo < hi) {
-		const mid = (lo + hi) >> 1;
-		if (xAt(mid) < x) lo = mid + 1;
-		else hi = mid;
-	}
-	if (lo > 0 && x - xAt(lo - 1) < xAt(lo) - x) return lo - 1;
-	return lo;
-}
-
 /** Interleave rows into (x, y) pairs with a NaN pad after each row, so one instanced segment
  * draw covers every series and never joins two rows. Reuses `out` when it fits. */
 export function layoutSeries(

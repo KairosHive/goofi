@@ -12,7 +12,6 @@
 	import { offsetIn, useAnchor, useSurface } from './plotHost';
 	import { pushImage, pushLine } from './plotFeed';
 	import { isRenderable } from './kind';
-	import { seriesColor } from './palette';
 	import { makeLUTCache } from './colormaps';
 	import { formatTick } from './format';
 
@@ -40,7 +39,6 @@
 	let plot = $state.raw<Plot | null>(null);
 	let labels = $state<string[]>([]);
 	let labelKey = '';
-	let cursor = $state<{ x: number; values: number[] } | null>(null);
 	const lutFor = makeLUTCache();
 
 	function quantize(px: number): number {
@@ -138,7 +136,6 @@
 		if (!p || !isArrayFrame(f) || !isRenderable(kind, f.data)) return;
 		if (p instanceof LinePlot) {
 			pushLine(p, f, capW, Boolean(settings.logX));
-			if (pointerX !== null) cursor = p.valueAt(pointerX);
 			const r = p.range();
 			if (!r) return;
 			const next = r.scalar
@@ -154,34 +151,9 @@
 		}
 	}
 
-	// POINTER, not mouse, so a finger gets a readout too; a tap is a press with no motion. The
-	// readout follows the frames while the pointer rests, so it stays true on a live plot.
-	let pointerX: number | null = null;
-	function onPointer(e: PointerEvent): void {
-		const p = plot;
-		if (!(p instanceof LinePlot) || !container) return;
-		const r = container.getBoundingClientRect();
-		pointerX = r.width > 0 ? ((e.clientX - r.left) / r.width) * container.offsetWidth : null;
-		cursor = pointerX === null ? null : p.valueAt(pointerX);
-	}
-	function onLeave(e: PointerEvent): void {
-		// A touch pointer is destroyed on release, so retracting on its `pointerleave` would flash the readout away.
-		if (e.type === 'pointerleave' && e.pointerType !== 'mouse') return;
-		pointerX = null;
-		cursor = null;
-	}
 </script>
 
-<!-- The pointer only feeds the readout; the body is not a control. -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div
-	class="viewer-feed"
-	bind:this={container}
-	onpointermove={onPointer}
-	onpointerdown={onPointer}
-	onpointerleave={onLeave}
-	onpointercancel={onLeave}
->
+<div class="viewer-feed" bind:this={container}>
 	{#if !slot}
 		<EmptyState>
 			{#snippet hint()}node has no output slots{/snippet}
@@ -195,14 +167,6 @@
 		{#each labels as text, i (i)}
 			{#if text}<span class="tick tick-{i}">{text}</span>{/if}
 		{/each}
-		{#if cursor}
-			<div class="cursor-chip" data-testid="cursor-chip">
-				<span class="cursor-x">x={formatTick(cursor.x)}</span>
-				{#each cursor.values as v, i (i)}
-					<span class="cursor-y" style="color: {seriesColor(i)};">{formatTick(v) || '—'}</span>
-				{/each}
-			</div>
-		{/if}
 	{/if}
 </div>
 
@@ -221,15 +185,26 @@
 		min-width: 0;
 		min-height: 0;
 	}
-	/* The range labels: the surface draws no text, so its corners are annotated here. */
+	/* The range labels: the surface draws no text, so its corners are annotated here, on hover. */
 	.tick {
 		position: absolute;
+		opacity: 0;
+		transition: opacity var(--dur-slow) var(--ease);
 		padding: var(--space-1);
 		font-family: var(--font-mono);
 		font-size: var(--fs-micro);
 		line-height: 1;
 		color: var(--text-dim);
 		pointer-events: none;
+	}
+	.viewer-feed:hover .tick {
+		opacity: 1;
+	}
+	/* No hover on a touch screen: the labels rest visible there. */
+	@media (hover: none) and (pointer: coarse) {
+		.tick {
+			opacity: 1;
+		}
 	}
 	.tick-0 {
 		top: 0;
@@ -242,33 +217,5 @@
 	.tick-2 {
 		bottom: 0;
 		right: 0;
-	}
-	.cursor-chip {
-		/* Bottom-center: the corners are taken by the range labels. */
-		position: absolute;
-		bottom: 4px;
-		left: 50%;
-		transform: translateX(-50%);
-		display: flex;
-		gap: var(--space-3);
-		font-family: var(--font-mono);
-		font-size: var(--fs-micro);
-		padding: var(--space-1) var(--space-3);
-		background: color-mix(in srgb, var(--bg) 78%, transparent);
-		border: 1px solid color-mix(in srgb, var(--text-muted) 30%, transparent);
-		border-radius: 3px;
-		color: var(--text-dim);
-		pointer-events: none;
-		max-width: calc(100% - 8px);
-		overflow: hidden;
-		white-space: nowrap;
-		text-overflow: ellipsis;
-		z-index: 2;
-	}
-	.cursor-x {
-		color: var(--text-muted);
-	}
-	.cursor-y {
-		font-variant-numeric: tabular-nums;
 	}
 </style>

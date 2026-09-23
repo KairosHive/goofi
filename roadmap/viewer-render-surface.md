@@ -68,7 +68,7 @@ transformed viewport (it cannot interleave with the edge and node layers).
 
 **A plot is a rect plus a series buffer; a frame is a buffer upload, never a state write.** The
 surface exposes `addPlot(rect, kind, settings) → handle`, `handle.push(values, shape)`,
-`handle.setRect`, `handle.setSettings`, `handle.valueAt(x)`, `remove()`. `push` writes into a
+`handle.setRect`, `handle.setSettings`, `remove()`. `push` writes into a
 per-plot region of one shared VBO (or a float texture) and marks the surface dirty. One `rAF` per
 surface draws every visible plot when anything is dirty — a draw call each, so redrawing all is
 cheaper than tracking damage. `frames.ts` stays the registry and the paint cap; the consumer of
@@ -123,7 +123,7 @@ worth doing in the current viewers, since the package will take weeks and each i
 The cheap cuts; `glance/` (surface, line and image plots, hit test, vitest over the pure parts,
 `tests/e2e/tests/viewer.spec.ts` for the pixels); `ArrayViewer` and `ImageViewer` migrated behind
 `ViewBinding`, uPlot and `imageGL.ts` removed. The docked `viewer` panel keeps a surface of its own
-at zoom 1. `valueAt` reads the CPU copy on the main thread.
+at zoom 1.
 
 ## Remaining
 

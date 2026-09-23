@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { waitForApp, resetPatch } from '../lib/app';
-import { addNode, waitForNode } from '../lib/goofi';
+import { addNode, selectNode, waitForNode } from '../lib/goofi';
 
 type Clip = { x: number; y: number; width: number; height: number };
 
@@ -81,6 +81,63 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			expect((await inspect(page, below)).contrast, 'the freed room is flat pane').toBeLessThan(10);
 			await card.getByLabel('toggle viewer').first().click();
 			await expect(body).toBeVisible();
+		});
+
+		await test.step('a zoom keeps the plot inside its card', async () => {
+			const before = (await card.boundingBox())!;
+			const pane = (await page.locator('.svelte-flow__pane').boundingBox())!;
+			await page.mouse.move(pane.x + pane.width / 2, pane.y + pane.height / 2);
+			await page.mouse.wheel(0, -400);
+			await expect
+				.poll(async () => (await card.boundingBox())!.width / before.width, { timeout: 10_000 })
+				.toBeGreaterThan(1.2);
+			const box = (await body.boundingBox())!;
+			await expect
+				.poll(async () => (await inspect(page, box)).tint, { timeout: 20_000 })
+				.toBeGreaterThan(40);
+			const cardBox = (await card.boundingBox())!;
+			const right = { x: cardBox.x + cardBox.width + 16, y: box.y, width: 24, height: box.height };
+			await expect
+				.poll(async () => (await inspect(page, right)).contrast, { timeout: 10_000 })
+				.toBeLessThan(10);
+			await page.mouse.wheel(0, 400);
+			await expect
+				.poll(async () => Math.abs((await card.boundingBox())!.width - before.width), { timeout: 10_000 })
+				.toBeLessThan(4);
+		});
+
+		await test.step('a raised card covers the plot beneath it', async () => {
+			// A flat line over the sine: the overlap shows the flat card's plot, not the one under it.
+			const box = (await body.boundingBox())!;
+			const flat = await addNode(page, 'LFO', [180, 140]);
+			await waitForNode(page, flat);
+			await page.evaluate((u) => {
+				const g = (window as any).goofi;
+				g.commands.updateParam(u, 'lfo', 'amplitude', 0);
+				g.commands.updateParam(u, 'output', 'mode', 'block');
+				g.commands.updateParam(u, 'output', 'sfreq', 64);
+			}, flat);
+			const top = page.locator(`.svelte-flow__node[data-id="${flat}"]`);
+			const topBody = top.locator('.slot-viewer .body');
+			await expect(topBody).toBeVisible();
+			await selectNode(page, flat);
+			const t = (await topBody.boundingBox())!;
+			const x0 = Math.max(box.x, t.x) + 4;
+			const y0 = Math.max(box.y, t.y) + 4;
+			const overlap = {
+				x: x0,
+				y: y0,
+				width: Math.min(box.x + box.width, t.x + t.width) - 4 - x0,
+				height: Math.min(box.y + box.height, t.y + t.height) - 4 - y0
+			};
+			expect(overlap.width, 'the bodies overlap').toBeGreaterThan(40);
+			expect(overlap.height, 'the bodies overlap').toBeGreaterThan(20);
+			await expect
+				.poll(async () => (await inspect(page, overlap)).tint, { timeout: 20_000 })
+				.toBeGreaterThan(40);
+			await expect
+				.poll(async () => (await inspect(page, overlap)).litRows, { timeout: 10_000 })
+				.toBeLessThan(0.15);
 		});
 
 		await test.step('a pan keeps the plot inside its card', async () => {

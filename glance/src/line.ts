@@ -3,7 +3,6 @@ import { seriesRgba } from './color';
 import {
 	extent,
 	layoutSeries,
-	nearestIndex,
 	rgba,
 	unmapped,
 	axisWindow,
@@ -157,19 +156,6 @@ export class LinePlot {
 			yMax: unmapped(this.yw[1], logY),
 			scalar: false
 		};
-	}
-
-	/** The sample nearest a point `x` flow units from the rect's left edge, one value per series. */
-	valueAt(x: number): { x: number; values: number[] } | null {
-		const buf = this.buf;
-		if (!buf || this.scalar || this.m === 0 || this.rect.w <= 0) return null;
-		const t = Math.min(1, Math.max(0, x / this.rect.w));
-		const target = unmapped(this.xw[0] + t * (this.xw[1] - this.xw[0]), this.settings.logX);
-		const i = nearestIndex((k) => buf[k * 2], this.m, target);
-		if (i < 0) return null;
-		const values: number[] = [];
-		for (let s = 0; s < this.series; s++) values.push(buf[(s * this.stride + i) * 2 + 1]);
-		return { x: buf[i * 2], values };
 	}
 
 	private fitWindows(): void {
