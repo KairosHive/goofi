@@ -56,7 +56,7 @@ async function sweep(page: Page, id: string): Promise<void> {
 async function handBack(page: Page, id: string, threw: boolean): Promise<void> {
 	try {
 		if (id) await sweep(page, id);
-		if ((await page.locator('.panel').count()) > 1) await closeSplit(page);
+		await closeSplit(page);
 		await resetPatch(page);
 	} catch (e) {
 		if (!threw) throw e;

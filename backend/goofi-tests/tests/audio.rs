@@ -118,7 +118,7 @@ fn near(a: usize, b: usize) -> bool {
 #[test]
 fn a_patch_sounds_under_the_external_clock() {
     let g = Goofi::new();
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(FirstVar));
+    g.state.graph.lock().unwrap().set_evaluator(Arc::new(FirstVar::default()));
 
     // Step: the palette lists the audio engine's types, and a chain of three sounds at once.
     let types = g.call("library list", j!({}));
@@ -520,11 +520,11 @@ fn a_patch_sounds_under_the_external_clock() {
     });
     let reported = loop {
         let ev = events.next("param_values");
-        if ev["node"] == hex(gain3) && !ev["values"]["gain"].is_null() {
+        if !ev["nodes"][hex(gain3)]["values"]["gain"].is_null() {
             break ev;
         }
     };
-    assert_eq!(reported["values"]["gain"]["gain"], 0.25, "{reported}");
+    assert_eq!(reported["nodes"][hex(gain3)]["values"]["gain"]["gain"], 0.25, "{reported}");
     g.set_param(source, "constant", "value", 0.75);
     sounds(&g, "the gain to follow its source", |x| (peak(x) - 0.75).abs() < 0.01);
 
@@ -1135,7 +1135,7 @@ fn settled(g: &Goofi, uid: Uid, what: &str) -> Vec<f32> {
 #[test]
 fn one_signal_speaks_through_another_band_by_band() {
     let g = Goofi::new();
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(FirstVar));
+    g.state.graph.lock().unwrap().set_evaluator(Arc::new(FirstVar::default()));
 
     // Step: with nothing behind `gains` every band is open, so a tone through the bank is still
     // that tone, at that pitch — louder, because neighbouring bands overlap and add.
@@ -1362,7 +1362,7 @@ fn lane(x: &[f32], c: usize, channels: u16) -> Vec<f32> {
 #[test]
 fn an_audio_out_lands_on_the_channels_it_names() {
     let g = Goofi::new();
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(FirstVar));
+    g.state.graph.lock().unwrap().set_evaluator(Arc::new(FirstVar::default()));
 
     let osc = g.add("Osc");
     let out = g.add("AudioOut");
@@ -1400,14 +1400,15 @@ fn an_audio_out_lands_on_the_channels_it_names() {
     g.link(osc, "out", out2, "input");
     g.set_param(out2, "audio", "channels", "3-4");
     g.set_param(out2, "audio", "gain", 0.5);
+    // Three edits land on the running nodes one control tick apart, so the wait is for all three:
+    // the width alone can be seen a tenth before the second output's gain.
     let channels = 4;
-    let x = wide(&g, "two outputs holding different pairs", channels);
-    for c in [0, 1] {
-        assert!((peak(&lane(&x, c, channels)) - 1.0).abs() < 0.01, "channel {} is the first output", c + 1);
-    }
-    for c in [2, 3] {
-        assert!((peak(&lane(&x, c, channels)) - 0.5).abs() < 0.01, "channel {} is the second, at its own gain", c + 1);
-    }
+    let at = |x: &[f32], c: usize, level: f32| (peak(&lane(x, c, channels)) - level).abs() < 0.01;
+    let x = g.until("two outputs holding different pairs, the second at its own gain", |g| {
+        let (x, c) = drive(g, TENTH);
+        (c == channels && at(&x, 0, 1.0) && at(&x, 1, 1.0) && at(&x, 2, 0.5) && at(&x, 3, 0.5)).then_some(x)
+    });
+    assert!(peak(&x) > 0.99, "the first output is heard at full level");
 
     // A selection that does not parse is a FAULT and plays nothing: silently falling back to the
     // whole device would put a signal on channels the patch took care to keep clear.

@@ -1,6 +1,6 @@
 /** Transient "this just changed" highlight ring on a set of nodes. */
 export class Flash {
-	private _active = $state(new Set<string>());
+	private _active = $state.raw(new Set<string>());
 	private timers = new Map<string, ReturnType<typeof setTimeout>>();
 
 	/** Whether `name` is currently flashing (reactive). */

@@ -81,7 +81,7 @@ fn the_services_are_created_with_limits_the_defaults_do_not_give_us() {
     let cfg = t.event_config();
     assert_eq!(cfg.event_id_max_value(), 255);
     assert_eq!(cfg.max_notifiers(), 256);
-    assert_eq!(cfg.max_listeners(), 1);
+    assert_eq!(cfg.max_listeners(), 2);
     let d = t.data_config("out").expect("the declared output slot has a service");
     assert_eq!(d.history_size(), 0, "a link NEVER replays a previous output");
     assert_eq!(d.max_subscribers(), 256);

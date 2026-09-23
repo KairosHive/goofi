@@ -236,6 +236,8 @@
 
 	// The residents change width from CONTENT, which no resize reports. The `tick()` is
 	// load-bearing: the tab strip is a sibling tree, so a synchronous replan measures the old one.
+	// A string of what the strip draws, so a layout edit inside a tab does not replan it.
+	const strip = $derived(`${ws.state.activeWorkspaceId}\n${ws.state.workspaces.map((w) => w.name).join('\n')}`);
 	$effect(() => {
 		void pluginHeaders.entries;
 		void g.savePath;
@@ -244,7 +246,7 @@
 		void rec.running;
 		void dropping;
 		void hs.running;
-		void ws.state.workspaces;
+		void strip;
 		widthCache.invalidate();
 		void tick().then(replan);
 	});

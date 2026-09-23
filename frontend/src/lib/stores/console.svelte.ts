@@ -33,6 +33,7 @@ export interface ConsoleView {
 export class ConsoleStore {
 	private groups = new Map<number, ConsoleEntry>();
 	private cursor = -1;
+	private oldest = -1;
 	private nextUid = 0;
 	version = $state(0);
 	private scheduled = false;
@@ -48,8 +49,12 @@ export class ConsoleStore {
 			this.groups.delete(group.id);
 			this.groups.set(group.id, { ...group, uid: previous?.uid ?? this.nextUid++, lines: group.text.split('\n').length });
 		}
-		for (const [id, group] of this.groups) {
-			if (group.seq < batch.oldest) this.groups.delete(id);
+		// The eviction scan is O(groups); it runs only when the floor moved.
+		if (batch.oldest > this.oldest || batch.reset) {
+			this.oldest = batch.oldest;
+			for (const [id, group] of this.groups) {
+				if (group.seq < batch.oldest) this.groups.delete(id);
+			}
 		}
 		this.cursor = batch.cursor;
 		this.scheduleBump();

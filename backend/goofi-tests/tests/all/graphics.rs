@@ -819,7 +819,7 @@ fn shaders_render_on_the_gpu() {
     // Step: a node that makes its own frames carries the patch's default size as a live
     // expression, so ONE variable re-sizes every producer at once. The seeding wants an evaluator
     // present; reading a bare variable does not, which is why this one needs no interpreter.
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(goofi_tests::FirstVar));
+    g.state.graph.lock().unwrap().set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
     let gen = g.add("graphics:Noise");
     g.ready(gen);
     let bound = g.doc()["nodes"][hex(gen)]["params"]["common"]["width"].clone();
@@ -1203,13 +1203,24 @@ fn the_mosaic_walks_its_cells_onto_the_picture() {
 
     // Step: told to follow the edges, the same solver walks the same sites onto the one edge the
     // picture has. Nothing about the fold changed — only what the quadrature weighs.
+    // The sites never come to rest — a step at this rate overshoots, and the ratio swings a tenth
+    // either way from frame to frame — so the claim is read off a mean of frames, not off one.
     g.set_param(t, "mosaic", "density", "edges");
-    let found = g.until("the cells find the rim", |g| {
-        render(g, 60);
-        probe.latest().filter(|d| ring(d) > 1.2)
-    });
-    assert!(ring(&found) > ring(&even) * 1.15, "the rim is no finer than the middle: {}", ring(&found));
-    assert!(seams(&found, false) > 0.0, "the middle lost its cells entirely");
+    render(&g, 30);
+    let mut seen = probe.count();
+    let frames: Vec<goofi_core::Data> = (0..10)
+        .map(|_| {
+            g.until("a frame drawn after the sites moved", |g| {
+                render(g, 10);
+                let fresh = probe.count() > seen;
+                seen = probe.count();
+                fresh.then(|| probe.latest()).flatten()
+            })
+        })
+        .collect();
+    let found = frames.iter().map(ring).sum::<f32>() / frames.len() as f32;
+    assert!(found > ring(&even) * 1.1, "the rim is no finer than the middle: {found} against {}", ring(&even));
+    assert!(frames.iter().all(|d| seams(d, false) > 0.0), "the middle lost its cells entirely");
     assert!(g.error(t).is_none(), "{:?}", g.error(t));
 }
 

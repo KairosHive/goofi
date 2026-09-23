@@ -94,6 +94,33 @@ describe('paint-rate accounting', () => {
 	});
 });
 
+describe('the per-flush budget', () => {
+	it('defers the second slot when the first one’s draw spends the budget', async () => {
+		// The callbacks run synchronously inside the flush, so a slow draw is what the budget sees;
+		// a draw that ran in a later microtask would measure microseconds and never engage.
+		let t = 0;
+		vi.spyOn(performance, 'now').mockImplementation(() => t);
+		const gotA: DataFrame[] = [];
+		const gotB: DataFrame[] = [];
+		const offA = bind('osc-a', 'out', (f) => {
+			gotA.push(f);
+			t += 10; // a draw past the 8 ms budget
+		});
+		const offB = bind('osc-b', 'out', (f) => gotB.push(f));
+		await settle();
+		const w = MockWorker.instances[0];
+		w.emit({ node: 'osc-a', slot: 'out', frame: { shape: [1] } as unknown as DataFrame });
+		w.emit({ node: 'osc-b', slot: 'out', frame: { shape: [2] } as unknown as DataFrame });
+		await vi.advanceTimersByTimeAsync(20);
+		expect(gotA.length, 'the first slot painted').toBe(1);
+		expect(gotB.length, 'the second waits for the next flush').toBe(0);
+		await vi.advanceTimersByTimeAsync(100);
+		expect(gotB.length, 'and is not forgotten').toBe(1);
+		offA();
+		offB();
+	});
+});
+
 describe('a joining viewer', () => {
 	it('replays the slot’s current frame to a late-joining consumer, immediately and once', async () => {
 		// The bridge only sends when something changed (an emit, a joiner IT can see, a spec

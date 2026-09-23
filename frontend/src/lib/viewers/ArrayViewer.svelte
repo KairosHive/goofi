@@ -7,7 +7,7 @@
 	import { decimateMinMax } from './decimate';
 	import { readEnvelope, envelopeBand } from './envelope';
 	import { formatTick as fmtTick } from './format';
-	import { logSafe, logSplits } from './logScale';
+	import { logSafe } from './logScale';
 	import { SERIES, AXIS_INK, tickFont } from './palette';
 
 	type Props = { frame: DataFrame; settings?: SettingsMap };
@@ -55,6 +55,18 @@
 		return xsCache;
 	}
 
+	// The corner tick strings, formatted once per range rather than per redraw.
+	let tickRange = '';
+	let ticks: string[] = [];
+	function cornerTicks(xMin: number, xMax: number, yMin: number, yMax: number): string[] {
+		const key = `${xMin} ${xMax} ${yMin} ${yMax}`;
+		if (key !== tickRange) {
+			tickRange = key;
+			ticks = [fmtTick(xMin), fmtTick(xMax), fmtTick(yMin), fmtTick(yMax)];
+		}
+		return ticks;
+	}
+
 	let cursorIdx = $state<number | null>(null);
 	let cursorValues = $state<(number | null)[]>([]);
 	let cursorXValue = $state<number | null>(null);
@@ -77,10 +89,12 @@
 		const ctx = u.ctx;
 		// uPlot does not pre-scale its ctx, so canvas coords are device pixels.
 		const r = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-		const xMin = u.scales.x.min ?? 0;
-		const xMax = u.scales.x.max ?? 1;
-		const yMin = u.scales.y.min ?? 0;
-		const yMax = u.scales.y.max ?? 1;
+		const [xMin, xMax, yMin, yMax] = cornerTicks(
+			u.scales.x.min ?? 0,
+			u.scales.x.max ?? 1,
+			u.scales.y.min ?? 0,
+			u.scales.y.max ?? 1
+		);
 		const left = u.bbox.left;
 		const top = u.bbox.top;
 		const right = u.bbox.left + u.bbox.width;
@@ -95,22 +109,22 @@
 			// Only the value (x) range is meaningful; y is the locked bar height.
 			ctx.textBaseline = 'bottom';
 			ctx.textAlign = 'left';
-			ctx.fillText(fmtTick(xMin), left + pad, bottom - pad);
+			ctx.fillText(xMin, left + pad, bottom - pad);
 			ctx.textAlign = 'right';
-			ctx.fillText(fmtTick(xMax), right - pad, bottom - pad);
+			ctx.fillText(xMax, right - pad, bottom - pad);
 			ctx.restore();
 			return;
 		}
 
 		ctx.textAlign = 'left';
 		ctx.textBaseline = 'top';
-		ctx.fillText(fmtTick(yMax), left + pad, top + pad);
+		ctx.fillText(yMax, left + pad, top + pad);
 		ctx.textBaseline = 'bottom';
-		ctx.fillText(fmtTick(yMin), left + pad, bottom - pad);
+		ctx.fillText(yMin, left + pad, bottom - pad);
 
 		ctx.textAlign = 'right';
 		ctx.textBaseline = 'bottom';
-		ctx.fillText(fmtTick(xMax), right - pad, bottom - pad);
+		ctx.fillText(xMax, right - pad, bottom - pad);
 
 		ctx.restore();
 	}
@@ -138,18 +152,8 @@
 		plot?.destroy();
 		lastNSeries = nSeries;
 		plotIsScalar = scalarMode;
-		// `size: 0` reclaims the axis margin; the `draw` hook paints the ticks inside the canvas.
-		const axis = (log: boolean): uPlot.Axis => ({
-			show: true,
-			size: 0,
-			gap: 0,
-			stroke: 'transparent',
-			ticks: { show: false },
-			grid: { show: true, stroke: 'rgba(255,255,255,0.05)' },
-			values: () => [],
-			...(log ? { splits: (_u: uPlot, _i: number, lo: number, hi: number) => logSplits(lo, hi) } : {})
-		});
-		const axes = scalarMode ? [axis(false), axis(false)] : [axis(mLogX), axis(mLogY)];
+		// No axes: they drew grid work per redraw and no label; the `draw` hook paints the corner ticks.
+		const axes: uPlot.Axis[] = [{ show: false }, { show: false }];
 		// distr 3 = log10.
 		const scales: uPlot.Options['scales'] = scalarMode
 			? {
@@ -220,7 +224,9 @@
 			makePlot(container.clientWidth || 200, container.clientHeight || 120, ySeries.length);
 		}
 		if (!plot) return;
-		plot.setData([xs, ...ySeries] as unknown as uPlot.AlignedData);
+		const p = plot;
+		// Batched: the redraw runs here, inside the delivery's budget, not in a later microtask.
+		p.batch(() => p.setData([xs, ...ySeries] as unknown as uPlot.AlignedData));
 	}
 
 	/** The value (x) axis span: the manual cog Y-range when set, else a self-calibrating one. */
@@ -247,7 +253,8 @@
 		if (!plot || !container) return;
 		if (!plotIsScalar) makePlot(container.clientWidth || 200, container.clientHeight || 120, 1);
 		if (!plot) return;
-		plot.setData([[value, value], [0, 1]] as unknown as uPlot.AlignedData);
+		const p = plot;
+		p.batch(() => p.setData([[value, value], [0, 1]] as unknown as uPlot.AlignedData));
 	}
 
 	function pushData(arr: ArrayData, envelope: { origLen: number } | null = null): void {
@@ -317,7 +324,9 @@
 	}
 
 	$effect(() => {
-		if (frame) drawFrame(frame);
+		if (!frame) return;
+		if (!plot) return; // before mount: `onMount` draws the frame it finds once the plot exists
+		drawFrame(frame);
 	});
 
 	$effect(() => {
@@ -361,6 +370,9 @@
 	onMount(() => {
 		if (!container) return;
 		makePlot(container.clientWidth || 200, container.clientHeight || 120, 1);
+		// The data effect ran before this and had no plot to draw on, so the frame it saw is drawn here.
+		const f = untrack(() => frame);
+		if (f) drawFrame(f);
 		// `pointerdown` too: a tap is a press with no motion, and it is the whole gesture on touch.
 		container.addEventListener('pointermove', captureMove, true);
 		container.addEventListener('pointerdown', captureMove, true);

@@ -9,12 +9,15 @@
 	import { ui } from '$lib/stores/ui.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { dtypeColor } from '$lib/editor/categoryColor';
+	import { useViewport } from '@xyflow/svelte';
 
 	// `label` overrides the displayed slot name for a sub-patch portal; the handle id stays `slot`.
 	type Props = { node: string; slot: string; dtype: string; label?: string };
 	const { node, slot, dtype, label }: Props = $props();
 
 	const g = graph();
+	// Inside the flow, so the viewer can size its demand to the zoom it is drawn under.
+	const vp = useViewport();
 
 	// Built here, its single use site, so viewBinding.ts stays rune-free.
 	const rec = $derived(g.nodeById(node));
@@ -104,7 +107,7 @@
 	</header>
 
 	{#if expanded}
-		<div class="body"><ViewerFeed {node} {slot} {binding} /></div>
+		<div class="body"><ViewerFeed {node} {slot} {binding} zoom={vp.current.zoom} /></div>
 	{/if}
 </div>
 

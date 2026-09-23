@@ -124,6 +124,8 @@ export class HistoryStore {
 	private replaying = false;
 	/** While a transaction is open, records collect here instead of pushing. */
 	private txBuffer: Action[] | null = null;
+	/** Resolves once the open transaction has recorded; an undo issued meanwhile waits for it. */
+	private txOpen: Promise<void> | null = null;
 	/** How undo/redo resolve the stores+control to replay against. */
 	private depsProvider: () => ExecutorDeps = liveDeps;
 
@@ -146,12 +148,12 @@ export class HistoryStore {
 
 	/** Move the top action of `from` to `to`, replaying it through `direction`. Atomic: on failure
 	 * the action stays on `from` and the failure is raised as a toast. */
-	private async _replay(
-		from: Action[],
-		to: Action[],
-		direction: 'inverse' | 'forward',
-		verb: string
-	): Promise<void> {
+	private async _replay(direction: 'inverse' | 'forward'): Promise<void> {
+		// The document shows a transaction's steps before it closes; issued then, the step to take
+		// back is the whole transaction, so wait for it.
+		if (this.txOpen) await this.txOpen;
+		const [from, to] = direction === 'inverse' ? [this.undoStack, this.redoStack] : [this.redoStack, this.undoStack];
+		const verb = direction === 'inverse' ? 'Undo' : 'Redo';
 		if (this.replaying || from.length === 0) return;
 		const action = from[from.length - 1];
 		const exec = executors[action.kind];
@@ -173,11 +175,11 @@ export class HistoryStore {
 	}
 
 	async undo(): Promise<void> {
-		return this._replay(this.undoStack, this.redoStack, 'inverse', 'Undo');
+		return this._replay('inverse');
 	}
 
 	async redo(): Promise<void> {
-		return this._replay(this.redoStack, this.undoStack, 'forward', 'Redo');
+		return this._replay('forward');
 	}
 
 	/** Run `fn` with recording disabled. Reentrant, and async-aware: a promise keeps the guard up. */
@@ -203,28 +205,32 @@ export class HistoryStore {
 	async transaction<T>(label: string, fn: () => Promise<T>): Promise<T> {
 		if (this.txBuffer || this.suspendDepth > 0) return fn(); // nested / suspended → passthrough
 		this.txBuffer = [];
-		let result: T;
+		let close!: () => void;
+		this.txOpen = new Promise<void>((r) => (close = r));
 		try {
-			result = await fn();
+			const result = await fn();
+			const children = this.txBuffer ?? [];
+			this.txBuffer = null;
+			if (children.length === 1) {
+				this.record(children[0]);
+			} else if (children.length > 1) {
+				this.record({
+					kind: 'compound',
+					domain: 'graph',
+					label,
+					context: children[0].context,
+					payload: { children }
+				});
+			}
+			return result;
 		} catch (e) {
 			// A thrown transaction did not complete, so its buffered children are discarded whole.
 			this.txBuffer = null;
 			throw e;
+		} finally {
+			this.txOpen = null;
+			close();
 		}
-		const children = this.txBuffer ?? [];
-		this.txBuffer = null;
-		if (children.length === 1) {
-			this.record(children[0]);
-		} else if (children.length > 1) {
-			this.record({
-				kind: 'compound',
-				domain: 'graph',
-				label,
-				context: children[0].context,
-				payload: { children }
-			});
-		}
-		return result;
 	}
 
 	get isSuspended(): boolean {

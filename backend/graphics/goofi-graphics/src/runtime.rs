@@ -121,6 +121,13 @@ impl Runtime {
         }
     }
 
+    /// Wait for the device to draw what the ticks so far submitted: what makes a tick under the
+    /// external clock mean one drawn frame, where the timer clock lets the device run behind.
+    pub fn finish(&mut self) {
+        let _gate = crate::gpu::gate();
+        let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
     /// One tick: upload what arrived, write the uniforms, draw every demanded stage, and read
     /// back the ones with a reader.
     pub fn tick(&mut self) {
