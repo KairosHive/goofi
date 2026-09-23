@@ -1,7 +1,8 @@
 /** GLSL ES 3.00 sources. Positions arrive in data units and leave in device pixels. */
 
 /** One instance per segment (or per point when `u_point`): `a_p0`/`a_p1` read one buffer a vertex
- * apart. A NaN or out-of-domain endpoint collapses the quad: the row pad, or a log-axis drop. */
+ * apart. A NaN or out-of-domain endpoint collapses the quad: the row pad, or a log-axis drop. The
+ * colour is the series' texel of `u_palette`, or `u_flat` when its alpha is set (the grid). */
 export const LINE_VS = `#version 300 es
 precision highp float;
 layout(location = 0) in vec2 a_p0;
@@ -14,7 +15,8 @@ uniform bvec2 u_log;
 uniform float u_width;
 uniform int u_stride;
 uniform int u_point;
-uniform vec4 u_colors[8];
+uniform sampler2D u_palette;
+uniform vec4 u_flat;
 out vec4 v_color;
 
 bool ok(vec2 p) {
@@ -27,7 +29,7 @@ vec2 toPx(vec2 p) {
 	return vec2(u_rect.x + t.x * u_rect.z, u_rect.y + (1.0 - t.y) * u_rect.w);
 }
 void main() {
-	v_color = u_colors[(gl_InstanceID / u_stride) % 8];
+	v_color = u_flat.a > 0.0 ? u_flat : texelFetch(u_palette, ivec2(gl_InstanceID / u_stride, 0), 0);
 	bool bad = !ok(a_p0) || (u_point == 0 && !ok(a_p1));
 	if (bad) {
 		gl_Position = vec4(-2.0, -2.0, 0.0, 1.0);

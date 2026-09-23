@@ -1,4 +1,5 @@
 import { bindSegments, type Program } from './gl';
+import { seriesRgba } from './color';
 import {
 	extent,
 	layoutSeries,
@@ -36,8 +37,8 @@ export interface Range {
 	scalar: boolean;
 }
 
-const GRID_COLOR = new Float32Array(32).map((_, i) => (i % 4 === 3 ? 0.05 : 1));
-const MINOR_COLOR = new Float32Array(32).map((_, i) => (i % 4 === 3 ? 0.02 : 1));
+const GRID_COLOR: [number, number, number, number] = [1, 1, 1, 0.05];
+const MINOR_COLOR: [number, number, number, number] = [1, 1, 1, 0.02];
 
 /** Grid segments in rect fractions: a NaN pad after each line keeps the instanced draw from joining them. */
 function gridSegments(xs: number[], ys: number[]): Float32Array {
@@ -54,6 +55,9 @@ interface LineGpu {
 	vbo: WebGLBuffer;
 	grid: WebGLBuffer;
 	minor: WebGLBuffer;
+	palette: WebGLTexture;
+	/** How many series the palette texture holds. */
+	paletteSeries: number;
 	uploaded: Float32Array | null;
 	gridUploaded: Float32Array | null;
 	minorUploaded: Float32Array | null;
@@ -63,7 +67,6 @@ export class LinePlot {
 	rect: Rect = { x: 0, y: 0, w: 0, h: 0 };
 	order = 0;
 	background: [number, number, number, number] = [0, 0, 0, 1];
-	private colors = new Float32Array(32);
 	private settings: LineSettings = { logX: false, logY: false, yAuto: true, yMin: -1, yMax: 1, points: false };
 	private buf: Float32Array | null = null;
 	private stride = 0;
@@ -78,9 +81,7 @@ export class LinePlot {
 	private minor = gridSegments([], []);
 	private gpu: LineGpu | null = null;
 
-	constructor(private readonly invalidate: () => void, private readonly detach: (p: LinePlot) => void) {
-		this.setColors(['#ffffff']);
-	}
+	constructor(private readonly invalidate: () => void, private readonly detach: (p: LinePlot) => void) {}
 
 	setRect(x: number, y: number, w: number, h: number): void {
 		this.rect = { x, y, w, h };
@@ -92,11 +93,6 @@ export class LinePlot {
 	}
 	setBackground(hex: string): void {
 		this.background = rgba(hex);
-		this.invalidate();
-	}
-	/** Up to eight `#rrggbb` series colours; a ninth series wraps to the first. */
-	setColors(hex: string[]): void {
-		for (let i = 0; i < 8; i++) this.colors.set(rgba(hex[i % hex.length]), i * 4);
 		this.invalidate();
 	}
 	setSettings(s: Partial<LineSettings>): void {
@@ -230,6 +226,7 @@ export class LinePlot {
 		gl.uniform2i(u.u_log, 0, 0);
 		gl.uniform1f(u.u_width, Math.max(1, Math.round(dpr)));
 		gl.uniform1i(u.u_point, 0);
+		gl.uniform1i(u.u_palette, 0);
 		this.drawGrid(gl, u, gpu.minor, this.minor, gpu.minorUploaded, MINOR_COLOR);
 		gpu.minorUploaded = this.minor;
 		this.drawGrid(gl, u, gpu.grid, this.grid, gpu.gridUploaded, GRID_COLOR);
@@ -241,7 +238,16 @@ export class LinePlot {
 		gl.uniform2i(u.u_log, this.scalar ? 0 : +this.settings.logX, this.scalar ? 0 : +this.settings.logY);
 		gl.uniform1f(u.u_width, Math.max(1, dpr) * (this.scalar ? 2 : 1));
 		gl.uniform1i(u.u_stride, this.stride);
-		gl.uniform4fv(u.u_colors, this.colors);
+		gl.uniform4f(u.u_flat, 0, 0, 0, 0);
+		gl.activeTexture(gl.TEXTURE0);
+		gl.bindTexture(gl.TEXTURE_2D, gpu.palette);
+		if (gpu.paletteSeries < this.series) {
+			const n = Math.max(this.series, gpu.paletteSeries * 2, 8);
+			const px = new Uint8Array(n * 4);
+			for (let i = 0; i < n; i++) px.set(seriesRgba(i).map((v) => Math.round(v * 255)), i * 4);
+			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, n, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+			gpu.paletteSeries = n;
+		}
 		const instances = this.series * this.stride - 1;
 		gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, instances);
 		if (this.settings.points && !this.scalar) {
@@ -257,24 +263,30 @@ export class LinePlot {
 		vbo: WebGLBuffer,
 		lines: Float32Array,
 		uploaded: Float32Array | null,
-		color: Float32Array
+		color: [number, number, number, number]
 	): void {
 		if (lines.length <= 2) return;
 		bindSegments(gl, vbo);
 		if (uploaded !== lines) gl.bufferData(gl.ARRAY_BUFFER, lines, gl.DYNAMIC_DRAW);
 		gl.uniform1i(u.u_stride, lines.length);
-		gl.uniform4fv(u.u_colors, color);
+		gl.uniform4f(u.u_flat, ...color);
 		gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, lines.length / 2 - 1);
 	}
 
 	private attach(gl: WebGL2RenderingContext, prog: Program): LineGpu {
 		if (this.gpu && this.gpu.gl === gl && this.gpu.prog === prog) return this.gpu;
+		const palette = gl.createTexture()!;
+		gl.bindTexture(gl.TEXTURE_2D, palette);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 		this.gpu = {
 			gl,
 			prog,
 			vbo: gl.createBuffer()!,
 			grid: gl.createBuffer()!,
 			minor: gl.createBuffer()!,
+			palette,
+			paletteSeries: 0,
 			uploaded: null,
 			gridUploaded: null,
 			minorUploaded: null
@@ -289,6 +301,7 @@ export class LinePlot {
 			g.gl.deleteBuffer(g.vbo);
 			g.gl.deleteBuffer(g.grid);
 			g.gl.deleteBuffer(g.minor);
+			g.gl.deleteTexture(g.palette);
 		}
 		this.gpu = null;
 	}

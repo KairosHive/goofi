@@ -3,7 +3,7 @@
 	import type { SettingsMap } from './settingsSchema';
 	import { onMount, onDestroy } from 'svelte';
 	import { formatTick as fmtTick } from './format';
-	import { SERIES, AXIS_INK, tickFont } from './palette';
+	import { seriesColor, AXIS_INK, tickFont } from './palette';
 
 	type Props = { frame: DataFrame; settings?: SettingsMap };
 	const { frame, settings = {} }: Props = $props();
@@ -182,7 +182,7 @@
 				const [i, j] = pairs[k];
 				const xr = rows[i];
 				const yr = rows[j];
-				const color = SERIES[k % SERIES.length];
+				const color = seriesColor(k);
 
 				ctx.strokeStyle = color;
 				ctx.lineWidth = 1.4;

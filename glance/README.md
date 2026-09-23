@@ -20,7 +20,6 @@ surface.setView({ x, y, zoom, width, height, dpr });
 const line = surface.addLine();
 line.setRect(x, y, w, h);                        // flow units; drawn at rect × zoom × dpr
 line.setBackground('#111111');
-line.setColors(['#7ab7ff', '#b58cff']);          // up to eight, wrapping
 line.setSettings({ logX, logY, yAuto, yMin, yMax, points });
 line.push({ rows: [Float32Array, ...], xs?, base? });
 line.range();                                    // { xMin, xMax, yMin, yMax, scalar } for labels
@@ -39,6 +38,10 @@ surface.dispose();
 `setView` takes the pane in CSS pixels, the camera in flow units and the device pixel ratio; a
 host with no camera passes `zoom: 1` and `x = y = 0`. Every plot's rect is in flow units, so a
 plot follows a pan or zoom when the view changes and the rects do not.
+
+Series colours are procedural: `seriesColor(i)` takes the hue that bisects the widest arc left by
+the series before it, at one OKLCH lightness and chroma per ring of eight, so any count stays
+distinct and earlier series keep their colour; a host uses it for its own legends.
 
 A single row of length 1 is a scalar: it draws as a bar at `x = value` over a running range.
 Rows of interleaved min/max pairs with two `xs` per pair draw as the band they describe.

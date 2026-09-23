@@ -12,7 +12,7 @@
 	import { offsetIn, useAnchor, useSurface } from './plotHost';
 	import { pushImage, pushLine } from './plotFeed';
 	import { isRenderable } from './kind';
-	import { SERIES } from './palette';
+	import { seriesColor } from './palette';
 	import { makeLUTCache } from './colormaps';
 	import { formatTick } from './format';
 
@@ -96,7 +96,6 @@
 		if (!onSurface || !s || !el) return;
 		const p = kind === 'line' ? s.addLine() : s.addImage();
 		p.setBackground(getComputedStyle(el).getPropertyValue('--bg').trim());
-		if (p instanceof LinePlot) p.setColors(SERIES);
 		plot = p;
 		return () => {
 			p.remove();
@@ -200,7 +199,7 @@
 			<div class="cursor-chip" data-testid="cursor-chip">
 				<span class="cursor-x">x={formatTick(cursor.x)}</span>
 				{#each cursor.values as v, i (i)}
-					<span class="cursor-y" style="color: {SERIES[i % SERIES.length]};">{formatTick(v) || '—'}</span>
+					<span class="cursor-y" style="color: {seriesColor(i)};">{formatTick(v) || '—'}</span>
 				{/each}
 			</div>
 		{/if}
