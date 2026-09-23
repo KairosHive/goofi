@@ -85,8 +85,8 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 
 		await test.step('a zoom keeps the plot inside its card', async () => {
 			const before = (await card.boundingBox())!;
-			const pane = (await page.locator('.svelte-flow__pane').boundingBox())!;
-			await page.mouse.move(pane.x + pane.width / 2, pane.y + pane.height / 2);
+			// Zoom about the card's own corner, so it grows in place and stays on screen.
+			await page.mouse.move(before.x + 4, before.y + 4);
 			await page.mouse.wheel(0, -400);
 			await expect
 				.poll(async () => (await card.boundingBox())!.width / before.width, { timeout: 10_000 })
@@ -96,7 +96,8 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 				.poll(async () => (await inspect(page, box)).tint, { timeout: 20_000 })
 				.toBeGreaterThan(40);
 			const cardBox = (await card.boundingBox())!;
-			const right = { x: cardBox.x + cardBox.width + 16, y: box.y, width: 24, height: box.height };
+			// Past the slot pills, which stand off the card's edge and grow with the zoom.
+			const right = { x: cardBox.x + cardBox.width + 48, y: box.y, width: 24, height: box.height };
 			await expect
 				.poll(async () => (await inspect(page, right)).contrast, { timeout: 10_000 })
 				.toBeLessThan(10);
@@ -104,6 +105,29 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			await expect
 				.poll(async () => Math.abs((await card.boundingBox())!.width - before.width), { timeout: 10_000 })
 				.toBeLessThan(4);
+		});
+
+		await test.step('a pan keeps the plot inside its card', async () => {
+			await expect
+				.poll(async () => (await inspect(page, (await body.boundingBox())!)).tint, { timeout: 20_000 })
+				.toBeGreaterThan(40);
+			const pane = (await page.locator('.svelte-flow__pane').boundingBox())!;
+			const before = (await card.boundingBox())!;
+			const from = { x: pane.x + pane.width - 80, y: pane.y + pane.height - 80 };
+			await page.mouse.move(from.x, from.y);
+			await page.mouse.down();
+			await page.mouse.move(from.x + 60, from.y + 40, { steps: 4 });
+			await page.mouse.move(from.x + 120, from.y + 80, { steps: 4 });
+			await page.mouse.up();
+			await page.waitForTimeout(300);
+			const box = (await body.boundingBox())!;
+			const cardBox = (await card.boundingBox())!;
+			expect(cardBox.x - before.x, 'the card moved with the pan').toBeGreaterThan(100);
+			expect((await inspect(page, box)).tint, 'the plot moved with the card').toBeGreaterThan(40);
+			const above = { x: cardBox.x + 20, y: cardBox.y - 30, width: cardBox.width - 40, height: 20 };
+			const right = { x: cardBox.x + cardBox.width + 16, y: box.y, width: 24, height: box.height };
+			expect((await inspect(page, above)).contrast, 'nothing painted above the card').toBeLessThan(10);
+			expect((await inspect(page, right)).contrast, 'nothing painted beside the card').toBeLessThan(10);
 		});
 
 		await test.step('a raised card covers the plot beneath it', async () => {
@@ -138,29 +162,6 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			await expect
 				.poll(async () => (await inspect(page, overlap)).litRows, { timeout: 10_000 })
 				.toBeLessThan(0.15);
-		});
-
-		await test.step('a pan keeps the plot inside its card', async () => {
-			await expect
-				.poll(async () => (await inspect(page, (await body.boundingBox())!)).tint, { timeout: 20_000 })
-				.toBeGreaterThan(40);
-			const pane = (await page.locator('.svelte-flow__pane').boundingBox())!;
-			const before = (await card.boundingBox())!;
-			const from = { x: pane.x + pane.width - 80, y: pane.y + pane.height - 80 };
-			await page.mouse.move(from.x, from.y);
-			await page.mouse.down();
-			await page.mouse.move(from.x + 60, from.y + 40, { steps: 4 });
-			await page.mouse.move(from.x + 120, from.y + 80, { steps: 4 });
-			await page.mouse.up();
-			await page.waitForTimeout(300);
-			const box = (await body.boundingBox())!;
-			const cardBox = (await card.boundingBox())!;
-			expect(cardBox.x - before.x, 'the card moved with the pan').toBeGreaterThan(100);
-			expect((await inspect(page, box)).tint, 'the plot moved with the card').toBeGreaterThan(40);
-			const above = { x: cardBox.x + 20, y: cardBox.y - 30, width: cardBox.width - 40, height: 20 };
-			const right = { x: cardBox.x + cardBox.width + 16, y: box.y, width: 24, height: box.height };
-			expect((await inspect(page, above)).contrast, 'nothing painted above the card').toBeLessThan(10);
-			expect((await inspect(page, right)).contrast, 'nothing painted beside the card').toBeLessThan(10);
 		});
 	} finally {
 		await resetPatch(page);
