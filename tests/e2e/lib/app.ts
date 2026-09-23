@@ -135,7 +135,7 @@ export async function splitRight(page: Page): Promise<void> {
 	const item = page.locator('.context-menu .item', { hasText: 'Split Right' }).first();
 	await expect(item).toBeVisible();
 	await item.click();
-	await expect(page.locator('.panel')).toHaveCount(2);
+	await expect(page.getByTestId('panel-header')).toHaveCount(2);
 }
 
 /**
@@ -147,14 +147,16 @@ export async function splitRight(page: Page): Promise<void> {
  */
 export async function closeSplit(page: Page): Promise<void> {
 	await releasePointer(page);
-	let open = await page.locator('.panel').count();
+	// Counted by header: `.panel` also matches the inspector's pane when it is open.
+	const headers = page.getByTestId('panel-header');
+	let open = await headers.count();
 	while (open > 1) {
-		await page.getByTestId('panel-header').nth(1).getByRole('button', { name: 'Close panel' }).click();
+		await headers.nth(1).getByRole('button', { name: 'Close panel' }).click();
 		// A closed panel leaves the DOM a beat later; a second click before that lands on it.
-		await expect(page.locator('.panel')).toHaveCount(open - 1);
+		await expect(headers).toHaveCount(open - 1);
 		open -= 1;
 	}
-	await expect(page.locator('.panel'), 'the workspace is back to one panel').toHaveCount(1);
+	await expect(headers, 'the workspace is back to one panel').toHaveCount(1);
 }
 
 /** Let go of a drag a failed step left mid-air: a held button swallows the clicks a cleanup makes. */
