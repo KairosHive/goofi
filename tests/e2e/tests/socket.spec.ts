@@ -77,6 +77,19 @@ async function clearGraph(page: Page): Promise<void> {
 	await expect.poll(async () => (await backendNodes(page)).length).toBe(0);
 }
 
+/** Run every hand-back step, so one that fails does not leave the rest undone; rethrow the first. */
+async function handBack(...steps: (() => Promise<unknown>)[]): Promise<void> {
+	let first: unknown;
+	for (const step of steps) {
+		try {
+			await step();
+		} catch (e) {
+			first ??= e;
+		}
+	}
+	if (first !== undefined) throw first;
+}
+
 test.describe('the control socket', () => {
 	test('every op a client issues lands exactly once, and the manager agrees after each', async ({
 		page
@@ -914,7 +927,7 @@ test.describe('the control socket', () => {
 				).toBeGreaterThan(0);
 			});
 		} finally {
-			await clearGraph(page);
+			await handBack(() => clearGraph(page), () => closeSplit(page));
 		}
 	});
 });
@@ -988,9 +1001,11 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		await expect.poll(async () => (await source()).expr).toBe('variables.desk.level');
 		expect((await backendDoc(page)).variables['desk.level']).toEqual(before);
 	} finally {
-		await clearGraph(page);
-		await closeSplit(page);
-		await page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.level'));
+		await handBack(
+			() => clearGraph(page),
+			() => closeSplit(page),
+			() => page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.level'))
+		);
 	}
 });
 
