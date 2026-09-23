@@ -26,11 +26,14 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     std::env::set_var("GOOFI_HOME", &tmp);
     std::env::remove_var("GOOFI_SESSION");
 
-    // No session of ours yet: refused by telling how to start one, or — the listing is machine-wide
-    // — by naming the developer's own goofi as the several to choose from.
+    // No session of ours yet. The listing is machine-wide, so what the bare resolution answers
+    // depends on the developer's own goofis: none is refused by telling how to start one, exactly
+    // one is taken, several are refused by naming them.
     let others = client::list().len();
-    let why = client::resolve_target().unwrap_err();
-    assert!(why.contains(if others == 0 { "no running goofi" } else { "several" }), "{why}");
+    match client::resolve_target() {
+        Ok(taken) => assert_eq!(others, 1, "one foreign goofi is the target: {taken:?}"),
+        Err(why) => assert!(why.contains(if others == 0 { "no running goofi" } else { "several" }), "{why}"),
+    }
 
     // The server is in-process (`serve_app`): the harness holds THIS process's session, and the
     // record under test is written here, as the binary's serve path writes its own.

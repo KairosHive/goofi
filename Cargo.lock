@@ -1046,6 +1046,7 @@ name = "goofi-codec"
 version = "3.1.0"
 dependencies = [
  "goofi-core",
+ "half",
  "indexmap",
  "rmp-serde",
  "rmpv",

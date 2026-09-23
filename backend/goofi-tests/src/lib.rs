@@ -706,10 +706,31 @@ impl Viewer {
             .unwrap();
     }
 
-    /// The next GOOF frame, raw. One deadline for the whole wait: the bridge's keepalive pings
-    /// would otherwise keep a socket that serves nothing waiting for ever.
+    /// The next GOOF frame with data in it, raw; the stamps frames between are passed over. One
+    /// deadline for the whole wait: the bridge's keepalive pings would otherwise keep a socket that
+    /// serves nothing waiting for ever.
     pub async fn frame(&mut self) -> Vec<u8> {
         let deadline = Instant::now() + WAIT;
+        loop {
+            let b = self.binary(deadline).await;
+            if !goofi_codec::is_stamps(&b) {
+                return b;
+            }
+        }
+    }
+
+    /// The next stamps frame's meta — how a held frame's `time`, `index` and `ufreq` keep moving.
+    pub async fn stamps(&mut self) -> goofi_core::Meta {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let b = self.binary(deadline).await;
+            if goofi_codec::is_stamps(&b) {
+                return goofi_codec::frame_meta(&b).expect("a stamps frame's meta");
+            }
+        }
+    }
+
+    async fn binary(&mut self, deadline: Instant) -> Vec<u8> {
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             match tokio::time::timeout(left, self.ws.next()).await {
@@ -735,6 +756,22 @@ impl Viewer {
                 return d;
             }
             assert!(Instant::now() < deadline, "no frame matched before the deadline");
+        }
+    }
+
+    /// Whether NO frame with data arrives within `window` — what a suppressed re-emit looks like
+    /// from here; the stamps frames of a held value do not count.
+    pub async fn silent_for(&mut self, window: Duration) -> bool {
+        let deadline = Instant::now() + window;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match tokio::time::timeout(left, self.ws.next()).await {
+                Ok(Some(Ok(Message::Binary(b)))) if goofi_codec::is_stamps(&b) => continue,
+                Ok(Some(Ok(Message::Binary(_)))) => return false,
+                Ok(Some(Ok(_))) => continue,
+                Ok(other) => panic!("the data socket stopped: {other:?}"),
+                Err(_) => return true,
+            }
         }
     }
 

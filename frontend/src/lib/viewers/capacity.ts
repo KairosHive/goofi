@@ -6,8 +6,8 @@ import type { ViewerKind } from './kind';
 import { VIEWER_KINDS } from '$lib/api/vocab';
 
 export type ReduceMethod = 'envelope' | 'subsample' | 'area';
-/** The sample width a viewer can draw; the stream is 8-bit only where every viewer accepts it. */
-export type Depth = 'f32' | 'u8';
+/** The sample width a viewer can draw; the stream is as narrow as the widest viewer's ask. */
+export type Depth = 'f32' | 'f16' | 'u8';
 export type DimCmp = 'lt' | 'le' | 'eq' | 'ge' | 'gt';
 export type ViewDtype = 'array' | 'string' | 'table';
 
@@ -88,6 +88,7 @@ export function viewSpecForKind(kind: ViewerKind, width: number, height: number)
 	const ndim = ndimOf(kind);
 	if (kind === 'line') {
 		// For 1-D, dim 0 and -1 collide on the bridge; it resolves by richness (envelope wins).
+		// Half floats: 11 significant bits are more than a device pixel resolves, for half the bytes.
 		return {
 			dtype: 'array',
 			ndim,
@@ -95,7 +96,8 @@ export function viewSpecForKind(kind: ViewerKind, width: number, height: number)
 			reduce: [
 				{ dim: 0, max: MAX_ROWS, method: 'subsample' },
 				{ dim: -1, max: w, method: 'envelope' }
-			]
+			],
+			depth: 'f16'
 		};
 	}
 	if (kind === 'image') {

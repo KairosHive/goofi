@@ -4,7 +4,9 @@
 //! little-endian, with the meta dict projected from the typed `Meta` plus derived shape/dtype.
 
 
-use goofi_core::{Coord, Data, MetaValue, Value};
+use std::hash::{DefaultHasher, Hasher};
+
+use goofi_core::{Coord, Data, MetaValue, Value, META_CHANNELS, META_INDEX, META_TIME, META_UFREQ};
 use rmpv::Value as Mp;
 
 pub const MAGIC: &[u8; 4] = b"GOOF";
@@ -24,6 +26,86 @@ pub fn encode_u8(shape: &[usize], texels: &[u8], meta: &goofi_core::Meta) -> Vec
     let mut body = Vec::new();
     array_body(b"|u1", shape, texels, &mut body);
     frame(0, pack_array_meta(meta, shape, "uint8"), body)
+}
+
+/// A half-float array frame for a line viewer's hop, where `Data` itself stays f32: the same
+/// header and the same meta, with a `<f2` body. `None` for a finite sample beyond a half's range.
+pub fn encode_f16(d: &Data) -> Option<Vec<u8>> {
+    let Value::Array(store) = d.value() else { return None };
+    let mut halves = Vec::with_capacity(store.as_bytes().len() / 2);
+    for b in store.as_bytes().chunks_exact(4) {
+        let v = f32::from_le_bytes(b.try_into().expect("four bytes"));
+        if v.is_finite() && v.abs() > half::f16::MAX.to_f32() {
+            return None;
+        }
+        halves.extend_from_slice(&half::f16::from_f32(v).to_le_bytes());
+    }
+    let mut body = Vec::new();
+    array_body(b"<f2", store.shape(), &halves, &mut body);
+    Some(frame(0, pack_array_meta(d.meta(), store.shape(), "float16"), body))
+}
+
+/// The tag of a frame that carries the engine's per-emit stamps alone, with no body: sent when
+/// the frame they belong to already reached the viewers, and merged into it there.
+pub const STAMPS_TAG: u8 = 4;
+/// What the engine writes afresh on every emit, and what [`content_hash`] leaves out.
+const STAMP_KEYS: [&str; 3] = [META_TIME, META_INDEX, META_UFREQ];
+
+/// A 64-bit hash of what a frame SAYS: its kind, its body, and its meta without the engine's
+/// per-emit stamps — so a held value emitted again hashes as the frame before it.
+pub fn content_hash(d: &Data) -> u64 {
+    let mut h = DefaultHasher::new();
+    hash_into(d, &mut h);
+    h.finish()
+}
+
+/// A 64-bit hash of the stamps alone, the other half of [`content_hash`].
+pub fn stamp_hash(d: &Data) -> u64 {
+    let mut h = DefaultHasher::new();
+    h.write(&pack(stamps(d.meta())));
+    h.finish()
+}
+
+/// The stamps of `meta` as a frame of their own, under [`STAMPS_TAG`].
+pub fn encode_stamps(meta: &goofi_core::Meta) -> Vec<u8> {
+    frame(STAMPS_TAG, pack(stamps(meta)), Vec::new())
+}
+
+/// Whether `frame` is a stamps frame: its meta is read with [`frame_meta`], and it has no data.
+pub fn is_stamps(frame: &[u8]) -> bool {
+    split_frame(frame).is_ok_and(|(tag, _, _)| tag == STAMPS_TAG)
+}
+
+fn stamps(meta: &goofi_core::Meta) -> Vec<(Mp, Mp)> {
+    carried(meta).into_iter().filter(|(k, _)| k.as_str().is_some_and(|k| STAMP_KEYS.contains(&k))).collect()
+}
+
+fn hash_into(d: &Data, h: &mut DefaultHasher) {
+    h.write_u8(d.dtype_tag());
+    let mut said: Vec<(Mp, Mp)> = carried(d.meta())
+        .into_iter()
+        .filter(|(k, _)| !k.as_str().is_some_and(|k| STAMP_KEYS.contains(&k)))
+        .collect();
+    said.push((Mp::from(META_CHANNELS), channels_to_mp(d.meta().channels())));
+    h.write(&pack(said));
+    match d.value() {
+        Value::Texture(t) => h.write(&rmp_serde::to_vec(&**t).expect("texture serialization")),
+        Value::Array(store) => {
+            h.write_usize(store.shape().len());
+            for &dim in store.shape() {
+                h.write_usize(dim);
+            }
+            h.write(store.as_bytes());
+        }
+        Value::Str(s) => h.write(s.as_bytes()),
+        Value::Table(map) => {
+            h.write_usize(map.len());
+            for (key, value) in map.iter() {
+                h.write(key.as_bytes());
+                hash_into(value, h);
+            }
+        }
+    }
 }
 
 /// The header every frame carries, around a packed meta and a body.
@@ -229,6 +311,7 @@ fn decode_at(frame: &[u8], depth: usize) -> std::result::Result<Data, String> {
         }
         2 => decode_table(body, meta, depth),
         3 => Data::texture(rmp_serde::from_slice(body).map_err(|e| e.to_string())?, meta),
+        STAMPS_TAG => Err("a stamps frame carries no data".into()),
         other => Err(format!("unknown dtype tag {other}")),
     }
 }

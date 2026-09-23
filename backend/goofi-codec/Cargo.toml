@@ -8,6 +8,8 @@ license.workspace = true
 goofi-core = { path = "../goofi-core" }
 indexmap = { version = "2", features = ["serde"] }
 rmpv = "1"
+# The line viewers' half-float hop.
+half = "2"
 # Param transport in the subprocess request frame: serde-serialize the ParamGroups tree
 # (Param derives Serialize/Deserialize) — no per-variant juggling, lossless by construction.
 rmp-serde = "1"

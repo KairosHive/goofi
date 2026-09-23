@@ -23,6 +23,7 @@ class MockWorker {
 
 let bindViewer: typeof import('./frames').bindViewer;
 let dropRate: typeof import('./frames').dropRate;
+let latestFrame: typeof import('./frames').latestFrame;
 
 /** Let the reconcile microtask run. */
 const settle = (): Promise<void> => Promise.resolve();
@@ -52,7 +53,7 @@ beforeEach(async () => {
 	vi.stubGlobal('Worker', MockWorker as unknown as typeof Worker);
 	vi.stubGlobal('URL', URL);
 	seq = 0;
-	({ bindViewer, dropRate } = await import('./frames'));
+	({ bindViewer, dropRate, latestFrame } = await import('./frames'));
 });
 
 afterEach(() => {
@@ -156,6 +157,31 @@ describe('a joining viewer', () => {
 		const got: DataFrame[] = [];
 		const off = bind('osc', 'out', (f) => got.push(f));
 		expect(got).toEqual([]);
+		off();
+	});
+});
+
+describe('a held frame’s stamps', () => {
+	it('land on the latest frame as a new object, without a paint', async () => {
+		// The reducer sends a frame that says what the last one said as its stamps alone. The
+		// metadata panel polls `latestFrame`, so the stamps must show there; the viewers drew
+		// nothing new, so no callback runs and no paint is counted.
+		const got: DataFrame[] = [];
+		const off = bind('osc', 'out', (f) => got.push(f));
+		await settle();
+		const w = MockWorker.instances[0];
+		const frame = { dtype: 'ARRAY', data: { dtype: '<f4', shape: [1], values: [3] }, meta: { time: 1, index: 1 } };
+		w.emit({ node: 'osc', slot: 'out', frame });
+		await vi.advanceTimersByTimeAsync(40);
+		expect(got.length).toBe(1);
+		const before = latestFrame('osc', 'out');
+		w.emit({ node: 'osc', slot: 'out', stamps: { time: 2, index: 2 } });
+		await vi.advanceTimersByTimeAsync(40);
+		const after = latestFrame('osc', 'out');
+		expect(after).not.toBe(before);
+		expect(after?.meta).toEqual({ time: 2, index: 2 });
+		expect(after?.data, 'the body is the held one').toBe(frame.data);
+		expect(got.length, 'stamps alone paint nothing').toBe(1);
 		off();
 	});
 });
