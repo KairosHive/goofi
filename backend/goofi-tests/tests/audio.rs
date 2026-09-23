@@ -601,11 +601,12 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(shape(&window), vec![1, 512], "the window is asked for, not taken: {:?}", shape(&window));
     g.set_param(framed, "audio", "mode", "envelope");
     g.set_param(framed, "audio", "size", 64);
+    // Both edits, not the first: a frame between them is an envelope over the old block. And a
+    // tenth's worth of levels, since a handful caught at one phase averages off the sine's RMS.
     let envelope = g.until("one level per 64 samples", |g| {
         drive(g, TENTH);
-        framing.latest().filter(|d| shape(d) != vec![1, 512])
+        framing.latest().filter(|d| d.meta().sfreq() == Some(750.0) && f32s(d).len() >= 64)
     });
-    assert_eq!(envelope.meta().sfreq(), Some(750.0), "a level per block runs at the rate over the block");
     // A block is a fraction of a cycle at this pitch, so each level wobbles about the sine's own
     // RMS rather than sitting on it.
     let rms = f32s(&envelope);
@@ -1141,7 +1142,9 @@ fn one_signal_speaks_through_another_band_by_band() {
     let carrier = g.add("Osc");
     let bank = g.add("BandFilter");
     g.link(carrier, "out", bank, "input");
-    let open = heard(&g, bank, "a tone through a bank with every band open", |x| peak(x) > 0.3);
+    // Past the onset tenth, whose half-silence would count as a lower pitch.
+    let open = settled(&g, bank, "a tone through a bank with every band open");
+    assert!(peak(&open) > 0.3, "the open bands add up: peak {}", peak(&open));
     assert!(near(per_tenth(&open), 88), "A4 leaves as A4: {} crossings", per_tenth(&open));
 
     // Step: `harmonic` stands the bands on the partials of `pitch` rather than spreading them.

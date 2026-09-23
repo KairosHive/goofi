@@ -319,6 +319,12 @@ async fn harness(addr: &str, kind: &str) -> (Ws, String, Ws) {
     (ctl, id, term)
 }
 
+/// A round trip through the shell: the view is subscribed, so a reap that follows reaches it.
+async fn attached(ws: &mut Ws) {
+    ws.send(Message::Binary(b"echo AT''TACHED\n".to_vec().into())).await.unwrap();
+    read_until(ws, "ATTACHED").await;
+}
+
 /// Read `/term` until `want` has been seen in the PTY bytes.
 async fn read_until(ws: &mut Ws, want: &str) -> String {
     let mut seen = String::new();
@@ -653,6 +659,7 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
 
     // Replacing the patch reaps the running agents, and the central /mcp stays open.
     let (mut ctl2, _, mut second) = harness(&addr, "_sh").await;
+    attached(&mut second).await;
     call(&mut ctl2, 4, "session new", json!({})).await;
     let roster = call(&mut ctl2, 5, "agent list", json!({})).await;
     assert_eq!(roster["instances"], json!([]), "the replaced patch's harnesses stayed: {roster}");
@@ -662,6 +669,7 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
     assert!(!err, "replacing the patch closed the central endpoint too: {ok}");
 
     let (_ctl, _, mut left) = harness(&addr, "_sh").await;
+    attached(&mut left).await;
     state.release_mount();
     read_until(&mut left, "exit_code").await; // no frame within its deadline panics
 }

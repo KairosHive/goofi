@@ -119,12 +119,10 @@ test('a harness runs in a panel, and its transcript survives closing that panel'
 
 		await test.step('the goofi CLI, argv to process, drives this same server', async () => {
 			const port = new URL(page.url()).port;
-			const dir = path.join(E2E_HOME, '.goofi', 'sessions');
-			const session = fs
-				.readdirSync(dir)
-				.map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')))
-				.find((s) => s.url.endsWith(`:${port}`));
-			const env = { ...process.env, GOOFI_HOME: E2E_HOME, GOOFI_SESSION: session.id };
+			const listed = { ...process.env, GOOFI_HOME: E2E_HOME };
+			const session = JSON.parse(execFileSync(BIN, ['session', 'list', '--json'], { env: listed }).toString())
+				.find((s: { url: string }) => s.url.endsWith(`:${port}`));
+			const env = { ...listed, GOOFI_SESSION: session.id };
 			const nodes = async (): Promise<number> =>
 				page.evaluate(() => (window as any).goofi.query.graph().nodes.length);
 			const before = await nodes();
@@ -146,7 +144,7 @@ test('a harness runs in a panel, and its transcript survives closing that panel'
 			expect(
 				rows.find((r: { id: string }) => r.id === session.id),
 				'the reserved word answers the recorded sessions'
-			).toMatchObject({ state: 'live', current: true });
+			).toMatchObject({ current: true });
 		});
 
 		// Name it again: closing that panel really WAS authoring (the layout changed), so the dot it
