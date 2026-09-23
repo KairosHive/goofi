@@ -522,6 +522,16 @@ fn spawn_reducer(
             if !pending && served == Some(g_now) {
                 continue; // nothing new to say — no emit, no joiner, no spec change
             }
+            // A frame that says what the last one said ends here, before the rate cap and the
+            // reduce — unless a joiner, a leaver, a spec change or a re-offer asked for it regardless.
+            let hash = match &made {
+                Some(_) => None,
+                None => latest.lock().unwrap().as_ref().map(goofi_codec::content_hash),
+            };
+            if hash.is_some() && served == Some(g_now) && hash == sent {
+                pending = false;
+                continue;
+            }
             // The viewer rate, held HERE because this is the one place N viewers became one
             // stream. A producer emitting faster than the browser paints is bytes nobody draws.
             // A serve held back is the duty the loop wakes to at the interval's end.
@@ -532,20 +542,9 @@ fn spawn_reducer(
             let bytes = match &made {
                 // Already exactly what the viewers asked for: one buffer, shared by every
                 // subscriber, and no pass over a texel anywhere in this process.
-                Some(ready) => {
-                    sent = None;
-                    ready.clone()
-                }
+                Some(ready) => ready.clone(),
                 None => {
                     let Some(d) = latest.lock().unwrap().clone() else { continue };
-                    // A frame that says what the last one said ends here, before the reduce —
-                    // unless a joiner, a leaver, a spec change or a re-offer asked for it regardless.
-                    let hash = goofi_codec::content_hash(&d);
-                    if served == Some(g_now) && sent == Some(hash) {
-                        pending = false;
-                        continue;
-                    }
-                    sent = Some(hash);
                     let specs = union_specs(&specs.lock().unwrap());
                     // A table has no texels to plan; an array is reduced to its viewers' plan.
                     let (out, depth) = match d.value() {
@@ -573,6 +572,7 @@ fn spawn_reducer(
                 next_serve = now + crate::vocab::VIEWER_INTERVAL;
             }
             let _ = tx.send(bytes); // Err only if all receivers are momentarily gone — harmless.
+            sent = hash;
             served = Some(g_now);
             pending = false;
         }
