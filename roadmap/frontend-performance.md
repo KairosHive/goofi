@@ -79,7 +79,7 @@ adds a path; several delete one.
    Backend follow-up in the same change: `arms.rs:729` stops echoing the node's full descriptors
    (3.6 KB) on a plain value edit — the patch carries the value and `/params` carries the error.
    Tests: `liveValue.test.ts` with fake timers (N commits in 50 ms → one send; `end()` flushes);
-   e2e `touch` (knob drag), `harmonic-geometry` and `midi-learn` (sliders).
+   e2e `touch` (knob drag) and `midi-learn` (sliders).
 3. **The write path off the lock** — `backend/goofi-bridge/src/lib.rs:1492–1501, 1431–1437`,
    `doc.rs:97–102`. Delete the per-op YAML manifest: autosave serializes when its own tick finds
    the graph dirty (it already wakes on `changed`), and save/patchfile read the graph the same
