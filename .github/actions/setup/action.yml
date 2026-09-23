@@ -14,9 +14,11 @@ runs:
       with:
         node-version: '24'
 
+    # The bundles' packages, keyed on the requirement files goofi-init installs from.
     - uses: astral-sh/setup-uv@v7
       with:
-        enable-cache: false
+        enable-cache: true
+        cache-dependency-glob: node-bundles/*/requirements*.txt
 
     # rustup reads rust-toolchain.toml. sccache keeps every compiled crate, ours included, which a
     # target-dir cache never does; rust-cache keeps only the registry here.
