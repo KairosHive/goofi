@@ -1,13 +1,5 @@
-//! Shared per-slot data reducers: ONE reduction per active `(node, slot)`, sized to the union of
-//! every subscribing connection's `ViewSpec`s and fanned out over a broadcast.
-//!
-//! The SLOT owns the reducer's lifetime, not the socket count — it lives until its node leaves the
-//! graph, because a closing socket is no evidence that a slot stopped being watched. Its
-//! SUBSCRIPTION follows demand though: an attached subscriber is what a scheduled engine reads as
-//! "somebody wants frames", so a reducer nobody asks of lets its feed go.
-//!
-//! A reducer is woken, never clocked: while it holds a feed the producer rings the slot's view
-//! door with every frame, and the bridge rings it for whatever else changes what it should do.
+//! Shared per-slot reducers: ONE reduction per watched `(node, slot)`, sized to the union of its
+//! connections' specs and fanned out; it lives until its node leaves, and is woken, never clocked.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -90,9 +82,8 @@ struct SlotReducer {
     /// The latest frame as it arrived — what serves a re-attaching viewer, and what the variables
     /// following this slot read. Reduced only where nothing but viewers is watching.
     latest: Arc<Mutex<Option<goofi_core::Data>>>,
-    /// Somebody read `latest` — a `node snapshot` — so the feed is wanted even with no viewer, and
-    /// wanted RAW. Never set at birth: warming a fresh reducer is `asked_at`'s job, and starting
-    /// here would spend one full-resolution frame on every slot the first time it is watched.
+    /// A `node snapshot` asked, so the feed is wanted RAW even with no viewer. Never set at birth,
+    /// which would spend a full-resolution frame on every slot the first time it is watched.
     asked: Arc<AtomicBool>,
     /// The bridge's bell on the slot's view door — the same door the producer rings once a frame
     /// is out. A joiner, a spec, a tap, an ask, a settle and the stop all ring it; nothing polls.
@@ -255,9 +246,8 @@ impl SlotReducers {
         }
     }
 
-    /// Withdraw `conn`'s contribution to `key`'s spec union; the reducer itself STAYS, and is
-    /// rung so a feed nobody reads any more starts its idle clock rather than waiting on a frame.
-    /// The union changed, so the frame is served once more under the plan that remains.
+    /// Withdraw `conn` from `key`'s union; the reducer STAYS, rung so an unread feed starts its idle
+    /// clock, and serves the frame once more under the plan that remains.
     pub fn unsubscribe(&self, key: &SlotKey, conn: ConnId) {
         if let Some(r) = self.inner.lock().unwrap().get(key) {
             r.specs.lock().unwrap().remove(&conn);
@@ -327,11 +317,8 @@ fn open_feed(graph: &Mutex<Graph>, iox: &SharedIox, uid: Uid, slot: &str) -> Opt
     Some(SlotFeed { _node: node, subscriber })
 }
 
-/// Spawn the per-slot reducer loop on a PLAIN thread. It parks on the slot's view door: the
-/// producer rings it once a frame is out, the bridge rings it (with its own id) for a joiner, a
-/// spec, a tap, an ask or a settle, and the duties a wake cannot bring — a serve the rate cap held
-/// back, the idle expiry of a feed nobody reads, a fresh watch's grace — are the only deadlines it
-/// wakes to on its own.
+/// Spawn the slot's loop on a plain thread, parked on the view door the producer and the bridge
+/// ring; a held serve, an idle expiry, a watch's grace and a snapshot's window are its deadlines.
 fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, door: String) {
     let (graph, iox, follow) = (reducers.graph.clone(), reducers.iox.clone(), reducers.follow.clone());
     // Weak: the map owns this loop's entry, and the loop removes it; a strong one would be a cycle.
@@ -471,9 +458,8 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             if let Some(f) = &feed {
                 while let Ok(Some(sample)) = f.subscriber.receive() {
                     let Some(header) = Peek::of(sample.payload()) else { continue };
-                    // A producer that answered the demand in the viewers' own width is FORWARDED:
-                    // decoding those texels to f32 only to quantize them back is the whole cost the
-                    // demand exists to remove, and there is nothing left here to reduce.
+                    // A frame already in the viewers' own width is FORWARDED: decoding it to f32 only
+                    // to quantize it back is the cost the demand exists to remove.
                     if header.ready {
                         peeked = Some(header);
                         *latest.lock().unwrap() = None;
@@ -500,10 +486,8 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                     }
                 }
             }
-            // A demand is what a reader ASKED for: the raw frame for a variable or a snapshot, and a
-            // box for a declared viewer. A reader that declared nothing asked for no pixels, so it
-            // gets one texel — never the whole frame, which is the most expensive thing an engine
-            // can be told to make.
+            // The raw frame for a variable or a snapshot, a box for a declared viewer, and one texel
+            // for a reader that declared nothing — never the whole frame, an engine's dearest output.
             let want = if full_res || !taps.lock().unwrap().is_empty() {
                 None
             } else {
@@ -538,10 +522,8 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             if !pending && served == Some(g_now) {
                 continue; // nothing new to say — no emit, no joiner, no spec change
             }
-            // A frame is two things on the wire, each sent when its own hash moved: what it says,
-            // and the engine's stamps on it. One that says what the last one said goes as its stamps
-            // alone, or not at all — unless a joiner, a leaver, a spec change or a re-offer asked for
-            // it regardless.
+            // What a frame says and its stamps go each when its own hash moved, so a repeat goes as
+            // stamps or not at all — unless a joiner, a leaver, a spec or a re-offer asked for it.
             let (hash, stamps) = match &made {
                 Some(_) => (None, None),
                 None => {
@@ -554,9 +536,8 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 pending = false;
                 continue;
             }
-            // The viewer rate, held HERE because this is the one place N viewers became one
-            // stream. A producer emitting faster than the browser paints is bytes nobody draws.
-            // A serve held back is the duty the loop wakes to at the interval's end.
+            // The viewer rate, held here, where N viewers became one stream; a serve held back is
+            // the duty the loop wakes to when the pace comes due.
             let now = std::time::Instant::now();
             if now < pace.due() {
                 continue;
@@ -611,9 +592,8 @@ fn is_reduced(d: &goofi_core::Data) -> bool {
     !matches!(d.meta().reduced(), None | Some(goofi_core::MetaValue::Null))
 }
 
-/// A frame read off its HEADER alone — its kind, its shape, and whether its body is already the
-/// 8-bit texels an image viewer draws. What a producer made to the plan is forwarded rather than
-/// remade, so this is everything the loop knows about such a frame.
+/// A frame read off its HEADER alone: its kind, its shape, and whether its body is already the
+/// 8-bit texels an image viewer draws, which the loop forwards rather than remakes.
 struct Peek {
     tag: u8,
     shape: Vec<usize>,

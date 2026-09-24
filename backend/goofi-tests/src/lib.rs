@@ -21,11 +21,11 @@ pub use serde_json::json as j;
 const WAIT: Duration = Duration::from_secs(180);
 /// How long [`Goofi::stays`] watches a negative.
 const SETTLE: Duration = Duration::from_millis(250);
-/// A situation blocked under a lock never reaches its deadline; past this the process aborts,
-/// naming what still ran, rather than holding a CI runner to its hour.
+/// A situation blocked under a lock never reaches its deadline; this long past its last wait, the
+/// process aborts, naming what still ran, rather than holding a CI runner to its hour.
 const STUCK: Duration = Duration::from_secs(600);
 
-/// Every live owner by a token of its own, the test thread that booted it and the boot instant.
+/// Every live owner by a token of its own, the test thread that booted it and its last wait.
 fn running() -> &'static std::sync::Mutex<Vec<(u64, String, Instant)>> {
     static RUNNING: std::sync::Mutex<Vec<(u64, String, Instant)>> = std::sync::Mutex::new(Vec::new());
     &RUNNING
@@ -59,6 +59,20 @@ fn watchdog() {
             })
             .expect("the watchdog thread");
     });
+}
+
+/// A sign of life from this thread: a situation that keeps entering bounded waits is not stuck.
+fn progressed() {
+    let me = thread_name();
+    for entry in running().lock().unwrap_or_else(|e| e.into_inner()).iter_mut().filter(|e| e.1 == me) {
+        entry.2 = Instant::now();
+    }
+}
+
+/// A bounded wait, which marks progress.
+fn timed<F: std::future::Future>(bound: Duration, f: F) -> tokio::time::Timeout<F> {
+    progressed();
+    tokio::time::timeout(bound, f)
 }
 
 fn thread_name() -> String {
@@ -393,6 +407,7 @@ impl Goofi {
     /// Poll `f` until it answers `Some`, or fail naming `what`.
     #[track_caller]
     pub fn until<T>(&self, what: &str, mut f: impl FnMut(&Goofi) -> Option<T>) -> T {
+        progressed();
         let deadline = Instant::now() + self.patience;
         loop {
             if let Some(v) = f(self) {
@@ -637,7 +652,7 @@ impl Client {
     }
 
     async fn next(&mut self) -> Message {
-        tokio::time::timeout(WAIT, self.ws.next())
+        timed(WAIT, self.ws.next())
             .await
             .expect("the socket said nothing before the deadline")
             .expect("the stream ended")
@@ -717,7 +732,7 @@ impl Viewer {
     pub async fn count_for(&mut self, window: Duration) -> usize {
         let deadline = Instant::now() + window;
         let mut n = 0;
-        while let Ok(Some(Ok(m))) = tokio::time::timeout(deadline.saturating_duration_since(Instant::now()), self.ws.next()).await {
+        while let Ok(Some(Ok(m))) = timed(deadline.saturating_duration_since(Instant::now()), self.ws.next()).await {
             n += matches!(m, Message::Binary(_)) as usize;
         }
         n
@@ -750,7 +765,7 @@ impl Viewer {
     async fn binary(&mut self, deadline: Instant) -> Vec<u8> {
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
-            match tokio::time::timeout(left, self.ws.next()).await {
+            match timed(left, self.ws.next()).await {
                 Ok(Some(Ok(Message::Binary(b)))) => return b.to_vec(),
                 Ok(Some(Ok(_))) => {}
                 other => panic!("the data socket stopped before a frame arrived: {other:?}"),
@@ -782,7 +797,7 @@ impl Viewer {
         let deadline = Instant::now() + window;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
-            match tokio::time::timeout(left, self.ws.next()).await {
+            match timed(left, self.ws.next()).await {
                 Ok(Some(Ok(Message::Binary(b)))) if goofi_codec::is_stamps(&b) => continue,
                 Ok(Some(Ok(Message::Binary(_)))) => return false,
                 Ok(Some(Ok(_))) => continue,
@@ -795,7 +810,7 @@ impl Viewer {
     /// The close code the bridge answered with, for a subscription it refuses.
     pub async fn close_code(&mut self) -> Option<u16> {
         loop {
-            match tokio::time::timeout(WAIT, self.ws.next()).await {
+            match timed(WAIT, self.ws.next()).await {
                 Ok(Some(Ok(Message::Close(Some(f))))) => return Some(u16::from(f.code)),
                 Ok(Some(Ok(_))) => continue,
                 _ => return None,
@@ -846,7 +861,7 @@ pub async fn http(
     s.write_all(head.as_bytes()).await.unwrap();
     s.write_all(body).await.unwrap();
     let mut raw = Vec::new();
-    tokio::time::timeout(WAIT, s.read_to_end(&mut raw))
+    timed(WAIT, s.read_to_end(&mut raw))
         .await
         .expect("the endpoint answered before the deadline")
         .unwrap();

@@ -77,10 +77,14 @@ jobs:
       - run: cargo test -p goofi-tests --features embed --test python_gil_tripwire
       - run: npm install
         working-directory: tests/e2e
+      # Keyed on the Playwright that installed, which the unpinned package.json does not name.
+      - id: playwright
+        run: echo "version=$(npx playwright --version)" >> "$GITHUB_OUTPUT"
+        working-directory: tests/e2e
       - uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/package.json') }}
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
       - run: npx playwright install --with-deps chromium
         working-directory: tests/e2e
       # One backend: two graphics patches rendering on lavapipe at once starve each other's frames.
@@ -101,7 +105,7 @@ jobs:
         if: always()
         with:
           path: target/goofi-build
-          key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
 
   # Only what a platform can answer differently: processes, paths, dynamic libraries, PTYs, audio
   # hosts. The rest was proven on Linux above.
@@ -132,4 +136,4 @@ jobs:
         if: always()
         with:
           path: target/goofi-build
-          key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}

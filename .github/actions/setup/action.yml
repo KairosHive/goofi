@@ -33,12 +33,14 @@ runs:
       run: echo 'LIBCLANG_PATH=C:\Program Files\LLVM\bin' >> "$GITHUB_ENV"
 
     # The shipped nodes and the Python probes, built into the binary and read back at boot.
-    # Restored here, saved by the job's last step, so a red run still warms the next one.
+    # Restored here, saved by the job's last step under this run's id, so each run's is the newest.
     - uses: actions/cache/restore@v4
       with:
         path: target/goofi-build
-        key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-        restore-keys: goofi-build-${{ runner.os }}-
+        key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
+        restore-keys: |
+          goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-
+          goofi-build-${{ runner.os }}-
 
     - name: Provision (cargo run -p goofi-init)
       shell: bash
