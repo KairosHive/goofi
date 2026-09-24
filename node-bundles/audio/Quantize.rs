@@ -1,4 +1,4 @@
-use goofi_audio_sdk::goofi_core::scale::{Recipe, MASK_BITS, MAX_DEGREES, METHODS, SCALES};
+use goofi_audio_sdk::goofi_core::scale::{Recipe, MASK_BITS, MAX_DEGREES, METHODS, NOTES, SCALES};
 use goofi_audio_sdk::goofi_core::SlotType;
 use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
 
@@ -13,9 +13,9 @@ goofi_audio_sdk::params! {
     ROOT = ParamDecl {
         group: "scale",
         name: "root",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 12.0 },
+        spec: ParamSpec::Str { default: "C", options: NOTES, refresh: false },
         expression: None,
-        doc: Some("the note the scale is built from, in semitones above C"),
+        doc: Some("the note the scale starts on"),
     },
     METHOD = ParamDecl {
         group: "scale",
@@ -23,13 +23,6 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Str { default: "generator", options: METHODS, refresh: false },
         expression: None,
         doc: Some("a custom scale stacked from a generator, read off the harmonic series, or picked from an equal division"),
-    },
-    PERIOD = ParamDecl {
-        group: "scale",
-        name: "period",
-        spec: ParamSpec::Float { default: 1200.0, min: 1.0, max: 4800.0 },
-        expression: None,
-        doc: Some("the interval the scale repeats at, in cents; 1200 is the octave"),
     },
     GENERATOR = ParamDecl {
         group: "scale",
@@ -43,7 +36,7 @@ goofi_audio_sdk::params! {
         name: "steps",
         spec: ParamSpec::Int { default: 7, min: 1, max: 53, options: &[] },
         expression: None,
-        doc: Some("generators stacked, harmonics read (partials steps to 2 steps - 1), or equal parts of the period"),
+        doc: Some("notes in the octave: generators stacked, harmonics read (partials steps to 2 steps - 1), or equal parts"),
     },
     MASK = ParamDecl {
         group: "scale",
@@ -55,9 +48,9 @@ goofi_audio_sdk::params! {
     MODE = ParamDecl {
         group: "scale",
         name: "mode",
-        spec: ParamSpec::Int { default: 0, min: 0, max: 52, options: &[] },
+        spec: ParamSpec::Int { default: 4, min: 0, max: 52, options: &[] },
         expression: None,
-        doc: Some("the degree the scale is read from, so one stack answers all of its modes"),
+        doc: Some("the degree the scale is read from: seven fifths read from 4 are major, from 0 lydian, from 2 minor"),
     },
 }
 
@@ -83,7 +76,7 @@ impl AudioNode for Quantize {
 
     fn process(&mut self, b: &mut Block<'_>) {
         let at = |k: usize| f64::from(b.params[k].chan(0)[0]);
-        let custom = Recipe::from_scalars(at(P::METHOD), at(P::PERIOD), at(P::GENERATOR), at(P::STEPS), at(P::MASK), at(P::MODE));
+        let custom = Recipe::from_scalars(at(P::METHOD), at(P::GENERATOR), at(P::STEPS), at(P::MASK), at(P::MODE));
         let recipe = Recipe::chosen(at(P::SCALE) as usize, custom);
         let mut all = [0.0; MAX_DEGREES];
         let n = recipe.degrees(&mut all);

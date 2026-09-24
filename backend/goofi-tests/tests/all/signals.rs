@@ -482,7 +482,8 @@ fn the_control_nodes_turn_a_signal_into_a_decision_a_route_and_a_label() {
 
     // Quantize counts its allowed values out: five from zero to one puts 0.7 on 0.75, the fourth.
     let steps = g.add("signal:Quantize");
-    set(steps, "quantize", "count", j!(5));
+    set(steps, "quantize", "mode", j!("count"));
+    set(steps, "count", "values", j!(5));
     set(level, "constant", "value", j!(0.7));
     let (pq, pi) = (g.probe(steps, "out"), g.probe(steps, "index"));
     g.link(level, "out", steps, "input");
@@ -492,8 +493,8 @@ fn the_control_nodes_turn_a_signal_into_a_decision_a_route_and_a_label() {
     g.until("which of them it landed on", |_| pi.latest().filter(|d| f32s(d).iter().all(|v| *v == 3.0)));
 
     // The same node against a WIRED set, which is how a tuning's own ratios become the only
-    // numbers a signal may take. `period` folds a value into one octave of the scale, matches it
-    // there, and puts the register back: 4.9 reads as 1.225, lands on 1.25, and comes out at 5.
+    // numbers a signal may take. The set repeats at the octave, so a value is folded into one, matched
+    // there, and put back in its register: 4.9 reads as 1.225, lands on 1.25, and comes out at 5.
     let written = g.add("Text");
     set(written, "text", "value", j!(r#"{"scale": [1.0, 1.25, 1.5]}"#));
     let parsed = g.add("FromJson");
@@ -507,7 +508,6 @@ fn the_control_nodes_turn_a_signal_into_a_decision_a_route_and_a_label() {
     // on has nothing to answer and says so.
     let tuned = g.add("signal:Quantize");
     set(tuned, "quantize", "mode", j!("levels"));
-    set(tuned, "quantize", "period", j!(2.0));
     let pv = g.probe(tuned, "out");
     g.link(ratios, "array", tuned, "levels");
     set(level, "constant", "value", j!(4.9));
@@ -516,11 +516,10 @@ fn the_control_nodes_turn_a_signal_into_a_decision_a_route_and_a_label() {
         pv.latest().filter(|d| f32s(d).iter().all(|v| (*v - 5.0).abs() < 1e-5))
     });
 
-    // `scale` reads a value as a pitch in Hz: 450 Hz in C major lands on A4, 440 Hz, its sixth
-    // degree. The harmonic series is a scale too: 300 Hz lands on the ninth partial of C4 over eight,
+    // By default a value is a pitch in Hz on C major: 450 Hz lands on A4, 440 Hz, its sixth degree.
+    // The harmonic series is a scale too: 300 Hz lands on the ninth partial of C4 over eight,
     // 294.33 Hz, which no tempered D is.
     let pitch = g.add("signal:Quantize");
-    set(pitch, "quantize", "mode", j!("scale"));
     let (pp, pd) = (g.probe(pitch, "out"), g.probe(pitch, "index"));
     set(level, "constant", "value", j!(450.0));
     g.link(level, "out", pitch, "input");

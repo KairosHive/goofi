@@ -1,7 +1,7 @@
 //! Musical scales made from a few numbers, so any scale is a setting rather than a table. A scale
 //! is stacked from a generator (the pentatonic and diatonic families and every moment-of-symmetry
 //! scale), read off the harmonic series, or chosen as a subset of an equal division; `mode` then
-//! rotates it onto another of its degrees. Degrees are cents above the root, inside one period.
+//! rotates it onto another of its degrees. Degrees are cents above the root, inside one octave.
 //! A node that quantizes to a scale declares these numbers in its `scale` param group.
 
 /// The most degrees a scale has: 53 parts to the octave is the finest division theory names.
@@ -13,16 +13,22 @@ pub const MASK_BITS: u32 = 24;
 /// C4, the pitch at 0 V on the audio plane and the C a `root` counts from on the signal plane.
 pub const C4_HZ: f64 = 261.625_565_300_598_6;
 
+/// The interval every scale repeats at, in cents.
+pub const OCTAVE: f64 = 1200.0;
+
+/// The notes a `root` param offers, a semitone apart from C.
+pub const NOTES: &[&str] = &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
 /// How a custom scale is made, in the order a `method` param offers them.
 pub const METHODS: &[&str] = &["generator", "harmonics", "division"];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Method {
-    /// `steps` stacks of `generator` cents, folded into the period.
+    /// `steps` stacks of `generator` cents, folded into the octave.
     Generator,
-    /// Partials `steps` to `2 * steps - 1` of a harmonic series, folded into the period.
+    /// Partials `steps` to `2 * steps - 1` of a harmonic series: one octave of it.
     Harmonics,
-    /// The period split into `steps` equal parts, of which `mask` admits some (0 admits all); a
+    /// The octave split into `steps` equal parts, of which `mask` admits some (0 admits all); a
     /// part past the mask's bits is admitted only when the mask is 0.
     Division,
 }
@@ -31,8 +37,6 @@ pub enum Method {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Recipe {
     pub method: Method,
-    /// The interval the scale repeats at, in cents; 1200 is the octave.
-    pub period: f64,
     pub generator: f64,
     pub steps: u32,
     pub mask: u64,
@@ -41,7 +45,7 @@ pub struct Recipe {
 }
 
 const fn fifths(steps: u32, mode: i32) -> Recipe {
-    Recipe { method: Method::Generator, period: 1200.0, generator: 700.0, steps, mask: 0, mode }
+    Recipe { method: Method::Generator, generator: 700.0, steps, mask: 0, mode }
 }
 
 /// A subset of twelve-tone equal temperament, by semitone.
@@ -51,7 +55,7 @@ const fn twelve(semitones: &[u32]) -> Recipe {
         mask |= 1 << semitones[i];
         i += 1;
     }
-    Recipe { method: Method::Division, period: 1200.0, generator: 700.0, steps: 12, mask, mode: 0 }
+    Recipe { method: Method::Division, generator: 700.0, steps: 12, mask, mode: 0 }
 }
 
 /// The named scales. Seven fifths read from their fourth degree are the major scale, and each
@@ -69,8 +73,8 @@ const PRESETS: [(&str, Recipe); 14] = [
     ("pentatonic_minor", fifths(5, 4)),
     ("blues", twelve(&[0, 3, 5, 6, 7, 10])),
     ("harmonic_minor", twelve(&[0, 2, 3, 5, 7, 8, 11])),
-    ("whole_tone", Recipe { method: Method::Generator, period: 1200.0, generator: 200.0, steps: 6, mask: 0, mode: 0 }),
-    ("harmonic", Recipe { method: Method::Harmonics, period: 1200.0, generator: 700.0, steps: 8, mask: 0, mode: 0 }),
+    ("whole_tone", Recipe { method: Method::Generator, generator: 200.0, steps: 6, mask: 0, mode: 0 }),
+    ("harmonic", Recipe { method: Method::Harmonics, generator: 700.0, steps: 8, mask: 0, mode: 0 }),
 ];
 
 /// The options of a `scale` param: `custom`, which reads the recipe off the other params, then
@@ -92,21 +96,20 @@ impl Recipe {
     }
 
     /// A custom recipe from its params' scalars, each held to what it can mean.
-    pub fn from_scalars(method: f64, period: f64, generator: f64, steps: f64, mask: f64, mode: f64) -> Recipe {
+    pub fn from_scalars(method: f64, generator: f64, steps: f64, mask: f64, mode: f64) -> Recipe {
         let method = match method as usize {
             0 => Method::Generator,
             1 => Method::Harmonics,
             _ => Method::Division,
         };
-        let period = if period.is_finite() && period > 0.0 { period } else { 1200.0 };
         let steps = (steps.max(1.0) as u32).min(MAX_DEGREES as u32);
-        Recipe { method, period, generator, steps, mask: mask.max(0.0) as u64, mode: mode as i32 }
+        Recipe { method, generator, steps, mask: mask.max(0.0) as u64, mode: mode as i32 }
     }
 
     /// The degrees, ascending, in `out`; answers how many. Never allocates, so the audio thread
     /// builds one per block.
     pub fn degrees(&self, out: &mut [f64; MAX_DEGREES]) -> usize {
-        let (p, steps) = (self.period, self.steps.clamp(1, MAX_DEGREES as u32) as usize);
+        let (p, steps) = (OCTAVE, self.steps.clamp(1, MAX_DEGREES as u32) as usize);
         let mut n = 0;
         for k in 0..steps {
             let cents = match self.method {
@@ -139,15 +142,15 @@ impl Recipe {
         kept
     }
 
-    /// `cents` above the root pulled onto the nearest degree, in the period it came from, and
-    /// which degree that is. The first degree of the next period up is a candidate too, so a pitch
+    /// `cents` above the root pulled onto the nearest degree, in the octave it came from, and
+    /// which degree that is. The first degree of the next octave up is a candidate too, so a pitch
     /// just under it climbs rather than falling a whole step.
     pub fn snap(&self, degrees: &[f64], cents: f64) -> (f64, usize) {
         let n = degrees.len();
         if n == 0 {
             return (cents, 0);
         }
-        let p = self.period;
+        let p = OCTAVE;
         let register = (cents / p).floor();
         let inside = cents - register * p;
         let i = degrees.partition_point(|d| *d < inside);
