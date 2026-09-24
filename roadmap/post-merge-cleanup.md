@@ -4,16 +4,6 @@ Decided 2026-09-24 from a full audit of main at 35462dac (backend, frontend, tes
 Nothing here is a redesign; each item names one defect, where it is, how it fails, and the fix.
 Items are ordered by severity. Remove each item when it lands, and this file when it is empty.
 
-## 3. The drain worker pulses "settled" on every wake
-
-`backend/goofi-bridge/src/lib.rs` (the drain thread): `drain_status()` settles, then
-`state.settled_now()` runs unconditionally, whatever `applied` says. A node whose param follows a
-moving expression reports `ParamValues` on every run in which a value changed, so a modulated
-patch wakes the drain at the modulation rate. Each pulse rings every reducer (`poke_all`), each
-reducer re-reads its address under the graph lock, and every `/data` socket re-takes the graph
-lock for `stream_behind`. With R reducers and V viewers at 30 Hz that is about 30·(R+V) graph-lock
-acquisitions a second for nothing that moved. Fix: pulse only when the settle applied something.
-
 ## 5. Range labels are hover-only on hybrid devices
 
 `frontend/src/lib/viewers/ViewerFeed.svelte`: the three range labels rest at `opacity: 0`, show
@@ -52,22 +42,6 @@ collapse and after a pan); convert both to `expect.poll` like the sibling steps.
 `node-bundles/inception`; the gallery step breaks when that bundle leaves the repo. Use a shipped
 graphics node or a test-authored shader. `tests/zz_pt.spec.ts` is a tracked debug spec outside the
 test dir whose import does not resolve; delete it.
-
-## 9. Small backend defects
-
-- `backend/goofi-graph/src/lib.rs` `set_view_watch`: inserts into `watched` before the leaf
-  lookup and reports a change even when no leaf exists. The reducer checks `manifest(uid)` under
-  one lock and calls `set_view_watch` under a later one; a node removed between the two leaves a
-  `(uid, slot)` in `watched` that `remove_node` already ran past. Return `false` without a leaf.
-- `backend/goofi-bridge/src/reducer.rs` `spawn_reducer`: `#[allow(clippy::too_many_arguments)]`
-  was added instead of passing the `SlotReducer` handles as one value. AGENTS.md: fix, not
-  suppress.
-- `backend/goofi-codec/src/lib.rs` `content_hash`: hashes `Meta` in insertion order, so two
-  frames that say the same thing with keys set in another order re-send in full instead of as
-  stamps. Sort the carried keys before hashing.
-- `backend/goofi-bridge/src/lib.rs` `send`: a `Dropped` send cancelled during flush stays
-  buffered in the sink; the next write flushes it and the `reoffer` sends the frame again, one
-  doubled frame per stall. Pre-existing; fix when the send path is next touched.
 
 ## 10. Coverage gaps the three PRs left
 

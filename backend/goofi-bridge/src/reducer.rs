@@ -180,7 +180,6 @@ impl SlotReducers {
         map: &'a mut HashMap<SlotKey, SlotReducer>,
         key: &SlotKey,
     ) -> &'a mut SlotReducer {
-        let slots = Arc::downgrade(&self.inner);
         if map.get(key).is_some_and(|r| r.stop.load(Ordering::Relaxed)) {
             map.remove(key);
         }
@@ -200,8 +199,7 @@ impl SlotReducers {
                 bell,
             };
             if reducer.bell.is_some() {
-                let (graph, iox) = (self.graph.clone(), self.iox.clone());
-                spawn_reducer(key.clone(), &reducer, door, graph, iox, slots, self.follow.clone());
+                spawn_reducer(self, key.clone(), &reducer, door);
             }
             reducer
         })
@@ -334,16 +332,10 @@ fn open_feed(graph: &Mutex<Graph>, iox: &SharedIox, uid: Uid, slot: &str) -> Opt
 /// spec, a tap, an ask or a settle, and the duties a wake cannot bring — a serve the rate cap held
 /// back, the idle expiry of a feed nobody reads, a fresh watch's grace — are the only deadlines it
 /// wakes to on its own.
-#[allow(clippy::too_many_arguments)]
-fn spawn_reducer(
-    key: SlotKey,
-    reducer: &SlotReducer,
-    door: String,
-    graph: Arc<Mutex<Graph>>,
-    iox: SharedIox,
-    slots: Weak<Mutex<HashMap<SlotKey, SlotReducer>>>,
-    follow: std::sync::mpsc::Sender<Followed>,
-) {
+fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, door: String) {
+    let (graph, iox, follow) = (reducers.graph.clone(), reducers.iox.clone(), reducers.follow.clone());
+    // Weak: the map owns this loop's entry, and the loop removes it; a strong one would be a cycle.
+    let slots: Weak<Mutex<HashMap<SlotKey, SlotReducer>>> = Arc::downgrade(&reducers.inner);
     let (specs, tx, taps) = (reducer.specs.clone(), reducer.tx.clone(), reducer.taps.clone());
     let (reductions, gen) = (reducer.reductions.clone(), reducer.gen.clone());
     let (latest, stop) = (reducer.latest.clone(), reducer.stop.clone());
@@ -361,9 +353,10 @@ fn spawn_reducer(
         let mut feed: Option<SlotFeed> = None;
         // The cache still belongs to this service after an idle port is dropped.
         let mut source: Option<String> = None;
-        // Whether the address has been read at all: it is read again on every poke, and a poke is
-        // what every change to what this loop should do arrives as.
-        let mut homed = false;
+        // The graph epoch the address was last read at: a poke re-reads it only when the graph
+        // moved since, or while the feed has yet to open.
+        let epoch = graph.lock().unwrap().epoch();
+        let mut homed: Option<u64> = None;
         // Whether the graph has been told this slot is watched — the producer's ring follows it —
         // and the one wake a fresh watch owes itself.
         let mut watching = false;
@@ -426,8 +419,9 @@ fn spawn_reducer(
             }
             // The graph may have moved: the slot's service carries the node's GENERATION, so a
             // restart re-homes the feed, and the node leaving the graph is the reducer's ONE death.
-            if poked || !homed {
-                homed = true;
+            let seen = epoch.load(Ordering::Acquire);
+            if homed.is_none() || (poked && (feed.is_none() || homed != Some(seen))) {
+                homed = Some(seen);
                 let current = {
                     let g = graph.lock().unwrap();
                     g.manifest(uid).map(|_| crate::output_service_of(&g, uid, &slot))

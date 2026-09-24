@@ -1654,11 +1654,16 @@ async fn send_bounded<S>(tx: &mut S, msg: Message, bound: Duration) -> SendOutco
 where
     S: futures_util::Sink<Message> + Unpin,
 {
-    // At most one message stays buffered: `poll_ready` gates the next write on the same flush.
-    match tokio::time::timeout(bound, tx.send(msg)).await {
-        Ok(Ok(())) => SendOutcome::Sent,
+    let deadline = tokio::time::Instant::now() + bound;
+    match tokio::time::timeout_at(deadline, tx.feed(msg)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => return SendOutcome::Gone,
+        Err(_) => return SendOutcome::Dropped,
+    }
+    // Accepted: a flush that runs out leaves it buffered, and the next write or ping carries it.
+    match tokio::time::timeout_at(deadline, tx.flush()).await {
         Ok(Err(_)) => SendOutcome::Gone,
-        Err(_) => SendOutcome::Dropped,
+        _ => SendOutcome::Sent,
     }
 }
 
@@ -1786,6 +1791,8 @@ async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: Str
     // physical slot a port stands in front of is graph state, so the socket re-asks rather than
     // freezing the answer at open — a port wired later starts drawing, and a re-wire is followed.
     let conn = state.reducers.new_conn();
+    let epoch = state.graph.lock().unwrap().epoch();
+    let mut seen = epoch.load(std::sync::atomic::Ordering::Acquire);
     let mut key = stream_behind(&state.graph.lock().unwrap(), uid, &slot);
     let mut frames = key.clone().map(|k| state.reducers.subscribe(k, conn));
     let mut declared = reducer::Declared::default();
@@ -1853,7 +1860,9 @@ async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: Str
                 Beat::Dead => break,
             },
         }
-        if recheck {
+        // Only a graph that moved can have moved the stream behind this address.
+        if recheck && epoch.load(std::sync::atomic::Ordering::Acquire) != seen {
+            seen = epoch.load(std::sync::atomic::Ordering::Acquire);
             let want = stream_behind(&state.graph.lock().unwrap(), uid, &slot);
             if want != key {
                 if let Some(old) = &key {
@@ -2012,4 +2021,28 @@ mod send_bounded_tests {
         );
     }
 
+    /// A sink that takes the message and then cannot flush it: the frame is on its way.
+    struct SlowFlush;
+
+    impl futures_util::Sink<Message> for SlowFlush {
+        type Error = axum::Error;
+        fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn start_send(self: Pin<&mut Self>, _: Message) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Pending
+        }
+        fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Pending
+        }
+    }
+
+    #[tokio::test]
+    async fn a_message_the_sink_took_is_sent_and_never_offered_twice() {
+        let outcome = send_bounded(&mut SlowFlush, Message::Binary(Default::default()), Duration::from_millis(50)).await;
+        assert_eq!(outcome, SendOutcome::Sent, "a buffered frame re-offered would arrive twice");
+    }
 }

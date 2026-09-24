@@ -168,6 +168,13 @@ fn goof_encoder_matches_python_golden() {
             assert_eq!(encode(&back), encode(d), "[{name}] did not survive the half-float hop");
         }
     }
+
+    // What a frame SAYS does not depend on the order its meta keys were set in.
+    let said = |keys: [(&str, f64); 2]| {
+        let meta = keys.iter().fold(Meta::new(), |m, (k, v)| m.with(*k, goofi_core::MetaValue::Float(*v)));
+        goofi_codec::content_hash(&arr(&[2], le_bytes(&[1.0, 2.0]), meta))
+    };
+    assert_eq!(said([("zz", 1.0), ("aa", 2.0)]), said([("aa", 2.0), ("zz", 1.0)]), "a key order changed the hash");
 }
 
 #[test]

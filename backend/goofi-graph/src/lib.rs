@@ -865,12 +865,12 @@ impl Graph {
     /// slot's view door. Answers whether that moved, which the settle then delivers.
     pub fn set_view_watch(&mut self, uid: Uid, slot: &str, on: bool) -> bool {
         let key = (uid, slot.to_string());
+        let name = self.leaf(uid).and_then(|l| l.manifest.outputs.iter().find(|o| o.name == slot)).map(|o| o.name);
+        // A node removed since the caller looked is never marked watched: its removal ran past.
+        let Some(name) = name else { return !on && self.watched.remove(&key) };
         let changed = if on { self.watched.insert(key) } else { self.watched.remove(&key) };
         if changed {
-            let name = self.leaf(uid).and_then(|l| l.manifest.outputs.iter().find(|o| o.name == slot)).map(|o| o.name);
-            if let Some(name) = name {
-                self.touched.push(Touched::Watch(uid, name));
-            }
+            self.touched.push(Touched::Watch(uid, name));
         }
         changed
     }

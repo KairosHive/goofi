@@ -86,6 +86,8 @@ fn hash_into(d: &Data, h: &mut DefaultHasher) {
         .into_iter()
         .filter(|(k, _)| !k.as_str().is_some_and(|k| STAMP_KEYS.contains(&k)))
         .collect();
+    // By key, so a frame that sets the same keys in another order says the same thing.
+    said.sort_by(|(a, _), (b, _)| a.as_str().cmp(&b.as_str()));
     said.push((Mp::from(META_CHANNELS), channels_to_mp(d.meta().channels())));
     h.write(&pack(said));
     match d.value() {
