@@ -129,23 +129,23 @@ impl Node for Select {
         let shape = a.shape();
         let axis = resolve_axis(p.i64("select", "axis").unwrap_or(0), shape.len())?;
         let len = shape[axis];
-        let mode = p.str("select", "mode").unwrap_or("name");
-        let include = p.str("select", "include").unwrap_or("");
-        let exclude = p.str("select", "exclude").unwrap_or("");
+        let mode = p.str("select", "mode").unwrap_or("keep-drop");
+        let keep = p.str("select", "keep").unwrap_or("");
+        let drop = p.str("select", "drop").unwrap_or("");
 
         let kept = match mode {
             // Each select reads the frame the one before it left, as two numpy getitems in a row.
-            "keep-drop" => delete(index(include, len)?, exclude)?,
             "drop-keep" => {
-                let rest = delete((0..len).collect(), exclude)?;
-                index(include, rest.len())?.into_iter().map(|i| rest[i]).collect()
+                let rest = delete((0..len).collect(), drop)?;
+                index(keep, rest.len())?.into_iter().map(|i| rest[i]).collect()
             }
-            _ => {
+            "name" => {
                 let labels = names(d, axis, len);
-                let dropped = by_name(exclude, &labels);
-                let kept = if include.trim().is_empty() { (0..len).collect() } else { by_name(include, &labels) };
+                let dropped = by_name(drop, &labels);
+                let kept = if keep.trim().is_empty() { (0..len).collect() } else { by_name(keep, &labels) };
                 kept.into_iter().filter(|i| !dropped.contains(i)).collect::<Vec<_>>()
             }
+            _ => delete(index(keep, len)?, drop)?,
         };
         if kept.is_empty() {
             return Err("nothing is left after the selection".to_string().into());
@@ -179,16 +179,16 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "select",
         name: "mode",
-        spec: ParamSpec::Str { default: "name", options: &["name", "keep-drop", "drop-keep"], refresh: false },
+        spec: ParamSpec::Str { default: "keep-drop", options: &["keep-drop", "drop-keep", "name"], refresh: false },
         expression: None,
         doc: Some(
-            "How entries are named: by label, or by numpy index — `keep-drop` takes `include` and \
-             then deletes `exclude` from what it took, `drop-keep` deletes first and then takes.",
+            "By numpy index — `keep-drop` takes `keep` and then deletes `drop` from what it took, \
+             `drop-keep` deletes first and then takes — or by label.",
         ),
     },
     ParamDecl {
         group: "select",
-        name: "include",
+        name: "keep",
         spec: ParamSpec::Str { default: "", options: &[], refresh: false },
         expression: None,
         doc: Some(
@@ -198,7 +198,7 @@ static PARAMS: &[ParamDecl] = &[
     },
     ParamDecl {
         group: "select",
-        name: "exclude",
+        name: "drop",
         spec: ParamSpec::Str { default: "", options: &[], refresh: false },
         expression: None,
         doc: Some("What to drop, written the same way; an index is deleted as `np.delete` does. Empty drops nothing."),
@@ -230,7 +230,7 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Arra
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Transform],
     doc: "Keep part of one axis.\n\
-          Named by label, or by numpy index with include and exclude applied in either order.",
+          Named by label, or by numpy index with keep and drop applied in either order.",
     inputs: INPUTS,
     outputs: OUTPUTS,
     params: PARAMS,

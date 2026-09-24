@@ -328,21 +328,20 @@ fn the_array_nodes_reshape_a_grid_and_the_rate_follows_the_time_axis() {
 
     // Select keeps part of an axis by numpy index, and can drop the axis when one entry is left.
     let pick = g.add("Select");
-    set(pick, "select", "mode", j!("keep-drop"));
-    set(pick, "select", "include", j!("0,2"));
+    set(pick, "select", "keep", j!("0,2"));
     let pp = g.probe(pick, "out");
     g.link(src, "out", pick, "input");
     g.until("two of the three channels", |_| pp.latest().filter(|d| shape(d) == vec![2, 4]));
-    set(pick, "select", "include", j!("::-2"));
+    set(pick, "select", "keep", j!("::-2"));
     g.until("a reversed stride", |_| pp.latest().filter(|d| shape(d) == vec![2, 4]));
     // The two index modes run the same selects in the other order: take then delete, or not.
-    set(pick, "select", "include", j!("0:2"));
-    set(pick, "select", "exclude", j!("-1"));
+    set(pick, "select", "keep", j!("0:2"));
+    set(pick, "select", "drop", j!("-1"));
     g.until("the last of the two taken, deleted", |_| pp.latest().filter(|d| shape(d) == vec![1, 4]));
     set(pick, "select", "mode", j!("drop-keep"));
     g.until("the first two of what the delete left", |_| pp.latest().filter(|d| shape(d) == vec![2, 4]));
-    set(pick, "select", "exclude", j!(""));
-    set(pick, "select", "include", j!("1"));
+    set(pick, "select", "drop", j!(""));
+    set(pick, "select", "keep", j!("1"));
     set(pick, "select", "squeeze", j!(true));
     g.until("the axis to go with the last entry", |_| pp.latest().filter(|d| shape(d) == vec![4]));
 
