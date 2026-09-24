@@ -1,5 +1,4 @@
-//! Select — keep part of one axis, named three ways: by label, by position, or by the coordinate
-//! range a labelled axis carries, which is how a spectrum is cut to a band.
+//! Select — keep part of one axis, named by label or by numpy index.
 
 use goofi_core::{resolve_axis, Coord, Data, SlotType};
 use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
@@ -59,49 +58,62 @@ fn by_name(spec: &str, labels: &[String]) -> Vec<usize> {
     picked
 }
 
-fn by_index(spec: &str, len: usize) -> Result<Vec<usize>, String> {
+/// A position on an axis of `len`, negative from the end, as numpy reads one.
+fn position(part: &str, len: usize) -> Result<usize, String> {
+    let i: i64 = part.parse().map_err(|_| format!("`{part}` is not a position"))?;
+    let at = if i < 0 { i + len as i64 } else { i };
+    (0..len as i64).contains(&at).then_some(at as usize).ok_or_else(|| format!("{i} is out of range for {len}"))
+}
+
+/// `start:stop:step` as a numpy slice reads it: ends left out, negatives from the end, any step.
+fn slice(part: &str, len: usize) -> Result<Vec<usize>, String> {
+    let fields: Vec<&str> = part.split(':').map(str::trim).collect();
+    let num = |s: &str| -> Result<Option<i64>, String> {
+        if s.is_empty() { Ok(None) } else { s.parse().map(Some).map_err(|_| format!("`{part}` is not a slice")) }
+    };
+    let step = num(fields.get(2).copied().unwrap_or(""))?.unwrap_or(1);
+    if step == 0 || fields.len() > 3 {
+        return Err(format!("`{part}` is not a slice"));
+    }
+    let n = len as i64;
+    let bound = |v: Option<i64>, forward: i64, backward: i64| match v {
+        None => if step > 0 { forward } else { backward },
+        Some(v) if v < 0 => (v + n).max(if step > 0 { 0 } else { -1 }),
+        Some(v) => v.min(if step > 0 { n } else { n - 1 }),
+    };
+    let (mut i, stop) = (bound(num(fields[0])?, 0, n - 1), bound(num(fields[1])?, n, -1));
+    let mut out = Vec::new();
+    while (step > 0 && i < stop) || (step < 0 && i > stop) {
+        out.push(i as usize);
+        i += step;
+    }
+    Ok(out)
+}
+
+/// A numpy index on one axis of `len`: positions and slices, comma-separated, in the order given,
+/// repeats kept. Empty is the whole axis.
+fn index(spec: &str, len: usize) -> Result<Vec<usize>, String> {
+    let spec = spec.trim().trim_start_matches('[').trim_end_matches(']');
+    if spec.trim().is_empty() {
+        return Ok((0..len).collect());
+    }
     let mut picked = Vec::new();
     for part in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-        let mut push = |i: usize| {
-            if i < len && !picked.contains(&i) {
-                picked.push(i);
-            }
-        };
-        match part.split_once(':') {
-            // A slice, in the reading every language shares: the end is not included.
-            Some((from, to)) => {
-                let from: usize = from.trim().parse().unwrap_or(0);
-                let to: usize = to.trim().parse().unwrap_or(len);
-                for i in from..to.min(len) {
-                    push(i);
-                }
-            }
-            None => push(part.parse().map_err(|_| format!("`{part}` is not a position"))?),
+        match part.contains(':') {
+            true => picked.extend(slice(part, len)?),
+            false => picked.push(position(part, len)?),
         }
     }
     Ok(picked)
 }
 
-fn by_range(spec: &str, coords: &[Coord]) -> Vec<usize> {
-    let mut picked = Vec::new();
-    for part in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-        let (from, to) = match part.split_once(':') {
-            Some((a, b)) => (a.trim().parse().unwrap_or(f64::NEG_INFINITY), b.trim().parse().unwrap_or(f64::INFINITY)),
-            None => {
-                let one = part.parse().unwrap_or(f64::NAN);
-                (one, one)
-            }
-        };
-        for (i, c) in coords.iter().enumerate() {
-            // Both ends are included: a band written 8:13 holds 13.
-            if let Coord::Num(n) = c {
-                if *n >= from && *n <= to && !picked.contains(&i) {
-                    picked.push(i);
-                }
-            }
-        }
+/// `kept` with the positions `spec` names deleted, as `np.delete` does.
+fn delete(kept: Vec<usize>, spec: &str) -> Result<Vec<usize>, String> {
+    if spec.trim().is_empty() {
+        return Ok(kept);
     }
-    picked
+    let gone = index(spec, kept.len())?;
+    Ok(kept.into_iter().enumerate().filter(|(i, _)| !gone.contains(i)).map(|(_, k)| k).collect())
 }
 
 impl Node for Select {
@@ -121,19 +133,20 @@ impl Node for Select {
         let include = p.str("select", "include").unwrap_or("");
         let exclude = p.str("select", "exclude").unwrap_or("");
 
-        let coords = d.meta().channels().get(axis).and_then(|x| x.coords.clone());
-        let pick = |spec: &str| -> Result<Vec<usize>, String> {
-            match mode {
-                "index" => by_index(spec, len),
-                "range" => Ok(by_range(spec, coords.as_deref().unwrap_or(&[]))),
-                _ => Ok(by_name(spec, &names(d, axis, len))),
+        let kept = match mode {
+            // Each select reads the frame the one before it left, as two numpy getitems in a row.
+            "keep-drop" => delete(index(include, len)?, exclude)?,
+            "drop-keep" => {
+                let rest = delete((0..len).collect(), exclude)?;
+                index(include, rest.len())?.into_iter().map(|i| rest[i]).collect()
+            }
+            _ => {
+                let labels = names(d, axis, len);
+                let dropped = by_name(exclude, &labels);
+                let kept = if include.trim().is_empty() { (0..len).collect() } else { by_name(include, &labels) };
+                kept.into_iter().filter(|i| !dropped.contains(i)).collect::<Vec<_>>()
             }
         };
-        let mut kept = if include.trim().is_empty() { (0..len).collect() } else { pick(include)? };
-        if !exclude.trim().is_empty() {
-            let dropped = pick(exclude)?;
-            kept.retain(|i| !dropped.contains(i));
-        }
         if kept.is_empty() {
             return Err("nothing is left after the selection".to_string().into());
         }
@@ -165,19 +178,12 @@ impl Node for Select {
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "select",
-        name: "axis",
-        spec: ParamSpec::Int { default: 0, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
-        expression: None,
-        doc: Some("Which axis to cut, negative from the end. 0 is channels on a `[channels, time]` frame."),
-    },
-    ParamDecl {
-        group: "select",
         name: "mode",
-        spec: ParamSpec::Str { default: "name", options: &["name", "index", "range"], refresh: false },
+        spec: ParamSpec::Str { default: "name", options: &["name", "keep-drop", "drop-keep"], refresh: false },
         expression: None,
         doc: Some(
-            "How the entries are named: by their labels, by their positions, or by the coordinate \
-             range a labelled axis carries, which is how a spectrum is cut to a band.",
+            "How entries are named: by label, or by numpy index — `keep-drop` takes `include` and \
+             then deletes `exclude` from what it took, `drop-keep` deletes first and then takes.",
         ),
     },
     ParamDecl {
@@ -186,8 +192,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "", options: &[], refresh: false },
         expression: None,
         doc: Some(
-            "What to keep, separated by commas: labels with `*` standing for anything, positions \
-             like `0,2,4:8`, or ranges like `8:13` with both ends included. Empty keeps everything.",
+            "What to keep: labels separated by commas with `*` for anything, or a numpy index like \
+             `-1`, `::2` or `[3, 0, 1:4]`, in the order given. Empty keeps everything.",
         ),
     },
     ParamDecl {
@@ -195,7 +201,14 @@ static PARAMS: &[ParamDecl] = &[
         name: "exclude",
         spec: ParamSpec::Str { default: "", options: &[], refresh: false },
         expression: None,
-        doc: Some("What to drop from the kept set, written the same way. Empty drops nothing."),
+        doc: Some("What to drop, written the same way; an index is deleted as `np.delete` does. Empty drops nothing."),
+    },
+    ParamDecl {
+        group: "select",
+        name: "axis",
+        spec: ParamSpec::Int { default: 0, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        expression: None,
+        doc: Some("Which axis to cut, negative from the end. 0 is channels on a `[channels, time]` frame."),
     },
     ParamDecl {
         group: "select",
@@ -217,7 +230,7 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Arra
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Transform],
     doc: "Keep part of one axis.\n\
-          Named by label, by position, or by the coordinate range it carries.",
+          Named by label, or by numpy index with include and exclude applied in either order.",
     inputs: INPUTS,
     outputs: OUTPUTS,
     params: PARAMS,
