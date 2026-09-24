@@ -467,6 +467,9 @@ pub struct Graph {
     /// The output slots a reducer watches; each producer rings the slot's view door once its
     /// frame is out, so the reducer wakes on the frame rather than on a clock.
     watched: HashSet<(Uid, String)>,
+    /// What each watched slot's viewers asked the producer to make; offered only while no wire
+    /// reads the slot, since a consumer takes the frame itself, never a viewer's preview.
+    view_wants: HashMap<(Uid, String), Option<goofi_view::ViewWant>>,
     /// Raised while a multi-step batch is mid-flight, so the drain-side settle cannot deliver its
     /// intermediates. On the GRAPH, not a thread-local: the drain is another thread.
     open_batches: u32,
@@ -543,6 +546,7 @@ impl Graph {
             touched: Vec::new(),
             open_batches: 0,
             watched: HashSet::new(),
+            view_wants: HashMap::new(),
         }
     }
 
@@ -856,8 +860,19 @@ impl Graph {
     /// Tell whichever engine owns `uid` what its readers want of `slot`. Offered to every engine
     /// rather than routed: an engine that does not hold the uid, or cannot render to size, no-ops.
     pub fn set_view_demand(&mut self, uid: Uid, slot: &str, want: Option<goofi_view::ViewWant>) {
-        for e in self.engines_mut() {
-            e.view_demand(uid, slot, want);
+        self.view_wants.insert((uid, slot.to_string()), want);
+        let edges = self.resolved_edges();
+        self.offer_view_wants(&edges);
+    }
+
+    /// Offer every engine its viewers' demand, or the full frame where a wire reads the slot.
+    fn offer_view_wants(&mut self, edges: &[Edge]) {
+        let Graph { view_wants, engines, .. } = self;
+        for ((uid, slot), want) in view_wants.iter() {
+            let wired = edges.iter().any(|e| e.producer.0 == *uid && e.producer.1 == slot);
+            for e in engines.iter_mut() {
+                e.view_demand(*uid, slot, if wired { None } else { *want });
+            }
         }
     }
 
@@ -2376,6 +2391,7 @@ impl Graph {
             return Err(format!("no such node {uid}"));
         };
         self.watched.retain(|(u, _)| *u != uid);
+        self.view_wants.retain(|(u, _), _| *u != uid);
         self.release_entry_bindings(&removed);
         // The planner holds its OWN handle on this node's channel, which is the graph's end of its
         // services. `forget` rather than `detach`: this uid is retired, so nothing queued applies.
@@ -3111,6 +3127,8 @@ impl Graph {
             }
             engines.iter().flat_map(|e| e.published()).collect::<Vec<_>>()
         };
+        // A wire made or cut, or a node reborn, changes what its producer owes its viewers.
+        self.offer_view_wants(&edges);
         // The engines' own facts into `system.*`, from the state this settle just reached. It
         // not a command and never becomes one: the user's undoable act is the param they moved,
         // and this is what that param MEANS once the engine has answered.

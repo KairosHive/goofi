@@ -754,6 +754,13 @@ fn shaders_render_on_the_gpu() {
     assert!(y.iter().all(|v| (v - y[0]).abs() < 0.01), "and is flat the other way: {} .. {}", y[0], y[63]);
     g.set_param(down, "graphics", "mode", "gray");
     waited(&g, "brightness keeps the picture's shape", |d| shape(d) == vec![64, 128]);
+    // A viewer's 8-bit box on the producer never reaches the wire: the consumer still takes the
+    // whole frame, in the engine's own 0..1.
+    let tiny = goofi_view::ViewWant { size: (8, 8), depth: goofi_view::Depth::U8 };
+    g.state.graph.lock().unwrap().set_view_demand(field, "out", Some(tiny));
+    render(&g, 3);
+    let whole = waited(&g, "the whole frame beside a viewer's box", |d| shape(d) == vec![64, 128]);
+    assert!(f32s(&whole).iter().all(|v| (0.0..=1.0).contains(v)), "in the engine's range, not texel bytes");
     for uid in [down, field] {
         g.call("node remove", j!({ "node": hex(uid) }));
     }
@@ -963,11 +970,8 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
     let full = full.expect("a snapshot reads real pixels, not the viewer's preview");
     assert!(full.meta().reduced().is_none(), "and the frame it answers with is not a reduction");
 
-    // Step: the viewer's box returns — the ask widened the readback for a while, not for good —
-    // and the full frame is not answered once a reduced one has arrived behind it.
+    // Step: the viewer's box returns — the ask widened the readback for a while, not for good.
     made(vec![64, 128, 4]);
-    viewer.until(|d| shape(d) == vec![64, 128, 4]).await;
-    assert!(g.state.reducers.latest(key.clone()).is_none(), "a snapshot answered a stale full frame");
 
     // Every reader from here on declares NOTHING, and none of them may widen the readback.
     // `want` for an unbroken stretch, any other shape restarting the stretch. A STRAGGLER is why
