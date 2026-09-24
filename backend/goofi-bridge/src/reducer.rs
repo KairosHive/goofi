@@ -90,10 +90,6 @@ struct SlotReducer {
     /// The latest frame as it arrived — what serves a re-attaching viewer, and what the variables
     /// following this slot read. Reduced only where nothing but viewers is watching.
     latest: Arc<Mutex<Option<goofi_core::Data>>>,
-    /// The last frame that arrived at FULL resolution. A producer that shrinks its output for the
-    /// viewers watching it would otherwise leave `latest` holding a preview, and `node snapshot`
-    /// asks for the frame itself. `Data` is an `Arc`, so holding it costs a refcount.
-    full: Arc<Mutex<Option<goofi_core::Data>>>,
     /// Somebody read `latest` — a `node snapshot` — so the feed is wanted even with no viewer, and
     /// wanted RAW. Never set at birth: warming a fresh reducer is `asked_at`'s job, and starting
     /// here would spend one full-resolution frame on every slot the first time it is watched.
@@ -200,7 +196,6 @@ impl SlotReducers {
                 reductions: Arc::new(AtomicU64::new(0)),
                 gen: Arc::new(AtomicU64::new(0)),
                 latest: Arc::new(Mutex::new(None)),
-                full: Arc::new(Mutex::new(None)),
                 asked: Arc::new(AtomicBool::new(false)),
                 bell,
             };
@@ -229,19 +224,19 @@ impl SlotReducers {
         rx
     }
 
-    /// The slot's latest RAW frame, once — never reduced, never a subscription. Asking also makes
-    /// sure the slot's reducer runs, so a never-watched slot starts warming on the first ask.
+    /// The slot's latest frame when it arrived at full resolution — never a producer's reduction,
+    /// never a subscription. Asking widens the demand, so an asker that polls gets one.
     pub fn latest(&self, key: SlotKey) -> Option<goofi_core::Data> {
         // The `inner` guard is released before `latest` is taken, mirroring the reducer's order.
-        let (full, latest) = {
+        let latest = {
             let mut map = self.inner.lock().unwrap();
             let r = self.ensure(&mut map, &key);
             r.asked.store(true, Ordering::Release);
             r.poke();
-            (r.full.clone(), r.latest.clone())
+            r.latest.clone()
         };
-        let frame = full.lock().unwrap().clone();
-        frame.or_else(|| latest.lock().unwrap().clone())
+        let frame = latest.lock().unwrap().clone().filter(|d| !is_reduced(d));
+        frame
     }
 
     /// Replace what `conn` declares for `key` (latest-wins). No-op if the slot is gone.
@@ -352,7 +347,6 @@ fn spawn_reducer(
     let (specs, tx, taps) = (reducer.specs.clone(), reducer.tx.clone(), reducer.taps.clone());
     let (reductions, gen) = (reducer.reductions.clone(), reducer.gen.clone());
     let (latest, stop) = (reducer.latest.clone(), reducer.stop.clone());
-    let full = reducer.full.clone();
     let asked = reducer.asked.clone();
     let (uid, slot) = key.clone();
     let failed = stop.clone();
@@ -389,9 +383,9 @@ fn spawn_reducer(
         // this loop never decoded. `made` is that frame itself, ready to forward as it stands.
         let mut peeked: Option<Peek> = None;
         let mut made: Option<Bytes> = None;
-        // A snapshot needs ONE full-resolution frame, so the demand is held wide until one lands
-        // rather than for the single wake the ask was seen on — the producer needs time to answer.
-        let mut full_res = false;
+        // A snapshot holds the demand wide for IDLE after the last ask, so an asker that polls
+        // finds the full frame its first ask made the producer send.
+        let mut snapped: Option<std::time::Instant> = None;
         // What the raw frame last reduced and served SAID, so one that says it again is not sent.
         let mut sent: Option<u64> = None;
         let mut stamped: Option<u64> = None;
@@ -406,6 +400,7 @@ fn spawn_reducer(
                 (owed && pace.due() > now).then_some(pace.due()),
                 (feed.is_some() && !wanted).then_some(asked_at + IDLE),
                 grace.filter(|at| *at > now),
+                snapped.map(|at| at + IDLE).filter(|at| *at > now),
             ];
             let mut poked = false;
             let mut note = |id: goofi_transport::WakeId| poked |= id.as_value() == goofi_transport::VIEW_POKE_ID as usize;
@@ -421,14 +416,11 @@ fn spawn_reducer(
             }
             // Read ONCE: the swap consumes it, so a second reader downstream would always miss.
             let snapshot = asked.swap(false, Ordering::Acquire);
-            // A slot being narrowed holds a full frame from before the ask, and answering with it
-            // would answer a question nobody asked. Cleared, so the ask waits for its own frame.
-            if snapshot && demanded.is_some_and(|w| w.is_some()) {
-                *full.lock().unwrap() = None;
+            if snapshot {
+                snapped = Some(std::time::Instant::now());
             }
-            full_res |= snapshot;
-            // `full_res` too: the demand stays wide until the snapshot's frame lands.
-            wanted = snapshot || full_res || !specs.lock().unwrap().is_empty() || !taps.lock().unwrap().is_empty();
+            let full_res = snapped.is_some_and(|at| at.elapsed() < IDLE);
+            wanted = full_res || !specs.lock().unwrap().is_empty() || !taps.lock().unwrap().is_empty();
             if wanted {
                 asked_at = std::time::Instant::now();
             }
@@ -459,7 +451,6 @@ fn spawn_reducer(
                     peeked = None;
                     made = None;
                     *latest.lock().unwrap() = None;
-                    *full.lock().unwrap() = None;
                     pending = false;
                     served = None;
                     sent = None;
@@ -499,9 +490,6 @@ fn spawn_reducer(
                     if let Ok(frame) = goofi_codec::decode(sample.payload()) {
                         peeked = Some(header);
                         made = None;
-                        if !is_reduced(&frame) {
-                            *full.lock().unwrap() = Some(frame.clone());
-                        }
                         *latest.lock().unwrap() = Some(frame);
                         fresh = true;
                     }
@@ -517,12 +505,6 @@ fn spawn_reducer(
                         }
                     }
                 }
-            }
-            // The full-resolution frame a snapshot asked for has landed — which the FRAME says,
-            // not the demand: the frame already in flight when the demand widened is a reduced one,
-            // and taking it for the answer would end the ask before the producer had answered it.
-            if fresh && full.lock().unwrap().is_some() {
-                full_res = false;
             }
             // A demand is what a reader ASKED for: the raw frame for a variable or a snapshot, and a
             // box for a declared viewer. A reader that declared nothing asked for no pixels, so it

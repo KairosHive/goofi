@@ -4,16 +4,6 @@ Decided 2026-09-24 from a full audit of main at 35462dac (backend, frontend, tes
 Nothing here is a redesign; each item names one defect, where it is, how it fails, and the fix.
 Items are ordered by severity. Remove each item when it lands, and this file when it is empty.
 
-## 2. A snapshot answers a stale full-resolution frame
-
-`backend/goofi-bridge/src/reducer.rs`: `SlotReducers::latest` returns `full` before `latest`.
-`full` is set when a non-reduced frame decodes and cleared only on the loop's next wake, and only
-when a snapshot was asked while the demand is narrow. Scenario: a viewer opens on a graphics node;
-the first frames arrive full f32 before any demand and set `full`; the box lands and every later
-frame is `|u1` ready, forwarded, `latest` cleared, `full` untouched. Minutes later `node snapshot`
-returns that first frame. Fix: clear `full` the moment the loop first pushes a narrow demand, or
-answer `None` with the existing "ask again" reason while the demand is narrow.
-
 ## 3. The drain worker pulses "settled" on every wake
 
 `backend/goofi-bridge/src/lib.rs` (the drain thread): `drain_status()` settles, then

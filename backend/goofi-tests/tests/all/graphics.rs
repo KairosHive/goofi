@@ -963,8 +963,11 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
     let full = full.expect("a snapshot reads real pixels, not the viewer's preview");
     assert!(full.meta().reduced().is_none(), "and the frame it answers with is not a reduction");
 
-    // Step: the viewer's box returns — one full frame was the cost of the ask, not a new mode.
+    // Step: the viewer's box returns — the ask widened the readback for a while, not for good —
+    // and the full frame is not answered once a reduced one has arrived behind it.
     made(vec![64, 128, 4]);
+    viewer.until(|d| shape(d) == vec![64, 128, 4]).await;
+    assert!(g.state.reducers.latest(key.clone()).is_none(), "a snapshot answered a stale full frame");
 
     // Every reader from here on declares NOTHING, and none of them may widen the readback.
     // `want` for an unbroken stretch, any other shape restarting the stretch. A STRAGGLER is why
