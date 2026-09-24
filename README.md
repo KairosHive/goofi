@@ -194,4 +194,4 @@ cd tests/e2e && npm install && npm run e2e    # Playwright against the real bina
 goofi is free software under the [GNU Affero General Public License v3.0](LICENSE).
 
 Closed-source projects that wish to build with or on top of goofi are welcome to do so under a
-commercial license, available on request.
+commercial license, available on request at [team@kairos-hive.org](mailto:team@kairos-hive.org).
