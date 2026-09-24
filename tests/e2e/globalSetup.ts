@@ -1,7 +1,6 @@
 import type { FullConfig } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { BASE_PORT, BIN, E2E_HOME, LOG_DIR, REPO_ROOT } from './playwright.config';
 
@@ -89,7 +88,7 @@ export default async function spawnFleet(config: FullConfig): Promise<() => Prom
 		await Promise.all(fleet.map(serving));
 		// The one e2e pin on the session records: a REAL binary spawn writes
 		// `/tmp/goofi-system/<id>/session.json` per server, each url naming the port it serves.
-		const written = process.platform === 'win32' ? path.join(os.tmpdir(), 'goofi-system') : '/tmp/goofi-system';
+		const written = process.platform === 'win32' ? 'C:\\Temp\\goofi-system' : '/tmp/goofi-system';
 		const sessions = fs
 			.readdirSync(written)
 			.map((id) => path.join(written, id, 'session.json'))

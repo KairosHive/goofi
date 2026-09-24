@@ -22,13 +22,15 @@ pub struct Session {
     pub url: String,
 }
 
-/// Where every session's ephemeral directory lives. A FIXED short path on unix, not `$TMPDIR`:
-/// a unix socket path under it is capped at 108 bytes, half of which a macOS `$TMPDIR` spends.
+/// Where every session's ephemeral directory lives. A FIXED short path, not the user's temp dir:
+/// a unix socket path under it is capped at 108 bytes, half of which a macOS `$TMPDIR` spends and
+/// all of which `%LOCALAPPDATA%\Temp` can (iceoryx2 emulates the socket on Windows, cap and all).
+/// On Windows it sits beside `C:\Temp\iceoryx2`, which iceoryx2 keeps its shared memory in.
 pub fn system_base() -> PathBuf {
     if cfg!(unix) {
         PathBuf::from("/tmp/goofi-system")
     } else {
-        std::env::temp_dir().join("goofi-system")
+        PathBuf::from(r"C:\Temp\goofi-system")
     }
 }
 

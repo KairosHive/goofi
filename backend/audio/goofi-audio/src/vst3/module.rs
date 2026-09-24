@@ -2,7 +2,9 @@
 //! at every use, because a factory is a reference of its own and never crosses a thread.
 
 use std::collections::HashMap;
-use std::ffi::{c_void, CStr};
+use std::ffi::c_void;
+#[cfg(unix)]
+use std::ffi::CStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
