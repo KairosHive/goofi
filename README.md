@@ -130,6 +130,7 @@ docstring is its doc, whose FIRST LINE is the nutshell a catalog shows. `process
 keyword argument per declared input slot and returns `{slot: value}`, or a bare value when there is
 exactly one output. The full contract — every constant, every param type, the Rust and WGSL SDKs —
 is at **[goofi.kairos-hive.org/docs/authoring](https://goofi.kairos-hive.org/docs/authoring/)**.
+See [graphics node authoring](sdk/graphics.md) for Rust and Python texture sources.
 
 The same Python file runs on either tier, and the file does not choose: a discovery probe imports
 it in a real interpreter and routes it in-process when its imports keep the GIL disabled, else to a
@@ -194,5 +195,3 @@ goofi is free software under the [GNU Affero General Public License v3.0](LICENS
 
 Closed-source projects that wish to build with or on top of goofi are welcome to do so under a
 commercial license, available on request.
-
-See [graphics node authoring](sdk/graphics.md) for Rust and Python texture sources.
