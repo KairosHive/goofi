@@ -99,6 +99,8 @@ pub struct AudioHalf {
     /// The node's scalar params, which say how its inboxes play what enters them.
     params: Arc<[AtomicU64]>,
     playback: crate::runtime::Playback,
+    /// Why the last frame an oscillator was handed could not sound, shown on its `mode`.
+    refused: Option<String>,
     inboxes: Vec<Inbox>,
     taps: Vec<Tap>,
     ports: Ports,
@@ -135,6 +137,7 @@ impl AudioHalf {
             manifest: birth.manifest,
             params: birth.params,
             playback: crate::runtime::Playback::of(birth.manifest),
+            refused: None,
             inboxes: birth.inboxes,
             taps: birth.taps.into_iter().map(|ring| Tap { ring }).collect(),
             recs: birth.recs,
@@ -315,6 +318,15 @@ impl Half for AudioHalf {
     fn arrive(&mut self, inbox: usize, frame: &Data) -> bool {
         let rate = self.audio.rate();
         let pitches = self.playback.oscillator(&self.params);
+        self.refused = None;
+        if pitches {
+            if let goofi_core::Value::Array(a) = frame.value() {
+                if pitch_width(a.shape()).is_none() {
+                    self.refused = Some(format!("an oscillator takes [n] pitches or [n, 2] pitches and phases, not {:?}", a.shape()));
+                    return false;
+                }
+            }
+        }
         self.inboxes[inbox].enter(frame, rate, pitches).unwrap_or(false)
     }
 
@@ -325,6 +337,9 @@ impl Half for AudioHalf {
     fn tick(&mut self, cx: &Cx<'_>, publish: &mut dyn FnMut(usize, &[u8])) -> Ticked {
         let mut ticked = Ticked::default();
         ticked.replan |= self.open_io(cx.consts, &mut ticked.errors);
+        if let Some(mode) = self.playback.mode() {
+            ticked.errors.push((key_of(self.manifest, mode), self.refused.clone()));
+        }
         if self.play.is_some() {
             let (error, moved) = self.playback(cx);
             let key = key_of(self.manifest, audio_playback::P::FILE);
@@ -369,15 +384,17 @@ impl Inbox {
 
     /// Resample one frame linearly from its `sfreq` to the rate and enter it whole, as one chunk
     /// headed by its channel count and length. A frame with no `sfreq` enters one sample per
-    /// sample. `pitches` enters every value as it is, on one channel. Answers whether the channel
-    /// count moved.
+    /// sample. `pitches` enters an `[n]` or `[n, 2]` frame as it is, pitches and phases for one
+    /// channel of sines. Answers whether the channel count moved.
     fn enter(&mut self, frame: &Data, rate: f64, pitches: bool) -> Option<bool> {
         let goofi_core::Value::Array(a) = frame.value() else { return None };
         if pitches {
+            let width = pitch_width(a.shape())?;
             let n = a.as_bytes().len() / 4;
             let chunk = self.ring.write_chunk_uninit(n + 2).ok()?;
             let values = a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes")));
-            chunk.fill_from_iter([1.0, n as f32].into_iter().chain(values.map(|v| if v.is_finite() { v } else { 0.0 })));
+            let head = [width as f32, (n / width) as f32];
+            chunk.fill_from_iter(head.into_iter().chain(values.map(|v| if v.is_finite() { v } else { 0.0 })));
             self.pos = 0.0;
             return Some(self.chans.swap(1, Ordering::Relaxed) != 1);
         }
@@ -417,6 +434,15 @@ impl Inbox {
         }
         self.pos = pos + n as f64 * step - t as f64;
         Some(moved)
+    }
+}
+
+/// How many numbers an oscillator's frame gives each sine: a pitch, or a pitch and a phase.
+fn pitch_width(shape: &[usize]) -> Option<usize> {
+    match *shape {
+        [_] => Some(1),
+        [_, 2] => Some(2),
+        _ => None,
     }
 }
 

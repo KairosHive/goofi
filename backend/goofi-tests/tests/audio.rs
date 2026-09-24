@@ -689,8 +689,8 @@ fn a_patch_sounds_under_the_external_clock() {
     g.set_param(signal_in, "signal", "smoothing", 0.0);
     g.call("node remove", j!({ "node": hex(level) }));
 
-    // Step: as an `oscillator`, each value is a sine at that many Hz and one channel is their
-    // mean: a [2, 1] frame of 1200 and 2400 sounds both, at half scale each.
+    // Step: as an `oscillator`, each row of an [n] or [n, 2] frame is a sine at that many Hz, and
+    // one channel is their mean. A frame of any other shape is refused on `mode`, and says why.
     let pair = g.add("_TestRamp");
     g.set_param(pair, "ramp", "channels", 2);
     g.set_param(pair, "ramp", "length", 1);
@@ -700,6 +700,12 @@ fn a_patch_sounds_under_the_external_clock() {
     g.set_param(signal_in, "signal", "mode", "oscillator");
     g.link(pair, "out", hz, "input");
     g.link(hz, "out", signal_in, "input");
+    g.until("a [2, 1] frame refused", |g| {
+        drive(g, TENTH);
+        g.error(signal_in).filter(|e| e.contains("[n, 2]"))
+    });
+    // [2, 2] is two rows of pitch and phase: 1200 and 2400 Hz, at half scale each.
+    g.set_param(pair, "ramp", "length", 2);
     g.until("two sines on one channel", |g| {
         let (x, channels) = drive(g, TENTH);
         (channels == 1 && amplitude(&x, 1200.0) > 0.45).then_some(())
@@ -709,8 +715,10 @@ fn a_patch_sounds_under_the_external_clock() {
         let got = amplitude(&chord, at);
         assert!((got - want).abs() < 0.02, "{at} Hz sounds at {got}, not {want}");
     }
-    // …one sine for every value, however many: a thousand of which only the last 299 sit at
-    // 1200 Hz and the rest at 0 Hz is 0.299 of full scale, and silence if any cap cut them off.
+    g.until("a frame that sounds clears the refusal", |g| g.error(signal_in).is_none().then_some(()));
+
+    // …one sine for every row, however many: a thousand of which only the last 299 sit at 1200 Hz
+    // and the rest at 0 Hz is 0.299 of full scale, and silence if any cap cut them off.
     g.set_param(pair, "ramp", "channels", 1);
     g.set_param(pair, "ramp", "length", 1000);
     g.set_param(hz, "math", "pre_add", -0.7005);
@@ -718,15 +726,45 @@ fn a_patch_sounds_under_the_external_clock() {
     g.set_param(hz, "math", "post_add", 0.0);
     g.set_param(hz, "range", "to_high", 1200.0);
     g.set_param(hz, "range", "bound", "clamp");
+    let row = g.add("Select");
+    g.set_param(row, "select", "keep", "0");
+    g.set_param(row, "select", "squeeze", true);
+    g.link(hz, "out", row, "input");
+    g.link(row, "out", signal_in, "input");
     g.until("a thousand sines, 299 of them sounding", |g| {
         let (x, _) = drive(g, TENTH);
         ((amplitude(&x, 1200.0) - 0.299).abs() < 0.002).then_some(())
     });
     let (many, _) = drive(&g, TENTH);
     assert!((amplitude(&many, 1200.0) - 0.299).abs() < 0.002, "{}", amplitude(&many, 1200.0));
+    for uid in [row, hz, pair] {
+        g.call("node remove", j!({ "node": hex(uid) }));
+    }
+
+    // …and the second column is each sine's phase in radians: two sines at 1200 Hz, born
+    // together, sound at full scale in phase and cancel at pi apart.
+    let rows = |phase: f64| format!(r#"{{"rows": [[1200.0, 0.0], [1200.0, {phase}]]}}"#);
+    let written = g.add("Text");
+    g.set_param(written, "text", "value", rows(0.0));
+    let parsed = g.add("FromJson");
+    let table = g.add("TableSelect");
+    g.set_param(table, "table", "key", "rows");
+    g.link(written, "out", parsed, "input");
+    g.link(parsed, "out", table, "input");
+    g.link(table, "array", signal_in, "input");
+    g.until("two sines in phase", |g| {
+        let (x, _) = drive(g, TENTH);
+        ((amplitude(&x, 1200.0) - 1.0).abs() < 0.01).then_some(())
+    });
+    g.set_param(written, "text", "value", rows(std::f64::consts::PI));
+    g.until("…and cancelled at pi apart", |g| {
+        let (x, _) = drive(g, TENTH);
+        (peak(&x) < 1e-3).then_some(())
+    });
     g.set_param(signal_in, "signal", "mode", "waveform");
-    g.call("node remove", j!({ "node": hex(hz) }));
-    g.call("node remove", j!({ "node": hex(pair) }));
+    for uid in [table, parsed, written] {
+        g.call("node remove", j!({ "node": hex(uid) }));
+    }
 
     // Step: a frame that is not a number crosses as silence — a NaN stays on the plane that made
     // it and never enters the plan.

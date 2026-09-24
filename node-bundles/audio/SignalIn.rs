@@ -7,7 +7,7 @@ goofi_audio_sdk::params! {
         name: "mode",
         spec: ParamSpec::Str { default: "waveform", options: cross::PLAYBACK, refresh: false },
         expression: None,
-        doc: Some("the frame's samples looped until the next frame, or each value a sine at that many Hz"),
+        doc: Some("the frame's samples looped until the next frame, or each row a sine: [n] Hz, or [n, 2] Hz and phase"),
     },
     SMOOTHING = ParamDecl {
         group: "signal",
@@ -28,8 +28,9 @@ static MANIFEST: Manifest = Manifest {
           As a `waveform`, a `[C, T]` frame with `sfreq` enters as `C` audio channels, resampled \
           to the rate; one with no `sfreq` enters one sample per sample. The newest frame loops \
           until the next one takes over at its end, so frames on time play back to back and a \
-          late one never leaves a gap. As an `oscillator`, every value is a sine at that many Hz, \
-          and their mean is one channel. `smoothing` morphs one frame into the next.",
+          late one never leaves a gap. As an `oscillator`, an `[n]` frame is n sines at those Hz \
+          and an `[n, 2]` frame n sines at column 0 Hz with column 1 as their phase in radians; \
+          their mean is one channel. `smoothing` morphs one frame into the next.",
     inputs: INS,
     outputs: OUTS,
     params: PARAMS,

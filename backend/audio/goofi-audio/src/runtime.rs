@@ -154,6 +154,10 @@ impl Playback {
         Playback { mode, smoothing }
     }
 
+    pub fn mode(&self) -> Option<usize> {
+        self.mode
+    }
+
     pub fn oscillator(&self, params: &[AtomicU64]) -> bool {
         self.mode.is_some_and(|m| f64::from_bits(params[m].load(Ordering::Relaxed)) >= 0.5)
     }
@@ -221,8 +225,10 @@ pub struct Frames {
     /// Samples into the crossfade from `now` to `next`, of how many; `(0, 0)` while none runs.
     fade: (usize, usize),
     oscillating: bool,
-    /// Per sine, one for every value a frame can hold: its pitch, gliding, and its phasor.
+    /// Per sine, one for every value a frame can hold: its pitch and phase offset, gliding, and
+    /// its phasor.
     hz: Vec<f32>,
+    offset: Vec<f32>,
     re: Vec<f32>,
     im: Vec<f32>,
 }
@@ -238,6 +244,7 @@ impl Frames {
             fade: (0, 0),
             oscillating: false,
             hz: Vec::with_capacity(crate::control::INBOX_RING),
+            offset: Vec::with_capacity(crate::control::INBOX_RING),
             re: Vec::with_capacity(crate::control::INBOX_RING),
             im: Vec::with_capacity(crate::control::INBOX_RING),
         }
@@ -254,6 +261,7 @@ impl Frames {
     fn forget(&mut self) {
         (self.now.len, self.now.chans, self.now.pos, self.fade) = (0, 0, 0, (0, 0));
         self.hz.clear();
+        self.offset.clear();
     }
 
     pub fn fill(&mut self, out: &mut PortMut<'_>, params: &[AtomicU64]) {
@@ -302,39 +310,50 @@ impl Frames {
         }
     }
 
-    /// Every value of the newest frame a sine at that many Hz, their mean on every channel. A
-    /// sine keeps its phase across frames, and with smoothing glides to its new pitch. Each is a
-    /// phasor turned once a sample, so a frame of thousands costs a multiply per value.
+    /// One sine per row of the newest frame, `[n]` pitches in Hz or `[n, 2]` pitches and phases
+    /// in radians, their mean on every channel. A sine runs on across frames, its phase an offset
+    /// on top, and with smoothing both glide. Each is a phasor turned once a sample, so a frame of
+    /// thousands costs a few multiplies per sine.
     fn oscillate(&mut self, out: &mut PortMut<'_>, smoothing: usize) {
         keep_newest(&mut self.ring, 0, 1);
         if self.next.take(&mut self.ring) {
             std::mem::swap(&mut self.now, &mut self.next);
         }
-        let n = self.now.chans * self.now.len;
-        let target = &self.now.buf[..n];
-        // Within the capacity reserved at birth, so neither allocates.
+        let (width, n) = (self.now.chans, self.now.len);
+        let row = |v: usize| (self.now.buf[v * width], if width == 2 { self.now.buf[v * width + 1] } else { 0.0 });
+        // Within the capacity reserved at birth, so nothing here allocates. A new sine starts where
+        // its row says, with no glide from a sine it never was.
         let was = self.hz.len().min(n);
-        self.hz.truncate(n);
-        self.hz.extend_from_slice(&target[was..]);
-        self.re.resize(was, 1.0);
-        self.re.resize(n, 1.0);
-        self.im.resize(was, 0.0);
-        self.im.resize(n, 0.0);
+        for v in [&mut self.hz, &mut self.offset, &mut self.re, &mut self.im] {
+            v.truncate(was);
+        }
+        for v in was..n {
+            let (hz, phase) = row(v);
+            self.hz.push(hz);
+            self.offset.push(phase);
+            self.re.push(1.0);
+            self.im.push(0.0);
+        }
         let k = if smoothing > 0 { 1.0 - (-(BLOCK as f32) / smoothing as f32).exp() } else { 1.0 };
         let turn = std::f64::consts::TAU / self.rate;
         let mut mix = [0.0f32; BLOCK];
-        for (((hz, want), re), im) in self.hz.iter_mut().zip(target).zip(&mut self.re).zip(&mut self.im) {
-            *hz += (want - *hz) * k;
-            let (s, c) = (turn * f64::from(*hz)).sin_cos();
+        for v in 0..n {
+            let (hz, phase) = row(v);
+            self.hz[v] += (hz - self.hz[v]) * k;
+            // The short way round, so a phase that wraps past pi does not spin the long way.
+            let turned = (phase - self.offset[v] + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            self.offset[v] += turned * k;
+            let (s, c) = (turn * f64::from(self.hz[v])).sin_cos();
             let (s, c) = (s as f32, c as f32);
-            let (mut x, mut y) = (*re, *im);
+            let (ps, pc) = self.offset[v].sin_cos();
+            let (mut x, mut y) = (self.re[v], self.im[v]);
             for m in &mut mix {
-                *m += y;
+                *m += y * pc + x * ps;
                 (x, y) = (x * c - y * s, x * s + y * c);
             }
             // Back onto the unit circle, which rounding walks it off.
             let norm = x.hypot(y).max(f32::MIN_POSITIVE);
-            (*re, *im) = (x / norm, y / norm);
+            (self.re[v], self.im[v]) = (x / norm, y / norm);
         }
         let scale = if n > 0 { 1.0 / n as f32 } else { 0.0 };
         for c in 0..out.channels() as usize {
