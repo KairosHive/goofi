@@ -91,5 +91,7 @@ test needs a node to be "inside" something, the fixture holds a latch the test o
 - Locally, `cargo test --workspace --no-fail-fast` at 8 threads times out 17 hosted and Python
   situations (`python.rs`, `nodes.rs`, `plugins.rs`, `signals.rs`) that pass at 4. Under the
   rules this is a defect to find, not a thread count to set: trace what starves at 8.
+- Locally, in the full run at 4 threads, `signals.rs:746` `the_analysis_nodes_read_a_known_sine_…`
+  missed "the window at half the rate"; it passes alone, 3 of 3.
 - On CI, `--test audio` `a_patch_sounds_under_the_external_clock` missed its 180 s "reaches the
   octave" budget once (run 35939068722), 25 s alone.
