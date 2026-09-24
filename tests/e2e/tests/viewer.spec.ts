@@ -216,3 +216,24 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 		await resetPatch(page);
 	}
 });
+
+test('streams served at the cap paint together, so the page paints at the cap', async ({ page }) => {
+	// Each slot served on a phase of its own made the page paint once per stream; the counter read
+	// twice `system.viewer_fps`. An upper bound: a busy machine can only paint less.
+	await page.setViewportSize({ width: 1280, height: 800 });
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		for (const x of [40, 340, 640]) {
+			const n = await addNode(page, 'LFO', [x, 80]);
+			await waitForNode(page, n);
+			await page.evaluate((u) => (window as any).goofi.commands.updateParam(u, 'common', 'max_frequency', 200), n);
+		}
+		const fps = async () => Number((await page.getByText(/^\d+ fps$/).first().textContent())?.split(' ')[0]);
+		await expect.poll(fps, { timeout: 20_000 }).toBeGreaterThan(0);
+		await page.waitForTimeout(3000);
+		expect(await fps(), 'paints a second, with three streams at a 30 fps cap').toBeLessThanOrEqual(36);
+	} finally {
+		await resetPatch(page);
+	}
+});

@@ -1470,10 +1470,12 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
             // document once, with each variable's newest pick.
             let mut latest: HashMap<String, goofi_core::variables::VariableValue> = HashMap::new();
             latest.insert(first.0, first.1);
-            while let Ok((name, value)) = rx.recv_timeout(pace.due().saturating_duration_since(Instant::now())) {
+            let interval = state.reducers.cap_interval();
+            let due = pace.due(interval, Instant::now());
+            while let Ok((name, value)) = rx.recv_timeout(due.saturating_duration_since(Instant::now())) {
                 latest.insert(name, value);
             }
-            pace.take(state.reducers.cap_interval(), Instant::now());
+            pace.take(interval, Instant::now());
             let mut g = state.graph.lock().unwrap();
             let changed = latest.into_iter().fold(false, |acc, (name, value)| g.follow_variable(&name, value) || acc);
             if changed {

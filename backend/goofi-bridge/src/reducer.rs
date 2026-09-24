@@ -56,22 +56,33 @@ fn cap_of(g: &Graph) -> f64 {
     if fps.is_finite() { fps.max(1.0) } else { 1.0 }
 }
 
-/// A phase-locked rate: each slot is the last one's TARGET plus the interval, so the work done
-/// between two slots does not stretch the period. A slot missed by a whole interval starts over.
+/// A rate on ONE grid for the whole process: every serve lands on a tick of its interval, so
+/// streams at one rate arrive together, a page paints them once, and work never stretches it.
 pub(crate) struct Pace(std::time::Instant);
+
+/// The first tick of `interval`'s grid at or after `at`.
+fn tick(interval: Duration, at: std::time::Instant) -> std::time::Instant {
+    static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let origin = *ORIGIN.get_or_init(std::time::Instant::now);
+    let step = interval.as_nanos().max(1);
+    let n = at.saturating_duration_since(origin).as_nanos().div_ceil(step);
+    origin + Duration::from_nanos((n * step) as u64)
+}
 
 impl Pace {
     pub(crate) fn new() -> Pace {
         Pace(std::time::Instant::now())
     }
-    pub(crate) fn due(&self) -> std::time::Instant {
+    /// The tick to serve on. One passed by more than half an interval is not a wake's lateness
+    /// but an idle stretch, and the next tick takes its place.
+    pub(crate) fn due(&mut self, interval: Duration, now: std::time::Instant) -> std::time::Instant {
+        if self.0 + interval / 2 <= now {
+            self.0 = tick(interval, now);
+        }
         self.0
     }
     pub(crate) fn take(&mut self, interval: Duration, now: std::time::Instant) {
-        self.0 += interval;
-        if self.0 < now {
-            self.0 = now + interval;
-        }
+        self.0 = tick(interval, now + Duration::from_nanos(1));
     }
 }
 
@@ -400,8 +411,10 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 let held = made.is_some() || latest.lock().unwrap().is_some();
                 watched && held && (pending || served != Some(gen.load(Ordering::Acquire)))
             };
+            let interval = serve_interval(&specs.lock().unwrap(), f64::from_bits(cap.load(Ordering::Relaxed)));
+            let due = pace.due(interval, now);
             let duties = [
-                (owed && pace.due() > now).then_some(pace.due()),
+                (owed && due > now).then_some(due),
                 (feed.is_some() && !wanted).then_some(asked_at + IDLE),
                 grace.filter(|at| *at > now),
                 snapped.map(|at| at + IDLE).filter(|at| *at > now),
@@ -563,7 +576,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             // The viewer rate, held here, where N viewers became one stream; a serve held back is
             // the duty the loop wakes to when the pace comes due.
             let now = std::time::Instant::now();
-            if now < pace.due() {
+            if now < pace.due(interval, now) {
                 continue;
             }
             let bytes = match &made {
@@ -598,7 +611,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 }
             };
             // The serve slot is taken by a frame served, never by one this tick held back.
-            pace.take(serve_interval(&specs.lock().unwrap(), f64::from_bits(cap.load(Ordering::Relaxed))), now);
+            pace.take(interval, now);
             let _ = tx.send(bytes); // Err only if all receivers are momentarily gone — harmless.
             sent = hash;
             stamped = stamps;
