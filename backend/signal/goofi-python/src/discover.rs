@@ -54,10 +54,7 @@ payload.close()
         Command::new(python)
             .arg("-c")
             .arg(PROBE)
-            .arg(path)
-            // A host `PYTHONPATH` must not shadow the probe interpreter's own goofi and deps.
-            .env_remove("PYTHONPATH")
-            .env_remove("PYTHONHOME"),
+            .arg(path),
         PROBE_WAIT,
     )
     .map_err(|e| format!("could not run `{python}`: {e}"))?;

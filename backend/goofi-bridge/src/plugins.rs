@@ -141,7 +141,6 @@ impl Service {
                 .args(["-u", "-m", "goofi_plugin"])
                 .arg(config.to_string())
                 .env("PYTHONPATH", sdk)
-                .env_remove("PYTHONHOME")
                 .current_dir(
                     config["package_dir"]
                         .as_str()

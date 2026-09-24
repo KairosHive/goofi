@@ -438,8 +438,8 @@ async fn a_harness_runs_unwatched_and_its_roster_survives_a_reconnect() {
 /// prints joined, so the echoed command cannot end the read.
 async fn report(term: &mut Ws) -> String {
     term.send(Message::Binary(
-        b"printf 'CWD[%s]TERM[%s]COLOR[%s]LC[%s]HOME[%s]KEPT[%s]E''ND\\n' \"$(pwd -P)\" \
-          \"$TERM\" \"$COLORTERM\" \"$LC_ALL\" \"$HOME\" \"$STATED_BY_THE_TEST\"\n".to_vec().into()))
+        b"printf 'CWD[%s]TERM[%s]COLOR[%s]LC[%s]HOME[%s]KEPT[%s]PY[%s]E''ND\\n' \"$(pwd -P)\" \
+          \"$TERM\" \"$COLORTERM\" \"$LC_ALL\" \"$HOME\" \"$STATED_BY_THE_TEST\" \"$PYTHONHOME$PYTHONPATH\"\n".to_vec().into()))
         .await.unwrap();
     read_until(term, "END").await
 }
@@ -471,7 +471,8 @@ async fn a_harness_runs_in_the_patchs_workspace_with_the_terminal_contract_overl
         // question before `LANG` is ever reached, and the overlay under test correctly never runs.
         // Stating the value that outranks every other is what makes this situation reachable.
         ("LC_ALL".into(), "C".into()), ("LANG".into(), "C".into()),
-        ("STATED_BY_THE_TEST".into(), "kept".into())];
+        ("STATED_BY_THE_TEST".into(), "kept".into()),
+        ("PYTHONHOME".into(), "/embedded".into()), ("PYTHONPATH".into(), "/embedded".into())];
     let stated = state.harnesses
         .spawn("_sh", &state.mount(), "http://127.0.0.1:1", &env, state.events.clone(),
                state.history.clone())
@@ -482,6 +483,7 @@ async fn a_harness_runs_in_the_patchs_workspace_with_the_terminal_contract_overl
     assert_eq!(field(&seen, "COLOR["), "truecolor", "{seen:?}");
     assert_eq!(field(&seen, "LC["), "C.UTF-8", "a parent with no UTF-8 locale gets one: {seen:?}");
     assert_eq!(field(&seen, "KEPT["), "kept", "the stated parent never reached the child: {seen:?}");
+    assert_eq!(field(&seen, "PY["), "", "the embedded interpreter's paths reached a shell: {seen:?}");
     // Asserted by what it must not be: an MSYS shell reports `/c/Users/x` for `C:\Users\x`.
     let home = field(&seen, "HOME[");
     assert!(!home.is_empty() && !home.contains(&nonce), "HOME was redirected: {seen:?}");

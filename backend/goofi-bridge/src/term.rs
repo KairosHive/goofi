@@ -2,8 +2,9 @@
 //! command line — no detection, no adapters. A command that cannot launch fails ON its PTY,
 //! where every agent already shows its output.
 //!
-//! The environment is inherited WHOLE, so the agent's own login and auth work; the terminal
-//! contract, `GOOFI_SESSION`/`GOOFI_ACTOR` and goofi's own directory on PATH are overlaid.
+//! The environment is inherited whole but for the embedded interpreter's, so the agent's own
+//! login and auth work; the terminal contract, `GOOFI_SESSION`/`GOOFI_ACTOR` and goofi's own
+//! directory on PATH are overlaid.
 //! Nothing here emulates a terminal; a bounded tail of output replays on attach, so a command
 //! that fails before any viewer arrives — or a page reload — still shows its words.
 
@@ -107,6 +108,9 @@ impl Harnesses {
         // The parent environment, then the terminal contract ON TOP of it.
         for (k, v) in env {
             cmd.env(k, v);
+        }
+        for key in goofi_core::child::EMBEDDED_ONLY {
+            cmd.env_remove(key);
         }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");

@@ -12,6 +12,9 @@ use crate::worker::Worker;
 /// Env var carrying the liveness pipe's read end: a unix fd number, or a Windows HANDLE.
 pub const LIVENESS_ENV: &str = "GOOFI_PARENT_PIPE";
 
+/// Set in this process for the embedded interpreter alone; no child inherits them.
+pub const EMBEDDED_ONLY: [&str; 2] = ["PYTHONHOME", "PYTHONPATH"];
+
 /// A process this one spawned, alive at most as long as this value.
 pub struct Child {
     inner: std::process::Child,
@@ -86,6 +89,12 @@ impl Spawn<'_> {
         let Spawn { name, cmd, source, stdin, stdout, stderr } = self;
         if let Some(session) = crate::session::current() {
             cmd.env(crate::session::ENV, session);
+        }
+        // A child that needs one of them states it on `cmd`.
+        for key in EMBEDDED_ONLY {
+            if !cmd.get_envs().any(|(k, _)| k == key) {
+                cmd.env_remove(key);
+            }
         }
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(cmd, 0);

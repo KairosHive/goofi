@@ -37,9 +37,6 @@ impl Running {
             .arg("import goofi; goofi.serve()")
             .env("GOOFI_IOX_REQ", format!("{base}_req"))
             .env("GOOFI_IOX_RESP", format!("{base}_resp"))
-            // The host's PYTHONPATH (the pyo3/FT tier's) must not shadow the child's own numpy/goofi.
-            .env_remove("PYTHONPATH")
-            .env_remove("PYTHONHOME")
             .env("PYTHONUNBUFFERED", "1");
         // The source rides stdin, never the environment: Windows caps a whole environment
         // block at 32767 characters, and a node file is text of no stated size.
