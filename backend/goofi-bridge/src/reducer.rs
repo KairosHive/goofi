@@ -9,8 +9,6 @@ use std::time::Duration;
 use axum::body::Bytes;
 use goofi_graph::{Graph, Uid};
 use goofi_view::ViewSpec;
-
-use crate::vocab::MAX_VIEWER_FPS;
 use tokio::sync::broadcast;
 
 /// The physical stream a reducer serves: a node uid + one of its output slot names.
@@ -31,7 +29,7 @@ pub type Followed = (String, goofi_core::variables::VariableValue);
 pub struct Declared {
     #[serde(default)]
     pub specs: Vec<ViewSpec>,
-    /// Frames a second; a connection that names none paints at [`MAX_VIEWER_FPS`].
+    /// Frames a second; a connection that names none paints at the cap.
     #[serde(default)]
     pub fps: Option<f64>,
 }
@@ -43,10 +41,19 @@ fn union_specs(by_conn: &HashMap<ConnId, Declared>) -> Vec<ViewSpec> {
 }
 
 /// The gap between two serves of a slot: its fastest display's, never faster than the cap.
-fn serve_interval(by_conn: &HashMap<ConnId, Declared>) -> Duration {
-    let cap = MAX_VIEWER_FPS as f64;
+fn serve_interval(by_conn: &HashMap<ConnId, Declared>, cap: f64) -> Duration {
     let fps = by_conn.values().map(|d| d.fps.unwrap_or(cap)).fold(1.0, f64::max);
     Duration::from_secs_f64(1.0 / fps.min(cap))
+}
+
+/// The viewer cap `system.viewer_fps` holds, as frames a second no slower than one.
+fn cap_of(g: &Graph) -> f64 {
+    let fps = match g.variables().get("system.viewer_fps") {
+        Some(goofi_core::variables::VariableValue::Float(f)) => *f,
+        Some(goofi_core::variables::VariableValue::Int(i)) => *i as f64,
+        _ => 0.0,
+    };
+    if fps.is_finite() { fps.max(1.0) } else { 1.0 }
 }
 
 /// A phase-locked rate: each slot is the last one's TARGET plus the interval, so the work done
@@ -120,11 +127,16 @@ pub struct SlotReducers {
     follow: std::sync::mpsc::Sender<Followed>,
     /// The graph's instance, which every view door is named under.
     instance: Arc<str>,
+    /// `system.viewer_fps` as f64 bits, projected from settled state.
+    cap: Arc<AtomicU64>,
 }
 
 impl SlotReducers {
     pub fn new(graph: Arc<Mutex<Graph>>, follow: std::sync::mpsc::Sender<Followed>) -> SlotReducers {
-        let instance = Arc::from(graph.lock().unwrap().instance());
+        let (instance, cap) = {
+            let g = graph.lock().unwrap();
+            (Arc::from(g.instance()), cap_of(&g))
+        };
         SlotReducers {
             inner: Arc::new(Mutex::new(HashMap::new())),
             graph,
@@ -132,7 +144,18 @@ impl SlotReducers {
             iox: Arc::new(Mutex::new(None)),
             follow,
             instance,
+            cap: Arc::new(AtomicU64::new(cap.to_bits())),
         }
+    }
+
+    /// Take the viewer cap from settled state.
+    pub fn set_cap(&self, g: &Graph) {
+        self.cap.store(cap_of(g).to_bits(), Ordering::Relaxed);
+    }
+
+    /// The gap the viewer cap asks for between two writes of one stream.
+    pub fn cap_interval(&self) -> Duration {
+        Duration::from_secs_f64(1.0 / f64::from_bits(self.cap.load(Ordering::Relaxed)))
     }
 
     /// The graph settled: every loop re-reads its slot's address on its next wake, so a restart
@@ -321,6 +344,7 @@ fn open_feed(graph: &Mutex<Graph>, iox: &SharedIox, uid: Uid, slot: &str) -> Opt
 /// ring; a held serve, an idle expiry, a watch's grace and a snapshot's window are its deadlines.
 fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, door: String) {
     let (graph, iox, follow) = (reducers.graph.clone(), reducers.iox.clone(), reducers.follow.clone());
+    let cap = reducers.cap.clone();
     // Weak: the map owns this loop's entry, and the loop removes it; a strong one would be a cycle.
     let slots: Weak<Mutex<HashMap<SlotKey, SlotReducer>>> = Arc::downgrade(&reducers.inner);
     let (specs, tx, taps) = (reducer.specs.clone(), reducer.tx.clone(), reducer.taps.clone());
@@ -574,7 +598,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 }
             };
             // The serve slot is taken by a frame served, never by one this tick held back.
-            pace.take(serve_interval(&specs.lock().unwrap()), now);
+            pace.take(serve_interval(&specs.lock().unwrap(), f64::from_bits(cap.load(Ordering::Relaxed))), now);
             let _ = tx.send(bytes); // Err only if all receivers are momentarily gone — harmless.
             sent = hash;
             stamped = stamps;

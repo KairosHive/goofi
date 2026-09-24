@@ -124,14 +124,6 @@ pub fn boundary_types_help() -> String {
 }
 
 /// The frontend's vocabulary module, generated from the tables above and checked into the tree.
-/// The fastest ONE slot's reduced stream is broadcast, as frames a second, whatever rate its
-/// connections declare: anything above it is bytes a viewer need not draw.
-pub const MAX_VIEWER_FPS: u32 = 30;
-
-/// The gap [`MAX_VIEWER_FPS`] asks for: how often the follower writes a followed variable.
-pub const VIEWER_INTERVAL: std::time::Duration =
-    std::time::Duration::from_nanos(1_000_000_000 / MAX_VIEWER_FPS as u64);
-
 pub fn typescript() -> String {
     let dtypes = SlotType::ALL.iter().map(|t| format!("'{}'", t.name())).collect::<Vec<_>>().join(" | ");
     let feeds = SlotType::ALL

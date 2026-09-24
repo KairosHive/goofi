@@ -1473,7 +1473,7 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
             while let Ok((name, value)) = rx.recv_timeout(pace.due().saturating_duration_since(Instant::now())) {
                 latest.insert(name, value);
             }
-            pace.take(crate::vocab::VIEWER_INTERVAL, Instant::now());
+            pace.take(state.reducers.cap_interval(), Instant::now());
             let mut g = state.graph.lock().unwrap();
             let changed = latest.into_iter().fold(false, |acc, (name, value)| g.follow_variable(&name, value) || acc);
             if changed {
@@ -1497,6 +1497,7 @@ fn sync_followers(state: &AppState, g: &Graph) {
         taps.entry((uid, slot)).or_default().push(reducer::Tap { variable, index });
     }
     state.reducers.set_taps(taps);
+    state.reducers.set_cap(g);
 }
 
 /// Re-project the authoritative graph into the document and broadcast the delta, after an RPC

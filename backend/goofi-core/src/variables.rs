@@ -239,6 +239,12 @@ pub static SYSTEM_VARIABLES: &[VariableDef] = &[
         ephemeral: false,
     },
     VariableDef {
+        name: "system.viewer_fps",
+        value: || VariableValue::Float(30.0),
+        doc: "The fastest a viewer is served (frames a second), whatever rate its display declares.",
+        ephemeral: false,
+    },
+    VariableDef {
         name: "system.default_width",
         value: || VariableValue::Int(DEFAULT_SIZE as i64),
         doc: "Default texture width (pixels) for graphics nodes that make their own frames.",
