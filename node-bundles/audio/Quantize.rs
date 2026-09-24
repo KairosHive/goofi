@@ -1,27 +1,63 @@
+use goofi_audio_sdk::goofi_core::scale::{Recipe, MASK_BITS, MAX_DEGREES, METHODS, SCALES};
 use goofi_audio_sdk::goofi_core::SlotType;
 use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     SCALE = ParamDecl {
-        group: "quantize",
+        group: "scale",
         name: "scale",
-        spec: ParamSpec::Str {
-            default: "major",
-            options: &[
-                "chromatic", "major", "minor", "pentatonic_major", "pentatonic_minor", "dorian",
-                "phrygian", "lydian", "mixolydian", "blues",
-            ],
-            refresh: false,
-        },
+        spec: ParamSpec::Str { default: "major", options: &SCALES, refresh: false },
         expression: None,
-        doc: Some("which notes a pitch is allowed to land on"),
+        doc: Some("a named scale, or `custom` to build one from the params below"),
     },
     ROOT = ParamDecl {
-        group: "quantize",
+        group: "scale",
         name: "root",
-        spec: ParamSpec::Int { default: 0, min: 0, max: 11, options: &[8, 12, 16, 24] },
+        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 12.0 },
         expression: None,
         doc: Some("the note the scale is built from, in semitones above C"),
+    },
+    METHOD = ParamDecl {
+        group: "scale",
+        name: "method",
+        spec: ParamSpec::Str { default: "generator", options: METHODS, refresh: false },
+        expression: None,
+        doc: Some("a custom scale stacked from a generator, read off the harmonic series, or picked from an equal division"),
+    },
+    PERIOD = ParamDecl {
+        group: "scale",
+        name: "period",
+        spec: ParamSpec::Float { default: 1200.0, min: 1.0, max: 4800.0 },
+        expression: None,
+        doc: Some("the interval the scale repeats at, in cents; 1200 is the octave"),
+    },
+    GENERATOR = ParamDecl {
+        group: "scale",
+        name: "generator",
+        spec: ParamSpec::Float { default: 700.0, min: 0.0, max: 4800.0 },
+        expression: None,
+        doc: Some("the interval stacked, in cents: 700 is a tempered fifth, 701.955 a pure one"),
+    },
+    STEPS = ParamDecl {
+        group: "scale",
+        name: "steps",
+        spec: ParamSpec::Int { default: 7, min: 1, max: 53, options: &[] },
+        expression: None,
+        doc: Some("generators stacked, harmonics read (partials steps to 2 steps - 1), or equal parts of the period"),
+    },
+    MASK = ParamDecl {
+        group: "scale",
+        name: "mask",
+        spec: ParamSpec::Int { default: 0, min: 0, max: (1 << MASK_BITS) - 1, options: &[] },
+        expression: None,
+        doc: Some("which of a division's first 24 parts are admitted, bit k for part k; zero admits every part"),
+    },
+    MODE = ParamDecl {
+        group: "scale",
+        name: "mode",
+        spec: ParamSpec::Int { default: 0, min: 0, max: 52, options: &[] },
+        expression: None,
+        doc: Some("the degree the scale is read from, so one stack answers all of its modes"),
     },
 }
 
@@ -31,60 +67,35 @@ static OUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Audio }
 
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Transform],
-    doc: "A pitch in volts pulled to the nearest note of a scale.",
+    doc: "A pitch in volts per octave pulled to the nearest note of a scale.\n\
+          A named scale is a preset; `custom` builds any scale from a stacked generator, the \
+          harmonic series, or a chosen subset of an equal division, read from any of its modes.",
     inputs: INS,
     outputs: OUTS,
     params: PARAMS,
 };
 
-/// The semitones each scale admits, in the order the `scale` param offers them.
-static SCALES: &[&[i32]] = &[
-    &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-    &[0, 2, 4, 5, 7, 9, 11],
-    &[0, 2, 3, 5, 7, 8, 10],
-    &[0, 2, 4, 7, 9],
-    &[0, 3, 5, 7, 10],
-    &[0, 2, 3, 5, 7, 9, 10],
-    &[0, 1, 3, 5, 7, 8, 10],
-    &[0, 2, 4, 6, 7, 9, 11],
-    &[0, 2, 4, 5, 7, 9, 10],
-    &[0, 3, 5, 6, 7, 10],
-];
-
 #[derive(Default)]
 struct Quantize;
-
-/// The nearest admitted semitone to `semis`, searched across the octave below and above so a
-/// pitch just under the root does not climb a whole octave to reach it.
-fn snap(semis: f32, degrees: &[i32], root: i32) -> f32 {
-    let octave = (semis / 12.0).floor() as i32;
-    let mut best = semis;
-    let mut gap = f32::INFINITY;
-    for o in octave - 1..=octave + 1 {
-        for d in degrees {
-            let note = (o * 12 + root + d) as f32;
-            if (note - semis).abs() < gap {
-                gap = (note - semis).abs();
-                best = note;
-            }
-        }
-    }
-    best
-}
 
 impl AudioNode for Quantize {
     fn prepare(&mut self, _rate: f64) {}
 
     fn process(&mut self, b: &mut Block<'_>) {
+        let at = |k: usize| f64::from(b.params[k].chan(0)[0]);
+        let custom = Recipe::from_scalars(at(P::METHOD), at(P::PERIOD), at(P::GENERATOR), at(P::STEPS), at(P::MASK), at(P::MODE));
+        let recipe = Recipe::chosen(at(P::SCALE) as usize, custom);
+        let mut all = [0.0; MAX_DEGREES];
+        let n = recipe.degrees(&mut all);
+        let degrees = &all[..n];
+        let root = at(P::ROOT) * 100.0;
         let input = &b.ins[0];
-        let degrees = SCALES[(b.params[P::SCALE].chan(0)[0] as usize).min(SCALES.len() - 1)];
-        let root = b.params[P::ROOT].chan(0)[0] as i32;
         let out = &mut b.outs[0];
         for c in 0..out.channels() as usize {
             let x = input.chan(c);
             let y = out.chan_mut(c);
             for i in 0..BLOCK {
-                y[i] = snap(x[i] * 12.0, degrees, root) / 12.0;
+                y[i] = ((recipe.snap(degrees, f64::from(x[i]) * 1200.0 - root).0 + root) / 1200.0) as f32;
             }
         }
     }

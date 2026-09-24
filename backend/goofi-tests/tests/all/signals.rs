@@ -516,7 +516,22 @@ fn the_control_nodes_turn_a_signal_into_a_decision_a_route_and_a_label() {
         pv.latest().filter(|d| f32s(d).iter().all(|v| (*v - 5.0).abs() < 1e-5))
     });
 
-    for n in [over, under, route, named, latch, steps, tuned] {
+    // `scale` reads a value as a pitch in Hz: 450 Hz in C major lands on A4, 440 Hz, its sixth
+    // degree. The harmonic series is a scale too: 300 Hz lands on the ninth partial of C4 over eight,
+    // 294.33 Hz, which no tempered D is.
+    let pitch = g.add("signal:Quantize");
+    set(pitch, "quantize", "mode", j!("scale"));
+    let (pp, pd) = (g.probe(pitch, "out"), g.probe(pitch, "index"));
+    set(level, "constant", "value", j!(450.0));
+    g.link(level, "out", pitch, "input");
+    g.until("450 Hz on A4", |_| pp.latest().filter(|d| f32s(d).iter().all(|v| (*v - 440.0).abs() < 1e-3)));
+    g.until("the sixth degree", |_| pd.latest().filter(|d| f32s(d).iter().all(|v| *v == 5.0)));
+    set(pitch, "scale", "scale", j!("harmonic"));
+    set(level, "constant", "value", j!(300.0));
+    let ninth = 261.625_57 * 9.0 / 8.0;
+    g.until("300 Hz on the ninth partial", |_| pp.latest().filter(|d| f32s(d).iter().all(|v| (*v - ninth).abs() < 1e-2)));
+
+    for n in [over, under, route, named, latch, steps, tuned, pitch] {
         assert!(g.error(n).is_none(), "a control node carries no error: {:?}", g.error(n));
     }
 }

@@ -68,6 +68,8 @@ before the first production deployment.
   replay tolerates stale targets. Layout inverses use forward planners.
 - Signal nodes schedule themselves; audio and graphics have their own clocks. Node processing
   does not run under the graph lock. Cross-engine transport is latest-wins shared memory.
+- Pitch is Hz on the signal plane and volts per octave on the audio plane (0 V is C4). Musical
+  scales come from `goofi_core::scale`, which both quantizers share.
 - Rust nodes are `.rs` files built against an engine SDK. Every dynamic library — a built node,
   a host program, a VST3 module — is opened and its entry symbols read through `goofi_build`.
   A signal node file built after the boot scan runs HOSTED: in a child of goofi's own binary

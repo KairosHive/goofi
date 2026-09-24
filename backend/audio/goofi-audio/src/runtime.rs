@@ -163,9 +163,6 @@ impl Playback {
     }
 }
 
-/// The most sines one oscillator frame sounds; the entries past it are silent.
-pub const VOICES: usize = 256;
-
 /// One frame in hand: interleaved samples, `len` per channel, and where the loop reads next.
 struct Voice {
     buf: Vec<f32>,
@@ -224,10 +221,10 @@ pub struct Frames {
     /// Samples into the crossfade from `now` to `next`, of how many; `(0, 0)` while none runs.
     fade: (usize, usize),
     oscillating: bool,
-    /// Per sine: its phase in cycles, and the pitch it is gliding from.
-    phase: [f64; VOICES],
-    hz: [f32; VOICES],
-    sounding: usize,
+    /// Per sine, one for every value a frame can hold: its pitch, gliding, and its phasor.
+    hz: Vec<f32>,
+    re: Vec<f32>,
+    im: Vec<f32>,
 }
 
 impl Frames {
@@ -240,9 +237,9 @@ impl Frames {
             next: Voice::new(),
             fade: (0, 0),
             oscillating: false,
-            phase: [0.0; VOICES],
-            hz: [0.0; VOICES],
-            sounding: 0,
+            hz: Vec::with_capacity(crate::control::INBOX_RING),
+            re: Vec::with_capacity(crate::control::INBOX_RING),
+            im: Vec::with_capacity(crate::control::INBOX_RING),
         }
     }
 
@@ -255,7 +252,8 @@ impl Frames {
     }
 
     fn forget(&mut self) {
-        (self.now.len, self.now.chans, self.now.pos, self.fade, self.sounding) = (0, 0, 0, (0, 0), 0);
+        (self.now.len, self.now.chans, self.now.pos, self.fade) = (0, 0, 0, (0, 0));
+        self.hz.clear();
     }
 
     pub fn fill(&mut self, out: &mut PortMut<'_>, params: &[AtomicU64]) {
@@ -305,29 +303,43 @@ impl Frames {
     }
 
     /// Every value of the newest frame a sine at that many Hz, their mean on every channel. A
-    /// sine keeps its phase across frames, and with smoothing glides to its new pitch.
+    /// sine keeps its phase across frames, and with smoothing glides to its new pitch. Each is a
+    /// phasor turned once a sample, so a frame of thousands costs a multiply per value.
     fn oscillate(&mut self, out: &mut PortMut<'_>, smoothing: usize) {
         keep_newest(&mut self.ring, 0, 1);
         if self.next.take(&mut self.ring) {
             std::mem::swap(&mut self.now, &mut self.next);
         }
-        let n = (self.now.chans * self.now.len).min(VOICES);
-        for v in self.sounding..n {
-            (self.hz[v], self.phase[v]) = (self.now.buf[v], 0.0);
-        }
-        self.sounding = n;
-        let k = if smoothing > 0 { 1.0 - (-1.0 / smoothing as f32).exp() } else { 1.0 };
-        let (step, channels) = (1.0 / self.rate, out.channels() as usize);
-        for i in 0..BLOCK {
-            let mut sum = 0.0;
-            for v in 0..n {
-                self.hz[v] += (self.now.buf[v] - self.hz[v]) * k;
-                self.phase[v] = (self.phase[v] + f64::from(self.hz[v]) * step).rem_euclid(1.0);
-                sum += (self.phase[v] * std::f64::consts::TAU).sin() as f32;
+        let n = self.now.chans * self.now.len;
+        let target = &self.now.buf[..n];
+        // Within the capacity reserved at birth, so neither allocates.
+        let was = self.hz.len().min(n);
+        self.hz.truncate(n);
+        self.hz.extend_from_slice(&target[was..]);
+        self.re.resize(was, 1.0);
+        self.re.resize(n, 1.0);
+        self.im.resize(was, 0.0);
+        self.im.resize(n, 0.0);
+        let k = if smoothing > 0 { 1.0 - (-(BLOCK as f32) / smoothing as f32).exp() } else { 1.0 };
+        let turn = std::f64::consts::TAU / self.rate;
+        let mut mix = [0.0f32; BLOCK];
+        for (((hz, want), re), im) in self.hz.iter_mut().zip(target).zip(&mut self.re).zip(&mut self.im) {
+            *hz += (want - *hz) * k;
+            let (s, c) = (turn * f64::from(*hz)).sin_cos();
+            let (s, c) = (s as f32, c as f32);
+            let (mut x, mut y) = (*re, *im);
+            for m in &mut mix {
+                *m += y;
+                (x, y) = (x * c - y * s, x * s + y * c);
             }
-            let y = if n > 0 { sum / n as f32 } else { 0.0 };
-            for c in 0..channels {
-                out.chan_mut(c)[i] = y;
+            // Back onto the unit circle, which rounding walks it off.
+            let norm = x.hypot(y).max(f32::MIN_POSITIVE);
+            (*re, *im) = (x / norm, y / norm);
+        }
+        let scale = if n > 0 { 1.0 / n as f32 } else { 0.0 };
+        for c in 0..out.channels() as usize {
+            for (y, m) in out.chan_mut(c).iter_mut().zip(&mix) {
+                *y = m * scale;
             }
         }
     }

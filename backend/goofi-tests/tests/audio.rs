@@ -269,7 +269,7 @@ fn a_patch_sounds_under_the_external_clock() {
 
     // A quantizer answers only the notes of its scale, and a mixdown answers a fixed width.
     let steps = g.add("audio:Quantize");
-    g.set_param(steps, "quantize", "scale", "pentatonic_major");
+    g.set_param(steps, "scale", "scale", "pentatonic_major");
     g.link(tone, "out", steps, "input");
     let on_scale = |x: &[f32]| {
         x.iter().all(|v| {
@@ -280,6 +280,14 @@ fn a_patch_sounds_under_the_external_clock() {
     };
     let held = heard(&g, steps, "a pitch pulled onto a scale step", on_scale);
     assert!(held.iter().any(|v| *v != held[0]), "the pitch still moves: {:?}", &held[..4]);
+    // …and any other scale is a setting: nineteen equal parts of the octave, which no preset names.
+    g.set_param(steps, "scale", "scale", "custom");
+    g.set_param(steps, "scale", "method", "division");
+    g.set_param(steps, "scale", "steps", 19);
+    heard(&g, steps, "a pitch on nineteen-tone equal temperament", |x| {
+        let on = |v: f32, parts: f32| (v * parts - (v * parts).round()).abs() < 1e-3;
+        x.iter().all(|v| on(*v, 19.0)) && x.iter().any(|v| !on(*v, 12.0))
+    });
 
     let wide = g.add("audio:Noise");
     g.set_param(wide, "noise", "channels", 6);
@@ -701,6 +709,21 @@ fn a_patch_sounds_under_the_external_clock() {
         let got = amplitude(&chord, at);
         assert!((got - want).abs() < 0.02, "{at} Hz sounds at {got}, not {want}");
     }
+    // …one sine for every value, however many: a thousand of which only the last 299 sit at
+    // 1200 Hz and the rest at 0 Hz is 0.299 of full scale, and silence if any cap cut them off.
+    g.set_param(pair, "ramp", "channels", 1);
+    g.set_param(pair, "ramp", "length", 1000);
+    g.set_param(hz, "math", "pre_add", -0.7005);
+    g.set_param(hz, "math", "multiply", 1.0e6);
+    g.set_param(hz, "math", "post_add", 0.0);
+    g.set_param(hz, "range", "to_high", 1200.0);
+    g.set_param(hz, "range", "bound", "clamp");
+    g.until("a thousand sines, 299 of them sounding", |g| {
+        let (x, _) = drive(g, TENTH);
+        ((amplitude(&x, 1200.0) - 0.299).abs() < 0.002).then_some(())
+    });
+    let (many, _) = drive(&g, TENTH);
+    assert!((amplitude(&many, 1200.0) - 0.299).abs() < 0.002, "{}", amplitude(&many, 1200.0));
     g.set_param(signal_in, "signal", "mode", "waveform");
     g.call("node remove", j!({ "node": hex(hz) }));
     g.call("node remove", j!({ "node": hex(pair) }));

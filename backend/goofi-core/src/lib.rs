@@ -15,6 +15,7 @@ pub mod path;
 pub mod png;
 pub mod probe;
 pub mod reduce;
+pub mod scale;
 pub mod record;
 pub mod registry;
 pub mod session;
