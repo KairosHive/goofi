@@ -37,34 +37,40 @@ impl Node for GraphicsIn {
         let d = inp.get("input").ok_or("`input` is required")?;
         let a = d.assert_ndims().at_least(2)?;
         let mut shape = a.shape().to_vec();
-        let mut bytes = a.as_bytes().to_vec();
-        let mut meta = d.meta().clone();
 
         // Both picture axes to the same bound, so a shrunk frame keeps the shape it had.
         let size = p.i64("graphics", "size").unwrap_or(256).clamp(0, 16384) as usize;
-        let mut noted = Vec::new();
+        let (mut noted, mut reduced) = (Vec::new(), None::<Vec<u8>>);
         for dim in [0, 1] {
             let was = shape[dim];
-            let Some(cut) = reduce_axis(&bytes, &shape, dim, size, ReduceMethod::Area) else { continue };
+            let bytes = reduced.as_deref().unwrap_or(a.as_bytes());
+            let Some(cut) = reduce_axis(bytes, &shape, dim, size, ReduceMethod::Area) else { continue };
             noted.push((dim, origin_of(d.meta(), dim, was), ReduceMethod::Area));
-            (bytes, shape[dim]) = (cut.bytes, cut.new_len);
-        }
-        if !noted.is_empty() {
-            note_reduced(&mut meta, &noted);
+            (reduced, shape[dim]) = (Some(cut.bytes), cut.new_len);
         }
 
         let (h, w) = (shape[0], shape[1]);
         let c = shape.get(2).copied().unwrap_or(1);
         let mode = p.str("graphics", "mode").unwrap_or("pixels");
         if mode == "pixels" {
-            out.set("out", Data::array_f32(shape, bytes, meta).map_err(|e| e.to_string())?);
+            // A frame nothing cut crosses as it came, its buffer shared rather than copied.
+            let frame = match reduced {
+                None => d.clone(),
+                Some(bytes) => {
+                    let mut meta = d.meta().clone();
+                    note_reduced(&mut meta, &noted);
+                    Data::array_f32(shape, bytes, meta).map_err(|e| e.to_string())?
+                }
+            };
+            out.set("out", frame);
             return Ok(());
         }
+        let bytes = reduced.as_deref().unwrap_or(a.as_bytes());
         // Every reduction below is over brightness, so the channel axis is spent and its labels
         // with it; the picture axes keep the note that says what they were rendered from.
         let mut gray = Vec::with_capacity(h * w);
         for i in 0..h * w {
-            gray.push(luma(&bytes, i * c, c));
+            gray.push(luma(bytes, i * c, c));
         }
         let (shape, values) = match mode {
             "rows" => (vec![h], (0..h).map(|y| gray[y * w..(y + 1) * w].iter().sum::<f32>() / w as f32).collect()),

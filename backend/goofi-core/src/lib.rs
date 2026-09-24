@@ -184,12 +184,12 @@ pub fn warn_cast_once(warned: &mut std::collections::HashSet<SrcDtype>, slot: &s
 #[derive(Clone, Debug)]
 pub struct ArrayStore {
     shape: Vec<usize>,
-    buf: Arc<[u8]>, // f32 LE, `buf.len() == nelem * 4`
+    buf: Arc<Vec<u8>>, // f32 LE, `buf.len() == nelem * 4`; a `Vec` so a built buffer moves in uncopied
 }
 
 impl ArrayStore {
     /// Build without normalization — the caller guarantees `buf.len() == nelem * 4`.
-    pub fn new(shape: Vec<usize>, buf: Arc<[u8]>) -> ArrayStore {
+    pub fn new(shape: Vec<usize>, buf: Arc<Vec<u8>>) -> ArrayStore {
         ArrayStore { shape, buf }
     }
     pub fn shape(&self) -> &[usize] {
@@ -618,7 +618,7 @@ impl Data {
             }
         }
 
-        Ok(Data::array(ArrayStore::new(shape, Arc::from(buf.into_boxed_slice())), meta))
+        Ok(Data::array(ArrayStore::new(shape, Arc::new(buf)), meta))
     }
 
     pub fn as_array(&self) -> std::result::Result<&ArrayStore, String> {

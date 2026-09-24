@@ -15,9 +15,36 @@ pub const HEADER_SIZE: usize = 14;
 
 /// Encode a `Data` into a fresh GOOF v2 frame.
 pub fn encode(d: &Data) -> Vec<u8> {
-    let mut body = Vec::new();
-    write_body(d, &mut body);
-    frame(d.dtype_tag(), pack_meta(d), body)
+    let mut out = Vec::new();
+    encode_into(d, &mut out);
+    out
+}
+
+/// Append `d`'s frame to `out`, the body written in place: a frame is never built, then copied.
+fn encode_into(d: &Data, out: &mut Vec<u8>) {
+    let meta = pack_meta(d);
+    let samples = if let Value::Array(store) = d.value() { store.as_bytes().len() } else { 0 };
+    out.reserve(HEADER_SIZE + meta.len() + samples + 64);
+    out.extend_from_slice(MAGIC);
+    out.push(VERSION);
+    out.push(d.dtype_tag());
+    out.extend_from_slice(&(meta.len() as u32).to_le_bytes());
+    let at = out.len();
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&meta);
+    let start = out.len();
+    write_body(d, out);
+    let len = (out.len() - start) as u32;
+    out[at..at + 4].copy_from_slice(&len.to_le_bytes());
+}
+
+/// Append a u32 length and the bytes `write` appends behind it.
+fn prefixed(out: &mut Vec<u8>, write: impl FnOnce(&mut Vec<u8>)) {
+    let at = out.len();
+    out.extend_from_slice(&[0; 4]);
+    write(out);
+    let len = (out.len() - at - 4) as u32;
+    out[at..at + 4].copy_from_slice(&len.to_le_bytes());
 }
 
 /// An 8-bit array frame for the browser hop, where `Data` itself stays f32: the same header and
@@ -134,9 +161,7 @@ fn write_body(d: &Data, out: &mut Vec<u8>) {
                 let kb = key.as_bytes();
                 out.extend_from_slice(&(kb.len() as u16).to_le_bytes());
                 out.extend_from_slice(kb);
-                let frame = encode(value);
-                out.extend_from_slice(&(frame.len() as u32).to_le_bytes());
-                out.extend_from_slice(&frame);
+                prefixed(out, |out| encode_into(value, out));
             }
         }
     }
@@ -477,9 +502,7 @@ pub fn encode_slots(slots: &[(&str, &str, &Data)], out: &mut Vec<u8>) {
             out.extend_from_slice(&(tb.len() as u16).to_le_bytes());
             out.extend_from_slice(tb);
         }
-        let frame = encode(d);
-        out.extend_from_slice(&(frame.len() as u32).to_le_bytes());
-        out.extend_from_slice(&frame);
+        prefixed(out, |out| encode_into(d, out));
     }
 }
 

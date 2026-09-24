@@ -110,10 +110,12 @@ pub(crate) fn rows_into(bytes: &mut Vec<u8>, buffer: &wgpu::Buffer, (w, h): (u32
     let Ok(mapped) = buffer.slice(..).get_mapped_range() else { return false };
     let row = (w * want.texel()) as usize;
     let pitch = padded_row(w, want.texel()) as usize;
-    bytes.resize(row * h as usize, 0);
+    // Appended, never zero-filled first: a tap's buffer is fresh every frame.
+    bytes.clear();
+    bytes.reserve(row * h as usize);
     for y in 0..h as usize {
         match mapped.get(y * pitch..y * pitch + row) {
-            Some(line) => bytes[y * row..(y + 1) * row].copy_from_slice(line),
+            Some(line) => bytes.extend_from_slice(line),
             None => return false,
         }
     }
