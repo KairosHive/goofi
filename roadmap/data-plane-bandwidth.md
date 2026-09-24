@@ -9,8 +9,9 @@ not a suspicion.
 1. **The tablet measurement over LAN.** Repeat the desktop baseline below against the tablet:
    frames/s and bytes/s per path, and the tablet's own frame rate. Record it here.
 
-The desktop baseline (headless Chromium, debug backend, 2026-09-16, before half floats and
-frame silence):
+The desktop baseline (headless Chromium, debug backend, 2026-09-16) predates half floats and
+frame silence, so the tablet numbers will not compare against it as is: re-take the desktop row
+for the same patch on the same build first.
 
 | patch | viewers on screen | `/data` | `/control` |
 |---|---|---|---|

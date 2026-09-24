@@ -3,19 +3,16 @@
 Two findings of the frontend performance audit (`frontend-performance.md`) that share one design.
 Every op is the standard interaction — UI, CLI, MCP, scripts and tests all speak it — so the rules
 for what an op may hold, what it defers and how a gesture feeds it must be decided once, for all
-of them, and not in the control that happens to emit the most.
+of them, and not in the control that happens to emit the most. `backend-architecture.md` §3 owns
+the transaction shape (`Txn`, one commit tail, `spawn_blocking`); this file owns which ops read,
+which write, which run off the lock, and the gesture design.
 
 ## What is known
 
-- An op holds the graph lock for its whole run. In the debug build that was 9–65 ms per op; the
-  write path since moved its diff, version and encode off the lock, and only the projection
-  stays under it.
-- A knob, a slider or a number field under a pointer emits one op per pointer event. Each op is
-  a full round trip with its own undo entry; the document replica now wakes only the readers of
-  the leaves a patch names, so the client cost per op is small, but the socket's event drain
-  waits on the reply of every one of them.
-- The live value in a control (`liveValue.svelte.ts`) shows a committed value until the source
-  echoes it, so a gesture reads as continuous whatever the backend's pace.
+- An op holds the graph lock for its whole run; only the projection stays under it on the write
+  path. A knob, a slider or a number field under a pointer emits one op per pointer event, each a
+  full round trip with its own undo entry, and the socket's event drain waits on the reply of
+  every one of them.
 
 ## Decisions already taken
 
@@ -33,5 +30,5 @@ of them, and not in the control that happens to emit the most.
   ops read, which write, and which run off the lock entirely.
 - **Continuous-motion edits.** Whether a gesture is one op with a stream of values inside it, a
   coalesced sequence of value ops with one undo entry, or something else; and what the control
-  shows between a send and its echo. Same answer for knob, slider, number field and the control
-  panel's widgets.
+  shows between a send and its echo (`liveValue.svelte.ts` shows a committed value until the
+  source echoes it). Same answer for knob, slider, number field and the control panel's widgets.

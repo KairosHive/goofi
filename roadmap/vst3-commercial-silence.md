@@ -23,3 +23,9 @@ Why an IK plugin mutes itself where a JUCE plugin, handed the identical buffers 
 identical code, renders. Every host call is accepted, so the difference is in what the plugin reads
 back from the host rather than in what it is told. It is IK-specific: no other vendor here is
 affected.
+
+## To confirm on hardware
+
+`backend/audio/goofi-audio/src/vst3/node.rs:509-511` now activates buses after `setupProcessing`
+and says that order left T-RackS silent. The owner must confirm on the machine that holds the
+suite; if the plugins render, this entry goes.

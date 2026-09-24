@@ -8,28 +8,16 @@ Two upstream defects in `iceoryx2-pal-posix`, both reproduced against 0.9.3 and 
   (#1869). iceoryx2's own dead-node reclaim therefore fails, and its liveness answer — a
   `LockFileEx` try whose every failure reads as "alive" — never even reaches it.
 
-## What goofi does about it (2026-09-14)
+goofi no longer asks iceoryx2 who is alive and no longer sweeps iceoryx2's machine-global root; a
+session (`goofi_core::session`) owns every ephemeral resource and its `alive.lock` is the one
+aliveness answer. On Windows the boot sweep takes each file's DACL back by name first
+(`take_path`), the only part of the old repair that remains.
 
-goofi no longer asks iceoryx2 who is alive, and no longer sweeps iceoryx2's machine-global root.
-A session — `goofi_core::session` — is the one owner of every ephemeral resource, and its
-`alive.lock` is the one aliveness answer, released by the OS on any exit:
+## Remaining
 
-- `<system>/goofi-system/<id>/` holds the record (`session.json`, `alive.lock`), machine-wide, and
-  its `iox/` is the iceoryx2 ROOT for that session, and every segment
-  carries the prefix `g<id>_`. `/tmp/goofi-system` on unix (a unix socket path is capped at 108
-  bytes, which a macOS `$TMPDIR` alone half spends), `%TEMP%\goofi-system` on Windows.
-- `<temp>/goofi-workspaces/<id>/` is the patch workspace: removed on a clean shutdown only. What a
-  crash leaves there with an autosave in it, the manager's boot pass moves to
-  `.goofi/system/recovery/<id>/` and offers (`session recoverable`); a leftover with no autosave
-  held no unsaved work, and the boot pass removes it.
-
-The boot pass (`goofi_transport::session`, run by the manager before any engine exists) removes
-every record whose lock is free, every system directory whose record is dead or gone, and the
-segments their prefixes name. Nothing a living session owns is ever enumerated. On Windows the
-removal takes each file's DACL back by name first (`take_path`), which is the only part of the
-old repair that remains. A spawned child joins its parent's session through `GOOFI_SESSION`.
-
-Remaining: the noise is upstream's, and a stderr filter deadlocks the Python subprocess tier, so
-it stays until the upstream fix lands. Unverified on Windows from this machine; the CI job is the
-proof. The shared-memory sweep by prefix lists a directory, which macOS's POSIX shm namespace does
-not offer — what a crash leaves there is reclaimed by iceoryx2's own path or a reboot.
+- The noise is upstream's. A stderr filter deadlocks the Python subprocess tier, so it stays until
+  the upstream fix lands.
+- Unverified on Windows from this machine, and CI does not prove it: the Windows job runs the unit
+  tests only, and the situations sit out until iceoryx2 can listen there.
+- The shared-memory sweep by prefix lists a directory, which macOS's POSIX shm namespace does not
+  offer. What a crash leaves there is reclaimed by iceoryx2's own path or a reboot.

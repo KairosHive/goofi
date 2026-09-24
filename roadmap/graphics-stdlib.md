@@ -1,38 +1,21 @@
 # Graphics standard library gaps
 
-Reviewed 2026-09-10 against `node-bundles/graphics/`, the related signal nodes, and
-TouchDesigner's [TOP catalog](https://docs.derivative.ca/TOP). This is a proposed
-build order for goofi, not a plan to copy every TOP. Names below are proposals.
+Reviewed 2026-09-10 against TouchDesigner's [TOP catalog](https://docs.derivative.ca/TOP). This
+is a proposed build order for goofi, not a plan to copy every TOP. Names below are proposals;
+none is built. The graphics bundle leaves this repo (`library.md`); the order travels with it.
 
-## Current coverage
+## Limits the proposals build on
 
-The graphics bundle has Constant, Ramp, Shape, Noise, Transform, Displace, Lookup,
-Level, Threshold, Composite, Blur, Math, Feedback, Tessellate, SignalIn, AudioIn,
-Window, and simulation nodes. Composite now has 20 modes; Blur has six algorithms;
-Math provides scale/shift, range mapping, bounds, and RGB/RGBA/alpha selection.
-
-Important limits of that coverage:
-
-- Transform has translation, rotation, uniform positive scale, and tiling. It has
-  no separate X/Y scale, pivot, flip, or aspect-preserving fit.
-- Common width/height already control output resolution. The missing capability
-  is good resampling and fit policy, not a second pair of size controls.
-- Level has gain, offset, gamma, and invert. It has no hue or saturation controls.
-- Composite combines two images with alpha. Its arithmetic modes do not provide
-  raw channel arithmetic independent of coverage. Its blend control is not a
-  general crossfade between A and B.
-- Lookup reads a one-dimensional palette from one channel. Displace applies
-  relative RG offsets; neither provides an absolute two-dimensional UV lookup.
-- Feedback supplies the previous tick. It does not provide a configurable frame
-  history, indexed playback, or capture/hold controls.
-- Camera/video input is `graphics:Camera`, using Rust/Python texture producers on
-  the graphics engine's own resources. See [graphics node authoring](../sdk/graphics.md).
-- `signal:Text` emits a string; it does not render text. Signal Switch and Select
-  operate on arrays, not GPU textures.
-- Texture video recording already exists in `goofi-record`. Window already handles
-  display. Subpatches already have texture input/output ports.
-- `harmonic-geometry:GeometryRender` draws its geometry format with a fixed view.
-  A general scene renderer with cameras, lights, and materials remains separate.
+- Transform has translation, rotation, uniform positive scale, and tiling; no separate X/Y scale,
+  pivot, flip, or aspect-preserving fit. Common width/height already control output resolution;
+  the missing capability is resampling and fit policy, not a second pair of size controls.
+- Level has gain, offset, gamma, and invert; no hue or saturation. Composite's arithmetic modes do
+  not provide raw channel arithmetic independent of coverage, and its blend is not a general
+  crossfade. Lookup reads a one-dimensional palette; Displace applies relative RG offsets; neither
+  is an absolute two-dimensional UV lookup. Feedback supplies the previous tick only.
+- `signal:Text` emits a string; nothing renders text. Signal Switch and Select operate on arrays.
+  Texture recording and Window display exist; a general scene renderer with cameras, lights, and
+  materials remains separate from `GeometryRender`.
 
 ## First: everyday image operations
 

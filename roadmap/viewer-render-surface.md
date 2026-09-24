@@ -1,14 +1,14 @@
 # Viewer rendering: one GPU surface per panel
 
-Decided 2026-09-16 from the performance audit; the line and image viewers draw on `glance/`
-(one WebGL2 canvas per editor panel and per docked viewer panel) since 2026-09-23. This file holds
-what remains and the decisions that bind it.
+Decided 2026-09-16 from the performance audit. Viewers draw on `glance/` (one WebGL2 canvas per
+editor panel and per docked viewer panel). This file holds what remains and the decisions that
+bind it.
 
 ## Decisions that hold
 
-- **Every viewer draws through the surface.** There is no canvas-2D path and none comes back: two
-  render paths would be two owners of one picture. A browser without WebGL2 sees the text
-  fallback.
+- **Every viewer draws through the surface.** No canvas-2D path beyond the two remaining kinds,
+  and none comes back: two render paths would be two owners of one picture. A browser without
+  WebGL2 sees the text fallback.
 - **WebGL2, hand-written.** No WebGPU backend: nothing here needs it, its coverage on Firefox, Linux
   Chrome and older iPads is uneven, and headless Chromium needs SwiftShader flags for it. Engines
   do not run in the browser, so the one feature that asked for a shared WebGPU device is gone.
