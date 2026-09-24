@@ -190,6 +190,10 @@ cd tests/e2e && npm install && npm run e2e    # Playwright against the real bina
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+goofi is free software under the [GNU Affero General Public License v3.0](LICENSE). The
+[`glance`](glance/) plotting package is MIT-licensed.
+
+Closed-source projects that wish to build with or on top of goofi are welcome to do so under a
+commercial license, available on request.
 
 See [graphics node authoring](sdk/graphics.md) for Rust and Python texture sources.
