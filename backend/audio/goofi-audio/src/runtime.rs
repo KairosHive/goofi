@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use goofi_audio_sdk::{AudioNode, Block, Port, PortMut, BLOCK, MAX_CHANNELS, MAX_PORTS};
-use goofi_node::Uid;
+use goofi_audio_sdk::{cross, AudioNode, Block, Port, PortMut, BLOCK, MAX_CHANNELS, MAX_PORTS};
+use goofi_node::{NodeManifest, ParamSpec, Uid};
 
 use crate::plan::{Plan, Source, SILENCE};
 
@@ -40,7 +40,7 @@ pub struct Slot {
     /// The scalar per param, `f64` bits, written by the node's control half.
     pub params: Arc<[AtomicU64]>,
     /// One per Array input, in declaration order.
-    pub inboxes: Vec<Inbox>,
+    pub inboxes: Vec<Frames>,
     /// One per output: what the control half publishes to whoever subscribes.
     pub taps: Vec<rtrb::Producer<f32>>,
     /// One per output: every block, whole, for the recorder.
@@ -51,8 +51,8 @@ pub struct Slot {
     pub overruns: u8,
 }
 
-/// The audio thread's end of an Array input: chunks of interleaved samples, each headed by its
-/// channel count and length, read one sample per sample.
+/// The audio thread's end of a device's or a file's feed: chunks of interleaved samples, each
+/// headed by its channel count and length, read one sample per sample, the last one held.
 pub struct Inbox {
     ring: rtrb::Consumer<f32>,
     chans: usize,
@@ -72,31 +72,9 @@ impl Inbox {
         Inbox { ring, chans: 0, left: 0, last: [0.0; MAX_CHANNELS as usize], catch_up }
     }
 
-    /// Empty the ring and forget the chunk in hand — what the previous producer left.
-    fn flush(&mut self) {
-        if let Ok(chunk) = self.ring.read_chunk(self.ring.slots()) {
-            chunk.commit_all();
-        }
-        self.chans = 0;
-        self.left = 0;
-        self.last = [0.0; MAX_CHANNELS as usize];
-    }
-
     /// Skip to the last `QUEUED` chunks when more than that wait behind the one in hand.
     fn catch_up(&mut self) {
-        let Ok(readable) = self.ring.read_chunk(self.ring.slots()) else { return };
-        let (a, b) = readable.as_slices();
-        let at = |i: usize| if i < a.len() { a[i] } else { b[i - a.len()] };
-        let len = a.len() + b.len();
-        let (mut count, mut recent) = (0, [0; QUEUED]);
-        let mut i = self.left * self.chans;
-        while i + 2 <= len {
-            recent[count % QUEUED] = i;
-            count += 1;
-            i += 2 + at(i) as usize * at(i + 1) as usize;
-        }
-        if count > QUEUED {
-            readable.commit(recent[count % QUEUED]);
+        if keep_newest(&mut self.ring, self.left * self.chans, QUEUED) {
             self.left = 0;
         }
     }
@@ -136,6 +114,220 @@ impl Inbox {
                     (n, c) if c < n => self.last[c],
                     _ => 0.0,
                 };
+            }
+        }
+    }
+}
+
+/// Drop all but the newest `keep` (at most `QUEUED`) chunks queued `from` samples on; answers
+/// whether any went.
+fn keep_newest(ring: &mut rtrb::Consumer<f32>, from: usize, keep: usize) -> bool {
+    let Ok(readable) = ring.read_chunk(ring.slots()) else { return false };
+    let (a, b) = readable.as_slices();
+    let at = |i: usize| if i < a.len() { a[i] } else { b[i - a.len()] };
+    let len = a.len() + b.len();
+    let (mut count, mut recent) = (0, [0; QUEUED]);
+    let mut i = from;
+    while i + 2 <= len {
+        recent[count % keep] = i;
+        count += 1;
+        i += 2 + at(i) as usize * at(i + 1) as usize;
+    }
+    if count > keep {
+        readable.commit(recent[count % keep]);
+    }
+    count > keep
+}
+
+/// Where a node's `mode` of [`cross::PLAYBACK`] and the `smoothing` beside it sit in its params.
+#[derive(Clone, Copy, Default)]
+pub struct Playback {
+    mode: Option<usize>,
+    smoothing: Option<usize>,
+}
+
+impl Playback {
+    pub fn of(manifest: &NodeManifest) -> Playback {
+        let params = &manifest.params;
+        let mode = params.iter().position(|d| matches!(d.spec, ParamSpec::Str { options, .. } if options == cross::PLAYBACK));
+        let smoothing = mode.and_then(|m| params.iter().position(|d| d.group == params[m].group && d.name == "smoothing"));
+        Playback { mode, smoothing }
+    }
+
+    pub fn oscillator(&self, params: &[AtomicU64]) -> bool {
+        self.mode.is_some_and(|m| f64::from_bits(params[m].load(Ordering::Relaxed)) >= 0.5)
+    }
+
+    fn smoothing(&self, params: &[AtomicU64]) -> f64 {
+        self.smoothing.map_or(0.0, |s| f64::from_bits(params[s].load(Ordering::Relaxed)).max(0.0))
+    }
+}
+
+/// The most sines one oscillator frame sounds; the entries past it are silent.
+pub const VOICES: usize = 256;
+
+/// One frame in hand: interleaved samples, `len` per channel, and where the loop reads next.
+struct Voice {
+    buf: Vec<f32>,
+    chans: usize,
+    len: usize,
+    pos: usize,
+}
+
+impl Voice {
+    /// Room for the largest chunk the ring holds, so a take never allocates.
+    fn new() -> Voice {
+        Voice { buf: Vec::with_capacity(crate::control::INBOX_RING), chans: 0, len: 0, pos: 0 }
+    }
+
+    fn sample(&self, c: usize) -> f32 {
+        match (self.chans, c) {
+            (0, _) => 0.0,
+            (1, _) => self.buf[self.pos],
+            (n, c) if c < n => self.buf[self.pos * n + c],
+            _ => 0.0,
+        }
+    }
+
+    fn advance(&mut self) {
+        if self.len > 0 {
+            self.pos = (self.pos + 1) % self.len;
+        }
+    }
+
+    /// The next whole chunk off `ring` in place of this one; the control half commits each at once.
+    fn take(&mut self, ring: &mut rtrb::Consumer<f32>) -> bool {
+        let Ok(head) = ring.read_chunk(2) else { return false };
+        let (a, b) = head.as_slices();
+        let at = |i: usize| if i < a.len() { a[i] } else { b[i - a.len()] };
+        let (chans, len) = (at(0) as usize, at(1) as usize);
+        head.commit_all();
+        let Ok(body) = ring.read_chunk(chans * len) else { return false };
+        let (a, b) = body.as_slices();
+        self.buf.clear();
+        self.buf.extend_from_slice(a);
+        self.buf.extend_from_slice(b);
+        body.commit_all();
+        (self.chans, self.len, self.pos) = (chans, len, 0);
+        len > 0
+    }
+}
+
+/// The audio thread's end of an Array input. Each frame is entered whole and played until the
+/// next: looped as a waveform, or as one sine per value, summed on one channel.
+pub struct Frames {
+    ring: rtrb::Consumer<f32>,
+    playback: Playback,
+    pub rate: f64,
+    now: Voice,
+    next: Voice,
+    /// Samples into the crossfade from `now` to `next`, of how many; `(0, 0)` while none runs.
+    fade: (usize, usize),
+    oscillating: bool,
+    /// Per sine: its phase in cycles, and the pitch it is gliding from.
+    phase: [f64; VOICES],
+    hz: [f32; VOICES],
+    sounding: usize,
+}
+
+impl Frames {
+    pub fn new(ring: rtrb::Consumer<f32>, playback: Playback, rate: f64) -> Frames {
+        Frames {
+            ring,
+            playback,
+            rate,
+            now: Voice::new(),
+            next: Voice::new(),
+            fade: (0, 0),
+            oscillating: false,
+            phase: [0.0; VOICES],
+            hz: [0.0; VOICES],
+            sounding: 0,
+        }
+    }
+
+    /// Empty the ring and forget the frame in hand — what the previous producer left.
+    pub fn flush(&mut self) {
+        if let Ok(chunk) = self.ring.read_chunk(self.ring.slots()) {
+            chunk.commit_all();
+        }
+        self.forget();
+    }
+
+    fn forget(&mut self) {
+        (self.now.len, self.now.chans, self.now.pos, self.fade, self.sounding) = (0, 0, 0, (0, 0), 0);
+    }
+
+    pub fn fill(&mut self, out: &mut PortMut<'_>, params: &[AtomicU64]) {
+        let oscillator = self.playback.oscillator(params);
+        if oscillator != self.oscillating {
+            // What the other mode entered means nothing to this one.
+            self.oscillating = oscillator;
+            self.forget();
+        }
+        let smoothing = (self.playback.smoothing(params) * self.rate) as usize;
+        match oscillator {
+            true => self.oscillate(out, smoothing),
+            false => self.loop_frames(out, smoothing),
+        }
+    }
+
+    /// A new frame takes over at the loop's end, so frames on time play back to back; with
+    /// smoothing it is crossfaded in as it arrives, the old one looping underneath.
+    fn loop_frames(&mut self, out: &mut PortMut<'_>, smoothing: usize) {
+        keep_newest(&mut self.ring, 0, if smoothing > 0 { 1 } else { QUEUED });
+        let channels = out.channels() as usize;
+        for i in 0..BLOCK {
+            if self.fade.1 == 0 && (self.now.pos == 0 || smoothing > 0) && self.next.take(&mut self.ring) {
+                match self.now.len == 0 || smoothing == 0 || self.next.chans != self.now.chans {
+                    true => std::mem::swap(&mut self.now, &mut self.next),
+                    false => self.fade = (0, smoothing),
+                }
+            }
+            let a = if self.fade.1 > 0 { self.fade.0 as f32 / self.fade.1 as f32 } else { 0.0 };
+            for c in 0..channels {
+                let mixed = match self.fade.1 {
+                    0 => self.now.sample(c),
+                    _ => self.now.sample(c) * (1.0 - a) + self.next.sample(c) * a,
+                };
+                out.chan_mut(c)[i] = mixed;
+            }
+            self.now.advance();
+            if self.fade.1 > 0 {
+                self.next.advance();
+                self.fade.0 += 1;
+                if self.fade.0 >= self.fade.1 {
+                    std::mem::swap(&mut self.now, &mut self.next);
+                    self.fade = (0, 0);
+                }
+            }
+        }
+    }
+
+    /// Every value of the newest frame a sine at that many Hz, their mean on every channel. A
+    /// sine keeps its phase across frames, and with smoothing glides to its new pitch.
+    fn oscillate(&mut self, out: &mut PortMut<'_>, smoothing: usize) {
+        keep_newest(&mut self.ring, 0, 1);
+        if self.next.take(&mut self.ring) {
+            std::mem::swap(&mut self.now, &mut self.next);
+        }
+        let n = (self.now.chans * self.now.len).min(VOICES);
+        for v in self.sounding..n {
+            (self.hz[v], self.phase[v]) = (self.now.buf[v], 0.0);
+        }
+        self.sounding = n;
+        let k = if smoothing > 0 { 1.0 - (-1.0 / smoothing as f32).exp() } else { 1.0 };
+        let (step, channels) = (1.0 / self.rate, out.channels() as usize);
+        for i in 0..BLOCK {
+            let mut sum = 0.0;
+            for v in 0..n {
+                self.hz[v] += (self.now.buf[v] - self.hz[v]) * k;
+                self.phase[v] = (self.phase[v] + f64::from(self.hz[v]) * step).rem_euclid(1.0);
+                sum += (self.phase[v] * std::f64::consts::TAU).sin() as f32;
+            }
+            let y = if n > 0 { sum / n as f32 } else { 0.0 };
+            for c in 0..channels {
+                out.chan_mut(c)[i] = y;
             }
         }
     }
@@ -391,7 +583,7 @@ impl Runtime {
                     }
                     Source::Inbox { at, channels, inbox } => {
                         let region = carve(arena, &[(*at, *channels as usize * BLOCK)]).take(0);
-                        slot.inboxes[*inbox].fill(&mut PortMut::new(region, *channels));
+                        slot.inboxes[*inbox].fill(&mut PortMut::new(region, *channels), &slot.params);
                     }
                     Source::Silence | Source::Region { .. } => {}
                 }

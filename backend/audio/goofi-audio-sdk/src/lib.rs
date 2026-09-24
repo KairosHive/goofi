@@ -183,12 +183,17 @@ pub fn band_partial(b: usize, voices: usize) -> (usize, f32) {
 }
 
 
-/// What every crossing into the audio plane shares. The other planes carry numbers in their own
-/// units, so each `<Source>In` node names the range those numbers span and this is what makes
-/// them a signal — one vocabulary, so two crossings cannot mean different things by one word.
+/// What the crossings into the audio plane share: the range a picture's numbers are named by,
+/// and how a signal frame is played — one vocabulary, so two crossings cannot mean different
+/// things by one word.
 pub mod cross {
     /// The `mode` options, in the order [`ranged`] reads their index.
     pub const RANGES: &[&str] = &["direct", "bipolar", "unipolar"];
+
+    /// The options of a `mode` that sets how the engine PLAYS the frames a node takes in: each
+    /// looped until the next, or each value a sine at that many Hz. A float `smoothing` beside it,
+    /// in seconds, crossfades one frame into the next, or glides each sine to its new pitch.
+    pub const PLAYBACK: &[&str] = &["waveform", "oscillator"];
 
     /// `v` on the plane it is crossing into: itself, or its place in `lo..hi` as a full-scale
     /// bipolar or unipolar signal. `min`..`max` is a declaration, so what falls outside it is

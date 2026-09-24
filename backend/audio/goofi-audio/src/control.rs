@@ -96,6 +96,9 @@ struct Tap {
 /// The audio plane's half of a control thread.
 pub struct AudioHalf {
     manifest: &'static NodeManifest,
+    /// The node's scalar params, which say how its inboxes play what enters them.
+    params: Arc<[AtomicU64]>,
+    playback: crate::runtime::Playback,
     inboxes: Vec<Inbox>,
     taps: Vec<Tap>,
     ports: Ports,
@@ -110,6 +113,7 @@ pub struct AudioHalf {
 /// What the engine hands a birth for its half; the half itself is built on the control thread.
 pub struct Birth {
     pub manifest: &'static NodeManifest,
+    pub params: Arc<[AtomicU64]>,
     pub inboxes: Vec<Inbox>,
     pub taps: Vec<rtrb::Consumer<f32>>,
     /// Per output: the recording ring's consumer.
@@ -129,6 +133,8 @@ impl AudioHalf {
         let mut ports = birth.ports;
         AudioHalf {
             manifest: birth.manifest,
+            params: birth.params,
+            playback: crate::runtime::Playback::of(birth.manifest),
             inboxes: birth.inboxes,
             taps: birth.taps.into_iter().map(|ring| Tap { ring }).collect(),
             recs: birth.recs,
@@ -304,10 +310,12 @@ impl AudioHalf {
 }
 
 impl Half for AudioHalf {
-    /// One frame into the crossing that resamples it to the clock's rate.
+    /// One frame into the crossing that resamples it to the clock's rate, or that enters its
+    /// values as they are for an oscillator to sound.
     fn arrive(&mut self, inbox: usize, frame: &Data) -> bool {
         let rate = self.audio.rate();
-        self.inboxes[inbox].enter(frame, rate).unwrap_or(false)
+        let pitches = self.playback.oscillator(&self.params);
+        self.inboxes[inbox].enter(frame, rate, pitches).unwrap_or(false)
     }
 
     fn unwired(&mut self, inbox: usize) {
@@ -361,9 +369,18 @@ impl Inbox {
 
     /// Resample one frame linearly from its `sfreq` to the rate and enter it whole, as one chunk
     /// headed by its channel count and length. A frame with no `sfreq` enters one sample per
-    /// sample, so a control value is held until the next. Answers whether the channel count moved.
-    fn enter(&mut self, frame: &Data, rate: f64) -> Option<bool> {
+    /// sample. `pitches` enters every value as it is, on one channel. Answers whether the channel
+    /// count moved.
+    fn enter(&mut self, frame: &Data, rate: f64, pitches: bool) -> Option<bool> {
         let goofi_core::Value::Array(a) = frame.value() else { return None };
+        if pitches {
+            let n = a.as_bytes().len() / 4;
+            let chunk = self.ring.write_chunk_uninit(n + 2).ok()?;
+            let values = a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes")));
+            chunk.fill_from_iter([1.0, n as f32].into_iter().chain(values.map(|v| if v.is_finite() { v } else { 0.0 })));
+            self.pos = 0.0;
+            return Some(self.chans.swap(1, Ordering::Relaxed) != 1);
+        }
         // Where lane `ch` sample `i` sits: a signal frame is planar `[C, T]`, and a texture is
         // texels — every channel of one position together, `[H, W, C]` in scan order.
         let (c, t, lane, stride) = match *a.shape() {
@@ -498,7 +515,7 @@ impl Play {
 fn enter_planar(inbox: &mut Inbox, channels: u16, frames: usize, planar: &[f32], from: f64, rate: f64) -> bool {
     let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
     match Data::array_f32(vec![channels as usize, frames], bytes, Meta::new().with_sfreq(Some(from))) {
-        Ok(frame) => inbox.enter(&frame, rate).unwrap_or(false),
+        Ok(frame) => inbox.enter(&frame, rate, false).unwrap_or(false),
         Err(_) => false,
     }
 }

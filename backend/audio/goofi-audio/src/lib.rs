@@ -58,7 +58,7 @@ use control::{AudioHalf, AudioShared};
 use goofi_control::{Desired, Handle, Shared, Sub};
 use nodes::{audio_in, audio_out, Class};
 use plan::Plan;
-use runtime::{Fault, Inbox, Msg, Retired, Runtime, Slot, OVERRUNS};
+use runtime::{Fault, Frames, Msg, Playback, Retired, Runtime, Slot, OVERRUNS};
 
 /// The rate until a device names one.
 pub(crate) const RATE: f64 = 48_000.0;
@@ -699,6 +699,7 @@ impl AudioEngine {
         if rate != self.audio.rate() {
             for slot in rt.slab.iter_mut().flatten() {
                 slot.node.prepare(rate);
+                slot.inboxes.iter_mut().for_each(|inbox| inbox.rate = rate);
             }
             self.audio.rate.store(rate.to_bits(), Ordering::Relaxed);
             rt.budget = Duration::from_secs_f64(BLOCK as f64 / rate) * runtime::BUDGET;
@@ -798,7 +799,8 @@ impl Engine for AudioEngine {
         // made on its own thread, where an OS handle it opens never has to cross one.
         let inboxes: Vec<control::Inbox> = inbox_in.into_iter().map(control::Inbox::new).collect();
         let inbox_chans = AudioHalf::channels(&inboxes);
-        let birth = control::Birth { manifest, inboxes, taps: tap_out, recs: rec_out, ports, audio: self.audio.clone() };
+        let birth =
+            control::Birth { manifest, params: atomics.clone(), inboxes, taps: tap_out, recs: rec_out, ports, audio: self.audio.clone() };
         let spawn = goofi_control::Spawn {
             engine: "audio",
             uid,
@@ -821,7 +823,7 @@ impl Engine for AudioEngine {
             serial,
             node,
             params: atomics,
-            inboxes: inbox_out.into_iter().map(|ring| Inbox::new(ring, true)).collect(),
+            inboxes: inbox_out.into_iter().map(|ring| Frames::new(ring, Playback::of(manifest), self.audio.rate())).collect(),
             taps: tap_in,
             recs: rec_in,
             dead: false,

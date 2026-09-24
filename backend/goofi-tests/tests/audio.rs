@@ -35,6 +35,15 @@ fn mean(v: &[f32]) -> f32 {
     v.iter().sum::<f32>() / v.len() as f32
 }
 
+/// The amplitude of the sine at `hz` in `v`, sampled at 48 kHz.
+fn amplitude(v: &[f32], hz: f64) -> f32 {
+    let w = std::f64::consts::TAU * hz / 48_000.0;
+    let (re, im) = v.iter().enumerate().fold((0.0, 0.0), |(re, im), (n, x)| {
+        (re + f64::from(*x) * (w * n as f64).cos(), im - f64::from(*x) * (w * n as f64).sin())
+    });
+    (2.0 * re.hypot(im) / v.len() as f64) as f32
+}
+
 fn crossings(v: &[f32]) -> usize {
     v.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count()
 }
@@ -638,25 +647,66 @@ fn a_patch_sounds_under_the_external_clock() {
     let span = second[second.len() - 1] - second[0];
     assert!((span - 0.05).abs() < 0.002, "a whole tenth is a twentieth of the ramp: {span}");
 
-    // …and `mode` is what makes those numbers a SIGNAL: the range they span, named, becomes full
-    // scale. Every crossing into the audio plane says it the same way.
-    g.set_param(signal_in, "signal", "mode", "bipolar");
-    let mapped = g.until("the named range on full scale", |g| {
-        let (x, _) = drive(g, TENTH);
-        (x[0] < 0.0 && x[x.len() - 1] < 0.0).then_some(x)
+    // …and a frame shorter than the wait for the next one loops rather than holding its last
+    // sample: sixty samples at 6 kHz are 480 at the rate, the whole ramp every 480.
+    g.set_param(ramp, "ramp", "sfreq", 6000.0);
+    g.set_param(ramp, "ramp", "length", 60);
+    sounds(&g, "a short frame looping until the next", |x| {
+        let tail = &x[x.len() - 960..];
+        let periodic = tail.iter().zip(&tail[480..]).all(|(a, b)| (a - b).abs() < 1e-4);
+        periodic && tail.iter().any(|v| *v < 0.05) && tail.iter().any(|v| *v > 0.95)
     });
-    assert!(mapped.windows(2).all(|w| w[1] >= w[0]), "the ramp still rises, below zero now");
-    let span = mapped[mapped.len() - 1] - mapped[0];
-    assert!((span - 0.10).abs() < 0.004, "0..1 onto [-1, 1] doubles the slope: {span}");
-    // A range the signal has already left holds it at that end: `min`..`max` is a declaration.
-    g.set_param(signal_in, "signal", "max", 0.05);
-    sounds(&g, "the ramp pinned where it left the range", |x| x.iter().all(|v| *v == 1.0));
-    g.set_param(signal_in, "signal", "mode", "direct");
-    g.set_param(signal_in, "signal", "max", 1.0);
+    g.set_param(ramp, "ramp", "sfreq", 256.0);
+    g.set_param(ramp, "ramp", "length", 512);
+
+    // Step: `smoothing` crossfades one frame into the next: a held quarter becomes a held 1 over
+    // a twentieth of a second, which is 2400 samples at the rate however late the frame arrived.
+    g.call("node remove", j!({ "node": hex(ramp) }));
+    let level = g.add("_TestConst");
+    g.set_param(signal_in, "signal", "smoothing", 0.05);
+    g.link(level, "out", signal_in, "input");
+    g.set_param(level, "constant", "value", 0.25);
+    sounds(&g, "the held quarter", |x| x.iter().all(|v| *v == 0.25));
+    g.set_param(level, "constant", "value", 1.0);
+    let mut morph = Vec::new();
+    g.until("the morph to reach one", |g| {
+        let (x, _) = drive(g, TENTH);
+        morph.extend_from_slice(&x);
+        ((x[x.len() - 1] - 1.0).abs() < 1e-6).then_some(())
+    });
+    assert!(morph.windows(2).all(|w| w[1] >= w[0] - 1e-6), "the crossfade only rises");
+    // 0.3 to 0.95 is 0.65 of the 0.75 it climbs: 2080 of the 2400 samples.
+    let between = morph.iter().filter(|v| (0.3..0.95).contains(*v)).count();
+    assert!((2000..2160).contains(&between), "it takes 2400 samples, not one: {between} between");
+    g.set_param(signal_in, "signal", "smoothing", 0.0);
+    g.call("node remove", j!({ "node": hex(level) }));
+
+    // Step: as an `oscillator`, each value is a sine at that many Hz and one channel is their
+    // mean: a [2, 1] frame of 1200 and 2400 sounds both, at half scale each.
+    let pair = g.add("_TestRamp");
+    g.set_param(pair, "ramp", "channels", 2);
+    g.set_param(pair, "ramp", "length", 1);
+    let hz = g.add("signal:Math");
+    g.set_param(hz, "math", "multiply", 1200.0);
+    g.set_param(hz, "math", "post_add", 1200.0);
+    g.set_param(signal_in, "signal", "mode", "oscillator");
+    g.link(pair, "out", hz, "input");
+    g.link(hz, "out", signal_in, "input");
+    g.until("two sines on one channel", |g| {
+        let (x, channels) = drive(g, TENTH);
+        (channels == 1 && amplitude(&x, 1200.0) > 0.45).then_some(())
+    });
+    let (chord, _) = drive(&g, TENTH);
+    for (at, want) in [(1200.0, 0.5), (2400.0, 0.5), (1800.0, 0.0)] {
+        let got = amplitude(&chord, at);
+        assert!((got - want).abs() < 0.02, "{at} Hz sounds at {got}, not {want}");
+    }
+    g.set_param(signal_in, "signal", "mode", "waveform");
+    g.call("node remove", j!({ "node": hex(hz) }));
+    g.call("node remove", j!({ "node": hex(pair) }));
 
     // Step: a frame that is not a number crosses as silence — a NaN stays on the plane that made
     // it and never enters the plan.
-    g.call("node remove", j!({ "node": hex(ramp) }));
     g.link(poison, "out", signal_in, "input");
     let poisoned = g.probe(poison, "out");
     g.until("the NaN to be emitted", |g| {

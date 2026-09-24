@@ -416,7 +416,6 @@ fn shaders_render_on_the_gpu() {
     g.set_param(flat, "constant", "length", 64);
     g.set_param(flat, "constant", "value", 0.5);
     let stream = g.add("audio:SignalIn");
-    g.set_param(stream, "signal", "mode", "direct");
     g.link(flat, "out", stream, "input");
     // `graphics:AudioIn` holds its own picture between renders — a HISTORY, which is what a
     // stream has and a frame has not: every render walks the picture one column left and stands

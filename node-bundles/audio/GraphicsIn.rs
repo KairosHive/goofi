@@ -44,7 +44,7 @@ static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Control],
     doc: "A texture crossing into the audio plane.\n\
           Its texels are read in scan order, row 0 first, one sample per texel — so the picture's \
-          SIZE is its length, and a frame arrives whole and is held until the next one does. The \
+          SIZE is its length, and a frame arrives whole and loops until the next one does. The \
           inbox holds one second of samples, so a picture past about 435 square does not fit and \
           is dropped: this crossing is for a modest one.",
     inputs: INS,
