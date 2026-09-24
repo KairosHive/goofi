@@ -17,6 +17,8 @@ use std::time::Duration;
 use axum::body::Bytes;
 use goofi_graph::{Graph, Uid};
 use goofi_view::ViewSpec;
+
+use crate::vocab::MAX_VIEWER_FPS;
 use tokio::sync::broadcast;
 
 /// The physical stream a reducer serves: a node uid + one of its output slot names.
@@ -32,14 +34,50 @@ pub struct Tap {
 /// What a tap delivers: the variable, and the value its frame held.
 pub type Followed = (String, goofi_core::variables::VariableValue);
 
+/// What one connection declares for a slot: the viewers' specs and the rate its display paints at.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+pub struct Declared {
+    #[serde(default)]
+    pub specs: Vec<ViewSpec>,
+    /// Frames a second; a connection that names none paints at [`MAX_VIEWER_FPS`].
+    #[serde(default)]
+    pub fps: Option<f64>,
+}
+
 /// Flatten every connection's `ViewSpec`s into the single list the planner merges; an empty
 /// list plans to the undeclared preview rather than to the full frame.
-fn union_specs(by_conn: &HashMap<ConnId, Vec<ViewSpec>>) -> Vec<ViewSpec> {
-    by_conn.values().flatten().cloned().collect()
+fn union_specs(by_conn: &HashMap<ConnId, Declared>) -> Vec<ViewSpec> {
+    by_conn.values().flat_map(|d| d.specs.iter()).cloned().collect()
+}
+
+/// The gap between two serves of a slot: its fastest display's, never faster than the cap.
+fn serve_interval(by_conn: &HashMap<ConnId, Declared>) -> Duration {
+    let cap = MAX_VIEWER_FPS as f64;
+    let fps = by_conn.values().map(|d| d.fps.unwrap_or(cap)).fold(1.0, f64::max);
+    Duration::from_secs_f64(1.0 / fps.min(cap))
+}
+
+/// A phase-locked rate: each slot is the last one's TARGET plus the interval, so the work done
+/// between two slots does not stretch the period. A slot missed by a whole interval starts over.
+pub(crate) struct Pace(std::time::Instant);
+
+impl Pace {
+    pub(crate) fn new() -> Pace {
+        Pace(std::time::Instant::now())
+    }
+    pub(crate) fn due(&self) -> std::time::Instant {
+        self.0
+    }
+    pub(crate) fn take(&mut self, interval: Duration, now: std::time::Instant) {
+        self.0 += interval;
+        if self.0 < now {
+            self.0 = now + interval;
+        }
+    }
 }
 
 struct SlotReducer {
-    specs: Arc<Mutex<HashMap<ConnId, Vec<ViewSpec>>>>,
+    specs: Arc<Mutex<HashMap<ConnId, Declared>>>,
     /// The variables that follow this slot, fed the RAW frame — never a reduction.
     taps: Arc<Mutex<Vec<Tap>>>,
     /// `Bytes` so the socket task forwards the SHARED buffer — a per-subscriber copy undoes dedup.
@@ -206,10 +244,10 @@ impl SlotReducers {
         frame.or_else(|| latest.lock().unwrap().clone())
     }
 
-    /// Replace `conn`'s declared specs for `key` (latest-wins). No-op if the slot is gone.
-    pub fn set_specs(&self, key: &SlotKey, conn: ConnId, specs: Vec<ViewSpec>) {
+    /// Replace what `conn` declares for `key` (latest-wins). No-op if the slot is gone.
+    pub fn declare(&self, key: &SlotKey, conn: ConnId, declared: Declared) {
         if let Some(r) = self.inner.lock().unwrap().get(key) {
-            r.specs.lock().unwrap().insert(conn, specs);
+            r.specs.lock().unwrap().insert(conn, declared);
             r.gen.fetch_add(1, Ordering::Release);
             r.poke();
         }
@@ -343,7 +381,7 @@ fn spawn_reducer(
         // `served: None` means "never broadcast", which is what sends the first frame without a bump.
         let mut served: Option<u64> = None;
         let mut pending = false;
-        let mut next_serve = std::time::Instant::now();
+        let mut pace = Pace::new();
         // What the producer was last told its readers want. Pushed only on a CHANGE: it takes the
         // graph lock, and a viewer's box moves rarely — the frontend quantizes it to 32-px steps.
         let mut demanded: Option<Option<goofi_view::ViewWant>> = None;
@@ -365,7 +403,7 @@ fn spawn_reducer(
                 watched && held && (pending || served != Some(gen.load(Ordering::Acquire)))
             };
             let duties = [
-                (owed && next_serve > now).then_some(next_serve),
+                (owed && pace.due() > now).then_some(pace.due()),
                 (feed.is_some() && !wanted).then_some(asked_at + IDLE),
                 grace.filter(|at| *at > now),
             ];
@@ -497,7 +535,7 @@ fn spawn_reducer(
                 // Planned against the frame's HEADER, so a frame this loop forwarded without
                 // decoding still says what the viewers may ask of the one after it.
                 match peeked.as_ref() {
-                    Some(p) if !held.values().all(|v| v.is_empty()) => {
+                    Some(p) if !held.values().all(|v| v.specs.is_empty()) => {
                         goofi_view::image_box(&union_specs(&held), p)
                     }
                     // Nothing declared, or nothing produced yet to measure a declaration against.
@@ -544,7 +582,7 @@ fn spawn_reducer(
             // stream. A producer emitting faster than the browser paints is bytes nobody draws.
             // A serve held back is the duty the loop wakes to at the interval's end.
             let now = std::time::Instant::now();
-            if now < next_serve {
+            if now < pace.due() {
                 continue;
             }
             let bytes = match &made {
@@ -579,10 +617,7 @@ fn spawn_reducer(
                 }
             };
             // The serve slot is taken by a frame served, never by one this tick held back.
-            next_serve += crate::vocab::VIEWER_INTERVAL;
-            if next_serve < now {
-                next_serve = now + crate::vocab::VIEWER_INTERVAL;
-            }
+            pace.take(serve_interval(&specs.lock().unwrap()), now);
             let _ = tx.send(bytes); // Err only if all receivers are momentarily gone — harmless.
             sent = hash;
             stamped = stamps;

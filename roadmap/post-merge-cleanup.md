@@ -4,24 +4,6 @@ Decided 2026-09-24 from a full audit of main at 35462dac (backend, frontend, tes
 Nothing here is a redesign; each item names one defect, where it is, how it fails, and the fix.
 Items are ordered by severity. Remove each item when it lands, and this file when it is empty.
 
-## 1. The page's paint cap beats against the manager's serve rate
-
-`frontend/src/lib/api/frames.ts` (`requestFlush`) with `frontend/src/lib/api/paintCap.ts`. The
-reducer already serves one slot at most every `VIEWER_INTERVAL` (33.3 ms, phase-locked from the
-previous target in `backend/goofi-bridge/src/reducer.rs`). The page applies the same 33.3 ms gate
-a second time, anchored on the ACTUAL start of the previous flush, then waits a `setTimeout` and
-then a `requestAnimationFrame`. A flush that starts just after a vsync ends its cooldown just
-after the second vsync, so the paint lands on the third: every interval rounds up to 50 ms on a
-60 Hz display (41.7 ms on 120 Hz). A 30 Hz stream paints at about 20 Hz, one frame in three
-overwrites `pending` and is charged to the stream's drop meter, and the HUD reads a lower number
-than the arrival rate. This is the stutter seen on the EEG buffer. The client cap is a second
-owner of one rate; delete `paintCap.ts`, the timer in `requestFlush`, `MAX_VIEWER_FPS` on the
-page, and paint whatever is pending on the next animation frame. Keep the rate the manager owns,
-at 30. The cadence design from the same session: each socket may declare its display rate on
-subscribe and a slot's serve interval becomes the fastest rate among its connections, so a node
-emitting slower than every display is served at its own rate and one emitting faster is coalesced
-to the display's.
-
 ## 2. A snapshot answers a stale full-resolution frame
 
 `backend/goofi-bridge/src/reducer.rs`: `SlotReducers::latest` returns `full` before `latest`.

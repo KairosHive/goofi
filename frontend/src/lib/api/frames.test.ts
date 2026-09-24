@@ -63,12 +63,8 @@ afterEach(() => {
 
 describe('paint-rate accounting', () => {
 	it('records one paint per flush, however many streams painted in it', async () => {
-		// The HUD's "fps" is the PAINT rate — flushes/s, which the cap (paintCap.ts) bounds at 30
-		// app-wide. It used to be bumped inside the per-slot loop, so it read the SUM of the open
-		// streams' delivery rates: ~30 x N, climbing by 30 with every node the user added while the
-		// cap it was being used to instrument never moved. TWO streams is the smallest fixture that
-		// can tell the two arithmetics apart — at N=1 the sum and the paint rate are the same number,
-		// which is exactly why the single-node `viewer-fps-cap.spec.ts` stayed green through it.
+		// The HUD's "fps" is flushes a second, not the sum of the streams' rates: two streams is
+		// the smallest fixture that tells the two apart.
 		const { perfStats } = await import('./perfStats.svelte');
 		const delivered = vi.spyOn(perfStats(), 'delivered');
 		const gotA: DataFrame[] = [];

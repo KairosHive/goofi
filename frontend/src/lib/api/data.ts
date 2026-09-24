@@ -43,6 +43,11 @@ export function closeStream(node: string, slot: string): void {
 	ensureWorker().postMessage({ op: 'unsub', node, slot });
 }
 
+/** Declare the page's display rate on every stream, open and to come. */
+export function declareRate(fps: number): void {
+	ensureWorker().postMessage({ op: 'rate', fps });
+}
+
 /** Ask the backend to reduce this stream to `specs` — every bound viewer's constraint, verbatim. */
 export function sendSpecs(node: string, slot: string, specs: ViewSpec[]): void {
 	ensureWorker().postMessage({ op: 'spec', node, slot, specs });

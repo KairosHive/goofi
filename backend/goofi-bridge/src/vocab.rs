@@ -124,12 +124,11 @@ pub fn boundary_types_help() -> String {
 }
 
 /// The frontend's vocabulary module, generated from the tables above and checked into the tree.
-/// How often ONE slot's reduced stream is broadcast, as frames a second. The app-wide viewer
-/// rate: the browser paints no faster, so anything above it is bytes nobody draws. The frontend
-/// reads it off the generated table rather than declaring a second one.
+/// The fastest ONE slot's reduced stream is broadcast, as frames a second, whatever rate its
+/// connections declare: anything above it is bytes a viewer need not draw.
 pub const MAX_VIEWER_FPS: u32 = 30;
 
-/// The gap [`MAX_VIEWER_FPS`] asks for between two serves of one slot.
+/// The gap [`MAX_VIEWER_FPS`] asks for: how often the follower writes a followed variable.
 pub const VIEWER_INTERVAL: std::time::Duration =
     std::time::Duration::from_nanos(1_000_000_000 / MAX_VIEWER_FPS as u64);
 
@@ -284,11 +283,7 @@ pub fn typescript() -> String {
          export const feeds = (out: SlotDtype, into: SlotDtype): boolean => FEEDS.has(`${{out}}>${{into}}`);\n\
          \n\
          /** The kind a slot of each dtype opens with, before a viewer has stored one of its own. */\n\
-         export const DEFAULT_KIND: Record<SlotDtype, ViewerKind> = {{\n{defaults}}};\n\
-         \n\
-         /** How fast the manager serves one slot, and so the fastest a viewer can be asked to paint. */\n\
-         export const MAX_VIEWER_FPS = {fps};\n",
-        fps = MAX_VIEWER_FPS,
+         export const DEFAULT_KIND: Record<SlotDtype, ViewerKind> = {{\n{defaults}}};\n",
     )
 }
 

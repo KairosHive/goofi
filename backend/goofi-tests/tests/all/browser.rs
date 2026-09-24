@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use goofi_tests::{f32s, hex, host, http, j, panels, tool, Client, Goofi, Message, Viewer};
+use goofi_tests::{f32s, hex, host, http, j, panels, tool, Client, Goofi, Message, Uid, Viewer};
 use serde_json::Value;
 
 #[tokio::test]
@@ -102,6 +102,14 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
     let goofi_core::Value::Array(a) = back.value() else { panic!("an array") };
     assert!(a.as_bytes().chunks_exact(4).all(|b| f32::from_le_bytes(b.try_into().unwrap()).abs() <= 1.0),
             "a unit LFO's samples, widened");
+
+    // Step: a page that declares a slow display is served no faster than it paints, however fast
+    // the node emits; the bound is an upper one, which a loaded runner can only undercut.
+    g.set_param(Uid::from_hex(&uid).unwrap(), "common", "max_frequency", 200.0);
+    v.view_at(j!([]), 4.0).await;
+    v.frame().await;
+    let served = v.count_for(Duration::from_secs(1)).await;
+    assert!(served <= 5, "a 4 fps display was served {served} frames in one second");
 
     // Step: a frame that says what the last one said is not sent: a Constant re-emits a held
     // value, stamped afresh, and the socket sees ONE frame with data — then its stamps alone,

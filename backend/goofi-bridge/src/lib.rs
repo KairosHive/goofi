@@ -1453,6 +1453,7 @@ fn doc_state(state: &AppState) -> String {
 fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Followed>) {
     let owner = state.clone();
     let worker = goofi_core::worker::spawn("goofi-follower", move || {
+        let mut pace = reducer::Pace::new();
         loop {
             // A bounded wait, so the stop is read between batches.
             let first = match rx.recv_timeout(BROADCAST_PERIOD) {
@@ -1469,16 +1470,10 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
             // document once, with each variable's newest pick.
             let mut latest: HashMap<String, goofi_core::variables::VariableValue> = HashMap::new();
             latest.insert(first.0, first.1);
-            let deadline = Instant::now() + crate::vocab::VIEWER_INTERVAL;
-            loop {
-                let left = deadline.saturating_duration_since(Instant::now());
-                match rx.recv_timeout(left) {
-                    Ok((name, value)) => {
-                        latest.insert(name, value);
-                    }
-                    Err(_) => break,
-                }
+            while let Ok((name, value)) = rx.recv_timeout(pace.due().saturating_duration_since(Instant::now())) {
+                latest.insert(name, value);
             }
+            pace.take(crate::vocab::VIEWER_INTERVAL, Instant::now());
             let mut g = state.graph.lock().unwrap();
             let changed = latest.into_iter().fold(false, |acc, (name, value)| g.follow_variable(&name, value) || acc);
             if changed {
@@ -1629,12 +1624,12 @@ fn size_frame(cols: u16, rows: u16) -> Message {
     Message::Text(json!({ "op": "size", "cols": cols, "rows": rows }).to_string().into())
 }
 
-/// The inband `{op:"view", specs:[…]}` a viewer sends to declare what it can draw. Latest-wins.
+/// The inband `{op:"view", specs:[…], fps}` a page sends to declare what it draws. Latest-wins.
 #[derive(serde::Deserialize)]
 struct ViewMsg {
     op: String,
-    #[serde(default)]
-    specs: Vec<goofi_view::ViewSpec>,
+    #[serde(flatten)]
+    declared: reducer::Declared,
 }
 
 fn close(code: u16, reason: &str) -> Message {
@@ -1793,7 +1788,7 @@ async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: Str
     let conn = state.reducers.new_conn();
     let mut key = stream_behind(&state.graph.lock().unwrap(), uid, &slot);
     let mut frames = key.clone().map(|k| state.reducers.subscribe(k, conn));
-    let mut specs: Vec<goofi_view::ViewSpec> = Vec::new();
+    let mut declared = reducer::Declared::default();
     let mut settled = state.settled.subscribe();
 
     // A dead-but-not-closed peer produces NO socket error, so without an active probe this
@@ -1830,9 +1825,9 @@ async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: Str
                         if m.op == "view" {
                             // Held, because a re-subscribe onto another physical slot has to carry
                             // this viewer's constraints with it or it asks for full resolution.
-                            specs = m.specs;
+                            declared = m.declared;
                             if let Some(k) = &key {
-                                state.reducers.set_specs(k, conn, specs.clone());
+                                state.reducers.declare(k, conn, declared.clone());
                             }
                         }
                     }
@@ -1866,7 +1861,7 @@ async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: Str
                 }
                 frames = want.clone().map(|k| {
                     let rx = state.reducers.subscribe(k.clone(), conn);
-                    state.reducers.set_specs(&k, conn, specs.clone());
+                    state.reducers.declare(&k, conn, declared.clone());
                     rx
                 });
                 key = want;

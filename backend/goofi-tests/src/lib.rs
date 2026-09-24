@@ -701,9 +701,26 @@ impl Viewer {
 
     /// Publish this viewer's constraints inband.
     pub async fn view(&mut self, specs: Value) {
-        self.ws.send(Message::Text(json!({ "op": "view", "specs": specs }).to_string().into()))
-            .await
-            .unwrap();
+        self.declare(json!({ "op": "view", "specs": specs })).await;
+    }
+
+    /// Publish this viewer's constraints and the rate its display paints at.
+    pub async fn view_at(&mut self, specs: Value, fps: f64) {
+        self.declare(json!({ "op": "view", "specs": specs, "fps": fps })).await;
+    }
+
+    async fn declare(&mut self, msg: Value) {
+        self.ws.send(Message::Text(msg.to_string().into())).await.unwrap();
+    }
+
+    /// Every binary message, data or stamps, that arrives within `window`.
+    pub async fn count_for(&mut self, window: Duration) -> usize {
+        let deadline = Instant::now() + window;
+        let mut n = 0;
+        while let Ok(Some(Ok(m))) = tokio::time::timeout(deadline.saturating_duration_since(Instant::now()), self.ws.next()).await {
+            n += matches!(m, Message::Binary(_)) as usize;
+        }
+        n
     }
 
     /// The next GOOF frame with data in it, raw; the stamps frames between are passed over. One

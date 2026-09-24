@@ -16,11 +16,13 @@ interface SlotState {
 }
 
 const slots = new Map<string, SlotState>();
+/** The page's display rate, declared with every stream's specs; unset until it is measured. */
+let fps: number | undefined;
 
 function sendSpecs(st: SlotState): void {
 	if (!st.ws || st.ws.readyState !== WebSocket.OPEN) return;
 	try {
-		st.ws.send(JSON.stringify({ op: 'view', specs: st.specs }));
+		st.ws.send(JSON.stringify({ op: 'view', specs: st.specs, fps }));
 	} catch {
 		// Closed mid-send; the next (re)connect re-sends from st.specs.
 	}
@@ -63,9 +65,12 @@ function collectBuffers(frame: DataFrame, out: Set<ArrayBufferLike>): void {
 }
 
 self.addEventListener('message', (e: MessageEvent) => {
-	const m = e.data as { op: string; node: string; slot: string; specs?: unknown[] };
+	const m = e.data as { op: string; node: string; slot: string; specs?: unknown[]; fps?: number };
 	const k = streamKey(m.node, m.slot);
-	if (m.op === 'sub') {
+	if (m.op === 'rate') {
+		fps = m.fps;
+		for (const st of slots.values()) sendSpecs(st);
+	} else if (m.op === 'sub') {
 		let st = slots.get(k);
 		if (!st) {
 			const proto = self.location.protocol === 'https:' ? 'wss:' : 'ws:';

@@ -1,7 +1,6 @@
 /** The viewer registry and display-rate frame delivery: ONE rAF flush per tick, most-starved
  * slot first, with a per-frame time budget. */
-import { closeStream, openStream, sendSpecs, setFrameSink, setStampsSink } from './data';
-import { paintDelay } from './paintCap';
+import { closeStream, declareRate, openStream, sendSpecs, setFrameSink, setStampsSink } from './data';
 import { perfStats } from './perfStats.svelte';
 import { RateMeter } from './rateMeter';
 import type { DataFrame } from '$lib/codec/decode';
@@ -49,27 +48,35 @@ const scheduleFlush =
 		: (fn: () => void): number => setTimeout(fn, 16) as unknown as number;
 
 let scheduled = false;
-/** When the last flush started — the paint cap's reference point. */
-let lastFlushStart = -Infinity;
+/** Paint what is pending on the next animation frame; the manager owns the rate it arrives at. */
 function requestFlush(): void {
 	if (scheduled) return;
 	scheduled = true;
-	// Inside the cap's cooldown, hold the frames on a TIMER: an rAF would fire at display rate
-	// just to decide "not yet". The rAF after it aligns the paint to the next vsync.
-	const wait = paintDelay(lastFlushStart, nowMs());
-	const arm = (): void => {
-		scheduleFlush(() => {
-			scheduled = false;
-			flush();
-		});
+	scheduleFlush(() => {
+		scheduled = false;
+		flush();
+	});
+}
+
+let measured = false;
+/** Count animation frames for half a second and declare the display's rate to every socket, so
+ * the manager serves no faster than this page can paint. */
+function measureDisplayRate(): void {
+	if (measured || typeof requestAnimationFrame !== 'function') return;
+	measured = true;
+	let start = -1;
+	let frames = 0;
+	const step = (t: number): void => {
+		if (start < 0) start = t;
+		else frames++;
+		if (t - start >= 500) declareRate(Math.round((frames * 1000) / (t - start)));
+		else requestAnimationFrame(step);
 	};
-	if (wait > 0) setTimeout(arm, wait);
-	else arm();
+	requestAnimationFrame(step);
 }
 
 function flush(): void {
 	const start = nowMs();
-	lastFlushStart = start;
 	// Most-starved slot first, so the budget can never permanently defer a slot.
 	const queue = [...dirty].sort((a, b) => a.lastFlush - b.lastFlush);
 	let painted = 0;
@@ -93,7 +100,7 @@ function flush(): void {
 		// The draws a delivery causes run here, so the budget measures them and not the callbacks alone.
 		flushSync();
 	}
-	// ONE paint per flush, not one per slot: that is the quantity the cap bounds and the HUD names.
+	// ONE paint per flush, not one per slot: that is the quantity the HUD names.
 	if (painted > 0) perfStats().delivered();
 	if (dirty.size > 0) requestFlush();
 }
@@ -172,6 +179,7 @@ export function bindViewer(
 	specs: ViewSpec[] | null,
 	cb: FrameCallback
 ): () => void {
+	measureDisplayRate();
 	const k = streamKey(node, slot);
 	const s = ensureSlot(k);
 	s.viewers.set(token, { cb, specs });
