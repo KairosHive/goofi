@@ -37,7 +37,7 @@
     "@xterm/xterm": "^6.0.0",
     "@xyflow/svelte": "^1.0.0",
     "marked": "^18.0.5",
-    "glance": "git+https://github.com/dav0dea/glance.git",
+    "glance": "git+https://github.com/dav0dea/glance.git#93d785afa71218dfd3bf2c4c6a1177600aaee689",
     "panelty": "0.1.2"
   }
 }

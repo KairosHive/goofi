@@ -41,6 +41,10 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 	// The editor's viewers draw on ONE canvas under the cards. Only pixels can say that a signal
 	// arrives as a picture, a collapsed body leaves none behind, and the picture pans with its card.
 	test.setTimeout(90_000);
+	const glErrors: string[] = [];
+	page.on('console', (m) => {
+		if (m.text().includes('INVALID_OPERATION')) glErrors.push(m.text());
+	});
 	await page.setViewportSize({ width: 1280, height: 800 });
 	await page.goto('/');
 	await waitForApp(page);
@@ -54,6 +58,7 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 		}, osc);
 		const card = page.locator(`.svelte-flow__node[data-id="${osc}"]`);
 		const body = card.locator('.slot-viewer .body');
+		let flat = '';
 		await expect(body).toBeVisible();
 		await expect
 			.poll(() => page.evaluate((u) => (window as any).goofi.query.frameSummary(u, 'out') !== null, osc), {
@@ -136,7 +141,7 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 		await test.step('a raised card covers the plot beneath it', async () => {
 			// A flat line over the sine: the overlap shows the flat card's plot, not the one under it.
 			const box = (await body.boundingBox())!;
-			const flat = await addNode(page, 'LFO', [180, 140]);
+			flat = await addNode(page, 'LFO', [180, 140]);
 			await waitForNode(page, flat);
 			await page.evaluate((u) => {
 				const g = (window as any).goofi;
@@ -165,6 +170,17 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			await expect
 				.poll(async () => (await inspect(page, overlap)).litRows, { timeout: 10_000 })
 				.toBeLessThan(0.15);
+		});
+
+		await test.step('an image draws after a line plot has gone, with no GL error', async () => {
+			await page.evaluate((u) => (window as any).goofi.commands.removeNode(u), flat);
+			const ramp = await addNode(page, 'graphics:Ramp', [520, 80]);
+			await waitForNode(page, ramp);
+			const image = page.locator(`.svelte-flow__node[data-id="${ramp}"] .slot-viewer .body`);
+			await expect
+				.poll(async () => (await inspect(page, (await image.boundingBox())!)).contrast, { timeout: 20_000 })
+				.toBeGreaterThan(100);
+			expect(glErrors).toEqual([]);
 		});
 
 		await test.step('zoomed out past legibility, a viewer keeps its picture and lets its stream go', async () => {
