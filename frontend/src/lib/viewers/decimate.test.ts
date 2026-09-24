@@ -15,7 +15,7 @@ describe('decimateMinMax', () => {
 		expect(out.ys[0]).toEqual([0, 5, 0, 9]);
 	});
 
-	it('keeps x strictly increasing (the hit test walks a sorted x)', () => {
+	it('keeps x strictly increasing', () => {
 		const ch = Array.from({ length: 777 }, (_, i) => Math.sin(i));
 		const out = decimateMinMax([ch], 777, 80);
 		for (let i = 1; i < out.xs.length; i++) {

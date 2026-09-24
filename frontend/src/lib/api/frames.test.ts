@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DataFrame } from '$lib/codec/decode';
 
-/** Minimal Worker stand-in (the data.test.ts idiom): records postMessage, emits inbound. */
+/** Minimal Worker stand-in: records postMessage, emits inbound. */
 class MockWorker {
 	static instances: MockWorker[] = [];
 	posted: unknown[] = [];
@@ -178,6 +178,13 @@ describe('a held frame’s stamps', () => {
 		expect(after?.meta).toEqual({ time: 2, index: 2 });
 		expect(after?.data, 'the body is the held one').toBe(frame.data);
 		expect(got.length, 'stamps alone paint nothing').toBe(1);
+		// Stamps that land between a frame's arrival and its paint ride that frame to the screen.
+		const next = { ...frame, data: { ...frame.data, values: [4] } };
+		w.emit({ node: 'osc', slot: 'out', frame: next });
+		w.emit({ node: 'osc', slot: 'out', stamps: { time: 3, index: 3 } });
+		await vi.advanceTimersByTimeAsync(40);
+		expect(got.at(-1)?.meta).toEqual({ time: 3, index: 3 });
+		expect(got.at(-1)?.data).toBe(next.data);
 		off();
 	});
 });

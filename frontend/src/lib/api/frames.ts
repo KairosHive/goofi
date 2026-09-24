@@ -97,7 +97,7 @@ function flush(): void {
 				console.error('frame consumer crashed', err);
 			}
 		}
-		// The draws a delivery causes run here, so the budget measures them and not the callbacks alone.
+		// A component viewer's draws run here, inside the budget; a surface plot draws in its own frame.
 		flushSync();
 	}
 	// ONE paint per flush, not one per slot: that is the quantity the HUD names.
@@ -213,9 +213,8 @@ setFrameSink((node, slot, frame) => {
 	requestFlush();
 });
 
-/** A held frame's fresh stamps land on the frame they belong to — the one waiting to paint, or
- * else the one painted — as a new object, so a poll of the latest frame sees them; nothing is
- * marked dirty, because nothing on screen changed. */
+/** A held frame's fresh stamps land on the pending frame, else the painted one, as a new object
+ * a poll sees; nothing is marked dirty, because nothing on screen changed. */
 setStampsSink((node, slot, stamps) => {
 	const s = slots.get(streamKey(node, slot));
 	if (!s) return;

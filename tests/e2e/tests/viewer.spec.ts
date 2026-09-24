@@ -77,8 +77,9 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			const top = Math.max(was.y, now.y + now.height + 2);
 			const below = { x: was.x, y: top, width: was.width, height: was.y + was.height - top };
 			expect(below.height, 'the card shrank away from where the plot was').toBeGreaterThan(20);
-			await page.waitForTimeout(300);
-			expect((await inspect(page, below)).contrast, 'the freed room is flat pane').toBeLessThan(10);
+			await expect
+				.poll(async () => (await inspect(page, below)).contrast, { message: 'the freed room is flat pane' })
+				.toBeLessThan(10);
 			await card.getByLabel('toggle viewer').first().click();
 			await expect(body).toBeVisible();
 		});
@@ -119,11 +120,13 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			await page.mouse.move(from.x + 60, from.y + 40, { steps: 4 });
 			await page.mouse.move(from.x + 120, from.y + 80, { steps: 4 });
 			await page.mouse.up();
-			await page.waitForTimeout(300);
+			await expect.poll(async () => (await card.boundingBox())!.x - before.x, { message: 'the card moved with the pan' })
+				.toBeGreaterThan(100);
 			const box = (await body.boundingBox())!;
 			const cardBox = (await card.boundingBox())!;
-			expect(cardBox.x - before.x, 'the card moved with the pan').toBeGreaterThan(100);
-			expect((await inspect(page, box)).tint, 'the plot moved with the card').toBeGreaterThan(40);
+			await expect
+				.poll(async () => (await inspect(page, box)).tint, { message: 'the plot moved with the card' })
+				.toBeGreaterThan(40);
 			const above = { x: cardBox.x + 20, y: cardBox.y - 30, width: cardBox.width - 40, height: 20 };
 			const right = { x: cardBox.x + cardBox.width + 16, y: box.y, width: 24, height: box.height };
 			expect((await inspect(page, above)).contrast, 'nothing painted above the card').toBeLessThan(10);
@@ -162,6 +165,36 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			await expect
 				.poll(async () => (await inspect(page, overlap)).litRows, { timeout: 10_000 })
 				.toBeLessThan(0.15);
+		});
+
+		await test.step('zoomed out past legibility, a viewer keeps its picture and lets its stream go', async () => {
+			const before = (await card.boundingBox())!.width;
+			const summary = () => page.evaluate((u) => (window as any).goofi.query.frameSummary(u, 'out'), osc);
+			const wheelTo = async (ratio: (r: number) => boolean, dy: number) => {
+				await expect
+					.poll(async () => {
+						const r = (await card.boundingBox())!.width / before;
+						if (!ratio(r)) await page.mouse.wheel(0, dy);
+						return ratio(r);
+					}, { timeout: 10_000 })
+					.toBe(true);
+			};
+			const at = (await card.boundingBox())!;
+			await page.mouse.move(at.x + 4, at.y + 4);
+			await wheelTo((r) => r < 0.28, 100);
+			await expect.poll(summary, { timeout: 10_000 }).toBeNull();
+			expect((await inspect(page, (await body.boundingBox())!)).tint, 'the last frame stays').toBeGreaterThan(40);
+			await wheelTo((r) => r > 0.4, -100);
+			await expect.poll(summary, { timeout: 10_000 }).not.toBeNull();
+		});
+
+		await test.step('the range labels show on a selected card, without a hover', async () => {
+			const tick = body.locator('.tick').first();
+			await page.mouse.move(4, 4);
+			await expect(tick).toHaveCSS('opacity', '0');
+			await selectNode(page, osc);
+			await page.mouse.move(4, 4);
+			await expect(tick).toHaveCSS('opacity', '1');
 		});
 	} finally {
 		await resetPatch(page);

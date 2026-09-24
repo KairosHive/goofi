@@ -17,8 +17,7 @@
 	let ctx: CanvasRenderingContext2D | null = null;
 	let resizer: ResizeObserver | null = null;
 
-	// One adaptive range for both axes, so the shape stays undistorted. A custom canvas, not uPlot:
-	// uPlot assumes a monotonic x-axis and shares one x-array across series.
+	// One adaptive range for both axes, so the shape stays undistorted.
 	const MARGIN = 0.1;
 	const SHRINKING = 0.01;
 	const MAX_TRAJ = 64; // guard against n*(n-1)/2 pair explosion for large n

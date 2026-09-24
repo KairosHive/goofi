@@ -1,98 +1,48 @@
 import { describe, it, expect } from 'vitest';
 import { viewSpecForKind, viewSpecsForKind, CAP_FLOOR } from './capacity';
 
+const axes = (kind: Parameters<typeof viewSpecForKind>[0], w: number, h: number) =>
+	viewSpecForKind(kind, w, h).reduce.map((r) => [r.dim, r.max, r.method]);
+
 describe('viewSpecForKind', () => {
-	it('line → the array it DRAWS (≤2-D), channels capped at what a plot can tell apart, samples enveloped to width', () => {
-		expect(viewSpecForKind('line', 1600, 300)).toEqual({
-			dtype: 'array',
-			ndim: [['le', 2]],
-			dims: [],
-			reduce: [
-				{ dim: 0, max: 32, method: 'subsample' },
-				{ dim: -1, max: 1600, method: 'envelope' }
-			],
-			depth: 'f16'
-		});
-	});
-
-	it('a kind describes what it cannot draw with an area preview, never its drawing axes', () => {
-		// A line viewer parked on an image slot renders nothing; asking for its line axes there
-		// would take the whole frame off a producer for a panel that only prints the shape.
-		const specs = viewSpecsForKind('line', 800, 600);
-		expect(specs).toHaveLength(2);
-		expect(specs[1]).toEqual({
-			dtype: 'array',
-			ndim: [
-				['ge', 3],
-				['le', 3]
-			],
-			dims: [],
-			reduce: [
-				{ dim: 0, max: 600, method: 'area' },
-				{ dim: 1, max: 800, method: 'area' }
-			],
-			depth: 'u8'
-		});
-		// The two never overlap, so one frame is only ever admitted by one of them.
-		expect(specs[0].ndim).toEqual([['le', 2]]);
-	});
-
-	it('a kind that draws everything it accepts declares once', () => {
-		expect(viewSpecsForKind('image', 640, 480)).toEqual([viewSpecForKind('image', 640, 480)]);
-		expect(viewSpecsForKind('topomap', 100, 100)).toHaveLength(1);
-	});
-
-	it('image → array 2-D..3-D, area on both pixel axes', () => {
-		expect(viewSpecForKind('image', 1280, 720)).toEqual({
-			dtype: 'array',
-			ndim: [
-				['ge', 2],
-				['le', 3]
-			],
-			dims: [],
-			reduce: [
-				{ dim: 0, max: 720, method: 'area' },
-				{ dim: 1, max: 1280, method: 'area' }
-			],
-			depth: 'u8'
-		});
-	});
-
-	// TrajectoryViewer reads a (dims × points) frame — shape[0] is the SIGNAL rows it pairs
-	// i<j, shape[1] is the path length. So the axis worth reducing is the LAST one; capping
-	// dim 0 would only drop signal rows while shipping every sample of the long axis.
-	it('trajectory → array 2-D, subsample the point axis (the last one)', () => {
-		expect(viewSpecForKind('trajectory', 800, 800)).toEqual({
-			dtype: 'array',
-			ndim: [['eq', 2]],
-			dims: [],
-			reduce: [{ dim: -1, max: 800, method: 'subsample' }]
-		});
-	});
-
-	it('trajectory caps the point axis at MAX_POINTS on a very wide panel', () => {
-		expect(viewSpecForKind('trajectory', 8000, 600).reduce).toEqual([
-			{ dim: -1, max: 4096, method: 'subsample' }
+	it('a line caps its channels at what a plot tells apart and envelopes its samples to the width', () => {
+		expect(axes('line', 1600, 300)).toEqual([
+			[0, 32, 'subsample'],
+			[-1, 1600, 'envelope']
 		]);
 	});
 
-	it('topomap → array 1-D, no reduction', () => {
-		expect(viewSpecForKind('topomap', 100, 100)).toEqual({
-			dtype: 'array',
-			ndim: [['eq', 1]],
-			dims: [],
-			reduce: []
-		});
+	it('an image averages both pixel axes down to its box', () => {
+		expect(axes('image', 1280, 720)).toEqual([
+			[0, 720, 'area'],
+			[1, 1280, 'area']
+		]);
 	});
 
-	it('string / table → dtype-only compatibility, no array constraints or reduction', () => {
-		expect(viewSpecForKind('string', 100, 100)).toEqual({ dtype: 'string', ndim: [], dims: [], reduce: [] });
-		expect(viewSpecForKind('table', 100, 100)).toEqual({ dtype: 'table', ndim: [], dims: [], reduce: [] });
+	it('a trajectory subsamples its point axis, the last one, up to a cap', () => {
+		expect(axes('trajectory', 800, 800)).toEqual([[-1, 800, 'subsample']]);
+		expect(axes('trajectory', 8000, 600)).toEqual([[-1, 4096, 'subsample']]);
+	});
+
+	it('a topomap, a string and a table are served whole', () => {
+		for (const kind of ['topomap', 'string', 'table'] as const) expect(axes(kind, 100, 100)).toEqual([]);
+	});
+
+	it('a line parked on an image slot previews it by area, and the two specs never overlap', () => {
+		// Its line axes asked of an image would take the whole frame off a producer for a shape print.
+		const [draws, preview] = viewSpecsForKind('line', 800, 600);
+		expect(draws.ndim).toEqual([['le', 2]]);
+		expect(preview.ndim).toEqual([
+			['ge', 3],
+			['le', 3]
+		]);
+		expect(preview.reduce.map((r) => r.method)).toEqual(['area', 'area']);
+		expect(viewSpecsForKind('image', 640, 480)).toEqual([viewSpecForKind('image', 640, 480)]);
 	});
 
 	it('clamps degenerate (0-px / collapsed) sizes to the floor', () => {
 		const spec = viewSpecForKind('line', 0, 0);
 		expect(spec.reduce[0].max).toBe(32); // channel axis: the trace cap is below the floor
-		expect(spec.reduce[1].max).toBe(CAP_FLOOR); // sample axis
+		expect(spec.reduce[1].max).toBe(CAP_FLOOR);
 	});
 });

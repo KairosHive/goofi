@@ -9,6 +9,8 @@
 // 1280, at 412 portrait, at 863 landscape and on a tablet, judged by one rule set.
 
 import { test, expect, type Page } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
 import { closeAddedTab, closeSplit, splitRight, waitForApp } from '../lib/app';
 import { expectIntact } from '../lib/invariants';
 import { addNode, selectNode, waitForNode } from '../lib/goofi';
@@ -279,12 +281,20 @@ test('parameter groups keep readable widths and scroll to the last group', async
 	await page.goto('/');
 	await waitForApp(page);
 	try {
-		const uid = await addNode(page, 'graphics:TimeWarpFbm');
+		// Nine groups of its own, wider together than the inspector, beside the one every node has.
+		const groups = ['texture', 'warp', 'octaves', 'palette', 'lighting', 'feedback', 'camera', 'timing', 'output'];
+		const status = (await rawCall(page, 'session status')).result;
+		const source = path.join(status.workspace, 'nodes_signal', 'many_groups.py');
+		fs.mkdirSync(path.dirname(source), { recursive: true });
+		const params = groups.map((g) => `"${g}": {"amount": goofi.FloatParam(0.5, 0.0, 1.0)}`).join(', ');
+		fs.writeFileSync(source, `import goofi\nclass ManyGroups(goofi.Node):\n    OUTPUTS = {"out": goofi.DataType.ARRAY}\n    PARAMS = {${params}}\n`);
+		expect((await rawCall(page, 'library refresh')).error).toBeUndefined();
+		const uid = await addNode(page, 'ManyGroups');
 		await waitForNode(page, uid);
 		await selectNode(page, uid);
 		const strip = page.getByTestId('param-tabs');
 		const tabs = strip.getByRole('tab');
-		await expect(tabs).toHaveCount(10);
+		await expect(tabs).toHaveCount(groups.length + 1);
 		const sizes = await strip.evaluate((el) => ({
 			width: el.clientWidth,
 			content: el.scrollWidth,

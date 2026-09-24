@@ -29,7 +29,10 @@
 	const anchor = useAnchor();
 	const onSurface = $derived(drawsOnSurface(kind));
 
+	// What the DOM shows: a surface kind's frame only while it takes the fallback text.
 	let frame = $state.raw<DataFrame | null>(null);
+	// The frame the plot last drew, for a redraw when the settings change.
+	let last: DataFrame | null = null;
 	let visible = $state(false);
 	let container: HTMLDivElement | null = $state(null);
 	// The content box in CSS px; the device box below is derived from it, the DPR and the zoom.
@@ -49,7 +52,6 @@
 	// Surface kinds: the plot, and the little that still reaches the DOM.
 	let plot = $state.raw<Plot | null>(null);
 	let labels = $state<string[]>([]);
-	let labelKey = '';
 	const lutFor = makeLUTCache();
 
 	/** The 32-px step for `px`, left where it is until `px` is a quarter step past the held one's edge. */
@@ -100,8 +102,8 @@
 	$effect(() => {
 		if (frozen) return;
 		frame = null;
+		last = null;
 		labels = [];
-		labelKey = '';
 		untrack(() => plot?.clear());
 		if (!visible || !slot) return;
 		// Kind is not part of the stream's identity, but it IS part of what this viewer needs.
@@ -110,7 +112,7 @@
 		// A joiner is replayed the current frame at once, so the delivery must not become a dependency.
 		return bindViewer(node, slot, token, specs, (f: DataFrame) =>
 			untrack(() => {
-				frame = f;
+				if (!draw || !frame || fallback(frame) || fallback(f)) frame = f;
 				if (draw) drawFrame(f);
 			})
 		);
@@ -156,17 +158,22 @@
 		} else {
 			p.setSettings({ lut: lutFor(String(s.colormap ?? 'gray')), stretch: s.stretch === true });
 		}
-		untrack(() => frame && drawFrame(frame));
+		untrack(() => last && drawFrame(last));
 	});
+
+	/** Whether a frame takes the fallback text rather than the plot. */
+	function fallback(f: DataFrame): boolean {
+		return !isArrayFrame(f) || !isRenderable(kind, f.data);
+	}
 
 	function drawFrame(f: DataFrame): void {
 		const p = plot;
+		last = f;
 		if (!p || !isArrayFrame(f)) return;
 		// A frame this kind cannot draw takes the fallback text; the trace before it must not stay under it.
-		if (!isRenderable(kind, f.data)) {
+		if (fallback(f)) {
 			p.clear();
 			labels = [];
-			labelKey = '';
 			return;
 		}
 		if (capW === 0) return; // unmeasured: the re-bind on the first size replays the frame
@@ -177,11 +184,7 @@
 			const next = r.scalar
 				? ['', formatTick(r.xMin), formatTick(r.xMax)]
 				: [formatTick(r.yMax), formatTick(r.yMin), formatTick(r.xMax)];
-			const key = next.join('|');
-			if (key !== labelKey) {
-				labelKey = key;
-				labels = next;
-			}
+			if (next.join('|') !== labels.join('|')) labels = next;
 		} else {
 			pushImage(p, f, settings);
 		}
@@ -221,7 +224,8 @@
 		min-width: 0;
 		min-height: 0;
 	}
-	/* The range labels: the surface draws no text, so its corners are annotated here, on hover. */
+	/* The range labels: the surface draws no text, so its corners are annotated here — on hover,
+	   on a selected card, and always in a docked panel. */
 	.tick {
 		position: absolute;
 		opacity: 0;
@@ -233,7 +237,9 @@
 		color: var(--text-dim);
 		pointer-events: none;
 	}
-	.viewer-feed:hover .tick {
+	.viewer-feed:hover .tick,
+	:global(.svelte-flow__node.selected) .tick,
+	:global(.vp-body) .tick {
 		opacity: 1;
 	}
 	/* No hover on a touch screen: the labels rest visible there. */
