@@ -1,6 +1,5 @@
 {
   "name": "@goofi/plugin",
-  "version": "0.1.0",
   "type": "module",
   "types": "./index.ts",
   "exports": { ".": { "types": "./index.ts" } }
