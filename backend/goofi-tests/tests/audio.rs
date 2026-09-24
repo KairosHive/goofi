@@ -689,35 +689,35 @@ fn a_patch_sounds_under_the_external_clock() {
     g.set_param(signal_in, "signal", "smoothing", 0.0);
     g.call("node remove", j!({ "node": hex(level) }));
 
-    // Step: as an `oscillator`, each row of an [n] or [n, 2] frame is a sine at that many Hz, and
-    // one channel is their mean. A frame of any other shape is refused on `mode`, and says why.
+    // Step: as an `oscillator`, each column of an [n] or [2, n] frame is a sine at that many Hz,
+    // and one channel is their mean. A frame of any other shape is refused on `mode`, and says why.
     let pair = g.add("_TestRamp");
-    g.set_param(pair, "ramp", "channels", 2);
-    g.set_param(pair, "ramp", "length", 1);
+    g.set_param(pair, "ramp", "channels", 3);
+    g.set_param(pair, "ramp", "length", 2);
     let hz = g.add("signal:Math");
     g.set_param(hz, "math", "multiply", 1200.0);
     g.set_param(hz, "math", "post_add", 1200.0);
     g.set_param(signal_in, "signal", "mode", "oscillator");
     g.link(pair, "out", hz, "input");
     g.link(hz, "out", signal_in, "input");
-    g.until("a [2, 1] frame refused", |g| {
+    g.until("a [3, 2] frame refused", |g| {
         drive(g, TENTH);
-        g.error(signal_in).filter(|e| e.contains("[n, 2]"))
+        g.error(signal_in).filter(|e| e.contains("[2, n]"))
     });
-    // [2, 2] is two rows of pitch and phase: 1200 and 2400 Hz, at half scale each.
-    g.set_param(pair, "ramp", "length", 2);
+    // [2, 2] is pitches over phases: its first row, 0 and 0.5, is 1200 and 1800 Hz at half scale each.
+    g.set_param(pair, "ramp", "channels", 2);
     g.until("two sines on one channel", |g| {
         let (x, channels) = drive(g, TENTH);
         (channels == 1 && amplitude(&x, 1200.0) > 0.45).then_some(())
     });
     let (chord, _) = drive(&g, TENTH);
-    for (at, want) in [(1200.0, 0.5), (2400.0, 0.5), (1800.0, 0.0)] {
+    for (at, want) in [(1200.0, 0.5), (1800.0, 0.5), (2400.0, 0.0)] {
         let got = amplitude(&chord, at);
         assert!((got - want).abs() < 0.02, "{at} Hz sounds at {got}, not {want}");
     }
     g.until("a frame that sounds clears the refusal", |g| g.error(signal_in).is_none().then_some(()));
 
-    // …one sine for every row, however many: a thousand of which only the last 299 sit at 1200 Hz
+    // …one sine for every column, however many: a thousand of which only the last 299 sit at 1200 Hz
     // and the rest at 0 Hz is 0.299 of full scale, and silence if any cap cut them off.
     g.set_param(pair, "ramp", "channels", 1);
     g.set_param(pair, "ramp", "length", 1000);
@@ -741,9 +741,9 @@ fn a_patch_sounds_under_the_external_clock() {
         g.call("node remove", j!({ "node": hex(uid) }));
     }
 
-    // …and the second column is each sine's phase in radians: two sines at 1200 Hz, born
-    // together, sound at full scale in phase and cancel at pi apart.
-    let rows = |phase: f64| format!(r#"{{"rows": [[1200.0, 0.0], [1200.0, {phase}]]}}"#);
+    // …and the second row is each sine's phase in radians: two sines at 1200 Hz, born together,
+    // sound at full scale in phase and cancel at pi apart.
+    let rows = |phase: f64| format!(r#"{{"rows": [[1200.0, 1200.0], [0.0, {phase}]]}}"#);
     let written = g.add("Text");
     g.set_param(written, "text", "value", rows(0.0));
     let parsed = g.add("FromJson");

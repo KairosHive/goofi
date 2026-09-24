@@ -310,8 +310,8 @@ impl Frames {
         }
     }
 
-    /// One sine per row of the newest frame, `[n]` pitches in Hz or `[n, 2]` pitches and phases
-    /// in radians, their mean on every channel. A sine runs on across frames, its phase an offset
+    /// One sine per column of the newest frame, `[n]` pitches in Hz or `[2, n]` pitches over
+    /// phases in radians, their mean on every channel. A sine runs on across frames, its phase an offset
     /// on top, and with smoothing both glide. Each is a phasor turned once a sample, so a frame of
     /// thousands costs a few multiplies per sine.
     fn oscillate(&mut self, out: &mut PortMut<'_>, smoothing: usize) {
@@ -320,7 +320,7 @@ impl Frames {
             std::mem::swap(&mut self.now, &mut self.next);
         }
         let (width, n) = (self.now.chans, self.now.len);
-        let row = |v: usize| (self.now.buf[v * width], if width == 2 { self.now.buf[v * width + 1] } else { 0.0 });
+        let row = |v: usize| (self.now.buf[v], if width == 2 { self.now.buf[n + v] } else { 0.0 });
         // Within the capacity reserved at birth, so nothing here allocates. A new sine starts where
         // its row says, with no glide from a sine it never was.
         let was = self.hz.len().min(n);

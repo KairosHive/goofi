@@ -322,7 +322,7 @@ impl Half for AudioHalf {
         if pitches {
             if let goofi_core::Value::Array(a) = frame.value() {
                 if pitch_width(a.shape()).is_none() {
-                    self.refused = Some(format!("an oscillator takes [n] pitches or [n, 2] pitches and phases, not {:?}", a.shape()));
+                    self.refused = Some(format!("an oscillator takes [n] pitches or [2, n] pitches and phases, not {:?}", a.shape()));
                     return false;
                 }
             }
@@ -384,7 +384,7 @@ impl Inbox {
 
     /// Resample one frame linearly from its `sfreq` to the rate and enter it whole, as one chunk
     /// headed by its channel count and length. A frame with no `sfreq` enters one sample per
-    /// sample. `pitches` enters an `[n]` or `[n, 2]` frame as it is, pitches and phases for one
+    /// sample. `pitches` enters an `[n]` or `[2, n]` frame as it is, pitches and phases for one
     /// channel of sines. Answers whether the channel count moved.
     fn enter(&mut self, frame: &Data, rate: f64, pitches: bool) -> Option<bool> {
         let goofi_core::Value::Array(a) = frame.value() else { return None };
@@ -437,11 +437,11 @@ impl Inbox {
     }
 }
 
-/// How many numbers an oscillator's frame gives each sine: a pitch, or a pitch and a phase.
+/// How many rows an oscillator's frame has: pitches, or pitches over phases.
 fn pitch_width(shape: &[usize]) -> Option<usize> {
     match *shape {
         [_] => Some(1),
-        [_, 2] => Some(2),
+        [2, _] => Some(2),
         _ => None,
     }
 }
