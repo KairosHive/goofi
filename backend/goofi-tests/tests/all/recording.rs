@@ -622,7 +622,9 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         .as_str()
         .expect("a folder")
         .to_string();
-    std::fs::remove_dir_all(&second).expect("the folder goes away");
+    // Moved in one step: a delete races the writer, which can add a file between the walk and the
+    // last `rmdir`. The temporary root takes the moved folder with it.
+    std::fs::rename(&second, format!("{second}.gone")).expect("the folder goes away");
     g.call("session new", j!({}));
     assert_eq!(g.call("record status", j!({}))["running"], j!(false), "a new patch ends the recording");
 
