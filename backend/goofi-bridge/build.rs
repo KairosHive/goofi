@@ -141,8 +141,6 @@ const INPUTS: &[&str] = &[
     "svelte.config.js",
     "vite.config.ts",
     "tsconfig.json",
-    // The linked plotting package beside the frontend.
-    "../glance/src",
 ];
 
 /// Rebuild the served SPA when its sources are newer than the last build; a build that cannot be

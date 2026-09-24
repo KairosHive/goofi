@@ -1,8 +1,8 @@
 # Viewer rendering: one GPU surface per panel
 
-Decided 2026-09-16 from the performance audit. Viewers draw on `glance/` (one WebGL2 canvas per
-editor panel and per docked viewer panel). This file holds what remains and the decisions that
-bind it.
+Decided 2026-09-16 from the performance audit. Viewers draw on glance
+(`github.com/dav0dea/glance`, one WebGL2 canvas per editor panel and per docked viewer panel).
+This file holds what remains and the decisions that bind it.
 
 ## Decisions that hold
 
@@ -32,9 +32,8 @@ bind it.
 1. **Topomap and trajectory onto the surface.** The interpolation (`topomapInterp.ts`, CPU today)
    becomes a fragment shader over the electrode positions; the trajectory a line plot with two
    series per pair. Then `ViewerSurface` keeps only the string and table kinds.
-2. **`glance` as an npm package.** It is linked from the repository root today, which needs
-   `server.fs.allow` in `frontend/vite.config.ts` and `../glance/src` among the bridge's SPA
-   inputs. When it is published, both go and `frontend/package.json` takes a version.
+2. **`glance` from npm.** `frontend/package.json` takes it from its GitHub repo today; when it is
+   published, the dependency takes a version.
 3. **Worker-side rendering.** `dataWorker.ts` owns the sockets and the decode; with
    `transferControlToOffscreen` it draws straight from the decoded buffer and the main thread sends
    rects and the camera on change. The renderer runs on either thread already.

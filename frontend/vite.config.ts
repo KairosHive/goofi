@@ -8,8 +8,6 @@ export default defineConfig({
 	server: {
 		port: 5173,
 		strictPort: false,
-		// Until glance is an npm package it is linked from the repo root, outside the dev server's root.
-		fs: { allow: ['..'] },
 		proxy: {
 			'/control': { target: BRIDGE, ws: true, changeOrigin: true },
 			'/data': { target: BRIDGE, ws: true, changeOrigin: true },

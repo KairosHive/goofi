@@ -42,17 +42,6 @@ reducer re-reads its address under the graph lock, and every `/data` socket re-t
 lock for `stream_behind`. With R reducers and V viewers at 30 Hz that is about 30·(R+V) graph-lock
 acquisitions a second for nothing that moved. Fix: pulse only when the settle applied something.
 
-## 4. glance is checked nowhere in CI
-
-`.github/workflows/ci.yml` runs only the frontend's `check` and `test`. `glance/src/*.test.ts`
-(17 tests: grid, layout, palette) run in no CI step, and `glance/tsconfig.json` includes the test
-files while the package has no installed `vitest`, so `npm --prefix glance run check` fails with
-"Cannot find module 'vitest'". `glance/.gitignore` ignores its own lockfile, so its devDependencies
-float. Fix: install glance in the setup action and run its two scripts, or move its tests under the
-frontend's vitest include; either way pin a lockfile or exclude `**/*.test.ts` from the tsconfig.
-When glance is published (`viewer-render-surface.md`), the package needs a build step (`dist/`,
-`.d.ts`) because its `exports` point at `src/index.ts` today.
-
 ## 5. Range labels are hover-only on hybrid devices
 
 `frontend/src/lib/viewers/ViewerFeed.svelte`: the three range labels rest at `opacity: 0`, show
@@ -127,8 +116,7 @@ test dir whose import does not resolve; delete it.
 - `frontend/src/lib/viewers/capacity.ts`: two consecutive doc comments on `MAX_ROWS`; the first
   is the old one.
 - `frontend/src/lib/viewers/TrajectoryViewer.svelte`: a comment explains "not uPlot".
-- `frontend/src/lib/viewers/decimate.test.ts` and `glance/src/math.ts` mention a hit test that
-  no longer exists; `frontend/src/lib/api/frames.test.ts` cites `viewer-fps-cap.spec.ts`, which
+- `frontend/src/lib/viewers/decimate.test.ts` mentions a hit test that no longer exists; `frontend/src/lib/api/frames.test.ts` cites `viewer-fps-cap.spec.ts`, which
   does not exist; `frames.ts` says a delivery's draws run inside the budget, which holds for
   component viewers only (a glance push draws in the surface's own animation frame).
 - `ViewerFeed.svelte` holds `labels` and `labelKey` for one fact, and writes `frame` on every
@@ -136,11 +124,9 @@ test dir whose import does not resolve; delete it.
   plot already holds the CPU copy; a `renderable` flag would do and would spare three deriveds
   per frame under `flushSync`.
 - `frontend/src/lib/viewers/capacity.test.ts` pins the literal spec objects it transcribes from
-  `capacity.ts`; `glance/src/color.test.ts` and `frontend/src/lib/viewers/palette.test.ts` test
-  the same palette twice. Keep one of each.
-- Comment runs over two lines in the new code: `frames.ts` (stamps fold), `glance/src/color.ts`,
-  `glance/src/shaders.ts`, `glance/src/math.ts` (gridLines), `frontend/vite.config.ts`, and
-  eleven in `reducer.rs`.
+  `capacity.ts`. Keep one.
+- Comment runs over two lines in the new code: `frames.ts` (stamps fold) and eleven in
+  `reducer.rs`.
 - `.github`: the `goofi-build` cache is saved under a key that `actions/cache/save` never
   overwrites, so it refreshes only when `Cargo.lock` changes; the Playwright cache key uses
   `package.json`, not the lockfile.

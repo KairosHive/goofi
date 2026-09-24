@@ -1,8 +1,5 @@
 /** Canvas colour palette: canvas 2D/WebGL cannot read the CSS custom properties. */
 
-/** The series colour of the plots, so a legend or a canvas viewer matches the surface. */
-export { seriesColor } from 'glance';
-
 export const AXIS_INK = 'rgba(208, 208, 208, 0.55)';
 
 /** The app's mono stack at `px`, ready for `ctx.font` — spelled out, since a canvas

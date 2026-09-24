@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { seriesColor } from './palette';
 
 const VIEWERS = fileURLToPath(new URL('.', import.meta.url));
 
@@ -14,14 +13,6 @@ function consumers(): { rel: string; src: string }[] {
 		.sort()
 		.map((f) => ({ rel: f, src: readFileSync(join(VIEWERS, f), 'utf8') }));
 }
-
-describe('canvas series palette', () => {
-	it('gives every series its own #rrggbb, the same one the surface draws', () => {
-		const seen = new Set(Array.from({ length: 32 }, (_, i) => seriesColor(i)));
-		expect(seen.size, 'no two series share a colour').toBe(32);
-		for (const c of seen) expect(c).toMatch(/^#[0-9a-f]{6}$/);
-	});
-});
 
 describe('canvas chrome', () => {
 	/* A canvas context parses `font` as a standalone CSS value, with no element to resolve custom
