@@ -68,8 +68,21 @@ pub struct Param {
     /// A default expression binding, live from birth — `me.params.…`, `variables.…` and the rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expression: Option<String>,
+    /// The index of the param's section inside its group; the inspector draws a line between two.
+    #[serde(default)]
+    pub section: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show: Option<Show>,
     #[serde(flatten)]
     pub spec: ParamSpec,
+}
+
+/// The inspector shows a param only while `param` (`name` in the same group, or `group.name`)
+/// holds one of `any_of`, compared as text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Show {
+    pub param: String,
+    pub any_of: Vec<String>,
 }
 
 /// The kind-specific fields, tagged by `kind` — exhaustive, so neither side has an unknown kind.

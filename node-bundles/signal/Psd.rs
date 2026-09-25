@@ -134,6 +134,8 @@ static PARAMS: &[ParamDecl] = &[
             "`welch` averages the spectra of overlapping segments, which is steadier; `fft` takes \
              the whole run as one segment, which is sharper and noisier.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "psd",
@@ -148,6 +150,8 @@ static PARAMS: &[ParamDecl] = &[
             "Taper applied to each segment. It stops a peak from smearing across the spectrum; \
              `rectangular` keeps the samples as they are.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "psd",
@@ -155,6 +159,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis holds the samples. -1 is time."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "welch",
@@ -162,6 +168,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.5, min: 0.0, max: 1e7 },
         expression: None,
         doc: Some("How long one segment is. A longer segment tells frequencies apart better."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "welch",
@@ -173,6 +181,8 @@ static PARAMS: &[ParamDecl] = &[
         },
         expression: None,
         doc: Some("What `segment` counts in. `fraction` is a share of the frame."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "welch",
@@ -180,6 +190,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.5, min: 0.0, max: 0.95 },
         expression: None,
         doc: Some("How much of a segment the next one repeats. More overlap is steadier and slower."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "range",
@@ -187,6 +199,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 10_000.0 },
         expression: None,
         doc: Some("The lowest frequency to keep, in Hz."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "range",
@@ -194,6 +208,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 10_000.0 },
         expression: None,
         doc: Some("The highest frequency to keep, in Hz. 0 keeps every bin above `low`."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "range",
@@ -201,6 +217,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "linear", options: &["linear", "log"], refresh: false },
         expression: None,
         doc: Some("Whether the power comes out as it is, or as its logarithm."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

@@ -53,7 +53,9 @@ const UNKNOWN: ParamDescriptor = {
 	expression: null,
 	reference: null,
 	triggers: false,
-	error: null
+	error: null,
+	section: 0,
+	show: null
 };
 
 /** One param: the catalog's static fields, and the document's and the runtime's live ones. */

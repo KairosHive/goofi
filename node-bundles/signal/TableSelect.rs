@@ -44,6 +44,8 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
     spec: ParamSpec::Str { default: "", options: &[], refresh: false },
     expression: None,
     doc: Some("Which field to take. `a.b.c` reaches through a table inside a table."),
+    section: 0,
+    show: None,
 }];
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",

@@ -91,6 +91,8 @@ static PARAMS: &[ParamDecl] = &[
             "`zscore` measures in standard deviations from the mean, `minmax` maps the window onto \
              0 to 1, and `robust` uses the median and the middle half, which an outlier cannot move.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "window",
@@ -101,6 +103,8 @@ static PARAMS: &[ParamDecl] = &[
             "How much of the past the statistics are taken over. 0 keeps running statistics over \
              everything the node has seen. Robust mode needs a positive size.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "window",
@@ -108,6 +112,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds", "seconds (ufreq)"], refresh: false },
         expression: None,
         doc: Some("What `size` counts."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "window",
@@ -115,6 +121,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis the statistics are taken along. -1 is time."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "window",
@@ -122,6 +130,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Bool { default: false },
         expression: None,
         doc: Some("Freeze the statistics where they are, so later data is measured against them."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "window",
@@ -129,6 +139,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Forget the past and any frozen statistics."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

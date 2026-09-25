@@ -96,6 +96,8 @@ fn autotrigger(m: &NodeManifest) -> ParamDecl {
             "Run on the node's own schedule, instead of waiting for an input frame. \
              Turn this on for sources; leave it off for transforms driven by their input.",
         ),
+        section: 0,
+        show: None,
     }
 }
 
@@ -115,6 +117,8 @@ fn max_frequency(m: &NodeManifest) -> ParamDecl {
             "Rate cap for this node, read through `frequency_mode`. 0 means uncapped — the node \
              runs as often as the scheduler and its inputs allow.",
         ),
+        section: 0,
+        show: None,
     }
 }
 
@@ -133,6 +137,8 @@ fn frequency_mode(_: &NodeManifest) -> ParamDecl {
             "How to read `max_frequency`: as a rate in Hz (updates per second), or as a period \
              in seconds between updates — convenient for very slow nodes.",
         ),
+        section: 0,
+        show: None,
     }
 }
 

@@ -28,6 +28,17 @@ export interface BaseParam {
 	triggers: boolean;
 	/** The active source's bind, compile or arrival error, or null. */
 	error: string | null;
+	/** The index of the param's section inside its group; the inspector draws a line between two. */
+	section: number;
+	/** The inspector shows the param only while this holds; null shows it always. */
+	show: ParamShow | null;
+}
+
+/** Holds while the param `group.name` has one of `any_of`, compared as text. */
+export interface ParamShow {
+	group: string;
+	name: string;
+	any_of: string[];
 }
 
 export interface FloatParam extends BaseParam {

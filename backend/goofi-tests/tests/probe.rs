@@ -178,6 +178,14 @@ fn missing_dep_greys_out_instead_of_crashing() {
         }
         _ => panic!("a node declaring a tag the vocabulary does not hold is Unavailable"),
     }
+    // A param name is one address in its group, whichever section declares it.
+    match discover_one(&fixtures().join("bad_section.py"), &py, Isolation::Subprocess, &memo()) {
+        Discovery::Unavailable { type_name, reason } => {
+            assert_eq!(type_name, "BadSection");
+            assert!(reason.contains("`kinds.gain` is declared twice"), "{reason}");
+        }
+        _ => panic!("a node declaring one param in two sections is Unavailable"),
+    }
 }
 
 #[test]
@@ -220,8 +228,9 @@ fn probe_ignores_a_host_pythonpath() {
 }
 
 #[test]
-fn every_param_kind_carries_its_doc_across_the_probe() {
-    // `doc=` crosses Python, the wheel's introspect and ParamDecl — one arm per param kind on each side.
+fn every_param_kind_carries_its_doc_section_and_show_across_the_probe() {
+    // `doc=` and `show=` cross Python, the wheel's introspect and ParamDecl — one arm per param kind
+    // on each side. A list of dicts is a group's sections; `4` and `True` compare as text.
     let py = test_python();
     let Discovery::Found(d) =
         discover_one(&fixtures().join("documented.py"), &py, Isolation::Subprocess, &memo())
@@ -242,6 +251,18 @@ fn every_param_kind_carries_its_doc_across_the_probe() {
     assert_eq!(doc("gain"), Some("how loud"));
     assert_eq!(doc("enabled"), Some("whether to run"));
     assert_eq!(doc("mode"), Some("which mode"));
+    assert_eq!(doc("reset"), Some("start over"));
+    let layout: Vec<_> = d.manifest.params.iter()
+        .map(|p| (p.name, p.section, p.show.map(|s| (s.param, s.any_of))))
+        .collect();
+    assert_eq!(layout, [
+        ("count", 0, None),
+        ("enabled", 0, None),
+        ("gain", 1, Some(("count", &["4", "8"][..]))),
+        ("mode", 1, Some(("kinds.enabled", &["true"][..]))),
+        ("reset", 1, Some(("mode", &["b"][..]))),
+        ("level", 0, None),
+    ]);
 }
 
 #[test]

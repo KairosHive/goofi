@@ -329,3 +329,67 @@ test('parameter groups keep readable widths and scroll to the last group', async
 		await tearDown(page);
 	}
 });
+
+test('a dropdown shows and hides the params, sections and group that depend on it', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		// Three sections of `filter`: the second shows only for `iir`, and `ripple` only while the
+		// shown `order` is 4 or 8. The `iir` group shows only for `iir` too.
+		const status = (await rawCall(page, 'session status')).result;
+		const source = path.join(status.workspace, 'nodes_signal', 'shown_by_mode.py');
+		fs.mkdirSync(path.dirname(source), { recursive: true });
+		fs.writeFileSync(source, [
+			'import goofi',
+			'class ShownByMode(goofi.Node):',
+			'    OUTPUTS = {"out": goofi.DataType.ARRAY}',
+			'    PARAMS = {',
+			'        "filter": [',
+			'            {"mode": goofi.StringParam("fir", options=["fir", "iir"]), "taps": goofi.IntParam(64, 1, 512, show=("mode", ["fir"]))},',
+			'            {"order": goofi.IntParam(4, 2, 8, options=[2, 4, 8], show=("mode", ["iir"])), "ripple": goofi.FloatParam(0.5, 0.0, 1.0, show=("order", [4, 8]))},',
+			'            {"gain": goofi.FloatParam(1.0, 0.0, 2.0)},',
+			'        ],',
+			'        "iir": {"q": goofi.FloatParam(0.7, 0.1, 10.0, show=("filter.mode", ["iir"]))},',
+			'    }',
+			''
+		].join('\n'));
+		expect((await rawCall(page, 'library refresh')).error).toBeUndefined();
+		const uid = await addNode(page, 'ShownByMode');
+		await waitForNode(page, uid);
+		await selectNode(page, uid);
+		const tabs = page.getByTestId('param-tabs').getByRole('tab');
+		const row = (key: string) => page.locator(`[data-param-key="${key}"]`);
+		const lines = page.getByTestId('param-rows').getByTestId('param-section-break');
+
+		// A section with no shown param draws nothing, so one line parts the two shown ones.
+		await expect(tabs).toHaveText(['filter', 'common']);
+		await expect(row('filter/taps')).toBeVisible();
+		await expect(row('filter/order')).toHaveCount(0);
+		await expect(row('filter/ripple'), 'a param shown by a hidden one hides with it').toHaveCount(0);
+		await expect(lines).toHaveCount(1);
+
+		await page.getByTestId('param-field-mode').locator('select').selectOption('iir');
+		await expect(row('filter/taps')).toHaveCount(0);
+		await expect(row('filter/order')).toBeVisible();
+		await expect(row('filter/ripple')).toBeVisible();
+		await expect(lines).toHaveCount(2);
+		await expect(tabs).toHaveText(['filter', 'iir', 'common']);
+		await expectIntact(page, 'a group parted into sections');
+
+		// A search does not reach a hidden param.
+		const search = page.getByTestId('param-search');
+		await search.fill('taps');
+		await expect(page.getByTestId('param-no-matches')).toBeVisible();
+		await search.fill('');
+
+		// The fronted group loses every param to the dropdown, so the front falls back to the first.
+		await tabs.getByText('iir', { exact: true }).click();
+		await expect(row('iir/q')).toBeVisible();
+		await rawCall(page, 'node param edit', { node: uid, param: 'filter/mode', value: 'fir' });
+		await expect(tabs).toHaveText(['filter', 'common']);
+		await expect(row('filter/taps')).toBeVisible();
+		await expect(lines).toHaveCount(1);
+	} finally {
+		await tearDown(page);
+	}
+});

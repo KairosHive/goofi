@@ -187,6 +187,8 @@ static PARAMS: &[ParamDecl] = &[
             "`vanderpol` is a relaxation cycle, `fitzhugh` an excitable neuron, `stuartlandau` the \
              Hopf normal form, `duffing` a double well, `pendulum` the driven damped pendulum.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "oscillator",
@@ -194,6 +196,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 200.0 },
         expression: None,
         doc: Some("Roughly how many cycles a second. It scales the whole model's time, not one term."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "oscillator",
@@ -205,6 +209,8 @@ static PARAMS: &[ParamDecl] = &[
              `fitzhugh` as how slow the recovery is, `stuartlandau` as lambda — negative for a \
              fixed point, positive for a cycle, and the bifurcation at zero.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "oscillator",
@@ -212,6 +218,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.2, min: 0.0, max: 5.0 },
         expression: None,
         doc: Some("Friction. `duffing` and `pendulum` read it; the others set their own."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "oscillator",
@@ -219,6 +227,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 10.0 },
         expression: None,
         doc: Some("Amplitude of a periodic forcing, added to whatever the `drive` input carries."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "oscillator",
@@ -226,6 +236,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 20.0 },
         expression: None,
         doc: Some("Frequency of that forcing, relative to the oscillator's own."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "oscillator",
@@ -233,6 +245,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("Jitter on both state variables, which is what makes an excitable model fire on its own."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -240,6 +254,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.005, min: 1.0e-6, max: 0.1 },
         expression: None,
         doc: Some("Model seconds per step. Too large and the integration leaves the cycle."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -247,6 +263,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Nudges the start and seeds the noise. Negative takes a fresh one from the clock."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -254,6 +272,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Start over from the seed."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -261,6 +281,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false },
         expression: None,
         doc: Some("`value` emits the state now; `block` emits every step since the last frame, which is a signal."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -268,6 +290,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 500.0, min: 1.0, max: 20_000.0 },
         expression: None,
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
+        section: 0,
+        show: None,
     },
 ];
 

@@ -19,7 +19,7 @@ impl Node for TextureHost {
 }
 static MANIFEST: Manifest = Manifest {
     doc: "Padded RGB rows for graphics integration tests.", tags: &[], inputs: &[], params: &[ParamDecl { group: "image", name: "mode", expression: None, doc: None,
-        spec: ParamSpec::Str { default: "pixels", options: &["pixels", "render", "broken"], refresh: false } }], producer: true,
+        spec: ParamSpec::Str { default: "pixels", options: &["pixels", "render", "broken"], refresh: false }, section: 0, show: None }], producer: true,
     outputs: &[OutputDecl { name: "out", kind: SlotType::Texture }],
 };
 goofi_graphics_sdk::export!(TextureHost, MANIFEST);

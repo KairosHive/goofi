@@ -891,8 +891,8 @@ fn a_patch_sounds_under_the_external_clock() {
         "use goofi_audio_sdk::goofi_core::SlotType;\n\
          use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec};\n\
          goofi_audio_sdk::params! {\n    \
-         ARM = ParamDecl { group: \"trap\", name: \"arm\", spec: ParamSpec::Bool { default: false }, expression: None, doc: None },\n    \
-         POISON = ParamDecl { group: \"trap\", name: \"poison\", spec: ParamSpec::Bool { default: false }, expression: None, doc: None },\n\
+         ARM = ParamDecl { group: \"trap\", name: \"arm\", spec: ParamSpec::Bool { default: false }, expression: None, doc: None, section: 0, show: None },\n    \
+         POISON = ParamDecl { group: \"trap\", name: \"poison\", spec: ParamSpec::Bool { default: false }, expression: None, doc: None, section: 0, show: None },\n\
          }\n\
          static OUTS: &[OutputDecl] = &[OutputDecl { name: \"out\", kind: SlotType::Audio }];\n\
          static MANIFEST: Manifest = Manifest { tags: &[], doc: \"a quarter, a panic, or a NaN\", inputs: &[], outputs: OUTS, params: PARAMS };\n\

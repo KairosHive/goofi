@@ -117,6 +117,8 @@ static PARAMS: &[ParamDecl] = &[
             "The shape looked for at each frequency. `morlet` reads a steady oscillation well; \
              `mexican_hat` reads a sudden one.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "wavelet",
@@ -127,6 +129,8 @@ static PARAMS: &[ParamDecl] = &[
             "How many cycles the Morlet shape spans. More cycles tell frequencies apart better and \
              tell moments apart worse.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "wavelet",
@@ -134,6 +138,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis holds the samples. -1 is time."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "range",
@@ -141,6 +147,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.01, max: 10_000.0 },
         expression: None,
         doc: Some("The lowest frequency to look for, in Hz."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "range",
@@ -148,6 +156,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 40.0, min: 0.01, max: 10_000.0 },
         expression: None,
         doc: Some("The highest frequency to look for, in Hz."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "range",
@@ -155,6 +165,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 40, min: 2, max: 512, options: &[16, 32, 64, 128] },
         expression: None,
         doc: Some("How many frequencies to look at, spaced evenly by ratio between the two above."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "range",
@@ -162,6 +174,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "linear", options: &["linear", "log"], refresh: false },
         expression: None,
         doc: Some("Whether the strength comes out as it is, or as its logarithm."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

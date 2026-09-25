@@ -13,7 +13,7 @@ pub mod abi;
 pub mod host;
 
 pub use goofi_core;
-pub use goofi_node::{ExprDecl, ExprMode, OutputDecl, ParamDecl, ParamKey, ParamSpec, Params, SlotDecl, Tag};
+pub use goofi_node::{ExprDecl, ExprMode, OutputDecl, ParamDecl, ParamKey, ParamSpec, Params, Show, SlotDecl, Tag};
 
 /// What a node file declares: a `NodeManifest` less the type name, which is the FILE's.
 pub struct Manifest {

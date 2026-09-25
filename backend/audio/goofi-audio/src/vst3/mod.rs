@@ -457,6 +457,8 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
         name: name.into(),
         doc: Some(doc.into()),
         expression: None,
+        section: 0,
+        show: None,
         spec,
     };
     let mut params = if class.events {
@@ -495,7 +497,7 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
                 let default = (p.default * p.steps as f64).round() as i64;
                 (probe::ParamSpec::Int { default, min: 0, max: p.steps as i64, options: vec![] }, Kind::Stepped(p.steps as f64), p.title.clone())
             };
-            (p.id, kind, probe::Param { group, name, doc: Some(doc), expression: None, spec })
+            (p.id, kind, probe::Param { group, name, doc: Some(doc), expression: None, section: 0, show: None, spec })
         })
         .collect();
     // `chosen` bounds the KINDS too, which is what keeps a param's index and the id it writes back

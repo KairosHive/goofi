@@ -9,6 +9,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Str { default: "major", options: &SCALES, refresh: false },
         expression: None,
         doc: Some("a named scale, or `custom` to build one from the params below"),
+        section: 0,
+        show: None,
     },
     ROOT = ParamDecl {
         group: "scale",
@@ -16,6 +18,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Str { default: "C", options: NOTES, refresh: false },
         expression: None,
         doc: Some("the note the scale starts on"),
+        section: 0,
+        show: None,
     },
     METHOD = ParamDecl {
         group: "scale",
@@ -23,6 +27,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Str { default: "generator", options: METHODS, refresh: false },
         expression: None,
         doc: Some("a custom scale stacked from a generator, read off the harmonic series, or picked from an equal division"),
+        section: 0,
+        show: None,
     },
     GENERATOR = ParamDecl {
         group: "scale",
@@ -30,6 +36,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 700.0, min: 0.0, max: 4800.0 },
         expression: None,
         doc: Some("the interval stacked, in cents: 700 is a tempered fifth, 701.955 a pure one"),
+        section: 0,
+        show: None,
     },
     STEPS = ParamDecl {
         group: "scale",
@@ -37,6 +45,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Int { default: 7, min: 1, max: 53, options: &[] },
         expression: None,
         doc: Some("notes in the octave: generators stacked, harmonics read (partials steps to 2 steps - 1), or equal parts"),
+        section: 0,
+        show: None,
     },
     MASK = ParamDecl {
         group: "scale",
@@ -44,6 +54,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Int { default: 0, min: 0, max: (1 << MASK_BITS) - 1, options: &[] },
         expression: None,
         doc: Some("which of a division's first 24 parts are admitted, bit k for part k; zero admits every part"),
+        section: 0,
+        show: None,
     },
     MODE = ParamDecl {
         group: "scale",
@@ -51,6 +63,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Int { default: 4, min: 0, max: 52, options: &[] },
         expression: None,
         doc: Some("the degree the scale is read from: seven fifths read from 4 are major, from 0 lydian, from 2 minor"),
+        section: 0,
+        show: None,
     },
 }
 

@@ -39,6 +39,12 @@ pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi
     m.insert("value".into(), goofi_graph::param_value_json(p));
     m.insert("doc".into(), decl.and_then(|d| d.doc).map(|d| json!(d)).unwrap_or(Value::Null));
     m.insert("default".into(), decl.map(|d| declared_default(d.spec)).unwrap_or(Value::Null));
+    m.insert("section".into(), json!(decl.map_or(0, |d| d.section)));
+    let show = decl.and_then(|d| Some((d.group, d.show?)));
+    m.insert("show".into(), show.map_or(Value::Null, |(group, s)| {
+        let (group, name) = s.controller(group);
+        json!({ "group": group, "name": name, "any_of": s.any_of })
+    }));
     m.insert(
         "refreshable".into(),
         json!(matches!(p, Param::Str { refresh: true, .. })),

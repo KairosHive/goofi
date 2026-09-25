@@ -74,6 +74,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
         expression: None,
         doc: Some("Added to every value before the multiply, which is how you centre a signal."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "math",
@@ -81,6 +83,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: -1.0e9, max: 1.0e9 },
         expression: None,
         doc: Some("Scales every value; a negative number turns the signal upside down."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "math",
@@ -88,6 +92,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
         expression: None,
         doc: Some("Added to every value after the multiply, which is how you set a baseline."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "range",
@@ -95,6 +101,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
         expression: None,
         doc: Some("The bottom of the range the values are expected to arrive in."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "range",
@@ -102,6 +110,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: -1.0e9, max: 1.0e9 },
         expression: None,
         doc: Some("The top of the range the values are expected to arrive in."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "range",
@@ -109,6 +119,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
         expression: None,
         doc: Some("The bottom of the range they are mapped onto."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "range",
@@ -116,6 +128,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: -1.0e9, max: 1.0e9 },
         expression: None,
         doc: Some("The top of the range they are mapped onto."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "range",
@@ -128,6 +142,8 @@ static PARAMS: &[ParamDecl] = &[
              inside, which is how a spectral peak becomes an audible pitch or an LFO rate. `fold` \
              needs a positive range, and one narrower than an octave cannot hold every value.",
         ),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

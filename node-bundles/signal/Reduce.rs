@@ -84,6 +84,8 @@ static PARAMS: &[ParamDecl] = &[
         },
         expression: None,
         doc: Some("How the values along the axis become one: an average, a spread, an extreme or a total."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "reduce",
@@ -91,6 +93,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis to collapse, negative from the end. -1 is time, -2 is channels."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

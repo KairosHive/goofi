@@ -48,6 +48,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
         expression: None,
         doc: Some("The number every entry carries; in reference mode it follows another node's output."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "constant",
@@ -55,6 +57,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "1", options: &[], refresh: false },
         expression: None,
         doc: Some("The shape to fill, as lengths separated by commas: `1` is one number, `4,64` a grid."),
+        section: 0,
+        show: None,
     },
 ];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];

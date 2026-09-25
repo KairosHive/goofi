@@ -21,6 +21,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 6.0, min: 0.0, max: 12.0 },
         expression: None,
         doc: Some("octaves to raise the peaks by to find the bands: an EEG peak is inaudible, and six octaves puts 10 Hz near 640 Hz"),
+        section: 0,
+        show: None,
     },
     Q = ParamDecl {
         group: "band",
@@ -28,6 +30,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 4.0, min: 0.5, max: 20.0 },
         expression: None,
         doc: Some("how narrow each band is; it rings longer as it climbs"),
+        section: 0,
+        show: None,
     },
     GAIN = ParamDecl {
         group: "band",
@@ -35,6 +39,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 1.0, min: -4.0, max: 4.0 },
         expression: None,
         doc: Some("how much of each band is added to the source. Negative subtracts it, which is a notch."),
+        section: 0,
+        show: None,
     },
     DEPTH = ParamDecl {
         group: "band",
@@ -42,6 +48,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.5, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("how far the sweep moves that gain: 1 swings it from nothing to twice over"),
+        section: 0,
+        show: None,
     },
     SWEEP = ParamDecl {
         group: "band",
@@ -49,6 +57,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 10.0 },
         expression: None,
         doc: Some("the sweep as a multiple of the peak's own rate; below 1 to hear a slow breath rather than a tremolo, 0 to hold each band still"),
+        section: 0,
+        show: None,
     },
     GAINBYAMP = ParamDecl {
         group: "amps",
@@ -56,6 +66,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("how much a peak's amplitude decides its band's gain: at 1 the spectrum of the signal is the spectrum of the filter"),
+        section: 0,
+        show: None,
     },
     DEPTHBYAMP = ParamDecl {
         group: "amps",
@@ -63,6 +75,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("how much it decides the sweep instead: at 1 a loud peak breathes hard and a quiet one sits still"),
+        section: 0,
+        show: None,
     },
     FLOOR = ParamDecl {
         group: "amps",
@@ -70,6 +84,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: -60.0, min: -120.0, max: -1.0 },
         expression: None,
         doc: Some("the amplitude that reads as nothing; everything from here up to 0 dB spreads across the two amounts above"),
+        section: 0,
+        show: None,
     },
 }
 

@@ -52,6 +52,29 @@ impl InputSlot {
     }
 }
 
+/// `show=("mode", ["iir", "fir"])`: the inspector shows the param only while the param `mode`
+/// (or `group.mode`) holds one of the values, compared as text.
+pub type Show = Option<(String, Vec<String>)>;
+
+/// A `show=` value as Python writes it: `True` and `4` compare as `"true"` and `"4"`.
+#[derive(FromPyObject)]
+enum ShowValue {
+    Bool(bool),
+    Int(i64),
+    Str(String),
+}
+
+type ShowArg = Option<(String, Vec<ShowValue>)>;
+
+fn show_text(show: ShowArg) -> Show {
+    let text = |v: ShowValue| match v {
+        ShowValue::Bool(b) => b.to_string(),
+        ShowValue::Int(i) => i.to_string(),
+        ShowValue::Str(s) => s,
+    };
+    show.map(|(param, values)| (param, values.into_iter().map(text).collect()))
+}
+
 #[pyclass]
 pub struct IntParam {
     #[pyo3(get)]
@@ -66,14 +89,16 @@ pub struct IntParam {
     pub doc: Option<String>,
     #[pyo3(get)]
     pub expression: Option<String>,
+    #[pyo3(get)]
+    pub show: Show,
 }
 
 #[pymethods]
 impl IntParam {
     #[new]
-    #[pyo3(signature = (default, min, max, doc=None, expression=None, options=Vec::new()))]
-    fn new(default: i64, min: i64, max: i64, doc: Option<String>, expression: Option<String>, options: Vec<i64>) -> IntParam {
-        IntParam { default, min, max, doc, expression, options }
+    #[pyo3(signature = (default, min, max, doc=None, expression=None, options=Vec::new(), show=None))]
+    fn new(default: i64, min: i64, max: i64, doc: Option<String>, expression: Option<String>, options: Vec<i64>, show: ShowArg) -> IntParam {
+        IntParam { default, min, max, doc, expression, options, show: show_text(show) }
     }
 }
 
@@ -89,14 +114,16 @@ pub struct FloatParam {
     pub doc: Option<String>,
     #[pyo3(get)]
     pub expression: Option<String>,
+    #[pyo3(get)]
+    pub show: Show,
 }
 
 #[pymethods]
 impl FloatParam {
     #[new]
-    #[pyo3(signature = (default, min, max, doc=None, expression=None))]
-    fn new(default: f64, min: f64, max: f64, doc: Option<String>, expression: Option<String>) -> FloatParam {
-        FloatParam { default, min, max, doc, expression }
+    #[pyo3(signature = (default, min, max, doc=None, expression=None, show=None))]
+    fn new(default: f64, min: f64, max: f64, doc: Option<String>, expression: Option<String>, show: ShowArg) -> FloatParam {
+        FloatParam { default, min, max, doc, expression, show: show_text(show) }
     }
 }
 
@@ -108,14 +135,16 @@ pub struct BoolParam {
     pub doc: Option<String>,
     #[pyo3(get)]
     pub expression: Option<String>,
+    #[pyo3(get)]
+    pub show: Show,
 }
 
 #[pymethods]
 impl BoolParam {
     #[new]
-    #[pyo3(signature = (default, doc=None, expression=None))]
-    fn new(default: bool, doc: Option<String>, expression: Option<String>) -> BoolParam {
-        BoolParam { default, doc, expression }
+    #[pyo3(signature = (default, doc=None, expression=None, show=None))]
+    fn new(default: bool, doc: Option<String>, expression: Option<String>, show: ShowArg) -> BoolParam {
+        BoolParam { default, doc, expression, show: show_text(show) }
     }
 }
 
@@ -131,14 +160,16 @@ pub struct StringParam {
     pub doc: Option<String>,
     #[pyo3(get)]
     pub expression: Option<String>,
+    #[pyo3(get)]
+    pub show: Show,
 }
 
 #[pymethods]
 impl StringParam {
     #[new]
-    #[pyo3(signature = (default, options=None, refresh=false, doc=None, expression=None))]
-    fn new(default: String, options: Option<Vec<String>>, refresh: bool, doc: Option<String>, expression: Option<String>) -> StringParam {
-        StringParam { default, options: options.unwrap_or_default(), refresh, doc, expression }
+    #[pyo3(signature = (default, options=None, refresh=false, doc=None, expression=None, show=None))]
+    fn new(default: String, options: Option<Vec<String>>, refresh: bool, doc: Option<String>, expression: Option<String>, show: ShowArg) -> StringParam {
+        StringParam { default, options: options.unwrap_or_default(), refresh, doc, expression, show: show_text(show) }
     }
 }
 
@@ -147,13 +178,15 @@ impl StringParam {
 pub struct PulseParam {
     #[pyo3(get)]
     pub doc: Option<String>,
+    #[pyo3(get)]
+    pub show: Show,
 }
 
 #[pymethods]
 impl PulseParam {
     #[new]
-    #[pyo3(signature = (doc=None))]
-    fn new(doc: Option<String>) -> PulseParam {
-        PulseParam { doc }
+    #[pyo3(signature = (doc=None, show=None))]
+    fn new(doc: Option<String>, show: ShowArg) -> PulseParam {
+        PulseParam { doc, show: show_text(show) }
     }
 }

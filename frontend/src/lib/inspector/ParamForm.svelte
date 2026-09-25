@@ -37,6 +37,7 @@
 		narrowing,
 		onlyAdmitted,
 		settleNonDefault,
+		shown,
 		SHOW_ALL,
 		toggleSource,
 		type Filters,
@@ -327,7 +328,10 @@
 		return g.referenceFor(dragged, d.type) ? `${formId}#${group}/${name}` : null;
 	}
 
-	const groupNames = $derived(node ? Object.keys(node.params) : []);
+	// A group whose every param is hidden has no tab.
+	const groupNames = $derived(
+		node ? Object.keys(node.params).filter((g) => Object.keys(node.params[g]).some((n) => shown(node.params, g, n))) : []
+	);
 	const health = $derived(nodeHealth(node));
 
 	// A docstring leads with its one-line summary, so that line IS the row and the caret opens what
@@ -388,8 +392,10 @@
 		if (!n) return [];
 		// A search inside the filters searches what they admit: the strip is the standing question,
 		// and a query narrows that rather than reopening everything behind it.
-		if (searching) return onlyAdmitted(matchParams(n.params, query), filters, nonDefault);
-		return activeGroup ? filteredRows(n.params, filters, nonDefault, [activeGroup]) : [];
+		const all = searching
+			? onlyAdmitted(matchParams(n.params, query), filters, nonDefault)
+			: activeGroup ? filteredRows(n.params, filters, nonDefault, [activeGroup]) : [];
+		return all.filter((r) => shown(n.params, r.group, r.name));
 	});
 </script>
 
@@ -603,7 +609,11 @@
 						{#if searching}{narrowed ? 'No filtered parameters match.' : 'No parameters match.'}{:else if narrowed}Nothing in this group matches these filters — another group may still hold one.{:else}No parameters in this group.{/if}
 					</div>
 				{:else}
-					{#each rows as { group, name: paramName, descriptor } (node.uid + '/' + group + '/' + paramName)}
+					{#each rows as { group, name: paramName, descriptor }, i (node.uid + '/' + group + '/' + paramName)}
+						<!-- A line only between two shown rows, so a hidden section draws nothing. -->
+						{#if !across && i > 0 && rows[i - 1].descriptor.section !== descriptor.section}
+							<hr class="pf-section" data-testid="param-section-break" />
+						{/if}
 						<div
 							class="pf-row"
 							role="group"
@@ -823,6 +833,11 @@
 	}
 	.param-form :global(.pf-clear:hover:not(:disabled)) {
 		color: var(--text);
+	}
+	.pf-section {
+		margin: 0;
+		border: none;
+		border-top: 1px solid var(--border);
 	}
 	.pf-row {
 		display: flex;

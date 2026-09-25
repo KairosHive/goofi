@@ -308,6 +308,8 @@ static PARAMS: &[ParamDecl] = &[
             "What to do with the wires. The arithmetic folds them left in wire order and stretches \
              a length of one to fit; the correlations measure the first wire against each other one.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "operation",
@@ -315,6 +317,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis the correlations run along; the other modes ignore it. -1 is time."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "operation",
@@ -322,6 +326,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 0, min: 0, max: 100_000, options: &[] },
         expression: None,
         doc: Some("How far either way a lagged correlation reaches, in samples; 0 reaches as far as it can."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

@@ -1,9 +1,9 @@
 //! `goofi.introspect(path)` — the discovery probe: import a node module in THIS interpreter,
 //! and return its declaration constants and GIL state as [`goofi_core::probe`] JSON.
 
-use goofi_core::probe::{Introspection, OutSlot, Param, ParamSpec, Slot};
+use goofi_core::probe::{Introspection, OutSlot, Param, ParamSpec, Show, Slot};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 
 use crate::loader::{find_node_class, module_from_path};
 use crate::params::{BoolParam, DataType, FloatParam, InputSlot, IntParam, PulseParam, StringParam};
@@ -80,14 +80,24 @@ fn slot_kind(v: &Bound<'_, PyAny>) -> PyResult<String> {
     v.getattr("value")?.extract()
 }
 
-/// `{group: {name: <Param descriptor>}}` → a flat list of typed `Param`.
+/// `{group: {name: <Param descriptor>}}` → a flat list of typed `Param`. A group may instead be a
+/// list of such dicts, one per section.
 fn params(d: &Bound<'_, PyAny>) -> PyResult<Vec<Param>> {
     let mut out = Vec::new();
-    for (group, names) in d.cast::<PyDict>()?.iter() {
+    for (group, sections) in d.cast::<PyDict>()?.iter() {
         let group: String = group.extract()?;
-        for (name, descr) in names.cast::<PyDict>()?.iter() {
-            let (spec, doc, expression) = param_spec(&descr)?;
-            out.push(Param { group: group.clone(), name: name.extract()?, doc, expression, spec });
+        let sections = match sections.cast::<PyList>() {
+            Ok(list) => list.iter().collect(),
+            Err(_) => vec![sections.clone()],
+        };
+        for (section, names) in sections.iter().enumerate() {
+            let section = u8::try_from(section)
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err(format!("group `{group}` has more than 256 sections")))?;
+            for (name, descr) in names.cast::<PyDict>()?.iter() {
+                let (spec, doc, expression, show) = param_spec(&descr)?;
+                let show = show.map(|(param, any_of)| Show { param, any_of });
+                out.push(Param { group: group.clone(), name: name.extract()?, doc, expression, section, show, spec });
+            }
         }
     }
     Ok(out)
@@ -103,20 +113,20 @@ enum ParamDescr<'py> {
     Pulse(Bound<'py, PulseParam>),
 }
 
-/// The kind-specific spec plus the kind-independent `doc=` and `expression=` texts.
-fn param_spec(descr: &Bound<'_, PyAny>) -> PyResult<(ParamSpec, Option<String>, Option<String>)> {
+/// The kind-specific spec plus the kind-independent `doc=`, `expression=` and `show=`.
+fn param_spec(descr: &Bound<'_, PyAny>) -> PyResult<(ParamSpec, Option<String>, Option<String>, crate::params::Show)> {
     Ok(match descr.extract::<ParamDescr>()? {
         ParamDescr::Int(p) => {
             let p = p.borrow();
-            (ParamSpec::Int { default: p.default, min: p.min, max: p.max, options: p.options.clone() }, p.doc.clone(), p.expression.clone())
+            (ParamSpec::Int { default: p.default, min: p.min, max: p.max, options: p.options.clone() }, p.doc.clone(), p.expression.clone(), p.show.clone())
         }
         ParamDescr::Float(p) => {
             let p = p.borrow();
-            (ParamSpec::Float { default: p.default, min: p.min, max: p.max }, p.doc.clone(), p.expression.clone())
+            (ParamSpec::Float { default: p.default, min: p.min, max: p.max }, p.doc.clone(), p.expression.clone(), p.show.clone())
         }
         ParamDescr::Bool(p) => {
             let p = p.borrow();
-            (ParamSpec::Bool { default: p.default }, p.doc.clone(), p.expression.clone())
+            (ParamSpec::Bool { default: p.default }, p.doc.clone(), p.expression.clone(), p.show.clone())
         }
         ParamDescr::Str(p) => {
             let p = p.borrow();
@@ -124,8 +134,12 @@ fn param_spec(descr: &Bound<'_, PyAny>) -> PyResult<(ParamSpec, Option<String>, 
                 ParamSpec::Str { default: p.default.clone(), options: p.options.clone(), refresh: p.refresh },
                 p.doc.clone(),
                 p.expression.clone(),
+                p.show.clone(),
             )
         }
-        ParamDescr::Pulse(p) => (ParamSpec::Pulse {}, p.borrow().doc.clone(), None),
+        ParamDescr::Pulse(p) => {
+            let p = p.borrow();
+            (ParamSpec::Pulse {}, p.doc.clone(), None, p.show.clone())
+        }
     })
 }

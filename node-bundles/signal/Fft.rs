@@ -171,6 +171,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "forward", options: &["forward", "inverse"], refresh: false },
         expression: None,
         doc: Some("`forward` turns samples into bins; `inverse` turns the same bins back into samples."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "fft",
@@ -181,6 +183,8 @@ static PARAMS: &[ParamDecl] = &[
             "How each bin's pair of numbers reads: `polar` as a size and an angle, `complex` as a \
              real and an imaginary part. An inverse must be told the same form the forward wrote.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "fft",
@@ -191,6 +195,8 @@ static PARAMS: &[ParamDecl] = &[
             "Taper applied before a forward transform, which stops a peak from smearing across the \
              spectrum. An inverse ignores it.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "fft",
@@ -198,6 +204,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis holds the samples going forward, or the bins coming back. -1 is time."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

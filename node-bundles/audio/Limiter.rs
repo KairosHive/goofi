@@ -8,6 +8,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.9, min: 0.05, max: 1.0 },
         expression: None,
         doc: Some("the level nothing leaving this node may pass"),
+        section: 0,
+        show: None,
     },
     ATTACK = ParamDecl {
         group: "limiter",
@@ -15,6 +17,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.004, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("seconds to take hold of a peak; shorter is tighter and harder"),
+        section: 0,
+        show: None,
     },
     RELEASE = ParamDecl {
         group: "limiter",
@@ -22,6 +26,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.4, min: 0.0, max: 10.0 },
         expression: None,
         doc: Some("seconds to let go once the peak has passed"),
+        section: 0,
+        show: None,
     },
 }
 

@@ -84,6 +84,8 @@ static PARAMS: &[ParamDecl] = &[
             "Catch the input as it is now and hold it. A reference here fires on a rising edge, \
              so a Clock's pulse or a Threshold's decision drives the latch.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "hold",
@@ -91,6 +93,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 600.0 },
         expression: None,
         doc: Some("How long in seconds to glide to a newly caught value. Zero steps to it."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

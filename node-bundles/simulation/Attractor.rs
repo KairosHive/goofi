@@ -239,6 +239,8 @@ static PARAMS: &[ParamDecl] = &[
         },
         expression: None,
         doc: Some("Which system. The first six are flows integrated at `dt`; the last four are maps, which ignore it."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "attractor",
@@ -246,6 +248,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 2.0 },
         expression: None,
         doc: Some("Scales the system's first canonical constant. 1 is the textbook figure."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "attractor",
@@ -253,6 +257,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 2.0 },
         expression: None,
         doc: Some("Scales the second canonical constant; a system with only one ignores it."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "attractor",
@@ -260,6 +266,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 2.0 },
         expression: None,
         doc: Some("Scales the third canonical constant; a system with fewer ignores it."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -267,6 +275,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.01, min: 1.0e-6, max: 0.1 },
         expression: None,
         doc: Some("Model seconds per step, for the flows. Too large and the integration leaves the attractor."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -274,6 +284,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Nudges the starting point. Negative takes a fresh one from the clock."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -281,6 +293,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Start over from the seed."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -288,6 +302,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false },
         expression: None,
         doc: Some("`value` emits the point now; `block` emits every step since the last frame, which is a signal."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -295,6 +311,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 500.0, min: 1.0, max: 20_000.0 },
         expression: None,
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -302,6 +320,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Bool { default: true },
         expression: None,
         doc: Some("Divide by the system's own size, so every system reads roughly within -1 to 1 and modulates a param directly."),
+        section: 0,
+        show: None,
     },
 ];
 

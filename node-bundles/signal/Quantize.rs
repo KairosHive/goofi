@@ -150,6 +150,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "scale", options: &["scale", "count", "levels"], refresh: false },
         expression: None,
         doc: Some("The set values land on: a musical scale over pitches in Hz, values counted out, or a set wired into `levels`."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "quantize",
@@ -157,6 +159,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("How far towards the allowed value each one is pulled. Zero passes the signal through."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "scale",
@@ -164,6 +168,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "major", options: &SCALES, refresh: false },
         expression: None,
         doc: Some("A named scale, or `custom` to build one from the params below."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "scale",
@@ -171,6 +177,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "C", options: NOTES, refresh: false },
         expression: None,
         doc: Some("The note the scale starts on."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "scale",
@@ -178,6 +186,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "generator", options: METHODS, refresh: false },
         expression: None,
         doc: Some("How `custom` builds its notes: stacking one interval, reading the harmonic series, or picking from equal steps."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "scale",
@@ -185,6 +195,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 7, min: 1, max: 53, options: &[] },
         expression: None,
         doc: Some("Notes in the octave: intervals stacked, harmonics read (partials steps to 2 steps - 1), or equal steps."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "scale",
@@ -192,6 +204,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 700.0, min: 0.0, max: 1200.0 },
         expression: None,
         doc: Some("The interval stacked, in cents: 700 is a tempered fifth, 701.955 a pure one."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "scale",
@@ -199,6 +213,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 0, min: 0, max: (1 << MASK_BITS) - 1, options: &[] },
         expression: None,
         doc: Some("Which of the first 24 equal steps are notes, bit k for step k; zero keeps every step."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "scale",
@@ -206,6 +222,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 4, min: 0, max: 52, options: &[] },
         expression: None,
         doc: Some("The note the scale is read from: seven fifths read from 4 are major, from 0 lydian, from 2 minor."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "count",
@@ -213,6 +231,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 12, min: 2, max: 4096, options: &[] },
         expression: None,
         doc: Some("How many values are allowed, spread evenly from `low` to `high` inclusive."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "count",
@@ -220,6 +240,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
         expression: None,
         doc: Some("The first of the counted values."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "count",
@@ -227,6 +249,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: -1.0e9, max: 1.0e9 },
         expression: None,
         doc: Some("The last of them."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "levels",
@@ -234,6 +258,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 2.0, min: 0.0, max: 16.0 },
         expression: None,
         doc: Some("The ratio the wired set repeats at, so a few numbers cover every register; 2 is the octave, 1 or less repeats nothing."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[

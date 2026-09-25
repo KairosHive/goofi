@@ -24,7 +24,9 @@ const base: Omit<BaseParam, 'value'> = {
 	mode: 'constant',
 	reference: null,
 	triggers: false,
-	error: null
+	error: null,
+	section: 0,
+	show: null
 };
 
 const floatParam = (over: Partial<FloatParam> = {}): FloatParam => ({

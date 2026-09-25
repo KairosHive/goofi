@@ -329,6 +329,8 @@ static PARAMS: &[ParamDecl] = &[
             "`boids` flocks, `vicsek` aligns and nothing else, `gravity` pulls, `swarmalators` \
              couples position to phase, `particlelife` reads a matrix of attractions between colours.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "swarm",
@@ -336,6 +338,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 300, min: 2, max: 2000, options: &[] },
         expression: None,
         doc: Some("How many particles. Every pair is considered, so the cost grows with the square."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "swarm",
@@ -343,6 +347,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 2, min: 2, max: 3, options: &[] },
         expression: None,
         doc: Some("Two dimensions or three. Positions always live in the unit box."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "swarm",
@@ -350,6 +356,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.08, min: 0.001, max: 1.0 },
         expression: None,
         doc: Some("How far a particle sees, as a fraction of the box. `gravity` reads it as its softening length."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "swarm",
@@ -357,6 +365,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.3, min: 0.0, max: 5.0 },
         expression: None,
         doc: Some("How hard a particle pushes off its neighbours. `particlelife` reads it as the size of the repelling core."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "swarm",
@@ -364,6 +374,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 5.0 },
         expression: None,
         doc: Some("How much a particle matches its neighbours' heading. `boids` and `vicsek` read it."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "swarm",
@@ -371,6 +383,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 5.0 },
         expression: None,
         doc: Some("Pull towards the neighbours' centre. `swarmalators` reads it as how much phase decides attraction."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "swarm",
@@ -378,6 +392,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: -5.0, max: 5.0 },
         expression: None,
         doc: Some("Phase coupling for `swarmalators` — negative splits them by phase — and the gravitational constant for `gravity`."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "swarm",
@@ -385,6 +401,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 4, min: 1, max: 16, options: &[] },
         expression: None,
         doc: Some("How many colours `particlelife` deals out. A wired `attraction` matrix decides instead."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "swarm",
@@ -392,6 +410,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.3, min: 0.0, max: 5.0 },
         expression: None,
         doc: Some("Speed limit, and the fixed speed `vicsek` moves at."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "swarm",
@@ -399,6 +419,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.1, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("How much of the velocity is lost each step. `particlelife` needs some to settle."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "swarm",
@@ -406,6 +428,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.05, min: 0.0, max: 5.0 },
         expression: None,
         doc: Some("Jitter on the motion. In `vicsek` this is the knob the order-disorder transition sits on."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -413,6 +437,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.02, min: 1.0e-4, max: 0.5 },
         expression: None,
         doc: Some("Model seconds per step."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -420,6 +446,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the layout, the colours and the drawn attraction matrix. Negative takes a fresh one from the clock."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -427,6 +455,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Scatter the particles again from the seed."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -434,6 +464,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 60.0, min: 1.0, max: 1000.0 },
         expression: None,
         doc: Some("Steps per second of real time. Particle state is a snapshot, so there is no block mode."),
+        section: 0,
+        show: None,
     },
 ];
 

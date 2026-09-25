@@ -307,6 +307,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.5, min: 0.0, max: 1.0 },
         doc: Some("the block's level"),
         expression: None,
+        section: 0,
+        show: None,
     },
 }
 

@@ -77,6 +77,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds", "seconds (ufreq)"], refresh: false },
         expression: None,
         doc: Some("What size counts for each member. Seconds uses the member's sfreq or ufreq; seconds (ufreq) uses the table's update rate."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "normalize",
@@ -87,6 +89,8 @@ static PARAMS: &[ParamDecl] = &[
             "`zscore` measures in standard deviations from the mean, `minmax` maps the past onto \
              0 to 1, and `robust` uses the median and the middle half, which an outlier cannot move.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "window",
@@ -97,6 +101,8 @@ static PARAMS: &[ParamDecl] = &[
             "How many past values each member is measured against. 0 keeps running statistics \
              instead. Robust mode needs a positive size.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "window",
@@ -104,6 +110,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Bool { default: false },
         expression: None,
         doc: Some("Stop taking in new values and keep scaling by what is already known."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "window",
@@ -111,6 +119,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Forget every member's statistics and start again."),
+        section: 0,
+        show: None,
     },
 ];
 

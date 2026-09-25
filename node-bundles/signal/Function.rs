@@ -74,6 +74,8 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
         "Which function to apply to every value. A value outside a function's domain, such as a \
          negative under `sqrt`, comes out as not-a-number rather than as an error.",
     ),
+    section: 0,
+    show: None,
 }];
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",

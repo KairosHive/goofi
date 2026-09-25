@@ -131,6 +131,8 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
             "Texture size in pixels; 0 follows the first wired texture input. A node that makes \
              its own frames follows the patch's default instead.",
         ),
+        section: 0,
+        show: None,
     }
 }
 

@@ -123,6 +123,16 @@ export function admits(f: Filters, d: ParamDescriptor, list: NonDefault, group =
 	return !f.nonDefault || list.has(paramKey(group, name));
 }
 
+/**
+ * Whether the inspector shows a param: its `show` holds for its controller's value, and the
+ * controller is shown too. Presentation only; a hidden param keeps its value and its source.
+ */
+export function shown(groups: ParamGroups | undefined, group: string, name: string): boolean {
+	const show = groups?.[group]?.[name]?.show;
+	const controller = show && groups?.[show.group]?.[show.name];
+	return !controller || (show.any_of.includes(String(controller.value)) && shown(groups, show.group, show.name));
+}
+
 /** Every param the filters admit, in the groups `order` names and their order. */
 export function filteredRows(
 	groups: ParamGroups | undefined,

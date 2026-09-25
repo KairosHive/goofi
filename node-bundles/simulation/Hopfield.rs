@@ -208,6 +208,8 @@ static PARAMS: &[ParamDecl] = &[
              blur; `modern` is the dense associative form, which holds far more and whose update \
              is a softmax over the memories.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "hopfield",
@@ -215,6 +217,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 64, min: 2, max: 4096, options: &[] },
         expression: None,
         doc: Some("How wide a memory is, when none is wired. A wired `patterns` matrix decides instead."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "hopfield",
@@ -222,6 +226,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 4, min: 1, max: 256, options: &[] },
         expression: None,
         doc: Some("How many memories to draw, when none is wired."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "hopfield",
@@ -229,6 +235,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 4.0, min: 0.0, max: 50.0 },
         expression: None,
         doc: Some("How sharply the network commits. High makes it snap to one memory; low leaves it between them."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "hopfield",
@@ -236,6 +244,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.1, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("How hard the `cue` holds the state. 1 pins it to the cue; 0 lets the network run free."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "hopfield",
@@ -243,6 +253,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("Jitter on the state, which shakes it out of a shallow memory."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -250,6 +262,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the drawn memories and the starting state. Negative takes a fresh one from the clock."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -257,6 +271,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Draw the memories again and start over."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -264,6 +280,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 30.0, min: 1.0, max: 1000.0 },
         expression: None,
         doc: Some("Updates per second of real time."),
+        section: 0,
+        show: None,
     },
 ];
 

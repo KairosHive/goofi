@@ -11,6 +11,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.0, min: -6.0, max: 6.5 },
         expression: None,
         doc: Some("in `harmonic`, what the bands stand on, in volts per octave; an audio reference is one voice per channel"),
+        section: 0,
+        show: None,
     },
     GATE = ParamDecl {
         group: "band",
@@ -18,6 +20,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("in `harmonic`, what one voice's partials are worth — a released note keeps its pitch, so this is what lets it go; `MidiIn.gate` drops it at once and an `Env` fades it"),
+        section: 0,
+        show: None,
     },
     BANDS = ParamDecl {
         group: "band",
@@ -25,6 +29,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Int { default: 16, min: 2, max: MAX_CHANNELS as i64, options: &[] },
         expression: None,
         doc: Some("how many bands leave, one per channel; `BandFilter` needs the same count"),
+        section: 0,
+        show: None,
     },
     LOW = ParamDecl {
         group: "band",
@@ -32,6 +38,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: -1.5, min: -6.0, max: 6.5 },
         expression: None,
         doc: Some("in `spread`, the lowest band's centre in volts per octave, 0 at C4 — the same units as `Osc.pitch`"),
+        section: 0,
+        show: None,
     },
     HIGH = ParamDecl {
         group: "band",
@@ -39,6 +47,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 4.25, min: -6.0, max: 6.5 },
         expression: None,
         doc: Some("in `spread`, the highest band's centre; the rest sit evenly between, so a band is a fixed interval"),
+        section: 0,
+        show: None,
     },
     Q = ParamDecl {
         group: "band",
@@ -46,6 +56,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 4.0, min: 0.5, max: 20.0 },
         expression: None,
         doc: Some("how narrow one band is; near 4 the default sixteen meet without a gap"),
+        section: 0,
+        show: None,
     },
     ATTACK = ParamDecl {
         group: "band",
@@ -53,6 +65,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.005, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("seconds to follow a band that gets louder; short keeps the consonants"),
+        section: 0,
+        show: None,
     },
     RELEASE = ParamDecl {
         group: "band",
@@ -60,6 +74,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.05, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("seconds to follow a band that gets quieter; long smears one word into the next"),
+        section: 0,
+        show: None,
     },
     LAYOUT = ParamDecl {
         group: "band",
@@ -67,6 +83,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Str { default: "spread", options: &["spread", "harmonic"], refresh: false },
         expression: None,
         doc: Some("where the bands sit: `spread` evenly from `low` to `high`, or `harmonic` on the partials of `pitch`"),
+        section: 0,
+        show: None,
     },
 }
 

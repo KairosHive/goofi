@@ -179,6 +179,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 64, min: 2, max: 4096, options: &[] },
         expression: None,
         doc: Some("How many units."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "boolean",
@@ -186,6 +188,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 2, min: 1, max: 6, options: &[] },
         expression: None,
         doc: Some("How many units each one reads. 1 freezes, 3 and up is chaos, and 2 is the edge between them."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "boolean",
@@ -193,6 +197,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.5, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("How often a drawn rule answers on. Away from 0.5 the network freezes even at high `connections`."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "boolean",
@@ -200,6 +206,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 0.5 },
         expression: None,
         doc: Some("Chance a unit flips against its rule, which is what shakes a frozen network."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -207,6 +215,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the wiring, the rules and the starting state. Negative takes a fresh one from the clock."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -214,6 +224,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Draw the network again from the seed."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -221,6 +233,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false },
         expression: None,
         doc: Some("`value` emits the state now; `block` emits every step since the last frame, which is a raster."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -228,6 +242,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 20.0, min: 1.0, max: 1000.0 },
         expression: None,
         doc: Some("Updates per second of real time, and the sample rate of an emitted block."),
+        section: 0,
+        show: None,
     },
 ];
 

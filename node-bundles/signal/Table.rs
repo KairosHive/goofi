@@ -53,6 +53,8 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
         "The key for each wire, comma-separated, over the arrays and then the strings. A wire \
          with no key here takes the name of the node it comes from.",
     ),
+    section: 0,
+    show: None,
 }];
 static INPUTS: &[SlotDecl] = &[
     SlotDecl { name: "arrays", kind: SlotType::Array, trigger_process: true, multi: true, required: false },

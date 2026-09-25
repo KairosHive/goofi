@@ -101,6 +101,8 @@ static PARAMS: &[ParamDecl] = &[
             "The texels as they came, their brightness, or the profile that brightness draws \
              down the frame or across it.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "graphics",
@@ -111,6 +113,8 @@ static PARAMS: &[ParamDecl] = &[
             "The most texels either picture axis keeps, averaged into blocks. Zero takes the \
              frame as it was rendered, which is every texel of it.",
         ),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] =

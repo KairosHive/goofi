@@ -10,6 +10,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Str { default: crate::DEFAULT_DEVICE, options: &[crate::DEFAULT_DEVICE], refresh: true },
         expression: None,
         doc: Some("the input device; one other than the clock's drifts, and the ring holds or drops at its edges — an `ASIO: ` name must be the same driver the rest of the patch uses, since only one loads at a time"),
+        section: 0,
+        show: None,
     },
     CHANNELS = ParamDecl {
         group: "audio",
@@ -17,6 +19,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Str { default: crate::chanmap::ALL, options: &[], refresh: false },
         expression: None,
         doc: Some(crate::chanmap::DOC),
+        section: 0,
+        show: None,
     },
 }
 

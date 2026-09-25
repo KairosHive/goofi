@@ -129,6 +129,8 @@ static PARAMS: &[ParamDecl] = &[
             "The new order of the axes, as their old numbers separated by commas: `1,0` swaps the \
              two axes of a grid. Empty keeps the order.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "reshape",
@@ -139,6 +141,8 @@ static PARAMS: &[ParamDecl] = &[
             "The shape to re-cut the entries into, separated by commas, with one -1 for the length \
              to work out. Empty keeps the shape.",
         ),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

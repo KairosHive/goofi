@@ -128,6 +128,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 5, min: 1, max: 10, options: &[] },
         expression: None,
         doc: Some("How many oscillations to pull out, fastest first. What is left over is dropped."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "emd",
@@ -135,6 +137,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 10, min: 1, max: 100, options: &[] },
         expression: None,
         doc: Some("How many passes each oscillation is refined by. More is cleaner and slower."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "emd",
@@ -142,6 +146,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis holds the samples. -1 is time."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

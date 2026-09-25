@@ -185,6 +185,8 @@ static PARAMS: &[ParamDecl] = &[
             "By numpy index — `keep-drop` takes `keep` and then deletes `drop` from what it took, \
              `drop-keep` deletes first and then takes — or by label.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "select",
@@ -195,6 +197,8 @@ static PARAMS: &[ParamDecl] = &[
             "What to keep: labels separated by commas with `*` for anything, or a numpy index like \
              `-1`, `::2` or `[3, 0, 1:4]`, in the order given. Empty keeps everything.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "select",
@@ -202,6 +206,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "", options: &[], refresh: false },
         expression: None,
         doc: Some("What to drop, written the same way; an index is deleted as `np.delete` does. Empty drops nothing."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "select",
@@ -209,6 +215,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 0, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis to cut, negative from the end. 0 is channels on a `[channels, time]` frame."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "select",
@@ -216,6 +224,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Bool { default: false },
         expression: None,
         doc: Some("When one entry is left, remove the axis instead of leaving it one long."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

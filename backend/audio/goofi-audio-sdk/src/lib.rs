@@ -3,7 +3,7 @@
 //! the file that authors one, so the two halves cannot drift.
 
 pub use goofi_core;
-pub use goofi_node::{ExprDecl, ExprMode, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag};
+pub use goofi_node::{ExprDecl, ExprMode, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Tag};
 
 pub mod abi;
 #[cfg(feature = "host")]
@@ -31,7 +31,7 @@ pub struct Manifest {
 }
 
 /// The params a node declares, as ONE list that is both the manifest's slice and the indices a
-/// node reads them by: `params! { CUTOFF = ParamDecl { … }, GAIN = ParamDecl { … } }` yields
+/// node reads them by: `params! { CUTOFF = ParamDecl { …, section: 0, show: None }, GAIN = ParamDecl { …, section: 0, show: None } }` yields
 /// `PARAMS` and `P::CUTOFF == 0`, `P::GAIN == 1`.
 #[macro_export]
 macro_rules! params {

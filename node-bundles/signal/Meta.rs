@@ -46,6 +46,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 100_000.0 },
         expression: None,
         doc: Some("The sample rate to write onto the frame, in Hz. 0 keeps whatever it arrived with."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "meta",
@@ -56,6 +58,8 @@ static PARAMS: &[ParamDecl] = &[
             "Names for the entries along the chosen axis, separated by commas, one per entry. \
              Empty keeps the labels the frame arrived with.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "meta",
@@ -63,6 +67,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 0, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis the labels name, negative from the end."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

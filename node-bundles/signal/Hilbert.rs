@@ -90,6 +90,8 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
     spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
     expression: None,
     doc: Some("Which axis holds the samples. -1 is time."),
+    section: 0,
+    show: None,
 }];
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",

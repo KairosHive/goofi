@@ -8,6 +8,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Int { default: 2, min: 1, max: 16, options: &[] },
         expression: None,
         doc: Some("how many channels leave; 2 is the pair a speaker takes"),
+        section: 0,
+        show: None,
     },
     SPREAD = ParamDecl {
         group: "mixdown",
@@ -15,6 +17,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("how far apart the voices sit; at 0 every one of them is in the middle"),
+        section: 0,
+        show: None,
     },
 }
 

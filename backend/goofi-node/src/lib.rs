@@ -11,7 +11,7 @@ pub mod mailbox;
 pub mod seam;
 pub mod tags;
 pub mod type_id;
-pub use describe::{describe, engine_of, folder_of, foreign_output, illegal_slot, leak_manifest, node_file_count, node_files, parse_introspection, type_name_of};
+pub use describe::{describe, engine_of, folder_of, foreign_output, illegal_param, illegal_slot, leak_manifest, node_file_count, node_files, parse_introspection, type_name_of};
 pub use mailbox::{Expression, Mailbox, Var};
 pub use seam::{
     Edit, EditorAction,
@@ -103,6 +103,25 @@ pub struct ParamDecl {
     pub expression: Option<ExprDecl>,
     /// Help text for the UI's tooltip.
     pub doc: Option<&'static str>,
+    /// The index of the param's section inside its group; the inspector draws a line between two.
+    pub section: u8,
+    /// Presentation only: the inspector hides the param unless this holds.
+    pub show: Option<Show>,
+}
+
+/// The inspector shows a param only while `param` (`name` in the same group, or `group.name`)
+/// holds one of `any_of`: an option's text, an int option in decimal, or `true`/`false`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Show {
+    pub param: &'static str,
+    pub any_of: &'static [&'static str],
+}
+
+impl Show {
+    /// The `(group, name)` of the controlling param, for a param in `group`.
+    pub fn controller<'a>(&'a self, group: &'a str) -> (&'a str, &'a str) {
+        self.param.split_once('.').unwrap_or((group, self.param))
+    }
 }
 
 /// A declared param expression: its source, whether it starts live, and whether it wakes the node.

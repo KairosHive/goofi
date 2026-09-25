@@ -88,6 +88,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds"], refresh: false },
         expression: None,
         doc: Some("Seconds uses the incoming audio sample rate."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "audio",
@@ -98,6 +100,8 @@ static PARAMS: &[ParamDecl] = &[
             "The samples as the tap hands them over, cut into windows of `size`, or the level of \
              every `size` of them.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "audio",
@@ -105,6 +109,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1024.0, min: 0.001, max: 1_000_000.0 },
         expression: None,
         doc: Some("Window length, or length behind each level, in the selected unit."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] =

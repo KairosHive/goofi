@@ -54,6 +54,8 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
         "The pad to read, as an expression of `variables.<panel>.<pad>` — the same way a knob's \
          value is pointed at a variable. It holds the drawing as a PNG data URL.",
     ),
+    section: 0,
+    show: None,
 }];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];
 

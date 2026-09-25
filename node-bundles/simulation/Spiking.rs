@@ -320,6 +320,8 @@ static PARAMS: &[ParamDecl] = &[
             "`lif` leaks and fires, `izhikevich` bursts and chatters, `adex` adapts. \
              `potentials` is reported the same way for all three: 0 at rest, 1 at threshold.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "neuron",
@@ -327,6 +329,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: -2.0, max: 10.0 },
         expression: None,
         doc: Some("Background current every neuron gets. Around 1 is enough to fire; below it the network needs its input."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "neuron",
@@ -334,6 +338,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.05, max: 3.0 },
         expression: None,
         doc: Some("Scales the firing threshold. Lower makes the network twitchier."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "neuron",
@@ -341,6 +347,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 20.0, min: 0.1, max: 200.0 },
         expression: None,
         doc: Some("Membrane time constant in milliseconds. `izhikevich` sets its own."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "neuron",
@@ -348,6 +356,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 2.0, min: 0.0, max: 50.0 },
         expression: None,
         doc: Some("Milliseconds a neuron stays silent after it fires, which caps its rate."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "neuron",
@@ -355,6 +365,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 5.0 },
         expression: None,
         doc: Some("How much each spike tires the neuron. `lif` has no adaptation and ignores it."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "neuron",
@@ -362,6 +374,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.05, min: 0.0, max: 2.0 },
         expression: None,
         doc: Some("Jitter on the current, which is what keeps a quiet network from being exactly still."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "network",
@@ -369,6 +383,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 200, min: 2, max: 20_000, options: &[] },
         expression: None,
         doc: Some("How many neurons. Cost grows with this times `fan_in`."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "network",
@@ -376,6 +392,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 12, min: 1, max: 64, options: &[] },
         expression: None,
         doc: Some("How many neurons each one listens to."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "network",
@@ -383,6 +401,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 2, min: 1, max: 3, options: &[] },
         expression: None,
         doc: Some("How many dimensions the neurons are laid out in, which is what distance and delay are measured in."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "network",
@@ -390,6 +410,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 4.0, min: 0.0, max: 30.0 },
         expression: None,
         doc: Some("How strongly a neuron prefers its neighbours. 0 wires the network at random."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "network",
@@ -397,6 +419,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.2, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("Fraction of neurons whose every synapse subtracts instead of adds."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "network",
@@ -404,6 +428,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 10.0 },
         expression: None,
         doc: Some("Gain on every synapse. This is the knob between a silent network and a seizing one."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "network",
@@ -411,6 +437,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 5.0, min: 0.0, max: 100.0 },
         expression: None,
         doc: Some("Milliseconds a spike takes to cross the whole layout. Distance sets each synapse's share of it."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -418,6 +446,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0005, min: 1.0e-6, max: 0.01 },
         expression: None,
         doc: Some("Model seconds per step. Half a millisecond suits all three models."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -425,6 +455,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the layout, the wiring and the noise. Negative takes a fresh one from the clock."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -432,6 +464,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Wire the network again from the seed."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -439,6 +473,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false },
         expression: None,
         doc: Some("`value` emits the state now; `block` emits every step since the last frame, which is a spike raster."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -446,6 +482,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 2000.0, min: 1.0, max: 20_000.0 },
         expression: None,
         doc: Some("Steps per second of real time. At the default `sim.dt` this runs the network in real time."),
+        section: 0,
+        show: None,
     },
 ];
 

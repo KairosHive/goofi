@@ -148,6 +148,11 @@ pub fn describe(
                 name: p.name.to_string(),
                 doc: p.doc.map(str::to_string),
                 expression: p.expression.map(|e| e.source.to_string()),
+                section: p.section,
+                show: p.show.map(|s| probe::Show {
+                    param: s.param.to_string(),
+                    any_of: s.any_of.iter().map(|v| v.to_string()).collect(),
+                }),
                 spec: match p.spec {
                     ParamSpec::Int { default, min, max, options } => probe::ParamSpec::Int { default, min, max, options: options.to_vec() },
                     ParamSpec::Float { default, min, max } => probe::ParamSpec::Float { default, min, max },
@@ -188,12 +193,62 @@ pub fn foreign_output(intro: &probe::Introspection, own: Option<goofi_core::Slot
     })
 }
 
+/// The first param declaration the inspector cannot draw, phrased for the palette: a name declared
+/// twice in a group, or a `show` whose controller is missing, has no fixed values, or loops.
+pub fn illegal_param(params: &[ParamDecl]) -> Option<String> {
+    let find = |group: &str, name: &str| params.iter().find(|d| d.group == group && d.name == name);
+    params.iter().enumerate().find_map(|(i, d)| {
+        let at = format!("param `{}.{}`", d.group, d.name);
+        if params[..i].iter().any(|e| e.group == d.group && e.name == d.name) {
+            return Some(format!("{at} is declared twice"));
+        }
+        let show = d.show?;
+        let (group, name) = show.controller(d.group);
+        let Some(controller) = find(group, name) else {
+            return Some(format!("{at} shows by `{}`, which this node does not declare", show.param));
+        };
+        let Some(choices) = choices(controller.spec) else {
+            return Some(format!("{at} shows by `{}`, which has no fixed set of values", show.param));
+        };
+        if show.any_of.is_empty() {
+            return Some(format!("{at} shows for no value of `{}`", show.param));
+        }
+        if let Some(v) = show.any_of.iter().find(|v| !choices.iter().any(|c| c == *v)) {
+            return Some(format!("{at} shows for `{v}`, which `{}` does not offer: {}", show.param, choices.join(", ")));
+        }
+        let mut cur = d;
+        for _ in 0..params.len() {
+            let Some(s) = cur.show else { break };
+            let (g, n) = s.controller(cur.group);
+            if (g, n) == (d.group, d.name) {
+                return Some(format!("{at} shows by a chain of params that leads back to it"));
+            }
+            let Some(next) = find(g, n) else { break };
+            cur = next;
+        }
+        None
+    })
+}
+
+/// The values a param can hold as `show` compares them, or `None` where the set is not fixed.
+fn choices(spec: ParamSpec) -> Option<Vec<String>> {
+    match spec {
+        ParamSpec::Str { options, refresh: false, .. } if !options.is_empty() => {
+            Some(options.iter().map(|o| o.to_string()).collect())
+        }
+        ParamSpec::Int { options, .. } if !options.is_empty() => Some(options.iter().map(i64::to_string).collect()),
+        ParamSpec::Bool { .. } => Some(vec!["true".into(), "false".into()]),
+        _ => None,
+    }
+}
+
 /// Leak a `'static &str` for the catalog's lifetime.
 fn leak_str(s: &str) -> &'static str {
     Box::leak(s.to_string().into_boxed_str())
 }
 
-/// Build a `'static NodeManifest` from an introspection; a tag outside the vocabulary refuses it.
+/// Build a `'static NodeManifest` from an introspection; a tag outside the vocabulary or an
+/// [`illegal_param`] refuses it.
 pub fn leak_manifest(
     type_name: String,
     intro: &probe::Introspection,
@@ -223,6 +278,9 @@ pub fn leak_manifest(
         })
         .collect();
     let params: Vec<ParamDecl> = intro.params.iter().map(param_decl).collect();
+    if let Some(reason) = illegal_param(&params) {
+        return Err(reason);
+    }
 
     Ok(Box::leak(Box::new(NodeManifest {
         type_name: leak_str(&type_name),
@@ -264,5 +322,10 @@ fn param_decl(p: &probe::Param) -> ParamDecl {
             trigger: false,
         }),
         doc: p.doc.as_deref().map(leak_str),
+        section: p.section,
+        show: p.show.as_ref().map(|s| crate::Show {
+            param: leak_str(&s.param),
+            any_of: Box::leak(s.any_of.iter().map(|v| leak_str(v)).collect::<Vec<_>>().into_boxed_slice()),
+        }),
     }
 }

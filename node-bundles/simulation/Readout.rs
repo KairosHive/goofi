@@ -137,6 +137,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Bool { default: true },
         expression: None,
         doc: Some("Keep training. Turn it off to freeze what it learned and watch the prediction run on alone."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "readout",
@@ -144,6 +146,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 1.0e-6, max: 1000.0 },
         expression: None,
         doc: Some("How cautious the first steps are. Larger learns slower and is steadier on a state with few directions."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "readout",
@@ -151,6 +155,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Forget the weights and start training again."),
+        section: 0,
+        show: None,
     },
 ];
 

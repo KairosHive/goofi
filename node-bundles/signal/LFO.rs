@@ -128,6 +128,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "sine", options: &["sine", "triangle", "sawtooth", "square"], refresh: false },
         expression: None,
         doc: Some("Shape of one cycle."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "lfo",
@@ -135,6 +137,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 1000.0 },
         expression: None,
         doc: Some("Cycles per second."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "lfo",
@@ -142,6 +146,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: -1.0e6, max: 1.0e6 },
         expression: None,
         doc: Some("Peak value: the wave swings between minus this and plus this, before `offset`."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "lfo",
@@ -149,6 +155,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: -1.0e6, max: 1.0e6 },
         expression: None,
         doc: Some("Added to every sample, so the wave can swing around a value other than zero."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "lfo",
@@ -156,6 +164,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("Where in the cycle the wave reads, in cycles; 0.25 is a quarter turn ahead."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "lfo",
@@ -163,6 +173,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.5, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("Fraction of the cycle a square wave spends high; the other waveforms ignore it."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "lfo",
@@ -170,6 +182,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Put the phase back to the start of the cycle."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -180,6 +194,8 @@ static PARAMS: &[ParamDecl] = &[
             "`value` emits one sample per update, which a param reference reads as a number; \
              `block` emits the samples elapsed at `sfreq`, which is a signal.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -187,6 +203,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 250.0, min: 1.0, max: 10_000.0 },
         expression: None,
         doc: Some("Sample rate within an emitted block, in Hz. `value` mode ignores it."),
+        section: 0,
+        show: None,
     },
     // A manifest's own `common.*` is never overwritten by the universal declaration, and the
     // universal default is uncapped — which makes a block one sample long.
@@ -199,6 +217,8 @@ static PARAMS: &[ParamDecl] = &[
             "How many frames a second to emit. Bound to the patch's `default_ufreq` variable, so \
              editing that variable re-rates every generator at once.",
         ),
+        section: 0,
+        show: None,
     },
 ];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];

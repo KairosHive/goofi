@@ -191,6 +191,28 @@ Put Python **node** dependencies in the bundle's existing requirements files und
 Backend `pyproject.toml` dependencies belong to its private service environment and do not install
 packages into node interpreters.
 
+A param can show only while one other param of the same node has one of a list of values. That
+param must have a fixed set of values: a string or int param with options, or a bool. Name it
+`name` in the same group or `group.name`. An int compares as decimal text and a bool as `true` or
+`false`. A param that a hidden param controls is also hidden. The inspector omits hidden params
+and a group tab with no shown param. A hidden param keeps its value and source, and the node runs
+as before. A group can have sections, and the inspector draws a line between two shown sections.
+Discovery refuses an unknown controller, a controller without a fixed set of values, a value that
+is not an option, a chain that returns to its param, and a name used twice in one group.
+
+```python
+PARAMS = {"filter": [
+    {"mode": goofi.StringParam("fir", options=["fir", "iir"])},
+    {"order": goofi.IntParam(4, 2, 8, options=[2, 4, 8], show=("mode", ["iir"])),
+     "ripple": goofi.FloatParam(0.5, 0.0, 1.0, show=("order", [4, 8]))},
+]}
+```
+
+A group that is a list of dicts has one section for each dict. In Rust, a `ParamDecl` sets
+`section: 1` and `show: Some(Show { param: "mode", any_of: &["iir"] })`, or `section: 0` and
+`show: None`. A WGSL header param adds `"section": 1` and
+`"show": {"param": "mode", "any_of": ["iir"]}`.
+
 A plugin can provide its own playback node and configure it through `ctx.call`. Downloads and
 database access must stay outside audio callbacks and other time-critical processing. Prefer stable
 recording IDs or portable paths in saved node parameters. No resource-provider API is required.

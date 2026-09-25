@@ -112,6 +112,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "concat", options: &["concat", "template"], refresh: false },
         expression: None,
         doc: Some("`concat` joins the wires in order; `template` places each one where it is named."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "format",
@@ -119,6 +121,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: " ", options: &[], refresh: false },
         expression: None,
         doc: Some("What goes between two wires in `concat` mode."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "format",
@@ -129,6 +133,8 @@ static PARAMS: &[ParamDecl] = &[
             "Where each wire goes: `{}` takes the next one, `{2}` the third, and `{0:>8}` sets \
              it right in a field eight wide. A wire that is not there is empty.",
         ),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

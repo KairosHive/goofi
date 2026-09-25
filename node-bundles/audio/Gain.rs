@@ -8,6 +8,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 10.0 },
         expression: None,
         doc: Some("what every sample is multiplied by; 1 leaves the signal as it is"),
+        section: 0,
+        show: None,
     },
 }
 

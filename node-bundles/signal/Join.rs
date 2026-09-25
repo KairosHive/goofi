@@ -96,6 +96,8 @@ static PARAMS: &[ParamDecl] = &[
             "`concatenate` lays the frames end to end along an axis they already share; `stack` \
              puts them side by side on a new axis, named after the nodes they came from.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "join",
@@ -103,6 +105,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 0, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis to join along, or where the new axis goes when stacking."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

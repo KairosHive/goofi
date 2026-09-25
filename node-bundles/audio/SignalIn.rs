@@ -8,6 +8,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Str { default: "waveform", options: cross::PLAYBACK, refresh: false },
         expression: None,
         doc: Some("the frame's samples looped until the next frame, or each column a sine: [n] Hz, or [2, n] Hz over phase"),
+        section: 0,
+        show: None,
     },
     SMOOTHING = ParamDecl {
         group: "signal",
@@ -15,6 +17,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 10.0 },
         expression: None,
         doc: Some("seconds a new frame crossfades in over, or each sine glides to its new pitch in"),
+        section: 0,
+        show: None,
     },
 }
 

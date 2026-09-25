@@ -109,6 +109,8 @@ static PARAMS: &[ParamDecl] = &[
             "`average` takes the mean of the last `size` values; `exponential` lets an old value \
              fade away, with `size` as the time it takes to fade.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "smooth",
@@ -116,6 +118,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 10.0, min: 0.0, max: 1.0e7 },
         expression: None,
         doc: Some("How much of the past to smooth over, in the unit below."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "smooth",
@@ -126,6 +130,8 @@ static PARAMS: &[ParamDecl] = &[
             "What `size` counts. `updates` smooths each position across frames instead of along \
              an axis, which is what a per-update value needs.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "smooth",
@@ -133,6 +139,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis to smooth along. -1 is time."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "smooth",
@@ -140,6 +148,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Forget the past, so the node starts again from the next frame."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

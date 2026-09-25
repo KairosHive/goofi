@@ -8,6 +8,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Str { default: "bipolar", options: cross::RANGES, refresh: false },
         expression: None,
         doc: Some("the texels themselves, or `min`..`max` mapped onto [-1, 1] or [0, 1]"),
+        section: 0,
+        show: None,
     },
     MIN = ParamDecl {
         group: "graphics",
@@ -15,6 +17,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
         expression: None,
         doc: Some("the value a mapped range starts at; a texture's own window is 0 to 1"),
+        section: 0,
+        show: None,
     },
     MAX = ParamDecl {
         group: "graphics",
@@ -22,6 +26,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 1.0, min: -1.0e9, max: 1.0e9 },
         expression: None,
         doc: Some("the value it ends at"),
+        section: 0,
+        show: None,
     },
     CHANNELS = ParamDecl {
         group: "graphics",
@@ -29,6 +35,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Str { default: "luma", options: &["luma", "all"], refresh: false },
         expression: None,
         doc: Some("the picture's brightness on one channel, or its colour channels each on their own"),
+        section: 0,
+        show: None,
     },
 }
 

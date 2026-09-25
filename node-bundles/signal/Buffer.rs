@@ -84,6 +84,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "seconds", options: &["seconds", "samples", "seconds (ufreq)", "updates"], refresh: false },
         expression: None,
         doc: Some("Seconds uses sfreq, or ufreq if no sample rate is set, along the selected axis. Updates and seconds (ufreq) stack whole frames on a new trailing axis."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "buffer",
@@ -91,6 +93,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 2.0, min: 0.001, max: 60.0 },
         expression: None,
         doc: Some("How much recent data to keep, in the selected unit."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "buffer",
@@ -102,6 +106,8 @@ static PARAMS: &[ParamDecl] = &[
              one a signal is usually buffered over; -2 is channels. An axis past the rank is a \
              new one, so a 1-D frame buffered along axis 1 becomes channels by time.",
         ),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

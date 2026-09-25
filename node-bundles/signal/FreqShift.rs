@@ -103,6 +103,8 @@ static PARAMS: &[ParamDecl] = &[
             "How far to move the signal, in Hz, up for a positive number and down for a negative \
              one. Unlike a pitch change, the speed of the signal does not change with it.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "freq_shift",
@@ -113,6 +115,8 @@ static PARAMS: &[ParamDecl] = &[
             "`single` moves the signal one way only; `ring` keeps both the sum and the difference, \
              which is the harsher, older sound.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "freq_shift",
@@ -120,6 +124,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Forget the past and start the shift's own phase again."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

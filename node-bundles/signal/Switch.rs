@@ -37,6 +37,8 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
         "Which wire passes, counted in the order they were connected. In reference mode another \
          node's output chooses the route.",
     ),
+    section: 0,
+    show: None,
 }];
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",

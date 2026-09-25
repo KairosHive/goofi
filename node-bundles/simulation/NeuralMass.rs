@@ -260,6 +260,8 @@ static PARAMS: &[ParamDecl] = &[
             "`jansenrit` makes a cortical rhythm in the alpha band, `wilsoncowan` an excitatory and \
              inhibitory pair, `wongwang` the slow decision variable used in whole-brain work.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "mass",
@@ -267,6 +269,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 1, min: 1, max: 512, options: &[] },
         expression: None,
         doc: Some("How many populations, when nothing is wired. A `connectivity` matrix decides instead."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "mass",
@@ -274,6 +278,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 50.0 },
         expression: None,
         doc: Some("How hard the network drives each population. With one population it does nothing."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "mass",
@@ -281,6 +287,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.5, min: 0.0, max: 5.0 },
         expression: None,
         doc: Some("Background input every population gets, added to whatever the `input` slot carries."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "mass",
@@ -288,6 +296,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.1, max: 3.0 },
         expression: None,
         doc: Some("How steep the model's firing-rate curve is. Steeper swings harder for the same input."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "mass",
@@ -298,6 +308,8 @@ static PARAMS: &[ParamDecl] = &[
             "Jitter on the input, as a fraction of `drive`. These rhythms are a resonance driven \
              by a fluctuating input: at 0 the model falls onto a slower cycle of its own.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -305,6 +317,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.001, min: 1.0e-6, max: 0.01 },
         expression: None,
         doc: Some("Model seconds per step. Jansen-Rit needs a millisecond or less."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -312,6 +326,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the starting state and the noise. Negative takes a fresh one from the clock."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -319,6 +335,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Start the network over from the seed."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -326,6 +344,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false },
         expression: None,
         doc: Some("`value` emits the state now; `block` emits every step since the last frame, which is a signal."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -333,6 +353,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1000.0, min: 1.0, max: 20_000.0 },
         expression: None,
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
+        section: 0,
+        show: None,
     },
 ];
 

@@ -12,6 +12,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Str { default: crate::DEFAULT_DEVICE, options: &[crate::DEFAULT_DEVICE], refresh: true },
         expression: None,
         doc: Some("the output device the engine's clock follows; every AudioOut names the same one"),
+        section: 0,
+        show: None,
     },
     CHANNELS = ParamDecl {
         group: "audio",
@@ -19,6 +21,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Str { default: crate::chanmap::ALL, options: &[], refresh: false },
         expression: None,
         doc: Some(crate::chanmap::DOC),
+        section: 0,
+        show: None,
     },
     GAIN = ParamDecl {
         group: "audio",
@@ -26,6 +30,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 10.0 },
         expression: None,
         doc: None,
+        section: 0,
+        show: None,
     },
 }
 

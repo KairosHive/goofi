@@ -151,6 +151,8 @@ static PARAMS: &[ParamDecl] = &[
             "How the samples are distributed: `uniform` fills the range evenly, `normal` clusters \
              around the offset, `pink` weights the low frequencies as living signals do.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "noise",
@@ -158,6 +160,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: -1.0e6, max: 1.0e6 },
         expression: None,
         doc: Some("Scales every sample, so the noise spans minus this to plus this."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "noise",
@@ -165,6 +169,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: -1.0e6, max: 1.0e6 },
         expression: None,
         doc: Some("Added to every sample, so the noise sits around a value other than zero."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "noise",
@@ -172,6 +178,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -1, max: i32::MAX as i64, options: &[] },
         expression: None,
         doc: Some("Fixes the stream so a patch replays the same noise; -1 takes a fresh one."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -182,6 +190,8 @@ static PARAMS: &[ParamDecl] = &[
             "`value` emits one sample per channel per update, which a param reference reads as a \
              number; `block` emits the samples elapsed at `sfreq`, which is a signal.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -189,6 +199,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 250.0, min: 1.0, max: 10_000.0 },
         expression: None,
         doc: Some("Sample rate within an emitted block, in Hz. `value` mode ignores it."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -196,6 +208,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 1, min: 1, max: 64, options: &[] },
         expression: None,
         doc: Some("How many independent noise streams to emit, one per channel."),
+        section: 0,
+        show: None,
     },
     // A manifest's own `common.*` is never overwritten by the universal declaration, and the
     // universal default is uncapped — which makes a block one sample long.
@@ -208,6 +222,8 @@ static PARAMS: &[ParamDecl] = &[
             "How many frames a second to emit. Bound to the patch's `default_ufreq` variable, so \
              editing that variable re-rates every generator at once.",
         ),
+        section: 0,
+        show: None,
     },
 ];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];

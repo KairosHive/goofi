@@ -250,6 +250,8 @@ static PARAMS: &[ParamDecl] = &[
             "Which part of the spectrum survives: below `high`, above `low`, between the two, or \
              everything except between the two.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "filter",
@@ -265,6 +267,8 @@ static PARAMS: &[ParamDecl] = &[
              answered late. `causal` answers each sample as it arrives, at the cost of a lag that \
              grows towards the band edges.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "filter",
@@ -272,6 +276,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 10_000.0 },
         expression: None,
         doc: Some("The bottom edge of the band, in Hz. `lowpass` ignores it."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "filter",
@@ -279,6 +285,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 40.0, min: 0.0, max: 10_000.0 },
         expression: None,
         doc: Some("The top edge of the band, in Hz. `highpass` ignores it."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "filter",
@@ -286,6 +294,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 4, min: 2, max: 16, options: &[2, 4, 6, 8] },
         expression: None,
         doc: Some("How sharply the edge cuts. A higher order is steeper and rings for longer."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "filter",
@@ -293,6 +303,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
         expression: None,
         doc: Some("Which axis to filter along. -1 is time."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "filter",
@@ -300,6 +312,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Forget the past, so the node starts again from the next frame."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

@@ -8,6 +8,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.45, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("how much of what leaves is the room rather than the sound that entered it"),
+        section: 0,
+        show: None,
     },
     DECAY = ParamDecl {
         group: "reverb",
@@ -15,6 +17,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 6.0, min: 0.2, max: 60.0 },
         expression: None,
         doc: Some("seconds for the tail to fall away"),
+        section: 0,
+        show: None,
     },
     SIZE = ParamDecl {
         group: "reverb",
@@ -22,6 +26,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.8, min: 0.1, max: 1.8 },
         expression: None,
         doc: Some("how far apart the walls are; small rooms ring, large ones wash"),
+        section: 0,
+        show: None,
     },
     DAMPING = ParamDecl {
         group: "reverb",
@@ -29,6 +35,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.5, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("how fast the top of the tail is lost, as it is in a room with soft walls"),
+        section: 0,
+        show: None,
     },
     PREDELAY = ParamDecl {
         group: "reverb",
@@ -36,6 +44,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.02, min: 0.0, max: 0.25 },
         expression: None,
         doc: Some("seconds of silence before the room answers, which is what sets the listener back from the source"),
+        section: 0,
+        show: None,
     },
     MODULATION = ParamDecl {
         group: "reverb",
@@ -43,6 +53,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.35, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("how much the walls move; a little of it stops the tail from ringing on one note"),
+        section: 0,
+        show: None,
     },
 }
 

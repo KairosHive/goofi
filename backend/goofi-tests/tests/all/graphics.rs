@@ -638,6 +638,19 @@ fn shaders_render_on_the_gpu() {
     assert_eq!(row["available"], false, "{row}");
     assert!(row["doc"].as_str().unwrap_or_default().contains("TEXTURE, ARRAY or AUDIO"), "{row}");
 
+    // Step: a header param sits in a section of its page and shows by another param; one that
+    // shows by a param the header does not declare is greyed, with the reason.
+    std::fs::write(dir.join("Tinted.wgsl"), TINTED).unwrap();
+    std::fs::write(dir.join("Untinted.wgsl"), TINTED.replace("\"tint\", \"any_of\"", "\"tone\", \"any_of\"")).unwrap();
+    g.call("library refresh", j!({}));
+    let hue = &g.call("library get", j!({ "type": "graphics:Tinted" }))["params"]["look"]["hue"];
+    assert_eq!((&hue["section"], &hue["show"]), (&j!(1), &j!({ "group": "look", "name": "tint", "any_of": ["true"] })));
+    let listed = g.call("library list", j!({ "full": true }));
+    let row = listed["types"].as_array().unwrap().iter().find(|r| r["type"] == "graphics:Untinted").cloned();
+    let row = row.expect("a shader whose param shows by nothing is still a row");
+    assert_eq!(row["available"], false, "{row}");
+    assert!(row["doc"].as_str().unwrap_or_default().contains("`tone`, which this node does not declare"), "{row}");
+
     // Step: a node holds its own state between two ticks. A state buffer starts empty, so a body
     // seeds itself on `frame == 0` and reads what the last tick wrote from then on.
     std::fs::write(dir.join("Count.wgsl"), COUNT).unwrap();
@@ -1224,6 +1237,7 @@ fn the_mosaic_walks_its_cells_onto_the_picture() {
 }
 
 const TEXTY: &str = "/* goofi\n{ \"doc\": \"claims a string slot\", \"inputs\": [{\"name\": \"input\", \"kind\": \"STRING\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
+const TINTED: &str = "/* goofi\n{ \"doc\": \"a tint that shows its hue\", \"params\": [{\"group\": \"look\", \"name\": \"tint\", \"kind\": \"bool\", \"default\": false}, {\"group\": \"look\", \"name\": \"hue\", \"kind\": \"float\", \"default\": 0.5, \"min\": 0.0, \"max\": 1.0, \"section\": 1, \"show\": {\"param\": \"tint\", \"any_of\": [\"true\"]}}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
 const BROKEN: &str = "/* goofi\n{ \"doc\": \"does not compile\" }\n*/\nfn shade(uv: vec2f) -> vec4f { return nothing(uv); }\n";
 const COUNT: &str = "/* goofi\n{ \"doc\": \"counts a tenth a tick in a buffer of its own\", \"state\": [\"acc\"] }\n*/\nfn at(uv: vec2f) -> vec2i { return vec2i(floor(uv * resolution)); }\nfn next_acc(uv: vec2f) -> vec4f {\n    if frame == 0u { return vec4f(0.1, 0.75, 0.0, 1.0); }\n    let held = textureLoad(acc, at(uv), 0);\n    return vec4f(held.r + 0.1, held.g, 0.0, 1.0);\n}\nfn shade(uv: vec2f) -> vec4f { return vec4f(textureLoad(acc, at(uv), 0).rgb, 1.0); }\n";
 const HALF: &str = "/* goofi\n{ \"doc\": \"half of the input\", \"inputs\": [{\"name\": \"input\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let c = textureSample(input, samp, uv); return vec4f(c.rgb * 0.5, c.a); }\n";

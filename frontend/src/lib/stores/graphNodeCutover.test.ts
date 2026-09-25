@@ -42,7 +42,9 @@ function catalog(): NodeTypeInfo[] {
 						mode: 'constant',
 						reference: null,
 						triggers: false,
-						error: null
+						error: null,
+						section: 0,
+						show: null
 					}
 				}
 			}

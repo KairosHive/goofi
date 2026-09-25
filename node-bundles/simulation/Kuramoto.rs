@@ -211,6 +211,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: 8, min: 1, max: 1024, options: &[] },
         expression: None,
         doc: Some("How many oscillators, when neither input says. A wired input decides instead."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "kuramoto",
@@ -218,6 +220,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 50.0 },
         expression: None,
         doc: Some("How hard the oscillators pull on each other. Past a threshold set by `spread`, they lock."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "kuramoto",
@@ -225,6 +229,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 200.0 },
         expression: None,
         doc: Some("Mean natural frequency in Hz. The `frequencies` input replaces this and `spread`."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "kuramoto",
@@ -232,6 +238,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.2, min: 0.0, max: 50.0 },
         expression: None,
         doc: Some("Standard deviation of the natural frequencies. A wider set needs stronger coupling to lock."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "kuramoto",
@@ -239,6 +247,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 10.0 },
         expression: None,
         doc: Some("Phase diffusion, which fights the coupling."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -246,6 +256,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.005, min: 1.0e-6, max: 1.0 },
         expression: None,
         doc: Some("Model seconds per step. The model runs at `output.sfreq` times this, relative to real time."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -253,6 +265,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
         expression: None,
         doc: Some("Seeds the phases and the drawn frequencies. Negative takes a fresh one from the clock."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "sim",
@@ -260,6 +274,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Pulse,
         expression: None,
         doc: Some("Draw the model again from the seed."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -270,6 +286,8 @@ static PARAMS: &[ParamDecl] = &[
             "`value` emits the state now, which a param reference reads as a number; \
              `block` emits every step since the last frame, which is a signal.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "output",
@@ -277,6 +295,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 200.0, min: 1.0, max: 10_000.0 },
         expression: None,
         doc: Some("Integration steps per second of real time, and the sample rate of an emitted block."),
+        section: 0,
+        show: None,
     },
 ];
 

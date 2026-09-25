@@ -8,6 +8,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Bool { default: false },
         expression: None,
         doc: Some("HIGH above zero; an audio reference is one voice per channel"),
+        section: 0,
+        show: None,
     },
     ATTACK = ParamDecl {
         group: "env",
@@ -15,6 +17,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.01, min: 0.0, max: 10.0 },
         expression: None,
         doc: Some("seconds to full"),
+        section: 0,
+        show: None,
     },
     DECAY = ParamDecl {
         group: "env",
@@ -22,6 +26,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.1, min: 0.0, max: 10.0 },
         expression: None,
         doc: Some("seconds from full to `sustain`"),
+        section: 0,
+        show: None,
     },
     SUSTAIN = ParamDecl {
         group: "env",
@@ -29,6 +35,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("the level held while the gate stays HIGH"),
+        section: 0,
+        show: None,
     },
     RELEASE = ParamDecl {
         group: "env",
@@ -36,6 +44,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Float { default: 0.1, min: 0.0, max: 10.0 },
         expression: None,
         doc: Some("seconds from full to silence once the gate drops"),
+        section: 0,
+        show: None,
     },
 }
 

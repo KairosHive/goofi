@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use goofi_bridge::ops::{find, registry, typescript};
 use goofi_bridge::vocab;
 use goofi_core::SlotType;
-use goofi_node::{NodeManifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl};
+use goofi_node::{NodeManifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl};
 use goofi_tests::{fixtures::LibraryEngine, hex, j, Client, Goofi};
 use serde_json::Value;
 
@@ -180,18 +180,41 @@ static DOCUMENTED_PARAMS: &[ParamDecl] = &[ParamDecl {
     group: "welch", name: "nperseg", spec: ParamSpec::Int { default: 256, min: 16, max: 4096, options: &[] },
     expression: None,
     doc: Some("Samples per Welch segment: longer means finer frequency resolution."),
+    section: 0,
+    show: None,
 }];
 static DOCUMENTED: NodeManifest = manifest("DocumentedThing", &[], DOCUMENTED_PARAMS, true);
 static OVERRIDE_PARAMS: &[ParamDecl] = &[ParamDecl {
     group: "common", name: "autotrigger", spec: ParamSpec::Bool { default: true },
     expression: None, doc: Some("On by default: this node is a source."),
+    section: 0,
+    show: None,
 }];
 static OVERRIDES_COMMON: NodeManifest = manifest("OverridesCommon", &[], OVERRIDE_PARAMS, false);
 static PULSE_PARAMS: &[ParamDecl] = &[ParamDecl {
     group: "count", name: "reset", spec: ParamSpec::Pulse,
     expression: None, doc: Some("Start the count over."),
+    section: 0,
+    show: None,
 }];
 static PULSING: NodeManifest = manifest("PulsingThing", &[], PULSE_PARAMS, true);
+const fn decl(group: &'static str, name: &'static str, spec: ParamSpec, section: u8, show: Option<Show>) -> ParamDecl {
+    ParamDecl { group, name, spec, expression: None, doc: None, section, show }
+}
+const fn when(param: &'static str, any_of: &'static [&'static str]) -> Option<Show> {
+    Some(Show { param, any_of })
+}
+const MODE: ParamSpec = ParamSpec::Str { default: "fir", options: &["fir", "iir"], refresh: false };
+const LEVEL: ParamSpec = ParamSpec::Float { default: 0.5, min: 0.0, max: 1.0 };
+/// Three sections of `filter`, each shown for its own mode, and a page shown only for `iir`.
+static SECTIONED_PARAMS: &[ParamDecl] = &[
+    decl("filter", "mode", MODE, 0, None),
+    decl("filter", "taps", ParamSpec::Int { default: 64, min: 1, max: 512, options: &[] }, 1, when("mode", &["fir"])),
+    decl("filter", "order", ParamSpec::Int { default: 4, min: 2, max: 8, options: &[2, 4, 8] }, 2, when("mode", &["iir"])),
+    decl("filter", "ripple", LEVEL, 2, when("order", &["4", "8"])),
+    decl("shape", "gate", ParamSpec::Bool { default: false }, 0, when("filter.mode", &["iir"])),
+];
+static SECTIONED: NodeManifest = manifest("SectionedThing", &[], SECTIONED_PARAMS, false);
 
 fn row(g: &Goofi, type_name: &str) -> Value {
     g.call("library list", j!({ "full": true }))["types"].as_array().expect("a palette").iter()
@@ -243,6 +266,7 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
     g.register_dyn(&DOCUMENTED, Box::new(|_| never()), &goofi_node::NATIVE);
     g.register_dyn(&OVERRIDES_COMMON, Box::new(|_| never()), &goofi_node::NATIVE);
     g.register_dyn(&PULSING, Box::new(|_| never()), &goofi_node::NATIVE);
+    g.register_dyn(&SECTIONED, Box::new(|_| never()), &goofi_node::NATIVE);
 
     let palette = g.call("library list", j!({ "full": true }))["types"].as_array().expect("a palette").clone();
     let row = |ty: &str| palette.iter().find(|v| v["type"] == ty).unwrap_or_else(|| panic!("{ty} is in the palette"));
@@ -313,6 +337,48 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
     // A pulse is a request: the row a client renders its button from carries a type and no value.
     let pulse = &row("signal:PulsingThing")["params"]["count"]["reset"];
     assert_eq!((&pulse["type"], &pulse["value"]), (&j!("pulse"), &j!(null)), "{pulse}");
+
+    // A row names its section and the one param that shows it, resolved to `group` and `name`.
+    let params = &row("signal:SectionedThing")["params"];
+    let layout = |g: &str, n: &str| (params[g][n]["section"].clone(), params[g][n]["show"].clone());
+    assert_eq!(layout("filter", "mode"), (j!(0), j!(null)));
+    assert_eq!(layout("filter", "taps"), (j!(1), j!({ "group": "filter", "name": "mode", "any_of": ["fir"] })));
+    assert_eq!(layout("filter", "ripple"), (j!(2), j!({ "group": "filter", "name": "order", "any_of": ["4", "8"] })));
+    assert_eq!(layout("shape", "gate").1["group"], "filter", "a page may show by another page's param");
+    assert_eq!(layout("common", "autotrigger"), (j!(0), j!(null)), "the engine's own params always show");
+}
+
+#[test]
+fn a_param_shows_only_by_a_fixed_choice_of_another_param() {
+    // A built node answers its manifest through `describe`, and every tier reads one back through
+    // `leak_manifest`: the declaration crosses intact, and one the inspector cannot draw is refused.
+    let read = |params: &[ParamDecl]| {
+        let json = goofi_node::describe(&[], "a fixture", &[], OUT, params, false);
+        goofi_node::leak_manifest("Shown".into(), &goofi_node::parse_introspection(&json).unwrap())
+    };
+    let crossed = read(SECTIONED_PARAMS).expect("a coherent declaration loads");
+    let layout = |ps: &[ParamDecl]| ps.iter().map(|d| (d.section, d.show)).collect::<Vec<_>>();
+    assert_eq!(layout(crossed.params), layout(SECTIONED_PARAMS));
+    let refused = |params: &[ParamDecl], why: &str| {
+        let reason = read(params).err().unwrap_or_else(|| panic!("loaded, not refused for `{why}`"));
+        assert!(reason.contains(why), "{reason}");
+    };
+    let mode = decl("filter", "mode", MODE, 0, None);
+    refused(&[mode, decl("filter", "q", LEVEL, 0, when("shape", &["fir"]))], "`shape`, which this node does not declare");
+    refused(&[decl("filter", "gain", LEVEL, 0, None), decl("filter", "q", LEVEL, 0, when("gain", &["1"]))],
+            "`gain`, which has no fixed set of values");
+    refused(&[mode, decl("filter", "q", LEVEL, 0, when("mode", &["fft"]))], "`fft`, which `mode` does not offer: fir, iir");
+    refused(&[mode, decl("filter", "q", LEVEL, 0, when("mode", &[]))], "shows for no value");
+    refused(&[decl("filter", "mode", MODE, 0, when("mode", &["fir"]))], "leads back to it");
+    refused(&[decl("filter", "a", MODE, 0, when("b", &["fir"])), decl("filter", "b", MODE, 0, when("a", &["iir"]))],
+            "leads back to it");
+    refused(&[mode, decl("filter", "mode", MODE, 1, None)], "`filter.mode` is declared twice");
+
+    // The declarations a fresh goofi carries in its own binary pass the same rule.
+    let g = Goofi::new();
+    for (_, l) in g.state.graph.lock().unwrap().library_entries() {
+        assert_eq!(goofi_node::illegal_param(l.manifest.params), None, "{}", l.manifest.type_name);
+    }
 }
 
 #[test]

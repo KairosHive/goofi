@@ -74,6 +74,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Str { default: "above", options: &["above", "below"], refresh: false },
         expression: None,
         doc: Some("Whether the decision is true above the level or below it."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "threshold",
@@ -81,6 +83,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
         expression: None,
         doc: Some("The value the signal is compared against."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "threshold",
@@ -91,6 +95,8 @@ static PARAMS: &[ParamDecl] = &[
             "How far past the level the signal must go to switch back, so noise sitting on the \
              level cannot rattle the decision.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "threshold",
@@ -98,6 +104,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Bool { default: false },
         expression: None,
         doc: Some("Emit one only on the update where the decision turns true, rather than while it holds."),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "threshold",
@@ -109,6 +117,8 @@ static PARAMS: &[ParamDecl] = &[
              decision follows it, so a brief excursion past the level is not a state. It delays \
              the release as well as the onset.",
         ),
+        section: 0,
+        show: None,
     },
     ParamDecl {
         group: "threshold",
@@ -116,6 +126,8 @@ static PARAMS: &[ParamDecl] = &[
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 3600.0 },
         expression: None,
         doc: Some("How long in seconds a decision stays before it is allowed to switch again."),
+        section: 0,
+        show: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

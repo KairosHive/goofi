@@ -8,6 +8,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Str { default: "white", options: &["white", "pink"], refresh: false },
         expression: None,
         doc: Some("`white` is level across the spectrum; `pink` falls with frequency, as most natural sound does"),
+        section: 0,
+        show: None,
     },
     CHANNELS = ParamDecl {
         group: "noise",
@@ -15,6 +17,8 @@ goofi_audio_sdk::params! {
         spec: ParamSpec::Int { default: 1, min: 1, max: 16, options: &[] },
         expression: None,
         doc: Some("how many channels to make; no two of them are alike"),
+        section: 0,
+        show: None,
     },
 }
 
