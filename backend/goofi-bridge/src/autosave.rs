@@ -1,10 +1,11 @@
 //! The autosave: the open patch written beside its mount, in the `.gfi` layout unpacked, whenever
 //! it holds unsaved work — so a crash leaves a recovery, and the next manager can offer it. It
 //! carries the manifest and the workspace files; a node's opaque state is persisted by a save.
-//! Nothing polls: the worker parks on `AppState::changed`, which every settle, every dirty
-//! transition and a watcher on the mount pulse, and writes once the pulses go quiet.
+//! The worker parks on `AppState::changed`, which every settle, every dirty transition and a
+//! watcher on the mount pulse, and writes once the pulses go quiet. Without a watcher it looks every [`CAP`].
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use goofi_graph::archive;
@@ -39,7 +40,7 @@ pub(crate) fn spawn(state: AppState) {
         let mut last: Option<Stamp> = None;
         let mut watch = Watch::new(&state);
         loop {
-            state.changed.wait_timeout(PARK);
+            state.changed.wait_timeout(if watch.at.is_some() { PARK } else { CAP });
             // Debounce: wait for a quiet window, but no longer than the cap since the first pulse.
             let first = Instant::now();
             loop {
@@ -60,18 +61,46 @@ pub(crate) fn spawn(state: AppState) {
     }
 }
 
-/// The watcher on the mount, re-aimed when a load replaces it. Every event pulses `changed`; the
-/// tick then walks, so an ignored file's churn costs a walk and never a write.
+/// Every live mount and the waker its event pulses. ONE watcher serves them all: a user's inotify
+/// instances are few, and a process may run several managers.
+static MOUNTS: Mutex<Vec<(PathBuf, Arc<goofi_node::DrainWaker>)>> = Mutex::new(Vec::new());
+
+/// The process's one watcher, made on first use and again after a refusal: the instances a
+/// machine grants run out while other programs hold them.
+static WATCHER: Mutex<Option<notify::RecommendedWatcher>> = Mutex::new(None);
+
+fn watch(mount: &Path) -> bool {
+    let mut watcher = WATCHER.lock().unwrap();
+    if watcher.is_none() {
+        match notify::recommended_watcher(|event: notify::Result<notify::Event>| {
+            let hit = |mount: &Path| event.as_ref().map_or(true, |e| e.paths.is_empty() || e.paths.iter().any(|p| p.starts_with(mount)));
+            for (_, changed) in MOUNTS.lock().unwrap().iter().filter(|(m, _)| hit(m)) {
+                changed.notify();
+            }
+        }) {
+            Ok(made) => *watcher = Some(made),
+            Err(e) => {
+                static SAID: std::sync::Once = std::sync::Once::new();
+                SAID.call_once(|| {
+                    let why = format!("autosave: no watcher on the workspace, so it is walked every {CAP:?}: {e}");
+                    goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Warning, None, why);
+                });
+            }
+        }
+    }
+    watcher.as_mut().is_some_and(|w| w.watch(mount, notify::RecursiveMode::Recursive).is_ok())
+}
+
+/// This manager's mount on the shared watcher, re-aimed when a load replaces it. The tick then
+/// walks, so an ignored file's churn costs a walk and never a write.
 struct Watch {
-    watcher: Option<notify::RecommendedWatcher>,
+    changed: Arc<goofi_node::DrainWaker>,
     at: Option<PathBuf>,
 }
 
 impl Watch {
     fn new(state: &AppState) -> Watch {
-        let changed = state.changed.clone();
-        let watcher = notify::recommended_watcher(move |_: notify::Result<notify::Event>| changed.notify());
-        let mut w = Watch { watcher: watcher.ok(), at: None };
+        let mut w = Watch { changed: state.changed.clone(), at: None };
         w.follow(state);
         w
     }
@@ -81,13 +110,25 @@ impl Watch {
         if self.at.as_ref() == Some(&mount) {
             return;
         }
-        let Some(watcher) = self.watcher.as_mut() else { return };
-        if let Some(old) = self.at.take() {
-            let _ = watcher.unwatch(&old);
-        }
-        if watcher.watch(&mount, notify::RecursiveMode::Recursive).is_ok() {
+        self.release();
+        if watch(&mount) {
+            MOUNTS.lock().unwrap().push((mount.clone(), self.changed.clone()));
             self.at = Some(mount);
         }
+    }
+
+    fn release(&mut self) {
+        let Some(old) = self.at.take() else { return };
+        MOUNTS.lock().unwrap().retain(|(m, _)| *m != old);
+        if let Some(w) = WATCHER.lock().unwrap().as_mut() {
+            let _ = w.unwatch(&old);
+        }
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        self.release();
     }
 }
 
