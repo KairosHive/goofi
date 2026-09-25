@@ -67,9 +67,9 @@ missed wake on a continuous stream.
 Its control half IS doorbell-driven, woken like a signal node (`audio-engine.md`). No intermediate
 engine proxy channel.
 
-**Generations are PROCESS-LIFETIME and live on the graph** with `instance`, riding `GraphView` as
-resolver inputs: bumped on every birth at a uid, surviving `clear()` and `load_doc`, never entering
-the archive — or a reloaded uid re-opens its predecessor's stale service names.
+**Generations are PROCESS-LIFETIME and live on the runtime** with `instance`, riding `GraphView`
+as resolver inputs: minted at settle, when a birth at a uid is inserted, surviving `clear()` and
+`load_doc`, never entering the archive — or a reloaded uid re-opens its predecessor's stale service names.
 
 **Node state splits by WRITER**: the record (op-written) and `Health` (drain-written) sit beside
 each other on the graph; birth is construction, so a rebirth's Health is a fresh struct. Accepted
@@ -97,12 +97,12 @@ iceoryx2; the pymod's FT-host build uses the codec and stays iceoryx2-free.
 ## Remaining
 
 - **`Kind` has no exhaustive match.** `NodeEntry::leaf`/`leaf_mut` and `Graph::stub`
-  (`goofi-graph/src/lib.rs:126-135`, `:1508-1511`) use `_ =>`, so a fourth variant compiles
-  silently classified "not a leaf". Replace them with explicit `Kind::Facade | Kind::Port(_)`.
+  (`goofi-graph/src/lib.rs`) use `_ =>`, so a fourth variant compiles silently classified "not a leaf".
+  Replace them with explicit `Kind::Facade | Kind::Port(_)`.
 - **`keys_touching`** (`goofi-signal/src/engine.rs:132`) is O(N × (links + bindings)) and runs once
   per node reaching `Ready`. A large patch will notice.
-- **`Graph::contains`** means "is a running leaf", `exists` "is any node", `wirable` "leaf or port"
-  (`lib.rs:1217-1233`); `Command::precondition` picks a different one per variant. One pass to name
-  them for what they answer.
+- **`Graph::contains`** means "is a running leaf", `exists` "is any node", `wirable` "leaf or port";
+  `Command::precondition` picks a different one per variant. One pass to name them for what they
+  answer.
 - **`goofi-graph` depends on `goofi-view`** beside `goofi-core` and `goofi-node`. Decide whether the
   view vocabulary belongs below the graph or the dependency goes.

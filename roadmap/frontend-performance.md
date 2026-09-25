@@ -2,7 +2,7 @@
 
 Audit of 2026-09-16, run against the owner's report that the browser's frame rate falls as a
 patch grows. The two structural answers have entries of their own: `viewer-render-surface.md` and
-`data-plane-bandwidth.md`; the op path is `op-path.md`. Headless Chromium with software GL and a
+`data-plane-bandwidth.md`; the op path is `backend-architecture.md` §3. Headless Chromium with software GL and a
 debug backend measured scaling laws, not absolute frame rates. This file is what remains, and what
 must not be looked at again.
 
