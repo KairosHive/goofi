@@ -113,11 +113,20 @@ export interface FsEntry {
 	path: string;
 	kind: 'dir' | 'file';
 	is_gfi: boolean;
+	/** Epoch milliseconds; null when the filesystem gives no time. */
+	modified: number | null;
+	/** Bytes; null for a directory. */
+	size: number | null;
 }
+
+export const FS_SORTS = ['name', 'modified', 'size'] as const;
+export type FsSort = (typeof FS_SORTS)[number];
 
 export interface FsRoot {
 	label: string;
 	path: string;
+	/** One of the folders patches were last loaded from or saved to. */
+	recent: boolean;
 }
 
 export interface DirListing {

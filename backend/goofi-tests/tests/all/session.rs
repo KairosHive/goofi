@@ -426,14 +426,19 @@ fn the_file_browser_answers_a_path_the_way_save_and_load_take_it() {
         None => g.call("dir list", j!({})),
     };
     let list_hidden = |p: &str| g.call("dir list", j!({ "path": p, "hidden": true }));
+    let sorted = |p: &str, sort: &str, reverse: bool| g.call("dir list", j!({ "path": p, "sort": sort, "reverse": reverse }));
     let names = |l: &Value| -> Vec<String> {
         l["entries"].as_array().unwrap().iter()
             .map(|e| e["name"].as_str().unwrap().to_string()).collect()
     };
 
     let tmp = tempfile::tempdir().unwrap();
-    for f in ["Beta.txt", "alpha.txt", ".hidden", "patch.gfi"] {
-        std::fs::write(tmp.path().join(f), b"x").unwrap();
+    // Sizes and times that disagree with the names, so each order is its own.
+    let epoch = std::time::UNIX_EPOCH;
+    for (f, len, secs) in [("Beta.txt", 3, 300), ("alpha.txt", 1, 200), (".hidden", 1, 100), ("patch.gfi", 2, 400)] {
+        let file = std::fs::File::create(tmp.path().join(f)).unwrap();
+        file.set_len(len).unwrap();
+        file.set_modified(epoch + std::time::Duration::from_secs(secs)).unwrap();
     }
     for d in ["Zeta", "apples"] {
         std::fs::create_dir_all(tmp.path().join(d)).unwrap();
@@ -461,27 +466,29 @@ fn the_file_browser_answers_a_path_the_way_save_and_load_take_it() {
     let by_name = |n: &str| listing["entries"].as_array().unwrap().iter()
         .find(|e| e["name"] == n).unwrap_or_else(|| panic!("{n} is listed")).clone();
     let entry = by_name("alpha.txt");
-    for key in ["name", "path", "kind", "is_gfi"] {
-        assert!(entry.get(key).is_some(), "an entry is missing `{key}`");
-    }
     assert_eq!(entry["kind"], "file");
     assert_eq!(entry["path"], format!("{here}/alpha.txt"));
-    // The browser renders neither a size nor a date column, so the row carries neither — nor a
-    // `hidden` flag, now that a listing holds nothing for it to mark.
-    for key in ["size", "mtime", "hidden"] {
-        assert!(entry.get(key).is_none(), "an entry carries an unrendered `{key}`");
-    }
+    assert_eq!((&entry["size"], &entry["modified"]), (&j!(1), &j!(200_000)), "bytes and epoch milliseconds");
+    assert!(by_name("Zeta")["size"].is_null(), "a directory has no size");
+    assert!(entry.get("hidden").is_none(), "a listing holds nothing for a `hidden` flag to mark");
+
+    // Directories stay first in every order; the name breaks ties.
+    let dir = tmp.path().to_string_lossy();
+    assert_eq!(names(&sorted(&dir, "modified", false))[2..], ["alpha.txt", "Beta.txt", "patch.gfi"]);
+    assert_eq!(names(&sorted(&dir, "size", true)), ["Zeta", "apples", "Beta.txt", "patch.gfi", "alpha.txt"],
+               "`--reverse` turns the directories' order too");
+    assert_eq!(names(&sorted(&dir, "name", true))[..2], ["Zeta", "apples"]);
+    assert!(g.refuse("dir list", j!({ "sort": "colour" })).contains("name, modified, size"));
     assert_eq!((&by_name("patch.gfi")["is_gfi"], &by_name("alpha.txt")["is_gfi"]),
                (&j!(true), &j!(false)));
 
     // A FILE path lists its parent, so a path typed into Save-As navigates.
     assert_eq!(list(Some(&tmp.path().join("patch.gfi").to_string_lossy()))["path"], here);
 
-    // The frontend omits `path` on the first open; a cleared input sends "".
+    // Where a bare listing opens is the last patch's folder, which every test here may move, so
+    // the save spec proves it in a home of its own.
     let home = std::env::home_dir().expect("a home directory in the test environment");
     let home = to_slash(&canonical(&home).unwrap_or_else(|_| home.clone()));
-    assert_eq!(list(None)["path"].as_str().unwrap(), home);
-    assert_eq!(list(Some("")), list(None));
     assert_eq!(list(Some("~"))["path"].as_str().unwrap(), home, "a leading tilde expands");
     // The sidebar marks a root active by raw string equality against `path`.
     let roots = list(None)["roots"].as_array().unwrap().clone();

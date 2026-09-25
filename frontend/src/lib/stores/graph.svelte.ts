@@ -8,6 +8,7 @@ import {
 	type DemoExample,
 	type Recovery,
 	type DirListing,
+	type FsSort,
 	type GraphSnapshot,
 	type LinkInfo,
 	type NodeInstanceInfo,
@@ -792,9 +793,10 @@ export class GraphStore {
 		return this.ctl.call('dir stat', { path });
 	}
 
-	/** List one directory level on the BACKEND filesystem (full FS, no jail). */
-	async listDir(path?: string): Promise<DirListing> {
-		return this.ctl.call<DirListing>('dir list', { path });
+	/** List one directory level on the BACKEND filesystem (full FS, no jail). No path opens the
+	 * folder of the last patch loaded or saved. */
+	async listDir(path: string | undefined, sort: FsSort, reverse: boolean): Promise<DirListing> {
+		return this.ctl.call<DirListing>('dir list', { path, sort, reverse });
 	}
 
 	/** Load a patch from a BACKEND filesystem path; destructive, and it resets the session, so

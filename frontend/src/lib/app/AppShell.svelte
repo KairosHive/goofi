@@ -45,12 +45,6 @@
 
 	let fsMode = $state<null | 'save' | 'load'>(null);
 
-	function dirOf(p: string | null): string | null {
-		if (!p) return null;
-		const i = p.lastIndexOf('/');
-		return i > 0 ? p.slice(0, i) : null;
-	}
-
 	function triggerSave(): void {
 		const path = g.savePath;
 		if (path) {
@@ -220,7 +214,6 @@
 	{#if fsMode}
 		<FsBrowser
 			mode={fsMode}
-			initialPath={dirOf(g.savePath)}
 			suggestedName={g.savePath ? (g.savePath.split('/').pop() ?? '').replace(/\.gfi$/, '') : ''}
 			onPick={onFsPick}
 			onFilePick={onFsFilePick}

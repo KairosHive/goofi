@@ -327,9 +327,9 @@ pub static TREE: &[Entry] = &[
         Leaf(Op { name: "stat", handler: Read(arms::dir_stat), args: "path:string!", positional: 1,
              doc: "Resolve a host path and report whether it names a file, a directory, or nothing.",
              result: "{path, kind: file | dir | missing}" }),
-        Leaf(Op { name: "list", handler: Read(arms::dir_list), args: "path:string hidden:bool", positional: 1,
-             doc: "List a directory on the goofi host — the save/load browser's read. Dot-names are left out; `--hidden` includes them.",
-             result: "{path, parent, entries: [{name, kind, is_gfi}], roots}" }),
+        Leaf(Op { name: "list", handler: Read(arms::dir_list), args: "path:string hidden:bool sort:string reverse:bool", positional: 1,
+             doc: "List a directory on the goofi host — the save/load browser's read. Without a path it opens the folder of the last patch loaded or saved, else the working directory; `roots` lists Home, the working directory and the five folders patches were last loaded from or saved to (`recent`). Dot-names are left out; `--hidden` includes them. Directories come first; `--sort` is name (the default), modified or size, and `--reverse` turns the order.",
+             result: "{path, parent, entries: [{name, kind, is_gfi, modified, size}], roots: [{label, path, recent}]} — `modified` is epoch milliseconds, `size` bytes and null for a directory" }),
     ]),
     Group("log", "application messages", &[
         Leaf(Op { name: "list", handler: Read(arms::log_list), args: "", positional: 0,

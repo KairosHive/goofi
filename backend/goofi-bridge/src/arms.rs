@@ -43,7 +43,13 @@ pub(crate) fn dir_list(
 ) -> Result<Value, String> {
     // Served WITHOUT the graph mutex: it walks the filesystem, which under the lock would stall
     // the status-drain worker.
-    Ok(fsbrowse::list_dir(payload.get("path").and_then(|v| v.as_str()), flag(payload, "hidden", false)))
+    let sort = fsbrowse::Sort::parse(payload.get("sort").and_then(|v| v.as_str()).unwrap_or("name"))?;
+    Ok(fsbrowse::list_dir(
+        payload.get("path").and_then(|v| v.as_str()),
+        flag(payload, "hidden", false),
+        sort,
+        flag(payload, "reverse", false),
+    ))
 }
 
 pub(crate) fn session_state(
@@ -1670,6 +1676,8 @@ pub(crate) fn session_save(
     // already-connected peer gets no new snapshot to read it from.
     *state.save_path.lock().unwrap() = Some(path.clone());
     events.push(event("save_path_changed", json!({ "save_path": &path })));
+    drop(g);
+    fsbrowse::remember(&path);
     Ok(json!({ "path": path }))
 }
 
@@ -1692,6 +1700,7 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
     let (content, from_path, recovered) =
         stage_load(&fresh, &state.custom, payload).inspect_err(|_| remove_mount(&fresh))?;
     prebuild(state, &fresh);
+    let opened = from_path.clone();
     let result = {
         let mut g = state.graph.lock().unwrap();
         // ORDER is load-bearing: the types the patch SHIPS are registered before the manifest
@@ -1747,6 +1756,9 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         // the reply says so rather than leaving the change unexplained.
         json!({ "ok": true, "layout_warning": g.arrangement_warning() })
     };
+    if let Some(path) = &opened {
+        fsbrowse::remember(path);
+    }
     resync_and_broadcast(state);
     Ok(result)
 }

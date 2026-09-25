@@ -25,6 +25,11 @@ pub fn custom_nodes() -> PathBuf {
     dir().join("custom")
 }
 
+/// The folders of the last patches loaded or saved, newest first: one path per line.
+pub fn recent_folders() -> PathBuf {
+    system().join("recent-folders")
+}
+
 /// Where a recording lands, and where a bare playback name is looked for.
 pub fn recordings() -> PathBuf {
     dir().join("recordings")

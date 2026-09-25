@@ -50,6 +50,27 @@ test('save dialogs and axis presets keep the user in control', async ({ page }) 
 		await expect(browser).toBeHidden();
 		await expect.poll(() => fs.readFileSync(target).subarray(0, 2).toString()).toBe('PK');
 
+		// The browser opens where the last patch went, and the order is this viewer's own pick.
+		const big = path.join(dir, 'big.txt');
+		fs.writeFileSync(big, 'x'.repeat(1_000_000));
+		fs.utimesSync(big, new Date(2000, 0, 1), new Date(2000, 0, 1));
+		await page.getByTestId('topbar-load').click();
+		await expect(pathInput).toHaveValue(fs.realpathSync(dir));
+		await expect(browser.getByTestId('fs-recent').first(), 'and it heads the recent folders').toHaveText(path.basename(dir));
+		const rows = browser.getByTestId('fs-entry');
+		await expect(rows).toHaveText([/big\.txt/, /held\.gfi/]);
+		await browser.getByTestId('fs-sort-modified').click();
+		await expect(rows, 'newest first').toHaveText([/held\.gfi/, /big\.txt/]);
+		await browser.getByTestId('fs-sort-modified').click();
+		await expect(rows, 'a second click turns it').toHaveText([/big\.txt/, /held\.gfi/]);
+		await browser.getByTestId('fs-sort-size').click();
+		await expect(rows.first(), 'largest first').toContainText('1.0 MB');
+		await browser.getByRole('button', { name: 'Cancel' }).click();
+		await page.getByTestId('topbar-load').click();
+		await expect(browser.getByTestId('fs-sort-size')).toHaveAttribute('aria-pressed', 'true');
+		await expect(rows.first()).toContainText('big.txt');
+		await browser.getByRole('button', { name: 'Cancel' }).click();
+
 		const status = (await rawCall(page, 'session status')).result;
 		const source = path.join(status.workspace, 'nodes_signal', 'save_choice.py');
 		fs.mkdirSync(path.dirname(source), { recursive: true });

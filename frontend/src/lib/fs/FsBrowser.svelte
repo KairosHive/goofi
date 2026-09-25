@@ -1,14 +1,13 @@
 <script lang="ts">
 	import { graph } from '$lib/stores/graph.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
-	import type { FsEntry, FsRoot } from '$lib/api/control';
+	import { FS_SORTS, type FsEntry, type FsRoot, type FsSort } from '$lib/api/control';
 	import { downloadPatch } from '$lib/api/patchFile';
 	import { Bar, Button, ConfirmDialog, Dialog, EmptyState, Icon, IconButton, ScrollArea, TextInput } from '$lib/ui';
 	import { onMount, untrack } from 'svelte';
 
 	type Props = {
 		mode: 'save' | 'load';
-		initialPath?: string | null;
 		suggestedName?: string;
 		onPick: (path: string, overwrite?: boolean) => void;
 		onClose: () => void;
@@ -17,7 +16,6 @@
 	};
 	const {
 		mode,
-		initialPath = null,
 		suggestedName = '',
 		onPick,
 		onClose,
@@ -45,6 +43,51 @@
 		return () => ui().closeEditor(standdownId);
 	});
 
+	// The order is this viewer's own convenience, so it lives in the browser, best-effort.
+	const SORT_KEY = 'goofi.fs.sort';
+	let sort = $state<{ by: FsSort; reverse: boolean }>(storedSort());
+
+	function storedSort(): { by: FsSort; reverse: boolean } {
+		try {
+			const s = JSON.parse(localStorage.getItem(SORT_KEY) ?? 'null');
+			if (FS_SORTS.includes(s?.by)) return { by: s.by, reverse: s.reverse === true };
+		} catch {
+			/* private mode or a stale value; the default stands */
+		}
+		return { by: 'name', reverse: false };
+	}
+
+	// A click on the active column turns its order; another column starts newest or largest first.
+	function sortBy(by: FsSort): void {
+		sort = { by, reverse: sort.by === by ? !sort.reverse : by !== 'name' };
+		try {
+			localStorage.setItem(SORT_KEY, JSON.stringify(sort));
+		} catch {
+			/* private mode; persistence is best-effort */
+		}
+		void go(cwd);
+	}
+
+	const day = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+	const date = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+
+	function when(ms: number | null): string {
+		if (ms === null) return '';
+		const at = new Date(ms);
+		return at.toDateString() === new Date().toDateString() ? day.format(at) : date.format(at);
+	}
+
+	function bytes(n: number | null): string {
+		if (n === null) return '';
+		const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+		let i = 0;
+		while (n >= 1000 && i < units.length - 1) {
+			n /= 1000;
+			i++;
+		}
+		return `${i === 0 || n >= 10 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
+	}
+
 	// A slower earlier listing must not clobber the directory the user has since navigated to.
 	let navSeq = 0;
 
@@ -53,7 +96,7 @@
 		error = null;
 		selected = null;
 		try {
-			const res = await g.listDir(path ?? undefined);
+			const res = await g.listDir(path || undefined, sort.by, sort.reverse);
 			if (seq !== navSeq) return;
 			cwd = res.path;
 			pathDraft = res.path;
@@ -113,7 +156,7 @@
 
 	onMount(() => {
 		// Focus after the first listing lands: earlier latches the input into editing mode.
-		void go(initialPath).then(() => pathBarEl?.querySelector('input')?.focus());
+		void go().then(() => pathBarEl?.querySelector('input')?.focus());
 	});
 
 	const title = $derived(mode === 'save' ? 'Save patch' : 'Load patch');
@@ -142,8 +185,17 @@
 
 		<div class="body">
 			<nav class="roots">
-				{#each roots as r (r.path)}
-					<button class="root" class:active={cwd === r.path} onclick={() => go(r.path)}>{r.label}</button>
+				{#each roots as r, i (r.path)}
+					{#if r.recent && !roots[i - 1]?.recent}
+						<span class="recent">Recent</span>
+					{/if}
+					<button
+						class="root"
+						class:active={cwd === r.path}
+						title={r.path}
+						data-testid={r.recent ? 'fs-recent' : 'fs-root'}
+						onclick={() => go(r.path)}>{r.label}</button
+					>
 				{/each}
 			</nav>
 
@@ -169,6 +221,20 @@
 					<div class="err" data-testid="fs-error">{error}</div>
 				{/if}
 
+				<div class="head" data-testid="fs-sort">
+					<span></span>
+					{#each FS_SORTS as by (by)}
+						<button
+							class="col {by}"
+							class:on={sort.by === by}
+							aria-pressed={sort.by === by}
+							data-testid={`fs-sort-${by}`}
+							onclick={() => sortBy(by)}
+							>{by}{#if sort.by === by}<span class="dir">{sort.reverse ? '↓' : '↑'}</span>{/if}</button
+						>
+					{/each}
+				</div>
+
 				<ScrollArea data-testid="fs-list">
 					<ul class="rows">
 						{#each entries as entry (entry.path)}
@@ -183,6 +249,8 @@
 								>
 									<span class="ico">{entry.kind === 'dir' ? '📁' : entry.is_gfi ? '◆' : '·'}</span>
 									<span class="nm">{entry.name}</span>
+									<span class="modified">{when(entry.modified)}</span>
+									<span class="size">{bytes(entry.size)}</span>
 								</button>
 							</li>
 						{/each}
@@ -285,8 +353,15 @@
 		background: var(--surface-2);
 		overflow-y: auto;
 	}
+	.recent {
+		padding: var(--space-4) var(--space-4) var(--space-1);
+		color: var(--text-muted);
+	}
 	.root {
 		font: inherit;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 		background: transparent;
 		border: none;
 		color: var(--text);
@@ -319,6 +394,47 @@
 		padding: var(--space-3) var(--space-5);
 		font-family: var(--font-mono);
 	}
+	/* The header and every row share one grid, so the columns line up. */
+	.head,
+	.entry {
+		display: grid;
+		grid-template-columns: 1rem minmax(0, 1fr) 8rem 4.5rem;
+		align-items: center;
+		gap: var(--space-4);
+		padding: var(--space-2) var(--space-6);
+	}
+	.head {
+		border-bottom: 1px solid var(--border);
+		font-family: var(--font-mono);
+	}
+	.col {
+		font: inherit;
+		background: transparent;
+		border: none;
+		padding: 0;
+		color: var(--text-muted);
+		text-align: left;
+		cursor: pointer;
+	}
+	.col.on {
+		color: var(--text);
+	}
+	.col:focus-visible {
+		outline: var(--focus-width) solid var(--focus-ink);
+	}
+	.col.size,
+	.entry .size {
+		text-align: right;
+	}
+	.dir {
+		margin-left: var(--space-1);
+	}
+	.entry .modified,
+	.entry .size {
+		color: var(--text-muted);
+		white-space: nowrap;
+		overflow: hidden;
+	}
 	.rows {
 		list-style: none;
 		margin: 0;
@@ -327,16 +443,12 @@
 	.entry {
 		font: inherit;
 		font-family: var(--font-mono);
-		display: flex;
-		align-items: center;
-		gap: var(--space-4);
 		width: 100%;
 		text-align: left;
 		background: transparent;
 		border: none;
 		border-radius: var(--radius-sm);
 		color: var(--text);
-		padding: var(--space-2) var(--space-6);
 		cursor: pointer;
 		transition: background var(--dur-fast) var(--ease);
 	}
@@ -347,8 +459,6 @@
 		background: var(--accent-fill);
 	}
 	.entry .ico {
-		flex: 0 0 auto;
-		width: 1rem;
 		text-align: center;
 	}
 	.entry.gfi .ico {
@@ -380,6 +490,20 @@
 		.root {
 			flex: 0 0 auto;
 			white-space: nowrap;
+		}
+		.recent {
+			flex: 0 0 auto;
+			align-self: center;
+			padding: 0 var(--space-2);
+		}
+		/* A phone keeps the date and drops the size. */
+		.head,
+		.entry {
+			grid-template-columns: 1rem minmax(0, 1fr) 6.5rem;
+		}
+		.col.size,
+		.entry .size {
+			display: none;
 		}
 	}
 </style>
