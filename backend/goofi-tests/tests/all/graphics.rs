@@ -354,7 +354,9 @@ fn shaders_render_on_the_gpu() {
     g.set_param(up, "common", "width", 4);
     g.set_param(up, "common", "height", 4);
     g.link(img, "out", up, "input");
-    let frame = drawn(&g, up, "the uploaded image", |d| shape(d) == vec![4, 4, 4]);
+    // Waited to the upload itself: the resize can draw before the signal frame lands, and that
+    // frame is the right size and empty.
+    let frame = drawn(&g, up, "the uploaded image", |d| shape(d) == vec![4, 4, 4] && px(d, 0, 0) != [0.0; 4]);
     assert!(close(px(&frame, 0, 0), [0.0, 1.0, 0.5, 1.0]), "row 0 is the top: {:?}", px(&frame, 0, 0));
     assert!(close(px(&frame, 3, 3), [1.0, 0.0, 0.5, 1.0]), "and row 3 the bottom: {:?}", px(&frame, 3, 3));
 
@@ -369,7 +371,7 @@ fn shaders_render_on_the_gpu() {
     g.link(ramp, "out", up, "input");
     g.set_param(up, "common", "width", 64);
     g.set_param(up, "common", "height", 32);
-    let frame = drawn(&g, up, "the raw [1, 64] frame", |d| shape(d) == vec![32, 64, 4]);
+    let frame = drawn(&g, up, "the raw [1, 64] frame", |d| shape(d) == vec![32, 64, 4] && px(d, 0, 0)[3] == 1.0);
     assert!(close(px(&frame, 0, 0), [0.0, 0.0, 0.0, 1.0]), "texture mode is the frame itself: {:?}", px(&frame, 0, 0));
 
     g.set_param(up, "signal", "mode", "line");
