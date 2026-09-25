@@ -92,6 +92,8 @@ before the first production deployment.
 - All Rust tests belong in `goofi-tests` and use public APIs. Prefer named sessions over isolated
   assertions; extend the situation that owns a surface rather than adding a unit test. Check Svelte changes with typecheck and a relevant Playwright session.
 - Tests must not open audio hardware or native windows. Use the test clocks and hosts.
+- A test asserts the state reached, never how fast: no rate floors, duration ratios, latency
+  ceilings or sleeps as synchronization. Poll against the harness `WAIT`. No test simulates load.
 - `goofi-init` also removes build artifacts under `target/` untouched for three days, so a moved
   hash does not leave its output behind for good.
 - `plugins/` holds the plugins goofi ships as source; `sdk/README.md` is the plugin interface.

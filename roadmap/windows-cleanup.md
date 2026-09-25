@@ -125,3 +125,5 @@ states the defect only; the fix for each is still to be decided. Related entries
   `usr\bin` on PATH, `agent.spec.ts` fails on Windows.
 - **The Windows orphan test does not run.** The test that a child stops when goofi dies is
   unix-only (`goofi-tests` `children.rs`), so the Windows liveness pipe has no test.
+- **Windows CI runs no test code.** The platform job only boots `--headless --list-nodes`,
+  because every situation opens an iceoryx2 listener. A wrong `site_packages` layout would pass.
