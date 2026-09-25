@@ -6,97 +6,58 @@ use std::path::Path;
 use goofi_python::{discover_one, probe_introspect, Discovery};
 use goofi_node::Isolation;
 
-/// The first interpreter that can `import goofi`: an override, the repo's venvs, then the system one.
-fn test_python() -> String {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut cands: Vec<String> = Vec::new();
-    if let Ok(p) = std::env::var("GOOFI_PYMOD_TEST_PYTHON") {
-        if !p.is_empty() {
-            cands.push(p);
-        }
-    }
-    for venv in [".gfivenv-ft", ".gfivenv"] {
-        // Both layouts: `python3` on Windows is an App Execution Alias that answers with an advert.
-        for tail in ["bin/python", "Scripts/python.exe"] {
-            cands.push(repo.join(venv).join(tail).to_string_lossy().into_owned());
-        }
-    }
-    cands.push("python3".to_string());
-    for cand in &cands {
-        let ok = std::process::Command::new(cand)
-            .args(["-c", "import goofi"])
-            // A host PYTHONPATH would shadow the candidate's own goofi, which the probe strips.
-            .env_remove("PYTHONPATH")
-            .env_remove("PYTHONHOME")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if ok {
-            return cand.clone();
-        }
-    }
-    panic!(
-        "no python with `goofi` importable (tried {cands:?}). Provision one with \
-         goofi once (it provisions both venvs at startup), or set GOOFI_PYMOD_TEST_PYTHON. Refusing to \
-         silent-skip a cross-language test."
-    )
-}
-
-/// The FREE-THREADED interpreter (the in-process tier's host), for the routing gate's SAFE half.
-fn ft_python() -> String {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut cands: Vec<String> = Vec::new();
-    if let Ok(p) = std::env::var("GOOFI_FT_PYTHON") {
-        if !p.is_empty() {
-            cands.push(p);
-        }
-    }
-    for tail in ["bin/python", "Scripts/python.exe"] {
-        cands.push(repo.join(".gfivenv-ft").join(tail).to_string_lossy().into_owned());
-    }
-    for cand in &cands {
-        // Free-threaded builds are exactly the ones where sys._is_gil_enabled() is False.
-        let ft = std::process::Command::new(cand)
-            .args(["-c", "import sys; sys.exit(0 if not sys._is_gil_enabled() else 1)"])
-            .env_remove("PYTHONPATH")
-            .env_remove("PYTHONHOME")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if ft {
-            return cand.clone();
-        }
-    }
-    panic!(
-        "no free-threaded python found (tried {cands:?}). Provision one with \
-         goofi once (it provisions both venvs at startup), or set GOOFI_FT_PYTHON."
-    )
-}
-
-/// The GIL interpreter (the subprocess tier's host) — the repo's `.gfivenv`.
-fn gil_python() -> String {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let venv = repo.join(".gfivenv");
-    // `bin/` on unix, `Scripts/` on Windows; the conventional name stands in so the assertion names one.
-    let p = [venv.join("bin/python"), venv.join("Scripts/python.exe")]
-        .into_iter()
-        .find(|c| c.is_file())
-        .unwrap_or_else(|| venv.join("bin/python"));
-    let ok = std::process::Command::new(&p)
-        .args(["-c", "import goofi"])
+/// Whether `py` runs `code` cleanly, with the host's Python variables stripped as the probe strips them.
+fn answers(py: &str, code: &str) -> bool {
+    std::process::Command::new(py)
+        .args(["-c", code])
         .env_remove("PYTHONPATH")
         .env_remove("PYTHONHOME")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    assert!(ok, "no `.gfivenv` python with goofi importable ({}). Run goofi once (it provisions both venvs at startup)", p.display());
-    p.to_string_lossy().into_owned()
+        .is_ok_and(|s| s.success())
+}
+
+/// A repo venv's interpreter, where goofi-init made it.
+fn venv(name: &str) -> Option<String> {
+    goofi_init::venv_python(&goofi_init::repo_root().join(name)).map(|p| p.to_string_lossy().into_owned())
+}
+
+/// A set, non-empty override.
+fn named(var: &str) -> Option<String> {
+    std::env::var(var).ok().filter(|p| !p.is_empty())
+}
+
+/// The first interpreter that can `import goofi`: an override, the repo's venvs, then the system one.
+fn test_python() -> String {
+    let cands: Vec<String> = named("GOOFI_PYMOD_TEST_PYTHON").into_iter()
+        .chain(venv(goofi_init::FT_VENV))
+        .chain(venv(goofi_init::GIL_VENV))
+        .chain(["python3".to_string()])
+        .collect();
+    cands.iter().find(|c| answers(c, "import goofi")).cloned().unwrap_or_else(|| panic!(
+        "no python with `goofi` importable (tried {cands:?}). Provision one with \
+         goofi once (it provisions both venvs at startup), or set GOOFI_PYMOD_TEST_PYTHON. Refusing to \
+         silent-skip a cross-language test."
+    ))
+}
+
+/// The FREE-THREADED interpreter (the in-process tier's host), for the routing gate's SAFE half.
+fn ft_python() -> String {
+    let cands: Vec<String> = named("GOOFI_FT_PYTHON").into_iter().chain(venv(goofi_init::FT_VENV)).collect();
+    // Free-threaded builds are exactly the ones where sys._is_gil_enabled() is False.
+    let ft = "import sys; sys.exit(0 if not sys._is_gil_enabled() else 1)";
+    cands.iter().find(|c| answers(c, ft)).cloned().unwrap_or_else(|| panic!(
+        "no free-threaded python found (tried {cands:?}). Provision one with \
+         goofi once (it provisions both venvs at startup), or set GOOFI_FT_PYTHON."
+    ))
+}
+
+/// The GIL interpreter (the subprocess tier's host) — the repo's `.gfivenv`.
+fn gil_python() -> String {
+    venv(goofi_init::GIL_VENV).filter(|p| answers(p, "import goofi")).unwrap_or_else(|| panic!(
+        "no `.gfivenv` python with goofi importable. Run goofi once (it provisions both venvs at startup)"
+    ))
 }
 
 fn fixtures() -> std::path::PathBuf {

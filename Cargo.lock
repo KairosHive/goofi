@@ -996,7 +996,6 @@ dependencies = [
  "serde",
  "serde_json",
  "shell-words",
- "tempfile",
  "tokio",
  "toml 0.8.23",
 ]
@@ -1024,7 +1023,6 @@ dependencies = [
  "goofi-python",
  "goofi-record",
  "goofi-signal",
- "goofi-signal-sdk",
  "goofi-transport",
  "goofi-window",
  "serde_json",
@@ -1247,6 +1245,7 @@ dependencies = [
  "goofi-audio",
  "goofi-audio-sdk",
  "goofi-bridge",
+ "goofi-cli",
  "goofi-client",
  "goofi-codec",
  "goofi-core",

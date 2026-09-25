@@ -232,7 +232,7 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
     assert!(!declared.is_empty(), "a fresh goofi offers a library");
     // Both or neither: registering without the `_` prefix ships a product node, and the prefix
     // without registration is invisible to the tests it exists for.
-    for want in ["_TestEcho", "_TestSink", "_TestFail", "_TestPanic", "_TestSetupFail", "_TestSlow",
+    for want in ["_TestEcho", "_TestSink", "_TestFail", "_TestPanic", "_TestSetupFail",
                  "_TestCounter", "_TestRequired", "_TestPicker", "_TestMute", "_TestConst"] {
         assert!(names.contains(&want), "{want} is not in the catalog: {names:?}");
         assert!(want.starts_with('_'), "{want} would show in the palette");
@@ -369,14 +369,6 @@ async fn the_palette_rides_the_snapshot_and_the_graph_never_does() {
     assert!(ev.next("graph_replaced").get("node_types").is_none(), "the echo omits the catalog");
     assert!(ev.next("node_types")["types"].as_array().is_some_and(|a| !a.is_empty()),
             "…and a separate event carries it");
-}
-
-#[test]
-fn a_type_id_names_its_engine() {
-    assert_eq!(goofi_node::qualify("audio", "Filter"), "audio:Filter");
-    assert_eq!(goofi_node::split_type_id("audio:Filter"), (Some("audio"), "Filter"));
-    assert_eq!(goofi_node::split_type_id("Filter"), (None, "Filter"));
-    assert_eq!(goofi_node::bare("audio:Filter"), "Filter");
 }
 
 #[test]

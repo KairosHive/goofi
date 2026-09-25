@@ -580,13 +580,11 @@ impl Client {
     /// Read frames until the replica satisfies `want`. `want` must be POSITIVE: an absence
     /// predicate is already true of the empty replica.
     pub async fn until_doc(&mut self, want: impl Fn(&GraphDoc) -> bool) {
-        for _ in 0..200 {
-            if want(&self.doc) {
-                return;
-            }
+        let deadline = Instant::now() + WAIT;
+        while !want(&self.doc) {
+            assert!(Instant::now() < deadline, "the replica never reached the state this test waited for");
             self.text().await;
         }
-        panic!("the replica never reached the state this test waited for");
     }
 
     /// Send an RPC and return its result, skipping the events interleaved with the reply.

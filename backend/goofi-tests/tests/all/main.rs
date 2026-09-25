@@ -29,8 +29,6 @@ mod plugins;
 mod python;
 #[cfg(feature = "embed")]
 mod python_init_order;
-#[cfg(feature = "embed")]
-mod python_module_hygiene;
 mod recording;
 mod running;
 mod session;

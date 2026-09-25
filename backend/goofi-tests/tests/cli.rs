@@ -1,7 +1,7 @@
-//! The CLI session: the client library against the real `/exec` door — target resolution over
-//! the machine's sessions, every phrase reachable, the batch as one undo step per actor, and the raw
-//! read round-tripped through NPY. The true argv-to-process path is e2e's, which spawns the
-//! real binary; nothing here depends on the bin crate.
+//! The CLI session: the serve command line the binary parses, then the client library against the
+//! real `/exec` door — target resolution over the machine's sessions, every phrase reachable, the
+//! batch as one undo step per actor, and the raw read round-tripped through NPY. The spawned
+//! binary's argv-to-process path is e2e's.
 
 use goofi_client as client;
 use goofi_core::session;
@@ -18,22 +18,42 @@ fn ok(url: &str, actor: &str, cmd: &str) -> String {
     entries.into_iter().next().map(|e| e["text"].as_str().unwrap_or_default().to_string()).unwrap_or_default()
 }
 
+#[test]
+fn the_serve_command_line_reads_its_flags_and_names_what_it_refuses() {
+    let parse = |args: &[&str]| goofi_cli::parse_args(args.iter().map(|s| s.to_string()));
+    let bare = parse(&[]).expect("no arguments is a valid invocation");
+    assert_eq!((bare.port, bare.bind.as_str()), (None, "127.0.0.1"), "the port is the doors' to decide");
+    let cli = parse(&["--port", "9001", "--extra-nodes", "theirs", "--bind", "a", "--list-nodes",
+                      "--extra-nodes", "mine", "--bind", "0.0.0.0", "--load", "patch.gfi"])
+        .expect("a well-formed invocation");
+    assert_eq!((cli.port, cli.bind.as_str(), cli.load.as_deref()), (Some(9001), "0.0.0.0", Some("patch.gfi")),
+               "a repeated --bind replaces");
+    assert_eq!(cli.extra_nodes, ["theirs", "mine"], "…while --extra-nodes adds");
+    assert!(cli.list_nodes && !cli.help);
+    for flag in ["--port", "--bind", "--extra-nodes", "--load"] {
+        let err = parse(&[flag]).expect_err(&format!("`{flag}` alone must not be ignored"));
+        assert!(err.contains(flag), "the message names the flag: {err}");
+    }
+    assert!(parse(&["--port", "nope"]).unwrap_err().contains("--port"));
+    assert!(parse(&["--frobnicate"]).unwrap_err().contains("unknown argument `--frobnicate`"));
+
+    for safe in ["127.0.0.1", "localhost", "::1", "127.0.0.53"] {
+        assert!(goofi_cli::exposure_warning(safe).is_none(), "`{safe}` is this machine");
+    }
+    for open in ["0.0.0.0", "::", "192.168.7.5", "goofi.local"] {
+        let warn = goofi_cli::exposure_warning(open).unwrap_or_else(|| panic!("`{open}` warns"));
+        assert!(warn.contains(open) && warn.contains("shell") && warn.contains("no authentication"),
+                "the warning names the address, the exposure and that nothing else guards it: {warn}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec() {
-    // The ONE test in this binary, so the process-global env is nobody else's.
+    // The one test here that touches the process-global env, so it is nobody else's.
     let tmp = std::env::temp_dir().join(format!("goofi-cli-home-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::env::set_var("GOOFI_HOME", &tmp);
     std::env::remove_var("GOOFI_SESSION");
-
-    // No session of ours yet. The listing is machine-wide, so what the bare resolution answers
-    // depends on the developer's own goofis: none is refused by telling how to start one, exactly
-    // one is taken, several are refused by naming them.
-    let others = client::list().len();
-    match client::resolve_target() {
-        Ok(taken) => assert_eq!(others, 1, "one foreign goofi is the target: {taken:?}"),
-        Err(why) => assert!(why.contains(if others == 0 { "no running goofi" } else { "several" }), "{why}"),
-    }
 
     // The server is in-process (`serve_app`): the harness holds THIS process's session, and the
     // record under test is written here, as the binary's serve path writes its own.
@@ -45,26 +65,25 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     goofi_transport::record_url(&url);
 
     // A record nobody holds is DEAD and is swept as it is met; the held one is listed.
-    let dead = session::system_dir("long_gone");
+    // Records are named per process: another run of this suite shares the machine's listing.
+    let gone = format!("long_gone_{}", std::process::id());
+    let dead = session::system_dir(&gone);
     std::fs::create_dir_all(&dead).unwrap();
     std::fs::File::create(dead.join("alive.lock")).unwrap();
-    std::fs::write(dead.join("session.json"), r#"{"id":"long_gone","url":"http://127.0.0.1:1"}"#).unwrap();
+    std::fs::write(dead.join("session.json"), format!(r#"{{"id":"{gone}","url":"http://127.0.0.1:1"}}"#)).unwrap();
     let rows = client::list();
     assert!(rows.iter().any(|s| s.id == id && s.url == url), "{rows:?}");
     assert!(!dead.exists(), "the dead record was swept; the live one stays");
-    if others == 0 {
-        let target = client::resolve_target().unwrap();
-        assert_eq!(target.id, id);
-    }
 
-    // A second held session — another goofi on the machine — makes the bare resolution
-    // ambiguous, and it says so by naming both.
-    let peer = session::hold("busy_peer").unwrap();
+    // The listing is machine-wide, so only named rows are asserted. A second held session makes
+    // the bare resolution ambiguous, and it says so by naming both.
+    let busy = format!("busy_peer_{}", std::process::id());
+    let peer = session::hold(&busy).unwrap();
     peer.record_url("http://127.0.0.1:1");
-    let rows = client::list();
-    assert_eq!(rows.len(), others + 2, "both alive: {rows:?}");
+    let listed = |who: &str| client::list().iter().any(|s| s.id == who);
+    assert!(listed(&busy) && listed(&id), "both alive: {:?}", client::list());
     let why = client::resolve_target().unwrap_err();
-    assert!(why.contains("several") && why.contains("busy_peer") && why.contains(&id), "{why}");
+    assert!(why.contains("several") && why.contains(&busy) && why.contains(&id), "{why}");
     // GOOFI_SESSION breaks the tie — and one naming NOTHING is refused by pointing at
     // the listing.
     std::env::set_var("GOOFI_SESSION", "no_such_goofi");
@@ -75,8 +94,7 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     assert_eq!(target.id, id);
     // Released cleanly: gone from the listing at once.
     drop(peer);
-    let rows = client::list();
-    assert_eq!(rows.len(), others + 1, "{rows:?}");
+    assert!(!listed(&busy) && listed(&id), "{:?}", client::list());
 
     // Every phrase is reachable through the real door: `--help` on each resolves and answers.
     let ops: serde_json::Value = serde_json::from_str(&ok(&url, "default", "op list")).unwrap();
@@ -165,17 +183,11 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     );
 
     // `--raw` round-trips: the entry's rendered form IS the NPY bytes, ready for a pipe.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    let npy = loop {
+    let npy = g.until("a frame to reach the raw read", |_| {
         let entries =
             client::exec(&url, &lines(&[&format!("node snapshot {uid}/out --raw")]), None).unwrap();
-        let bytes = client::rendered(&entries[0]);
-        if bytes.starts_with(b"\x93NUMPY") {
-            break bytes;
-        }
-        assert!(std::time::Instant::now() < deadline, "no frame ever reached the raw read");
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    };
+        Some(client::rendered(&entries[0])).filter(|bytes| bytes.starts_with(b"\x93NUMPY"))
+    });
     let hlen = u16::from_le_bytes([npy[8], npy[9]]) as usize;
     assert!((npy.len() - 10 - hlen).is_multiple_of(4) && npy.len() > 10 + hlen, "a whole f32 payload");
 

@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use futures_util::StreamExt;
-use goofi_tests::{f32s, hex, host, http, j, panels, tool, Client, Goofi, Message, Uid, Viewer};
+use futures_util::{SinkExt, StreamExt};
+use goofi_tests::{f32s, hex, host, http, j, panels, tool, Client, Goofi, Message, Uid, Viewer, Ws, WAIT};
 use serde_json::Value;
 
 #[tokio::test]
@@ -178,7 +178,7 @@ fn depth_range(meta: &[u8]) -> (f64, f64) {
 /// Raw frames until one whose body `want` accepts. A viewer's constraints reach the reducer
 /// inband, so the frames before it applies them are the ones this reads past.
 async fn raw_until(v: &mut Viewer, want: impl Fn(&str, &[usize]) -> bool) -> Vec<u8> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + WAIT;
     loop {
         let frame = v.frame().await;
         let (_, _, body) = goofi_codec::split_frame(&frame).unwrap();
@@ -268,20 +268,25 @@ async fn a_tab_mirrors_the_graph_off_the_document_events_and_follows_a_peer_edit
     assert_eq!(answered, [9001, 9002]);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_tab_that_fell_behind_is_recovered_with_a_fresh_snapshot() {
-    // The victim has a tiny receive buffer and STOPS reading; a flood pushes past the 256-slot ring.
-    let g = Goofi::new();
-    let base = g.serve().await;
-    let addr: std::net::SocketAddr = host(&base).parse().unwrap();
+/// A socket on a receive buffer too small to hide a reader that stops: what a stalled tab is.
+async fn narrow(base: &str, path: &str) -> Ws {
+    let addr: std::net::SocketAddr = host(base).parse().unwrap();
     let sock = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM,
                                     Some(socket2::Protocol::TCP)).unwrap();
     sock.set_recv_buffer_size(2048).unwrap(); // also turns off the kernel's autotuning
     sock.connect(&addr.into()).unwrap();
     sock.set_nonblocking(true).unwrap();
     let stream = tokio::net::TcpStream::from_std(std::net::TcpStream::from(sock)).unwrap();
-    let (mut victim, _) = tokio_tungstenite::client_async(
-        format!("{base}/control"), tokio_tungstenite::MaybeTlsStream::Plain(stream)).await.unwrap();
+    tokio_tungstenite::client_async(format!("{base}{path}"), tokio_tungstenite::MaybeTlsStream::Plain(stream))
+        .await.unwrap().0
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tab_that_fell_behind_is_recovered_with_a_fresh_snapshot() {
+    // The victim has a tiny receive buffer and STOPS reading; a flood pushes past the 256-slot ring.
+    let g = Goofi::new();
+    let base = g.serve().await;
+    let mut victim = narrow(&base, "/control").await;
     victim.next().await; // the initial hello, then stall
 
     // Re-binding the SAME expression pushes a `state_update` without touching the doc, isolating events.
@@ -296,7 +301,7 @@ async fn a_tab_that_fell_behind_is_recovered_with_a_fresh_snapshot() {
     });
     flood.join().unwrap();
 
-    let recovered = tokio::time::timeout(Duration::from_secs(30), async {
+    let recovered = tokio::time::timeout(WAIT, async {
         loop {
             if let Some(Ok(Message::Text(t))) = victim.next().await {
                 if serde_json::from_str::<Value>(t.as_str()).unwrap()["event"] == "hello" {
@@ -308,6 +313,58 @@ async fn a_tab_that_fell_behind_is_recovered_with_a_fresh_snapshot() {
     .await
     .unwrap_or(false);
     assert!(recovered, "a lagged control client must recover via a fresh hello snapshot");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_viewer_that_stops_reading_parks_nothing_and_reading_again_draws_the_newest_frame() {
+    // A write to a stalled peer gives up at its bound; the pong deadline, past WAIT, never fires here.
+    let mut g = Goofi::new();
+    g.state.data_liveness = goofi_bridge::DataLiveness {
+        ping_interval: Duration::from_millis(100),
+        pong_deadline: WAIT * 2,
+        send_timeout: Duration::from_millis(50),
+    };
+    let base = g.serve().await;
+    // A ten-second window of a 10 kHz block: frames that grow to 400 kB, each unlike the last.
+    let lfo = g.add("LFO");
+    g.set_param(lfo, "output", "mode", "block");
+    g.set_param(lfo, "output", "sfreq", 10_000.0);
+    let buf = g.add("Buffer");
+    g.set_param(buf, "buffer", "size", 10.0);
+    g.link(lfo, "out", buf, "input");
+    let key = (buf, "out".to_string());
+    let path = format!("/data/{}/out", hex(buf));
+    let whole = j!([{ "dtype": "array", "ndim": [], "dims": [], "reduce": [] }]);
+    let mut leaving = Viewer { ws: narrow(&base, &path).await };
+    let mut back = Viewer { ws: narrow(&base, &path).await };
+    for v in [&mut leaving, &mut back] {
+        v.view(whole.clone()).await;
+        v.frame().await;
+    }
+
+    // Neither reads now. Four times what the kernel buffers at most is pushed at both.
+    let (mut pushed, mut seen) = (0, None);
+    g.until("the stalled sockets to fill", |g| {
+        let d = g.state.reducers.latest(key.clone())?;
+        if d.meta().index() != seen {
+            seen = d.meta().index();
+            pushed += f32s(&d).len() * 4;
+        }
+        (pushed > 16 << 20).then_some(())
+    });
+    // A socket whose write is jammed still reads, so its close lets the viewer go.
+    leaving.ws.send(Message::Close(None)).await.unwrap();
+    g.until("the closing viewer to be let go", |g| (g.state.reducers.subscribers(&key) == 1).then_some(()));
+
+    // The stall cost the other nothing: its socket stayed open, and the frame it was denied is
+    // offered again, so the producer's last one reaches it once it reads.
+    g.set_param(lfo, "common", "max_frequency", 0.01);
+    loop {
+        let index = back.decoded().await.meta().index();
+        if index.is_some() && index == g.state.reducers.latest(key.clone()).and_then(|d| d.meta().index()) {
+            break;
+        }
+    }
 }
 
 #[tokio::test]
@@ -416,8 +473,8 @@ async fn ask(addr: &str, path: &str, method: &str, headers: &str, host: &str) ->
     s.write_all(head.as_bytes()).await.unwrap();
     s.write_all(body.as_bytes()).await.unwrap();
     let mut buf = [0u8; 512];
-    let n = tokio::time::timeout(Duration::from_secs(5), s.read(&mut buf))
-        .await.expect("the route answered within 5s").unwrap();
+    let n = tokio::time::timeout(WAIT, s.read(&mut buf))
+        .await.expect("the route answered").unwrap();
     String::from_utf8_lossy(&buf[..n]).split_whitespace().nth(1)
         .expect("a status line").parse().expect("a status code")
 }

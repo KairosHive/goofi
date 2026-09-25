@@ -52,7 +52,3 @@ goofi-init = { path = "../goofi-init" }
 asio = ["goofi-audio/asio"]
 default = ["python", "asio"]
 python = ["dep:goofi-python", "goofi-python/embed", "goofi-signal/embed", "goofi-graphics/embed"]
-
-[dev-dependencies]
-# The trait the graceful-exit test's node implements.
-goofi-signal-sdk = { path = "../signal/goofi-signal-sdk" }

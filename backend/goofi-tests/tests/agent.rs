@@ -675,3 +675,27 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
     state.release_mount();
     read_until(&mut left, "exit_code").await; // no frame within its deadline panics
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unwatched_harness_that_asks_for_its_cursor_is_answered_and_the_ask_leaves_the_stream() {
+    // ConPTY asks on Windows; a child asking itself takes the same path on every platform.
+    let (_g, addr, state) = start_server().await;
+    let (mut ctl, _) = connect_async(format!("ws://{addr}/control")).await.unwrap();
+    recv_text(&mut ctl).await;
+    let id = call(&mut ctl, 1, "agent start", json!({ "name": "_sh" })).await["instance_id"]
+        .as_str().unwrap().to_string();
+    let inst = state.harnesses.get(&id).expect("the harness is on the roster");
+    // Raw and silent first, so the reply goofi types is read whole and never echoed.
+    inst.write(b"stty raw -echo; printf 'A\\033[6nB\\033[6nC'; dd bs=1 count=6 of=reply 2>/dev/null; stty sane; exit\n");
+    let reply = state.mount().join("reply");
+    let deadline = std::time::Instant::now() + WAIT;
+    while std::fs::read(&reply).map_or(true, |r| r.len() < 6) {
+        assert!(std::time::Instant::now() < deadline, "no reply reached the child");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(std::fs::read(&reply).unwrap(), b"\x1b[1;1R");
+    let tail = String::from_utf8_lossy(&inst.attach().tail).into_owned();
+    assert!(tail.contains("ABC") && !tail.contains("\u{1b}[6n"), "every ask left the stream: {tail:?}");
+    state.release_mount();
+}

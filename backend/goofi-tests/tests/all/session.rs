@@ -403,6 +403,16 @@ fn the_workspace_counts_as_unsaved_work_a_load_is_clean_and_a_new_patch_inherits
     assert!(!mount.join("agent.md").exists());
     assert!(std::fs::read_to_string(mount.join("AGENTS.md")).unwrap().contains("goofi is a live"));
     assert_eq!(std::fs::read_to_string(mount.join("CLAUDE.md")).unwrap(), "@AGENTS.md\n");
+    let ignore = goofi_graph::archive::IGNORE_FILE;
+    assert_eq!(std::fs::read_to_string(mount.join(ignore)).unwrap(), goofi_graph::archive::DEFAULT_IGNORE);
+    // Absent-only: what an agent or the author made of a seeded file is theirs.
+    for name in ["AGENTS.md", "CLAUDE.md", ignore] {
+        std::fs::write(mount.join(name), "their own\n").unwrap();
+    }
+    goofi_bridge::term::seed_orientation(&mount);
+    for name in ["AGENTS.md", "CLAUDE.md", ignore] {
+        assert_eq!(std::fs::read_to_string(mount.join(name)).unwrap(), "their own\n", "{name} was seeded over");
+    }
 }
 
 #[test]

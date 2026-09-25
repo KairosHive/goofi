@@ -55,6 +55,8 @@ name = "backend_parity"
 required-features = ["embed"]
 
 [dev-dependencies]
+# The serve command line the binary parses; no Python, so the default suite needs no interpreter.
+goofi-cli = { path = "../goofi-cli", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
 tempfile = "3"
 # The frame type a reducer subscription yields.

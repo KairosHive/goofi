@@ -5,48 +5,9 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use goofi_bridge::{serve_app, spawn_workers, AppState, HEADLESS_BUILD, SPA};
+use goofi_cli::{exposure_warning, parse_args, Cli, DEFAULT_PORT, USAGE};
 use goofi_core::startup::{report, Startup};
 use goofi_node::{Isolation, Scanned};
-
-#[derive(Debug)]
-struct Cli {
-    /// `None` until `--port` names one; [`DEFAULT_PORT`] otherwise.
-    port: Option<u16>,
-    bind: String,
-    /// Node source roots scanned before the patch's own; a later entry wins a shared type name.
-    extra_nodes: Vec<String>,
-    list_nodes: bool,
-    /// Serve the API alone: the SPA's routes are never mounted. Also set by `GOOFI_HEADLESS` in
-    /// the environment and by a binary built with it, both folded in by [`main`].
-    headless: bool,
-    /// Open `/dev/*`, the development surfaces. Also set by `GOOFI_DEBUG` in the environment.
-    debug: bool,
-    /// A PUBLIC goofi: no terminal, no agents, no filesystem, no save or load, no audio. Also set
-    /// by `GOOFI_DEMO` in the environment. Not a sandbox.
-    demo: bool,
-    /// A patch to open before the first client connects. Also `GOOFI_LOAD` in the environment.
-    load: Option<String>,
-    help: bool,
-}
-
-impl Default for Cli {
-    fn default() -> Self {
-        Self {
-            port: None,
-            bind: String::from("127.0.0.1"),
-            extra_nodes: Vec::new(),
-            list_nodes: false,
-            headless: false,
-            debug: false,
-            demo: false,
-            load: None,
-            help: false,
-        }
-    }
-}
-
-const USAGE: &str = "usage: goofi [serve] [--port N] [--bind HOST] \
-     [--extra-nodes DIR] [--list-nodes] [--headless] [--debug] [--demo] [--load PATCH]";
 
 fn headless_env() -> bool {
     matches!(std::env::var("GOOFI_HEADLESS").as_deref(), Ok("1") | Ok("true"))
@@ -56,9 +17,6 @@ fn debug_env() -> bool {
     matches!(std::env::var("GOOFI_DEBUG").as_deref(), Ok("1") | Ok("true"))
 }
 
-/// The port with no door naming one.
-const DEFAULT_PORT: u16 = 8000;
-
 fn demo_env() -> bool {
     matches!(std::env::var("GOOFI_DEMO").as_deref(), Ok("1") | Ok("true"))
 }
@@ -66,31 +24,6 @@ fn demo_env() -> bool {
 /// A set variable that is empty names nothing — a platform spells an unset variable that way.
 fn named_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
-}
-
-/// Parse the argument list (already skipping argv[0]). `Err` is the message to print before
-/// exiting 2.
-fn parse_args<I: Iterator<Item = String>>(mut args: I) -> Result<Cli, String> {
-    let mut cli = Cli::default();
-    while let Some(arg) = args.next() {
-        let need = |v: Option<String>| v.ok_or_else(|| format!("{arg} requires a value (try --help)"));
-        match arg.as_str() {
-            "--port" => {
-                let v = need(args.next())?;
-                cli.port = Some(v.parse().map_err(|_| format!("invalid --port `{v}`"))?);
-            }
-            "--bind" => cli.bind = need(args.next())?,
-            "--extra-nodes" => cli.extra_nodes.push(need(args.next())?),
-            "--list-nodes" => cli.list_nodes = true,
-            "--headless" => cli.headless = true,
-            "--debug" => cli.debug = true,
-            "--demo" => cli.demo = true,
-            "--load" => cli.load = Some(need(args.next())?),
-            "-h" | "--help" => cli.help = true,
-            other => return Err(format!("unknown argument `{other}` (try --help)")),
-        }
-    }
-    Ok(cli)
 }
 
 fn main() {
@@ -428,21 +361,6 @@ fn default_subproc_python() -> Result<String, String> {
     goofi_init::venv_python(&goofi_init::repo_root().join(goofi_init::GIL_VENV))
         .map(|p| p.display().to_string())
         .ok_or_else(|| format!("no {} — {}", goofi_init::GIL_VENV, goofi_init::RUN_ME))
-}
-
-/// The warning a `--bind` beyond this machine earns, or `None` for the loopback default. A name
-/// that is not an address warns too: only a parseable address can be proven local.
-fn exposure_warning(bind: &str) -> Option<String> {
-    let local = bind == "localhost"
-        || bind.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback());
-    (!local).then(|| {
-        format!(
-            "WARNING: --bind {bind} serves goofi beyond this machine, and goofi runs agent \
-             harnesses on a shell with your environment. Anyone who can reach this port can run \
-             commands as you: there is no authentication, only a guard against a web page \
-             reaching it through your browser."
-        )
-    })
 }
 
 /// Everything the process does once it has a state, returning its exit code: `std::process::exit`
@@ -816,86 +734,4 @@ fn boot_scan(state: &AppState) {
     let total = n_native + n_in + n_sub + n_shader;
     goofi_core::startup::note(format!("Node library: {total} available{bad}"));
     goofi_core::startup::note(format!("{n_native} native · {n_in} in-process · {n_sub} subprocess · {n_shader} shaders{NO_PYTHON_NOTE}"));
-}
-
-// The suite lives in `goofi-tests`; a binary has no lib target for it to reach into.
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn parse(args: &[&str]) -> Result<Cli, String> {
-        parse_args(args.iter().map(|s| s.to_string()))
-    }
-
-    #[test]
-    fn defaults_with_no_arguments() {
-        let cli = parse(&[]).expect("no arguments is a valid invocation");
-        assert_eq!(cli.port, None, "…and the port is decided by the doors, not by the parse");
-        assert_eq!(cli.bind, "127.0.0.1");
-        assert!(cli.extra_nodes.is_empty());
-        assert!(!cli.list_nodes && !cli.help);
-    }
-
-    #[test]
-    fn reads_every_value_taking_flag() {
-        let cli = parse(&[
-            "--port", "9001", "--bind", "0.0.0.0", "--extra-nodes", "b", "--list-nodes",
-            "--load", "patch.gfi",
-        ])
-        .expect("a well-formed invocation");
-        assert_eq!(cli.port, Some(9001));
-        assert_eq!(cli.bind, "0.0.0.0");
-        assert_eq!(cli.extra_nodes, ["b"]);
-        assert!(cli.list_nodes);
-        assert_eq!(cli.load.as_deref(), Some("patch.gfi"));
-    }
-
-    #[test]
-    fn extra_nodes_accumulates_where_the_other_flags_replace() {
-        let cli = parse(&["--extra-nodes", "theirs", "--bind", "a", "--extra-nodes", "mine",
-                          "--bind", "b"])
-            .expect("a repeated flag is well-formed");
-        assert_eq!(cli.extra_nodes, ["theirs", "mine"], "--extra-nodes adds");
-        assert_eq!(cli.bind, "b", "…while --bind still replaces");
-    }
-
-    #[test]
-    fn a_value_taking_flag_without_its_value_is_an_error() {
-        for flag in ["--port", "--bind", "--extra-nodes", "--load"] {
-            let err = parse(&[flag]).expect_err(&format!("`{flag}` alone must not be ignored"));
-            assert!(err.contains(flag), "the message names the flag: {err}");
-        }
-    }
-
-    #[test]
-    fn a_bind_beyond_this_machine_says_what_it_exposes() {
-        for safe in ["127.0.0.1", "localhost", "::1", "127.0.0.53"] {
-            assert!(exposure_warning(safe).is_none(), "`{safe}` is this machine");
-        }
-        for open in ["0.0.0.0", "::", "192.168.7.5", "goofi.local"] {
-            let warn = exposure_warning(open).unwrap_or_else(|| panic!("`{open}` warns"));
-            assert!(warn.contains(open), "the warning names the address: {warn}");
-            assert!(warn.contains("shell"), "the warning names the exposure: {warn}");
-            assert!(warn.contains("no authentication"), "…and that nothing else guards it: {warn}");
-        }
-    }
-
-    #[test]
-    fn rejects_an_unparseable_port_and_an_unknown_flag() {
-        assert!(parse(&["--port", "nope"]).unwrap_err().contains("--port"));
-        assert!(parse(&["--python-nodes", "x"]).unwrap_err().contains("unknown argument"));
-    }
-
-    #[test]
-    fn a_retired_node_flag_is_rejected_rather_than_ignored() {
-        for retired in [
-            ["--subproc-python", "/usr/bin/python3"],
-            ["--subproc-nodes", "dir"],
-            ["--auto-nodes", "dir"],
-        ] {
-            let err = parse(&retired).expect_err(&format!("`{}` is retired", retired[0]));
-            assert!(err.contains("unknown argument"), "and says so plainly: {err}");
-            assert!(err.contains(retired[0]), "…naming the flag the user typed: {err}");
-        }
-    }
 }

@@ -38,7 +38,6 @@ pub fn register(g: &mut Graph) {
     add(g, manifest("_TestFail", "process always errors", &[], OUT_ARRAY, NO_PARAMS, true), || Box::new(Failing));
     add(g, manifest("_TestPanic", "process panics", &[], OUT_ARRAY, NO_PARAMS, true), || Box::new(Panicking));
     add(g, manifest("_TestSetupFail", "setup always errors, so process never runs", &[], OUT_ARRAY, NO_PARAMS, true), || Box::new(SetupFail));
-    add(g, manifest("_TestSlow", "one run takes ten seconds", &[], OUT_ARRAY, NO_PARAMS, true), || Box::new(Slow));
     add(g, manifest("_TestCounter", "emits its own run count", IN_ARRAY, OUT_ARRAY, NO_PARAMS, true), || Box::new(Counter::default()));
     add(g, manifest("_TestSenders", "names the senders on its multi slot, in wire order", IN_MULTI, OUT_STRING, NO_PARAMS, false), || Box::new(Senders));
     add(g, manifest("_TestResettable", "counts up, and starts over on a pulse", &[], OUT_ARRAY, RESETTABLE_PARAMS, true), || Box::new(Resettable::default()));
@@ -313,15 +312,6 @@ impl Node for SetupFail {
     }
     fn process(&mut self, _i: &Inputs<'_>, o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {
         o.set("out", Data::array_f32(vec![1], 0f32.to_le_bytes().to_vec(), Meta::new()).unwrap());
-        Ok(())
-    }
-}
-
-/// Sleeps far past the shutdown ceiling, so a teardown that JOINED would hang instead of returning.
-struct Slow;
-impl Node for Slow {
-    fn process(&mut self, _i: &Inputs<'_>, _o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {
-        std::thread::sleep(std::time::Duration::from_secs(10));
         Ok(())
     }
 }
