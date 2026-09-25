@@ -4,6 +4,7 @@
 
 use std::path::Path;
 use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use goofi_node::{NodeManifest, Scanned, ScannedType};
@@ -110,50 +111,61 @@ impl Compiler {
 struct Order {
     job: Job,
     cell: Built,
-    shared: Arc<goofi_control::Shared>,
 }
 
-/// Where every pipeline in the process is built: ONE thread, beside the one device, so no op
-/// waits on a compile.
-fn compiler() -> Option<&'static mpsc::Sender<Order>> {
-    static ONE: OnceLock<Option<mpsc::Sender<Order>>> = OnceLock::new();
-    ONE.get_or_init(|| {
-        let gpu = crate::gpu::shared().ok()?;
+/// One engine's compile thread, so no op waits on a compile. Its stop drops what is still queued,
+/// waits out the compile in flight and joins the thread, so no compile outlives the engine.
+pub struct Compiler {
+    jobs: Option<mpsc::Sender<Order>>,
+    halt: Arc<AtomicBool>,
+    thread: Option<goofi_core::worker::Worker>,
+}
+
+impl Compiler {
+    pub fn start(gpu: Arc<Gpu>, shared: Arc<goofi_control::Shared>) -> Compiler {
         let (jobs, take) = mpsc::channel::<Order>();
-        goofi_core::worker::thread("goofi-graphics-compile")
+        let halt = Arc::new(AtomicBool::new(false));
+        let stopped = halt.clone();
+        let thread = goofi_core::worker::thread("goofi-graphics-compile")
             .spawn(move || {
                 while let Ok(order) = take.recv() {
+                    if stopped.load(Ordering::Acquire) {
+                        break;
+                    }
                     let _ = order.cell.set(compile(&gpu, &order.job));
                     // The tick picks the cell up by itself; the settle is for a refusal, which
                     // only a plan can turn into the node's standing error.
-                    order.shared.ask_settle();
+                    shared.ask_settle();
                     // The order may hold the last handle on the pipeline it just built.
                     crate::gpu::give_back(order);
                 }
             })
-            .ok()?;
-        Some(jobs)
-    })
-    .as_ref()
-}
+            .ok();
+        Compiler { jobs: thread.is_some().then_some(jobs), halt, thread }
+    }
 
-/// One engine's end of that queue: the shared state a finished compile must wake.
-#[derive(Clone)]
-pub struct Compiler(pub Arc<goofi_control::Shared>);
-
-impl Compiler {
     pub fn build(&self, job: Job) -> Built {
         let cell: Built = Arc::new(OnceLock::new());
-        let order = Order { job, cell: cell.clone(), shared: self.0.clone() };
-        match compiler() {
-            Some(jobs) => {
-                let _ = jobs.send(order);
-            }
-            None => {
-                let _ = cell.set(Err("no compile thread".into()));
-            }
+        let sent = self.jobs.as_ref().is_some_and(|jobs| jobs.send(Order { job, cell: cell.clone() }).is_ok());
+        if !sent {
+            let _ = cell.set(Err("no compile thread".into()));
         }
         cell
+    }
+
+    /// Called WITHOUT the device gate, which the compile in flight holds.
+    pub fn stop(&mut self) {
+        self.halt.store(true, Ordering::Release);
+        self.jobs = None;
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for Compiler {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 

@@ -201,7 +201,7 @@ impl GraphicsEngine {
             instance,
             time,
             clock,
-            compiler: Compiler(shared.clone()),
+            compiler: Compiler::start(gpu.clone(), shared.clone()),
             gpu,
             shared,
             classes: HashMap::new(),
@@ -547,12 +547,14 @@ impl Engine for GraphicsEngine {
         self
     }
 
-    /// Stop the clock, then every control half, and WAIT for each to release its shared memory.
+    /// Stop the clock and the compiler, then every control half, and WAIT for each to release its
+    /// shared memory.
     fn shutdown(&mut self) {
         if let Some((stop, thread)) = self.ticker.take() {
             stop.store(true, Ordering::Relaxed);
             let _ = thread.join();
         }
+        self.compiler.stop();
         if let Some(ui) = self.ui.take() {
             for (id, _) in std::mem::take(&mut self.windows).into_values() {
                 ui.post(move |host| host.close_window(id));
