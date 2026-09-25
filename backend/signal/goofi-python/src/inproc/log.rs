@@ -1,12 +1,16 @@
 //! Python text streams retain the source of the node thread that writes them.
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 use pyo3::prelude::*;
 use goofi_core::log::{self, Level};
 
 thread_local! {
     static LINES: RefCell<[String; 2]> = const { RefCell::new([String::new(), String::new()]) };
+    static GIL_WARNED: Cell<bool> = const { Cell::new(false) };
 }
+
+/// CPython's notice, printed by the thread whose import turned the GIL on.
+const GIL_WARNING: &str = "global interpreter lock (GIL) has been enabled";
 
 #[pyclass]
 struct Stream { error: bool, original: Option<Py<PyAny>> }
@@ -14,6 +18,9 @@ struct Stream { error: bool, original: Option<Py<PyAny>> }
 #[pymethods]
 impl Stream {
     fn write(&self, text: &str) -> usize {
+        if text.contains(GIL_WARNING) {
+            GIL_WARNED.set(true);
+        }
         LINES.with(|lines| {
             let mut lines = lines.borrow_mut();
             let pending = &mut lines[usize::from(self.error)];
@@ -66,6 +73,11 @@ pub fn install(py: Python<'_>) -> PyResult<()> {
         };
         run().map_err(|e| e.to_string())
     }).clone().map_err(pyo3::exceptions::PyRuntimeError::new_err)
+}
+
+/// Whether this thread printed the notice since it last asked.
+pub fn gil_warned_here() -> bool {
+    GIL_WARNED.replace(false)
 }
 
 pub fn flush() {
