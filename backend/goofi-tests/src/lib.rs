@@ -518,6 +518,15 @@ pub fn drive(g: &Goofi, frames: usize) -> (Vec<f32>, u16) {
     goofi_bridge::audio_engine(&mut graph).drive(frames)
 }
 
+/// Wait until every audio control half has taken what the patch last asked of it: one whole
+/// control tick each, acknowledged, so a param edit is in the next block `drive` renders.
+pub fn applied(g: &Goofi) {
+    let acks = goofi_bridge::audio_engine(&mut g.state.graph.lock().unwrap()).flush_recording();
+    for ack in acks {
+        let _ = ack.recv_timeout(WAIT).expect("a control half acknowledges its tick");
+    }
+}
+
 /// Tick the graphics engine's external clock `frames` times, on this thread — what the binary's
 /// own timer clock does, at the caller's pace.
 pub fn render(g: &Goofi, frames: usize) {

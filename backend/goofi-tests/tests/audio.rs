@@ -1232,11 +1232,13 @@ fn loudest(levels: &[f32]) -> usize {
     (0..levels.len()).max_by(|a, b| levels[*a].total_cmp(&levels[*b])).expect("a band")
 }
 
-/// A node's own output once the shape behind it has stopped moving. A follower's release is tens
-/// of milliseconds, so a tap read the moment a modulator changes still carries the bands that
-/// were open before it — and a measurement compared against another has to come from settled
-/// state, not from the way there.
+/// A node's own output once the shape behind it has stopped moving. The params last set reach the
+/// engine a control hop later, on wall time, so that hop is waited out first; a follower's release
+/// is then tens of milliseconds, so a tap read the moment a modulator changes still carries the
+/// bands that were open before it — and a measurement compared against another has to come from
+/// settled state, not from the way there.
 fn settled(g: &Goofi, uid: Uid, what: &str) -> Vec<f32> {
+    goofi_tests::applied(g);
     for _ in 0..5 {
         drive(g, TENTH);
     }
@@ -1294,18 +1296,18 @@ fn one_signal_speaks_through_another_band_by_band() {
     g.link(voice, "out", hush, "input");
     g.link(hush, "out", follow, "input");
     let levels = g.probe(follow, "out");
-    let low = g.until("the bands to settle on A4", |g| {
+    // Polled to the shape, not taken at the first loud frame: a follower's attack passes through
+    // the bands beside the one it lands on.
+    let low = g.until("A4 to settle on band 5 or 6 of the default bank", |g| {
         drive(g, TENTH);
-        shape_held(&levels).filter(|l| l.iter().any(|x| *x > 0.05))
+        shape_held(&levels).filter(|l| l.iter().any(|x| *x > 0.05) && (5..=6).contains(&loudest(l)))
     });
     assert_eq!(low.len(), 16, "sixteen bands are sixteen channels");
-    assert!((5..=6).contains(&loudest(&low)), "A4 is band 5 or 6 of the default bank: {low:?}");
     g.set_param(voice, "osc", "pitch", 3.75);
-    let high = g.until("the bands to follow the tone up", |g| {
+    g.until("three octaves up to settle high in the bank", |g| {
         drive(g, TENTH);
-        shape_held(&levels).filter(|l| loudest(l) != loudest(&low))
+        shape_held(&levels).filter(|l| loudest(l) >= 12)
     });
-    assert!(loudest(&high) >= 12, "three octaves up is high in the bank: {} of 16", loudest(&high));
 
     // Both banks read the one layout, so the follower stands on partials too: C4 into a bank
     // standing at C4 is the FIRST partial, which is the first band.
