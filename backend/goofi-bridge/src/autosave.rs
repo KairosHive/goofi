@@ -61,9 +61,9 @@ pub(crate) fn spawn(state: AppState) {
     }
 }
 
-/// Every live mount and the waker its event pulses. ONE watcher serves them all: a user's inotify
-/// instances are few, and a process may run several managers.
-static MOUNTS: Mutex<Vec<(PathBuf, Arc<goofi_node::DrainWaker>)>> = Mutex::new(Vec::new());
+/// Every live mount, as given and symlink-free, and the waker its event pulses. ONE watcher serves
+/// them all. FSEvents names the real path: a macOS temp mount is `/var/…`, its events `/private/var/…`.
+static MOUNTS: Mutex<Vec<(PathBuf, PathBuf, Arc<goofi_node::DrainWaker>)>> = Mutex::new(Vec::new());
 
 /// The process's one watcher, made on first use and again after a refusal: the instances a
 /// machine grants run out while other programs hold them.
@@ -73,8 +73,10 @@ fn watch(mount: &Path) -> bool {
     let mut watcher = WATCHER.lock().unwrap();
     if watcher.is_none() {
         match notify::recommended_watcher(|event: notify::Result<notify::Event>| {
-            let hit = |mount: &Path| event.as_ref().map_or(true, |e| e.paths.is_empty() || e.paths.iter().any(|p| p.starts_with(mount)));
-            for (_, changed) in MOUNTS.lock().unwrap().iter().filter(|(m, _)| hit(m)) {
+            let hit = |at: &[&PathBuf]| {
+                event.as_ref().map_or(true, |e| e.paths.is_empty() || e.paths.iter().any(|p| at.iter().any(|m| p.starts_with(m))))
+            };
+            for (_, _, changed) in MOUNTS.lock().unwrap().iter().filter(|(m, real, _)| hit(&[m, real])) {
                 changed.notify();
             }
         }) {
@@ -112,14 +114,15 @@ impl Watch {
         }
         self.release();
         if watch(&mount) {
-            MOUNTS.lock().unwrap().push((mount.clone(), self.changed.clone()));
+            let real = goofi_core::path::canonical(&mount).unwrap_or_else(|_| mount.clone());
+            MOUNTS.lock().unwrap().push((mount.clone(), real, self.changed.clone()));
             self.at = Some(mount);
         }
     }
 
     fn release(&mut self) {
         let Some(old) = self.at.take() else { return };
-        MOUNTS.lock().unwrap().retain(|(m, _)| *m != old);
+        MOUNTS.lock().unwrap().retain(|(m, _, _)| *m != old);
         if let Some(w) = WATCHER.lock().unwrap().as_mut() {
             let _ = w.unwatch(&old);
         }
