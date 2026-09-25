@@ -431,7 +431,7 @@ fn a_scheduled_engine_beside_the_signal_one() {
 
     // Step: a viewer on a skeleton slot is a plain subscriber on the derived name.
     let audio_probe = t.probe(audio, "out");
-    let block = audio_probe.expect_frame(&mut t.state.graph.lock().unwrap(), "the audio block");
+    let block = t.until("the audio block", |_| audio_probe.latest());
     assert_eq!(f32s(&block)[0], 0.25, "the static block, decoded off the shared transport");
     assert_eq!(f32s(&block).len(), 64);
 
@@ -474,7 +474,7 @@ fn a_scheduled_engine_beside_the_signal_one() {
     let echo = t.add("_TestEcho");
     t.link(audio, "out", echo, "input");
     let echoed = t.probe(echo, "out");
-    let crossed = echoed.expect_frame(&mut t.state.graph.lock().unwrap(), "the crossed block");
+    let crossed = t.until("the crossed block", |_| echoed.latest());
     assert_eq!(f32s(&crossed), f32s(&block), "the signal node re-emits what the skeleton made");
 
     // Step: signal → skeleton. The boundary is drained at the SKELETON's own tick — no doorbell
@@ -483,7 +483,7 @@ fn a_scheduled_engine_beside_the_signal_one() {
     let osc = t.add("signal:LFO");
     t.link(osc, "out", audio, "input");
     let back = t.probe(audio, "echo");
-    let boundary = back.expect_frame(&mut t.state.graph.lock().unwrap(), "the boundary echo");
+    let boundary = t.until("the boundary echo", |_| back.latest());
     assert!(!f32s(&boundary).is_empty(), "the oscillator's block came back through the boundary");
 
     // Step: cross-engine modulation. A signal param binds to nd('SkelAudioOsc'); the skeleton
@@ -496,15 +496,12 @@ fn a_scheduled_engine_beside_the_signal_one() {
         j!({ "node": hex(meter), "param": "control/value",
              "expression": "nd('SkelAudioOsc')", "mode": "expression" }),
     );
-    t.until("the binding's one write landed (init replay + the bound arrival)", |t| {
-        let count = t.probe(meter, "out").frame(&mut t.state.graph.lock().unwrap())?;
-        (f32s(&count)[0] >= 2.0).then_some(f32s(&count)[0])
+    let writes = t.probe(meter, "out");
+    t.until("the binding's one write landed (init replay + the bound arrival)", |_| {
+        writes.latest().filter(|c| f32s(c)[0] >= 2.0)
     });
     assert!(
-        t.stays(|t| {
-            let count = t.probe(meter, "out").frame(&mut t.state.graph.lock().unwrap());
-            count.is_none_or(|c| f32s(&c)[0] <= 2.0)
-        }),
+        t.stays(|_| writes.latest().is_none_or(|c| f32s(&c)[0] <= 2.0)),
         "latest-wins modulation of a STATIC value writes once, however many ticks pass"
     );
 
@@ -535,16 +532,15 @@ fn a_scheduled_engine_beside_the_signal_one() {
         "the rebirth minted a fresh generation"
     );
     let reborn = t.probe(audio, "out");
-    reborn.expect_frame(&mut t.state.graph.lock().unwrap(), "the reborn skeleton's block");
+    t.until("the reborn skeleton's block", |_| reborn.latest());
     let seen = stale_probe.count();
-    std::thread::sleep(Duration::from_millis(30));
-    assert_eq!(stale_probe.count(), seen, "the corpse's service name went silent");
+    assert!(t.stays(|_| stale_probe.count() == seen), "the corpse's service name went silent");
 
     // Step: the second scheduled engine ticks beside the first, with its own shape and pace.
     let gfx = t.add("SkelGfxFrame");
     t.ready(gfx);
     let frame_probe = t.probe(gfx, "frame");
-    let frame = frame_probe.expect_frame(&mut t.state.graph.lock().unwrap(), "the gfx frame");
+    let frame = t.until("the gfx frame", |_| frame_probe.latest());
     assert_eq!(shape(&frame), vec![8, 8], "the graphics skeleton's static frame");
 
     // Step: a texture output feeds a texture input, or an ARRAY input through the tap; nothing
@@ -559,7 +555,7 @@ fn a_scheduled_engine_beside_the_signal_one() {
     let sink = t.add("_TestEcho");
     t.link(gfx, "tex", sink, "input");
     let crossed = t.probe(sink, "out");
-    let crossed = crossed.expect_frame(&mut t.state.graph.lock().unwrap(), "the tapped texture");
+    let crossed = t.until("the tapped texture", |_| crossed.latest());
     assert_eq!(shape(&crossed), vec![8, 8], "a texture reaches a signal node as a frame");
     let refused = t.refuse("link add", j!({ "from": ep(hex(gfx), "frame"), "to": ep(hex(gfx2), "tex") }));
     assert!(refused.contains("ARRAY") && refused.contains("TEXTURE"), "{refused}");
@@ -584,5 +580,6 @@ fn a_scheduled_engine_beside_the_signal_one() {
     // Step: a remove through the one op surface tears the foreign node down and the rest stand.
     t.call("node remove", j!({ "node": hex(gfx) }));
     assert!(!t.nodes().contains(&hex(gfx)), "the graphics node is gone");
-    audio_probe.expect_frame(&mut t.state.graph.lock().unwrap(), "the audio skeleton still runs");
+    let fresh = t.probe(audio, "out");
+    t.until("the audio skeleton still runs", |_| fresh.latest());
 }

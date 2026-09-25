@@ -932,14 +932,7 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
     // Upstream of the reducer: what the ENGINE published, before anything on a CPU shrank it.
     let engine = g.probe(big, "out");
     let made = |want: Vec<usize>| {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            if let Some(d) = engine.latest().filter(|d| shape(d) == want) {
-                return d;
-            }
-            assert!(std::time::Instant::now() < deadline, "the engine never published {want:?}");
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        g.until(&format!("the engine to publish {want:?}"), |_| engine.latest().filter(|d| shape(d) == want))
     };
     made(vec![512, 1024, 4]);
 
@@ -960,12 +953,10 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
     // Step: a snapshot asks for the frame ITSELF. The two-call protocol the op documents: the ask
     // widens the demand, and the answer is the frame the producer then made for it.
     let key = (big, "out".to_string());
+    let deadline = std::time::Instant::now() + goofi_tests::WAIT;
     let mut full = None;
-    for _ in 0..400 {
+    while full.is_none() && std::time::Instant::now() < deadline {
         full = g.state.reducers.latest(key.clone()).filter(|d| shape(d) == vec![512, 1024, 4]);
-        if full.is_some() {
-            break;
-        }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     let full = full.expect("a snapshot reads real pixels, not the viewer's preview");
@@ -983,7 +974,7 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
     let holds_at = |want: Vec<usize>, why: &str| {
         let tick = std::time::Duration::from_millis(20);
         let hold = std::time::Duration::from_secs(2);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let deadline = std::time::Instant::now() + goofi_tests::WAIT;
         let mut since = std::time::Instant::now();
         let mut seen = None;
         while since.elapsed() < hold {

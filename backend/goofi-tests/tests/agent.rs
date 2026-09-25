@@ -7,7 +7,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use goofi_bridge::ops::registry;
 use goofi_bridge::{term, AppState};
-use goofi_tests::{host, http, Client, Goofi};
+use goofi_tests::{host, http, Client, Goofi, WAIT};
 use serde_json::{json, Value};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -293,7 +293,7 @@ async fn recv_text_by(ws: &mut Ws, deadline: tokio::time::Instant) -> Value {
 }
 
 async fn recv_text(ws: &mut Ws) -> Value {
-    recv_text_by(ws, tokio::time::Instant::now() + Duration::from_secs(5)).await
+    recv_text_by(ws, tokio::time::Instant::now() + WAIT).await
 }
 
 /// Send an RPC on `/control` and return its reply, skipping interleaved broadcast events.
@@ -329,7 +329,7 @@ async fn attached(ws: &mut Ws) {
 async fn read_until(ws: &mut Ws, want: &str) -> String {
     let mut seen = String::new();
     let mut answered = false;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + WAIT;
     while !seen.contains(want) {
         // A real terminal answers ConPTY's cursor-position query, and the child stays BLOCKED until one does.
         if !answered && seen.contains('\u{1b}') && seen.contains("[6n") {
@@ -382,7 +382,7 @@ async fn a_harness_spawns_carries_bytes_both_ways_and_is_reaped_with_the_code_it
 
     // A shell that ends on its OWN loses its undo stack too — the reaper owns the drop, and its
     // broadcast comes after it, so the exited event is the settled signal.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + WAIT;
     loop {
         let ev = recv_text_by(&mut ctl, deadline).await;
         if ev["event"] == json!("harness_changed")
@@ -511,7 +511,7 @@ async fn a_stop_asks_before_it_insists_and_reaps_a_harness_that_will_not_go() {
     #[cfg(unix)]
     read_until(&mut term, "GOT-TERM").await;
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + WAIT;
     loop {
         let ev = recv_text_by(&mut ctl, deadline).await;
         let inst = ev["payload"]["instances"][0].clone();
@@ -526,7 +526,7 @@ async fn a_stop_asks_before_it_insists_and_reaps_a_harness_that_will_not_go() {
     // that arrives after the words, the race the panel always loses to a fast shell.
     let gone = call(&mut ctl, 4, "agent start", json!({ "name": "_gone" })).await["instance_id"]
         .as_str().expect("the spawn succeeds; the SHELL is what fails").to_string();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + WAIT;
     for probe in 100.. {
         let roster = call(&mut ctl, probe, "agent list", json!({})).await;
         let done = roster["instances"].as_array().unwrap().iter()
@@ -546,7 +546,7 @@ async fn a_stop_asks_before_it_insists_and_reaps_a_harness_that_will_not_go() {
 
 /// Read `/term` text frames until an authoritative-size one arrives.
 async fn recv_size(ws: &mut Ws) -> (u64, u64) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + WAIT;
     loop {
         let v = recv_text_by(ws, deadline).await;
         if v["op"] == json!("size") {
@@ -645,7 +645,7 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
     let actor = term::actor_of(&id);
     g.client(&actor).call("node add", json!({ "type": "LFO" }));
     call(&mut ctl, 3, "agent stop", json!({ "instance": id })).await;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + WAIT;
     loop {
         let ev = recv_text_by(&mut ctl, deadline).await;
         if ev["event"] == json!("harness_changed")

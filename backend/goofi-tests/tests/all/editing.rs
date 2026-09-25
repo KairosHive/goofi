@@ -155,8 +155,10 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("variable entry source", j!({ "name": "desk.level", "reference": "" }));
     assert!(g.doc()["variables"]["desk.level"].get("source").is_none(), "an empty reference clears it");
     assert_eq!(g.call("variable entry edit", j!({ "name": "desk.level", "value": 0.5 }))["value"], 0.5);
-    // …and it STAYS: the producer is still running, and a pick it made before the clear must not
-    // land on top of what the author typed after it.
+    // …and it STAYS: the producer still runs, and neither a pick in flight nor one it makes after
+    // the clear lands on what the author typed. A probe opened now sees only frames newer than it.
+    let after = g.probe(osc, "out");
+    g.until("the carrier to emit after the clear", |_| after.latest());
     assert!(g.stays(|g| g.doc()["variables"]["desk.level"]["value"] == j!(0.5)), "the cleared source writes no more");
 
     // A panel made a control panel with no group of its own is born naming a fresh one.

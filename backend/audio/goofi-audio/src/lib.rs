@@ -419,6 +419,17 @@ impl AudioEngine {
         (out, channels)
     }
 
+    /// Take each `process` of `uid`'s current occupant to cost `cost`, not the wall time it took, so
+    /// a test judges the watchdog without racing the scheduler; `None` measures again.
+    pub fn state_cost(&mut self, uid: Uid, cost: Option<Duration>) {
+        let Some(&Instance { idx, serial, .. }) = self.live.get(&uid) else { return };
+        let mut rt = self.runtime();
+        rt.apply_pending();
+        if let Some(slot) = rt.slab[idx].as_mut().filter(|s| s.serial == serial) {
+            slot.cost = cost;
+        }
+    }
+
     pub fn flush_recording(&self) -> Vec<mpsc::Receiver<Result<(), String>>> {
         self.live.values().map(|node| node.control.flush()).collect()
     }
@@ -828,6 +839,7 @@ impl Engine for AudioEngine {
             recs: rec_in,
             dead: false,
             overruns: 0,
+            cost: None,
         };
         self.send(Msg::Insert { idx, slot });
         let twin = make(nodes::Birth { chans, ..Default::default() });

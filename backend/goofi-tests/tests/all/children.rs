@@ -4,6 +4,8 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use goofi_tests::WAIT;
+
 use goofi_core::child;
 use goofi_core::registry::{self, Kind};
 
@@ -25,7 +27,9 @@ fn sleeper() {
         libc::signal(libc::SIGTERM, libc::SIG_IGN);
     }
     println!("SLEEPING {}", std::env::var(goofi_core::session::ENV).unwrap_or_default());
-    std::thread::sleep(Duration::from_secs(60));
+    loop {
+        std::thread::park();
+    }
 }
 
 fn sleeper_command() -> Command {
@@ -44,7 +48,7 @@ fn alive(pid: u32) -> bool {
 }
 
 /// Turns this binary into the intermediate parent: it spawns a sleeper through the child type,
-/// names the grandchild's pid, and holds it until killed.
+/// names the grandchild's pid, and holds it until killed or its stdin closes.
 const INTERMEDIATE: &str = "GOOFI_TEST_INTERMEDIATE";
 
 #[test]
@@ -54,7 +58,7 @@ fn intermediate() {
     }
     let grandchild = child::spawn("sleeper", &mut sleeper_command()).expect("spawn");
     println!("GRANDCHILD {}", grandchild.id());
-    std::thread::sleep(Duration::from_secs(60));
+    let _ = std::io::stdin().read_line(&mut String::new());
 }
 
 /// The liveness pipe, end to end: a parent killed with no chance to clean up takes its child
@@ -67,16 +71,18 @@ fn a_hard_killed_parent_still_stops_its_child() {
     let mut parent = Command::new(std::env::current_exe().expect("this test binary"))
         .args([&format!("{}::intermediate", crate::situation(module_path!())), "--exact", "--nocapture"])
         .env(INTERMEDIATE, "1")
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn the intermediate parent");
     let mut out = std::io::BufReader::new(parent.stdout.take().expect("piped"));
     let mut line = String::new();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !line.starts_with("GRANDCHILD") && Instant::now() < deadline {
+    while !line.starts_with("GRANDCHILD") {
         line.clear();
-        std::io::BufRead::read_line(&mut out, &mut line).expect("read the parent");
+        if std::io::BufRead::read_line(&mut out, &mut line).expect("read the parent") == 0 {
+            break;
+        }
     }
     let grandchild: u32 = line.trim().strip_prefix("GRANDCHILD ").and_then(|p| p.parse().ok()).expect("a pid");
     assert!(alive(grandchild));
@@ -85,7 +91,7 @@ fn a_hard_killed_parent_still_stops_its_child() {
         libc::kill(parent.id() as i32, libc::SIGKILL);
     }
     let _ = parent.wait();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + WAIT;
     while alive(grandchild) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -115,7 +121,7 @@ fn a_child_is_listed_while_it_lives_and_leaves_when_stopped() {
             .filter_map(|g| g.message)
             .find(|m| m.source.component == "sleeper" && m.text.starts_with("SLEEPING"))
     };
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + WAIT;
     while said().is_none() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -125,9 +131,7 @@ fn a_child_is_listed_while_it_lives_and_leaves_when_stopped() {
 
     // Deaf to the ask; the stop closes the pipe first, which is what ends it, and insists after
     // the grace for a child that watches nothing. Either way it is gone when `stop` returns.
-    let started = Instant::now();
     let _ended = child.stop(Duration::from_millis(300));
-    assert!(started.elapsed() < Duration::from_secs(10));
     assert!(!alive(pid), "pid {pid} is gone");
     drop(child);
     assert!(!listed().iter().any(mine), "the entry went with the lease");
@@ -148,16 +152,14 @@ fn a_dropped_child_does_not_outlive_its_owner() {
 fn a_tool_past_its_deadline_is_killed_and_reported() {
     goofi_tests::walled_home();
     goofi_transport::session();
-    let started = Instant::now();
     let refused = child::output("sleeper", &mut sleeper_command(), Duration::from_millis(500));
-    assert!(started.elapsed() < Duration::from_secs(10));
     let err = refused.expect_err("a tool that never finishes is refused");
     assert_eq!(err.kind(), std::io::ErrorKind::TimedOut, "{err}");
 
     // One that finishes answers with its output, status and all.
     let mut quick = Command::new(std::env::current_exe().expect("this test binary"));
     quick.args(["--list", "--format", "terse"]);
-    let out = child::output("list tests", &mut quick, Duration::from_secs(30)).expect("a quick tool");
+    let out = child::output("list tests", &mut quick, WAIT).expect("a quick tool");
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("sleeper: test"), "{}", String::from_utf8_lossy(&out.stdout));
 }

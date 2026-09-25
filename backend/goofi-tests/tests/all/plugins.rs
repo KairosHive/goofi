@@ -66,10 +66,7 @@ fn a_folder_plugin_registers_ops_nodes_hooks_and_persistent_sessions() {
         j!({"from": format!("{node}/out"), "to": format!("{echo}/input")}),
     );
     let output = goofi.probe(goofi_tests::Uid::from_hex(&echo).unwrap(), "out");
-    let frame = output.expect_frame(
-        &mut goofi.state.graph.lock().unwrap(),
-        "bundled Rust source through bundled Python node",
-    );
+    let frame = goofi.until("bundled Rust source through bundled Python node", |_| output.latest());
     assert_eq!(goofi_tests::f32s(&frame), vec![7.0]);
     let before = goofi.nodes();
     let error = goofi

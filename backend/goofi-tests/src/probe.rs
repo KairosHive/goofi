@@ -3,18 +3,10 @@
 //! A probe must be opened BEFORE the frame it waits for — the data services carry
 //! `history_size(0)`, so a probe opened later has missed what the producer already emitted.
 
-use std::time::{Duration, Instant};
-
 use goofi_core::Data;
 
 use goofi_graph::{Graph, Uid};
 use goofi_transport::{iox_node, IoxNode};
-
-/// How long a wait may take before it is a failure. Generous on purpose.
-const WAIT: Duration = Duration::from_secs(5);
-
-/// How long a poll sleeps between looks.
-const POLL: Duration = Duration::from_millis(1);
 
 /// A subscriber on one output slot — a viewer, with no privileged path into the node (§7).
 pub struct OutputProbe {
@@ -72,24 +64,22 @@ impl OutputProbe {
         self.latest.borrow().clone()
     }
 
-    /// The newest frame this slot has emitted, waiting for a first one while the graph is pumped.
-    /// `None` when it stayed silent for the whole window.
+    /// The newest frame, looking once after the graph drains its status. `None` while silent.
     pub fn frame(&self, g: &mut Graph) -> Option<Data> {
-        let deadline = Instant::now() + WAIT;
-        loop {
-            g.drain_status();
-            if let Some(frame) = self.latest() {
-                return Some(frame);
-            }
-            if Instant::now() >= deadline {
-                return None;
-            }
-            std::thread::sleep(POLL);
-        }
+        g.drain_status();
+        self.latest()
     }
 
-    /// The newest frame, or a failure naming what was being waited for.
+    /// The newest frame of a graph driven directly, pumped while it waits against the harness
+    /// budget; a failure names what was being waited for. A [`crate::Goofi`] waits with `until`.
     pub fn expect_frame(&self, g: &mut Graph, what: &str) -> Data {
-        self.frame(g).unwrap_or_else(|| panic!("timed out waiting for a frame: {what}"))
+        let deadline = std::time::Instant::now() + crate::WAIT;
+        loop {
+            if let Some(frame) = self.frame(g) {
+                return frame;
+            }
+            assert!(std::time::Instant::now() < deadline, "timed out waiting for a frame: {what}");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
 }

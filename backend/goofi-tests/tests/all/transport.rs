@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use goofi_core::{Param, SlotType};
-use goofi_tests::{f32s, frame};
+use goofi_tests::{f32s, frame, WAIT};
 use goofi_graph::Uid;
 use goofi_signal::runtime::{
     Control, ControlSink, Envelope, IoxTransport, NodeChannel, NodeEnv, NodeFault, NodeRuntime,
@@ -16,9 +16,6 @@ use goofi_signal::runtime::{
 use goofi_transport::{door_service, iox_node, output_service, service_base, Doorbell, IoxNode};
 use goofi_node::{NodeManifest, OutputDecl, ParamKey, Params, SlotDecl};
 use goofi_signal_sdk::{Inputs, Node, NodeCtx, NodeResult, Outputs};
-
-/// Long enough that a park is a real park, short enough that a broken retention fails fast.
-const MS200: Duration = Duration::from_millis(200);
 
 /// A node with one input and one output. Nothing runs it; the manifest is what the transport reads.
 struct Passthrough;
@@ -64,7 +61,7 @@ fn status_within(channel: &NodeChannel, timeout: Duration) -> Vec<WireStatus> {
         if !got.is_empty() || std::time::Instant::now() >= deadline {
             return got;
         }
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(1));
     }
 }
 
@@ -125,9 +122,9 @@ fn a_notify_landing_mid_drain_is_not_lost() {
     let ringer = iox_node().unwrap();
     let bell = bell_for(Uid(2), &ringer);
     bell.ring(1).unwrap();
-    assert_eq!(t.wait(Some(MS200)), vec![1]);
+    assert_eq!(t.wait(Some(WAIT)), vec![1]);
     bell.ring(2).unwrap(); // lands while "draining"
-    assert_eq!(t.wait(Some(MS200)), vec![2], "retained across the re-park");
+    assert_eq!(t.wait(Some(WAIT)), vec![2], "retained across the re-park");
 }
 
 #[test]
@@ -137,9 +134,14 @@ fn a_control_and_a_data_notification_both_survive() {
     let bell = bell_for(Uid(3), &ringer);
     bell.ring(0).unwrap();
     bell.ring(3).unwrap();
-    let mut got = t.wait(Some(MS200));
+    let mut got = Vec::new();
+    while !(got.contains(&0) && got.contains(&3)) {
+        let woke = t.wait(Some(WAIT));
+        assert!(!woke.is_empty(), "both ids were rung, and only {got:?} woke the node");
+        got.extend(woke);
+    }
     got.sort();
-    assert_eq!(got, vec![0, 3]);
+    assert_eq!(got, vec![0, 3], "each id wakes once");
 }
 
 #[test]
@@ -164,11 +166,11 @@ fn a_control_message_crosses_shared_memory_and_comes_back_acked() {
             value: ParamValue::Literal(Param::boolean(true)),
         },
     });
-    assert_eq!(transport.wait(Some(MS200)), vec![0], "the graph rang the control id");
+    assert_eq!(transport.wait(Some(WAIT)), vec![0], "the graph rang the control id");
 
     node.run_once();
     assert!(node.next_wake().is_some(), "the node applied what it was sent and re-paced");
-    assert_eq!(status_within(&channel, MS200), vec![WireStatus::Ack { seq: 41, ok: Ok(()) }]);
+    assert_eq!(status_within(&channel, WAIT), vec![WireStatus::Ack { seq: 41, ok: Ok(()) }]);
 
     // The ack carries the VERDICT, not a receipt: the graph abandons a refused sequence.
     channel.send(Envelope {
@@ -177,13 +179,13 @@ fn a_control_message_crosses_shared_memory_and_comes_back_acked() {
     });
     node.run_once();
     assert_eq!(
-        status_within(&channel, MS200),
+        status_within(&channel, WAIT),
         vec![WireStatus::Ack { seq: 42, ok: Err("no output slot `nope`".to_string()) }]
     );
 
     let fault = NodeFault::Process { msg: "boom".to_string(), since: 12.5 };
     transport.report(WireStatus::Health(Status::Fault { fault: Some(fault.clone()) }));
-    assert_eq!(status_within(&channel, MS200), vec![WireStatus::Health(Status::Fault { fault: Some(fault) })]);
+    assert_eq!(status_within(&channel, WAIT), vec![WireStatus::Health(Status::Fault { fault: Some(fault) })]);
 }
 
 #[test]
@@ -195,7 +197,7 @@ fn a_frame_reaches_a_wired_consumer_and_rings_its_slot() {
     producer.wire_out("out", &[(door_service(&base_of(Uid(6))), 1)]).unwrap();
 
     producer.publish("out", &frame(&[1.0, 2.0, 3.0]));
-    assert_eq!(consumer.wait(Some(MS200)), vec![1], "woken by the slot's own event id");
+    assert_eq!(consumer.wait(Some(WAIT)), vec![1], "woken by the slot's own event id");
     let got = consumer.drain_inputs();
     assert_eq!(got.len(), 1);
     assert_eq!((got[0].0.as_str(), got[0].1), ("input", 0), "slot, and its position in the wire order");
@@ -299,7 +301,7 @@ fn a_multi_input_keeps_one_cell_per_wire_in_the_order_it_was_given() {
 const CRASH_HELPER: &str = "GOOFI_TRANSPORT_CRASH_HELPER";
 
 /// The child: hold a session of its own, open a node with a port in it, NAME the session, then
-/// wait to be killed.
+/// wait to be killed, or for its stdin to close.
 #[test]
 fn crash_helper() {
     if std::env::var(CRASH_HELPER).is_err() {
@@ -313,7 +315,7 @@ fn crash_helper() {
         // the way a test binary or a second Ctrl-C ends.
         std::process::exit(0);
     }
-    std::thread::sleep(Duration::from_secs(60));
+    let _ = std::io::stdin().read_line(&mut String::new());
 }
 
 /// A session owns one ephemeral directory, a workspace and its cache parts; the lock alone
@@ -414,6 +416,7 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
         .env("GOOFI_HOME", &foreign)
         // Its OWN session, not this process's.
         .env_remove(goofi_core::session::ENV)
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         // SIGKILLed mid-test, so its parting "broken pipe" would otherwise read as this test's failure.
         .stderr(std::process::Stdio::null())
@@ -421,11 +424,12 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
         .expect("spawn the child");
 
     let mut out = std::io::BufReader::new(child.stdout.take().expect("the child's stdout"));
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let mut line = String::new();
-    while !line.contains("READY") && std::time::Instant::now() < deadline {
+    while !line.contains("READY") {
         line.clear();
-        std::io::BufRead::read_line(&mut out, &mut line).expect("read the child");
+        if std::io::BufRead::read_line(&mut out, &mut line).expect("read the child") == 0 {
+            break;
+        }
     }
     let id = line.split_whitespace().nth(1).map(str::to_string).unwrap_or_default();
     assert!(!id.is_empty(), "the child named its session: {line:?}");

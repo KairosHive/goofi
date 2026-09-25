@@ -64,7 +64,7 @@ fn process_capture_child() {
     startup.finish("Capture test ready");
     println!("native stdout marker");
     eprintln!("native stderr marker");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + goofi_tests::WAIT;
     loop {
         let snapshot = serde_json::to_value(log::global().lock().unwrap().since(None)).unwrap();
         let rows = snapshot["groups"].as_array().unwrap();

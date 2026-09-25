@@ -6,10 +6,11 @@ use std::sync::Arc;
 
 use goofi_tests::{drive, ep, f32s, hex, j, shape, FirstVar, Goofi, Uid};
 
-/// Drive tenths until the output satisfies `want` — a constant lands within one control hop, and
-/// the tenth after shows it — and hand that tenth back.
+/// Drive tenths until the output satisfies `want`, and hand that tenth back. Each tenth waits for
+/// a control tick first, so a param edit has landed and a file's feed is topped up ahead of it.
 fn sounds(g: &Goofi, what: &str, want: impl Fn(&[f32]) -> bool) -> Vec<f32> {
     g.until(what, |g| {
+        goofi_tests::applied(g);
         let (x, _) = drive(g, TENTH);
         want(&x).then_some(x)
     })
@@ -325,6 +326,7 @@ fn a_patch_sounds_under_the_external_clock() {
     let stillborn: Vec<String> = many.iter().filter_map(|u| g.error(*u)).collect();
     assert!(stillborn.is_empty(), "every one of them starts: {stillborn:?}");
     g.link(*many.last().unwrap(), "out", gain, "input");
+    goofi_tests::applied(&g);
     let (grown, _) = drive(&g, TENTH);
     assert!((peak(&grown) - 1.5).abs() < 0.01 && (mean(&grown) - 1.0).abs() < 0.02, "sine plus two, halved: peak {} mean {}", peak(&grown), mean(&grown));
     for uid in many {
@@ -890,21 +892,15 @@ fn a_patch_sounds_under_the_external_clock() {
          use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec};\n\
          goofi_audio_sdk::params! {\n    \
          ARM = ParamDecl { group: \"trap\", name: \"arm\", spec: ParamSpec::Bool { default: false }, expression: None, doc: None },\n    \
-         STALL = ParamDecl { group: \"trap\", name: \"stall\", spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 100.0 }, expression: None, doc: None },\n    \
          POISON = ParamDecl { group: \"trap\", name: \"poison\", spec: ParamSpec::Bool { default: false }, expression: None, doc: None },\n\
          }\n\
          static OUTS: &[OutputDecl] = &[OutputDecl { name: \"out\", kind: SlotType::Audio }];\n\
-         static MANIFEST: Manifest = Manifest { tags: &[], doc: \"a quarter, a panic, or a stall\", inputs: &[], outputs: OUTS, params: PARAMS };\n\
+         static MANIFEST: Manifest = Manifest { tags: &[], doc: \"a quarter, a panic, or a NaN\", inputs: &[], outputs: OUTS, params: PARAMS };\n\
          #[derive(Default)]\nstruct Trap;\n\
          impl AudioNode for Trap {\n    \
          fn prepare(&mut self, _rate: f64) {}\n    \
          fn process(&mut self, b: &mut Block<'_>) {\n        \
          if b.params[P::ARM].chan(0)[0] > 0.5 { panic!(\"armed\"); }\n        \
-         let ms = b.params[P::STALL].chan(0)[0];\n        \
-         if ms > 0.0 {\n            \
-         let t = std::time::Instant::now();\n            \
-         while t.elapsed().as_secs_f32() * 1e3 < ms {}\n        \
-         }\n        \
          if b.params[P::POISON].chan(0)[0] > 0.5 { b.outs[0].chan_mut(0).fill(f32::NAN); return; }\n        \
          b.outs[0].chan_mut(0).fill(0.25);\n    \
          }\n}\n\
@@ -931,17 +927,15 @@ fn a_patch_sounds_under_the_external_clock() {
     g.until("the restarted node to be clean", |g| (!state(g, trap).contains("panic")).then_some(()));
     sounds(&g, "the quarter to rejoin", |x| (level(x) - 0.75).abs() < 0.01);
 
-    // Step: a node costing about ONE block is heavy, not broken — a plugin sits exactly there and
-    // the engine carries it — so the budget has a margin. The stall is WAITED for, never assumed:
-    // driving costs no wall time while the node is still fast, so a step that only drove is blind.
-    g.set_param(trap, "trap", "stall", 2.0);
-    g.until("the stall to reach the audio thread, or the node to be taken for it", |g| {
-        let t = std::time::Instant::now();
-        drive(g, TENTH);
-        let slow = t.elapsed() > std::time::Duration::from_millis(100);
-        (slow || state(g, trap).contains("overran")).then_some(())
-    });
-    for _ in 0..3 {
+    // Step: a node costing more than ONE block is heavy, not broken — a plugin sits exactly there
+    // and the engine carries it — so the budget has a margin. The cost is stated to the watchdog,
+    // so the scheduler's noise can neither take the node nor hide an overrun.
+    let cost = |g: &Goofi, ms: u64| {
+        let ms = std::time::Duration::from_millis(ms);
+        goofi_bridge::audio_engine(&mut g.state.graph.lock().unwrap()).state_cost(trap, Some(ms));
+    };
+    cost(&g, 2);
+    for _ in 0..4 {
         drive(&g, TENTH);
     }
     assert!(!state(&g, trap).contains("overran"), "a heavy node was taken: {}", state(&g, trap));
@@ -949,13 +943,12 @@ fn a_patch_sounds_under_the_external_clock() {
 
     // Step: a node PAST that budget, eight blocks in a row, is taken out of the plan by the
     // watchdog and says so; its neighbours never miss a block for it.
-    g.set_param(trap, "trap", "stall", 10.0);
+    cost(&g, 10);
     g.until("the watchdog to take it", |g| {
         drive(g, TENTH);
         state(g, trap).contains("overran its budget").then_some(())
     });
     sounds(&g, "the stalled quarter to leave the sum", |x| (level(x) - 0.5).abs() < 0.01);
-    g.set_param(trap, "trap", "stall", 0.0);
     g.call("node restart", j!({ "node": hex(trap) }));
     sounds(&g, "the quarter to rejoin once more", |x| (level(x) - 0.75).abs() < 0.01);
 

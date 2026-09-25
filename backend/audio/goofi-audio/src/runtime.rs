@@ -49,6 +49,8 @@ pub struct Slot {
     /// settle that re-plans without it.
     pub dead: bool,
     pub overruns: u8,
+    /// What the watchdog takes one `process` to cost in place of the wall time it took, when stated.
+    pub cost: Option<Duration>,
 }
 
 /// The audio thread's end of a device's or a file's feed: chunks of interleaved samples, each
@@ -662,7 +664,7 @@ impl Runtime {
                 Some(Ok(())) if outs.writes[..stage.outs.len()].iter().flatten().any(|o| o.iter().any(|v| !v.is_finite())) => {
                     Some(Fault::NotANumber)
                 }
-                Some(Ok(())) if started.elapsed() > budget => {
+                Some(Ok(())) if slot.cost.unwrap_or_else(|| started.elapsed()) > budget => {
                     slot.overruns = slot.overruns.saturating_add(1);
                     (slot.overruns >= OVERRUNS).then_some(Fault::Overrun)
                 }
