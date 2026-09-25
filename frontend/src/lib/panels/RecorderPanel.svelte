@@ -207,7 +207,10 @@
 									? `Dropping frames — ${r.dropped} lost`
 									: `${r.dropped} frames lost`}
 							/>
-							<span class="who">{r.label}/{r.slot}</span>
+							<span class="who">
+								<span class="name">{r.label}/{r.slot}</span>
+								{#if !r.video}<span class="native-quality">Native · full precision</span>{/if}
+							</span>
 							<span class="num" title="Frames written">{r.frames}</span>
 							<span class="num drops" class:bad={r.losing} title="Frames dropped"
 								>{r.dropped}</span
@@ -222,18 +225,16 @@
 								><Icon name="x" /></IconButton
 							>
 						</div>
-						<div class="quality">
-							{#if r.video}
+						{#if r.video}
+							<div class="quality">
 								<Field label="Quality" doc="Higher quality produces larger files. A change during recording starts a new video file.">
 									<Select value={r.quality} options={[...VIDEO_QUALITIES]} labels={qualityLabels}
 										data-testid="recorder-quality"
 										onChange={(value) => void g.setRecordQuality(r.uid, r.slot, value as VideoQuality)
 											.catch((error: unknown) => (failure = String(error)))} />
 								</Field>
-							{:else}
-								<span class="native-quality">Native · full precision</span>
-							{/if}
-						</div>
+							</div>
+						{/if}
 					</li>
 				{/each}
 			</ul>
@@ -318,7 +319,7 @@
 	}
 	.native-quality {
 		color: var(--text-muted);
-		font-size: var(--fs-small);
+		white-space: nowrap;
 	}
 	.stream-status {
 		display: flex;
@@ -332,11 +333,18 @@
 	.who {
 		flex: 1 1 auto;
 		min-width: 0;
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		column-gap: var(--space-2);
+		font-size: var(--fs-small);
+	}
+	.name {
+		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-family: var(--font-mono);
-		font-size: var(--fs-small);
 	}
 	.num {
 		font-family: var(--font-mono);
