@@ -1,11 +1,19 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { waitForApp } from '../lib/app';
 import { rawCall, backendDoc } from '../lib/raw';
-import { addNode, selectNode, updateParam, nodeParams } from '../lib/goofi';
+import { addNode, frameSummary, selectNode, updateParam, nodeParams } from '../lib/goofi';
 
-test.use({ actionTimeout: 10_000 });
+/** Wait until a learn holds a whole frame of `slot` as its baseline, so the next change is learned. */
+async function baseline(page: Page, node: string, slot: string): Promise<void> {
+	await expect
+		.poll(async () => {
+			const frame = await frameSummary(page, node, slot);
+			return frame !== null && frame.reducedLength === undefined;
+		}, { message: `the learn saw a whole ${slot} frame` })
+		.toBe(true);
+}
 
 test('MIDI learn selects a node and maps the first changed channel to a parameter or widget', async ({ page }) => {
 	await page.goto('/');
@@ -46,8 +54,7 @@ class LearnMidi(goofi.Node):
 		await expect(learn).toHaveAttribute('aria-pressed', 'true');
 		await expect(learn.locator('.spinner')).toBeVisible();
 		await expect(learn).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-		// Give the real stream its initial frame before changing a channel.
-		await page.waitForTimeout(500);
+		await baseline(page, midi, 'notes');
 		await updateParam(page, midi, 'test', 'note', 0.75);
 		await expect(learn).toHaveAttribute('aria-pressed', 'false');
 		await expect.poll(async () => (await nodeParams(page, consumer)).common.max_frequency.reference).toBe('keys.notes[60]');
@@ -78,7 +85,7 @@ class LearnMidi(goofi.Node):
 		await expect(page.getByRole('menuitem', { name: 'keys', exact: true })).toBeVisible();
 		await page.getByRole('menuitem', { name: 'pads', exact: true }).click();
 		await expect(learn).toHaveAttribute('aria-pressed', 'true');
-		await page.waitForTimeout(500);
+		await baseline(page, second, 'cc');
 		await updateParam(page, midi, 'test', 'note', 0.875);
 		await expect(learn).toHaveAttribute('aria-pressed', 'true');
 		await updateParam(page, second, 'test', 'cc', 0.5);
@@ -99,7 +106,7 @@ class LearnMidi(goofi.Node):
 		await widget.click();
 		await page.getByRole('menuitem', { name: 'keys', exact: true }).click();
 		await expect(widget.locator('.spinner')).toBeVisible();
-		await page.waitForTimeout(500);
+		await baseline(page, midi, 'cc');
 		await updateParam(page, midi, 'test', 'cc', 0.625);
 		await expect(widget).toHaveAttribute('aria-pressed', 'false');
 		await expect.poll(async () => {
@@ -116,7 +123,7 @@ class LearnMidi(goofi.Node):
 		await widget.click();
 		await expect(widget).toHaveAttribute('aria-pressed', 'true');
 		await expect(page.getByRole('menu')).toHaveCount(0);
-		await page.waitForTimeout(500);
+		await baseline(page, midi, 'notes');
 		await updateParam(page, midi, 'test', 'note', 0.375);
 		await expect.poll(async () => (await backendDoc(page)).variables?.['desk.level']?.source)
 			.toEqual({ reference: 'keys.notes', index: 60 });

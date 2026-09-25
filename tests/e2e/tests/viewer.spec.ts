@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { waitForApp, resetPatch } from '../lib/app';
-import { addNode, selectNode, waitForNode } from '../lib/goofi';
+import { addNode, frameSummary, selectNode, waitForNode } from '../lib/goofi';
 
 type Clip = { x: number; y: number; width: number; height: number };
 
@@ -40,7 +40,6 @@ async function inspect(page: Page, clip: Clip): Promise<{ contrast: number; tint
 test('the plot surface draws a viewer inside its card, and only while the card shows it', async ({ page }) => {
 	// The editor's viewers draw on ONE canvas under the cards. Only pixels can say that a signal
 	// arrives as a picture, a collapsed body leaves none behind, and the picture pans with its card.
-	test.setTimeout(90_000);
 	const glErrors: string[] = [];
 	page.on('console', (m) => {
 		if (m.text().includes('INVALID_OPERATION')) glErrors.push(m.text());
@@ -60,15 +59,11 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 		const body = card.locator('.slot-viewer .body');
 		let flat = '';
 		await expect(body).toBeVisible();
-		await expect
-			.poll(() => page.evaluate((u) => (window as any).goofi.query.frameSummary(u, 'out') !== null, osc), {
-				timeout: 30_000
-			})
-			.toBe(true);
+		await expect.poll(() => frameSummary(page, osc)).not.toBeNull();
 
 		await test.step('a sine draws a band that is not flat', async () => {
 			await expect
-				.poll(async () => (await inspect(page, (await body.boundingBox())!)).tint, { timeout: 20_000 })
+				.poll(async () => (await inspect(page, (await body.boundingBox())!)).tint)
 				.toBeGreaterThan(40);
 			const seen = await inspect(page, (await body.boundingBox())!);
 			expect(seen.litRows, 'the line sweeps the body, not one row of it').toBeGreaterThan(0.4);
@@ -95,27 +90,27 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			await page.mouse.move(before.x + 4, before.y + 4);
 			await page.mouse.wheel(0, -400);
 			await expect
-				.poll(async () => (await card.boundingBox())!.width / before.width, { timeout: 10_000 })
+				.poll(async () => (await card.boundingBox())!.width / before.width)
 				.toBeGreaterThan(1.2);
 			const box = (await body.boundingBox())!;
 			await expect
-				.poll(async () => (await inspect(page, box)).tint, { timeout: 20_000 })
+				.poll(async () => (await inspect(page, box)).tint)
 				.toBeGreaterThan(40);
 			const cardBox = (await card.boundingBox())!;
 			// Past the slot pills, which stand off the card's edge and grow with the zoom.
 			const right = { x: cardBox.x + cardBox.width + 48, y: box.y, width: 24, height: box.height };
 			await expect
-				.poll(async () => (await inspect(page, right)).contrast, { timeout: 10_000 })
+				.poll(async () => (await inspect(page, right)).contrast)
 				.toBeLessThan(10);
 			await page.mouse.wheel(0, 400);
 			await expect
-				.poll(async () => Math.abs((await card.boundingBox())!.width - before.width), { timeout: 10_000 })
+				.poll(async () => Math.abs((await card.boundingBox())!.width - before.width))
 				.toBeLessThan(4);
 		});
 
 		await test.step('a pan keeps the plot inside its card', async () => {
 			await expect
-				.poll(async () => (await inspect(page, (await body.boundingBox())!)).tint, { timeout: 20_000 })
+				.poll(async () => (await inspect(page, (await body.boundingBox())!)).tint)
 				.toBeGreaterThan(40);
 			const pane = (await page.locator('.svelte-flow__pane').boundingBox())!;
 			const before = (await card.boundingBox())!;
@@ -165,10 +160,10 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			expect(overlap.width, 'the bodies overlap').toBeGreaterThan(40);
 			expect(overlap.height, 'the bodies overlap').toBeGreaterThan(20);
 			await expect
-				.poll(async () => (await inspect(page, overlap)).tint, { timeout: 20_000 })
+				.poll(async () => (await inspect(page, overlap)).tint)
 				.toBeGreaterThan(40);
 			await expect
-				.poll(async () => (await inspect(page, overlap)).litRows, { timeout: 10_000 })
+				.poll(async () => (await inspect(page, overlap)).litRows)
 				.toBeLessThan(0.15);
 		});
 
@@ -178,30 +173,30 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			await waitForNode(page, ramp);
 			const image = page.locator(`.svelte-flow__node[data-id="${ramp}"] .slot-viewer .body`);
 			await expect
-				.poll(async () => (await inspect(page, (await image.boundingBox())!)).contrast, { timeout: 20_000 })
+				.poll(async () => (await inspect(page, (await image.boundingBox())!)).contrast)
 				.toBeGreaterThan(100);
 			expect(glErrors).toEqual([]);
 		});
 
 		await test.step('zoomed out past legibility, a viewer keeps its picture and lets its stream go', async () => {
 			const before = (await card.boundingBox())!.width;
-			const summary = () => page.evaluate((u) => (window as any).goofi.query.frameSummary(u, 'out'), osc);
+			const summary = () => frameSummary(page, osc);
 			const wheelTo = async (ratio: (r: number) => boolean, dy: number) => {
 				await expect
 					.poll(async () => {
 						const r = (await card.boundingBox())!.width / before;
 						if (!ratio(r)) await page.mouse.wheel(0, dy);
 						return ratio(r);
-					}, { timeout: 10_000 })
+					})
 					.toBe(true);
 			};
 			const at = (await card.boundingBox())!;
 			await page.mouse.move(at.x + 4, at.y + 4);
 			await wheelTo((r) => r < 0.28, 100);
-			await expect.poll(summary, { timeout: 10_000 }).toBeNull();
+			await expect.poll(summary).toBeNull();
 			expect((await inspect(page, (await body.boundingBox())!)).tint, 'the last frame stays').toBeGreaterThan(40);
 			await wheelTo((r) => r > 0.4, -100);
-			await expect.poll(summary, { timeout: 10_000 }).not.toBeNull();
+			await expect.poll(summary).not.toBeNull();
 		});
 
 		await test.step('the range labels show on a selected card, without a hover', async () => {
@@ -224,14 +219,20 @@ test('streams served at the cap paint together, so the page paints at the cap', 
 	await page.goto('/');
 	await waitForApp(page);
 	try {
+		const lfos: string[] = [];
 		for (const x of [40, 340, 640]) {
 			const n = await addNode(page, 'LFO', [x, 80]);
 			await waitForNode(page, n);
 			await page.evaluate((u) => (window as any).goofi.commands.updateParam(u, 'common', 'max_frequency', 200), n);
+			lfos.push(n);
 		}
+		// 400 emits on every stream, two seconds or more at 200 Hz, so the HUD's last window saw all three.
+		const emitted = async () => Promise.all(lfos.map(async (n) => (await frameSummary(page, n))?.index ?? -1));
+		const from = await emitted();
+		await expect
+			.poll(async () => (await emitted()).every((i, k) => i > from[k] + 400), { message: 'all three stream' })
+			.toBe(true);
 		const fps = async () => Number((await page.getByText(/^\d+ fps$/).first().textContent())?.split(' ')[0]);
-		await expect.poll(fps, { timeout: 20_000 }).toBeGreaterThan(0);
-		await page.waitForTimeout(3000);
 		expect(await fps(), 'paints a second, with three streams at a 30 fps cap').toBeLessThanOrEqual(36);
 	} finally {
 		await resetPatch(page);

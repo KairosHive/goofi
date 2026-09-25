@@ -1,4 +1,4 @@
-import { expect, type Locator } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 
 /**
  * Box arithmetic shared by the specs that measure the shell's layout.
@@ -15,8 +15,20 @@ export interface Box {
 	height: number;
 }
 
+/** Resolve once every finite animation on the page has ended; an infinite one is not waited for. */
+export async function animationsDone(page: Page): Promise<void> {
+	await page.evaluate(() =>
+		Promise.all(
+			document
+				.getAnimations()
+				.filter((a) => a.effect?.getTiming().iterations !== Infinity)
+				.map((a) => a.finished.catch(() => undefined))
+		)
+	);
+}
+
 /**
- * A locator's box once it has stopped moving — two consecutive reads that agree.
+ * A locator's box once its animations have ended and two consecutive reads agree.
  *
  * Anything that slides (the inspector) reports a frame of its animation otherwise, and a position
  * read off a frame is not a measurement of the layout. BOTH axes are compared: the pane slides in X
@@ -25,6 +37,7 @@ export interface Box {
  */
 export async function settledBox(loc: Locator): Promise<Box> {
 	let prev: Box = { x: NaN, y: NaN, width: 0, height: 0 };
+	await animationsDone(loc.page());
 	await expect
 		.poll(
 			async () => {

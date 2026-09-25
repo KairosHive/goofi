@@ -17,7 +17,7 @@ test('the editor is usable while a plugin frontend is still loading', async ({ p
 		await request;
 		// The plugin download stays blocked until the editor has rendered and accepted a gesture.
 		const editor = page.locator('.editor-panel');
-		await expect(editor).toBeVisible({ timeout: 2_000 });
+		await expect(editor).toBeVisible();
 		await editor.click({ position: { x: 40, y: 80 } });
 		const original = await editor.elementHandle();
 		release();

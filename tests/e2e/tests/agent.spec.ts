@@ -38,9 +38,7 @@ async function say(page: Page, marker: string): Promise<void> {
 	await page.getByTestId('agent-terminal').click();
 	await page.keyboard.type(`echo goofi''${marker}`);
 	await page.keyboard.press('Enter');
-	await expect(page.getByTestId('agent-terminal')).toContainText(`goofi${marker}`, {
-		timeout: 15_000
-	});
+	await expect(page.getByTestId('agent-terminal')).toContainText(`goofi${marker}`);
 }
 
 /** Hand the instance back, and wait for the CLIENT to agree: a panel still bound to it would keep
@@ -178,7 +176,7 @@ test('a harness runs in a panel, and its transcript survives closing that panel'
 			await expect(page.getByTestId('agent-terminal')).toContainText('goofimark42', {
 				timeout: 200
 			});
-		}).toPass({ timeout: 15_000, intervals: [200] });
+		}).toPass({ intervals: [200] });
 
 		// The TopBar chip is the door from outside the panel: it lists what is running, and choosing
 		// one raises the same question — this time answered with Kill.
@@ -188,7 +186,7 @@ test('a harness runs in a panel, and its transcript survives closing that panel'
 		await page.getByTestId('agent-kill').click();
 		// `gone`, not `exited`: a dead harness is dropped rather than kept, and the app asks the
 		// manager to drop it as soon as it sees the exit.
-		await expect.poll(() => stateOf(page, id), { timeout: 15_000 }).toBe('gone');
+		await expect.poll(() => stateOf(page, id)).toBe('gone');
 		threw = false;
 	} finally {
 		await handBack(page, id, threw);
@@ -245,7 +243,7 @@ test('a freshly launched harness is sized to its panel, with no manual resize', 
 				.map((l) => l.trim())
 				.filter((l) => /^\d+ \d+$/.test(l))
 				.pop() ?? '';
-		await expect.poll(answer, { timeout: 15_000 }).toMatch(/^\d+ \d+$/);
+		await expect.poll(answer).toMatch(/^\d+ \d+$/);
 		const [rows, cols] = (await answer()).split(' ').map(Number);
 
 		// The child's grid IS the drawn grid (one cell each way), so the cell size follows from it —
@@ -282,10 +280,10 @@ test('a harness that dies hands its panel back to the launcher, and says why', a
 		await page.keyboard.press('Enter');
 
 		// No frozen last screen and no dismiss button to press — the panel offers a new harness.
-		await expect(page.getByTestId('agent-launcher')).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByTestId('agent-launcher')).toBeVisible();
 		await expect(page.getByTestId('toast')).toContainText('exited unexpectedly');
 		// …and nothing dead is left behind on the manager's roster either.
-		await expect.poll(() => stateOf(page, id), { timeout: 15_000 }).toBe('gone');
+		await expect.poll(() => stateOf(page, id)).toBe('gone');
 		id = '';
 
 		// A CLEAN exit is the ordinary end of a shell session, and gets no alarm at all.
@@ -295,7 +293,7 @@ test('a harness that dies hands its panel back to the launcher, and says why', a
 		await page.getByTestId('agent-terminal').click();
 		await page.keyboard.type('exit');
 		await page.keyboard.press('Enter');
-		await expect(page.getByTestId('agent-launcher')).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByTestId('agent-launcher')).toBeVisible();
 		await expect(page.getByTestId('toast'), 'a clean exit is not an alarm').toBeHidden();
 		id = '';
 		threw = false;

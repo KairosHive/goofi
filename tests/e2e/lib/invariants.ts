@@ -1,4 +1,5 @@
 import { expect, type Page } from '@playwright/test';
+import { animationsDone } from './geometry';
 
 /**
  * Structural rules a rendered goofi must obey, whatever it looks like.
@@ -152,30 +153,17 @@ export async function sweep(page: Page, slack = 1.5): Promise<Violation[]> {
 }
 
 /**
- * Wait for the scene to stop moving.
+ * Sweep the scene once its finite animations end, until it holds together.
  *
- * A pane caught mid-slide is 400px past the right edge and is not a layout claim about anything.
- * Infinite animations are excluded and the wait is bounded, so a spinner or a streaming viewer
- * cannot hold this open.
+ * A pane caught mid-slide is 400px past the right edge and is not a layout claim about anything, so
+ * the sweep is polled; infinite animations are not waited for, so a spinner cannot hold it open.
  */
-async function settled(page: Page): Promise<void> {
-	await page.evaluate(async () => {
-		const finite = document
-			.getAnimations()
-			.filter((a) => a.effect?.getTiming().iterations !== Infinity);
-		await Promise.race([
-			Promise.all(finite.map((a) => a.finished.catch(() => undefined))),
-			new Promise((r) => setTimeout(r, 1000))
-		]);
-	});
-}
-
-/** Sweep a settled scene, and fail naming every violation at once. */
 export async function expectIntact(page: Page, scene: string, slack?: number): Promise<void> {
-	await settled(page);
-	const found = await sweep(page, slack);
-	expect(
-		found.map((v) => `  [${v.rule}] ${v.where}: ${v.detail}`).join('\n'),
-		`${scene} holds together`
-	).toBe('');
+	await animationsDone(page);
+	await expect
+		.poll(
+			async () => (await sweep(page, slack)).map((v) => `  [${v.rule}] ${v.where}: ${v.detail}`).join('\n'),
+			{ message: `${scene} holds together` }
+		)
+		.toBe('');
 }

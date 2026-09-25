@@ -49,7 +49,7 @@ export async function stateOf(page: Page, id: string): Promise<string> {
  * for the exit first. */
 export async function dismiss(page: Page, id: string): Promise<void> {
 	await rawCall(page, 'agent stop', { instance: id });
-	await expect.poll(() => stateOf(page, id), { timeout: 15_000 }).toMatch(/exited|gone/);
+	await expect.poll(() => stateOf(page, id)).toMatch(/exited|gone/);
 	if ((await stateOf(page, id)) === 'exited') await rawCall(page, 'agent stop', { instance: id });
-	await expect.poll(() => stateOf(page, id), { timeout: 15_000 }).toBe('gone');
+	await expect.poll(() => stateOf(page, id)).toBe('gone');
 }

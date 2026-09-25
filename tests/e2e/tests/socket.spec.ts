@@ -23,6 +23,7 @@ import {
 } from '../lib/raw';
 import {
 	addNode,
+	frameSummary,
 	nodeParams,
 	nodes,
 	redo,
@@ -265,7 +266,7 @@ test.describe('the control socket', () => {
 				expect(Math.abs(after.y - held.y)).toBeLessThan(2);
 				await page.mouse.up();
 				await expect
-					.poll(async () => (await backendDoc(page)).nodes[osc].pos.x, { timeout: 10_000 })
+					.poll(async () => (await backendDoc(page)).nodes[osc].pos.x)
 					.toBeGreaterThan(60);
 				const rested = (await card.boundingBox())!;
 				expect(Math.abs(rested.x - held.x), 'and the drop holds through the round trip').toBeLessThan(2);
@@ -424,6 +425,8 @@ test.describe('the control socket', () => {
 				// Copy the FACADE and paste it. A sub-patch is not one type, so what rides the
 				// clipboard has to be its members, its ports and the wiring among them.
 				await selectNode(page, scope);
+				// Each press lands off the one before it: two on one spot inside 350 ms enter the sub-patch.
+				const aside = { x: 12, y: 6 };
 				const readClipboard = () => page.evaluate(() => navigator.clipboard.readText());
 				// The keys must leave the selection alone — asked, not clicked: a second press on the
 				// still-selected facade inside the double-click window would ENTER the sub-patch.
@@ -446,7 +449,7 @@ test.describe('the control socket', () => {
 				await page.keyboard.press('Control+x');
 				expect((await backendDoc(page)).nodes[scope]).toBeDefined();
 				// The press is the gesture under test here: it clears the stale text selection.
-				await selectNode(page, scope);
+				await selectNode(page, scope, aside);
 				await expect.poll(() => page.evaluate(() => window.getSelection()!.toString())).toBe('');
 				await label.focus();
 				await page.keyboard.press('Control+c');
@@ -469,7 +472,7 @@ test.describe('the control socket', () => {
 				const beforePaste = await backendDoc(page);
 				await page.keyboard.press('Control+v');
 				expect(await backendDoc(page)).toEqual(beforePaste);
-				await selectNode(page, scope);
+				await selectNode(page, scope, aside);
 				await page.keyboard.press('Control+v');
 				await expect
 					.poll(
@@ -739,10 +742,7 @@ test.describe('the control socket', () => {
 				// The oracle is an RPC, because it is the only one the app has: `docSynced()` is a LATCH
 				// — "this replica has pulled at least once" — and stays true through any disconnection.
 				await expect
-					.poll(() => reachesManager(page), {
-						message: 'the tab lost the manager',
-						timeout: 20_000
-					})
+					.poll(() => reachesManager(page), { message: 'the tab lost the manager' })
 					.toBe(false);
 			});
 
@@ -778,12 +778,11 @@ test.describe('the control socket', () => {
 			await test.step('and on rejoining it takes the manager’s document whole', async () => {
 				await restoreSocket(page);
 				await expect
-					.poll(() => reachesManager(page), { message: 'the tab reconnected', timeout: 30_000 })
+					.poll(() => reachesManager(page), { message: 'the tab reconnected' })
 					.toBe(true);
 				await expect
 					.poll(() => replicaNodes(page), {
-						message: 'the node it was holding is GONE — a merge onto a stale base would keep it',
-						timeout: 30_000
+						message: 'the node it was holding is GONE — a merge onto a stale base would keep it'
 					})
 					.toEqual([survivor]);
 				await expect(
@@ -847,12 +846,11 @@ test.describe('the control socket', () => {
 				g.commands.updateParam(u, 'output', 'sfreq', 64);
 			}, osc);
 
-			const read = () =>
-				page.evaluate((u) => (window as any).goofi.query.frameSummary(u, 'out'), osc);
+			const read = () => frameSummary(page, osc);
+			// The producer's emit counter on the newest frame the tab holds; -1 before any.
+			const index = async (): Promise<number> => (await read())?.index ?? -1;
 			await test.step('frames arrive on the slot the viewer subscribed', async () => {
-				await expect
-					.poll(read, { message: 'a decoded frame reached the tab', timeout: 30_000 })
-					.not.toBeNull();
+				await expect.poll(read, { message: 'a decoded frame reached the tab' }).not.toBeNull();
 			});
 			const summary = await read();
 
@@ -866,9 +864,7 @@ test.describe('the control socket', () => {
 				//
 				// A SPLIT, not a second tab: switching tabs unmounts the first viewer, so the two would
 				// never be live at once and the question would not be asked at all.
-				const index = () =>
-					page.evaluate((u) => (window as any).goofi.query.frameSummary(u, 'out'), osc);
-				await expect.poll(index, { message: 'the canvas viewer is served' }).not.toBeNull();
+				await expect.poll(read, { message: 'the canvas viewer is served' }).not.toBeNull();
 
 				await splitRight(page);
 				const fresh = await page.evaluate(() => {
@@ -881,17 +877,14 @@ test.describe('the control socket', () => {
 				});
 				expect(fresh, 'the split gave us a second panel to bind').toBeTruthy();
 				await expect
-					.poll(index, { message: 'both viewers live, and the slot still answers' })
+					.poll(read, { message: 'both viewers live, and the slot still answers' })
 					.not.toBeNull();
 
 				await closeSplit(page);
-				await page.evaluate(() => new Promise((r) => setTimeout(r, 400)));
+				const closed = await index();
 				await expect
-					.poll(
-						async () => (await index())?.numeric?.max ?? null,
-						{ message: 'the surviving viewer is STILL served after the other went', timeout: 20_000 }
-					)
-					.not.toBeNull();
+					.poll(index, { message: 'the surviving viewer is STILL served after the other went' })
+					.toBeGreaterThan(closed);
 			});
 
 			await test.step('the wire is capped at the rate the app paints, not the rate the node emits', async () => {
@@ -904,15 +897,18 @@ test.describe('the control socket', () => {
 				}, osc);
 				const rate = () =>
 					page.evaluate((u) => (window as any).goofi.query.arrivalRate(u, 'out'), osc);
+				await expect.poll(async () => (await nodeParams(page, osc)).common.max_frequency.value).toBe(100);
+				const edited = await index();
 				await expect
-					.poll(rate, { message: 'the stream reports a rate', timeout: 20_000 })
-					.toBeGreaterThan(0);
-				// Two windows, so a rate measured across the param edit cannot stand.
-				await page.evaluate(() => new Promise((r) => setTimeout(r, 1200)));
+					.poll(index, { message: 'the stream still delivers, capped rather than stalled' })
+					.toBeGreaterThan(edited);
+				// A read starts a window at most 0.5 s back; 200 emits at 100 Hz after it keep that tail,
+				// which may predate the edit, under a fifth of the next reading.
+				await rate();
+				const opened = await index();
+				await expect.poll(index, { message: 'two seconds of the edited producer' }).toBeGreaterThan(opened + 200);
 				const fps = (await rate()) ?? 0;
 				expect(fps, `arriving at ${fps} fps, and the cap is 30`).toBeLessThan(45);
-				expect(fps, `arriving at ${fps} fps — the stream stalled instead of being capped`)
-					.toBeGreaterThan(15);
 			});
 
 			await test.step('…and it decodes to a real signal, not to zeroes', async () => {

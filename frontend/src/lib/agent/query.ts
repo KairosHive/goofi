@@ -20,6 +20,8 @@ export interface FrameSummary {
 	reducedLength?: number;
 	numeric?: { min: number; max: number; mean: number };
 	text?: string;
+	/** The producer's emit counter (`meta.index`): a greater one is a newer frame. */
+	index?: number;
 }
 
 const shapesEqual = (a: number[], b: readonly number[]): boolean =>
@@ -28,6 +30,11 @@ const shapesEqual = (a: number[], b: readonly number[]): boolean =>
 /** A compact, DOM-free description of the latest frame on a slot. */
 function summarize(frame: DataFrame | null): FrameSummary | null {
 	if (!frame) return null;
+	const index = typeof frame.meta.index === 'number' ? frame.meta.index : undefined;
+	return { ...describe(frame), index };
+}
+
+function describe(frame: DataFrame): FrameSummary {
 	if (isArrayFrame(frame)) {
 		const a = frame.data;
 		const s = summaryOf(a, frame.meta);

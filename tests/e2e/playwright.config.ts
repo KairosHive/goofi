@@ -24,6 +24,9 @@ const WORKERS = Number(
 
 const INTEGRITY = /integrity\.spec\.ts$/;
 
+/** What a wait may take: paid only by a failure, so a busy runner never reaches it. */
+export const WAIT = 60_000;
+
 export default defineConfig({
 	testDir: './tests',
 	// A worker owns its backend alone, so the specs that share one are the ones that landed on the
@@ -36,10 +39,11 @@ export default defineConfig({
 	reporter: [['list'], ['html', { open: 'never' }]],
 	// Every test here is a SESSION — one boot, then a long ordered walk — so the budget is a
 	// session's, not an assertion's.
-	timeout: 120_000,
-	expect: { timeout: 10_000 },
+	timeout: 5 * WAIT,
+	expect: { timeout: WAIT, toPass: { timeout: WAIT } },
 	use: {
 		baseURL: BASE_URL,
+		actionTimeout: WAIT,
 		headless: true,
 		trace: 'on-first-retry'
 	},

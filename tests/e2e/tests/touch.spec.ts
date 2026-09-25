@@ -11,17 +11,18 @@
 // `integrity.spec.ts` under this same Pixel 7 project — a rule that names no element beats fifty
 // tests that each name one.
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { restorePanelType, waitForApp } from '../lib/app';
 import { addNode, tapNode, waitForNode } from '../lib/goofi';
-import { emptySpot, touchSession } from '../lib/touch';
+import { emptySpot, swipe, touchSession } from '../lib/touch';
 import { pane } from '../lib/inspector';
 
-/** A long press at `p`, the coarse door onto everything hover and right-click own on a desktop. */
-async function longPress(page: Page, p: { x: number; y: number }, ms = 600): Promise<void> {
+/** A long press at `p`, the coarse door onto everything hover and right-click own on a desktop:
+ * the finger stays down until `opened` shows. */
+async function longPress(page: Page, p: { x: number; y: number }, opened: Locator): Promise<void> {
 	const touch = await touchSession(page);
 	await touch.down(p);
-	await page.waitForTimeout(ms);
+	await expect(opened, 'the held finger opened its menu').toBeVisible();
 	await touch.up();
 }
 
@@ -36,11 +37,11 @@ test('a held parameter opens modulation without toggling its disclosure', async 
 		await field.scrollIntoViewIfNeeded();
 		const summary = field.getByRole('button', { name: 'frequency', exact: true });
 		const box = await field.boundingBox();
-		await longPress(page, { x: box!.x + 2, y: box!.y + 2 });
-		await expect(summary).toHaveAttribute('aria-expanded', 'false');
 		const choice = page.getByRole('menuitem', { name: 'LFO', exact: true });
+		await longPress(page, { x: box!.x + 2, y: box!.y + 2 }, choice);
+		await expect(summary).toHaveAttribute('aria-expanded', 'false');
 		await expect(choice).toBeVisible();
-		await choice.tap({ timeout: 10_000 });
+		await choice.tap();
 		await expect.poll(() => page.evaluate((id) =>
 			(window as any).goofi.query.graph().nodes.find((n: { uid: string }) => n.uid === id)?.params.lfo.frequency.mode, uid
 		)).toBe('expression');
@@ -48,25 +49,6 @@ test('a held parameter opens modulation without toggling its disclosure', async 
 		await tearDown(page);
 	}
 });
-
-/** A finger drag from `a` to `b`, coming to REST before it lifts so Chromium reads no fling. */
-async function swipe(
-	page: Page,
-	a: { x: number; y: number },
-	b: { x: number; y: number },
-	steps = 8
-): Promise<void> {
-	const touch = await touchSession(page);
-	await touch.down(a);
-	for (let i = 1; i <= steps; i++) {
-		await touch.moveTo({
-			x: Math.round(a.x + ((b.x - a.x) * i) / steps),
-			y: Math.round(a.y + ((b.y - a.y) * i) / steps)
-		});
-	}
-	await page.waitForTimeout(150);
-	await touch.up();
-}
 
 async function tearDown(page: Page): Promise<void> {
 	await page.evaluate(async () => {

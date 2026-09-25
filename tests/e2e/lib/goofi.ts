@@ -22,18 +22,18 @@ export function addNode(
  * Two doors, because they are two doors: a fine pointer clicks and a coarse one taps, and a card
  * that answers only the mouse would pass [[selectNode]] and fail a phone.
  */
-async function pressNode(page: Page, uid: string, how: 'click' | 'tap'): Promise<void> {
+async function pressNode(page: Page, uid: string, how: 'click' | 'tap', position?: { x: number; y: number }): Promise<void> {
 	const header = page.locator(`.svelte-flow__node[data-id="${uid}"] .header`);
-	await (how === 'tap' ? header.tap() : header.click());
+	await (how === 'tap' ? header.tap({ position }) : header.click({ position }));
 	await page.waitForFunction(
 		(u) => ((window as any).goofi.query.selection().nodes as string[]).includes(u),
-		uid,
-		{ timeout: 10_000 }
+		uid
 	);
 }
 
-/** Select a node with a mouse click on its card. */
-export const selectNode = (page: Page, uid: string): Promise<void> => pressNode(page, uid, 'click');
+/** Select a node with a mouse click on its card, at its header's centre unless `position` says. */
+export const selectNode = (page: Page, uid: string, position?: { x: number; y: number }): Promise<void> =>
+	pressNode(page, uid, 'click', position);
 
 /** Select a node with a finger tap on its card — the coarse-pointer door. */
 export const tapNode = (page: Page, uid: string): Promise<void> => pressNode(page, uid, 'tap');
@@ -49,9 +49,13 @@ export function nodes(page: Page): Promise<Array<{ uid: string; type: string; na
 export async function waitForNode(page: Page, uid: string): Promise<void> {
 	await page.waitForFunction(
 		(u) => ((window as any).goofi.query.graph().nodes as Array<{ uid: string }>).some((n) => n.uid === u),
-		uid,
-		{ timeout: 10_000 }
+		uid
 	);
+}
+
+/** A compact description of the latest frame on a slot this page views, or null. */
+export function frameSummary(page: Page, uid: string, slot = 'out'): Promise<any> {
+	return page.evaluate(([u, s]) => (window as any).goofi.query.frameSummary(u, s), [uid, slot] as const);
 }
 
 /** A node's params object (`{group: {name: {value, …}}}`). */
@@ -64,8 +68,7 @@ export function nodeParams(page: Page, uid: string): Promise<any> {
 export async function waitForNoNode(page: Page, uid: string): Promise<void> {
 	await page.waitForFunction(
 		(u) => !((window as any).goofi.query.graph().nodes as Array<{ uid: string }>).some((n) => n.uid === u),
-		uid,
-		{ timeout: 10_000 }
+		uid
 	);
 }
 

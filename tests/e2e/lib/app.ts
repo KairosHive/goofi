@@ -9,14 +9,10 @@ const DEFAULT_PANEL_TYPE = 'node-editor';
  * this is only for a RELOAD mid-spec, where the spec's own state is legitimately still live —
  * everything else enters through `waitForApp`, which adds the hermeticity backstop. */
 export async function appReady(page: Page): Promise<void> {
-	await page.waitForFunction(
-		() => {
-			const g = (window as any).goofi;
-			return !!g && (g.query.nodeTypes()?.length ?? 0) > 0;
-		},
-		undefined,
-		{ timeout: 20_000 }
-	);
+	await page.waitForFunction(() => {
+		const g = (window as any).goofi;
+		return !!g && (g.query.nodeTypes()?.length ?? 0) > 0;
+	});
 }
 
 /** Resolve once the app is fully live AND the shared backend is pristine — the readiness gate
@@ -49,17 +45,14 @@ export async function waitForApp(page: Page): Promise<void> {
  * doing any work at all.
  */
 export async function expectPristineWorkspace(page: Page): Promise<void> {
-	// The app is already live, so the default arrangement is on screen: a short budget keeps a leak
-	// cheap to report instead of paying the 10s default on every spec after the one that leaked.
-	const settled = { timeout: 2_000 };
 	await expect(
 		page.getByTestId('workspace-tabs').locator('.ui-tab'),
 		'a previous spec left an extra workspace tab behind — hand it back in a `finally`'
-	).toHaveCount(1, settled);
+	).toHaveCount(1);
 	await expect(
 		page.locator('.panel'),
 		'a previous spec left a split panel behind — hand it back in a `finally`'
-	).toHaveCount(1, settled);
+	).toHaveCount(1);
 	// The third leakable global: GRAPH NODES. A leaked node is worse than a leaked panel — every
 	// later page renders its viewer and subscribes its stream, so it surfaced as an fps reading
 	// no single viewer could produce (viewer-fps-cap read 364 against a 30 cap: a dozen leaked
@@ -70,9 +63,7 @@ export async function expectPristineWorkspace(page: Page): Promise<void> {
 	// only after it does an empty node list mean an empty graph. Read from the store (synchronous
 	// with the doc), naming the leaked nodes so the red points at what was left, not just that
 	// something was.
-	await page.waitForFunction(() => (window as any).goofi.query.docSynced(), undefined, {
-		timeout: 2_000
-	});
+	await page.waitForFunction(() => (window as any).goofi.query.docSynced());
 	const leaked = await page.evaluate(() =>
 		(window as any).goofi.query.graph().nodes.map((n: { type: string; uid: string }) => `${n.type}(${n.uid})`)
 	);
@@ -93,7 +84,6 @@ export async function expectPristineWorkspace(page: Page): Promise<void> {
 	// no node editor, so nothing subscribes and `integrity`'s streaming poll times out 30s later.
 	await expect
 		.poll(() => page.evaluate(() => (window as any).goofi.query.panels()[0]?.type), {
-			...settled,
 			message: 'a previous spec left the panel on another type — `restorePanelType` in a `finally`'
 		})
 		.toBe(DEFAULT_PANEL_TYPE);

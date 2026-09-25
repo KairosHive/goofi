@@ -2,7 +2,7 @@ import type { FullConfig } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { BASE_PORT, BIN, E2E_HOME, LOG_DIR, REPO_ROOT } from './playwright.config';
+import { BASE_PORT, BIN, E2E_HOME, LOG_DIR, REPO_ROOT, WAIT } from './playwright.config';
 
 type Backend = { child: ChildProcess; port: number; log: string };
 
@@ -111,7 +111,7 @@ export default async function spawnFleet(config: FullConfig): Promise<() => Prom
  * would otherwise be missed entirely — the likeliest cause being a port already taken.
  */
 async function serving({ child, port, log }: Backend): Promise<void> {
-	const deadline = Date.now() + 60_000;
+	const deadline = Date.now() + 5 * WAIT;
 	let exited = false;
 	child.once('exit', () => (exited = true));
 	for (;;) {

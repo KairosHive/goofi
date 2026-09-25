@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page } from '@playwright/test';
-import { settledBox } from './geometry';
+import { animationsDone, settledBox } from './geometry';
 import { addNode, selectNode, waitForNode, waitForNoNode } from './goofi';
-import { touchSession } from './touch';
+import { swipe } from './touch';
 
 /**
  * The inspector pane, and THE ONE RULE it is built on:
@@ -151,7 +151,7 @@ export async function grabberShape(page: Page): Promise<Grabber> {
 }
 
 /**
- * The grabber's shape once it has stopped animating — two consecutive reads that agree.
+ * The grabber's shape once its transition has ended and two consecutive reads agree.
  *
  * `::after` TRANSITIONS its background, so a one-shot read can describe a frame of that transition
  * rather than the resting state; and `toHaveCSS` cannot address a pseudo-element, so this is its
@@ -159,6 +159,7 @@ export async function grabberShape(page: Page): Promise<Grabber> {
  */
 export async function settledGrabber(page: Page): Promise<Grabber> {
 	let prev: Grabber | null = null;
+	await animationsDone(page);
 	await expect
 		.poll(
 			async () => {
@@ -201,27 +202,13 @@ export async function expectRestingPill(page: Page): Promise<void> {
  * Real CDP touch, not `page.mouse`: under `hasTouch` Playwright's mouse API still reports
  * `pointerType: 'mouse'`, which would prove the desktop path a second time.
  *
- * THE FINGER COMES TO REST BEFORE IT LIFTS, and that is not decoration. Dispatched back to back, the
- * moves carry a velocity Chromium reads as a FLING at release — and Chromium eats the next tap
- * anywhere on the page to stop the fling it thinks is running (measured: after this drag, a tap on
- * bare canvas far from the pane also did nothing; the same drag with a still finger before release
- * left the tap intact). No product code is involved: the sequence still arrives complete and
- * unprevented, Chromium simply synthesizes no `click` from it. A deliberate resize ends with a
- * finger that has stopped, so holding still is also the more faithful gesture.
+ * The finger comes to rest before it lifts ([[swipe]]): a deliberate resize ends with a still finger.
  */
-export async function swipeGripInward(page: Page, travel: number, steps = 8): Promise<void> {
+export async function swipeGripInward(page: Page, travel: number): Promise<void> {
 	const axis = await paneAxis(page);
 	const g = (await grip(page).boundingBox())!;
-	const x0 = Math.round(g.x + g.width / 2);
-	const y0 = Math.round(g.y + g.height / 2);
-	const at = (d: number) =>
-		axis === 'y' ? { x: x0, y: Math.round(y0 + d) } : { x: Math.round(x0 + d), y: y0 };
-	const touch = await touchSession(page);
-	await touch.down(at(0));
-	for (let i = 1; i <= steps; i++) await touch.moveTo(at((travel * i) / steps));
-	await touch.moveTo(at(travel));
-	await page.waitForTimeout(150);
-	await touch.up();
+	const from = { x: Math.round(g.x + g.width / 2), y: Math.round(g.y + g.height / 2) };
+	await swipe(page, from, axis === 'y' ? { ...from, y: from.y + travel } : { ...from, x: from.x + travel });
 }
 
 /**

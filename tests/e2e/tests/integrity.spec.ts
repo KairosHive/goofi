@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { closeAddedTab, closeSplit, splitRight, waitForApp } from '../lib/app';
 import { expectIntact } from '../lib/invariants';
-import { addNode, selectNode, waitForNode } from '../lib/goofi';
+import { addNode, frameSummary, selectNode, waitForNode } from '../lib/goofi';
 import { rawCall } from '../lib/raw';
 
 /** Open the panel header menu, reveal its content submenu, and answer every row it shows. */
@@ -104,26 +104,27 @@ test('a patch under construction holds together at every stage', async ({ page }
 		await test.step('a viewer streaming real frames', async () => {
 			// A node that is RUNNING, not merely present: a viewer sizes itself around live data, and
 			// an empty one cannot overflow the way a full one can.
-			await expect
-				.poll(
-					() => page.evaluate((u) => (window as any).goofi.query.frameSummary(u, 'out') !== null, buf),
-					{ message: 'frames reached the tab', timeout: 30_000 }
-				)
-				.toBe(true);
+			await expect.poll(() => frameSummary(page, buf), { message: 'frames reached the tab' }).not.toBeNull();
 			await expectIntact(page, 'a streaming viewer');
 			// A card under a live runtime never blinks out: every delta re-derives the flow, and a
 			// node SvelteFlow has not measured is hidden until it is — a press then lands on the pane.
-			const blinks = await page.evaluate(async (u) => {
+			await page.evaluate((u) => {
 				const card = document.querySelector(`.svelte-flow__node[data-id="${u}"]`) as HTMLElement;
-				let hidden = 0;
-				const mo = new MutationObserver(() => {
-					if (getComputedStyle(card).visibility === 'hidden') hidden++;
+				const w = window as any;
+				w.blinks = 0;
+				w.blinkWatch = new MutationObserver(() => {
+					if (getComputedStyle(card).visibility === 'hidden') w.blinks++;
 				});
-				mo.observe(card, { attributes: true, attributeFilter: ['style'] });
-				await new Promise((r) => setTimeout(r, 2000));
-				mo.disconnect();
-				return hidden;
+				w.blinkWatch.observe(card, { attributes: true, attributeFilter: ['style'] });
 			}, buf);
+			// Watched across 60 of the buffer's emits, two seconds at the default rate.
+			const from = (await frameSummary(page, buf)).index;
+			await expect.poll(async () => (await frameSummary(page, buf))?.index).toBeGreaterThan(from + 60);
+			const blinks = await page.evaluate(() => {
+				const w = window as any;
+				w.blinkWatch.disconnect();
+				return w.blinks;
+			});
 			expect(blinks, 'the streaming card never went hidden').toBe(0);
 		});
 
@@ -148,13 +149,11 @@ test('a patch under construction holds together at every stage', async ({ page }
 				node: psd,
 				viewer: [{ slot: 'out', kind: 'line', settings: { logY: true } }]
 			});
-			await expect
-				.poll(
-					() => page.evaluate((u) => (window as any).goofi.query.frameSummary(u, 'out') !== null, psd),
-					{ message: 'spectra reached the tab', timeout: 30_000 }
-				)
-				.toBe(true);
-			await page.waitForTimeout(1500);
+			await expect.poll(() => frameSummary(page, psd), { message: 'spectra reached the tab' }).not.toBeNull();
+			await expect(
+				page.locator(`.svelte-flow__node[data-id="${psd}"] .tick`).first(),
+				'the spectrum painted its log axis'
+			).toBeVisible();
 			await expectIntact(page, 'a streaming spectrum');
 		});
 

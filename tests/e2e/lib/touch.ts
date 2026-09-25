@@ -34,6 +34,24 @@ export async function touchSession(page: Page): Promise<TouchSession> {
 }
 
 /**
+ * A finger drag from `a` to `b` that comes to REST before it lifts. Moves dispatched back to back
+ * carry a velocity Chromium reads as a fling at release, and it eats the next tap to stop it.
+ */
+export async function swipe(page: Page, a: TouchPoint, b: TouchPoint, steps = 8): Promise<void> {
+	const touch = await touchSession(page);
+	await touch.down(a);
+	for (let i = 1; i <= steps; i++) {
+		await touch.moveTo({
+			x: Math.round(a.x + ((b.x - a.x) * i) / steps),
+			y: Math.round(a.y + ((b.y - a.y) * i) / steps)
+		});
+	}
+	// The still finger is the gesture; a slow runner only holds it longer.
+	await page.waitForTimeout(150);
+	await touch.up();
+}
+
+/**
  * Fake a soft keyboard by shrinking `visualViewport.height` (an own property shadows the prototype
  * getter) and firing the resize the real keyboard would fire. `px = 0` restores it.
  *
