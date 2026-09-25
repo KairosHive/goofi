@@ -407,6 +407,14 @@ scans. Child stderr defaults to warning; a traceback or an `ERROR:` line is an e
   (`arms.rs:348,392,766,1513`) and `AddNode` capture (`command.rs:704,965`, `lib.rs:3405`) go
   with typed args and `admit`. Actors become a newtype; the `record start` plugin mutex
   (`lib.rs:1391`) moves into its op.
+- Product deadlines judge speed, so a starved thread becomes an error: the recorder's 3 s
+  ceilings (`goofi-record` `SETTLE`, `AudioCapture::flush`, `recording_boundary`) fail
+  `record stop`, and the hosted and Python `TICK_TIMEOUT`/`COLD_START_TIMEOUT` kill a child that
+  is slow but alive. Make each a liveness check; §4.F's event wake gives `ask` the halt signal it
+  lacks. The AGENTS.md load rule applies to product code too.
+- `cargo test --workspace` builds a goofi-tests binary nothing else builds: goofi-cli's default
+  `python` feature turns on `goofi-python/embed` while goofi-tests' `embed` stays off, so `io.rs`
+  runs beside the in-process tier only there. Make the builds agree.
 - Not in this plan: a reader for the npy + sidecar format. It is a feature and needs its own
   entry.
 
