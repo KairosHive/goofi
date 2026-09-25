@@ -1232,17 +1232,23 @@ fn loudest(levels: &[f32]) -> usize {
     (0..levels.len()).max_by(|a, b| levels[*a].total_cmp(&levels[*b])).expect("a band")
 }
 
-/// A node's own output once the shape behind it has stopped moving. The params last set reach the
-/// engine a control hop later, on wall time, so that hop is waited out first; a follower's release
-/// is then tens of milliseconds, so a tap read the moment a modulator changes still carries the
-/// bands that were open before it — and a measurement compared against another has to come from
-/// settled state, not from the way there.
+/// A node's own output once the shape behind it has stopped moving, heard through an `AudioOut`
+/// of its own so the reading is the block `drive` renders rather than a tap's. The params last set
+/// reach the engine a control hop later, on wall time, so that hop is waited out first; a
+/// follower's release is then tens of milliseconds, so the node is driven past it before a tenth
+/// is kept.
 fn settled(g: &Goofi, uid: Uid, what: &str) -> Vec<f32> {
+    let out = g.add("AudioOut");
+    g.link(uid, "out", out, "input");
     goofi_tests::applied(g);
     for _ in 0..5 {
         drive(g, TENTH);
     }
-    heard(g, uid, what, |x| peak(x) > 0.02)
+    let (x, channels) = drive(g, TENTH);
+    g.call("node remove", j!({ "node": hex(out) }));
+    let heard = lane(&x, 0, channels);
+    assert_eq!(heard.len(), TENTH, "{what}: a tenth, heard");
+    heard
 }
 
 #[test]
