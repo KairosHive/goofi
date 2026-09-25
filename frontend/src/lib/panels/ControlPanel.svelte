@@ -856,18 +856,6 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		visibility: hidden;
-	}
-	.cell:hover .label,
-	.cell:focus-within .label,
-	[data-edit='true'] .label,
-	.born .label {
-		visibility: visible;
-	}
-	@media (hover: none) and (pointer: coarse) {
-		.label {
-			visibility: visible;
-		}
 	}
 	.rename {
 		position: absolute;
