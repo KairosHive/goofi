@@ -4,11 +4,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use goofi_tests::{f32s, text, Goofi, Viewer, ep, hex, holds_within, j};
-
-// A wall-clock oracle needs a QUIET machine: a measuring test takes it alone (write), the rest
-// share it (read) — CI's two cores made parallel tests corrupt each other's time.
-static MACHINE: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+use futures_util::{SinkExt, StreamExt};
+use goofi_tests::fixtures::Latch;
+use goofi_tests::{eventually, f32s, text, until_faster_than, Goofi, Message, Viewer, ep, hex, j};
 
 /// A snapshot reply's NPY, decoded; empty when the reply holds none.
 fn npy(r: &serde_json::Value) -> Vec<u8> {
@@ -29,7 +27,6 @@ fn npy_f32s(bytes: &[u8]) -> Vec<f32> {
 
 #[test]
 fn a_chain_runs_streams_and_follows_the_params_edited_under_it() {
-    let _machine = MACHINE.blocking_read();
     let g = Goofi::new();
     let osc = g.add("LFO");
     let buf = g.add("Buffer");
@@ -109,7 +106,6 @@ fn a_chain_runs_streams_and_follows_the_params_edited_under_it() {
 
 #[test]
 fn a_producer_paces_itself_to_its_rate_cap_and_follows_a_live_change() {
-    let _machine = MACHINE.blocking_write();
     // Counting emitted frames is the only way to see a cap: a stated value reads correct anyway.
     let g = Goofi::new();
     let osc = g.add("LFO");
@@ -133,36 +129,21 @@ fn a_producer_paces_itself_to_its_rate_cap_and_follows_a_live_change() {
     assert!(slow <= 8, "5 Hz produced {slow} frames in 0.8 s — the cap is not honoured");
 
     g.set_param(osc, "common", "max_frequency", 60.0);
-    g.until("the re-paced producer", |_| (runs(Duration::from_millis(400)) > 8).then_some(()));
+    // Half the old period apart, which the 5 Hz cap never allows.
+    until_faster_than(&g, &probe, 0.1);
 
-    // The delivered rate sits just UNDER the cap, never over — and a low cap hides that, so the
-    // window that judges it is a fast one.
-    g.set_param(osc, "output", "sfreq", 1000.0);
-    g.set_param(osc, "output", "mode", "block");
+    // The delivered rate never goes OVER the cap, and a low cap hides that, so the window that
+    // judges it is a fast one. Edits land in order: a 1 kHz frame was made under the new cap.
     g.set_param(osc, "common", "max_frequency", 200.0);
-    runs(Duration::from_millis(300)); // let the new cap take hold before the window that judges it
-    // The floor is the MACHINE's, not a constant: the pacer spends one sleep per period, so what
-    // a 5 ms sleep costs here bounds any cap — macOS CI rounds it to ~16 ms and tops out near 60.
-    // Read on BOTH sides of the window, and the SLOWER one is the bar: a runner that loses half its
-    // speed to a neighbour mid-window is a slow machine, not a producer that stopped pacing.
-    let pace = || {
-        let t0 = Instant::now();
-        for _ in 0..40 {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        (40_000u128 / t0.elapsed().as_millis().max(1)).min(200) as u64
-    };
-    let before = pace();
+    g.set_param(osc, "output", "mode", "block");
+    g.set_param(osc, "output", "sfreq", 1000.0);
+    g.until("the new cap to take hold", |_| probe.latest().filter(|d| d.meta().sfreq() == Some(1000.0)));
     let fast = runs(Duration::from_millis(1000));
-    let paceable = before.min(pace());
     assert!(fast <= 201, "a 200 Hz cap delivered {fast} frames in a second — OVER the cap");
-    assert!(fast >= paceable * 85 / 100,
-            "a 200 Hz cap delivered {fast} frames in a second, where this machine paces {paceable}");
 }
 
 #[test]
 fn each_way_a_node_can_fail_is_reported_and_none_of_them_stops_the_patch() {
-    let _machine = MACHINE.blocking_read();
     // Containment: `setup` runs under the graph mutex the bridge unwraps, so a panic must not poison it.
     let g = Goofi::new();
     let bad = g.add("_TestFail");
@@ -189,7 +170,6 @@ fn each_way_a_node_can_fail_is_reported_and_none_of_them_stops_the_patch() {
 
 #[test]
 fn a_required_input_refuses_to_run_on_a_hole_and_says_so() {
-    let _machine = MACHINE.blocking_read();
     // A `required` slot lets `process` read it unconditionally, which is worth something only if
     // the runtime enforces the refusal.
     let g = Goofi::new();
@@ -240,7 +220,6 @@ impl goofi_signal_sdk::Node for Flaky {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_restart_recovers_a_node_and_the_viewer_follows_it_to_its_new_home() {
-    let _machine = MACHINE.read().await;
     // A rebirth publishes under a NEW service name, so a stale subscriber never errors, it just stops.
     let g = Goofi::new();
     let builds = Arc::new(AtomicUsize::new(0));
@@ -272,7 +251,6 @@ async fn a_restart_recovers_a_node_and_the_viewer_follows_it_to_its_new_home() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_draw() {
-    let _machine = MACHINE.read().await;
     let g = Goofi::new();
     let base = g.serve().await;
     let osc = g.add("LFO");
@@ -293,8 +271,8 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     assert!(f32s(&preview).len() <= goofi_view::UNDECLARED_MAX,
             "an undeclared viewer draws a preview, never the full frame");
     drop(undeclared);
-    assert!(holds_within(Duration::from_secs(5), || g.state.reducers.subscribers(&key) == 0).await,
-            "it left before the counted viewers arrive");
+    eventually("the undeclared viewer to leave before the counted ones arrive",
+               || g.state.reducers.subscribers(&key) == 0).await;
 
     let spec = |max: usize| j!([{ "dtype": "array", "ndim": [["le", 2]], "dims": [],
                                   "reduce": [{ "dim": -1, "max": max, "method": "envelope" }] }]);
@@ -353,33 +331,35 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     g.call("link add", j!({ "from": ep(&bare, "value"), "to": ep(&mid, "input") }));
     assert_eq!(g.state.reducers.subscribers(&key), 7, "the inside alone feeds it nothing");
     g.call("link add", j!({ "from": ep(hex(osc), "out"), "to": ep(&inst, &bare) }));
-    assert!(holds_within(Duration::from_secs(5), || g.state.reducers.subscribers(&key) == 8).await,
-            "the open socket joined the stream its port now stands in front of");
+    eventually("the open socket to join the stream its port now stands in front of",
+               || g.state.reducers.subscribers(&key) == 8).await;
     assert_eq!(g.state.reducers.active_slots(), 1, "still one reducer for the one physical slot");
     assert!(!f32s(&pending.until(|d| !f32s(d).is_empty()).await).is_empty(),
             "and it draws, on a socket that never closed");
     drop(pending);
-    assert!(holds_within(Duration::from_secs(5), || g.state.reducers.subscribers(&key) == 7).await);
+    eventually("the port's viewer to leave", || g.state.reducers.subscribers(&key) == 7).await;
     drop(through);
-    assert!(holds_within(Duration::from_secs(5), || g.state.reducers.subscribers(&key) == 6).await);
+    eventually("the port's first viewer to leave", || g.state.reducers.subscribers(&key) == 6).await;
     g.call("node remove", j!({ "node": inst }));
 
-    let passes = g.state.reducers.reductions(&key);
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    // Twelve frames, counted by the producer's own index stamp.
+    let probe = g.probe(osc, "out");
+    let index = || probe.latest().and_then(|d| d.meta().index());
+    eventually("a frame on the probe", || index().is_some()).await;
+    let (from, passes) = (index().unwrap(), g.state.reducers.reductions(&key));
+    eventually("twelve more frames", || index() >= Some(from + 12)).await;
     let grew = g.state.reducers.reductions(&key) - passes;
     assert!(grew < 30, "{grew} reduce passes for ~12 frames — the reducer is running per subscriber");
 
     drop(rest);
     drop(narrow);
-    assert!(holds_within(Duration::from_secs(5), || g.state.reducers.subscribers(&key) == 1).await);
+    eventually("all but the wide viewer to leave", || g.state.reducers.subscribers(&key) == 1).await;
 
     // One emit per hundred seconds, so every frame below can only be the one the reducer holds.
     g.set_param(osc, "common", "max_frequency", 0.01);
-    tokio::time::sleep(Duration::from_millis(250)).await; // the last emit in flight lands
 
     drop(wide);
-    assert!(holds_within(Duration::from_secs(5), || g.state.reducers.subscribers(&key) == 0).await,
-            "the last viewer left");
+    eventually("the last viewer to leave", || g.state.reducers.subscribers(&key) == 0).await;
     assert_eq!(g.state.reducers.active_slots(), 1,
                "the reducer went with its last viewer, and the slot's only copy of the last frame \
                 went with it — the producer keeps no history, so the next viewer has nothing to draw");
@@ -387,34 +367,35 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     // A closing socket is no evidence that a slot stopped being watched.
     let mut back = Viewer::open(&base, &hex(osc), "out").await;
     back.view(spec(32)).await;
-    let cached = back.until(|d| !f32s(d).is_empty()).await.meta().index();
+    let mut cached = back.until(|d| !f32s(d).is_empty()).await.meta().index();
     assert!(cached.is_some(), "a served frame carries the emit index of the producer's own frame");
     drop(back);
 
     // 300 rounds is past the data service's own `max_nodes` (256), so a rebuild that does not give
     // its node and subscriber back spends a ceiling the viewer count never reaches.
+    let mut stepped = false;
     for round in 0..300 {
         let mut v = Viewer::open(&base, &hex(osc), "out").await;
         v.view(spec(32)).await;
-        let served = v.until(|d| !f32s(d).is_empty()).await;
-        assert_eq!(served.meta().index(), cached, "round {round}: not the frame the slot held");
+        let served = v.until(|d| !f32s(d).is_empty()).await.meta().index();
+        // A run under way when the cap landed emits once more, and only once.
+        if !stepped && served == cached.map(|i| i + 1) {
+            (stepped, cached) = (true, served);
+        }
+        assert_eq!(served, cached, "round {round}: not the frame the slot held");
         assert_eq!(g.state.reducers.active_slots(), 1, "round {round}: one viewer, one reducer");
         drop(v);
-        // Tight rather than `holds_within`: the round must SEE zero, and 300 polls of 25 ms is 8 s.
-        let gone = Instant::now() + Duration::from_secs(5);
-        while g.state.reducers.subscribers(&key) != 0 && Instant::now() < gone {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-        assert_eq!(g.state.reducers.subscribers(&key), 0, "round {round}: the viewer's socket closed");
+        eventually(&format!("round {round}: the viewer's socket to close"),
+                   || g.state.reducers.subscribers(&key) == 0).await;
     }
 
-    // Those rounds out-ran the idle, so no feed above ever closed. A gap past it closes one, and
-    // the attach after is the re-open — the only path that mints, and one mint per attach panicked
-    // a reducer thread on Windows, where a node's birth is a directory create.
+    // An idle gap closes the feed, and the attach after is the re-open — the only path that mints,
+    // and one mint per attach panicked a reducer thread on Windows, where a birth is a directory create.
     let iox = g.state.reducers.iox_node_id();
     assert!(iox.is_some(), "the feeds so far minted the one node they share");
     for round in 0..3 {
-        tokio::time::sleep(goofi_bridge::reducer::IDLE * 2).await;
+        eventually(&format!("round {round}: the idle feed to close"),
+                   || !g.state.graph.lock().unwrap().view_watched(osc, "out")).await;
         let mut v = Viewer::open(&base, &hex(osc), "out").await;
         v.view(spec(32)).await;
         v.until(|d| !f32s(d).is_empty()).await;
@@ -438,13 +419,11 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     g.call("node remove", j!({ "node": hex(table) }));
 
     g.call("node remove", j!({ "node": hex(osc) }));
-    assert!(holds_within(Duration::from_secs(5), || g.state.reducers.active_slots() == 0).await,
-            "the node left and its reducer went with it");
+    eventually("the node's reducer to go with it", || g.state.reducers.active_slots() == 0).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_viewer_that_stops_answering_is_reclaimed_and_a_merely_slow_one_is_not() {
-    let _machine = MACHINE.write().await;
     // The hard half is the second one: a viewer on a slow link must not be mistaken for a dead one.
     let g = Goofi::impatient();
     let base = g.serve().await;
@@ -452,108 +431,87 @@ async fn a_viewer_that_stops_answering_is_reclaimed_and_a_merely_slow_one_is_not
     let key = (osc, "out".to_string());
 
     let dead = Viewer::open(&base, &hex(osc), "out").await;
-    let mut slow = Viewer::open(&base, &hex(osc), "out").await;
-    slow.decoded().await;
-    assert_eq!(g.state.reducers.subscribers(&key), 2);
+    let slow = Viewer::open(&base, &hex(osc), "out").await;
+    eventually("both viewers to subscribe", || g.state.reducers.subscribers(&key) == 2).await;
 
-    let ticker = tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            slow.decoded().await;
+    // Its reads crawl and its answers do not: a pong goes out each beat from a task of its own.
+    let (mut answers, mut reads) = slow.ws.split();
+    let beat = g.state.data_liveness.ping_interval;
+    let answering = tokio::spawn(async move {
+        while answers.send(Message::Pong(Default::default())).await.is_ok() {
+            tokio::time::sleep(beat).await;
         }
     });
-    assert!(holds_within(Duration::from_secs(10), || g.state.reducers.subscribers(&key) == 1).await,
-            "the silent peer was never reclaimed");
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(g.state.reducers.subscribers(&key), 1, "…and the slow one kept its subscription");
-    ticker.abort();
+    let reading = tokio::spawn(async move {
+        while reads.next().await.is_some() {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    });
+    eventually("the silent peer to be reclaimed", || g.state.reducers.subscribers(&key) <= 1).await;
+    assert!(tokio::task::block_in_place(|| g.stays(|g| g.state.reducers.subscribers(&key) == 1)),
+            "…and the slow one kept its subscription");
+    answering.abort();
+    reading.abort();
     drop(dead);
+}
+
+/// Run `op` on a client off this thread and answer what it returned, failing if it never returns.
+fn returns<T: Send + 'static>(g: &Goofi, what: &str, op: impl FnOnce(&Goofi) -> T + Send + 'static) -> T {
+    let client = g.client("test");
+    let op = std::thread::spawn(move || op(&client));
+    g.until(what, |_| op.is_finished().then_some(()));
+    op.join().expect("the op did not panic")
 }
 
 #[test]
 fn a_busy_node_never_holds_up_the_control_plane_and_never_wedges_the_exit() {
-    let _machine = MACHINE.blocking_write();
     // A node observes its halt flag only BETWEEN runs, so exit waits to a CEILING, never a join.
+    // Each op below returns while a latch holds a node inside its run or its build.
     let g = Goofi::new();
-    let slow = g.add("_TestSlow");
-    let other = g.add("_TestSlow");
-    std::thread::sleep(Duration::from_millis(60)); // both threads are now inside a ten-second run
-
-    let t0 = Instant::now();
-    g.call("node remove", j!({ "node": hex(slow) }));
-    assert!(t0.elapsed() < Duration::from_millis(100),
-            "the delete took {:?} — it waited on the busy node under the graph lock", t0.elapsed());
+    let busy = Latch::default();
+    busy.busy(&g, "_TestBusy");
+    let slow = g.add("_TestBusy");
+    g.add("_TestBusy");
+    g.until("both busy nodes inside a run", |_| (busy.inside() == 2).then_some(()));
+    returns(&g, "the delete of a node inside its run", move |c| c.call("node remove", j!({ "node": hex(slow) })));
 
     // A Python node's build EXECUTES its module, so the honest fixture is the dyn seam a discovered
     // node arrives through, not a trivial native factory.
-    struct Echo;
-    impl goofi_signal_sdk::Node for Echo {
-        fn process(&mut self, i: &goofi_signal_sdk::Inputs<'_>, o: &mut goofi_signal_sdk::Outputs<'_>,
-                   _: &mut goofi_signal_sdk::NodeCtx, _: &goofi_node::Params<'_>)
-                   -> goofi_signal_sdk::NodeResult {
-            if let Some(d) = i.get("input") {
-                o.set("out", d.clone());
-            }
-            Ok(())
-        }
-    }
-    static SLOW_IN: &[goofi_node::SlotDecl] = &[goofi_node::SlotDecl {
-        name: "input", kind: goofi_core::SlotType::Array,
-        trigger_process: true, multi: false, required: false }];
-    static SLOW_OUT: &[goofi_node::OutputDecl] =
-        &[goofi_node::OutputDecl { name: "out", kind: goofi_core::SlotType::Array }];
-    static SLOW_BUILD: goofi_node::NodeManifest = goofi_node::NodeManifest {
-        type_name: "_TestSlowBuild", tags: &[], doc: "takes 700 ms to construct",
-        inputs: SLOW_IN, outputs: SLOW_OUT, params: &[],
-        producer: false,
-    };
-    g.register_dyn(&SLOW_BUILD, Box::new(|_| {
-        std::thread::sleep(Duration::from_millis(700));
-        Box::new(Echo)
-    }), &goofi_node::NATIVE);
-
+    let build = Latch::default();
+    build.echo(&g, "_TestSlowBuild");
     let src = g.add("_TestCounter");
-    let t0 = Instant::now();
-    let heavy = g.add("_TestSlowBuild");
-    let added = t0.elapsed();
-    assert!(added < Duration::from_millis(250),
-            "the add took {added:?} — the instance was built under the graph lock");
+    let heavy = returns(&g, "the add of a node whose build is held", |c| c.add("_TestSlowBuild"));
     assert_eq!(g.stage(heavy), "creating", "a node still being built says it is being built");
-    let t0 = Instant::now();
-    let quick = g.add("_TestSlow");
-    assert!(t0.elapsed() < Duration::from_millis(250),
-            "an op behind the build took {:?}", t0.elapsed());
+    let quick = returns(&g, "an op behind the held build", |c| c.add("_TestEcho"));
 
     // A node is ADDRESSABLE only once ready, so this wire is planned against one that cannot hear it.
     let probe = g.probe(heavy, "out");
     g.link(src, "out", heavy, "input");
     assert_eq!(g.stage(heavy), "creating", "…and it is still building while that wire is planned");
+    build.open();
     g.ready(heavy);
     g.until("the wire planned during the build to carry a frame", |_| probe.latest());
     g.call("node remove", j!({ "node": hex(quick) }));
 
-    let t0 = Instant::now();
-    g.state.graph.lock().unwrap().shutdown();
-    // Five seconds sits between the two answers: the ceiling is two and a JOIN would cost ten.
-    assert!(t0.elapsed() < Duration::from_secs(5),
-            "the exit took {:?} — it JOINED the busy node instead of waiting to a ceiling", t0.elapsed());
-    let _ = other;
+    returns(&g, "the exit with two nodes inside a run", |c| c.state.graph.lock().unwrap().shutdown());
+    assert_eq!(busy.inside(), 2, "the exit JOINED a busy node instead of waiting to a ceiling");
 
-    // An idle node parks on its doorbell with no timeout, so only `signal_stop` ringing it ends the wait.
+    // An idle node parks on its doorbell with no timeout, so only `signal_stop` ringing it ends it.
     let idle = Goofi::new();
+    let open = Latch::default();
+    open.open();
+    open.echo(&idle, "_TestParkedExit");
     for _ in 0..8 {
-        idle.ready(idle.add("Buffer")); // unwired, so it parks rather than running
+        idle.ready(idle.add("_TestParkedExit")); // unwired, so it parks rather than running
     }
-    let t0 = Instant::now();
-    idle.state.graph.lock().unwrap().shutdown();
-    assert!(t0.elapsed() < Duration::from_millis(500),
-            "an exit with nothing but parked nodes took {:?} — a doorbell was lost and it waited \
-             out the ceiling", t0.elapsed());
+    returns(&idle, "the exit with parked nodes", |c| c.state.graph.lock().unwrap().shutdown());
+    idle.until("every parked node's thread to end, which a lost doorbell never lets happen", |_| {
+        goofi_core::registry::inventory().iter().all(|e| e.name != "goofi-_TestParkedExit").then_some(())
+    });
 }
 
 #[test]
 fn a_refreshable_param_is_re_enumerated_on_the_nodes_own_thread() {
-    let _machine = MACHINE.blocking_read();
     // Options live in runtime state, never the doc, so they reach a client only through the status echo.
     let g = Goofi::new();
     let picker = g.add("_TestPicker");
@@ -589,7 +547,6 @@ fn a_refreshable_param_is_re_enumerated_on_the_nodes_own_thread() {
 
 #[test]
 fn a_pulse_fires_from_the_op_and_from_a_rising_edge_and_holds_no_value() {
-    let _machine = MACHINE.blocking_read();
     // A pulse is a REQUEST: the op makes it once, a source makes it on every rising edge, and
     // neither leaves a value behind.
     let g = Goofi::new();

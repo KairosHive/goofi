@@ -890,6 +890,11 @@ impl Graph {
         changed
     }
 
+    /// Whether a viewer's feed watches this output now (test/diagnostic).
+    pub fn view_watched(&self, uid: Uid, slot: &str) -> bool {
+        self.watched.contains(&(uid, slot.to_string()))
+    }
+
     pub fn engine_mut(&mut self, id: &str) -> Option<&mut dyn Engine> {
         self.engines.iter_mut().map(|e| e.as_mut() as &mut dyn Engine).find(|e| e.id() == id)
     }

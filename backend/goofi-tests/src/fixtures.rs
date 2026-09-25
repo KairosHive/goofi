@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use goofi_core::{Data, Meta, SlotType};
 use goofi_graph::Graph;
@@ -167,6 +167,72 @@ impl Node for Echo {
         if let Some(d) = i.get("input") {
             o.set("out", d.clone());
         }
+        Ok(())
+    }
+}
+
+/// A gate test nodes wait at until the test opens it, counting who waits. Dropping it opens it,
+/// so a failing test strands no node thread.
+#[derive(Default)]
+pub struct Latch(Arc<Gate>);
+
+#[derive(Default)]
+struct Gate {
+    /// Whether it is open, and how many wait at it.
+    state: Mutex<(bool, usize)>,
+    wake: Condvar,
+}
+
+impl Gate {
+    fn pass(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.1 += 1;
+        while !state.0 {
+            state = self.wake.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+        state.1 -= 1;
+    }
+}
+
+impl Latch {
+    pub fn open(&self) {
+        self.0.state.lock().unwrap_or_else(|e| e.into_inner()).0 = true;
+        self.0.wake.notify_all();
+    }
+
+    /// How many wait at it now.
+    pub fn inside(&self) -> usize {
+        self.0.state.lock().unwrap_or_else(|e| e.into_inner()).1
+    }
+
+    /// Register `type_name`, a producer whose every run waits here.
+    pub fn busy(&self, g: &crate::Goofi, type_name: &'static str) {
+        let gate = self.0.clone();
+        let m = manifest(type_name, "every run waits at a latch", &[], OUT_ARRAY, NO_PARAMS, true);
+        g.register_dyn(Box::leak(Box::new(m)), Box::new(move |_| Box::new(Busy(gate.clone()))), &goofi_node::NATIVE);
+    }
+
+    /// Register `type_name`, an echo whose build waits here.
+    pub fn echo(&self, g: &crate::Goofi, type_name: &'static str) {
+        let gate = self.0.clone();
+        let m = manifest(type_name, "its build waits at a latch", IN_ARRAY, OUT_ARRAY, NO_PARAMS, false);
+        g.register_dyn(Box::leak(Box::new(m)), Box::new(move |_| {
+            gate.pass();
+            Box::new(Echo)
+        }), &goofi_node::NATIVE);
+    }
+}
+
+impl Drop for Latch {
+    fn drop(&mut self) {
+        self.open();
+    }
+}
+
+struct Busy(Arc<Gate>);
+impl Node for Busy {
+    fn process(&mut self, _i: &Inputs<'_>, _o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {
+        self.0.pass();
         Ok(())
     }
 }

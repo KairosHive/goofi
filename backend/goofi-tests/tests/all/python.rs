@@ -2,8 +2,6 @@
 //! registered, added to the graph and run — on whichever tier its imports allow. The in-process
 //! tier needs `--features embed`, which LINKS libpython.
 
-use std::time::{Duration, Instant};
-
 use goofi_tests::{ep, f32s, hex, install, require_python, j, text, Goofi, Uid};
 
 /// Set a consumer to free-run, so it produces with nothing wired upstream.
@@ -333,13 +331,9 @@ class Ticker(goofi.Node):
     // Slowly, so most of the window below is genuine idle.
     free_run(&g, node, 2.0);
     let first = f32s(&g.until("the ticker's first frame", |_| probe.latest()))[0];
-    // A fixed window, not the next frame: a threshold calibrated on an idle machine reads a busy
-    // machine as starved.
-    let opened = Instant::now();
-    let later = f32s(&g.until("a frame a second and a half later", |_| {
-        (opened.elapsed() >= Duration::from_millis(1500)).then(|| probe.latest()).flatten()
-    }))[0];
-    assert!(later - first > 10.0, "the node's thread must run while the child idles: {first} → {later}");
+    g.until("the node's own thread to tick ten times while the child idles", |_| {
+        probe.latest().filter(|d| f32s(d)[0] > first + 10.0)
+    });
 }
 
 const PULSE_COUNTER: &str = include_str!("../fixtures/pulse_counter.py");
@@ -556,36 +550,6 @@ class Absent(goofi.Node):
         return {"out": data.data * 2.0}
 "#;
 
-    const NO_HOOK: &str = r#"
-import goofi
-import numpy as np
-class Mute(goofi.Node):
-    OUTPUTS = {"out": goofi.DataType.ARRAY}
-    PRODUCER = True
-    PARAMS = {"count": {"reset": goofi.PulseParam()}}
-    def setup(self):
-        self.n = 0
-    def process(self):
-        self.n += 1
-        return np.array([float(self.n)], dtype=np.float32)
-"#;
-
-    const RAISING_HOOK: &str = r#"
-import goofi
-import numpy as np
-class Loud(goofi.Node):
-    OUTPUTS = {"out": goofi.DataType.ARRAY}
-    PRODUCER = True
-    PARAMS = {"count": {"reset": goofi.PulseParam()}}
-    def setup(self):
-        self.n = 0
-    def process(self):
-        self.n += 1
-        return np.array([float(self.n)], dtype=np.float32)
-    def pulse_count_reset(self):
-        raise RuntimeError("boom")
-"#;
-
     #[test]
     fn one_source_run_on_both_tiers_produces_the_same_frame() {
         let py = subproc_python();
@@ -635,15 +599,18 @@ class Loud(goofi.Node):
     #[test]
     fn several_python_nodes_run_at_once_inside_the_live_graph() {
         assert!(!PyNode::gil_enabled().unwrap(), "the interpreter must be free-threaded");
-        const SLEEPER: &str = r#"
-import time
-import numpy as np
+        // Each first run waits inside `process` until all four are there, on a barrier every
+        // instance's module finds on `sys`: a serialized tier never lets the second one in.
+        const MEETING: &str = r#"
+import sys, threading
 import goofi
-class Sleeper(goofi.Node):
+class Meeting(goofi.Node):
     INPUTS = {"data": goofi.DataType.ARRAY}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     def process(self, data):
-        time.sleep(0.15)
+        if not getattr(self, "met", False):
+            sys.__dict__.setdefault("_goofi_meeting", threading.Barrier(4)).wait()
+            self.met = True
         return {"out": data.data * 2.0}
 "#;
         static IN: &[goofi_node::SlotDecl] = &[goofi_node::SlotDecl {
@@ -651,50 +618,27 @@ class Sleeper(goofi.Node):
             trigger_process: true, multi: false, required: false }];
         static OUT: &[goofi_node::OutputDecl] =
             &[goofi_node::OutputDecl { name: "out", kind: goofi_core::SlotType::Array }];
-        static SLEEPY_TIER: goofi_node::IsolationCell =
+        static MEETING_TIER: goofi_node::IsolationCell =
             goofi_node::IsolationCell::new(goofi_node::Isolation::InProcess);
-        static SLEEPY: goofi_node::NodeManifest = goofi_node::NodeManifest {
-            type_name: "Sleeper", tags: &[], doc: "sleeps 150 ms per run",
+        static MANIFEST: goofi_node::NodeManifest = goofi_node::NodeManifest {
+            type_name: "Meeting", tags: &[], doc: "meets three siblings inside its first run",
             inputs: IN, outputs: OUT, params: &[],
             producer: false,
         };
 
         let g = Goofi::new();
-        g.register_dyn(&SLEEPY, Box::new(|_| {
-            Box::new(PyNode::from_source(SLEEPER, vec![("data", false)], vec!["out"]).expect("PyNode"))
-        }), &SLEEPY_TIER);
+        g.register_dyn(&MANIFEST, Box::new(|_| {
+            Box::new(PyNode::from_source(MEETING, vec![("data", false)], vec!["out"]).expect("PyNode"))
+        }), &MEETING_TIER);
         let src = g.add("_TestCounter");
-
-        // A LOAD is serialized on purpose — one module body at a time, process-wide, so a cyclic
-        // package cannot deadlock — so every window here opens on a node that has already emitted.
-        let solo = g.add("Sleeper");
-        let solo_probe = g.probe(solo, "out");
-        g.link(src, "out", solo, "data");
-        g.until("the lone sleeper to load and emit", |_| solo_probe.latest());
-        // ONE sleeper first, to learn what a single 150 ms run costs on THIS machine.
-        let base = solo_probe.count();
-        let t0 = Instant::now();
-        g.until("the lone sleeper to run again", |_| (solo_probe.count() > base).then_some(()));
-        let one = t0.elapsed();
-        g.call("node remove", j!({ "node": hex(solo) }));
-
-        let sleepers: Vec<_> = (0..4).map(|_| g.add("Sleeper")).collect();
-        let probes: Vec<_> = sleepers.iter().map(|u| g.probe(*u, "out")).collect();
-        for u in &sleepers {
+        let meeting: Vec<_> = (0..4).map(|_| g.add("Meeting")).collect();
+        let probes: Vec<_> = meeting.iter().map(|u| g.probe(*u, "out")).collect();
+        for u in &meeting {
             g.link(src, "out", *u, "data");
         }
         for p in &probes {
-            g.until("every sleeper to load and emit", |_| p.latest());
+            g.until("all four inside `process` at once, and each to emit", |_| p.latest());
         }
-        let bases: Vec<u64> = probes.iter().map(|p| p.count()).collect();
-        let t0 = Instant::now();
-        for (p, base) in probes.iter().zip(&bases) {
-            g.until("every sleeper to run again", |_| (p.count() > *base).then_some(()));
-        }
-        let four = t0.elapsed();
-        // Overlapping, four cost about one; serialized they cost four. Two is the only bar between.
-        assert!(four < one * 2,
-                "four python nodes took {four:?} against one node's {one:?} — they ran serialized");
         assert!(!PyNode::gil_enabled().unwrap(), "the GIL must stay disabled");
     }
 
@@ -766,8 +710,8 @@ class Sleeper(goofi.Node):
         assert!(slow <= 8, "5 Hz produced {slow} frames in 0.8 s — the variable is not pacing it");
 
         g.call("variable entry edit", j!({ "name": "system.default_ufreq", "value": 60.0 }));
-        g.until("every producer to be re-rated by one variable edit",
-                |_| (runs(Duration::from_millis(400)) > 8).then_some(()));
+        // Half the old period apart, which the 5 Hz rate never allows.
+        goofi_tests::until_faster_than(&g, &probe, 0.1);
 
         // The evaluator's namespace: `math`'s names and `time()` are simply there, beside `np`.
         let r = g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude",

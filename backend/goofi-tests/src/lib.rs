@@ -828,16 +828,27 @@ impl Viewer {
     }
 }
 
-/// Poll until `f` holds or `limit` elapses, and answer whether it held.
-pub async fn holds_within(limit: Duration, mut f: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + limit;
-    while Instant::now() < deadline {
-        if f() {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
+/// Poll `f` until it holds, or fail naming `what`: [`Goofi::until`] for an async situation.
+pub async fn eventually(what: &str, mut f: impl FnMut() -> bool) {
+    progressed();
+    let deadline = Instant::now() + WAIT;
+    while !f() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        tokio::time::sleep(Duration::from_millis(2)).await;
     }
-    f()
+}
+
+/// Wait until two successive emits on `probe` are stamped under `secs` apart: proof that a rate
+/// cap slower than `1 / secs` no longer holds, on a machine of any speed.
+pub fn until_faster_than(g: &Goofi, probe: &OutputProbe, secs: f64) {
+    let mut last: Option<(u64, f64)> = None;
+    g.until(&format!("two successive emits under {secs} s apart"), |_| {
+        let d = probe.latest()?;
+        let now = (d.meta().index()?, d.meta().time()?);
+        let near = last.is_some_and(|(i, t)| now.0 == i + 1 && now.1 - t < secs);
+        last = Some(now);
+        near.then_some(())
+    });
 }
 
 /// The `host:port` inside a `ws://` base, for the HTTP half of the same server.
