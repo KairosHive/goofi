@@ -7,13 +7,17 @@ import path from 'node:path';
 // restart — so the port derives per worker without a spec knowing that a port exists.
 // `globalSetup.ts` spawns the fleet against the same arithmetic and reaps it after.
 export const BASE_PORT = Number(process.env.GOOFI_E2E_PORT ?? 8500);
-const PORT = BASE_PORT + Number(process.env.TEST_PARALLEL_INDEX ?? 0);
+const SLOT = Number(process.env.TEST_PARALLEL_INDEX ?? 0);
+const PORT = BASE_PORT + SLOT;
 export const BASE_URL = `http://127.0.0.1:${PORT}`;
 export const REPO_ROOT = path.resolve(__dirname, '../..');
 export const LOG_DIR = path.join(__dirname, 'test-results', 'backend');
 export const BIN = process.env.GOOFI_E2E_BIN ?? path.join(REPO_ROOT, 'target', 'debug', `goofi${process.platform === 'win32' ? '.exe' : ''}`);
-// The fleet's test-scoped home: the build cache and the test agent config land here.
-export const E2E_HOME = path.join(__dirname, 'test-results', 'goofi-home');
+// A backend's test-scoped home, one per slot: a recovery one spec plants must not be offered to
+// another worker's page, where its modal takes the focus that spec is typing into.
+export const HOMES = path.join(__dirname, 'test-results', 'goofi-home');
+export const homeOf = (slot: number): string => path.join(HOMES, String(slot));
+export const E2E_HOME = homeOf(SLOT);
 
 // Half the cores, capped at 8, so a small machine scales DOWN rather than up; the other gate anyone
 // running this also runs is `cargo test --workspace`, and a suite that starves a build is a suite

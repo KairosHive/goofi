@@ -2,7 +2,7 @@ import type { FullConfig } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { BASE_PORT, BIN, E2E_HOME, LOG_DIR, REPO_ROOT, WAIT } from './playwright.config';
+import { BASE_PORT, BIN, HOMES, LOG_DIR, REPO_ROOT, WAIT, homeOf } from './playwright.config';
 
 type Backend = { child: ChildProcess; port: number; log: string };
 
@@ -29,22 +29,22 @@ export default async function spawnFleet(config: FullConfig): Promise<() => Prom
 	if (!fs.existsSync(BIN))
 		throw new Error(`${BIN} is missing — \`npm run build:backend\` builds it and the SPA it serves`);
 	fs.mkdirSync(LOG_DIR, { recursive: true });
-	// A test-scoped `GOOFI_HOME`, wiped up front: the fleet's session files and the test agent
-	// config land here, never in the runner's real home. The fleet's TEMP lives inside it too, so
+	// Test-scoped `GOOFI_HOME`s, wiped up front: each backend's session files and the test agent
+	// config land in its own, never in the runner's real home. Its TEMP lives inside it too, so
 	// a mount a killed backend left is wiped with the home rather than offered as a recovery.
-	const home = E2E_HOME;
-	const tmp = path.join(home, 'tmp');
-	fs.rmSync(home, { recursive: true, force: true });
-	fs.mkdirSync(path.join(home, '.goofi'), { recursive: true });
-	fs.mkdirSync(tmp, { recursive: true });
-	// `_sh` is a CONFIG entry a test writes, exactly as a user's own entry would be; the servers'
-	// own seeding is absent-only, so this file stands.
-	fs.writeFileSync(
-		path.join(home, '.goofi', 'config.toml'),
-		'[[agents]]\nname = "_sh"\ncommand = "sh"\n'
-	);
+	fs.rmSync(HOMES, { recursive: true, force: true });
 	const fleet: Backend[] = [];
 	for (let slot = 0; slot < config.workers; slot++) {
+		const home = homeOf(slot);
+		const tmp = path.join(home, 'tmp');
+		fs.mkdirSync(path.join(home, '.goofi'), { recursive: true });
+		fs.mkdirSync(tmp, { recursive: true });
+		// `_sh` is a CONFIG entry a test writes, exactly as a user's own entry would be; the servers'
+		// own seeding is absent-only, so this file stands.
+		fs.writeFileSync(
+			path.join(home, '.goofi', 'config.toml'),
+			'[[agents]]\nname = "_sh"\ncommand = "sh"\n'
+		);
 		const port = BASE_PORT + slot;
 		const log = path.join(LOG_DIR, `backend-${slot}.log`);
 		const fd = fs.openSync(log, 'w');

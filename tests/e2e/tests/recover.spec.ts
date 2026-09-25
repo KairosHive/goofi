@@ -6,7 +6,7 @@ import { E2E_HOME } from '../playwright.config';
 import { resetPatch, waitForApp } from '../lib/app';
 import { backendDoc, rawCall } from '../lib/raw';
 
-/** What a goofi that died leaves, once a boot has moved it into the fleet home's recovery
+/** What a goofi that died leaves, once a boot has moved it into its backend's recovery
  * folder: `patch.yaml` beside `workspace/` in a nonce directory of a session nobody holds. */
 function crashed(manifest: string, home: string | null): string {
 	const dir = path.join(
