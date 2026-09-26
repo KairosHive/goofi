@@ -69,6 +69,10 @@ test('save dialogs and axis presets keep the user in control', async ({ page }) 
 		await page.getByTestId('topbar-load').click();
 		await expect(browser.getByTestId('fs-sort-size')).toHaveAttribute('aria-pressed', 'true');
 		await expect(rows.first()).toContainText('big.txt');
+		// A dismissed upload picker returns to the dialog rather than closing it.
+		await expect(browser.getByTestId('fs-upload')).toHaveText('Upload…');
+		await browser.locator('input[type=file]').dispatchEvent('cancel', { bubbles: true });
+		await expect(browser).toBeVisible();
 		await browser.getByRole('button', { name: 'Cancel' }).click();
 
 		const status = (await rawCall(page, 'session status')).result;

@@ -27,6 +27,8 @@
 	});
 
 	function onCancel(e: Event): void {
+		// A file input's dismissed picker also fires `cancel`, and that one is not the dialog's.
+		if (e.target !== dialogEl) return;
 		// Keep the element open and route through the parent, which owns `open`.
 		e.preventDefault();
 		onClose();

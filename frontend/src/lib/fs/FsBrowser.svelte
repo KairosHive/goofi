@@ -91,6 +91,14 @@
 	// A slower earlier listing must not clobber the directory the user has since navigated to.
 	let navSeq = 0;
 
+	// A listing refused while the socket was down is asked for again once it is back.
+	$effect(() => {
+		if (!g.connected) return;
+		untrack(() => {
+			if (error) void go(cwd);
+		});
+	});
+
 	async function go(path?: string | null): Promise<void> {
 		const seq = ++navSeq;
 		error = null;
@@ -167,7 +175,7 @@
 	open
 	class="nokey"
 	{onClose}
-	style="--dialog-pad: 0; --dialog-bg: var(--surface-1); --dialog-max-width: min(720px, 92vw); width: 100%"
+	style="--dialog-pad: 0; --dialog-bg: var(--surface-1); --dialog-max-width: min(1100px, 94vw); width: 100%"
 	aria-label={title}
 	data-testid="fs-browser"
 >
@@ -281,7 +289,7 @@
 					</Button>
 				{:else}
 					<Button variant="ghost" onclick={() => fileInput?.click()} data-testid="fs-upload">
-						Open from this computer…
+						Upload…
 					</Button>
 					<input
 						bind:this={fileInput}
@@ -342,7 +350,7 @@
 		display: flex;
 		min-height: 0;
 		/* `dvh`, not `vh`: on a phone `vh` is the largest viewport, so the modal would overflow. */
-		height: min(24rem, 55dvh);
+		height: min(42rem, 70dvh);
 	}
 	.roots {
 		flex: 0 0 8.75rem;
