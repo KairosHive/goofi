@@ -131,13 +131,25 @@ pub fn record(source: Source, level: Level, stream: Option<&str>, text: impl Int
     });
 }
 
+/// A child's stderr line is a warning unless it says otherwise: a traceback or an `ERROR:` line
+/// is an error. Stdout is information.
+fn stream_level(stream: &str, text: &str) -> Level {
+    if stream != "stderr" {
+        Level::Info
+    } else if text.starts_with("Traceback") || text.contains("ERROR:") {
+        Level::Error
+    } else {
+        Level::Warning
+    }
+}
+
 /// Drain bytes without allowing an unterminated line to grow without limit.
 pub fn drain(mut reader: impl Read, source: Source, stream: &str) {
     let mut pending = Vec::new();
     let mut bytes = [0; 4096];
     let emit = |bytes: &[u8]| {
-        record(source.clone(), if stream == "stderr" { Level::Error } else { Level::Info },
-            Some(stream), String::from_utf8_lossy(bytes).trim_end_matches('\r').to_string());
+        let text = String::from_utf8_lossy(bytes).trim_end_matches('\r').to_string();
+        record(source.clone(), stream_level(stream, &text), Some(stream), text);
     };
     loop {
         match reader.read(&mut bytes) {

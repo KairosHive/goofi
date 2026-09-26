@@ -15,11 +15,9 @@ const CONNECT: Duration = Duration::from_secs(2);
 const EXEC: Duration = Duration::from_secs(300);
 
 /// Every alive session. A session is alive while its process holds its lock — the one aliveness
-/// answer — and a dead record is swept as it is met.
+/// answer. A dead record is the server's sweep to remove; a list reads only.
 pub fn list() -> Vec<Session> {
-    session::sessions(|p| {
-        let _ = std::fs::remove_dir_all(p);
-    })
+    session::sessions()
 }
 
 /// The server this command drives: `GOOFI_SESSION` names one; unset, exactly one candidate is

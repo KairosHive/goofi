@@ -205,20 +205,14 @@ pub fn alive(id: &str) -> bool {
     alive_at(&system_dir(id))
 }
 
-/// Every alive session on the machine, its record read; a directory whose lock nobody holds is
-/// dead — a part still being built holds its lock too — and `remove` takes it as it is met.
-/// The lock is the FIRST thing in a directory, so one without it is dead, whatever it holds.
-pub fn sessions(mut remove: impl FnMut(&Path)) -> Vec<Session> {
+/// Every alive session on the machine, its record read. A directory whose lock nobody holds is
+/// dead and is left alone here: `dead` names it, and the transport's sweep removes it.
+pub fn sessions() -> Vec<Session> {
     let Ok(entries) = fs::read_dir(system_base()) else { return Vec::new() };
     let mut out = Vec::new();
     for entry in entries.flatten() {
         let dir = entry.path();
-        if !dir.is_dir() {
-            let _ = fs::remove_file(&dir);
-            continue;
-        }
-        if !alive_at(&dir) {
-            remove(&dir);
+        if !dir.is_dir() || !alive_at(&dir) {
             continue;
         }
         let parsed = fs::read(dir.join("session.json"))
@@ -230,4 +224,12 @@ pub fn sessions(mut remove: impl FnMut(&Path)) -> Vec<Session> {
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out
+}
+
+/// Every record under the session base that no process holds: a dead session's directory (a
+/// part still being built holds its lock too) or a stray file. The lock is the FIRST thing in a
+/// directory, so one without it is dead, whatever it holds.
+pub fn dead() -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(system_base()) else { return Vec::new() };
+    entries.flatten().map(|e| e.path()).filter(|p| !p.is_dir() || !alive_at(p)).collect()
 }

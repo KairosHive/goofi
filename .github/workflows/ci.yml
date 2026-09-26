@@ -70,11 +70,11 @@ jobs:
       # graphics ones the three that put Python on the GPU's side.
       - name: Tests (in-process Python tier)
         run: >
-          cargo test -p goofi-tests --features embed --test all --
+          cargo test -p goofi-tests --test all --
           python:: plugins:: nodes:: inspect:: codec_golden:: filter_golden::
           param_modulation:: python_init_order::
           graphics::python_texture graphics::host_pixels --test-threads=4
-      - run: cargo test -p goofi-tests --features embed --test python_gil_tripwire
+      - run: cargo test -p goofi-tests --test python_gil_tripwire
       - run: npm install
         working-directory: tests/e2e
       # Keyed on the Playwright that installed, which the unpinned package.json does not name.

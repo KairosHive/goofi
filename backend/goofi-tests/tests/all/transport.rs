@@ -326,13 +326,10 @@ fn a_session_owns_its_directory_workspace_and_cache_parts() {
     use std::fs;
     goofi_tests::walled_home();
     let _sole = goofi_tests::sole_session();
-    let remove = |p: &std::path::Path| {
-        let _ = fs::remove_dir_all(p);
-    };
     let held = hold("abcabcabcabcabc1").unwrap();
     held.record_url("http://127.0.0.1:9999");
     assert!(alive("abcabcabcabcabc1"), "held from within the same process still reads alive");
-    assert!(sessions(remove).contains(&Session { id: "abcabcabcabcabc1".into(), url: "http://127.0.0.1:9999".into() }));
+    assert!(sessions().contains(&Session { id: "abcabcabcabcabc1".into(), url: "http://127.0.0.1:9999".into() }));
     assert!(system_dir("abcabcabcabcabc1").is_dir());
 
     // A dead session: its lock file exists in its directory and nobody holds it. An orphan
@@ -343,8 +340,10 @@ fn a_session_owns_its_directory_workspace_and_cache_parts() {
     fs::create_dir_all(system_dir("stale.part")).unwrap();
     fs::File::create(system_dir("stale.part").join("alive.lock")).unwrap();
     assert!(!alive("gone"));
-    assert!(sessions(remove).iter().all(|s| s.id != "gone"), "the dead one is not listed");
-    assert!(!system_dir("gone").exists() && !system_dir("orphan").exists(), "…and is swept as it is met");
+    assert!(sessions().iter().all(|s| s.id != "gone"), "the dead one is not listed");
+    assert!(system_dir("gone").exists(), "…and a list removes nothing");
+    goofi_transport::sweep_dead();
+    assert!(!system_dir("gone").exists() && !system_dir("orphan").exists(), "the sweep removes it");
     assert!(!system_dir("stale.part").exists(), "a crashed hold's part is swept");
     assert!(system_dir("abcabcabcabcabc1").join("alive.lock").exists(), "the live one is untouched");
 

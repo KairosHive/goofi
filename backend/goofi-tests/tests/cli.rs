@@ -64,8 +64,8 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let id = goofi_transport::session().to_string();
     goofi_transport::record_url(&url);
 
-    // A record nobody holds is DEAD and is swept as it is met; the held one is listed.
-    // Records are named per process: another run of this suite shares the machine's listing.
+    // A record nobody holds is DEAD: not listed, and left for the server's sweep; the held one
+    // is listed. Records are named per process: another run of this suite shares the listing.
     let gone = format!("long_gone_{}", std::process::id());
     let dead = session::system_dir(&gone);
     std::fs::create_dir_all(&dead).unwrap();
@@ -73,7 +73,9 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     std::fs::write(dead.join("session.json"), format!(r#"{{"id":"{gone}","url":"http://127.0.0.1:1"}}"#)).unwrap();
     let rows = client::list();
     assert!(rows.iter().any(|s| s.id == id && s.url == url), "{rows:?}");
-    assert!(!dead.exists(), "the dead record was swept; the live one stays");
+    assert!(rows.iter().all(|s| s.id != gone) && dead.exists(), "a list reads only: {rows:?}");
+    goofi_transport::sweep_dead();
+    assert!(!dead.exists(), "the sweep removes it; the live one stays");
 
     // The listing is machine-wide, so only named rows are asserted. A second held session makes
     // the bare resolution ambiguous, and it says so by naming both.

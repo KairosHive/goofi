@@ -32,12 +32,14 @@ fn console_session_groups_interleaved_messages_and_keeps_ops_out_of_patch_histor
 #[test]
 fn byte_streams_preserve_split_lines_invalid_utf8_and_final_unterminated_text() {
     let source = Source::component("byte-stream-session");
-    log::drain(std::io::Cursor::new(b"hello\r\n\xff\nlast"), source, "stderr");
+    log::drain(std::io::Cursor::new(b"hello\r\n\xff\nERROR: last"), source, "stderr");
     let snapshot = serde_json::to_value(log::global().lock().unwrap().since(None)).unwrap();
     let rows: Vec<_> = snapshot["groups"].as_array().unwrap().iter()
         .filter(|row| row["component"] == "byte-stream-session").collect();
-    assert_eq!(rows.iter().map(|row| row["text"].as_str().unwrap()).collect::<Vec<_>>(), ["hello", "�", "last"]);
-    assert!(rows.iter().all(|row| row["stream"] == "stderr" && row["level"] == "error"));
+    assert_eq!(rows.iter().map(|row| row["text"].as_str().unwrap()).collect::<Vec<_>>(), ["hello", "�", "ERROR: last"]);
+    assert!(rows.iter().all(|row| row["stream"] == "stderr"));
+    assert_eq!(rows.iter().map(|row| row["level"].as_str().unwrap()).collect::<Vec<_>>(),
+        ["warning", "warning", "error"], "stderr is a warning unless the line says error");
 }
 
 #[test]

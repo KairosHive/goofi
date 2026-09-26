@@ -231,10 +231,10 @@ pub fn record_url(url: &str) {
 /// is not alive — each judged by the lock alone. The workspaces are the manager's to sweep.
 pub fn sweep_dead() -> Swept {
     let mut swept = Swept::default();
-    let _ = goofi_core::session::sessions(|dir| {
+    for path in goofi_core::session::dead() {
         swept.directories += 1;
-        remove_tree(dir);
-    });
+        remove_tree(&path);
+    }
     let mut known = std::collections::HashMap::new();
     swept.segments = sweep_shared_memory(|id| !*known.entry(id.to_string()).or_insert_with(|| goofi_core::session::alive(id)));
     swept
@@ -255,9 +255,9 @@ pub fn swept_at_boot() -> Swept {
 
 static SWEPT: OnceLock<Swept> = OnceLock::new();
 
-/// Every alive session, dead ones swept as they are met.
+/// Every alive session; `sweep_dead` is the one deleter.
 pub fn sessions() -> Vec<goofi_core::session::Session> {
-    goofi_core::session::sessions(remove_tree)
+    goofi_core::session::sessions()
 }
 
 /// A path for a file needed for a moment — a `.gfi` packed or uploaded — under the session's
@@ -339,7 +339,7 @@ pub fn iox_node() -> Result<IoxNode, String> {
 /// Remove a tree this session owns.
 #[cfg(not(windows))]
 fn remove_tree(path: &std::path::Path) {
-    let _ = std::fs::remove_dir_all(path);
+    let _ = if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) };
 }
 
 /// On Windows the files iceoryx2 writes carry a protected DACL their owner cannot unlink through

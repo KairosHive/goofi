@@ -125,13 +125,13 @@ impl NodeEntry {
     fn leaf(&self) -> Option<&Leaf> {
         match &self.kind {
             Kind::Leaf(l) => Some(l),
-            _ => None,
+            Kind::Facade | Kind::Port(_) => None,
         }
     }
     fn leaf_mut(&mut self) -> Option<&mut Leaf> {
         match &mut self.kind {
             Kind::Leaf(l) => Some(l),
-            _ => None,
+            Kind::Facade | Kind::Port(_) => None,
         }
     }
 }
@@ -1234,14 +1234,15 @@ impl Graph {
         self.nodes.iter().filter_map(|(u, e)| e.leaf().map(|l| (*u, l)))
     }
 
-    pub fn contains(&self, uid: Uid) -> bool {
+    /// Is `uid` a RUNNING node — a leaf, not a facade or a port?
+    pub fn is_leaf(&self, uid: Uid) -> bool {
         self.leaf(uid).is_some()
     }
 
     /// Is `uid` a live endpoint a wire may name — a leaf or a boundary port? A facade is not: an
     /// address naming one is folded onto its port before any link is stored.
     pub fn wirable(&self, uid: Uid) -> bool {
-        self.contains(uid) || self.stub(uid).is_some()
+        self.is_leaf(uid) || self.stub(uid).is_some()
     }
 
     /// Node uids in insertion order.
@@ -1527,7 +1528,7 @@ impl Graph {
     pub fn stub(&self, uid: Uid) -> Option<(Uid, subpatch::Port)> {
         match self.nodes.get(&uid)?.kind {
             Kind::Port(p) => Some((self.scope_of.get(&uid).copied().flatten()?, p)),
-            _ => None,
+            Kind::Leaf(_) | Kind::Facade => None,
         }
     }
 

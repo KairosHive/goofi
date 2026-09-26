@@ -124,7 +124,6 @@ Checks from the repository root:
 cargo build --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --no-fail-fast
-cargo test -p goofi-tests --features embed
 npm --prefix frontend run check
 npm --prefix frontend run test
 ```

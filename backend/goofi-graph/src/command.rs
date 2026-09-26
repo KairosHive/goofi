@@ -244,13 +244,13 @@ impl Command {
             }
             // A collapsed sub-patch facade is editable here (name/pos), so either kind counts.
             Command::EditNode { uid, .. } => {
-                (g.contains(*uid) || g.is_facade(*uid) || g.stub(*uid).is_some())
+                (g.is_leaf(*uid) || g.is_facade(*uid) || g.stub(*uid).is_some())
                     .then_some(())
                     .ok_or_else(|| format!("no node, sub-patch or port {}", uid.to_hex()))
             }
             // Stricter than `EditNode`: a scope facade has no params to edit.
             Command::EditParam { uid, .. } => {
-                g.contains(*uid).then_some(()).ok_or_else(|| format!("no node {}", uid.to_hex()))
+                g.is_leaf(*uid).then_some(()).ok_or_else(|| format!("no node {}", uid.to_hex()))
             }
             // RemoveNode/RemoveLink stay tolerant ON PURPOSE: removing something already gone is
             // not a caller error. AddLink is validated at dispatch by `wirable_endpoint`.
@@ -411,7 +411,7 @@ impl Command {
 
             Command::EditNode { uid, name, pos, viewers } => {
                 // A node, a scope facade or a boundary port; only a vanished uid is the no-op.
-                if !g.contains(uid) && !g.is_facade(uid) && g.stub(uid).is_none() {
+                if !g.is_leaf(uid) && !g.is_facade(uid) && g.stub(uid).is_none() {
                     return Ok((Outcome::Ok, Command::Compound(vec![]))); // idempotent: it is gone
                 }
                 let old_pos = pos.map(|_| g.pos(uid).unwrap_or([0.0, 0.0]));
@@ -466,7 +466,7 @@ impl Command {
             }
 
             Command::EditParam { uid, group, name, value, source } => {
-                if !g.contains(uid) {
+                if !g.is_leaf(uid) {
                     return Ok((Outcome::Ok, Command::Compound(vec![]))); // idempotent: node gone
                 }
                 let old_value = match &value {
