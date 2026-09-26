@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use goofi_audio_sdk::{cross, AudioNode, Block, Port, PortMut, BLOCK, MAX_CHANNELS, MAX_PORTS};
+use goofi_audio_sdk::{cross, AudioNode, Block, Port, PortMut, BLOCK, MAX_PORTS};
 use goofi_node::{NodeManifest, ParamSpec, Uid};
 
 use crate::plan::{Plan, Source, SILENCE};
@@ -59,7 +59,8 @@ pub struct Inbox {
     ring: rtrb::Consumer<f32>,
     chans: usize,
     left: usize,
-    last: [f32; MAX_CHANNELS as usize],
+    /// One held sample per channel; it grows when a wider chunk arrives, once per width.
+    last: Vec<f32>,
     /// Whether a pile-up is latency to drop. A live source has no past to keep; a file does, and
     /// dropping there would skip through it.
     catch_up: bool,
@@ -71,7 +72,7 @@ const QUEUED: usize = 2;
 
 impl Inbox {
     pub fn new(ring: rtrb::Consumer<f32>, catch_up: bool) -> Inbox {
-        Inbox { ring, chans: 0, left: 0, last: [0.0; MAX_CHANNELS as usize], catch_up }
+        Inbox { ring, chans: 0, left: 0, last: Vec::new(), catch_up }
     }
 
     /// Skip to the last `QUEUED` chunks when more than that wait behind the one in hand.
@@ -93,16 +94,15 @@ impl Inbox {
                     let mut head = head.into_iter();
                     self.chans = head.next().unwrap_or(0.0) as usize;
                     self.left = head.next().unwrap_or(0.0) as usize;
+                    if self.chans > self.last.len() {
+                        self.last.resize(self.chans, 0.0);
+                    }
                 }
             }
             if self.left > 0 {
                 match self.ring.read_chunk(self.chans) {
                     Ok(sample) => {
-                        // `chans` is read off the RING, so it is the producer's word and not this
-                        // side's: a device wider than `MAX_CHANNELS` — an ASIO card answers with
-                        // eighteen — would index past `last` and panic in the audio callback. The
-                        // extra channels are dropped here rather than trusted.
-                        for (c, v) in sample.into_iter().enumerate().take(self.last.len()) {
+                        for (c, v) in sample.into_iter().enumerate() {
                             self.last[c] = v;
                         }
                         self.left -= 1;
@@ -210,8 +210,8 @@ struct Voice {
 
 impl Voice {
     /// Room for the largest chunk the ring holds, so a take never allocates.
-    fn new() -> Voice {
-        Voice { buf: Vec::with_capacity(crate::control::INBOX_RING), chans: 0, len: 0, pos: 0 }
+    fn new(capacity: usize) -> Voice {
+        Voice { buf: Vec::with_capacity(capacity), chans: 0, len: 0, pos: 0 }
     }
 
     fn sample(&self, c: usize) -> f32 {
@@ -264,17 +264,19 @@ pub struct Frames {
 }
 
 impl Frames {
+    /// Sized by the ring: the largest frame it can carry is what a voice or a bank of sines holds.
     pub fn new(ring: rtrb::Consumer<f32>, playback: Playback, rate: f64) -> Frames {
+        let capacity = ring.buffer().capacity();
         Frames {
             ring,
             playback,
             rate,
-            now: Voice::new(),
-            next: Voice::new(),
+            now: Voice::new(capacity),
+            next: Voice::new(capacity),
             fade: (0, 0),
             oscillating: false,
-            re: Vec::with_capacity(crate::control::INBOX_RING),
-            im: Vec::with_capacity(crate::control::INBOX_RING),
+            re: Vec::with_capacity(capacity),
+            im: Vec::with_capacity(capacity),
         }
     }
 
@@ -473,6 +475,9 @@ pub fn number_in(lo: f32, hi: f32) -> u64 {
 pub enum Msg {
     Insert { idx: usize, slot: Slot },
     Remove(usize),
+    /// Wider rings for a slot, minted for the widths the next plan carries; the control half
+    /// takes the other ends from the shared swap.
+    Rings { idx: usize, serial: u64, rings: Rings },
     Plan { plan: Plan, arena: Vec<f32> },
     Grow(Vec<Option<Slot>>),
     RecordBoundary { window: Arc<goofi_core::record::FrameWindow>, begin: bool, done: Arc<AtomicBool> },
@@ -485,9 +490,24 @@ pub enum Fault {
     NotANumber,
 }
 
+/// The audio thread's ends of a slot's rings, by inbox or output index.
+#[derive(Default)]
+pub struct Rings {
+    pub inboxes: Vec<(usize, Frames)>,
+    pub taps: Vec<(usize, rtrb::Producer<f32>)>,
+    pub recs: Vec<(usize, rtrb::Producer<f32>)>,
+}
+
+impl Rings {
+    pub fn is_empty(&self) -> bool {
+        self.inboxes.is_empty() && self.taps.is_empty() && self.recs.is_empty()
+    }
+}
+
 /// What comes back to be dropped off the audio thread — and what it put out of the plan.
 pub enum Retired {
     Slot(Slot),
+    Rings(Rings),
     Plan(Plan, Vec<f32>),
     Slab(Vec<Option<Slot>>),
     RecordBoundary(Arc<goofi_core::record::FrameWindow>, Arc<AtomicBool>),
@@ -555,6 +575,21 @@ impl Runtime {
             }
             Msg::Insert { idx, slot } => self.slab[idx].replace(slot).map(Retired::Slot),
             Msg::Remove(idx) => self.slab[idx].take().map(Retired::Slot),
+            Msg::Rings { idx, serial, mut rings } => {
+                // Swapped in place, the old ends going back; rings for a slot that left go back whole.
+                if let Some(slot) = self.slab[idx].as_mut().filter(|s| s.serial == serial) {
+                    for (i, frames) in &mut rings.inboxes {
+                        std::mem::swap(&mut slot.inboxes[*i], frames);
+                    }
+                    for (i, tap) in &mut rings.taps {
+                        std::mem::swap(&mut slot.taps[*i], tap);
+                    }
+                    for (i, rec) in &mut rings.recs {
+                        std::mem::swap(&mut slot.recs[*i], rec);
+                    }
+                }
+                Some(Retired::Rings(rings))
+            }
             Msg::Plan { plan, arena } => {
                 let old = std::mem::replace(&mut self.plan, plan);
                 let old_arena = std::mem::replace(&mut self.arena, arena);
@@ -728,8 +763,7 @@ impl Runtime {
                     // named `c`th, and every device channel nobody named is left as it was — which
                     // is what lets two AudioOuts hold different pairs of one card without either
                     // clearing the other's. A name past the width the device opened at is dropped,
-                    // since the plan's width is capped at `MAX_CHANNELS` and a device may be
-                    // narrower than the plan asked for.
+                    // since a device may be narrower than the plan asked for.
                     Some(sel) => {
                         for (c, dev) in sel.iter().enumerate() {
                             let dev = *dev as usize;
@@ -756,7 +790,7 @@ impl Runtime {
 }
 
 /// What a read lands on when the plan put it inside a written region, which it never does.
-static QUIET: [f32; MAX_CHANNELS as usize * BLOCK] = [0.0; MAX_CHANNELS as usize * BLOCK];
+static QUIET: [f32; crate::plan::CEILING as usize * BLOCK] = [0.0; crate::plan::CEILING as usize * BLOCK];
 
 /// The arena carved for one pass: every region asked for as its own exclusive slice, answered
 /// in the order asked, and the gaps between them as the shared slices every read comes from.

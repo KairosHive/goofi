@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK, MAX_CHANNELS};
+use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     RISE = ParamDecl {
@@ -38,7 +38,7 @@ static MANIFEST: Manifest = Manifest {
 #[derive(Default)]
 struct Slew {
     rate: f32,
-    held: [f32; MAX_CHANNELS as usize],
+    held: Lanes<f32>,
 }
 
 impl AudioNode for Slew {
@@ -49,9 +49,10 @@ impl AudioNode for Slew {
     fn process(&mut self, b: &mut Block<'_>) {
         let (input, rise, fall) = (&b.ins[0], &b.params[P::RISE], &b.params[P::FALL]);
         let out = &mut b.outs[0];
-        for c in 0..out.channels() as usize {
+        let width = out.channels() as usize;
+        let helds = self.held.fit(width);
+        for (c, held) in helds.iter_mut().enumerate() {
             let (x, up, down) = (input.chan(c), rise.chan(c), fall.chan(c));
-            let held = &mut self.held[c];
             let y = out.chan_mut(c);
             for i in 0..BLOCK {
                 let seconds = if x[i] > *held { up[i] } else { down[i] };

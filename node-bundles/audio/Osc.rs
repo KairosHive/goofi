@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag, BLOCK, MAX_CHANNELS};
+use goofi_audio_sdk::{hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Lanes, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     PITCH = ParamDecl {
@@ -38,7 +38,7 @@ static MANIFEST: Manifest = Manifest {
 
 #[derive(Default)]
 struct Osc {
-    phase: [f32; MAX_CHANNELS as usize],
+    phase: Lanes<f32>,
     step: f32,
 }
 
@@ -51,9 +51,10 @@ impl AudioNode for Osc {
         let pitch = &b.params[P::PITCH];
         let waveform = b.params[P::WAVEFORM].chan(0)[0] as u8;
         let out = &mut b.outs[0];
-        for c in 0..out.channels() as usize {
+        let width = out.channels() as usize;
+        let phases = self.phase.fit(width);
+        for (c, phase) in phases.iter_mut().enumerate() {
             let p = pitch.chan(c);
-            let phase = &mut self.phase[c];
             let samples = out.chan_mut(c);
             for i in 0..BLOCK {
                 samples[i] = match waveform {

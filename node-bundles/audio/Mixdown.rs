@@ -1,11 +1,11 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK, MAX_CHANNELS};
+use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     CHANNELS = ParamDecl {
         group: "mixdown",
         name: "channels",
-        spec: ParamSpec::Int { default: 2, min: 1, max: 16, options: &[] },
+        spec: ParamSpec::Int { default: 2, min: 1, max: 256, options: &[] },
         expression: None,
         doc: Some("how many channels leave; 2 is the pair a speaker takes"),
         section: 0,
@@ -45,7 +45,7 @@ fn position(v: usize, n: usize, spread: f32) -> f32 {
 
 impl AudioNode for Mixdown {
     fn channels(&self, _ins: &[u16], params: &[f64], outs: usize) -> Vec<u16> {
-        vec![(params[P::CHANNELS] as u16).clamp(1, MAX_CHANNELS); outs]
+        vec![(params[P::CHANNELS] as u16).max(1); outs]
     }
 
     fn prepare(&mut self, _rate: f64) {}
@@ -53,7 +53,7 @@ impl AudioNode for Mixdown {
     fn process(&mut self, b: &mut Block<'_>) {
         let input = &b.ins[0];
         let spread = b.params[P::SPREAD].chan(0)[0];
-        let voices = (input.channels() as usize).min(MAX_CHANNELS as usize);
+        let voices = input.channels() as usize;
         let out = &mut b.outs[0];
         let wide = out.channels() as usize;
 

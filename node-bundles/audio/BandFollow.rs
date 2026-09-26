@@ -1,7 +1,7 @@
 use goofi_audio_sdk::goofi_core::SlotType;
 use goofi_audio_sdk::{
-    band_partial, band_volts, hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK,
-    MAX_CHANNELS,
+    band_partial, band_volts, hz_of, AudioNode, Block, Lanes, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag,
+    BLOCK,
 };
 
 goofi_audio_sdk::params! {
@@ -26,7 +26,7 @@ goofi_audio_sdk::params! {
     BANDS = ParamDecl {
         group: "band",
         name: "bands",
-        spec: ParamSpec::Int { default: 16, min: 2, max: MAX_CHANNELS as i64, options: &[] },
+        spec: ParamSpec::Int { default: 16, min: 2, max: 128, options: &[] },
         expression: None,
         doc: Some("how many bands leave, one per channel; `BandFilter` needs the same count"),
         section: 0,
@@ -107,9 +107,9 @@ static MANIFEST: Manifest = Manifest {
 #[derive(Default)]
 struct BandFollow {
     rate: f32,
-    ic1: [f32; MAX_CHANNELS as usize],
-    ic2: [f32; MAX_CHANNELS as usize],
-    level: [f32; MAX_CHANNELS as usize],
+    ic1: Lanes<f32>,
+    ic2: Lanes<f32>,
+    level: Lanes<f32>,
 }
 
 /// The one-pole step for a time constant; a zero time is a wire.
@@ -122,7 +122,7 @@ fn coef(seconds: f32, rate: f32) -> f32 {
 
 impl AudioNode for BandFollow {
     fn channels(&self, _ins: &[u16], params: &[f64], outs: usize) -> Vec<u16> {
-        vec![(params[P::BANDS] as u16).clamp(2, MAX_CHANNELS); outs]
+        vec![(params[P::BANDS] as u16).max(1); outs]
     }
 
     fn audio_params(&self, _declared: usize) -> usize {
@@ -153,6 +153,7 @@ impl AudioNode for BandFollow {
         let voices = pitch.channels() as usize;
         let out = &mut b.outs[0];
         let bands = out.channels() as usize;
+        let (ic1s, ic2s, levels) = (self.ic1.fit(bands), self.ic2.fit(bands), self.level.fit(bands));
         for band in 0..bands {
             // The bank re-tunes once a block: a note lands on a block edge, and a tan per sample
             // per band buys nothing for it.
@@ -167,7 +168,7 @@ impl AudioNode for BandFollow {
             let g = (std::f32::consts::PI * f / rate).tan();
             let a1 = 1.0 / (1.0 + g * (g + k));
             let (a2, a3) = (g * a1, g * g * a1);
-            let (ic1, ic2, level) = (&mut self.ic1[band], &mut self.ic2[band], &mut self.level[band]);
+            let (ic1, ic2, level) = (&mut ic1s[band], &mut ic2s[band], &mut levels[band]);
             let y = out.chan_mut(band);
             for i in 0..BLOCK {
                 let v3 = heard[i] - *ic2;

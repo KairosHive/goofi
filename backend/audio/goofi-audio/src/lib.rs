@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use goofi_audio_sdk::host::Loaded;
-use goofi_audio_sdk::{AudioNode, BLOCK, MAX_CHANNELS, MAX_PORTS};
+use goofi_audio_sdk::{AudioNode, BLOCK, MAX_PORTS};
 use goofi_core::{Param, SlotType};
 use goofi_node::{
     DrainWaker, Edit, EditorAction, Engine, GraphView, LibraryEntry, NodeManifest, NodeStage, NodeView,
@@ -184,8 +184,7 @@ fn open_output(name: &str, runtime: Arc<Mutex<Runtime>>, stats: Arc<Stats>, wake
     let format = supported.sample_format();
     // The host's own buffer, never a size of ours: `render_into` is size-agnostic, and a request of
     // ours underran while the client was unoptimized. The 2 s this costs is a roadmap item.
-    let mut config = supported.config();
-    config.channels = config.channels.min(MAX_CHANNELS);
+    let config = supported.config();
     let rate = f64::from(config.sample_rate);
     let channels = config.channels;
     // The word the DEVICE speaks, as on the input side: a shared-mode host takes `f32` from every
@@ -262,12 +261,12 @@ fn rings_for(type_name: &str, chans: Arc<AtomicU16>, uid: Uid, ui: Option<goofi_
     let mut ports = control::Ports::default();
     match type_name {
         nodes::audio_in::TYPE => {
-            let (producer, consumer) = rtrb::RingBuffer::new(control::INBOX_RING);
+            let (producer, consumer) = rtrb::RingBuffer::new(control::inbox_ring(control::USUAL_WIDTH));
             birth.inbox = Some(consumer);
             ports.audio_in = Some((Arc::new(Mutex::new(producer)), chans));
         }
         nodes::audio_playback::TYPE => {
-            let (producer, consumer) = rtrb::RingBuffer::new(control::INBOX_RING);
+            let (producer, consumer) = rtrb::RingBuffer::new(control::inbox_ring(control::USUAL_WIDTH));
             birth.inbox = Some(consumer);
             ports.play = Some((producer, chans));
         }
@@ -292,6 +291,14 @@ pub(crate) struct Instance {
     pub(crate) control: Handle,
     /// The channel count each Array input last saw — what the plan sizes its inbox by.
     pub(crate) chans: Vec<Arc<AtomicU16>>,
+    /// The width each inbox ring and each output's rings were minted for; a plan past it grows them.
+    minted: Widths,
+}
+
+#[derive(Default)]
+struct Widths {
+    inboxes: Vec<u16>,
+    outs: Vec<u16>,
 }
 
 pub struct AudioEngine {
@@ -375,6 +382,7 @@ impl AudioEngine {
                 edits: Mutex::new(Vec::new()),
                 waker,
                 anchor: anchor.clone(),
+                swaps: Mutex::new(HashMap::new()),
             }),
             classes,
             rust_loaded: HashMap::new(),
@@ -518,6 +526,7 @@ impl AudioEngine {
                 Retired::Slot(slot) => self.write_state(slot.uid, slot.type_name, slot.node.save()),
                 // The drop is the POINT: these come back so the audio thread never frees them.
                 Retired::Plan(plan, arena) => drop((plan, arena)),
+                Retired::Rings(rings) => drop(rings),
                 Retired::Slab(slab) => drop(slab),
                 Retired::RecordBoundary(window, done) => drop((window, done)),
                 Retired::Faulted { uid, serial, fault } => {
@@ -722,6 +731,52 @@ impl AudioEngine {
     }
 }
 
+impl AudioEngine {
+    /// Rings wider than any a stage of `plan` carries, minted here and swapped in at both ends:
+    /// the audio thread's by message, ahead of the plan, and the control half's at its next tick.
+    fn grow_rings(&mut self, plan: &Plan) {
+        for stage in &plan.stages {
+            let Some((uid, inst)) = self.live.iter_mut().find(|(_, i)| i.idx == stage.idx && i.serial == stage.serial) else { continue };
+            let mut rings = runtime::Rings::default();
+            let mut swap = control::Swap::default();
+            for (i, minted) in inst.minted.inboxes.iter_mut().enumerate() {
+                let width = inst.chans[i].load(Ordering::Relaxed);
+                if width <= *minted {
+                    continue;
+                }
+                *minted = width;
+                let (producer, consumer) = rtrb::RingBuffer::new(control::inbox_ring(width));
+                rings.inboxes.push((i, Frames::new(consumer, Playback::of(inst.manifest), self.audio.rate())));
+                swap.inboxes.push((i, producer));
+            }
+            for (o, minted) in inst.minted.outs.iter_mut().enumerate() {
+                let width = stage.outs.get(o).map_or(1, |out| out.1);
+                if width <= *minted {
+                    continue;
+                }
+                *minted = width;
+                let (tap_in, tap_out) = rtrb::RingBuffer::new(control::tap_ring(width));
+                let (rec_in, rec_out) = rtrb::RingBuffer::new(control::rec_ring(width));
+                rings.taps.push((o, tap_in));
+                rings.recs.push((o, rec_in));
+                swap.taps.push((o, tap_out));
+                swap.recs.push((o, rec_out));
+            }
+            if rings.is_empty() {
+                continue;
+            }
+            let (idx, serial, uid) = (inst.idx, inst.serial, *uid);
+            let mut swaps = self.audio.swaps.lock().unwrap_or_else(|e| e.into_inner());
+            let held = swaps.entry(uid).or_default();
+            held.inboxes.extend(swap.inboxes);
+            held.taps.extend(swap.taps);
+            held.recs.extend(swap.recs);
+            drop(swaps);
+            self.send(Msg::Rings { idx, serial, rings });
+        }
+    }
+}
+
 impl Engine for AudioEngine {
     fn id(&self) -> &'static str {
         "audio"
@@ -795,23 +850,32 @@ impl Engine for AudioEngine {
             .inputs
             .iter()
             .filter(|s| s.kind != SlotType::Audio)
-            .map(|_| rtrb::RingBuffer::<f32>::new(control::INBOX_RING))
+            .map(|_| rtrb::RingBuffer::<f32>::new(control::inbox_ring(control::USUAL_WIDTH)))
             .unzip();
         let (tap_in, tap_out): (Vec<_>, Vec<_>) =
-            manifest.outputs.iter().map(|_| rtrb::RingBuffer::<f32>::new(control::TAP_RING)).unzip();
+            manifest.outputs.iter().map(|_| rtrb::RingBuffer::<f32>::new(control::tap_ring(control::USUAL_WIDTH))).unzip();
         // Beside the tap and never in `rings_for`: a recording ring belongs to an OUTPUT, and the
         // rings there belong to a TYPE's OS handle.
         let (rec_in, rec_out): (Vec<_>, Vec<_>) = manifest
             .outputs
             .iter()
-            .map(|_| rtrb::RingBuffer::<f32>::new(control::REC_RING))
+            .map(|_| rtrb::RingBuffer::<f32>::new(control::rec_ring(control::USUAL_WIDTH)))
             .unzip();
         // The inboxes are built here so the plan can read their channel cells; the half itself is
         // made on its own thread, where an OS handle it opens never has to cross one.
         let inboxes: Vec<control::Inbox> = inbox_in.into_iter().map(control::Inbox::new).collect();
         let inbox_chans = AudioHalf::channels(&inboxes);
-        let birth =
-            control::Birth { manifest, params: atomics.clone(), inboxes, taps: tap_out, recs: rec_out, ports, audio: self.audio.clone() };
+        let minted = Widths { inboxes: vec![control::USUAL_WIDTH; inbox_chans.len()], outs: vec![control::USUAL_WIDTH; manifest.outputs.len()] };
+        let birth = control::Birth {
+            uid,
+            manifest,
+            params: atomics.clone(),
+            inboxes,
+            taps: tap_out,
+            recs: rec_out,
+            ports,
+            audio: self.audio.clone(),
+        };
         let spawn = goofi_control::Spawn {
             engine: "audio",
             uid,
@@ -843,7 +907,7 @@ impl Engine for AudioEngine {
         };
         self.send(Msg::Insert { idx, slot });
         let twin = make(nodes::Birth { chans, ..Default::default() });
-        self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans });
+        self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans, minted });
         self.pending.push((uid, Status::Stage { stage: NodeStage::Ready }));
         self.dirty = true;
         self.shared.waker.notify();
@@ -915,6 +979,7 @@ impl Engine for AudioEngine {
         let since = self.time.now();
         self.pending.extend(self.faults.settle(faults, since));
         if plan != self.last {
+            self.grow_rings(&plan);
             let arena = vec![0.0; plan.arena_len];
             self.send(Msg::Plan { plan: plan.clone(), arena });
             self.last = plan;

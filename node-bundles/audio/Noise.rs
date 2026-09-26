@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag, BLOCK, MAX_CHANNELS};
+use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Lanes, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     MODE = ParamDecl {
@@ -14,7 +14,7 @@ goofi_audio_sdk::params! {
     CHANNELS = ParamDecl {
         group: "noise",
         name: "channels",
-        spec: ParamSpec::Int { default: 1, min: 1, max: 16, options: &[] },
+        spec: ParamSpec::Int { default: 1, min: 1, max: 256, options: &[] },
         expression: None,
         doc: Some("how many channels to make; no two of them are alike"),
         section: 0,
@@ -32,21 +32,12 @@ static MANIFEST: Manifest = Manifest {
     params: PARAMS,
 };
 
+#[derive(Default)]
 struct Noise {
-    seed: [u32; MAX_CHANNELS as usize],
+    /// A fresh lane is zero, which xorshift never leaves; it is seeded by its index on first use.
+    seed: Lanes<u32>,
     /// The three one-pole states the pink filter keeps per channel.
-    poles: [[f32; 3]; MAX_CHANNELS as usize],
-}
-
-impl Default for Noise {
-    fn default() -> Noise {
-        // Each channel starts somewhere else, which is what keeps them uncorrelated.
-        let mut seed = [0u32; MAX_CHANNELS as usize];
-        for (c, s) in seed.iter_mut().enumerate() {
-            *s = 0x9E37_79B9u32.wrapping_mul(c as u32 + 1) | 1;
-        }
-        Noise { seed, poles: [[0.0; 3]; MAX_CHANNELS as usize] }
-    }
+    poles: Lanes<[f32; 3]>,
 }
 
 /// One uniform sample in [-1, 1], and the state moved on.
@@ -59,18 +50,24 @@ fn white(state: &mut u32) -> f32 {
 
 impl AudioNode for Noise {
     fn channels(&self, _ins: &[u16], params: &[f64], outs: usize) -> Vec<u16> {
-        vec![(params[P::CHANNELS] as u16).clamp(1, MAX_CHANNELS); outs]
+        vec![(params[P::CHANNELS] as u16).max(1); outs]
     }
 
     fn prepare(&mut self, _rate: f64) {
-        self.poles = [[0.0; 3]; MAX_CHANNELS as usize];
+        self.poles.reset();
     }
 
     fn process(&mut self, b: &mut Block<'_>) {
         let pink = b.params[P::MODE].chan(0)[0] as u8 == 1;
         let out = &mut b.outs[0];
-        for c in 0..out.channels() as usize {
-            let (seed, poles) = (&mut self.seed[c], &mut self.poles[c]);
+        let width = out.channels() as usize;
+        let (seeds, poles) = (self.seed.fit(width), self.poles.fit(width));
+        for c in 0..width {
+            let (seed, poles) = (&mut seeds[c], &mut poles[c]);
+            if *seed == 0 {
+                // Each channel starts somewhere else, which is what keeps them uncorrelated.
+                *seed = 0x9E37_79B9u32.wrapping_mul(c as u32 + 1) | 1;
+            }
             let y = out.chan_mut(c);
             for sample in y.iter_mut().take(BLOCK) {
                 let w = white(seed);

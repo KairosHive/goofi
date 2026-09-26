@@ -46,8 +46,8 @@ The audio node contract is `sdk/README.md` and the code.
   notarized release.
 - **A control-rate param referencing an audio output** receives a `[C, T]` frame and the bare
   reference rule wants one element. Open: the rule takes the last sample, or a node sits between.
-- **Whether `MAX_CHANNELS = 16`** (`goofi-audio-sdk/src/lib.rs`) is right, and what a spectral
-  port does to it when a `Bins` layout arrives. No layout tag exists until a node needs one.
+- **What a spectral port does to a port's width** when a `Bins` layout arrives. No layout tag
+  exists until a node needs one.
 - **Drift between two devices** for `AudioIn`, and between hosts in one patch (a WASAPI capture
   beside an ASIO output is allowed): measure before any correction is built.
 - **A canvas affordance for references**: nothing draws a reference on the canvas.

@@ -1,7 +1,7 @@
 use goofi_audio_sdk::goofi_core::SlotType;
 use goofi_audio_sdk::{
-    band_partial, band_volts, hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK,
-    MAX_CHANNELS,
+    band_partial, band_volts, hz_of, AudioNode, Block, Lanes, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag,
+    BLOCK,
 };
 
 goofi_audio_sdk::params! {
@@ -35,7 +35,7 @@ goofi_audio_sdk::params! {
     BANDS = ParamDecl {
         group: "band",
         name: "bands",
-        spec: ParamSpec::Int { default: 16, min: 2, max: MAX_CHANNELS as i64, options: &[] },
+        spec: ParamSpec::Int { default: 16, min: 2, max: 128, options: &[] },
         expression: None,
         doc: Some("how many bands the input is split into, while nothing drives `gains`; a shape that does is as wide as it is"),
         section: 0,
@@ -102,8 +102,9 @@ static MANIFEST: Manifest = Manifest {
 #[derive(Default)]
 struct BandFilter {
     rate: f32,
-    ic1: [[f32; MAX_CHANNELS as usize]; MAX_CHANNELS as usize],
-    ic2: [[f32; MAX_CHANNELS as usize]; MAX_CHANNELS as usize],
+    /// One state-variable filter per band per channel, channel-major.
+    ic1: Lanes<f32>,
+    ic2: Lanes<f32>,
 }
 
 impl AudioNode for BandFilter {
@@ -129,14 +130,16 @@ impl AudioNode for BandFilter {
         // A shape says how many bands it holds, so a driven bank cannot disagree with its follower.
         let bands = match gains.channels() > 1 {
             true => gains.channels() as usize,
-            false => (b.scalars[P::BANDS] as usize).clamp(2, MAX_CHANNELS as usize),
+            false => (b.scalars[P::BANDS] as usize).max(1),
         };
         let harmonic = b.scalars[P::LAYOUT] as u8 == 1;
         let voices = pitch.channels() as usize;
         let out = &mut b.outs[0];
-        for c in 0..out.channels() as usize {
+        let width = out.channels() as usize;
+        let (ic1s, ic2s) = (self.ic1.fit(bands * width), self.ic2.fit(bands * width));
+        for c in 0..width {
             let x = input.chan(c);
-            let (ic1s, ic2s) = (&mut self.ic1[c], &mut self.ic2[c]);
+            let (ic1s, ic2s) = (&mut ic1s[c * bands..(c + 1) * bands], &mut ic2s[c * bands..(c + 1) * bands]);
             let y = out.chan_mut(c);
             y.fill(0.0);
             for band in 0..bands {

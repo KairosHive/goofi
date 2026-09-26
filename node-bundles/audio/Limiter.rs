@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK, MAX_CHANNELS};
+use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     CEILING = ParamDecl {
@@ -62,7 +62,7 @@ impl AudioNode for Limiter {
     fn process(&mut self, b: &mut Block<'_>) {
         let (input, ceiling, attack, release) =
             (&b.ins[0], &b.params[P::CEILING], &b.params[P::ATTACK], &b.params[P::RELEASE]);
-        let channels = (b.outs[0].channels() as usize).min(MAX_CHANNELS as usize);
+        let channels = b.outs[0].channels() as usize;
         let (ceil, att, rel) = (ceiling.chan(0), attack.chan(0), release.chan(0));
 
         // One pass to find the gain from the loudest channel, so the channels stay in proportion.

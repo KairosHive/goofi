@@ -16,7 +16,7 @@
 //! not a set — `3-4` and `4-3` are different answers, and duplicates are allowed because sending
 //! one source to two destinations is a real thing to want.
 
-use goofi_audio_sdk::MAX_CHANNELS;
+use crate::plan::CEILING;
 
 /// What a `channels` param means when it names the whole device.
 pub const ALL: &str = "all";
@@ -60,9 +60,9 @@ pub fn parse(spec: &str) -> Result<Option<Vec<u16>>, String> {
             None => out.push(one(part)?),
         }
     }
-    if out.len() > MAX_CHANNELS as usize {
+    if out.len() > CEILING as usize {
         return Err(format!(
-            "`{spec}` selects {} channels and the engine carries {MAX_CHANNELS}",
+            "`{spec}` selects {} channels and a port carries {CEILING}",
             out.len()
         ));
     }

@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{high, AudioNode, Block, Edge, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag, BLOCK, MAX_CHANNELS};
+use goofi_audio_sdk::{high, AudioNode, Block, Edge, Manifest, OutputDecl, ParamDecl, ParamSpec, Lanes, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     GATE = ParamDecl {
@@ -71,9 +71,9 @@ enum Stage {
 
 #[derive(Default)]
 struct Env {
-    stage: [Stage; MAX_CHANNELS as usize],
-    level: [f32; MAX_CHANNELS as usize],
-    edge: [Edge; MAX_CHANNELS as usize],
+    stage: Lanes<Stage>,
+    level: Lanes<f32>,
+    edge: Lanes<Edge>,
     step: f32,
 }
 
@@ -84,13 +84,16 @@ impl AudioNode for Env {
 
     fn process(&mut self, b: &mut Block<'_>) {
         let out = &mut b.outs[0];
-        for c in 0..out.channels() as usize {
+        let width = out.channels() as usize;
+        let (stages, levels, edges) = (self.stage.fit(width), self.level.fit(width), self.edge.fit(width));
+        let step = self.step;
+        for c in 0..width {
             let gate = b.params[P::GATE].chan(c);
             let attack = b.params[P::ATTACK].chan(c);
             let decay = b.params[P::DECAY].chan(c);
             let sustain = b.params[P::SUSTAIN].chan(c);
             let release = b.params[P::RELEASE].chan(c);
-            let (stage, level, edge) = (&mut self.stage[c], &mut self.level[c], &mut self.edge[c]);
+            let (stage, level, edge) = (&mut stages[c], &mut levels[c], &mut edges[c]);
             let samples = out.chan_mut(c);
             for i in 0..BLOCK {
                 if edge.rising(gate[i]) {
@@ -98,7 +101,7 @@ impl AudioNode for Env {
                 } else if !high(gate[i]) && !matches!(*stage, Stage::Idle | Stage::Release) {
                     *stage = Stage::Release;
                 }
-                let per = |seconds: f32| self.step / seconds.max(1e-4);
+                let per = |seconds: f32| step / seconds.max(1e-4);
                 match *stage {
                     Stage::Attack => {
                         *level += per(attack[i]);

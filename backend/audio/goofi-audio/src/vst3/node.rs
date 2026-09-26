@@ -4,7 +4,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use goofi_audio_sdk::{high, AudioNode, Block, BLOCK, MAX_CHANNELS};
+use goofi_audio_sdk::{high, AudioNode, Block, BLOCK};
+
+/// A voice is a MIDI channel, and MIDI has sixteen: the protocol's bound, not the engine's.
+const MIDI_CHANNELS: usize = 16;
 use goofi_node::Stamp;
 use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
@@ -98,7 +101,7 @@ impl Drop for Plugin {
 
 impl AudioNode for Plugin {
     fn channels(&self, _ins: &[u16], _params: &[f64], outs: usize) -> Vec<u16> {
-        (0..outs).map(|i| self.class.outputs.get(i).copied().unwrap_or(1).clamp(1, MAX_CHANNELS)).collect()
+        (0..outs).map(|i| self.class.outputs.get(i).copied().unwrap_or(1).max(1)).collect()
     }
 
     /// Only the voice params are read per sample, to place a note inside the block. A plugin
@@ -176,10 +179,10 @@ struct Live {
     /// The normalized value last handed over per plugin param; NaN sends it at the next block.
     sent: Vec<f64>,
     /// Per voice, the note sounding and the cents it was detuned by.
-    held: [Option<(i16, f32)>; MAX_CHANNELS as usize],
+    held: [Option<(i16, f32)>; MIDI_CHANNELS],
     /// Per voice, where its channel's pitch wheel sits in `changes` — `None` where the plugin
     /// maps none, which is what decides between the wheel and the note's own `tuning`.
-    bend: [Option<usize>; MAX_CHANNELS as usize],
+    bend: [Option<usize>; MIDI_CHANNELS],
     /// Whether `setupProcessing` has run: what a re-prepare must undo and a first one must not.
     prepared: bool,
 }
@@ -207,7 +210,7 @@ impl Live {
         let (bend, bend_ids) = unsafe { wheels(controller.as_ref(), &component, class.params.len()) };
         let changes = ComWrapper::new(Changes::new(class.params.iter().map(|(id, _)| *id).chain(bend_ids)));
         let changes_ptr = changes.to_com_ptr().expect("changes are an IParameterChanges");
-        let events = ComWrapper::new(Events::with_capacity(BLOCK * MAX_CHANNELS as usize));
+        let events = ComWrapper::new(Events::with_capacity(BLOCK * MIDI_CHANNELS));
         let events_ptr = events.to_com_ptr().expect("events are an IEventList");
         let mut live = Live {
             _host: host,
@@ -223,7 +226,7 @@ impl Live {
             ins,
             outs,
             sent: vec![f64::NAN; class.params.len()],
-            held: [None; MAX_CHANNELS as usize],
+            held: [None; MIDI_CHANNELS],
             bend,
             prepared: false,
         };
@@ -268,7 +271,7 @@ impl Live {
         self.context.timeSigDenominator = 4;
         // The reactivation dropped the plugin's voices, so a gate still HIGH must note again.
         self.sent.fill(f64::NAN);
-        self.held = [None; MAX_CHANNELS as usize];
+        self.held = [None; MIDI_CHANNELS];
         Ok(())
     }
 
@@ -318,11 +321,11 @@ impl Live {
                         (n, &move |which, c, s| if which == 1 { p.chan(c)[s] } else { p.chan(n + c)[s] }, &|v| v > 0.0)
                     }
                     None => {
-                        let n = (b.params[0].channels() as usize).min(MAX_CHANNELS as usize);
+                        let n = (b.params[0].channels() as usize).min(MIDI_CHANNELS);
                         (n, &|which, c, s| b.params[which].chan(c)[s], &high)
                     }
                 };
-            for c in 0..voices.min(MAX_CHANNELS as usize) {
+            for c in 0..voices.min(MIDI_CHANNELS) {
                 for s in 0..BLOCK {
                     match (held(read(0, c, s)), self.held[c]) {
                         (true, None) => {
@@ -403,8 +406,8 @@ unsafe fn wheels(
     controller: Option<&ComPtr<IEditController>>,
     component: &ComPtr<IComponent>,
     first: usize,
-) -> ([Option<usize>; MAX_CHANNELS as usize], Vec<ParamID>) {
-    let mut slots = [None; MAX_CHANNELS as usize];
+) -> ([Option<usize>; MIDI_CHANNELS], Vec<ParamID>) {
+    let mut slots = [None; MIDI_CHANNELS];
     let mut ids = Vec::new();
     let Some(mapping) = controller.cloned().or_else(|| component.cast()).and_then(|c: ComPtr<IEditController>| c.cast::<IMidiMapping>())
     else {
@@ -499,7 +502,7 @@ unsafe fn arrange(component: &ComPtr<IComponent>, processor: &ComPtr<IAudioProce
             .map(|i| {
                 let mut info: BusInfo = std::mem::zeroed();
                 component.getBusInfo(audio, dir, i, &mut info);
-                info.channelCount.clamp(1, MAX_CHANNELS as i32) as u16
+                info.channelCount.max(1) as u16
             })
             .collect()
     };

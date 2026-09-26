@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 
-use goofi_audio_sdk::{BLOCK, MAX_CHANNELS};
+use goofi_audio_sdk::BLOCK;
 use goofi_core::SlotType;
 use goofi_control::{param_of, scalar_of};
 use goofi_node::{BindingView, GraphView, NodeManifest, Uid};
@@ -13,6 +13,10 @@ use crate::Instance;
 
 /// An offset into the arena, in floats; a region is `channels * BLOCK` of them.
 pub type Region = usize;
+
+/// The widest a port may be: a bound on what a garbled width can ask of the arena and the rings,
+/// not a design limit. A port this wide is 256 KB of arena and some 400 MB of rings.
+pub const CEILING: u16 = 1024;
 
 /// The silence every unwired input reads: one channel at the arena's start.
 pub const SILENCE: Region = 0;
@@ -193,7 +197,7 @@ pub fn compile(
         let scalars: Vec<f64> = inst.manifest.params.iter().map(|d| scalar_of(nv.params, d)).collect();
         let wanted = inst.twin.channels(&counts, &scalars, inst.manifest.outputs.len());
         for (i, o) in inst.manifest.outputs.iter().enumerate() {
-            let channels = wanted.get(i).copied().unwrap_or(1).clamp(1, MAX_CHANNELS);
+            let channels = wanted.get(i).copied().unwrap_or(1).clamp(1, CEILING);
             outs_of.insert((*uid, o.name), (alloc(channels, &mut plan.arena_len), channels));
         }
     }
@@ -258,7 +262,7 @@ pub fn compile(
         })
         .max()
         .unwrap_or(1)
-        .min(MAX_CHANNELS);
+        .min(CEILING);
     plan.output = (alloc(width, &mut plan.arena_len), width);
     (plan, faults)
 }

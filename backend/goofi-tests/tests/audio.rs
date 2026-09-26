@@ -872,7 +872,7 @@ fn a_patch_sounds_under_the_external_clock() {
     g.set_param(in2, "signal", "high", 3.0);
     sounds(&g, "the mix in range", |x| x.iter().all(|v| (*v - 0.25).abs() < 1e-5));
     // Any number of rows mix: forty that hold 0..39, scaled by a fiftieth, are 0.39. Unmixed,
-    // more rows than a port carries are refused on `mode`, and say so.
+    // the same forty are forty channels, the rings and the arena grown to carry them.
     g.set_param(in2, "signal", "high", 1.0);
     g.set_param(ramp2, "ramp", "channels", 40);
     let fiftieth = g.add("signal:Math");
@@ -882,9 +882,11 @@ fn a_patch_sounds_under_the_external_clock() {
     g.link(fiftieth, "out", in2, "input");
     sounds(&g, "forty rows mixed", |x| x.iter().all(|v| (*v - 0.39).abs() < 1e-4));
     g.set_param(in2, "signal", "mix", false);
-    g.until("forty rows unmixed refused", |g| g.error(in2).filter(|e| e.contains("at most 16")));
-    g.set_param(in2, "signal", "mix", true);
-    g.until("mixed again clears the refusal", |g| g.error(in2).is_none().then_some(()));
+    g.until("forty channels", |g| {
+        let (x, channels) = drive(g, TENTH);
+        let last = &x[x.len() - 40..];
+        (channels == 40 && last.iter().enumerate().all(|(c, v)| (*v - c as f32 * 0.02).abs() < 1e-4)).then_some(())
+    });
     g.call("node remove", j!({ "node": hex(fiftieth) }));
     // The params beside `mode` show only for a waveform; an oscillator has none.
     let signal = &g.call("library get", j!({ "type": "audio:SignalIn" }))["params"]["signal"];
@@ -1573,7 +1575,7 @@ fn an_audio_out_lands_on_the_channels_it_names() {
     assert!(why.contains("count from 1"), "the refusal says where counting starts: {why}");
     g.set_param(out, "audio", "channels", "all");
     g.until("the fault to clear", |g| g.error(out).is_none().then_some(()));
-    for spec in ["1,,2", "1-2-3", "1-64"] {
+    for spec in ["1,,2", "1-2-3", "1-2000"] {
         g.set_param(out, "audio", "channels", spec);
         g.until("an invalid channel selection is refused", |g| g.error(out));
         g.set_param(out, "audio", "channels", "all");

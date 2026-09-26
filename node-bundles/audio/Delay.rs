@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK, MAX_CHANNELS};
+use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     TIME = ParamDecl {
@@ -48,7 +48,8 @@ const MAX_SECONDS: f32 = 5.0;
 #[derive(Default)]
 struct Delay {
     rate: f32,
-    lines: Vec<Vec<f32>>,
+    len: usize,
+    lines: Lanes<Vec<f32>>,
     write: usize,
 }
 
@@ -66,8 +67,8 @@ fn tap(line: &[f32], write: usize, back: f32) -> f32 {
 impl AudioNode for Delay {
     fn prepare(&mut self, rate: f64) {
         self.rate = rate as f32;
-        let len = (MAX_SECONDS * self.rate) as usize + 2;
-        self.lines = vec![vec![0.0; len]; MAX_CHANNELS as usize];
+        self.len = (MAX_SECONDS * self.rate) as usize + 2;
+        self.lines.reset();
         self.write = 0;
     }
 
@@ -75,11 +76,16 @@ impl AudioNode for Delay {
         let (input, time, feedback, mix) =
             (&b.ins[0], &b.params[P::TIME], &b.params[P::FEEDBACK], &b.params[P::MIX]);
         let out = &mut b.outs[0];
+        let width = out.channels() as usize;
+        let (len, lines) = (self.len, self.lines.fit(width));
+        // A line is allocated when its lane is new or the rate moved, never on a steady block.
+        for line in lines.iter_mut().filter(|line| line.len() != len) {
+            *line = vec![0.0; len];
+        }
         let start = self.write;
         let mut write = start;
-        for c in 0..out.channels() as usize {
+        for (c, line) in lines.iter_mut().enumerate() {
             let (x, t, fb, wet) = (input.chan(c), time.chan(c), feedback.chan(c), mix.chan(c));
-            let line = &mut self.lines[c];
             let y = out.chan_mut(c);
             write = start;
             for i in 0..BLOCK {

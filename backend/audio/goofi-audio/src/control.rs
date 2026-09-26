@@ -3,13 +3,14 @@
 //! what an ARRIVAL becomes on the audio plane, what a tap publishes, and the OS handles a node
 //! owns — a device, a MIDI port, a file — which are opened on this thread and never leave it.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::FromSample;
-use goofi_audio_sdk::{BLOCK, MAX_CHANNELS};
+use goofi_audio_sdk::BLOCK;
 use goofi_control::{flag, text, Cx, Half, Ticked};
 use goofi_core::{Data, Meta, Param};
 use goofi_node::{NodeManifest, ParamKey};
@@ -19,14 +20,22 @@ use crate::nodes::{audio_in, audio_out, audio_playback, midi_in};
 use crate::runtime::{Entry, REC_HEADER};
 use crate::{wav, Clock, DEFAULT_DEVICE, NO_DEVICE, RATE};
 
-/// A tap holds this many blocks of the widest output; what does not fit is dropped, newest first.
-pub const TAP_RING: usize = (1 + MAX_CHANNELS as usize * BLOCK) * 16;
-/// An inbox holds one second of the widest frame at the rate; a frame that does not fit is
+/// The width every ring is minted for at birth; a plan that carries more grows the ring past it.
+pub const USUAL_WIDTH: u16 = 16;
+/// A tap holds sixteen blocks at `width`; what does not fit is dropped, newest first.
+pub fn tap_ring(width: u16) -> usize {
+    (1 + width.max(1) as usize * BLOCK) * 16
+}
+/// An inbox holds one second of a frame at `width` at the rate; a frame that does not fit is
 /// dropped whole.
-pub const INBOX_RING: usize = RATE as usize * MAX_CHANNELS as usize;
-/// A recording ring holds one second of the widest block, as an inbox holds one second of a frame:
-/// the control half drains it every tick, so a second is what a stalled thread may cost.
-pub const REC_RING: usize = (REC_HEADER + MAX_CHANNELS as usize * BLOCK) * (RATE as usize / BLOCK);
+pub fn inbox_ring(width: u16) -> usize {
+    RATE as usize * width.max(1) as usize
+}
+/// A recording ring holds one second of blocks at `width`, as an inbox holds one second of a
+/// frame: the control half drains it every tick, so a second is what a stalled thread may cost.
+pub fn rec_ring(width: u16) -> usize {
+    (REC_HEADER + width.max(1) as usize * BLOCK) * (RATE as usize / BLOCK)
+}
 /// Notes a port may hold between two blocks.
 pub const NOTE_RING: usize = 1024;
 /// How much of a file one read takes, in frames of the file's own rate.
@@ -74,6 +83,16 @@ pub struct AudioShared {
     pub waker: Arc<goofi_node::DrainWaker>,
     /// The block count and its one tie to the clock: what dates every recorded block.
     pub anchor: Arc<crate::runtime::Anchor>,
+    /// The control halves' ends of rings the engine grew, by node, taken at the half's next tick.
+    pub swaps: Mutex<HashMap<goofi_node::Uid, Swap>>,
+}
+
+/// The control half's ends of grown rings, by inbox or output index.
+#[derive(Default)]
+pub struct Swap {
+    pub inboxes: Vec<(usize, rtrb::Producer<f32>)>,
+    pub taps: Vec<(usize, rtrb::Consumer<f32>)>,
+    pub recs: Vec<(usize, rtrb::Consumer<f32>)>,
 }
 
 impl AudioShared {
@@ -95,6 +114,7 @@ struct Tap {
 
 /// The audio plane's half of a control thread.
 pub struct AudioHalf {
+    uid: goofi_node::Uid,
     manifest: &'static NodeManifest,
     /// The node's scalar params, which say how its inboxes play what enters them.
     params: Arc<[AtomicU64]>,
@@ -114,6 +134,7 @@ pub struct AudioHalf {
 
 /// What the engine hands a birth for its half; the half itself is built on the control thread.
 pub struct Birth {
+    pub uid: goofi_node::Uid,
     pub manifest: &'static NodeManifest,
     pub params: Arc<[AtomicU64]>,
     pub inboxes: Vec<Inbox>,
@@ -134,6 +155,7 @@ impl AudioHalf {
     pub fn new(birth: Birth) -> AudioHalf {
         let mut ports = birth.ports;
         AudioHalf {
+            uid: birth.uid,
             manifest: birth.manifest,
             params: birth.params,
             playback: crate::runtime::Playback::of(birth.manifest),
@@ -276,8 +298,9 @@ impl AudioHalf {
                 play.inbox.pos = 0.0;
             }
             // An eighth of a second ahead: enough over a tick, and what a skip waits out.
-            let want = (rate as usize / 8).saturating_mul(file.channels as usize).min(INBOX_RING / 2);
-            while dead.is_none() && INBOX_RING - play.inbox.ring.slots() < want {
+            let capacity = play.inbox.ring.buffer().capacity();
+            let want = (rate as usize / 8).saturating_mul(file.channels as usize).min(capacity / 2);
+            while dead.is_none() && capacity - play.inbox.ring.slots() < want {
                 let (got, planar) = match file.read(READ_CHUNK) {
                     Ok(chunk) => chunk,
                     Err(e) => {
@@ -325,8 +348,9 @@ impl Half for AudioHalf {
                     self.refused = Some(format!("an oscillator takes [n] pitches or [2, n] pitches and phases, not {:?}", a.shape()));
                     return false;
                 }
-                Entry::Waveform { mix: false, .. } if channels_of(a.shape()).is_some_and(|c| c > MAX_CHANNELS as usize) => {
-                    self.refused = Some(format!("a waveform plays at most {MAX_CHANNELS} channels, not {:?}: mix them", a.shape()));
+                Entry::Waveform { mix: false, .. } if channels_of(a.shape()).is_some_and(|c| c > crate::plan::CEILING as usize) => {
+                    let most = crate::plan::CEILING;
+                    self.refused = Some(format!("a waveform plays at most {most} channels, not {:?}: mix them", a.shape()));
                     return false;
                 }
                 _ => {}
@@ -365,6 +389,19 @@ impl Half for AudioHalf {
             let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
             if let Ok(frame) = Data::array_f32(vec![c, t], bytes, Meta::new().with_sfreq(Some(rate))) {
                 publish(i, &goofi_codec::encode(&frame));
+            }
+        }
+        // After the drains, so what the old rings still held went out before they go.
+        let swap = self.audio.swaps.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.uid);
+        if let Some(swap) = swap {
+            for (i, ring) in swap.inboxes {
+                self.inboxes[i].ring = ring;
+            }
+            for (i, ring) in swap.taps {
+                self.taps[i].ring = ring;
+            }
+            for (i, ring) in swap.recs {
+                self.recs[i] = ring;
             }
         }
         ticked
@@ -425,13 +462,13 @@ impl Inbox {
             return None;
         }
         let mut x: Vec<f32> = a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes"))).collect();
-        // Any number of rows mix into one channel; unmixed, a port carries at most `MAX_CHANNELS`.
+        // Any number of rows mix into one channel; unmixed, a port carries at most the ceiling.
         let (c, lane, stride) = match mix && c > 1 {
             true => {
                 x = (0..t).map(|i| (0..c).map(|ch| x[ch * lane + i * stride]).sum::<f32>() / c as f32).collect();
                 (1, t, 1)
             }
-            false if c > MAX_CHANNELS as usize => return None,
+            false if c > crate::plan::CEILING as usize => return None,
             false => (c, lane, stride),
         };
         let step = frame.meta().sfreq().filter(|sf| *sf > 0.0).map_or(1.0, |sf| sf / rate);
@@ -622,20 +659,13 @@ fn open_input(
     let format = supported.sample_format();
     let mut config = supported.config();
     config.sample_rate = rate as u32;
-    // The engine carries `MAX_CHANNELS`, and a device may be wider: an ASIO card answers with every
-    // channel the interface has — eighteen on a Scarlett 4pre — where WASAPI answers with the pair
-    // an endpoint is. Ask for what can be carried rather than for everything, so the extra channels
-    // are never opened instead of being read and dropped.
-    //
-    // A SELECTION moves that line. The stream must be opened wide enough to CONTAIN the highest
-    // channel asked for — channel 18 is only there if eighteen were opened — while what leaves the
-    // callback is only the selection, which the parser has already held to `MAX_CHANNELS`. So the
-    // ceiling applies to what the node emits and never to what the device is opened at, and the
-    // channels past sixteen of a wide card become reachable for the first time.
+    // A device answers with every channel the interface has — eighteen on a Scarlett 4pre —
+    // and all of them are carried. A SELECTION opens the stream just wide enough to CONTAIN the
+    // highest channel it names, and only the selection leaves the callback.
     let device_width = config.channels;
     config.channels = match sel {
         Some(sel) => crate::chanmap::needed_width(sel).min(device_width),
-        None => device_width.min(MAX_CHANNELS),
+        None => device_width,
     };
     let opened = config.channels;
     // A selection naming a channel the device does not have is the selection's error, and it is

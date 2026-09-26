@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK, MAX_CHANNELS};
+use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     FREQUENCY = ParamDecl {
@@ -68,22 +68,23 @@ struct Voice {
 #[derive(Default)]
 struct FreqShift {
     step: f32,
-    voices: [Voice; MAX_CHANNELS as usize],
+    voices: Lanes<Voice>,
 }
 
 impl AudioNode for FreqShift {
     fn prepare(&mut self, rate: f64) {
         self.step = 1.0 / rate as f32;
-        self.voices = [Voice::default(); MAX_CHANNELS as usize];
+        self.voices.reset();
     }
 
     fn process(&mut self, b: &mut Block<'_>) {
         let (input, frequency) = (&b.ins[0], &b.params[P::FREQUENCY]);
         let ring = b.params[P::MODE].chan(0)[0] as u8 == 1;
         let out = &mut b.outs[0];
-        for c in 0..out.channels() as usize {
+        let width = out.channels() as usize;
+        let voices = self.voices.fit(width);
+        for (c, v) in voices.iter_mut().enumerate() {
             let (x, f) = (input.chan(c), frequency.chan(c));
-            let v = &mut self.voices[c];
             let y = out.chan_mut(c);
             for i in 0..BLOCK {
                 let (sin, cos) = (std::f32::consts::TAU * v.phase).sin_cos();

@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK, MAX_CHANNELS};
+use goofi_audio_sdk::{hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     MODE = ParamDecl {
@@ -50,8 +50,8 @@ static MANIFEST: Manifest = Manifest {
 #[derive(Default)]
 struct Filter {
     rate: f32,
-    ic1: [f32; MAX_CHANNELS as usize],
-    ic2: [f32; MAX_CHANNELS as usize],
+    ic1: Lanes<f32>,
+    ic2: Lanes<f32>,
 }
 
 impl AudioNode for Filter {
@@ -63,9 +63,11 @@ impl AudioNode for Filter {
         let (input, cutoff, q) = (&b.ins[0], &b.params[P::CUTOFF], &b.params[P::Q]);
         let mode = b.params[P::MODE].chan(0)[0] as u8;
         let out = &mut b.outs[0];
-        for c in 0..out.channels() as usize {
+        let width = out.channels() as usize;
+        let (ic1s, ic2s) = (self.ic1.fit(width), self.ic2.fit(width));
+        for c in 0..width {
             let (x, volts, res) = (input.chan(c), cutoff.chan(c), q.chan(c));
-            let (ic1, ic2) = (&mut self.ic1[c], &mut self.ic2[c]);
+            let (ic1, ic2) = (&mut ic1s[c], &mut ic2s[c]);
             let y = out.chan_mut(c);
             for i in 0..BLOCK {
                 // Nyquist is the ceiling `tan` needs: at it the warp is infinite.

@@ -11,8 +11,36 @@ pub mod host;
 
 /// Every block is exactly this many frames; the engine carries any surplus to the next callback.
 pub const BLOCK: usize = 64;
-/// What a node is prepared for; a port never carries more channels than this.
-pub const MAX_CHANNELS: u16 = 16;
+/// Per-channel state that follows a port's width. `fit(n)` answers `n` lanes, allocating only
+/// when the width moves: the one allocation a node makes on the audio thread, at a change.
+#[derive(Debug, Default, Clone)]
+pub struct Lanes<T>(Vec<T>);
+
+impl<T: Default> Lanes<T> {
+    /// The lanes at width `n`; a lane past a width the port shrank to starts over when it returns.
+    pub fn fit(&mut self, n: usize) -> &mut [T] {
+        self.0.resize_with(n, T::default);
+        &mut self.0
+    }
+
+    /// Every lane starts over.
+    pub fn reset(&mut self) {
+        self.0.clear();
+    }
+}
+
+impl<T> std::ops::Deref for Lanes<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for Lanes<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        &mut self.0
+    }
+}
 /// The most inputs, outputs or AUDIO-RATE params a node may declare: a block's ports are stack
 /// arrays on both sides of the boundary, so this is stack per callback rather than a free number.
 /// A control-rate param is a float in `Block::scalars` instead, and is not bounded by this.
@@ -133,7 +161,7 @@ pub trait AudioNode: Send {
         declared
     }
     /// Once on the control thread before the first block, again only when the rate changes.
-    /// Allocate here, for `MAX_CHANNELS` and `BLOCK` frames.
+    /// Allocate here, for `BLOCK` frames; per-channel state is a `Lanes` fitted in `process`.
     fn prepare(&mut self, rate: f64);
     /// One block, on the audio thread.
     fn process(&mut self, b: &mut Block<'_>);

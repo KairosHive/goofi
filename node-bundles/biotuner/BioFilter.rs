@@ -12,7 +12,7 @@
 //! every band is at full amplitude.
 
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK, MAX_CHANNELS};
+use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     SHIFT = ParamDecl {
@@ -106,16 +106,15 @@ static MANIFEST: Manifest = Manifest {
     params: PARAMS,
 };
 
-const CH: usize = MAX_CHANNELS as usize;
-
 #[derive(Default)]
 struct BioFilter {
     rate: f32,
-    /// One state-variable filter per band per channel.
-    ic1: [[f32; CH]; CH],
-    ic2: [[f32; CH]; CH],
-    /// Where each band's sweep has reached, in cycles.
-    phase: [f32; CH],
+    /// One state-variable filter per band per channel, band-major.
+    ic1: Lanes<f32>,
+    ic2: Lanes<f32>,
+    /// Where each band's sweep has reached, in cycles, and what it is worth this sample.
+    phase: Lanes<f32>,
+    level: Lanes<f32>,
 }
 
 impl AudioNode for BioFilter {
@@ -140,34 +139,36 @@ impl AudioNode for BioFilter {
         let by_depth = b.params[P::DEPTHBYAMP].chan(0)[0].clamp(0.0, 1.0);
         let floor = b.params[P::FLOOR].chan(0)[0].min(-1.0);
         // Nothing wired to `peaks` is no bank at all, and the source passes untouched.
-        let bands = if peaks.wired() { (peaks.channels() as usize).min(CH) } else { 0 };
+        let bands = if peaks.wired() { peaks.channels() as usize } else { 0 };
         // Unwired `amps` reads 0 dB, which is full amplitude — the right answer for no answer.
         let loudest = if amps.wired() { amps.channels() as usize } else { 0 };
         let out = &mut b.outs[0];
-        let width = (out.channels() as usize).min(CH);
+        let width = out.channels() as usize;
+        let rate = self.rate;
+        let (phase, level) = (self.phase.fit(bands), self.level.fit(bands));
+        let (ic1s, ic2s) = (self.ic1.fit(bands * width), self.ic2.fit(bands * width));
 
         for i in 0..BLOCK {
             // Each band's sweep advances once a sample, not once a channel.
-            let mut level = [0.0f32; CH];
-            for (bd, g) in level.iter_mut().enumerate().take(bands) {
+            for (bd, g) in level.iter_mut().enumerate() {
                 let hz = peaks.chan(bd)[i].max(0.0);
                 let db = if loudest > 0 { amps.chan(bd.min(loudest - 1))[i] } else { 0.0 };
                 let loud = ((db - floor) / -floor).clamp(0.0, 1.0);
-                self.phase[bd] = (self.phase[bd] + hz * sweep / self.rate).rem_euclid(1.0);
+                phase[bd] = (phase[bd] + hz * sweep / rate).rem_euclid(1.0);
                 let swing = depth * (1.0 - by_depth + by_depth * loud);
                 let amount = gain * (1.0 - by_gain + by_gain * loud);
-                *g = amount * (1.0 + swing * (std::f32::consts::TAU * self.phase[bd]).sin());
+                *g = amount * (1.0 + swing * (std::f32::consts::TAU * phase[bd]).sin());
             }
             for c in 0..width {
                 let x = input.chan(c)[i];
                 let mut y = x;
-                for (bd, g) in level.iter().enumerate().take(bands) {
+                for (bd, g) in level.iter().enumerate() {
                     // Nyquist is the ceiling `tan` needs: at it the warp is infinite.
-                    let f = (peaks.chan(bd)[i] * octaves).clamp(1.0, 0.45 * self.rate);
-                    let w = (std::f32::consts::PI * f / self.rate).tan();
+                    let f = (peaks.chan(bd)[i] * octaves).clamp(1.0, 0.45 * rate);
+                    let w = (std::f32::consts::PI * f / rate).tan();
                     let a1 = 1.0 / (1.0 + w * (w + k));
                     let (a2, a3) = (w * a1, w * w * a1);
-                    let (ic1, ic2) = (&mut self.ic1[bd][c], &mut self.ic2[bd][c]);
+                    let (ic1, ic2) = (&mut ic1s[bd * width + c], &mut ic2s[bd * width + c]);
                     let v3 = x - *ic2;
                     let v1 = a1 * *ic1 + a2 * v3;
                     let v2 = *ic2 + a2 * *ic1 + a3 * v3;

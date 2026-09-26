@@ -1,5 +1,8 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag, MAX_CHANNELS};
+use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag};
+
+/// The most voices a `MidiIn` deals out.
+const VOICES: u16 = 64;
 
 use crate::nodes::Birth;
 
@@ -29,7 +32,7 @@ goofi_audio_sdk::params! {
     VOICES = ParamDecl {
         group: "midi",
         name: "voices",
-        spec: ParamSpec::Int { default: 4, min: 1, max: MAX_CHANNELS as i64, options: &[] },
+        spec: ParamSpec::Int { default: 4, min: 1, max: VOICES as i64, options: &[] },
         expression: None,
         doc: Some(
             "one channel per voice on every output; notes take voices round-robin. The bundled              `voices` output needs two channels per voice, so it carries the first 8 — past that,              wire gate, pitch and velocity separately",
@@ -102,7 +105,8 @@ struct Voice {
 
 pub struct MidiIn {
     notes: Option<rtrb::Consumer<Note>>,
-    voices: [Voice; MAX_CHANNELS as usize],
+    /// Grown to the count in play and never shrunk, so a note-off past a shrunk count still frees.
+    voices: Vec<Voice>,
     next: usize,
     pedal: bool,
     bend: f32,
@@ -110,7 +114,7 @@ pub struct MidiIn {
 
 impl MidiIn {
     pub fn new(birth: Birth) -> MidiIn {
-        MidiIn { notes: birth.notes, voices: [Voice::default(); MAX_CHANNELS as usize], next: 0, pedal: false, bend: 0.0 }
+        MidiIn { notes: birth.notes, voices: Vec::new(), next: 0, pedal: false, bend: 0.0 }
     }
 
     /// A note-on takes the next free voice round-robin — or the voice already holding that note;
@@ -163,22 +167,24 @@ impl AudioNode for MidiIn {
     /// a reader halves the count. The gate is not carried because MIDI does not carry one either:
     /// a velocity of zero IS the note off, which is what buys the eighth voice.
     fn channels(&self, _ins: &[u16], params: &[f64], outs: usize) -> Vec<u16> {
-        let voices = (params.get(P::VOICES).copied().unwrap_or(1.0) as u16).clamp(1, MAX_CHANNELS);
-        (0..outs).map(|i| if i == 3 { (voices * 2).min(MAX_CHANNELS) } else { voices }).collect()
+        let voices = (params.get(P::VOICES).copied().unwrap_or(1.0) as u16).clamp(1, VOICES);
+        (0..outs).map(|i| if i == 3 { voices * 2 } else { voices }).collect()
     }
 
     fn prepare(&mut self, _rate: f64) {}
 
     fn process(&mut self, b: &mut Block<'_>) {
-        let voices = (b.outs[0].channels() as usize).clamp(1, MAX_CHANNELS as usize);
+        let voices = (b.outs[0].channels() as usize).max(1);
+        if self.voices.len() < voices {
+            self.voices.resize(voices, Voice::default());
+        }
         // The wheel bends the PITCH rather than riding a channel of its own, so every instrument
         // hears it through the one signal it already reads — the cable included.
         let semitones = b.params.get(P::BEND).map_or(2.0, |p| p.chan(0)[0]);
         while let Some(n) = self.notes.as_mut().and_then(|r| r.pop().ok()) {
             self.land(n, voices);
         }
-        // The bundle is capped like any other port, so a voice count whose pair would not fit
-        // carries as many whole voices as it can rather than a torn last one.
+        // The bundle carries whole voices only, however wide its port came out.
         let bundled = (b.outs[3].channels() as usize / 2).min(voices);
         for c in 0..voices {
             let voice = self.voices[c];
