@@ -6,11 +6,11 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-**Phase 0**, each alone, in any order: §3.1-3, §3.6; §4.A-E, §4.J; §5.1-7; §1.A1; §2.B1.
+**Phase 0**, each alone, in any order: §3.1-3, §3.6; §4.A-E, §4.J; §5.1-6; §1.A1; §2.B1.
 
-**Phase 1**: §5.12 and §5.8; then §3.4 and §3.5; then §4.F and §4.G1-G4; then §1.A2 and §1.A3.
+**Phase 1**: §5.11 and §5.7; then §3.4 and §3.5; then §4.F and §4.G1-G4; then §1.A2 and §1.A3.
 
-**Phase 2**: §2.B2-B5, §3.7-12, §4.H-I, §5.9-11 and 13-14.
+**Phase 2**: §2.B2-B5, §3.7-12, §4.H-I, §5.8-10 and 12-13.
 
 ## 1. The patch model and the runtime are two types
 
@@ -183,36 +183,35 @@ joined, ports, paths, devices. `boot` returns a `Manager { state, scope }` that 
 dropping it is the shutdown.
 
 1. `goofi_core::sync::Mutex` (§6).
-2. One tokenizer (§6).
-3. Boundary panics (§6).
-4. Timed child waits (pidfd, `WaitForSingleObject`) replace polling in `Child::poll`,
+2. Boundary panics (§6).
+3. Timed child waits (pidfd, `WaitForSingleObject`) replace polling in `Child::poll`,
    `stop_recording` and `wait_released`; recording stop and engine release join their workers.
-5. The recorder's `Session` becomes `Take`.
-6. The supervisor split.
-7. One `Session` value: `hold()` locks a sibling `<id>.alive` file before the directory exists;
+4. The recorder's `Session` becomes `Take`.
+5. The supervisor split.
+6. One `Session` value: `hold()` locks a sibling `<id>.alive` file before the directory exists;
    `release()` is idempotent and runs on drop. Transport takes an explicit `Iox` handle built
    from the session; the statics and the `atexit` hook go; one read-only process
    `session::id()` stays for part-file tags. The binary releases explicitly on the serve-panic
    and second-Ctrl+C paths; a test binary that exits leaves its record for the next boot's
    sweep, and the situation `a_process_that_exits_without_releasing_leaves_no_record` goes.
    `goofi-client`'s own sweep goes.
-8. `Scope` and `Manager`; every detached thread gets an owner (`term.rs`, `plugins.rs`,
+7. `Scope` and `Manager`; every detached thread gets an owner (`term.rs`, `plugins.rs`,
     `arms.rs`, `reducer.rs`, `record.rs`); the record beat goes; `scratch()` and the mount are
     leased as `Kind::Path`. The rest of the transport file splits into names, services and
     exchange.
-9. Plugin scopes.
-10. PTY scopes: children join through a `Stoppable` trait and reap on exit watches; the
+8. Plugin scopes.
+9. PTY scopes: children join through a `Stoppable` trait and reap on exit watches; the
     sleeping stop thread, the 25 ms reap poll and the hand-made lease go.
-11. Windows process control (`windows-cleanup.md`); needs a Windows host:
+10. Windows process control (`windows-cleanup.md`); needs a Windows host:
     `CREATE_NEW_PROCESS_GROUP` so Ctrl+C stays with goofi, a Job object per child with
     `KILL_ON_JOB_CLOSE` and `CTRL_BREAK` for a graceful stop in place of `taskkill`, and a
     blocking console-close handler bounded by the scope deadlines.
-12. `goofi_bridge::boot(Config) -> Manager` serves the binary and the harness. Plugins,
+11. `goofi_bridge::boot(Config) -> Manager` serves the binary and the harness. Plugins,
     requirements, the evaluator and fixture registration are `Config` fields; tests boot with no
     evaluator unless the `Config` asks for one.
-13. Situations move off direct `state.graph` locks to ops and harness probes; `AppState.graph`
+12. Situations move off direct `state.graph` locks to ops and harness probes; `AppState.graph`
     becomes crate-private; a harness gate on live instances replaces `RUST_TEST_THREADS`.
-14. Error enums (§6).
+13. Error enums (§6).
 
 ## 6. Errors, locks, lexers
 
@@ -223,8 +222,6 @@ dropping it is the shutdown.
   logs a poisoned lock once by name; it replaces every `lock().unwrap()`.
 - The boundary panics return errors: `hold(...).expect`, `iox_config`'s `expect`s on a long
   base path, `new_mount`, `fresh_id`, `nonce_hex`, `to_value(batch).unwrap()`.
-- One tokenizer, `goofi_node::expr::tokens`, handles escapes, triple quotes, f-strings and `#`
-  comments for the three expression scans (`expr_rewrite.rs`, `goofi-node/src/lib.rs`).
 
 ## Smaller items
 

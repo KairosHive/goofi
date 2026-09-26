@@ -2,6 +2,7 @@
 //! `__v0.mean() * __v1` plus the variable map the graph resolves. Slots live behind `.out`,
 //! params behind `.params`, a bare reference is the single output, and `me` is this node.
 
+use goofi_node::expr::is_ident;
 use goofi_node::ExprError;
 
 /// One variable of a rewritten expression, before the graph resolves it to a service or a value.
@@ -96,13 +97,11 @@ fn path_after(source: &str, end: usize, head: &str) -> Result<Path, ExprError> {
 /// rewritten source and the variables it names, in first-seen order.
 pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
     let mut terms: Vec<Term> = Vec::new();
-    let mut name_spans: Vec<(usize, usize)> = Vec::new();
-    for call in goofi_node::scan_nd_calls(source) {
+    for call in goofi_node::expr::scan_nd_calls(source) {
         // `nd('')` names nothing however it is spelled, so this precedes the unclosed-call check.
         if call.name.is_empty() {
             return Err(ExprError("nd() needs a node name".to_string()));
         }
-        name_spans.push((call.name_start, call.name_end));
         // An unclosed call is left verbatim, so the binding reports a NameError rather than being
         // quietly rewired.
         let Some(end) = call.end else { continue };
@@ -118,11 +117,7 @@ pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
         };
         terms.push(Term { start: call.start, end: target.0, target: target.1 });
     }
-    for (start, end) in scan_me(source) {
-        // `nd('me')` holds a NAME at this span, not a reference.
-        if name_spans.iter().any(|(s, e)| *s <= start && end <= *e) {
-            continue;
-        }
+    for (start, end) in goofi_node::expr::scan_me(source) {
         let target = match path_after(source, end, "me")? {
             Path::Bare { end: at } => (at, Target::MeOut { slot: None }),
             Path::Out { slot, end: at } => (at, Target::MeOut { slot: Some(slot) }),
@@ -130,7 +125,7 @@ pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
         };
         terms.push(Term { start, end: target.0, target: target.1 });
     }
-    for read in goofi_node::scan_variables(source) {
+    for read in goofi_node::expr::scan_variables(source) {
         terms.push(Term {
             start: read.start,
             end: read.end,
@@ -163,41 +158,6 @@ pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
     Ok((out, vars))
 }
 
-/// Every bare `me` outside a string literal: not an attribute (`x.me`), not part of a longer word.
-/// The quote walk is why `p == "me"` stays text where the other scans accept their looseness —
-/// `me` is an English word, and it WILL appear in strings.
-fn scan_me(source: &str) -> Vec<(usize, usize)> {
-    let b = source.as_bytes();
-    let mut out = Vec::new();
-    let mut quote: Option<u8> = None;
-    let mut i = 0;
-    while i < b.len() {
-        match quote {
-            Some(q) => {
-                if b[i] == b'\\' {
-                    i += 1;
-                } else if b[i] == q {
-                    quote = None;
-                }
-            }
-            None if b[i] == b'\'' || b[i] == b'"' => quote = Some(b[i]),
-            None => {
-                if b[i] == b'm'
-                    && b.get(i + 1) == Some(&b'e')
-                    && (i == 0 || !(is_ident(b[i - 1]) || b[i - 1] == b'.'))
-                    && b.get(i + 2).is_none_or(|c| !is_ident(*c))
-                {
-                    out.push((i, i + 2));
-                    i += 2;
-                    continue;
-                }
-            }
-        }
-        i += 1;
-    }
-    out
-}
-
 /// The two scans' terms as ONE ascending, non-overlapping list — the only shape the splice can
 /// consume. An unsorted or nested term slices backwards, which panics under the graph mutex.
 fn merge(mut terms: Vec<Term>) -> Vec<Term> {
@@ -220,7 +180,7 @@ pub fn rename_refs(
     rename: impl Fn(&str, Option<&str>) -> (Option<String>, Option<String>),
 ) -> Option<String> {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
-    for call in goofi_node::scan_nd_calls(source) {
+    for call in goofi_node::expr::scan_nd_calls(source) {
         let slot = call
             .end
             .and_then(|end| path_after(source, end, "").ok())
@@ -252,7 +212,7 @@ pub fn rename_refs(
 /// alone.
 pub fn rename_variables(source: &str, rename: impl Fn(&str) -> Option<String>) -> Option<String> {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
-    for read in goofi_node::scan_variables(source) {
+    for read in goofi_node::expr::scan_variables(source) {
         if let Some(to) = rename(read.name) {
             edits.push((read.end - read.name.len(), read.end, to));
         }
@@ -314,6 +274,3 @@ fn ident_after(source: &str, end: usize) -> Option<(&str, usize)> {
     Some((&source[start..at], at))
 }
 
-fn is_ident(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
-}

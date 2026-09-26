@@ -501,7 +501,7 @@ fn every_declared_expression_reads_only_a_variable_a_fresh_patch_has() {
         let Some(expr) = decl.expression else { continue };
         assert!(!expr.source.trim().is_empty(),
                 "{owner}: {}/{} has an empty expression", decl.group, decl.name);
-        for read in goofi_node::scan_variables(expr.source) {
+        for read in goofi_node::expr::scan_variables(expr.source) {
             assert!(goofi_core::variables::SYSTEM_VARIABLES.iter().any(|g| g.name == read.name),
                     "{owner}: the expression on {}/{} reads `variables.{}`, which no fresh patch has",
                     decl.group, decl.name, read.name);

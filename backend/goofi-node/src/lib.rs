@@ -7,6 +7,7 @@ use indexmap::IndexMap;
 
 pub mod abi;
 pub mod describe;
+pub mod expr;
 pub mod mailbox;
 pub mod seam;
 pub mod tags;
@@ -241,114 +242,6 @@ pub trait ExprEvaluator: Send + Sync {
     fn compile(&self, source: &str) -> Result<Compiled, ExprError>;
     fn eval(&self, id: BindingId, ctx: &EvalCtx<'_>) -> Result<Param, ExprError>;
     fn release(&self, id: BindingId);
-}
-
-/// One `nd(..)` call, with both spans its consumers need: the name literal a rename replaces, and
-/// the whole term a rewrite replaces.
-pub struct NdCall<'a> {
-    pub start: usize,
-    pub name_start: usize,
-    pub name_end: usize,
-    /// One past the closing `)`, or `None` when the call does not close cleanly — a rewrite leaves
-    /// those verbatim, so the failure shows up as an eval error.
-    pub end: Option<usize>,
-    pub name: &'a str,
-}
-
-/// Scan `source` for `nd('name')` calls, in source order. A lexical scan, not a parse.
-pub fn scan_nd_calls(source: &str) -> Vec<NdCall<'_>> {
-    let b = source.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i + 2 <= b.len() {
-        if &b[i..i + 2] != b"nd" {
-            i += 1;
-            continue;
-        }
-        let boundary = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_');
-        let mut j = i + 2;
-        while j < b.len() && (b[j] as char).is_whitespace() {
-            j += 1;
-        }
-        if boundary && j < b.len() && b[j] == b'(' {
-            j += 1;
-            while j < b.len() && (b[j] as char).is_whitespace() {
-                j += 1;
-            }
-            if j < b.len() && (b[j] == b'\'' || b[j] == b'"') {
-                let q = b[j];
-                j += 1;
-                let start = j;
-                while j < b.len() && b[j] != q {
-                    j += 1;
-                }
-                if j < b.len() {
-                    let mut close = j + 1;
-                    while close < b.len() && (b[close] as char).is_whitespace() {
-                        close += 1;
-                    }
-                    let end = (b.get(close) == Some(&b')')).then_some(close + 1);
-                    out.push(NdCall {
-                        start: i,
-                        name_start: start,
-                        name_end: j,
-                        end,
-                        name: &source[start..j],
-                    });
-                    i = j + 1;
-                    continue;
-                }
-            }
-        }
-        i += 2;
-    }
-    out
-}
-
-/// One `variables.<group>.<element>` read [`scan_variables`] found; the span covers the prefix too.
-pub struct VariableRead<'a> {
-    pub start: usize,
-    pub end: usize,
-    pub name: &'a str,
-}
-
-/// Scan `source` for `variables.<group>.<element>` reads, on the same word-boundary rule.
-pub fn scan_variables(source: &str) -> Vec<VariableRead<'_>> {
-    const PREFIX: &str = "variables.";
-    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let bytes = source.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while let Some(pos) = source[i..].find(PREFIX) {
-        let start = i + pos;
-        i = start + PREFIX.len();
-        if start > 0 && is_ident(bytes[start - 1]) {
-            continue;
-        }
-        let name_start = start + PREFIX.len();
-        let mut end = name_start;
-        while end < bytes.len() && is_ident(bytes[end]) {
-            end += 1;
-        }
-        if end > name_start && !bytes[name_start].is_ascii_digit() {
-            // Every variable is `group.element`, so one identifier alone names nothing.
-            let Some(el_start) = (bytes.get(end) == Some(&b'.')).then(|| end + 1) else {
-                i = end;
-                continue;
-            };
-            let mut el_end = el_start;
-            while el_end < bytes.len() && is_ident(bytes[el_end]) {
-                el_end += 1;
-            }
-            if el_end == el_start || bytes[el_start].is_ascii_digit() {
-                i = end;
-                continue;
-            }
-            out.push(VariableRead { start, end: el_end, name: &source[name_start..el_end] });
-            i = el_end;
-        }
-    }
-    out
 }
 
 /// Where a node type's code actually runs. This is the ONE owner of that fact: the palette shows

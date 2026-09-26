@@ -828,6 +828,18 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
             .then(|| p["params"]["common"]["max_frequency"]["expression"].clone())
     });
     assert_eq!(expr, "nd('signal')", "the referrer's nd() reference followed the rename");
+    // A term in a comment or a string is text: one scan decides what is text for every reader.
+    set("nd('signal') + len(\"nd('signal') me\")  # me nd('signal') variables.a.b");
+    g.call("node edit", j!({ "node": hex(producer), "name": "src" }));
+    let expr = g.until("the referrer's echo", |_| {
+        let p = ev.next("state_update");
+        let d = &p["params"]["common"]["max_frequency"];
+        (p["node"] == hex(consumer) && d["expression"].as_str().is_some_and(|e| e.starts_with("nd('src')")))
+            .then(|| d["expression"].clone())
+    });
+    assert_eq!(expr, "nd('src') + len(\"nd('signal') me\")  # me nd('signal') variables.a.b");
+    g.call("node edit", j!({ "node": hex(producer), "name": "signal" }));
+    set("nd('signal')");
 
     // A REFERENCE is the same record with no Python: one producer slot, copied on arrival. The
     // expression is RETAINED beside it, because a mode switch is never destructive.
