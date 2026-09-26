@@ -27,11 +27,11 @@ export interface PixelCache {
 	height: number;
 	layoutKey: string;
 	count: number;
-	/** Byte offset in ImageData.data for each inside-circle pixel. */
+	/** Byte offset in ImageData.data for each cell the head disc covers. */
 	pixelByteOffsets: Int32Array;
-	/** Normalized x (in [0, 1]) of each inside-circle pixel. */
+	/** Layout-space x of each covered cell: [0, 1] across the centred head square. */
 	px: Float32Array;
-	/** Normalized y (in [0, 1]) of each inside-circle pixel. */
+	/** Layout-space y of each covered cell: [0, 1] across the centred head square. */
 	py: Float32Array;
 	/** Per-point φ image; length = nTotal, each Float32Array length = count. */
 	kernels: Float32Array[];
@@ -163,33 +163,35 @@ export function buildLayout(
 	return { nReal, nExtra, posX, posY, extraNN: ring.nn, Minv, layoutKey };
 }
 
+/** The head frame of a `w`×`h` grid: its centre, and the side of the square the [0, 1]² layout fills. */
+export function headFrame(w: number, h: number): { cx: number; cy: number; side: number; radius: number } {
+	const side = Math.min(w, h);
+	return { cx: w / 2, cy: h / 2, side, radius: side * 0.45 };
+}
+
 export function buildPixelCache(layout: TopoLayout, w: number, h: number): PixelCache {
-	const cx = w / 2;
-	const cy = h / 2;
-	const radius = Math.min(w, h) * 0.45;
-	const r2 = radius * radius;
+	const { cx, cy, side, radius } = headFrame(w, h);
+	// Every cell whose centre lies within a cell of the head circle, so the clipped disc is covered
+	// to its edge; the [0, 1]² layout maps onto the centred square, never onto the whole grid.
+	const reach = (radius + 1) * (radius + 1);
+	const inside = (x: number, y: number): boolean => {
+		const dx = x + 0.5 - cx;
+		const dy = y + 0.5 - cy;
+		return dx * dx + dy * dy <= reach;
+	};
 	let count = 0;
-	for (let y = 0; y < h; y++) {
-		const dy = y - cy;
-		for (let x = 0; x < w; x++) {
-			const dx = x - cx;
-			if (dx * dx + dy * dy <= r2) count++;
-		}
-	}
+	for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (inside(x, y)) count++;
 	const pixelByteOffsets = new Int32Array(count);
 	const px = new Float32Array(count);
 	const py = new Float32Array(count);
 	let idx = 0;
 	for (let y = 0; y < h; y++) {
-		const dy = y - cy;
 		for (let x = 0; x < w; x++) {
-			const dx = x - cx;
-			if (dx * dx + dy * dy <= r2) {
-				pixelByteOffsets[idx] = (y * w + x) * 4;
-				px[idx] = x / w;
-				py[idx] = y / h;
-				idx++;
-			}
+			if (!inside(x, y)) continue;
+			pixelByteOffsets[idx] = (y * w + x) * 4;
+			px[idx] = 0.5 + (x + 0.5 - cx) / side;
+			py[idx] = 0.5 + (y + 0.5 - cy) / side;
+			idx++;
 		}
 	}
 	const nTotal = layout.nReal + layout.nExtra;

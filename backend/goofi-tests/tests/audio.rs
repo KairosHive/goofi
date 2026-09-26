@@ -347,9 +347,14 @@ fn a_patch_sounds_under_the_external_clock() {
     let (back, _) = drive(&g, TENTH);
     assert!((peak(&back) - 0.5).abs() < 0.01 && near(crossings(&back), 176), "undo restored the 880 Hz oscillator: peak {} crossings {}", peak(&back), crossings(&back));
 
+    // Step: a removed gain hands its oscillator straight to the output, at full scale now.
+    g.call("node remove", j!({ "node": hex(gain) }));
+    let (through, _) = drive(&g, TENTH);
+    assert!((peak(&through) - 1.0).abs() < 0.01 && near(crossings(&through), 176), "the oscillator wired through: peak {} crossings {}", peak(&through), crossings(&through));
+    g.call("node remove", j!({ "node": hex(osc) }));
+
     // Step: every AudioOut naming the device sums into it, each through its own gain; one naming
     // another device is told where the clock is, and leaves the sum until it agrees.
-    g.call("node remove", j!({ "node": hex(gain) }));
     let out2 = g.add("AudioOut");
     let osc3 = g.add("Osc");
     let gain3 = g.add("Gain");

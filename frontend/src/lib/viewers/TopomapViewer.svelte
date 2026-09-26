@@ -6,6 +6,7 @@
 	import {
 		buildLayout,
 		buildPixelCache,
+		headFrame,
 		solveWeights,
 		evaluateField,
 		type TopoLayout,
@@ -54,9 +55,7 @@
 		h: number,
 		channels: Array<[number, number]>
 	): void {
-		const cx = w / 2;
-		const cy = h / 2;
-		const radius = Math.min(w, h) * 0.45;
+		const { cx, cy, side, radius } = headFrame(w, h);
 		ctx.strokeStyle = '#c5c8d6';
 		ctx.lineWidth = 1.5;
 		ctx.beginPath();
@@ -70,7 +69,7 @@
 		ctx.fillStyle = '#0e1014';
 		for (const p of channels) {
 			ctx.beginPath();
-			ctx.arc(p[0] * w, p[1] * h, 2, 0, Math.PI * 2);
+			ctx.arc(cx + (p[0] - 0.5) * side, cy + (p[1] - 0.5) * side, 2, 0, Math.PI * 2);
 			ctx.fill();
 		}
 	}
@@ -182,8 +181,16 @@
 		}
 		gctx.putImageData(imageData, 0, 0);
 		ctx.clearRect(0, 0, w, h);
+		// The field reaches past the head circle, and the circle itself is the clip: an
+		// anti-aliased edge everywhere, with no cell left unpainted inside it.
+		const head = headFrame(w, h);
+		ctx.save();
+		ctx.beginPath();
+		ctx.arc(head.cx, head.cy, head.radius, 0, Math.PI * 2);
+		ctx.clip();
 		ctx.imageSmoothingEnabled = true;
 		ctx.drawImage(grid, 0, 0, w, h);
+		ctx.restore();
 		drawHeadDecor(ctx, w, h, knownPos);
 	}
 

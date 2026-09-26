@@ -867,9 +867,13 @@ fn arming_survives_a_rewire_and_rides_the_document() {
             let mut graph = g.state.graph.lock().expect("the graph");
             graph.epoch().fetch_add(1, std::sync::atomic::Ordering::Release);
             let audio = goofi_bridge::audio_engine(&mut graph);
-            audio.drive(64 * burst as usize);
-            for ack in audio.flush_recording() {
-                ack.recv_timeout(goofi_tests::WAIT).expect("the control half ticks").expect("its ports are armed");
+            // In pieces the engine's one-second ring holds, each flushed before the next: the depth
+            // under test is the SERVICE's, and a ring overflow drops the newest, which no gap shows.
+            for _ in 0..3 {
+                audio.drive(64 * burst as usize / 3);
+                for ack in audio.flush_recording() {
+                    ack.recv_timeout(goofi_tests::WAIT).expect("the control half ticks").expect("its ports are armed");
+                }
             }
         }
         let (kept, lost) = g.until("every block of the burst to be accounted for", |g| {

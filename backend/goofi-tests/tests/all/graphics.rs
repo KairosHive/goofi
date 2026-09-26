@@ -480,17 +480,17 @@ fn shaders_render_on_the_gpu() {
     g.link(field, "out", into_audio, "input");
     let sink = g.add("audio:AudioOut");
     g.link(into_audio, "out", sink, "input");
-    let (rgba, chans) = g.until("the texture's channels as channels", |g| {
+    // A whole drive of it: one that straddles the texture's arrival still opens on zeros.
+    let (rgba, chans) = g.until("the texture's channels as channels, opaque throughout", |g| {
         render(g, 1);
         let (x, c) = drive(g, 480);
-        (c == 4 && x.chunks_exact(4).any(|t| t[0] > 0.5)).then_some((x, c))
+        (c == 4 && x.chunks_exact(4).all(|t| (t[3] - 1.0).abs() < 0.01)).then_some((x, c))
     });
     assert_eq!(chans, 4, "a texture is RGBA, so it crosses as four");
     let lanes = |c: usize| rgba.chunks_exact(4).map(|t| t[c]).collect::<Vec<f32>>();
     let red = lanes(0);
     assert!(red.iter().any(|v| *v < 0.1) && red.iter().any(|v| *v > 0.9), "the gradient sweeps: {} .. {}",
             red.iter().copied().fold(f32::INFINITY, f32::min), red.iter().copied().fold(0.0f32, f32::max));
-    assert!(lanes(3).iter().all(|v| (v - 1.0).abs() < 0.01), "and the ramp is opaque throughout");
     // Brightness is the other way to take it, on one channel, the weights summing to one.
     g.set_param(into_audio, "graphics", "channels", "luma");
     g.until("the picture's brightness on one channel", |g| {
