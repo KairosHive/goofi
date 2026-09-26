@@ -9,9 +9,6 @@
   a size it should keep) and `audio::one_signal_speaks_through_another_band_by_band` read
   BandFilter's params before the edit landed (its waits changed in 78262aee; re-check). Fix the
   races, then land the profile with them.
-- A pinch e2e in `touch.spec.ts`: a pinch that crosses the 0.3 zoom threshold
-  (`ViewerFeed.svelte`), asserting `/data` goes quiet and resumes. Needs a CDP pinch helper;
-  `window.goofi.query.arrivalRate` observes `/data`.
 - The one measurement that settles the idle frame-rate drop, which did not reproduce headless:
   on the owner's display, Chrome's Performance panel over 5 s on `thought-sphere` fitted to the
   screen, once idle, once with the inspector open, once during a knob drag; read Commit /

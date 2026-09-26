@@ -13,8 +13,8 @@
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { restorePanelType, waitForApp } from '../lib/app';
-import { addNode, tapNode, waitForNode } from '../lib/goofi';
-import { emptySpot, swipe, touchSession } from '../lib/touch';
+import { addNode, frameSummary, tapNode, waitForNode } from '../lib/goofi';
+import { emptySpot, pinch, swipe, touchSession } from '../lib/touch';
 import { pane } from '../lib/inspector';
 
 /** A long press at `p`, the coarse door onto everything hover and right-click own on a desktop:
@@ -45,6 +45,56 @@ test('a held parameter opens modulation without toggling its disclosure', async 
 		await expect.poll(() => page.evaluate((id) =>
 			(window as any).goofi.query.graph().nodes.find((n: { uid: string }) => n.uid === id)?.params.lfo.frequency.mode, uid
 		)).toBe('expression');
+	} finally {
+		await tearDown(page);
+	}
+});
+
+test('a pinch past legibility lets a viewer\'s stream go, and a pinch back resumes it', async ({ page }) => {
+	// `ViewerFeed.svelte` unsubscribes below a 0.3 zoom and keeps the last frame; a pinch is how a
+	// phone gets there. The proof is on the wire: `/data` stops arriving for the slot, then arrives
+	// again. The fingers close ABOUT the card, so it shrinks in place and never leaves the viewport,
+	// which would let the stream go for a reason that is not the zoom.
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const osc = await addNode(page, 'LFO', [40, 200]);
+		await waitForNode(page, osc);
+		await page.evaluate((u) => {
+			const g = (window as any).goofi;
+			g.commands.updateParam(u, 'output', 'mode', 'block');
+			g.commands.updateParam(u, 'output', 'sfreq', 64);
+		}, osc);
+		const card = page.locator(`.svelte-flow__node[data-id="${osc}"]`);
+		await expect(card.locator('.slot-viewer .body')).toBeVisible();
+		await expect.poll(() => frameSummary(page, osc)).not.toBeNull();
+		const rate = () =>
+			page.evaluate((u) => (window as any).goofi.query.arrivalRate(u, 'out') ?? 0, osc);
+		await expect.poll(rate, 'the viewer draws the stream').toBeGreaterThan(0);
+
+		// The pane's own scale, read off its transform: the number the freeze is decided from.
+		const zoom = () =>
+			page.locator('.svelte-flow__viewport').evaluate(
+				(el) => Number(/scale\(([\d.]+)\)/.exec(el.style.transform)?.[1] ?? 1)
+			);
+		const pinchTo = async (reached: (z: number) => boolean, factor: number) => {
+			await expect
+				.poll(async () => {
+					if (reached(await zoom())) return true;
+					const c = (await card.boundingBox())!;
+					const centre = { x: Math.round(c.x + c.width / 2), y: Math.round(c.y + c.height / 2) };
+					// Fingers clear of the card on either side, or the pinch drags the card instead.
+					const gap = Math.round(c.height + 2 * 60);
+					await pinch(page, centre, gap, gap * factor);
+					return reached(await zoom());
+				})
+				.toBe(true);
+		};
+		await pinchTo((z) => z < 0.28, 0.5);
+		await expect.poll(rate, 'past the threshold, nothing arrives for the slot').toBe(0);
+		await expect.poll(() => frameSummary(page, osc)).toBeNull();
+		await pinchTo((z) => z > 0.4, 2);
+		await expect.poll(rate, 'and back above it, the stream is demanded again').toBeGreaterThan(0);
 	} finally {
 		await tearDown(page);
 	}

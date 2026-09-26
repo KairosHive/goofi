@@ -52,6 +52,32 @@ export async function swipe(page: Page, a: TouchPoint, b: TouchPoint, steps = 8)
 }
 
 /**
+ * Two fingers at once, from `gap` apart to `gapTo` apart about `centre`, on a vertical line. Each
+ * point carries its id so Chromium keeps the two apart; a d3-zoom pane reads that as a pinch.
+ */
+export async function pinch(
+	page: Page,
+	centre: TouchPoint,
+	gap: number,
+	gapTo: number,
+	steps = 8
+): Promise<void> {
+	const cdp = await page.context().newCDPSession(page);
+	const send = (type: string, touchPoints: Array<TouchPoint & { id: number }>) =>
+		cdp.send('Input.dispatchTouchEvent', { type, touchPoints } as never);
+	const pair = (d: number) => [
+		{ id: 0, x: centre.x, y: Math.round(centre.y - d / 2) },
+		{ id: 1, x: centre.x, y: Math.round(centre.y + d / 2) }
+	];
+	await send('touchStart', pair(gap));
+	for (let i = 1; i <= steps; i++) await send('touchMove', pair(gap + ((gapTo - gap) * i) / steps));
+	// The still fingers are the gesture's end; a fast lift reads as a fling.
+	await page.waitForTimeout(150);
+	await send('touchEnd', []);
+	await cdp.detach();
+}
+
+/**
  * Fake a soft keyboard by shrinking `visualViewport.height` (an own property shadows the prototype
  * getter) and firing the resize the real keyboard would fire. `px = 0` restores it.
  *
