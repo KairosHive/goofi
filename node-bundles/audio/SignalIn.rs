@@ -14,7 +14,7 @@ goofi_audio_sdk::params! {
     SMOOTHING = ParamDecl {
         group: "signal",
         name: "smoothing",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 10.0 },
+        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("seconds a new frame crossfades in over, or each sine glides to its new pitch in"),
         section: 0,

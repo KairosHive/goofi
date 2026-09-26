@@ -115,7 +115,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "smooth",
         name: "size",
-        spec: ParamSpec::Float { default: 10.0, min: 0.0, max: 1.0e7 },
+        spec: ParamSpec::Float { default: 10.0, min: 0.0, max: 100.0 },
         expression: None,
         doc: Some("How much of the past to smooth over, in the unit below."),
         section: 0,
