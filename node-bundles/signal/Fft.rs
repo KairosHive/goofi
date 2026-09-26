@@ -69,8 +69,11 @@ impl Fft {
             }
         }
 
-        let sfreq = d.meta().sfreq().ok_or("a forward transform needs a frame that carries its sample rate")?;
-        let freqs: Vec<Coord> = (0..bins).map(|k| Coord::Num(k as f64 * sfreq / t as f64)).collect();
+        // Bins are labelled in Hz where the frame carries its rate, and left as bin numbers where not.
+        let freqs = match d.meta().sfreq() {
+            Some(sfreq) => Axis::coords(Arc::from((0..bins).map(|k| Coord::Num(k as f64 * sfreq / t as f64)).collect::<Vec<_>>())),
+            None => Axis::default(),
+        };
         let parts: Vec<Coord> = if polar {
             vec![Coord::Str("magnitude".into()), Coord::Str("phase".into())]
         } else {
@@ -82,7 +85,7 @@ impl Fft {
         // A spectrum is no longer a time series, so the rate would read as the spacing of a domain
         // that is gone.
         let meta = d.meta().insert_axis(dim + 1, Axis::coords(Arc::from(parts)), shape.len());
-        let axes = meta.channels().clone().with(dim, Axis::coords(Arc::from(freqs)));
+        let axes = meta.channels().clone().with(dim, freqs);
         let meta = meta.with_channels(axes).with_sfreq(None);
         out.set("out", Data::array_f32(shape_out, buf, meta).map_err(|e| e.to_string())?);
         Ok(())
