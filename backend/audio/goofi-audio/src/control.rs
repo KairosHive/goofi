@@ -319,12 +319,17 @@ impl Half for AudioHalf {
         let rate = self.audio.rate();
         let entry = self.playback.entry(&self.params);
         self.refused = None;
-        if matches!(entry, Entry::Pitches) {
-            if let goofi_core::Value::Array(a) = frame.value() {
-                if pitch_width(a.shape()).is_none() {
+        if let goofi_core::Value::Array(a) = frame.value() {
+            match entry {
+                Entry::Pitches if pitch_width(a.shape()).is_none() => {
                     self.refused = Some(format!("an oscillator takes [n] pitches or [2, n] pitches and phases, not {:?}", a.shape()));
                     return false;
                 }
+                Entry::Waveform { mix: false, .. } if channels_of(a.shape()).is_some_and(|c| c > MAX_CHANNELS as usize) => {
+                    self.refused = Some(format!("a waveform plays at most {MAX_CHANNELS} channels, not {:?}: mix them", a.shape()));
+                    return false;
+                }
+                _ => {}
             }
         }
         self.inboxes[inbox].enter(frame, rate, entry).unwrap_or(false)
@@ -406,15 +411,17 @@ impl Inbox {
             [h, w, c] => (c, h * w, 1, c),
             _ => return None,
         };
-        if c == 0 || t == 0 || c > MAX_CHANNELS as usize {
+        if c == 0 || t == 0 {
             return None;
         }
         let mut x: Vec<f32> = a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes"))).collect();
+        // Any number of rows mix into one channel; unmixed, a port carries at most `MAX_CHANNELS`.
         let (c, lane, stride) = match mix && c > 1 {
             true => {
                 x = (0..t).map(|i| (0..c).map(|ch| x[ch * lane + i * stride]).sum::<f32>() / c as f32).collect();
                 (1, t, 1)
             }
+            false if c > MAX_CHANNELS as usize => return None,
             false => (c, lane, stride),
         };
         let step = frame.meta().sfreq().filter(|sf| *sf > 0.0).map_or(1.0, |sf| sf / rate);
@@ -446,6 +453,15 @@ impl Inbox {
         }
         self.pos = pos + n as f64 * step - t as f64;
         Some(moved)
+    }
+}
+
+/// The channels a waveform frame carries: `[T]`, `[C, T]`, or `[H, W, C]` texels.
+fn channels_of(shape: &[usize]) -> Option<usize> {
+    match *shape {
+        [_] => Some(1),
+        [c, _] | [_, _, c] => Some(c),
+        _ => None,
     }
 }
 

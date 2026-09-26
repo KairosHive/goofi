@@ -862,6 +862,21 @@ fn a_patch_sounds_under_the_external_clock() {
     });
     g.set_param(in2, "signal", "high", 3.0);
     sounds(&g, "the mix in range", |x| x.iter().all(|v| (*v - 0.25).abs() < 1e-5));
+    // Any number of rows mix: forty that hold 0..39, scaled by a fiftieth, are 0.39. Unmixed,
+    // more rows than a port carries are refused on `mode`, and say so.
+    g.set_param(in2, "signal", "high", 1.0);
+    g.set_param(ramp2, "ramp", "channels", 40);
+    let fiftieth = g.add("signal:Math");
+    g.set_param(fiftieth, "math", "multiply", 0.02);
+    g.call("link remove", j!({ "from": ep(hex(ramp2), "out"), "to": ep(hex(in2), "input") }));
+    g.link(ramp2, "out", fiftieth, "input");
+    g.link(fiftieth, "out", in2, "input");
+    sounds(&g, "forty rows mixed", |x| x.iter().all(|v| (*v - 0.39).abs() < 1e-4));
+    g.set_param(in2, "signal", "mix", false);
+    g.until("forty rows unmixed refused", |g| g.error(in2).filter(|e| e.contains("at most 16")));
+    g.set_param(in2, "signal", "mix", true);
+    g.until("mixed again clears the refusal", |g| g.error(in2).is_none().then_some(()));
+    g.call("node remove", j!({ "node": hex(fiftieth) }));
     // The params beside `mode` show only for a waveform; an oscillator has none.
     let signal = &g.call("library get", j!({ "type": "audio:SignalIn" }))["params"]["signal"];
     let waveform = j!({ "group": "signal", "name": "mode", "any_of": ["waveform"] });

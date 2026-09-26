@@ -560,7 +560,7 @@ static RAMP_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "ramp",
         name: "channels",
-        spec: ParamSpec::Int { default: 1, min: 1, max: 16, options: &[] },
+        spec: ParamSpec::Int { default: 1, min: 1, max: 64, options: &[] },
         expression: None,
         doc: None,
         section: 0,
