@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -261,12 +261,12 @@ fn rings_for(type_name: &str, chans: Arc<AtomicU16>, uid: Uid, ui: Option<goofi_
     let mut ports = control::Ports::default();
     match type_name {
         nodes::audio_in::TYPE => {
-            let (producer, consumer) = rtrb::RingBuffer::new(control::inbox_ring(control::USUAL_WIDTH));
+            let (producer, consumer) = rtrb::RingBuffer::new(control::DEVICE_RING);
             birth.inbox = Some(consumer);
             ports.audio_in = Some((Arc::new(Mutex::new(producer)), chans));
         }
         nodes::audio_playback::TYPE => {
-            let (producer, consumer) = rtrb::RingBuffer::new(control::inbox_ring(control::USUAL_WIDTH));
+            let (producer, consumer) = rtrb::RingBuffer::new(control::DEVICE_RING);
             birth.inbox = Some(consumer);
             ports.play = Some((producer, chans));
         }
@@ -291,13 +291,18 @@ pub(crate) struct Instance {
     pub(crate) control: Handle,
     /// The channel count each Array input last saw — what the plan sizes its inbox by.
     pub(crate) chans: Vec<Arc<AtomicU16>>,
-    /// The width each inbox ring and each output's rings were minted for; a plan past it grows them.
-    minted: Widths,
+    /// The ring size each Array input asks for, in floats, sized by the frames it takes.
+    wanted: Vec<Arc<AtomicUsize>>,
+    /// What each inbox ring and each output's rings were minted for; a plan or a frame past it
+    /// re-mints them.
+    minted: Minted,
 }
 
 #[derive(Default)]
-struct Widths {
-    inboxes: Vec<u16>,
+struct Minted {
+    /// Floats per inbox ring.
+    inboxes: Vec<usize>,
+    /// Channels per output's tap and recording rings.
     outs: Vec<u16>,
 }
 
@@ -732,26 +737,27 @@ impl AudioEngine {
 }
 
 impl AudioEngine {
-    /// Rings wider than any a stage of `plan` carries, minted here and swapped in at both ends:
-    /// the audio thread's by message, ahead of the plan, and the control half's at its next tick.
-    fn grow_rings(&mut self, plan: &Plan) {
+    /// Rings sized to what a stage of `plan` carries and its frames ask for, minted here and swapped
+    /// in at both ends: the audio thread's by message, ahead of the plan, and the control half's at
+    /// its next tick.
+    fn fit_rings(&mut self, plan: &Plan) {
         for stage in &plan.stages {
             let Some((uid, inst)) = self.live.iter_mut().find(|(_, i)| i.idx == stage.idx && i.serial == stage.serial) else { continue };
             let mut rings = runtime::Rings::default();
             let mut swap = control::Swap::default();
             for (i, minted) in inst.minted.inboxes.iter_mut().enumerate() {
-                let width = inst.chans[i].load(Ordering::Relaxed);
-                if width <= *minted {
+                let floats = inst.wanted[i].load(Ordering::Relaxed);
+                if floats == *minted {
                     continue;
                 }
-                *minted = width;
-                let (producer, consumer) = rtrb::RingBuffer::new(control::inbox_ring(width));
+                *minted = floats;
+                let (producer, consumer) = rtrb::RingBuffer::new(floats);
                 rings.inboxes.push((i, Frames::new(consumer, Playback::of(inst.manifest), self.audio.rate())));
                 swap.inboxes.push((i, producer));
             }
             for (o, minted) in inst.minted.outs.iter_mut().enumerate() {
                 let width = stage.outs.get(o).map_or(1, |out| out.1);
-                if width <= *minted {
+                if width == *minted {
                     continue;
                 }
                 *minted = width;
@@ -850,22 +856,22 @@ impl Engine for AudioEngine {
             .inputs
             .iter()
             .filter(|s| s.kind != SlotType::Audio)
-            .map(|_| rtrb::RingBuffer::<f32>::new(control::inbox_ring(control::USUAL_WIDTH)))
+            .map(|_| rtrb::RingBuffer::<f32>::new(control::INBOX_SEED))
             .unzip();
         let (tap_in, tap_out): (Vec<_>, Vec<_>) =
-            manifest.outputs.iter().map(|_| rtrb::RingBuffer::<f32>::new(control::tap_ring(control::USUAL_WIDTH))).unzip();
+            manifest.outputs.iter().map(|_| rtrb::RingBuffer::<f32>::new(control::tap_ring(1))).unzip();
         // Beside the tap and never in `rings_for`: a recording ring belongs to an OUTPUT, and the
         // rings there belong to a TYPE's OS handle.
         let (rec_in, rec_out): (Vec<_>, Vec<_>) = manifest
             .outputs
             .iter()
-            .map(|_| rtrb::RingBuffer::<f32>::new(control::rec_ring(control::USUAL_WIDTH)))
+            .map(|_| rtrb::RingBuffer::<f32>::new(control::rec_ring(1)))
             .unzip();
         // The inboxes are built here so the plan can read their channel cells; the half itself is
         // made on its own thread, where an OS handle it opens never has to cross one.
         let inboxes: Vec<control::Inbox> = inbox_in.into_iter().map(control::Inbox::new).collect();
-        let inbox_chans = AudioHalf::channels(&inboxes);
-        let minted = Widths { inboxes: vec![control::USUAL_WIDTH; inbox_chans.len()], outs: vec![control::USUAL_WIDTH; manifest.outputs.len()] };
+        let (inbox_chans, wanted) = AudioHalf::cells(&inboxes);
+        let minted = Minted { inboxes: vec![control::INBOX_SEED; inbox_chans.len()], outs: vec![1; manifest.outputs.len()] };
         let birth = control::Birth {
             uid,
             manifest,
@@ -907,7 +913,7 @@ impl Engine for AudioEngine {
         };
         self.send(Msg::Insert { idx, slot });
         let twin = make(nodes::Birth { chans, ..Default::default() });
-        self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans, minted });
+        self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans, wanted, minted });
         self.pending.push((uid, Status::Stage { stage: NodeStage::Ready }));
         self.dirty = true;
         self.shared.waker.notify();
@@ -978,8 +984,8 @@ impl Engine for AudioEngine {
         faults.extend(looped);
         let since = self.time.now();
         self.pending.extend(self.faults.settle(faults, since));
+        self.fit_rings(&plan);
         if plan != self.last {
-            self.grow_rings(&plan);
             let arena = vec![0.0; plan.arena_len];
             self.send(Msg::Plan { plan: plan.clone(), arena });
             self.last = plan;

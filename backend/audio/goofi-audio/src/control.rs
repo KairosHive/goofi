@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, StreamTrait};
@@ -20,19 +20,18 @@ use crate::nodes::{audio_in, audio_out, audio_playback, midi_in};
 use crate::runtime::{Entry, REC_HEADER};
 use crate::{wav, Clock, DEFAULT_DEVICE, NO_DEVICE, RATE};
 
-/// The width every ring is minted for at birth; a plan that carries more grows the ring past it.
-pub const USUAL_WIDTH: u16 = 16;
-/// A tap holds sixteen blocks at `width`; what does not fit is dropped, newest first.
+/// An inbox is born this many floats wide and follows the frames that arrive: four of the
+/// newest, grown when one does not fit and shrunk when it is sixteen times too wide.
+pub const INBOX_SEED: usize = 4096;
+/// A device's or a file's feed holds a second at sixteen channels; a chunk that does not fit is dropped.
+pub const DEVICE_RING: usize = RATE as usize * 16;
+/// A tap holds a quarter second of blocks at `width`, what a reader takes between two ticks;
+/// what does not fit is dropped, newest first.
 pub fn tap_ring(width: u16) -> usize {
-    (1 + width.max(1) as usize * BLOCK) * 16
+    (1 + width.max(1) as usize * BLOCK) * (RATE as usize / BLOCK / 4)
 }
-/// An inbox holds one second of a frame at `width` at the rate; a frame that does not fit is
-/// dropped whole.
-pub fn inbox_ring(width: u16) -> usize {
-    RATE as usize * width.max(1) as usize
-}
-/// A recording ring holds one second of blocks at `width`, as an inbox holds one second of a
-/// frame: the control half drains it every tick, so a second is what a stalled thread may cost.
+/// A recording ring holds one second of blocks at `width`: the control half drains it every tick,
+/// and a second is what a parked drain thread may cost before the recorder counts a gap.
 pub fn rec_ring(width: u16) -> usize {
     (REC_HEADER + width.max(1) as usize * BLOCK) * (RATE as usize / BLOCK)
 }
@@ -146,10 +145,10 @@ pub struct Birth {
 }
 
 impl AudioHalf {
-    /// The channel cell of each Array input, which the plan sizes its inbox by. Read before the
-    /// half moves to its thread.
-    pub fn channels(inboxes: &[Inbox]) -> Vec<Arc<AtomicU16>> {
-        inboxes.iter().map(|i| i.chans.clone()).collect()
+    /// The cells of each Array input: the channel count the plan sizes its port by, and the ring
+    /// size the engine mints for it. Read before the half moves to its thread.
+    pub fn cells(inboxes: &[Inbox]) -> (Vec<Arc<AtomicU16>>, Vec<Arc<AtomicUsize>>) {
+        (inboxes.iter().map(|i| i.chans.clone()).collect(), inboxes.iter().map(|i| i.wanted.clone()).collect())
     }
 
     pub fn new(birth: Birth) -> AudioHalf {
@@ -394,8 +393,13 @@ impl Half for AudioHalf {
         // After the drains, so what the old rings still held went out before they go.
         let swap = self.audio.swaps.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.uid);
         if let Some(swap) = swap {
+            let entry = self.playback.entry(&self.params);
             for (i, ring) in swap.inboxes {
                 self.inboxes[i].ring = ring;
+                // The frame the old ring could not take enters the one minted for it.
+                if let Some(frame) = self.inboxes[i].pending.take() {
+                    ticked.replan |= self.inboxes[i].enter(&frame, rate, entry).unwrap_or(false);
+                }
             }
             for (i, ring) in swap.taps {
                 self.taps[i].ring = ring;
@@ -415,20 +419,40 @@ impl Half for AudioHalf {
 pub struct Inbox {
     ring: rtrb::Producer<f32>,
     chans: Arc<AtomicU16>,
+    /// The ring size the frames ask for, in floats; the engine mints a ring of it at the settle.
+    wanted: Arc<AtomicUsize>,
+    /// A frame the ring could not take, entered once the ring minted for it arrives.
+    pending: Option<Data>,
     /// The fractional input position the next output sample reads, carried across frames.
     pos: f64,
 }
 
 impl Inbox {
     pub fn new(ring: rtrb::Producer<f32>) -> Inbox {
-        Inbox { ring, chans: Arc::new(AtomicU16::new(1)), pos: 0.0 }
+        let wanted = Arc::new(AtomicUsize::new(ring.buffer().capacity()));
+        Inbox { ring, chans: Arc::new(AtomicU16::new(1)), wanted, pending: None, pos: 0.0 }
+    }
+
+    /// Whether a chunk of `need` floats fits, and whether the ring must be re-minted: for a chunk
+    /// that does not fit, which is held until then, or for one sixteen times smaller than the ring.
+    fn room(&mut self, need: usize, frame: &Data) -> (bool, bool) {
+        let capacity = self.ring.buffer().capacity();
+        let fits = need <= capacity;
+        if !fits {
+            self.pending = Some(frame.clone());
+        }
+        let resize = !fits || need * 16 < capacity;
+        if resize {
+            self.wanted.store(need * 4, Ordering::Relaxed);
+        }
+        (fits, resize)
     }
 
     /// Resample one frame linearly from its `sfreq` to the rate and enter it whole, as one chunk
     /// headed by its channel count and length. A frame with no `sfreq` enters one sample per
     /// sample. [`Entry::Pitches`] enters an `[n]` or `[2, n]` frame as pitches in Hz and phases
-    /// for one channel of sines, a volt per octave turned to Hz. Answers whether the channel count
-    /// moved.
+    /// for one channel of sines, a volt per octave turned to Hz. Answers whether the plan must
+    /// settle again: the channel count moved, or the ring must be re-minted.
     fn enter(&mut self, frame: &Data, rate: f64, entry: Entry) -> Option<bool> {
         let goofi_core::Value::Array(a) = frame.value() else { return None };
         let (mix, range) = match entry {
@@ -436,6 +460,10 @@ impl Inbox {
             Entry::Pitches { volts } => {
                 let width = pitch_width(a.shape())?;
                 let n = a.as_bytes().len() / 4;
+                let (fits, resize) = self.room(n + 2, frame);
+                if !fits {
+                    return Some(true);
+                }
                 let chunk = self.ring.write_chunk_uninit(n + 2).ok()?;
                 let values = a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes")));
                 let head = [width as f32, (n / width) as f32];
@@ -447,7 +475,7 @@ impl Inbox {
                 });
                 chunk.fill_from_iter(head.into_iter().chain(values));
                 self.pos = 0.0;
-                return Some(self.chans.swap(1, Ordering::Relaxed) != 1);
+                return Some(self.chans.swap(1, Ordering::Relaxed) != 1 || resize);
             }
         };
         // Where lane `ch` sample `i` sits: a signal frame is planar `[C, T]`, and a texture is
@@ -479,6 +507,10 @@ impl Inbox {
         let pos = self.pos;
         let n = ((t as f64 - pos) / step).ceil().max(0.0) as usize;
         let Some(need) = n.checked_mul(c).and_then(|s| s.checked_add(2)) else { return Some(moved) };
+        let (fits, resize) = self.room(need, frame);
+        if !fits {
+            return Some(true);
+        }
         if let Ok(chunk) = self.ring.write_chunk_uninit(need) {
             let at = |ch: usize, i: usize| {
                 let v = x[ch * lane + i.min(t - 1) * stride];
@@ -499,7 +531,7 @@ impl Inbox {
             chunk.fill_from_iter([c as f32, n as f32].into_iter().chain(samples));
         }
         self.pos = pos + n as f64 * step - t as f64;
-        Some(moved)
+        Some(moved || resize)
     }
 }
 
@@ -606,7 +638,8 @@ struct Play {
 
 impl Play {
     fn new((ring, chans): (rtrb::Producer<f32>, Arc<AtomicU16>)) -> Play {
-        let inbox = Inbox { ring, chans, pos: 0.0 };
+        let wanted = Arc::new(AtomicUsize::new(ring.buffer().capacity()));
+        let inbox = Inbox { ring, chans, wanted, pending: None, pos: 0.0 };
         Play { inbox, file: None, named: None, position: 0.0, ended: false, error: None }
     }
 }
