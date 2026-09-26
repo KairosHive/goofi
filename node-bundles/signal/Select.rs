@@ -221,7 +221,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "select",
         name: "squeeze",
-        spec: ParamSpec::Bool { default: false },
+        spec: ParamSpec::Bool { default: true },
         expression: None,
         doc: Some("When one entry is left, remove the axis instead of leaving it one long."),
         section: 0,

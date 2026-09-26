@@ -328,6 +328,8 @@ fn the_array_nodes_reshape_a_grid_and_the_rate_follows_the_time_axis() {
 
     // Select keeps part of an axis by numpy index, and can drop the axis when one entry is left.
     let pick = g.add("Select");
+    // Off for the shapes below, which keep a one-long axis; the default squeezes it away.
+    set(pick, "select", "squeeze", j!(false));
     set(pick, "select", "keep", j!("0,2"));
     let pp = g.probe(pick, "out");
     g.link(src, "out", pick, "input");
