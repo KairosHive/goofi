@@ -1118,3 +1118,41 @@ fn clearing_the_touched_baseline_moves_the_zero_point_and_breaks_no_binding() {
     assert_eq!(g.call("redo", j!({}))["changed"], true);
     assert_eq!(baseline(&g)["lfo/frequency"]["value"], j!(3.5), "redo put it back");
 }
+
+#[test]
+fn a_deleted_node_hands_its_wires_through() {
+    // A chain stays a chain: what fed the deleted node feeds whatever it fed, by the first wired
+    // input whose kind fits, and one undo brings the node and its own wires back.
+    let g = Goofi::new();
+    let (src, mid, sink) = (g.add("signal:Constant"), g.add("Smooth"), g.add("Smooth"));
+    g.link(src, "out", mid, "input");
+    g.link(mid, "out", sink, "input");
+    let wires = |g: &Goofi| -> Vec<(String, String)> {
+        let links = g.doc()["links"].as_array().cloned().unwrap_or_default();
+        links.iter().map(|l| (l["node_out"].as_str().unwrap().into(), l["node_in"].as_str().unwrap().into())).collect()
+    };
+    g.call("node remove", j!({ "node": hex(mid) }));
+    assert_eq!(wires(&g), vec![(hex(src), hex(sink))], "the source now feeds the sink directly");
+    g.call("undo", j!({}));
+    assert_eq!(wires(&g), vec![(hex(src), hex(mid)), (hex(mid), hex(sink))], "one undo restores the chain");
+    g.call("redo", j!({}));
+    assert_eq!(wires(&g), vec![(hex(src), hex(sink))], "and redo bridges again");
+    g.call("undo", j!({}));
+
+    // The first WIRED input is the one handed through, and only where its kind fits: a Quantize
+    // fed on `levels` alone bridges from there, and a FromJson between a String and a Table
+    // consumer bridges nothing.
+    g.call("node remove", j!({ "node": hex(src) }));
+    assert_eq!(wires(&g), vec![(hex(mid), hex(sink))], "a node with no wired input leaves its consumer unfed");
+    let quant = g.add("signal:Quantize");
+    g.link(mid, "out", quant, "levels");
+    g.link(quant, "out", sink, "input");
+    assert_eq!(wires(&g), vec![(hex(mid), hex(quant)), (hex(quant), hex(sink))]);
+    g.call("node remove", j!({ "node": hex(quant) }));
+    assert_eq!(wires(&g), vec![(hex(mid), hex(sink))], "the first wired input, `levels`, is handed through");
+    let (text, json, table) = (g.add("Text"), g.add("FromJson"), g.add("TableSelect"));
+    g.link(text, "out", json, "input");
+    g.link(json, "out", table, "input");
+    g.call("node remove", j!({ "node": hex(json) }));
+    assert_eq!(wires(&g), vec![(hex(mid), hex(sink))], "a String cannot feed a Table consumer, so nothing bridges");
+}

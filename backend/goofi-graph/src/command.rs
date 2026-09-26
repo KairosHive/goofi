@@ -346,6 +346,8 @@ impl Command {
                 if !g.exists(uid) {
                     return Ok((Outcome::Ok, Command::Compound(vec![])));
                 }
+                // A leaf hands its consumers its own sources before it goes, so a chain stays one.
+                let bridges = if g.is_leaf(uid) { bridges_around(g, uid) } else { Vec::new() };
                 let (inverse, gone) = capture_subtree_restore(g, uid);
                 // A panel bound to a uid this delete takes renders empty, so the binding goes with
                 // the node — HERE, inside the one command, so it is one undo step.
@@ -359,12 +361,18 @@ impl Command {
                 } else {
                     g.remove_node(uid)?;
                 }
-                if unbind.is_empty() {
-                    return Ok((Outcome::Ok, inverse));
+                // Undone in this order: the bridges go before the node and its own wires return,
+                // and re-binding runs AFTER the nodes are back, which `Compound` replays in order.
+                let mut steps = Vec::new();
+                for bridge in bridges {
+                    steps.push(bridge.execute(g)?.1);
                 }
-                // Re-binding runs AFTER the nodes are back, which `Compound` replays in order.
-                let (_, rebind) = Command::LayoutContents { writes: unbind }.execute(g)?;
-                Ok((Outcome::Ok, Command::Compound(vec![inverse, rebind])))
+                steps.push(inverse);
+                if !unbind.is_empty() {
+                    steps.push(Command::LayoutContents { writes: unbind }.execute(g)?.1);
+                }
+                let inverse = if steps.len() == 1 { steps.remove(0) } else { Command::Compound(steps) };
+                Ok((Outcome::Ok, inverse))
             }
 
             Command::AddLink { node_out, slot_out, node_in, slot_in } => {
@@ -934,6 +942,35 @@ impl CommandHistory {
 
 /// Capture the exact inverse to restore the subtree rooted at `root`, BEFORE the caller removes it.
 /// The Compound recreates every node, scope, membership, pruned stub and touching link, uid-stable.
+/// The wires a leaf about to go leaves behind: each consumer of one of its outputs is fed by the
+/// first wired input of the leaf, in declaration order, whose source feeds the consumer's slot.
+fn bridges_around(g: &Graph, uid: Uid) -> Vec<Command> {
+    let links = g.links_view();
+    let kind_of = |slots: Vec<(String, String, goofi_core::SlotType)>, name: &str| {
+        slots.into_iter().find(|(n, _, _)| n == name).map(|(_, _, kind)| kind)
+    };
+    let sources: Vec<(Uid, &'static str, goofi_core::SlotType)> = g
+        .input_slots(uid)
+        .iter()
+        .filter_map(|(name, _, _)| links.iter().find(|l| l.node_in == uid && l.slot_in == name.as_str()))
+        .filter_map(|l| kind_of(g.output_slots(l.node_out), l.slot_out).map(|kind| (l.node_out, l.slot_out, kind)))
+        .collect();
+    links
+        .iter()
+        .filter(|l| l.node_out == uid && l.node_in != uid)
+        .filter_map(|l| {
+            let into = kind_of(g.input_slots(l.node_in), l.slot_in)?;
+            let (node_out, slot_out, _) = sources.iter().find(|(src, _, kind)| *src != l.node_in && kind.feeds(into))?;
+            Some(Command::AddLink {
+                node_out: *node_out,
+                slot_out: slot_out.to_string(),
+                node_in: l.node_in,
+                slot_in: l.slot_in.to_string(),
+            })
+        })
+        .collect()
+}
+
 fn capture_subtree_restore(g: &Graph, root: Uid) -> (Command, std::collections::HashSet<Uid>) {
     // Where the restored top returns to: `None` = ROOT (a top-level instance / leaf).
     let orig_parent = g.scope_of(root);
