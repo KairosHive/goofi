@@ -321,7 +321,7 @@ impl Half for AudioHalf {
         self.refused = None;
         if let goofi_core::Value::Array(a) = frame.value() {
             match entry {
-                Entry::Pitches if pitch_width(a.shape()).is_none() => {
+                Entry::Pitches { .. } if pitch_width(a.shape()).is_none() => {
                     self.refused = Some(format!("an oscillator takes [n] pitches or [2, n] pitches and phases, not {:?}", a.shape()));
                     return false;
                 }
@@ -389,19 +389,29 @@ impl Inbox {
 
     /// Resample one frame linearly from its `sfreq` to the rate and enter it whole, as one chunk
     /// headed by its channel count and length. A frame with no `sfreq` enters one sample per
-    /// sample. [`Entry::Pitches`] enters an `[n]` or `[2, n]` frame as it is, pitches and phases
-    /// for one channel of sines. Answers whether the channel count moved.
+    /// sample. [`Entry::Pitches`] enters an `[n]` or `[2, n]` frame as pitches in Hz and phases
+    /// for one channel of sines, a volt per octave turned to Hz. Answers whether the channel count
+    /// moved.
     fn enter(&mut self, frame: &Data, rate: f64, entry: Entry) -> Option<bool> {
         let goofi_core::Value::Array(a) = frame.value() else { return None };
-        let Entry::Waveform { mix, range } = entry else {
-            let width = pitch_width(a.shape())?;
-            let n = a.as_bytes().len() / 4;
-            let chunk = self.ring.write_chunk_uninit(n + 2).ok()?;
-            let values = a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes")));
-            let head = [width as f32, (n / width) as f32];
-            chunk.fill_from_iter(head.into_iter().chain(values.map(|v| if v.is_finite() { v } else { 0.0 })));
-            self.pos = 0.0;
-            return Some(self.chans.swap(1, Ordering::Relaxed) != 1);
+        let (mix, range) = match entry {
+            Entry::Waveform { mix, range } => (mix, range),
+            Entry::Pitches { volts } => {
+                let width = pitch_width(a.shape())?;
+                let n = a.as_bytes().len() / 4;
+                let chunk = self.ring.write_chunk_uninit(n + 2).ok()?;
+                let values = a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes")));
+                let head = [width as f32, (n / width) as f32];
+                // Row 0 is the pitch; row 1, where there is one, stays the phase.
+                let values = values.enumerate().map(|(i, v)| match v.is_finite() {
+                    true if volts && i < n / width => goofi_audio_sdk::hz_of(v),
+                    true => v,
+                    false => 0.0,
+                });
+                chunk.fill_from_iter(head.into_iter().chain(values));
+                self.pos = 0.0;
+                return Some(self.chans.swap(1, Ordering::Relaxed) != 1);
+            }
         };
         // Where lane `ch` sample `i` sits: a signal frame is planar `[C, T]`, and a texture is
         // texels — every channel of one position together, `[H, W, C]` in scan order.

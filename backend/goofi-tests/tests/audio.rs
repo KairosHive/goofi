@@ -763,6 +763,15 @@ fn a_patch_sounds_under_the_external_clock() {
         let (x, _) = drive(g, TENTH);
         (peak(&x) < 1e-3).then_some(())
     });
+    // …and with `pitch` in volts per octave, row 0 is volts above C4: the same 1200 Hz as volts.
+    let volts = (1200.0f64 / 261.63).log2();
+    g.set_param(written, "text", "value", format!(r#"{{"rows": [[{volts}, {volts}], [0.0, 0.0]]}}"#));
+    g.set_param(signal_in, "signal", "pitch", "v/oct");
+    g.until("two sines from volts", |g| {
+        let (x, _) = drive(g, TENTH);
+        ((amplitude(&x, 1200.0) - 1.0).abs() < 0.01).then_some(())
+    });
+    g.set_param(signal_in, "signal", "pitch", "hz");
     g.set_param(signal_in, "signal", "mode", "waveform");
     for uid in [table, parsed, written] {
         g.call("node remove", j!({ "node": hex(uid) }));
@@ -883,6 +892,7 @@ fn a_patch_sounds_under_the_external_clock() {
     for name in ["mix", "low", "high", "smoothing"] {
         assert_eq!(signal[name]["show"], waveform, "{name}");
     }
+    assert_eq!(signal["pitch"]["show"], j!({ "group": "signal", "name": "mode", "any_of": ["oscillator"] }));
     assert_eq!(signal["mode"]["show"], j!(null));
     for uid in [in2, ramp2] {
         g.call("node remove", j!({ "node": hex(uid) }));

@@ -149,13 +149,14 @@ pub struct Playback {
     mix: Option<usize>,
     low: Option<usize>,
     high: Option<usize>,
+    pitch: Option<usize>,
 }
 
-/// How a frame enters the crossing: as pitches for sines, or as a waveform with its rows mixed to
-/// one channel or not, and `range` the values that are full scale.
+/// How a frame enters the crossing: as pitches for sines, in Hz or in volts per octave, or as a
+/// waveform with its rows mixed to one channel or not, and `range` the values that are full scale.
 #[derive(Clone, Copy)]
 pub enum Entry {
-    Pitches,
+    Pitches { volts: bool },
     Waveform { mix: bool, range: Option<(f32, f32)> },
 }
 
@@ -164,7 +165,14 @@ impl Playback {
         let params = &manifest.params;
         let mode = params.iter().position(|d| matches!(d.spec, ParamSpec::Str { options, .. } if options == cross::PLAYBACK));
         let beside = |name: &str| mode.and_then(|m| params.iter().position(|d| d.group == params[m].group && d.name == name));
-        Playback { mode, smoothing: beside("smoothing"), mix: beside("mix"), low: beside("low"), high: beside("high") }
+        Playback {
+            mode,
+            smoothing: beside("smoothing"),
+            mix: beside("mix"),
+            low: beside("low"),
+            high: beside("high"),
+            pitch: beside("pitch"),
+        }
     }
 
     pub fn mode(&self) -> Option<usize> {
@@ -181,7 +189,7 @@ impl Playback {
 
     pub fn entry(&self, params: &[AtomicU64]) -> Entry {
         if self.oscillator(params) {
-            return Entry::Pitches;
+            return Entry::Pitches { volts: Self::read(params, self.pitch, 0.0) >= 0.5 };
         }
         let range = (Self::read(params, self.low, -1.0) as f32, Self::read(params, self.high, 1.0) as f32);
         Entry::Waveform { mix: Self::read(params, self.mix, 0.0) >= 0.5, range: Some(range) }
