@@ -1,104 +1,74 @@
 # Graphics standard library gaps
 
-Reviewed 2026-09-10 against TouchDesigner's [TOP catalog](https://docs.derivative.ca/TOP). This
-is a proposed build order for goofi, not a plan to copy every TOP. Names below are proposals;
-none is built. The graphics bundle leaves this repo (`library.md`); the order travels with it.
+A build order for the graphics bundle, after TouchDesigner's [TOP catalog](https://docs.derivative.ca/TOP).
+Names are proposals; none is built. The bundle leaves this repo (`library.md`); the order travels
+with it.
 
-## Limits the proposals build on
+## Decisions needed before the first batch
 
-- Transform has translation, rotation, uniform positive scale, and tiling; no separate X/Y scale,
-  pivot, flip, or aspect-preserving fit. Common width/height already control output resolution;
-  the missing capability is resampling and fit policy, not a second pair of size controls.
-- Level has gain, offset, gamma, and invert; no hue or saturation. Composite's arithmetic modes do
-  not provide raw channel arithmetic independent of coverage, and its blend is not a general
-  crossfade. Lookup reads a one-dimensional palette; Displace applies relative RG offsets; neither
-  is an absolute two-dimensional UV lookup. Feedback supplies the previous tick only.
-- `signal:Text` emits a string; nothing renders text. Signal Switch and Select operate on arrays.
-  Texture recording and Window display exist; a general scene renderer with cameras, lights, and
-  materials remains separate from `GeometryRender`.
+- Audit alpha conventions across generators, filters, viewers, and recording. Shape scales RGB by
+  coverage; Constant supplies independent RGB and alpha. New nodes must not add a third convention.
+- Decide texture color space, channel selection, border modes, units, and invalid numeric results
+  once. Preserve HDR values where the operation permits them.
+- Add engine support for multiple internal passes only for a concrete consumer (Bloom, wide
+  Gaussian Blur, Optical Flow). Do not hide large, unbounded loops in a per-pixel shader.
+- Image and Text sources use the shared [Rust/Python graphics producer](../sdk/graphics.md).
+- Test with real GPU sessions: opaque and transparent images, unequal dimensions, boundary values,
+  mode changes. Check sampling cost at useful frame sizes.
 
-## First: everyday image operations
+## First batch: Reorder, Color, Transform/Fit, Switch/Mix, Mask
 
-| Priority | Capability | Smallest useful goofi scope | TouchDesigner reference |
-|---|---|---|---|
-| 1 | Reorder | Build RGBA from input channels, luminance, zero, or one. Support a second input for alpha and channel packing. | Reorder |
-| 2 | Color | Hue shift, saturation, value, and monochrome; define the working color space. | HSV Adjust, Monochrome |
-| 3 | Fit / Crop | Contain, cover, stretch, crop, and pad to the common output size; alignment and border color. Extend Transform with independent scale, pivot, and flip. | Fit, Crop, Transform, Flip |
-| 4 | Switch / Mix | Select a texture or crossfade two textures independent of their coverage. Begin with two inputs; many-input selection needs shared engine support. | Switch, Cross |
-| 5 | Mask | Replace or multiply alpha from a selected channel of another image; invert and remap the mask. Keep foreground RGB intact. | Matte |
-| 6 | Function | Per-channel abs, sign, power, root, log, exp, sin/cos, floor, ceil, round, and fractional part. Define invalid-domain results. Math remains the scale/range node. | Function |
-| 7 | Operation | Raw channel add/subtract/multiply/divide/min/max, with texture or scalar operand; explicit alpha policy and zero-divisor behavior. | Math, Function; signal Operation is the local naming precedent |
-| 8 | Edge / Convolve | Shared neighborhood sampling; Sobel edge magnitude/direction, Laplacian, sharpen, emboss, and a small custom kernel. Presets can share one node. | Edge, Convolve, Emboss |
-| 9 | Image | Load a still image from the patch workspace, preserve alpha, and report decode failures. Use existing workspace packaging. | Movie File In |
-| 10 | Text | Render a string with font, size, alignment, wrapping, foreground, and background controls. Needs a font/raster upload path. | Text |
-| 11 | Remap | Sample an image at absolute UV coordinates from another texture, with explicit outside-frame behavior. Could be a Displace mode if the interface stays clear. | Remap |
-| 12 | Pattern | Checker, grid, stripes, and radial/angular coordinates for masks, tests, and UV maps. Extend Ramp/Shape where appropriate. Wave is a membrane simulation, not this generator. | Ramp, Circle, Rectangle |
+| Capability | Smallest useful scope | TOP reference |
+|---|---|---|
+| Reorder | Build RGBA from input channels, luminance, zero, or one; second input for alpha and channel packing. | Reorder |
+| Color | Hue shift, saturation, value, monochrome; define the working color space. Level keeps gain/offset/gamma/invert. | HSV Adjust, Monochrome |
+| Fit / Crop | Contain, cover, stretch, crop, pad to the common output size; alignment and border color. Extend Transform with independent X/Y scale, pivot, and flip. | Fit, Crop, Transform, Flip |
+| Switch / Mix | Select a texture or crossfade two textures independent of coverage. Two inputs first; many-input selection needs shared engine support. | Switch, Cross |
+| Mask | Replace or multiply alpha from a selected channel of another image; invert and remap the mask; keep foreground RGB. | Matte |
 
-Color controls follow the role of [HSV Adjust](https://derivative.ca/UserGuide/HSV_Adjust_TOP).
-[Function](https://derivative.ca/UserGuide/Function_TOP) separates nonlinear channel
-functions from range mapping. [Convolve](https://derivative.ca/UserGuide/Convolve_TOP)
-shows how several neighborhood filters can share one kernel interface.
-[Reorder](https://derivative.ca/solr/reorder-top) and
-[Channel Mix](https://derivative.ca/UserGuide/Channel_Mix_TOP) are distinct: channel
-selection is a first step; arbitrary weighted channel mixing can follow it.
+## Second batch: Function/Operation, Edge/Convolve, Image, Text, Remap/Pattern
 
-## Next: masks, color, and spatial effects
+| Capability | Smallest useful scope | TOP reference |
+|---|---|---|
+| Function | Per-channel abs, sign, power, root, log, exp, sin/cos, floor, ceil, round, fract; define invalid-domain results. Math stays the scale/range node. | Function |
+| Operation | Raw channel add/subtract/multiply/divide/min/max with texture or scalar operand; explicit alpha policy and zero-divisor behavior. | Math, Function |
+| Edge / Convolve | Shared neighborhood sampling; Sobel magnitude/direction, Laplacian, sharpen, emboss, small custom kernel. Presets share one node. | Edge, Convolve, Emboss |
+| Image | Load a still image from the patch workspace, preserve alpha, report decode failures. | Movie File In |
+| Text | Render a string with font, size, alignment, wrapping, foreground, background. Needs a font/raster upload path. | Text |
+| Remap | Sample an image at absolute UV coordinates from another texture; explicit outside-frame behavior. Could be a Displace mode. | Remap |
+| Pattern | Checker, grid, stripes, radial/angular coordinates. Extend Ramp/Shape where appropriate; Wave is a simulation, not this. | Ramp, Circle, Rectangle |
 
-| Capability | Missing behavior and proposed scope |
+## After the foundations
+
+| Capability | Proposed scope |
 |---|---|
-| Key | Luma and chroma keys, soft selection, and spill suppression. Threshold currently emits grayscale and preserves the original alpha. |
-| Morphology | Dilate and erode masks; opening/closing as compositions. Spatial min/max is different from Composite's comparison of two images. This is a goofi proposal, not a claim of a same-named TOP. |
-| Channel Mix | A channel matrix for grayscale weights, tinting, and channel reconstruction. Add after Reorder proves insufficient. |
-| Color space / Tone map | RGB↔HSV and linear↔sRGB conversions, plus HDR-to-display tone mapping. Agree on the texture color contract before implementation. |
-| Bloom | Bright-region extraction and multi-scale blur/add. Start as a reusable patch; a fast node needs internal multi-pass rendering. |
-| Normal / Slope | Height-to-gradient and height-to-normal output for displacement and lighting. Share derivative kernels with Edge. |
-| Corner Pin | Four-corner projective warp for fitting an image to a surface. |
-| Lens / Polar | Lens distortion and cartesian↔polar transforms. Prefer Remap presets when they can express the same behavior. |
-| Layout | Arrange several images in a row, column, or grid inside a texture. This is separate from browser panel layout. |
-| Resample | Nearest, linear, and a proper downsample filter; explicit border modes. Common controls should own shared sampling rules. A node is useful only for a distinct resize stage. |
-| Blur extensions | Edge-preserving bilateral blur and mask-driven radius. Keep them in Blur. Faster wide Gaussian blur needs multiple passes; fixed sparse sampling is not an exact large kernel. |
-| Composite extensions | Hue, saturation, color, and luminosity blend modes. Keep these in Composite. |
-
-The TOP catalog names Key, Normal Map, Slope, Bloom, Corner Pin, Lens Distort,
-Layout, and Tone Map counterparts. The grouping and priorities here are goofi
-implementation choices. [Remap](https://derivative.ca/UserGuide/Remap_TOP) and
-[Resolution](https://derivative.ca/UserGuide/Resolution_TOP) inform the coordinate
-and resampling work.
+| Key | Luma and chroma keys, soft selection, spill suppression. |
+| Morphology | Dilate and erode masks; opening/closing as compositions. |
+| Channel Mix | A channel matrix; add only after Reorder proves insufficient. |
+| Color space / Tone map | RGB↔HSV, linear↔sRGB, HDR-to-display; after the color contract is agreed. |
+| Bloom | Bright-region extraction and multi-scale blur/add; a patch first, a node needs multi-pass. |
+| Normal / Slope | Height-to-gradient and height-to-normal; share derivative kernels with Edge. |
+| Corner Pin | Four-corner projective warp. |
+| Lens / Polar | Lens distortion and cartesian↔polar; prefer Remap presets where they suffice. |
+| Layout | Arrange several images in a row, column, or grid inside a texture. |
+| Resample | Nearest, linear, a proper downsample filter, explicit border modes; a node only for a distinct resize stage. |
+| Blur extensions | Bilateral blur and mask-driven radius, inside Blur. |
+| Composite extensions | Hue, saturation, color, luminosity blend modes, inside Composite. |
 
 ## Engine-backed work
 
-| Capability | Why it is more than another fragment shader |
+| Capability | Why it is more than a fragment shader |
 |---|---|
-| Cache / Delay / Hold | A bounded GPU frame history with capture, freeze, reset, and indexed delay. One owner for allocation and frame advancement; no viewer-driven clock. |
-| Analyze / Histogram | Min/max/mean, image statistics, and distributions need GPU reduction and a defined result format. A compact signal result is useful for biosignal/visual feedback. |
-| Sample / Texture-to-signal | Read selected pixels, rows, or regions into arrays through the existing transport. Specify readback rate and cost; do not use viewer snapshots as engine input. |
-| Media playback | Still images first; later seek, pause, speed, timestamps, and image sequences through the existing source owner. Reuse video recording for output. |
-| Optical Flow | A motion-vector field from successive frames; requires history and usually a pyramid or multiple passes. Useful after Cache and reduction/multi-pass work. |
-| External texture I/O | Screen capture and Spout/Syphon/NDI have platform, resource, and dependency requirements. Keep these optional rather than blocking the basic bundle. |
+| Cache / Delay / Hold | Bounded GPU frame history with capture, freeze, reset, indexed delay; one owner for allocation and advancement; no viewer-driven clock. |
+| Analyze / Histogram | Min/max/mean and distributions need GPU reduction and a defined result format. |
+| Sample / Texture-to-signal | Read pixels, rows, or regions into arrays through the transport; specify readback rate and cost; never viewer snapshots. |
+| Media playback | Still images first; later seek, pause, speed, timestamps, image sequences through the existing source owner. |
+| Optical Flow | Motion vectors from successive frames; needs history and a pyramid or multiple passes; after Cache. |
+| External texture I/O | Screen capture and Spout/Syphon/NDI; optional, not blocking the basic bundle. |
 
-[Cache](https://derivative.ca/UserGuide/Cache_TOP) is the reference for freeze and
-indexed history. [Analyze](https://derivative.ca/UserGuide/Analyze_TOP) is the
-reference for reducing images to small results. Their goofi implementations must
-follow the existing engine and transport ownership rules.
+## Not to be done
 
-## Shared requirements and build order
-
-- Audit alpha conventions across generators, filters, viewers, and recording.
-  Shape currently scales RGB by coverage, while Constant supplies independent
-  RGB and alpha. New nodes must not add a third convention.
-- Decide texture color space, channel selection, border modes, units, and invalid
-  numeric results once. Preserve HDR values where the operation permits them.
-- Add engine support for multiple internal passes only for a concrete consumer.
-  Do not hide large, unbounded loops in a per-pixel shader.
-- Use the shared [Rust/Python graphics producer mechanism](../sdk/graphics.md)
-  for Image and Text sources.
-- First image-operation batch: Reorder, Color, Transform/Fit, Switch/Mix, Mask.
-  Second batch: Function/Operation, Edge/Convolve, Image, Text, Remap/Pattern.
-  Build advanced effects and temporal analysis after those foundations.
-- Use real GPU sessions with opaque and transparent images, unequal dimensions,
-  boundary values, and mode changes. Check sampling cost at useful frame sizes.
-- Do not add separate Add, Multiply, Over, Under, Invert, Limit, Circle, Rectangle,
-  Movie File Out, or texture In/Out nodes merely to match TOP names. Existing
-  nodes or shared capabilities already cover those roles, subject to the limits
-  listed above. General 3D rendering and vendor camera integrations are not core
-  2D standard-library prerequisites.
+- No separate Add, Multiply, Over, Under, Invert, Limit, Circle, Rectangle, Movie File Out, or
+  texture In/Out nodes merely to match TOP names: existing nodes cover those roles.
+- General 3D rendering (cameras, lights, materials) and vendor camera integrations are not core 2D
+  standard-library prerequisites.

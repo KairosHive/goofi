@@ -1,9 +1,9 @@
 # Plugin system
 
 The package contract is `sdk/README.md`; `library.md` owns the installation unit and distribution.
-No generic state/event bus, panel-open API, task manager, or resource provider is planned for this
-version. Live replacement, a marketplace, dependency relations between plugins, and durable
-lifecycle subscriptions are outside the initial interface.
+Not in this version: a generic state/event bus, panel-open API, task manager, resource provider,
+live replacement, a marketplace, dependency relations between plugins, and durable lifecycle
+subscriptions.
 
 Remaining product work:
 
