@@ -668,9 +668,9 @@ fn a_stitching_node_answers_from_the_past_and_a_transform_round_trips() {
     g.link(flat, "out", stamp, "input");
     g.link(stamp, "out", fwd, "input");
     g.link(fwd, "out", back, "input");
-    let spectrum = g.until("the one-sided bins", |_| pf.latest().filter(|d| shape(d) == vec![33, 2]));
+    let spectrum = g.until("the one-sided bins, last", |_| pf.latest().filter(|d| shape(d) == vec![2, 33]));
     assert_eq!(spectrum.meta().sfreq(), None, "a spectrum is not a time series");
-    let freqs = spectrum.meta().channels().get(0).and_then(|x| x.coords.clone()).expect("bin coords");
+    let freqs = spectrum.meta().channels().get(1).and_then(|x| x.coords.clone()).expect("bin coords");
     assert_eq!(freqs[1], goofi_core::Coord::Num(4.0), "64 samples at 256 Hz make four-hertz bins");
     let again = g.until("the samples back", |_| {
         pb.latest().filter(|d| shape(d) == vec![64] && f32s(d).iter().all(|v| (v - 5.0).abs() < 1e-3))

@@ -62,7 +62,7 @@ impl Fft {
                 for (f, c) in scratch[..bins].iter().enumerate() {
                     let pair = if polar { [c.norm(), c.arg()] } else { [c.re, c.im] };
                     for (part, v) in pair.iter().enumerate() {
-                        let at = ((((o * bins) + f) * 2 + part) * inner + i) * 4;
+                        let at = ((((o * 2) + part) * bins + f) * inner + i) * 4;
                         buf[at..at + 4].copy_from_slice(&v.to_le_bytes());
                     }
                 }
@@ -79,13 +79,14 @@ impl Fft {
         } else {
             vec![Coord::Str("real".into()), Coord::Str("imaginary".into())]
         };
+        // The pair axis goes BEFORE the bins, so the bins stay the last axis as time was.
         let mut shape_out = shape.to_vec();
         shape_out[dim] = bins;
-        shape_out.insert(dim + 1, 2);
+        shape_out.insert(dim, 2);
         // A spectrum is no longer a time series, so the rate would read as the spacing of a domain
         // that is gone.
-        let meta = d.meta().insert_axis(dim + 1, Axis::coords(Arc::from(parts)), shape.len());
-        let axes = meta.channels().clone().with(dim, freqs);
+        let meta = d.meta().insert_axis(dim, Axis::coords(Arc::from(parts)), shape.len());
+        let axes = meta.channels().clone().with(dim + 1, freqs);
         let meta = meta.with_channels(axes).with_sfreq(None);
         out.set("out", Data::array_f32(shape_out, buf, meta).map_err(|e| e.to_string())?);
         Ok(())
@@ -94,16 +95,17 @@ impl Fft {
     fn inverse(&mut self, d: &Data, dim: usize, polar: bool, out: &mut Outputs<'_>) -> NodeResult {
         let a = d.assert_ndims().at_least(2)?;
         let shape = a.shape();
-        if shape.get(dim + 1) != Some(&2) {
-            return Err(format!("an inverse needs a pair axis of 2 after the bins, got {shape:?}").into());
+        // `dim` is the bins axis of the shape WITHOUT the pair axis, which sits just before it.
+        if shape.get(dim) != Some(&2) {
+            return Err(format!("an inverse needs a pair axis of 2 before the bins, got {shape:?}").into());
         }
-        let bins = shape[dim];
+        let bins = shape[dim + 1];
         let t = (bins - 1) * 2;
         let (outer, inner) = (shape[..dim].iter().product::<usize>(), shape[dim + 2..].iter().product::<usize>());
         let fft = self.planner.plan_fft_inverse(t);
         let src = a.as_bytes();
         let read = |o: usize, f: usize, part: usize, i: usize| {
-            let at = ((((o * bins) + f) * 2 + part) * inner + i) * 4;
+            let at = ((((o * 2) + part) * bins + f) * inner + i) * 4;
             f32::from_le_bytes(src[at..at + 4].try_into().expect("four bytes"))
         };
 
@@ -129,16 +131,16 @@ impl Fft {
         }
 
         // The bins say how far apart they are, and that spacing times the length is the rate.
-        let sfreq = d.meta().channels().get(dim).and_then(|x| x.coords.as_ref()).and_then(|c| {
+        let sfreq = d.meta().channels().get(dim + 1).and_then(|x| x.coords.as_ref()).and_then(|c| {
             match (c.first(), c.get(1)) {
                 (Some(Coord::Num(a)), Some(Coord::Num(b))) => Some((b - a) * t as f64),
                 _ => None,
             }
         });
         let mut shape_out = shape.to_vec();
-        shape_out.remove(dim + 1);
+        shape_out.remove(dim);
         shape_out[dim] = t;
-        let meta = d.meta().drop_axis(dim + 1, shape.len());
+        let meta = d.meta().drop_axis(dim, shape.len());
         let axes = meta.channels().clone().with(dim, Axis::default());
         let meta = meta.with_channels(axes).with_sfreq(sfreq);
         out.set("out", Data::array_f32(shape_out, buf, meta).map_err(|e| e.to_string())?);
