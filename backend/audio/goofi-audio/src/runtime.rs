@@ -141,33 +141,54 @@ fn keep_newest(ring: &mut rtrb::Consumer<f32>, from: usize, keep: usize) -> bool
     count > keep
 }
 
-/// Where a node's `mode` of [`cross::PLAYBACK`] and the `smoothing` beside it sit in its params.
+/// Where a node's `mode` of [`cross::PLAYBACK`] and the params beside it sit in its params.
 #[derive(Clone, Copy, Default)]
 pub struct Playback {
     mode: Option<usize>,
     smoothing: Option<usize>,
+    mix: Option<usize>,
+    low: Option<usize>,
+    high: Option<usize>,
+}
+
+/// How a frame enters the crossing: as pitches for sines, or as a waveform with its rows mixed to
+/// one channel or not, and `range` the values that are full scale.
+#[derive(Clone, Copy)]
+pub enum Entry {
+    Pitches,
+    Waveform { mix: bool, range: Option<(f32, f32)> },
 }
 
 impl Playback {
     pub fn of(manifest: &NodeManifest) -> Playback {
         let params = &manifest.params;
         let mode = params.iter().position(|d| matches!(d.spec, ParamSpec::Str { options, .. } if options == cross::PLAYBACK));
-        let smoothing = mode.and_then(|m| params.iter().position(|d| d.group == params[m].group && d.name == "smoothing"));
-        Playback { mode, smoothing }
+        let beside = |name: &str| mode.and_then(|m| params.iter().position(|d| d.group == params[m].group && d.name == name));
+        Playback { mode, smoothing: beside("smoothing"), mix: beside("mix"), low: beside("low"), high: beside("high") }
     }
 
     pub fn mode(&self) -> Option<usize> {
         self.mode
     }
 
-    /// The option of [`cross::PLAYBACK`] in force.
-    pub fn playing(&self, params: &[AtomicU64]) -> &'static str {
-        let i = self.mode.map_or(0.0, |m| f64::from_bits(params[m].load(Ordering::Relaxed))).round();
-        cross::PLAYBACK.get(i.max(0.0) as usize).copied().unwrap_or(cross::PLAYBACK[0])
+    fn read(params: &[AtomicU64], at: Option<usize>, or: f64) -> f64 {
+        at.map_or(or, |i| f64::from_bits(params[i].load(Ordering::Relaxed)))
+    }
+
+    pub fn oscillator(&self, params: &[AtomicU64]) -> bool {
+        Self::read(params, self.mode, 0.0) >= 0.5
+    }
+
+    pub fn entry(&self, params: &[AtomicU64]) -> Entry {
+        if self.oscillator(params) {
+            return Entry::Pitches;
+        }
+        let range = (Self::read(params, self.low, -1.0) as f32, Self::read(params, self.high, 1.0) as f32);
+        Entry::Waveform { mix: Self::read(params, self.mix, 0.0) >= 0.5, range: Some(range) }
     }
 
     fn smoothing(&self, params: &[AtomicU64]) -> f64 {
-        self.smoothing.map_or(0.0, |s| f64::from_bits(params[s].load(Ordering::Relaxed)).max(0.0))
+        Self::read(params, self.smoothing, 0.0).max(0.0)
     }
 }
 
@@ -229,10 +250,7 @@ pub struct Frames {
     /// Samples into the crossfade from `now` to `next`, of how many; `(0, 0)` while none runs.
     fade: (usize, usize),
     oscillating: bool,
-    /// Per sine, one for every value a frame can hold: its pitch and phase offset, gliding, and
-    /// its phasor.
-    hz: Vec<f32>,
-    offset: Vec<f32>,
+    /// Per sine, one for every value a frame can hold: its phasor.
     re: Vec<f32>,
     im: Vec<f32>,
 }
@@ -247,8 +265,6 @@ impl Frames {
             next: Voice::new(),
             fade: (0, 0),
             oscillating: false,
-            hz: Vec::with_capacity(crate::control::INBOX_RING),
-            offset: Vec::with_capacity(crate::control::INBOX_RING),
             re: Vec::with_capacity(crate::control::INBOX_RING),
             im: Vec::with_capacity(crate::control::INBOX_RING),
         }
@@ -264,21 +280,18 @@ impl Frames {
 
     fn forget(&mut self) {
         (self.now.len, self.now.chans, self.now.pos, self.fade) = (0, 0, 0, (0, 0));
-        self.hz.clear();
-        self.offset.clear();
     }
 
     pub fn fill(&mut self, out: &mut PortMut<'_>, params: &[AtomicU64]) {
-        let oscillator = self.playback.playing(params) == "oscillator";
+        let oscillator = self.playback.oscillator(params);
         if oscillator != self.oscillating {
             // What the other mode entered means nothing to this one.
             self.oscillating = oscillator;
             self.forget();
         }
-        let smoothing = (self.playback.smoothing(params) * self.rate) as usize;
         match oscillator {
-            true => self.oscillate(out, smoothing),
-            false => self.loop_frames(out, smoothing),
+            true => self.oscillate(out),
+            false => self.loop_frames(out, (self.playback.smoothing(params) * self.rate) as usize),
         }
     }
 
@@ -315,41 +328,29 @@ impl Frames {
     }
 
     /// One sine per column of the newest frame, `[n]` pitches in Hz or `[2, n]` pitches over
-    /// phases in radians, their mean on every channel. A sine runs on across frames, its phase an offset
-    /// on top, and with smoothing both glide. Each is a phasor turned once a sample, so a frame of
-    /// thousands costs a few multiplies per sine.
-    fn oscillate(&mut self, out: &mut PortMut<'_>, smoothing: usize) {
+    /// phases in radians, their mean on every channel. A sine runs on across frames, its phase an
+    /// offset on top. Each is a phasor turned once a sample, so a frame of thousands costs a few
+    /// multiplies per sine.
+    fn oscillate(&mut self, out: &mut PortMut<'_>) {
         keep_newest(&mut self.ring, 0, 1);
         if self.next.take(&mut self.ring) {
             std::mem::swap(&mut self.now, &mut self.next);
         }
         let (width, n) = (self.now.chans, self.now.len);
         let row = |v: usize| (self.now.buf[v], if width == 2 { self.now.buf[n + v] } else { 0.0 });
-        // Within the capacity reserved at birth, so nothing here allocates. A new sine starts where
-        // its row says, with no glide from a sine it never was.
-        let was = self.hz.len().min(n);
-        for v in [&mut self.hz, &mut self.offset, &mut self.re, &mut self.im] {
-            v.truncate(was);
-        }
-        for v in was..n {
-            let (hz, phase) = row(v);
-            self.hz.push(hz);
-            self.offset.push(phase);
-            self.re.push(1.0);
-            self.im.push(0.0);
-        }
-        let k = if smoothing > 0 { 1.0 - (-(BLOCK as f32) / smoothing as f32).exp() } else { 1.0 };
+        // Within the capacity reserved at birth, so nothing here allocates.
+        let was = self.re.len().min(n);
+        self.re.truncate(was);
+        self.im.truncate(was);
+        self.re.resize(n, 1.0);
+        self.im.resize(n, 0.0);
         let turn = std::f64::consts::TAU / self.rate;
         let mut mix = [0.0f32; BLOCK];
         for v in 0..n {
             let (hz, phase) = row(v);
-            self.hz[v] += (hz - self.hz[v]) * k;
-            // The short way round, so a phase that wraps past pi does not spin the long way.
-            let turned = (phase - self.offset[v] + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-            self.offset[v] += turned * k;
-            let (s, c) = (turn * f64::from(self.hz[v])).sin_cos();
+            let (s, c) = (turn * f64::from(hz)).sin_cos();
             let (s, c) = (s as f32, c as f32);
-            let (ps, pc) = self.offset[v].sin_cos();
+            let (ps, pc) = phase.sin_cos();
             let (mut x, mut y) = (self.re[v], self.im[v]);
             for m in &mut mix {
                 *m += y * pc + x * ps;

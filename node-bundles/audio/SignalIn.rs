@@ -1,5 +1,7 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag};
+use goofi_audio_sdk::{cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Tag};
+
+const WAVEFORM: Option<Show> = Some(Show { param: "mode", any_of: &["waveform"] });
 
 goofi_audio_sdk::params! {
     MODE = ParamDecl {
@@ -7,18 +9,45 @@ goofi_audio_sdk::params! {
         name: "mode",
         spec: ParamSpec::Str { default: "waveform", options: cross::PLAYBACK, refresh: false },
         expression: None,
-        doc: Some("the frame's samples looped until the next frame, each column a sine: [n] Hz, or [2, n] Hz over phase, or the rows looped as one mono mix"),
+        doc: Some("the frame's samples looped until the next frame, or each column a sine: [n] Hz, or [2, n] Hz over phase"),
         section: 0,
         show: None,
+    },
+    MIX = ParamDecl {
+        group: "signal",
+        name: "mix",
+        spec: ParamSpec::Bool { default: false },
+        expression: None,
+        doc: Some("the rows of a [C, T] frame played together as one channel, their mean, rather than one channel each"),
+        section: 0,
+        show: WAVEFORM,
+    },
+    LOW = ParamDecl {
+        group: "signal",
+        name: "low",
+        spec: ParamSpec::Float { default: -1.0, min: -1.0e6, max: 1.0e6 },
+        expression: None,
+        doc: Some("the input value that is full scale low, -1 on the audio plane"),
+        section: 0,
+        show: WAVEFORM,
+    },
+    HIGH = ParamDecl {
+        group: "signal",
+        name: "high",
+        spec: ParamSpec::Float { default: 1.0, min: -1.0e6, max: 1.0e6 },
+        expression: None,
+        doc: Some("the input value that is full scale high, 1 on the audio plane"),
+        section: 0,
+        show: WAVEFORM,
     },
     SMOOTHING = ParamDecl {
         group: "signal",
         name: "smoothing",
         spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 1.0 },
         expression: None,
-        doc: Some("seconds a new frame crossfades in over, or each sine glides to its new pitch in"),
+        doc: Some("seconds a new frame crossfades in over"),
         section: 0,
-        show: None,
+        show: WAVEFORM,
     },
 }
 
@@ -32,10 +61,11 @@ static MANIFEST: Manifest = Manifest {
           As a `waveform`, a `[C, T]` frame with `sfreq` enters as `C` audio channels, resampled \
           to the rate; one with no `sfreq` enters one sample per sample. The newest frame loops \
           until the next one takes over at its end, so frames on time play back to back and a \
-          late one never leaves a gap. As an `oscillator`, an `[n]` frame is n sines at those Hz \
-          and a `[2, n]` frame n sines at row 0 Hz with row 1 as their phase in radians; \
-          their mean is one channel. As a `mix`, a `[C, T]` frame is `C` waveforms played \
-          together, their mean one channel. `smoothing` morphs one frame into the next.",
+          late one never leaves a gap. With `mix`, the `C` rows play together as one channel, \
+          their mean. `low..high` are the values that are full scale, and `smoothing` crossfades \
+          one frame into the next. As an `oscillator`, an `[n]` frame is n sines at those Hz and \
+          a `[2, n]` frame n sines at row 0 Hz with row 1 as their phase in radians; their mean \
+          is one channel.",
     inputs: INS,
     outputs: OUTS,
     params: PARAMS,

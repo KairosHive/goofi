@@ -16,7 +16,7 @@ use goofi_node::{NodeManifest, ParamKey};
 
 use crate::nodes::midi_in::{Note, NO_PORT};
 use crate::nodes::{audio_in, audio_out, audio_playback, midi_in};
-use crate::runtime::REC_HEADER;
+use crate::runtime::{Entry, REC_HEADER};
 use crate::{wav, Clock, DEFAULT_DEVICE, NO_DEVICE, RATE};
 
 /// A tap holds this many blocks of the widest output; what does not fit is dropped, newest first.
@@ -317,10 +317,9 @@ impl Half for AudioHalf {
     /// values as they are for an oscillator to sound.
     fn arrive(&mut self, inbox: usize, frame: &Data) -> bool {
         let rate = self.audio.rate();
-        let mode = self.playback.playing(&self.params);
-        let pitches = mode == "oscillator";
+        let entry = self.playback.entry(&self.params);
         self.refused = None;
-        if pitches {
+        if matches!(entry, Entry::Pitches) {
             if let goofi_core::Value::Array(a) = frame.value() {
                 if pitch_width(a.shape()).is_none() {
                     self.refused = Some(format!("an oscillator takes [n] pitches or [2, n] pitches and phases, not {:?}", a.shape()));
@@ -328,7 +327,7 @@ impl Half for AudioHalf {
                 }
             }
         }
-        self.inboxes[inbox].enter(frame, rate, pitches, mode == "mix").unwrap_or(false)
+        self.inboxes[inbox].enter(frame, rate, entry).unwrap_or(false)
     }
 
     fn unwired(&mut self, inbox: usize) {
@@ -385,12 +384,11 @@ impl Inbox {
 
     /// Resample one frame linearly from its `sfreq` to the rate and enter it whole, as one chunk
     /// headed by its channel count and length. A frame with no `sfreq` enters one sample per
-    /// sample. `pitches` enters an `[n]` or `[2, n]` frame as it is, pitches and phases for one
-    /// channel of sines; `mix` enters the mean of the channels as one. Answers whether the channel
-    /// count moved.
-    fn enter(&mut self, frame: &Data, rate: f64, pitches: bool, mix: bool) -> Option<bool> {
+    /// sample. [`Entry::Pitches`] enters an `[n]` or `[2, n]` frame as it is, pitches and phases
+    /// for one channel of sines. Answers whether the channel count moved.
+    fn enter(&mut self, frame: &Data, rate: f64, entry: Entry) -> Option<bool> {
         let goofi_core::Value::Array(a) = frame.value() else { return None };
-        if pitches {
+        let Entry::Waveform { mix, range } = entry else {
             let width = pitch_width(a.shape())?;
             let n = a.as_bytes().len() / 4;
             let chunk = self.ring.write_chunk_uninit(n + 2).ok()?;
@@ -399,7 +397,7 @@ impl Inbox {
             chunk.fill_from_iter(head.into_iter().chain(values.map(|v| if v.is_finite() { v } else { 0.0 })));
             self.pos = 0.0;
             return Some(self.chans.swap(1, Ordering::Relaxed) != 1);
-        }
+        };
         // Where lane `ch` sample `i` sits: a signal frame is planar `[C, T]`, and a texture is
         // texels — every channel of one position together, `[H, W, C]` in scan order.
         let (c, t, lane, stride) = match *a.shape() {
@@ -430,7 +428,12 @@ impl Inbox {
         if let Ok(chunk) = self.ring.write_chunk_uninit(need) {
             let at = |ch: usize, i: usize| {
                 let v = x[ch * lane + i.min(t - 1) * stride];
-                if v.is_finite() { v } else { 0.0 }
+                // A linear map, not a clamp: a pitch in volts past the range is still a pitch.
+                match range {
+                    _ if !v.is_finite() => 0.0,
+                    Some((lo, hi)) if hi > lo => (v - lo) / (hi - lo) * 2.0 - 1.0,
+                    _ => v,
+                }
             };
             let samples = (0..n).flat_map(|k| {
                 let p = pos + k as f64 * step;
@@ -550,7 +553,7 @@ impl Play {
 fn enter_planar(inbox: &mut Inbox, channels: u16, frames: usize, planar: &[f32], from: f64, rate: f64) -> bool {
     let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
     match Data::array_f32(vec![channels as usize, frames], bytes, Meta::new().with_sfreq(Some(from))) {
-        Ok(frame) => inbox.enter(&frame, rate, false, false).unwrap_or(false),
+        Ok(frame) => inbox.enter(&frame, rate, Entry::Waveform { mix: false, range: None }).unwrap_or(false),
         Err(_) => false,
     }
 }
