@@ -25,7 +25,7 @@ goofi_audio_sdk::params! {
     LOW = ParamDecl {
         group: "signal",
         name: "low",
-        spec: ParamSpec::Float { default: -1.0, min: -1.0e6, max: 1.0e6 },
+        spec: ParamSpec::Float { default: -1.0, min: -10.0, max: 10.0 },
         expression: None,
         doc: Some("the input value that is full scale low, -1 on the audio plane"),
         section: 0,
@@ -34,7 +34,7 @@ goofi_audio_sdk::params! {
     HIGH = ParamDecl {
         group: "signal",
         name: "high",
-        spec: ParamSpec::Float { default: 1.0, min: -1.0e6, max: 1.0e6 },
+        spec: ParamSpec::Float { default: 1.0, min: -10.0, max: 10.0 },
         expression: None,
         doc: Some("the input value that is full scale high, 1 on the audio plane"),
         section: 0,
