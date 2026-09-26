@@ -628,16 +628,27 @@ impl Graph {
     }
 
     /// Every followed variable, resolved: the variable, the producer's uid and slot, and the index.
-    /// A reference naming no node is left out — the follower re-asks as nodes come and go.
+    /// A source that does not resolve is left out and carries its error instead.
     pub fn variable_sources(&self) -> Vec<(String, Uid, String, Option<usize>)> {
         self.variables
             .entries()
             .filter_map(|(name, _, _, _, source)| {
                 let s = source?;
-                let (node, slot) = s.reference.split_once('.')?;
-                Some((name.to_string(), self.uid_by_name(node)?, slot.to_string(), s.index))
+                let (uid, slot) = self.resolve_variable_source(s).ok()?;
+                Some((name.to_string(), uid, slot.to_string(), s.index))
             })
             .collect()
+    }
+
+    /// Why a variable's source delivers nothing: the node or the output it names is not there.
+    /// The one derivation, so the projection and the follower cannot answer differently.
+    pub fn variable_source_error(&self, source: &goofi_core::variables::VariableSource) -> Option<String> {
+        self.resolve_variable_source(source).err()
+    }
+
+    fn resolve_variable_source(&self, source: &goofi_core::variables::VariableSource) -> Result<(Uid, &'static str), String> {
+        let (node, slot) = source.reference.split_once('.').ok_or("a source is `node.slot`")?;
+        self.resolve_stream(node, Some(slot))
     }
 
     /// Lock or unlock one variable, answering the lock it held.

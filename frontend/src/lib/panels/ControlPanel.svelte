@@ -488,7 +488,8 @@
 						<div
 							class="widget"
 							class:held={held.value || gv.source !== undefined}
-							title={gv.source ? `Follows ${gv.source.reference}` : held.value ? 'Value-locked' : undefined}
+							class:broken={gv.source?.error !== undefined}
+							title={gv.source ? gv.source.error ?? `Follows ${gv.source.reference}` : held.value ? 'Value-locked' : undefined}
 						>
 							{@render widget(c, gv.value, gv.element, (v) => commitValue(gv, v), gv.name)}
 						</div>
@@ -623,6 +624,9 @@
 									testid="control-props-link"
 								/>
 							</Field>
+						{/if}
+						{#if pv.source?.error}
+							<p class="source-error" role="alert" data-testid="control-source-error">{pv.source.error}</p>
 						{/if}
 						{#if pv.source}
 							<Field label="index" doc="Which number of a wide frame the widget reads — a controller's cc holds 128. Learn, on the widget, finds it">
@@ -843,6 +847,15 @@
 	.widget.held {
 		pointer-events: none;
 		opacity: var(--disabled-opacity);
+	}
+	.widget.broken {
+		outline: 1px dashed var(--danger);
+	}
+	.source-error {
+		margin: 0;
+		color: var(--danger);
+		font-size: var(--fs-small);
+		overflow-wrap: anywhere;
 	}
 	.label {
 		touch-action: none;

@@ -272,6 +272,8 @@ export interface LockView {
 export interface SourceView {
 	reference: string;
 	index?: number;
+	/** Why the source delivers nothing: the node or the output it names is not there. */
+	error?: string;
 }
 
 export interface VariableView {
@@ -292,7 +294,10 @@ export interface VariableView {
 function sourceOf(raw: unknown): SourceView | undefined {
 	const s = obj(raw);
 	if (typeof s.reference !== 'string') return undefined;
-	return typeof s.index === 'number' ? { reference: s.reference, index: s.index } : { reference: s.reference };
+	const view: SourceView = { reference: s.reference };
+	if (typeof s.index === 'number') view.index = s.index;
+	if (typeof s.error === 'string') view.error = s.error;
+	return view;
 }
 
 function lockOf(raw: unknown): LockView {

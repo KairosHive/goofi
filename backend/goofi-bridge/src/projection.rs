@@ -89,7 +89,11 @@ pub fn of(g: &Graph) -> Value {
                 m.insert("control".into(), serde_json::to_value(c).expect("a plain record"));
             }
             if let Some(s) = source {
-                m.insert("source".into(), serde_json::to_value(s).expect("a plain record"));
+                let mut record = serde_json::to_value(s).expect("a plain record");
+                if let (Value::Object(r), Some(error)) = (&mut record, g.variable_source_error(s)) {
+                    r.insert("error".into(), Value::String(error));
+                }
+                m.insert("source".into(), record);
             }
             if !lock.is_default() {
                 m.insert("lock".into(), serde_json::to_value(lock).expect("a plain record"));

@@ -152,6 +152,14 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("node edit", j!({ "node": hex(osc), "name": "lfo" }));
     assert_eq!(g.doc()["variables"]["desk.level"]["source"]["reference"], j!("lfo.out"), "the source followed the rename");
     g.call("node edit", j!({ "node": hex(osc), "name": "carrier" }));
+    // A source naming what is not there is kept, and says so where the widget reads it.
+    for (reference, why) in [("nosuch.out", "no node named `nosuch`"), ("carrier.nope", "no output `nope`")] {
+        g.call("variable entry source", j!({ "name": "desk.level", "reference": reference }));
+        let error = g.doc()["variables"]["desk.level"]["source"]["error"].clone();
+        assert!(error.as_str().is_some_and(|e| e.contains(why)), "`{reference}` carries its error: {error}");
+    }
+    g.call("variable entry source", j!({ "name": "desk.level", "reference": "carrier.out" }));
+    assert!(g.doc()["variables"]["desk.level"]["source"].get("error").is_none(), "a resolved source carries none");
     g.call("variable entry source", j!({ "name": "desk.level", "reference": "" }));
     assert!(g.doc()["variables"]["desk.level"].get("source").is_none(), "an empty reference clears it");
     assert_eq!(g.call("variable entry edit", j!({ "name": "desk.level", "value": 0.5 }))["value"], 0.5);
@@ -325,7 +333,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let built = g.doc();
 
     // A compound is ONE step though it is an add plus a remove composed.
-    let expected_steps = 57 + 2 * goofi_core::variables::ControlKind::ALL.len();
+    let expected_steps = 60 + 2 * goofi_core::variables::ControlKind::ALL.len();
     let mut steps = 0;
     while g.call("undo", j!({}))["changed"] == true {
         steps += 1;

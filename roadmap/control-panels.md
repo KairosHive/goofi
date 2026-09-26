@@ -12,9 +12,6 @@
   press is the touch door; prove it in `tests/e2e/tests/touch.spec.ts`.
 - A canvas affordance that draws a control element or a reference on the canvas; one answer
   serves both (`audio-engine.md` lists the same item).
-- A variable `source` naming a node that is not there is silent (`variable_sources` in
-  `goofi-graph/src/lib.rs` leaves it out and the follower re-asks). A param's reference carries an
-  `error` for the same case; the variable's should too.
 - A hand's strokes on the `paint` pad are written back as a bitmap, not as turtle script, so a
   drawing made with a mouse cannot be read or replayed as one. Both doors reach one script; the
   rule that holds: `control paint` is another HAND on the pad, never a second painter — Rust does
