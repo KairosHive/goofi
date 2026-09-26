@@ -851,6 +851,15 @@ fn a_patch_sounds_under_the_external_clock() {
         let (x, channels) = drive(g, TENTH);
         (channels == 2 && (x[x.len() - 1] - x[x.len() - 2] - 1.0).abs() < 0.01).then_some(())
     });
+    // …and as a `mix` the rows play together as one channel, their mean: four rows that hold
+    // 0, 1, 2 and 3 sound as 1.5, which no row is on its own.
+    g.set_param(ramp2, "ramp", "channels", 4);
+    g.set_param(ramp2, "ramp", "length", 1);
+    g.set_param(in2, "signal", "mode", "mix");
+    g.until("a mono mix", |g| {
+        let (x, channels) = drive(g, TENTH);
+        (channels == 1 && x.iter().all(|v| (*v - 1.5).abs() < 1e-5)).then_some(())
+    });
     for uid in [in2, ramp2] {
         g.call("node remove", j!({ "node": hex(uid) }));
     }

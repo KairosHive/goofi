@@ -191,9 +191,10 @@ pub mod cross {
     pub const RANGES: &[&str] = &["direct", "bipolar", "unipolar"];
 
     /// The options of a `mode` that sets how the engine PLAYS the frames a node takes in: each
-    /// looped until the next, or each value a sine at that many Hz. A float `smoothing` beside it,
-    /// in seconds, crossfades one frame into the next, or glides each sine to its new pitch.
-    pub const PLAYBACK: &[&str] = &["waveform", "oscillator"];
+    /// looped until the next, each value a sine at that many Hz, or each looped with its rows
+    /// mixed to one channel. A float `smoothing` beside it, in seconds, crossfades one frame into
+    /// the next, or glides each sine to its new pitch.
+    pub const PLAYBACK: &[&str] = &["waveform", "oscillator", "mix"];
 
     /// `v` on the plane it is crossing into: itself, or its place in `lo..hi` as a full-scale
     /// bipolar or unipolar signal. `min`..`max` is a declaration, so what falls outside it is

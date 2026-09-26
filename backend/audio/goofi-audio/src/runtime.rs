@@ -160,8 +160,10 @@ impl Playback {
         self.mode
     }
 
-    pub fn oscillator(&self, params: &[AtomicU64]) -> bool {
-        self.mode.is_some_and(|m| f64::from_bits(params[m].load(Ordering::Relaxed)) >= 0.5)
+    /// The option of [`cross::PLAYBACK`] in force.
+    pub fn playing(&self, params: &[AtomicU64]) -> &'static str {
+        let i = self.mode.map_or(0.0, |m| f64::from_bits(params[m].load(Ordering::Relaxed))).round();
+        cross::PLAYBACK.get(i.max(0.0) as usize).copied().unwrap_or(cross::PLAYBACK[0])
     }
 
     fn smoothing(&self, params: &[AtomicU64]) -> f64 {
@@ -267,7 +269,7 @@ impl Frames {
     }
 
     pub fn fill(&mut self, out: &mut PortMut<'_>, params: &[AtomicU64]) {
-        let oscillator = self.playback.oscillator(params);
+        let oscillator = self.playback.playing(params) == "oscillator";
         if oscillator != self.oscillating {
             // What the other mode entered means nothing to this one.
             self.oscillating = oscillator;

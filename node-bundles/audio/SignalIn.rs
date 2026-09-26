@@ -7,7 +7,7 @@ goofi_audio_sdk::params! {
         name: "mode",
         spec: ParamSpec::Str { default: "waveform", options: cross::PLAYBACK, refresh: false },
         expression: None,
-        doc: Some("the frame's samples looped until the next frame, or each column a sine: [n] Hz, or [2, n] Hz over phase"),
+        doc: Some("the frame's samples looped until the next frame, each column a sine: [n] Hz, or [2, n] Hz over phase, or the rows looped as one mono mix"),
         section: 0,
         show: None,
     },
@@ -34,7 +34,8 @@ static MANIFEST: Manifest = Manifest {
           until the next one takes over at its end, so frames on time play back to back and a \
           late one never leaves a gap. As an `oscillator`, an `[n]` frame is n sines at those Hz \
           and a `[2, n]` frame n sines at row 0 Hz with row 1 as their phase in radians; \
-          their mean is one channel. `smoothing` morphs one frame into the next.",
+          their mean is one channel. As a `mix`, a `[C, T]` frame is `C` waveforms played \
+          together, their mean one channel. `smoothing` morphs one frame into the next.",
     inputs: INS,
     outputs: OUTS,
     params: PARAMS,

@@ -317,7 +317,8 @@ impl Half for AudioHalf {
     /// values as they are for an oscillator to sound.
     fn arrive(&mut self, inbox: usize, frame: &Data) -> bool {
         let rate = self.audio.rate();
-        let pitches = self.playback.oscillator(&self.params);
+        let mode = self.playback.playing(&self.params);
+        let pitches = mode == "oscillator";
         self.refused = None;
         if pitches {
             if let goofi_core::Value::Array(a) = frame.value() {
@@ -327,7 +328,7 @@ impl Half for AudioHalf {
                 }
             }
         }
-        self.inboxes[inbox].enter(frame, rate, pitches).unwrap_or(false)
+        self.inboxes[inbox].enter(frame, rate, pitches, mode == "mix").unwrap_or(false)
     }
 
     fn unwired(&mut self, inbox: usize) {
@@ -385,8 +386,9 @@ impl Inbox {
     /// Resample one frame linearly from its `sfreq` to the rate and enter it whole, as one chunk
     /// headed by its channel count and length. A frame with no `sfreq` enters one sample per
     /// sample. `pitches` enters an `[n]` or `[2, n]` frame as it is, pitches and phases for one
-    /// channel of sines. Answers whether the channel count moved.
-    fn enter(&mut self, frame: &Data, rate: f64, pitches: bool) -> Option<bool> {
+    /// channel of sines; `mix` enters the mean of the channels as one. Answers whether the channel
+    /// count moved.
+    fn enter(&mut self, frame: &Data, rate: f64, pitches: bool, mix: bool) -> Option<bool> {
         let goofi_core::Value::Array(a) = frame.value() else { return None };
         if pitches {
             let width = pitch_width(a.shape())?;
@@ -409,7 +411,14 @@ impl Inbox {
         if c == 0 || t == 0 || c > MAX_CHANNELS as usize {
             return None;
         }
-        let x: Vec<f32> = a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes"))).collect();
+        let mut x: Vec<f32> = a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes"))).collect();
+        let (c, lane, stride) = match mix && c > 1 {
+            true => {
+                x = (0..t).map(|i| (0..c).map(|ch| x[ch * lane + i * stride]).sum::<f32>() / c as f32).collect();
+                (1, t, 1)
+            }
+            false => (c, lane, stride),
+        };
         let step = frame.meta().sfreq().filter(|sf| *sf > 0.0).map_or(1.0, |sf| sf / rate);
         let moved = self.chans.swap(c as u16, Ordering::Relaxed) != c as u16;
         if moved {
@@ -541,7 +550,7 @@ impl Play {
 fn enter_planar(inbox: &mut Inbox, channels: u16, frames: usize, planar: &[f32], from: f64, rate: f64) -> bool {
     let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
     match Data::array_f32(vec![channels as usize, frames], bytes, Meta::new().with_sfreq(Some(from))) {
-        Ok(frame) => inbox.enter(&frame, rate, false).unwrap_or(false),
+        Ok(frame) => inbox.enter(&frame, rate, false, false).unwrap_or(false),
         Err(_) => false,
     }
 }
