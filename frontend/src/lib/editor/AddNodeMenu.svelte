@@ -214,7 +214,7 @@
 
 <style>
 	.add-menu {
-		background: var(--surface-glass);
+		background: var(--surface-2);
 		border: 1px solid var(--border-strong);
 		border-radius: var(--radius-md);
 		box-shadow: var(--shadow-2);

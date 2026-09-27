@@ -74,9 +74,11 @@ pub fn header(source: &str) -> Result<Introspection, String> {
     if let Some(name) = clash {
         return Err(format!("`{name}` is the prelude's; choose another name"));
     }
-    // A graphics node with no texture behind it makes its own frames, so it takes the patch's
-    // default size rather than following anything.
-    intro.producer = !intro.inputs.iter().any(|s| SlotType::from_name(&s.kind) == Some(SlotType::Texture));
+    // A graphics node with neither a texture nor a frame behind it makes its own frames, so it
+    // takes the patch's default size rather than following anything.
+    intro.producer = !intro.inputs.iter().any(|s| {
+        matches!(SlotType::from_name(&s.kind), Some(SlotType::Texture | SlotType::Array))
+    });
     Ok(intro)
 }
 

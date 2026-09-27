@@ -41,7 +41,7 @@ export const EXPR_THEME_SPEC = {
 	/* The completion popup: CodeMirror copies the view's theme classes onto the container it creates
 	   in `document.body`, which is what lets these rules reach it. */
 	'.cm-tooltip': {
-		background: 'var(--surface-glass)',
+		background: 'var(--surface-2)',
 		border: '1px solid var(--border)',
 		borderRadius: 'var(--radius-sm)',
 		boxShadow: 'var(--shadow-1)',

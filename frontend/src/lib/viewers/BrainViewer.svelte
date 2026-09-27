@@ -31,6 +31,8 @@
 	const vmin = $derived(Number(settings.vmin ?? -1));
 	const vmax = $derived(Number(settings.vmax ?? 1));
 	const contours = $derived(Boolean(settings.contours));
+	// The share of the edges drawn, strongest first: 100 is all of them.
+	const top = $derived(Math.min(100, Math.max(1, Number(settings.top ?? 100))));
 	const mode = $derived(brainMode(settings, (frame.data as ArrayData).shape.length));
 
 	let canvas: HTMLCanvasElement | null = $state(null);
@@ -236,7 +238,8 @@
 		value: number;
 		t: number;
 	}
-	/** The edges between the channels drawn, weakest first so the strong ones land on top. */
+	/** The strongest `top` percent of the edges between the channels drawn, weakest first so the
+	 * strong ones land on top. The window is the kept edges' own, so the colours span them. */
 	function edgesOf(arr: ArrayData, channels: Channel[]): Edge[] {
 		const n = arr.shape[0];
 		const v = arr.values as ArrayLike<number>;
@@ -247,11 +250,12 @@
 				if (Number.isFinite(value)) out.push({ a, b, value, t: 0 });
 			}
 		}
-		const [lo, hi] = valueWindow(out.map((e) => e.value));
+		out.sort((x, y) => x.value - y.value);
+		const kept = out.slice(out.length - Math.max(1, Math.round((out.length * top) / 100)));
+		const [lo, hi] = valueWindow(kept.map((e) => e.value));
 		const span = hi - lo || 1;
-		for (const e of out) e.t = Math.min(1, Math.max(0, (e.value - lo) / span));
-		out.sort((x, y) => x.t - y.t);
-		return out;
+		for (const e of kept) e.t = Math.min(1, Math.max(0, (e.value - lo) / span));
+		return kept;
 	}
 	function rgb(L: Uint8Array, t: number): string {
 		const i = ((t * 255) | 0) * 3;
@@ -375,7 +379,8 @@
 		const L = lutFor(colormap);
 		const view = project(camera, w, h);
 		// The head: its equator, and the two great circles through the vertex, as the scaffold
-		// the electrodes hang on. The nose points anterior.
+		// the electrodes hang on. The nose is a wedge off the front, so the way the head faces
+		// reads at a glance from any angle.
 		ctx.strokeStyle = 'rgba(160, 168, 184, 0.25)';
 		ctx.lineWidth = 1;
 		const circles: [number, number, number][][] = [[], [], []];
@@ -394,11 +399,16 @@
 			});
 			ctx.stroke();
 		}
-		const nose = [view([0, 1, 0]), view([0, 1.15, 0])];
-		ctx.strokeStyle = 'rgba(197, 200, 214, 0.7)';
+		const nose = [view([-0.18, 0.98, 0]), view([0, 1.3, 0]), view([0.18, 0.98, 0])];
+		ctx.fillStyle = 'rgba(197, 200, 214, 0.35)';
+		ctx.strokeStyle = 'rgba(230, 233, 240, 0.9)';
+		ctx.lineWidth = 2;
+		ctx.lineJoin = 'round';
 		ctx.beginPath();
 		ctx.moveTo(nose[0].x, nose[0].y);
 		ctx.lineTo(nose[1].x, nose[1].y);
+		ctx.lineTo(nose[2].x, nose[2].y);
+		ctx.fill();
 		ctx.stroke();
 		const points = channels.map((c) => view(lift(c.pos)));
 		placed = channels.map((c, k) => ({ name: c.name, x: points[k].x, y: points[k].y, i: k }));
@@ -443,7 +453,7 @@
 
 	$effect(() => {
 		// Repaint on a new frame, a new size, or any colormap / range / contour / mode change.
-		void [colormap, autoRange, vmin, vmax, contours, mode, size, frame];
+		void [colormap, autoRange, vmin, vmax, contours, top, mode, size, frame];
 		repaint();
 	});
 	$effect(() => {

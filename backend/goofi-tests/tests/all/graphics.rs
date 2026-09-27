@@ -351,6 +351,9 @@ fn shaders_render_on_the_gpu() {
     g.ready(img);
     let up = g.add("graphics:SignalIn");
     g.ready(up);
+    // A door for frames follows the frame: its size rests at a constant 0, not the patch's default.
+    let width = g.doc()["nodes"][hex(up)]["params"]["common"]["width"].clone();
+    assert_eq!(width, j!({ "value": 0 }), "the size is a constant 0, not a seeded expression");
     g.set_param(up, "common", "width", 4);
     g.set_param(up, "common", "height", 4);
     g.link(img, "out", up, "input");
