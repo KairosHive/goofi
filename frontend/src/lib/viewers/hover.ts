@@ -7,7 +7,8 @@ import { formatTick } from './format';
 export interface Hover {
 	/** The point the readout is about, marked with a dot of radius `r`; the readout follows the pointer. */
 	mark: { x: number; y: number; r: number } | null;
-	lines: string[];
+	/** The value on top, then where it is: each line's parts sit in one row. */
+	lines: string[][];
 }
 
 export interface ProbeBox {
@@ -26,9 +27,13 @@ export function axisNames(meta: Record<string, unknown> | undefined, dim: number
 	return Array.isArray(names) ? (names as string[]) : null;
 }
 
-/** A coordinate as its axis name when the axis has one, else the integer or the tick format. */
+/** A coordinate as its axis name when the axis has one, else the integer or the tick format. A
+ * name that is itself a number is shown to the tick format's precision, not to its full length. */
 function coord(v: number, names: string[] | null): string {
-	if (names && Number.isInteger(v) && v >= 0 && v < names.length) return names[v];
+	if (names && Number.isInteger(v) && v >= 0 && v < names.length) {
+		const name = names[v];
+		return name.trim() !== '' && Number.isFinite(Number(name)) ? formatTick(Number(name)) : name;
+	}
 	return Number.isInteger(v) ? String(v) : formatTick(v);
 }
 
@@ -93,8 +98,8 @@ export function lineProbe(data: LineData, range: Range, axes: LineAxes, names: L
 		const { i, s } = best;
 		const x = xAt(i);
 		const y = Number(rows[s][i]);
-		const lines = [`x ${coord(x, names.x)}`, `y ${formatTick(y)}`];
-		if (rows.length > 1) lines.unshift(coord(s, names.series));
+		const lines = [[formatTick(y)], [`x ${coord(x, names.x)}`]];
+		if (rows.length > 1) lines.unshift([coord(s, names.series)]);
 		return { mark: { x: toPx(x), y: toPy(y), r: 3.5 }, lines };
 	};
 }
@@ -125,6 +130,6 @@ export function imageProbe(arr: ArrayData, stretch: boolean, meta: Record<string
 		const at = (row * iw + col) * channels;
 		const values: string[] = [];
 		for (let c = 0; c < channels; c++) values.push(formatTick(Number(arr.values[at + c])));
-		return { mark: null, lines: [`x ${coord(col, colNames)}`, `y ${coord(row, rowNames)}`, values.join(' ')] };
+		return { mark: null, lines: [values, [`x ${coord(col, colNames)}`, `y ${coord(row, rowNames)}`]] };
 	};
 }

@@ -60,7 +60,7 @@ pub(crate) struct State {
     pub(crate) count: u32,
     pub(crate) uploads: Vec<Option<Target>>,
     /// The range each upload spanned, in the uniform's own order.
-    pub(crate) ranges: Vec<[f32; 2]>,
+    pub(crate) ranges: Vec<[f32; 3]>,
     pub(crate) time: wgpu::Buffer,
     pub(crate) frame: wgpu::Buffer,
     pub(crate) resolution: wgpu::Buffer,
@@ -235,9 +235,9 @@ impl State {
             self.uploads.resize_with(k + 1, || None);
         }
         if self.ranges.len() <= k {
-            self.ranges.resize(k + 1, [0.0, 1.0]);
+            self.ranges.resize(k + 1, [0.0, 1.0, 1.0]);
         }
-        self.ranges[k] = [up.lo, up.hi];
+        self.ranges[k] = [up.lo, up.hi, up.channels as f32];
         let size = (up.width, up.height);
         if self.uploads[k].as_ref().is_none_or(|t| t.size != size) {
             let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
@@ -287,6 +287,8 @@ pub struct Upload {
     pub texels: Vec<u8>,
     pub lo: f32,
     pub hi: f32,
+    /// How many channels the frame had, which the texels alone cannot say: gray fills three.
+    pub channels: u32,
 }
 
 impl Upload {
@@ -310,7 +312,7 @@ impl Upload {
                 }
             }
         }
-        Self { width: p.width, height: p.height, texels, lo: 0.0, hi: 1.0 }
+        Self { width: p.width, height: p.height, texels, lo: 0.0, hi: 1.0, channels: channels as u32 }
     }
 
     /// A frame as RGBA texels, unclamped. `[N]` is one row; `[H, W]` is gray; `[H, W, C]` fills
@@ -350,6 +352,6 @@ impl Upload {
             );
         }
         let (lo, hi) = if lo.is_finite() { (lo, hi) } else { (0.0, 1.0) };
-        Some(Upload { width: w as u32, height: h as u32, texels, lo, hi })
+        Some(Upload { width: w as u32, height: h as u32, texels, lo, hi, channels: c as u32 })
     }
 }

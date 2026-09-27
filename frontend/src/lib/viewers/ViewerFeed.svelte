@@ -303,7 +303,9 @@
 					bind:offsetHeight={readoutH}
 					use:portal
 				>
-					{#each hover.lines as line, i (i)}<span>{line}</span>{/each}
+					{#each hover.lines as line, i (i)}
+						<span class="row">{#each line as part, j (j)}<span>{part}</span>{/each}</span>
+					{/each}
 				</span>
 			{/if}
 		{/if}
@@ -375,6 +377,10 @@
 		line-height: 1.2;
 		color: var(--text);
 		white-space: nowrap;
+	}
+	:global(.viewer-hover-readout .row) {
+		display: flex;
+		gap: var(--space-2);
 	}
 	.tick-0 {
 		top: 0;

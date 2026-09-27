@@ -206,7 +206,7 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			const readout = page.locator('.viewer-hover-readout');
 			const x = box.x + box.width / 2;
 			// The sine crosses every row at some column, so a column scan meets it; the readout
-			// names the sample index and the value, and marks the point on the line.
+			// gives the value over the sample index, and marks the point on the line.
 			await expect
 				.poll(async () => {
 					for (let y = box.y + 6; y < box.y + box.height - 6; y += 4) {
@@ -215,7 +215,7 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 					}
 					return '';
 				})
-				.toMatch(/x \d+\s+y -?\d/);
+				.toMatch(/^-?\d[\d.]*\s+x \d+$/);
 			await expect(body.locator('.mark')).toHaveCount(1);
 			await page.mouse.move(4, 4);
 			await expect(readout).toHaveCount(0);
@@ -225,7 +225,7 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			const image = page.locator(`.svelte-flow__node[data-id="${ramp}"] .slot-viewer .body`);
 			const box = (await image.boundingBox())!;
 			await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-			await expect(page.locator('.viewer-hover-readout')).toHaveText(/^x \d+y \d+/);
+			await expect(page.locator('.viewer-hover-readout')).toHaveText(/^-?[\d.]+x \d+y \d+$/);
 			await expect(image.locator('.mark')).toHaveCount(0);
 		});
 

@@ -63,6 +63,8 @@ pub(crate) struct Instance {
     pub(crate) class: Arc<Class>,
     pub(crate) params: Arc<[AtomicU64]>,
     pub(crate) uploads: Vec<Arc<Mutex<Option<half::Upload>>>>,
+    /// The last upload's size, as the half packs it.
+    pub(crate) uploaded: Arc<AtomicU64>,
     pub(crate) readers: Arc<AtomicBool>,
     pub(crate) tap: Arc<Mutex<half::Tap>>,
     /// What this node's readers want its readback fitted into: the bridge writes it, the render
@@ -128,8 +130,9 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
             trigger: false,
         }),
         doc: Some(
-            "Texture size in pixels; 0 follows the first wired texture input. A node that makes \
-             its own frames follows the patch's default instead.",
+            "Texture size in pixels; 0 follows the first wired texture input, or the frame \
+             uploaded to the first array input. A node that makes its own frames follows the \
+             patch's default instead.",
         ),
         section: 0,
         show: None,
@@ -425,6 +428,7 @@ impl Engine for GraphicsEngine {
             .collect();
         let uploads: Vec<Arc<Mutex<Option<half::Upload>>>> =
             (0..Self::uploads_of(manifest)).map(|_| Arc::new(Mutex::new(None))).collect();
+        let uploaded = Arc::new(AtomicU64::new(0));
         let readers = Arc::new(AtomicBool::new(false));
         let tap = Arc::new(Mutex::new(half::Tap::default()));
         let tap_box = Arc::new(AtomicU64::new(0));
@@ -437,7 +441,7 @@ impl Engine for GraphicsEngine {
             params: atomics.clone(),
             time: self.time.clone(),
         };
-        let (cells, flag, out) = (uploads.clone(), readers.clone(), tap.clone());
+        let (cells, flag, out, seen) = (uploads.clone(), readers.clone(), tap.clone(), uploaded.clone());
         let size = manifest.params.len();
         let source = matches!(class.kind, scan::Kind::Host(_)).then(producer::Source::default);
         let producer = match &class.kind {
@@ -447,13 +451,13 @@ impl Engine for GraphicsEngine {
             )),
         };
         let lifetime = producer.as_ref().map(producer::Worker::lifetime);
-        let make = move || GraphicsHalf::new(cells, flag, out, size).with_producer(producer);
+        let make = move || GraphicsHalf::new(cells, flag, out, seen, size).with_producer(producer);
         let control = match goofi_control::spawn(spawn, self.shared.clone(), &self.bells, make) {
             Ok(handle) => handle,
             Err(e) => return Some(e),
         };
         self.ask(runtime::Cmd::Insert(uid, runtime::params_len(manifest)));
-        self.live.insert(uid, Instance { class: class.clone(), params: atomics, uploads, readers, tap, tap_box, control, source, producer: lifetime, program: None });
+        self.live.insert(uid, Instance { class: class.clone(), params: atomics, uploads, uploaded, readers, tap, tap_box, control, source, producer: lifetime, program: None });
         // A synchronous engine is ready the moment its insert answers.
         if matches!(class.kind, scan::Kind::Shader(_)) {
             self.pending.push((uid, Status::Stage { stage: NodeStage::Ready }));

@@ -66,10 +66,10 @@
 		if (near) {
 			const t = Math.min(1, Math.max(0, (Math.sqrt(best) - DOT) / (reach - DOT)));
 			const r = DOT + (6 - DOT) * (1 - t);
-			return { mark: { x: near.x, y: near.y, r }, lines: [near.name, formatTick(near.value)] };
+			return { mark: { x: near.x, y: near.y, r }, lines: [[formatTick(near.value)], [near.name]] };
 		}
 		const v = evaluateAt(layout, weights, 0.5 + (px - cx) / side, 0.5 + (py - cy) / side);
-		return { mark: null, lines: [formatTick(v)] };
+		return { mark: null, lines: [[formatTick(v)]] };
 	};
 
 	const lutFor = makeLUTCache();
