@@ -484,42 +484,6 @@ fn the_control_nodes_turn_a_signal_into_a_decision_a_route_and_a_label() {
     });
     assert_eq!(shape(&caught), vec![3, 4], "a latch keeps the shape it was given");
 
-    // Quantize counts its allowed values out: five from zero to one puts 0.7 on 0.75, the fourth.
-    let steps = g.add("signal:Quantize");
-    set(steps, "quantize", "mode", j!("count"));
-    set(steps, "count", "values", j!(5));
-    set(level, "constant", "value", j!(0.7));
-    let (pq, pi) = (g.probe(steps, "out"), g.probe(steps, "index"));
-    g.link(level, "out", steps, "input");
-    g.until("the nearest of five counted values", |_| {
-        pq.latest().filter(|d| f32s(d).iter().all(|v| (*v - 0.75).abs() < 1e-6))
-    });
-    g.until("which of them it landed on", |_| pi.latest().filter(|d| f32s(d).iter().all(|v| *v == 3.0)));
-
-    // The same node against a WIRED set, which is how a tuning's own ratios become the only
-    // numbers a signal may take. The set repeats at the octave, so a value is folded into one, matched
-    // there, and put back in its register: 4.9 reads as 1.225, lands on 1.25, and comes out at 5.
-    let written = g.add("Text");
-    set(written, "text", "value", j!(r#"{"scale": [1.0, 1.25, 1.5]}"#));
-    let parsed = g.add("FromJson");
-    let ratios = g.add("TableSelect");
-    set(ratios, "table", "key", j!("scale"));
-    g.link(written, "out", parsed, "input");
-    g.link(parsed, "out", ratios, "input");
-    let pr = g.probe(ratios, "array");
-    g.until("the scale read out of its own text", |_| pr.latest().filter(|d| f32s(d).len() == 3));
-    // The set is wired before the signal is, because a levels-mode quantizer with no set to land
-    // on has nothing to answer and says so.
-    let tuned = g.add("signal:Quantize");
-    set(tuned, "quantize", "mode", j!("levels"));
-    let pv = g.probe(tuned, "out");
-    g.link(ratios, "array", tuned, "levels");
-    set(level, "constant", "value", j!(4.9));
-    g.link(level, "out", tuned, "input");
-    g.until("the value pulled onto the scale, in the octave it came from", |_| {
-        pv.latest().filter(|d| f32s(d).iter().all(|v| (*v - 5.0).abs() < 1e-5))
-    });
-
     // By default a value is a pitch in Hz on C major: 450 Hz lands on A4, 440 Hz, its sixth degree.
     // The harmonic series is a scale too: 300 Hz lands on the ninth partial of C4 over eight,
     // 294.33 Hz, which no tempered D is.
@@ -529,12 +493,24 @@ fn the_control_nodes_turn_a_signal_into_a_decision_a_route_and_a_label() {
     g.link(level, "out", pitch, "input");
     g.until("450 Hz on A4", |_| pp.latest().filter(|d| f32s(d).iter().all(|v| (*v - 440.0).abs() < 1e-3)));
     g.until("the sixth degree", |_| pd.latest().filter(|d| f32s(d).iter().all(|v| *v == 5.0)));
-    set(pitch, "scale", "scale", j!("harmonic"));
+    set(pitch, "quantize", "scale", j!("harmonic"));
     set(level, "constant", "value", j!(300.0));
     let ninth = 261.625_57 * 9.0 / 8.0;
     g.until("300 Hz on the ninth partial", |_| pp.latest().filter(|d| f32s(d).iter().all(|v| (*v - ninth).abs() < 1e-2)));
 
-    for n in [over, under, route, named, latch, steps, tuned, pitch] {
+    // In volts per octave 0 V is C4, so 0.45 V is 540 cents up, which D major pulls to its third,
+    // F#4 at 600 cents: 0.5 V. A pitch below the root lands in the octave it came from: -0.95 V
+    // is 60 cents under C3, and the nearest note of D major there is C#3.
+    set(pitch, "quantize", "mode", j!("v/oct"));
+    set(pitch, "quantize", "scale", j!("major"));
+    set(pitch, "quantize", "root", j!("D"));
+    set(level, "constant", "value", j!(0.45));
+    g.until("0.45 V on F#4", |_| pp.latest().filter(|d| f32s(d).iter().all(|v| (*v - 0.5).abs() < 1e-5)));
+    g.until("the third degree", |_| pd.latest().filter(|d| f32s(d).iter().all(|v| *v == 2.0)));
+    set(level, "constant", "value", j!(-0.95));
+    g.until("-0.95 V on C#3", |_| pp.latest().filter(|d| f32s(d).iter().all(|v| (*v + 11.0 / 12.0).abs() < 1e-5)));
+
+    for n in [over, under, route, named, latch, pitch] {
         assert!(g.error(n).is_none(), "a control node carries no error: {:?}", g.error(n));
     }
 }

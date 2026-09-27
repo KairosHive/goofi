@@ -89,10 +89,26 @@ pub const SCALES: [&str; PRESETS.len() + 1] = {
     names
 };
 
+/// The presets by name: the `scale` param of a node that offers no custom recipe.
+pub const PRESET_NAMES: [&str; PRESETS.len()] = {
+    let mut names = [""; PRESETS.len()];
+    let mut i = 0;
+    while i < PRESETS.len() {
+        names[i] = PRESETS[i].0;
+        i += 1;
+    }
+    names
+};
+
 impl Recipe {
     /// The recipe the `scale` param's option `index` names, or `custom` when it names none.
     pub fn chosen(index: usize, custom: Recipe) -> Recipe {
         index.checked_sub(1).and_then(|i| PRESETS.get(i)).map_or(custom, |(_, r)| *r)
+    }
+
+    /// The preset called `name`, or the major scale for a name that is none.
+    pub fn preset(name: &str) -> Recipe {
+        PRESETS.iter().find(|(n, _)| *n == name).map_or(fifths(7, 4), |(_, r)| *r)
     }
 
     /// A custom recipe from its params' scalars, each held to what it can mean.
