@@ -304,13 +304,18 @@
 			i: k
 		}));
 		ctx.lineCap = 'round';
+		// The bend's control point sits between the centre and the chord's middle, so neighbours
+		// bow near the rim and only a chord across the ring passes the centre.
+		const PULL = 0.55;
 		for (const e of edges) {
 			ctx.strokeStyle = rgb(L, e.t);
 			ctx.globalAlpha = 0.15 + 0.85 * e.t;
 			ctx.lineWidth = 0.5 + 1.5 * e.t;
+			const mx = (placed[e.a].x + placed[e.b].x) / 2;
+			const my = (placed[e.a].y + placed[e.b].y) / 2;
 			ctx.beginPath();
 			ctx.moveTo(placed[e.a].x, placed[e.a].y);
-			ctx.quadraticCurveTo(cx, cy, placed[e.b].x, placed[e.b].y);
+			ctx.quadraticCurveTo(cx + (mx - cx) * PULL, cy + (my - cy) * PULL, placed[e.b].x, placed[e.b].y);
 			ctx.stroke();
 		}
 		ctx.globalAlpha = 1;
