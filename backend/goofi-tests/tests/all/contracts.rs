@@ -86,13 +86,13 @@ fn every_op_and_vocabulary_row_is_well_formed_documented_and_reachable() {
 
     // Each op that takes a vocabulary word enumerates the set in its own description, by expansion.
     let doc = find("layout panel edit").expect("registered").doc();
-    for word in ["inspector", "node-editor", "viewer", "line", "trajectory", "topomap"] {
+    for word in ["inspector", "node-editor", "viewer", "line", "image", "brain"] {
         assert!(doc.contains(word), "`{word}` is not offered by the panel edit doc: {doc}");
     }
     // The description is the ONLY text an agent reads, so node edit's has to carry the viewer
     // vocabulary, and node param edit's the two words that decide what an expression does.
     let doc = find("node edit").expect("registered").doc();
-    for word in ["line", "topomap", "table"] {
+    for word in ["line", "brain", "table"] {
         assert!(doc.contains(word), "`{word}` is not offered by node edit's doc: {doc}");
     }
     let doc = find("node param edit").expect("registered").doc();

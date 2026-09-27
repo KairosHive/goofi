@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { imageProbe, lineProbe } from './hover';
+import { axisNames, imageProbe, lineProbe } from './hover';
 import type { ArrayData } from '$lib/codec/decode';
 
 const axes = { logX: false, logY: false, pad: 0 };
@@ -16,10 +16,10 @@ describe('lineProbe', () => {
 			series: ['ramp', 'flat']
 		});
 		const h = probe(31, 71, box)!;
-		expect(h.lines).toEqual(['ramp', 'x t3', 'y 0.300']);
+		expect(h.lines).toEqual([['ramp'], ['0.300'], ['x t3']]);
 		expect(h.mark!.x).toBeCloseTo(30);
 		expect(h.mark!.y).toBeCloseTo(70);
-		expect(probe(31, 52, box)!.lines).toEqual(['flat', 'x t3', 'y 0.500']);
+		expect(probe(31, 52, box)!.lines).toEqual([['flat'], ['0.500'], ['x t3']]);
 	});
 
 	it('answers nothing away from every line, and nothing for a scalar bar', () => {
@@ -28,9 +28,22 @@ describe('lineProbe', () => {
 		expect(lineProbe({ rows: [[1]] }, { ...range, scalar: true }, axes, { x: null, series: null })(5, 5, box)).toBeNull();
 	});
 
+	it('shows a numeric axis name to the tick precision', () => {
+		const probe = lineProbe({ rows, base: 0 }, range, axes, {
+			x: Array.from({ length: 11 }, (_, i) => `${i}.123456789`),
+			series: null
+		});
+		expect(probe(31, 71, box)!.lines).toEqual([['0'], ['0.300'], ['x 3.12']]);
+	});
+
+	it('reads axis names a producer sent as numbers', () => {
+		expect(axisNames({ channels: { dim0: [3.5, 'Cz', 7] } }, 0)).toEqual(['3.5', 'Cz', '7']);
+		expect(axisNames({ channels: { dim0: 'none' } }, 0)).toBeNull();
+	});
+
 	it('follows decimated positions and an unnamed index', () => {
 		const probe = lineProbe({ rows: [[0.2, 0.8]], xs: [0, 10] }, range, axes, { x: null, series: null });
-		expect(probe(98, 22, box)!.lines).toEqual(['x 10', 'y 0.800']);
+		expect(probe(98, 22, box)!.lines).toEqual([['0.800'], ['x 10']]);
 	});
 });
 
@@ -44,12 +57,12 @@ describe('imageProbe', () => {
 	it('reads the cell under the pointer in a fitted image', () => {
 		const probe = imageProbe(arr, false, { channels: { dim0: ['top', 'bottom'] } });
 		// A 4×2 image in a 100×100 box sits at y 25..75, 25 px a cell.
-		expect(probe(60, 60, box)!.lines).toEqual(['x 2', 'y bottom', '7.00']);
+		expect(probe(60, 60, box)!.lines).toEqual([['7.00'], ['x 2', 'y bottom']]);
 		expect(probe(60, 10, box)).toBeNull();
 	});
 
 	it('spans the box when stretched', () => {
 		const probe = imageProbe(arr, true, {});
-		expect(probe(99, 1, box)!.lines).toEqual(['x 3', 'y 0', '4.00']);
+		expect(probe(99, 1, box)!.lines).toEqual([['4.00'], ['x 3', 'y 0']]);
 	});
 });

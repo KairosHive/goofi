@@ -1,30 +1,18 @@
-<!-- Per-slot viewer settings: a cog opening a Popover of setting groups. Its role is `group`,
-     not a menu — nothing in it is a menuitem. -->
+<!-- Per-slot viewer settings: a cog opening a Popover of the kind's settings, one under the
+     other. Its role is `group`, not a menu — nothing in it is a menuitem. -->
 <script lang="ts">
 	import { settingsSchemaFor, type SettingDescriptor, type SettingValue } from './settingsSchema';
 	import type { ViewBinding } from './viewBinding';
-	import {
-		Popover,
-		Icon,
-		IconButton,
-		Disclosure,
-		Field,
-		ScrollArea,
-		EmptyState,
-		Toggle,
-		Select,
-		NumberInput
-	} from '$lib/ui';
+	import { Popover, Icon, IconButton, Field, ScrollArea, EmptyState, Toggle, Select, NumberInput } from '$lib/ui';
 
 	let { binding }: { binding: ViewBinding } = $props();
 
 	const kind = $derived(binding.kind);
-	const groups = $derived(settingsSchemaFor(kind));
+	const schema = $derived(settingsSchemaFor(kind));
 	const settings = $derived(binding.settings);
 
 	let open = $state(false);
 	let anchor = $state<HTMLElement | null>(null);
-	let collapsed = $state<Record<string, boolean>>({});
 
 	function toggle(e: MouseEvent): void {
 		// stopPropagation so picking the cog on a node header does not also toggle the slot's collapse.
@@ -33,7 +21,7 @@
 	}
 
 	function visible(s: SettingDescriptor): boolean {
-		return !s.showWhen || settings[s.showWhen.key] === s.showWhen.equals;
+		return !s.showWhen || s.showWhen.anyOf.includes(settings[s.showWhen.key]);
 	}
 	function set(key: string, value: SettingValue): void {
 		binding.setSetting(key, value);
@@ -65,39 +53,31 @@
 	data-testid="viewer-settings-menu"
 >
 	<ScrollArea>
-		{#if groups.length === 0}
+		{#if schema.length === 0}
 			<EmptyState>
 				{#snippet hint()}No settings{/snippet}
 			</EmptyState>
 		{/if}
-		{#each groups as g (g.title)}
-			<Disclosure
-				open={!collapsed[g.title]}
-				onToggle={(o) => (collapsed = { ...collapsed, [g.title]: !o })}
-			>
-				{#snippet summary()}{g.title}{/snippet}
-				{#each g.settings.filter(visible) as s (s.key)}
-					<Field label={s.label}>
-						{#if s.type === 'toggle'}
-							<Toggle value={settings[s.key] as boolean} onChange={(v) => set(s.key, v)} />
-						{:else if s.type === 'select'}
-							<Select
-								options={s.options ?? []}
-								value={settings[s.key] as string}
-								onChange={(v) => set(s.key, v)}
-							/>
-						{:else}
-							<NumberInput
-								value={settings[s.key] as number}
-								onChange={(v) => set(s.key, v)}
-								min={s.min}
-								max={s.max}
-								step={s.step ?? 1}
-							/>
-						{/if}
-					</Field>
-				{/each}
-			</Disclosure>
+		{#each schema.filter(visible) as s (s.key)}
+			<Field label={s.label} row>
+				{#if s.type === 'toggle'}
+					<Toggle value={settings[s.key] as boolean} onChange={(v) => set(s.key, v)} />
+				{:else if s.type === 'select'}
+					<Select
+						options={s.options ?? []}
+						value={settings[s.key] as string}
+						onChange={(v) => set(s.key, v)}
+					/>
+				{:else}
+					<NumberInput
+						value={settings[s.key] as number}
+						onChange={(v) => set(s.key, v)}
+						min={s.min}
+						max={s.max}
+						step={s.step ?? 1}
+					/>
+				{/if}
+			</Field>
 		{/each}
 	</ScrollArea>
 </Popover>
@@ -134,7 +114,6 @@
 		}
 	}
 	:global(.vs-menu) {
-		--popover-bg: var(--surface-glass);
 		--popover-pad: var(--space-2);
 		--popover-min-width: 0;
 		/* This menu overhangs a small cog, which Popover's default --radius-md rounds visibly too much. */

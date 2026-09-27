@@ -2,7 +2,8 @@
  * Per-viewer ViewSpec — a compatibility predicate plus a reduction request.
  * The wire shape mirrors Rust `goofi_view::ViewSpec`; `ndim` is a conjunction.
  */
-import type { ViewerKind } from './kind';
+import { isTrajectory, type ViewerKind } from './kind';
+import type { SettingsMap } from './settingsSchema';
 import { VIEWER_KINDS } from '$lib/api/vocab';
 
 export type ReduceMethod = 'envelope' | 'subsample' | 'area';
@@ -75,16 +76,26 @@ function describeSpec(kind: ViewerKind, w: number, h: number): ViewSpec | null {
 
 /** Everything one viewer of `kind` at `width`x`height` declares: what it draws, and — where it
  * accepts more than it draws — what it can only describe. */
-export function viewSpecsForKind(kind: ViewerKind, width: number, height: number): ViewSpec[] {
+export function viewSpecsForKind(kind: ViewerKind, width: number, height: number, settings: SettingsMap = {}): ViewSpec[] {
 	const describe = describeSpec(kind, px(width), px(height));
-	return describe ? [viewSpecForKind(kind, width, height), describe] : [viewSpecForKind(kind, width, height)];
+	const draws = viewSpecForKind(kind, width, height, settings);
+	return describe ? [draws, describe] : [draws];
 }
 
 /** The ViewSpec for a viewer `kind` at `width`×`height` device pixels. */
-export function viewSpecForKind(kind: ViewerKind, width: number, height: number): ViewSpec {
+export function viewSpecForKind(kind: ViewerKind, width: number, height: number, settings: SettingsMap = {}): ViewSpec {
 	const w = px(width);
 	const h = px(height);
 	const ndim = ndimOf(kind);
+	if (isTrajectory(kind, settings)) {
+		// (dims × points): the path is the LAST axis, and a phase portrait has no peaks to keep.
+		return {
+			dtype: 'array',
+			ndim: [['eq', 2]],
+			dims: [],
+			reduce: [{ dim: -1, max: Math.min(w, MAX_POINTS), method: 'subsample' }]
+		};
+	}
 	if (kind === 'line') {
 		// For 1-D, dim 0 and -1 collide on the bridge; it resolves by richness (envelope wins).
 		// Half floats: 11 significant bits are more than a device pixel resolves, for half the bytes.
@@ -113,16 +124,7 @@ export function viewSpecForKind(kind: ViewerKind, width: number, height: number)
 			depth: 'u8'
 		};
 	}
-	if (kind === 'trajectory') {
-		// (dims × points): the path is the LAST axis, and a phase portrait has no peaks to keep.
-		return {
-			dtype: 'array',
-			ndim,
-			dims: [],
-			reduce: [{ dim: -1, max: Math.min(w, MAX_POINTS), method: 'subsample' }]
-		};
-	}
-	if (kind === 'topomap') {
+	if (kind === 'brain') {
 		return { dtype: 'array', ndim, dims: [], reduce: [] };
 	}
 	if (kind === 'string') {

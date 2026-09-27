@@ -3,14 +3,17 @@
 	import type { SettingsMap } from './settingsSchema';
 	import { onMount, onDestroy } from 'svelte';
 	import { formatTick as fmtTick } from './format';
-	import { seriesColor } from 'glance';
+	import { seriesColor } from 'plotluck';
 	import { AXIS_INK, tickFont } from './palette';
 
 	type Props = { frame: DataFrame; settings?: SettingsMap };
 	const { frame, settings = {} }: Props = $props();
 
 	const pointSize = $derived(Number(settings.pointSize ?? 2));
-	const autoRange = $derived(settings.auto !== false);
+	// The line viewer's range settings, which both axes share here so the shape is not distorted.
+	const autoRange = $derived(settings.yAuto !== false);
+	const yMin = $derived(Number(settings.yMin ?? -1));
+	const yMax = $derived(Number(settings.yMax ?? 1));
 
 	let container: HTMLDivElement | null = $state(null);
 	let canvas: HTMLCanvasElement | null = $state(null);
@@ -79,10 +82,9 @@
 				}
 				if (vmin === null || mn < vmin) vmin = mn;
 				if (vmax === null || mx > vmax) vmax = mx;
-			} else if (!have) {
-				// Frozen mode still needs an initial range from the first frame.
-				vmin = mn;
-				vmax = mx;
+			} else {
+				vmin = yMin;
+				vmax = yMax;
 			}
 		}
 		draw();
@@ -246,7 +248,7 @@
 
 	$effect(() => {
 		// Redraw when a style/range setting changes (the read registers the dep).
-		void [pointSize, autoRange];
+		void [pointSize, autoRange, yMin, yMax];
 		draw();
 	});
 

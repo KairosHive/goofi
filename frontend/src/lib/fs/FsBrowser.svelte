@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { graph } from '$lib/stores/graph.svelte';
+	import { consoleStore } from '$lib/stores/console.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { FS_SORTS, type FsEntry, type FsRoot, type FsSort } from '$lib/api/control';
 	import { downloadPatch } from '$lib/api/patchFile';
@@ -9,10 +10,11 @@
 	type Props = {
 		mode: 'save' | 'load';
 		suggestedName?: string;
-		onPick: (path: string, overwrite?: boolean) => void;
+		/** Settles when the pick is done; the dialog shows the log meanwhile. */
+		onPick: (path: string, overwrite?: boolean) => Promise<void>;
 		onClose: () => void;
 		/** The through-the-browser copy, for locations the backend cannot reach. */
-		onFilePick: (file: File) => void;
+		onFilePick: (file: File) => Promise<void>;
 	};
 	const {
 		mode,
@@ -35,6 +37,33 @@
 	let error = $state<string | null>(null);
 	let pathBarEl = $state<HTMLDivElement | null>(null);
 	let fileInput = $state<HTMLInputElement | null>(null);
+
+	// While a pick runs, the dialog is its progress: a spinner over what the backend has logged
+	// since the pick, read off the one console store.
+	const cs = consoleStore();
+	let working = $state<number | null>(null);
+	let logEl = $state<HTMLElement | null>(null);
+	const progress = $derived.by(() => {
+		if (working === null) return [];
+		void cs.version;
+		return cs.since(working);
+	});
+	$effect(() => {
+		void progress.length;
+		if (logEl) logEl.scrollTop = logEl.scrollHeight;
+	});
+	async function run(task: () => Promise<void>): Promise<void> {
+		if (working !== null) return;
+		working = cs.mark();
+		try {
+			await task();
+		} finally {
+			working = null;
+		}
+	}
+	function pick(path: string, overwrite?: boolean): void {
+		void run(() => onPick(path, overwrite));
+	}
 
 	// A modal: the app's global chords stand down while it is up.
 	const standdownId = $props.id();
@@ -127,7 +156,7 @@
 		if (entry.kind === 'dir') {
 			void go(entry.path);
 		} else if (entry.is_gfi) {
-			if (mode === 'load') onPick(entry.path);
+			if (mode === 'load') pick(entry.path);
 			else filename = entry.name.replace(/\.gfi$/, '');
 		}
 	}
@@ -150,7 +179,7 @@
 			const target = await g.statPath(full);
 			if (target.kind === 'dir') error = 'Choose a file name. This path is a folder.';
 			else if (target.kind === 'file') replacing = target.path;
-			else onPick(target.path);
+			else pick(target.path);
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -159,7 +188,7 @@
 	}
 
 	function confirmOpen(): void {
-		if (selected) onPick(selected);
+		if (selected) pick(selected);
 	}
 
 	onMount(() => {
@@ -167,14 +196,18 @@
 		void go().then(() => pathBarEl?.querySelector('input')?.focus());
 	});
 
-	const title = $derived(mode === 'save' ? 'Save patch' : 'Load patch');
+	const title = $derived(
+		working !== null
+			? mode === 'save' ? 'Saving patch…' : 'Loading patch…'
+			: mode === 'save' ? 'Save patch' : 'Load patch'
+	);
 </script>
 
 <!-- `nokey`: SvelteFlow's delete key is a bare window listener, so Backspace here would delete the canvas selection. -->
 <Dialog
 	open
 	class="nokey"
-	{onClose}
+	onClose={() => working === null && onClose()}
 	style="--dialog-pad: 0; --dialog-bg: var(--surface-1); --dialog-max-width: min(1100px, 94vw); width: 100%"
 	aria-label={title}
 	data-testid="fs-browser"
@@ -191,6 +224,17 @@
 			{/snippet}
 		</Bar>
 
+		{#if working !== null}
+			<div class="body progress" data-testid="fs-progress" aria-live="polite">
+				<!-- Three dots in turn, no ring: the frame's own accent, drawn small and quiet. -->
+				<span class="spinner" aria-hidden="true"><i></i><i></i><i></i></span>
+				<ul class="log" bind:this={logEl}>
+					{#each progress as row (row.uid)}
+						<li class={row.level}>{row.text}</li>
+					{/each}
+				</ul>
+			</div>
+		{:else}
 		<div class="body">
 			<nav class="roots">
 				{#each roots as r, i (r.path)}
@@ -271,6 +315,7 @@
 				</ScrollArea>
 			</section>
 		</div>
+		{/if}
 
 		<Bar class="fs-footer" style="--bar-wrap: wrap; --bar-pad-y: var(--space-2)">
 			{#snippet start()}
@@ -301,17 +346,17 @@
 							const file = input.files?.[0];
 							// Cleared first: else picking the same file twice fires no second `change`.
 							input.value = '';
-							if (file) onFilePick(file);
+							if (file) void run(() => onFilePick(file));
 						}}
 					/>
 				{/if}
 			{/snippet}
 			{#snippet end()}
-				<Button variant="ghost" onclick={onClose}>Cancel</Button>
+				<Button variant="ghost" onclick={onClose} disabled={working !== null}>Cancel</Button>
 				{#if mode === 'save'}
-					<Button variant="primary" onclick={confirmSave} disabled={checking} data-testid="fs-save">Save</Button>
+					<Button variant="primary" onclick={confirmSave} disabled={checking || working !== null} data-testid="fs-save">Save</Button>
 				{:else}
-					<Button variant="primary" disabled={!selected} onclick={confirmOpen} data-testid="fs-open">
+					<Button variant="primary" disabled={!selected || working !== null} onclick={confirmOpen} data-testid="fs-open">
 						Open
 					</Button>
 				{/if}
@@ -330,7 +375,7 @@
 	<Button variant="danger" data-testid="fs-replace" onclick={() => {
 		const path = replacing;
 		replacing = null;
-		if (path) onPick(path, true);
+		if (path) pick(path, true);
 	}}>Overwrite</Button>
 	<Button variant="ghost" onclick={() => (replacing = null)}>Cancel</Button>
 </ConfirmDialog>
@@ -351,6 +396,69 @@
 		min-height: 0;
 		/* `dvh`, not `vh`: on a phone `vh` is the largest viewport, so the modal would overflow. */
 		height: min(42rem, 70dvh);
+	}
+	/* The spinner beside the log; a narrow dialog, taller than it is wide, stacks them instead. */
+	.progress {
+		flex-direction: row;
+		align-items: center;
+		gap: var(--space-6);
+		padding: var(--space-6);
+	}
+	.spinner {
+		flex: 0 0 auto;
+		display: flex;
+		gap: var(--space-2);
+		padding: var(--space-4);
+	}
+	.spinner i {
+		width: 0.5rem;
+		height: 0.5rem;
+		border-radius: 50%;
+		background: var(--accent);
+		animation: fs-pulse 1.2s ease-in-out infinite;
+	}
+	.spinner i:nth-child(2) {
+		animation-delay: 0.2s;
+	}
+	.spinner i:nth-child(3) {
+		animation-delay: 0.4s;
+	}
+	@keyframes fs-pulse {
+		0%,
+		60%,
+		100% {
+			opacity: 0.25;
+			transform: scale(0.8);
+		}
+		30% {
+			opacity: 1;
+			transform: scale(1);
+		}
+	}
+	.log {
+		flex: 1 1 auto;
+		align-self: stretch;
+		min-height: 0;
+		min-width: 0;
+		margin: 0;
+		padding: var(--space-3) var(--space-4);
+		list-style: none;
+		overflow-y: auto;
+		font-family: var(--font-mono);
+		color: var(--text-muted);
+		background: var(--surface-2);
+		border-radius: var(--radius-sm);
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+	.log li:last-child {
+		color: var(--text);
+	}
+	.log .warning {
+		color: var(--warning);
+	}
+	.log .error {
+		color: var(--danger);
 	}
 	.roots {
 		flex: 0 0 8.75rem;
@@ -486,7 +594,8 @@
 		color: var(--text-muted);
 	}
 	@container fs (max-width: 30rem) {
-		.body {
+		.body,
+		.progress {
 			flex-direction: column;
 		}
 		.roots {

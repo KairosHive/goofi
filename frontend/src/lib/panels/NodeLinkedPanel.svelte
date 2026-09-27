@@ -5,8 +5,7 @@
 	import { graph } from '$lib/stores/graph.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { linkedNodeName } from 'panelty';
-	import { workspace } from 'panelty';
-	import { Bar, Icon, IconButton, StatusDot, EmptyState } from '$lib/ui';
+	import { Bar, StatusDot, EmptyState } from '$lib/ui';
 	import { nodeHealth } from '$lib/editor/nodeHealth';
 	import NodeSelect from './NodeSelect.svelte';
 	import type { Snippet } from 'svelte';
@@ -26,42 +25,35 @@
 
 	const g = graph();
 	const uiStore = ui();
-	const ws = workspace();
 
 	const linkedName = $derived(linkedNodeName(linkState));
 	const node = $derived(linkedName ? g.nodeById(linkedName) : null);
 	const dragActive = $derived(uiStore.nodeDrag !== null);
 	const over = $derived(uiStore.nodeDragTarget === panelId);
-
-	// Through the store, not the opaque `setState`: an unrecorded edit is destroyed by the next undo.
-	function unlink(): void {
-		ws.unlinkNodeFromPanel(panelId);
-	}
 </script>
 
 <div class="linked" role="group" data-testid="node-linked-panel">
-	<Bar>
+	<!-- Tight, as the node header's controls sit: every px of this row is the strip's, and it has
+	     nothing at its end to keep apart. -->
+	<Bar class="nlp-bar" style="--bar-gap: var(--space-3)">
 		{#snippet start()}
-			{#if node}
-				{@const health = nodeHealth(node)}
-				<StatusDot
-					tone={health.tone}
-					size="sm"
-					pulse={health.kind === 'dead'}
-					title={health.title}
-				/>
-			{/if}
-			<NodeSelect {panelId} state={linkState} emptyLabel="No node" />
-			{#if node && controls}
-				<div class="controls thin-scrollbar">{@render controls(node)}</div>
-			{/if}
-		{/snippet}
-		{#snippet end()}
-			{#if node}
-				<IconButton variant="ghost" density="chrome" label="Unlink node" onclick={unlink}
-					><Icon name="x" /></IconButton
-				>
-			{/if}
+			<!-- ONE scrolling group, the picker and dot included, so a narrow panel slides the whole
+			     strip rather than clipping the controls behind a fixed picker. -->
+			<div class="controls thin-scrollbar" data-testid="panel-strip">
+				{#if node}
+					{@const health = nodeHealth(node)}
+					<StatusDot
+						tone={health.tone}
+						size="sm"
+						pulse={health.kind === 'dead'}
+						title={health.title}
+					/>
+				{/if}
+				<NodeSelect {panelId} state={linkState} emptyLabel="<empty>" />
+				{#if node && controls}
+					{@render controls(node)}
+				{/if}
+			</div>
 		{/snippet}
 	</Bar>
 	{#if node}
@@ -71,7 +63,7 @@
 	{:else}
 		<div class="empty">
 			<EmptyState>
-				{#snippet title()}No node bound{/snippet}
+				{#snippet title()}No node picked{/snippet}
 				{#snippet hint()}Pick one above, or drag a node here, to show its {label}{/snippet}
 			</EmptyState>
 		</div>
@@ -99,6 +91,24 @@
 		gap: inherit;
 		overflow-x: auto;
 		overflow-y: hidden;
+		/* A scroll box clips what it holds, and a picker's focus ring sits outside its border, so
+		   the group pads for the ring on every side; the bar's height has the room. */
+		--ring: calc(var(--focus-width) + 1px);
+		padding: var(--ring);
+		scroll-padding: var(--ring);
+	}
+	/* Touch: the strip's cog and bar take a shorter floor than the 44px hit, following the rem
+	   up to a maximum, so a phone's viewer keeps its height for the data. `.nlp-bar` travels to
+	   `Bar` as a prop; `.linked` keeps the rule scoped. */
+	@media (hover: none) and (pointer: coarse) {
+		.linked {
+			--strip-control: min(32px, 2rem);
+			--vs-cog-box: var(--strip-control);
+			--bar-height: min(36px, 2.25rem);
+		}
+		.linked :global(.nlp-bar button) {
+			min-height: var(--strip-control);
+		}
 	}
 	.body {
 		flex: 1;

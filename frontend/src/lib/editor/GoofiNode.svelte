@@ -305,7 +305,7 @@
 		font-size: 9px;
 		line-height: 1;
 		color: var(--text-dim);
-		background: var(--surface-glass);
+		background: var(--surface-2);
 		border: 1px solid var(--border);
 		border-radius: 3px;
 		padding: 2px 5px;

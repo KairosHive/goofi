@@ -351,6 +351,9 @@ fn shaders_render_on_the_gpu() {
     g.ready(img);
     let up = g.add("graphics:SignalIn");
     g.ready(up);
+    // A door for frames follows the frame: its size rests at a constant 0, not the patch's default.
+    let width = g.doc()["nodes"][hex(up)]["params"]["common"]["width"].clone();
+    assert_eq!(width, j!({ "value": 0 }), "the size is a constant 0, not a seeded expression");
     g.set_param(up, "common", "width", 4);
     g.set_param(up, "common", "height", 4);
     g.link(img, "out", up, "input");
@@ -372,7 +375,26 @@ fn shaders_render_on_the_gpu() {
     g.set_param(up, "common", "width", 64);
     g.set_param(up, "common", "height", 32);
     let frame = drawn(&g, up, "the raw [1, 64] frame", |d| shape(d) == vec![32, 64, 4] && px(d, 0, 0)[3] == 1.0);
-    assert!(close(px(&frame, 0, 0), [0.0, 0.0, 0.0, 1.0]), "texture mode is the frame itself: {:?}", px(&frame, 0, 0));
+    assert!(close(px(&frame, 0, 0), [0.267, 0.004, 0.329, 1.0]), "a one-channel frame reads through the colormap, its floor at viridis's: {:?}", px(&frame, 0, 0));
+    assert!(close(px(&frame, 0, 63), [0.992, 0.906, 0.145, 1.0]), "and its ceiling at the top: {:?}", px(&frame, 0, 63));
+    g.set_param(up, "signal", "colormap", "gray");
+    let frame = drawn(&g, up, "the gray frame", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 1.0]));
+    assert!(close(px(&frame, 0, 63), [1.0, 1.0, 1.0, 1.0]), "gray is the value itself: {:?}", px(&frame, 0, 63));
+    // Off autoscale, the range is the one asked for: the ramp's last step, 63/64, on a window
+    // to 2 is half that gray.
+    g.set_param(up, "signal", "autoscale", false);
+    g.set_param(up, "signal", "min", 0.0);
+    g.set_param(up, "signal", "max", 2.0);
+    let half = 63.0 / 128.0;
+    let frame = drawn(&g, up, "the windowed frame", |d| close(px(d, 0, 63), [half, half, half, 1.0]));
+    assert!(close(px(&frame, 0, 0), [0.0, 0.0, 0.0, 1.0]), "from the floor: {:?}", px(&frame, 0, 0));
+    g.set_param(up, "signal", "autoscale", true);
+    // A size left at 0 follows the frame: one row of 64, the shape of what came in.
+    g.set_param(up, "common", "width", 0);
+    g.set_param(up, "common", "height", 0);
+    drawn(&g, up, "the frame at its own size", |d| shape(d) == vec![1, 64, 4]);
+    g.set_param(up, "common", "width", 64);
+    g.set_param(up, "common", "height", 32);
 
     g.set_param(up, "signal", "mode", "line");
     g.set_param(up, "signal", "autoscale", false);
@@ -407,7 +429,7 @@ fn shaders_render_on_the_gpu() {
 
     g.set_param(up, "signal", "mode", "texture");
     g.set_param(ramp, "ramp", "channels", 1);
-    drawn(&g, up, "the raw frame again", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 1.0]));
+    drawn(&g, up, "the gray frame again", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 1.0]));
     g.call("link remove", j!({ "from": ep(hex(ramp), "out"), "to": ep(hex(up), "input") }));
 
     // Step: the audio plane and this one, both ways, over the ONE cross-engine transport. Each

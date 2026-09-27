@@ -526,6 +526,6 @@ fn present(
 /// A stage's uniform block length, measured by the writer so there is one layout.
 pub fn params_len(manifest: &goofi_node::NodeManifest) -> usize {
     let zeros: Vec<AtomicU64> = manifest.params.iter().map(|_| AtomicU64::new(0)).collect();
-    let ranges = vec![[0.0, 1.0]; shader::array_inputs(manifest).count()];
+    let ranges = vec![[0.0, 1.0, 1.0]; shader::array_inputs(manifest).count()];
     shader::uniform_bytes(manifest.params, &zeros, &ranges).len()
 }

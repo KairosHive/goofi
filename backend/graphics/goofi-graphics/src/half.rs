@@ -1,7 +1,7 @@
 //! The graphics engine's half of a node's control thread: an arrival becomes texels the render
 //! thread uploads, and the frame that thread read back goes out while anyone drinks from it.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use goofi_control::{Cx, Half, Ticked};
@@ -32,11 +32,23 @@ pub struct GraphicsHalf {
     uploads: Vec<Arc<Mutex<Option<Upload>>>>,
     readers: Arc<AtomicBool>,
     tap: Arc<Mutex<Tap>>,
+    /// The size of the last frame uploaded to the first ARRAY input, packed; what a zero axis
+    /// of `common` follows when no texture is wired behind the node.
+    uploaded: Arc<AtomicU64>,
     /// Where the universal `common` size starts in the param atomics.
     size: usize,
-    /// The size last seen there. Only a settle can re-plan a stage's target, so the half — which
-    /// ticks beside the one writer of those atomics — is what asks for one when the size moves.
-    last: (u32, u32),
+    /// The sizes last seen: asked, and uploaded. Only a settle can re-plan a stage's target, so
+    /// the half — which ticks beside the writers of both — is what asks for one when either moves.
+    last: ((u32, u32), u64),
+}
+
+/// The upload size as one atomic word, and back; 0 is no upload yet.
+pub(crate) fn pack(size: (u32, u32)) -> u64 {
+    (u64::from(size.0) << 32) | u64::from(size.1)
+}
+
+pub(crate) fn unpack(word: u64) -> Option<(u32, u32)> {
+    (word != 0).then_some(((word >> 32) as u32, word as u32))
 }
 
 impl GraphicsHalf {
@@ -49,9 +61,10 @@ impl GraphicsHalf {
         uploads: Vec<Arc<Mutex<Option<Upload>>>>,
         readers: Arc<AtomicBool>,
         tap: Arc<Mutex<Tap>>,
+        uploaded: Arc<AtomicU64>,
         size: usize,
     ) -> GraphicsHalf {
-        GraphicsHalf { producer: None, uploads, readers, tap, size, last: (u32::MAX, u32::MAX) }
+        GraphicsHalf { producer: None, uploads, readers, tap, uploaded, size, last: ((u32::MAX, u32::MAX), 0) }
     }
 }
 
@@ -66,6 +79,9 @@ impl Half for GraphicsHalf {
         if let Some(producer) = &self.producer { producer.input(inbox, frame.clone()); return false; }
         let Some(cell) = self.uploads.get(inbox) else { return false };
         if let Some(up) = Upload::of(frame) {
+            if inbox == 0 {
+                self.uploaded.store(pack((up.width, up.height)), Ordering::Relaxed);
+            }
             *cell.lock().unwrap() = Some(up);
         }
         false
@@ -73,6 +89,9 @@ impl Half for GraphicsHalf {
 
     fn unwired(&mut self, inbox: usize) {
         if let Some(producer) = &self.producer { producer.unwired(inbox); }
+        if inbox == 0 {
+            self.uploaded.store(0, Ordering::Relaxed);
+        }
     }
     fn refresh(&mut self) -> Option<Vec<String>> {
         if let Some(producer) = &self.producer { producer.refresh(); }
@@ -93,7 +112,7 @@ impl Half for GraphicsHalf {
             }
             None => {}
         }
-        let size = crate::plan::asked(cx.params, self.size);
-        Ticked { errors: Vec::new(), replan: std::mem::replace(&mut self.last, size) != size }
+        let seen = (crate::plan::asked(cx.params, self.size), self.uploaded.load(Ordering::Relaxed));
+        Ticked { errors: Vec::new(), replan: std::mem::replace(&mut self.last, seen) != seen }
     }
 }

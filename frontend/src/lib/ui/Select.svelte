@@ -117,16 +117,8 @@
 			border-color: var(--accent);
 		}
 	}
-	/* Touch: the rules above release app.css's --hit floor and drop below the 16px iOS force-zooms
-	   under, so both are restored here; `--select-*` is the frozen slot header's opt-out. */
-	@media (hover: none) and (pointer: coarse) {
-		.ui-select.d-chrome .ui-select-input {
-			/* Less this element's own 1px border per side: the box above is a CONTENT box, and it is
-			   the rendered control that must measure --hit. */
-			min-height: var(--select-min-h, calc(var(--hit) - 2px));
-			font-size: var(--select-fs, 16px);
-		}
-	}
+	/* Chrome density is ONE control at every pointer: the node header's kind picker and the panel
+	   strip's read the same, so the coarse floor and the 16px focus-zoom size are not restated. */
 	/* A bare ring, not the ⟳ icon: a circle rotates dead-centred where the glyph wobbles. */
 	.ui-select-spinner {
 		width: 0.85em;

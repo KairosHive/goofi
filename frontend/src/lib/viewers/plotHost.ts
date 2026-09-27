@@ -1,6 +1,6 @@
 /** How a viewer finds the surface it draws on and the card it sits in: two Svelte contexts. */
 import { getContext, setContext } from 'svelte';
-import { createSurface, type Rect, type Surface, type View } from 'glance';
+import { createSurface, type Rect, type Surface, type View } from 'plotluck';
 
 export interface PlotHost {
 	readonly surface: Surface | null;

@@ -8,10 +8,11 @@
 	import type { ViewBinding } from './viewBinding';
 	import { EmptyState } from '$lib/ui';
 	import { untrack } from 'svelte';
-	import { LinePlot, type Plot } from 'glance';
+	import { LinePlot, type Plot } from 'plotluck';
 	import { offsetIn, useAnchor, useSurface } from './plotHost';
 	import { lineData, pushImage } from './plotFeed';
-	import { axisNames, imageProbe, lineProbe, type Hover, type Probe } from './hover';
+	import { axisNames, imageProbe, lineProbe, type Drag, type Hover, type Probe } from './hover';
+	import { portal } from 'panelty';
 	import { drawsOnSurface, isRenderable } from './kind';
 	import { makeLUTCache } from './colormaps';
 	import { formatTick } from './format';
@@ -28,7 +29,7 @@
 	const settings = $derived(binding.settings);
 	const host = useSurface();
 	const anchor = useAnchor();
-	const onSurface = $derived(drawsOnSurface(kind));
+	const onSurface = $derived(drawsOnSurface(kind, settings));
 
 	// What the DOM shows: a surface kind's frame only while it takes the fallback text.
 	let frame = $state.raw<DataFrame | null>(null);
@@ -57,8 +58,29 @@
 	// The hover: a surface kind's probe is built here from the drawn data, a component's is bound.
 	let surfaceProbe: Probe | null = null;
 	let componentProbe = $state.raw<Probe | null>(null);
+	// A component's drag, where it has one: the feed then captures the pointer instead of the
+	// card, which otherwise moves the node.
+	let componentDrag = $state.raw<Drag | null>(null);
+	let dragging: { x: number; y: number } | null = null;
+	// Whether the feed holds the pointer: a finger reading it, or a drag on a component.
+	let held = false;
 	let hover = $state.raw<Hover | null>(null);
 	let pointer = $state.raw<{ x: number; y: number } | null>(null);
+	// The pointer in viewport px: the readout is portalled, so the window edge is its only bound.
+	let client = $state.raw<{ x: number; y: number } | null>(null);
+	let readoutW = $state(0);
+	let readoutH = $state(0);
+	const GAP = 6;
+	// Up and left of the pointer, away from where a hand or a pen sits; a side flips only where
+	// the window would cut it off.
+	const readoutPos = $derived.by(() => {
+		if (!client) return null;
+		let left = client.x - GAP - readoutW;
+		if (left < 0) left = client.x + GAP;
+		let top = client.y - GAP - readoutH;
+		if (top < 0) top = client.y + GAP;
+		return { left, top };
+	});
 
 	/** The 32-px step for `px`, left where it is until `px` is a quarter step past the held one's edge. */
 	function quantize(px: number, held: number): number {
@@ -115,7 +137,7 @@
 		untrack(() => plot?.clear());
 		if (!visible || !slot) return;
 		// Kind is not part of the stream's identity, but it IS part of what this viewer needs.
-		const specs = capW > 0 && capH > 0 ? viewSpecsForKind(kind, capW, capH) : null;
+		const specs = capW > 0 && capH > 0 ? viewSpecsForKind(kind, capW, capH, settings) : null;
 		const draw = onSurface;
 		// A joiner is replayed the current frame at once, so the delivery must not become a dependency.
 		return bindViewer(node, slot, token, specs, (f: DataFrame) =>
@@ -161,7 +183,9 @@
 				yAuto: s.yAuto !== false,
 				yMin: Number(s.yMin ?? -1),
 				yMax: Number(s.yMax ?? 1),
-				points: Boolean(s.points)
+				points: Boolean(s.points),
+				width: 2,
+				alpha: 0.75
 			});
 		} else {
 			p.setSettings({ lut: lutFor(String(s.colormap ?? 'gray')), stretch: s.stretch === true });
@@ -171,7 +195,7 @@
 
 	/** Whether a frame takes the fallback text rather than the plot. */
 	function fallback(f: DataFrame): boolean {
-		return !isArrayFrame(f) || !isRenderable(kind, f.data);
+		return !isArrayFrame(f) || !isRenderable(kind, f.data, settings);
 	}
 
 	function drawFrame(f: DataFrame): void {
@@ -227,17 +251,63 @@
 		hover = probe(pointer.x, pointer.y, { w: boxW, h: boxH, tol: 12 / zoom });
 	}
 
-	function onPointerMove(e: PointerEvent): void {
-		if (!container) return;
-		// Layout px: the box is measured under the flow zoom, the pointer is not.
+	/** The pointer in layout px: the box is measured under the flow zoom, the pointer is not. */
+	function layoutPoint(e: PointerEvent): { x: number; y: number } | null {
+		if (!container) return null;
 		const r = container.getBoundingClientRect();
 		const scale = r.width > 0 ? boxW / r.width : 1;
-		pointer = { x: (e.clientX - r.left) * scale, y: (e.clientY - r.top) * scale };
+		return { x: (e.clientX - r.left) * scale, y: (e.clientY - r.top) * scale };
+	}
+
+	function onPointerDown(e: PointerEvent): void {
+		if (e.button !== 0) return;
+		const drag = onSurface ? null : componentDrag;
+		// A finger is the hover a touch screen does not have: held down, it reads the picture and
+		// follows, and the card is not carried by it. A mouse only reads by resting over the body.
+		const finger = e.pointerType === 'touch';
+		if (!drag && !finger) return;
+		if (drag) dragging = layoutPoint(e);
+		held = true;
+		container?.setPointerCapture(e.pointerId);
+		if (finger) onPointerMove(e);
+		// The card must not take this press as the start of a node drag, nor a menu as a dismissal.
+		e.stopPropagation();
+	}
+
+	/** The node's drag and the pane's pan start on touch events, which a finger reading a viewer
+	 * keeps to itself; they have not started, so a still finger is no long press on the pane. */
+	function keepTouch(e: TouchEvent): void {
+		e.stopPropagation();
+	}
+
+	function onPointerMove(e: PointerEvent): void {
+		const at = layoutPoint(e);
+		if (!at) return;
+		const drag = onSurface ? null : componentDrag;
+		if (dragging && drag) {
+			drag(at.x - dragging.x, at.y - dragging.y, { w: boxW, h: boxH, tol: 12 / zoom });
+			dragging = at;
+		}
+		pointer = at;
+		client = { x: e.clientX, y: e.clientY };
 		readout();
 	}
 
-	function onPointerLeave(): void {
+	function onPointerUp(e: PointerEvent): void {
+		dragging = null;
+		held = false;
+		if (container?.hasPointerCapture(e.pointerId)) container.releasePointerCapture(e.pointerId);
+		// A lifted finger hovers nothing.
+		if (e.pointerType === 'touch') onPointerLeave(e);
+	}
+
+	function onPointerLeave(e: PointerEvent): void {
+		// A captured pointer leaves the box and comes back; only its release ends the hold.
+		if (held && e.type === 'pointerleave') return;
+		dragging = null;
+		held = false;
 		pointer = null;
+		client = null;
 		hover = null;
 	}
 
@@ -246,10 +316,15 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="viewer-feed"
+	class:nodrag={!onSurface && componentDrag !== null}
 	bind:this={container}
+	onpointerdown={onPointerDown}
 	onpointermove={onPointerMove}
+	onpointerup={onPointerUp}
 	onpointerleave={onPointerLeave}
 	onpointercancel={onPointerLeave}
+	ontouchstart={keepTouch}
+	ontouchmove={keepTouch}
 >
 	{#if !slot}
 		<EmptyState>
@@ -260,23 +335,34 @@
 			{#snippet hint()}WebGL2 is not available{/snippet}
 		</EmptyState>
 	{:else}
-		<ViewerSurface {frame} {kind} {settings} bind:probe={componentProbe} />
+		<ViewerSurface {frame} {kind} {settings} bind:probe={componentProbe} bind:drag={componentDrag} />
 		{#each labels as text, i (i)}
 			{#if text}<span class="tick tick-{i}">{text}</span>{/if}
 		{/each}
 		{#if hover && pointer}
 			{#if hover.mark}
-				<span class="mark" style:left="{hover.mark.x}px" style:top="{hover.mark.y}px"></span>
+				<span
+					class="mark"
+					style:left="{hover.mark.x}px"
+					style:top="{hover.mark.y}px"
+					style:width="{2 * hover.mark.r}px"
+					style:height="{2 * hover.mark.r}px"
+				></span>
 			{/if}
-			<span
-				class="readout"
-				class:left={pointer.x > boxW / 2}
-				class:up={pointer.y > boxH / 2}
-				style:left="{pointer.x}px"
-				style:top="{pointer.y}px"
-			>
-				{#each hover.lines as line, i (i)}<span>{line}</span>{/each}
-			</span>
+			{#if readoutPos}
+				<span
+					class="viewer-hover-readout"
+					style:left="{readoutPos.left}px"
+					style:top="{readoutPos.top}px"
+					bind:offsetWidth={readoutW}
+					bind:offsetHeight={readoutH}
+					use:portal
+				>
+					{#each hover.lines as line, i (i)}
+						<span class="row">{#each line as part, j (j)}<span>{part}</span>{/each}</span>
+					{/each}
+				</span>
+			{/if}
 		{/if}
 	{/if}
 </div>
@@ -290,6 +376,14 @@
 		display: flex;
 		align-items: stretch;
 		justify-content: stretch;
+	}
+	/* A finger on a viewer reads it, so the page gets no scroll or pan from it, and a held one
+	   selects no text. */
+	.viewer-feed {
+		touch-action: none;
+		user-select: none;
+		-webkit-user-select: none;
+		-webkit-touch-callout: none;
 	}
 	.viewer-feed > :global(*) {
 		flex: 1;
@@ -320,42 +414,36 @@
 			opacity: 1;
 		}
 	}
-	/* The mark sits on the probed point; the readout follows the pointer, leaning away from the
-	   nearer edge so it stays inside the body. */
+	/* The mark sits on the probed point; the readout follows the pointer, on <body> so a card's
+	   edge never clips it. */
 	.mark {
 		position: absolute;
 		pointer-events: none;
-		width: 7px;
-		height: 7px;
 		transform: translate(-50%, -50%);
 		border-radius: 50%;
 		background: var(--text);
 		box-shadow: 0 0 0 1px var(--bg);
 	}
-	.readout {
-		position: absolute;
+	:global(.viewer-hover-readout) {
+		position: fixed;
+		z-index: var(--z-menu);
 		pointer-events: none;
-		transform: translate(10px, 10px);
 		display: flex;
 		flex-direction: column;
 		gap: 1px;
 		padding: var(--space-1);
 		border-radius: var(--radius-sm);
-		background: color-mix(in srgb, var(--bg) 85%, transparent);
+		background: var(--surface-2);
+		border: 1px solid var(--border-strong);
 		font-family: var(--font-mono);
 		font-size: var(--fs-micro);
 		line-height: 1.2;
 		color: var(--text);
 		white-space: nowrap;
 	}
-	.readout.left {
-		transform: translate(calc(-100% - 10px), 10px);
-	}
-	.readout.up {
-		transform: translate(10px, calc(-100% - 10px));
-	}
-	.readout.left.up {
-		transform: translate(calc(-100% - 10px), calc(-100% - 10px));
+	:global(.viewer-hover-readout .row) {
+		display: flex;
+		gap: var(--space-2);
 	}
 	.tick-0 {
 		top: 0;

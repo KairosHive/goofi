@@ -73,13 +73,11 @@ pub static PANEL_TYPES: &[PanelType] = &[
 /// The ARRAY kinds first, in the order the viewer's dropdown offers them; the pinned ones after.
 pub static VIEWER_KINDS: &[ViewerKind] = &[
     ViewerKind { id: "line", draws: Draws::Array { draws: (0, 2), accepts: (0, 3) },
-                 doc: "a time plot: one series (1-D) or one per channel (C, N)" },
+                 doc: "a time plot: one series (1-D) or one per channel (C, N); or, as a setting, the trajectory over pairs of rows" },
     ViewerKind { id: "image", draws: Draws::Array { draws: (2, 3), accepts: (2, 3) },
                  doc: "a bitmap: (H, W), or (H, W, C) for 1–4 channels" },
-    ViewerKind { id: "trajectory", draws: Draws::Array { draws: (2, 2), accepts: (2, 2) },
-                 doc: "a phase portrait over pairs of rows of a (D, N) frame" },
-    ViewerKind { id: "topomap", draws: Draws::Array { draws: (1, 1), accepts: (1, 1) },
-                 doc: "a scalp map of one scalar per channel" },
+    ViewerKind { id: "brain", draws: Draws::Array { draws: (1, 2), accepts: (1, 2) },
+                 doc: "a scalp map of one scalar per channel (1-D), or the connectivity between channels (C, C) as a ring or in 3-D" },
     ViewerKind { id: "string", draws: Draws::Pinned("STRING"), doc: "the text of a STRING slot" },
     ViewerKind { id: "table", draws: Draws::Pinned("TABLE"), doc: "the rows of a TABLE slot" },
 ];

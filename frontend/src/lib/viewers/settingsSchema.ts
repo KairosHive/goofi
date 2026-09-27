@@ -1,4 +1,4 @@
-/** Per-viewer settings schema: what each viewer kind exposes in its cog menu. */
+/** Per-viewer settings schema: what each viewer kind exposes in its cog menu, one flat list. */
 import type { ViewerKind } from './kind';
 import { COLORMAPS } from './colormaps';
 
@@ -14,75 +14,55 @@ export interface SettingDescriptor {
 	min?: number;
 	max?: number;
 	step?: number;
-	/** Only show this control when another setting holds a given value. */
-	showWhen?: { key: string; equals: SettingValue };
+	/** Only show this control while another setting holds one of these values. */
+	showWhen?: { key: string; anyOf: SettingValue[] };
 }
 
-export interface SettingGroup {
-	title: string;
-	settings: SettingDescriptor[];
-}
+/** The line viewer's two drawings of a (C, N) frame. */
+export const LINE_MODES = ['series', 'trajectory'] as const;
+/** The brain viewer's drawings: `auto` is a topomap of a 1-D frame and a ring of a (C, C) one. */
+export const BRAIN_MODES = ['auto', 'topomap', 'ring', '3d'] as const;
 
-const SCHEMA: Record<ViewerKind, SettingGroup[]> = {
+const series = { key: 'mode', anyOf: ['series'] };
+const trajectory = { key: 'mode', anyOf: ['trajectory'] };
+const manual = (key: string) => ({ key, anyOf: [false] });
+
+const SCHEMA: Record<ViewerKind, SettingDescriptor[]> = {
 	line: [
-		{
-			title: 'Axes',
-			settings: [
-				{ key: 'logX', label: 'Log X', type: 'toggle', default: false },
-				{ key: 'logY', label: 'Log Y', type: 'toggle', default: false }
-			]
-		},
-		{
-			title: 'Y range',
-			settings: [
-				{ key: 'yAuto', label: 'Auto', type: 'toggle', default: true },
-				{ key: 'yMin', label: 'Min', type: 'number', default: -1, step: 0.1, showWhen: { key: 'yAuto', equals: false } },
-				{ key: 'yMax', label: 'Max', type: 'number', default: 1, step: 0.1, showWhen: { key: 'yAuto', equals: false } }
-			]
-		},
-		{ title: 'Style', settings: [{ key: 'points', label: 'Show points', type: 'toggle', default: false }] }
+		{ key: 'mode', label: 'Mode', type: 'select', default: 'series', options: [...LINE_MODES] },
+		{ key: 'logX', label: 'Log X', type: 'toggle', default: false, showWhen: series },
+		{ key: 'logY', label: 'Log Y', type: 'toggle', default: false, showWhen: series },
+		{ key: 'yAuto', label: 'Auto range', type: 'toggle', default: true },
+		{ key: 'yMin', label: 'Min', type: 'number', default: -1, step: 0.1, showWhen: manual('yAuto') },
+		{ key: 'yMax', label: 'Max', type: 'number', default: 1, step: 0.1, showWhen: manual('yAuto') },
+		{ key: 'points', label: 'Show points', type: 'toggle', default: false, showWhen: series },
+		{ key: 'pointSize', label: 'Point size', type: 'number', default: 2, min: 0, max: 12, step: 1, showWhen: trajectory }
 	],
 	image: [
-		{ title: 'Color', settings: [{ key: 'colormap', label: 'Colormap', type: 'select', default: 'gray', options: COLORMAPS }] },
-		{
-			title: 'Range',
-			settings: [
-				{ key: 'auto', label: 'Auto', type: 'toggle', default: true },
-				{ key: 'vmin', label: 'Min', type: 'number', default: 0, step: 0.1, showWhen: { key: 'auto', equals: false } },
-				{ key: 'vmax', label: 'Max', type: 'number', default: 1, step: 0.1, showWhen: { key: 'auto', equals: false } }
-			]
-		},
-		{ title: 'Layout', settings: [{ key: 'stretch', label: 'Stretch to fill', type: 'toggle', default: false }] }
+		{ key: 'colormap', label: 'Colormap', type: 'select', default: 'gray', options: COLORMAPS },
+		{ key: 'auto', label: 'Auto range', type: 'toggle', default: true },
+		{ key: 'vmin', label: 'Min', type: 'number', default: 0, step: 0.1, showWhen: manual('auto') },
+		{ key: 'vmax', label: 'Max', type: 'number', default: 1, step: 0.1, showWhen: manual('auto') },
+		{ key: 'stretch', label: 'Stretch to fill', type: 'toggle', default: false }
 	],
-	topomap: [
-		{ title: 'Color', settings: [{ key: 'colormap', label: 'Colormap', type: 'select', default: 'coolwarm', options: COLORMAPS }] },
-		{
-			title: 'Range',
-			settings: [
-				{ key: 'auto', label: 'Auto', type: 'toggle', default: true },
-				{ key: 'vmin', label: 'Min', type: 'number', default: -1, step: 0.1, showWhen: { key: 'auto', equals: false } },
-				{ key: 'vmax', label: 'Max', type: 'number', default: 1, step: 0.1, showWhen: { key: 'auto', equals: false } }
-			]
-		},
-		{ title: 'Style', settings: [{ key: 'contours', label: 'Contour lines', type: 'toggle', default: false }] }
+	brain: [
+		{ key: 'mode', label: 'Mode', type: 'select', default: 'auto', options: [...BRAIN_MODES] },
+		{ key: 'colormap', label: 'Colormap', type: 'select', default: 'coolwarm', options: COLORMAPS },
+		{ key: 'auto', label: 'Auto range', type: 'toggle', default: true },
+		{ key: 'vmin', label: 'Min', type: 'number', default: -1, step: 0.1, showWhen: manual('auto') },
+		{ key: 'vmax', label: 'Max', type: 'number', default: 1, step: 0.1, showWhen: manual('auto') },
+		{ key: 'contours', label: 'Contour lines', type: 'toggle', default: false, showWhen: { key: 'mode', anyOf: ['auto', 'topomap'] } },
+		{ key: 'top', label: 'Top edges %', type: 'number', default: 100, min: 1, max: 100, step: 1, showWhen: { key: 'mode', anyOf: ['auto', 'ring', '3d'] } },
+		{ key: 'curve', label: 'Curve', type: 'number', default: 0.5, min: 0, max: 1, step: 0.1, showWhen: { key: 'mode', anyOf: ['3d'] } }
 	],
-	trajectory: [
-		{ title: 'Style', settings: [{ key: 'pointSize', label: 'Point size', type: 'number', default: 2, min: 0, max: 12, step: 1 }] },
-		{ title: 'Range', settings: [{ key: 'auto', label: 'Auto', type: 'toggle', default: true }] }
-	],
-	table: [{ title: 'Format', settings: [{ key: 'decimals', label: 'Decimals', type: 'number', default: 3, min: 0, max: 10, step: 1 }] }],
+	table: [{ key: 'decimals', label: 'Decimals', type: 'number', default: 3, min: 0, max: 10, step: 1 }],
 	string: [
-		{
-			title: 'Render',
-			settings: [
-				{ key: 'markdown', label: 'Markdown', type: 'toggle', default: false },
-				{ key: 'wrap', label: 'Word wrap', type: 'toggle', default: true }
-			]
-		}
+		{ key: 'markdown', label: 'Markdown', type: 'toggle', default: false },
+		{ key: 'wrap', label: 'Word wrap', type: 'toggle', default: true }
 	]
 };
 
-export function settingsSchemaFor(kind: ViewerKind): SettingGroup[] {
+export function settingsSchemaFor(kind: ViewerKind): SettingDescriptor[] {
 	return SCHEMA[kind] ?? [];
 }
 
@@ -91,7 +71,7 @@ export type SettingsMap = Record<string, SettingValue>;
 
 function defaultSettings(kind: ViewerKind): SettingsMap {
 	const out: SettingsMap = {};
-	for (const g of settingsSchemaFor(kind)) for (const s of g.settings) out[s.key] = s.default;
+	for (const s of settingsSchemaFor(kind)) out[s.key] = s.default;
 	return out;
 }
 

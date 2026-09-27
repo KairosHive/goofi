@@ -21,10 +21,10 @@ pub fn array_inputs(m: &NodeManifest) -> impl Iterator<Item = &'static str> + '_
     m.inputs.iter().filter(|s| s.kind != SlotType::Texture).map(|s| s.name)
 }
 
-/// The two fields the engine adds to `Params` for one ARRAY input: the range its last frame
-/// spanned. A body cannot work that out for itself — a reduction over every texel, at every texel.
-fn range_fields(input: &str) -> [String; 2] {
-    [format!("{input}_lo"), format!("{input}_hi")]
+/// The fields the engine adds to `Params` for one ARRAY input: the range its last frame spanned,
+/// which a body cannot reduce for itself, and how many channels the frame had.
+fn range_fields(input: &str) -> [String; 3] {
+    [format!("{input}_lo"), format!("{input}_hi"), format!("{input}_channels")]
 }
 
 /// The header's manifest, with the one output added. The file's WHOLE text stays the source that
@@ -74,9 +74,11 @@ pub fn header(source: &str) -> Result<Introspection, String> {
     if let Some(name) = clash {
         return Err(format!("`{name}` is the prelude's; choose another name"));
     }
-    // A graphics node with no texture behind it makes its own frames, so it takes the patch's
-    // default size rather than following anything.
-    intro.producer = !intro.inputs.iter().any(|s| SlotType::from_name(&s.kind) == Some(SlotType::Texture));
+    // A graphics node with neither a texture nor a frame behind it makes its own frames, so it
+    // takes the patch's default size rather than following anything.
+    intro.producer = !intro.inputs.iter().any(|s| {
+        matches!(SlotType::from_name(&s.kind), Some(SlotType::Texture | SlotType::Array))
+    });
     Ok(intro)
 }
 
@@ -158,11 +160,11 @@ pub fn validate(full: &str) -> Result<(), String> {
         .map_err(|e| e.emit_to_string(full))
 }
 
-/// One stage's `Params` buffer: a 4-byte scalar per declared param, then the range each ARRAY
-/// input's last frame spanned, padded to 16. Every field is a scalar, so the layout needs no
-/// layouter.
-pub fn uniform_bytes(decls: &[ParamDecl], atomics: &[AtomicU64], ranges: &[[f32; 2]]) -> Vec<u8> {
-    let mut out = Vec::with_capacity((decls.len() + ranges.len() * 2) * 4 + 16);
+/// One stage's `Params` buffer: a 4-byte scalar per declared param, then the range and channel
+/// count of each ARRAY input's last frame, padded to 16. Every field is a scalar, so the layout
+/// needs no layouter.
+pub fn uniform_bytes(decls: &[ParamDecl], atomics: &[AtomicU64], ranges: &[[f32; 3]]) -> Vec<u8> {
+    let mut out = Vec::with_capacity((decls.len() + ranges.len() * 3) * 4 + 16);
     for (d, a) in decls.iter().zip(atomics) {
         let v = f64::from_bits(a.load(Ordering::Relaxed));
         match d.spec {
@@ -171,9 +173,8 @@ pub fn uniform_bytes(decls: &[ParamDecl], atomics: &[AtomicU64], ranges: &[[f32;
             _ => out.extend_from_slice(&(v.round().max(0.0) as u32).to_le_bytes()),
         }
     }
-    for [lo, hi] in ranges {
-        out.extend_from_slice(&lo.to_le_bytes());
-        out.extend_from_slice(&hi.to_le_bytes());
+    for field in ranges.iter().flatten() {
+        out.extend_from_slice(&field.to_le_bytes());
     }
     out.resize(out.len().next_multiple_of(16), 0);
     out

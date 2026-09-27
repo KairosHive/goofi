@@ -1,13 +1,14 @@
 /** What a viewer says about the point under the pointer: each kind defines its own probe, and
  * the feed draws the answer. Positions are in the body's layout px. */
 import type { ArrayData } from '$lib/codec/decode';
-import type { LineData, Range } from 'glance';
+import type { LineData, Range } from 'plotluck';
 import { formatTick } from './format';
 
 export interface Hover {
-	/** The point the readout is about, marked with a dot; the readout itself follows the pointer. */
-	mark: { x: number; y: number } | null;
-	lines: string[];
+	/** The point the readout is about, marked with a dot of radius `r`; the readout follows the pointer. */
+	mark: { x: number; y: number; r: number } | null;
+	/** The value on top, then where it is: each line's parts sit in one row. */
+	lines: string[][];
 }
 
 export interface ProbeBox {
@@ -19,16 +20,25 @@ export interface ProbeBox {
 
 export type Probe = (x: number, y: number, box: ProbeBox) => Hover | null;
 
-/** The names a frame's meta gives axis `dim`, or `null` where it names none. */
+/** What a viewer does with a drag of `dx`, `dy` layout px. A viewer that defines one captures
+ * the pointer; one that does not leaves the drag to whatever holds it, such as the node card. */
+export type Drag = (dx: number, dy: number, box: ProbeBox) => void;
+
+/** The names a frame's meta gives axis `dim`, as strings whatever a producer sent, or `null`
+ * where it names none. */
 export function axisNames(meta: Record<string, unknown> | undefined, dim: number): string[] | null {
 	const channels = meta?.channels as Record<string, unknown> | undefined;
 	const names = channels?.[`dim${dim}`];
-	return Array.isArray(names) ? (names as string[]) : null;
+	return Array.isArray(names) ? names.map(String) : null;
 }
 
-/** A coordinate as its axis name when the axis has one, else the integer or the tick format. */
+/** A coordinate as its axis name when the axis has one, else the integer or the tick format. A
+ * name that is itself a number is shown to the tick format's precision, not to its full length. */
 function coord(v: number, names: string[] | null): string {
-	if (names && Number.isInteger(v) && v >= 0 && v < names.length) return names[v];
+	if (names && Number.isInteger(v) && v >= 0 && v < names.length) {
+		const name = names[v];
+		return name.trim() !== '' && Number.isFinite(Number(name)) ? formatTick(Number(name)) : name;
+	}
 	return Number.isInteger(v) ? String(v) : formatTick(v);
 }
 
@@ -39,7 +49,7 @@ function log(v: number, on: boolean): number {
 export interface LineAxes {
 	logX: boolean;
 	logY: boolean;
-	/** The plot's inner margin in layout px; glance keeps a 2-device-px pad around the range. */
+	/** The plot's inner margin in layout px; plotluck keeps a 2-device-px pad around the range. */
 	pad: number;
 }
 
@@ -93,9 +103,9 @@ export function lineProbe(data: LineData, range: Range, axes: LineAxes, names: L
 		const { i, s } = best;
 		const x = xAt(i);
 		const y = Number(rows[s][i]);
-		const lines = [`x ${coord(x, names.x)}`, `y ${formatTick(y)}`];
-		if (rows.length > 1) lines.unshift(coord(s, names.series));
-		return { mark: { x: toPx(x), y: toPy(y) }, lines };
+		const lines = [[formatTick(y)], [`x ${coord(x, names.x)}`]];
+		if (rows.length > 1) lines.unshift([coord(s, names.series)]);
+		return { mark: { x: toPx(x), y: toPy(y), r: 3.5 }, lines };
 	};
 }
 
@@ -125,6 +135,6 @@ export function imageProbe(arr: ArrayData, stretch: boolean, meta: Record<string
 		const at = (row * iw + col) * channels;
 		const values: string[] = [];
 		for (let c = 0; c < channels; c++) values.push(formatTick(Number(arr.values[at + c])));
-		return { mark: null, lines: [`x ${coord(col, colNames)}`, `y ${coord(row, rowNames)}`, values.join(' ')] };
+		return { mark: null, lines: [values, [`x ${coord(col, colNames)}`, `y ${coord(row, rowNames)}`]] };
 	};
 }

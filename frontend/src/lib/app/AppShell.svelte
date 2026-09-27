@@ -63,24 +63,28 @@
 		fsMode = 'load';
 	}
 
+	// The dialog stays up while the operation runs, showing its progress, and closes once it
+	// has settled either way; a failure is said by the toast.
 	async function onFsPick(pickedPath: string, overwrite = false): Promise<void> {
 		const mode = fsMode;
-		fsMode = null;
 		try {
 			if (mode === 'save') await g.save(pickedPath, overwrite);
 			else if (mode === 'load') await g.load(pickedPath);
 		} catch (e) {
 			notify().failure(mode === 'save' ? 'Save' : 'Load', e);
+		} finally {
+			fsMode = null;
 		}
 	}
 
 	/** Upload a `.gfi` from the user's own machine, for what the backend's browser cannot reach. */
 	async function onFsFilePick(file: File): Promise<void> {
-		fsMode = null;
 		try {
 			await uploadPatch(file);
 		} catch (e) {
 			notify().failure('Open', e);
+		} finally {
+			fsMode = null;
 		}
 	}
 

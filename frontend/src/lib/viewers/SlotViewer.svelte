@@ -108,7 +108,7 @@
 
 	{#if expanded}
 		<!-- A line or image body is transparent: the editor's plot surface paints it from beneath. -->
-		<div class="body" class:plot={drawsOnSurface(binding.kind)}>
+		<div class="body" class:plot={drawsOnSurface(binding.kind, binding.settings)}>
 			<ViewerFeed {node} {slot} {binding} zoom={vp.current.zoom} />
 		</div>
 	{/if}
@@ -219,9 +219,7 @@
 	   coarse floor: the header BAR takes the tap instead. */
 	@media (hover: none) and (pointer: coarse) {
 		header {
-			--select-min-h: 0;
-			--select-fs: var(--fs-small);
-			/* The cog keeps its 16px paint for the same reason; a `::after` carries its coarse target outward. */
+			/* The cog keeps its 16px paint; a `::after` carries its coarse target outward. */
 			--vs-cog-box: 16px;
 		}
 		.tri {

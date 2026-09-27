@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { viewSpecForKind, viewSpecsForKind, CAP_FLOOR } from './capacity';
 
-const axes = (kind: Parameters<typeof viewSpecForKind>[0], w: number, h: number) =>
-	viewSpecForKind(kind, w, h).reduce.map((r) => [r.dim, r.max, r.method]);
+const axes = (kind: Parameters<typeof viewSpecForKind>[0], w: number, h: number, settings = {}) =>
+	viewSpecForKind(kind, w, h, settings).reduce.map((r) => [r.dim, r.max, r.method]);
 
 describe('viewSpecForKind', () => {
 	it('a line caps its channels at what a plot tells apart and envelopes its samples to the width', () => {
@@ -20,12 +20,12 @@ describe('viewSpecForKind', () => {
 	});
 
 	it('a trajectory subsamples its point axis, the last one, up to a cap', () => {
-		expect(axes('trajectory', 800, 800)).toEqual([[-1, 800, 'subsample']]);
-		expect(axes('trajectory', 8000, 600)).toEqual([[-1, 4096, 'subsample']]);
+		expect(axes('line', 800, 800, { mode: 'trajectory' })).toEqual([[-1, 800, 'subsample']]);
+		expect(axes('line', 8000, 600, { mode: 'trajectory' })).toEqual([[-1, 4096, 'subsample']]);
 	});
 
-	it('a topomap, a string and a table are served whole', () => {
-		for (const kind of ['topomap', 'string', 'table'] as const) expect(axes(kind, 100, 100)).toEqual([]);
+	it('a brain, a string and a table are served whole', () => {
+		for (const kind of ['brain', 'string', 'table'] as const) expect(axes(kind, 100, 100)).toEqual([]);
 	});
 
 	it('a line parked on an image slot previews it by area, and the two specs never overlap', () => {

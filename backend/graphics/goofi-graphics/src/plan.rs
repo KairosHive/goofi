@@ -274,8 +274,9 @@ pub fn sizes(view: &GraphView<'_>, live: &HashMap<Uid, Instance>) -> HashMap<Uid
 }
 
 /// A node's size: what `common/width` and `common/height` hold, and for a zero on an axis the
-/// first wired texture input's size on that axis. A chain that follows itself, or one that
-/// follows nothing, is a generator.
+/// first wired texture input's size on that axis — or, with no texture behind it, the frame its
+/// host made or its first array input uploaded. A chain that follows itself, or one that follows
+/// nothing, is a generator.
 fn size_of(
     uid: Uid,
     live: &HashMap<Uid, Instance>,
@@ -304,8 +305,10 @@ fn size_of(
         });
         let (fw, fh) = match behind {
             Some(p) => size_of(p, live, wires, sizes, visiting),
-            None => live.get(&uid).and_then(|i| i.source.as_ref())
-                .and_then(|s| s.lock().unwrap().as_ref().map(|f| f.size)).unwrap_or((GENERATOR, GENERATOR)),
+            None => live.get(&uid).and_then(|i| {
+                i.source.as_ref().and_then(|s| s.lock().unwrap().as_ref().map(|f| f.size))
+                    .or_else(|| crate::half::unpack(i.uploaded.load(Ordering::Relaxed)))
+            }).unwrap_or((GENERATOR, GENERATOR)),
         };
         answer = (if w == 0 { fw } else { w }, if h == 0 { fh } else { h });
     }

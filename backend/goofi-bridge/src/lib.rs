@@ -1140,6 +1140,9 @@ async fn handle_control(socket: WebSocket, state: AppState) {
 
     let mut log_cursor = None;
     let mut log_tick = tokio::time::interval(Duration::from_millis(50));
+    // The op in flight, run off this task: a load builds nodes for seconds, and the log lines
+    // and events it raises meanwhile must reach the client that asked. One at a time, in order.
+    let mut pending: Option<tokio::task::JoinHandle<Option<String>>> = None;
     loop {
         tokio::select! {
             _ = log_tick.tick() => {
@@ -1150,13 +1153,18 @@ async fn handle_control(socket: WebSocket, state: AppState) {
                     if tx.send(Message::Text(msg.into())).await.is_err() { break; }
                 }
             },
-            incoming = rx.next() => match incoming {
-                Some(Ok(Message::Text(t))) => {
-                    if let Some(reply) = dispatch(&state, t.as_str()) {
-                        if tx.send(Message::Text(reply.into())).await.is_err() {
-                            break;
-                        }
+            replied = async { pending.as_mut().unwrap().await }, if pending.is_some() => {
+                pending = None;
+                if let Ok(Some(reply)) = replied {
+                    if tx.send(Message::Text(reply.into())).await.is_err() {
+                        break;
                     }
+                }
+            },
+            incoming = rx.next(), if pending.is_none() => match incoming {
+                Some(Ok(Message::Text(t))) => {
+                    let state = state.clone();
+                    pending = Some(tokio::task::spawn_blocking(move || dispatch(&state, t.as_str())));
                 }
                 Some(Ok(Message::Close(_))) | None => break,
                 Some(Err(_)) => break,
