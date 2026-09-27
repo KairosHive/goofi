@@ -325,7 +325,6 @@
 	onpointercancel={onPointerLeave}
 	ontouchstart={keepTouch}
 	ontouchmove={keepTouch}
-	oncontextmenu={(e) => e.preventDefault()}
 >
 	{#if !slot}
 		<EmptyState>
@@ -384,6 +383,7 @@
 		touch-action: none;
 		user-select: none;
 		-webkit-user-select: none;
+		-webkit-touch-callout: none;
 	}
 	.viewer-feed > :global(*) {
 		flex: 1;

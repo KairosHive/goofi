@@ -142,7 +142,7 @@
 	/* Hit-target geometry — documentary fine-pointer defaults. The touch floor only applies under
 	   (pointer: coarse), in the @media block at the end of this file. */
 	--hit: 28px; /* documentary default; the floor only applies under (pointer: coarse) below */
-	--splitter-size: 6px; /* larger under coarse */
+	--splitter-size: 6px; /* the gap between panels; larger under coarse */
 	/* The height of EVERY chrome strip a panel stacks: its header, and the content toolbar (Bar)
 	   flush beneath it. One token because the two must read as one band — a toolbar that sized
 	   itself off its content was 34.8px under a 26px header, and 53px under a 44px one. */
@@ -552,12 +552,32 @@ textarea {
 
 /* Touch density. Gated on a real touch device (no hover + coarse pointer) so fine-pointer
    desktop chrome keeps its natural, compact geometry. */
+/* Registered as lengths, so a token spelled as a `min()` of a px ceiling and a rem still reads
+   back as a resolved number of pixels — TopBar, ConsolePanel and the e2e invariants parse it. */
+@property --hit {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 28px;
+}
+@property --splitter-size {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 6px;
+}
+@property --panel-header-h {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 26px;
+}
+
 @media (hover: none) and (pointer: coarse) {
 	:root {
-		--hit: 44px;
-		--splitter-size: 14px;
-		/* grow the header bar to fit the floored controls it hosts */
-		--panel-header-h: 44px;
+		/* The touch floor follows the root rem — a phone's chrome is shorter than a tablet's — up
+		   to the 44px it was pinned at; the seams between panels and the header bar go with it. */
+		--hit: min(44px, 2.75rem);
+		--splitter-size: min(14px, 0.875rem);
+		/* the header bar is exactly as tall as the floored controls it hosts */
+		--panel-header-h: var(--hit);
 		/* raise the type floor to the iOS focus-zoom threshold */
 		font-size: clamp(14px, 0.9vw + 0.3vh, 16px);
 	}
