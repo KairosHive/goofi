@@ -92,10 +92,9 @@
 		overflow-x: auto;
 		overflow-y: hidden;
 		/* A scroll box clips what it holds, and a picker's focus ring sits outside its border, so
-		   the group pads for the ring on every side and pulls the same back out of the row. */
+		   the group pads for the ring on every side; the bar's height has the room. */
 		--ring: calc(var(--focus-width) + 1px);
 		padding: var(--ring);
-		margin: calc(-1 * var(--ring));
 		scroll-padding: var(--ring);
 	}
 	/* Touch: the strip's cog and bar take a shorter floor than the 44px hit, following the rem
