@@ -226,7 +226,8 @@
 
 		{#if working !== null}
 			<div class="body progress" data-testid="fs-progress" aria-live="polite">
-				<span class="spinner" aria-hidden="true"></span>
+				<!-- Three dots in turn, no ring: the frame's own accent, drawn small and quiet. -->
+				<span class="spinner" aria-hidden="true"><i></i><i></i><i></i></span>
 				<ul class="log" bind:this={logEl}>
 					{#each progress as row (row.uid)}
 						<li class={row.level}>{row.text}</li>
@@ -396,32 +397,49 @@
 		/* `dvh`, not `vh`: on a phone `vh` is the largest viewport, so the modal would overflow. */
 		height: min(42rem, 70dvh);
 	}
+	/* The spinner beside the log; a narrow dialog, taller than it is wide, stacks them instead. */
 	.progress {
-		flex-direction: column;
+		flex-direction: row;
 		align-items: center;
-		gap: var(--space-5);
-		padding: var(--space-7) var(--space-6);
+		gap: var(--space-6);
+		padding: var(--space-6);
 	}
 	.spinner {
 		flex: 0 0 auto;
-		width: 2rem;
-		height: 2rem;
-		border-radius: 50%;
-		box-sizing: border-box;
-		border: 3px solid var(--border);
-		border-top-color: var(--accent);
-		animation: fs-spin 0.8s linear infinite;
+		display: flex;
+		gap: var(--space-2);
+		padding: var(--space-4);
 	}
-	@keyframes fs-spin {
-		to {
-			transform: rotate(360deg);
+	.spinner i {
+		width: 0.5rem;
+		height: 0.5rem;
+		border-radius: 50%;
+		background: var(--accent);
+		animation: fs-pulse 1.2s ease-in-out infinite;
+	}
+	.spinner i:nth-child(2) {
+		animation-delay: 0.2s;
+	}
+	.spinner i:nth-child(3) {
+		animation-delay: 0.4s;
+	}
+	@keyframes fs-pulse {
+		0%,
+		60%,
+		100% {
+			opacity: 0.25;
+			transform: scale(0.8);
+		}
+		30% {
+			opacity: 1;
+			transform: scale(1);
 		}
 	}
 	.log {
 		flex: 1 1 auto;
+		align-self: stretch;
 		min-height: 0;
-		width: 100%;
-		max-width: 40rem;
+		min-width: 0;
 		margin: 0;
 		padding: var(--space-3) var(--space-4);
 		list-style: none;
@@ -576,7 +594,8 @@
 		color: var(--text-muted);
 	}
 	@container fs (max-width: 30rem) {
-		.body {
+		.body,
+		.progress {
 			flex-direction: column;
 		}
 		.roots {
