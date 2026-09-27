@@ -33,6 +33,7 @@ fn add(g: &mut Graph, manifest: NodeManifest, make: fn() -> Box<dyn Node>) {
 /// Every fixture into `g`.
 pub fn register(g: &mut Graph) {
     add(g, manifest("_TestEcho", "passes its input straight through", IN_ARRAY, OUT_ARRAY, NO_PARAMS, false), || Box::new(Echo));
+    add(g, manifest("_TestPair", "echoes `a`, or `b` when only that is wired", IN_PAIR, OUT_ARRAY, NO_PARAMS, false), || Box::new(Pair));
     add(g, manifest("_TestSink", "consumes a wire and carries one param", IN_ARRAY, &[], SINK_PARAMS, false), || Box::new(Sink));
     add(g, manifest("_TestScalar", "emits its `control/value` as a one-element frame", &[], OUT_ARRAY, SINK_PARAMS, true), || Box::new(Scalar));
     add(g, manifest("_TestFail", "process always errors", &[], OUT_ARRAY, NO_PARAMS, true), || Box::new(Failing));
@@ -73,6 +74,11 @@ static IN_MULTI: &[SlotDecl] = &[SlotDecl {
     multi: true,
     required: false,
 }];
+/// Two optional inputs, so a test can wire the second alone.
+static IN_PAIR: &[SlotDecl] = &[
+    SlotDecl { name: "a", kind: SlotType::Array, trigger_process: true, multi: false, required: false },
+    SlotDecl { name: "b", kind: SlotType::Array, trigger_process: true, multi: false, required: false },
+];
 static OUT_ARRAY: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];
 static OUT_STRING: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::String }];
 static NO_PARAMS: &[ParamDecl] = &[];
@@ -164,6 +170,16 @@ struct Echo;
 impl Node for Echo {
     fn process(&mut self, i: &Inputs<'_>, o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {
         if let Some(d) = i.get("input") {
+            o.set("out", d.clone());
+        }
+        Ok(())
+    }
+}
+
+struct Pair;
+impl Node for Pair {
+    fn process(&mut self, i: &Inputs<'_>, o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {
+        if let Some(d) = i.get("a").or_else(|| i.get("b")) {
             o.set("out", d.clone());
         }
         Ok(())

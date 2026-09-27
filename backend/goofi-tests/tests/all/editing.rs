@@ -1139,17 +1139,17 @@ fn a_deleted_node_hands_its_wires_through() {
     assert_eq!(wires(&g), vec![(hex(src), hex(sink))], "and redo bridges again");
     g.call("undo", j!({}));
 
-    // The first WIRED input is the one handed through, and only where its kind fits: a Quantize
-    // fed on `levels` alone bridges from there, and a FromJson between a String and a Table
+    // The first WIRED input is the one handed through, and only where its kind fits: a pair
+    // fed on `b` alone bridges from there, and a FromJson between a String and a Table
     // consumer bridges nothing.
     g.call("node remove", j!({ "node": hex(src) }));
     assert_eq!(wires(&g), vec![(hex(mid), hex(sink))], "a node with no wired input leaves its consumer unfed");
-    let quant = g.add("signal:Quantize");
-    g.link(mid, "out", quant, "levels");
-    g.link(quant, "out", sink, "input");
-    assert_eq!(wires(&g), vec![(hex(mid), hex(quant)), (hex(quant), hex(sink))]);
-    g.call("node remove", j!({ "node": hex(quant) }));
-    assert_eq!(wires(&g), vec![(hex(mid), hex(sink))], "the first wired input, `levels`, is handed through");
+    let pair = g.add("_TestPair");
+    g.link(mid, "out", pair, "b");
+    g.link(pair, "out", sink, "input");
+    assert_eq!(wires(&g), vec![(hex(mid), hex(pair)), (hex(pair), hex(sink))]);
+    g.call("node remove", j!({ "node": hex(pair) }));
+    assert_eq!(wires(&g), vec![(hex(mid), hex(sink))], "the first wired input, `b`, is handed through");
     let (text, json, table) = (g.add("Text"), g.add("FromJson"), g.add("TableSelect"));
     g.link(text, "out", json, "input");
     g.link(json, "out", table, "input");
