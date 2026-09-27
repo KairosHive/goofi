@@ -5,10 +5,8 @@ import type { LineData, Range } from 'glance';
 import { formatTick } from './format';
 
 export interface Hover {
-	/** Where the readout anchors; `mark` puts a dot there. */
-	x: number;
-	y: number;
-	mark: boolean;
+	/** The point the readout is about, marked with a dot; the readout itself follows the pointer. */
+	mark: { x: number; y: number } | null;
 	lines: string[];
 }
 
@@ -97,7 +95,7 @@ export function lineProbe(data: LineData, range: Range, axes: LineAxes, names: L
 		const y = Number(rows[s][i]);
 		const lines = [`x ${coord(x, names.x)}`, `y ${formatTick(y)}`];
 		if (rows.length > 1) lines.unshift(coord(s, names.series));
-		return { x: toPx(x), y: toPy(y), mark: true, lines };
+		return { mark: { x: toPx(x), y: toPy(y) }, lines };
 	};
 }
 
@@ -127,11 +125,6 @@ export function imageProbe(arr: ArrayData, stretch: boolean, meta: Record<string
 		const at = (row * iw + col) * channels;
 		const values: string[] = [];
 		for (let c = 0; c < channels; c++) values.push(formatTick(Number(arr.values[at + c])));
-		return {
-			x: px,
-			y: py,
-			mark: false,
-			lines: [`x ${coord(col, colNames)}`, `y ${coord(row, rowNames)}`, values.join(' ')]
-		};
+		return { mark: null, lines: [`x ${coord(col, colNames)}`, `y ${coord(row, rowNames)}`, values.join(' ')] };
 	};
 }

@@ -16,8 +16,9 @@ describe('lineProbe', () => {
 			series: ['ramp', 'flat']
 		});
 		const h = probe(31, 71, box)!;
-		expect(h).toMatchObject({ x: 30, mark: true, lines: ['ramp', 'x t3', 'y 0.300'] });
-		expect(h.y).toBeCloseTo(70);
+		expect(h.lines).toEqual(['ramp', 'x t3', 'y 0.300']);
+		expect(h.mark!.x).toBeCloseTo(30);
+		expect(h.mark!.y).toBeCloseTo(70);
 		expect(probe(31, 52, box)!.lines).toEqual(['flat', 'x t3', 'y 0.500']);
 	});
 

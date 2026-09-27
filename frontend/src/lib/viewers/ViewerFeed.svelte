@@ -58,7 +58,7 @@
 	let surfaceProbe: Probe | null = null;
 	let componentProbe = $state.raw<Probe | null>(null);
 	let hover = $state.raw<Hover | null>(null);
-	let pointer: { x: number; y: number } | null = null;
+	let pointer = $state.raw<{ x: number; y: number } | null>(null);
 
 	/** The 32-px step for `px`, left where it is until `px` is a quarter step past the held one's edge. */
 	function quantize(px: number, held: number): number {
@@ -264,19 +264,19 @@
 		{#each labels as text, i (i)}
 			{#if text}<span class="tick tick-{i}">{text}</span>{/if}
 		{/each}
-		{#if hover}
-			<div
-				class="hover"
-				class:left={hover.x > boxW / 2}
-				class:up={hover.y > boxH / 2}
-				style:left="{hover.x}px"
-				style:top="{hover.y}px"
+		{#if hover && pointer}
+			{#if hover.mark}
+				<span class="mark" style:left="{hover.mark.x}px" style:top="{hover.mark.y}px"></span>
+			{/if}
+			<span
+				class="readout"
+				class:left={pointer.x > boxW / 2}
+				class:up={pointer.y > boxH / 2}
+				style:left="{pointer.x}px"
+				style:top="{pointer.y}px"
 			>
-				{#if hover.mark}<span class="mark"></span>{/if}
-				<span class="readout">
-					{#each hover.lines as line, i (i)}<span>{line}</span>{/each}
-				</span>
-			</div>
+				{#each hover.lines as line, i (i)}<span>{line}</span>{/each}
+			</span>
 		{/if}
 	{/if}
 </div>
@@ -320,15 +320,11 @@
 			opacity: 1;
 		}
 	}
-	/* The hover readout anchors at the probed point and leans away from the nearer edge. */
-	.hover {
-		position: absolute;
-		width: 0;
-		height: 0;
-		pointer-events: none;
-	}
+	/* The mark sits on the probed point; the readout follows the pointer, leaning away from the
+	   nearer edge so it stays inside the body. */
 	.mark {
 		position: absolute;
+		pointer-events: none;
 		width: 7px;
 		height: 7px;
 		transform: translate(-50%, -50%);
@@ -338,8 +334,8 @@
 	}
 	.readout {
 		position: absolute;
-		left: 10px;
-		top: 10px;
+		pointer-events: none;
+		transform: translate(10px, 10px);
 		display: flex;
 		flex-direction: column;
 		gap: 1px;
@@ -352,13 +348,14 @@
 		color: var(--text);
 		white-space: nowrap;
 	}
-	.hover.left .readout {
-		left: auto;
-		right: 10px;
+	.readout.left {
+		transform: translate(calc(-100% - 10px), 10px);
 	}
-	.hover.up .readout {
-		top: auto;
-		bottom: 10px;
+	.readout.up {
+		transform: translate(10px, calc(-100% - 10px));
+	}
+	.readout.left.up {
+		transform: translate(calc(-100% - 10px), calc(-100% - 10px));
 	}
 	.tick-0 {
 		top: 0;

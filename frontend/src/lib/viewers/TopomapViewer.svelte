@@ -40,14 +40,29 @@
 	let pixelCache: PixelCache | null = null;
 	let field: Float32Array | null = null;
 	let weights: Float64Array | null = null;
+	// The electrodes the last paint placed, for the hover to name.
+	let electrodes: { name: string; x: number; y: number; value: number }[] = [];
 
-	// The hover reads the interpolated field inside the head disc and nothing outside it.
+	// The hover names an electrode within reach, else reads the field inside the head disc; it
+	// says nothing outside the disc.
 	probe = (px, py, box) => {
 		if (!layout || !weights) return null;
 		const { cx, cy, side, radius } = headFrame(box.w, box.h);
 		if ((px - cx) ** 2 + (py - cy) ** 2 > radius * radius) return null;
+		let near: (typeof electrodes)[number] | null = null;
+		let best = box.tol * box.tol;
+		for (const e of electrodes) {
+			const ex = cx + (e.x - 0.5) * side;
+			const ey = cy + (e.y - 0.5) * side;
+			const d = (ex - px) ** 2 + (ey - py) ** 2;
+			if (d <= best) {
+				best = d;
+				near = { ...e, x: ex, y: ey };
+			}
+		}
+		if (near) return { mark: { x: near.x, y: near.y }, lines: [near.name, formatTick(near.value)] };
 		const v = evaluateAt(layout, weights, 0.5 + (px - cx) / side, 0.5 + (py - cy) / side);
-		return { x: px, y: py, mark: false, lines: [formatTick(v)] };
+		return { mark: null, lines: [formatTick(v)] };
 	};
 
 	const lutFor = makeLUTCache();
@@ -96,12 +111,14 @@
 		const vals = arr.values as ArrayLike<number>;
 		const knownIdx: number[] = [];
 		const knownPos: Array<[number, number]> = [];
+		electrodes = [];
 		for (let i = 0; i < channels.length; i++) {
 			const name = channels[i];
 			const pos = EEG_LAYOUT[name] ?? EEG_LAYOUT[name.toUpperCase()];
 			if (!pos) continue;
 			knownIdx.push(i);
 			knownPos.push(pos);
+			electrodes.push({ name, x: pos[0], y: pos[1], value: Number(vals[i]) });
 		}
 
 		if (knownPos.length === 0) {
