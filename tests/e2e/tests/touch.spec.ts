@@ -385,7 +385,7 @@ test('a viewer panel\'s strip is one group that slides as a whole, under a short
 		await expect(strip.getByTestId('viewer-kind')).toBeAttached();
 		await expect(strip.getByTestId('viewer-settings-cog')).toBeAttached();
 		const height = (await strip.getByTestId('viewer-slot').locator('select').boundingBox())!.height;
-		expect(height, 'the slot picker sits under the strip floor').toBeLessThanOrEqual(32);
+		expect(height, 'the slot picker reads as the node header\'s does').toBeLessThanOrEqual(28);
 	} finally {
 		await restorePanelType(page);
 		await tearDown(page);
