@@ -202,7 +202,8 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 
 		await test.step('a hover near the line reads the point under it, and nothing away from it', async () => {
 			const box = (await body.boundingBox())!;
-			const readout = body.locator('.readout');
+			// The readout is portalled to <body>, so it is found from the page.
+			const readout = page.locator('.viewer-hover-readout');
 			const x = box.x + box.width / 2;
 			// The sine crosses every row at some column, so a column scan meets it; the readout
 			// names the sample index and the value, and marks the point on the line.
@@ -224,7 +225,7 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			const image = page.locator(`.svelte-flow__node[data-id="${ramp}"] .slot-viewer .body`);
 			const box = (await image.boundingBox())!;
 			await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-			await expect(image.locator('.readout')).toHaveText(/^x \d+y \d+/);
+			await expect(page.locator('.viewer-hover-readout')).toHaveText(/^x \d+y \d+/);
 			await expect(image.locator('.mark')).toHaveCount(0);
 		});
 

@@ -12,6 +12,7 @@
 	import { offsetIn, useAnchor, useSurface } from './plotHost';
 	import { lineData, pushImage } from './plotFeed';
 	import { axisNames, imageProbe, lineProbe, type Hover, type Probe } from './hover';
+	import { portal } from 'panelty';
 	import { drawsOnSurface, isRenderable } from './kind';
 	import { makeLUTCache } from './colormaps';
 	import { formatTick } from './format';
@@ -59,6 +60,21 @@
 	let componentProbe = $state.raw<Probe | null>(null);
 	let hover = $state.raw<Hover | null>(null);
 	let pointer = $state.raw<{ x: number; y: number } | null>(null);
+	// The pointer in viewport px: the readout is portalled, so the window edge is its only bound.
+	let client = $state.raw<{ x: number; y: number } | null>(null);
+	let readoutW = $state(0);
+	let readoutH = $state(0);
+	const GAP = 10;
+	// Up and left of the pointer, away from where a hand or a pen sits; a side flips only where
+	// the window would cut it off.
+	const readoutPos = $derived.by(() => {
+		if (!client) return null;
+		let left = client.x - GAP - readoutW;
+		if (left < 0) left = client.x + GAP;
+		let top = client.y - GAP - readoutH;
+		if (top < 0) top = client.y + GAP;
+		return { left, top };
+	});
 
 	/** The 32-px step for `px`, left where it is until `px` is a quarter step past the held one's edge. */
 	function quantize(px: number, held: number): number {
@@ -233,11 +249,13 @@
 		const r = container.getBoundingClientRect();
 		const scale = r.width > 0 ? boxW / r.width : 1;
 		pointer = { x: (e.clientX - r.left) * scale, y: (e.clientY - r.top) * scale };
+		client = { x: e.clientX, y: e.clientY };
 		readout();
 	}
 
 	function onPointerLeave(): void {
 		pointer = null;
+		client = null;
 		hover = null;
 	}
 
@@ -268,15 +286,18 @@
 			{#if hover.mark}
 				<span class="mark" style:left="{hover.mark.x}px" style:top="{hover.mark.y}px"></span>
 			{/if}
-			<span
-				class="readout"
-				class:left={pointer.x > boxW / 2}
-				class:up={pointer.y > boxH / 2}
-				style:left="{pointer.x}px"
-				style:top="{pointer.y}px"
-			>
-				{#each hover.lines as line, i (i)}<span>{line}</span>{/each}
-			</span>
+			{#if readoutPos}
+				<span
+					class="viewer-hover-readout"
+					style:left="{readoutPos.left}px"
+					style:top="{readoutPos.top}px"
+					bind:offsetWidth={readoutW}
+					bind:offsetHeight={readoutH}
+					use:portal
+				>
+					{#each hover.lines as line, i (i)}<span>{line}</span>{/each}
+				</span>
+			{/if}
 		{/if}
 	{/if}
 </div>
@@ -320,8 +341,8 @@
 			opacity: 1;
 		}
 	}
-	/* The mark sits on the probed point; the readout follows the pointer, leaning away from the
-	   nearer edge so it stays inside the body. */
+	/* The mark sits on the probed point; the readout follows the pointer, on <body> so a card's
+	   edge never clips it. */
 	.mark {
 		position: absolute;
 		pointer-events: none;
@@ -332,30 +353,22 @@
 		background: var(--text);
 		box-shadow: 0 0 0 1px var(--bg);
 	}
-	.readout {
-		position: absolute;
+	:global(.viewer-hover-readout) {
+		position: fixed;
+		z-index: var(--z-menu);
 		pointer-events: none;
-		transform: translate(10px, 10px);
 		display: flex;
 		flex-direction: column;
 		gap: 1px;
 		padding: var(--space-1);
 		border-radius: var(--radius-sm);
-		background: color-mix(in srgb, var(--bg) 85%, transparent);
+		background: var(--surface-2);
+		border: 1px solid var(--border-strong);
 		font-family: var(--font-mono);
 		font-size: var(--fs-micro);
 		line-height: 1.2;
 		color: var(--text);
 		white-space: nowrap;
-	}
-	.readout.left {
-		transform: translate(calc(-100% - 10px), 10px);
-	}
-	.readout.up {
-		transform: translate(10px, calc(-100% - 10px));
-	}
-	.readout.left.up {
-		transform: translate(calc(-100% - 10px), calc(-100% - 10px));
 	}
 	.tick-0 {
 		top: 0;
