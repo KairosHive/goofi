@@ -6,9 +6,11 @@ Chromium needs SwiftShader flags). The surface owns pixels only; text stays in t
 
 ## Remaining
 
-1. Topomap and trajectory onto the surface: the interpolation (`topomapInterp.ts`, CPU today)
-   becomes a fragment shader over the electrode positions; the trajectory a line plot with two
-   series per pair. Then `ViewerSurface` keeps only the string and table kinds.
+1. The brain viewer and the line viewer's trajectory mode onto the surface: the topomap
+   interpolation (`topomapInterp.ts`, CPU today) becomes a fragment shader over the electrode
+   positions, the ring and the 3-D connectivity (canvas 2-D today) line programs, and the
+   trajectory a line plot with two series per pair. Then `ViewerSurface` keeps only the string
+   and table kinds.
 2. `glance` from npm: `frontend/package.json` takes it from its GitHub repo today; when it is
    published, the dependency takes a version.
 3. Worker-side rendering: `dataWorker.ts` owns the sockets and the decode; with

@@ -996,7 +996,7 @@ fn a_viewer_bag_persists_and_refuses_a_word_outside_its_vocabulary() {
 
     let why = g.refuse("node edit", j!({ "node": hex(osc),
                                          "viewer": [{ "slot": "out", "kind": "waveform" }] }));
-    assert!(why.contains("waveform") && why.contains("line") && why.contains("topomap"), "{why}");
+    assert!(why.contains("waveform") && why.contains("line") && why.contains("brain"), "{why}");
     let why = g.refuse("node edit", j!({ "node": hex(osc),
                                          "viewer": [{ "slot": "psd", "kind": "line" }] }));
     assert!(why.contains("psd") && why.contains("out"), "an unknown slot names the real ones: {why}");

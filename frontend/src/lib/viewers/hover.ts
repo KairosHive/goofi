@@ -20,6 +20,10 @@ export interface ProbeBox {
 
 export type Probe = (x: number, y: number, box: ProbeBox) => Hover | null;
 
+/** What a viewer does with a drag of `dx`, `dy` layout px. A viewer that defines one captures
+ * the pointer; one that does not leaves the drag to whatever holds it, such as the node card. */
+export type Drag = (dx: number, dy: number, box: ProbeBox) => void;
+
 /** The names a frame's meta gives axis `dim`, or `null` where it names none. */
 export function axisNames(meta: Record<string, unknown> | undefined, dim: number): string[] | null {
 	const channels = meta?.channels as Record<string, unknown> | undefined;

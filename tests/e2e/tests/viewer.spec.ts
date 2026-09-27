@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { waitForApp, resetPatch } from '../lib/app';
-import { addNode, frameSummary, selectNode, waitForNode } from '../lib/goofi';
+import { addNode, frameSummary, selectNode, updateParam, waitForNode } from '../lib/goofi';
+import { rawCall } from '../lib/harness';
 
 type Clip = { x: number; y: number; width: number; height: number };
 
@@ -264,6 +265,47 @@ test('streams served at the cap paint together, so the page paints at the cap', 
 			.toBe(true);
 		const fps = async () => Number((await page.getByText(/^\d+ fps$/).first().textContent())?.split(' ')[0]);
 		expect(await fps(), 'paints a second, with three streams at a 30 fps cap').toBeLessThanOrEqual(36);
+	} finally {
+		await resetPatch(page);
+	}
+});
+
+test('a viewer with a drag of its own keeps it from the card; one without lets the card move', async ({ page }) => {
+	// The 3-D brain turns under a drag, so a press on it must not start a node drag; the ring
+	// has no drag, so the same press moves the node as a press on any viewer does.
+	await page.setViewportSize({ width: 1280, height: 800 });
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const c = await addNode(page, 'signal:Constant', [160, 120]);
+		await waitForNode(page, c);
+		await updateParam(page, c, 'constant', 'shape', '4,4');
+		const card = page.locator(`.svelte-flow__node[data-id="${c}"]`);
+		const feed = card.locator('.slot-viewer .body .viewer-feed');
+		const drag = async (): Promise<{ dx: number; dy: number }> => {
+			const before = (await card.boundingBox())!;
+			const box = (await feed.boundingBox())!;
+			await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+			await page.mouse.down();
+			await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2 + 40, { steps: 8 });
+			await page.mouse.up();
+			const after = (await card.boundingBox())!;
+			return { dx: after.x - before.x, dy: after.y - before.y };
+		};
+
+		await test.step('the 3-D brain takes the drag', async () => {
+			await rawCall(page, 'node edit', { node: c, viewer: [{ slot: 'out', kind: 'brain', settings: { mode: '3d' } }] });
+			await expect(feed, 'the viewer declares its drag once the frame is drawn').toHaveClass(/nodrag/);
+			expect(await drag()).toEqual({ dx: 0, dy: 0 });
+		});
+
+		await test.step('the ring leaves it to the card', async () => {
+			await rawCall(page, 'node edit', { node: c, viewer: [{ slot: 'out', kind: 'brain', settings: { mode: 'ring' } }] });
+			await expect(feed).not.toHaveClass(/nodrag/);
+			const moved = await drag();
+			expect(moved.dx, 'the card followed the pointer').toBeGreaterThan(40);
+			expect(moved.dy).toBeGreaterThan(20);
+		});
 	} finally {
 		await resetPatch(page);
 	}

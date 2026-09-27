@@ -108,7 +108,7 @@
 
 	{#if expanded}
 		<!-- A line or image body is transparent: the editor's plot surface paints it from beneath. -->
-		<div class="body" class:plot={drawsOnSurface(binding.kind)}>
+		<div class="body" class:plot={drawsOnSurface(binding.kind, binding.settings)}>
 			<ViewerFeed {node} {slot} {binding} zoom={vp.current.zoom} />
 		</div>
 	{/if}

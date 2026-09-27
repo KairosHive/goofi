@@ -302,9 +302,9 @@ describe('inline viewer state — the document is the one holder, so it follows 
 		// A SECOND tab expands the slot and picks another viewer. It reaches us as an ordinary doc
 		// patch on a node we already hold — the case a client-side copy, seeded once per new uid,
 		// never hears about: the two tabs then disagree, and whichever edits next overwrites the peer.
-		d.patch({ nodes: { n1: blob({ out: { collapsed: false, kind: 'topomap' } }) } });
+		d.patch({ nodes: { n1: blob({ out: { collapsed: false, kind: 'brain' } }) } });
 		expect(isSlotExpanded(g.nodeById('n1'), 'out'), 'the peer’s expand converges').toBe(true);
-		expect(slotView(g.nodeById('n1'), 'out').kind, 'and so does the peer’s kind').toBe('topomap');
+		expect(slotView(g.nodeById('n1'), 'out').kind, 'and so does the peer’s kind').toBe('brain');
 	});
 
 	it('an in-session load onto a re-used uid draws the loaded patch, not the outgoing one', () => {

@@ -38,16 +38,27 @@ describe('isRenderable', () => {
 	const spec = (...shape: number[]) => ({ dtype: '<f4', shape, values: new Float32Array(shape.reduce((a, b) => a * b, 1)) });
 
 	it('line draws 1-D and 2-D (C,N) — and nothing higher', () => {
-		expect(isRenderable('line', spec(128))).toBe(true);
-		expect(isRenderable('line', spec(4, 128))).toBe(true);
+		expect(isRenderable('line', spec(128), {})).toBe(true);
+		expect(isRenderable('line', spec(4, 128), {})).toBe(true);
 		// A line plot draws nothing above 2-D: a 3-D frame on the default kind must take the same
 		// HighDimFallback a 4-D frame gets, not sit blank or frozen on the last 2-D frame.
-		expect(isRenderable('line', spec(4, 4, 3))).toBe(false);
-		expect(isRenderable('line', spec(2, 4, 4, 3))).toBe(false);
+		expect(isRenderable('line', spec(4, 4, 3), {})).toBe(false);
+		expect(isRenderable('line', spec(2, 4, 4, 3), {})).toBe(false);
+	});
+
+	it('a trajectory wants pairs of rows; a brain a value per channel or a channel-by-channel matrix', () => {
+		const trajectory = { mode: 'trajectory' };
+		expect(isRenderable('line', spec(2, 128), trajectory)).toBe(true);
+		expect(isRenderable('line', spec(128), trajectory)).toBe(false);
+		expect(isRenderable('brain', spec(8), {})).toBe(true);
+		expect(isRenderable('brain', spec(8, 8), {})).toBe(true);
+		expect(isRenderable('brain', spec(8, 4), {})).toBe(false);
+		expect(isRenderable('brain', spec(8), { mode: 'ring' })).toBe(false);
+		expect(isRenderable('brain', spec(8, 8), { mode: 'topomap' })).toBe(false);
 	});
 
 	it('a non-array frame is always renderable by its own dedicated viewer', () => {
-		expect(isRenderable('string', null)).toBe(true);
+		expect(isRenderable('string', null, {})).toBe(true);
 	});
 });
 

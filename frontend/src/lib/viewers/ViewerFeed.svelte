@@ -11,7 +11,7 @@
 	import { LinePlot, type Plot } from 'glance';
 	import { offsetIn, useAnchor, useSurface } from './plotHost';
 	import { lineData, pushImage } from './plotFeed';
-	import { axisNames, imageProbe, lineProbe, type Hover, type Probe } from './hover';
+	import { axisNames, imageProbe, lineProbe, type Drag, type Hover, type Probe } from './hover';
 	import { portal } from 'panelty';
 	import { drawsOnSurface, isRenderable } from './kind';
 	import { makeLUTCache } from './colormaps';
@@ -29,7 +29,7 @@
 	const settings = $derived(binding.settings);
 	const host = useSurface();
 	const anchor = useAnchor();
-	const onSurface = $derived(drawsOnSurface(kind));
+	const onSurface = $derived(drawsOnSurface(kind, settings));
 
 	// What the DOM shows: a surface kind's frame only while it takes the fallback text.
 	let frame = $state.raw<DataFrame | null>(null);
@@ -58,6 +58,10 @@
 	// The hover: a surface kind's probe is built here from the drawn data, a component's is bound.
 	let surfaceProbe: Probe | null = null;
 	let componentProbe = $state.raw<Probe | null>(null);
+	// A component's drag, where it has one: the feed then captures the pointer instead of the
+	// card, which otherwise moves the node.
+	let componentDrag = $state.raw<Drag | null>(null);
+	let dragging: { x: number; y: number } | null = null;
 	let hover = $state.raw<Hover | null>(null);
 	let pointer = $state.raw<{ x: number; y: number } | null>(null);
 	// The pointer in viewport px: the readout is portalled, so the window edge is its only bound.
@@ -131,7 +135,7 @@
 		untrack(() => plot?.clear());
 		if (!visible || !slot) return;
 		// Kind is not part of the stream's identity, but it IS part of what this viewer needs.
-		const specs = capW > 0 && capH > 0 ? viewSpecsForKind(kind, capW, capH) : null;
+		const specs = capW > 0 && capH > 0 ? viewSpecsForKind(kind, capW, capH, settings) : null;
 		const draw = onSurface;
 		// A joiner is replayed the current frame at once, so the delivery must not become a dependency.
 		return bindViewer(node, slot, token, specs, (f: DataFrame) =>
@@ -189,7 +193,7 @@
 
 	/** Whether a frame takes the fallback text rather than the plot. */
 	function fallback(f: DataFrame): boolean {
-		return !isArrayFrame(f) || !isRenderable(kind, f.data);
+		return !isArrayFrame(f) || !isRenderable(kind, f.data, settings);
 	}
 
 	function drawFrame(f: DataFrame): void {
@@ -245,17 +249,46 @@
 		hover = probe(pointer.x, pointer.y, { w: boxW, h: boxH, tol: 12 / zoom });
 	}
 
-	function onPointerMove(e: PointerEvent): void {
-		if (!container) return;
-		// Layout px: the box is measured under the flow zoom, the pointer is not.
+	/** The pointer in layout px: the box is measured under the flow zoom, the pointer is not. */
+	function layoutPoint(e: PointerEvent): { x: number; y: number } | null {
+		if (!container) return null;
 		const r = container.getBoundingClientRect();
 		const scale = r.width > 0 ? boxW / r.width : 1;
-		pointer = { x: (e.clientX - r.left) * scale, y: (e.clientY - r.top) * scale };
+		return { x: (e.clientX - r.left) * scale, y: (e.clientY - r.top) * scale };
+	}
+
+	function onPointerDown(e: PointerEvent): void {
+		const drag = onSurface ? null : componentDrag;
+		if (!drag || e.button !== 0) return;
+		dragging = layoutPoint(e);
+		container?.setPointerCapture(e.pointerId);
+		// The card must not take this press as the start of a node drag, nor a menu as a dismissal.
+		e.stopPropagation();
+	}
+
+	function onPointerMove(e: PointerEvent): void {
+		const at = layoutPoint(e);
+		if (!at) return;
+		const drag = onSurface ? null : componentDrag;
+		if (dragging && drag) {
+			drag(at.x - dragging.x, at.y - dragging.y, { w: boxW, h: boxH, tol: 12 / zoom });
+			dragging = at;
+		}
+		pointer = at;
 		client = { x: e.clientX, y: e.clientY };
 		readout();
 	}
 
-	function onPointerLeave(): void {
+	function onPointerUp(e: PointerEvent): void {
+		if (!dragging) return;
+		dragging = null;
+		container?.releasePointerCapture(e.pointerId);
+	}
+
+	function onPointerLeave(e: PointerEvent): void {
+		// A captured pointer leaves the box and comes back; only its release ends the drag.
+		if (dragging && e.type === 'pointerleave') return;
+		dragging = null;
 		pointer = null;
 		client = null;
 		hover = null;
@@ -266,8 +299,11 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="viewer-feed"
+	class:nodrag={!onSurface && componentDrag !== null}
 	bind:this={container}
+	onpointerdown={onPointerDown}
 	onpointermove={onPointerMove}
+	onpointerup={onPointerUp}
 	onpointerleave={onPointerLeave}
 	onpointercancel={onPointerLeave}
 >
@@ -280,7 +316,7 @@
 			{#snippet hint()}WebGL2 is not available{/snippet}
 		</EmptyState>
 	{:else}
-		<ViewerSurface {frame} {kind} {settings} bind:probe={componentProbe} />
+		<ViewerSurface {frame} {kind} {settings} bind:probe={componentProbe} bind:drag={componentDrag} />
 		{#each labels as text, i (i)}
 			{#if text}<span class="tick tick-{i}">{text}</span>{/if}
 		{/each}
@@ -321,6 +357,10 @@
 		display: flex;
 		align-items: stretch;
 		justify-content: stretch;
+	}
+	/* A viewer that takes the drag takes the finger too: no scroll or pan from the page. */
+	.viewer-feed.nodrag {
+		touch-action: none;
 	}
 	.viewer-feed > :global(*) {
 		flex: 1;
