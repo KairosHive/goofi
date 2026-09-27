@@ -14,6 +14,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { restorePanelType, waitForApp } from '../lib/app';
 import { addNode, frameSummary, tapNode, waitForNode } from '../lib/goofi';
+import { rawCall } from '../lib/harness';
 import { emptySpot, pinch, swipe, touchSession } from '../lib/touch';
 import { pane } from '../lib/inspector';
 
@@ -359,6 +360,40 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			for (const v of g.query.variables().filter((v: { name: string }) => v.name.startsWith('desk.')))
 				await g.commands.removeVariable(v.name);
 		});
+		await tearDown(page);
+	}
+});
+
+test('a finger held on a viewer reads it, and follows as it moves, without moving the card', async ({ page }) => {
+	// There is no hover on a touch screen, so the finger IS the hover: the readout shows while it
+	// is down and follows it. The finger is reading the picture, not carrying the node. An image
+	// answers under every cell, so the readout's presence is the finger's alone.
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const c = await addNode(page, 'signal:Constant', [40, 200]);
+		await waitForNode(page, c);
+		await page.evaluate((u) => (window as any).goofi.commands.updateParam(u, 'constant', 'shape', '4,4'), c);
+		await rawCall(page, 'node edit', { node: c, viewer: [{ slot: 'out', kind: 'image' }] });
+		const card = page.locator(`.svelte-flow__node[data-id="${c}"]`);
+		const body = card.locator('.slot-viewer .body');
+		await expect(body).toBeVisible();
+		await expect.poll(() => frameSummary(page, c)).not.toBeNull();
+		const before = (await card.boundingBox())!;
+		const box = (await body.boundingBox())!;
+		const readout = page.locator('.viewer-hover-readout');
+		const touch = await touchSession(page);
+		const at = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
+		await touch.down(at);
+		await expect(readout, 'the press reads the cell under the finger').toHaveCount(1);
+		await touch.moveTo({ x: at.x + 30, y: at.y + 10 });
+		await expect(readout, 'and holds through the move').toHaveCount(1);
+		await page.waitForTimeout(150);
+		await touch.up();
+		await expect(readout, 'and goes with the finger').toHaveCount(0);
+		const after = (await card.boundingBox())!;
+		expect([after.x, after.y], 'the card stayed where it was').toEqual([before.x, before.y]);
+	} finally {
 		await tearDown(page);
 	}
 });

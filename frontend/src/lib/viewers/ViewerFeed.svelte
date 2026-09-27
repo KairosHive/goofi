@@ -62,6 +62,8 @@
 	// card, which otherwise moves the node.
 	let componentDrag = $state.raw<Drag | null>(null);
 	let dragging: { x: number; y: number } | null = null;
+	// Whether the feed holds the pointer: a finger reading it, or a drag on a component.
+	let held = false;
 	let hover = $state.raw<Hover | null>(null);
 	let pointer = $state.raw<{ x: number; y: number } | null>(null);
 	// The pointer in viewport px: the readout is portalled, so the window edge is its only bound.
@@ -258,11 +260,23 @@
 	}
 
 	function onPointerDown(e: PointerEvent): void {
+		if (e.button !== 0) return;
 		const drag = onSurface ? null : componentDrag;
-		if (!drag || e.button !== 0) return;
-		dragging = layoutPoint(e);
+		// A finger is the hover a touch screen does not have: held down, it reads the picture and
+		// follows, and the card is not carried by it. A mouse only reads by resting over the body.
+		const finger = e.pointerType === 'touch';
+		if (!drag && !finger) return;
+		if (drag) dragging = layoutPoint(e);
+		held = true;
 		container?.setPointerCapture(e.pointerId);
+		if (finger) onPointerMove(e);
 		// The card must not take this press as the start of a node drag, nor a menu as a dismissal.
+		e.stopPropagation();
+	}
+
+	/** The node's drag and the pane's pan start on touch events, which a finger reading a viewer
+	 * keeps to itself; they have not started, so a still finger is no long press on the pane. */
+	function keepTouch(e: TouchEvent): void {
 		e.stopPropagation();
 	}
 
@@ -280,15 +294,18 @@
 	}
 
 	function onPointerUp(e: PointerEvent): void {
-		if (!dragging) return;
 		dragging = null;
-		container?.releasePointerCapture(e.pointerId);
+		held = false;
+		if (container?.hasPointerCapture(e.pointerId)) container.releasePointerCapture(e.pointerId);
+		// A lifted finger hovers nothing.
+		if (e.pointerType === 'touch') onPointerLeave(e);
 	}
 
 	function onPointerLeave(e: PointerEvent): void {
-		// A captured pointer leaves the box and comes back; only its release ends the drag.
-		if (dragging && e.type === 'pointerleave') return;
+		// A captured pointer leaves the box and comes back; only its release ends the hold.
+		if (held && e.type === 'pointerleave') return;
 		dragging = null;
+		held = false;
 		pointer = null;
 		client = null;
 		hover = null;
@@ -306,6 +323,9 @@
 	onpointerup={onPointerUp}
 	onpointerleave={onPointerLeave}
 	onpointercancel={onPointerLeave}
+	ontouchstart={keepTouch}
+	ontouchmove={keepTouch}
+	oncontextmenu={(e) => e.preventDefault()}
 >
 	{#if !slot}
 		<EmptyState>
@@ -358,9 +378,12 @@
 		align-items: stretch;
 		justify-content: stretch;
 	}
-	/* A viewer that takes the drag takes the finger too: no scroll or pan from the page. */
-	.viewer-feed.nodrag {
+	/* A finger on a viewer reads it, so the page gets no scroll or pan from it, and a held one
+	   selects no text. */
+	.viewer-feed {
 		touch-action: none;
+		user-select: none;
+		-webkit-user-select: none;
 	}
 	.viewer-feed > :global(*) {
 		flex: 1;
