@@ -58,6 +58,7 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 		const card = page.locator(`.svelte-flow__node[data-id="${osc}"]`);
 		const body = card.locator('.slot-viewer .body');
 		let flat = '';
+		let ramp = '';
 		await expect(body).toBeVisible();
 		await expect.poll(() => frameSummary(page, osc)).not.toBeNull();
 
@@ -169,7 +170,7 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 
 		await test.step('an image draws after a line plot has gone, with no GL error', async () => {
 			await page.evaluate((u) => (window as any).goofi.commands.removeNode(u), flat);
-			const ramp = await addNode(page, 'graphics:Ramp', [520, 80]);
+			ramp = await addNode(page, 'graphics:Ramp', [520, 80]);
 			await waitForNode(page, ramp);
 			const image = page.locator(`.svelte-flow__node[data-id="${ramp}"] .slot-viewer .body`);
 			await expect
@@ -197,6 +198,34 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			expect((await inspect(page, (await body.boundingBox())!)).tint, 'the last frame stays').toBeGreaterThan(40);
 			await wheelTo((r) => r > 0.4, -100);
 			await expect.poll(summary).not.toBeNull();
+		});
+
+		await test.step('a hover near the line reads the point under it, and nothing away from it', async () => {
+			const box = (await body.boundingBox())!;
+			const readout = body.locator('.readout');
+			const x = box.x + box.width / 2;
+			// The sine crosses every row at some column, so a column scan meets it; the readout
+			// names the sample index and the value, and marks the point on the line.
+			await expect
+				.poll(async () => {
+					for (let y = box.y + 6; y < box.y + box.height - 6; y += 4) {
+						await page.mouse.move(x, y);
+						if ((await readout.count()) > 0) return readout.innerText();
+					}
+					return '';
+				})
+				.toMatch(/x \d+\s+y -?\d/);
+			await expect(body.locator('.mark')).toHaveCount(1);
+			await page.mouse.move(4, 4);
+			await expect(readout).toHaveCount(0);
+		});
+
+		await test.step('a hover over an image reads the pixel coordinate and its value', async () => {
+			const image = page.locator(`.svelte-flow__node[data-id="${ramp}"] .slot-viewer .body`);
+			const box = (await image.boundingBox())!;
+			await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+			await expect(image.locator('.readout')).toHaveText(/^x \d+y \d+/);
+			await expect(image.locator('.mark')).toHaveCount(0);
 		});
 
 		await test.step('the range labels show on a selected card, without a hover', async () => {

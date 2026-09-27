@@ -9,14 +9,17 @@
 		headFrame,
 		solveWeights,
 		evaluateField,
+		evaluateAt,
 		type TopoLayout,
 		type PixelCache
 	} from './topomapInterp';
 	import { onMount, onDestroy } from 'svelte';
 	import { tickFont } from './palette';
+	import { formatTick } from './format';
+	import type { Probe } from './hover';
 
-	type Props = { frame: DataFrame; settings?: SettingsMap };
-	const { frame, settings = {} }: Props = $props();
+	type Props = { frame: DataFrame; settings?: SettingsMap; probe?: Probe | null };
+	let { frame, settings = {}, probe = $bindable(null) }: Props = $props();
 
 	const colormap = $derived(String(settings.colormap ?? 'coolwarm'));
 	const autoRange = $derived(settings.auto !== false);
@@ -36,7 +39,16 @@
 	let layout: TopoLayout | null = null;
 	let pixelCache: PixelCache | null = null;
 	let field: Float32Array | null = null;
+	let weights: Float64Array | null = null;
 
+	// The hover reads the interpolated field inside the head disc and nothing outside it.
+	probe = (px, py, box) => {
+		if (!layout || !weights) return null;
+		const { cx, cy, side, radius } = headFrame(box.w, box.h);
+		if ((px - cx) ** 2 + (py - cy) ** 2 > radius * radius) return null;
+		const v = evaluateAt(layout, weights, 0.5 + (px - cx) / side, 0.5 + (py - cy) / side);
+		return { x: px, y: py, mark: false, lines: [formatTick(v)] };
+	};
 
 	const lutFor = makeLUTCache();
 
@@ -93,10 +105,12 @@
 		}
 
 		if (knownPos.length === 0) {
+			weights = null;
 			drawMessage(ctx, w, h, 'no recognized channels');
 			return;
 		}
 		if (knownPos.length < 3) {
+			weights = null;
 			drawMessage(ctx, w, h, 'need ≥ 3 channels for topomap');
 			return;
 		}
@@ -139,7 +153,7 @@
 			realVals[i] = Number(vals[knownIdx[i]]);
 		}
 
-		const weights = solveWeights(layout, realVals);
+		weights = solveWeights(layout, realVals);
 		evaluateField(layout, pixelCache, weights, field);
 
 		if (!imageData || imageData.width !== gw || imageData.height !== gh) {

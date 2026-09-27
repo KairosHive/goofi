@@ -10,7 +10,8 @@
 	import { untrack } from 'svelte';
 	import { LinePlot, type Plot } from 'glance';
 	import { offsetIn, useAnchor, useSurface } from './plotHost';
-	import { pushImage, pushLine } from './plotFeed';
+	import { lineData, pushImage } from './plotFeed';
+	import { axisNames, imageProbe, lineProbe, type Hover, type Probe } from './hover';
 	import { drawsOnSurface, isRenderable } from './kind';
 	import { makeLUTCache } from './colormaps';
 	import { formatTick } from './format';
@@ -53,6 +54,11 @@
 	let plot = $state.raw<Plot | null>(null);
 	let labels = $state<string[]>([]);
 	const lutFor = makeLUTCache();
+	// The hover: a surface kind's probe is built here from the drawn data, a component's is bound.
+	let surfaceProbe: Probe | null = null;
+	let componentProbe = $state.raw<Probe | null>(null);
+	let hover = $state.raw<Hover | null>(null);
+	let pointer: { x: number; y: number } | null = null;
 
 	/** The 32-px step for `px`, left where it is until `px` is a quarter step past the held one's edge. */
 	function quantize(px: number, held: number): number {
@@ -104,6 +110,8 @@
 		frame = null;
 		last = null;
 		labels = [];
+		surfaceProbe = null;
+		hover = null;
 		untrack(() => plot?.clear());
 		if (!visible || !slot) return;
 		// Kind is not part of the stream's identity, but it IS part of what this viewer needs.
@@ -174,25 +182,75 @@
 		if (fallback(f)) {
 			p.clear();
 			labels = [];
+			surfaceProbe = null;
 			return;
 		}
 		if (capW === 0) return; // unmeasured: the re-bind on the first size replays the frame
 		if (p instanceof LinePlot) {
-			pushLine(p, f, capW, Boolean(settings.logX));
+			const logX = Boolean(settings.logX);
+			const data = lineData(f, capW, logX);
+			p.push(data);
 			const r = p.range();
 			if (!r) return;
 			const next = r.scalar
 				? ['', formatTick(r.xMin), formatTick(r.xMax)]
 				: [formatTick(r.yMax), formatTick(r.yMin), formatTick(r.xMax)];
 			if (next.join('|') !== labels.join('|')) labels = next;
+			const ndim = f.data.shape.length;
+			surfaceProbe = lineProbe(
+				data,
+				r,
+				{ logX, logY: Boolean(settings.logY), pad: 2 / zoom },
+				{ x: axisNames(f.meta, ndim - 1), series: ndim > 1 ? axisNames(f.meta, 0) : null }
+			);
 		} else {
 			pushImage(p, f, settings);
+			surfaceProbe = imageProbe(f.data, settings.stretch === true, f.meta);
 		}
+		if (pointer) readout();
+	}
+
+	// A component kind draws from `frame`, so its readout follows the frame the same way.
+	$effect(() => {
+		void frame;
+		void componentProbe;
+		if (!onSurface) untrack(readout);
+	});
+
+	/** Ask the kind's probe about the pointer; the readout follows the pointer and the frame alike. */
+	function readout(): void {
+		const probe = onSurface ? surfaceProbe : componentProbe;
+		if (!pointer || !probe || !boxW || !boxH) {
+			hover = null;
+			return;
+		}
+		hover = probe(pointer.x, pointer.y, { w: boxW, h: boxH, tol: 12 / zoom });
+	}
+
+	function onPointerMove(e: PointerEvent): void {
+		if (!container) return;
+		// Layout px: the box is measured under the flow zoom, the pointer is not.
+		const r = container.getBoundingClientRect();
+		const scale = r.width > 0 ? boxW / r.width : 1;
+		pointer = { x: (e.clientX - r.left) * scale, y: (e.clientY - r.top) * scale };
+		readout();
+	}
+
+	function onPointerLeave(): void {
+		pointer = null;
+		hover = null;
 	}
 
 </script>
 
-<div class="viewer-feed" bind:this={container}>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+	class="viewer-feed"
+	bind:this={container}
+	onpointermove={onPointerMove}
+	onpointerleave={onPointerLeave}
+	onpointercancel={onPointerLeave}
+>
 	{#if !slot}
 		<EmptyState>
 			{#snippet hint()}node has no output slots{/snippet}
@@ -202,10 +260,24 @@
 			{#snippet hint()}WebGL2 is not available{/snippet}
 		</EmptyState>
 	{:else}
-		<ViewerSurface {frame} {kind} {settings} />
+		<ViewerSurface {frame} {kind} {settings} bind:probe={componentProbe} />
 		{#each labels as text, i (i)}
 			{#if text}<span class="tick tick-{i}">{text}</span>{/if}
 		{/each}
+		{#if hover}
+			<div
+				class="hover"
+				class:left={hover.x > boxW / 2}
+				class:up={hover.y > boxH / 2}
+				style:left="{hover.x}px"
+				style:top="{hover.y}px"
+			>
+				{#if hover.mark}<span class="mark"></span>{/if}
+				<span class="readout">
+					{#each hover.lines as line, i (i)}<span>{line}</span>{/each}
+				</span>
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -247,6 +319,46 @@
 		.tick {
 			opacity: 1;
 		}
+	}
+	/* The hover readout anchors at the probed point and leans away from the nearer edge. */
+	.hover {
+		position: absolute;
+		width: 0;
+		height: 0;
+		pointer-events: none;
+	}
+	.mark {
+		position: absolute;
+		width: 7px;
+		height: 7px;
+		transform: translate(-50%, -50%);
+		border-radius: 50%;
+		background: var(--text);
+		box-shadow: 0 0 0 1px var(--bg);
+	}
+	.readout {
+		position: absolute;
+		left: 10px;
+		top: 10px;
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+		padding: var(--space-1);
+		border-radius: var(--radius-sm);
+		background: color-mix(in srgb, var(--bg) 85%, transparent);
+		font-family: var(--font-mono);
+		font-size: var(--fs-micro);
+		line-height: 1.2;
+		color: var(--text);
+		white-space: nowrap;
+	}
+	.hover.left .readout {
+		left: auto;
+		right: 10px;
+	}
+	.hover.up .readout {
+		top: auto;
+		bottom: 10px;
 	}
 	.tick-0 {
 		top: 0;

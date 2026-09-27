@@ -1,19 +1,16 @@
 /** What an array frame becomes on its way to a plot: the reductions the viewers did on their own canvases. */
 import type { ArrayData, DataFrame } from '$lib/codec/decode';
-import { extent, type ImagePlot, type LinePlot } from 'glance';
+import { extent, type ImagePlot, type LineData } from 'glance';
 import { decimateMinMax } from './decimate';
 import { isU8, sampleRange } from './depth';
 import { envelopeBand, readEnvelope } from './envelope';
 import type { SettingsMap } from './settingsSchema';
 
 /** `cols` is the plot's width in device px: a frame denser than two samples per column is min/max folded. */
-export function pushLine(plot: LinePlot, frame: DataFrame, cols: number, logX: boolean): void {
+export function lineData(frame: DataFrame, cols: number, logX: boolean): LineData {
 	const arr = frame.data as ArrayData;
 	const v = arr.values;
-	if (v.length === 1) {
-		plot.push({ rows: [v] });
-		return;
-	}
+	if (v.length === 1) return { rows: [v] };
 	const shape = arr.shape;
 	const series = shape.length <= 1 ? 1 : shape[0];
 	const m = shape.length <= 1 ? v.length : shape[1];
@@ -24,13 +21,13 @@ export function pushLine(plot: LinePlot, frame: DataFrame, cols: number, logX: b
 	const env = readEnvelope(frame.meta, shape.length);
 	if (env) {
 		const band = envelopeBand(rows, env.origLen, base);
-		plot.push({ rows: band.ys, xs: band.xs });
-	} else if (m > cols * 2) {
-		const dec = decimateMinMax(rows, m, cols, base);
-		plot.push({ rows: dec.ys, xs: dec.xs });
-	} else {
-		plot.push({ rows, base });
+		return { rows: band.ys, xs: band.xs };
 	}
+	if (m > cols * 2) {
+		const dec = decimateMinMax(rows, m, cols, base);
+		return { rows: dec.ys, xs: dec.xs };
+	}
+	return { rows, base };
 }
 
 /** Only the wire's f32 and the reducer's 8-bit hop are textures; nothing else reaches an image viewer.

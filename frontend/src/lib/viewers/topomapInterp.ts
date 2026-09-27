@@ -253,3 +253,15 @@ export function evaluateField(
 		for (let p = 0; p < count; p++) out[p] += wi * k[p];
 	}
 }
+
+/** The field at one layout-space point `(x, y)`, for a readout off the grid. */
+export function evaluateAt(layout: TopoLayout, weights: Float64Array, x: number, y: number): number {
+	const nTotal = layout.nReal + layout.nExtra;
+	let v = weights[nTotal] + weights[nTotal + 1] * x + weights[nTotal + 2] * y;
+	for (let i = 0; i < nTotal; i++) {
+		const dx = x - layout.posX[i];
+		const dy = y - layout.posY[i];
+		v += weights[i] * tpsKernel(dx * dx + dy * dy);
+	}
+	return v;
+}
