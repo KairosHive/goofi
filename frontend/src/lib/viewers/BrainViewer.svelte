@@ -33,7 +33,7 @@
 	const contours = $derived(Boolean(settings.contours));
 	// The share of the edges drawn, strongest first: 100 is all of them.
 	const top = $derived(Math.min(100, Math.max(1, Number(settings.top ?? 100))));
-	// How far a 3-D edge arcs over the scalp: 0 is the straight chord, 1 a bow well clear of it.
+	// How far a 3-D edge dips into the head: 0 is the straight chord, 1 a bow through the centre.
 	const curve = $derived(Math.min(1, Math.max(0, Number(settings.curve ?? 0.5))));
 	const mode = $derived(brainMode(settings, (frame.data as ArrayData).shape.length));
 
@@ -431,13 +431,11 @@
 			if (curve === 0) {
 				ctx.lineTo(points[e.b].x, points[e.b].y);
 			} else {
-				// A quadratic bow in head space, its control point the chord's middle pushed out
-				// along its own direction: the wider the pair, the higher the arc has to go.
+				// A quadratic bow in head space, its control point the chord's middle pulled past
+				// the centre: at 1 the bow's own middle is the centre itself.
 				const [p, q] = [lifted[e.a], lifted[e.b]];
-				const mid = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2, (p[2] + q[2]) / 2];
-				const len = Math.hypot(mid[0], mid[1], mid[2]) || 1;
-				const out = 1 + curve * (2 - len);
-				const c = mid.map((v) => (v / len) * out) as [number, number, number];
+				const pull = 1 - 2 * curve;
+				const c = [(p[0] + q[0]) / 2 * pull, (p[1] + q[1]) / 2 * pull, (p[2] + q[2]) / 2 * pull];
 				for (let k = 1; k <= STEPS; k++) {
 					const t = k / STEPS;
 					const u = 1 - t;
