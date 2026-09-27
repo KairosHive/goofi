@@ -55,7 +55,9 @@ fn a_chain_filters_a_live_stream_and_reads_the_band_that_survives() {
     // Welch cuts the same window into one-second segments, so the answer is steadier and the bins
     // are twice as wide — and the sine still lands on the bin that carries 10 Hz.
     set(psd, "psd", "mode", j!("welch"));
+    set(psd, "welch", "unit", j!("seconds"));
     set(psd, "welch", "segment", j!(1.0));
+    set(psd, "welch", "overlap", j!(0.5));
     let welch = g.until("a spectrum of averaged segments", |_| {
         probe.latest().filter(|d| shape(d) == vec![129])
     });
