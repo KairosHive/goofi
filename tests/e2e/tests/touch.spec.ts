@@ -364,6 +364,34 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 	}
 });
 
+test('a viewer panel\'s strip is one group that slides as a whole, under a short floor', async ({ page }) => {
+	// The dot, the node picker, the slot, the kind and the cog scroll together when the panel is
+	// narrower than they are; none stays pinned while the rest clip. Their floor is shorter than
+	// the 44px hit, so the phone keeps its height for the data.
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const c = await addNode(page, 'signal:Constant', [40, 200]);
+		await waitForNode(page, c);
+		await page.evaluate((u) => {
+			const g = (window as any).goofi;
+			const p = g.query.panels()[0].panelId;
+			g.commands.setPanelType(p, 'viewer');
+			g.commands.bindNodeToPanel(p, u);
+		}, c);
+		const strip = page.getByTestId('panel-strip');
+		await expect(strip.getByTestId('panel-node')).toBeVisible();
+		await expect(strip.getByTestId('viewer-slot')).toBeAttached();
+		await expect(strip.getByTestId('viewer-kind')).toBeAttached();
+		await expect(strip.getByTestId('viewer-settings-cog')).toBeAttached();
+		const height = (await strip.getByTestId('viewer-slot').locator('select').boundingBox())!.height;
+		expect(height, 'the slot picker sits under the strip floor').toBeLessThanOrEqual(32);
+	} finally {
+		await restorePanelType(page);
+		await tearDown(page);
+	}
+});
+
 test('a finger held on a viewer reads it, and follows as it moves, without moving the card', async ({ page }) => {
 	// There is no hover on a touch screen, so the finger IS the hover: the readout shows while it
 	// is down and follows it. The finger is reading the picture, not carrying the node. An image

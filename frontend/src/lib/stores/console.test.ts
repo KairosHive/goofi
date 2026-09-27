@@ -23,6 +23,14 @@ describe('console log replica', () => {
 		expect(rows(s)[1].count).toBe(2);
 	});
 
+	it('answers what was said since a mark, a repeat included', () => {
+		const s = new ConsoleStore();
+		s.apply({ reset: true, cursor: 2, oldest: 1, groups: [group(1, 'Opening a.gfi'), group(2, 'before')] });
+		const mark = s.mark();
+		s.apply({ reset: false, cursor: 4, oldest: 1, groups: [{ id: 1, seq: 3, count: 2, ts: 3 }, group(4, 'Starting nodes')] });
+		expect(s.since(mark).map((g) => g.text)).toEqual(['Opening a.gfi', 'Starting nodes']);
+	});
+
 	it('replaces history on reconnect and applies eviction', () => {
 		const s = new ConsoleStore();
 		s.apply({ reset: true, cursor: 2, oldest: 1, groups: [group(1, 'old'), group(2, 'kept')] });

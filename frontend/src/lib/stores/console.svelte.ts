@@ -71,6 +71,17 @@ export class ConsoleStore {
 		return { total: () => rows.length, get: (i) => rows[i] };
 	}
 
+	/** The log's position now, for `since`. */
+	mark(): number {
+		return this.cursor;
+	}
+
+	/** Every group written or repeated after `mark`, oldest first: what an operation started at
+	 * `mark` has said so far. */
+	since(mark: number): ConsoleEntry[] {
+		return [...this.groups.values()].filter((g) => g.seq > mark);
+	}
+
 	private scheduleBump(): void {
 		if (this.scheduled) return;
 		this.scheduled = true;

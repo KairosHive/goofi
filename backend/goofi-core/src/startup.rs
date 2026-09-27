@@ -88,11 +88,13 @@ impl Drop for Startup {
     }
 }
 
-/// A step begins: printed, and the heartbeat's subject from now on.
+/// A step begins: logged always, so a load's steps reach the console; printed, and the
+/// heartbeat's subject from now on, while the startup screen is up.
 pub fn report(message: impl Into<String>) {
+    let message = message.into();
+    crate::log::record(crate::log::Source::component("goofi"), crate::log::Level::Info, None, message.clone());
     let mut active = ACTIVE.lock().unwrap();
     if let Some(current) = active.as_mut() {
-        let message = message.into();
         line(">", &message);
         *current = (message, Instant::now());
     }

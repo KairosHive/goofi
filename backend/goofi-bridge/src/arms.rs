@@ -1697,6 +1697,9 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
     // so a refused load leaves the open patch untouched on both planes. Staged and built off the
     // lock: the archive's own Rust nodes may take seconds to build.
     let fresh = new_mount();
+    if let Some(name) = payload.get("path").and_then(Value::as_str).and_then(|p| p.rsplit('/').next()) {
+        goofi_core::startup::report(format!("Opening {name}"));
+    }
     let (content, from_path, recovered) =
         stage_load(&fresh, &state.custom, payload).inspect_err(|_| remove_mount(&fresh))?;
     prebuild(state, &fresh);
@@ -1707,6 +1710,7 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         // resolves, or the unknown-type gate fires on the nodes the archive brought.
         rescan(state, &mut g, &fresh);
         // Parse BEFORE anything is announced or committed.
+        goofi_core::startup::report("Starting the patch's nodes");
         if let Err(e) = g.load_doc(&content, &fresh) {
             // Refused, so the registry the scan above swapped is re-derived from the mount that
             // is still live.

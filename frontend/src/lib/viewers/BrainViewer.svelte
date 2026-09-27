@@ -20,7 +20,7 @@
 	import { AXIS_INK, tickFont } from './palette';
 	import { formatTick } from './format';
 	import { seriesColor } from 'plotluck';
-	import type { Drag, Probe } from './hover';
+	import { axisNames, type Drag, type Probe } from './hover';
 	import { project, type Camera } from './brain3d';
 
 	type Props = { frame: DataFrame; settings?: SettingsMap; probe?: Probe | null; drag?: Drag | null };
@@ -465,7 +465,7 @@
 		const ctx = canvas.getContext('2d');
 		if (!ctx) return;
 		const arr = frame.data as ArrayData;
-		const names = ((frame.meta?.channels as { dim0?: string[] }) ?? {}).dim0 ?? [];
+		const names = axisNames(frame.meta, 0) ?? [];
 		const dpr = window.devicePixelRatio || 1;
 		const bw = Math.max(1, Math.round(size.w * dpr));
 		const bh = Math.max(1, Math.round(size.h * dpr));

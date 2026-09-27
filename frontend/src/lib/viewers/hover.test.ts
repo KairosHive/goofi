@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { imageProbe, lineProbe } from './hover';
+import { axisNames, imageProbe, lineProbe } from './hover';
 import type { ArrayData } from '$lib/codec/decode';
 
 const axes = { logX: false, logY: false, pad: 0 };
@@ -34,6 +34,11 @@ describe('lineProbe', () => {
 			series: null
 		});
 		expect(probe(31, 71, box)!.lines).toEqual([['0'], ['0.300'], ['x 3.12']]);
+	});
+
+	it('reads axis names a producer sent as numbers', () => {
+		expect(axisNames({ channels: { dim0: [3.5, 'Cz', 7] } }, 0)).toEqual(['3.5', 'Cz', '7']);
+		expect(axisNames({ channels: { dim0: 'none' } }, 0)).toBeNull();
 	});
 
 	it('follows decimated positions and an unnamed index', () => {

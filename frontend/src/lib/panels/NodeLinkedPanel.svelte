@@ -40,21 +40,25 @@
 </script>
 
 <div class="linked" role="group" data-testid="node-linked-panel">
-	<Bar>
+	<Bar class="nlp-bar">
 		{#snippet start()}
-			{#if node}
-				{@const health = nodeHealth(node)}
-				<StatusDot
-					tone={health.tone}
-					size="sm"
-					pulse={health.kind === 'dead'}
-					title={health.title}
-				/>
-			{/if}
-			<NodeSelect {panelId} state={linkState} emptyLabel="No node" />
-			{#if node && controls}
-				<div class="controls thin-scrollbar">{@render controls(node)}</div>
-			{/if}
+			<!-- ONE scrolling group, the picker and dot included, so a narrow panel slides the whole
+			     strip rather than clipping the controls behind a fixed picker. -->
+			<div class="controls thin-scrollbar" data-testid="panel-strip">
+				{#if node}
+					{@const health = nodeHealth(node)}
+					<StatusDot
+						tone={health.tone}
+						size="sm"
+						pulse={health.kind === 'dead'}
+						title={health.title}
+					/>
+				{/if}
+				<NodeSelect {panelId} state={linkState} emptyLabel="No node" />
+				{#if node && controls}
+					{@render controls(node)}
+				{/if}
+			</div>
 		{/snippet}
 		{#snippet end()}
 			{#if node}
@@ -99,6 +103,20 @@
 		gap: inherit;
 		overflow-x: auto;
 		overflow-y: hidden;
+	}
+	/* Touch: the strip's controls take a shorter floor than the 44px hit, following the rem up
+	   to a maximum, so a phone's viewer keeps its height for the data. `.nlp-bar` travels to
+	   `Bar` as a prop; `.linked` keeps the rule scoped. */
+	@media (hover: none) and (pointer: coarse) {
+		.linked {
+			--strip-control: min(32px, 2rem);
+			--select-min-h: calc(var(--strip-control) - 2px);
+			--vs-cog-box: var(--strip-control);
+			--bar-height: min(36px, 2.25rem);
+		}
+		.linked :global(.nlp-bar button) {
+			min-height: var(--strip-control);
+		}
 	}
 	.body {
 		flex: 1;

@@ -27,6 +27,12 @@ fn console_session_groups_interleaved_messages_and_keeps_ops_out_of_patch_histor
     let update = delta["groups"].as_array().unwrap().iter().find(|row| row["id"] == groups[0]["id"]).unwrap();
     assert_eq!(update["count"], 2);
     assert!(update.get("text").is_none(), "repeat packets do not carry text");
+
+    // A patch replacement says its steps to the log, so a load's dialog can show them.
+    g.call("session new", j!({}));
+    let listed = g.call("log list", j!({}));
+    assert!(listed["groups"].as_array().unwrap().iter()
+        .any(|row| row["component"] == "goofi" && row["text"] == "Starting the patch's nodes"));
 }
 
 #[test]

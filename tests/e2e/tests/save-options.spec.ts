@@ -73,6 +73,14 @@ test('save dialogs and axis presets keep the user in control', async ({ page }) 
 		await expect(browser.getByTestId('fs-upload')).toHaveText('Upload…');
 		await browser.locator('input[type=file]').dispatchEvent('cancel', { bubbles: true });
 		await expect(browser).toBeVisible();
+		// A load runs INSIDE the dialog: it closes once the patch is up, and the steps the backend
+		// took on the way are in the log for it to show.
+		await rows.filter({ hasText: 'held.gfi' }).click();
+		await browser.getByTestId('fs-open').click();
+		await expect(browser).toBeHidden();
+		await expect.poll(async () => (await rawCall(page, 'log list')).result.groups
+			.some((row: { text: string }) => row.text === 'Opening held.gfi')).toBe(true);
+		await page.getByTestId('topbar-load').click();
 		await browser.getByRole('button', { name: 'Cancel' }).click();
 
 		const status = (await rawCall(page, 'session status')).result;

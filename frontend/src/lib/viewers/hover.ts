@@ -24,11 +24,12 @@ export type Probe = (x: number, y: number, box: ProbeBox) => Hover | null;
  * the pointer; one that does not leaves the drag to whatever holds it, such as the node card. */
 export type Drag = (dx: number, dy: number, box: ProbeBox) => void;
 
-/** The names a frame's meta gives axis `dim`, or `null` where it names none. */
+/** The names a frame's meta gives axis `dim`, as strings whatever a producer sent, or `null`
+ * where it names none. */
 export function axisNames(meta: Record<string, unknown> | undefined, dim: number): string[] | null {
 	const channels = meta?.channels as Record<string, unknown> | undefined;
 	const names = channels?.[`dim${dim}`];
-	return Array.isArray(names) ? (names as string[]) : null;
+	return Array.isArray(names) ? names.map(String) : null;
 }
 
 /** A coordinate as its axis name when the axis has one, else the integer or the tick format. A
