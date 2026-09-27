@@ -51,20 +51,23 @@ impl Node for Psd {
         let sfreq = d.meta().sfreq().ok_or("this node needs a frame that carries its sample rate")?;
 
         let taper = p.str("psd", "window").unwrap_or("hann");
-        let seg = if p.str("psd", "mode").unwrap_or("welch") == "fft" {
-            n
-        } else {
-            let size = p.f64("welch", "segment").unwrap_or(0.5);
-            let samples = match p.str("welch", "unit").unwrap_or("seconds") {
+        // Segment and overlap share one unit, so both are read through the same conversion.
+        let unit = p.str("welch", "unit").unwrap_or("fraction");
+        let samples = |size: f64| -> Result<f64, String> {
+            Ok(match unit {
                 "samples" => size,
                 "fraction" => size * n as f64,
                 "seconds (ufreq)" => goofi_core::stream::window_count(size, "seconds (ufreq)", d.meta())? as f64,
                 _ => size * sfreq,
-            };
-            (samples.round().max(2.0) as usize).min(n)
+            })
         };
-        let overlap = p.f64("welch", "overlap").unwrap_or(0.5).clamp(0.0, 0.95);
-        let hop = ((seg as f64 * (1.0 - overlap)).round() as usize).clamp(1, seg);
+        let (seg, hop) = if p.str("psd", "mode").unwrap_or("welch") == "fft" {
+            (n, n)
+        } else {
+            let seg = (samples(p.f64("welch", "segment").unwrap_or(0.4))?.round().max(2.0) as usize).min(n);
+            let overlap = samples(p.f64("welch", "overlap").unwrap_or(0.3))?.round().max(0.0) as usize;
+            (seg, seg.saturating_sub(overlap).clamp(1, seg))
+        };
 
         let bins = seg / 2 + 1;
         let taper = window(taper, seg);
@@ -164,8 +167,21 @@ static PARAMS: &[ParamDecl] = &[
     },
     ParamDecl {
         group: "welch",
+        name: "unit",
+        spec: ParamSpec::Str {
+            default: "fraction",
+            options: &["fraction", "seconds", "samples", "seconds (ufreq)"],
+            refresh: false,
+        },
+        expression: None,
+        doc: Some("What `segment` and `overlap` count in. `fraction` is a share of the frame."),
+        section: 0,
+        show: None,
+    },
+    ParamDecl {
+        group: "welch",
         name: "segment",
-        spec: ParamSpec::Float { default: 0.5, min: 0.0, max: 1e7 },
+        spec: ParamSpec::Float { default: 0.4, min: 0.0, max: 1.0 },
         expression: None,
         doc: Some("How long one segment is. A longer segment tells frequencies apart better."),
         section: 0,
@@ -173,23 +189,13 @@ static PARAMS: &[ParamDecl] = &[
     },
     ParamDecl {
         group: "welch",
-        name: "unit",
-        spec: ParamSpec::Str {
-            default: "seconds",
-            options: &["seconds", "samples", "seconds (ufreq)", "fraction"],
-            refresh: false,
-        },
-        expression: None,
-        doc: Some("What `segment` counts in. `fraction` is a share of the frame."),
-        section: 0,
-        show: None,
-    },
-    ParamDecl {
-        group: "welch",
         name: "overlap",
-        spec: ParamSpec::Float { default: 0.5, min: 0.0, max: 0.95 },
+        spec: ParamSpec::Float { default: 0.3, min: 0.0, max: 1.0 },
         expression: None,
-        doc: Some("How much of a segment the next one repeats. More overlap is steadier and slower."),
+        doc: Some(
+            "How much of a segment the next one repeats, in `unit`. More overlap is steadier and \
+             slower; at a full segment the hop is one sample.",
+        ),
         section: 0,
         show: None,
     },
