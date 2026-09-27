@@ -8,7 +8,7 @@
 	import type { ViewBinding } from './viewBinding';
 	import { EmptyState } from '$lib/ui';
 	import { untrack } from 'svelte';
-	import { LinePlot, type Plot } from 'glance';
+	import { LinePlot, type Plot } from 'plotluck';
 	import { offsetIn, useAnchor, useSurface } from './plotHost';
 	import { lineData, pushImage } from './plotFeed';
 	import { axisNames, imageProbe, lineProbe, type Drag, type Hover, type Probe } from './hover';

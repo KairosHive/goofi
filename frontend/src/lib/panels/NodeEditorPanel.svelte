@@ -20,7 +20,7 @@
 	import FlowApi from '$lib/editor/FlowApi.svelte';
 	import FlowSurface from '$lib/editor/FlowSurface.svelte';
 	import { provideSurface } from '$lib/viewers/plotHost';
-	import type { Surface } from 'glance';
+	import type { Surface } from 'plotluck';
 	import SubpatchZoomExit from '$lib/editor/SubpatchZoomExit.svelte';
 	import SnapGuides from '$lib/editor/SnapGuides.svelte';
 	import {

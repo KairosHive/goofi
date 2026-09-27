@@ -1,7 +1,7 @@
 /** What a viewer says about the point under the pointer: each kind defines its own probe, and
  * the feed draws the answer. Positions are in the body's layout px. */
 import type { ArrayData } from '$lib/codec/decode';
-import type { LineData, Range } from 'glance';
+import type { LineData, Range } from 'plotluck';
 import { formatTick } from './format';
 
 export interface Hover {
@@ -48,7 +48,7 @@ function log(v: number, on: boolean): number {
 export interface LineAxes {
 	logX: boolean;
 	logY: boolean;
-	/** The plot's inner margin in layout px; glance keeps a 2-device-px pad around the range. */
+	/** The plot's inner margin in layout px; plotluck keeps a 2-device-px pad around the range. */
 	pad: number;
 }
 

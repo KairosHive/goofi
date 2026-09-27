@@ -2,7 +2,7 @@
 	/** The editor's plot surface: one canvas under the node cards, following the camera in flow
 	 * units so a flow-unit rect lands 1:1 on device pixels. Render inside <SvelteFlow>. */
 	import { useStore } from '@xyflow/svelte';
-	import type { Surface } from 'glance';
+	import type { Surface } from 'plotluck';
 	import { mountSurface, type SurfaceMount } from '$lib/viewers/plotHost';
 
 	let { surface = $bindable(null) }: { surface: Surface | null } = $props();

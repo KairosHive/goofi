@@ -10,7 +10,7 @@
 	import { asStateObject } from 'panelty';
 	import { workspace } from 'panelty';
 	import { Select } from '$lib/ui';
-	import type { Surface } from 'glance';
+	import type { Surface } from 'plotluck';
 	import { mountSurface, provideAnchor, provideSurface } from '$lib/viewers/plotHost';
 
 	interface ViewerState {

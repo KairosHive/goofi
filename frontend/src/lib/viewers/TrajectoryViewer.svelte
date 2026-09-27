@@ -3,7 +3,7 @@
 	import type { SettingsMap } from './settingsSchema';
 	import { onMount, onDestroy } from 'svelte';
 	import { formatTick as fmtTick } from './format';
-	import { seriesColor } from 'glance';
+	import { seriesColor } from 'plotluck';
 	import { AXIS_INK, tickFont } from './palette';
 
 	type Props = { frame: DataFrame; settings?: SettingsMap };

@@ -19,7 +19,7 @@
 	import { onDestroy } from 'svelte';
 	import { AXIS_INK, tickFont } from './palette';
 	import { formatTick } from './format';
-	import { seriesColor } from 'glance';
+	import { seriesColor } from 'plotluck';
 	import type { Drag, Probe } from './hover';
 	import { project, type Camera } from './brain3d';
 

@@ -37,7 +37,7 @@
     "@xterm/xterm": "^6.0.0",
     "@xyflow/svelte": "^1.0.0",
     "marked": "^18.0.5",
-    "glance": "git+https://github.com/dav0dea/glance.git#e30b0382ab6b6a4a0da26186b8751382d9fd8596",
-    "panelty": "git+https://github.com/dav0dea/panelty.git#a8ff2f7c363cbc59d6447003b031d93ed84248f7"
+    "plotluck": "git+https://github.com/dav0dea/plotluck.git#8246399229dc3ba0690f98baff98fdba1f25c267",
+    "panelty": "0.1.3"
   }
 }
