@@ -33,7 +33,9 @@
 </script>
 
 <div class="linked" role="group" data-testid="node-linked-panel">
-	<Bar class="nlp-bar">
+	<!-- Tight, as the node header's controls sit: every px of this row is the strip's, and it has
+	     nothing at its end to keep apart. -->
+	<Bar class="nlp-bar" style="--bar-gap: var(--space-3)">
 		{#snippet start()}
 			<!-- ONE scrolling group, the picker and dot included, so a narrow panel slides the whole
 			     strip rather than clipping the controls behind a fixed picker. -->
