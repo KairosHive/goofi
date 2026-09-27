@@ -33,6 +33,8 @@
 	const contours = $derived(Boolean(settings.contours));
 	// The share of the edges drawn, strongest first: 100 is all of them.
 	const top = $derived(Math.min(100, Math.max(1, Number(settings.top ?? 100))));
+	// How far a 3-D edge arcs over the scalp: 0 is the straight chord, 1 a bow well clear of it.
+	const curve = $derived(Math.min(1, Math.max(0, Number(settings.curve ?? 0.5))));
 	const mode = $derived(brainMode(settings, (frame.data as ArrayData).shape.length));
 
 	let canvas: HTMLCanvasElement | null = $state(null);
@@ -410,16 +412,38 @@
 		ctx.lineTo(nose[2].x, nose[2].y);
 		ctx.fill();
 		ctx.stroke();
-		const points = channels.map((c) => view(lift(c.pos)));
+		const lifted = channels.map((c) => lift(c.pos));
+		const points = lifted.map(view);
 		placed = channels.map((c, k) => ({ name: c.name, x: points[k].x, y: points[k].y, i: k }));
 		ctx.lineCap = 'round';
+		const STEPS = 16;
 		for (const e of edges) {
 			ctx.strokeStyle = rgb(L, e.t);
 			ctx.globalAlpha = 0.15 + 0.85 * e.t;
 			ctx.lineWidth = 0.5 + 1.5 * e.t;
 			ctx.beginPath();
 			ctx.moveTo(points[e.a].x, points[e.a].y);
-			ctx.lineTo(points[e.b].x, points[e.b].y);
+			if (curve === 0) {
+				ctx.lineTo(points[e.b].x, points[e.b].y);
+			} else {
+				// A quadratic bow in head space, its control point the chord's middle pushed out
+				// along its own direction: the wider the pair, the higher the arc has to go.
+				const [p, q] = [lifted[e.a], lifted[e.b]];
+				const mid = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2, (p[2] + q[2]) / 2];
+				const len = Math.hypot(mid[0], mid[1], mid[2]) || 1;
+				const out = 1 + curve * (2 - len);
+				const c = mid.map((v) => (v / len) * out) as [number, number, number];
+				for (let k = 1; k <= STEPS; k++) {
+					const t = k / STEPS;
+					const u = 1 - t;
+					const at = view([
+						u * u * p[0] + 2 * u * t * c[0] + t * t * q[0],
+						u * u * p[1] + 2 * u * t * c[1] + t * t * q[1],
+						u * u * p[2] + 2 * u * t * c[2] + t * t * q[2]
+					]);
+					ctx.lineTo(at.x, at.y);
+				}
+			}
 			ctx.stroke();
 		}
 		ctx.globalAlpha = 1;
@@ -453,7 +477,7 @@
 
 	$effect(() => {
 		// Repaint on a new frame, a new size, or any colormap / range / contour / mode change.
-		void [colormap, autoRange, vmin, vmax, contours, top, mode, size, frame];
+		void [colormap, autoRange, vmin, vmax, contours, top, curve, mode, size, frame];
 		repaint();
 	});
 	$effect(() => {

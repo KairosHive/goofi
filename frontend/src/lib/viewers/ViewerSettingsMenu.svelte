@@ -59,7 +59,7 @@
 			</EmptyState>
 		{/if}
 		{#each schema.filter(visible) as s (s.key)}
-			<Field label={s.label}>
+			<Field label={s.label} row>
 				{#if s.type === 'toggle'}
 					<Toggle value={settings[s.key] as boolean} onChange={(v) => set(s.key, v)} />
 				{:else if s.type === 'select'}
@@ -115,7 +115,6 @@
 	}
 	:global(.vs-menu) {
 		--popover-pad: var(--space-2);
-		--field-gap: var(--space-2);
 		--popover-min-width: 0;
 		/* This menu overhangs a small cog, which Popover's default --radius-md rounds visibly too much. */
 		--popover-radius: var(--radius-sm);
@@ -123,16 +122,5 @@
 		max-height: 70dvh;
 		display: flex;
 		flex-direction: column;
-	}
-	/* One setting per row: the label and its control share the line, the control taking the rest.
-	   The Field's own wrap threshold is an inspector width this menu never has. */
-	:global(.vs-menu .ui-field) {
-		flex-wrap: nowrap;
-		justify-content: space-between;
-		padding-block: var(--space-1);
-	}
-	:global(.vs-menu .ui-field-value) {
-		flex: 0 1 auto;
-		justify-content: flex-end;
 	}
 </style>

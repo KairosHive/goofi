@@ -3,7 +3,8 @@
      wraps on its OWN width rather than on a breakpoint, so one field per line is the resting
      shape and the label steps above the value only where the two cannot share a line.
      Given `onExpand`, the label is a disclosure summary instead: a caret plus a press target the
-     whole name wide, for a row that reveals more beneath itself. -->
+     whole name wide, for a row that reveals more beneath itself. `row` keeps the label and the
+     control on one line whatever the width, for a narrow menu of short controls. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -16,6 +17,7 @@
 		adornment,
 		expanded = false,
 		stretchSummary = false,
+		row = false,
 		onExpand,
 		class: klass = '',
 		children,
@@ -30,6 +32,8 @@
 		expanded?: boolean;
 		/** Extend the disclosure target to its positioned parent with isolated stacking. */
 		stretchSummary?: boolean;
+		/** One line, the control trailing the label, at any width. */
+		row?: boolean;
 		/** Makes the label a disclosure summary rather than a `<label>`. */
 		onExpand?: () => void;
 		children?: Snippet;
@@ -39,7 +43,7 @@
 	provideFieldControlId((id) => (controlId = id));
 </script>
 
-<div {...rest} class={`ui-field ${klass}`.trim()} title={doc ?? rest.title}>
+<div {...rest} class={`ui-field ${klass}`.trim()} class:row title={doc ?? rest.title}>
 	{#if onExpand}
 		<button type="button" class="ui-field-label ui-field-summary" class:stretched={stretchSummary} aria-expanded={expanded} onclick={onExpand}>
 			<span class="ui-field-caret" class:open={expanded}><Icon name="chevron-right" /></span>{label}
@@ -64,6 +68,14 @@
 		row-gap: var(--field-gap, var(--space-3));
 		min-width: 0;
 		font-size: var(--fs-small);
+	}
+	.ui-field.row {
+		flex-wrap: nowrap;
+		justify-content: space-between;
+	}
+	.ui-field.row .ui-field-value {
+		flex: 0 1 auto;
+		justify-content: flex-end;
 	}
 	.ui-field-label {
 		flex: 0 1 auto;
