@@ -42,15 +42,18 @@
 	let weights: Float64Array | null = null;
 	// The electrodes the last paint placed, for the hover to name.
 	let electrodes: { name: string; x: number; y: number; value: number }[] = [];
+	/** The radius of a drawn electrode dot, in px. */
+	const DOT = 2;
 
 	// The hover names an electrode within reach, else reads the field inside the head disc; it
-	// says nothing outside the disc.
+	// says nothing outside the disc. The mark grows as the pointer nears, full-size over the dot.
 	probe = (px, py, box) => {
 		if (!layout || !weights) return null;
 		const { cx, cy, side, radius } = headFrame(box.w, box.h);
 		if ((px - cx) ** 2 + (py - cy) ** 2 > radius * radius) return null;
+		const reach = box.tol * 3;
 		let near: (typeof electrodes)[number] | null = null;
-		let best = box.tol * box.tol;
+		let best = reach * reach;
 		for (const e of electrodes) {
 			const ex = cx + (e.x - 0.5) * side;
 			const ey = cy + (e.y - 0.5) * side;
@@ -60,7 +63,11 @@
 				near = { ...e, x: ex, y: ey };
 			}
 		}
-		if (near) return { mark: { x: near.x, y: near.y }, lines: [near.name, formatTick(near.value)] };
+		if (near) {
+			const t = Math.min(1, Math.max(0, (Math.sqrt(best) - DOT) / (reach - DOT)));
+			const r = DOT + (6 - DOT) * (1 - t);
+			return { mark: { x: near.x, y: near.y, r }, lines: [near.name, formatTick(near.value)] };
+		}
 		const v = evaluateAt(layout, weights, 0.5 + (px - cx) / side, 0.5 + (py - cy) / side);
 		return { mark: null, lines: [formatTick(v)] };
 	};
@@ -96,7 +103,7 @@
 		ctx.fillStyle = '#0e1014';
 		for (const p of channels) {
 			ctx.beginPath();
-			ctx.arc(cx + (p[0] - 0.5) * side, cy + (p[1] - 0.5) * side, 2, 0, Math.PI * 2);
+			ctx.arc(cx + (p[0] - 0.5) * side, cy + (p[1] - 0.5) * side, DOT, 0, Math.PI * 2);
 			ctx.fill();
 		}
 	}

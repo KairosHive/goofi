@@ -5,8 +5,8 @@ import type { LineData, Range } from 'glance';
 import { formatTick } from './format';
 
 export interface Hover {
-	/** The point the readout is about, marked with a dot; the readout itself follows the pointer. */
-	mark: { x: number; y: number } | null;
+	/** The point the readout is about, marked with a dot of radius `r`; the readout follows the pointer. */
+	mark: { x: number; y: number; r: number } | null;
 	lines: string[];
 }
 
@@ -95,7 +95,7 @@ export function lineProbe(data: LineData, range: Range, axes: LineAxes, names: L
 		const y = Number(rows[s][i]);
 		const lines = [`x ${coord(x, names.x)}`, `y ${formatTick(y)}`];
 		if (rows.length > 1) lines.unshift(coord(s, names.series));
-		return { mark: { x: toPx(x), y: toPy(y) }, lines };
+		return { mark: { x: toPx(x), y: toPy(y), r: 3.5 }, lines };
 	};
 }
 

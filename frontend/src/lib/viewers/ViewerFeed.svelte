@@ -64,7 +64,7 @@
 	let client = $state.raw<{ x: number; y: number } | null>(null);
 	let readoutW = $state(0);
 	let readoutH = $state(0);
-	const GAP = 10;
+	const GAP = 6;
 	// Up and left of the pointer, away from where a hand or a pen sits; a side flips only where
 	// the window would cut it off.
 	const readoutPos = $derived.by(() => {
@@ -177,7 +177,9 @@
 				yAuto: s.yAuto !== false,
 				yMin: Number(s.yMin ?? -1),
 				yMax: Number(s.yMax ?? 1),
-				points: Boolean(s.points)
+				points: Boolean(s.points),
+				width: 2,
+				alpha: 0.75
 			});
 		} else {
 			p.setSettings({ lut: lutFor(String(s.colormap ?? 'gray')), stretch: s.stretch === true });
@@ -284,7 +286,13 @@
 		{/each}
 		{#if hover && pointer}
 			{#if hover.mark}
-				<span class="mark" style:left="{hover.mark.x}px" style:top="{hover.mark.y}px"></span>
+				<span
+					class="mark"
+					style:left="{hover.mark.x}px"
+					style:top="{hover.mark.y}px"
+					style:width="{2 * hover.mark.r}px"
+					style:height="{2 * hover.mark.r}px"
+				></span>
 			{/if}
 			{#if readoutPos}
 				<span
@@ -346,8 +354,6 @@
 	.mark {
 		position: absolute;
 		pointer-events: none;
-		width: 7px;
-		height: 7px;
 		transform: translate(-50%, -50%);
 		border-radius: 50%;
 		background: var(--text);
