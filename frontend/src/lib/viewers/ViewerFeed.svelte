@@ -1,5 +1,5 @@
-<!-- The viewer body: a lazily-subscribed Data frame, drawn on the host's plot surface for lines and
-     images and by a component for every other kind. Padding is the caller's. -->
+<!-- The viewer body: a lazily-subscribed Data frame, drawn on the host's plot surface for every
+     array kind and by a component for the text kinds. Padding is the caller's. -->
 <script lang="ts">
 	import { bindViewer } from '$lib/api/frames';
 	import { viewSpecsForKind } from './capacity';
@@ -8,14 +8,12 @@
 	import type { ViewBinding } from './viewBinding';
 	import { EmptyState } from '$lib/ui';
 	import { untrack } from 'svelte';
-	import { LinePlot, type Plot } from 'plotluck';
 	import { offsetIn, useAnchor, useSurface } from './plotHost';
-	import { lineData, pushImage } from './plotFeed';
-	import { axisNames, imageProbe, lineProbe, type Drag, type Hover, type Probe } from './hover';
+	import { ImageDrawing, LineDrawing, TrajectoryDrawing, type Drawing, type PlacedText } from './drawing';
+	import { BrainDrawing } from './brainDrawing';
+	import type { Drag, Hover } from './hover';
 	import { portal } from 'panelty';
-	import { drawsOnSurface, isRenderable } from './kind';
-	import { makeLUTCache } from './colormaps';
-	import { formatTick } from './format';
+	import { drawsOnSurface, isRenderable, isTrajectory } from './kind';
 
 	/** `zoom` is the flow zoom the viewer is drawn under; a docked panel draws at 1. */
 	let {
@@ -29,11 +27,12 @@
 	const settings = $derived(binding.settings);
 	const host = useSurface();
 	const anchor = useAnchor();
-	const onSurface = $derived(drawsOnSurface(kind, settings));
+	const onSurface = $derived(drawsOnSurface(kind));
+	const trajectory = $derived(isTrajectory(kind, settings));
 
 	// What the DOM shows: a surface kind's frame only while it takes the fallback text.
 	let frame = $state.raw<DataFrame | null>(null);
-	// The frame the plot last drew, for a redraw when the settings change.
+	// The frame the drawing last drew, for a redraw when the settings change.
 	let last: DataFrame | null = null;
 	let visible = $state(false);
 	let container: HTMLDivElement | null = $state(null);
@@ -51,18 +50,16 @@
 	const token =
 		typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `vf-${Math.random()}`;
 
-	// Surface kinds: the plot, and the little that still reaches the DOM.
-	let plot = $state.raw<Plot | null>(null);
+	// The drawing of a surface kind, and the little of it that reaches the DOM.
+	let drawing = $state.raw<Drawing | null>(null);
 	let labels = $state<string[]>([]);
-	const lutFor = makeLUTCache();
-	// The hover: a surface kind's probe is built here from the drawn data, a component's is bound.
-	let surfaceProbe: Probe | null = null;
-	let componentProbe = $state.raw<Probe | null>(null);
-	// A component's drag, where it has one: the feed then captures the pointer instead of the
+	let texts = $state.raw<PlacedText[]>([]);
+	let message = $state<string | null>(null);
+	// A drawing's drag, where it has one: the feed then captures the pointer instead of the
 	// card, which otherwise moves the node.
-	let componentDrag = $state.raw<Drag | null>(null);
+	let drag = $state.raw<Drag | null>(null);
 	let dragging: { x: number; y: number } | null = null;
-	// Whether the feed holds the pointer: a finger reading it, or a drag on a component.
+	// Whether the feed holds the pointer: a finger reading it, or a drag on the drawing.
 	let held = false;
 	let hover = $state.raw<Hover | null>(null);
 	let pointer = $state.raw<{ x: number; y: number } | null>(null);
@@ -131,10 +128,11 @@
 		if (frozen) return;
 		frame = null;
 		last = null;
-		labels = [];
-		surfaceProbe = null;
+		untrack(() => {
+			drawing?.clear();
+			show(drawing);
+		});
 		hover = null;
-		untrack(() => plot?.clear());
 		if (!visible || !slot) return;
 		// Kind is not part of the stream's identity, but it IS part of what this viewer needs.
 		const specs = capW > 0 && capH > 0 ? viewSpecsForKind(kind, capW, capH, settings) : null;
@@ -152,44 +150,36 @@
 		const s = host?.surface;
 		const el = container;
 		if (!onSurface || !s || !el) return;
-		const p = kind === 'line' ? s.addLine() : s.addImage();
-		p.setBackground(getComputedStyle(el).getPropertyValue('--bg').trim());
-		plot = p;
+		const d =
+			kind === 'brain'
+				? new BrainDrawing(s)
+				: kind === 'image'
+					? new ImageDrawing(s)
+					: trajectory
+						? new TrajectoryDrawing(s)
+						: new LineDrawing(s);
+		d.setBackground(getComputedStyle(el).getPropertyValue('--bg').trim());
+		drawing = d;
 		return () => {
-			p.remove();
-			plot = null;
+			d.remove();
+			drawing = null;
 		};
 	});
 
 	// The rect follows the card: its flow position, and this body's offset inside it.
 	$effect(() => {
-		const p = plot;
+		const d = drawing;
 		const a = anchor;
 		void layout;
-		if (!p || !a?.el || !container) return;
+		if (!d || !a?.el || !container) return;
 		const o = offsetIn(container, a.el);
-		p.setRect(a.x + o.x, a.y + o.y, o.w, o.h);
-		p.setOrder(a.z);
+		d.place(a.x + o.x, a.y + o.y, o.w, o.h, a.z);
 	});
 
+	// A settings change redraws the last frame under the new settings.
 	$effect(() => {
-		const p = plot;
-		const s = settings;
-		if (!p) return;
-		if (p instanceof LinePlot) {
-			p.setSettings({
-				logX: Boolean(s.logX),
-				logY: Boolean(s.logY),
-				yAuto: s.yAuto !== false,
-				yMin: Number(s.yMin ?? -1),
-				yMax: Number(s.yMax ?? 1),
-				points: Boolean(s.points),
-				width: 2,
-				alpha: 0.75
-			});
-		} else {
-			p.setSettings({ lut: lutFor(String(s.colormap ?? 'gray')), stretch: s.stretch === true });
-		}
+		void settings;
+		void drawing;
 		untrack(() => last && drawFrame(last));
 	});
 
@@ -199,51 +189,36 @@
 	}
 
 	function drawFrame(f: DataFrame): void {
-		const p = plot;
+		const d = drawing;
 		last = f;
-		if (!p || !isArrayFrame(f)) return;
+		if (!d || !isArrayFrame(f)) return;
 		// A frame this kind cannot draw takes the fallback text; the trace before it must not stay under it.
 		if (fallback(f)) {
-			p.clear();
-			labels = [];
-			surfaceProbe = null;
+			d.clear();
+			show(d);
 			return;
 		}
 		if (capW === 0) return; // unmeasured: the re-bind on the first size replays the frame
-		if (p instanceof LinePlot) {
-			const logX = Boolean(settings.logX);
-			const data = lineData(f, capW, logX);
-			p.push(data);
-			const r = p.range();
-			if (!r) return;
-			const next = r.scalar
-				? ['', formatTick(r.xMin), formatTick(r.xMax)]
-				: [formatTick(r.yMax), formatTick(r.yMin), formatTick(r.xMax)];
-			if (next.join('|') !== labels.join('|')) labels = next;
-			const ndim = f.data.shape.length;
-			surfaceProbe = lineProbe(
-				data,
-				r,
-				{ logX, logY: Boolean(settings.logY), pad: 2 / zoom },
-				{ x: axisNames(f.meta, ndim - 1), series: ndim > 1 ? axisNames(f.meta, 0) : null }
-			);
-		} else {
-			pushImage(p, f, settings);
-			surfaceProbe = imageProbe(f.data, settings.stretch === true, f.meta);
-		}
+		d.push(f, settings, { w: boxW, h: boxH, cols: capW, zoom });
+		show(d);
 		if (pointer) readout();
 	}
 
-	// A component kind draws from `frame`, so its readout follows the frame the same way.
-	$effect(() => {
-		void frame;
-		void componentProbe;
-		if (!onSurface) untrack(readout);
-	});
+	/** Copy what the drawing leaves for the DOM, as far as it changed. */
+	function show(d: Drawing | null): void {
+		const next = d?.labels ?? [];
+		if (next.join('|') !== labels.join('|')) labels = next;
+		const t = d?.texts ?? [];
+		if (t !== texts && (t.length !== texts.length || t.some((x, i) => x.text !== texts[i].text || x.x !== texts[i].x || x.y !== texts[i].y))) texts = t;
+		const m = d?.message ?? null;
+		if (m !== message) message = m;
+		const g = d?.drag ?? null;
+		if (g !== drag) drag = g;
+	}
 
-	/** Ask the kind's probe about the pointer; the readout follows the pointer and the frame alike. */
+	/** Ask the drawing's probe about the pointer; the readout follows the pointer and the frame alike. */
 	function readout(): void {
-		const probe = onSurface ? surfaceProbe : componentProbe;
+		const probe = drawing?.probe;
 		if (!pointer || !probe || !boxW || !boxH) {
 			hover = null;
 			return;
@@ -261,7 +236,6 @@
 
 	function onPointerDown(e: PointerEvent): void {
 		if (e.button !== 0) return;
-		const drag = onSurface ? null : componentDrag;
 		// A finger is the hover a touch screen does not have: held down, it reads the picture and
 		// follows, and the card is not carried by it. A mouse only reads by resting over the body.
 		const finger = e.pointerType === 'touch';
@@ -283,7 +257,6 @@
 	function onPointerMove(e: PointerEvent): void {
 		const at = layoutPoint(e);
 		if (!at) return;
-		const drag = onSurface ? null : componentDrag;
 		if (dragging && drag) {
 			drag(at.x - dragging.x, at.y - dragging.y, { w: boxW, h: boxH, tol: 12 / zoom });
 			dragging = at;
@@ -310,13 +283,12 @@
 		client = null;
 		hover = null;
 	}
-
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="viewer-feed"
-	class:nodrag={!onSurface && componentDrag !== null}
+	class:nodrag={drag !== null}
 	bind:this={container}
 	onpointerdown={onPointerDown}
 	onpointermove={onPointerMove}
@@ -335,10 +307,22 @@
 			{#snippet hint()}WebGL2 is not available{/snippet}
 		</EmptyState>
 	{:else}
-		<ViewerSurface {frame} {kind} {settings} bind:probe={componentProbe} bind:drag={componentDrag} />
+		<ViewerSurface {frame} {kind} {settings} />
 		{#each labels as text, i (i)}
 			{#if text}<span class="tick tick-{i}">{text}</span>{/if}
 		{/each}
+		{#each texts as t, i (i)}
+			<span
+				class="placed"
+				style:left="{t.x}px"
+				style:top="{t.y}px"
+				style:transform="rotate({t.angle}rad) translate({t.align === 'right' ? '-100%' : '0'}, -50%)"
+				style:color={t.color}>{t.text}</span
+			>
+		{/each}
+		{#if message}
+			<span class="message">{message}</span>
+		{/if}
 		{#if hover && pointer}
 			{#if hover.mark}
 				<span
@@ -413,6 +397,25 @@
 		.tick {
 			opacity: 1;
 		}
+	}
+	/* Text a drawing places on its picture, turned about its anchor; a message sits in the middle. */
+	.placed,
+	.message {
+		position: absolute;
+		font-family: var(--font-mono);
+		font-size: var(--fs-micro);
+		line-height: 1;
+		color: var(--text-dim);
+		white-space: nowrap;
+		pointer-events: none;
+	}
+	.placed {
+		transform-origin: 0 50%;
+	}
+	.message {
+		left: 50%;
+		top: 50%;
+		transform: translate(-50%, -50%);
 	}
 	/* The mark sits on the probed point; the readout follows the pointer, on <body> so a card's
 	   edge never clips it. */

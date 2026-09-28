@@ -64,7 +64,8 @@ export function lineProbe(data: LineData, range: Range, axes: LineAxes, names: L
 	const rows = data.rows;
 	const m = rows[0]?.length ?? 0;
 	const base = data.base ?? 0;
-	const xs = data.xs;
+	// One row of positions shared by every series; a trajectory's per-row xs take `trajectoryProbe`.
+	const xs = data.xs as ArrayLike<number> | null | undefined;
 	const xAt = (i: number) => (xs ? xs[i] : i + base);
 	const x0 = log(range.xMin, axes.logX);
 	const x1 = log(range.xMax, axes.logX);
@@ -106,6 +107,48 @@ export function lineProbe(data: LineData, range: Range, axes: LineAxes, names: L
 		const lines = [[formatTick(y)], [`x ${coord(x, names.x)}`]];
 		if (rows.length > 1) lines.unshift([coord(s, names.series)]);
 		return { mark: { x: toPx(x), y: toPy(y), r: 3.5 }, lines };
+	};
+}
+
+/** The drawn point nearest the pointer on a trajectory, within `tol`: every path is scanned,
+ * since each has x positions of its own. `pairs` names the rows a path was drawn from. */
+export function trajectoryProbe(
+	data: LineData,
+	range: Range,
+	pad: number,
+	pairs: [number, number][],
+	names: string[] | null
+): Probe {
+	const rows = data.rows;
+	const xs = data.xs as ArrayLike<number>[] | undefined;
+	const m = rows[0]?.length ?? 0;
+	return (px, py, box) => {
+		const w = box.w - 2 * pad;
+		const h = box.h - 2 * pad;
+		if (!xs || m === 0 || w <= 0 || h <= 0) return null;
+		const toPx = (x: number) => pad + ((x - range.xMin) / (range.xMax - range.xMin || 1)) * w;
+		const toPy = (y: number) => pad + (1 - (y - range.yMin) / (range.yMax - range.yMin || 1)) * h;
+		let best: { i: number; s: number; d: number } | null = null;
+		for (let s = 0; s < rows.length; s++) {
+			for (let i = 0; i < m; i++) {
+				const x = Number(xs[s][i]);
+				const y = Number(rows[s][i]);
+				if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+				const dx = toPx(x) - px;
+				const dy = toPy(y) - py;
+				const d = dx * dx + dy * dy;
+				if (d <= box.tol * box.tol && (!best || d < best.d)) best = { i, s, d };
+			}
+		}
+		if (!best) return null;
+		const { i, s } = best;
+		const x = Number(xs[s][i]);
+		const y = Number(rows[s][i]);
+		const [a, b] = pairs[s];
+		return {
+			mark: { x: toPx(x), y: toPy(y), r: 3.5 },
+			lines: [[formatTick(x), formatTick(y)], [`${coord(a, names)} · ${coord(b, names)}`, `t ${i}`]]
+		};
 	};
 }
 

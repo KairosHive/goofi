@@ -1,6 +1,7 @@
 /**
  * Thin-plate spline interpolation for EEG topomaps, approximating MNE's `plot_topomap`.
  * The ring of extra points outside the head carries its neighbours' mean, as MNE's `border="mean"`.
+ * The weights are solved here; the field is evaluated per pixel by the plot surface.
  */
 
 const TPS_EPS_SQ = 1e-12;
@@ -20,21 +21,6 @@ export interface TopoLayout {
 	/** Inverse of the augmented matrix; (nTotal+3)² row-major. */
 	Minv: Float64Array;
 	layoutKey: string;
-}
-
-export interface PixelCache {
-	width: number;
-	height: number;
-	layoutKey: string;
-	count: number;
-	/** Byte offset in ImageData.data for each cell the head disc covers. */
-	pixelByteOffsets: Int32Array;
-	/** Layout-space x of each covered cell: [0, 1] across the centred head square. */
-	px: Float32Array;
-	/** Layout-space y of each covered cell: [0, 1] across the centred head square. */
-	py: Float32Array;
-	/** Per-point φ image; length = nTotal, each Float32Array length = count. */
-	kernels: Float32Array[];
 }
 
 function invertMatrix(m: Float64Array, n: number): Float64Array {
@@ -163,51 +149,12 @@ export function buildLayout(
 	return { nReal, nExtra, posX, posY, extraNN: ring.nn, Minv, layoutKey };
 }
 
-/** The head frame of a `w`×`h` grid: its centre, and the side of the square the [0, 1]² layout fills. */
+/** The head's radius in the layout's unit square, and the electrodes' place inside a `w`×`h` box:
+ * the centre, and the side of the centred square the [0, 1]² layout fills. */
+export const HEAD_RADIUS = 0.45;
 export function headFrame(w: number, h: number): { cx: number; cy: number; side: number; radius: number } {
 	const side = Math.min(w, h);
-	return { cx: w / 2, cy: h / 2, side, radius: side * 0.45 };
-}
-
-export function buildPixelCache(layout: TopoLayout, w: number, h: number): PixelCache {
-	const { cx, cy, side, radius } = headFrame(w, h);
-	// Every cell whose centre lies within a cell of the head circle, so the clipped disc is covered
-	// to its edge; the [0, 1]² layout maps onto the centred square, never onto the whole grid.
-	const reach = (radius + 1) * (radius + 1);
-	const inside = (x: number, y: number): boolean => {
-		const dx = x + 0.5 - cx;
-		const dy = y + 0.5 - cy;
-		return dx * dx + dy * dy <= reach;
-	};
-	let count = 0;
-	for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (inside(x, y)) count++;
-	const pixelByteOffsets = new Int32Array(count);
-	const px = new Float32Array(count);
-	const py = new Float32Array(count);
-	let idx = 0;
-	for (let y = 0; y < h; y++) {
-		for (let x = 0; x < w; x++) {
-			if (!inside(x, y)) continue;
-			pixelByteOffsets[idx] = (y * w + x) * 4;
-			px[idx] = 0.5 + (x + 0.5 - cx) / side;
-			py[idx] = 0.5 + (y + 0.5 - cy) / side;
-			idx++;
-		}
-	}
-	const nTotal = layout.nReal + layout.nExtra;
-	const kernels: Float32Array[] = new Array(nTotal);
-	for (let i = 0; i < nTotal; i++) {
-		const arr = new Float32Array(count);
-		const cxi = layout.posX[i];
-		const cyi = layout.posY[i];
-		for (let p = 0; p < count; p++) {
-			const dx = px[p] - cxi;
-			const dy = py[p] - cyi;
-			arr[p] = tpsKernel(dx * dx + dy * dy);
-		}
-		kernels[i] = arr;
-	}
-	return { width: w, height: h, layoutKey: layout.layoutKey, count, pixelByteOffsets, px, py, kernels };
+	return { cx: w / 2, cy: h / 2, side, radius: side * HEAD_RADIUS };
 }
 
 export function solveWeights(layout: TopoLayout, realVals: ArrayLike<number>): Float64Array {
@@ -231,27 +178,19 @@ export function solveWeights(layout: TopoLayout, realVals: ArrayLike<number>): F
 	return w;
 }
 
-export function evaluateField(
+/** The solved spline as the surface takes it: every centre with its weight, and the affine part. */
+export function fieldCentres(
 	layout: TopoLayout,
-	cache: PixelCache,
-	weights: Float64Array,
-	out: Float32Array
-): void {
+	weights: Float64Array
+): { points: Float32Array; affine: [number, number, number] } {
 	const nTotal = layout.nReal + layout.nExtra;
-	const a0 = weights[nTotal + 0];
-	const a1 = weights[nTotal + 1];
-	const a2 = weights[nTotal + 2];
-	const count = cache.count;
-	const px = cache.px;
-	const py = cache.py;
-	for (let p = 0; p < count; p++) out[p] = a0 + a1 * px[p] + a2 * py[p];
-	const kernels = cache.kernels;
+	const points = new Float32Array(nTotal * 3);
 	for (let i = 0; i < nTotal; i++) {
-		const wi = weights[i];
-		if (wi === 0) continue;
-		const k = kernels[i];
-		for (let p = 0; p < count; p++) out[p] += wi * k[p];
+		points[i * 3] = layout.posX[i];
+		points[i * 3 + 1] = layout.posY[i];
+		points[i * 3 + 2] = weights[i];
 	}
+	return { points, affine: [weights[nTotal], weights[nTotal + 1], weights[nTotal + 2]] };
 }
 
 /** The field at one layout-space point `(x, y)`, for a readout off the grid. */

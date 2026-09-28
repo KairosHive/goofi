@@ -94,12 +94,7 @@ const ALLOW_VALUE: { file?: string; prop?: RegExp; value: RegExp; why: string }[
 
 /** Rules two components are allowed to state identically, each with the reason it is not one
  *  affordance written twice. */
-const ALLOW_DUPLICATE: { sel: string; why: string }[] = [
-	{
-		sel: '.container',
-		why: 'TrajectoryViewer and TableViewer each size their OWN body to fill its slot with a sane minimum — a private box, not a shared affordance. The agreement is what "fill your slot" means, not a vocabulary either of them could look up; hoisting a viewer-internal frame into the CENTRAL stylesheet is the opposite of what that module is for'
-	}
-];
+const ALLOW_DUPLICATE: { sel: string; why: string }[] = [];
 
 /** Geometric invariants that are not spacing at all: nothing (in both spellings — a `var()`
  *  fallback inside `calc()` must carry a unit), a hairline, full, a pill, a half. */

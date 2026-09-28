@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { axisNames, imageProbe, lineProbe } from './hover';
+import { axisNames, imageProbe, lineProbe, trajectoryProbe } from './hover';
 import type { ArrayData } from '$lib/codec/decode';
 
 const axes = { logX: false, logY: false, pad: 0 };
@@ -44,6 +44,26 @@ describe('lineProbe', () => {
 	it('follows decimated positions and an unnamed index', () => {
 		const probe = lineProbe({ rows: [[0.2, 0.8]], xs: [0, 10] }, range, axes, { x: null, series: null });
 		expect(probe(98, 22, box)!.lines).toEqual([['0.800'], ['x 10']]);
+	});
+});
+
+describe('trajectoryProbe', () => {
+	// Two paths on one square window: row 0 against row 1, and row 0 against row 2.
+	const xs = [Float32Array.from([0, 5, 10]), Float32Array.from([0, 5, 10])];
+	const rows = [Float32Array.from([0, 5, 10]), Float32Array.from([10, 5, 0])];
+	const range = { xMin: 0, xMax: 10, yMin: 0, yMax: 10, scalar: false };
+	const pairs: [number, number][] = [
+		[0, 1],
+		[0, 2]
+	];
+
+	it('reads the nearest point of any path, naming the rows it was drawn from', () => {
+		const probe = trajectoryProbe({ rows, xs }, range, 0, pairs, ['a', 'b', 'c']);
+		const h = probe(97, 3, box)!;
+		expect(h.lines).toEqual([['10.00', '10.00'], ['a · b', 't 2']]);
+		expect(h.mark).toEqual({ x: 100, y: 0, r: 3.5 });
+		expect(probe(3, 3, box)!.lines[1]).toEqual(['a · c', 't 0']);
+		expect(probe(50, 90, box)).toBeNull();
 	});
 });
 

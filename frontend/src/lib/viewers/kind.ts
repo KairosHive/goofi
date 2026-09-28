@@ -39,9 +39,10 @@ export function brainMode(settings: SettingsMap, ndim: number): BrainMode {
 	return ndim <= 1 ? 'topomap' : 'ring';
 }
 
-/** The kinds the panel's plot surface draws; their card body is a transparent frame over it. */
-export function drawsOnSurface(kind: ViewerKind, settings: SettingsMap): boolean {
-	return (kind === 'line' && !isTrajectory(kind, settings)) || kind === 'image';
+/** The kinds the panel's plot surface draws, which is every array kind; their card body is a
+ * transparent frame over it, and the text kinds fill it themselves. */
+export function drawsOnSurface(kind: ViewerKind): boolean {
+	return VIEWER_KINDS.find((k) => k.id === kind)?.dtype === 'ARRAY';
 }
 
 /** Whether an array of the given shape can be drawn by `kind` under `settings`; a non-array

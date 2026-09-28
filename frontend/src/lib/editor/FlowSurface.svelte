@@ -16,7 +16,9 @@
 		const c = document.createElement('canvas');
 		c.className = 'plot-surface';
 		c.style.cssText = 'position:absolute;pointer-events:none;';
-		layer.prepend(c);
+		// Under the cards and over the cables, in the viewport's transform; not inside the nodes
+		// layer, which Svelte empties wholesale with the last card and the canvas along with it.
+		layer.before(c);
 		const m = mountSurface(c);
 		canvas = c;
 		mount = m;

@@ -6,13 +6,6 @@ Chromium needs SwiftShader flags). The surface owns pixels only; text stays in t
 
 ## Remaining
 
-1. The brain viewer and the line viewer's trajectory mode onto the surface: the topomap
-   interpolation (`topomapInterp.ts`, CPU today) becomes a fragment shader over the electrode
-   positions, the ring and the 3-D connectivity (canvas 2-D today) line programs, and the
-   trajectory a line plot with two series per pair. Then `ViewerSurface` keeps only the string
-   and table kinds.
-2. `plotluck` from npm: `frontend/package.json` takes it from its GitHub repo today; when it is
-   published, the dependency takes a version.
-3. Worker-side rendering: `dataWorker.ts` owns the sockets and the decode; with
+1. Worker-side rendering: `dataWorker.ts` owns the sockets and the decode; with
    `transferControlToOffscreen` it draws straight from the decoded buffer and the main thread
    sends rects and the camera on change. The renderer runs on either thread already.

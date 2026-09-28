@@ -270,8 +270,9 @@ test('streams served at the cap paint together, so the page paints at the cap', 
 	}
 });
 
-test('a viewer with a drag of its own keeps it from the card; one without lets the card move', async ({ page }) => {
-	// The 3-D brain turns under a drag, so a press on it must not start a node drag; the ring
+test('the brain draws a scalp on the surface, names its channels in the DOM, and turns under its own drag', async ({ page }) => {
+	// A value per named channel is a topomap; a channel-by-channel matrix a ring, whose names are
+	// text the surface never draws; in 3-D a press on it must not start a node drag, and the ring
 	// has no drag, so the same press moves the node as a press on any viewer does.
 	await page.setViewportSize({ width: 1280, height: 800 });
 	await page.goto('/');
@@ -279,8 +280,17 @@ test('a viewer with a drag of its own keeps it from the card; one without lets t
 	try {
 		const c = await addNode(page, 'signal:Constant', [160, 120]);
 		await waitForNode(page, c);
-		await updateParam(page, c, 'constant', 'shape', '4,4');
-		const card = page.locator(`.svelte-flow__node[data-id="${c}"]`);
+		await updateParam(page, c, 'constant', 'shape', '4');
+		const m = await addNode(page, 'signal:Meta', [420, 120]);
+		await waitForNode(page, m);
+		await updateParam(page, m, 'meta', 'labels', 'Fz,Cz,Pz,Oz');
+		await page.evaluate(
+			([a, b]) =>
+				(window as any).goofi.commands.addLink({ node_out: a, slot_out: 'out', node_in: b, slot_in: 'input' }),
+			[c, m]
+		);
+		await expect.poll(() => frameSummary(page, m)).not.toBeNull();
+		const card = page.locator(`.svelte-flow__node[data-id="${m}"]`);
 		const feed = card.locator('.slot-viewer .body .viewer-feed');
 		const drag = async (): Promise<{ dx: number; dy: number }> => {
 			const before = (await card.boundingBox())!;
@@ -293,18 +303,32 @@ test('a viewer with a drag of its own keeps it from the card; one without lets t
 			return { dx: after.x - before.x, dy: after.y - before.y };
 		};
 
-		await test.step('the 3-D brain takes the drag', async () => {
-			await rawCall(page, 'node edit', { node: c, viewer: [{ slot: 'out', kind: 'brain', settings: { mode: '3d' } }] });
-			await expect(feed, 'the viewer declares its drag once the frame is drawn').toHaveClass(/nodrag/);
-			expect(await drag()).toEqual({ dx: 0, dy: 0 });
+		await test.step('a value per channel draws a scalp map, read by a hover inside the head', async () => {
+			await rawCall(page, 'node edit', { node: m, viewer: [{ slot: 'out', kind: 'brain', settings: {} }] });
+			await expect
+				.poll(async () => (await inspect(page, (await feed.boundingBox())!)).contrast, { message: 'the head disc is painted' })
+				.toBeGreaterThan(60);
+			const box = (await feed.boundingBox())!;
+			await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+			await expect(page.locator('.viewer-hover-readout')).toHaveText(/^-?[\d.]+/);
+			await page.mouse.move(4, 4);
 		});
 
-		await test.step('the ring leaves it to the card', async () => {
-			await rawCall(page, 'node edit', { node: c, viewer: [{ slot: 'out', kind: 'brain', settings: { mode: 'ring' } }] });
+		await test.step('a channel-by-channel matrix draws a ring, its channel names as text', async () => {
+			await updateParam(page, c, 'constant', 'shape', '4,4');
+			await expect(feed.locator('.placed')).toHaveCount(4);
+			await expect(feed.locator('.placed').first()).toHaveText('Fz');
 			await expect(feed).not.toHaveClass(/nodrag/);
 			const moved = await drag();
 			expect(moved.dx, 'the card followed the pointer').toBeGreaterThan(40);
 			expect(moved.dy).toBeGreaterThan(20);
+		});
+
+		await test.step('the 3-D brain takes the drag', async () => {
+			await rawCall(page, 'node edit', { node: m, viewer: [{ slot: 'out', kind: 'brain', settings: { mode: '3d' } }] });
+			await expect(feed, 'the viewer declares its drag once the frame is drawn').toHaveClass(/nodrag/);
+			await expect(feed.locator('.placed')).toHaveCount(0);
+			expect(await drag()).toEqual({ dx: 0, dy: 0 });
 		});
 	} finally {
 		await resetPatch(page);
