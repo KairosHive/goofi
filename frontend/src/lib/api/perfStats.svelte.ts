@@ -16,8 +16,8 @@ export class PerfStats {
 		this.meter = new RateMeter(now);
 	}
 
-	delivered(): void {
-		this.meter.delivered();
+	delivered(n = 1): void {
+		this.meter.delivered(n);
 	}
 
 	tick(now: number = nowMs()): void {

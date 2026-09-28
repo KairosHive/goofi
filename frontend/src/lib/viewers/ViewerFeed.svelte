@@ -1,19 +1,20 @@
-<!-- The viewer body: a lazily-subscribed Data frame, drawn on the host's plot surface for every
-     array kind and by a component for the text kinds. Padding is the caller's. -->
+<!-- The viewer body: a lazily-subscribed Data frame, drawn in the worker on the host's plot
+     surface for every array kind and by a component here for the text kinds. Padding is the caller's. -->
 <script lang="ts">
 	import { bindViewer } from '$lib/api/frames';
+	import { createDrawing, type DrawingHandle } from '$lib/api/drawings';
 	import { viewSpecsForKind } from './capacity';
-	import { isArrayFrame, type DataFrame } from '$lib/codec/decode';
+	import type { DataFrame } from '$lib/codec/decode';
 	import ViewerSurface from './ViewerSurface.svelte';
+	import HighDimFallback from './HighDimFallback.svelte';
 	import type { ViewBinding } from './viewBinding';
 	import { EmptyState } from '$lib/ui';
 	import { untrack } from 'svelte';
 	import { offsetIn, useAnchor, useSurface } from './plotHost';
-	import { ImageDrawing, LineDrawing, TrajectoryDrawing, type Drawing, type PlacedText } from './drawing';
-	import { BrainDrawing } from './brainDrawing';
-	import type { Drag, Hover } from './hover';
+	import type { DrawnState } from './drawing';
+	import type { Hover } from './hover';
 	import { portal } from 'panelty';
-	import { drawsOnSurface, isRenderable, isTrajectory } from './kind';
+	import { drawsOnSurface, isTrajectory } from './kind';
 
 	/** `zoom` is the flow zoom the viewer is drawn under; a docked panel draws at 1. */
 	let {
@@ -30,10 +31,8 @@
 	const onSurface = $derived(drawsOnSurface(kind));
 	const trajectory = $derived(isTrajectory(kind, settings));
 
-	// What the DOM shows: a surface kind's frame only while it takes the fallback text.
+	// What a text kind shows: its frame, read on this thread.
 	let frame = $state.raw<DataFrame | null>(null);
-	// The frame the drawing last drew, for a redraw when the settings change.
-	let last: DataFrame | null = null;
 	let visible = $state(false);
 	let container: HTMLDivElement | null = $state(null);
 	// The content box in CSS px; the device box below is derived from it, the DPR and the zoom.
@@ -50,14 +49,10 @@
 	const token =
 		typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `vf-${Math.random()}`;
 
-	// The drawing of a surface kind, and the little of it that reaches the DOM.
-	let drawing = $state.raw<Drawing | null>(null);
-	let labels = $state<string[]>([]);
-	let texts = $state.raw<PlacedText[]>([]);
-	let message = $state<string | null>(null);
-	// A drawing's drag, where it has one: the feed then captures the pointer instead of the
-	// card, which otherwise moves the node.
-	let drag = $state.raw<Drag | null>(null);
+	// The drawing of an array kind, in the worker, and what it reports for the DOM.
+	const NOTHING: DrawnState = { has: false, fallback: null, labels: [], texts: [], message: null, drag: false };
+	let drawing = $state.raw<DrawingHandle | null>(null);
+	let drawn = $state.raw<DrawnState>(NOTHING);
 	let dragging: { x: number; y: number } | null = null;
 	// Whether the feed holds the pointer: a finger reading it, or a drag on the drawing.
 	let held = false;
@@ -127,43 +122,43 @@
 	$effect(() => {
 		if (frozen) return;
 		frame = null;
-		last = null;
-		untrack(() => {
-			drawing?.clear();
-			show(drawing);
-		});
-		hover = null;
 		if (!visible || !slot) return;
 		// Kind is not part of the stream's identity, but it IS part of what this viewer needs.
 		const specs = capW > 0 && capH > 0 ? viewSpecsForKind(kind, capW, capH, settings) : null;
-		const draw = onSurface;
-		// A joiner is replayed the current frame at once, so the delivery must not become a dependency.
-		return bindViewer(node, slot, token, specs, (f: DataFrame) =>
-			untrack(() => {
-				if (!draw || !frame || fallback(frame) || fallback(f)) frame = f;
-				if (draw) drawFrame(f);
-			})
-		);
+		// A text kind reads its frames here; an array kind's drawing takes them in the worker.
+		return bindViewer(node, slot, token, specs, onSurface ? null : (f: DataFrame) => (frame = f));
 	});
 
 	$effect(() => {
 		const s = host?.surface;
 		const el = container;
 		if (!onSurface || !s || !el) return;
-		const d =
-			kind === 'brain'
-				? new BrainDrawing(s)
-				: kind === 'image'
-					? new ImageDrawing(s)
-					: trajectory
-						? new TrajectoryDrawing(s)
-						: new LineDrawing(s);
+		const d = createDrawing(
+			s,
+			kind,
+			trajectory,
+			(state) => (drawn = state),
+			(h) => (hover = h)
+		);
 		d.setBackground(getComputedStyle(el).getPropertyValue('--bg').trim());
 		drawing = d;
 		return () => {
 			d.remove();
 			drawing = null;
+			drawn = NOTHING;
+			hover = null;
 		};
+	});
+
+	// The drawing follows the stream while the body is on screen; zoomed out past legibility it
+	// lets the stream go and keeps its last picture as a thumbnail. Decided from the settled state,
+	// never in a teardown, which sees the values of the run before.
+	$effect(() => {
+		const d = drawing;
+		if (!d) return;
+		if (frozen) d.detach(true);
+		else if (!visible || !slot) d.detach(false);
+		else d.attach(node, slot);
 	});
 
 	// The rect follows the card: its flow position, and this body's offset inside it.
@@ -176,55 +171,12 @@
 		d.place(a.x + o.x, a.y + o.y, o.w, o.h, a.z);
 	});
 
-	// A settings change redraws the last frame under the new settings.
+	// The settings and the body's size, under which the worker draws each frame.
 	$effect(() => {
-		void settings;
-		void drawing;
-		untrack(() => last && drawFrame(last));
-	});
-
-	/** Whether a frame takes the fallback text rather than the plot. */
-	function fallback(f: DataFrame): boolean {
-		return !isArrayFrame(f) || !isRenderable(kind, f.data, settings);
-	}
-
-	function drawFrame(f: DataFrame): void {
 		const d = drawing;
-		last = f;
-		if (!d || !isArrayFrame(f)) return;
-		// A frame this kind cannot draw takes the fallback text; the trace before it must not stay under it.
-		if (fallback(f)) {
-			d.clear();
-			show(d);
-			return;
-		}
-		if (capW === 0) return; // unmeasured: the re-bind on the first size replays the frame
-		d.push(f, settings, { w: boxW, h: boxH, cols: capW, zoom });
-		show(d);
-		if (pointer) readout();
-	}
-
-	/** Copy what the drawing leaves for the DOM, as far as it changed. */
-	function show(d: Drawing | null): void {
-		const next = d?.labels ?? [];
-		if (next.join('|') !== labels.join('|')) labels = next;
-		const t = d?.texts ?? [];
-		if (t !== texts && (t.length !== texts.length || t.some((x, i) => x.text !== texts[i].text || x.x !== texts[i].x || x.y !== texts[i].y))) texts = t;
-		const m = d?.message ?? null;
-		if (m !== message) message = m;
-		const g = d?.drag ?? null;
-		if (g !== drag) drag = g;
-	}
-
-	/** Ask the drawing's probe about the pointer; the readout follows the pointer and the frame alike. */
-	function readout(): void {
-		const probe = drawing?.probe;
-		if (!pointer || !probe || !boxW || !boxH) {
-			hover = null;
-			return;
-		}
-		hover = probe(pointer.x, pointer.y, { w: boxW, h: boxH, tol: 12 / zoom });
-	}
+		if (!d || !capW) return; // unmeasured: nothing draws before the first size
+		d.settings(settings, { w: boxW, h: boxH, cols: capW, zoom });
+	});
 
 	/** The pointer in layout px: the box is measured under the flow zoom, the pointer is not. */
 	function layoutPoint(e: PointerEvent): { x: number; y: number } | null {
@@ -234,13 +186,17 @@
 		return { x: (e.clientX - r.left) * scale, y: (e.clientY - r.top) * scale };
 	}
 
+	function probeBox(): { w: number; h: number; tol: number } {
+		return { w: boxW, h: boxH, tol: 12 / zoom };
+	}
+
 	function onPointerDown(e: PointerEvent): void {
 		if (e.button !== 0) return;
 		// A finger is the hover a touch screen does not have: held down, it reads the picture and
 		// follows, and the card is not carried by it. A mouse only reads by resting over the body.
 		const finger = e.pointerType === 'touch';
-		if (!drag && !finger) return;
-		if (drag) dragging = layoutPoint(e);
+		if (!drawn.drag && !finger) return;
+		if (drawn.drag) dragging = layoutPoint(e);
 		held = true;
 		container?.setPointerCapture(e.pointerId);
 		if (finger) onPointerMove(e);
@@ -257,13 +213,13 @@
 	function onPointerMove(e: PointerEvent): void {
 		const at = layoutPoint(e);
 		if (!at) return;
-		if (dragging && drag) {
-			drag(at.x - dragging.x, at.y - dragging.y, { w: boxW, h: boxH, tol: 12 / zoom });
+		if (dragging && drawn.drag) {
+			drawing?.drag(at.x - dragging.x, at.y - dragging.y, probeBox());
 			dragging = at;
 		}
 		pointer = at;
 		client = { x: e.clientX, y: e.clientY };
-		readout();
+		if (boxW && boxH) drawing?.pointer({ ...at, box: probeBox() });
 	}
 
 	function onPointerUp(e: PointerEvent): void {
@@ -282,13 +238,14 @@
 		pointer = null;
 		client = null;
 		hover = null;
+		drawing?.pointer(null);
 	}
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="viewer-feed"
-	class:nodrag={drag !== null}
+	class:nodrag={drawn.drag}
 	bind:this={container}
 	onpointerdown={onPointerDown}
 	onpointermove={onPointerMove}
@@ -306,12 +263,20 @@
 		<EmptyState>
 			{#snippet hint()}WebGL2 is not available{/snippet}
 		</EmptyState>
+	{:else if !onSurface}
+		<ViewerSurface {frame} {settings} />
+	{:else if !drawn.has}
+		<EmptyState>
+			{#snippet hint()}no data yet{/snippet}
+		</EmptyState>
 	{:else}
-		<ViewerSurface {frame} {kind} {settings} />
-		{#each labels as text, i (i)}
+		{#if drawn.fallback}
+			<HighDimFallback summary={drawn.fallback} />
+		{/if}
+		{#each drawn.labels as text, i (i)}
 			{#if text}<span class="tick tick-{i}">{text}</span>{/if}
 		{/each}
-		{#each texts as t, i (i)}
+		{#each drawn.texts as t, i (i)}
 			<span
 				class="placed"
 				style:left="{t.x}px"
@@ -320,8 +285,8 @@
 				style:color={t.color}>{t.text}</span
 			>
 		{/each}
-		{#if message}
-			<span class="message">{message}</span>
+		{#if drawn.message}
+			<span class="message">{drawn.message}</span>
 		{/if}
 		{#if hover && pointer}
 			{#if hover.mark}

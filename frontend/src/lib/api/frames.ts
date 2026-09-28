@@ -1,6 +1,8 @@
-/** The viewer registry and display-rate frame delivery: ONE rAF flush per tick, most-starved
- * slot first, with a per-frame time budget. */
-import { closeStream, declareRate, openStream, sendSpecs, setFrameSink, setStampsSink } from './data';
+/** The viewer registry: what each stream is asked for, and the frames this thread reads. A
+ * drawing consumes its frames in the worker; a reader here gets them on ONE rAF flush per tick,
+ * most-starved slot first, with a per-frame time budget. */
+import { closeStream, declareRate, listen, openStream, sendSpecs } from './data';
+import { headOf, type FrameHead } from './dataProtocol';
 import { perfStats } from './perfStats.svelte';
 import { RateMeter } from './rateMeter';
 import type { DataFrame } from '$lib/codec/decode';
@@ -11,9 +13,10 @@ import { flushSync } from 'svelte';
 type FrameCallback = (frame: DataFrame) => void;
 
 /** One viewer bound to a stream. Null `specs` contribute nothing to the reduction; a stream
- * every viewer declares null for is served one texel, never the full frame. */
+ * every viewer declares null for is served one texel, never the full frame. A null `cb` is a
+ * drawing the worker feeds, which asks for no frame here. */
 interface BoundViewer {
-	cb: FrameCallback;
+	cb: FrameCallback | null;
 	specs: ViewSpec[] | null;
 }
 
@@ -23,6 +26,8 @@ interface Slot {
 	viewers: Map<string, BoundViewer>;
 	pending: DataFrame | null;
 	current: DataFrame | null;
+	/** What the last frame said of itself, for a stream no reader here holds. */
+	head: FrameHead | null;
 	/** When this slot last delivered, for most-starved-first fairness. */
 	lastFlush: number;
 	/** This stream's own coalescing rate — per slot, because a drop belongs to the stream that
@@ -91,13 +96,14 @@ function flush(): void {
 		s.lastFlush = start;
 		painted++;
 		for (const { cb } of [...s.viewers.values()]) {
+			if (!cb) continue;
 			try {
 				cb(frame);
 			} catch (err) {
 				console.error('frame consumer crashed', err);
 			}
 		}
-		// A component viewer's draws run here, inside the budget; a surface plot draws in its own frame.
+		// A component viewer's draws run here, inside the budget; the worker's plots draw in their own frame.
 		flushSync();
 	}
 	// ONE paint per flush, not one per slot: that is the quantity the HUD names.
@@ -124,25 +130,35 @@ function reconcile(node: string, slot: string, k: string): void {
 		slots.delete(k);
 		return;
 	}
-	if (have === null) openStream(node, slot);
-	sendSpecs(node, slot, JSON.parse(want) as ViewSpec[]);
+	const { specs, frames } = JSON.parse(want) as Demand;
+	if (have === null) openStream(node, slot, frames);
+	sendSpecs(node, slot, specs, frames);
 	synced.set(k, want);
 }
 
-/** What this page needs a stream reduced to: every bound viewer's constraint, DISTINCT ones only
- * — the bridge folds richest-per-dim, so a repeat would renegotiate nothing. */
-function demand(s: Slot): ViewSpec[] {
+interface Demand {
+	specs: ViewSpec[];
+	/** Whether any viewer reads the frames on this thread. */
+	frames: boolean;
+}
+
+/** What this page needs of a stream: every bound viewer's constraint, DISTINCT ones only —
+ * the bridge folds richest-per-dim, so a repeat would renegotiate nothing — and whether the
+ * frames are wanted here. */
+function demand(s: Slot): Demand {
 	const seen = new Set<string>();
-	const out: ViewSpec[] = [];
-	for (const { specs } of s.viewers.values()) {
-		for (const spec of specs ?? []) {
+	const specs: ViewSpec[] = [];
+	let frames = false;
+	for (const v of s.viewers.values()) {
+		if (v.cb) frames = true;
+		for (const spec of v.specs ?? []) {
 			const sig = JSON.stringify(spec);
 			if (seen.has(sig)) continue;
 			seen.add(sig);
-			out.push(spec);
+			specs.push(spec);
 		}
 	}
-	return out;
+	return { specs, frames };
 }
 
 function scheduleReconcile(node: string, slot: string, k: string): void {
@@ -161,6 +177,7 @@ function ensureSlot(k: string): Slot {
 			viewers: new Map(),
 			pending: null,
 			current: null,
+			head: null,
 			lastFlush: 0,
 			drops: new RateMeter(nowMs()),
 			arrivals: new RateMeter(nowMs())
@@ -171,13 +188,14 @@ function ensureSlot(k: string): Slot {
 }
 
 /** Bind a viewer to a (node, slot) stream under `token`, so several viewers of one slot collect
- * rather than evict. Re-binding with changed `specs` reports a resize or a kind switch. */
+ * rather than evict. Re-binding with changed `specs` reports a resize or a kind switch. A
+ * viewer with no `cb` draws in the worker and only states its demand here. */
 export function bindViewer(
 	node: string,
 	slot: string,
 	token: string,
 	specs: ViewSpec[] | null,
-	cb: FrameCallback
+	cb: FrameCallback | null
 ): () => void {
 	measureDisplayRate();
 	const k = streamKey(node, slot);
@@ -186,7 +204,7 @@ export function bindViewer(
 	scheduleReconcile(node, slot, k);
 	// An open stream sends nothing new for a joiner, so replay the current frame to it alone —
 	// re-marking the slot dirty would repaint every settled viewer.
-	if (s.current) {
+	if (cb && s.current) {
 		try {
 			cb(s.current);
 		} catch (err) {
@@ -201,26 +219,47 @@ export function bindViewer(
 	};
 }
 
-/** Everything the worker decodes lands here, latest-wins, and is painted on the next flush. */
-setFrameSink((node, slot, frame) => {
-	const s = slots.get(streamKey(node, slot));
-	if (!s) return;
-	s.arrivals.delivered();
-	// A pending frame overwritten before it painted is a drop, charged to THIS stream.
-	if (s.pending !== null) s.drops.dropped();
-	s.pending = frame;
-	dirty.add(s);
-	requestFlush();
-});
+/** Whether the worker draws this stream for a viewer here. */
+function drawn(s: Slot): boolean {
+	for (const v of s.viewers.values()) if (!v.cb) return true;
+	return false;
+}
 
-/** A held frame's fresh stamps land on the pending frame, else the painted one, as a new object
- * a poll sees; nothing is marked dirty, because nothing on screen changed. */
-setStampsSink((node, slot, stamps) => {
-	const s = slots.get(streamKey(node, slot));
-	if (!s) return;
-	const restamp = (f: DataFrame): DataFrame => ({ ...f, meta: { ...f.meta, ...stamps } });
-	if (s.pending) s.pending = restamp(s.pending);
-	else if (s.current) s.current = restamp(s.current);
+listen((m) => {
+	if ('frame' in m) {
+		// Everything the worker decodes for this thread lands here, latest-wins, painted on the next flush.
+		const s = slots.get(streamKey(m.node, m.slot));
+		if (!s) return;
+		// A pending frame overwritten before it painted is a drop, charged to THIS stream; where
+		// the worker draws the stream too, its count stands for both.
+		if (s.pending !== null && !drawn(s)) s.drops.dropped();
+		s.pending = m.frame;
+		s.head = null;
+		dirty.add(s);
+		requestFlush();
+	} else if ('head' in m) {
+		const s = slots.get(streamKey(m.node, m.slot));
+		if (s) s.head = m.head;
+	} else if ('stamps' in m) {
+		// A held frame's fresh stamps land on the pending frame, else the painted one, as a new
+		// object a poll sees; nothing is marked dirty, because nothing on screen changed.
+		const s = slots.get(streamKey(m.node, m.slot));
+		if (!s) return;
+		const restamp = (f: DataFrame): DataFrame => ({ ...f, meta: { ...f.meta, ...m.stamps } });
+		if (s.pending) s.pending = restamp(s.pending);
+		if (s.current) s.current = restamp(s.current);
+		else if (s.head) s.head = { ...s.head, meta: { ...s.head.meta, ...m.stamps } };
+	} else if ('stats' in m) {
+		// The worker's paints and, per stream, what the wire delivered and what its plots
+		// coalesced: a drop belongs to the stream whose frame was overwritten before a draw.
+		if (m.stats.paints > 0) perfStats().delivered(m.stats.paints);
+		for (const [node, slot, arrivals, drops] of m.stats.streams) {
+			const s = slots.get(streamKey(node, slot));
+			if (!s) continue;
+			s.arrivals.delivered(arrivals);
+			s.drops.dropped(drops);
+		}
+	}
 });
 
 /** Coalesced-frame rate for ONE stream. Null when nothing is subscribed: absent is not zero. */
@@ -240,7 +279,17 @@ export function arrivalRate(node: string, slot: string): number | null {
 	return s.arrivals.fps;
 }
 
-/** The latest frame for a (node, slot), or null when nothing is subscribed to it. */
+/** The latest frame for a (node, slot), or null when no reader on this thread holds one. */
 export function latestFrame(node: string, slot: string): DataFrame | null {
 	return slots.get(streamKey(node, slot))?.current ?? null;
+}
+
+/** What the latest frame said of itself: where a reader on this thread takes the frames, the
+ * one it was given, never one still pending its flush; else what the worker told of a frame it
+ * kept for a drawing. Null when nothing is subscribed or nothing has been handed over yet. */
+export function latestHead(node: string, slot: string): FrameHead | null {
+	const s = slots.get(streamKey(node, slot));
+	if (!s) return null;
+	if (s.current) return headOf(s.current);
+	return demand(s).frames ? null : s.head;
 }

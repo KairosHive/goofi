@@ -1,54 +1,49 @@
-/** Data-plane transport: the main-thread wire to `dataWorker.ts`. Viewer counting belongs to
- * the registry in `frames.ts`, never here. */
-import type { DataFrame } from '$lib/codec/decode';
+/** Data-plane transport: the main-thread wire to `dataWorker.ts`, which owns the sockets, the
+ * decode and the plot surfaces. Viewer counting belongs to the registry in `frames.ts`; a
+ * drawing's life belongs to `drawings.ts`. Neither is decided here. */
 import type { ViewSpec } from '$lib/viewers/capacity';
-
-/** Where decoded frames go. One sink, registered once by `frames.ts`. */
-type FrameSink = (node: string, slot: string, frame: DataFrame) => void;
-/** Where a held frame's fresh stamps go: the same registry, which folds them into that frame. */
-type StampsSink = (node: string, slot: string, stamps: Record<string, unknown>) => void;
+import type { ToMain, ToWorker } from './dataProtocol';
 
 let worker: Worker | null = null;
-let sink: FrameSink | null = null;
-let stampsSink: StampsSink | null = null;
-
-/** Route decoded frames to `f`. Called once, at `frames.ts` module init. */
-export function setFrameSink(f: FrameSink): void {
-	sink = f;
-}
-
-/** Route a held frame's stamps to `f`. Called once, at `frames.ts` module init. */
-export function setStampsSink(f: StampsSink): void {
-	stampsSink = f;
-}
+const listeners = new Set<(m: ToMain) => void>();
 
 function ensureWorker(): Worker {
 	if (worker) return worker;
 	worker = new Worker(new URL('./dataWorker.ts', import.meta.url), { type: 'module' });
 	worker.addEventListener('message', (e: MessageEvent) => {
-		const m = e.data as { node: string; slot: string; frame?: DataFrame; stamps?: Record<string, unknown> };
-		if (m.frame) sink?.(m.node, m.slot, m.frame);
-		else if (m.stamps) stampsSink?.(m.node, m.slot, m.stamps);
+		for (const cb of listeners) cb(e.data as ToMain);
 	});
 	return worker;
 }
 
-/** Open the `(node, slot)` stream. Idempotent at the worker: a stream already open stays open. */
-export function openStream(node: string, slot: string): void {
-	ensureWorker().postMessage({ op: 'sub', node, slot });
+/** Everything the worker says reaches every listener; each picks out what is its own. */
+export function listen(cb: (m: ToMain) => void): () => void {
+	listeners.add(cb);
+	return () => listeners.delete(cb);
+}
+
+export function post(m: ToWorker, transfer: Transferable[] = []): void {
+	ensureWorker().postMessage(m, transfer);
+}
+
+/** Open the `(node, slot)` stream. Idempotent at the worker: a stream already open stays open.
+ * `frames` asks for the decoded frames on this thread, beside whatever the worker draws. */
+export function openStream(node: string, slot: string, frames: boolean): void {
+	post({ op: 'sub', node, slot, frames });
 }
 
 /** Close the `(node, slot)` stream and drop its socket. */
 export function closeStream(node: string, slot: string): void {
-	ensureWorker().postMessage({ op: 'unsub', node, slot });
+	post({ op: 'unsub', node, slot });
 }
 
 /** Declare the page's display rate on every stream, open and to come. */
 export function declareRate(fps: number): void {
-	ensureWorker().postMessage({ op: 'rate', fps });
+	post({ op: 'rate', fps });
 }
 
-/** Ask the backend to reduce this stream to `specs` — every bound viewer's constraint, verbatim. */
-export function sendSpecs(node: string, slot: string, specs: ViewSpec[]): void {
-	ensureWorker().postMessage({ op: 'spec', node, slot, specs });
+/** Ask the backend to reduce this stream to `specs` — every bound viewer's constraint, verbatim —
+ * and say whether this thread wants the frames. */
+export function sendSpecs(node: string, slot: string, specs: ViewSpec[], frames: boolean): void {
+	post({ op: 'spec', node, slot, specs, frames });
 }

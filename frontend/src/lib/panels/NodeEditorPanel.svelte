@@ -20,7 +20,7 @@
 	import FlowApi from '$lib/editor/FlowApi.svelte';
 	import FlowSurface from '$lib/editor/FlowSurface.svelte';
 	import { provideSurface } from '$lib/viewers/plotHost';
-	import type { Surface } from 'plotluck';
+	import type { SurfaceHandle } from '$lib/api/drawings';
 	import SubpatchZoomExit from '$lib/editor/SubpatchZoomExit.svelte';
 	import SnapGuides from '$lib/editor/SnapGuides.svelte';
 	import {
@@ -1029,7 +1029,7 @@
 	}
 
 	// The plot surface the node cards' viewers draw on; bound from <FlowSurface> inside <SvelteFlow>.
-	let plotSurface = $state.raw<Surface | null>(null);
+	let plotSurface = $state.raw<SurfaceHandle | null>(null);
 	provideSurface({
 		get surface() {
 			return plotSurface;

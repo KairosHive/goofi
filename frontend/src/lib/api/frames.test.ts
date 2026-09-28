@@ -24,6 +24,7 @@ class MockWorker {
 let bindViewer: typeof import('./frames').bindViewer;
 let dropRate: typeof import('./frames').dropRate;
 let latestFrame: typeof import('./frames').latestFrame;
+let latestHead: typeof import('./frames').latestHead;
 
 /** Let the reconcile microtask run. */
 const settle = (): Promise<void> => Promise.resolve();
@@ -53,7 +54,7 @@ beforeEach(async () => {
 	vi.stubGlobal('Worker', MockWorker as unknown as typeof Worker);
 	vi.stubGlobal('URL', URL);
 	seq = 0;
-	({ bindViewer, dropRate, latestFrame } = await import('./frames'));
+	({ bindViewer, dropRate, latestFrame, latestHead } = await import('./frames'));
 });
 
 afterEach(() => {
@@ -211,6 +212,29 @@ describe('per-stream drop accounting', () => {
 		offB();
 	});
 
+	it('takes a drawn stream’s drops from the worker, which coalesces there, and its head', async () => {
+		// A viewer that draws in the worker asks for no frame here: the stream opens without
+		// frames, what the worker counts is the stream's rate, and the head is all this thread holds.
+		const off = bindViewer('osc', 'out', 'd', [line(256)], null);
+		await settle();
+		const w = MockWorker.instances[0];
+		expect(opsOf(w, 'sub')).toEqual([{ op: 'sub', node: 'osc', slot: 'out', frames: false }]);
+		w.emit({ node: 'osc', slot: 'out', head: { dtype: 'ARRAY', meta: { index: 7 }, array: { dtype: '<f4', shape: [8] } } });
+		expect(latestFrame('osc', 'out')).toBeNull();
+		expect(latestHead('osc', 'out')?.meta.index).toBe(7);
+		w.emit({ node: 'osc', slot: 'out', stamps: { index: 8 } });
+		expect(latestHead('osc', 'out')?.meta.index, 'stamps land on the head').toBe(8);
+		w.emit({ stats: { paints: 3, streams: [['osc', 'out', 4, 2]] } });
+		await vi.advanceTimersByTimeAsync(600);
+		expect(dropRate('osc', 'out')).toBeGreaterThan(0);
+		// A reader joining the drawn stream turns the frames on, and leaves the drop count with the worker.
+		const offR = bind('osc', 'out');
+		await settle();
+		expect((opsOf(w, 'spec').at(-1) as { frames: boolean }).frames).toBe(true);
+		off();
+		offR();
+	});
+
 	it('reports null for a stream nobody is watching', async () => {
 		// Absent is not zero: `0/s` for a stream that is not running asserts something false.
 		expect(dropRate('osc-a', 'out')).toBeNull();
@@ -235,7 +259,7 @@ describe('what the registry tells the backend', () => {
 		await settle();
 		const w = MockWorker.instances[0];
 		expect(opsOf(w, 'sub'), 'two viewers, one stream').toEqual([
-			{ op: 'sub', node: 'osc', slot: 'out' }
+			{ op: 'sub', node: 'osc', slot: 'out', frames: true }
 		]);
 
 		offA();
@@ -282,7 +306,7 @@ describe('what the registry tells the backend', () => {
 		await settle();
 		const w = MockWorker.instances[0];
 		expect(opsOf(w, 'spec')).toEqual([
-			{ op: 'spec', node: 'osc', slot: 'out', specs: [line(150)] }
+			{ op: 'spec', node: 'osc', slot: 'out', specs: [line(150)], frames: true }
 		]);
 
 		// Re-binding the same viewer with the same need — a re-render — says nothing.

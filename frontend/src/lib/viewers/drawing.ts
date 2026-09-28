@@ -1,5 +1,6 @@
 /** One drawing per viewer of an array kind: the plots it holds on the host's surface, and what
- * the feed still shows in the DOM for it — corner labels, placed text, a message, the hover. */
+ * the feed still shows in the DOM for it — corner labels, placed text, a message, the hover.
+ * A drawing lives where its surface does, in the data worker; nothing here touches the DOM. */
 import type { ArrayData, DataFrame } from '$lib/codec/decode';
 import type { ImagePlot, LinePlot, Plot, Surface } from 'plotluck';
 import { axisNames, imageProbe, lineProbe, trajectoryProbe, type Drag, type Probe } from './hover';
@@ -7,6 +8,7 @@ import { formatTick } from './format';
 import { makeLUTCache } from './colormaps';
 import { lineData, pushImage } from './plotFeed';
 import type { SettingsMap } from './settingsSchema';
+import type { ViewSummary } from './viewMeta';
 
 /** The body the drawing fills: its layout box in CSS px, its width in device px, the flow zoom. */
 export interface DrawBox {
@@ -24,6 +26,19 @@ export interface PlacedText {
 	angle: number;
 	align: 'left' | 'right';
 	color?: string;
+}
+
+/** What the feed shows in the DOM for a drawing, as the worker last reported it. */
+export interface DrawnState {
+	/** Whether the drawing holds a frame at all; the feed says "no data yet" until it does. */
+	has: boolean;
+	/** The summary of a frame the kind could not draw, shown in the picture's place. */
+	fallback: ViewSummary | null;
+	labels: string[];
+	texts: PlacedText[];
+	message: string | null;
+	/** Whether the drawing answers a drag, which the feed then keeps from the card. */
+	drag: boolean;
 }
 
 export interface Drawing {

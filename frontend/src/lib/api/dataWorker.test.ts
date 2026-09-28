@@ -53,20 +53,28 @@ function stampsFrame(meta: Record<string, unknown>): ArrayBuffer {
 }
 
 describe('the data worker', () => {
-	it('declares specs and the display rate, and posts what each frame decodes to', () => {
-		inbound({ data: { op: 'sub', node: 'n', slot: 'out' } });
+	it('declares specs and the display rate, and posts what each frame decodes to where it is read', () => {
+		inbound({ data: { op: 'sub', node: 'n', slot: 'out', frames: true } });
 		const ws = MockSocket.last;
 		ws.fire('open');
 		expect(ws.sent.at(-1)).toEqual({ op: 'view', specs: [] });
 		inbound({ data: { op: 'rate', fps: 60 } });
 		expect(ws.sent.at(-1), 'a rate reaches every open stream').toEqual({ op: 'view', specs: [], fps: 60 });
 
-		ws.fire('message', { data: bytes(golden.entries.find((e) => e.name === 'array_f32_1d')!.hex) });
+		const frame = bytes(golden.entries.find((e) => e.name === 'array_f32_1d')!.hex);
+		ws.fire('message', { data: frame });
 		expect(posted.at(-1)).toMatchObject({ node: 'n', slot: 'out', frame: { dtype: 'ARRAY' } });
 		ws.fire('message', { data: stampsFrame({ time: 2 }) });
 		expect(posted.at(-1)).toEqual({ node: 'n', slot: 'out', stamps: { time: 2 } });
 		const count = posted.length;
 		ws.fire('message', { data: new Uint8Array([1, 2, 3]).buffer });
 		expect(posted.length, 'a corrupt frame posts nothing and keeps the slot').toBe(count);
+
+		// A stream nobody reads on the main thread sends its head there, never the frame.
+		inbound({ data: { op: 'spec', node: 'n', slot: 'out', specs: [], frames: false } });
+		ws.fire('message', { data: bytes(golden.entries.find((e) => e.name === 'array_f32_1d')!.hex) });
+		const last = posted.at(-1) as { head?: { dtype: string; array?: { shape: number[] } } };
+		expect(last.head?.dtype).toBe('ARRAY');
+		expect(last.head?.array?.shape.length).toBe(1);
 	});
 });

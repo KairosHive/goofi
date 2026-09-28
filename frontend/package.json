@@ -38,6 +38,6 @@
     "@xyflow/svelte": "^1.0.0",
     "marked": "^18.0.5",
     "panelty": "0.1.3",
-    "plotluck": "0.2.0"
+    "plotluck": "0.2.1"
   }
 }

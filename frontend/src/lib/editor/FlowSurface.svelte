@@ -2,10 +2,10 @@
 	/** The editor's plot surface: one canvas under the node cards, following the camera in flow
 	 * units so a flow-unit rect lands 1:1 on device pixels. Render inside <SvelteFlow>. */
 	import { useStore } from '@xyflow/svelte';
-	import type { Surface } from 'plotluck';
+	import type { SurfaceHandle } from '$lib/api/drawings';
 	import { mountSurface, type SurfaceMount } from '$lib/viewers/plotHost';
 
-	let { surface = $bindable(null) }: { surface: Surface | null } = $props();
+	let { surface = $bindable(null) }: { surface: SurfaceHandle | null } = $props();
 	const store = useStore();
 	let canvas: HTMLCanvasElement | null = null;
 	let mount = $state.raw<SurfaceMount | null>(null);
@@ -19,7 +19,7 @@
 		// Under the cards and over the cables, in the viewport's transform; not inside the nodes
 		// layer, which Svelte empties wholesale with the last card and the canvas along with it.
 		layer.before(c);
-		const m = mountSurface(c);
+		const m = mountSurface(c, () => (surface = null));
 		canvas = c;
 		mount = m;
 		surface = m.surface;

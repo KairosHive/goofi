@@ -10,7 +10,7 @@
 	import { asStateObject } from 'panelty';
 	import { workspace } from 'panelty';
 	import { Select } from '$lib/ui';
-	import type { Surface } from 'plotluck';
+	import type { SurfaceHandle } from '$lib/api/drawings';
 	import { mountSurface, provideAnchor, provideSurface } from '$lib/viewers/plotHost';
 
 	interface ViewerState {
@@ -24,7 +24,7 @@
 	// This panel's own plot surface, at zoom 1, covering the body under the feed.
 	let body = $state<HTMLElement | null>(null);
 	let canvas = $state<HTMLCanvasElement | null>(null);
-	let surface = $state.raw<Surface | null>(null);
+	let surface = $state.raw<SurfaceHandle | null>(null);
 	provideSurface({
 		get surface() {
 			return surface;
@@ -42,7 +42,7 @@
 		const c = canvas;
 		const b = body;
 		if (!c || !b) return;
-		const m = mountSurface(c);
+		const m = mountSurface(c, () => (surface = null));
 		surface = m.surface;
 		const ro = new ResizeObserver(() =>
 			m.setView({ x: 0, y: 0, zoom: 1, width: b.clientWidth, height: b.clientHeight })

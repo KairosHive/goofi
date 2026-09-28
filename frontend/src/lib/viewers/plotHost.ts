@@ -1,9 +1,11 @@
 /** How a viewer finds the surface it draws on and the card it sits in: two Svelte contexts. */
 import { getContext, setContext } from 'svelte';
-import { createSurface, type Rect, type Surface, type View } from 'plotluck';
+import { createSurface, type SurfaceHandle } from '$lib/api/drawings';
+import type { Rect, View } from 'plotluck';
 
 export interface PlotHost {
-	readonly surface: Surface | null;
+	/** Null until the worker holds the canvas, and again when it could not draw on it. */
+	readonly surface: SurfaceHandle | null;
 }
 
 /** The element a plot rect is measured inside, and where that element sits in the surface's flow units. */
@@ -42,25 +44,20 @@ export function offsetIn(el: HTMLElement, anchor: HTMLElement): Rect {
 }
 
 export interface SurfaceMount {
-	/** Null where WebGL2 is missing; the mount then holds no view. */
-	readonly surface: Surface | null;
+	readonly surface: SurfaceHandle;
 	setView(v: Omit<View, 'dpr'>): void;
 	dispose(): void;
 }
 
-/** A surface on `canvas`; the last view is re-applied when the device pixel ratio changes. */
-export function mountSurface(canvas: HTMLCanvasElement): SurfaceMount {
-	let surface: Surface | null = null;
-	try {
-		surface = createSurface(canvas);
-	} catch (err) {
-		console.warn(err);
-	}
+/** `canvas` as a surface in the worker; the last view is re-applied when the device pixel
+ * ratio changes. `onLost` fires when the worker could not draw on it. */
+export function mountSurface(canvas: HTMLCanvasElement, onLost: () => void): SurfaceMount {
+	const surface = createSurface(canvas, onLost);
 	let last: Omit<View, 'dpr'> | null = null;
 	let media: MediaQueryList | null = null;
 	const dpr = () => window.devicePixelRatio || 1;
 	const apply = () => {
-		if (last) surface?.setView({ ...last, dpr: dpr() });
+		if (last) surface.setView({ ...last, dpr: dpr() });
 	};
 	// The query matches the ratio of the moment, so it is re-armed after every change.
 	const arm = () => {
@@ -81,7 +78,7 @@ export function mountSurface(canvas: HTMLCanvasElement): SurfaceMount {
 		},
 		dispose() {
 			media?.removeEventListener('change', changed);
-			surface?.dispose();
+			surface.dispose();
 		}
 	};
 }

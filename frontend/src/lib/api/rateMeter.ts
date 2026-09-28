@@ -12,12 +12,12 @@ export class RateMeter {
 		this.windowStart = now;
 	}
 
-	delivered(): void {
-		this.deliveries++;
+	delivered(n = 1): void {
+		this.deliveries += n;
 	}
 
-	dropped(): void {
-		this.drops++;
+	dropped(n = 1): void {
+		this.drops += n;
 	}
 
 	tick(now: number): void {
