@@ -10,7 +10,7 @@
 
 import { test, expect, type Browser, type Page } from '@playwright/test';
 import { touchSession } from '../lib/touch';
-import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
+import { closeAddedTab, closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
 import {
 	armSocketControl,
 	backendDoc,
@@ -717,6 +717,7 @@ test.describe('the control socket', () => {
 				await expect(other.getByTestId('peer-cursor'), 'a peer on another tab is not drawn').toHaveCount(0);
 				await page.mouse.move(260, 330);
 				await expect(other.getByTestId('peer-cursor')).toHaveCount(0);
+				await closeAddedTab(other);
 			});
 
 			await test.step('both tabs and the manager hold ONE document', async () => {
