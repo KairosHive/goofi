@@ -106,22 +106,34 @@ function collectBuffers(frame: DataFrame, out: Set<ArrayBufferLike>): void {
 }
 
 // ── paints and stats ─────────────────────────────────────────────────────────────────────────
-// One paint per animation frame in which a frame was drawn: the surfaces coalesce the pushes
-// the same way, so this is how often the page's pictures changed.
+// A drawing renders once per animation frame from its stream's latest frame, however many
+// frames, sizes or settings reached it meanwhile: a resize that posts a size per pointer event
+// must not replay every size. One paint per frame in which something drew.
 const schedule =
 	typeof requestAnimationFrame === 'function'
 		? requestAnimationFrame
 		: (fn: () => void): number => setTimeout(fn, 16) as unknown as number;
-let paintScheduled = false;
+const stale = new Set<DrawingState>();
+let flushScheduled = false;
 let paints = 0;
-function paint(): void {
-	if (paintScheduled) return;
-	paintScheduled = true;
-	schedule(() => {
-		paintScheduled = false;
-		paints++;
-		for (const st of slots.values()) st.undrawn = false;
-	});
+function invalidate(d: DrawingState): void {
+	stale.add(d);
+	if (flushScheduled) return;
+	flushScheduled = true;
+	schedule(flush);
+}
+function flush(): void {
+	flushScheduled = false;
+	let drew = false;
+	for (const d of stale) {
+		if (!d.slot?.latest) continue;
+		render(d, d.slot.latest);
+		drew = true;
+	}
+	stale.clear();
+	if (!drew) return;
+	paints++;
+	for (const st of slots.values()) st.undrawn = false;
 }
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 function report(): void {
@@ -197,6 +209,7 @@ function make(surface: Surface, kind: ViewerKind, trajectory: boolean): Drawing 
 function detach(d: DrawingState, keep: boolean): void {
 	d.slot?.drawings.delete(d);
 	d.slot = null;
+	stale.delete(d);
 	if (!keep) clearDrawing(d);
 }
 
@@ -299,6 +312,7 @@ self.addEventListener('message', (e: MessageEvent) => {
 			const d = drawings.get(m.id);
 			if (!d) break;
 			d.slot?.drawings.delete(d);
+			stale.delete(d);
 			d.drawing.remove();
 			drawings.delete(m.id);
 			break;
@@ -314,8 +328,7 @@ self.addEventListener('message', (e: MessageEvent) => {
 			if (!d) break;
 			d.settings = m.settings;
 			d.box = m.box;
-			// A settings change redraws the last frame under the new settings.
-			if (d.slot?.latest) render(d, d.slot.latest);
+			invalidate(d);
 			break;
 		}
 		case 'attach': {
@@ -325,7 +338,7 @@ self.addEventListener('message', (e: MessageEvent) => {
 			if (d.slot !== st) detach(d, false);
 			d.slot = st;
 			st.drawings.add(d);
-			if (st.latest) render(d, st.latest);
+			invalidate(d);
 			break;
 		}
 		case 'detach': {
@@ -373,8 +386,7 @@ function arrive(st: SlotState, raw: ArrayBuffer): void {
 		// A frame over one no draw has shown yet is a drop; a reader's own coalescing is its own.
 		if (st.undrawn) st.drops++;
 		st.undrawn = true;
-		for (const d of st.drawings) render(d, frame);
-		paint();
+		for (const d of st.drawings) invalidate(d);
 	}
 	if (!st.frames) {
 		send({ node: st.node, slot: st.slot, head: headOf(frame) });

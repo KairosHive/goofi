@@ -36,19 +36,15 @@ and the same command, and treated differently only by the history.
 
 ## Remaining
 
-1. The data worker renders from the latest `settings` and `place` per animation frame, the way
-   `paint` coalesces, instead of a synchronous render per message; a resize with several viewers
-   replays every intermediate size today. Hold the 32-px spec renegotiation in `ViewerFeed.svelte`
-   until the size has been still for a frame or two. Independent of the rest.
-2. `key()` on the commands; the preview map in `CommandHistory`; the flag in the envelope and in
+1. `key()` on the commands; the preview map in `CommandHistory`; the flag in the envelope and in
    `ControlClient.call`; the revert on socket close and before a flip.
-3. The latest-wins slot in the `/control` handler.
-4. `useLiveValue`: `input` previews, `commit` commits; Knob, Slider and NumberInput follow. Panelty
+2. The latest-wins slot in the `/control` handler.
+3. `useLiveValue`: `input` previews, `commit` commits; Knob, Slider and NumberInput follow. Panelty
    resize through `resizeSplit` with the flag, and the override deleted upstream.
-5. A situation: a drag of N previews and one commit is one undo entry and one dirty flip; a socket
+4. A situation: a drag of N previews and one commit is one undo entry and one dirty flip; a socket
    that closes mid-drag leaves the committed value; a second browser sees the preview.
 
-## Open
+## Not to be done
 
-- Whether the tail should project touched paths only (§3.12) as part of this: a preview per frame
-  projects the whole doc until it lands.
+- Projecting touched doc paths only: `backend-architecture.md` §3.12 owns it, and it comes after
+  this entry. A preview per frame projects the whole doc until then.

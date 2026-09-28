@@ -38,6 +38,9 @@
 	// The content box in CSS px; the device box below is derived from it, the DPR and the zoom.
 	let boxW = $state(0);
 	let boxH = $state(0);
+	// The box once it has held still for a frame: a resize drag renegotiates the reduction once.
+	let stillW = $state(0);
+	let stillH = $state(0);
 	// Quantized to 32-px steps so a 1-px resize does not renegotiate the reduction.
 	let capW = $state(0);
 	let capH = $state(0);
@@ -84,8 +87,8 @@
 		// Half-octave zoom steps, rounded up: a pinch crosses a few of them, not one per pointer
 		// event, and the demand overshoots the drawn size by at most 41%.
 		const scale = dpr * Math.pow(2, Math.ceil(Math.log2(zoom) * 2) / 2);
-		const w = boxW;
-		const h = boxH;
+		const w = stillW;
+		const h = stillH;
 		if (!w || !h) return; // unmeasured: a 0 quantized to 32 would hold through the first real size
 		untrack(() => {
 			capW = quantize(w * scale, capW);
@@ -105,16 +108,23 @@
 			{ rootMargin: '64px' }
 		);
 		io.observe(el);
+		let still = 0;
 		const ro = new ResizeObserver(() => {
 			boxW = el.clientWidth;
 			boxH = el.clientHeight;
 			layout++;
+			cancelAnimationFrame(still);
+			still = requestAnimationFrame(() => {
+				stillW = boxW;
+				stillH = boxH;
+			});
 		});
 		ro.observe(el);
 		if (anchor?.el) ro.observe(anchor.el);
 		return () => {
 			io.disconnect();
 			ro.disconnect();
+			cancelAnimationFrame(still);
 		};
 	});
 
