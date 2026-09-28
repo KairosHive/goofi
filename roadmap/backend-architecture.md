@@ -115,11 +115,7 @@ mutex orders them.
    write replies carry this actor's `{undo, redo}` labels; a stale entry is removed and
    reported; navigation context is restored after the flip. The browser marker stack and the
    `_recordGraphCmd` sites go.
-10. Continuous motion: a gesture sends ordinary value ops with an envelope `merge` token; the
-    commit folds same-token, same-`merge_key` entries into one undo entry. The client keeps one
-    send in flight per control, latest value wins, and shows its local value until the reply's
-    doc version has reached the replica. Scripts, tests and plugin editor-window knob bursts
-    send the same token.
+10. Continuous motion is `preview-ops.md`: a `preview` flag on the op, not a merge token.
 11. **a** `session save` persists, serializes and fingerprints under the guard, zips off it, and
     clears dirty only if `revision` did not move; the download zips off the lock. **b** Rescans
     (`load_patch`, `library refresh`, `library save`, `library get --source`) leave the lock once
@@ -128,7 +124,8 @@ mutex orders them.
 
 Not to be done: a per-socket op queue that holds an op's events behind its reply (a second
 scheduler beside the op path; a slow op parked everything behind it), and a rate limiter inside
-`useLiveValue` (the gesture design has to follow the op path).
+`useLiveValue` (the gesture design has to follow the op path; a preview's latest-wins slot is
+not a queue).
 
 ## 4. One node runtime, one protocol per boundary
 
