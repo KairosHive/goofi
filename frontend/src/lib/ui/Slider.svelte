@@ -8,6 +8,7 @@
 	let {
 		value,
 		onChange,
+		onInput,
 		min = 0,
 		max = 1,
 		step,
@@ -17,6 +18,8 @@
 	}: HTMLAttributes<HTMLDivElement> & {
 		value: number;
 		onChange: (v: number) => unknown;
+		/** Each step of a drag, before the release commits it. */
+		onInput?: (v: number) => unknown;
 		min?: number;
 		max?: number;
 		step?: number;
@@ -28,7 +31,8 @@
 	const fieldId = claimFieldControlId(ownId);
 	const live = useLiveValue<number>(
 		() => value,
-		(v) => onChange(v)
+		(v) => onChange(v),
+		(v) => onInput?.(v)
 	);
 
 	// A default step gives the range ~200 stops across the span.
@@ -59,7 +63,8 @@
 		onpointerdown={() => live.begin()}
 		onpointerup={() => live.end()}
 		onpointercancel={() => live.end()}
-		oninput={(e) => live.commit(Number((e.currentTarget as HTMLInputElement).value))}
+		oninput={(e) => live.input(Number((e.currentTarget as HTMLInputElement).value))}
+		onchange={(e) => live.commit(Number((e.currentTarget as HTMLInputElement).value))}
 	/>
 	<span class="ui-slider-bound" aria-hidden="true">{fmtBound(max)}</span>
 </div>

@@ -385,13 +385,13 @@
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape' && variableGrab) { drag = null; cancelVariable(); } }} />
 
-{#snippet widget(c: ControlView, value: Value, label: string, onChange: (v: Value) => unknown, name = '')}
+{#snippet widget(c: ControlView, value: Value, label: string, onChange: (v: Value) => unknown, name = '', onInput?: (v: number) => unknown)}
 	{#if c.kind === 'knob'}
-		<Knob {label} value={num(value)} min={c.min ?? 0} max={c.max ?? 1} step={c.step ?? 0} {onChange} />
+		<Knob {label} value={num(value)} min={c.min ?? 0} max={c.max ?? 1} step={c.step ?? 0} {onChange} {onInput} />
 	{:else if c.kind === 'slider'}
-		<Slider value={num(value)} min={c.min ?? 0} max={c.max ?? 1} step={c.step} {onChange} />
+		<Slider value={num(value)} min={c.min ?? 0} max={c.max ?? 1} step={c.step} {onChange} {onInput} />
 	{:else if c.kind === 'number'}
-		<NumberInput value={num(value)} min={c.min} max={c.max} step={c.step ?? 1} scrub {onChange} />
+		<NumberInput value={num(value)} min={c.min} max={c.max} step={c.step ?? 1} scrub {onChange} {onInput} />
 	{:else if c.kind === 'toggle'}
 		<Toggle value={value === true} {onChange} />
 	{:else if c.kind === 'dropdown'}
@@ -491,7 +491,7 @@
 							class:broken={gv.source?.error !== undefined}
 							title={gv.source ? gv.source.error ?? `Follows ${gv.source.reference}` : held.value ? 'Value-locked' : undefined}
 						>
-							{@render widget(c, gv.value, gv.element, (v) => commitValue(gv, v), gv.name)}
+							{@render widget(c, gv.value, gv.element, (v) => commitValue(gv, v), gv.name, (v) => g.previewVariableValue(gv.name, v))}
 						</div>
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<span

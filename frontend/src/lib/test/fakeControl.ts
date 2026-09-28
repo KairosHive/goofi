@@ -6,6 +6,8 @@ export class FakeControl implements Control {
 	/** Fixed stand-in for the tab's minted actor id. */
 	readonly actor = 'fake-actor';
 	private calls: Array<{ op: OpName; payload: Record<string, unknown> }> = [];
+	/** Every preview sent, in order, with the key it would coalesce on. */
+	previews: Array<{ key: string; op: OpName; payload: Record<string, unknown> }> = [];
 	private listeners = new Set<(ev: ControlEvent) => void>();
 	private connectListeners = new Set<(c: boolean) => void>();
 	private results = new Map<string, unknown>();
@@ -33,6 +35,10 @@ export class FakeControl implements Control {
 			return Promise.reject(new Error(`fake control: ${op} failed`));
 		}
 		return Promise.resolve(this.results.get(op) as T);
+	}
+
+	preview(key: string, op: OpName, payload: Record<string, unknown>): void {
+		this.previews.push({ key, op, payload });
 	}
 
 	on(fn: (ev: ControlEvent) => void): () => void {

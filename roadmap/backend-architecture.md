@@ -10,7 +10,7 @@ updates the frontend and the Python wheels in the same commit.
 
 **Phase 1**: §5.11 and §5.7; then §3.4 and §3.5; then §4.F and §4.G1-G4; then §1.A2 and §1.A3.
 
-**Phase 2**: §2.B2-B5, §3.7-12, §4.H-I, §5.8-10 and 12-13.
+**Phase 2**: §2.B2-B5, §3.7-11, §4.H-I, §5.8-10 and 12-13.
 
 ## 1. The patch model and the runtime are two types
 
@@ -115,12 +115,11 @@ mutex orders them.
    write replies carry this actor's `{undo, redo}` labels; a stale entry is removed and
    reported; navigation context is restored after the flip. The browser marker stack and the
    `_recordGraphCmd` sites go.
-10. Continuous motion is `preview-ops.md`: a `preview` flag on the op, not a merge token.
-11. **a** `session save` persists, serializes and fingerprints under the guard, zips off it, and
+10. **a** `session save` persists, serializes and fingerprints under the guard, zips off it, and
     clears dirty only if `revision` did not move; the download zips off the lock. **b** Rescans
     (`load_patch`, `library refresh`, `library save`, `library get --source`) leave the lock once
     the runtime owns the catalog (§1).
-12. The tail projects touched paths only (after §2).
+11. The tail projects touched paths only (after §2).
 
 Not to be done: a per-socket op queue that holds an op's events behind its reply (a second
 scheduler beside the op path; a slow op parked everything behind it), and a rate limiter inside

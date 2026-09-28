@@ -10,6 +10,7 @@
 	let {
 		value,
 		onChange,
+		onInput,
 		min = 0,
 		max = 1,
 		step = 0,
@@ -20,6 +21,8 @@
 	}: HTMLAttributes<HTMLDivElement> & {
 		value: number;
 		onChange: (v: number) => unknown;
+		/** Each step of a turn, before the release commits it. */
+		onInput?: (v: number) => unknown;
 		min?: number;
 		max?: number;
 		step?: number;
@@ -31,7 +34,8 @@
 	const fieldId = claimFieldControlId(ownId);
 	const live = useLiveValue<number>(
 		() => value,
-		(v) => onChange(v)
+		(v) => onChange(v),
+		(v) => onInput?.(v)
 	);
 
 	const span = $derived(max - min || 1);
@@ -52,10 +56,11 @@
 
 	function move(e: PointerEvent): void {
 		if (!from) return;
-		live.commit(turnedBy(from.value, e.clientY - from.y, min, max, stp));
+		live.input(turnedBy(from.value, e.clientY - from.y, min, max, stp));
 	}
 
 	function up(): void {
+		if (from) live.commit(live.value);
 		from = null;
 		live.end();
 	}

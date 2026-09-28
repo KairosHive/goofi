@@ -229,6 +229,22 @@ pub enum Command {
 }
 
 impl Command {
+    /// What a preview merges on: the thing a drag keeps writing. `None` cannot be previewed.
+    pub fn key(&self) -> Option<String> {
+        Some(match self {
+            Command::EditParam { uid, group, name, .. } => format!("param {} {group}/{name}", uid.0),
+            Command::EditNode { uid, .. } => format!("node {}", uid.0),
+            Command::EditVariable { name, .. } => format!("variable {name}"),
+            Command::LayoutResizeSplit { split, .. } => format!("split {split}"),
+            Command::LayoutContents { writes } => {
+                let mut ids: Vec<&str> = writes.iter().map(|(id, _)| id.as_str()).collect();
+                ids.sort_unstable();
+                format!("contents {}", ids.join(" "))
+            }
+            _ => return None,
+        })
+    }
+
     /// What a FRESH caller must satisfy, checked in [`CommandHistory::apply`] ONLY, so `flip` keeps
     /// its tolerance. `Compound` is absent: its later children need a graph its earlier ones have
     /// not built yet.
@@ -792,6 +808,14 @@ fn variable_group_members(g: &Graph, group: &str) -> (Vec<String>, Vec<String>) 
 #[derive(Default)]
 pub struct CommandHistory {
     entries: Vec<HistoryEntry>,
+    /// A drag in flight: the inverse to the state before its first preview, per actor and key.
+    previews: Vec<Preview>,
+}
+
+struct Preview {
+    actor: String,
+    key: String,
+    inverse: Command,
 }
 
 struct HistoryEntry {
@@ -806,6 +830,21 @@ struct HistoryEntry {
 
 std::thread_local! {
     static OPEN_BATCH: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    static PREVIEWING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While held, the write arms on this thread preview: the command runs, no entry is pushed.
+pub struct PreviewScope(());
+
+pub fn open_preview() -> PreviewScope {
+    PREVIEWING.set(true);
+    PreviewScope(())
+}
+
+impl Drop for PreviewScope {
+    fn drop(&mut self) {
+        PREVIEWING.set(false);
+    }
 }
 
 static NEXT_BATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -842,8 +881,23 @@ impl CommandHistory {
     /// Execute `cmd` against `g`, record its inverse tagged with `actor`, and return the outcome.
     /// A new command clears THIS actor's redo run, never another actor's.
     pub fn apply(&mut self, g: &mut Graph, actor: &str, cmd: Command) -> Result<Outcome, String> {
+        let key = cmd.key();
+        if PREVIEWING.get() {
+            let key = key.ok_or("this op cannot be previewed")?;
+            let (outcome, inverse) = cmd.execute_mode(g, true)?;
+            // The first preview of a drag keeps the way back; the ones after it change nothing here.
+            if !self.previews.iter().any(|p| p.actor == actor && p.key == key) {
+                self.previews.push(Preview { actor: actor.to_string(), key, inverse });
+            }
+            return Ok(outcome);
+        }
         // The fresh-caller gate. `flip` deliberately does NOT call this — see `Command::precondition`.
         let (outcome, inverse) = cmd.execute_mode(g, true)?;
+        // A commit that ends a drag inverts to the state before the drag, not before its last preview.
+        let inverse = match self.previews.iter().position(|p| p.actor == actor && Some(&p.key) == key.as_ref()) {
+            Some(i) => self.previews.remove(i).inverse,
+            None => inverse,
+        };
         // Record EVERY successful command, a forward no-op included: the client records one entry
         // per mutating RPC, so skipping one here desyncs the stacks and a later undo flips wrong.
         self.entries.retain(|e| !(e.actor == actor && e.undone));
@@ -854,6 +908,22 @@ impl CommandHistory {
             batch: OPEN_BATCH.get(),
         });
         Ok(outcome)
+    }
+
+    /// Take back the actor's drags in flight — what its socket's close does, and what an undo or
+    /// redo does first. Answers whether anything moved.
+    pub fn revert_previews(&mut self, g: &mut Graph, actor: &str) -> bool {
+        let mut moved = false;
+        let mut i = self.previews.len();
+        while i > 0 {
+            i -= 1;
+            if self.previews[i].actor != actor {
+                continue;
+            }
+            let _ = self.previews.remove(i).inverse.execute(g);
+            moved = true;
+        }
+        moved
     }
 
     pub fn is_empty(&self) -> bool {
@@ -870,6 +940,7 @@ impl CommandHistory {
     /// history goes with it. The graph keeps every change; only the way back is gone.
     pub fn drop_actor(&mut self, actor: &str) {
         self.entries.retain(|e| e.actor != actor);
+        self.previews.retain(|p| p.actor != actor);
     }
 
     /// Fold everything `batch`'s steps added into ONE entry, so a compound RPC is a single undo
@@ -906,20 +977,23 @@ impl CommandHistory {
     /// session — there is nothing to undo across a load — so the manager clears here.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.previews.clear();
     }
 
     /// Undo the actor's most-recent applied command. `Ok(false)` if it has nothing to undo.
     pub fn undo(&mut self, g: &mut Graph, actor: &str) -> Result<bool, String> {
+        let reverted = self.revert_previews(g, actor);
         let Some(idx) = self.entries.iter().rposition(|e| e.actor == actor && !e.undone) else {
-            return Ok(false);
+            return Ok(reverted);
         };
         self.flip(g, idx, true)
     }
 
     /// Redo the actor's most-recently-undone command. `Ok(false)` if it has nothing to redo.
     pub fn redo(&mut self, g: &mut Graph, actor: &str) -> Result<bool, String> {
+        let reverted = self.revert_previews(g, actor);
         let Some(idx) = self.entries.iter().position(|e| e.actor == actor && e.undone) else {
-            return Ok(false);
+            return Ok(reverted);
         };
         self.flip(g, idx, false)
     }

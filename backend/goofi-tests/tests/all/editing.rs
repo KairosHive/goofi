@@ -3,7 +3,7 @@
 
 use serde_json::{Map, Value};
 
-use goofi_tests::{f32s, Goofi, ep, hex, j};
+use goofi_tests::{f32s, Client, Goofi, ep, hex, j};
 
 /// The arrangement flattened to an id-keyed map with a `parent` on each node.
 fn entries(g: &Goofi) -> Map<String, Value> {
@@ -396,6 +396,58 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
 
     while g.call("undo", j!({}))["changed"] == true {}
     assert_eq!(strip(&g), ["Tab 1"], "back to the arrangement a fresh patch opens with");
+}
+
+/// A knob turn is many previews and one commit: the op each time, but the history keeps one entry
+/// whose way back is the state before the drag, the patch stays clean until the commit, a peer
+/// sees every step, and a socket cut mid-drag leaves the last committed value.
+#[tokio::test]
+async fn a_drag_previews_and_commits_as_one_step_and_a_cut_socket_takes_it_back() {
+    let g = Goofi::new();
+    let osc = g.add("LFO");
+    g.set_param(osc, "lfo", "amplitude", 1.0);
+    let dir = tempfile::tempdir().unwrap();
+    g.call("session save", j!({ "path": dir.path().join("drag.gfi").to_string_lossy() }));
+    let amp = |g: &Goofi| g.doc()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["value"].clone();
+    let dirty = |g: &Goofi| g.call("session status", j!({}))["dirty"] == true;
+    let edit = |v: f64| j!({ "node": hex(osc), "param": "lfo/amplitude", "value": v });
+    assert!(!dirty(&g));
+
+    for v in [0.2, 0.4, 0.6] {
+        g.preview("node param edit", edit(v));
+        assert_eq!(amp(&g), j!(v), "a preview moves the graph for real");
+    }
+    assert!(!dirty(&g), "a preview is not an edit of the patch");
+    g.call("node param edit", edit(0.7));
+    assert!(dirty(&g), "the commit is");
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    assert_eq!(amp(&g), j!(1.0), "ONE undo returns to before the drag, not to its last preview");
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert_eq!(amp(&g), j!(0.7));
+
+    // An undo with a drag in flight takes the drag back first, then flips.
+    g.preview("node param edit", edit(0.3));
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    assert_eq!(amp(&g), j!(1.0));
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert_eq!(amp(&g), j!(0.7));
+
+    // Only an undoable write has a way back to keep; a read and a birth cannot be previewed.
+    for (op, payload) in [("session status", j!({})), ("node add", j!({ "type": "LFO" })),
+                          ("compound", j!({ "ops": [] }))] {
+        let why = g.state.preview(op, payload, "s1").expect_err(op);
+        assert!(why.contains("preview"), "{op}: {why}");
+    }
+
+    // Over the socket: a peer's replica follows each step, and the socket's close ends the drag.
+    let base = g.serve().await;
+    let (mut peer, _) = Client::connect_as(&base, "peer").await;
+    let (mut tab, _) = Client::connect_as(&base, "tab").await;
+    tab.preview("node param edit", edit(0.1), "lfo/amplitude").await;
+    peer.until_doc(|d| d.to_json()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["value"] == j!(0.1)).await;
+    drop(tab);
+    peer.until_doc(|d| d.to_json()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["value"] == j!(0.7)).await;
+    assert!(dirty(&g), "the commit before the drag is still an edit");
 }
 
 #[test]

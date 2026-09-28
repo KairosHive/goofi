@@ -297,6 +297,8 @@ export interface Control {
 	/** This client's stable ACTOR id; it scopes the manager's per-actor undo history. */
 	readonly actor: string;
 	call<T = unknown>(op: OpName, payload?: Record<string, unknown>): Promise<T>;
+	/** One step of a drag: the op as a PREVIEW, no reply, and the newest per `key` each frame. */
+	preview(key: string, op: OpName, payload: Record<string, unknown>): void;
 	on(fn: (ev: ControlEvent) => void): () => void;
 	onConnect(fn: (c: boolean) => void): () => void;
 }
@@ -324,6 +326,9 @@ export class ControlClient implements Control {
 	readonly actor = readOrMintActor();
 	private nextId = 1;
 	private pending = new Map<number, Pending>();
+	/** The previews of the coming frame, one per key: a drag sends where it is, never where it was. */
+	private previews = new Map<string, { op: OpName; payload: Record<string, unknown> }>();
+	private previewFrame = 0;
 	private handlers = new Set<EventHandler>();
 	private connectListeners = new Set<(connected: boolean) => void>();
 	private protocolListeners = new Set<(mismatch: boolean) => void>();
@@ -434,6 +439,8 @@ export class ControlClient implements Control {
 		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
 			return Promise.reject(new Error('control socket not connected'));
 		}
+		// A drag's last preview goes out before the op that ends it: order on the wire is order here.
+		this.flushPreviews();
 		const id = this.nextId++;
 		return new Promise<T>((resolve, reject) => {
 			this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
@@ -441,6 +448,21 @@ export class ControlClient implements Control {
 			// whose undo, where GOOFI_SESSION names which server.
 			this.ws!.send(JSON.stringify({ id, op, payload, actor: this.actor }));
 		});
+	}
+	preview(key: string, op: OpName, payload: Record<string, unknown>): void {
+		this.previews.set(key, { op, payload });
+		if (this.previewFrame) return;
+		this.previewFrame = requestAnimationFrame(() => this.flushPreviews());
+	}
+
+	private flushPreviews(): void {
+		cancelAnimationFrame(this.previewFrame);
+		this.previewFrame = 0;
+		const open = this.ws?.readyState === WebSocket.OPEN;
+		for (const [key, { op, payload }] of this.previews) {
+			if (open) this.ws!.send(JSON.stringify({ op, payload, actor: this.actor, preview: key }));
+		}
+		this.previews.clear();
 	}
 }
 

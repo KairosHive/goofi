@@ -5,8 +5,9 @@ export function displayValue<T>(editing: boolean, source: T, local: T): T {
 	return editing ? local : source;
 }
 
-/** The live-value handle a control drives from its DOM events: `input` buffers, `commit` sends to
- * the backend, and the source is suppressed between `begin` and `end` and until it echoes a commit. */
+/** The live-value handle a control drives from its DOM events: `input` buffers and previews,
+ * `commit` sends to the backend, and the source is suppressed between `begin` and `end` and until
+ * it echoes a commit. */
 export interface LiveValue<T> {
 	readonly value: T;
 	readonly editing: boolean;
@@ -16,8 +17,13 @@ export interface LiveValue<T> {
 	end(): void;
 }
 
-/** Wire a control's local edit buffer to a live backend source. */
-export function useLiveValue<T>(getSource: () => T, onChange: (v: T) => void): LiveValue<T> {
+/** Wire a control's local edit buffer to a live backend source. `onInput`, when given, takes each
+ * step of a drag as a preview; `onChange` takes the commit. */
+export function useLiveValue<T>(
+	getSource: () => T,
+	onChange: (v: T) => void,
+	onInput?: (v: T) => void
+): LiveValue<T> {
 	let editing = $state(false);
 	let edit = $state<T>(getSource());
 	// A commit the source has not answered yet: shown in its place until the source next moves.
@@ -42,6 +48,7 @@ export function useLiveValue<T>(getSource: () => T, onChange: (v: T) => void): L
 		},
 		input(v: T) {
 			edit = v;
+			onInput?.(v);
 		},
 		commit(v: T) {
 			edit = v;

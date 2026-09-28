@@ -199,10 +199,12 @@ test.describe('the control socket', () => {
 				await page.evaluate((u) => (window as any).goofi.commands.updateParam(u, 'lfo', 'amplitude', 0.7), osc);
 				const field = page.getByTestId('param-field-amplitude');
 				await expect(field).toBeVisible();
-				const range = field.locator('input[type=range]');
-				await range.scrollIntoViewIfNeeded();
-				const slider = (await range.boundingBox())!;
-				await page.mouse.move(slider.x + slider.width * 0.7, slider.y + slider.height / 2);
+				// Held by its name: a press on the slider would preview the slider's own position, and
+				// the release would commit that over the edit this step lands from outside.
+				const label = field.locator('.ui-field-label').first();
+				await label.scrollIntoViewIfNeeded();
+				const name = (await label.boundingBox())!;
+				await page.mouse.move(name.x + name.width / 2, name.y + name.height / 2);
 				await page.mouse.down();
 				await page.evaluate((u) => (window as any).goofi.commands.updateParam(u, 'lfo', 'amplitude', 0.42), osc);
 				await expect.poll(async () => (await nodeParams(page, osc)).lfo.amplitude.value).toBeCloseTo(0.42);
@@ -219,6 +221,59 @@ test.describe('the control socket', () => {
 				await expect(field).toHaveCount(0);
 				await page.getByTestId('param-non-default-only').click();
 				await page.getByTestId('param-search').fill('');
+			});
+
+			await test.step('a slider drag previews each move, commits once, and is one undo', async () => {
+				await page.getByTestId('param-search').fill('duty');
+				const field = page.getByTestId('param-field-duty');
+				const range = field.locator('input[type=range]');
+				await range.scrollIntoViewIfNeeded();
+				const box = (await range.boundingBox())!;
+				const y = box.y + box.height / 2;
+				const duty = async () => (await backendDoc(page)).nodes[osc].params.lfo.duty.value as number;
+				const dirtyBefore = (await rawCall(page, 'session status', {})).dirty;
+				await page.mouse.move(box.x + box.width * 0.2, y);
+				await page.mouse.down();
+				await page.mouse.move(box.x + box.width * 0.5, y, { steps: 6 });
+				await expect.poll(duty, { message: 'the manager follows the finger before it lifts' }).toBeGreaterThan(0.4);
+				expect((await rawCall(page, 'session status', {})).dirty, 'a preview is not an edit').toBe(dirtyBefore);
+				await page.mouse.move(box.x + box.width * 0.8, y, { steps: 6 });
+				await page.mouse.up();
+				await expect.poll(duty).toBeGreaterThan(0.7);
+				await undo(page);
+				await expect.poll(duty, { message: 'ONE undo returns to before the drag' }).toBe(0.5);
+				await expect.poll(() => page.evaluate(() => (window as any).goofi.query.canRedo())).toBe(true);
+				await redo(page);
+				await expect.poll(duty).toBeGreaterThan(0.7);
+				await page.getByTestId('param-search').fill('');
+			});
+
+			await test.step('a split drag is the same gesture: previews on the way, one op and one undo', async () => {
+				await splitRight(page);
+				const sizes = async (): Promise<number[]> => {
+					const root = (await backendDoc(page)).arrangement.tabs[0].root;
+					return root.kind === 'split' ? root.children.map((c: { size: number }) => c.size) : [];
+				};
+				await expect.poll(sizes).toHaveLength(2);
+				const before = await sizes();
+				const dirtyBefore = (await rawCall(page, 'session status', {})).dirty;
+				const seam = page.locator('.splitter.row').first();
+				const box = (await seam.boundingBox())!;
+				const x = box.x + box.width / 2;
+				const y = box.y + box.height / 2;
+				await page.mouse.move(x, y);
+				await page.mouse.down();
+				await page.mouse.move(x - 80, y, { steps: 5 });
+				await expect
+					.poll(async () => (await sizes())[0], { message: 'the manager follows the seam before it lifts' })
+					.toBeLessThan(before[0] - 0.02);
+				expect((await rawCall(page, 'session status', {})).dirty, 'a preview is not an edit').toBe(dirtyBefore);
+				await page.mouse.move(x - 160, y, { steps: 5 });
+				await page.mouse.up();
+				await expect.poll(async () => (await sizes())[0]).toBeLessThan(before[0] - 0.06);
+				await undo(page);
+				await expect.poll(sizes, { message: 'ONE undo returns to before the drag' }).toEqual(before);
+				await closeSplit(page);
 			});
 
 			await test.step('a variable is patch state, and lands the same way', async () => {

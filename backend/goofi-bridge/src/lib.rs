@@ -1143,7 +1143,18 @@ async fn handle_control(socket: WebSocket, state: AppState) {
     // The op in flight, run off this task: a load builds nodes for seconds, and the log lines
     // and events it raises meanwhile must reach the client that asked. One at a time, in order.
     let mut pending: Option<tokio::task::JoinHandle<Option<String>>> = None;
+    // What arrived while one ran, in order; a preview waiting here is replaced by a newer one of
+    // its key, so a drag never replays the sizes it went through.
+    let mut queue: std::collections::VecDeque<(Option<String>, String)> = std::collections::VecDeque::new();
+    // Whose socket this is: the last actor it presented, whose drags in flight end with it.
+    let mut actor: Option<String> = None;
     loop {
+        if pending.is_none() {
+            if let Some((_, text)) = queue.pop_front() {
+                let state = state.clone();
+                pending = Some(tokio::task::spawn_blocking(move || dispatch(&state, text.as_str())));
+            }
+        }
         tokio::select! {
             _ = log_tick.tick() => {
                 let batch = goofi_core::log::global().lock().unwrap_or_else(|e| e.into_inner()).since(log_cursor);
@@ -1161,10 +1172,17 @@ async fn handle_control(socket: WebSocket, state: AppState) {
                     }
                 }
             },
-            incoming = rx.next(), if pending.is_none() => match incoming {
+            incoming = rx.next() => match incoming {
                 Some(Ok(Message::Text(t))) => {
-                    let state = state.clone();
-                    pending = Some(tokio::task::spawn_blocking(move || dispatch(&state, t.as_str())));
+                    let envelope: Envelope = serde_json::from_str(&t).unwrap_or_default();
+                    if envelope.actor.is_some() {
+                        actor = envelope.actor;
+                    }
+                    let key = envelope.preview;
+                    match key.as_ref().and_then(|k| queue.iter().position(|(q, _)| q.as_ref() == Some(k))) {
+                        Some(i) => queue[i].1 = t.to_string(),
+                        None => queue.push_back((key, t.to_string())),
+                    }
                 }
                 Some(Ok(Message::Close(_))) | None => break,
                 Some(Err(_)) => break,
@@ -1191,10 +1209,25 @@ async fn handle_control(socket: WebSocket, state: AppState) {
             },
         }
     }
+    if let Some(actor) = actor {
+        let state = state.clone();
+        let _ = tokio::task::spawn_blocking(move || state.end_previews(&actor)).await;
+    }
     farewell(tx, rx, 1000, "").await;
 }
 
 impl AppState {
+    /// A socket closed mid-drag: its actor's previews go back to the last committed state.
+    pub fn end_previews(&self, actor: &str) {
+        let reverted = {
+            let mut g = self.graph.lock().unwrap();
+            self.history.lock().unwrap().revert_previews(&mut g, actor)
+        };
+        if reverted {
+            resync_and_broadcast(self);
+        }
+    }
+
     /// The graph settled: wake every reducer and pulse every `/data` socket, so each re-reads
     /// what it derives from the graph — an address, a generation, a node's very existence.
     pub(crate) fn settled_now(&self) {
@@ -1392,9 +1425,23 @@ impl AppState {
     /// ONE re-mirror and one dirty decision happen here, where no write arm can forget either; a
     /// Read touches nothing; an Effect's arm owns its own consequences.
     pub fn call(&self, op: &str, payload: Value, actor: &str) -> Result<Value, String> {
+        self.call_as(op, payload, actor, false)
+    }
+
+    /// The op run as a PREVIEW: the same arm and command, and the graph moves for real, but the
+    /// history keeps no entry and the patch stays clean. The commit is the same op without the flag.
+    pub fn preview(&self, op: &str, payload: Value, actor: &str) -> Result<Value, String> {
+        self.call_as(op, payload, actor, true)
+    }
+
+    fn call_as(&self, op: &str, payload: Value, actor: &str, preview: bool) -> Result<Value, String> {
         let Some(spec) = self.find_op(op) else {
             return Err(format!("unknown op `{op}`"));
         };
+        if preview && (!spec.handler.is_write() || op == "compound") {
+            return Err(format!("`{op}` cannot be previewed: only an undoable write can"));
+        }
+        let _previewing = preview.then(goofi_graph::open_preview);
         let _scope = plugins::CallScope::enter(op)?;
         let _record_start = (op == "record start").then(|| self.plugins.record_start.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         let hooked = self.plugins.has_hooks(op);
@@ -1408,7 +1455,9 @@ impl AppState {
         };
         if result.is_ok() && spec.handler.is_write() {
             resync_and_broadcast(self);
-            events.extend(self.set_dirty(true));
+            if !preview {
+                events.extend(self.set_dirty(true));
+            }
         }
         for e in events {
             let _ = self.events.send(e);
@@ -1418,8 +1467,16 @@ impl AppState {
     }
 }
 
-/// The `/control` envelope over [`AppState::call`]: `{id, op, payload, actor}` in, `{id, result}`
-/// or `{id, error}` out. A request with no numeric `id` wants no reply.
+/// What the socket reads off a `/control` request before it runs: whose it is, and whether it
+/// is a preview, keyed so a newer preview of the same key replaces an older one still waiting.
+#[derive(serde::Deserialize, Default)]
+struct Envelope {
+    actor: Option<String>,
+    preview: Option<String>,
+}
+
+/// The `/control` envelope over [`AppState::call`]: `{id, op, payload, actor, preview?}` in,
+/// `{id, result}` or `{id, error}` out. A request with no numeric `id` wants no reply.
 fn dispatch(state: &AppState, text: &str) -> Option<String> {
     let req: Value = serde_json::from_str(text).ok()?;
     let id = req.get("id").cloned().unwrap_or(Value::Null);
@@ -1429,7 +1486,11 @@ fn dispatch(state: &AppState, text: &str) -> Option<String> {
     // Absent ⇒ the one shared actor, so a caller that presents none still works.
     let actor = req.get("actor").and_then(|v| v.as_str()).unwrap_or(DEFAULT_ACTOR).to_string();
 
-    let result = state.call(&op, payload, &actor);
+    let result = if req.get("preview").is_some_and(|p| !p.is_null()) {
+        state.preview(&op, payload, &actor)
+    } else {
+        state.call(&op, payload, &actor)
+    };
     match id {
         Value::Number(_) => Some(match result {
             Ok(r) => json!({ "id": id, "result": r }).to_string(),

@@ -331,17 +331,20 @@ describe('a frozen gesture is a layout command', () => {
 	});
 });
 
-describe('a resize drag draws locally and commits once', () => {
-	it('sends nothing while the pointer moves, and one op when it lifts', async () => {
+describe('a resize drag previews each move and commits once', () => {
+	it('previews each move under the split\'s key, and sends one op when the pointer lifts', async () => {
 		const ws = boot(split());
 		ws.resize('split-4', 0, 0.1);
 		ws.resize('split-4', 0, 0.05);
 		await Promise.resolve();
 		expect(sent(), 'a command per pointermove is exactly what this replaces').toEqual([]);
+		expect(fc.previews.map((p) => p.key)).toEqual(['split split-4', 'split split-4']);
+		const drawn = fc.previews[1].payload.fraction as number[];
+		expect(drawn[0], 'the moves accumulate').toBeCloseTo(0.75, 6);
 
 		const root = ws.active.root;
 		if (root.kind !== 'split') throw new Error('expected a split');
-		expect(root.sizes[0], 'but the seam moved on screen').toBeCloseTo(0.75, 6);
+		expect(root.sizes[0], 'the tree holds no override: the manager\'s echo is what draws').toBeCloseTo(0.6, 6);
 
 		ws.commitResize('split-4');
 		await Promise.resolve();
@@ -354,58 +357,28 @@ describe('a resize drag draws locally and commits once', () => {
 		expect(fractions[1]).toBeCloseTo(0.25, 6);
 	});
 
-	it('keeps drawing the shares it drew until the manager’s answer lands', async () => {
-		const ws = boot(split());
-		ws.resize('split-4', 0, 0.1);
-		ws.commitResize('split-4');
-		await Promise.resolve();
-		const mid = ws.active.root;
-		if (mid.kind !== 'split') throw new Error('expected a split');
-		expect(mid.sizes[0], 'no snap-back between the reply and the delta').toBeCloseTo(0.7, 6);
-
-		const answered = resized(0.7, 0.3);
-		ws.syncFromDoc(answered);
-		const after = ws.active.root;
-		if (after.kind !== 'split') throw new Error('expected a split');
-		expect(after.sizes).toEqual([0.7, 0.3]);
-	});
-
 	it('commits nothing when the drag drew nothing', async () => {
 		const ws = boot(split());
 		ws.commitResize('split-4');
 		await Promise.resolve();
 		expect(sent()).toEqual([]);
+		expect(fc.previews).toEqual([]);
 	});
 
-	it('commits a second drag that lands back on the shares the REPLICA still shows', async () => {
-		// The "nothing changed" short-circuit has to compare against what was last SENT, not against
-		// the replica — the replica is the arrangement from before the previous commit, so a drag
-		// returning the split to those shares looks like a no-op and is dropped on the floor. Halves
-		// and quarters, because floating-point inexactness is what hides this in a fixture.
+	it('commits a second drag that lands back on the shares it started from', async () => {
+		// The commit is what closes the drag on the manager, so it goes out even when the shares
+		// are back where the replica shows them. Halves and quarters, so float inexactness cannot hide it.
 		const even = resized(0.5, 0.5);
 		const ws = boot(even);
 		ws.resize('split-4', 0, 0.25);
 		ws.commitResize('split-4');
 		await Promise.resolve();
+		ws.syncFromDoc(resized(0.75, 0.25));
 		ws.resize('split-4', 0, -0.25);
 		ws.commitResize('split-4');
 		await Promise.resolve();
-		expect(sent(), 'the drag back is a change the user made and asked for').toHaveLength(2);
+		expect(sent()).toHaveLength(2);
 		expect(sent()[1][1].fraction).toEqual([0.5, 0.5]);
-	});
-
-	it('does not retire the override under a finger still on the seam', () => {
-		// The previous commit's delta lands while the NEXT drag is live. Retiring the override then
-		// jumps the seam out from under the pointer and the gesture continues from the jump.
-		const ws = boot(split());
-		ws.resize('split-4', 0, 0.1);
-		ws.commitResize('split-4');
-		ws.resize('split-4', 0, 0.05);
-		const answered = resized(0.7, 0.3);
-		ws.syncFromDoc(answered);
-		const root = ws.active.root;
-		if (root.kind !== 'split') throw new Error('expected a split');
-		expect(root.sizes[0], 'the seam stays where the finger put it').toBeCloseTo(0.75, 6);
 	});
 });
 

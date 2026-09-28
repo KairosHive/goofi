@@ -10,6 +10,7 @@
 	let {
 		value,
 		onChange,
+		onInput,
 		min,
 		max,
 		step = 1,
@@ -19,6 +20,8 @@
 	}: Omit<HTMLInputAttributes, 'value' | 'type' | 'inputmode' | 'min' | 'max' | 'step' | 'oninput'> & {
 		value: number;
 		onChange: (v: number) => unknown;
+		/** Each step of a scrub, before the release commits it. */
+		onInput?: (v: number) => unknown;
 		min?: number;
 		max?: number;
 		step?: number;
@@ -30,7 +33,8 @@
 	const fieldId = claimFieldControlId(ownId);
 	const live = useLiveValue<number>(
 		() => value,
-		(v) => onChange(v)
+		(v) => onChange(v),
+		(v) => onInput?.(v)
 	);
 
 	// Re-synced while idle only, so typing "1." is never rewritten under the cursor.
@@ -99,7 +103,7 @@
 			}
 			const v = clamp(snap(startVal + Math.round(dx / 2) * step));
 			text = fmt(v);
-			live.commit(v);
+			live.input(v);
 		};
 		const detach = () => {
 			el.removeEventListener('pointermove', move);
@@ -110,6 +114,7 @@
 		const up = () => {
 			detach();
 			if (active) {
+				live.commit(live.value);
 				scrubbing = false;
 				// Release the latch only once focus has left, or the idle effect clobbers typed text.
 				if (document.activeElement !== el) live.end();
@@ -121,6 +126,7 @@
 		const cancel = () => {
 			detach();
 			if (active) {
+				live.commit(live.value);
 				scrubbing = false;
 				live.end();
 			}

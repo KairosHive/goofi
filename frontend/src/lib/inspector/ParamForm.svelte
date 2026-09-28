@@ -635,6 +635,7 @@
 								data-testid={`param-field-${paramName}`}
 								refreshing={node != null && g.isRefreshing(node.uid, group, paramName)}
 								onCommit={(v) => setValue(group, paramName, v)}
+								onPreview={(v) => node && g.previewParam(node.uid, group, paramName, v)}
 								onSetSource={(source) => setSource(group, paramName, source)}
 								onRefresh={() => refreshOptions(group, paramName)}
 								onPulse={() => pulse(group, paramName)}

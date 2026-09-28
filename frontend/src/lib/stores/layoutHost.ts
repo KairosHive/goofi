@@ -83,8 +83,11 @@ export function goofiLayoutHost(deps: HostDeps): LayoutHost {
 			return landed(await cmd('Close panel', 'layout remove', { entry: panel }));
 		},
 
-		async resizeSplit(split, fractions) {
-			return landed(await cmd('Resize', 'layout split edit', { split, fraction: fractions }));
+		async resizeSplit(split, fractions, preview = false) {
+			const payload = { split, fraction: fractions };
+			if (!preview) return landed(await cmd('Resize', 'layout split edit', payload));
+			deps.control().preview(`split ${split}`, 'layout split edit', payload);
+			return true;
 		},
 
 		async setPanel(panel, patch, label = 'Change panel') {

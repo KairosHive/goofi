@@ -250,6 +250,13 @@ impl Goofi {
         self.state.call(op, payload, &self.actor)
     }
 
+    /// Run an op as a PREVIEW — one step of a drag — and unwrap it.
+    #[track_caller]
+    pub fn preview(&self, op: &str, payload: Value) -> Value {
+        self.state.preview(op, payload.clone(), &self.actor)
+            .unwrap_or_else(|e| panic!("preview {op} {payload} was refused: {e}"))
+    }
+
     /// Run an op that must be refused, and answer why.
     #[track_caller]
     pub fn refuse(&self, op: &str, payload: Value) -> String {
@@ -596,9 +603,21 @@ impl Client {
     }
 
     pub async fn try_call(&mut self, op: &str, payload: Value) -> Result<Value, String> {
+        self.request(op, payload, None).await
+    }
+
+    /// One step of a drag over the socket: `key` is what a newer step of the same drag replaces.
+    pub async fn preview(&mut self, op: &str, payload: Value, key: &str) -> Value {
+        match self.request(op, payload.clone(), Some(key)).await {
+            Ok(r) => r,
+            Err(e) => panic!("preview {op} {payload} was refused: {e}"),
+        }
+    }
+
+    async fn request(&mut self, op: &str, payload: Value, preview: Option<&str>) -> Result<Value, String> {
         let id = self.next_id;
         self.next_id += 1;
-        let req = json!({ "id": id, "op": op, "payload": payload, "actor": self.actor });
+        let req = json!({ "id": id, "op": op, "payload": payload, "actor": self.actor, "preview": preview });
         self.ws.send(Message::Text(req.to_string().into())).await.unwrap();
         loop {
             let m = self.text().await;

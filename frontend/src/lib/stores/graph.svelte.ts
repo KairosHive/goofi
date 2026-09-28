@@ -518,6 +518,11 @@ export class GraphStore {
 		this._recordGraphCmd('Disconnect');
 	}
 
+	/** One step of a drag on a param: the value moves everywhere, the history keeps nothing yet. */
+	previewParam(node: string, group: string, name: string, value: unknown): void {
+		this.ctl.preview(`param ${node} ${group}/${name}`, 'node param edit', { node, param: `${group}/${name}`, value });
+	}
+
 	async updateParam(node: string, group: string, name: string, value: unknown): Promise<void> {
 		// Guard on EXISTENCE, not truthiness — a real param may hold 0, false or ''.
 		const param = this.nodeById(node)?.params?.[group]?.[name];
@@ -537,6 +542,10 @@ export class GraphStore {
 		if (this.variables.some((g) => g.name === name)) throw new Error(`variable ${name} already exists`);
 		await this.ctl.call('variable entry add', control ? { name, value, type, control } : { name, value, type });
 		this._recordGraphCmd(`Add variable ${name}`);
+	}
+
+	previewVariableValue(name: string, value: number | string | boolean): void {
+		this.ctl.preview(`variable ${name}`, 'variable entry edit', { name, value });
 	}
 
 	/** Edit an existing variable's value, keeping its type. */
