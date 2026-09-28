@@ -180,24 +180,31 @@ pub fn warn_cast_once(warned: &mut std::collections::HashSet<SrcDtype>, slot: &s
     true
 }
 
-/// A row-major, little-endian, contiguous f32 array; the buffer is `Arc`-shared, so fan-out
-/// is a refcount bump and a numpy or audio view can alias it zero-copy.
+/// A row-major, contiguous f32 LE array, a RANGE of an `Arc`-shared buffer: fan-out is a
+/// refcount bump, numpy aliases it, and a frame decoded off a wire views the bytes it arrived in.
 #[derive(Clone, Debug)]
 pub struct ArrayStore {
     shape: Vec<usize>,
-    buf: Arc<Vec<u8>>, // f32 LE, `buf.len() == nelem * 4`; a `Vec` so a built buffer moves in uncopied
+    buf: Arc<Vec<u8>>, // f32 LE; a `Vec` so a built buffer moves in uncopied
+    samples: std::ops::Range<usize>, // `samples.len() == nelem * 4`
 }
 
 impl ArrayStore {
     /// Build without normalization — the caller guarantees `buf.len() == nelem * 4`.
     pub fn new(shape: Vec<usize>, buf: Arc<Vec<u8>>) -> ArrayStore {
-        ArrayStore { shape, buf }
+        let samples = 0..buf.len();
+        ArrayStore { shape, buf, samples }
+    }
+    /// The samples at `samples` of `buf`, the rest of which is the wire around them: the caller
+    /// guarantees the range is within `buf` and `samples.len() == nelem * 4`.
+    pub fn view(shape: Vec<usize>, buf: Arc<Vec<u8>>, samples: std::ops::Range<usize>) -> ArrayStore {
+        ArrayStore { shape, buf, samples }
     }
     pub fn shape(&self) -> &[usize] {
         &self.shape
     }
     pub fn as_bytes(&self) -> &[u8] {
-        &self.buf
+        &self.buf[self.samples.clone()]
     }
     pub fn ndim(&self) -> usize {
         self.shape.len()
@@ -539,6 +546,10 @@ impl Data {
     pub fn value(&self) -> &Value {
         &self.0.value
     }
+    /// Whether the two are ONE frame — the same allocation, not two that say the same thing.
+    pub fn same(&self, other: &Data) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
     pub fn meta(&self) -> &Meta {
         &self.0.meta
     }
@@ -583,6 +594,13 @@ impl Data {
 
     /// Build an f32 array `Data`, promoting 0-d to 1-d and validating channel coords.
     pub fn array_f32(shape: Vec<usize>, buf: Vec<u8>, meta: Meta) -> Result<Data> {
+        let samples = 0..buf.len();
+        Data::array_shared(shape, Arc::new(buf), samples, meta)
+    }
+
+    /// An f32 array `Data` over the `samples` range of a shared buffer, validated as
+    /// [`Data::array_f32`] is: what a decoder builds so a frame keeps the bytes it arrived in.
+    pub fn array_shared(shape: Vec<usize>, buf: Arc<Vec<u8>>, samples: std::ops::Range<usize>, meta: Meta) -> Result<Data> {
         // Checked: a garbled shape could otherwise wrap `expect` down onto a short buffer.
         let nelem: usize = shape
             .iter()
@@ -591,10 +609,10 @@ impl Data {
         let expect = nelem
             .checked_mul(4) // f32 itemsize
             .ok_or_else(|| GoofiError::Invalid("array byte length overflows usize".into()))?;
-        if buf.len() != expect {
+        if samples.len() != expect || samples.end > buf.len() {
             return Err(GoofiError::Invalid(format!(
                 "buffer length {} != nelem {nelem} * 4 = {expect}",
-                buf.len(),
+                samples.len(),
             )));
         }
 
@@ -619,7 +637,7 @@ impl Data {
             }
         }
 
-        Ok(Data::array(ArrayStore::new(shape, Arc::new(buf)), meta))
+        Ok(Data::array(ArrayStore::view(shape, buf, samples), meta))
     }
 
     pub fn as_array(&self) -> std::result::Result<&ArrayStore, String> {

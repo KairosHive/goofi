@@ -40,6 +40,29 @@ impl Bytes {
     }
 }
 
+/// A request as the boundary spells it: byte runs read as one, so a frame's samples cross by
+/// reference rather than being copied into a request around them.
+#[repr(C)]
+pub struct Segments {
+    pub ptr: *const Bytes,
+    pub len: usize,
+}
+
+impl Segments {
+    pub fn of(runs: &[Bytes]) -> Segments {
+        Segments { ptr: runs.as_ptr(), len: runs.len() }
+    }
+
+    /// # Safety
+    /// `ptr` addresses `len` [`Bytes`], each addressing memory that outlives the slices.
+    pub unsafe fn as_slices<'a>(&self) -> Vec<&'a [u8]> {
+        match self.len {
+            0 => Vec::new(),
+            n => std::slice::from_raw_parts(self.ptr, n).iter().map(|b| b.as_slice()).collect(),
+        }
+    }
+}
+
 /// The host's collector: the node writes, the host owns the bytes.
 pub type Write = unsafe extern "C" fn(sink: *mut c_void, bytes: Bytes);
 

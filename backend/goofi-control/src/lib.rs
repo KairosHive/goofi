@@ -637,7 +637,7 @@ impl<H: Half> Control<H> {
         let outs = &self.outs;
         let record = |i: usize, bytes: &[u8]| {
             let Some((_, port)) = outs[i].record.as_ref() else { return };
-            port.send(bytes);
+            port.send(bytes.len(), |loan| goofi_transport::write_parts(loan, [bytes]));
         };
         let values = self.consts.iter().enumerate().map(|(i, value)| {
             self.binds.iter().find(|b| b.param == i)

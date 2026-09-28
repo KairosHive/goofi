@@ -5,13 +5,14 @@
 use std::ffi::{c_char, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use goofi_codec::{Emitted, Out, Request};
 use goofi_core::Data;
 use goofi_node::{ParamKey, Params};
 use indexmap::IndexMap;
 
 use crate::{Inputs, Manifest, Node, NodeCtx, Outputs};
 
-pub use goofi_node::abi::{collect, version, Bytes, Write};
+pub use goofi_node::abi::{collect, version, Bytes, Segments, Write};
 
 /// What a node may ask its runtime, as plain data.
 #[repr(C)]
@@ -21,7 +22,7 @@ pub struct Ctx {
 }
 
 /// Every entry has one shape: a request in, a reply out through the host's sink.
-pub type Call = unsafe extern "C" fn(node: *mut c_void, ctx: Ctx, request: Bytes, sink: *mut c_void, write: Write);
+pub type Call = unsafe extern "C" fn(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write);
 
 #[repr(C)]
 pub struct VTable {
@@ -64,50 +65,81 @@ pub unsafe extern "C" fn destroy(node: *mut c_void) {
     }
 }
 
+/// What an entry answers, encoded onto the host's sink only once the whole call succeeded.
+enum Answer {
+    Done,
+    Process { outputs: IndexMap<&'static str, Option<Data>>, inputs: Vec<(&'static str, usize, Data)>, clears: Vec<String> },
+    Options(Option<Vec<String>>),
+}
+
+/// The host's sink as a codec sink: each run the node writes lands in the host's own buffer.
+struct Sink {
+    sink: *mut c_void,
+    write: Write,
+}
+
+impl<'a> Out<'a> for Sink {
+    fn put(&mut self, bytes: &[u8]) {
+        // SAFETY: the host handed `sink` and `write` for this call, and `bytes` is a live slice.
+        unsafe { (self.write)(self.sink, Bytes::of(bytes)) }
+    }
+}
+
 /// Every entry the same way: decode, call, encode — a refusal or a panic is an error reply.
 unsafe fn call(
     node: *mut c_void,
     ctx: Option<Ctx>,
-    request: Bytes,
+    request: Segments,
     sink: *mut c_void,
     write: Write,
-    f: impl FnOnce(&mut Instance, &[u8]) -> Result<Vec<u8>, String>,
+    f: impl FnOnce(&mut Instance, &[&[u8]]) -> Result<Answer, String>,
 ) {
     let inst = &mut *(node as *mut Instance);
     if let Some(ctx) = ctx {
         inst.ctx.now = ctx.now;
     }
-    let request = request.as_slice();
-    let reply = match catch_unwind(AssertUnwindSafe(|| f(inst, request))) {
-        Ok(Ok(bytes)) => bytes,
-        Ok(Err(e)) => goofi_codec::encode_error_response(&e),
-        Err(p) => goofi_codec::encode_error_response(&goofi_node::panic_message(p)),
-    };
-    write(sink, Bytes::of(&reply));
+    let request = request.as_slices();
+    let mut out = Sink { sink, write };
+    match catch_unwind(AssertUnwindSafe(|| f(inst, &request))) {
+        Ok(Ok(Answer::Done)) => goofi_codec::encode_response(&[], &[], &mut out),
+        Ok(Ok(Answer::Process { outputs, inputs, clears })) => {
+            // An output that IS an input crosses as that input's name: the host still holds it.
+            let emitted: Vec<(&str, Emitted<'_>)> = outputs
+                .iter()
+                .filter_map(|(name, d)| d.as_ref().map(|d| (*name, d)))
+                .map(|(name, d)| match inputs.iter().find(|(_, _, i)| i.same(d)) {
+                    Some((slot, index, _)) => (name, Emitted::Input { slot, index: *index }),
+                    None => (name, Emitted::Frame(d)),
+                })
+                .collect();
+            goofi_codec::encode_response(&emitted, &clears, &mut out);
+        }
+        Ok(Ok(Answer::Options(options))) => out.put(&goofi_codec::encode_options_response(&options)),
+        Ok(Err(e)) => out.put(&goofi_codec::encode_error_response(&e)),
+        Err(p) => out.put(&goofi_codec::encode_error_response(&goofi_node::panic_message(p))),
+    }
 }
 
-fn process_request(req: &[u8]) -> Result<(goofi_codec::ParamMap, goofi_codec::SourcedSlots), String> {
+fn process_request(req: &[&[u8]]) -> Result<(goofi_codec::ParamMap, goofi_codec::SourcedSlots), String> {
     match goofi_codec::decode_request(req)? {
-        goofi_codec::Request::Process { params, slots } => Ok((params, slots)),
-        goofi_codec::Request::Refresh { .. } | goofi_codec::Request::Pulse { .. } => {
-            Err("a refresh or a pulse where a run was expected".into())
-        }
+        Request::Process { params, slots } => Ok((params, slots)),
+        Request::Refresh { .. } | Request::Pulse { .. } => Err("a refresh or a pulse where a run was expected".into()),
     }
 }
 
 /// # Safety
 /// `node` came from [`instance`]; `request` and `sink` are the host's for the call.
-pub unsafe extern "C" fn setup(node: *mut c_void, ctx: Ctx, request: Bytes, sink: *mut c_void, write: Write) {
+pub unsafe extern "C" fn setup(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
     call(node, Some(ctx), request, sink, write, |inst, req| {
         let (params, _) = process_request(req)?;
         inst.node.setup(&mut inst.ctx, &Params::new(&params)).map_err(|e| e.0)?;
-        Ok(goofi_codec::encode_response(&[], &[]))
+        Ok(Answer::Done)
     })
 }
 
 /// # Safety
 /// As [`setup`].
-pub unsafe extern "C" fn process(node: *mut c_void, ctx: Ctx, request: Bytes, sink: *mut c_void, write: Write) {
+pub unsafe extern "C" fn process(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
     call(node, Some(ctx), request, sink, write, |inst, req| {
         let (params, slots) = process_request(req)?;
         let mut singles: IndexMap<&'static str, Option<Data>> =
@@ -127,47 +159,49 @@ pub unsafe extern "C" fn process(node: *mut c_void, ctx: Ctx, request: Bytes, si
         let mut out = Outputs::new(&mut outputs);
         inst.ctx.take_cleared_inputs();
         inst.node.process(&inputs, &mut out, &mut inst.ctx, &Params::new(&params)).map_err(|e| e.0)?;
-        let emitted: Vec<(&str, &Data)> =
-            outputs.iter().filter_map(|(name, d)| d.as_ref().map(|d| (*name, d))).collect();
-        Ok(goofi_codec::encode_response(&emitted, &inst.ctx.take_cleared_inputs()))
+        let inputs = singles
+            .iter()
+            .filter_map(|(slot, d)| d.clone().map(|d| (*slot, 0, d)))
+            .chain(multis.iter().flat_map(|(slot, frames)| frames.iter().enumerate().map(|(i, (_, d))| (*slot, i, d.clone()))))
+            .collect();
+        Ok(Answer::Process { outputs, inputs, clears: inst.ctx.take_cleared_inputs() })
     })
 }
 
 /// # Safety
 /// As [`setup`]; `request` is `(group, name, Param)` as msgpack.
-pub unsafe extern "C" fn on_param_changed(node: *mut c_void, ctx: Ctx, request: Bytes, sink: *mut c_void, write: Write) {
+pub unsafe extern "C" fn on_param_changed(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
     let _ = ctx;
     call(node, None, request, sink, write, |inst, req| {
         let (group, name, value): (String, String, goofi_core::Param) =
-            rmp_serde::from_slice(req).map_err(|e| e.to_string())?;
+            rmp_serde::from_slice(req.concat().as_slice()).map_err(|e| e.to_string())?;
         inst.node.on_param_changed(&ParamKey::new(group, name), &value).map_err(|e| e.0)?;
-        Ok(goofi_codec::encode_response(&[], &[]))
+        Ok(Answer::Done)
     })
 }
 
 /// # Safety
 /// As [`setup`]; `request` is a codec refresh request.
-pub unsafe extern "C" fn on_param_refreshed(node: *mut c_void, ctx: Ctx, request: Bytes, sink: *mut c_void, write: Write) {
+pub unsafe extern "C" fn on_param_refreshed(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
     let _ = ctx;
     call(node, None, request, sink, write, |inst, req| {
-        let goofi_codec::Request::Refresh { params, group, name } = goofi_codec::decode_request(req)? else {
+        let Request::Refresh { params, group, name } = goofi_codec::decode_request(req)? else {
             return Err("a run where a refresh was expected".into());
         };
-        let options = inst.node.on_param_refreshed(&ParamKey::new(group, name), &Params::new(&params));
-        Ok(goofi_codec::encode_options_response(&options))
+        Ok(Answer::Options(inst.node.on_param_refreshed(&ParamKey::new(group, name), &Params::new(&params))))
     })
 }
 
 /// # Safety
 /// As [`setup`]; `request` is a codec pulse request.
-pub unsafe extern "C" fn on_pulse(node: *mut c_void, ctx: Ctx, request: Bytes, sink: *mut c_void, write: Write) {
+pub unsafe extern "C" fn on_pulse(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
     let _ = ctx;
     call(node, None, request, sink, write, |inst, req| {
-        let goofi_codec::Request::Pulse { params, group, name } = goofi_codec::decode_request(req)? else {
+        let Request::Pulse { params, group, name } = goofi_codec::decode_request(req)? else {
             return Err("a run where a pulse was expected".into());
         };
         inst.node.on_pulse(&ParamKey::new(group, name), &Params::new(&params)).map_err(|e| e.0)?;
-        Ok(goofi_codec::encode_response(&[], &[]))
+        Ok(Answer::Done)
     })
 }
 

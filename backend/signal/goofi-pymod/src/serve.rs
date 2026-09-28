@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use goofi_codec::{decode_request, encode_error_response, encode_options_response, encode_response, Request};
+use goofi_codec::{decode_request, encode_error_response, encode_options_response, encode_response, Emitted, Request};
 use goofi_core::{Data as CoreData, SrcDtype};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -87,14 +87,14 @@ fn handle(
     did_setup: &mut bool,
     body: &[u8],
 ) -> PyResult<Vec<u8>> {
-    let (params, arrived) = match decode_request(body).map_err(pyo3::exceptions::PyValueError::new_err)? {
+    let (params, arrived) = match decode_request(&[body]).map_err(pyo3::exceptions::PyValueError::new_err)? {
         Request::Process { params, slots } => (params, slots),
         Request::Refresh { params, group, name } => {
             return Ok(encode_options_response(&crate::exec::run_refresh(py, instance, &params, &group, &name)));
         }
         Request::Pulse { params, group, name } => {
             return Ok(match crate::exec::run_pulse(py, instance, &params, &group, &name) {
-                None => encode_response(&[], &[]),
+                None => response(&[], &[]),
                 Some(raised) => encode_error_response(&raised),
             });
         }
@@ -114,11 +114,17 @@ fn handle(
         .collect();
     match run_node(py, instance, &params, &inputs, out_slots, warned, did_setup) {
         Ok(result) => {
-            let slots: Vec<(&str, &CoreData)> = result.outputs.iter().map(|(n, d)| (n.as_str(), d)).collect();
-            Ok(encode_response(&slots, &result.clear_inputs))
+            let slots: Vec<(&str, Emitted<'_>)> = result.outputs.iter().map(|(n, d)| (n.as_str(), Emitted::Frame(d))).collect();
+            Ok(response(&slots, &result.clear_inputs))
         }
         Err(e) => Ok(encode_error_response(&e.to_string())),
     }
+}
+
+fn response(outputs: &[(&str, Emitted<'_>)], clears: &[String]) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_response(outputs, clears, &mut out);
+    out
 }
 
 /// Run `setup()` until it SUCCEEDS, then `process()`; a setup that raised is retried on the next
@@ -131,7 +137,7 @@ fn run_node(
     out_slots: &[&str],
     warned: &mut HashSet<SrcDtype>,
     did_setup: &mut bool,
-) -> PyResult<goofi_codec::ProcessOutput> {
+) -> PyResult<crate::exec::Ran> {
     if !*did_setup {
         crate::exec::run_setup(py, instance, params)?;
         *did_setup = true;

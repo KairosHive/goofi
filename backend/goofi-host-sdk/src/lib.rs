@@ -84,6 +84,14 @@ impl<'a> Inputs<'a> {
     pub fn get_multi(&self, name: &str) -> &[(String, Data)] {
         self.multis.and_then(|m| m.get(name)).map_or(&[], |v| v.as_slice())
     }
+    /// The frame at `index` of a slot: a single slot holds one, at 0; a `multi` slot its present
+    /// frames in wire order.
+    pub fn at(&self, name: &str, index: usize) -> Option<&Data> {
+        match self.singles.get(name) {
+            Some(single) => single.as_ref().filter(|_| index == 0),
+            None => self.get_multi(name).get(index).map(|(_, d)| d),
+        }
+    }
 }
 
 /// A pre-sized output sink; slots left unset emit nothing.

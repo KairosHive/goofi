@@ -6,9 +6,9 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use goofi_core::Data;
 use goofi_transport::Exchange;
 use goofi_node::{ParamKey, Params};
+use goofi_host_sdk::host;
 use goofi_host_sdk::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
 
 /// Unique iceoryx2 service-name base per spawned subprocess, so concurrent nodes never collide.
@@ -55,7 +55,7 @@ impl Running {
         Ok(Running { child, exchange })
     }
 
-    fn roundtrip(&mut self, frame: &[u8], timeout: Duration) -> std::result::Result<Vec<u8>, String> {
+    fn roundtrip(&mut self, frame: &[&[u8]], timeout: Duration) -> std::result::Result<Vec<u8>, String> {
         self.exchange.ask(&mut self.child, frame, timeout).map_err(|e| format!("subprocess io: {e}"))
     }
 
@@ -99,10 +99,10 @@ impl RemoteNode {
 
     /// One request to the child, spawning it first if need be; an IO failure drops the child so
     /// the next request starts a fresh one.
-    fn ask(&mut self, frame: &[u8]) -> Result<goofi_codec::Response, String> {
+    fn ask(&mut self, frame: &[&[u8]]) -> Result<goofi_codec::Response, String> {
         let timeout = if self.proc.is_none() { COLD_START_TIMEOUT } else { TICK_TIMEOUT };
         let resp = self.ensure().and_then(|r| r.roundtrip(frame, timeout)).inspect_err(|_| self.reset())?;
-        goofi_codec::decode_response(&resp)
+        goofi_codec::decode_response(resp)
     }
 }
 
@@ -110,39 +110,25 @@ impl Node for RemoteNode {
     fn process(&mut self, inp: &Inputs<'_>, out: &mut Outputs<'_>, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
         // Only the PRESENT frames cross the wire, a `multi` slot's each with its source; the child
         // rebuilds the declared kwarg set from `INPUTS`.
-        let mut present: Vec<(&str, &str, &Data)> = Vec::new();
-        for (name, multi) in &self.in_slots {
-            if *multi {
-                present.extend(inp.get_multi(name).iter().map(|(source, d)| (*name, source.as_str(), d)));
-            } else if let Some(d) = inp.get(name) {
-                present.push((*name, "", d));
-            }
-        }
+        let present = host::present(self.in_slots.iter().map(|(name, multi)| (*name, *multi)), inp);
+        let request = goofi_codec::encode_request(p.groups(), &present);
         // A node RAISE does not kill the child: its state is preserved and the error is instant.
-        match self.ask(&goofi_codec::encode_request(p.groups(), &present)).map_err(NodeError)? {
-            goofi_codec::Response::Process(result) => {
-                for slot in result.clear_inputs {
-                    ctx.clear_input(&slot);
-                }
-                for (slot, data) in result.outputs {
-                    out.set(&slot, data);
-                }
-                Ok(())
-            }
+        match self.ask(&host::runs(&request)).map_err(NodeError)? {
+            goofi_codec::Response::Process(result) => host::apply(result, inp, out, ctx),
             goofi_codec::Response::NodeError(msg) => Err(NodeError(msg)),
             goofi_codec::Response::Options(_) => Err(NodeError("the child answered a tick with options".into())),
         }
     }
 
     fn on_param_refreshed(&mut self, key: &ParamKey, p: &Params<'_>) -> Option<Vec<String>> {
-        match self.ask(&goofi_codec::encode_refresh_request(p.groups(), &key.group, &key.name)) {
+        match self.ask(&[&goofi_codec::encode_refresh_request(p.groups(), &key.group, &key.name)]) {
             Ok(goofi_codec::Response::Options(options)) => options,
             _ => None,
         }
     }
 
     fn on_pulse(&mut self, key: &ParamKey, p: &Params<'_>) -> NodeResult {
-        match self.ask(&goofi_codec::encode_pulse_request(p.groups(), &key.group, &key.name)).map_err(NodeError)? {
+        match self.ask(&[&goofi_codec::encode_pulse_request(p.groups(), &key.group, &key.name)]).map_err(NodeError)? {
             goofi_codec::Response::NodeError(msg) => Err(NodeError(msg)),
             _ => Ok(()),
         }

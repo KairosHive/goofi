@@ -349,6 +349,27 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
     assert!(g.call("library list", j!({}))["types"].as_array().is_some(), "goofi answers after the child died");
     emits(&g, live, 3.0);
 
+    // A hosted node that hands an input on unchanged emits that very frame: it crosses back to
+    // goofi as the input's name, and what leaves the node is what came in.
+    std::fs::write(
+        mount.join("nodes_signal").join("Through.rs"),
+        "use goofi_core::SlotType;\n\
+         use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params, SlotDecl};\n\
+         #[derive(Default)]\nstruct Through;\n\
+         impl Node for Through {\n    \
+         fn process(&mut self, i: &Inputs<'_>, o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {\n        \
+         o.set(\"out\", i.get(\"data\").cloned().ok_or(\"no data\")?);\n        Ok(())\n    }\n}\n\
+         static INS: &[SlotDecl] = &[SlotDecl { name: \"data\", kind: SlotType::Array, trigger_process: true, multi: false, required: true }];\n\
+         static OUTS: &[OutputDecl] = &[OutputDecl { name: \"out\", kind: SlotType::Array }];\n\
+         static MANIFEST: Manifest = Manifest { tags: &[], doc: \"passes its input on\", inputs: INS, outputs: OUTS, params: &[], producer: false };\n\
+         goofi_signal_sdk::export!(Through, MANIFEST);\n",
+    )
+    .unwrap();
+    assert_eq!(rescan(&g)["added"], j!(["signal:Through"]));
+    let through = g.add("Through");
+    g.link(live, "out", through, "data");
+    emits(&g, through, 3.0);
+
     // An audio slot belongs to the audio SDK: a signal node that declares one is greyed out with
     // the SDK named, never registered.
     std::fs::write(

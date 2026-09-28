@@ -162,8 +162,7 @@ one-shot race stays a documented property.
 - **G4** One `desired_of`/`rides_the_plan`.
 - **H** Graphics host `.rs` files built after boot run hosted, as signal does; audio keeps
   loading in-process and never unloads (`audio-engine.md`).
-- **I** Native ABI stays bytes; inputs cross as borrowed GOOF frames, params only as deltas,
-  outputs are written into the loan (`frame-copies.md`).
+- **I** Native ABI stays bytes; params cross only as deltas, not the whole map per call.
 - **J** Leaked manifests are interned by type and describe hash, not moved to `Arc`.
 
 Fold graphics recording (`set_recorder` from the render thread) into the executor.

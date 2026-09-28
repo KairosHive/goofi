@@ -77,6 +77,12 @@ pub enum SlotIn<'a> {
     Multi(Vec<(&'a str, &'a CoreData)>),
 }
 
+/// Outputs and input clears from a successful process call.
+pub struct Ran {
+    pub outputs: Vec<(String, CoreData)>,
+    pub clear_inputs: Vec<String>,
+}
+
 /// Apply the live params, call `node.process(**inputs)`, and marshal the return into per-slot
 /// `Data`. `inputs` names every DECLARED slot in order; `out_slots` names the slot a bare
 /// (non-dict) return goes to.
@@ -87,7 +93,7 @@ pub fn run_process(
     inputs: &[(&str, SlotIn<'_>)],
     out_slots: &[&str],
     warned: &mut HashSet<SrcDtype>,
-) -> PyResult<goofi_codec::ProcessOutput> {
+) -> PyResult<Ran> {
     let node = instance.cast::<crate::node::Node>()?;
     node.borrow_mut().clear_inputs = Some(Vec::new());
     let result = process_outputs(py, instance, params, inputs, out_slots, warned);
@@ -96,7 +102,7 @@ pub fn run_process(
     if let Some(name) = clear_inputs.iter().find(|name| !inputs.iter().any(|(slot, _)| slot == name)) {
         return Err(pyo3::exceptions::PyValueError::new_err(format!("no input slot `{name}`")));
     }
-    Ok(goofi_codec::ProcessOutput { outputs, clear_inputs })
+    Ok(Ran { outputs, clear_inputs })
 }
 
 fn process_outputs(
