@@ -35,7 +35,6 @@ fn main() {
         None => argv,
         Some("help") | Some("--help") | Some("-h") => std::process::exit(help_main(&argv[1..])),
         Some("-") => std::process::exit(client_stdin(&argv[1..])),
-        Some("serve") => argv[1..].to_vec(),
         // The binary is its own plugin scanner: a child per bundle, so a crash there is a
         // refusal here.
         Some("vst3-scan") => std::process::exit(goofi_audio::vst3::scan_main(&argv[1..])),
@@ -88,7 +87,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     cli.debug |= debug_env();
     cli.demo |= demo_env();
     if cli.help {
-        // `goofi serve --help` / a flag mix that asked: the SERVE usage, not the op help door.
+        // `goofi --help` / a flag mix that asked: the SERVE usage, not the op help door.
         println!(
             "{USAGE}\n\
              \n  \
@@ -330,7 +329,7 @@ fn help_main(rest: &[String]) -> i32 {
         let words: Vec<String> = std::iter::once("help".to_string()).chain(rest.clone()).collect();
         match goofi_bridge::phrase::help(&goofi_bridge::ops::table(goofi_bridge::Mode::default()), &words) {
             Some(h) => {
-                println!("no running server — the built-in index answers; `goofi serve` starts one.");
+                println!("no running server — the built-in index answers; `goofi` starts one.");
                 println!("{h}");
                 return 0;
             }

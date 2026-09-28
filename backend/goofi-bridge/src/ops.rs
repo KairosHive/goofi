@@ -428,10 +428,9 @@ pub static TREE: &[Entry] = &[
     ]),
 ];
 
-/// The phrases the CLIENT owns — `serve`, the door words, and the future `plugin` prefix. Never
+/// The phrases the CLIENT owns — the door words, and the future `plugin` prefix. Never
 /// registrable, and prefix-free with the registry: the contracts invariant checks both together.
-pub static RESERVED: &[&str] =
-    &["serve", "help", "session list", "agent term", "completions"];
+pub static RESERVED: &[&str] = &["help", "session list", "agent term", "completions"];
 
 /// The flat rows the tree spells, full phrases joined once and leaked once per process — what the
 /// socket, `op list` and the generated `OpName` union read.

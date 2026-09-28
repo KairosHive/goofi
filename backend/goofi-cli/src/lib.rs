@@ -37,7 +37,7 @@ impl Default for Cli {
     }
 }
 
-pub const USAGE: &str = "usage: goofi [serve] [--port N] [--bind HOST] \
+pub const USAGE: &str = "usage: goofi [--port N] [--bind HOST] \
      [--extra-nodes DIR] [--list-nodes] [--headless] [--debug] [--demo] [--load PATCH]";
 
 /// The port with no door naming one.
