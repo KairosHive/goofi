@@ -21,6 +21,10 @@ fn demo_env() -> bool {
     matches!(std::env::var("GOOFI_DEMO").as_deref(), Ok("1") | Ok("true"))
 }
 
+fn boot_only_env() -> bool {
+    matches!(std::env::var("GOOFI_BOOT_ONLY").as_deref(), Ok("1") | Ok("true"))
+}
+
 /// A set variable that is empty names nothing — a platform spells an unset variable that way.
 fn named_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
@@ -86,6 +90,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     cli.headless |= headless_env() || HEADLESS_BUILD;
     cli.debug |= debug_env();
     cli.demo |= demo_env();
+    cli.boot_only = boot_only_env();
     if cli.help {
         // `goofi --help` / a flag mix that asked: the SERVE usage, not the op help door.
         println!(
@@ -99,7 +104,8 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
              the app out of the binary entirely. GOOFI_DEBUG=1 is --debug, which opens `/dev/*` \
              — the UI primitive gallery and the other development surfaces. GOOFI_LOAD is --load, \
              the patch to open at start; on a demo it is what `session new` returns to, and \
-             GOOFI_DEMO_BASE names where that set's other examples answer.",
+             GOOFI_DEMO_BASE names where that set's other examples answer. GOOFI_BOOT_ONLY=1 \
+             boots the node library and exits, serving nothing.",
             goofi_init::GIL_VENV
         );
         return;
@@ -114,7 +120,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
             std::process::exit(1);
         }
     };
-    if !cli.list_nodes {
+    if !cli.boot_only {
         if let Err(e) = goofi_core::log::capture_stdio() {
             eprintln!("Could not capture application output: {e}");
             std::process::exit(1);
@@ -375,7 +381,7 @@ async fn run(
     // Before ANY use of the embedded interpreter.
     point_embedded_python_at_its_venv();
 
-    let Cli { port, bind, extra_nodes, list_nodes, headless, debug, demo, load: _, help: _ } = cli;
+    let Cli { port, bind, extra_nodes, boot_only, headless, debug, demo, load: _, help: _ } = cli;
     let port = port.unwrap_or(DEFAULT_PORT);
 
     report("Preparing plugins");
@@ -388,7 +394,7 @@ async fn run(
     let scanned: Vec<PathBuf> = state.node_roots().into_iter().map(|(d, _)| d).collect();
     report("Checking node package requirements");
     let ready = ensure_packages(&scanned, &subproc_python).and_then(|()| {
-        if list_nodes {
+        if boot_only {
             return Ok(());
         }
         report("Preparing parameter expressions");
@@ -429,7 +435,7 @@ async fn run(
     let code = if let Err(error) = ready {
         let _ = goofi_core::log::terminal_line(&format!("Startup failed: {error}"));
         1
-    } else if list_nodes {
+    } else if boot_only {
         let names = goofi_bridge::catalog_type_names(&state.graph.lock().unwrap());
         if let Some(startup) = startup.take() {
             startup.finish("Node library ready");

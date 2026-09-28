@@ -7,7 +7,8 @@ pub struct Cli {
     pub bind: String,
     /// Node source roots scanned before the patch's own; a later entry wins a shared type name.
     pub extra_nodes: Vec<String>,
-    pub list_nodes: bool,
+    /// `GOOFI_BOOT_ONLY=1`: boot the node library, then exit without serving.
+    pub boot_only: bool,
     /// Serve the API alone: the SPA's routes are never mounted. Also set by `GOOFI_HEADLESS` in
     /// the environment and by a binary built with it, both folded in by the binary.
     pub headless: bool,
@@ -27,7 +28,7 @@ impl Default for Cli {
             port: None,
             bind: String::from("127.0.0.1"),
             extra_nodes: Vec::new(),
-            list_nodes: false,
+            boot_only: false,
             headless: false,
             debug: false,
             demo: false,
@@ -38,7 +39,7 @@ impl Default for Cli {
 }
 
 pub const USAGE: &str = "usage: goofi [--port N] [--bind HOST] \
-     [--extra-nodes DIR] [--list-nodes] [--headless] [--debug] [--demo] [--load PATCH]";
+     [--extra-nodes DIR] [--headless] [--debug] [--demo] [--load PATCH]";
 
 /// The port with no door naming one.
 pub const DEFAULT_PORT: u16 = 8000;
@@ -56,7 +57,6 @@ pub fn parse_args<I: Iterator<Item = String>>(mut args: I) -> Result<Cli, String
             }
             "--bind" => cli.bind = need(args.next())?,
             "--extra-nodes" => cli.extra_nodes.push(need(args.next())?),
-            "--list-nodes" => cli.list_nodes = true,
             "--headless" => cli.headless = true,
             "--debug" => cli.debug = true,
             "--demo" => cli.demo = true,

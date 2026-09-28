@@ -23,13 +23,13 @@ fn the_serve_command_line_reads_its_flags_and_names_what_it_refuses() {
     let parse = |args: &[&str]| goofi_cli::parse_args(args.iter().map(|s| s.to_string()));
     let bare = parse(&[]).expect("no arguments is a valid invocation");
     assert_eq!((bare.port, bare.bind.as_str()), (None, "127.0.0.1"), "the port is the doors' to decide");
-    let cli = parse(&["--port", "9001", "--extra-nodes", "theirs", "--bind", "a", "--list-nodes",
+    let cli = parse(&["--port", "9001", "--extra-nodes", "theirs", "--bind", "a",
                       "--extra-nodes", "mine", "--bind", "0.0.0.0", "--load", "patch.gfi"])
         .expect("a well-formed invocation");
     assert_eq!((cli.port, cli.bind.as_str(), cli.load.as_deref()), (Some(9001), "0.0.0.0", Some("patch.gfi")),
                "a repeated --bind replaces");
     assert_eq!(cli.extra_nodes, ["theirs", "mine"], "…while --extra-nodes adds");
-    assert!(cli.list_nodes && !cli.help);
+    assert!(!cli.boot_only && !cli.help, "the boot-only door is the environment's, never a flag");
     for flag in ["--port", "--bind", "--extra-nodes", "--load"] {
         let err = parse(&[flag]).expect_err(&format!("`{flag}` alone must not be ignored"));
         assert!(err.contains(flag), "the message names the flag: {err}");

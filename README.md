@@ -56,14 +56,14 @@ nothing at every route.
 `GOOFI_HEADLESS=1` is `--headless` spelled as an environment variable, and it applies to the build
 as well: set for `cargo build`, it leaves the app out of the binary entirely — no Node.js needed,
 and the result is headless for life, with no flag to remember at every run. `GOOFI_DEBUG=1` is
-`--debug` the same way.
+`--debug` the same way. `GOOFI_BOOT_ONLY=1` boots the node library and exits without serving,
+which is what a CI job runs to prove the build; it has no flag.
 
 | Flag | Default | Effect |
 | --- | --- | --- |
 | `--port N` | `8000` | The port to serve on. |
 | `--bind HOST` | `127.0.0.1` | The address to serve on. Anything beyond this machine warns: there is no auth, and `/term` is a real shell. |
 | `--extra-nodes ROOT` | — | A folder of node files, scanned after the shipped bundles and before the open patch's own workspace. Repeatable; a later root wins a type name it shares with an earlier one. |
-| `--list-nodes` | — | Print the registered node types and exit. |
 | `--headless` | — | Serve the API alone — `/control`, `/data`, `/term`, `/mcp`. The app's routes are never mounted. |
 | `--demo` | — | Withhold the doors a public instance cannot offer: `dir`, `agent`, session save/load and `library save` leave the op table, and `/exec`, `/mcp`, `/term` and `/patch.gfi` are never mounted. `GOOFI_DEMO=1` is the same switch. Not a sandbox. |
 | `--debug` | — | Open `/dev/*`: the UI primitive gallery at `/dev/ui`, and the other development surfaces. Shut otherwise. |

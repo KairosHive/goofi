@@ -45,7 +45,9 @@ jobs:
           cargo test --workspace --no-run 2>&1 | tee build.log
           ! grep -n '^warning' build.log
       # One boot fills the node build dir with the Python probes every test binary would otherwise take.
-      - run: cargo run -p goofi-cli -- --headless --list-nodes
+      - run: cargo run -p goofi-cli -- --headless
+        env:
+          GOOFI_BOOT_ONLY: "1"
       # One invocation over the whole workspace, so the package set and its unified features match
       # the builds above and nothing is compiled a second time.
       - name: The situations with a binary of their own
@@ -119,7 +121,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
-      - run: cargo run -p goofi-cli -- --headless --list-nodes
+      - run: cargo run -p goofi-cli -- --headless
+        env:
+          GOOFI_BOOT_ONLY: "1"
       # Windows only boots: iceoryx2 cannot create a listener under the session's root there yet,
       # and every situation opens one. Drop both conditions once it can.
       - name: Situations

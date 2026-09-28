@@ -74,4 +74,4 @@ Defects found in a Windows audit on 2026-09-24. The fix for each is still to be 
 - The e2e agent specs need a POSIX shell (`tests/e2e/globalSetup.ts` pins `sh`).
 - The child-stops-when-goofi-dies test (`goofi-tests` `children.rs`) is unix-only; the Windows
   liveness pipe has no test.
-- Windows CI only boots `--headless --list-nodes`; it runs no situation.
+- Windows CI only boots (`GOOFI_BOOT_ONLY=1 goofi --headless`); it runs no situation.
