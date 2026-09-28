@@ -5,6 +5,7 @@
 	import { selection } from '$lib/stores/selection.svelte';
 	import { workspace } from 'panelty';
 	import { harnesses, harnessLabel } from '$lib/stores/harness.svelte';
+	import { presence } from '$lib/stores/presence.svelte';
 	import { perfStats } from '$lib/api/perfStats.svelte';
 	import { activeOrOnlyEditor } from '$lib/panels/editorCommands';
 	import { tick, untrack, type Snippet } from 'svelte';
@@ -31,6 +32,7 @@
 	const ws = workspace();
 	const p = perfStats();
 	const hs = harnesses();
+	const pr = presence();
 
 	// The recording, as the backend last pushed it — the elapsed time is READ, never counted here.
 	const rec = $derived(g.record);
@@ -371,6 +373,12 @@
 		<!-- The connection speaks only when it needs attention, and never spills into a menu. -->
 		{#if g.disconnected}
 			<Badge tone="warning" data-testid="topbar-connection">disconnected</Badge>
+		{/if}
+		<!-- Only company is worth a word: alone, the count says nothing. -->
+		{#if pr.peers.length > 1}
+			<Badge tone="accent" title="Browsers in this patch" data-testid="topbar-peers"
+				><Icon name="users" />{pr.peers.length}</Badge
+			>
 		{/if}
 		{#if hs.running > 0}
 			<Button

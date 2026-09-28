@@ -8,6 +8,8 @@
 	import AgentClose from '$lib/app/AgentClose.svelte';
 	import RecoverDialog from '$lib/app/RecoverDialog.svelte';
 	import TitleTip from '$lib/app/TitleTip.svelte';
+	import PresenceOverlay from '$lib/app/PresenceOverlay.svelte';
+	import { presence } from '$lib/stores/presence.svelte';
 	import { Tabs as WorkspaceTabs } from 'panelty';
 	import { Panels as WorkspaceView } from 'panelty';
 	import { registerAppPanels } from '$lib/panels/register';
@@ -181,7 +183,9 @@
 		window.addEventListener('keydown', onKeydown);
 		window.addEventListener('beforeunload', onBeforeUnload);
 		const offProto = getControl().onProtocolMismatch(() => (protocolMismatch = true));
+		const leave = presence().start();
 		return () => {
+			leave();
 			disposed = true;
 			offPlugins();
 			cleanup?.();
@@ -211,6 +215,7 @@
 			<WorkspaceTabs />
 		{/snippet}
 	</TopBar>
+	<PresenceOverlay />
 	<div class="main">
 		<WorkspaceView />
 		<ErrorPanel onFocus={focusError} />

@@ -698,6 +698,27 @@ test.describe('the control socket', () => {
 				await expect.poll(() => replicaNodes(page)).toContain(theirs);
 			});
 
+			await test.step('each tab counts the other, sees its pointer, and loses it across a tab switch', async () => {
+				for (const tab of [page, other]) await expect(tab.getByTestId('topbar-peers')).toHaveText('2');
+				const box = other.viewportSize()!;
+				await page.mouse.move(200, 300);
+				await page.mouse.move(240, 320, { steps: 3 });
+				const cursor = other.getByTestId('peer-cursor');
+				await expect(cursor).toHaveCount(1);
+				// Fractions of the window, so the point lands where this window's 240,320 is.
+				const mine = page.viewportSize()!;
+				await expect
+					.poll(async () => {
+						const at = (await cursor.boundingBox())!;
+						return Math.abs(at.x + at.width / 2 - (240 / mine.width) * box.width);
+					})
+					.toBeLessThan(4);
+				await other.evaluate(() => (window as any).goofi.commands.addTab());
+				await expect(other.getByTestId('peer-cursor'), 'a peer on another tab is not drawn').toHaveCount(0);
+				await page.mouse.move(260, 330);
+				await expect(other.getByTestId('peer-cursor')).toHaveCount(0);
+			});
+
 			await test.step('both tabs and the manager hold ONE document', async () => {
 				const truth = await backendNodes(page);
 				expect(truth.sort()).toEqual([mine, theirs].sort());

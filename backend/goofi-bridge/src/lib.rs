@@ -17,6 +17,7 @@ pub mod ops;
 pub mod plugins;
 mod origin;
 mod patchfile;
+pub mod presence;
 mod record;
 pub mod reducer;
 pub mod schemas;
@@ -130,6 +131,8 @@ pub struct AppState {
     bound: Arc<Mutex<std::net::SocketAddr>>,
     /// The spawned agent harnesses and their PTYs.
     pub harnesses: Arc<term::Harnesses>,
+    /// The browsers in the patch right now, and where their pointers are.
+    pub presence: Arc<Mutex<presence::Presence>>,
     /// The one recorder every engine writes its armed streams to. Whether it runs is RUNTIME —
     /// `record status` and the `record_changed` event carry it, never the document.
     pub recorder: Arc<goofi_record::Recorder>,
@@ -233,6 +236,7 @@ impl AppState {
             save_path: Arc::new(Mutex::new(None)),
             bound: Arc::new(Mutex::new(([127, 0, 0, 1], 8000).into())),
             harnesses: Arc::new(term::Harnesses::default()),
+            presence: Arc::new(Mutex::new(presence::Presence::default())),
             recorder,
             record_drain: Arc::new(goofi_transport::Halt::default()),
             stopping: Arc::new(goofi_transport::Halt::default()),
@@ -486,6 +490,13 @@ fn routes(state: AppState) -> Router {
                  ws: WebSocketUpgrade,
                  State(state): State<AppState>| async {
                 ws.on_upgrade(move |socket| handle_params(socket, state, node))
+            }),
+        )
+        // The browsers in the patch and their pointers; a tab is a peer while its socket is open.
+        .route(
+            "/presence",
+            any(|ws: WebSocketUpgrade, State(state): State<AppState>| async {
+                ws.on_upgrade(move |socket| async move { presence::handle(socket, &state.presence).await })
             }),
         )
         // One stream per (node, slot): each connection sends its viewers' ViewSpecs inband.

@@ -442,6 +442,7 @@ const ROUTES: &[(&str, &str, u16)] = &[
     ("/control", "WS", 101),
     ("/data/deadbeef/out", "WS", 101),
     ("/params/deadbeef", "WS", 101),
+    ("/presence", "WS", 101),
     ("/term/no-such-instance", "WS", 101),
     ("/mcp", "POST", 200),
     // 400, not 200: `/exec` refuses the probe's empty body for its own reason, and that reason
@@ -586,4 +587,59 @@ async fn three_devices_edit_one_patch_at_once_and_end_on_the_same_document() {
         assert_eq!(d.read_at(&["variables", &format!("patch.g{i}"), "value"]), Some(j!(i as f64)),
                    "device B's variable g{i}");
     }
+}
+
+/// The next JSON frame on a `/presence` socket.
+async fn presence_frame(ws: &mut Ws) -> Value {
+    loop {
+        match ws.next().await {
+            Some(Ok(Message::Text(t))) => return serde_json::from_str(t.as_str()).unwrap(),
+            Some(Ok(_)) => continue,
+            other => panic!("the presence socket ended: {other:?}"),
+        }
+    }
+}
+
+/// Read `/presence` frames until one satisfies `want`.
+async fn presence_until(ws: &mut Ws, what: &str, want: impl Fn(&Value) -> bool) -> Value {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let frame = tokio::time::timeout_at(deadline, presence_frame(ws)).await
+            .unwrap_or_else(|_| panic!("no presence frame said: {what}"));
+        if want(&frame) {
+            return frame;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_tab_is_a_peer_while_its_presence_socket_is_open_and_its_pointer_reaches_the_others() {
+    let g = Goofi::new();
+    let base = g.serve().await;
+    let (mut one, _) = tokio_tungstenite::connect_async(format!("{base}/presence")).await.unwrap();
+    let me = presence_frame(&mut one).await;
+    let my_id = me["you"].as_u64().expect("a peer id");
+    assert!(me["hue"].as_u64().is_some_and(|h| h < 360), "a hue to draw in: {me}");
+    presence_until(&mut one, "a roster of one", |f| f["peers"].as_array().is_some_and(|p| p.len() == 1)).await;
+
+    let (mut two, _) = tokio_tungstenite::connect_async(format!("{base}/presence")).await.unwrap();
+    let other = presence_frame(&mut two).await;
+    assert_ne!(other["you"], me["you"], "each socket is its own peer");
+    assert_ne!(other["hue"], me["hue"], "with its own colour");
+    for (ws, who) in [(&mut one, "the first"), (&mut two, "the second")] {
+        presence_until(ws, &format!("{who} sees a roster of two"),
+                       |f| f["peers"].as_array().is_some_and(|p| p.len() == 2)).await;
+    }
+
+    // A pointer is fractions of the window and the tab it is on; it reaches every peer as the
+    // sender's id and hue, and a leave takes it back.
+    one.send(Message::Text(r#"{"tab":"tab-1","x":0.25,"y":0.5}"#.into())).await.unwrap();
+    let seen = presence_until(&mut two, "the pointer", |f| f.get("cursor").is_some()).await;
+    assert_eq!(seen["cursor"], j!({ "id": my_id, "hue": me["hue"], "tab": "tab-1", "x": 0.25, "y": 0.5 }));
+    one.send(Message::Text(r#"{"leave":true}"#.into())).await.unwrap();
+    presence_until(&mut two, "the leave", |f| f["gone"] == j!(my_id)).await;
+
+    // The close is the leave: no heartbeat, nothing to expire.
+    drop(one);
+    presence_until(&mut two, "the roster of one again", |f| f["peers"].as_array().is_some_and(|p| p.len() == 1)).await;
 }
