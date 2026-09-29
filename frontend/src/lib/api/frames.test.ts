@@ -41,7 +41,7 @@ const line = (max: number) => ({
 	dtype: 'array' as const,
 	ndim: [['le', 3]] as [import('$lib/viewers/capacity').DimCmp, number][],
 	dims: [],
-	reduce: [{ dim: -1, max, method: 'envelope' as const }]
+	reduce: [{ dim: -1, max }]
 });
 
 const opsOf = (w: MockWorker, op: string): unknown[] =>
@@ -62,10 +62,10 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-describe('paint-rate accounting', () => {
-	it('records one paint per flush, however many streams painted in it', async () => {
-		// The HUD's "fps" is flushes a second, not the sum of the streams' rates: two streams is
-		// the smallest fixture that tells the two apart.
+describe('one paint loop', () => {
+	it('delivers every stream of a batch at once, and takes the paint count from the worker', async () => {
+		// The worker's flush is the page's one paint loop: a batch is one of its flushes. Nothing
+		// here paints on its own, so the HUD's "fps" is the worker's count and never a sum of two.
 		const { perfStats } = await import('./perfStats.svelte');
 		const delivered = vi.spyOn(perfStats(), 'delivered');
 		const gotA: DataFrame[] = [];
@@ -74,46 +74,17 @@ describe('paint-rate accounting', () => {
 		const offB = bind('osc-b', 'out', (f) => gotB.push(f));
 		await settle(); // the reconcile opens the streams
 		const w = MockWorker.instances[0];
-		w.emit({ node: 'osc-a', slot: 'out', frame: { shape: [1] } as unknown as DataFrame });
-		w.emit({ node: 'osc-b', slot: 'out', frame: { shape: [2] } as unknown as DataFrame });
-		await vi.advanceTimersByTimeAsync(40); // past the paint scheduler → ONE flush
-		// The fixture is only honest if both streams really painted in that one flush.
-		expect(gotA.length, 'stream A painted').toBe(1);
-		expect(gotB.length, 'stream B painted').toBe(1);
-		expect(delivered, 'one flush is one paint, not one per slot').toHaveBeenCalledTimes(1);
-
-		// …and it is a rate, not a latch: the next flush counts too.
-		w.emit({ node: 'osc-a', slot: 'out', frame: { shape: [3] } as unknown as DataFrame });
-		w.emit({ node: 'osc-b', slot: 'out', frame: { shape: [4] } as unknown as DataFrame });
-		await vi.advanceTimersByTimeAsync(40);
-		expect(delivered, 'a second flush is a second paint').toHaveBeenCalledTimes(2);
-		offA();
-		offB();
-	});
-});
-
-describe('the per-flush budget', () => {
-	it('defers the second slot when the first one’s draw spends the budget', async () => {
-		// The callbacks run synchronously inside the flush, so a slow draw is what the budget sees;
-		// a draw that ran in a later microtask would measure microseconds and never engage.
-		let t = 0;
-		vi.spyOn(performance, 'now').mockImplementation(() => t);
-		const gotA: DataFrame[] = [];
-		const gotB: DataFrame[] = [];
-		const offA = bind('osc-a', 'out', (f) => {
-			gotA.push(f);
-			t += 10; // a draw past the 8 ms budget
+		w.emit({
+			batch: [
+				{ node: 'osc-a', slot: 'out', frame: { shape: [1] } as unknown as DataFrame },
+				{ node: 'osc-b', slot: 'out', frame: { shape: [2] } as unknown as DataFrame }
+			]
 		});
-		const offB = bind('osc-b', 'out', (f) => gotB.push(f));
-		await settle();
-		const w = MockWorker.instances[0];
-		w.emit({ node: 'osc-a', slot: 'out', frame: { shape: [1] } as unknown as DataFrame });
-		w.emit({ node: 'osc-b', slot: 'out', frame: { shape: [2] } as unknown as DataFrame });
-		await vi.advanceTimersByTimeAsync(20);
-		expect(gotA.length, 'the first slot painted').toBe(1);
-		expect(gotB.length, 'the second waits for the next flush').toBe(0);
-		await vi.advanceTimersByTimeAsync(100);
-		expect(gotB.length, 'and is not forgotten').toBe(1);
+		expect(gotA.length, 'stream A delivered in the batch').toBe(1);
+		expect(gotB.length, 'stream B delivered in the same batch').toBe(1);
+		expect(delivered, 'a batch is not counted here').not.toHaveBeenCalled();
+		w.emit({ stats: { paints: 2, streams: [] } });
+		expect(delivered).toHaveBeenCalledWith(2);
 		offA();
 		offB();
 	});
@@ -131,8 +102,7 @@ describe('a joining viewer', () => {
 		const offA = bind('osc', 'out', (f) => gotA.push(f));
 		await settle();
 		const frame1 = { shape: [1] } as unknown as DataFrame;
-		MockWorker.instances[0].emit({ node: 'osc', slot: 'out', frame: frame1 });
-		await vi.advanceTimersByTimeAsync(40); // past the paint scheduler
+		MockWorker.instances[0].emit({ batch: [{ node: 'osc', slot: 'out', frame: frame1 }] });
 		expect(gotA, 'the first consumer painted the frame').toEqual([frame1]);
 
 		// The late joiner: no new worker frame, no timers — the cached frame arrives at once.
@@ -159,74 +129,49 @@ describe('a joining viewer', () => {
 });
 
 describe('a held frame’s stamps', () => {
-	it('land on the latest frame as a new object, without a paint', async () => {
+	it('land on the latest frame as a new object, without a delivery', async () => {
 		// The reducer sends a frame that says what the last one said as its stamps alone. The
 		// metadata panel polls `latestFrame`, so the stamps must show there; the viewers drew
-		// nothing new, so no callback runs and no paint is counted.
+		// nothing new, so no callback runs.
 		const got: DataFrame[] = [];
 		const off = bind('osc', 'out', (f) => got.push(f));
 		await settle();
 		const w = MockWorker.instances[0];
 		const frame = { dtype: 'ARRAY', data: { dtype: '<f4', shape: [1], values: [3] }, meta: { time: 1, index: 1 } };
-		w.emit({ node: 'osc', slot: 'out', frame });
-		await vi.advanceTimersByTimeAsync(40);
+		w.emit({ batch: [{ node: 'osc', slot: 'out', frame }] });
 		expect(got.length).toBe(1);
 		const before = latestFrame('osc', 'out');
-		w.emit({ node: 'osc', slot: 'out', stamps: { time: 2, index: 2 } });
-		await vi.advanceTimersByTimeAsync(40);
+		w.emit({ batch: [{ node: 'osc', slot: 'out', stamps: { time: 2, index: 2 } }] });
 		const after = latestFrame('osc', 'out');
 		expect(after).not.toBe(before);
 		expect(after?.meta).toEqual({ time: 2, index: 2 });
 		expect(after?.data, 'the body is the held one').toBe(frame.data);
-		expect(got.length, 'stamps alone paint nothing').toBe(1);
-		// Stamps that land between a frame's arrival and its paint ride that frame to the screen.
-		const next = { ...frame, data: { ...frame.data, values: [4] } };
-		w.emit({ node: 'osc', slot: 'out', frame: next });
-		w.emit({ node: 'osc', slot: 'out', stamps: { time: 3, index: 3 } });
-		await vi.advanceTimersByTimeAsync(40);
-		expect(got.at(-1)?.meta).toEqual({ time: 3, index: 3 });
-		expect(got.at(-1)?.data).toBe(next.data);
+		expect(got.length, 'stamps alone deliver nothing').toBe(1);
 		off();
 	});
 });
 
 describe('per-stream drop accounting', () => {
-	it('attributes a coalesced frame to the stream that dropped it, not to the app', async () => {
-		// A "drop" is latest-wins coalescing: a frame overwritten before it painted. It was summed
-		// app-wide beside an fps counter that is emphatically NOT a sum, so the pair could not be
-		// read together. TWO streams is the smallest fixture that can tell "per stream" from
-		// "app-wide" — with one stream both arithmetics give the same number.
-		const offA = bind('osc-a', 'out');
-		const offB = bind('osc-b', 'out');
-		await settle();
-		const w = MockWorker.instances[0];
-		// Two frames on A before any flush → the first is coalesced away. B gets one, so it drops none.
-		w.emit({ node: 'osc-a', slot: 'out', frame: { shape: [1] } as unknown as DataFrame });
-		w.emit({ node: 'osc-a', slot: 'out', frame: { shape: [2] } as unknown as DataFrame });
-		w.emit({ node: 'osc-b', slot: 'out', frame: { shape: [3] } as unknown as DataFrame });
-		await vi.advanceTimersByTimeAsync(600); // past the meter window
-
-		expect(dropRate('osc-a', 'out')).toBeGreaterThan(0);
-		expect(dropRate('osc-b', 'out'), 'the quiet stream is not charged for its neighbour').toBe(0);
-		offA();
-		offB();
-	});
-
-	it('takes a drawn stream’s drops from the worker, which coalesces there, and its head', async () => {
+	it('takes a stream’s drops from the worker, which coalesces there, and a drawn stream’s head', async () => {
+		// The worker coalesces every stream, drawn there or read here, so a drop is counted once,
+		// by the stream that overwrote a frame — never summed app-wide beside the paint count.
 		// A viewer that draws in the worker asks for no frame here: the stream opens without
-		// frames, what the worker counts is the stream's rate, and the head is all this thread holds.
+		// frames, and the head is all this thread holds.
 		const off = bindViewer('osc', 'out', 'd', [line(256)], null);
 		await settle();
 		const w = MockWorker.instances[0];
 		expect(opsOf(w, 'sub')).toEqual([{ op: 'sub', node: 'osc', slot: 'out', frames: false }]);
-		w.emit({ node: 'osc', slot: 'out', head: { dtype: 'ARRAY', meta: { index: 7 }, array: { dtype: '<f4', shape: [8] } } });
+		w.emit({ batch: [{ node: 'osc', slot: 'out', head: { dtype: 'ARRAY', meta: { index: 7 }, array: { dtype: '<f4', shape: [8] } } }] });
 		expect(latestFrame('osc', 'out')).toBeNull();
 		expect(latestHead('osc', 'out')?.meta.index).toBe(7);
-		w.emit({ node: 'osc', slot: 'out', stamps: { index: 8 } });
+		w.emit({ batch: [{ node: 'osc', slot: 'out', stamps: { index: 8 } }] });
 		expect(latestHead('osc', 'out')?.meta.index, 'stamps land on the head').toBe(8);
+		bind('quiet', 'out');
+		await settle();
 		w.emit({ stats: { paints: 3, streams: [['osc', 'out', 4, 2]] } });
 		await vi.advanceTimersByTimeAsync(600);
 		expect(dropRate('osc', 'out')).toBeGreaterThan(0);
+		expect(dropRate('quiet', 'out'), 'the quiet stream is not charged for its neighbour').toBe(0);
 		// A reader joining the drawn stream turns the frames on, and leaves the drop count with the worker.
 		const offR = bind('osc', 'out');
 		await settle();

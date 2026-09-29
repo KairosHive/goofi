@@ -9,7 +9,7 @@ import type { ProbeBox } from '$lib/viewers/hover';
 import { isRenderable, type ViewerKind } from '$lib/viewers/kind';
 import type { SettingsMap } from '$lib/viewers/settingsSchema';
 import { summaryOf } from '$lib/viewers/viewMeta';
-import { headOf, type ToMain, type ToWorker } from './dataProtocol';
+import { headOf, type StreamNews, type ToMain, type ToWorker } from './dataProtocol';
 import { dataUrl } from './dataUrl';
 import { streamKey } from './streamKey';
 
@@ -30,11 +30,13 @@ interface SlotState {
 	drawings: Set<DrawingState>;
 	/** The last decoded frame, replayed to a drawing that attaches. */
 	latest: DataFrame | null;
-	/** Since the last stats report: what the wire delivered, and what arrived over an undrawn frame. */
+	/** What the main thread is owed at the next flush, latest-wins. */
+	news: Omit<StreamNews, 'node' | 'slot'> | null;
+	/** Since the last stats report: what the wire delivered, and what arrived over an unflushed frame. */
 	arrivals: number;
 	drops: number;
-	/** A frame arrived and no draw has run since. */
-	undrawn: boolean;
+	/** A frame arrived and no flush has run since. */
+	unflushed: boolean;
 }
 
 interface DrawingState {
@@ -106,9 +108,9 @@ function collectBuffers(frame: DataFrame, out: Set<ArrayBufferLike>): void {
 }
 
 // ── paints and stats ─────────────────────────────────────────────────────────────────────────
-// A drawing renders once per animation frame from its stream's latest frame, however many
-// frames, sizes or settings reached it meanwhile: a resize that posts a size per pointer event
-// must not replay every size. One paint per frame in which something drew.
+// THE page's one paint loop. A flush renders every stale drawing from its stream's latest frame,
+// however many frames, sizes or settings reached it meanwhile, and hands the main thread what
+// its readers are owed in ONE message. A paint is a flush in which something was drawn or sent.
 const schedule =
 	typeof requestAnimationFrame === 'function'
 		? requestAnimationFrame
@@ -116,24 +118,39 @@ const schedule =
 const stale = new Set<DrawingState>();
 let flushScheduled = false;
 let paints = 0;
-function invalidate(d: DrawingState): void {
-	stale.add(d);
+function requestFlush(): void {
 	if (flushScheduled) return;
 	flushScheduled = true;
 	schedule(flush);
 }
+function invalidate(d: DrawingState): void {
+	stale.add(d);
+	requestFlush();
+}
 function flush(): void {
 	flushScheduled = false;
-	let drew = false;
+	let painted = false;
 	for (const d of stale) {
 		if (!d.slot?.latest) continue;
 		render(d, d.slot.latest);
-		drew = true;
+		painted = true;
 	}
 	stale.clear();
-	if (!drew) return;
-	paints++;
-	for (const st of slots.values()) st.undrawn = false;
+	const batch: StreamNews[] = [];
+	const transfer = new Set<ArrayBufferLike>();
+	for (const st of slots.values()) {
+		st.unflushed = false;
+		if (!st.news) continue;
+		if (st.news.frame) {
+			painted = true;
+			// Its buffers move with it unless a drawing here still holds them.
+			if (st.drawings.size === 0) collectBuffers(st.news.frame, transfer);
+		}
+		batch.push({ node: st.node, slot: st.slot, ...st.news });
+		st.news = null;
+	}
+	if (batch.length > 0) send({ batch }, Array.from(transfer) as Transferable[]);
+	if (painted) paints++;
 }
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 function report(): void {
@@ -233,9 +250,10 @@ function ensureSlot(node: string, slot: string): SlotState {
 			frames: false,
 			drawings: new Set(),
 			latest: null,
+			news: null,
 			arrivals: 0,
 			drops: 0,
-			undrawn: false
+			unflushed: false
 		};
 		slots.set(k, st);
 	}
@@ -364,16 +382,20 @@ self.addEventListener('message', (e: MessageEvent) => {
 	}
 });
 
-/** Decode one frame, draw it where it is wanted, and hand it on: a held frame's stamps go as
- * the small message they are; the frame itself goes to the main thread only where a reader
- * asked, its buffers transferred unless a drawing here still holds them. */
+/** Decode one frame and mark what it changes for the next flush: the drawings it feeds, and the
+ * news the main thread is owed — the frame where a reader asked, else its head. A held frame's
+ * stamps restamp whatever is pending, or go alone. */
 function arrive(st: SlotState, raw: ArrayBuffer): void {
 	let frame: DataFrame;
 	try {
 		const stamps = decodeStamps(raw);
 		if (stamps) {
 			if (st.latest) st.latest = { ...st.latest, meta: { ...st.latest.meta, ...stamps } };
-			send({ node: st.node, slot: st.slot, stamps });
+			const n = st.news;
+			if (n?.frame) n.frame = { ...n.frame, meta: { ...n.frame.meta, ...stamps } };
+			else if (n?.head) n.head = { ...n.head, meta: { ...n.head.meta, ...stamps } };
+			else st.news = { stamps: { ...n?.stamps, ...stamps } };
+			requestFlush();
 			return;
 		}
 		frame = decodeData(raw);
@@ -382,17 +404,10 @@ function arrive(st: SlotState, raw: ArrayBuffer): void {
 	}
 	st.arrivals++;
 	st.latest = frame;
-	if (st.drawings.size > 0) {
-		// A frame over one no draw has shown yet is a drop; a reader's own coalescing is its own.
-		if (st.undrawn) st.drops++;
-		st.undrawn = true;
-		for (const d of st.drawings) invalidate(d);
-	}
-	if (!st.frames) {
-		send({ node: st.node, slot: st.slot, head: headOf(frame) });
-		return;
-	}
-	const transfer = new Set<ArrayBufferLike>();
-	if (st.drawings.size === 0) collectBuffers(frame, transfer);
-	send({ node: st.node, slot: st.slot, frame }, Array.from(transfer) as Transferable[]);
+	// A frame over one no flush has shown yet is a drop, whoever would have drawn it.
+	if (st.unflushed) st.drops++;
+	st.unflushed = true;
+	for (const d of st.drawings) stale.add(d);
+	st.news = st.frames ? { frame } : { head: headOf(frame) };
+	requestFlush();
 }

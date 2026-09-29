@@ -266,6 +266,16 @@ test('streams served at the cap paint together, so the page paints at the cap', 
 			.toBe(true);
 		const fps = async () => Number((await page.getByText(/^\d+ fps$/).first().textContent())?.split(' ')[0]);
 		expect(await fps(), 'paints a second, with three streams at a 30 fps cap').toBeLessThanOrEqual(36);
+
+		// Producers slower than the cap emit at phases of their own; the reducer still serves each
+		// frame on the next tick of the grid, so they arrive together and the page paints no more.
+		for (const [k, n] of lfos.entries())
+			await page.evaluate(([u, f]) => (window as any).goofi.commands.updateParam(u, 'common', 'max_frequency', f), [n, 7 + 4 * k] as const);
+		const again = await emitted();
+		await expect
+			.poll(async () => (await emitted()).every((i, k) => i > again[k] + 20), { message: 'all three stream below the cap' })
+			.toBe(true);
+		expect(await fps(), 'paints a second, with three streams below the cap').toBeLessThanOrEqual(36);
 	} finally {
 		await resetPatch(page);
 	}

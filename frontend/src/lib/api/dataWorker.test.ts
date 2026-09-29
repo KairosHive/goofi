@@ -24,7 +24,7 @@ class MockSocket {
 	close(): void {}
 }
 
-const posted: { node: string; slot: string; frame?: unknown; stamps?: unknown }[] = [];
+const posted: { batch?: { node: string; slot: string; frame?: unknown; stamps?: unknown; head?: unknown }[] }[] = [];
 let inbound: (e: { data: unknown }) => void;
 
 beforeAll(async () => {
@@ -53,7 +53,8 @@ function stampsFrame(meta: Record<string, unknown>): ArrayBuffer {
 }
 
 describe('the data worker', () => {
-	it('declares specs and the display rate, and posts what each frame decodes to where it is read', () => {
+	it('declares specs and the display rate, and posts what each frame decodes in one batch per flush', () => {
+		vi.useFakeTimers();
 		inbound({ data: { op: 'sub', node: 'n', slot: 'out', frames: true } });
 		const ws = MockSocket.last;
 		ws.fire('open');
@@ -63,18 +64,27 @@ describe('the data worker', () => {
 
 		const frame = bytes(golden.entries.find((e) => e.name === 'array_f32_1d')!.hex);
 		ws.fire('message', { data: frame });
-		expect(posted.at(-1)).toMatchObject({ node: 'n', slot: 'out', frame: { dtype: 'ARRAY' } });
+		// Stamps that land before the flush ride the pending frame; nothing goes out until it.
 		ws.fire('message', { data: stampsFrame({ time: 2 }) });
-		expect(posted.at(-1)).toEqual({ node: 'n', slot: 'out', stamps: { time: 2 } });
+		expect(posted.length, 'nothing crosses before the flush').toBe(0);
+		vi.advanceTimersByTime(20);
+		expect(posted.at(-1)).toMatchObject({ batch: [{ node: 'n', slot: 'out', frame: { dtype: 'ARRAY', meta: { time: 2 } } }] });
+		ws.fire('message', { data: stampsFrame({ time: 3 }) });
+		vi.advanceTimersByTime(20);
+		expect(posted.at(-1)).toEqual({ batch: [{ node: 'n', slot: 'out', stamps: { time: 3 } }] });
 		const count = posted.length;
 		ws.fire('message', { data: new Uint8Array([1, 2, 3]).buffer });
+		vi.advanceTimersByTime(20);
 		expect(posted.length, 'a corrupt frame posts nothing and keeps the slot').toBe(count);
 
 		// A stream nobody reads on the main thread sends its head there, never the frame.
 		inbound({ data: { op: 'spec', node: 'n', slot: 'out', specs: [], frames: false } });
 		ws.fire('message', { data: bytes(golden.entries.find((e) => e.name === 'array_f32_1d')!.hex) });
-		const last = posted.at(-1) as { head?: { dtype: string; array?: { shape: number[] } } };
+		vi.advanceTimersByTime(20);
+		const last = posted.at(-1)!.batch![0] as { frame?: unknown; head?: { dtype: string; array?: { shape: number[] } } };
+		expect(last.frame).toBeUndefined();
 		expect(last.head?.dtype).toBe('ARRAY');
 		expect(last.head?.array?.shape.length).toBe(1);
+		vi.useRealTimers();
 	});
 });

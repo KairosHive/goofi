@@ -17,7 +17,7 @@
 	<span
 		class="hud"
 		data-testid="perf-hud"
-		title="Viewer paints per second: how often the page draws a new batch of frames, whatever the node count."
+		title="Paints per second: how often the page draws a new batch of frames, whatever the stream count. Streams served together paint together, so this reads the viewer cap at rest."
 	>
 		<span class="fps">{p.fps.toFixed(0)} fps</span>
 	</span>

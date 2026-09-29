@@ -1,6 +1,6 @@
-/** The viewer registry: what each stream is asked for, and the frames this thread reads. A
- * drawing consumes its frames in the worker; a reader here gets them on ONE rAF flush per tick,
- * most-starved slot first, with a per-frame time budget. */
+/** The viewer registry: what each stream is asked for, and the frames this thread reads. The
+ * worker owns the page's one paint loop: a drawing consumes its frames there, and a reader here
+ * gets them in the batch each of its flushes sends. */
 import { closeStream, declareRate, listen, openStream, sendSpecs } from './data';
 import { headOf, type FrameHead } from './dataProtocol';
 import { perfStats } from './perfStats.svelte';
@@ -24,14 +24,11 @@ interface Slot {
 	/** Every viewer bound to this stream, by its own stable token. THE registry: nothing else
 	 *  counts viewers, and nothing else decides what the backend is asked for. */
 	viewers: Map<string, BoundViewer>;
-	pending: DataFrame | null;
 	current: DataFrame | null;
 	/** What the last frame said of itself, for a stream no reader here holds. */
 	head: FrameHead | null;
-	/** When this slot last delivered, for most-starved-first fairness. */
-	lastFlush: number;
-	/** This stream's own coalescing rate — per slot, because a drop belongs to the stream that
-	 * overwrote a frame. */
+	/** This stream's own coalescing rate, as the worker counts it — per slot, because a drop
+	 * belongs to the stream that overwrote a frame. */
 	drops: RateMeter;
 	/** What the WIRE delivered, which the paint rate cannot show: the cap the manager serves at
 	 * is invisible in a paint count, since a paint is capped either way. */
@@ -39,29 +36,11 @@ interface Slot {
 }
 
 const slots = new Map<string, Slot>();
-const dirty = new Set<Slot>();
-const FRAME_BUDGET_MS = 8;
 
 const nowMs =
 	typeof performance !== 'undefined' && typeof performance.now === 'function'
 		? (): number => performance.now()
 		: (): number => Date.now();
-
-const scheduleFlush =
-	typeof requestAnimationFrame === 'function'
-		? (fn: () => void): number => requestAnimationFrame(fn)
-		: (fn: () => void): number => setTimeout(fn, 16) as unknown as number;
-
-let scheduled = false;
-/** Paint what is pending on the next animation frame; the manager owns the rate it arrives at. */
-function requestFlush(): void {
-	if (scheduled) return;
-	scheduled = true;
-	scheduleFlush(() => {
-		scheduled = false;
-		flush();
-	});
-}
 
 let measured = false;
 /** Count animation frames for half a second and declare the display's rate to every socket, so
@@ -80,38 +59,6 @@ function measureDisplayRate(): void {
 	requestAnimationFrame(step);
 }
 
-function flush(): void {
-	const start = nowMs();
-	// Most-starved slot first, so the budget can never permanently defer a slot.
-	const queue = [...dirty].sort((a, b) => a.lastFlush - b.lastFlush);
-	let painted = 0;
-	for (const s of queue) {
-		// Always deliver at least one slot; after that, stop once over budget.
-		if (painted > 0 && nowMs() - start > FRAME_BUDGET_MS) break;
-		const frame = s.pending;
-		dirty.delete(s);
-		if (!frame) continue;
-		s.pending = null;
-		s.current = frame;
-		s.lastFlush = start;
-		painted++;
-		for (const { cb } of [...s.viewers.values()]) {
-			if (!cb) continue;
-			try {
-				cb(frame);
-			} catch (err) {
-				console.error('frame consumer crashed', err);
-			}
-		}
-		// A component viewer's draws run here, inside the budget; the worker's plots draw in their own frame.
-		flushSync();
-	}
-	// ONE paint per flush, not one per slot: that is the quantity the HUD names.
-	if (painted > 0) perfStats().delivered();
-	if (dirty.size > 0) requestFlush();
-}
-
-
 /** What the backend has been told to serve for a stream; absent means no stream is open. */
 const synced = new Map<string, string>();
 const reconciling = new Set<string>();
@@ -126,7 +73,6 @@ function reconcile(node: string, slot: string, k: string): void {
 	if (want === null) {
 		closeStream(node, slot);
 		synced.delete(k);
-		if (s) dirty.delete(s);
 		slots.delete(k);
 		return;
 	}
@@ -175,16 +121,25 @@ function ensureSlot(k: string): Slot {
 	if (!s) {
 		s = {
 			viewers: new Map(),
-			pending: null,
 			current: null,
 			head: null,
-			lastFlush: 0,
 			drops: new RateMeter(nowMs()),
 			arrivals: new RateMeter(nowMs())
 		};
 		slots.set(k, s);
 	}
 	return s;
+}
+
+function deliver(s: Slot, frame: DataFrame): void {
+	for (const { cb } of [...s.viewers.values()]) {
+		if (!cb) continue;
+		try {
+			cb(frame);
+		} catch (err) {
+			console.error('frame consumer crashed', err);
+		}
+	}
 }
 
 /** Bind a viewer to a (node, slot) stream under `token`, so several viewers of one slot collect
@@ -202,8 +157,7 @@ export function bindViewer(
 	const s = ensureSlot(k);
 	s.viewers.set(token, { cb, specs });
 	scheduleReconcile(node, slot, k);
-	// An open stream sends nothing new for a joiner, so replay the current frame to it alone —
-	// re-marking the slot dirty would repaint every settled viewer.
+	// An open stream sends nothing new for a joiner, so replay the current frame to it alone.
 	if (cb && s.current) {
 		try {
 			cb(s.current);
@@ -219,39 +173,31 @@ export function bindViewer(
 	};
 }
 
-/** Whether the worker draws this stream for a viewer here. */
-function drawn(s: Slot): boolean {
-	for (const v of s.viewers.values()) if (!v.cb) return true;
-	return false;
-}
-
 listen((m) => {
-	if ('frame' in m) {
-		// Everything the worker decodes for this thread lands here, latest-wins, painted on the next flush.
-		const s = slots.get(streamKey(m.node, m.slot));
-		if (!s) return;
-		// A pending frame overwritten before it painted is a drop, charged to THIS stream; where
-		// the worker draws the stream too, its count stands for both.
-		if (s.pending !== null && !drawn(s)) s.drops.dropped();
-		s.pending = m.frame;
-		s.head = null;
-		dirty.add(s);
-		requestFlush();
-	} else if ('head' in m) {
-		const s = slots.get(streamKey(m.node, m.slot));
-		if (s) s.head = m.head;
-	} else if ('stamps' in m) {
-		// A held frame's fresh stamps land on the pending frame, else the painted one, as a new
-		// object a poll sees; nothing is marked dirty, because nothing on screen changed.
-		const s = slots.get(streamKey(m.node, m.slot));
-		if (!s) return;
-		const restamp = (f: DataFrame): DataFrame => ({ ...f, meta: { ...f.meta, ...m.stamps } });
-		if (s.pending) s.pending = restamp(s.pending);
-		if (s.current) s.current = restamp(s.current);
-		else if (s.head) s.head = { ...s.head, meta: { ...s.head.meta, ...m.stamps } };
+	if ('batch' in m) {
+		// One flush of the worker: every stream's news at once, and the readers' components
+		// rendered in the same turn, so the page shows one batch, not one stream after another.
+		let delivered = false;
+		for (const n of m.batch) {
+			const s = slots.get(streamKey(n.node, n.slot));
+			if (!s) continue;
+			if (n.frame) {
+				s.current = n.frame;
+				s.head = null;
+				deliver(s, n.frame);
+				delivered = true;
+			} else if (n.head) {
+				s.head = n.head;
+			} else if (n.stamps) {
+				// A held frame's fresh stamps land as a new object a poll sees; nothing on screen changed.
+				const stamps = n.stamps;
+				if (s.current) s.current = { ...s.current, meta: { ...s.current.meta, ...stamps } };
+				else if (s.head) s.head = { ...s.head, meta: { ...s.head.meta, ...stamps } };
+			}
+		}
+		if (delivered) flushSync();
 	} else if ('stats' in m) {
-		// The worker's paints and, per stream, what the wire delivered and what its plots
-		// coalesced: a drop belongs to the stream whose frame was overwritten before a draw.
+		// The worker's paints and, per stream, what the wire delivered and what it coalesced.
 		if (m.stats.paints > 0) perfStats().delivered(m.stats.paints);
 		for (const [node, slot, arrivals, drops] of m.stats.streams) {
 			const s = slots.get(streamKey(node, slot));
@@ -285,8 +231,8 @@ export function latestFrame(node: string, slot: string): DataFrame | null {
 }
 
 /** What the latest frame said of itself: where a reader on this thread takes the frames, the
- * one it was given, never one still pending its flush; else what the worker told of a frame it
- * kept for a drawing. Null when nothing is subscribed or nothing has been handed over yet. */
+ * one it was given; else what the worker told of a frame it kept for a drawing. Null when
+ * nothing is subscribed or nothing has been handed over yet. */
 export function latestHead(node: string, slot: string): FrameHead | null {
 	const s = slots.get(streamKey(node, slot));
 	if (!s) return null;

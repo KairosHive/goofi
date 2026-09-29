@@ -45,10 +45,18 @@ export type ToWorker =
 	| { op: 'pointer'; id: number; at: { x: number; y: number; box: ProbeBox } | null }
 	| { op: 'drag'; id: number; dx: number; dy: number; box: ProbeBox };
 
+/** What one flush tells the main thread of a stream: its newest frame where a reader there asked,
+ * else its head, or the stamps alone where a held frame only moved in time. */
+export interface StreamNews {
+	node: string;
+	slot: string;
+	frame?: DataFrame;
+	head?: FrameHead;
+	stamps?: Record<string, unknown>;
+}
+
 export type ToMain =
-	| { node: string; slot: string; frame: DataFrame }
-	| { node: string; slot: string; stamps: Record<string, unknown> }
-	| { node: string; slot: string; head: FrameHead }
+	| { batch: StreamNews[] }
 	| { drawn: { id: number } & DrawnState }
 	| { hover: { id: number; hover: Hover | null } }
 	| { surface: { id: number; ok: boolean } }
