@@ -2,7 +2,7 @@
 //! wants reduced, and N specs merge into ONE plan per frame.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The Data kind a viewer draws; the tags are goofi-core's wire dtype tags, restated to keep
 /// this crate free of that dependency.
@@ -242,13 +242,14 @@ pub fn undeclared_axes(shape: &[usize]) -> Vec<PlannedAxis> {
         .collect()
 }
 
-/// Every admitted viewer's asks, folded per dim: `max(max)` and the union of the kernels. What a
-/// frame is then actually reduced to is [`plan`]'s business — this is the ask alone. `None` where
-/// NOTHING admits the frame: no viewer here can draw it, so none of them has asked for anything.
+/// Every admitted viewer's asks, folded per dim: `max(max)` and the union of the kernels. A dim an
+/// admitted viewer asks nothing of, it draws whole, so that dim is not reduced for anyone. `None`
+/// where NOTHING admits the frame: no viewer here can draw it, so none of them has asked for anything.
 fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<(Vec<PlannedAxis>, Depth)> {
     let ndim = frame.ndim();
     let mut order: Vec<usize> = Vec::new(); // first-seen dim order → stable output
     let mut folded: HashMap<usize, (usize, MethodSet)> = HashMap::new();
+    let mut whole: HashSet<usize> = HashSet::new();
     let mut admitted = 0usize;
     let mut depth = Depth::U8;
     for spec in specs {
@@ -257,6 +258,8 @@ fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<(Ve
         }
         admitted += 1;
         depth = depth.max(spec.depth);
+        let asked: HashSet<usize> = spec.reduce.iter().filter_map(|r| canon_dim(r.dim, ndim)).collect();
+        whole.extend((0..ndim).filter(|d| !asked.contains(d)));
         for r in &spec.reduce {
             let Some(d) = canon_dim(r.dim, ndim) else {
                 continue;
@@ -271,6 +274,7 @@ fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<(Ve
     }
     let axes: Vec<PlannedAxis> = order
         .iter()
+        .filter(|d| !whole.contains(d))
         .map(|&d| {
             let (mx, set) = folded[&d];
             PlannedAxis { dim: d, max: mx, method: set.resolve() }

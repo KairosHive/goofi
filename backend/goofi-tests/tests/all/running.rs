@@ -297,6 +297,18 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     assert_eq!(g.state.reducers.active_slots(), 1, "six viewers, one reducer");
     assert_eq!(g.state.reducers.subscribers(&key), 6);
 
+    // A viewer that asks nothing of a dim draws it whole, so the fold stops reducing that dim for
+    // everyone: the narrow ones now see the raw frame too, and the cap returns once it leaves.
+    let mut whole = Viewer::open(&base, &hex(osc), "out").await;
+    whole.view(j!([{ "dtype": "array", "ndim": [["le", 2]], "dims": [], "reduce": [] }])).await;
+    for v in [&mut whole, &mut wide, &mut narrow] {
+        let d = v.until(|d| !f32s(d).is_empty() && d.meta().reduced().is_none()).await;
+        assert!(f32s(&d).len() > 512, "the whole frame, not the fold of the others");
+    }
+    drop(whole);
+    eventually("the whole-frame viewer to leave", || g.state.reducers.subscribers(&key) == 6).await;
+    wide.until(|d| f32s(d).len() == 512).await;
+
     // A sub-patch boundary port is a NAMING indirection over this same stream — it never runs and
     // never holds a frame — so a viewer on one has to land on the reducer already here rather than
     // opening a second on a slot that produces nothing.
