@@ -120,16 +120,15 @@
 	.vs-rows {
 		display: grid;
 		grid-template-columns: max-content 1fr;
-		column-gap: var(--space-4);
-		row-gap: var(--space-2);
+		column-gap: var(--space-5);
+		row-gap: var(--space-3);
 		--number-width: 100%;
 	}
 	:global(.vs-menu) {
-		--popover-pad: var(--space-2);
 		--popover-min-width: 0;
 		/* This menu overhangs a small cog, which Popover's default --radius-md rounds visibly too much. */
 		--popover-radius: var(--radius-sm);
-		width: 212px;
+		width: 232px;
 		max-height: 70dvh;
 		display: flex;
 		flex-direction: column;

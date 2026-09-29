@@ -52,7 +52,7 @@ const SCHEMA: Record<ViewerKind, SettingDescriptor[]> = {
 		{ key: 'vmin', label: 'Min', type: 'number', default: -1, step: 0.1, showWhen: manual('auto') },
 		{ key: 'vmax', label: 'Max', type: 'number', default: 1, step: 0.1, showWhen: manual('auto') },
 		{ key: 'contours', label: 'Contour lines', type: 'toggle', default: false, showWhen: { key: 'mode', anyOf: ['topomap'] } },
-		{ key: 'top', label: 'Top edges %', type: 'number', default: 30, min: 1, max: 100, step: 1, showWhen: { key: 'mode', anyOf: ['ring', '3d'] } },
+		{ key: 'top', label: 'Edges %', type: 'number', default: 15, min: 1, max: 100, step: 1, showWhen: { key: 'mode', anyOf: ['ring', '3d'] } },
 		{ key: 'curve', label: 'Curve', type: 'number', default: 0.1, min: 0, max: 1, step: 0.1, showWhen: { key: 'mode', anyOf: ['3d'] } }
 	],
 	table: [{ key: 'decimals', label: 'Decimals', type: 'number', default: 3, min: 0, max: 10, step: 1 }],

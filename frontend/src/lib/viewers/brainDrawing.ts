@@ -217,7 +217,7 @@ export class BrainDrawing extends Base {
 	 * strong ones land on top. The window is the kept edges' own, so the colours span them. */
 	private edgesOf(arr: ArrayData, channels: Channel[], s: SettingsMap): Edge[] {
 		// The share of the edges drawn, strongest first: 100 is all of them.
-		const top = Math.min(100, Math.max(1, Number(s.top ?? 30)));
+		const top = Math.min(100, Math.max(1, Number(s.top ?? 15)));
 		const n = arr.shape[0];
 		const v = arr.values as ArrayLike<number>;
 		const out: Edge[] = [];
