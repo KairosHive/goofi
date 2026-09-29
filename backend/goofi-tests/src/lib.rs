@@ -564,6 +564,9 @@ pub struct Client {
     next_id: i64,
     actor: String,
     doc: GraphDoc,
+    /// The events a call read past on the way to its reply: an op's events and its reply cross
+    /// the socket in no promised order, so what a call skipped is what `event` reads first.
+    skipped: std::collections::VecDeque<Value>,
 }
 
 impl Client {
@@ -574,7 +577,7 @@ impl Client {
 
     pub async fn connect_as(base: &str, actor: &str) -> (Client, Value) {
         let (ws, _) = tokio_tungstenite::connect_async(format!("{base}/control")).await.unwrap();
-        let mut c = Client { ws, next_id: 1, actor: actor.into(), doc: GraphDoc::new() };
+        let mut c = Client { ws, next_id: 1, actor: actor.into(), doc: GraphDoc::new(), skipped: Default::default() };
         let hello = c.text().await;
         (c, hello["payload"].clone())
     }
@@ -627,14 +630,23 @@ impl Client {
                     None => Ok(m["result"].clone()),
                 };
             }
+            if m.get("event").is_some() {
+                self.skipped.push_back(m);
+            }
         }
     }
 
-    /// The next event named `name`, skipping the others.
+    /// The next event named `name`, skipping the others: one a call already read past, else the
+    /// socket's next.
     pub async fn event(&mut self, name: &str) -> Value {
+        let named = |m: &Value| m.get("event").and_then(Value::as_str) == Some(name);
+        if let Some(at) = self.skipped.iter().position(named) {
+            return self.skipped.remove(at).expect("found")["payload"].clone();
+        }
+        self.skipped.clear();
         loop {
             let m = self.text().await;
-            if m.get("event").and_then(Value::as_str) == Some(name) {
+            if named(&m) {
                 return m["payload"].clone();
             }
         }
