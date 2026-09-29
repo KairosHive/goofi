@@ -1214,9 +1214,9 @@
 			</div>
 		{/if}
 
+		<!-- Fixed and positioned in VIEWPORT coordinates, so both portal to <body>: `.panel-body`
+		     is a query container and must never become their containing block. -->
 		{#if menuOpen}
-			<!-- Fixed and positioned in VIEWPORT coordinates, so both portal to <body>: `.panel-body`
-			     is a query container and must never become their containing block. -->
 			<div
 				class="menu-overlay"
 				use:portal
@@ -1226,6 +1226,8 @@
 				}}
 				role="presentation"
 			></div>
+		{/if}
+		{#if menuOpen}
 			<div
 				class="menu-anchor"
 				bind:this={menuEl}

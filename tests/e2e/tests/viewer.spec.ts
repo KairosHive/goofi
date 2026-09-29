@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { waitForApp, resetPatch } from '../lib/app';
 import { addNode, frameSummary, selectNode, updateParam, waitForNode } from '../lib/goofi';
 import { rawCall } from '../lib/harness';
+import { backendDoc } from '../lib/raw';
 
 type Clip = { x: number; y: number; width: number; height: number };
 
@@ -330,6 +331,38 @@ test('the brain draws a scalp on the surface, names its channels in the DOM, and
 			await expect(feed.locator('.placed')).toHaveCount(0);
 			expect(await drag()).toEqual({ dx: 0, dy: 0 });
 		});
+	} finally {
+		await resetPatch(page);
+	}
+});
+
+test('the cog opens a card\'s settings, a click elsewhere closes them, and the header keeps its slot name', async ({ page }) => {
+	// The menu portals to <body> from between the cog and the slot name; a dismiss must remove the
+	// menu and nothing else of the header. A setting picked in it lands in the document.
+	await page.setViewportSize({ width: 1280, height: 800 });
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const osc = await addNode(page, 'LFO', [300, 200]);
+		await waitForNode(page, osc);
+		const card = page.locator(`.svelte-flow__node[data-id="${osc}"]`);
+		const name = card.getByTestId('slot-output').first();
+		const cog = card.getByTestId('viewer-settings-cog').first();
+		const menu = page.getByTestId('viewer-settings-menu');
+		await expect(name).toHaveText('out');
+
+		await cog.click();
+		await expect(menu).toBeVisible();
+		await menu.getByLabel('Auto range').click();
+		await expect
+			.poll(async () => JSON.parse((await backendDoc(page)).nodes[osc]?.viewers ?? '{}').out?.settings?.yAuto)
+			.toBe(false);
+
+		await page.mouse.click(900, 600);
+		await expect(menu).toHaveCount(0);
+		await expect(name, 'the dismiss took only the menu').toHaveText('out');
+		await expect(cog).toBeVisible();
+		await expect(card.locator('.slot-viewer .body')).toBeVisible();
 	} finally {
 		await resetPatch(page);
 	}

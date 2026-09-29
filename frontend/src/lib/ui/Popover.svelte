@@ -80,12 +80,14 @@
 	onkeydowncapture={open ? onWindowKeydown : undefined}
 />
 
+<!-- One portalled element per block: Svelte tears a block down by walking siblings from its first
+     node to its last, so a moved LAST node would take the anchor's neighbours instead. -->
+{#if open && catcher}
+	<!-- Handler-free by design: the layer only ABSORBS the pointer event, so a dismissing click
+	     does not also act on what it landed on. The window listener above dismisses. -->
+	<div class="ui-popover-catcher" use:portal></div>
+{/if}
 {#if open}
-	{#if catcher}
-		<!-- Handler-free by design: the layer only ABSORBS the pointer event, so a dismissing click
-		     does not also act on what it landed on. The window listener above dismisses. -->
-		<div class="ui-popover-catcher" use:portal></div>
-	{/if}
 	<div
 		{...rest}
 		bind:this={menuEl}

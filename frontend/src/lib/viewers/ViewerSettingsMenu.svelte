@@ -58,27 +58,29 @@
 				{#snippet hint()}No settings{/snippet}
 			</EmptyState>
 		{/if}
-		{#each schema.filter(visible) as s (s.key)}
-			<Field label={s.label} row>
-				{#if s.type === 'toggle'}
-					<Toggle value={settings[s.key] as boolean} onChange={(v) => set(s.key, v)} />
-				{:else if s.type === 'select'}
-					<Select
-						options={s.options ?? []}
-						value={settings[s.key] as string}
-						onChange={(v) => set(s.key, v)}
-					/>
-				{:else}
-					<NumberInput
-						value={settings[s.key] as number}
-						onChange={(v) => set(s.key, v)}
-						min={s.min}
-						max={s.max}
-						step={s.step ?? 1}
-					/>
-				{/if}
-			</Field>
-		{/each}
+		<div class="vs-rows">
+			{#each schema.filter(visible) as s (s.key)}
+				<Field label={s.label} row>
+					{#if s.type === 'toggle'}
+						<Toggle value={settings[s.key] as boolean} onChange={(v) => set(s.key, v)} />
+					{:else if s.type === 'select'}
+						<Select
+							options={s.options ?? []}
+							value={settings[s.key] as string}
+							onChange={(v) => set(s.key, v)}
+						/>
+					{:else}
+						<NumberInput
+							value={settings[s.key] as number}
+							onChange={(v) => set(s.key, v)}
+							min={s.min}
+							max={s.max}
+							step={s.step ?? 1}
+						/>
+					{/if}
+				</Field>
+			{/each}
+		</div>
 	</ScrollArea>
 </Popover>
 
@@ -112,6 +114,15 @@
 		.vs-anchor :global(.vs-cog::after) {
 			inset: calc((var(--node-u) - 100%) / -2);
 		}
+	}
+	/* Two columns for every row: the label at its widest, then the control column a stretching
+	   widget fills; a toggle keeps its size and sits at the right end. */
+	.vs-rows {
+		display: grid;
+		grid-template-columns: max-content 1fr;
+		column-gap: var(--space-4);
+		row-gap: var(--space-2);
+		--number-width: 100%;
 	}
 	:global(.vs-menu) {
 		--popover-pad: var(--space-2);

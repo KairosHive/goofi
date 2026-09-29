@@ -69,12 +69,13 @@
 		min-width: 0;
 		font-size: var(--fs-small);
 	}
+	/* A row is two cells of its parent's grid, so the rows of one menu share their columns. */
 	.ui-field.row {
-		flex-wrap: nowrap;
-		justify-content: space-between;
+		display: grid;
+		grid-template-columns: subgrid;
+		grid-column: 1 / -1;
 	}
-	.ui-field.row .ui-field-value {
-		flex: 0 1 auto;
+	.ui-field.row .ui-field-control {
 		justify-content: flex-end;
 	}
 	.ui-field-label {

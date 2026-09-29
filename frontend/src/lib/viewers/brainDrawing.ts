@@ -217,7 +217,7 @@ export class BrainDrawing extends Base {
 	 * strong ones land on top. The window is the kept edges' own, so the colours span them. */
 	private edgesOf(arr: ArrayData, channels: Channel[], s: SettingsMap): Edge[] {
 		// The share of the edges drawn, strongest first: 100 is all of them.
-		const top = Math.min(100, Math.max(1, Number(s.top ?? 100)));
+		const top = Math.min(100, Math.max(1, Number(s.top ?? 30)));
 		const n = arr.shape[0];
 		const v = arr.values as ArrayLike<number>;
 		const out: Edge[] = [];
@@ -338,7 +338,7 @@ export class BrainDrawing extends Base {
 		this.field.clear();
 		if (channels.length < 2) return this.fail('need ≥ 2 recognized channels');
 		// How far a 3-D edge dips into the head: 0 is the straight chord, 1 a bow through the centre.
-		const curve = Math.min(1, Math.max(0, Number(s.curve ?? 0.5)));
+		const curve = Math.min(1, Math.max(0, Number(s.curve ?? 0.1)));
 		this.edges = this.edgesOf(arr, channels, s);
 		this.names = channels.map((c) => c.name);
 		const L = this.lutFor(String(s.colormap ?? 'coolwarm'));
