@@ -102,7 +102,7 @@ impl SignalEngine {
         let manifest = goofi_node::leak_manifest(type_name.to_string(), &intro)?;
         let artifact = artifact.to_path_buf();
         let factory: goofi_signal_sdk::NodeFactory =
-            Box::new(move |_| Box::new(crate::hosted::HostedNode::new(host.clone(), artifact.clone(), manifest)));
+            Box::new(move |_| Box::new(crate::hosted::Hosted::node(host.clone(), artifact.clone(), manifest)));
         Ok(self.register_dyn_type(manifest, factory, &goofi_node::HOSTED))
     }
 

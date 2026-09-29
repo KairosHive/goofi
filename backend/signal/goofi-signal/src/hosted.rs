@@ -6,10 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use goofi_core::Data;
-use goofi_signal_sdk::host::Entry;
-use goofi_signal_sdk::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
-use goofi_node::{NodeManifest, ParamKey, Params};
+use goofi_node::NodeManifest;
+use goofi_signal_sdk::host::{Ask, Entry, Handle};
 use goofi_transport::{Exchange, Served};
 
 static HOSTED_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -17,15 +15,6 @@ static HOSTED_SEQ: AtomicU64 = AtomicU64::new(0);
 /// How long a request waits on a child that stopped answering; the first one also pays the load.
 const TICK_TIMEOUT: Duration = Duration::from_secs(10);
 const COLD_START_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// A frame across the exchange: the entry byte, the patch time, then the codec request.
-fn frame(entry: Entry, now: f64, request: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(9 + request.len());
-    out.push(entry as u8);
-    out.extend_from_slice(&now.to_le_bytes());
-    out.extend_from_slice(request);
-    out
-}
 
 /// What a built library says it is, read by a child so the library never enters this process.
 pub fn describe(host: &Path, artifact: &Path) -> Result<String, String> {
@@ -40,103 +29,58 @@ pub fn describe(host: &Path, artifact: &Path) -> Result<String, String> {
 }
 
 /// A node whose library runs in a child, spawned on its first call and replaced on a failure.
-pub struct HostedNode {
+pub type HostedNode = Handle<Hosted>;
+
+/// The child that holds a hosted node's library, asked over the exchange: `[entry][f64 now]`,
+/// then the codec request.
+pub struct Hosted {
     host: PathBuf,
     artifact: PathBuf,
-    manifest: &'static NodeManifest,
+    type_name: &'static str,
     live: Option<(goofi_core::child::Child, Exchange)>,
 }
 
-impl HostedNode {
-    pub fn new(host: PathBuf, artifact: PathBuf, manifest: &'static NodeManifest) -> HostedNode {
-        HostedNode { host, artifact, manifest, live: None }
+impl Hosted {
+    pub fn node(host: PathBuf, artifact: PathBuf, manifest: &'static NodeManifest) -> HostedNode {
+        Handle::new(Hosted { host, artifact, type_name: manifest.type_name, live: None }, manifest)
     }
 
     fn spawn(&self) -> Result<(goofi_core::child::Child, Exchange), String> {
         let base = format!("goofi_host_{}_{}", std::process::id(), HOSTED_SEQ.fetch_add(1, Ordering::Relaxed));
         let mut cmd = std::process::Command::new(&self.host);
-        cmd.arg("host").arg("serve").arg(&self.artifact).arg(self.manifest.type_name)
+        cmd.arg("host").arg("serve").arg(&self.artifact).arg(self.type_name)
             .env("GOOFI_IOX_REQ", format!("{base}_req"))
             .env("GOOFI_IOX_RESP", format!("{base}_resp"));
-        let child = goofi_core::child::run(format!("native node {} (hosted)", self.manifest.type_name), &mut cmd)
+        let child = goofi_core::child::run(format!("native node {} (hosted)", self.type_name), &mut cmd)
             .source(goofi_core::log::source())
             .spawn()
             .map_err(|e| format!("spawn the host: {e}"))?;
         let exchange = Exchange::open(&base)?;
         Ok((child, exchange))
     }
+}
 
+impl Ask for Hosted {
     /// One request to the child, spawning it first if need be; a child that failed is dropped so
     /// the next request starts a fresh one.
-    fn ask(&mut self, entry: Entry, now: f64, request: &[u8]) -> Result<goofi_codec::Response, String> {
+    fn ask(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
         let timeout = if self.live.is_none() { COLD_START_TIMEOUT } else { TICK_TIMEOUT };
         if self.live.is_none() {
             self.live = Some(self.spawn()?);
         }
         let (child, exchange) = self.live.as_mut().expect("spawned");
-        let reply = exchange.ask(child, &frame(entry, now, request), timeout);
+        let mut head = vec![entry as u8];
+        head.extend_from_slice(&now.to_le_bytes());
+        let frame: Vec<&[u8]> = std::iter::once(&head[..]).chain(request.iter().copied()).collect();
+        let reply = exchange.ask(child, &frame, timeout);
         if reply.is_err() {
             self.live = None;
         }
-        goofi_codec::decode_response(&reply?)
-    }
-
-    fn done(answer: Result<goofi_codec::Response, String>) -> NodeResult {
-        match answer {
-            Ok(goofi_codec::Response::Process(_)) => Ok(()),
-            Ok(goofi_codec::Response::NodeError(msg)) => Err(NodeError(msg)),
-            Ok(goofi_codec::Response::Options(_)) => Err(NodeError("the node answered options where none were asked".into())),
-            Err(e) => Err(NodeError(e)),
-        }
+        reply
     }
 }
 
-impl Node for HostedNode {
-    fn setup(&mut self, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
-        Self::done(self.ask(Entry::Setup, ctx.now, &goofi_codec::encode_request(p.groups(), &[])))
-    }
-
-    fn process(&mut self, inp: &Inputs<'_>, out: &mut Outputs<'_>, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
-        let mut present: Vec<(&str, &str, &Data)> = Vec::new();
-        for slot in self.manifest.inputs {
-            if slot.multi {
-                present.extend(inp.get_multi(slot.name).iter().map(|(source, d)| (slot.name, source.as_str(), d)));
-            } else if let Some(d) = inp.get(slot.name) {
-                present.push((slot.name, "", d));
-            }
-        }
-        match self.ask(Entry::Process, ctx.now, &goofi_codec::encode_request(p.groups(), &present)) {
-            Ok(goofi_codec::Response::Process(result)) => {
-                for slot in result.clear_inputs {
-                    ctx.clear_input(&slot);
-                }
-                for (slot, data) in result.outputs {
-                    out.set(&slot, data);
-                }
-                Ok(())
-            }
-            other => Self::done(other),
-        }
-    }
-
-    fn on_param_changed(&mut self, key: &ParamKey, v: &goofi_core::Param) -> NodeResult {
-        let request = rmp_serde::to_vec(&(&key.group, &key.name, v)).map_err(|e| NodeError(e.to_string()))?;
-        Self::done(self.ask(Entry::ParamChanged, 0.0, &request))
-    }
-
-    fn on_param_refreshed(&mut self, key: &ParamKey, p: &Params<'_>) -> Option<Vec<String>> {
-        match self.ask(Entry::Refresh, 0.0, &goofi_codec::encode_refresh_request(p.groups(), &key.group, &key.name)) {
-            Ok(goofi_codec::Response::Options(options)) => options,
-            _ => None,
-        }
-    }
-
-    fn on_pulse(&mut self, key: &ParamKey, p: &Params<'_>) -> NodeResult {
-        Self::done(self.ask(Entry::Pulse, 0.0, &goofi_codec::encode_pulse_request(p.groups(), &key.group, &key.name)))
-    }
-}
-
-impl Drop for HostedNode {
+impl Drop for Hosted {
     fn drop(&mut self) {
         if let Some((mut child, _)) = self.live.take() {
             child.stop(Duration::ZERO);
@@ -179,7 +123,7 @@ fn serve(artifact: &Path, type_name: &str) -> Result<(), String> {
         let reply = match body.split_first().and_then(|(e, rest)| Some((Entry::from_u8(*e)?, rest))) {
             Some((entry, rest)) if rest.len() >= 8 => {
                 let now = f64::from_le_bytes(rest[..8].try_into().unwrap());
-                raw.call(entry, now, &rest[8..]).unwrap_or_else(|e| goofi_codec::encode_error_response(&e))
+                raw.ask(entry, now, &[&rest[8..]]).unwrap_or_else(|e| goofi_codec::encode_error_response(&e))
             }
             _ => goofi_codec::encode_error_response("a malformed request"),
         };

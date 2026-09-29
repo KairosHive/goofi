@@ -134,10 +134,10 @@ impl IoxTransport {
     }
 
     /// Why a recording loan was refused: an outsized frame, or shared memory that ran out.
-    fn loan_refused(&self, bytes: &[u8]) -> String {
+    fn loan_refused(&self, len: usize) -> String {
         let ceiling = record_shape("signal").slice;
-        match bytes.len() > ceiling {
-            true => format!("a {} byte frame is over the {ceiling} byte ceiling", bytes.len()),
+        match len > ceiling {
+            true => format!("a {len} byte frame is over the {ceiling} byte ceiling"),
             false => "no shared memory left".to_string(),
         }
     }
@@ -229,7 +229,8 @@ impl Transport for IoxTransport {
             for (index, wire) in wires.iter().enumerate() {
                 let mut newest = None;
                 while let Ok(Some(sample)) = wire.subscriber.receive() {
-                    newest = Some(goofi_codec::decode(sample.payload()));
+                    // One copy, off the loan the producer needs back; the frame then views it.
+                    newest = Some(goofi_codec::decode_owned(sample.payload().to_vec()));
                 }
                 // A frame that cannot be decoded is a wire whose two ends disagree about the
                 // format; dropping it keeps the node running on its other inputs.
@@ -312,11 +313,18 @@ impl Transport for IoxTransport {
         })
     }
 
+    /// Encoded straight into each loan, sized by the frame's own length: a frame is never bytes
+    /// on this side of the shared memory.
     fn publish(&self, slot: &str, frame: &Data) {
         let Some(port) = self.outputs.get(slot) else { return };
-        let bytes = goofi_codec::encode(frame);
+        let len = goofi_codec::encoded_len(frame);
+        let fill = |loan: &mut [std::mem::MaybeUninit<u8>]| {
+            let mut out = goofi_codec::Fill::new(loan);
+            goofi_codec::encode_into(frame, &mut out);
+            assert!(out.full(), "a frame fills the loan its length asked for");
+        };
         let targets = port.targets.lock().unwrap();
-        goofi_transport::publish(&port.publisher, &bytes, targets.iter().map(|(b, id)| (b, *id)));
+        goofi_transport::publish_with(&port.publisher, len, fill, targets.iter().map(|(b, id)| (b, *id)));
         let mut records = self.records.lock().unwrap();
         // A retired port is dropped HERE rather than at the disarm, so the release follows the
         // recorder's own reading and never outruns it.
@@ -324,10 +332,10 @@ impl Transport for IoxTransport {
         live.retain(|_, (_, port)| !port.spent());
         retired.retain(|port| !port.spent());
         if let Some((_, rec)) = live.get(slot) {
-            let ok = rec.send(&bytes);
+            let ok = rec.send(len, fill);
             if !ok && !rec.retired() {
                 let mut trouble = self.trouble.lock().unwrap();
-                let (dropped, _) = trouble.get_or_insert_with(|| (0, self.loan_refused(&bytes)));
+                let (dropped, _) = trouble.get_or_insert_with(|| (0, self.loan_refused(len)));
                 *dropped += 1;
             }
         }

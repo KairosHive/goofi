@@ -2,6 +2,7 @@
 //! mechanism for every engine. A phone book, not a switchboard — the resolver here is pure name
 //! and config derivation, and whichever side settles first waits on `open_or_create`.
 
+use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -482,19 +483,18 @@ impl Exchange {
         Ok(Exchange { request, reply, seq: 0, _node: node })
     }
 
-    /// One request to `child`, answered within `timeout`; a child that exited or fell silent is
-    /// the error, so the owner can start a fresh one.
-    pub fn ask(&mut self, child: &mut goofi_core::child::Child, frame: &[u8], timeout: Duration) -> Result<Vec<u8>, String> {
+    /// One request to `child` — its runs, written into the loan as one frame — answered within
+    /// `timeout`; a child that exited or fell silent is the error, so the owner can start a
+    /// fresh one.
+    pub fn ask(&mut self, child: &mut goofi_core::child::Child, frame: &[&[u8]], timeout: Duration) -> Result<Vec<u8>, String> {
         self.seq = self.seq.wrapping_add(1);
         let seq = self.seq;
         while matches!(self.reply.receive(), Ok(Some(_))) {}
-        let mut msg = Vec::with_capacity(4 + frame.len());
-        msg.extend_from_slice(&seq.to_le_bytes());
-        msg.extend_from_slice(frame);
+        let seq_bytes = seq.to_le_bytes();
+        let parts: Vec<&[u8]> = std::iter::once(&seq_bytes[..]).chain(frame.iter().copied()).collect();
         let deadline = Instant::now() + timeout;
         loop {
-            let sample = self.request.loan_slice_uninit(msg.len()).map_err(|e| format!("iox publish: {e}"))?;
-            let _ = sample.write_from_slice(msg.as_slice()).send();
+            send_parts(&self.request, &parts)?;
             loop {
                 match self.reply.receive() {
                     Ok(Some(sample)) => {
@@ -573,15 +573,7 @@ impl Served {
     }
 
     pub fn answer(&mut self, seq: u32, reply: &[u8]) -> Result<(), String> {
-        let mut msg = Vec::with_capacity(4 + reply.len());
-        msg.extend_from_slice(&seq.to_le_bytes());
-        msg.extend_from_slice(reply);
-        self.reply
-            .loan_slice_uninit(msg.len())
-            .map_err(|e| format!("iox loan: {e}"))?
-            .write_from_slice(msg.as_slice())
-            .send()
-            .map_err(|e| format!("iox send: {e}"))?;
+        send_parts(&self.reply, &[&seq.to_le_bytes(), reply])?;
         self.answered = Some(seq);
         Ok(())
     }
@@ -688,10 +680,10 @@ impl RecordPort {
         Ok(RecordPort { service, publisher, bell: bell.clone(), retired: false })
     }
 
-    /// One frame onto the service, and the recorder's door rung. `false` is a refused loan, which
-    /// the next frame's own number witnesses. A retired port sends nothing.
-    pub fn send(&self, bytes: &[u8]) -> bool {
-        !self.retired && publish(&self.publisher, bytes, std::iter::once((&*self.bell, RECORD_EVENT_ID)))
+    /// One frame, written by `fill` into a loan of `len`, and the recorder's door rung. `false` is
+    /// a refused loan, which the next frame's own number witnesses. A retired port sends nothing.
+    pub fn send(&self, len: usize, fill: impl FnOnce(&mut [MaybeUninit<u8>])) -> bool {
+        !self.retired && publish_with(&self.publisher, len, fill, std::iter::once((&*self.bell, RECORD_EVENT_ID)))
     }
 
     /// Disarmed: stop publishing, but stay open while the recorder still reads.
@@ -794,12 +786,48 @@ pub fn var_of(view: &GraphView<'_>, v: &BoundVar) -> (String, Var) {
 /// nothing and parks. `false` says the loan failed — no shared memory, or a frame over a static
 /// publisher's slice — which is a caller's to count.
 pub fn publish<'a>(publisher: &BytePublisher, bytes: &[u8], bells: impl IntoIterator<Item = (&'a Doorbell, EventId)>) -> bool {
-    let Ok(sample) = publisher.loan_slice_uninit(bytes.len()) else { return false };
-    let _ = sample.write_from_slice(bytes).send();
+    publish_with(publisher, bytes.len(), |loan| write_parts(loan, [bytes]), bells)
+}
+
+/// [`publish`] with the frame written by `fill` straight into a loan of `len` bytes, so a frame
+/// that is not bytes yet is encoded once, into shared memory. `fill` must write every byte.
+pub fn publish_with<'a>(
+    publisher: &BytePublisher,
+    len: usize,
+    fill: impl FnOnce(&mut [MaybeUninit<u8>]),
+    bells: impl IntoIterator<Item = (&'a Doorbell, EventId)>,
+) -> bool {
+    let Ok(mut sample) = publisher.loan_slice_uninit(len) else { return false };
+    fill(sample.payload_mut());
+    // SAFETY: `fill`'s contract is that the whole loan was written.
+    let _ = unsafe { sample.assume_init() }.send();
     for (bell, id) in bells {
         let _ = bell.ring(id);
     }
     true
+}
+
+/// Copy `parts`, one after the other, over a loan they fill exactly.
+pub fn write_parts<'p>(loan: &mut [MaybeUninit<u8>], parts: impl IntoIterator<Item = &'p [u8]>) {
+    let mut at = 0;
+    for part in parts {
+        let end = at + part.len();
+        // SAFETY: `MaybeUninit<u8>` and `u8` share a layout, and the range is bounds-checked.
+        let dst = &mut loan[at..end];
+        unsafe { std::ptr::copy_nonoverlapping(part.as_ptr(), dst.as_mut_ptr() as *mut u8, part.len()) };
+        at = end;
+    }
+    assert_eq!(at, loan.len(), "a loan is filled exactly");
+}
+
+/// One message of `parts` onto a service with no bells: the exchange's two directions.
+fn send_parts(publisher: &BytePublisher, parts: &[&[u8]]) -> Result<(), String> {
+    let len = parts.iter().map(|p| p.len()).sum();
+    let mut sample = publisher.loan_slice_uninit(len).map_err(|e| format!("iox loan: {e}"))?;
+    write_parts(sample.payload_mut(), parts.iter().copied());
+    // SAFETY: `write_parts` filled the loan exactly.
+    unsafe { sample.assume_init() }.send().map_err(|e| format!("iox send: {e}"))?;
+    Ok(())
 }
 
 /// The survivor `keep` names, taken out of what a reconcile held; what is left is what the new

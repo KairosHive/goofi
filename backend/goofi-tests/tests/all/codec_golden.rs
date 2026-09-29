@@ -178,24 +178,51 @@ fn goof_encoder_matches_python_golden() {
 }
 
 #[test]
-fn a_request_carries_each_multi_frame_with_its_source() {
+fn a_request_carries_each_multi_frame_with_its_source_and_a_big_one_by_reference() {
     // A multi slot's entries cross under one name repeated, each with the `node.slot` that sent
     // it; a single slot's entry crosses with no source, and an output never has one.
     let a = &arr(&[3], le_bytes(&[1.0, 2.0, 3.0]), Meta::empty());
     let b = &arr(&[2], le_bytes(&[4.0, 5.0]), Meta::empty());
     let params = goofi_codec::ParamMap::new();
-    let bytes = goofi_codec::encode_request(&params, &[("input", "alpha.out", a), ("input", "beta.out", b), ("gate", "", a)]);
-    let goofi_codec::Request::Process { slots, .. } = goofi_codec::decode_request(&bytes).expect("a request") else {
+    let runs = goofi_codec::encode_request(&params, &[("input", "alpha.out", a), ("input", "beta.out", b), ("gate", "", a)]);
+    let slices: Vec<&[u8]> = runs.iter().map(|r| &**r).collect();
+    let goofi_codec::Request::Process { slots, .. } = goofi_codec::decode_request(&slices).expect("a request") else {
         panic!("a run, not a refresh");
     };
     let named: Vec<(&str, &str)> = slots.iter().map(|(n, s, _)| (n.as_str(), s.as_str())).collect();
     assert_eq!(named, vec![("input", "alpha.out"), ("input", "beta.out"), ("gate", "")]);
     assert_eq!(encode(&slots[1].2), encode(b), "the second entry is beta's own frame");
-    let reply = goofi_codec::decode_response(&goofi_codec::encode_response(&[("out", b)], &["input".into()])).expect("a response");
-    let goofi_codec::Response::Process(result) = reply else { panic!("process output") };
+    assert_eq!(runs.len(), 1, "small samples ride inside the one copied run");
+
+    // A big frame's samples are a run of their own, the node's very bytes and never a copy of
+    // them; what the runs say, read as one, is the same request.
+    let big = &arr(&[4096], le_bytes(&[0.5; 4096]), Meta::empty());
+    let runs = goofi_codec::encode_request(&params, &[("input", "", big), ("gate", "", a)]);
+    let samples = big.as_array().unwrap().as_bytes();
+    assert!(runs.iter().any(|r| matches!(r, std::borrow::Cow::Borrowed(s) if s.as_ptr() == samples.as_ptr())), "by reference");
+    let slices: Vec<&[u8]> = runs.iter().map(|r| &**r).collect();
+    let whole = runs.concat();
+    for request in [&slices[..], &[&whole[..]][..]] {
+        let decoded = goofi_codec::decode_request(request).unwrap_or_else(|e| panic!("{e} ({} runs)", request.len()));
+        let goofi_codec::Request::Process { slots, .. } = decoded else { panic!("a run") };
+        assert_eq!((slots.len(), encode(&slots[0].2), encode(&slots[1].2)), (2, encode(big), encode(a)));
+    }
+
+    // A reply carries a frame per output — or the NAME of the input an output is, unchanged,
+    // with no bytes behind it, which the host resolves against what it sent.
+    let mut reply = Vec::new();
+    let emitted = [("out", goofi_codec::Emitted::Frame(b)), ("same", goofi_codec::Emitted::Input { slot: "input", index: 1 })];
+    goofi_codec::encode_response(&emitted, &["input".into()], &mut reply);
+    assert!(reply.len() < encode(b).len() + 64, "the reference carries no frame: {} bytes", reply.len());
+    let goofi_codec::Response::Process(result) = goofi_codec::decode_response(reply).expect("a response") else {
+        panic!("process output")
+    };
     assert_eq!(result.clear_inputs, vec!["input"]);
     let outs = result.outputs;
-    assert_eq!((outs[0].0.as_str(), encode(&outs[0].1)), ("out", encode(b)));
+    let goofi_codec::Output::Frame(frame) = &outs[0].1 else { panic!("a frame") };
+    assert_eq!((outs[0].0.as_str(), encode(frame)), ("out", encode(b)));
+    let goofi_codec::Output::Input { slot, index } = &outs[1].1 else { panic!("a reference") };
+    assert_eq!((outs[1].0.as_str(), slot.as_str(), *index), ("same", "input", 1));
 }
 
 #[test]
