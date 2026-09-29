@@ -45,3 +45,32 @@ runs:
     - name: Provision (cargo run -p goofi-init)
       shell: bash
       run: cargo run -p goofi-init
+
+    # One boot fills the node build dir with the Python probes every test binary would otherwise
+    # take, so the tests that follow start warm, however many run at once.
+    - name: Boot the node library
+      shell: bash
+      run: cargo run -p goofi-cli -- --headless
+      env:
+        GOOFI_BOOT_ONLY: "1"
+
+    # The browser suite's own prerequisites, where the browser suite runs. Chromium is keyed on
+    # the Playwright that installed, which the unpinned package.json does not name.
+    - if: runner.os == 'Linux'
+      shell: bash
+      run: npm install
+      working-directory: tests/e2e
+    - if: runner.os == 'Linux'
+      id: playwright
+      shell: bash
+      run: echo "version=$(npx playwright --version)" >> "$GITHUB_OUTPUT"
+      working-directory: tests/e2e
+    - if: runner.os == 'Linux'
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+    - if: runner.os == 'Linux'
+      shell: bash
+      run: npx playwright install --with-deps chromium
+      working-directory: tests/e2e

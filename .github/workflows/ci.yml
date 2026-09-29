@@ -26,77 +26,12 @@ env:
   GOOFI_BUILD_DIR: ${{ github.workspace }}/target/goofi-build
 
 jobs:
-  # The gates a fresh clone meets before any test: warnings, and a boot of the node library. The
-  # test jobs below run BESIDE this one, each on its own runner, so the wall time is the longest
-  # job and not their sum; sccache hands every job the crates this one compiled.
-  gates:
+  # One job, one build: every gate in the order a fresh clone meets them. The runner has four
+  # cores; the situations run as ONE process at four threads, and the browser suite runs beside
+  # them, since a test a sibling can starve is a defect and not a reason to run it alone.
+  linux:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
-      - name: Zero warnings (rustc + clippy)
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      # Cargo's own warnings are not clippy's; the test profile is what the tests link.
-      - name: No cargo warnings
-        run: |
-          cargo test --workspace --no-run 2>&1 | tee build.log
-          ! grep -n '^warning' build.log
-      - run: cargo run -p goofi-cli -- --headless
-        env:
-          GOOFI_BOOT_ONLY: "1"
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: target/goofi-build
-          key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
-
-  # The situations, in shards of about equal wall time, each ONE process at four threads: the
-  # runner has four cores, and a situation that a sibling can starve is a defect, not a reason
-  # to run it alone. A file whose situations all need `embed` is in the Python-tier job instead.
-  situations:
-    strategy:
-      fail-fast: false
-      matrix:
-        shard:
-          - 'editing:: graphics:: session:: signals:: browser:: contracts:: inspect::'
-          - 'nodes:: python:: running:: subpatches:: recording:: plugins:: audio_priority:: engines:: demo:: headless:: logging:: textures:: transport:: children:: io::'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
-      # One boot fills the node build dir with the Python probes every test binary would otherwise take.
-      - run: cargo run -p goofi-cli -- --headless
-        env:
-          GOOFI_BOOT_ONLY: "1"
-      # The flag, not `RUST_TEST_THREADS`, which the helper children a situation spawns would inherit.
-      - run: cargo test -p goofi-tests --test all -- ${{ matrix.shard }} --test-threads=4
-
-  # The other Python tier links libpython: only the situations that run Python, and of the
-  # graphics ones the three that put Python on the GPU's side. With them, the situations that
-  # keep a binary of their own.
-  python-tier:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
-      - run: cargo run -p goofi-cli -- --headless
-        env:
-          GOOFI_BOOT_ONLY: "1"
-      - run: >
-          cargo test -p goofi-tests --test all --
-          python:: plugins:: nodes:: inspect:: codec_golden:: filter_golden::
-          param_modulation:: python_init_order::
-          graphics::python_texture graphics::host_pixels --test-threads=4
-      - run: cargo test -p goofi-tests --test python_gil_tripwire
-      - run: cargo test --workspace --no-fail-fast --test agent --test audio --test cli --test probe --test shipped
-
-  # The browser: the frontend's own checks, then Playwright against the real binary.
-  e2e:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -104,22 +39,30 @@ jobs:
         working-directory: frontend
       - run: npm run test
         working-directory: frontend
-      - run: npm install
-        working-directory: tests/e2e
-      # Keyed on the Playwright that installed, which the unpinned package.json does not name.
-      - id: playwright
-        run: echo "version=$(npx playwright --version)" >> "$GITHUB_OUTPUT"
-        working-directory: tests/e2e
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
-      - run: npx playwright install --with-deps chromium
-        working-directory: tests/e2e
-      - run: npm run e2e
-        working-directory: tests/e2e
-      - run: npm run e2e:plugins
-        working-directory: tests/e2e
+      - name: Zero warnings (rustc + clippy)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      # Cargo's own warnings are not clippy's; the test profile is what the tests below link.
+      - name: No cargo warnings
+        run: |
+          cargo test --workspace --no-run 2>&1 | tee build.log
+          ! grep -n '^warning' build.log
+      # The browser suite runs BESIDE the situations, its output kept apart and shown after them.
+      # `--test-threads=4` as a flag, not `RUST_TEST_THREADS`, which the helper children a
+      # situation spawns would inherit. `embed` is goofi-tests' default feature, so the one
+      # process holds both Python tiers.
+      - name: Situations and the browser suite
+        run: |
+          (cd tests/e2e && npm run e2e && npm run e2e:plugins) > e2e.log 2>&1 &
+          e2e=$!
+          status=0
+          cargo test --workspace --no-fail-fast --test agent --test audio --test cli --test probe --test shipped || status=1
+          cargo test -p goofi-tests --test all -- --test-threads=4 || status=1
+          cargo test -p goofi-tests --test python_gil_tripwire || status=1
+          wait $e2e || status=1
+          echo "::group::Browser suite"
+          cat e2e.log
+          echo "::endgroup::"
+          exit $status
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
@@ -127,6 +70,11 @@ jobs:
           path: |
             tests/e2e/playwright-report/
             tests/e2e/test-results/
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: target/goofi-build
+          key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
 
   # Only what a platform can answer differently: processes, paths, dynamic libraries, PTYs, audio
   # hosts. The rest was proven on Linux above.
@@ -140,9 +88,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
-      - run: cargo run -p goofi-cli -- --headless
-        env:
-          GOOFI_BOOT_ONLY: "1"
       # Windows only boots: iceoryx2 cannot create a listener under the session's root there yet,
       # and every situation opens one. Drop both conditions once it can.
       - name: Situations
