@@ -578,12 +578,20 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
     // one to drop. Nothing is offered until a boot moves it to the recovery base for safekeeping.
     let (left, recover) = crashed_copy(&dir);
     let (_, discard) = crashed_copy(&dir);
+    // …and one a session under ANOTHER home took: temp is machine-wide, the recovery is the home's.
+    let (foreign, elsewhere) = crashed_copy(&dir);
+    let sidecar = std::path::Path::new(&foreign).join("autosave.json");
+    std::fs::write(&sidecar, std::fs::read_to_string(&sidecar).unwrap().replace(
+        &goofi_core::path::to_slash(&goofi_core::home::system()), "/somewhere/else/.goofi/system")).unwrap();
     assert!(g.call("session recoverable", j!({}))["recoveries"].as_array().unwrap().is_empty());
     let opened = Goofi::new();
     assert!(!std::path::Path::new(&left).exists(), "the boot moved it out of temp");
+    assert!(std::path::Path::new(&foreign).exists(), "another home's crash is left for that home's boot");
     let listed = opened.call("session recoverable", j!({}));
     let names: Vec<&str> = listed["recoveries"].as_array().unwrap().iter().map(|r| r["workspace"].as_str().unwrap()).collect();
     assert!(names.contains(&recover.as_str()) && names.contains(&discard.as_str()), "both offered: {listed}");
+    assert!(!names.contains(&elsewhere.as_str()), "and not the other home's: {listed}");
+    std::fs::remove_dir_all(std::path::Path::new(&foreign).parent().unwrap()).unwrap();
     let entry = listed["recoveries"].as_array().unwrap().iter().find(|r| r["workspace"] == recover).unwrap();
     assert_eq!(entry["home"], j!(spelled(&home)), "the home the save gave the patch");
     assert!(entry["at"].as_f64().unwrap() > 0.0, "when it was taken");

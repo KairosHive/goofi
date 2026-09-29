@@ -153,7 +153,9 @@ fn tick(state: &AppState, last: &mut Option<Stamp>) {
         return;
     }
     let at = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
-    let sidecar = json!({ "home": state.save_path(), "at": at });
+    // `system` names the GOOFI_HOME this session ran under: a crash is recovered by THAT home's
+    // next boot, and a boot under another leaves it be.
+    let sidecar = json!({ "home": state.save_path(), "at": at, "system": system() });
     let written = archive::write_manifest(&dir, &manifest)
         .and_then(|()| std::fs::write(dir.join(SIDECAR), sidecar.to_string()).map_err(|e| e.to_string()));
     if let Err(e) = written {
@@ -163,12 +165,17 @@ fn tick(state: &AppState, last: &mut Option<Stamp>) {
     *last = Some((manifest, seen));
 }
 
-/// What a recovery holds: its path, the patch's home, and when the autosave was taken.
-fn entry(dir: &Path) -> Value {
-    let sidecar: Value = std::fs::read(dir.join(SIDECAR))
+/// The sidecar beside an autosave, or `Null` where none was written.
+fn sidecar(dir: &Path) -> Value {
+    std::fs::read(dir.join(SIDECAR))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or(Value::Null);
+        .unwrap_or(Value::Null)
+}
+
+/// What a recovery holds: its path, the patch's home, and when the autosave was taken.
+fn entry(dir: &Path) -> Value {
+    let sidecar = sidecar(dir);
     json!({
         "workspace": goofi_core::path::to_slash(dir),
         "home": sidecar.get("home").cloned().unwrap_or(Value::Null),
@@ -204,14 +211,24 @@ fn move_tree(from: &Path, to: &Path) -> Result<(), String> {
     std::fs::remove_dir_all(from).map_err(|e| format!("{}: {e}", from.display()))
 }
 
+/// This process's `GOOFI_HOME` system directory, as the sidecar spells it.
+fn system() -> String {
+    goofi_core::path::to_slash(&goofi_core::home::system())
+}
+
 /// The boot pass over the workspaces: a dead session's directory that carries an autosave is
 /// moved to the recovery base for safekeeping, one that carries none held no unsaved work and
-/// goes. Nothing a living session owns is touched. Answers how many went either way.
+/// goes. Nothing a living session owns is touched, and an autosave another home's session took
+/// is left for that home's boot. Answers how many went either way.
 pub fn sweep_dead() -> usize {
     let mut swept = 0;
+    let own = system();
     for (id, dir) in nonces(&goofi_core::session::workspaces_base(), |id| !goofi_core::session::alive(id)) {
         let Some(nonce) = dir.file_name() else { continue };
         let done = if archive::has_manifest(&dir) {
+            if sidecar(&dir)["system"] != own {
+                continue;
+            }
             move_tree(&dir, &goofi_core::session::recovery_base().join(&id).join(nonce)).is_ok()
         } else {
             std::fs::remove_dir_all(&dir).is_ok()
