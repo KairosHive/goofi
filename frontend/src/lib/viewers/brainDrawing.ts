@@ -114,7 +114,7 @@ export class BrainDrawing extends Base {
 		const arr = frame.data as ArrayData;
 		const mode = brainMode(settings, arr.shape.length);
 		if (settings !== this.applied) {
-			this.field.setSettings({ lut: this.lutFor(String(settings.colormap ?? 'coolwarm')), bands: settings.contours ? 10 : 0 });
+			this.field.setSettings({ lut: this.lutFor(String(settings.colormap ?? 'magma')), bands: settings.contours ? 10 : 0 });
 			this.applied = settings;
 		}
 		const channels = known(axisNames(frame.meta, 0) ?? []);
@@ -253,7 +253,7 @@ export class BrainDrawing extends Base {
 		if (channels.length < 2) return this.fail('need ≥ 2 recognized channels');
 		this.edges = this.edgesOf(arr, channels, s);
 		this.names = channels.map((c) => c.name);
-		const L = this.lutFor(String(s.colormap ?? 'coolwarm'));
+		const L = this.lutFor(String(s.colormap ?? 'magma'));
 		const n = channels.length;
 		const cx = w / 2;
 		const cy = h / 2;
@@ -341,7 +341,7 @@ export class BrainDrawing extends Base {
 		const curve = Math.min(1, Math.max(0, Number(s.curve ?? 0.1)));
 		this.edges = this.edgesOf(arr, channels, s);
 		this.names = channels.map((c) => c.name);
-		const L = this.lutFor(String(s.colormap ?? 'coolwarm'));
+		const L = this.lutFor(String(s.colormap ?? 'magma'));
 		const view = project(this.camera, w, h);
 		const at = (q: [number, number, number]): [number, number] => {
 			const v = view(q);

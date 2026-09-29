@@ -47,7 +47,7 @@ const SCHEMA: Record<ViewerKind, SettingDescriptor[]> = {
 	],
 	brain: [
 		{ key: 'mode', label: 'Mode', type: 'select', default: 'auto', options: [...BRAIN_MODES] },
-		{ key: 'colormap', label: 'Colormap', type: 'select', default: 'coolwarm', options: COLORMAPS },
+		{ key: 'colormap', label: 'Colormap', type: 'select', default: 'magma', options: COLORMAPS },
 		{ key: 'auto', label: 'Auto range', type: 'toggle', default: true },
 		{ key: 'vmin', label: 'Min', type: 'number', default: -1, step: 0.1, showWhen: manual('auto') },
 		{ key: 'vmax', label: 'Max', type: 'number', default: 1, step: 0.1, showWhen: manual('auto') },
