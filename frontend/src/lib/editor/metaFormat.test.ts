@@ -71,12 +71,12 @@ describe('formatMetaValue', () => {
 import { reconstructMeta } from './metaFormat';
 
 describe('reconstructMeta (Option C reduction-aware inspector)', () => {
-	it('restores original shape + drops envelope co-reduced coord + hides reduced', () => {
+	it('restores original shape + drops the co-reduced coord + hides reduced', () => {
 		const reducedMeta = {
 			shape: [2000],
 			dtype: '<f4',
 			channels: { dim0: new Array(2000).fill(0) }, // co-reduced artifact
-			reduced: { '0': { orig_len: 10000, method: 'envelope' } },
+			reduced: { '0': { orig_len: 10000 } },
 			sfreq: 250
 		};
 		const out = reconstructMeta(reducedMeta);
@@ -91,7 +91,7 @@ describe('reconstructMeta (Option C reduction-aware inspector)', () => {
 			shape: [3, 100],
 			channels: { dim0: ['a', 'c', 'f'], dim1: [] },
 			reduced: {
-				'0': { orig_len: 6, method: 'subsample', orig_coord: ['a', 'b', 'c', 'd', 'e', 'f'] }
+				'0': { orig_len: 6, orig_coord: ['a', 'b', 'c', 'd', 'e', 'f'] }
 			}
 		});
 		expect(out.shape).toEqual([6, 100]);

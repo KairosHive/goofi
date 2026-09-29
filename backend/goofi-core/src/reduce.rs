@@ -1,21 +1,10 @@
-//! Axis reduction kernels — subsample, envelope (interleaved `min,max` per bin) and area — over
-//! a frame's f32 LE bytes. Each returns `None` when it would not shrink the axis.
+//! Axis subsampling over a frame's f32 LE bytes: a strided copy of the entries a reader asked for,
+//! nothing computed. Returns `None` when it would not shrink the axis.
 
 use crate::{Coord, Data, Meta, MetaValue, Value};
 use goofi_view::{MergedViewSpec, ViewSpec};
-/// The kernels' own vocabulary, re-exported so a node file — which reaches goofi-core through its
-/// SDK and never `goofi-view` — can name the method it asks for.
-pub use goofi_view::ReduceMethod;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-
-fn method_name(m: ReduceMethod) -> &'static str {
-    match m {
-        ReduceMethod::Envelope => "envelope",
-        ReduceMethod::Subsample => "subsample",
-        ReduceMethod::Area => "area",
-    }
-}
 
 /// Evaluate a merged view plan against a frame: reduce each planned axis, co-reduce the coords,
 /// and record `meta.reduced`. Fail-open — an unreconstructible result returns the source frame.
@@ -36,18 +25,16 @@ pub fn reduce_for_view(frame: &Data, plan: &MergedViewSpec) -> Data {
     let mut planned = plan.axes.clone();
     planned.sort_by_key(|ax| std::cmp::Reverse(ax.dim));
     for ax in &planned {
-        let Some(r) = reduce_axis(&bytes, &shape, ax.dim, ax.max, ax.method) else {
+        let Some(r) = reduce_axis(&bytes, &shape, ax.dim, ax.max) else {
             continue;
         };
         let orig_len = shape[ax.dim];
         // Capture the ORIGINAL coords before slicing, so a small subsampled axis keeps exact labels.
-        let verbatim = (ax.method == ReduceMethod::Subsample && orig_len <= 4096)
-            .then(|| axes.get(ax.dim).and_then(|a| a.coords.clone()))
-            .flatten();
+        let verbatim = (orig_len <= 4096).then(|| axes.get(ax.dim).and_then(|a| a.coords.clone())).flatten();
         bytes = Cow::Owned(r.bytes);
         shape[ax.dim] = r.new_len;
         axes = axes.sliced(ax.dim, &r.centers);
-        let mut entry = axis_record(orig_len, ax.method);
+        let mut entry = axis_record(orig_len);
         if let Some(coords) = verbatim {
             let list = coords
                 .iter()
@@ -91,11 +78,8 @@ pub fn reduce_table(frame: &Data, specs: &[ViewSpec]) -> Data {
 
 /// One axis's reduction, as `meta.reduced` records it. The ONE writer of that shape, so a
 /// producer that reduced a frame itself says it the same way this module does.
-fn axis_record(orig_len: usize, method: ReduceMethod) -> BTreeMap<String, MetaValue> {
-    let mut entry = BTreeMap::new();
-    entry.insert("orig_len".to_string(), MetaValue::Uint(orig_len as u64));
-    entry.insert("method".to_string(), MetaValue::Str(method_name(method).to_string()));
-    entry
+fn axis_record(orig_len: usize) -> BTreeMap<String, MetaValue> {
+    BTreeMap::from([("orig_len".to_string(), MetaValue::Uint(orig_len as u64))])
 }
 
 /// What `dim` measured before every reduction this meta already records, and `now` where it
@@ -114,10 +98,10 @@ pub fn origin_of(meta: &Meta, dim: usize, now: usize) -> usize {
 
 /// Say that `dims` were already reduced — for a producer that rendered the reduced size rather
 /// than making a frame only to shrink it. Without this the frame would understate its own origin.
-pub fn note_reduced(meta: &mut Meta, dims: &[(usize, usize, ReduceMethod)]) {
+pub fn note_reduced(meta: &mut Meta, dims: &[(usize, usize)]) {
     let mut reduced: BTreeMap<String, MetaValue> = BTreeMap::new();
-    for &(dim, orig_len, method) in dims {
-        reduced.insert(dim.to_string(), MetaValue::Map(axis_record(orig_len, method)));
+    for &(dim, orig_len) in dims {
+        reduced.insert(dim.to_string(), MetaValue::Map(axis_record(orig_len)));
     }
     if !reduced.is_empty() {
         meta.set_reduced(Some(MetaValue::Map(reduced)));
@@ -126,8 +110,8 @@ pub fn note_reduced(meta: &mut Meta, dims: &[(usize, usize, ReduceMethod)]) {
 
 /// A frame as 8-bit texels for the browser hop: a quarter of the bytes. Three or four channels
 /// quantize over `[0, 1]`, the colour convention; fewer over the frame's own finite range,
-/// recorded as `reduced.depth = {lo, hi}` so a viewer maps a texel back. `None` for anything but
-/// a 2-D or 3-D array, which is every frame an image viewer draws.
+/// recorded as `reduced.depth = {lo, hi}` so a reader maps a texel back. `None` for anything but
+/// a 2-D or 3-D array.
 pub fn quantize_u8(frame: &Data) -> Option<(Vec<usize>, Vec<u8>, crate::Meta)> {
     let Value::Array(store) = frame.value() else {
         return None;
@@ -159,7 +143,7 @@ pub fn quantize_u8(frame: &Data) -> Option<(Vec<usize>, Vec<u8>, crate::Meta)> {
     Some((shape.to_vec(), texels, meta))
 }
 
-/// Say what window a frame's texels span, so a viewer maps one back to a value. ONE spelling,
+/// Say what window a frame's texels span, so a reader maps one back to a value. ONE spelling,
 /// whether the quantization happened here or on a GPU that wrote the texels directly.
 pub fn note_depth(meta: &mut crate::Meta, lo: f32, hi: f32) {
     let mut reduced = match meta.reduced() {
@@ -192,17 +176,7 @@ pub fn subsample_idx(n: usize, m: usize) -> Vec<usize> {
         .collect()
 }
 
-/// Panics only on a malformed buffer — the length is validated at frame construction.
-fn read_f32(b: &[u8], i: usize) -> f32 {
-    f32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap())
-}
-
-fn write_f32(v: f32, out: &mut Vec<u8>) {
-    out.extend_from_slice(&v.to_le_bytes());
-}
-
-/// One axis's reduction: new bytes, the new axis length, and the original index each entry maps
-/// to. For envelope, a bin's midpoint appears twice, so `centers` still matches the new length.
+/// One axis's reduction: new bytes, the new axis length, and the original index each entry maps to.
 pub struct AxisReduction {
     pub bytes: Vec<u8>,
     pub new_len: usize,
@@ -218,26 +192,13 @@ fn strides(shape: &[usize], dim: usize) -> (usize, usize, usize) {
     (outer, axis, inner)
 }
 
-/// Reduce one axis to at most `max` entries; `None` when it would not shrink the axis.
-pub fn reduce_axis(
-    bytes: &[u8],
-    shape: &[usize],
-    dim: usize,
-    max: usize,
-    method: ReduceMethod,
-) -> Option<AxisReduction> {
+/// Keep at most `max` evenly spaced entries of one axis, each copied whole with everything inside
+/// it; `None` when that would not shrink the axis.
+pub fn reduce_axis(bytes: &[u8], shape: &[usize], dim: usize, max: usize) -> Option<AxisReduction> {
     let elements = shape.iter().try_fold(1usize, |n, &d| n.checked_mul(d))?;
     if elements == 0 || elements.checked_mul(4)? != bytes.len() || dim >= shape.len() || max == 0 {
         return None;
     }
-    match method {
-        ReduceMethod::Subsample => subsample_axis(bytes, shape, dim, max),
-        ReduceMethod::Envelope => envelope_axis(bytes, shape, dim, max),
-        ReduceMethod::Area => area_axis(bytes, shape, dim, max),
-    }
-}
-
-fn subsample_axis(bytes: &[u8], shape: &[usize], dim: usize, max: usize) -> Option<AxisReduction> {
     let (outer, axis, inner) = strides(shape, dim);
     let idx = subsample_idx(axis, max);
     if idx.len() >= axis {
@@ -252,84 +213,4 @@ fn subsample_axis(bytes: &[u8], shape: &[usize], dim: usize, max: usize) -> Opti
         }
     }
     Some(AxisReduction { bytes: out, new_len: idx.len(), centers: idx })
-}
-
-/// Integer bin edges: `bins+1` boundaries evenly spanning `0..axis`.
-fn bin_edges(axis: usize, bins: usize) -> Vec<usize> {
-    (0..=bins).map(|b| ((b as u128 * axis as u128) / bins as u128) as usize).collect()
-}
-
-fn envelope_axis(bytes: &[u8], shape: &[usize], dim: usize, max: usize) -> Option<AxisReduction> {
-    let (outer, axis, inner) = strides(shape, dim);
-    let w = max.min(axis);
-    // Envelope doubles the axis (min,max per bin); only worth it if it still shrinks ≥2×.
-    if w == 0 || w > axis / 2 {
-        return None;
-    }
-    let edges = bin_edges(axis, w);
-    let mut out = Vec::with_capacity(outer * 2 * w * inner * 4);
-    let mut centers = Vec::with_capacity(2 * w);
-    let mut mn = vec![f32::INFINITY; inner];
-    let mut mx = vec![f32::NEG_INFINITY; inner];
-    for o in 0..outer {
-        for b in 0..w {
-            let (lo, hi) = (edges[b], edges[b + 1].max(edges[b] + 1).min(axis));
-            mn.fill(f32::INFINITY);
-            mx.fill(f32::NEG_INFINITY);
-            for a in lo..hi {
-                for i in 0..inner {
-                    let v = read_f32(bytes, (o * axis + a) * inner + i);
-                    if v < mn[i] {
-                        mn[i] = v;
-                    }
-                    if v > mx[i] {
-                        mx[i] = v;
-                    }
-                }
-            }
-            // An all-NaN bin wins no comparison, so both seeds survive — emit NaN rather than
-            // the (+INF, -INF) pair, which would wreck a viewer's autoscale.
-            let all_nan = |i: usize| mn[i] == f32::INFINITY && mx[i] == f32::NEG_INFINITY;
-            for (i, &v) in mn.iter().enumerate() {
-                write_f32(if all_nan(i) { f32::NAN } else { v }, &mut out);
-            }
-            for (i, &v) in mx.iter().enumerate() {
-                write_f32(if all_nan(i) { f32::NAN } else { v }, &mut out);
-            }
-            if o == 0 {
-                let mid = (lo + hi.saturating_sub(1)) / 2;
-                centers.push(mid);
-                centers.push(mid);
-            }
-        }
-    }
-    Some(AxisReduction { bytes: out, new_len: 2 * w, centers })
-}
-
-fn area_axis(bytes: &[u8], shape: &[usize], dim: usize, max: usize) -> Option<AxisReduction> {
-    let (outer, axis, inner) = strides(shape, dim);
-    let m = max.min(axis);
-    if m == 0 || m >= axis {
-        return None;
-    }
-    let edges = bin_edges(axis, m);
-    let mut out = Vec::with_capacity(outer * m * inner * 4);
-    let mut centers = Vec::with_capacity(m);
-    for o in 0..outer {
-        for b in 0..m {
-            let (lo, hi) = (edges[b], edges[b + 1].max(edges[b] + 1).min(axis));
-            for i in 0..inner {
-                // Accumulate in f64 for precision, emit f32.
-                let mut sum = 0.0f64;
-                for a in lo..hi {
-                    sum += read_f32(bytes, (o * axis + a) * inner + i) as f64;
-                }
-                write_f32((sum / (hi - lo) as f64) as f32, &mut out);
-            }
-            if o == 0 {
-                centers.push((lo + hi.saturating_sub(1)) / 2);
-            }
-        }
-    }
-    Some(AxisReduction { bytes: out, new_len: m, centers })
 }

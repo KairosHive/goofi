@@ -79,21 +79,20 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
     assert_eq!((texels[0], texels[15]), (0, 255), "both ends of the frame's own range");
 
     // Step: the depth rides BESIDE an axis reduction, which is what a real image viewer asks for
-    // — it always sends two `area` reductions — so neither block displaces the other.
+    // — its box is a reduction of both picture axes — so neither block displaces the other.
     g.set_param(img, "control", "gray", false);
     v8.view(j!([{ "dtype": "array", "ndim": [], "dims": [],
-                  "reduce": [{ "dim": 0, "max": 2, "method": "area" }], "depth": "u8" }])).await;
+                  "reduce": [{ "dim": 0, "max": 2 }], "aspect": true, "depth": "u8" }])).await;
     let frame = raw_until(&mut v8, |dtype, shape| dtype == "|u1" && shape == [2, 4, 3]).await;
     let (_, meta, _) = goofi_codec::split_frame(&frame).unwrap();
     assert_eq!(depth_range(meta), (0.0, 1.0), "the colour range survives the reduction");
     let axis = at(&reduced(meta), "0").expect("the reduced axis stands beside the depth");
     assert_eq!(at(&axis, "orig_len").and_then(|v| v.as_u64()), Some(4));
-    assert_eq!(at(&axis, "method").and_then(|v| v.as_str().map(str::to_string)), Some("area".into()));
 
-    // Step: a line viewer draws half floats and is served them — half the bytes of an f32
-    // envelope — and the codec widens them back to the f32 the producer emitted.
+    // Step: a line viewer draws half floats and is served them — half the bytes of the f32
+    // subsample — and the codec widens them back to the f32 the producer emitted.
     v.view(j!([{ "dtype": "array", "ndim": [], "dims": [],
-                 "reduce": [{ "dim": -1, "max": 8, "method": "envelope" }], "depth": "f16" }])).await;
+                 "reduce": [{ "dim": -1, "max": 8 }], "depth": "f16" }])).await;
     let frame = raw_until(&mut v, |dtype, _| dtype == "<f2").await;
     let (_, _, body) = goofi_codec::split_frame(&frame).unwrap();
     let (_, shape, halves) = array_body(body);

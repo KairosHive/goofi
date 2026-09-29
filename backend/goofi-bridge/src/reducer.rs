@@ -58,7 +58,13 @@ fn cap_of(g: &Graph) -> f64 {
 
 /// A rate on ONE grid for the whole process: every serve lands on a tick of its interval, so
 /// streams at one rate arrive together, a page paints them once, and work never stretches it.
-pub(crate) struct Pace(std::time::Instant);
+pub(crate) struct Pace {
+    tick: std::time::Instant,
+    /// The grid `tick` is on; a tick armed on another grid is nobody's.
+    interval: Duration,
+    /// Whether something waits for `tick`: only then is a wake after it that tick's, late.
+    armed: bool,
+}
 
 /// The first tick of `interval`'s grid at or after `at`.
 fn tick(interval: Duration, at: std::time::Instant) -> std::time::Instant {
@@ -71,18 +77,22 @@ fn tick(interval: Duration, at: std::time::Instant) -> std::time::Instant {
 
 impl Pace {
     pub(crate) fn new() -> Pace {
-        Pace(std::time::Instant::now())
+        Pace { tick: std::time::Instant::now(), interval: Duration::ZERO, armed: false }
     }
-    /// The tick to serve on. One passed by more than half an interval is not a wake's lateness
-    /// but an idle stretch, and the next tick takes its place.
+    /// The tick to serve on, armed by this ask. An armed one passed by more than half an interval
+    /// is not a wake's lateness but an idle stretch, and the next tick takes its place.
     pub(crate) fn due(&mut self, interval: Duration, now: std::time::Instant) -> std::time::Instant {
-        if self.0 + interval / 2 <= now {
-            self.0 = tick(interval, now);
+        if !self.armed || self.interval != interval || self.tick + interval / 2 <= now {
+            self.tick = tick(interval, now);
+            self.interval = interval;
+            self.armed = true;
         }
-        self.0
+        self.tick
     }
+    /// A serve took this tick: the next one is nobody's until a wait arms it.
     pub(crate) fn take(&mut self, interval: Duration, now: std::time::Instant) {
-        self.0 = tick(interval, now + Duration::from_nanos(1));
+        self.tick = tick(interval, now + Duration::from_nanos(1));
+        self.armed = false;
     }
 }
 
@@ -412,9 +422,9 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 watched && held && (pending || served != Some(gen.load(Ordering::Acquire)))
             };
             let interval = serve_interval(&specs.lock().unwrap(), f64::from_bits(cap.load(Ordering::Relaxed)));
-            let due = pace.due(interval, now);
+            // Armed only when a serve is owed: a fresh frame after an idle tick waits for the next.
             let duties = [
-                (owed && due > now).then_some(due),
+                owed.then(|| pace.due(interval, now)).filter(|at| *at > now),
                 (feed.is_some() && !wanted).then_some(asked_at + IDLE),
                 grace.filter(|at| *at > now),
                 snapped.map(|at| at + IDLE).filter(|at| *at > now),
@@ -533,7 +543,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 // decoding still says what the viewers may ask of the one after it.
                 match peeked.as_ref() {
                     Some(p) if !held.values().all(|v| v.specs.is_empty()) => {
-                        goofi_view::image_box(&union_specs(&held), p)
+                        goofi_view::asked_box(&union_specs(&held), p)
                     }
                     // Nothing declared, or nothing produced yet to measure a declaration against.
                     _ => Some(goofi_view::ViewWant {
@@ -574,8 +584,10 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 continue;
             }
             // The viewer rate, held here, where N viewers became one stream; a serve held back is
-            // the duty the loop wakes to when the pace comes due.
+            // the duty the loop wakes to when the pace comes due. The rate is read again: the
+            // viewer this serves may have joined during the wait.
             let now = std::time::Instant::now();
+            let interval = serve_interval(&specs.lock().unwrap(), f64::from_bits(cap.load(Ordering::Relaxed)));
             if now < pace.due(interval, now) {
                 continue;
             }

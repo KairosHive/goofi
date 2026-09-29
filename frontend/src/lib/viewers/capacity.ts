@@ -6,16 +6,15 @@ import { isTrajectory, type ViewerKind } from './kind';
 import type { SettingsMap } from './settingsSchema';
 import { VIEWER_KINDS } from '$lib/api/vocab';
 
-export type ReduceMethod = 'envelope' | 'subsample' | 'area';
 /** The sample width a viewer can draw; the stream is as narrow as the widest viewer's ask. */
 export type Depth = 'f32' | 'f16' | 'u8';
 export type DimCmp = 'lt' | 'le' | 'eq' | 'ge' | 'gt';
 export type ViewDtype = 'array' | 'string' | 'table';
 
+/** At most `max` entries on `dim`, subsampled at an even stride. */
 export interface AxisReduce {
 	dim: number;
 	max: number;
-	method: ReduceMethod;
 }
 
 export interface DimConstraint {
@@ -30,6 +29,8 @@ export interface ViewSpec {
 	dims: DimConstraint[];
 	reduce: AxisReduce[];
 	depth?: Depth;
+	/** The asks on dims 0 and 1 are one box: shrunk by one factor, so a picture keeps its aspect. */
+	aspect?: boolean;
 }
 
 /** Floor so a 0-px / collapsed layout never asks for a degenerate reduction. */
@@ -53,8 +54,8 @@ function ndimOf(kind: ViewerKind): [DimCmp, number][] {
 }
 
 /** What a kind accepts but cannot draw: it shows a summary of such a frame, so it asks for a small
- * area preview — the same shape an image viewer asks for, so the fold stays homogeneous and takes
- * the largest box per dim rather than falling out to the whole frame. `null` where a kind draws
+ * preview — the same box an image viewer asks for, so the fold stays homogeneous and takes the
+ * largest box per dim rather than falling out to the whole frame. `null` where a kind draws
  * everything it accepts. */
 function describeSpec(kind: ViewerKind, w: number, h: number): ViewSpec | null {
 	const k = VIEWER_KINDS.find((x) => x.id === kind);
@@ -67,10 +68,11 @@ function describeSpec(kind: ViewerKind, w: number, h: number): ViewSpec | null {
 		],
 		dims: [],
 		reduce: [
-			{ dim: 0, max: h, method: 'area' },
-			{ dim: 1, max: w, method: 'area' }
+			{ dim: 0, max: h },
+			{ dim: 1, max: w }
 		],
-		depth: 'u8'
+		depth: 'u8',
+		aspect: true
 	};
 }
 
@@ -93,19 +95,19 @@ export function viewSpecForKind(kind: ViewerKind, width: number, height: number,
 			dtype: 'array',
 			ndim: [['eq', 2]],
 			dims: [],
-			reduce: [{ dim: -1, max: Math.min(w, MAX_POINTS), method: 'subsample' }]
+			reduce: [{ dim: -1, max: Math.min(w, MAX_POINTS) }]
 		};
 	}
 	if (kind === 'line') {
-		// For 1-D, dim 0 and -1 collide on the bridge; it resolves by richness (envelope wins).
+		// For 1-D, dim 0 and -1 collide on the bridge, which takes the larger cap.
 		// Half floats: 11 significant bits are more than a device pixel resolves, for half the bytes.
 		return {
 			dtype: 'array',
 			ndim,
 			dims: [],
 			reduce: [
-				{ dim: 0, max: MAX_ROWS, method: 'subsample' },
-				{ dim: -1, max: w, method: 'envelope' }
+				{ dim: 0, max: MAX_ROWS },
+				{ dim: -1, max: w }
 			],
 			depth: 'f16'
 		};
@@ -118,10 +120,11 @@ export function viewSpecForKind(kind: ViewerKind, width: number, height: number,
 			ndim,
 			dims: [],
 			reduce: [
-				{ dim: 0, max: h, method: 'area' },
-				{ dim: 1, max: w, method: 'area' }
+				{ dim: 0, max: h },
+				{ dim: 1, max: w }
 			],
-			depth: 'u8'
+			depth: 'u8',
+			aspect: true
 		};
 	}
 	if (kind === 'brain') {

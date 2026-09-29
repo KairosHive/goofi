@@ -275,7 +275,7 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
                || g.state.reducers.subscribers(&key) == 0).await;
 
     let spec = |max: usize| j!([{ "dtype": "array", "ndim": [["le", 2]], "dims": [],
-                                  "reduce": [{ "dim": -1, "max": max, "method": "envelope" }] }]);
+                                  "reduce": [{ "dim": -1, "max": max }] }]);
     let mut wide = Viewer::open(&base, &hex(osc), "out").await;
     wide.view(spec(256)).await;
     let mut narrow = Viewer::open(&base, &hex(osc), "out").await;
@@ -288,10 +288,10 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
         rest.push(v);
     }
 
-    // The fold takes the largest need per dim, and an envelope of width W carries 2·W samples.
+    // The fold takes the largest need per dim: a subsample of width W carries W samples.
     // Every one of the six is awaited: a viewer holding a folded frame is a viewer that is counted.
     for v in [&mut wide, &mut narrow].into_iter().chain(rest.iter_mut()) {
-        let d = v.until(|d| f32s(d).len() == 512).await;
+        let d = v.until(|d| f32s(d).len() == 256).await;
         assert!(d.meta().reduced().is_some(), "the frame says it is a reduction");
     }
     assert_eq!(g.state.reducers.active_slots(), 1, "six viewers, one reducer");
@@ -303,11 +303,11 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     whole.view(j!([{ "dtype": "array", "ndim": [["le", 2]], "dims": [], "reduce": [] }])).await;
     for v in [&mut whole, &mut wide, &mut narrow] {
         let d = v.until(|d| !f32s(d).is_empty() && d.meta().reduced().is_none()).await;
-        assert!(f32s(&d).len() > 512, "the whole frame, not the fold of the others");
+        assert!(f32s(&d).len() > 256, "the whole frame, not the fold of the others");
     }
     drop(whole);
     eventually("the whole-frame viewer to leave", || g.state.reducers.subscribers(&key) == 6).await;
-    wide.until(|d| f32s(d).len() == 512).await;
+    wide.until(|d| f32s(d).len() == 256).await;
 
     // A sub-patch boundary port is a NAMING indirection over this same stream — it never runs and
     // never holds a frame — so a viewer on one has to land on the reducer already here rather than

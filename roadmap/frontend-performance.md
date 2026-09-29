@@ -23,4 +23,4 @@
   one-deep with safe overflow, so it drains at most one sample per wake.
 - Re-investigating "per-frame `clientWidth` reads force layout after the same microtask's
   writes": Svelte's batch runs render effects before user effects, and the read sites are not
-  reached by envelope or scalar frames.
+  reached by reduced or scalar frames.

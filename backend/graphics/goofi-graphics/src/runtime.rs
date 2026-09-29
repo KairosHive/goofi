@@ -440,8 +440,7 @@ impl Runtime {
                         // and a viewer could not map a texel back to the pixel it came from.
                         let mut meta = Meta::new();
                         if shrunk.from != shrunk.to {
-                            let area = goofi_view::ReduceMethod::Area;
-                            let axes = [(0, shrunk.from.1 as usize, area), (1, shrunk.from.0 as usize, area)];
+                            let axes = [(0, shrunk.from.1 as usize), (1, shrunk.from.0 as usize)];
                             goofi_core::reduce::note_reduced(&mut meta, &axes);
                         }
                         let held = if w == Want::TapU8 {

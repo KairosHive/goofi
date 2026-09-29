@@ -976,8 +976,7 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
     let mut viewer = Viewer::open(&base, &hex(big), "out").await;
     viewer
         .view(j!([{ "dtype": "array", "ndim": [["ge", 2], ["le", 3]], "dims": [],
-                    "reduce": [{ "dim": 0, "max": 128, "method": "area" },
-                               { "dim": 1, "max": 128, "method": "area" }] }]))
+                    "reduce": [{ "dim": 0, "max": 128 }, { "dim": 1, "max": 128 }], "aspect": true }]))
         .await;
     let small = made(vec![64, 128, 4]);
     let reduced = small.meta().reduced().cloned().expect("a frame shrunk on the way out says so");
@@ -1042,18 +1041,16 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
     let mut cannot = Viewer::open(&base, &hex(big), "out").await;
     cannot
         .view(j!([{ "dtype": "array", "ndim": [["le", 2]], "dims": [],
-                    "reduce": [{ "dim": 0, "max": 300, "method": "subsample" },
-                               { "dim": -1, "max": 800, "method": "envelope" }] }]))
+                    "reduce": [{ "dim": 0, "max": 300 }, { "dim": -1, "max": 800 }] }]))
         .await;
     holds_at(vec![1, 1, 4], "a viewer that cannot draw the frame widened the readback");
 
     // Step: and beside one that CAN draw it, the fold takes the largest box per dim rather than
-    // falling out to the whole frame — the line panel drops out, it does not degrade the kernel.
+    // falling out to the whole frame — the line panel drops out, it does not uncouple the box.
     let mut draws = Viewer::open(&base, &hex(big), "out").await;
     draws
         .view(j!([{ "dtype": "array", "ndim": [["ge", 2], ["le", 3]], "dims": [],
-                    "reduce": [{ "dim": 0, "max": 128, "method": "area" },
-                               { "dim": 1, "max": 128, "method": "area" }] }]))
+                    "reduce": [{ "dim": 0, "max": 128 }, { "dim": 1, "max": 128 }], "aspect": true }]))
         .await;
     holds_at(vec![64, 128, 4], "a viewer that cannot draw the frame shrank one that can");
 }

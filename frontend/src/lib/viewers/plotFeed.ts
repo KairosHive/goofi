@@ -3,7 +3,6 @@ import type { ArrayData, DataFrame } from '$lib/codec/decode';
 import { extent, type ImagePlot, type LineData } from 'plotluck';
 import { decimateMinMax } from './decimate';
 import { isU8, sampleRange } from './depth';
-import { envelopeBand, readEnvelope } from './envelope';
 import type { SettingsMap } from './settingsSchema';
 
 /** `cols` is the plot's width in device px: a frame denser than two samples per column is min/max folded. */
@@ -18,11 +17,6 @@ export function lineData(frame: DataFrame, cols: number, logX: boolean): LineDat
 	for (let c = 0; c < series; c++) rows.push(v.subarray(c * m, (c + 1) * m));
 	// The index axis starts at 1 under log x, since log10(0) has no place on it.
 	const base = logX ? 1 : 0;
-	const env = readEnvelope(frame.meta, shape.length);
-	if (env) {
-		const band = envelopeBand(rows, env.origLen, base);
-		return { rows: band.ys, xs: band.xs };
-	}
 	if (m > cols * 2) {
 		const dec = decimateMinMax(rows, m, cols, base);
 		return { rows: dec.ys, xs: dec.xs };
