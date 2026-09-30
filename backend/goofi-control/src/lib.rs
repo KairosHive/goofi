@@ -8,7 +8,8 @@
 
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use goofi_core::{Data, Param};
@@ -63,7 +64,7 @@ impl Shared {
     }
 
     fn report(&self, uid: Uid, status: Status) {
-        self.reports.lock().unwrap().push((uid, status));
+        self.reports.lock().push((uid, status));
         self.waker.notify();
     }
 
@@ -77,7 +78,7 @@ impl Shared {
     /// many. ONE lock over the reports, so nothing lands between a read and a clear.
     pub fn drain(&self, pending: &mut Vec<(Uid, Status)>, apply: &mut dyn FnMut(Uid, Status)) -> usize {
         let mut all = std::mem::take(pending);
-        all.append(&mut self.reports.lock().expect("the reports"));
+        all.append(&mut self.reports.lock());
         let n = all.len();
         for (uid, status) in all {
             apply(uid, status);
@@ -189,22 +190,22 @@ impl Handle {
     /// caller waits outside the graph lock and never on the audio callback.
     pub fn flush(&self) -> std::sync::mpsc::Receiver<Result<(), String>> {
         let (ack, done) = std::sync::mpsc::sync_channel(1);
-        let armed = self.last.lock().expect("the last desired").as_ref()
+        let armed = self.last.lock().as_ref()
             .map(|d| d.record.iter().map(|(slot, _)| slot.clone()).collect()).unwrap_or_default();
-        self.mail.lock().unwrap().flush.push(Flush { armed, ack });
+        self.mail.lock().flush.push(Flush { armed, ack });
         let _ = self.bell.ring(0);
         done
     }
 
     fn send(&self, desired: Desired) {
-        *self.last.lock().expect("the last desired") = Some(desired.clone());
-        self.mail.lock().unwrap().desired = Some(desired);
+        *self.last.lock() = Some(desired.clone());
+        self.mail.lock().desired = Some(desired);
         let _ = self.bell.ring(0);
     }
 
     /// Send only what is new, and say whether it did.
     pub fn send_if_changed(&self, desired: Desired) -> bool {
-        let fresh = self.last.lock().expect("the last desired").as_ref() != Some(&desired);
+        let fresh = self.last.lock().as_ref() != Some(&desired);
         if fresh {
             self.send(desired);
         }
@@ -212,12 +213,12 @@ impl Handle {
     }
 
     pub fn refresh(&self, key: ParamKey) {
-        self.mail.lock().unwrap().refresh.push(key);
+        self.mail.lock().refresh.push(key);
         let _ = self.bell.ring(0);
     }
 
     pub fn pulse(&self, key: ParamKey) {
-        self.mail.lock().unwrap().pulse.push(key);
+        self.mail.lock().pulse.push(key);
         let _ = self.bell.ring(0);
     }
 
@@ -372,7 +373,7 @@ impl<H: Half> Control<H> {
                 }
                 held
             });
-            let mail = std::mem::take(&mut *self.mail.lock().unwrap());
+            let mail = std::mem::take(&mut *self.mail.lock());
             if let Some(d) = mail.desired {
                 self.apply(d);
             }
@@ -678,7 +679,7 @@ impl<H: Half> Control<H> {
         let b = &self.binds[i];
         let param = b.param;
         let target = &self.consts[param];
-        let evaluator = self.shared.evaluator.lock().unwrap().clone();
+        let evaluator = self.shared.evaluator.lock().clone();
         let t = self.time.now();
         let (value, error) = match b.expr.evaluate(evaluator.as_deref(), t, target) {
             Ok(Some(v)) if !scalar(&v).is_finite() => (None, Some(format!("evaluated to {}", scalar(&v)))),

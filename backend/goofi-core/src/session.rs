@@ -55,11 +55,16 @@ pub fn workspace_dir(id: &str) -> PathBuf {
     workspaces_base().join(id)
 }
 
-/// A 64-bit random id, hex. Short on purpose: it is a path segment under the socket cap above.
-pub fn fresh_id() -> String {
-    let mut nonce = [0u8; 8];
-    getrandom::fill(&mut nonce).expect("the OS random source");
-    format!("{:016x}", u64::from_be_bytes(nonce))
+/// `bytes` random bytes, hex: the one random source every id and nonce is minted from.
+pub fn nonce_hex(bytes: usize) -> Result<String, String> {
+    let mut nonce = vec![0u8; bytes];
+    getrandom::fill(&mut nonce).map_err(|e| format!("the OS random source: {e}"))?;
+    Ok(nonce.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// A 64-bit random session id. Short on purpose: it is a path segment under the socket cap above.
+pub fn fresh_id() -> Result<String, String> {
+    nonce_hex(8)
 }
 
 static CURRENT: OnceLock<String> = OnceLock::new();

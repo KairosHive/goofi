@@ -167,7 +167,7 @@ fn inspect_node_reports_params_whether_each_slot_is_emitting_and_the_error() {
                                    "expression": "variables.system.default_ufreq / 30" }));
     // A rate is MEASURED, so it needs two emits and a report across the status service.
     g.until("the LFO's measured rate", |g| {
-        g.state.graph.lock().unwrap().node_ufreq(osc)
+        g.state.graph.lock().node_ufreq(osc)
     });
 
     let out = text(&g, "node state", j!({ "node": hex(osc) }));
@@ -205,7 +205,7 @@ fn inspect_node_reports_params_whether_each_slot_is_emitting_and_the_error() {
     // With an evaluator the error changes hands to the NODE. A node is handed one at BIRTH, so this
     // one is born after the injection.
     let broken = Arc::new(AtomicBool::new(true));
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(Flaky { broken: broken.clone() }));
+    g.state.graph.lock().set_evaluator(Arc::new(Flaky { broken: broken.clone() }));
     let bound = g.add("LFO");
     g.call("node param edit", j!({ "node": hex(bound), "param": "lfo/amplitude",
                                    "expression": "variables.system.default_ufreq / 30" }));

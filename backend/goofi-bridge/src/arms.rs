@@ -58,7 +58,7 @@ pub(crate) fn session_state(
     _actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    Ok(state.doc.lock().unwrap().to_json())
+    Ok(state.doc.lock().to_json())
 }
 
 // The harness ops touch no graph state: they fork and signal children, and the roster converges
@@ -86,7 +86,7 @@ pub(crate) fn agent_start(
     // The mount lock is held ACROSS the spawn, so a concurrent load's swap-and-delete cannot
     // take the workspace out from under the child's cwd.
     let id = {
-        let mount = state.mount.lock().unwrap();
+        let mount = state.mount.lock();
         state.harnesses.spawn(
             h,
             &mount,
@@ -154,10 +154,10 @@ pub(crate) fn compound(
     // steps make — never a position, which a peer's removal could shift. No step touches the
     // dirty flag — only this settle does — so a refusal has nothing to restore.
     let batch = writes.then(|| {
-        state.history.lock().unwrap().clear_redo(actor);
+        state.history.lock().clear_redo(actor);
         // Held on the GRAPH, because the drain is another thread: without the hold, its
         // settle can deliver this compound's intermediates between two steps.
-        state.graph.lock().unwrap().hold_settle();
+        state.graph.lock().hold_settle();
         goofi_graph::open_batch()
     });
     let mut results = Vec::with_capacity(resolved.len());
@@ -168,8 +168,8 @@ pub(crate) fn compound(
                 // A compound is a UNIT, so a refused step takes back the ones that landed —
                 // and the events they queued name state the correction just took away.
                 if let Some(batch) = &batch {
-                    let mut g = state.graph.lock().unwrap();
-                    state.history.lock().unwrap().rollback(&mut g, batch.id());
+                    let mut g = state.graph.lock();
+                    state.history.lock().rollback(&mut g, batch.id());
                     g.release_settle();
                     drop(g);
                     events.clear();
@@ -180,8 +180,8 @@ pub(crate) fn compound(
         }
     }
     if let Some(batch) = &batch {
-        state.history.lock().unwrap().coalesce(actor, batch.id());
-        state.graph.lock().unwrap().release_settle();
+        state.history.lock().coalesce(actor, batch.id());
+        state.graph.lock().release_settle();
         resync_and_broadcast(state);
         events.extend(state.set_dirty(true));
     }
@@ -196,7 +196,7 @@ pub(crate) fn library_list(
     _actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let g = state.graph.lock().unwrap();
+    let g = state.graph.lock();
     Ok(json!({ "types": schemas::catalog_types(&g, detail(payload, "full")) }))
 }
 
@@ -210,7 +210,7 @@ pub(crate) fn library_get(
     let ty = parse_str(payload, "type")?;
     let mount = state.mount();
     let source = flag(payload, "source", false);
-    inspect::node_source(&state.graph.lock().unwrap(), ty, &mount, &state.node_roots(), source)
+    inspect::node_source(&state.graph.lock(), ty, &mount, &state.node_roots(), source)
 }
 
 /// Move a node file out of the open patch and into the private library, where every later patch
@@ -226,7 +226,7 @@ pub(crate) fn library_save(
     let overwrite = flag(payload, "overwrite", false);
     let mount = state.mount();
     let (engine, bare, from) = {
-        let g = state.graph.lock().unwrap();
+        let g = state.graph.lock();
         let (engine, entry) = g.resolve_type(asked).map_err(|e| format!("library save: {e}"))?;
         let ty = goofi_node::qualify(engine, entry.manifest.type_name);
         if !g.is_patch_type(&ty) && !g.is_custom_type(&ty) {
@@ -274,7 +274,7 @@ pub(crate) fn library_save(
     }
     let to = held.unwrap_or(to);
     std::fs::create_dir_all(&library).map_err(|e| format!("library save: {}: {e}", library.display()))?;
-    let staged = library.join(format!(".save-{}.part", crate::nonce_hex()));
+    let staged = library.join(format!(".save-{}.part", crate::nonce_hex()?));
     let replace = (|| -> std::io::Result<()> {
         let mut input = std::fs::File::open(&from)?;
         let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&staged)?;
@@ -304,7 +304,7 @@ pub(crate) fn library_save(
     // Rescanned but NOT restarted: the code behind every live instance is byte for byte the file
     // that just moved.
     {
-        let mut g = state.graph.lock().unwrap();
+        let mut g = state.graph.lock();
         rescan(state, &mut g, &mount);
         events.push(event("node_types", json!({ "types": schemas::catalog_types(&g, Detail::Full) })));
     }
@@ -321,7 +321,7 @@ pub(crate) fn library_refresh(
 ) -> Result<Value, String> {
     prebuild(state, &state.mount());
     let result = {
-        let mut g = state.graph.lock().unwrap();
+        let mut g = state.graph.lock();
         let (diff, _) = rescan(state, &mut g, &state.mount());
         restart_changed(&mut g, &diff);
         events.push(event("node_types", json!({ "types": schemas::catalog_types(&g, Detail::Full) })));
@@ -337,7 +337,7 @@ pub(crate) fn nodes_copy(
     _actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let g = state.graph.lock().unwrap();
+    let g = state.graph.lock();
     let uids = parse_uid_list(&g, payload, "nodes")?;
     Ok(json!({ "doc": g.fragment(&g.subtree_of(&uids)) }))
 }
@@ -348,7 +348,7 @@ pub(crate) fn nodes_paste(
     actor: &str,
     events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let doc = payload.get("doc").ok_or("nodes paste: missing doc")?;
     let offset = payload
         .get("pos")
@@ -358,7 +358,7 @@ pub(crate) fn nodes_paste(
         .unwrap_or([0.0, 0.0]);
     let scope = parse_uid_opt(&g, payload, "inst_id", "nodes paste")?;
     let (cmd, rename) = g.import_fragment(doc, scope, offset)?;
-    state.history.lock().unwrap().apply(&mut g, actor, cmd)?;
+    state.history.lock().apply(&mut g, actor, cmd)?;
     for uid in rename.values() {
         events.push(event("node_added", json!({ "uid": uid })));
     }
@@ -371,7 +371,7 @@ pub(crate) fn node_add(
     actor: &str,
     events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let ty = payload
         .get("type")
         .and_then(|v| v.as_str())
@@ -417,7 +417,7 @@ pub(crate) fn node_add(
         record: None,
         scope,
     };
-    let uid = match state.history.lock().unwrap().apply(&mut g, actor, cmd)? {
+    let uid = match state.history.lock().apply(&mut g, actor, cmd)? {
         goofi_graph::Outcome::Uid(u) => u,
         _ => return Err("node add: no uid returned".into()),
     };
@@ -452,13 +452,13 @@ pub(crate) fn node_remove(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let uid = parse_uid(&g, payload, "node")?;
     // The command is idempotent, so a uid naming nothing succeeds; the reply says which of the
     // two happened.
     let existed = g.exists(uid);
     let cmd = goofi_graph::Command::RemoveNode { uid };
-    state.history.lock().unwrap().apply(&mut g, actor, cmd)?;
+    state.history.lock().apply(&mut g, actor, cmd)?;
     Ok(json!({ "removed": existed }))
 }
 
@@ -471,7 +471,7 @@ pub(crate) fn node_restart(
     events: &mut Vec<String>,
 ) -> Result<Value, String> {
     {
-        let mut g = state.graph.lock().unwrap();
+        let mut g = state.graph.lock();
         let uid = parse_uid(&g, payload, "node")?;
         g.restart_node(uid)?;
         // Pushed at once, so the red border lifts on the click rather than on the sweep.
@@ -489,7 +489,7 @@ pub(crate) fn node_editor(
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
     let action = {
-        let mut g = state.graph.lock().unwrap();
+        let mut g = state.graph.lock();
         let uid = parse_uid(&g, payload, "node")?;
         let show = payload.get("show").and_then(Value::as_bool).unwrap_or(true);
         g.node_editor(uid, show)?
@@ -503,11 +503,11 @@ pub(crate) fn link_add(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let (a, so, b, si) = parse_link(&g, payload, "link add")?;
     let (a, so) = wirable_endpoint(&g, a, &so, "from")?;
     let (b, si) = wirable_endpoint(&g, b, &si, "to")?;
-    state.history.lock().unwrap().apply(
+    state.history.lock().apply(
         &mut g,
         actor,
         goofi_graph::Command::AddLink {
@@ -536,13 +536,13 @@ pub(crate) fn link_remove(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let (a, so, b, si) = parse_link(&g, payload, "link remove")?;
     let (a, so) = g.normalise(a, &so);
     let (b, si) = g.normalise(b, &si);
     // Idempotent for the same reason `remove_node` is, and answered the same way.
     let existed = g.has_link(a, &so, b, &si);
-    state.history.lock().unwrap().apply(
+    state.history.lock().apply(
         &mut g,
         actor,
         goofi_graph::Command::RemoveLink { node_out: a, slot_out: so, node_in: b, slot_in: si },
@@ -562,7 +562,7 @@ pub(crate) fn node_param_request(
     let kind: goofi_node::RequestKind = serde_json::from_value(payload["request"].clone())
         .map_err(|_| "node param request: `request` is `refresh` or `pulse`".to_string())?;
     {
-        let mut g = state.graph.lock().unwrap();
+        let mut g = state.graph.lock();
         let uid = parse_uid(&g, payload, "node")?;
         let (group, name) = parse_param_addr(payload, "node param request")?;
         g.request(uid, &group, &name, kind)?;
@@ -587,11 +587,11 @@ pub(crate) fn node_touched_clear(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let uid = parse_uid(&g, payload, "node")?;
     // `None` means "snapshot what is there", which the command does under the history lock so the
     // inverse captures the blob it replaced.
-    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::SetBaseline { uid, baseline: None })?;
+    state.history.lock().apply(&mut g, actor, goofi_graph::Command::SetBaseline { uid, baseline: None })?;
     let cleared = g.baseline(uid).and_then(|b| b.as_object()).map_or(0, serde_json::Map::len);
     // The zero point is document state and reaches no engine, so nothing else would mirror it:
     // without this the graph holds the new baseline and every client still reads the old one.
@@ -650,7 +650,7 @@ pub(crate) fn node_snapshot(
     // The address resolves exactly as a viewer's does: a facade or a port names the stream
     // BEHIND it, and one with nothing behind it yet is the unwired state, never an error.
     let key = {
-        let g = state.graph.lock().unwrap();
+        let g = state.graph.lock();
         let (uid, slot) = parse_endpoint(&g, payload, "node snapshot", "output")?;
         if !g.exists(uid) {
             return Err(format!("node snapshot: no node {}", named(&g, uid)));
@@ -716,7 +716,7 @@ pub(crate) fn node_param_edit(
     actor: &str,
     events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let uid = parse_uid(&g, payload, "node")?;
     let (group, name) = parse_param_addr(payload, "node param edit")?;
     let mut entry = serde_json::Map::new();
@@ -733,7 +733,7 @@ pub(crate) fn node_param_edit(
         .map_err(|e| format!("node param edit: {e}"))?
         .pop()
         .ok_or("node param edit: nothing to change")?;
-    state.history.lock().unwrap().apply(&mut g, actor, cmd)?;
+    state.history.lock().apply(&mut g, actor, cmd)?;
     if describes {
         events.push(param_state_update(&g, uid, &[]));
     }
@@ -751,7 +751,7 @@ pub(crate) fn node_edit(
     actor: &str,
     events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let uid = parse_uid(&g, payload, "node")?;
     let name = payload.get("name").and_then(|v| v.as_str()).map(str::to_string);
     // The rename command tolerates a collision as a no-op so a stale replay converges; the
@@ -790,7 +790,7 @@ pub(crate) fn node_edit(
     if name.is_none() && pos.is_none() && viewers.is_none() {
         return Err("node edit: give a name, pos or viewer".into());
     }
-    let out = state.history.lock().unwrap().apply(
+    let out = state.history.lock().apply(
         &mut g,
         actor,
         goofi_graph::Command::EditNode { uid, name, pos, viewers },
@@ -838,7 +838,7 @@ pub(crate) fn layout_viewpoint_edit(
     _actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    state.graph.lock().unwrap().set_viewpoint(payload.get("value").cloned().unwrap_or(Value::Null));
+    state.graph.lock().set_viewpoint(payload.get("value").cloned().unwrap_or(Value::Null));
     // No projection: the viewpoint is the manifest's alone. The pulse is for the autosave, which
     // takes the new viewpoint on its next tick of an already dirty patch.
     state.changed.notify();
@@ -851,7 +851,7 @@ pub(crate) fn layout_inspect(
     _actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let g = state.graph.lock().unwrap();
+    let g = state.graph.lock();
     let tab = payload.get("tab").and_then(|v| v.as_str()).map(str::to_string);
     Ok(json!({ "text": inspect::layout_tree(&g, tab.as_deref()) }))
 }
@@ -863,7 +863,7 @@ pub(crate) fn layout_tab_edit(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let tab = parse_str(payload, "tab")?.to_string();
     let name = parse_str(payload, "name")?;
     let writes = g.arrangement().rename_tab(&tab, name)?;
@@ -877,7 +877,7 @@ pub(crate) fn layout_panel_edit(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let panel = parse_str(payload, "panel")?.to_string();
     let ty = payload.get("type").and_then(|v| v.as_str()).map(str::to_string);
     let panel_state = payload.get("state").cloned().filter(|v| !v.is_null());
@@ -929,7 +929,7 @@ pub(crate) fn layout_split_edit(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let split = parse_str(payload, "split")?.to_string();
     // A non-numeric entry becomes NaN, which the planner refuses beside a zero or a negative
     // one — so "is this a fraction" is answered in one place.
@@ -955,7 +955,7 @@ pub(crate) fn layout_panel_add(
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
     const OP: &str = "layout panel add";
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let beside = payload.get("beside").and_then(|v| v.as_str());
     let ratio = payload.get("ratio").and_then(|v| v.as_f64()).unwrap_or(0.5);
     match beside {
@@ -991,7 +991,7 @@ pub(crate) fn layout_move(
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
     const OP: &str = "layout move";
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let entry = parse_str(payload, "entry")?.to_string();
     let beside = payload.get("beside").and_then(|v| v.as_str()).map(str::to_string);
     let within = payload.get("in").and_then(|v| v.as_str()).map(str::to_string);
@@ -1043,7 +1043,7 @@ pub(crate) fn layout_remove(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let panel = parse_str(payload, "entry")?.to_string();
     // A tab is closed whole; anything else is closed with promote. Planned here only so a bad id
     // answers teachably: `LayoutClose` re-plans it under this same lock, and DEGRADES rather
@@ -1102,7 +1102,7 @@ pub(crate) fn control_list(
     _actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let g = state.graph.lock().unwrap();
+    let g = state.graph.lock();
     let panels: Vec<Value> =
         g.arrangement().control_panels().into_iter().map(|(panel, group)| json!({ "panel": panel, "group": group })).collect();
     let mut groups = serde_json::Map::new();
@@ -1135,7 +1135,7 @@ pub(crate) fn control_add(
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
     use goofi_core::variables::{free_cell, is_valid_identifier};
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let group = parse_str(payload, "group")?.to_string();
     if !is_valid_identifier(&group) {
         return Err(format!("control add: invalid group `{group}`: {}", goofi_core::variables::VARIABLE_NAME_RULE));
@@ -1186,7 +1186,7 @@ pub(crate) fn control_add(
     }
     let control: goofi_core::variables::Control = serde_json::from_value(record.clone()).map_err(|e| format!("control add: {e}"))?;
     let cmd = goofi_graph::Command::EditVariable { name: name.clone(), value: Some(value), at: None, control: Some(Some(control)) };
-    state.history.lock().unwrap().apply(&mut g, actor, cmd)?;
+    state.history.lock().apply(&mut g, actor, cmd)?;
     Ok(json!({ "name": name, "control": record }))
 }
 
@@ -1196,7 +1196,7 @@ pub(crate) fn control_edit(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let (group, _, name) = element_of(&g, "control edit", payload)?;
     let mut cmds = Vec::new();
     let mut target = name.clone();
@@ -1224,7 +1224,7 @@ pub(crate) fn control_edit(
     if cmds.is_empty() {
         return Err("control edit: nothing to change — give a name, a kind, a range, options or a cell".into());
     }
-    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::Compound(cmds))?;
+    state.history.lock().apply(&mut g, actor, goofi_graph::Command::Compound(cmds))?;
     Ok(json!({ "name": target }))
 }
 
@@ -1234,9 +1234,9 @@ pub(crate) fn control_remove(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let (_, _, name) = element_of(&g, "control remove", payload)?;
-    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::RemoveVariable { name })?;
+    state.history.lock().apply(&mut g, actor, goofi_graph::Command::RemoveVariable { name })?;
     Ok(json!({ "removed": true }))
 }
 
@@ -1251,7 +1251,7 @@ pub(crate) fn control_paint(
     events: &mut Vec<String>,
 ) -> Result<Value, String> {
     let name = {
-        let g = state.graph.lock().unwrap();
+        let g = state.graph.lock();
         let (_, _, name) = element_of(&g, "control paint", payload)?;
         match g.variables().control(&name).map(|c| c.kind) {
             Some(goofi_core::variables::ControlKind::Paint) => name,
@@ -1276,7 +1276,7 @@ pub(crate) fn control_source(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let (_, _, name) = element_of(&g, "control source", payload)?;
     let reference = parse_str(payload, "reference")?.trim().to_string();
     let index = match payload.get("index") {
@@ -1285,7 +1285,7 @@ pub(crate) fn control_source(
     };
     let source = (!reference.is_empty()).then_some(goofi_core::variables::VariableSource { reference, index });
     let cmd = goofi_graph::Command::SourceVariable { name, source: source.clone() };
-    state.history.lock().unwrap().apply(&mut g, actor, cmd)?;
+    state.history.lock().apply(&mut g, actor, cmd)?;
     Ok(json!({ "source": source }))
 }
 
@@ -1296,7 +1296,7 @@ pub(crate) fn variable_add(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let group = payload.get("group").and_then(Value::as_str);
     let name = match group {
         Some(group) => {
@@ -1324,7 +1324,7 @@ pub(crate) fn variable_add(
             .ok_or_else(|| format!("variable entry add: `{val}` is not a {ty}"))?
     };
     let control = parse_control(payload)?;
-    state.history.lock().unwrap().apply(
+    state.history.lock().apply(
         &mut g,
         actor,
         goofi_graph::Command::EditVariable { name: name.clone(), value: Some(value.clone()), at: None, control },
@@ -1339,7 +1339,7 @@ pub(crate) fn variable_edit(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let name = parse_str(payload, "name")?.to_string();
     let held = g.variables().get(&name).map(goofi_graph::variable_to_json);
     let Some(held) = held else {
@@ -1365,7 +1365,7 @@ pub(crate) fn variable_edit(
         Some(v) => goofi_graph::variable_to_json(v)["value"].clone(),
         None => held["value"].clone(),
     };
-    state.history.lock().unwrap().apply(
+    state.history.lock().apply(
         &mut g,
         actor,
         goofi_graph::Command::EditVariable { name, value, at: None, control },
@@ -1379,12 +1379,12 @@ pub(crate) fn variable_remove(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let name = parse_str(payload, "name")?.to_string();
     if g.variables().get(&name).is_none() {
         return Err(format!("variable entry remove: no variable `{name}`"));
     }
-    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::RemoveVariable { name })?;
+    state.history.lock().apply(&mut g, actor, goofi_graph::Command::RemoveVariable { name })?;
     Ok(json!({ "removed": true }))
 }
 
@@ -1394,10 +1394,10 @@ pub(crate) fn variable_rename(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let from = parse_str(payload, "name")?.to_string();
     let to = parse_str(payload, "to")?.to_string();
-    state.history.lock().unwrap().apply(
+    state.history.lock().apply(
         &mut g,
         actor,
         goofi_graph::Command::RenameVariable { from, to: to.clone() },
@@ -1421,14 +1421,14 @@ pub(crate) fn variable_lock(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let name = parse_str(payload, "name")?.to_string();
     if g.variables().get(&name).is_none() {
         return Err(format!("variable entry lock: no variable `{name}`"));
     }
     let held = g.variables().entries().find(|(n, ..)| *n == name).map(|(_, _, l, ..)| l).unwrap_or_default();
     let lock = parse_lock(payload, held).map_err(|e| format!("variable entry lock: {e}"))?;
-    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::LockVariable { name, lock })?;
+    state.history.lock().apply(&mut g, actor, goofi_graph::Command::LockVariable { name, lock })?;
     Ok(json!({ "lock": lock }))
 }
 
@@ -1438,7 +1438,7 @@ pub(crate) fn variable_source(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let name = parse_str(payload, "name")?.to_string();
     if g.variables().get(&name).is_none() {
         return Err(format!("variable entry source: no variable `{name}`"));
@@ -1451,7 +1451,7 @@ pub(crate) fn variable_source(
         ),
     };
     let source = (!reference.is_empty()).then_some(goofi_core::variables::VariableSource { reference, index });
-    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::SourceVariable { name, source: source.clone() })?;
+    state.history.lock().apply(&mut g, actor, goofi_graph::Command::SourceVariable { name, source: source.clone() })?;
     Ok(json!({ "source": source }))
 }
 
@@ -1461,10 +1461,10 @@ pub(crate) fn variable_group_lock(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let group = parse_str(payload, "group")?.to_string();
     let lock = parse_lock(payload, g.variables().group_lock(&group)).map_err(|e| format!("variable group lock: {e}"))?;
-    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::LockVariableGroup { group, lock: Some(lock) })?;
+    state.history.lock().apply(&mut g, actor, goofi_graph::Command::LockVariableGroup { group, lock: Some(lock) })?;
     Ok(json!({ "lock": lock }))
 }
 
@@ -1474,7 +1474,7 @@ pub(crate) fn variable_group_add(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let group = match payload.get("group").and_then(Value::as_str) {
         Some(group) => group.to_string(),
         None => {
@@ -1484,7 +1484,7 @@ pub(crate) fn variable_group_add(
                 .ok_or("no free group name")?
         }
     };
-    state.history.lock().unwrap().apply(
+    state.history.lock().apply(
         &mut g, actor, goofi_graph::Command::AddVariableGroup { group: group.clone(), at: None },
     )?;
     Ok(json!({ "group": group }))
@@ -1496,10 +1496,10 @@ pub(crate) fn variable_group_rename(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let from = parse_str(payload, "from")?.to_string();
     let to = parse_str(payload, "to")?.to_string();
-    state.history.lock().unwrap().apply(
+    state.history.lock().apply(
         &mut g,
         actor,
         goofi_graph::Command::RenameVariableGroup { from, to: to.clone(), members: None },
@@ -1513,7 +1513,7 @@ pub(crate) fn nodes_group(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let uids = parse_uid_list(&g, payload, "nodes")?;
     let pos = payload
         .get("pos")
@@ -1521,7 +1521,7 @@ pub(crate) fn nodes_group(
         .map(|v| parse_pos(v).ok_or("nodes group: pos is [x, y]"))
         .transpose()?
         .unwrap_or([0.0, 0.0]);
-    let out = state.history.lock().unwrap().apply(
+    let out = state.history.lock().apply(
         &mut g,
         actor,
         goofi_graph::Command::Group { members: uids, pos, restore: None },
@@ -1539,12 +1539,11 @@ pub(crate) fn nodes_ungroup(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let inst = parse_uid(&g, payload, "subpatch")?;
     state
         .history
         .lock()
-        .unwrap()
         .apply(&mut g, actor, goofi_graph::Command::Expand { scope: inst })?;
     Ok(json!({ "ok": true }))
 }
@@ -1555,7 +1554,7 @@ pub(crate) fn nodes_inspect(
     _actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let g = state.graph.lock().unwrap();
+    let g = state.graph.lock();
     let scope = parse_uid_opt(&g, payload, "scope", "nodes inspect")?;
     Ok(json!({ "text": inspect::patch(&g, scope)? }))
 }
@@ -1566,7 +1565,7 @@ pub(crate) fn node_state(
     _actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let g = state.graph.lock().unwrap();
+    let g = state.graph.lock();
     let uid = parse_uid(&g, payload, "node")?;
     let want = |k: &str| payload.get(k).and_then(|v| v.as_bool()).unwrap_or(true);
     let slot = payload.get("slot").and_then(|v| v.as_str());
@@ -1580,7 +1579,7 @@ pub(crate) fn variable_list(
     _actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let g = state.graph.lock().unwrap();
+    let g = state.graph.lock();
     Ok(inspect::variables(&g))
 }
 
@@ -1595,7 +1594,7 @@ pub(crate) fn session_status(
     let save_path = state.save_path();
     let workspace = goofi_core::path::to_slash(&state.mount());
     let dirty = state.is_dirty();
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let errors = inspect::errors(&g);
     // A demo registers no audio engine, and a machine with no adapter no graphics one. Status is
     // a READ: it answers what is there.
@@ -1641,7 +1640,7 @@ pub(crate) fn session_manifest(
     _actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let g = state.graph.lock().unwrap();
+    let g = state.graph.lock();
     Ok(json!({ "yaml": g.serialize() }))
 }
 
@@ -1653,7 +1652,7 @@ pub(crate) fn session_save(
     _actor: &str,
     events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     // Expand `~` exactly as the browser does — the two must agree on what a path means. No path
     // means the patch's HOME, and a patch that never had one is refused rather than guessed at.
     let path = match payload.get("path").and_then(|v| v.as_str()) {
@@ -1669,12 +1668,12 @@ pub(crate) fn session_save(
     save_archive(std::path::Path::new(&path), &g.serialize(), &mount, &bundled_custom(&g, &state.custom), flag(payload, "overwrite", true))?;
     // Announced UNCONDITIONALLY, not on the flag's transition: a patch dirtied solely by a file
     // in the mount leaves the flag already false, so no transition comes.
-    *state.workspace_baseline.lock().unwrap() = packed;
+    *state.workspace_baseline.lock() = packed;
     state.set_dirty(false);
     events.push(event("unsaved_changes", json!({ "unsaved_changes": false })));
     // The patch's home, stored ONLY on success and announced as well as stored: an
     // already-connected peer gets no new snapshot to read it from.
-    *state.save_path.lock().unwrap() = Some(path.clone());
+    *state.save_path.lock() = Some(path.clone());
     events.push(event("save_path_changed", json!({ "save_path": &path })));
     drop(g);
     fsbrowse::remember(&path);
@@ -1696,7 +1695,7 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
     // Every source mounts FRESH, and the live mount is swapped only once the manifest has parsed,
     // so a refused load leaves the open patch untouched on both planes. Staged and built off the
     // lock: the archive's own Rust nodes may take seconds to build.
-    let fresh = new_mount();
+    let fresh = new_mount()?;
     if let Some(name) = payload.get("path").and_then(Value::as_str).and_then(|p| p.rsplit('/').next()) {
         goofi_core::startup::report(format!("Opening {name}"));
     }
@@ -1705,7 +1704,7 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
     prebuild(state, &fresh);
     let opened = from_path.clone();
     let result = {
-        let mut g = state.graph.lock().unwrap();
+        let mut g = state.graph.lock();
         // ORDER is load-bearing: the types the patch SHIPS are registered before the manifest
         // resolves, or the unknown-type gate fires on the nodes the archive brought.
         rescan(state, &mut g, &fresh);
@@ -1720,7 +1719,7 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         }
         // Commit, now that nothing left can fail: the loaded patch's workspace becomes the live
         // one, and the replaced mount goes with the harnesses spawned into it.
-        let replaced = std::mem::replace(&mut *state.mount.lock().unwrap(), fresh);
+        let replaced = std::mem::replace(&mut *state.mount.lock(), fresh);
         // Off this thread wherever there IS a wait: this runs under the graph lock, and a harness
         // that will not leave takes the whole grace — five seconds no op may be held for.
         if let Some(finish) = state.reclaim(replaced) {
@@ -1729,16 +1728,16 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         // Projected HERE, so the snapshot names the version the loaded document is at, and a
         // client can hold its fit until its replica reaches it.
         g.settle();
-        crate::reconcile_and_broadcast(state, state.doc.lock().unwrap(), crate::projection::of(&g));
+        crate::reconcile_and_broadcast(state, state.doc.lock(), crate::projection::of(&g));
         // Sent under the lock, not queued for the dispatcher: the status worker's next stage delta
         // needs this lock, so nothing it says can overtake the snapshot it is a delta over.
         let _ = state.events.send(event("harness_changed", state.harnesses.roster(&agents)));
         // `read_gfi` restores no mtimes, so without a baseline taken HERE a patch would be dirty
         // from the moment it finished loading.
-        *state.workspace_baseline.lock().unwrap() =
+        *state.workspace_baseline.lock() =
             goofi_graph::archive::fingerprint(&state.mount());
         // A load fully resets the session: there is nothing to undo across it.
-        state.history.lock().unwrap().clear();
+        state.history.lock().clear();
         // A recovery IS unsaved work — that is what it was kept for — and, taken up, it is done
         // with; a load from a file is exactly what the file holds.
         if let Some(e) = state.set_dirty(recovered.is_some()) {
@@ -1749,7 +1748,7 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         }
         // NONE for an inline load and for `session new`, neither with a file behind it: an
         // inherited path would aim the next silent save at an unrelated `.gfi`.
-        *state.save_path.lock().unwrap() = from_path.clone();
+        *state.save_path.lock() = from_path.clone();
         let _ = state.events.send(event(
             "graph_replaced",
             schemas::snapshot(&g, state, false, recovered.is_some(), from_path.as_deref(),
@@ -1844,8 +1843,8 @@ pub(crate) fn undo(
     events: &mut Vec<String>,
 ) -> Result<Value, String> {
     let result = {
-        let mut g = state.graph.lock().unwrap();
-        let mut hist = state.history.lock().unwrap();
+        let mut g = state.graph.lock();
+        let mut hist = state.history.lock();
         let changed = hist.undo(&mut g, actor)?;
         json!({ "changed": changed, "can_undo": hist.can_undo(actor), "can_redo": hist.can_redo(actor) })
     };
@@ -1864,8 +1863,8 @@ pub(crate) fn redo(
     events: &mut Vec<String>,
 ) -> Result<Value, String> {
     let result = {
-        let mut g = state.graph.lock().unwrap();
-        let mut hist = state.history.lock().unwrap();
+        let mut g = state.graph.lock();
+        let mut hist = state.history.lock();
         let changed = hist.redo(&mut g, actor)?;
         json!({ "changed": changed, "can_undo": hist.can_undo(actor), "can_redo": hist.can_redo(actor) })
     };
@@ -1931,7 +1930,7 @@ fn set_armed(
     payload: &Value,
     arm: bool,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let (uid, slot) = parse_endpoint(&g, payload, op, "output")?;
     let slot = vocab::resolve_slot(&g, op, uid, &slot)?;
     let mut record = g.recorded(uid).unwrap_or(&[]).to_vec();
@@ -1943,7 +1942,7 @@ fn set_armed(
         }
         _ => return Ok(json!({ "ok": true, "changed": false })),
     }
-    state.history.lock().unwrap().apply(
+    state.history.lock().apply(
         &mut g,
         actor,
         goofi_graph::Command::SetRecorded { uid, record },
@@ -1978,7 +1977,7 @@ pub(crate) fn record_quality(
     actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     let (uid, slot) = parse_endpoint(&g, payload, "record quality", "output")?;
     let slot = vocab::resolve_slot(&g, "record quality", uid, &slot)?;
     if g.node_type(uid).and_then(|ty| g.type_engine(&ty)) != Some("graphics") {
@@ -1993,7 +1992,7 @@ pub(crate) fn record_quality(
         return Ok(json!({ "ok": true, "changed": false }));
     }
     output.quality = quality;
-    state.history.lock().unwrap().apply(&mut g, actor, goofi_graph::Command::SetRecorded { uid, record })?;
+    state.history.lock().apply(&mut g, actor, goofi_graph::Command::SetRecorded { uid, record })?;
     Ok(json!({ "ok": true, "changed": true }))
 }
 
@@ -2016,7 +2015,7 @@ pub(crate) fn record_start(
     _actor: &str,
     events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    let g = state.graph.lock().unwrap();
+    let g = state.graph.lock();
     let armed: Vec<Uid> = g.all_uids().into_iter().filter(|u| !g.recorded(*u).unwrap_or(&[]).is_empty()).collect();
     if armed.is_empty() {
         return Err("record start: nothing is armed — `record arm <node>/<slot>` first".into());
@@ -2084,7 +2083,7 @@ pub(crate) fn record_status(
 
 /// The session's recording state — RUNTIME, so it rides this read and the event, never the document.
 pub(crate) fn record_state(state: &AppState) -> Value {
-    let now = state.graph.lock().unwrap().time().now();
+    let now = state.graph.lock().time().now();
     record_state_at(state, now)
 }
 
@@ -2115,7 +2114,7 @@ pub(crate) fn record_changed(state: &AppState) -> String {
 
 
 pub(crate) fn log_list(_state: &AppState, _payload: &Value, _actor: &str, _events: &mut Vec<String>) -> Result<Value, String> {
-    serde_json::to_value(goofi_core::log::global().lock().unwrap_or_else(|e| e.into_inner()).since(None)).map_err(|e| e.to_string())
+    serde_json::to_value(goofi_core::log::since(None)).map_err(|e| e.to_string())
 }
 
 pub(crate) fn log_write(_state: &AppState, payload: &Value, _actor: &str, _events: &mut Vec<String>) -> Result<Value, String> {

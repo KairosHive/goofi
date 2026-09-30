@@ -3,7 +3,8 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use goofi_audio_sdk::{cross, AudioNode, Block, Port, PortMut, BLOCK, MAX_PORTS};
@@ -419,16 +420,12 @@ impl Anchor {
         }
     }
 
-    fn held(&self) -> std::sync::MutexGuard<'_, Vec<(u64, Tie)>> {
-        self.ties.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
     /// Tie the clock to the block that will be rendered NEXT. The caller holds the runtime lock, so
     /// no block is rendered between reading the count and reading the clock.
     pub fn tie(&self, time: f64, rate: f64) {
         let tie = Tie { at: self.blocks.load(Ordering::Relaxed), time, rate };
         let epoch = self.epoch.load(Ordering::Relaxed) + 1;
-        let mut ties = self.held();
+        let mut ties = self.ties.lock();
         ties.push((epoch, tie));
         if ties.len() > TIES {
             ties.remove(0);
@@ -445,7 +442,7 @@ impl Anchor {
     /// was rendered under, never whichever is newest. An epoch older than what is held falls to the
     /// oldest, which is a block that outlived eight device changes in a one-second ring.
     pub fn seconds(&self, n: u64, epoch: u64) -> f64 {
-        let ties = self.held();
+        let ties = self.ties.lock();
         let tie = ties.iter().find(|(e, _)| *e == epoch).or_else(|| ties.first()).map(|(_, t)| *t);
         let Some(tie) = tie else { return 0.0 };
         tie.time + (n as f64 - tie.at as f64) * BLOCK as f64 / tie.rate

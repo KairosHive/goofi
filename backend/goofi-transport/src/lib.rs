@@ -4,7 +4,8 @@
 
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+use goofi_core::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use iceoryx2::config::Config;
@@ -176,31 +177,38 @@ impl Doorbell {
 
 /// The session this process mints under, decided once: `GOOFI_SESSION` names a parent's to JOIN,
 /// else the process holds its own. Deciding it runs the boot pass over what dead sessions left.
-pub fn session() -> &'static str {
-    static SESSION: OnceLock<String> = OnceLock::new();
-    SESSION.get_or_init(|| {
-        set_log_level_from_env_or(LogLevel::Error);
-        raise_fd_limit();
-        let joined = std::env::var(goofi_core::session::ENV).ok().filter(|id| goofi_core::session::alive(id));
-        let id = match joined {
-            Some(id) => id,
-            None => {
-                let held = goofi_core::session::hold(&goofi_core::session::fresh_id()).expect("hold a session");
-                let id = held.id().to_string();
-                *HELD.lock().unwrap_or_else(|e| e.into_inner()) = Some(held);
-                // A process that never calls `release_session` releases at exit; an earlier
-                // release makes this a no-op. SAFETY: a plain `extern "C"` hook the CRT calls once.
-                unsafe {
-                    libc::atexit(release_at_exit);
-                }
-                id
+pub fn session() -> Result<&'static str, String> {
+    decided().map(|(id, _)| id.as_str())
+}
+
+fn decided() -> Result<&'static (String, Config), String> {
+    static SESSION: OnceLock<Result<(String, Config), String>> = OnceLock::new();
+    SESSION.get_or_init(decide).as_ref().map_err(Clone::clone)
+}
+
+fn decide() -> Result<(String, Config), String> {
+    set_log_level_from_env_or(LogLevel::Error);
+    raise_fd_limit();
+    let joined = std::env::var(goofi_core::session::ENV).ok().filter(|id| goofi_core::session::alive(id));
+    let id = match joined {
+        Some(id) => id,
+        None => {
+            let held = goofi_core::session::hold(&goofi_core::session::fresh_id()?).map_err(|e| format!("hold a session: {e}"))?;
+            let id = held.id().to_string();
+            *HELD.lock() = Some(held);
+            // A process that never calls `release_session` releases at exit; an earlier
+            // release makes this a no-op. SAFETY: a plain `extern "C"` hook the CRT calls once.
+            unsafe {
+                libc::atexit(release_at_exit);
             }
-        };
-        goofi_core::session::decide(&id);
-        let _ = std::fs::create_dir_all(iox_root(&id));
-        let _ = SWEPT.set(sweep_dead());
-        id
-    })
+            id
+        }
+    };
+    let config = iox_config(&id)?;
+    goofi_core::session::decide(&id);
+    let _ = std::fs::create_dir_all(iox_root(&id));
+    let _ = SWEPT.set(sweep_dead());
+    Ok((id, config))
 }
 
 /// The session this process holds, if it holds one rather than joining a parent's.
@@ -209,7 +217,7 @@ static HELD: Mutex<Option<goofi_core::session::Held>> = Mutex::new(None);
 /// A clean shutdown: after every port is gone, the record goes first, then the ephemeral
 /// directory, then the shared memory the session's prefix names. The workspace is not touched.
 pub fn release_session() {
-    if let Some(held) = HELD.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    if let Some(held) = HELD.lock().take() {
         let id = held.id().to_string();
         drop(held);
         remove_tree(&goofi_core::session::system_dir(&id));
@@ -223,7 +231,7 @@ extern "C" fn release_at_exit() {
 
 /// Record where this session serves, for `goofi session list` and the shell.
 pub fn record_url(url: &str) {
-    if let Some(held) = HELD.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+    if let Some(held) = HELD.lock().as_ref() {
         held.record_url(url);
     }
 }
@@ -250,8 +258,7 @@ pub struct Swept {
 
 /// What the boot pass swept, once the session is decided.
 pub fn swept_at_boot() -> Swept {
-    session();
-    *SWEPT.get().expect("the boot pass ran")
+    SWEPT.get().copied().unwrap_or_default()
 }
 
 static SWEPT: OnceLock<Swept> = OnceLock::new();
@@ -263,10 +270,10 @@ pub fn sessions() -> Vec<goofi_core::session::Session> {
 
 /// A path for a file needed for a moment — a `.gfi` packed or uploaded — under the session's
 /// ephemeral directory, so a crash's leftover is swept with the session.
-pub fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = goofi_core::session::system_dir(session()).join("scratch");
+pub fn scratch(name: &str) -> Result<std::path::PathBuf, String> {
+    let dir = goofi_core::session::system_dir(session()?).join("scratch");
     let _ = std::fs::create_dir_all(&dir);
-    dir.join(name)
+    Ok(dir.join(name))
 }
 
 /// Where iceoryx2 keeps a session's files: node directories, service configs, monitors.
@@ -313,25 +320,23 @@ fn sweep_shared_memory(mut dead: impl FnMut(&str) -> bool) -> usize {
 /// The iceoryx2 configuration every goofi port is built against: the session's own root and
 /// prefix, and iceoryx2's three automatic dead-node passes OFF — the session lock is the one
 /// liveness answer, and a pass over a directory only this session writes has nothing to find.
-fn iox_config() -> &'static Config {
-    static CONFIG: OnceLock<Config> = OnceLock::new();
-    CONFIG.get_or_init(|| {
-        let id = session();
-        let mut config = Config::global_config().clone();
-        let root = iox_root(id).to_string_lossy().replace('\\', "/");
-        config.global.set_root_path(&iceoryx2::prelude::Path::new(root.as_bytes()).expect("a root path"));
-        config.global.prefix = iceoryx2::prelude::FileName::new(shm_prefix(id).as_bytes()).expect("a prefix");
-        config.global.service.cleanup_dead_nodes_on_open = false;
-        config.global.node.cleanup_dead_nodes_on_creation = false;
-        config.global.node.cleanup_dead_nodes_on_destruction = false;
-        config
-    })
+fn iox_config(id: &str) -> Result<Config, String> {
+    let mut config = Config::global_config().clone();
+    let root = iox_root(id).to_string_lossy().replace('\\', "/");
+    let path = iceoryx2::prelude::Path::new(root.as_bytes()).map_err(|e| format!("iceoryx2 refuses the root {root}: {e:?}"))?;
+    config.global.set_root_path(&path);
+    let prefix = shm_prefix(id);
+    config.global.prefix = iceoryx2::prelude::FileName::new(prefix.as_bytes()).map_err(|e| format!("iceoryx2 refuses the prefix {prefix}: {e:?}"))?;
+    config.global.service.cleanup_dead_nodes_on_open = false;
+    config.global.node.cleanup_dead_nodes_on_creation = false;
+    config.global.node.cleanup_dead_nodes_on_destruction = false;
+    Ok(config)
 }
 
 /// One iceoryx2 node per port OWNER, never per port: each is a directory under the session's
 /// root and each is counted by every service's `max_nodes`.
 pub fn iox_node() -> Result<IoxNode, String> {
-    let node = NodeBuilder::new().config(iox_config()).create::<Svc>().map_err(|e| format!("iox node: {e}"))?;
+    let node = NodeBuilder::new().config(&decided()?.1).create::<Svc>().map_err(|e| format!("iox node: {e}"))?;
     // Named by the thread that opened it, which is what a reader of the inventory can act on.
     let owner = std::thread::current().name().unwrap_or("?").to_string();
     Ok(IoxNode { node, _lease: goofi_core::registry::lease(goofi_core::registry::Kind::Port, owner) })

@@ -3,7 +3,8 @@ use crate::runtime::{Control, Envelope, EventId, ParamValue, ServiceName, Transp
 use goofi_core::Data;
 use goofi_node::{ParamGroups, ParamKey};
 use std::collections::HashMap;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 #[derive(Default)]
@@ -35,7 +36,7 @@ impl Local {
         })
     }
     pub fn wake(&self) {
-        self.mail.lock().unwrap().wake = true;
+        self.mail.lock().wake = true;
         self.changed.notify_one();
     }
     pub fn control(&self, control: Control) {
@@ -45,7 +46,7 @@ impl Local {
         if controls.is_empty() {
             return;
         }
-        let mut mail = self.mail.lock().unwrap();
+        let mut mail = self.mail.lock();
         for control in controls {
             // Coalesce values only after the latest pulse, which must observe its own values.
             if let Control::SetParam { key, .. } = &control {
@@ -82,7 +83,7 @@ impl Local {
         self.controls(changes);
     }
     pub fn input(&self, name: &str, frame: Data) {
-        let mut mail = self.mail.lock().unwrap();
+        let mut mail = self.mail.lock();
         mail.inputs.insert(name.into(), frame);
         mail.wake = true;
         self.changed.notify_one();
@@ -91,23 +92,23 @@ impl Local {
 
 impl Transport for Local {
     fn wait(&self, timeout: Option<Duration>) -> Vec<EventId> {
-        let mail = self.mail.lock().unwrap();
+        let mail = self.mail.lock();
         let mut mail = match timeout {
-            Some(d) => self.changed.wait_timeout_while(mail, d, |m| !m.wake).unwrap().0,
-            None => self.changed.wait_while(mail, |m| !m.wake).unwrap(),
+            Some(d) => self.changed.wait_timeout_while(mail, d, |m| !m.wake),
+            None => self.changed.wait_while(mail, |m| !m.wake),
         };
         mail.wake = false;
         Vec::new()
     }
     fn drain_control(&self) -> Vec<Envelope> {
-        std::mem::take(&mut self.mail.lock().unwrap().controls)
+        std::mem::take(&mut self.mail.lock().controls)
     }
     fn drain_inputs(&self) -> Vec<(String, usize, Data)> {
-        self.mail.lock().unwrap().inputs.drain().map(|(slot, d)| (slot, 0, d)).collect()
+        self.mail.lock().inputs.drain().map(|(slot, d)| (slot, 0, d)).collect()
     }
     fn wire_in(&self, slot: &str, services: &[ServiceName]) -> Result<(), String> {
         if services.is_empty() {
-            self.mail.lock().unwrap().inputs.remove(slot);
+            self.mail.lock().inputs.remove(slot);
         }
         Ok(())
     }

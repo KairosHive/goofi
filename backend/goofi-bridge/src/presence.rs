@@ -1,7 +1,7 @@
 //! `/presence`: who is in the patch, and where each pointer is. A socket is a peer for exactly
 //! as long as it is open, so the roster is the set of open sockets and nothing expires.
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use goofi_core::sync::Mutex;
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
@@ -42,7 +42,7 @@ impl Presence {
 pub async fn handle(socket: WebSocket, presence: &Mutex<Presence>) {
     let (mut tx, mut rx) = socket.split();
     let (id, hue, mut fanout) = {
-        let mut p = presence.lock().unwrap();
+        let mut p = presence.lock();
         // Subscribed BEFORE the roster is sent, so this peer's own join is the first frame it reads.
         let fanout = p.fanout.subscribe();
         let (id, hue) = p.join();
@@ -73,7 +73,7 @@ pub async fn handle(socket: WebSocket, presence: &Mutex<Presence>) {
                         }
                         _ => json!({ "gone": id }),
                     };
-                    let _ = presence.lock().unwrap().fanout.send(out.to_string());
+                    let _ = presence.lock().fanout.send(out.to_string());
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                 _ => {}
@@ -85,7 +85,7 @@ pub async fn handle(socket: WebSocket, presence: &Mutex<Presence>) {
 }
 
 fn leave(presence: &Mutex<Presence>, id: u64) {
-    let mut p = presence.lock().unwrap();
+    let mut p = presence.lock();
     p.peers.remove(&id);
     let _ = p.fanout.send(json!({ "gone": id }).to_string());
     let _ = p.fanout.send(p.roster());

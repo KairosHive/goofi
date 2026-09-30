@@ -230,7 +230,7 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
     let g = Goofi::new();
     // The lock is DROPPED before the first op: `library list` takes the same one.
     let (declared, names): (Vec<(String, Vec<String>)>, Vec<&str>) = {
-        let graph = g.state.graph.lock().unwrap();
+        let graph = g.state.graph.lock();
         let declared = graph.library_entries().into_iter()
             .filter(|(_, l)| !l.manifest.type_name.starts_with('_'))
             .map(|(engine, l)| {
@@ -376,7 +376,7 @@ fn a_param_shows_only_by_a_fixed_choice_of_another_param() {
 
     // The declarations a fresh goofi carries in its own binary pass the same rule.
     let g = Goofi::new();
-    for (_, l) in g.state.graph.lock().unwrap().library_entries() {
+    for (_, l) in g.state.graph.lock().library_entries() {
         assert_eq!(goofi_node::illegal_param(l.manifest.params), None, "{}", l.manifest.type_name);
     }
 }
@@ -385,7 +385,7 @@ fn a_param_shows_only_by_a_fixed_choice_of_another_param() {
 fn a_node_that_could_not_load_explains_itself_instead_of_vanishing() {
     let g = Goofi::new();
     {
-        let mut graph = g.state.graph.lock().unwrap();
+        let mut graph = g.state.graph.lock();
         graph.register_unavailable("signal:PsdScipy".into(), "scipy".into());
         goofi_bridge::register_dyn_type(&mut graph, &SOURCE, Box::new(|_| never()), &goofi_node::NATIVE);
         // Provenance is the only thing the scan knows that the catalog cannot re-derive, greyed rows too.
@@ -443,7 +443,7 @@ fn two_engines_may_share_a_type_name_and_never_an_id() {
     // advertised and both are addressable. It cost a shipped audio filter its name, and twice
     // before that a node was renamed to dodge the silence a first-advertiser-wins lookup made.
     let g = Goofi::new();
-    g.state.graph.lock().unwrap().register_engine(Box::new(LibraryEngine::named("twin", &["LFO"])));
+    g.state.graph.lock().register_engine(Box::new(LibraryEngine::named("twin", &["LFO"])));
 
     assert_ne!(g.add("signal:LFO"), g.add("twin:LFO"), "each engine's own is reachable");
     let why = g.refuse("node add", j!({ "type": "LFO" }));
@@ -453,11 +453,11 @@ fn two_engines_may_share_a_type_name_and_never_an_id() {
     // …because the ENGINE id is what tells them apart, it is the one thing that cannot be shared:
     // a second `twin` would name both engines from one id and send every insert to the first.
     let twice = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        g.state.graph.lock().unwrap().register_engine(Box::new(LibraryEngine::named("twin", &["Other"])));
+        g.state.graph.lock().register_engine(Box::new(LibraryEngine::named("twin", &["Other"])));
     }));
     assert!(twice.is_err(), "a second engine was allowed to take the id `twin`");
-    // The refusal poisoned the lock, and this instance's workers are still parked on it.
-    g.state.graph.clear_poison();
+    // The refusal panicked under the graph lock, and the instance's workers still get it.
+    assert_eq!(g.state.graph.lock().node_count(), 2);
 }
 
 #[test]
@@ -465,7 +465,7 @@ fn every_slot_name_is_letters_and_digits() {
     // A reference spells `node.slot`, and an expression reads a slot as an attribute: one rule,
     // held by every manifest a fresh goofi offers — the shipped nodes and the fixtures.
     let g = Goofi::new();
-    let graph = g.state.graph.lock().unwrap();
+    let graph = g.state.graph.lock();
     for (_, l) in graph.library_entries() {
         let m = l.manifest;
         let slots = m.inputs.iter().map(|s| s.name).chain(m.outputs.iter().map(|o| o.name));
@@ -492,7 +492,7 @@ fn every_declared_expression_reads_only_a_variable_a_fresh_patch_has() {
     // Cheap and evaluator-free: a typo'd `variables.defualt_ufreq` compiles, binds, then errors on every
     // instance. Read AS EACH TYPE SEES IT, since a declaration may condition on the manifest.
     let g = Goofi::new();
-    let graph = g.state.graph.lock().unwrap();
+    let graph = g.state.graph.lock();
     let decls = graph.library_entries().into_iter().flat_map(|(engine, l)| {
         let m = l.manifest;
         m.params.iter().copied().chain(graph.universal_decls(engine, m)).map(move |d| (m.type_name, d))

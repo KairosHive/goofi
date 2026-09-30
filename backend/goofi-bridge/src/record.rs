@@ -3,7 +3,8 @@
 //! a timer and reduces for viewers.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use goofi_core::time::Time;
@@ -55,7 +56,7 @@ impl AudioCapture {
     fn flush(&self) -> Result<(), String> {
         let graph = self.0.upgrade().ok_or("the recording graph is gone")?;
         let waits = {
-            let mut graph = graph.lock().unwrap_or_else(|e| e.into_inner());
+            let mut graph = graph.lock();
             crate::try_audio_engine(&mut graph).map(|audio| audio.flush_recording()).unwrap_or_default()
         };
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -75,7 +76,7 @@ impl goofi_record::Capture for AudioCapture {
     fn boundary(&self, window: Arc<goofi_core::record::FrameWindow>, begin: bool) -> Result<(), String> {
         let graph = self.0.upgrade().ok_or("the recording graph is gone")?;
         let action = {
-            let mut graph = graph.lock().unwrap_or_else(|e| e.into_inner());
+            let mut graph = graph.lock();
             crate::try_audio_engine(&mut graph).map(|audio| audio.recording_boundary(window, begin))
         };
         if let Some(action) = action {
@@ -163,7 +164,7 @@ impl Drain {
     /// EXHAUSTION before it is closed: what the service already delivered is transported data, and
     /// dropping the subscriber would lose it where no gap and no count could ever show it.
     fn resolve(&mut self) -> bool {
-        let wanted = armed(&self.graph.lock().unwrap_or_else(|e| e.into_inner()));
+        let wanted = armed(&self.graph.lock());
         let expected = wanted.len();
         for key in self.feeds.keys().cloned().collect::<Vec<_>>() {
             let why = match wanted.get(&key) {
@@ -213,14 +214,14 @@ impl Drain {
 }
 
 fn drain_epoch(graph: &Arc<Mutex<Graph>>) -> Arc<std::sync::atomic::AtomicU64> {
-    graph.lock().unwrap_or_else(|e| e.into_inner()).epoch()
+    graph.lock().epoch()
 }
 
 /// Start the one drain. `halt` is what stops it, and what a teardown waits on to a ceiling.
 pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>) {
     recorder.set_capture(Arc::new(AudioCapture(Arc::downgrade(&graph))));
     let (instance, time) = {
-        let g = graph.lock().unwrap_or_else(|e| e.into_inner());
+        let g = graph.lock();
         (g.instance().to_string(), g.time())
     };
     let ran = halt.clone();

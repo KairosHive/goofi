@@ -5,7 +5,8 @@ use goofi_core::{Data, SlotType, Value};
 use goofi_host_sdk::Node;
 use goofi_node::{NodeManifest, ParamGroups, ParamKey, Status, Uid};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::Mutex;
 
 pub(crate) type Factory = Arc<dyn Fn(&ParamGroups) -> Box<dyn Node> + Send + Sync>;
 #[derive(Clone)]
@@ -139,7 +140,7 @@ impl Worker {
                     Texture::Pixels(pixels) => Content::Pixels(Arc::new(crate::resources::Upload::pixels(pixels))),
                     Texture::Render { source, .. } => Content::Render(Arc::from(source.as_str())),
                 };
-                let mut latest = source.lock().unwrap();
+                let mut latest = source.lock();
                 let size = texture.size();
                 let changed = latest.as_ref().is_none_or(|old| old.size != size)
                     || match (&content, latest.as_ref().map(|old| &old.content)) {
@@ -156,7 +157,7 @@ impl Worker {
                 if let goofi_host::runtime::WireStatus::Health(status) = status {
                     // Evaluated params belong to the control half; this worker receives only values.
                     if !matches!(status, Status::ParamValues { .. } | Status::BindingErrors { .. }) {
-                        let mut reports = report.reports.lock().unwrap();
+                        let mut reports = report.reports.lock();
                         if report_halt.stopped() {
                             return;
                         }

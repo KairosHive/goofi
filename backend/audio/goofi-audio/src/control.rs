@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::Mutex;
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::FromSample;
@@ -391,7 +392,7 @@ impl Half for AudioHalf {
             }
         }
         // After the drains, so what the old rings still held went out before they go.
-        let swap = self.audio.swaps.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.uid);
+        let swap = self.audio.swaps.lock().remove(&self.uid);
         if let Some(swap) = swap {
             let entry = self.playback.entry(&self.params);
             for (i, ring) in swap.inboxes {
@@ -774,7 +775,7 @@ where
         .build_input_stream::<T, _, _>(
             config,
             move |data: &[T], _| {
-                let Ok(mut inbox) = producer.try_lock() else { return };
+                let Some(mut inbox) = producer.try_lock() else { return };
                 let frames = data.len() / opened as usize;
                 let len = frames * emitted as usize;
                 if let Ok(chunk) = inbox.write_chunk_uninit(2 + len) {
@@ -816,7 +817,7 @@ fn open_port(name: &str, producer: Feed<Note>) -> Result<midir::MidiInputConnect
             &port,
             "goofi-in",
             move |_, bytes, _| {
-                if let (Some(note), Ok(mut notes)) = (Note::parse(bytes), producer.try_lock()) {
+                if let (Some(note), Some(mut notes)) = (Note::parse(bytes), producer.try_lock()) {
                     let _ = notes.push(note);
                 }
             },

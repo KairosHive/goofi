@@ -241,9 +241,9 @@ async fn a_restart_recovers_a_node_and_the_viewer_follows_it_to_its_new_home() {
 
     let mut v = Viewer::open(&base, &hex(uid), "out").await;
     assert_eq!(f32s(&v.decoded().await)[0], 1.0, "the stream is live on the recovered generation");
-    let before = goofi_bridge::output_service_of(&g.state.graph.lock().unwrap(), uid, "out");
+    let before = goofi_bridge::output_service_of(&g.state.graph.lock(), uid, "out");
     g.call("node restart", j!({ "node": hex(uid) }));
-    assert_ne!(goofi_bridge::output_service_of(&g.state.graph.lock().unwrap(), uid, "out"), before,
+    assert_ne!(goofi_bridge::output_service_of(&g.state.graph.lock(), uid, "out"), before,
                "a rebirth is a new name");
     // For up to one rehome interval the reducer is still listening on the dead name.
     v.until(|d| f32s(d)[0] == 2.0).await;
@@ -417,7 +417,7 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     assert!(iox.is_some(), "the feeds so far minted the one node they share");
     for round in 0..3 {
         eventually(&format!("round {round}: the idle feed to close"),
-                   || !g.state.graph.lock().unwrap().view_watched(osc, "out")).await;
+                   || !g.state.graph.lock().view_watched(osc, "out")).await;
         let mut v = Viewer::open(&base, &hex(osc), "out").await;
         v.view(spec(32)).await;
         v.until(|d| !f32s(d).is_empty()).await;
@@ -515,7 +515,7 @@ fn a_busy_node_never_holds_up_the_control_plane_and_never_wedges_the_exit() {
     g.until("the wire planned during the build to carry a frame", |_| probe.latest());
     g.call("node remove", j!({ "node": hex(quick) }));
 
-    returns(&g, "the exit with two nodes inside a run", |c| c.state.graph.lock().unwrap().shutdown());
+    returns(&g, "the exit with two nodes inside a run", |c| c.state.graph.lock().shutdown());
     assert_eq!(busy.inside(), 2, "the exit JOINED a busy node instead of waiting to a ceiling");
 
     // An idle node parks on its doorbell with no timeout, so only `signal_stop` ringing it ends it.
@@ -526,7 +526,7 @@ fn a_busy_node_never_holds_up_the_control_plane_and_never_wedges_the_exit() {
     for _ in 0..8 {
         idle.ready(idle.add("_TestParkedExit")); // unwired, so it parks rather than running
     }
-    returns(&idle, "the exit with parked nodes", |c| c.state.graph.lock().unwrap().shutdown());
+    returns(&idle, "the exit with parked nodes", |c| c.state.graph.lock().shutdown());
     idle.until("every parked node's thread to end, which a lost doorbell never lets happen", |_| {
         goofi_core::registry::inventory().iter().all(|e| e.name != "goofi-_TestParkedExit").then_some(())
     });
@@ -572,7 +572,7 @@ fn a_pulse_fires_from_the_op_and_from_a_rising_edge_and_holds_no_value() {
     // A pulse is a REQUEST: the op makes it once, a source makes it on every rising edge, and
     // neither leaves a value behind.
     let g = Goofi::new();
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
+    g.state.graph.lock().set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
     let n = g.add("_TestResettable");
     let gate = g.add("_TestScalar");
     let gate_name = g.doc()["nodes"][hex(gate)]["name"].as_str().expect("a minted name").to_string();

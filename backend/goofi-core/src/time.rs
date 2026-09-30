@@ -17,7 +17,7 @@ fn since_base() -> u64 {
 #[derive(Debug)]
 pub struct Time {
     origin: AtomicU64,
-    wall: std::sync::Mutex<SystemTime>,
+    wall: crate::sync::Mutex<SystemTime>,
 }
 
 impl Default for Time {
@@ -28,7 +28,7 @@ impl Default for Time {
 
 impl Time {
     pub fn new() -> Time {
-        Time { origin: AtomicU64::new(since_base()), wall: std::sync::Mutex::new(SystemTime::now()) }
+        Time { origin: AtomicU64::new(since_base()), wall: crate::sync::Mutex::new(SystemTime::now()) }
     }
 
     /// Seconds since the patch began.
@@ -39,7 +39,7 @@ impl Time {
     /// The wall time the patch began at — the one UTC a recording's manifest states, so nothing
     /// downstream mints a second origin.
     pub fn wall(&self) -> SystemTime {
-        *self.wall.lock().expect("a poisoned time is a panicked writer")
+        *self.wall.lock()
     }
 
     /// The UTC of now, anchored ONCE at the origin and advanced by the monotonic clock. An NTP
@@ -56,7 +56,7 @@ impl Time {
     /// Begin again from now.
     pub fn restart(&self) {
         self.origin.store(since_base(), Ordering::Relaxed);
-        *self.wall.lock().expect("a poisoned time is a panicked writer") = SystemTime::now();
+        *self.wall.lock() = SystemTime::now();
     }
 }
 

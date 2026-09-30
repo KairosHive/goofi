@@ -6,7 +6,8 @@ use goofi_core::record::RecordedOutput;
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 use goofi_core::Param;
@@ -54,7 +55,7 @@ pub struct DrainWaker {
 
 impl DrainWaker {
     pub fn notify(&self) {
-        *self.woke.lock().unwrap() = true;
+        *self.woke.lock() = true;
         self.cv.notify_one();
     }
 
@@ -62,13 +63,13 @@ impl DrainWaker {
     /// notify came, so a caller can tell a quiet window from a wake.
     pub fn wait_timeout(&self, timeout: Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
-        let mut woke = self.woke.lock().unwrap();
+        let mut woke = self.woke.lock();
         while !*woke {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             if left.is_zero() {
                 break;
             }
-            let (guard, _) = self.cv.wait_timeout(woke, left).unwrap();
+            let guard = self.cv.wait_timeout(woke, left);
             woke = guard;
         }
         std::mem::replace(&mut *woke, false)

@@ -129,14 +129,26 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo };
     report("Cleaning up after earlier sessions");
     // The session is held BEFORE the engines exist: every iceoryx2 port they open is its.
-    let session = goofi_transport::session().to_string();
+    let session = match goofi_transport::session() {
+        Ok(id) => id.to_string(),
+        Err(e) => {
+            eprintln!("Could not hold a session: {e}");
+            std::process::exit(1);
+        }
+    };
     let swept = goofi_transport::swept_at_boot();
     goofi_core::startup::note(match (swept.directories, swept.segments) {
         (0, 0) => "nothing left behind".to_string(),
         (d, s) => format!("removed {d} directories and {s} shared-memory segments of dead sessions"),
     });
     report("Starting signal, audio and graphics engines");
-    let mut state = AppState::with_instance(session, mode, goofi_bridge::Clock::Device, goofi_bridge::RenderClock::Timer);
+    let mut state = match AppState::with_instance(session, mode, goofi_bridge::Clock::Device, goofi_bridge::RenderClock::Timer) {
+        Ok(state) => state,
+        Err(e) => {
+            eprintln!("Could not start: {e}");
+            std::process::exit(1);
+        }
+    };
     state.load = cli.load.clone().or_else(|| named_env("GOOFI_LOAD")).map(PathBuf::from);
     state.demo_base = named_env("GOOFI_DEMO_BASE");
     let window = ui.clone();
@@ -402,13 +414,13 @@ async fn run(
     });
     if ready.is_ok() {
         // Handed to the engine before anything scans, so the boot scan and every rescan share it.
-        goofi_bridge::signal_engine(&mut state.graph.lock().unwrap())
+        goofi_bridge::signal_engine(&mut state.graph.lock())
             .set_python(goofi_signal::Python::new(subproc_python.clone()));
-        if let Some(graphics) = goofi_bridge::try_graphics_engine(&mut state.graph.lock().unwrap()) {
+        if let Some(graphics) = goofi_bridge::try_graphics_engine(&mut state.graph.lock()) {
             graphics.set_python(goofi_signal::Python::new(subproc_python.clone()));
         }
         {
-            let mut g = state.graph.lock().unwrap();
+            let mut g = state.graph.lock();
             // This binary is its own node host and its own plugin scanner.
             if let Ok(own) = std::env::current_exe() {
                 goofi_bridge::signal_engine(&mut g).set_host(own);
@@ -436,7 +448,7 @@ async fn run(
         let _ = goofi_core::log::terminal_line(&format!("Startup failed: {error}"));
         1
     } else if boot_only {
-        let names = goofi_bridge::catalog_type_names(&state.graph.lock().unwrap());
+        let names = goofi_bridge::catalog_type_names(&state.graph.lock());
         if let Some(startup) = startup.take() {
             startup.finish("Node library ready");
         }
@@ -603,7 +615,7 @@ async fn managed_stop() {
 fn register_evaluator(state: &AppState) -> Result<(), String> {
     let ev = goofi_python::inproc::PyExprEvaluator::new()
         .map_err(|e| format!("param-expression evaluator unavailable: {e}"))?;
-    state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(ev));
+    state.graph.lock().set_evaluator(std::sync::Arc::new(ev));
     println!("  param-expression evaluator ready (free-threaded Python)");
     Ok(())
 }
@@ -710,7 +722,7 @@ fn boot_scan(state: &AppState) {
     goofi_bridge::prebuild(state, &state.mount());
     report("Indexing the node library");
     let found = {
-        let mut g = state.graph.lock().unwrap();
+        let mut g = state.graph.lock();
         let patch = state.mount();
         let found = goofi_bridge::rescan(state, &mut g, &patch).1;
         g.boot_done();

@@ -278,7 +278,7 @@ fn a_node_missing_a_dependency_is_listed_greyed_rather_than_vanishing() {
             assert_eq!(type_name, "NeedsScipy");
             assert!(reason.contains(&module), "the reason names the module: {reason}");
             let ty = goofi_node::qualify("signal", &type_name);
-            g.state.graph.lock().unwrap().register_unavailable(ty, reason);
+            g.state.graph.lock().register_unavailable(ty, reason);
         }
         goofi_python::Discovery::Found(_) =>
             panic!("a node with a missing import must not probe as loadable"),
@@ -645,7 +645,7 @@ class Meeting(goofi.Node):
     #[test]
     fn a_param_reference_reads_this_node_and_follows_its_edit() {
         let g = Goofi::new();
-        g.state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(
+        g.state.graph.lock().set_evaluator(std::sync::Arc::new(
             goofi_python::inproc::PyExprEvaluator::new().expect("the evaluator constructs")));
         let osc = g.add("LFO");
         let probe = g.probe(osc, "out");
@@ -682,7 +682,7 @@ class Meeting(goofi.Node):
     fn the_patch_rate_variable_re_rates_every_producer_at_once() {
         // `common.max_frequency` is BOUND to `variables.system.default_ufreq`, and a binding needs the evaluator.
         let g = Goofi::new();
-        g.state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(
+        g.state.graph.lock().set_evaluator(std::sync::Arc::new(
             goofi_python::inproc::PyExprEvaluator::new().expect("the evaluator constructs")));
         g.call("variable entry edit", j!({ "name": "system.default_ufreq", "value": 5.0 }));
 

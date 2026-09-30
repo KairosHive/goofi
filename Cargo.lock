@@ -976,7 +976,6 @@ dependencies = [
  "axum",
  "base64",
  "futures-util",
- "getrandom 0.4.3",
  "goofi-audio",
  "goofi-build",
  "goofi-codec",
@@ -1084,7 +1083,6 @@ dependencies = [
 name = "goofi-graph"
 version = "3.0.0"
 dependencies = [
- "getrandom 0.4.3",
  "goofi-core",
  "goofi-node",
  "goofi-view",

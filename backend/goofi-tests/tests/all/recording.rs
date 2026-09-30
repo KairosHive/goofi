@@ -296,7 +296,7 @@ fn npy(bytes: &[u8]) -> (String, Vec<u8>) {
 #[test]
 fn arming_survives_a_rewire_and_rides_the_document() {
     let g = goofi_tests::Goofi::new();
-    let booted = g.state.graph.lock().expect("the graph").time().now();
+    let booted = g.state.graph.lock().time().now();
     let src_uid = g.add("_TestConst");
     let src = goofi_tests::hex(src_uid);
     let dst = goofi_tests::hex(g.add("_TestSink"));
@@ -638,14 +638,14 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     // The drain resolves under the GRAPH lock whenever the graph's epoch moved, so holding the lock
     // and moving the epoch freezes it while the producer publishes far past the 64 the service holds.
     let reached = {
-        let mut graph = g.state.graph.lock().expect("the graph");
+        let mut graph = g.state.graph.lock();
         graph.epoch().fetch_add(1, std::sync::atomic::Ordering::Release);
         let from = g.until("a frame under the freeze", |_| index());
         let reached = g.until("the producer to outrun the service", |_| index().filter(|&i| i >= from + 2 * 64));
         // Step: what the service already DELIVERED is transported data. The disarm lands with the
         // service full, so a departure that let the subscriber go unread would lose all of it.
         let disarm = goofi_graph::Command::SetRecorded { uid: fast, record: Vec::new() };
-        g.state.history.lock().unwrap().apply(&mut graph, "test", disarm).expect("the disarm applies");
+        g.state.history.lock().apply(&mut graph, "test", disarm).expect("the disarm applies");
         graph.settle();
         reached
     };
@@ -864,7 +864,7 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     let lost = g.until("a burst the frozen service kept its depth of", |g| {
         let (kept, lost) = (frames(g, &osc_name) / 64, dropped(g));
         {
-            let mut graph = g.state.graph.lock().expect("the graph");
+            let mut graph = g.state.graph.lock();
             graph.epoch().fetch_add(1, std::sync::atomic::Ordering::Release);
             let audio = goofi_bridge::audio_engine(&mut graph);
             // In pieces the engine's one-second ring holds, each flushed before the next: the depth
@@ -911,8 +911,8 @@ fn arming_survives_a_rewire_and_rides_the_document() {
             .is_some_and(|streams| streams.iter().any(|stream| stream["engine"] == "graphics" && stream["frames"].as_u64().unwrap_or(0) > 0))
             .then_some(())
     });
-    g.state.graph.lock().unwrap().shutdown();
-    assert_eq!(g.state.graph.lock().unwrap().node_count(), 0);
+    g.state.graph.lock().shutdown();
+    assert_eq!(g.state.graph.lock().node_count(), 0);
     std::thread::scope(|scope| {
         let (done, finished) = std::sync::mpsc::channel();
         let state = &g.state;
@@ -961,7 +961,7 @@ fn an_armed_signal_slot_loses_no_tick_to_the_viewer_plane() {
     // The drain frozen as the graph lock and a moved epoch freeze it: a latest-wins wire keeps the
     // newest of the frames published meanwhile, and the service keeps every one.
     let (from, to) = {
-        let graph = g.state.graph.lock().expect("the graph");
+        let graph = g.state.graph.lock();
         graph.epoch().fetch_add(1, std::sync::atomic::Ordering::Release);
         let from = g.until("a frame under the freeze", |_| index());
         (from, g.until("two more frames under the freeze", |_| index().filter(|&i| i >= from + 2)))

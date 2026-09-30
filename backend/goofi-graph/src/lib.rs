@@ -475,12 +475,6 @@ pub struct Graph {
     open_batches: u32,
 }
 
-impl Default for Graph {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Drop for Graph {
     /// A node's transport is owned by its own thread and releases its segments when it DROPS, so
     /// raising the halt flags and returning leaves every one allocated if the process exits first.
@@ -507,21 +501,15 @@ fn variable_as_param(value: &goofi_core::variables::VariableValue) -> Param {
     }
 }
 
-/// A fresh service-name scope for one graph — the resolver input the graph owns and mints.
-/// Random rather than a pid, which is reused, and a recycled scope would JOIN stale services.
-fn mint_instance() -> String {
-    let mut bytes = [0u8; 8];
-    getrandom::fill(&mut bytes).expect("the OS random source");
-    format!("{:016x}", u64::from_be_bytes(bytes))
-}
-
 /// The lowest free doorbell id in the expression range, or `None` when a node has spent all 64.
 fn next_event_id(taken: &[EventId]) -> Option<EventId> {
     (65..=128).find(|id| !taken.contains(id))
 }
 
 impl Graph {
-    pub fn new() -> Graph {
+    /// `instance` is the service-name scope this graph mints under: fresh per graph and never a
+    /// pid, which is reused, since a recycled scope would JOIN stale services.
+    pub fn new(instance: String) -> Graph {
         let waker = Arc::new(DrainWaker::default());
         Graph {
             engines: Vec::new(),
@@ -538,7 +526,7 @@ impl Graph {
             evaluator: None,
             scope_of: HashMap::new(),
             variables: goofi_core::variables::VariableStore::new(),
-            instance: mint_instance(),
+            instance,
             generations: HashMap::new(),
             arm_serial: 0,
             epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),

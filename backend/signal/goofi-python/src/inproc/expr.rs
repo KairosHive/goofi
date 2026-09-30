@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use goofi_core::sync::Mutex;
 
 use goofi_core::{Data, Param, Value};
 use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator, Local};
@@ -157,7 +157,7 @@ impl ExprEvaluator for PyExprEvaluator {
                 .call1((source,))
                 .map_err(|e| ExprError(e.to_string()))?;
             let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
-            self.codes.lock().unwrap().insert(id, code.unbind());
+            self.codes.lock().insert(id, code.unbind());
             Ok(Compiled { id })
         })
     }
@@ -167,7 +167,6 @@ impl ExprEvaluator for PyExprEvaluator {
             let code = self
                 .codes
                 .lock()
-                .unwrap()
                 .get(&id)
                 .map(|c| c.clone_ref(py))
                 .ok_or_else(|| ExprError("expression not compiled".into()))?;
@@ -195,6 +194,6 @@ impl ExprEvaluator for PyExprEvaluator {
     }
 
     fn release(&self, id: BindingId) {
-        self.codes.lock().unwrap().remove(&id);
+        self.codes.lock().remove(&id);
     }
 }

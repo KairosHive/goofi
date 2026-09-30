@@ -12,7 +12,8 @@
 
 use std::collections::HashMap;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::Mutex;
 
 use crate::stream::{StreamMeta, Timeline};
 use crate::StreamId;
@@ -68,11 +69,11 @@ impl Writer {
         at: f64,
         wait: bool,
     ) -> bool {
-        let mut buffer = self.free.lock().expect("the free frames").pop().unwrap_or_default();
+        let mut buffer = self.free.lock().pop().unwrap_or_default();
         buffer.clear();
         buffer.extend_from_slice(bytes);
         let queued = Queued { id: id.clone(), bytes: buffer, rate, timeline, at };
-        let mut lanes = self.lanes.lock().expect("the lanes");
+        let mut lanes = self.lanes.lock();
         let lane = lanes.entry(id.clone()).or_insert_with(|| self.lane());
         if wait {
             return lane.jobs.send(Job::Frame(queued)).is_ok();
@@ -101,7 +102,7 @@ impl Writer {
     /// lane needs.
     pub fn flush(&self) {
         let waits: Vec<Receiver<()>> = {
-            let lanes = self.lanes.lock().expect("the lanes");
+            let lanes = self.lanes.lock();
             lanes
                 .values()
                 .filter_map(|lane| {
@@ -118,7 +119,7 @@ impl Writer {
 
 impl Drop for Writer {
     fn drop(&mut self) {
-        let mut lanes = self.lanes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut lanes = self.lanes.lock();
         for (_, mut lane) in lanes.drain() {
             drop(lane.jobs);
             if let Some(thread) = lane.thread.take() {
@@ -129,7 +130,7 @@ impl Drop for Writer {
 }
 
 fn give_back(free: &Free, buffer: Vec<u8>) {
-    let mut free = free.lock().expect("the free frames");
+    let mut free = free.lock();
     if free.len() < LANE {
         free.push(buffer);
     }

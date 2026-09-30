@@ -2,7 +2,7 @@
 //! of one node's control channel. The machinery and the names are `goofi-transport`'s.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use goofi_core::sync::Mutex;
 use std::time::Duration;
 
 use iceoryx2::prelude::*;
@@ -181,7 +181,7 @@ impl Transport for IoxTransport {
     }
 
     fn wire_in(&self, slot: &str, services: &[ServiceName]) -> Result<(), String> {
-        let mut inputs = self.inputs.lock().unwrap();
+        let mut inputs = self.inputs.lock();
         let mut held: Vec<InputWire> = match inputs.iter().position(|(name, _)| name == slot) {
             Some(at) => inputs.remove(at).1,
             None => Vec::new(),
@@ -209,7 +209,7 @@ impl Transport for IoxTransport {
         // Opened here, where a failure can still be reported. The previous set stands until the
         // whole new one opens, so a refused message leaves the node in the state its ack describes
         // — and a survivor is MOVED across rather than reopened, or the peak would be both sets.
-        let mut held = std::mem::take(&mut *port.targets.lock().unwrap());
+        let mut held = std::mem::take(&mut *port.targets.lock());
         let mut opened = Vec::with_capacity(targets.len());
         for (service, id) in targets {
             match goofi_transport::take_where(&mut held, |(bell, _)| bell.names(service)) {
@@ -217,7 +217,7 @@ impl Transport for IoxTransport {
                 None => opened.push((Doorbell::open(&self.node, service)?, *id)),
             }
         }
-        *port.targets.lock().unwrap() = opened;
+        *port.targets.lock() = opened;
         Ok(())
     }
 
@@ -225,7 +225,7 @@ impl Transport for IoxTransport {
     /// is a hint, and a wire keeps only its newest frame.
     fn drain_inputs(&self) -> Vec<(String, usize, Data)> {
         let mut out = Vec::new();
-        for (slot, wires) in self.inputs.lock().unwrap().iter() {
+        for (slot, wires) in self.inputs.lock().iter() {
             for (index, wire) in wires.iter().enumerate() {
                 let mut newest = None;
                 while let Ok(Some(sample)) = wire.subscriber.receive() {
@@ -243,7 +243,7 @@ impl Transport for IoxTransport {
     }
 
     fn record_out(&self, slots: &[(String, u64)]) -> Result<(), String> {
-        let mut records = self.records.lock().unwrap();
+        let mut records = self.records.lock();
         let Records { live, retired, bell } = &mut *records;
         // A new arming is a new service: the old port keeps the name the recorder may already
         // have let go of, and is dropped once nobody reads it.
@@ -296,16 +296,16 @@ impl Transport for IoxTransport {
         }
         drop(records);
         if failed.is_empty() {
-            *self.trouble.lock().unwrap() = None;
+            *self.trouble.lock() = None;
             return Ok(());
         }
         let why = failed.join("; ");
-        *self.trouble.lock().unwrap() = Some((0, why.clone()));
+        *self.trouble.lock() = Some((0, why.clone()));
         Err(why)
     }
 
     fn record_trouble(&self) -> Option<String> {
-        let trouble = self.trouble.lock().unwrap();
+        let trouble = self.trouble.lock();
         let (dropped, why) = trouble.as_ref()?;
         Some(match dropped {
             0 => format!("recording: {why}"),
@@ -323,9 +323,9 @@ impl Transport for IoxTransport {
             goofi_codec::encode_into(frame, &mut out);
             assert!(out.full(), "a frame fills the loan its length asked for");
         };
-        let targets = port.targets.lock().unwrap();
+        let targets = port.targets.lock();
         goofi_transport::publish_with(&port.publisher, len, fill, targets.iter().map(|(b, id)| (b, *id)));
-        let mut records = self.records.lock().unwrap();
+        let mut records = self.records.lock();
         // A retired port is dropped HERE rather than at the disarm, so the release follows the
         // recorder's own reading and never outruns it.
         let Records { live, retired, .. } = &mut *records;
@@ -334,7 +334,7 @@ impl Transport for IoxTransport {
         if let Some((_, rec)) = live.get(slot) {
             let ok = rec.send(len, fill);
             if !ok && !rec.retired() {
-                let mut trouble = self.trouble.lock().unwrap();
+                let mut trouble = self.trouble.lock();
                 let (dropped, _) = trouble.get_or_insert_with(|| (0, self.loan_refused(len)));
                 *dropped += 1;
             }

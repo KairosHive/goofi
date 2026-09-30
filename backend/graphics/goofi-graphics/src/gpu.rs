@@ -2,7 +2,8 @@
 //! layouts every pipeline shares, and the 1x1 transparent texture an unwired input samples.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+use goofi_core::sync::Mutex;
 
 /// Every texture in the engine.
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -137,7 +138,7 @@ pub fn shared() -> Result<Arc<Gpu>, String> {
 /// the runtime mutex, then this.
 pub fn gate() -> std::sync::MutexGuard<'static, ()> {
     static GATE: Mutex<()> = Mutex::new(());
-    GATE.lock().unwrap_or_else(|e| e.into_inner())
+    GATE.lock()
 }
 
 /// Give a value that owns GPU objects back, behind the gate.
@@ -362,7 +363,6 @@ impl Gpu {
     pub fn textures(&self, count: usize) -> Arc<wgpu::BindGroupLayout> {
         self.textures
             .lock()
-            .unwrap()
             .entry(count)
             .or_insert_with(|| {
                 let entries: Vec<wgpu::BindGroupLayoutEntry> = (0..count as u32)
@@ -400,7 +400,7 @@ impl Gpu {
     }
 
     pub fn layout(&self, params: bool, inputs: usize, state: usize) -> Arc<wgpu::PipelineLayout> {
-        if let Some(held) = self.layouts.lock().unwrap().get(&(params, inputs, state)) {
+        if let Some(held) = self.layouts.lock().get(&(params, inputs, state)) {
             return held.clone();
         }
         let (group1, group2) = (self.textures(inputs), self.textures(state));
@@ -409,7 +409,7 @@ impl Gpu {
             bind_group_layouts: &[Some(self.group0(params)), Some(&group1), Some(&group2)],
             immediate_size: 0,
         }));
-        self.layouts.lock().unwrap().insert((params, inputs, state), made.clone());
+        self.layouts.lock().insert((params, inputs, state), made.clone());
         made
     }
 }

@@ -4,7 +4,8 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::Mutex;
 use std::time::Duration;
 
 use goofi_audio_sdk::{AudioNode, Block, ParamDecl, ParamSpec, Port, PortMut, BLOCK};
@@ -129,7 +130,7 @@ impl Skeleton {
 
 /// One tick: drain every boundary input to its freshest frame, then publish and ring.
 fn tick_once(shared: &Mutex<Shared>) {
-    let Ok(mut s) = shared.lock() else { return };
+    let mut s = shared.lock();
     let mut fresh: HashMap<Uid, Vec<u8>> = HashMap::new();
     for (uid, feed) in &s.feeds {
         let mut newest = None;
@@ -185,7 +186,6 @@ impl Engine for Skeleton {
     ) -> Option<String> {
         self.shared
             .lock()
-            .unwrap()
             .feeds
             .insert(uid, Feed { generation, ..Feed::default() });
         // A synchronous engine is ready the moment its insert answers.
@@ -196,14 +196,14 @@ impl Engine for Skeleton {
     }
 
     fn remove(&mut self, uid: Uid) {
-        self.shared.lock().unwrap().feeds.remove(&uid);
+        self.shared.lock().feeds.remove(&uid);
         self.pending.retain(|(u, _)| *u != uid);
         self.dirty = true;
     }
 
     fn settle(&mut self, view: &GraphView<'_>, _touched: &[Touched]) {
         self.dirty = false;
-        let mut s = self.shared.lock().unwrap();
+        let mut s = self.shared.lock();
         let Shared { feeds, block, iox } = &mut *s;
         for (uid, node) in &view.nodes {
             if node.engine != self.id {
@@ -276,7 +276,7 @@ impl Engine for Skeleton {
         if let Some(tick) = self.tick.take() {
             let _ = tick.join();
         }
-        self.shared.lock().unwrap().feeds.clear();
+        self.shared.lock().feeds.clear();
     }
 }
 
@@ -340,7 +340,7 @@ fn gfx_frame() -> goofi_core::Data {
 }
 
 fn register_skeletons(t: &Goofi) {
-    let mut g = t.state.graph.lock().unwrap();
+    let mut g = t.state.graph.lock();
     let waker = g.drain_waker();
     g.set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
     g.register_engine(Box::new(Skeleton::new(
@@ -378,7 +378,7 @@ fn a_scheduled_engine_beside_the_signal_one() {
 
     // Step: a THIRD engine takes a name the signal engine ships. A type id is `engine:Name`, so
     // both are advertised, both are addressable, and the bare name is refused as ambiguous.
-    t.state.graph.lock().unwrap().register_engine(Box::new(LibraryEngine::named("twin", &["LFO"])));
+    t.state.graph.lock().register_engine(Box::new(LibraryEngine::named("twin", &["LFO"])));
 
     let rows = t.call("library list", j!({}))["types"].clone();
     let ids: Vec<&str> = rows.as_array().unwrap().iter().map(|r| r["type"].as_str().unwrap()).collect();
@@ -524,12 +524,12 @@ fn a_scheduled_engine_beside_the_signal_one() {
     t.call("node remove", j!({ "node": hex(picker) }));
 
     // Step: a restart is a rebirth through the same trait doors — new generation, new services.
-    let generation = t.state.graph.lock().unwrap().node_generation(audio);
+    let generation = t.state.graph.lock().node_generation(audio);
     let stale_probe = t.probe(audio, "out");
     t.call("node restart", j!({ "node": hex(audio) }));
     t.ready(audio);
     assert_eq!(
-        t.state.graph.lock().unwrap().node_generation(audio),
+        t.state.graph.lock().node_generation(audio),
         generation + 1,
         "the rebirth minted a fresh generation"
     );

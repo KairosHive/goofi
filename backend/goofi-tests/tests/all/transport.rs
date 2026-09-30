@@ -309,7 +309,7 @@ fn crash_helper() {
     }
     let node = iox_node().expect("a node");
     let _out = goofi_transport::data_service(&node, "goofi_crash_helper_out").expect("a service");
-    println!("READY {}", goofi_transport::session());
+    println!("READY {}", goofi_transport::session().unwrap());
     if std::env::var(CRASH_HELPER).as_deref() == Ok("exit") {
         // A process that leaves through `exit`, with its ports still open and no release called:
         // the way a test binary or a second Ctrl-C ends.

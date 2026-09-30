@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use goofi_control::{Desired, Handle, Shared, Sub};
@@ -180,7 +181,7 @@ impl GraphicsEngine {
             troubles.clone(),
             shared.clone(),
         )));
-        let inbox = runtime.lock().expect("the runtime").inbox.clone();
+        let inbox = runtime.lock().inbox.clone();
         let ticker = (clock == Clock::Timer).then(|| {
             let stop = Arc::new(AtomicBool::new(false));
             let (rt, halt) = (runtime.clone(), stop.clone());
@@ -188,9 +189,7 @@ impl GraphicsEngine {
                 .spawn(move || {
                     let mut next = Instant::now();
                     while !halt.load(Ordering::Relaxed) {
-                        if let Ok(mut rt) = rt.lock() {
-                            rt.tick();
-                        }
+                        rt.lock().tick();
                         next += PERIOD;
                         // A tick that overran does not try to catch up: the next one is now.
                         match next.checked_duration_since(Instant::now()) {
@@ -243,13 +242,13 @@ impl GraphicsEngine {
     /// Ask the render thread for something. Never blocks: a tick is long, and an op that waited
     /// on one would be an op that waits on a render.
     fn ask(&self, cmd: runtime::Cmd) {
-        self.inbox.lock().expect("the inbox").push(cmd);
+        self.inbox.lock().push(cmd);
     }
 
     /// The external clock: run `frames` ticks on the caller's thread. The harness's door.
     pub fn render(&mut self, frames: usize) {
         for _ in 0..frames {
-            let mut runtime = self.runtime.lock().expect("the runtime");
+            let mut runtime = self.runtime.lock();
             runtime.tick();
             runtime.finish();
         }
@@ -470,12 +469,12 @@ impl Engine for GraphicsEngine {
     fn remove(&mut self, uid: Uid) {
         if let Some(inst) = self.live.remove(&uid) {
             if let Some(producer) = &inst.producer { producer.stop(); }
-            self.shared.reports.lock().unwrap().retain(|(u, _)| *u != uid);
+            self.shared.reports.lock().retain(|(u, _)| *u != uid);
             inst.control.stop();
             self.ask(runtime::Cmd::Remove(uid));
             gpu::give_back(inst);
             self.faults.forget(uid);
-            self.troubles.lock().expect("the record troubles").remove(&uid);
+            self.troubles.lock().remove(&uid);
             self.pending.retain(|(u, _)| *u != uid);
             self.dirty = true;
         }
@@ -492,7 +491,7 @@ impl Engine for GraphicsEngine {
         // Workers hold CPU descriptions only. Compiled programs belong to the graphics engine.
         for inst in self.live.values_mut() {
             let source = inst.source.as_ref().and_then(|s| {
-                s.lock().unwrap().as_ref().and_then(|frame| match &frame.content {
+                s.lock().as_ref().and_then(|frame| match &frame.content {
                     producer::Content::Render(text) => Some(text.clone()),
                     producer::Content::Pixels(_) => None,
                 })
@@ -512,7 +511,7 @@ impl Engine for GraphicsEngine {
         self.follow_windows(view, &plan::sizes(view, &self.live));
         let open: HashMap<Uid, goofi_window::Id> = self.windows.iter().map(|(u, (id, _))| (*u, *id)).collect();
         let (plan, mut faults) = plan::compile(view, &self.live, &open);
-        faults.extend(self.troubles.lock().expect("the record troubles").iter().map(|(u, w)| (*u, w.clone())));
+        faults.extend(self.troubles.lock().iter().map(|(u, w)| (*u, w.clone())));
         let since = self.time.now();
         self.pending.extend(self.faults.settle(faults, since));
         self.ask(runtime::Cmd::Plan(plan));
@@ -546,7 +545,7 @@ impl Engine for GraphicsEngine {
     }
 
     fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_node::ExprEvaluator>) {
-        *self.shared.evaluator.lock().expect("the evaluator") = Some(evaluator);
+        *self.shared.evaluator.lock() = Some(evaluator);
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
@@ -572,7 +571,7 @@ impl Engine for GraphicsEngine {
             inst.control.stop();
         }
         goofi_transport::wait_released(halts.iter().map(|h| &**h), goofi_transport::SHUTDOWN_WAIT);
-        self.runtime.lock().expect("the runtime").clear();
+        self.runtime.lock().clear();
         let gate = gpu::gate();
         self.live.clear();
         self.classes.clear();

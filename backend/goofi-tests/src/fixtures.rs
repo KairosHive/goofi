@@ -4,7 +4,8 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::{Condvar, Mutex};
 
 use goofi_core::{Data, Meta, SlotType};
 use goofi_graph::Graph;
@@ -131,7 +132,7 @@ impl Engine for LibraryEngine {
 
     fn remove(&mut self, uid: Uid) {
         self.pending.retain(|(u, _)| *u != uid);
-        self.shown.lock().unwrap().remove(&uid);
+        self.shown.lock().remove(&uid);
     }
 
     fn settle(&mut self, _view: &GraphView<'_>, _touched: &[Touched]) {}
@@ -143,7 +144,7 @@ impl Engine for LibraryEngine {
     fn editor(&mut self, uid: Uid, show: bool) -> Result<EditorAction, String> {
         let shown = self.shown.clone();
         Ok(Box::new(move || {
-            let mut shown = shown.lock().unwrap();
+            let mut shown = shown.lock();
             Ok(if show { shown.insert(uid) } else { shown.remove(&uid) })
         }))
     }
@@ -200,10 +201,10 @@ struct Gate {
 
 impl Gate {
     fn pass(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock();
         state.1 += 1;
         while !state.0 {
-            state = self.wake.wait(state).unwrap_or_else(|e| e.into_inner());
+            state = self.wake.wait(state);
         }
         state.1 -= 1;
     }
@@ -211,13 +212,13 @@ impl Gate {
 
 impl Latch {
     pub fn open(&self) {
-        self.0.state.lock().unwrap_or_else(|e| e.into_inner()).0 = true;
+        self.0.state.lock().0 = true;
         self.0.wake.notify_all();
     }
 
     /// How many wait at it now.
     pub fn inside(&self) -> usize {
-        self.0.state.lock().unwrap_or_else(|e| e.into_inner()).1
+        self.0.state.lock().1
     }
 
     /// Register `type_name`, a producer whose every run waits here.

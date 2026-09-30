@@ -136,7 +136,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // An expression READING the followed variable is handed each pick through the expression it
     // compiled once: a moved value refreshes the binding, it does not rebuild it.
     let evaluator = std::sync::Arc::new(goofi_tests::FirstVar::default());
-    g.state.graph.lock().unwrap().set_evaluator(evaluator.clone());
+    g.state.graph.lock().set_evaluator(evaluator.clone());
     let reader = g.add("LFO");
     g.call("node param edit", j!({ "node": hex(reader), "param": "lfo/amplitude", "expression": "variables.desk.level" }));
     let mut ev = g.events();

@@ -30,7 +30,6 @@ axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 futures-util = "0.3"
 # The mount nonce only has to be unguessable-enough to keep two concurrent goofis apart.
-getrandom = "0.4"
 notify = "8"
 serde = { version = "1", features = ["derive"] }
 # A palette row lists its pages in the manifest's declared order, so the map keeps insertion order.

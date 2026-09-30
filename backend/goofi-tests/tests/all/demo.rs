@@ -49,7 +49,7 @@ async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
 
     // No audio ENGINE, which is the one line that also empties the audio half of the catalog.
     let types = |g: &Goofi| -> Vec<String> {
-        goofi_bridge::catalog_type_names(&g.state.graph.lock().unwrap())
+        goofi_bridge::catalog_type_names(&g.state.graph.lock())
     };
     assert!(types(&full).iter().any(|t| t.starts_with("audio:")), "a full server has audio nodes");
     assert!(

@@ -2,7 +2,8 @@
 use crate::gpu::{Gpu, Want, padded_row, target};
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::Mutex;
 /// One texture the engine owns, with the size it was made for.
 pub(crate) struct Target {
     pub(crate) texture: wgpu::Texture,
@@ -98,7 +99,7 @@ pub(crate) type Spare = Arc<Mutex<Vec<Vec<u8>>>>;
 
 /// Two is every buffer this path can have in hand at once; a third would only be held.
 pub(crate) fn give_back(spare: &Spare, buffer: Vec<u8>) {
-    let mut held = spare.lock().expect("the spare");
+    let mut held = spare.lock();
     if held.len() < 2 {
         held.push(buffer);
     }

@@ -18,19 +18,15 @@ use crate::node::Node;
 /// later import is a lookup. A node body is where a node's imports first run, so serializing the
 /// bodies is enough — and it costs nothing after, since nothing here is on the frame path.
 fn one_at_a_time(py: Python<'_>) -> std::sync::MutexGuard<'static, ()> {
-    static BODIES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static BODIES: goofi_core::sync::Mutex<()> = goofi_core::sync::Mutex::new(());
     loop {
         match BODIES.try_lock() {
-            Ok(held) => return held,
-            // A panic under this lock poisons it, and there is nothing behind it to protect: the
-            // guard IS the critical section. Taking it anyway is what keeps one panic from
-            // leaving every later load spinning here for the life of the process.
-            Err(std::sync::TryLockError::Poisoned(held)) => return held.into_inner(),
+            Some(held) => return held,
             // A guard cannot cross `detach`, so waiting and holding are two steps: block DETACHED
             // until it is free, then race for it attached. Waiting attached is what must not
             // happen — the GIL tripwire can turn the GIL back on, and a waiter holding it would
             // stop the very thread it waits for.
-            Err(std::sync::TryLockError::WouldBlock) => py.detach(|| drop(BODIES.lock())),
+            None => py.detach(|| drop(BODIES.lock())),
         }
     }
 }

@@ -3,7 +3,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Mutex, OnceLock};
+use std::sync::{mpsc, OnceLock};
+use crate::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle, TermLike};
@@ -56,12 +57,12 @@ impl Startup {
     pub fn begin(version: &str) -> Self {
         let started = Instant::now();
         line("goofi", &format!("{version} · starting"));
-        *ACTIVE.lock().unwrap() = Some(("Starting".into(), started));
-        *FOLDERS.lock().unwrap() = Some(HashMap::new());
+        *ACTIVE.lock() = Some(("Starting".into(), started));
+        *FOLDERS.lock() = Some(HashMap::new());
         let (stop, receive) = mpsc::channel();
         let worker = crate::worker::thread("goofi-startup").spawn(move || {
             while receive.recv_timeout(Duration::from_secs(5)) == Err(mpsc::RecvTimeoutError::Timeout) {
-                let active = ACTIVE.lock().unwrap();
+                let active = ACTIVE.lock();
                 if let Some((message, since)) = active.as_ref().filter(|(_, since)| since.elapsed() >= Duration::from_secs(5)) {
                     line("…", &format!("{message} · {:.0}s elapsed", since.elapsed().as_secs_f64()));
                 }
@@ -83,8 +84,8 @@ impl Drop for Startup {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
-        *ACTIVE.lock().unwrap() = None;
-        *FOLDERS.lock().unwrap() = None;
+        *ACTIVE.lock() = None;
+        *FOLDERS.lock() = None;
     }
 }
 
@@ -93,7 +94,7 @@ impl Drop for Startup {
 pub fn report(message: impl Into<String>) {
     let message = message.into();
     crate::log::record(crate::log::Source::component("goofi"), crate::log::Level::Info, None, message.clone());
-    let mut active = ACTIVE.lock().unwrap();
+    let mut active = ACTIVE.lock();
     if let Some(current) = active.as_mut() {
         line(">", &message);
         *current = (message, Instant::now());
@@ -102,7 +103,7 @@ pub fn report(message: impl Into<String>) {
 
 /// A fact under the current step, printed during startup only.
 pub fn note(message: impl Into<String>) {
-    if ACTIVE.lock().unwrap().is_some() {
+    if ACTIVE.lock().is_some() {
         line("·", &message.into());
     }
 }
@@ -123,7 +124,7 @@ fn shown(path: &Path) -> String {
 
 /// A scan of `folder` with `files` to read begins: a bar until [`indexed`] replaces it.
 pub fn scanning(folder: &Path, files: usize) {
-    let mut folders = FOLDERS.lock().unwrap();
+    let mut folders = FOLDERS.lock();
     let Some(folders) = folders.as_mut() else { return };
     let bar = screen().add(ProgressBar::new(files as u64));
     let style = ProgressStyle::with_template("  ⋯ {prefix} {bar:24} {pos}/{len} {msg}").expect("a template").progress_chars("━╸ ");
@@ -136,14 +137,14 @@ pub fn scanning(folder: &Path, files: usize) {
 /// `file` is being read: its folder's bar names it.
 pub fn reading(file: &Path) {
     let Some(folder) = file.parent() else { return };
-    if let Some(bar) = FOLDERS.lock().unwrap().as_ref().and_then(|f| f.get(folder)) {
+    if let Some(bar) = FOLDERS.lock().as_ref().and_then(|f| f.get(folder)) {
         bar.set_message(file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
     }
 }
 
 /// One file of `folder` was read and decided.
 pub fn scanned(folder: &Path, file: &Path) {
-    if let Some(bar) = FOLDERS.lock().unwrap().as_ref().and_then(|f| f.get(folder)) {
+    if let Some(bar) = FOLDERS.lock().as_ref().and_then(|f| f.get(folder)) {
         bar.set_message(file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
         bar.inc(1);
     }
@@ -151,7 +152,7 @@ pub fn scanned(folder: &Path, file: &Path) {
 
 /// The scan of `folder` is over: its bar becomes the count of nodes it put in the library.
 pub fn indexed(folder: &Path, nodes: usize, unavailable: usize) {
-    let bar = FOLDERS.lock().unwrap().as_mut().and_then(|f| f.remove(folder));
+    let bar = FOLDERS.lock().as_mut().and_then(|f| f.remove(folder));
     if let Some(bar) = bar {
         bar.finish_and_clear();
         screen().remove(&bar);

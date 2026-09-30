@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
+use goofi_core::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, StreamTrait};
@@ -224,8 +225,8 @@ where
                 let started = Instant::now();
                 scratch.resize(data.len(), 0.0);
                 match runtime.try_lock() {
-                    Ok(mut rt) => rt.render_into(&mut scratch),
-                    Err(_) => {
+                    Some(mut rt) => rt.render_into(&mut scratch),
+                    None => {
                         scratch.fill(0.0);
                         stats.xruns.fetch_add(1, Ordering::Relaxed);
                     }
@@ -425,7 +426,7 @@ impl AudioEngine {
     /// The external clock: render whole blocks until `frames` are ready, and hand them over
     /// interleaved — exactly what a device callback would receive.
     pub fn drive(&mut self, frames: usize) -> (Vec<f32>, u16) {
-        let mut rt = self.runtime();
+        let mut rt = self.runtime.lock();
         let channels = rt.channels();
         let mut out = vec![0.0; frames * channels as usize];
         rt.render_into(&mut out);
@@ -436,7 +437,7 @@ impl AudioEngine {
     /// a test judges the watchdog without racing the scheduler; `None` measures again.
     pub fn state_cost(&mut self, uid: Uid, cost: Option<Duration>) {
         let Some(&Instance { idx, serial, .. }) = self.live.get(&uid) else { return };
-        let mut rt = self.runtime();
+        let mut rt = self.runtime.lock();
         rt.apply_pending();
         if let Some(slot) = rt.slab[idx].as_mut().filter(|s| s.serial == serial) {
             slot.cost = cost;
@@ -458,7 +459,7 @@ impl AudioEngine {
         let done = Arc::new(AtomicBool::new(false));
         self.send(Msg::RecordBoundary { window, begin, done: done.clone() });
         if self.device.is_none() {
-            self.runtime().apply_pending();
+            self.runtime.lock().apply_pending();
         }
         move || {
             let deadline = Instant::now() + Duration::from_secs(3);
@@ -549,16 +550,11 @@ impl AudioEngine {
         }
     }
 
-    /// The audio half's lock, held through a panic there: the slab is still the slab.
-    fn runtime(&self) -> std::sync::MutexGuard<'_, Runtime> {
-        self.runtime.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
     /// A message always lands. A full ring means the audio thread has not run for a long time, so
     /// taking its lock to apply the backlog costs no block.
     fn send(&mut self, mut msg: Msg) {
         while let Err(rtrb::PushError::Full(back)) = self.inbox.push(msg) {
-            self.runtime().apply_pending();
+            self.runtime.lock().apply_pending();
             msg = back;
         }
     }
@@ -704,7 +700,7 @@ impl AudioEngine {
     /// Stop the clock and wait for it; the name it had.
     fn close(&mut self) -> Option<String> {
         let clock = self.device.take()?;
-        self.runtime().set_device(None);
+        self.runtime.lock().set_device(None);
         Some(clock.name.clone())
     }
 
@@ -719,7 +715,7 @@ impl AudioEngine {
     /// The device's rate and width, under the runtime lock: every instance — the ones still on
     /// the ring included — is re-prepared when the rate moved, and the FIFO is re-cut to the width.
     fn retune(&mut self, rate: f64, channels: u16) {
-        let mut rt = self.runtime();
+        let mut rt = self.runtime.lock();
         rt.apply_pending();
         if rate != self.audio.rate() {
             for slot in rt.slab.iter_mut().flatten() {
@@ -772,7 +768,7 @@ impl AudioEngine {
                 continue;
             }
             let (idx, serial, uid) = (inst.idx, inst.serial, *uid);
-            let mut swaps = self.audio.swaps.lock().unwrap_or_else(|e| e.into_inner());
+            let mut swaps = self.audio.swaps.lock();
             let held = swaps.entry(uid).or_default();
             held.inboxes.extend(swap.inboxes);
             held.taps.extend(swap.taps);
@@ -825,7 +821,7 @@ impl Engine for AudioEngine {
     /// Every live node's state, under the runtime lock.
     fn persist(&mut self) {
         let states: Vec<(Uid, &'static str, Vec<u8>)> = {
-            let mut rt = self.runtime();
+            let mut rt = self.runtime.lock();
             rt.apply_pending();
             rt.slab.iter().flatten().map(|s| (s.uid, s.type_name, s.node.save())).collect()
         };
@@ -926,7 +922,7 @@ impl Engine for AudioEngine {
             self.send(Msg::Remove(inst.idx));
             // The box comes back NOW, its state kept, so a restart's birth finds it: one callback
             // may find the runtime taken — a click at an authoring event, accepted.
-            self.runtime().apply_pending();
+            self.runtime.lock().apply_pending();
             self.discard_retired();
             self.free.push(inst.idx);
             self.disabled.remove(&uid);
@@ -1049,7 +1045,7 @@ impl Engine for AudioEngine {
     /// What every editor wrote since the last call, as the record spells it — latest wins per
     /// param, because a drag is many edits and the document wants the last.
     fn take_edits(&mut self) -> Vec<Edit> {
-        let raw = std::mem::take(&mut *self.audio.edits.lock().unwrap());
+        let raw = std::mem::take(&mut *self.audio.edits.lock());
         let mut edits: Vec<Edit> = Vec::new();
         for (uid, id, v) in raw {
             let Some(inst) = self.live.get(&uid) else { continue };
@@ -1077,7 +1073,7 @@ impl Engine for AudioEngine {
     }
 
     fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_node::ExprEvaluator>) {
-        *self.shared.evaluator.lock().unwrap() = Some(evaluator);
+        *self.shared.evaluator.lock() = Some(evaluator);
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
@@ -1093,9 +1089,7 @@ impl Engine for AudioEngine {
             self.remove(uid);
         }
         goofi_transport::wait_released(halts.iter().map(|h| &**h), goofi_transport::SHUTDOWN_WAIT);
-        if let Ok(mut rt) = self.runtime.lock() {
-            rt.render_block();
-        }
+        self.runtime.lock().render_block();
         self.discard_retired();
     }
 }

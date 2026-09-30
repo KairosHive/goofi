@@ -67,7 +67,7 @@ fn intermediate() {
 #[test]
 fn a_hard_killed_parent_still_stops_its_child() {
     goofi_tests::walled_home();
-    goofi_transport::session();
+    goofi_transport::session().unwrap();
     let mut parent = Command::new(std::env::current_exe().expect("this test binary"))
         .args([&format!("{}::intermediate", crate::situation(module_path!())), "--exact", "--nocapture"])
         .env(INTERMEDIATE, "1")
@@ -105,7 +105,7 @@ fn a_hard_killed_parent_still_stops_its_child() {
 #[test]
 fn a_child_is_listed_while_it_lives_and_leaves_when_stopped() {
     goofi_tests::walled_home();
-    goofi_transport::session();
+    goofi_transport::session().unwrap();
     let listed = || registry::inventory().into_iter().filter(|e| e.kind == Kind::Child).map(|e| e.name).collect::<Vec<_>>();
 
     let mut child = child::spawn("sleeper", &mut sleeper_command()).expect("spawn");
@@ -117,7 +117,7 @@ fn a_child_is_listed_while_it_lives_and_leaves_when_stopped() {
     // It was told the session — the same one this process runs under — and what it printed is
     // in the process log under its name, on the stream it used, without a pipe of the owner's.
     let said = || {
-        goofi_core::log::global().lock().unwrap().since(None).groups.into_iter()
+        goofi_core::log::since(None).groups.into_iter()
             .filter_map(|g| g.message)
             .find(|m| m.source.component == "sleeper" && m.text.starts_with("SLEEPING"))
     };
@@ -126,7 +126,7 @@ fn a_child_is_listed_while_it_lives_and_leaves_when_stopped() {
         std::thread::sleep(Duration::from_millis(20));
     }
     let line = said().expect("the child's line reached the log");
-    assert_eq!(line.text, format!("SLEEPING {}", goofi_transport::session()));
+    assert_eq!(line.text, format!("SLEEPING {}", goofi_transport::session().unwrap()));
     assert_eq!(line.stream.as_deref(), Some("stdout"));
 
     // Deaf to the ask; the stop closes the pipe first, which is what ends it, and insists after
@@ -140,7 +140,7 @@ fn a_child_is_listed_while_it_lives_and_leaves_when_stopped() {
 #[test]
 fn a_dropped_child_does_not_outlive_its_owner() {
     goofi_tests::walled_home();
-    goofi_transport::session();
+    goofi_transport::session().unwrap();
     let pid = {
         let child = child::spawn("sleeper", &mut sleeper_command()).expect("spawn");
         child.id()
@@ -151,7 +151,7 @@ fn a_dropped_child_does_not_outlive_its_owner() {
 #[test]
 fn a_tool_past_its_deadline_is_killed_and_reported() {
     goofi_tests::walled_home();
-    goofi_transport::session();
+    goofi_transport::session().unwrap();
     let refused = child::output("sleeper", &mut sleeper_command(), Duration::from_millis(500));
     let err = refused.expect_err("a tool that never finishes is refused");
     assert_eq!(err.kind(), std::io::ErrorKind::TimedOut, "{err}");

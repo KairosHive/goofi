@@ -4,7 +4,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::Mutex;
 
 use goofi_core::SlotType;
 use goofi_node::{GraphView, ParamDecl, Uid};
@@ -306,7 +307,7 @@ fn size_of(
         let (fw, fh) = match behind {
             Some(p) => size_of(p, live, wires, sizes, visiting),
             None => live.get(&uid).and_then(|i| {
-                i.source.as_ref().and_then(|s| s.lock().unwrap().as_ref().map(|f| f.size))
+                i.source.as_ref().and_then(|s| s.lock().as_ref().map(|f| f.size))
                     .or_else(|| crate::half::unpack(i.uploaded.load(Ordering::Relaxed)))
             }).unwrap_or((GENERATOR, GENERATOR)),
         };

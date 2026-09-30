@@ -61,7 +61,7 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let base = g.serve().await;
     let url = format!("http://{}", base.trim_start_matches("ws://"));
     let _sole = goofi_tests::sole_session();
-    let id = goofi_transport::session().to_string();
+    let id = goofi_transport::session().unwrap().to_string();
     goofi_transport::record_url(&url);
 
     // A record nobody holds is DEAD: not listed, and left for the server's sweep; the held one

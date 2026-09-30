@@ -14,7 +14,6 @@ goofi-node = { path = "../goofi-node" }
 goofi-view = { path = "../goofi-view" }
 
 # One line: the random scope a graph's service names live in.
-getrandom = "0.4"
 indexmap = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

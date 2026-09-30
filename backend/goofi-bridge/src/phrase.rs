@@ -491,7 +491,7 @@ fn values_for(ty: &str, state: Option<&crate::AppState>, partial: &str) -> Vec<(
             .collect(),
         "uid" | "endpoint" => {
             let Some(state) = state else { return Vec::new() };
-            let doc = state.doc.lock().unwrap().to_json();
+            let doc = state.doc.lock().to_json();
             let Some(nodes) = doc.get("nodes").and_then(Value::as_object) else {
                 return Vec::new();
             };

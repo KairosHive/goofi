@@ -155,7 +155,7 @@ impl IComponentHandlerTrait for Handler {
     }
 
     unsafe fn performEdit(&self, id: ParamID, value: ParamValue) -> tresult {
-        self.shared.edits.lock().unwrap().push((self.uid, id, value));
+        self.shared.edits.lock().push((self.uid, id, value));
         self.shared.waker.notify();
         kResultOk
     }

@@ -12,7 +12,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
+use goofi_core::sync::Mutex;
 use std::time::Duration;
 
 const SDK: &str = include_str!("../../../sdk/python/goofi_plugin/__init__.py");
@@ -201,7 +202,6 @@ impl Service {
                 if let Err(error) = sent {
                     for (_, tx) in replies
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .drain()
                     {
                         let _ = tx.send(Err(format!("plugin service input: {error}")));
@@ -226,7 +226,6 @@ impl Service {
         let Some(reader) = self
             .output
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
         else {
             return;
@@ -246,7 +245,6 @@ impl Service {
                 if let Some(id) = message["id"].as_u64() {
                     if let Some(tx) = pending
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .remove(&id)
                     {
                         let reply = match message["error"].as_str() {
@@ -284,7 +282,6 @@ impl Service {
             service.kill();
             for (_, tx) in pending
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .drain()
             {
                 let _ = tx.send(Err("plugin service stopped".into()));
@@ -296,7 +293,6 @@ impl Service {
         if self
             .child
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .try_wait()
             .map_err(|e| e.to_string())?
             .is_some()
@@ -307,7 +303,6 @@ impl Service {
         let (tx, rx) = mpsc::channel();
         self.pending
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id, tx);
         let chain = CHAIN.with(|chain| chain.borrow().clone());
         if let Err(error) = write(
@@ -316,7 +311,6 @@ impl Service {
         ) {
             self.pending
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .remove(&id);
             return Err(error);
         }
@@ -325,7 +319,6 @@ impl Service {
             Err(_) => {
                 self.pending
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .remove(&id);
                 self.kill();
                 Err(
@@ -341,7 +334,6 @@ impl Service {
     fn kill(&self) {
         self.child
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .stop(Duration::from_secs(2));
     }
 }
@@ -795,7 +787,7 @@ impl Package {
 
 pub(crate) fn list(state: &AppState, _: &Value, _: &str, _: &mut Vec<String>) -> Reply {
     let packages: Vec<_> = state.plugins.packages.iter().map(|p| {
-        let dead = p.service.as_ref().is_some_and(|s| s.child.lock().unwrap_or_else(std::sync::PoisonError::into_inner).try_wait().ok().flatten().is_some());
+        let dead = p.service.as_ref().is_some_and(|s| s.child.lock().try_wait().ok().flatten().is_some());
         json!({"id": p.manifest.id, "version": p.manifest.version, "error": p.error.as_deref().or(dead.then_some("plugin service stopped")),
             "frontend": p.frontend.as_ref().filter(|_| !dead).map(|_| format!("/plugins/{}/index.js", p.manifest.id))})
     }).collect();

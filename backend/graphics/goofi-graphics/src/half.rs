@@ -2,7 +2,8 @@
 //! thread uploads, and the frame that thread read back goes out while anyone drinks from it.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::Mutex;
 
 use goofi_control::{Cx, Half, Ticked};
 use goofi_core::Data;
@@ -82,7 +83,7 @@ impl Half for GraphicsHalf {
             if inbox == 0 {
                 self.uploaded.store(pack((up.width, up.height)), Ordering::Relaxed);
             }
-            *cell.lock().unwrap() = Some(up);
+            *cell.lock() = Some(up);
         }
         false
     }
@@ -104,7 +105,7 @@ impl Half for GraphicsHalf {
         self.readers.store(readers, Ordering::Relaxed);
         // Taken from UNDER the lock and encoded outside it: the render thread waits on this
         // mutex, so an encode held across it is the frontend stalling a node tick.
-        let taken = self.tap.lock().expect("the tap").frame.take();
+        let taken = self.tap.lock().frame.take();
         match taken {
             Some(Tapped::Full(frame)) => publish(0, &goofi_codec::encode(&frame)),
             Some(Tapped::Texels { shape, bytes, meta }) => {

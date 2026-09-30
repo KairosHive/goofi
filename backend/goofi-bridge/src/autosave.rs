@@ -5,7 +5,8 @@
 //! watcher on the mount pulse, and writes once the pulses go quiet. Without a watcher it looks every [`CAP`].
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
 use goofi_graph::archive;
@@ -57,7 +58,7 @@ pub(crate) fn spawn(state: AppState) {
         }
     });
     if let Ok(worker) = worker {
-        owner.workers.lock().unwrap().push(worker);
+        owner.workers.lock().push(worker);
     }
 }
 
@@ -70,13 +71,13 @@ static MOUNTS: Mutex<Vec<(PathBuf, PathBuf, Arc<goofi_node::DrainWaker>)>> = Mut
 static WATCHER: Mutex<Option<notify::RecommendedWatcher>> = Mutex::new(None);
 
 fn watch(mount: &Path) -> bool {
-    let mut watcher = WATCHER.lock().unwrap();
+    let mut watcher = WATCHER.lock();
     if watcher.is_none() {
         match notify::recommended_watcher(|event: notify::Result<notify::Event>| {
             let hit = |at: &[&PathBuf]| {
                 event.as_ref().map_or(true, |e| e.paths.is_empty() || e.paths.iter().any(|p| at.iter().any(|m| p.starts_with(m))))
             };
-            for (_, _, changed) in MOUNTS.lock().unwrap().iter().filter(|(m, real, _)| hit(&[m, real])) {
+            for (_, _, changed) in MOUNTS.lock().iter().filter(|(m, real, _)| hit(&[m, real])) {
                 changed.notify();
             }
         }) {
@@ -115,15 +116,15 @@ impl Watch {
         self.release();
         if watch(&mount) {
             let real = goofi_core::path::canonical(&mount).unwrap_or_else(|_| mount.clone());
-            MOUNTS.lock().unwrap().push((mount.clone(), real, self.changed.clone()));
+            MOUNTS.lock().push((mount.clone(), real, self.changed.clone()));
             self.at = Some(mount);
         }
     }
 
     fn release(&mut self) {
         let Some(old) = self.at.take() else { return };
-        MOUNTS.lock().unwrap().retain(|(m, _, _)| *m != old);
-        if let Some(w) = WATCHER.lock().unwrap().as_mut() {
+        MOUNTS.lock().retain(|(m, _, _)| *m != old);
+        if let Some(w) = WATCHER.lock().as_mut() {
             let _ = w.unwatch(&old);
         }
     }
@@ -148,7 +149,7 @@ fn tick(state: &AppState, last: &mut Option<Stamp>) {
         }
         return;
     }
-    let manifest = state.graph.lock().unwrap().serialize();
+    let manifest = state.graph.lock().serialize();
     if last.as_ref().is_some_and(|(m, fp)| *m == manifest && *fp == seen) {
         return;
     }

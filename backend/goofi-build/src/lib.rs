@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{LazyLock, Mutex, OnceLock};
+use std::sync::{LazyLock, OnceLock};
+use goofi_core::sync::Mutex;
 
 use sha2::{Digest, Sha256};
 
@@ -117,7 +118,7 @@ pub fn built(sdk: &Sdk, source: &Path, base: &Path) -> Result<PathBuf, String> {
     if artifact.is_file() {
         return Ok(artifact);
     }
-    let failed = FAILED.lock().unwrap_or_else(|e| e.into_inner());
+    let failed = FAILED.lock();
     Err(failed.get(&key).cloned().unwrap_or_else(|| "not built yet — refresh the library".into()))
 }
 
@@ -130,7 +131,7 @@ pub fn ensure(sdk: &Sdk, source: &Path, base: &Path) -> Result<PathBuf, String> 
     }
     let result = build(sdk, source, base, &key, &artifact);
     if let Err(why) = &result {
-        FAILED.lock().unwrap_or_else(|e| e.into_inner()).insert(key, why.clone());
+        FAILED.lock().insert(key, why.clone());
     }
     result
 }
@@ -140,7 +141,7 @@ fn build(sdk: &Sdk, source: &Path, base: &Path, key: &str, artifact: &Path) -> R
         return Err("needs `cargo` to build — install a Rust toolchain, or use a shipped node".into());
     };
     static BUILDING: Mutex<()> = Mutex::new(());
-    let _one_at_a_time = BUILDING.lock().unwrap_or_else(|e| e.into_inner());
+    let _one_at_a_time = BUILDING.lock();
     if artifact.is_file() {
         return Ok(artifact.to_path_buf());
     }
@@ -293,7 +294,7 @@ pub struct Opened {
 /// versions, never a call into a stale ABI — then `goofi_describe`.
 pub fn open(path: &Path) -> Result<Opened, String> {
     static DESCRIBED: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
-    let mut described = DESCRIBED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let mut described = DESCRIBED.get_or_init(Default::default).lock();
     let library = library(path)?;
     if let Some(describe) = described.get(path) {
         return Ok(Opened { library, describe: describe.clone() });
@@ -334,7 +335,7 @@ type Handle = usize;
 
 fn opened() -> std::sync::MutexGuard<'static, HashMap<PathBuf, (&'static libloading::Library, Handle)>> {
     static OPENED: OnceLock<Mutex<HashMap<PathBuf, (&'static libloading::Library, Handle)>>> = OnceLock::new();
-    OPENED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+    OPENED.get_or_init(Default::default).lock()
 }
 
 /// A symbol of `library` as the function type `F`.

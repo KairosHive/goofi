@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use crate::sync::Mutex;
 use std::time::Instant;
 
 /// What kind of thing a resource is, in the order a shutdown releases them.
@@ -46,7 +46,7 @@ pub struct Lease {
 
 impl Drop for Lease {
     fn drop(&mut self) {
-        ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.id);
+        ENTRIES.lock().remove(&self.id);
     }
 }
 
@@ -74,7 +74,7 @@ pub fn leased<T>(kind: Kind, name: impl Into<String>, value: T) -> Leased<T> {
 pub fn lease(kind: Kind, name: impl Into<String>) -> Lease {
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let entry = Entry { id, kind, name: name.into(), held_s: 0.0, since: Instant::now() };
-    ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).insert(id, entry);
+    ENTRIES.lock().insert(id, entry);
     Lease { id }
 }
 
@@ -83,7 +83,6 @@ pub fn inventory() -> Vec<Entry> {
     let now = Instant::now();
     let mut out: Vec<Entry> = ENTRIES
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
         .values()
         .map(|e| Entry { held_s: now.duration_since(e.since).as_secs_f64(), ..e.clone() })
         .collect();

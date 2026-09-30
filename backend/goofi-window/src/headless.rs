@@ -3,7 +3,8 @@
 //! suite's plugin registers a timer.
 
 use std::ffi::c_void;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::{Condvar, Mutex};
 use std::time::Instant;
 
 use super::{Id, Pumped, Screen, Wake};
@@ -22,7 +23,7 @@ struct Signal {
 
 impl Wake for Signal {
     fn wake(&self) {
-        *self.woke.lock().unwrap() = true;
+        *self.woke.lock() = true;
         self.cv.notify_one();
     }
 }
@@ -42,17 +43,17 @@ impl Screen for Platform {
     fn destroy(&mut self, _id: Id) {}
 
     fn pump(&mut self, until: Option<Instant>, _fds: &[i32]) -> Pumped {
-        let mut woke = self.wake.woke.lock().unwrap();
+        let mut woke = self.wake.woke.lock();
         while !*woke {
             let Some(until) = until else {
-                woke = self.wake.cv.wait(woke).unwrap();
+                woke = self.wake.cv.wait(woke);
                 continue;
             };
             let left = until.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 break;
             }
-            woke = self.wake.cv.wait_timeout(woke, left).unwrap().0;
+            woke = self.wake.cv.wait_timeout(woke, left);
         }
         *woke = false;
         Pumped { closed: Vec::new(), ready: Vec::new(), dead: false }

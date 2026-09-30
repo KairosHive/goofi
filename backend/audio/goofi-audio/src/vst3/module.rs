@@ -6,7 +6,8 @@ use std::ffi::c_void;
 #[cfg(unix)]
 use std::ffi::CStr;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+use goofi_core::sync::Mutex;
 
 use vst3::Steinberg::*;
 use vst3::{ComPtr, Interface};
@@ -17,7 +18,7 @@ use super::host::cstr;
 /// a bundle REPLACED in place keeps running its old code until goofi restarts (see the roadmap).
 pub fn factory(path: &Path) -> Result<Factory, String> {
     static ENTERED: OnceLock<Mutex<HashMap<PathBuf, &'static libloading::Library>>> = OnceLock::new();
-    let mut entered = ENTERED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let mut entered = ENTERED.get_or_init(Default::default).lock();
     let library = match entered.get(path) {
         Some(library) => library,
         None => {

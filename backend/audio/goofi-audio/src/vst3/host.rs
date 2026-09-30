@@ -2,7 +2,7 @@
 //! built, so a block on the audio thread touches them freely.
 
 use std::cell::{Cell, RefCell};
-use std::sync::Mutex;
+use goofi_core::sync::Mutex;
 use std::ffi::{c_char, c_void};
 
 use vst3::Steinberg::Vst::*;
@@ -90,7 +90,7 @@ impl Attributes {
 
     fn put(&self, id: IAttrID, value: Attr) -> tresult {
         let key = Self::key(id);
-        let mut map = self.map.lock().unwrap();
+        let mut map = self.map.lock();
         match map.iter_mut().find(|(k, _)| *k == key) {
             Some(slot) => slot.1 = value,
             None => map.push((key, value)),
@@ -109,7 +109,7 @@ impl IAttributeListTrait for Attributes {
     }
 
     unsafe fn getInt(&self, id: IAttrID, value: *mut int64) -> tresult {
-        let map = self.map.lock().unwrap();
+        let map = self.map.lock();
         match map.iter().find(|(k, _)| *k == Self::key(id)) {
             Some((_, Attr::Int(v))) => {
                 *value = *v;
@@ -124,7 +124,7 @@ impl IAttributeListTrait for Attributes {
     }
 
     unsafe fn getFloat(&self, id: IAttrID, value: *mut f64) -> tresult {
-        let map = self.map.lock().unwrap();
+        let map = self.map.lock();
         match map.iter().find(|(k, _)| *k == Self::key(id)) {
             Some((_, Attr::Float(v))) => {
                 *value = *v;
@@ -154,7 +154,7 @@ impl IAttributeListTrait for Attributes {
         if cap == 0 || string.is_null() {
             return kResultFalse;
         }
-        let map = self.map.lock().unwrap();
+        let map = self.map.lock();
         match map.iter().find(|(k, _)| *k == Self::key(id)) {
             Some((_, Attr::String(v))) => {
                 let n = v.len().min(cap);
@@ -178,7 +178,7 @@ impl IAttributeListTrait for Attributes {
     /// The pointer handed back is INTO the stored blob, which lives as long as this list does — the
     /// SDK's contract, and why the value is kept rather than copied out.
     unsafe fn getBinary(&self, id: IAttrID, data: *mut *const c_void, sizeInBytes: *mut uint32) -> tresult {
-        let map = self.map.lock().unwrap();
+        let map = self.map.lock();
         match map.iter().find(|(k, _)| *k == Self::key(id)) {
             Some((_, Attr::Binary(v))) => {
                 *data = v.as_ptr() as *const c_void;
@@ -204,11 +204,11 @@ impl Class for Message {
 
 impl IMessageTrait for Message {
     unsafe fn getMessageID(&self) -> FIDString {
-        self.id.lock().unwrap().as_ptr()
+        self.id.lock().as_ptr()
     }
 
     unsafe fn setMessageID(&self, id: FIDString) {
-        *self.id.lock().unwrap() = match id.is_null() {
+        *self.id.lock() = match id.is_null() {
             true => std::ffi::CString::default(),
             false => std::ffi::CStr::from_ptr(id).to_owned(),
         };
@@ -217,7 +217,7 @@ impl IMessageTrait for Message {
     /// Built on first ask and kept, because the caller expects the SAME list every time — writing
     /// through one borrow and reading through another is exactly how a message is used.
     unsafe fn getAttributes(&self) -> *mut IAttributeList {
-        let mut held = self.attributes.lock().unwrap();
+        let mut held = self.attributes.lock();
         if held.is_none() {
             *held = ComWrapper::new(Attributes::default()).to_com_ptr::<IAttributeList>();
         }

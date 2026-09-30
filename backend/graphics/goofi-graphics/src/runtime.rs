@@ -3,7 +3,8 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use goofi_core::{Data, Meta};
@@ -109,7 +110,7 @@ impl Runtime {
     /// Everything the graph asked for since the last tick, applied on this thread — every GPU
     /// object this engine owns is made and unmade here.
     fn drain_inbox(&mut self) {
-        let asked = std::mem::take(&mut *self.inbox.lock().expect("the inbox"));
+        let asked = std::mem::take(&mut *self.inbox.lock());
         for cmd in asked {
             match cmd {
                 Cmd::Insert(uid, params) => self.insert(uid, params),
@@ -155,7 +156,7 @@ impl Runtime {
             }
             let stage = &self.plan.stages[i];
             let produced = match &stage.pass {
-                Pass::Host { source, program } => source.lock().unwrap().clone().filter(|frame| {
+                Pass::Host { source, program } => source.lock().clone().filter(|frame| {
                     let matches = match (&frame.content, program) {
                         (crate::producer::Content::Pixels(_), None) => true,
                         (crate::producer::Content::Render(text), Some((compiled, _))) => text == compiled,
@@ -180,13 +181,13 @@ impl Runtime {
                 self.trouble(stage.uid, Some(error));
                 continue;
             }
-            let clear = self.troubles.lock().expect("the render troubles")
+            let clear = self.troubles.lock()
                 .get(&stage.uid).is_some_and(|why| why.starts_with("readback:"));
             if clear { self.trouble(stage.uid, None); }
             let Some(state) = self.states.get_mut(&stage.uid) else { continue };
             let shrunk_from = stage.size;
             for (k, cell) in stage.uploads.iter().enumerate() {
-                if let Some(up) = cell.lock().unwrap().take() {
+                if let Some(up) = cell.lock().take() {
                     state.upload(&self.gpu, k, &up);
                 }
             }
@@ -377,7 +378,7 @@ impl Runtime {
 
     /// Raise or clear what an armed stage wears, and ask for the settle that publishes it.
     fn trouble(&self, uid: Uid, why: Option<String>) {
-        let mut held = self.troubles.lock().expect("the record troubles");
+        let mut held = self.troubles.lock();
         let was = match why {
             Some(why) => held.insert(uid, why),
             None => held.remove(&uid),
@@ -404,7 +405,7 @@ impl Runtime {
                 slot.ready.store(false, Ordering::Relaxed);
                 let (size, at) = (slot.texture.size, slot.at);
                 let shrunk = ring.shrunk;
-                let mut rows = ring.spare.lock().expect("the spare").pop().unwrap_or_default();
+                let mut rows = ring.spare.lock().pop().unwrap_or_default();
                 let filled = rows_into(&mut rows, &slot.buffer, size, w);
                 slot.buffer.unmap();
                 let spare = ring.spare.clone();
@@ -452,7 +453,7 @@ impl Runtime {
                             Data::array_f32(shape, rows, meta).ok().map(Tapped::Full)
                         };
                         if let Some(held) = held {
-                            tap_cell.lock().expect("the tap").frame = Some(held);
+                            tap_cell.lock().frame = Some(held);
                         }
                     }
                 }
@@ -504,7 +505,7 @@ fn present(
     texels: Vec<u8>,
     spare: Spare,
 ) {
-    if let Some((_, dropped)) = cell.pending.lock().expect("the pending frame").replace((size, texels)) {
+    if let Some((_, dropped)) = cell.pending.lock().replace((size, texels)) {
         give_back(&spare, dropped);
     }
     if cell.posted.swap(true, Ordering::AcqRel) {
@@ -512,7 +513,7 @@ fn present(
     }
     let cell = cell.clone();
     ui.post(move |host| {
-        if let Some((size, texels)) = cell.pending.lock().expect("the pending frame").take() {
+        if let Some((size, texels)) = cell.pending.lock().take() {
             host.present(id, size, &texels);
             give_back(&spare, texels);
         }

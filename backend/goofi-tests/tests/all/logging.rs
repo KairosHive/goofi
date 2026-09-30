@@ -23,7 +23,7 @@ fn console_session_groups_interleaved_messages_and_keeps_ops_out_of_patch_histor
 
     let cursor = listed["cursor"].as_u64().unwrap();
     g.call("log write", j!({ "component": component, "text": "second", "level": "warning" }));
-    let delta = serde_json::to_value(log::global().lock().unwrap().since(Some(cursor))).unwrap();
+    let delta = serde_json::to_value(log::since(Some(cursor))).unwrap();
     let update = delta["groups"].as_array().unwrap().iter().find(|row| row["id"] == groups[0]["id"]).unwrap();
     assert_eq!(update["count"], 2);
     assert!(update.get("text").is_none(), "repeat packets do not carry text");
@@ -39,7 +39,7 @@ fn console_session_groups_interleaved_messages_and_keeps_ops_out_of_patch_histor
 fn byte_streams_preserve_split_lines_invalid_utf8_and_final_unterminated_text() {
     let source = Source::component("byte-stream-session");
     log::drain(std::io::Cursor::new(b"hello\r\n\xff\nERROR: last"), source, "stderr");
-    let snapshot = serde_json::to_value(log::global().lock().unwrap().since(None)).unwrap();
+    let snapshot = serde_json::to_value(log::since(None)).unwrap();
     let rows: Vec<_> = snapshot["groups"].as_array().unwrap().iter()
         .filter(|row| row["component"] == "byte-stream-session").collect();
     assert_eq!(rows.iter().map(|row| row["text"].as_str().unwrap()).collect::<Vec<_>>(), ["hello", "�", "ERROR: last"]);
@@ -74,7 +74,7 @@ fn process_capture_child() {
     eprintln!("native stderr marker");
     let deadline = std::time::Instant::now() + goofi_tests::WAIT;
     loop {
-        let snapshot = serde_json::to_value(log::global().lock().unwrap().since(None)).unwrap();
+        let snapshot = serde_json::to_value(log::since(None)).unwrap();
         let rows = snapshot["groups"].as_array().unwrap();
         if ["native stdout marker", "native stderr marker"].iter()
             .all(|text| rows.iter().any(|row| row["text"] == *text)) {

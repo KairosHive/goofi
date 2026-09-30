@@ -793,7 +793,7 @@ fn shaders_render_on_the_gpu() {
     // A viewer's 8-bit box on the producer never reaches the wire: the consumer still takes the
     // whole frame, in the engine's own 0..1.
     let tiny = goofi_view::ViewWant { size: (8, 8), depth: goofi_view::Depth::U8 };
-    g.state.graph.lock().unwrap().set_view_demand(field, "out", Some(tiny));
+    g.state.graph.lock().set_view_demand(field, "out", Some(tiny));
     render(&g, 3);
     let whole = waited(&g, "the whole frame beside a viewer's box", |d| shape(d) == vec![64, 128]);
     assert!(f32s(&whole).iter().all(|v| (0.0..=1.0).contains(v)), "in the engine's range, not texel bytes");
@@ -821,7 +821,7 @@ fn shaders_render_on_the_gpu() {
     g.set_param(win, "common", "height", 32);
     g.link(c, "out", win, "input");
     let ui = g.ui();
-    let opened = |g: &Goofi| goofi_bridge::graphics_engine(&mut g.state.graph.lock().unwrap()).window_of(win);
+    let opened = |g: &Goofi| goofi_bridge::graphics_engine(&mut g.state.graph.lock()).window_of(win);
     let id = g.until("the window is open", |g| {
         render(g, 1);
         opened(g)
@@ -844,11 +844,11 @@ fn shaders_render_on_the_gpu() {
     assert_eq!(g.call("session status", j!({}))["graphics"]["windows"], j!(0), "and status says so");
 
     // Step: a restart is a rebirth through the same trait doors — new generation, new services.
-    let generation = g.state.graph.lock().unwrap().node_generation(c);
+    let generation = g.state.graph.lock().node_generation(c);
     let stale = g.probe(c, "out");
     g.call("node restart", j!({ "node": hex(c) }));
     g.ready(c);
-    assert_eq!(g.state.graph.lock().unwrap().node_generation(c), generation + 1);
+    assert_eq!(g.state.graph.lock().node_generation(c), generation + 1);
     drawn(&g, c, "the reborn constant", |d| close(px(d, 0, 0), [0.25, 0.5, 1.0, 1.0]));
     let seen = stale.count();
     render(&g, 5);
@@ -862,7 +862,7 @@ fn shaders_render_on_the_gpu() {
     // Step: a node that makes its own frames carries the patch's default size as a live
     // expression, so ONE variable re-sizes every producer at once. The seeding wants an evaluator
     // present; reading a bare variable does not, which is why this one needs no interpreter.
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
+    g.state.graph.lock().set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
     let gen = g.add("graphics:Noise");
     g.ready(gen);
     let bound = g.doc()["nodes"][hex(gen)]["params"]["common"]["width"].clone();

@@ -26,7 +26,8 @@ pub mod vocab;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, MutexGuard};
+use goofi_core::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use goofi_node::{ScannedType, Stamp};
@@ -171,37 +172,31 @@ impl Default for DataLiveness {
     }
 }
 
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new(Mode::default(), Clock::External, RenderClock::External)
-    }
-}
-
 impl AppState {
     /// An instance named by a fresh id — a test's, several to a process.
-    pub fn new(mode: Mode, clock: Clock, render: RenderClock) -> AppState {
-        Self::with_instance(goofi_core::session::fresh_id(), mode, clock, render)
+    pub fn new(mode: Mode, clock: Clock, render: RenderClock) -> Result<AppState, String> {
+        Self::with_instance(goofi_core::session::fresh_id()?, mode, clock, render)
     }
 
     /// An instance named by `instance` — the binary's, which names it after the session it holds,
     /// so the id a shell sets `GOOFI_SESSION` to is the one `session status` answers.
-    pub fn with_instance(instance: String, mode: Mode, clock: Clock, render: RenderClock) -> AppState {
+    pub fn with_instance(instance: String, mode: Mode, clock: Clock, render: RenderClock) -> Result<AppState, String> {
         // The session is decided — and what dead ones left is swept — HERE, by the manager,
         // before any engine exists: never by whoever happens to open the first port. The caches
         // under `.goofi/system` are swept in the same breath: a crash's part files, old versions.
-        goofi_transport::session();
+        goofi_transport::session()?;
         goofi_core::session::sweep_system(goofi_build::VERSION);
         autosave::sweep_dead();
         let (events, _) = broadcast::channel(256);
         // Seeded BEFORE the baseline is taken, or the patch is dirty from boot, having written
         // the seed itself.
-        let mount = new_mount();
+        let mount = new_mount()?;
         term::seed_orientation(&mount);
         seed_skills(&mount);
         let workspace_baseline = goofi_graph::archive::fingerprint(&mount);
         // Project the INITIAL graph — no nodes, but the seeded system variables — so a client that
         // connects to a fresh backend has the current state at once.
-        let mut graph_val = fresh_graph((!mode.demo).then_some(clock), render);
+        let mut graph_val = fresh_graph((!mode.demo).then_some(clock), render)?;
         graph_val.set_workspace(&mount);
         let mut doc = crate::doc::GraphDoc::new();
         doc.reconcile_root(projection::of(&graph_val));
@@ -245,7 +240,7 @@ impl AppState {
         spawn_follower(state.clone(), follow_rx);
         autosave::spawn(state.clone());
         record::spawn(state.graph.clone(), state.recorder.clone(), state.record_drain.clone());
-        state
+        Ok(state)
     }
 
     /// Release everything this manager holds, in the one safe order: agents, recording and
@@ -258,11 +253,11 @@ impl AppState {
         self.stopping.stop();
         // Parked workers read the stop when they wake.
         self.changed.notify();
-        let workers: Vec<_> = std::mem::take(&mut *self.workers.lock().unwrap_or_else(|e| e.into_inner()));
+        let workers: Vec<_> = std::mem::take(&mut *self.workers.lock());
         for worker in workers {
             let _ = worker.join_within(goofi_transport::SHUTDOWN_WAIT);
         }
-        self.graph.lock().unwrap_or_else(|e| e.into_inner()).shutdown();
+        self.graph.lock().shutdown();
         self.release_mount();
     }
 
@@ -280,7 +275,7 @@ impl AppState {
 
     /// Record the address this server actually bound — what `local_url` derives from.
     pub fn set_bound(&self, addr: std::net::SocketAddr) {
-        *self.bound.lock().unwrap() = addr;
+        *self.bound.lock() = addr;
     }
 
     /// The base URL a LOCAL client reaches this server at — a spawned harness, the session
@@ -288,7 +283,7 @@ impl AppState {
     /// bound address itself when `--bind` named one other interface, where loopback answers
     /// nothing.
     pub fn local_url(&self) -> String {
-        let a = *self.bound.lock().unwrap();
+        let a = *self.bound.lock();
         match a.ip().is_unspecified() || a.ip().is_loopback() {
             true => format!("http://127.0.0.1:{}", a.port()),
             false => format!("http://{a}"),
@@ -297,7 +292,7 @@ impl AppState {
 
     /// Where the open patch lives on disk, if anywhere.
     pub(crate) fn save_path(&self) -> Option<String> {
-        self.save_path.lock().unwrap().clone()
+        self.save_path.lock().clone()
     }
 
     /// Where the open patch's workspace files live right now. Copied out rather than borrowed: no
@@ -311,7 +306,7 @@ impl AppState {
     }
 
     pub fn mount(&self) -> PathBuf {
-        self.mount.lock().unwrap().clone()
+        self.mount.lock().clone()
     }
 
     /// Every node root OUTSIDE the open patch, in precedence order and each with the origin a
@@ -332,7 +327,7 @@ impl AppState {
     /// leaves behind. A `.gfi` still carries the file, from the library, so the patch's saved
     /// content did not change and the unsaved dot must not rise for it.
     fn forget_baseline(&self, rel: &std::path::Path) {
-        self.workspace_baseline.lock().unwrap().remove(rel);
+        self.workspace_baseline.lock().remove(rel);
     }
 
     /// Drop the workspace mount, nonce directory and all, waiting HERE — what teardown wants,
@@ -365,11 +360,11 @@ impl AppState {
 /// A fresh, empty workspace mount: `<workspaces>/<session>/<nonce>/workspace`. The nonce directory
 /// wraps it so a load can rename an extracted tree onto `workspace` wholesale, and the autosave
 /// sits beside it; the session directory is what a clean shutdown removes and a crash leaves.
-fn new_mount() -> PathBuf {
-    let session = goofi_core::session::current().expect("the session is decided before a mount");
-    let dir = goofi_core::session::workspace_dir(session).join(nonce_hex()).join("workspace");
+fn new_mount() -> Result<PathBuf, String> {
+    let session = goofi_core::session::current().ok_or("no session is decided")?;
+    let dir = goofi_core::session::workspace_dir(session).join(nonce_hex()?).join("workspace");
     let _ = std::fs::create_dir_all(&dir);
-    dir
+    Ok(dir)
 }
 
 /// Reclaim a mount: the nonce directory, not just `workspace`, which would leave an empty husk.
@@ -378,10 +373,8 @@ fn remove_mount(mount: &std::path::Path) {
 }
 
 /// A 128-bit random name, hex — enough to keep two concurrent goofis from colliding.
-pub(crate) fn nonce_hex() -> String {
-    let mut nonce = [0u8; 16];
-    getrandom::fill(&mut nonce).expect("the OS random source");
-    format!("{:032x}", u128::from_be_bytes(nonce))
+pub(crate) fn nonce_hex() -> Result<String, String> {
+    goofi_core::session::nonce_hex(16)
 }
 
 /// Open the patch `--load` named, before the first client can connect. Nothing to do where none
@@ -409,7 +402,7 @@ pub fn save_archive(
     // Suffix appended, not substituted, so the rename below stays within one filesystem.
     let tmp = PathBuf::from({
         let mut s = target.as_os_str().to_owned();
-        s.push(format!(".tmp-{}", nonce_hex()));
+        s.push(format!(".tmp-{}", nonce_hex()?));
         s
     });
     let packed = goofi_graph::archive::write_gfi(&tmp, manifest, mount, extra)
@@ -457,7 +450,7 @@ fn stage_load(
         (content.to_string(), None, false)
     } else {
         // Naming no source IS the source: an empty patch, so New cannot drift from Load.
-        (Graph::new().serialize(), None, false)
+        (Graph::new(goofi_core::session::fresh_id()?).serialize(), None, false)
     };
     // Only a workspace goofi minted empty is seeded: an archive has just unpacked the patch's OWN
     // workspace into `mount`, and goofi does not write into someone's patch.
@@ -585,7 +578,7 @@ pub fn spawn_workers(state: &AppState) {
     let state = state.clone();
     let (graph, events) = (state.graph.clone(), state.events.clone());
     let worker = goofi_core::worker::spawn("goofi-status-drain", move || {
-        let waker = graph.lock().unwrap().drain_waker();
+        let waker = graph.lock().drain_waker();
         let period = BROADCAST_PERIOD;
         let mut last_errors: HashMap<String, (u64, Option<String>)> = HashMap::new();
         // A node's stage changes on its own thread, with no RPC to ride on. It carries the error
@@ -601,7 +594,7 @@ pub fn spawn_workers(state: &AppState) {
             }
             let due = Instant::now() >= next_broadcast;
             let (edits, collected) = {
-                let mut g = graph.lock().unwrap();
+                let mut g = graph.lock();
                 g.drain_status();
                 state.settled_now();
                 let edits = g.take_edits();
@@ -687,7 +680,7 @@ pub fn spawn_workers(state: &AppState) {
         }
     });
     if let Ok(worker) = worker {
-        owner.workers.lock().unwrap().push(worker);
+        owner.workers.lock().push(worker);
     }
 }
 
@@ -905,7 +898,6 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
     let sdks: Vec<(&'static str, &'static goofi_build::Sdk)> = state
         .graph
         .lock()
-        .unwrap()
         .rust_sdks()
         .into_iter()
         .filter_map(|(id, sdk)| goofi_build::sdk(sdk).map(|s| (id, s)))
@@ -930,8 +922,8 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
 /// The composed graph the app boots: the model plus the signal engine, registered first. A `None`
 /// audio clock asks for no audio engine at all, which takes every audio node out of the catalog.
 /// The graphics engine is always ASKED for, and a machine with no adapter simply has none.
-pub fn fresh_graph(clock: Option<Clock>, render: RenderClock) -> Graph {
-    let mut g = Graph::new();
+pub fn fresh_graph(clock: Option<Clock>, render: RenderClock) -> Result<Graph, String> {
+    let mut g = Graph::new(goofi_core::session::fresh_id()?);
     let signal = goofi_signal::SignalEngine::new(
         g.instance().to_string(),
         g.time(),
@@ -945,7 +937,7 @@ pub fn fresh_graph(clock: Option<Clock>, render: RenderClock) -> Graph {
         Ok(engine) => g.register_engine(Box::new(engine)),
         Err(why) => goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("graphics: {why}; this machine renders no shaders")),
     }
-    g
+    Ok(g)
 }
 
 /// The graphics engine registered in `g` — its external clock is the door a test renders through.
@@ -1056,7 +1048,7 @@ pub fn rescan(
     }
     g.set_type_origins(origins);
 
-    let mut prev = state.node_index.lock().unwrap();
+    let mut prev = state.node_index.lock();
     let mut diff = ScanDiff::default();
     for (name, seen) in &found {
         match prev.get(name) {
@@ -1125,7 +1117,7 @@ fn control_seeds(state: &AppState) -> (String, String) {
     let saved_at = state.save_path();
     let roster = state.harnesses.roster(&goofi_core::home::agents());
     let hello = {
-        let g = state.graph.lock().unwrap();
+        let g = state.graph.lock();
         event(
             "hello",
             schemas::snapshot(&g, state, true, unsaved, saved_at.as_deref(), roster),
@@ -1168,11 +1160,13 @@ async fn handle_control(socket: WebSocket, state: AppState) {
         }
         tokio::select! {
             _ = log_tick.tick() => {
-                let batch = goofi_core::log::global().lock().unwrap_or_else(|e| e.into_inner()).since(log_cursor);
+                let batch = goofi_core::log::since(log_cursor);
                 if log_cursor != Some(batch.cursor) {
                     log_cursor = Some(batch.cursor);
-                    let msg = event("logs", serde_json::to_value(batch).unwrap());
-                    if tx.send(Message::Text(msg.into())).await.is_err() { break; }
+                    match serde_json::to_value(batch) {
+                        Ok(payload) => if tx.send(Message::Text(event("logs", payload).into())).await.is_err() { break; },
+                        Err(e) => goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("the log batch does not serialize: {e}")),
+                    }
                 }
             },
             replied = async { pending.as_mut().unwrap().await }, if pending.is_some() => {
@@ -1231,8 +1225,8 @@ impl AppState {
     /// A socket closed mid-drag: its actor's previews go back to the last committed state.
     pub fn end_previews(&self, actor: &str) {
         let reverted = {
-            let mut g = self.graph.lock().unwrap();
-            self.history.lock().unwrap().revert_previews(&mut g, actor)
+            let mut g = self.graph.lock();
+            self.history.lock().revert_previews(&mut g, actor)
         };
         if reverted {
             resync_and_broadcast(self);
@@ -1254,7 +1248,7 @@ impl AppState {
 
     /// The same, against a walk the caller already took.
     pub(crate) fn dirty_against(&self, seen: &Fingerprint) -> bool {
-        self.dirty.load(std::sync::atomic::Ordering::Relaxed) || *seen != *self.workspace_baseline.lock().unwrap()
+        self.dirty.load(std::sync::atomic::Ordering::Relaxed) || *seen != *self.workspace_baseline.lock()
     }
 
     /// Set the dirty flag, returning an `unsaved_changes` event only when it actually changed.
@@ -1415,7 +1409,7 @@ fn apply_layout(
     actor: &str,
     cmd: goofi_graph::Command,
 ) -> Result<Value, String> {
-    state.history.lock().unwrap().apply(g, actor, cmd)?;
+    state.history.lock().apply(g, actor, cmd)?;
     Ok(json!({ "text": inspect::layout_tree(g, None) }))
 }
 
@@ -1454,7 +1448,7 @@ impl AppState {
         }
         let _previewing = preview.then(goofi_graph::open_preview);
         let _scope = plugins::CallScope::enter(op)?;
-        let _record_start = (op == "record start").then(|| self.plugins.record_start.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        let _record_start = (op == "record start").then(|| self.plugins.record_start.lock());
         let hooked = self.plugins.has_hooks(op);
         if hooked { spec.validate(&payload)?; }
         let payload = self.plugins.pre_op(self, op, payload, actor)?;
@@ -1523,7 +1517,7 @@ pub(crate) fn reconcile_and_broadcast(state: &AppState, mut doc: MutexGuard<crat
 
 /// The whole document as an event — what seeds a fresh connection, and what recovers a lagged one.
 fn doc_state(state: &AppState) -> String {
-    let doc = state.doc.lock().unwrap();
+    let doc = state.doc.lock();
     event("doc_state", json!({ "v": doc.version(), "doc": doc.to_json() }))
 }
 
@@ -1556,19 +1550,19 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
                 latest.insert(name, value);
             }
             pace.take(interval, Instant::now());
-            let mut g = state.graph.lock().unwrap();
+            let mut g = state.graph.lock();
             let changed = latest.into_iter().fold(false, |acc, (name, value)| g.follow_variable(&name, value) || acc);
             if changed {
                 g.settle();
                 let projection = projection::of(&g);
-                let doc = state.doc.lock().unwrap();
+                let doc = state.doc.lock();
                 drop(g);
                 reconcile_and_broadcast(&state, doc, projection);
             }
         }
     });
     if let Ok(worker) = worker {
-        owner.workers.lock().unwrap().push(worker);
+        owner.workers.lock().push(worker);
     }
 }
 
@@ -1585,13 +1579,13 @@ fn sync_followers(state: &AppState, g: &Graph) {
 /// Re-project the authoritative graph into the document and broadcast the delta, after an RPC
 /// mutates the graph. The projection is built WHOLE, so a stale leaf converges too.
 fn resync_and_broadcast(state: &AppState) {
-    let mut g = state.graph.lock().unwrap();
+    let mut g = state.graph.lock();
     // The settle point: one delivery per batch, before the projection, from settled state.
     g.settle();
     state.changed.notify();
     sync_followers(state, &g);
     let projection = projection::of(&g);
-    let doc = state.doc.lock().unwrap();
+    let doc = state.doc.lock();
     drop(g);
     state.settled_now();
     reconcile_and_broadcast(state, doc, projection);
@@ -1825,7 +1819,7 @@ async fn handle_params(socket: WebSocket, state: AppState, node: String) {
         tokio::select! {
             _ = tick.tick() => {
                 let pair = {
-                    let g = state.graph.lock().unwrap();
+                    let g = state.graph.lock();
                     live_pair(&g, uid)
                 };
                 let text = pair_payload(&uid.to_hex(), &pair).to_string();
@@ -1861,7 +1855,7 @@ async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: Str
     // question, asked again below, because a port with nothing wired yet is a real node with no
     // data, exactly as a leaf nobody has connected is.
     let named = {
-        let g = state.graph.lock().unwrap();
+        let g = state.graph.lock();
         vocab::resolve_slot(&g, "data", uid, &slot).ok()
     };
     let Some(slot) = named else {
@@ -1874,9 +1868,9 @@ async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: Str
     // physical slot a port stands in front of is graph state, so the socket re-asks rather than
     // freezing the answer at open — a port wired later starts drawing, and a re-wire is followed.
     let conn = state.reducers.new_conn();
-    let epoch = state.graph.lock().unwrap().epoch();
+    let epoch = state.graph.lock().epoch();
     let mut seen = epoch.load(std::sync::atomic::Ordering::Acquire);
-    let mut key = stream_behind(&state.graph.lock().unwrap(), uid, &slot);
+    let mut key = stream_behind(&state.graph.lock(), uid, &slot);
     let mut frames = key.clone().map(|k| state.reducers.subscribe(k, conn));
     let mut declared = reducer::Declared::default();
     let mut settled = state.settled.subscribe();
@@ -1946,7 +1940,7 @@ async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: Str
         // Only a graph that moved can have moved the stream behind this address.
         if recheck && epoch.load(std::sync::atomic::Ordering::Acquire) != seen {
             seen = epoch.load(std::sync::atomic::Ordering::Acquire);
-            let want = stream_behind(&state.graph.lock().unwrap(), uid, &slot);
+            let want = stream_behind(&state.graph.lock(), uid, &slot);
             if want != key {
                 if let Some(old) = &key {
                     state.reducers.unsubscribe(old, conn);

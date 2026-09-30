@@ -21,6 +21,7 @@ pub mod registry;
 pub mod session;
 pub mod startup;
 pub mod stream;
+pub mod sync;
 pub mod time;
 pub mod texture;
 pub mod turtle;

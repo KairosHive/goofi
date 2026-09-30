@@ -120,9 +120,14 @@ impl Log {
     }
 }
 
-pub fn global() -> &'static Mutex<Log> {
+// std's mutex here: a poisoned log cannot report its own poison through itself.
+fn global() -> &'static Mutex<Log> {
     static LOG: OnceLock<Mutex<Log>> = OnceLock::new();
     LOG.get_or_init(|| Mutex::new(Log::default()))
+}
+
+pub fn since(cursor: Option<u64>) -> Batch {
+    global().lock().unwrap_or_else(|e| e.into_inner()).since(cursor)
 }
 
 pub fn record(source: Source, level: Level, stream: Option<&str>, text: impl Into<String>) {

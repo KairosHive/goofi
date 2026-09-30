@@ -2,7 +2,8 @@
 //! joinable within a deadline so a hung thread cannot hold a shutdown hostage.
 
 use std::io;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
+use crate::sync::{Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -55,7 +56,7 @@ struct Ending(Arc<(Mutex<bool>, Condvar)>);
 impl Drop for Ending {
     fn drop(&mut self) {
         let (flag, wake) = &*self.0;
-        *flag.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        *flag.lock() = true;
         wake.notify_all();
     }
 }
@@ -77,13 +78,13 @@ impl<T> Worker<T> {
     pub fn join_within(mut self, within: Duration) -> Option<std::thread::Result<T>> {
         let (flag, wake) = &*self.done;
         let deadline = Instant::now() + within;
-        let mut finished = flag.lock().unwrap_or_else(|e| e.into_inner());
+        let mut finished = flag.lock();
         while !*finished {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 return None;
             }
-            finished = wake.wait_timeout(finished, left).unwrap_or_else(|e| e.into_inner()).0;
+            finished = wake.wait_timeout(finished, left);
         }
         drop(finished);
         Some(self.handle.take().expect("joined once").join())

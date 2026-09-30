@@ -20,7 +20,8 @@
 //! which is a redistributed binary rather than a build.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+use goofi_core::sync::Mutex;
 
 use cpal::traits::{DeviceTrait, HostTrait};
 
@@ -126,19 +127,14 @@ fn seen() -> &'static Mutex<HashMap<(Kind, String), cpal::Device>> {
 /// enumerated, so the first dropdown a user opens is enough to make the other direction reachable
 /// once a stream holds the driver — the case that had an ASIO output leave `AudioIn` all WASAPI.
 fn remember(kind: Kind, list: &[(String, cpal::Device)]) {
-    if let Ok(mut seen) = seen().lock() {
-        seen.extend(
-            list.iter().filter(|(n, _)| asio_driver(n).is_some()).map(|(n, d)| ((kind, n.clone()), d.clone())),
-        );
-    }
+    seen().lock().extend(
+        list.iter().filter(|(n, _)| asio_driver(n).is_some()).map(|(n, d)| ((kind, n.clone()), d.clone())),
+    );
 }
 
 /// The remembered ASIO devices for `kind`, by stored name.
 fn remembered(kind: Kind) -> Vec<(String, cpal::Device)> {
-    seen()
-        .lock()
-        .map(|s| s.iter().filter(|((k, _), _)| *k == kind).map(|((_, n), d)| (n.clone(), d.clone())).collect())
-        .unwrap_or_default()
+    seen().lock().iter().filter(|((k, _), _)| *k == kind).map(|((_, n), d)| (n.clone(), d.clone())).collect()
 }
 
 /// Learn every ASIO device, in BOTH directions, ONCE per process and as early as possible.
@@ -256,7 +252,7 @@ pub(crate) fn device(kind: Kind, name: &str) -> Result<cpal::Device, String> {
     // Not in the list, and for an ASIO name that is the expected answer once a stream holds the
     // driver — see [`seen`]. A device remembered from before is the same device.
     if asio_driver(name).is_some() {
-        if let Some(device) = seen().lock().ok().and_then(|s| s.get(&(kind, name.to_string())).cloned()) {
+        if let Some(device) = seen().lock().get(&(kind, name.to_string())).cloned() {
             return Ok(device);
         }
     }

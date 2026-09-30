@@ -12,7 +12,8 @@ use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_core::sync::Mutex;
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde_json::{json, Value};
@@ -40,7 +41,7 @@ impl Harnesses {
     /// live instances, and the CONFIG's launchable list, `_`-test entries withheld. `config` is
     /// `home::agents()`, read by the CALLER so the disk read runs off whatever lock it holds.
     pub fn roster(&self, config: &(Vec<goofi_core::home::Agent>, Option<String>)) -> Value {
-        let instances: Vec<Value> = self.instances.lock().unwrap().iter()
+        let instances: Vec<Value> = self.instances.lock().iter()
             .map(|(id, i)| {
                 let exit = i.exit_code();
                 json!({
@@ -67,7 +68,7 @@ impl Harnesses {
 
     /// The instance behind a `/term` path, if it is still on the roster.
     pub fn get(&self, id: &str) -> Option<Arc<Instance>> {
-        self.instances.lock().unwrap().iter().find(|(k, _)| k == id).map(|(_, i)| i.clone())
+        self.instances.lock().iter().find(|(k, _)| k == id).map(|(_, i)| i.clone())
     }
 
     /// Launch the config entry named `agent` on a PTY with the patch workspace as its cwd. The
@@ -100,7 +101,7 @@ impl Harnesses {
                     false => format!("unknown agent `{agent}` — the config offers: {}", have.join(", ")),
                 }
             })?;
-        let id = crate::nonce_hex()[..12].to_string();
+        let id = crate::nonce_hex()?[..12].to_string();
 
         let pty = native_pty_system().openpty(PtySize::default()).map_err(|e| e.to_string())?;
         let mut cmd = shell_command(&command);
@@ -161,7 +162,7 @@ impl Harnesses {
                 }
                 let bytes = answer_cursor_query(&answering, &buf[..n]);
                 // Appended and sent under ONE lock, against `attach`'s snapshot-then-subscribe.
-                let mut tail = answering.tail.lock().unwrap();
+                let mut tail = answering.tail.lock();
                 tail.extend_from_slice(&bytes);
                 let over = tail.len().saturating_sub(TAIL_BYTES);
                 if over > 0 {
@@ -175,7 +176,7 @@ impl Harnesses {
 
         // BEFORE the reaper starts, or a child that dies instantly announces a roster this
         // instance is not yet on.
-        self.instances.lock().unwrap().push((id.clone(), inst.clone()));
+        self.instances.lock().push((id.clone(), inst.clone()));
         let harnesses = self.clone();
         let reaped = id.clone();
         let _ = goofi_core::worker::spawn("goofi-term-reap", move || {
@@ -186,7 +187,7 @@ impl Harnesses {
             inst.exit.send_replace(Some(code));
             // A stack's lifetime follows its actor: dropped where the actor DIES, before the
             // broadcast — so an observer of `harness_changed` sees the stack gone too.
-            history.lock().unwrap().drop_actor(&actor_of(&reaped));
+            history.lock().drop_actor(&actor_of(&reaped));
             let _ =
                 events.send(crate::event("harness_changed", harnesses.roster(&goofi_core::home::agents())));
         });
@@ -198,7 +199,7 @@ impl Harnesses {
     pub fn stop(&self, id: &str) -> Result<(), String> {
         let inst = self.get(id).ok_or_else(|| format!("no harness instance `{id}`"))?;
         if inst.exit_code().is_some() {
-            self.instances.lock().unwrap().retain(|(k, _)| k != id);
+            self.instances.lock().retain(|(k, _)| k != id);
             return Ok(());
         }
         begin_stop(inst)
@@ -210,7 +211,7 @@ impl Harnesses {
     /// `None` when nothing was running, which is the case with nothing to wait for.
     #[must_use]
     pub fn reap_all(&self) -> Option<impl FnOnce() + Send + 'static> {
-        let taken = std::mem::take(&mut *self.instances.lock().unwrap());
+        let taken = std::mem::take(&mut *self.instances.lock());
         if taken.is_empty() {
             return None;
         }
@@ -307,7 +308,7 @@ impl Instance {
     /// output is complete. Snapshot and subscribe share the lock the drain sends under, so replay
     /// meets live with no byte lost or doubled.
     pub fn attach(&self) -> Attached {
-        let tail = self.tail.lock().unwrap();
+        let tail = self.tail.lock();
         Attached {
             tail: tail.clone(),
             output: self.output.subscribe(),
@@ -325,13 +326,13 @@ impl Instance {
     /// This view's word on the size, `None` when it has nothing on screen. The lock is held across
     /// the settle, so two views resizing at once cannot land out of order.
     pub fn propose(&self, seat: u64, size: Option<(u16, u16)>) {
-        let mut sizes = self.sizes.lock().unwrap();
+        let mut sizes = self.sizes.lock();
         self.settle(sizes.propose(seat, size));
     }
 
     /// This view is gone; the terminal goes back to whichever survivor spoke last.
     pub fn leave(&self, seat: u64) {
-        let mut sizes = self.sizes.lock().unwrap();
+        let mut sizes = self.sizes.lock();
         self.settle(sizes.leave(seat));
     }
 
@@ -342,13 +343,13 @@ impl Instance {
             return;
         }
         let size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
-        let _ = self.master.lock().unwrap().resize(size);
+        let _ = self.master.lock().resize(size);
         self.size.send_replace(now);
     }
 
     /// Keystrokes (or a paste) from an attached `/term` socket.
     pub fn write(&self, bytes: &[u8]) {
-        let mut w = self.writer.lock().unwrap();
+        let mut w = self.writer.lock();
         let _ = w.write_all(bytes).and_then(|()| w.flush());
     }
 
@@ -384,10 +385,9 @@ fn answer_cursor_query(inst: &Instance, bytes: &[u8]) -> Vec<u8> {
     }
     let Some(stripped) = take_cursor_queries(bytes) else { return bytes.to_vec() };
     // Row 1, column 1 — a lie, told only when there is no screen to contradict it.
-    if let Ok(mut w) = inst.writer.lock() {
-        let _ = w.write_all(b"\x1b[1;1R");
-        let _ = w.flush();
-    }
+    let mut w = inst.writer.lock();
+    let _ = w.write_all(b"\x1b[1;1R");
+    let _ = w.flush();
     stripped
 }
 

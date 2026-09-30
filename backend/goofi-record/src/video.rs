@@ -13,7 +13,8 @@ use std::process::{ChildStdin, Command};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
+use goofi_core::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// One video file being written. A frame is `width * height` tight-packed texels of four 8-bit
@@ -194,7 +195,7 @@ impl Ffmpeg {
     /// Select and start the encoder on the writer thread, without blocking the graphics clock.
     fn start(&mut self) -> Result<(), String> {
         let candidates = Preset::candidates();
-        let known = WORKING.lock().expect("the working presets").get(&self.size).copied();
+        let known = WORKING.lock().get(&self.size).copied();
         let index = match known {
             Some(i) if i < candidates.len() => i,
             _ => {
@@ -206,7 +207,7 @@ impl Ffmpeg {
                     }
                 }
                 let i = found.ok_or("FFmpeg has no working H.264 encoder for this frame size; install an FFmpeg build with libx264 or a supported hardware encoder")?;
-                WORKING.lock().expect("the working presets").insert(self.size, i);
+                WORKING.lock().insert(self.size, i);
                 i
             }
         };
@@ -341,7 +342,7 @@ impl Video {
         if self.counts.queued.load(Ordering::Relaxed) >= QUEUE as u64 {
             return false;
         }
-        let mut buffer = self.free.lock().expect("the free frames").pop().unwrap_or_default();
+        let mut buffer = self.free.lock().pop().unwrap_or_default();
         buffer.clear();
         buffer.extend_from_slice(texels);
         self.counts.queued.fetch_add(1, Ordering::Relaxed);
@@ -381,7 +382,7 @@ impl Video {
         if let Some(writer) = self.writer.take() {
             let _ = writer.join();
         }
-        match self.counts.error.lock().expect("the encoder's error").take() {
+        match self.counts.error.lock().take() {
             Some(why) => Err(why),
             None => Ok(()),
         }
@@ -404,7 +405,7 @@ struct Counts {
 }
 
 fn give_back(free: &Free, buffer: Vec<u8>) {
-    let mut free = free.lock().expect("the free frames");
+    let mut free = free.lock();
     if free.len() < QUEUE {
         free.push(buffer);
     }
@@ -423,7 +424,7 @@ fn encode(
     // The FIRST error is what killed the stream; `finish` on a dead encoder only says so again.
     let died = |counts: &Counts, why: String| {
         counts.dead.store(true, Ordering::Relaxed);
-        counts.error.lock().expect("the encoder's error").get_or_insert(why);
+        counts.error.lock().get_or_insert(why);
     };
     for (buffer, at) in rx.iter() {
         counts.queued.fetch_sub(1, Ordering::Relaxed);

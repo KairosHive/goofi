@@ -187,7 +187,7 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     let snap = ev.next("graph_replaced");
     assert_eq!(snap["runtime"][hex(late)]["stage"], "creating",
                "the load rebuilt it at the uid it was saved with, and the snapshot caught it starting");
-    assert_eq!(snap["doc_version"], g.state.doc.lock().unwrap().version(),
+    assert_eq!(snap["doc_version"], g.state.doc.lock().version(),
                "the load projected before it announced, so the snapshot names the loaded document's version");
     g.ready(late);
     // The stage stream is a delta over that snapshot, so the node reaching `ready` again HAS to be
@@ -528,7 +528,7 @@ fn autosave_dir(g: &Goofi) -> std::path::PathBuf {
 /// cannot let go of its own session's lock. Answers the nonce directory, and where the next boot
 /// moves it to for safekeeping, both as goofi spells them.
 fn crashed_copy(dir: &std::path::Path) -> (String, String) {
-    let id = goofi_core::session::fresh_id();
+    let id = goofi_core::session::fresh_id().unwrap();
     let dead = goofi_core::session::workspace_dir(&id).join(dir.file_name().unwrap());
     fn copy(from: &std::path::Path, to: &std::path::Path) {
         std::fs::create_dir_all(to).unwrap();
@@ -626,7 +626,7 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
 
     // The boot pass: a dead session's directory with no autosave held nothing and goes. A clean
     // shutdown leaves neither.
-    let husk = goofi_core::session::workspace_dir(&goofi_core::session::fresh_id()).join("nonce");
+    let husk = goofi_core::session::workspace_dir(&goofi_core::session::fresh_id().unwrap()).join("nonce");
     std::fs::create_dir_all(husk.join("workspace")).unwrap();
     std::fs::write(husk.join("workspace").join("AGENTS.md"), b"seeded").unwrap();
     let _booted = Goofi::new();
