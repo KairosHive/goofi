@@ -3,8 +3,8 @@
  * Docked viewer PANELS do not use this — see `viewBinding.panelBinding`.
  */
 import type { NodeInstanceInfo } from '$lib/api/control';
-import type { ViewerKind } from './kind';
-import type { SettingsMap } from './settingsSchema';
+import type { ViewerKind } from './registry';
+import type { SettingsMap } from './module';
 
 export interface SlotView {
 	collapsed?: boolean;

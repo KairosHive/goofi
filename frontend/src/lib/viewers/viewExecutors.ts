@@ -4,7 +4,7 @@
  */
 import { history } from '$lib/stores/history.svelte';
 import { captureNavContext } from '$lib/stores/navContext';
-import type { SettingsMap } from './settingsSchema';
+import type { SettingsMap } from './module';
 import type { Executor, ExecutorDeps, ViewAction, ViewSnapshot } from '$lib/stores/history.svelte';
 
 function apply(target: ViewAction['payload']['target'], snap: ViewSnapshot, deps: ExecutorDeps): void {

@@ -4,8 +4,8 @@
 import { listen, post } from './data';
 import type { DrawBox, DrawnState } from '$lib/viewers/drawing';
 import type { Hover, ProbeBox } from '$lib/viewers/hover';
-import type { ViewerKind } from '$lib/viewers/kind';
-import type { SettingsMap } from '$lib/viewers/settingsSchema';
+import type { ViewerKind } from '$lib/viewers/registry';
+import type { SettingsMap } from '$lib/viewers/module';
 import type { View } from 'plotluck';
 
 let nextId = 1;
@@ -65,14 +65,14 @@ export function createSurface(canvas: HTMLCanvasElement, onLost: () => void): Su
 export function createDrawing(
 	surface: SurfaceHandle,
 	kind: ViewerKind,
-	trajectory: boolean,
+	variant: string,
 	onState: (s: DrawnState) => void,
 	onHover: (h: Hover | null) => void
 ): DrawingHandle {
 	const id = nextId++;
 	stateCbs.set(id, onState);
 	hoverCbs.set(id, onHover);
-	post({ op: 'drawing', id, surface: surface.id, kind, trajectory });
+	post({ op: 'drawing', id, surface: surface.id, kind, variant });
 	return {
 		id,
 		place: (x, y, w, h, z) => post({ op: 'place', id, x, y, w, h, z }),

@@ -3,8 +3,8 @@
 	import ViewerControls from './ViewerControls.svelte';
 	import { slotView, isSlotExpanded } from './inlineView';
 	import { recordViewChange } from './viewExecutors';
-	import { drawsOnSurface, resolveKind, type ViewerKind } from './kind';
-	import { resolveSettings, type SettingsMap } from './settingsSchema';
+	import { drawsOnSurface, resolveKind, resolveSettings, type ViewerKind } from './registry';
+	import type { SettingsMap } from './module';
 	import type { ViewBinding } from './viewBinding';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { graph } from '$lib/stores/graph.svelte';

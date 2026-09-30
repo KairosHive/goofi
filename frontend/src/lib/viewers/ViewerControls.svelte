@@ -1,7 +1,7 @@
 <!-- Shared viewer header controls: the ARRAY viewer-type dropdown plus the settings cog. -->
 <script lang="ts">
 	import ViewerSettingsMenu from './ViewerSettingsMenu.svelte';
-	import { ARRAY_KINDS, pinnedKind, type ViewerKind } from './kind';
+	import { ARRAY_KINDS, pinnedKind, type ViewerKind } from './registry';
 	import type { ViewBinding } from './viewBinding';
 	import { Select } from '$lib/ui';
 

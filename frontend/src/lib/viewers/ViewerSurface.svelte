@@ -2,7 +2,7 @@
      thread. Every array kind is a drawing in the worker, on the plot surface beneath. -->
 <script lang="ts">
 	import { isStringFrame, isTableFrame, type DataFrame } from '$lib/codec/decode';
-	import type { SettingsMap } from './settingsSchema';
+	import type { SettingsMap } from './module';
 	import { EmptyState } from '$lib/ui';
 	import StringViewer from './StringViewer.svelte';
 	import TableViewer from './TableViewer.svelte';

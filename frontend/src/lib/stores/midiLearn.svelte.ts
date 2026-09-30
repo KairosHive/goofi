@@ -29,10 +29,11 @@ class MidiLearn {
 		this.owner = owner;
 		this.target = target;
 		this.node = node.uid;
-		// Keep every element so a learned index addresses the original frame.
+		// Every element whole, so a learned index addresses the original frame.
+		const whole = [{ dim: 0, max: 'whole' as const }, { dim: -1, max: 'whole' as const }];
 		for (const [slot] of slots) {
 			let baseline: number[] | null = null;
-			this.unbind.push(bindViewer(node.uid, slot, `midi-learn:${target}`, [{ dtype: 'array', ndim: [], dims: [], reduce: [] }], (frame) => {
+			this.unbind.push(bindViewer(node.uid, slot, `midi-learn:${target}`, [{ dtype: 'array', ndim: [], dims: [], reduce: whole }], (frame) => {
 				if (this.target !== target) return;
 				const values = (frame.data as ArrayData).values;
 				if (!values) return;

@@ -2,8 +2,8 @@
  * node's INLINE viewer state is the one exception: no command owns it, so it replays a snapshot. */
 import type { Control, ControlEvent } from '$lib/api/control';
 import { getControl } from '$lib/api/control';
-import type { ViewerKind } from '$lib/viewers/kind';
-import type { SettingsMap } from '$lib/viewers/settingsSchema';
+import type { ViewerKind } from '$lib/viewers/registry';
+import type { SettingsMap } from '$lib/viewers/module';
 import { graph } from './graph.svelte';
 import { viewExecutors } from '$lib/viewers/viewExecutors';
 import { restoreNavContext } from '$lib/stores/navContext';

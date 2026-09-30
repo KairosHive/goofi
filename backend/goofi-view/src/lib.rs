@@ -56,12 +56,44 @@ pub struct DimConstraint {
     pub n: usize,
 }
 
-/// The most entries a viewer wants of one axis; the reduction is a subsample, so every entry it
-/// keeps is one the producer emitted.
+/// What a viewer wants of one axis: at most `max` entries, subsampled, or the axis whole. A dim
+/// it names neither way it has no opinion on; the fold reads nothing into the silence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AxisReduce {
     pub dim: i32,
-    pub max: usize,
+    pub max: Ask,
+}
+
+/// One axis's ask, on the wire a count or the word `whole`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ask {
+    Cap(usize),
+    Whole,
+}
+
+impl Serialize for Ask {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Ask::Cap(n) => s.serialize_u64(*n as u64),
+            Ask::Whole => s.serialize_str("whole"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Ask {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Cap(usize),
+            Word(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Cap(n) => Ok(Ask::Cap(n)),
+            Raw::Word(w) if w == "whole" => Ok(Ask::Whole),
+            Raw::Word(w) => Err(serde::de::Error::custom(format!("an axis ask is a count or `whole`, not `{w}`"))),
+        }
+    }
 }
 
 /// The entries an axis is capped to for a viewer that has declared nothing.
@@ -212,8 +244,8 @@ struct Fold {
 }
 
 /// Every admitted viewer's asks, folded per dim to `max(max)`. A dim an admitted viewer asks
-/// nothing of, it draws whole, so that dim is not reduced for anyone. `None` where NOTHING admits
-/// the frame: no viewer here can draw it, so none of them has asked for anything.
+/// whole is not reduced for anyone. `None` where NOTHING admits the frame: no viewer here can
+/// draw it, so none of them has asked for anything.
 fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<Fold> {
     let ndim = frame.ndim();
     let mut order: Vec<usize> = Vec::new(); // first-seen dim order → stable output
@@ -228,20 +260,20 @@ fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<Fol
         }
         admitted += 1;
         depth = depth.max(spec.depth);
-        let asked: HashSet<usize> = spec.reduce.iter().filter_map(|r| canon_dim(r.dim, ndim)).collect();
-        whole.extend((0..ndim).filter(|d| !asked.contains(d)));
-        if !asked.is_empty() {
-            aspect &= spec.aspect;
-        }
         for r in &spec.reduce {
             let Some(d) = canon_dim(r.dim, ndim) else {
                 continue;
             };
+            let Ask::Cap(max) = r.max else {
+                whole.insert(d);
+                continue;
+            };
+            aspect &= spec.aspect;
             let entry = folded.entry(d).or_insert_with(|| {
                 order.push(d);
                 0
             });
-            *entry = (*entry).max(r.max);
+            *entry = (*entry).max(max);
         }
     }
     let axes: Vec<PlannedAxis> =

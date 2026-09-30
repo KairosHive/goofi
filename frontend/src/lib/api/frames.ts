@@ -6,7 +6,7 @@ import { headOf, type FrameHead } from './dataProtocol';
 import { perfStats } from './perfStats.svelte';
 import { RateMeter } from './rateMeter';
 import type { DataFrame } from '$lib/codec/decode';
-import type { ViewSpec } from '$lib/viewers/capacity';
+import type { ViewSpec } from '$lib/viewers/module';
 import { streamKey } from './streamKey';
 import { flushSync } from 'svelte';
 

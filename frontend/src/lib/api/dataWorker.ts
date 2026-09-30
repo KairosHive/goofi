@@ -3,11 +3,10 @@
  * only where a reader there asked for it. `frames.ts` owns the demand, `drawings.ts` the handles. */
 import { decodeData, decodeStamps, isArrayFrame, type DataFrame } from '$lib/codec/decode';
 import { createSurface, type Surface } from 'plotluck';
-import { BrainDrawing } from '$lib/viewers/brainDrawing';
-import { ImageDrawing, LineDrawing, TrajectoryDrawing, type DrawBox, type Drawing, type DrawnState } from '$lib/viewers/drawing';
+import type { DrawBox, Drawing, DrawnState } from '$lib/viewers/drawing';
 import type { ProbeBox } from '$lib/viewers/hover';
-import { isRenderable, type ViewerKind } from '$lib/viewers/kind';
-import type { SettingsMap } from '$lib/viewers/settingsSchema';
+import { isRenderable, makeDrawing, type ViewerKind } from '$lib/viewers/registry';
+import type { SettingsMap } from '$lib/viewers/module';
 import { summaryOf } from '$lib/viewers/viewMeta';
 import { headOf, type StreamNews, type ToMain, type ToWorker } from './dataProtocol';
 import { dataUrl } from './dataUrl';
@@ -217,12 +216,6 @@ function clearDrawing(d: DrawingState): void {
 	probe(d);
 }
 
-function make(surface: Surface, kind: ViewerKind, trajectory: boolean): Drawing {
-	if (kind === 'brain') return new BrainDrawing(surface);
-	if (kind === 'image') return new ImageDrawing(surface);
-	return trajectory ? new TrajectoryDrawing(surface) : new LineDrawing(surface);
-}
-
 function detach(d: DrawingState, keep: boolean): void {
 	d.slot?.drawings.delete(d);
 	d.slot = null;
@@ -315,7 +308,7 @@ self.addEventListener('message', (e: MessageEvent) => {
 			if (!surface) break;
 			drawings.set(m.id, {
 				id: m.id,
-				drawing: make(surface, m.kind, m.trajectory),
+				drawing: makeDrawing(m.kind, surface, m.variant),
 				kind: m.kind,
 				settings: {},
 				box: null,

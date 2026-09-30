@@ -1,7 +1,8 @@
 <!-- Per-slot viewer settings: a cog opening a Popover of the kind's settings, one under the
      other. Its role is `group`, not a menu — nothing in it is a menuitem. -->
 <script lang="ts">
-	import { settingsSchemaFor, type SettingDescriptor, type SettingValue } from './settingsSchema';
+	import { settingsSchemaFor } from './registry';
+	import type { SettingDescriptor, SettingValue } from './module';
 	import type { ViewBinding } from './viewBinding';
 	import { Popover, Icon, IconButton, Field, ScrollArea, EmptyState, Toggle, Select, NumberInput } from '$lib/ui';
 

@@ -3,7 +3,7 @@ import type { ArrayData, DataFrame } from '$lib/codec/decode';
 import { extent, type ImagePlot, type LineData } from 'plotluck';
 import { decimateMinMax } from './decimate';
 import { isU8, sampleRange } from './depth';
-import type { SettingsMap } from './settingsSchema';
+import type { SettingsMap } from './module';
 
 /** `cols` is the plot's width in device px: a frame denser than two samples per column is min/max folded. */
 export function lineData(frame: DataFrame, cols: number, logX: boolean): LineData {

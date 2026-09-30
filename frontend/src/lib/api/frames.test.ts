@@ -39,7 +39,7 @@ const bind = (
 
 const line = (max: number) => ({
 	dtype: 'array' as const,
-	ndim: [['le', 3]] as [import('$lib/viewers/capacity').DimCmp, number][],
+	ndim: [['le', 3]] as [import('$lib/viewers/module').DimCmp, number][],
 	dims: [],
 	reduce: [{ dim: -1, max }]
 });

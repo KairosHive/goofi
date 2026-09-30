@@ -297,10 +297,11 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     assert_eq!(g.state.reducers.active_slots(), 1, "six viewers, one reducer");
     assert_eq!(g.state.reducers.subscribers(&key), 6);
 
-    // A viewer that asks nothing of a dim draws it whole, so the fold stops reducing that dim for
+    // A viewer that asks a dim WHOLE draws it whole, so the fold stops reducing that dim for
     // everyone: the narrow ones now see the raw frame too, and the cap returns once it leaves.
     let mut whole = Viewer::open(&base, &hex(osc), "out").await;
-    whole.view(j!([{ "dtype": "array", "ndim": [["le", 2]], "dims": [], "reduce": [] }])).await;
+    whole.view(j!([{ "dtype": "array", "ndim": [["le", 2]], "dims": [],
+                     "reduce": [{ "dim": -1, "max": "whole" }] }])).await;
     for v in [&mut whole, &mut wide, &mut narrow] {
         let d = v.until(|d| !f32s(d).is_empty() && d.meta().reduced().is_none()).await;
         assert!(f32s(&d).len() > 256, "the whole frame, not the fold of the others");
@@ -308,6 +309,15 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     drop(whole);
     eventually("the whole-frame viewer to leave", || g.state.reducers.subscribers(&key) == 6).await;
     wide.until(|d| f32s(d).len() == 256).await;
+
+    // A viewer that names a dim neither way has no opinion on it: the fold is the others', and
+    // it is served their subsample rather than pulling the whole frame for everyone.
+    let mut silent = Viewer::open(&base, &hex(osc), "out").await;
+    silent.view(j!([{ "dtype": "array", "ndim": [["le", 2]], "dims": [], "reduce": [] }])).await;
+    let d = silent.until(|d| f32s(d).len() == 256).await;
+    assert!(d.meta().reduced().is_some(), "an unstated dim takes the fold of the stated ones");
+    drop(silent);
+    eventually("the silent viewer to leave", || g.state.reducers.subscribers(&key) == 6).await;
 
     // A sub-patch boundary port is a NAMING indirection over this same stream — it never runs and
     // never holds a frame — so a viewer on one has to land on the reducer already here rather than

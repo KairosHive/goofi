@@ -1,11 +1,11 @@
 /** What crosses between the main thread and `dataWorker.ts`, both ways, and how a head is made. */
 import type { ArrayData, DataFrame, DataType } from '$lib/codec/decode';
-import type { ViewSpec } from '$lib/viewers/capacity';
+import type { ViewSpec } from '$lib/viewers/module';
 import { summaryOf, type ViewSummary } from '$lib/viewers/viewMeta';
 import type { DrawBox, DrawnState } from '$lib/viewers/drawing';
 import type { Hover, ProbeBox } from '$lib/viewers/hover';
-import type { ViewerKind } from '$lib/viewers/kind';
-import type { SettingsMap } from '$lib/viewers/settingsSchema';
+import type { ViewerKind } from '$lib/viewers/registry';
+import type { SettingsMap } from '$lib/viewers/module';
 import type { View } from 'plotluck';
 
 /** What every frame says about itself, for a thread that does not hold the frame. */
@@ -35,7 +35,7 @@ export type ToWorker =
 	| { op: 'surface'; id: number; canvas: OffscreenCanvas }
 	| { op: 'view'; id: number; view: View }
 	| { op: 'dispose'; id: number }
-	| { op: 'drawing'; id: number; surface: number; kind: ViewerKind; trajectory: boolean }
+	| { op: 'drawing'; id: number; surface: number; kind: ViewerKind; variant: string }
 	| { op: 'drop'; id: number }
 	| { op: 'place'; id: number; x: number; y: number; w: number; h: number; z: number }
 	| { op: 'background'; id: number; hex: string }

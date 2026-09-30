@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { DataFrame } from '$lib/codec/decode';
-	import type { SettingsMap } from './settingsSchema';
+	import type { SettingsMap } from './module';
 	import { renderMarkdown } from './renderMarkdown';
 
 	type Props = { frame: DataFrame; settings?: SettingsMap };

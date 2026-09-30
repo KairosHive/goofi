@@ -1,7 +1,7 @@
 /** Data-plane transport: the main-thread wire to `dataWorker.ts`, which owns the sockets, the
  * decode and the plot surfaces. Viewer counting belongs to the registry in `frames.ts`; a
  * drawing's life belongs to `drawings.ts`. Neither is decided here. */
-import type { ViewSpec } from '$lib/viewers/capacity';
+import type { ViewSpec } from '$lib/viewers/module';
 import type { ToMain, ToWorker } from './dataProtocol';
 
 let worker: Worker | null = null;

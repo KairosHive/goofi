@@ -3,7 +3,7 @@
 <script lang="ts">
 	import { bindViewer } from '$lib/api/frames';
 	import { createDrawing, type DrawingHandle } from '$lib/api/drawings';
-	import { viewSpecsForKind } from './capacity';
+	import { viewSpecsForKind } from './registry';
 	import type { DataFrame } from '$lib/codec/decode';
 	import ViewerSurface from './ViewerSurface.svelte';
 	import HighDimFallback from './HighDimFallback.svelte';
@@ -14,7 +14,7 @@
 	import type { DrawnState } from './drawing';
 	import type { Hover } from './hover';
 	import { portal } from 'panelty';
-	import { drawsOnSurface, isTrajectory } from './kind';
+	import { drawsOnSurface, MODULES } from './registry';
 
 	/** `zoom` is the flow zoom the viewer is drawn under; a docked panel draws at 1. */
 	let {
@@ -29,7 +29,7 @@
 	const host = useSurface();
 	const anchor = useAnchor();
 	const onSurface = $derived(drawsOnSurface(kind));
-	const trajectory = $derived(isTrajectory(kind, settings));
+	const variant = $derived(MODULES[kind].variant(settings));
 
 	// What a text kind shows: its frame, read on this thread.
 	let frame = $state.raw<DataFrame | null>(null);
@@ -146,7 +146,7 @@
 		const d = createDrawing(
 			s,
 			kind,
-			trajectory,
+			variant,
 			(state) => (drawn = state),
 			(h) => (hover = h)
 		);

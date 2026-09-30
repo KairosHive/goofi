@@ -7,7 +7,7 @@ import { axisNames, imageProbe, lineProbe, trajectoryProbe, type Drag, type Prob
 import { formatTick } from './format';
 import { makeLUTCache } from './colormaps';
 import { lineData, pushImage } from './plotFeed';
-import type { SettingsMap } from './settingsSchema';
+import type { SettingsMap } from './module';
 import type { ViewSummary } from './viewMeta';
 
 /** The body the drawing fills: its layout box in CSS px, its width in device px, the flow zoom. */

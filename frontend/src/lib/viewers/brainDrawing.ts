@@ -9,8 +9,7 @@ import { Base, type DrawBox, type PlacedText } from './drawing';
 import { electrodeAt, lift } from './eegLayout';
 import { formatTick } from './format';
 import { axisNames, type Drag, type Probe } from './hover';
-import { brainMode } from './kind';
-import type { SettingsMap } from './settingsSchema';
+import type { SettingsMap } from './module';
 import {
 	buildLayout,
 	evaluateAt,
@@ -76,6 +75,16 @@ function valueWindow(values: Iterable<number>, s: SettingsMap): [number, number]
 function lutRgba(L: Uint8Array, t: number, alpha: number): Rgba {
 	const i = ((t * 255) | 0) * 3;
 	return [L[i] / 255, L[i + 1] / 255, L[i + 2] / 255, alpha];
+}
+
+export type BrainMode = 'topomap' | 'ring' | '3d';
+
+/** What the brain viewer draws for a frame of `ndim` axes: its setting, or under `auto` a
+ * topomap of one value per channel and a ring of a channel-by-channel matrix. */
+export function brainMode(settings: SettingsMap, ndim: number): BrainMode {
+	const mode = settings.mode;
+	if (mode === 'topomap' || mode === 'ring' || mode === '3d') return mode;
+	return ndim <= 1 ? 'topomap' : 'ring';
 }
 
 export class BrainDrawing extends Base {

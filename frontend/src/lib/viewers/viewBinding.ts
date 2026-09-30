@@ -2,8 +2,8 @@
  * A ViewBinding is one viewer instance's kind + settings; the components read nothing else.
  * The inline binding is built at its single use site (SlotViewer), which needs runes.
  */
-import { resolveKind, type ViewerKind } from './kind';
-import { resolveSettings, type SettingValue, type SettingsMap } from './settingsSchema';
+import { resolveKind, resolveSettings, type ViewerKind } from './registry';
+import type { SettingValue, SettingsMap } from './module';
 import { asStateObject } from 'panelty';
 
 export interface ViewBinding {
