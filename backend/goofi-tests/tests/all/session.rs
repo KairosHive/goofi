@@ -187,6 +187,8 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     let snap = ev.next("graph_replaced");
     assert_eq!(snap["runtime"][hex(late)]["stage"], "creating",
                "the load rebuilt it at the uid it was saved with, and the snapshot caught it starting");
+    assert_eq!(snap["doc_version"], g.state.doc.lock().unwrap().version(),
+               "the load projected before it announced, so the snapshot names the loaded document's version");
     g.ready(late);
     // The stage stream is a delta over that snapshot, so the node reaching `ready` again HAS to be
     // said — the uid it came back at reported the same thing in its previous life.

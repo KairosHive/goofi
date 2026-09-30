@@ -16,7 +16,7 @@
 
 	$effect(() => {
 		const epoch = g.loadEpoch;
-		if (epoch === cam.fittedEpoch) return;
+		if (epoch === cam.fittedEpoch || !g.loadSettled) return;
 		cam.fittedEpoch = epoch;
 		// An empty load must not arm a fit that the first placed node would then satisfy.
 		if (g.nodes.length > 0) void fitView(options);

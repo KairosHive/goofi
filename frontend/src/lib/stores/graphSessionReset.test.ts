@@ -98,6 +98,7 @@ function snap(instance_id: string): GraphSnapshot {
 		save_path: null,
 		unsaved_changes: false,
 		instance_id,
+		doc_version: 0,
 		viewpoint: null
 	} as unknown as GraphSnapshot;
 }

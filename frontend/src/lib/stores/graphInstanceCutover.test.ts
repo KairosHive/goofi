@@ -160,6 +160,7 @@ describe('a collapsed scope’s inline viewer, which is a node’s inline viewer
 				save_path: null,
 				unsaved_changes: false,
 				instance_id: 'sess1',
+				doc_version: 0,
 				viewpoint: null
 			} as unknown as GraphSnapshot
 		});

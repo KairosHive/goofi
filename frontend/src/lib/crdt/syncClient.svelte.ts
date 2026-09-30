@@ -15,7 +15,7 @@ export class SyncClient {
 	/** Told what moved: the applied merge patch, or `null` when the whole document was replaced. */
 	private docObserver: ((patch: Record<string, unknown> | null) => void) | null = null;
 	/** The version `_doc` is at, or `-1` before the first `doc_state`. */
-	private _version = -1;
+	private _version = $state(-1);
 	get version(): number {
 		return this._version;
 	}

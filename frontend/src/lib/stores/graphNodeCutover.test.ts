@@ -16,6 +16,7 @@ function helloSnap(node_types?: NodeTypeInfo[], runtime: GraphSnapshot['runtime'
 		save_path: null,
 		unsaved_changes: false,
 		instance_id: 'sess1',
+		doc_version: 0,
 		viewpoint: null
 	} as unknown as GraphSnapshot;
 }
@@ -283,6 +284,21 @@ describe('catalog-in-hello — the palette rides on the snapshot, no async list_
 		const n = g.nodeById('n9')!;
 		expect(n.stage, 'the overlay applies in the delta-first order too').toBe('error');
 		expect(n.error).toBe('ImportError: no scipy');
+	});
+
+	it('a load is settled only once the replica reaches the version the snapshot names', () => {
+		// The snapshot-first order: a fit armed on the epoch would frame the OUTGOING nodes.
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		fc.emit({ event: 'hello', payload: helloSnap(catalog()) });
+		const d = seed(fc).node('n1', 'signal:Oscillator', 'osc0', [0, 0]);
+		expect(g.loadSettled).toBe(true);
+
+		const snap = { ...helloSnap(), doc_version: d.version + 1 };
+		fc.emit({ event: 'graph_replaced', payload: snap });
+		expect(g.loadSettled, 'the epoch moved, the document has not').toBe(false);
+		d.node('n2', 'signal:Oscillator', 'osc1', [10, 10]);
+		expect(g.loadSettled).toBe(true);
 	});
 });
 

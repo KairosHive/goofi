@@ -144,6 +144,8 @@ export interface GraphSnapshot {
 	protocol_version?: number;
 	/** Identifies the manager process; it changes when the backend is restarted. */
 	instance_id: string;
+	/** The document version this frame goes with; a replica behind it is still mid-load. */
+	doc_version: number;
 	/** Per-node runtime state, seeded here because its live stream pushes only transitions. */
 	runtime: Record<string, { stage?: NodeStage; error?: string | null; runtime?: NodeRuntime }>;
 	/** The node palette, carried on `hello`/`graph_replaced`. Absent on an older backend. */

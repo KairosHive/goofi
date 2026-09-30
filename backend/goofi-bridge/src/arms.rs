@@ -1726,6 +1726,10 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         if let Some(finish) = state.reclaim(replaced) {
             let _ = goofi_core::worker::spawn("goofi-reclaim", finish);
         }
+        // Projected HERE, so the snapshot names the version the loaded document is at, and a
+        // client can hold its fit until its replica reaches it.
+        g.settle();
+        crate::reconcile_and_broadcast(state, state.doc.lock().unwrap(), crate::projection::of(&g));
         // Sent under the lock, not queued for the dispatcher: the status worker's next stage delta
         // needs this lock, so nothing it says can overtake the snapshot it is a delta over.
         let _ = state.events.send(event("harness_changed", state.harnesses.roster(&agents)));

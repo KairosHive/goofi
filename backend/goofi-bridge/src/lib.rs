@@ -1513,7 +1513,7 @@ fn dispatch(state: &AppState, text: &str) -> Option<String> {
 
 /// Take the document to `projection` and broadcast the delta. The caller projected under the graph
 /// lock and took `doc` before releasing it, so apply→re-project is atomic and the diff runs unlocked.
-fn reconcile_and_broadcast(state: &AppState, mut doc: MutexGuard<crate::doc::GraphDoc>, projection: Value) {
+pub(crate) fn reconcile_and_broadcast(state: &AppState, mut doc: MutexGuard<crate::doc::GraphDoc>, projection: Value) {
     let from = doc.version();
     let Some(patch) = doc.reconcile_root(projection) else { return };
     let _ = state

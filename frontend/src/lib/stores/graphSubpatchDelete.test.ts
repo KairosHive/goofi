@@ -29,6 +29,7 @@ function snapshot(): GraphSnapshot {
 		save_path: null,
 		unsaved_changes: false,
 		instance_id: 'sess1',
+		doc_version: 0,
 		viewpoint: null
 	} as never;
 }

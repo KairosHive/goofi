@@ -162,6 +162,13 @@ export class GraphStore {
 
 	/** Bumps on every WHOLESALE graph load, never on an incremental add/remove; editors re-fit on it. */
 	loadEpoch = $state(0);
+	/** The document version the last wholesale load reached. */
+	private _loadVersion = $state(0);
+	/** Whether the replica holds the loaded document yet: the snapshot and the doc delta cross in
+	 * no fixed order, so a fit armed by the epoch waits for this. */
+	get loadSettled(): boolean {
+		return this._sync.version >= this._loadVersion;
+	}
 
 	/** Params with a ⟳ refresh in flight → its safety-timeout handle. Cleared when the node reports
 	 * the param done (`refreshed_params`), never on the fire-and-forget RPC ack. */
@@ -277,8 +284,9 @@ export class GraphStore {
 		workspace().syncFromDoc([]);
 	}
 
-	private _onWholesaleLoad(): void {
+	private _onWholesaleLoad(docVersion: number): void {
 		this.loadEpoch += 1;
+		this._loadVersion = docVersion;
 		// A wholesale load mints new uids and clears the manager's history, so a kept client entry
 		// would pop against a command that is not there. A same-session reconnect never comes here.
 		history().reset();
@@ -310,14 +318,14 @@ export class GraphStore {
 					// Projections first: `_resetProjection` reads `this.nodes`.
 					this._resetProjection();
 					this._sync.reset();
-					this._onWholesaleLoad();
+					this._onWholesaleLoad(ev.payload.doc_version);
 					this.sessionEpoch += 1;
 				}
 				break;
 			}
 			case 'graph_replaced':
 				this._replaceSnapshot(ev.payload);
-				this._onWholesaleLoad();
+				this._onWholesaleLoad(ev.payload.doc_version);
 				break;
 			case 'state_update': {
 				const t = this._runtimeOf(ev.payload.node);
