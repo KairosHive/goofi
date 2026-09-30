@@ -97,7 +97,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // each is ONE command with an exact inverse.
     g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude",
                                    "expression": "variables.patch.participant * 2" }));
-    let expr = |g: &Goofi| g.doc()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["expr"].clone();
+    let expr = |g: &Goofi| g.doc()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["expression"].clone();
     g.call("variable entry rename", j!({ "name": "patch.participant", "to": "patch.handle" }));
     assert_eq!(expr(&g), j!("variables.patch.handle * 2"), "the element rename followed");
     g.call("variable group rename", j!({ "from": "patch", "to": "desk" }));
@@ -962,7 +962,7 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     // A value edit echoes no descriptor: the document carries the mode it switched.
     param(&g, j!({ "value": 7 }));
     let d = g.doc()["nodes"][hex(consumer)]["params"]["common"]["max_frequency"].clone();
-    assert_eq!((&d["value"], &d["mode"], &d["ref"], &d["expr"]),
+    assert_eq!((&d["value"], &d["mode"], &d["reference"], &d["expression"]),
                (&j!(7.0), &j!("constant"), &j!("signal.out"), &j!("nd('signal')")), "{d}");
     // A mode alone switches among what is retained: the reference is still `signal.out`, so its
     // shape error comes back. An empty reference clears that text and nothing else. The echoes
@@ -1117,7 +1117,7 @@ fn eight_writers_all_land_and_none_deadlock() {
         let n = &doc["nodes"][hex(*u)];
         assert_eq!(n["params"]["common"]["max_frequency"]["value"].as_f64(), Some(ROUNDS as f64),
                    "a param write was lost on {u}");
-        assert_eq!(n["pos"]["x"].as_f64(), Some(ROUNDS as f64), "a drag was lost on {u}");
+        assert_eq!(n["pos"][0].as_f64(), Some(ROUNDS as f64), "a drag was lost on {u}");
     }
 }
 
@@ -1161,7 +1161,7 @@ fn clearing_the_touched_baseline_moves_the_zero_point_and_breaks_no_binding() {
 
     // Nothing was edited: the expression still drives, so the Expression filter still finds it.
     let params = g.doc()["nodes"][hex(osc)]["params"].clone();
-    assert_eq!(params["lfo"]["amplitude"]["expr"], j!("1 + 1"), "the binding survived the clear");
+    assert_eq!(params["lfo"]["amplitude"]["expression"], j!("1 + 1"), "the binding survived the clear");
     assert_eq!(params["lfo"]["frequency"]["value"], j!(3.5), "and the value is untouched");
 
     // Undoable like any other document edit.

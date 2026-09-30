@@ -69,8 +69,8 @@ function liveParam(uid: string, group: string, name: string, catalog: ParamDescr
 	const p = { ...base } as ParamDescriptor;
 	return accessors(p, {
 		mode,
-		expression: () => (typeof leaf().expr === 'string' ? leaf().expr : null),
-		reference: () => (typeof leaf().ref === 'string' ? leaf().ref : null),
+		expression: () => (typeof leaf().expression === 'string' ? leaf().expression : null),
+		reference: () => (typeof leaf().reference === 'string' ? leaf().reference : null),
 		triggers: () => leaf().triggers === true,
 		error: () => cx.runtime(uid)?.errors?.[group]?.[name] ?? null,
 		// What a param SHOWS: a driven one reads what its source evaluated to, a withdrawn value

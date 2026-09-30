@@ -296,7 +296,7 @@ fn a_boundary_is_authored_wired_and_renamed_without_changing_its_id() {
     assert_eq!(port["scope"], inst, "…and the sub-patch it is a port of is its scope");
     assert_eq!(g.inner(&bnd), Some((hex(buf), "out".into())), "the inner wire is a link: {port}");
     assert_eq!(port["name"], "wave", "renamed, and the port's uid is unchanged");
-    assert_eq!(port["pos"], j!({ "x": 12.0, "y": 34.0 }));
+    assert_eq!(port["pos"], j!([12.0, 34.0]));
 
     assert_eq!(g.call("undo", j!({}))["changed"], true);
     let back = g.doc()["nodes"][&bnd].clone();

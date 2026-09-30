@@ -6,7 +6,7 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-**Phase 0**, each alone, in any order: §3.1-3, §3.6; §4.A-E, §4.J; §5.1-6; §1.A1; §2.B1.
+**Phase 0**, each alone, in any order: §3.1-3, §3.6; §4.B-E, §4.J; §5.3-6.
 
 **Phase 1**: §5.11 and §5.7; then §3.4 and §3.5; then §4.F and §4.G1-G4; then §1.A2 and §1.A3.
 
@@ -24,9 +24,6 @@ restores deleted uids. `arrangement_warning` becomes a return value of load. `Va
 parallel maps become one `IndexMap<String, Variable>`. `touched` and `open_batches` move into
 §3's `Txn`.
 
-- **A1** Binding state (`rewritten`, `terms`, `vars`, `bind_error`) is derived at settle,
-  memoized by text; the evaluator id compiles only when the rewritten text changes. The rebind
-  and invalidate functions and their call sites go.
 - **A2** The `Runtime` struct with the `instances` table.
 - **A3** Births at settle: commands record `Added`, `Removed` and `Restart` in the transaction's
   change log and never call the engine. Settle does removals, then births (mint a generation),
@@ -58,8 +55,6 @@ variables as an ordered map. `viewpoint` and ephemeral variables stay out of the
 node's class derives from the catalog, not pinned per instance. Values a type no longer declares
 drop on load or paste. Rename `doc.rs`'s existing `Patch` type (Applied/Stale/Gap).
 
-- **B1** One wire spelling in the projection and a `variable_groups` root; frontend, e2e and
-  test readers follow.
 - **B2** Typed archive and fragment through serde; one `admit(doc) -> (PatchDoc, warnings)` for
   paste and load. Unresolvable links are dropped with a warning in the reply. `MANIFEST_VERSION`
   becomes 2; the example patches are converted once.
@@ -136,8 +131,6 @@ pulse edge), one `FaultState` and the stamps. An `Executor` trait (`arrive`, `pa
 the signal executor in the control thread, and `Local` goes. Data services keep no history; the
 one-shot race stays a documented property.
 
-- **A** `EncodeError` on size limits in the codec instead of `as` casts and `expect`s; an
-  undecodable input frame is a process fault on its wire, not a dropped error.
 - **B** `PortBundle<P>` drops its ports before its node; one `ServiceKind` table; the subprocess
   service declares `max_nodes`; swallowed status and control loans are reported; a failed open in
   `goofi-control` is retried, not deduplicated away; slots at index 64 and above get a doorbell.
@@ -177,8 +170,6 @@ one pass per `Kind` over the whole tree: finish, children on one shared deadline
 joined, ports, paths, devices. `boot` returns a `Manager { state, scope }` that is not `Clone`;
 dropping it is the shutdown.
 
-1. `goofi_core::sync::Mutex` (§6).
-2. Boundary panics (§6).
 3. Timed child waits (pidfd, `WaitForSingleObject`) replace polling in `Child::poll`,
    `stop_recording` and `wait_released`; recording stop and engine release join their workers.
 4. The recorder's `Session` becomes `Take`.
@@ -213,10 +204,6 @@ dropping it is the shutdown.
 - Error enums only where a caller branches or a boundary needs context: transport (keeping the
   iceoryx2 kind, so the Windows handle limit is a named fault), record, build, and `io::Error`
   in the supervisor; graph and bridge `Result<_, String>` become §3's `OpError`.
-- `goofi_core::sync::Mutex` (own, not parking_lot) returns std's guard so `Condvar` works and
-  logs a poisoned lock once by name; it replaces every `lock().unwrap()`.
-- The boundary panics return errors: `hold(...).expect`, `iox_config`'s `expect`s on a long
-  base path, `new_mount`, `fresh_id`, `nonce_hex`, `to_value(batch).unwrap()`.
 
 ## Smaller items
 

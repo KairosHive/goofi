@@ -172,7 +172,7 @@ test.describe('the control socket', () => {
 					osc
 				);
 				await expect
-					.poll(async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency.expr)
+					.poll(async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency.expression)
 					.toBe('2 * 3');
 				const param = (await backendDoc(page)).nodes[osc].params.lfo.frequency;
 				expect(param.mode, 'the mode rode with the text').toBe('expression');
@@ -321,7 +321,7 @@ test.describe('the control socket', () => {
 				expect(Math.abs(after.y - held.y)).toBeLessThan(2);
 				await page.mouse.up();
 				await expect
-					.poll(async () => (await backendDoc(page)).nodes[osc].pos.x)
+					.poll(async () => (await backendDoc(page)).nodes[osc].pos[0])
 					.toBeGreaterThan(60);
 				const rested = (await card.boundingBox())!;
 				expect(Math.abs(rested.x - held.x), 'and the drop holds through the round trip').toBeLessThan(2);
@@ -434,7 +434,7 @@ test.describe('the control socket', () => {
 				await page.evaluate((p) => (window as any).goofi.commands.renameNode(p, 'left'), port);
 				await page.evaluate((p) => (window as any).goofi.commands.setNodePos(p, [7, 9]), port);
 				await expect.poll(async () => (await backendDoc(page)).nodes[port].name).toBe('left');
-				expect((await backendDoc(page)).nodes[port].pos).toEqual({ x: 7, y: 9 });
+				expect((await backendDoc(page)).nodes[port].pos).toEqual([7, 9]);
 
 				// …and so does the delete, which takes the port's inner wire with it.
 				await page.evaluate((p) => (window as any).goofi.commands.removeNodes([p]), port);
@@ -1042,7 +1042,7 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		}
 		await dragLabel();
 		await page.mouse.up();
-		await expect.poll(async () => (await source()).expr).toBe('variables.desk.level');
+		await expect.poll(async () => (await source()).expression).toBe('variables.desk.level');
 		expect((await source()).mode).toBe('expression');
 		expect((await backendDoc(page)).variables['desk.level']).toEqual(before);
 		await undo(page);
@@ -1060,7 +1060,7 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		await page.getByTestId('control-edit-toggle').click();
 		await dragLabel(true);
 		await page.mouse.up();
-		await expect.poll(async () => (await source()).expr).toBe('variables.desk.level');
+		await expect.poll(async () => (await source()).expression).toBe('variables.desk.level');
 		expect((await backendDoc(page)).variables['desk.level']).toEqual(before);
 		await undo(page);
 		await expect.poll(source).toEqual(original);
@@ -1071,7 +1071,7 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		await finger.moveTo({ x: target.x + target.width / 2, y: target.y + target.height / 2 });
 		await expect(row).toHaveClass(/over/);
 		await finger.up();
-		await expect.poll(async () => (await source()).expr).toBe('variables.desk.level');
+		await expect.poll(async () => (await source()).expression).toBe('variables.desk.level');
 		expect((await backendDoc(page)).variables['desk.level']).toEqual(before);
 	} finally {
 		await handBack(
@@ -1115,10 +1115,10 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 	const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
 	const original = await source();
 	async function expectModulation(kind: string, previous: unknown): Promise<void> {
-		await expect.poll(async () => (await source()).expr).not.toBe(previous);
+		await expect.poll(async () => (await source()).expression).not.toBe(previous);
 		const param = await source();
 		expect(param.mode).toBe('expression');
-		const match = param.expr.match(new RegExp(`^${kind}\\(freq=([0-9.]+)\\)$`));
+		const match = param.expression.match(new RegExp(`^${kind}\\(freq=([0-9.]+)\\)$`));
 		expect(match).not.toBeNull();
 		const freq = Number(match![1]);
 		expect(freq).toBeGreaterThanOrEqual(0.01);
@@ -1129,7 +1129,7 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 			const previous = await source();
 			await row.click({ button: 'right' });
 			await page.getByRole('menuitem', { name: label, exact: true }).click();
-			await expectModulation(kind, previous.expr);
+			await expectModulation(kind, previous.expression);
 		}
 		await undo(page);
 		await undo(page);
@@ -1140,7 +1140,7 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 			const previous = await source();
 			await row.hover();
 			await page.keyboard.press(key);
-			await expectModulation(kind, previous.expr);
+			await expectModulation(kind, previous.expression);
 		}
 		await undo(page);
 		await undo(page);
@@ -1149,7 +1149,7 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 	await row.hover();
 	await page.keyboard.press('e');
 	await expect.poll(async () => (await source()).mode).toBe('expression');
-	await expect.poll(async () => (await source()).expr).toBe(String(original.value));
+	await expect.poll(async () => (await source()).expression).toBe(String(original.value));
 	await page.keyboard.press('c');
 	await expect.poll(async () => (await source()).mode).toBe('constant');
 	await page.keyboard.press('e');

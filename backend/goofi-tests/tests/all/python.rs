@@ -690,7 +690,7 @@ class Meeting(goofi.Node):
         let probe = g.probe(osc, "out");
         g.ready(osc);
         let bound = g.doc()["nodes"][hex(osc)]["params"]["common"]["max_frequency"].clone();
-        assert_eq!((&bound["expr"], &bound["mode"]), (&j!("variables.system.default_ufreq"), &j!("expression")),
+        assert_eq!((&bound["expression"], &bound["mode"]), (&j!("variables.system.default_ufreq"), &j!("expression")),
                    "the manifest's declared binding was seeded live, not flattened to a literal");
 
         // Counting emitted frames is the only way to see a rate: a stated value reads correct anyway.

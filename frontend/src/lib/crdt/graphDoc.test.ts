@@ -24,11 +24,11 @@ function seedDoc(): Doc {
 			a: {
 				type: 'Oscillator',
 				name: 'osc0',
-				pos: { x: 10, y: 20 },
+				pos: [10, 20],
 				params: {
 					common: { max_frequency: { value: 30 } },
 					oscillator: {
-						waveform: { value: 'sine', mode: 'expression', expr: "nd('lfo')" }
+						waveform: { value: 'sine', mode: 'expression', expression: "nd('lfo')" }
 					}
 				}
 			},
@@ -59,7 +59,7 @@ describe('graphDoc readers', () => {
 		expect(docParams(doc, 'a').common?.max_frequency?.value).toBe(30);
 		expect(docParams(doc, 'a').oscillator?.waveform?.value).toBe('sine');
 		expect(docParams(doc, 'a').common?.nope?.value).toBeUndefined();
-		expect(docParams(doc, 'a').oscillator?.waveform?.source?.expr).toBe("nd('lfo')");
+		expect(docParams(doc, 'a').oscillator?.waveform?.source?.expression).toBe("nd('lfo')");
 		expect(docParams(doc, 'a').common?.max_frequency?.source).toBeUndefined();
 	});
 
@@ -79,8 +79,8 @@ describe('graphDoc readers', () => {
 			nodes: {
 				...(base.nodes as Record<string, unknown>),
 				m1: { type: 'Buffer', name: 'm0', scope: 'i1' },
-				i1: { type: 'SubPatch', name: 'subpatch0', pos: { x: 5, y: 6 } },
-				p1: { type: 'OutArray', name: 'wave', pos: { x: 1, y: 2 }, scope: 'i1' }
+				i1: { type: 'SubPatch', name: 'subpatch0', pos: [5, 6] },
+				p1: { type: 'OutArray', name: 'wave', pos: [1, 2], scope: 'i1' }
 			},
 			links: [
 				...(base.links as unknown[]),
@@ -115,7 +115,7 @@ describe('graphDoc readers', () => {
 		// waveform in seedDoc carries a value AND a source record.
 		expect(p.oscillator.waveform).toEqual({
 			value: 'sine',
-			source: { mode: 'expression', expr: "nd('lfo')" }
+			source: { mode: 'expression', expression: "nd('lfo')" }
 		});
 		// A node with no params → empty.
 		expect(docParams(doc, 'b')).toEqual({});
@@ -158,11 +158,11 @@ describe('graphDoc.setParamSource — the test-seed source write', () => {
 	it('writes a record in place and docParams reads it back', () => {
 		const doc = seedDoc();
 		expect(
-			setParamSource(doc, 'a', 'common', 'max_frequency', { mode: 'reference', ref: 'f.out', triggers: true })
+			setParamSource(doc, 'a', 'common', 'max_frequency', { mode: 'reference', reference: 'f.out', triggers: true })
 		).toBe(true);
 		expect(docParams(doc, 'a').common?.max_frequency?.source).toEqual({
 			mode: 'reference',
-			ref: 'f.out',
+			reference: 'f.out',
 			triggers: true
 		});
 		// The committed value is untouched — only the binding was written.
@@ -179,7 +179,7 @@ describe('graphDoc.setParamSource — the test-seed source write', () => {
 
 	it('no-ops (returns false) when the node is absent — never mint a phantom', () => {
 		const doc = seedDoc();
-		expect(setParamSource(doc, 'ghost', 'common', 'x', { mode: 'expression', expr: 'nd()' })).toBe(false);
+		expect(setParamSource(doc, 'ghost', 'common', 'x', { mode: 'expression', expression: 'nd()' })).toBe(false);
 		expect(nodesMap(doc).ghost).toBeUndefined();
 	});
 });

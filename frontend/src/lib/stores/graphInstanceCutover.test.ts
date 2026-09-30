@@ -25,7 +25,7 @@ function catalog(): NodeTypeInfo[] {
 const node = (type: string, name: string, scope?: string) => ({
 	type,
 	name,
-	pos: { x: 0, y: 0 },
+	pos: [0, 0],
 	...(scope ? { scope } : {})
 });
 
@@ -53,7 +53,7 @@ function scope(
 	const links: unknown[] = [];
 	for (const p of o.ports ?? []) {
 		const pp = p.pos ?? [0, 0];
-		nodes[p.uid] = { type: p.type, name: p.name, pos: { x: pp[0], y: pp[1] }, scope: uid };
+		nodes[p.uid] = { type: p.type, name: p.name, pos: [pp[0], pp[1]], scope: uid };
 		if (!p.inner) continue;
 		const [n, s] = p.inner;
 		links.push(

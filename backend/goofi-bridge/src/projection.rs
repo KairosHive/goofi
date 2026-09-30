@@ -8,8 +8,6 @@ use serde_json::{json, Map, Value};
 /// The sub-patch forest is not a block of its own — a member names its scope, and that is the only
 /// place membership lives.
 pub fn of(g: &Graph) -> Value {
-    let pos_json = |p: [f64; 2]| json!({ "x": p[0], "y": p[1] });
-
     let mut nodes = Map::new();
     // ONE loop over ONE namespace: a leaf, a facade and a boundary port are all node records, and
     // what differs between them is only what they HAVE — a facade and a port run nothing, so the
@@ -18,7 +16,7 @@ pub fn of(g: &Graph) -> Value {
         let mut node = Map::new();
         node.insert("type".into(), json!(g.node_type(uid).unwrap_or_default()));
         node.insert("name".into(), json!(g.name(uid).unwrap_or("")));
-        node.insert("pos".into(), pos_json(g.pos(uid).unwrap_or([0.0, 0.0])));
+        node.insert("pos".into(), json!(g.pos(uid).unwrap_or([0.0, 0.0])));
         let mut params = Map::new();
         if let Some(ps) = g.params(uid) {
             for (group, pg) in &*ps {
@@ -33,10 +31,10 @@ pub fn of(g: &Graph) -> Value {
                     if let Some(s) = g.param_source(uid, group, pname) {
                         entry.insert("mode".into(), json!(s.state.mode));
                         if !s.state.expression.is_empty() {
-                            entry.insert("expr".into(), json!(s.state.expression));
+                            entry.insert("expression".into(), json!(s.state.expression));
                         }
                         if !s.state.reference.is_empty() {
-                            entry.insert("ref".into(), json!(s.state.reference));
+                            entry.insert("reference".into(), json!(s.state.reference));
                         }
                         if s.state.triggers {
                             entry.insert("triggers".into(), json!(true));

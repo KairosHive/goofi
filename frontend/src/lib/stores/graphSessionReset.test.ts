@@ -83,10 +83,10 @@ function hydrate(fc: FakeControl, viewers?: Record<string, unknown>): DocSeed {
 			n1: {
 				type: 'Oscillator',
 				name: 'osc-n1',
-				pos: { x: 0, y: 0 },
+				pos: [0, 0],
 				...(viewers ? { viewers: JSON.stringify(viewers) } : {})
 			},
-			n2: { type: 'Oscillator', name: 'osc-n2', pos: { x: 0, y: 0 } }
+			n2: { type: 'Oscillator', name: 'osc-n2', pos: [0, 0] }
 		},
 		links: [{ node_out: 'n1', slot_out: 'out', node_in: 'n2', slot_in: 'in' }]
 	});

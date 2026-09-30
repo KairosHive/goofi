@@ -42,7 +42,7 @@ export class DocSeed {
 
 	/** One node, with whatever leaves the test cares about beyond identity. */
 	node(uid: string, type: string, name: string, pos: [number, number] = [0, 0], extra: Obj = {}): this {
-		return this.patch({ nodes: { [uid]: { type, name, pos: { x: pos[0], y: pos[1] }, ...extra } } });
+		return this.patch({ nodes: { [uid]: { type, name, pos: [pos[0], pos[1]], ...extra } } });
 	}
 
 	/** One sub-patch facade — a node record wearing the scope type. Membership is each MEMBER's own

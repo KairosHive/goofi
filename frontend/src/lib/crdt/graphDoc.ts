@@ -68,9 +68,9 @@ function variablesMap(doc: Doc): Record<string, Obj> {
 }
 
 function pos2(m: Obj | undefined): [number, number] {
-	const p = obj(m?.pos);
-	const n = (k: string) => (typeof p[k] === 'number' ? (p[k] as number) : 0);
-	return [n('x'), n('y')];
+	const p = m?.pos;
+	const n = (i: number) => (Array.isArray(p) && typeof p[i] === 'number' ? (p[i] as number) : 0);
+	return [n(0), n(1)];
 }
 
 export function nodeView(doc: Doc, uid: string): NodeView | null {
@@ -116,8 +116,8 @@ export function facadeFaces(doc: Doc): Map<string, FacadeFace> {
 /** A param's source record as the document carries it: the mode, and the texts it retains. */
 export interface ParamSource {
 	mode: ParamMode;
-	expr?: string;
-	ref?: string;
+	expression?: string;
+	reference?: string;
 	triggers?: boolean;
 }
 
@@ -138,8 +138,8 @@ export function docParams(doc: Doc, uid: string): DocParamLeaves {
 			if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') leaf.value = v;
 			if (typeof entry.mode === 'string' && (PARAM_MODES as readonly string[]).includes(entry.mode)) {
 				const source: ParamSource = { mode: entry.mode as ParamMode };
-				if (typeof entry.expr === 'string') source.expr = entry.expr;
-				if (typeof entry.ref === 'string') source.ref = entry.ref;
+				if (typeof entry.expression === 'string') source.expression = entry.expression;
+				if (typeof entry.reference === 'string') source.reference = entry.reference;
 				if (entry.triggers === true) source.triggers = true;
 				leaf.source = source;
 			}
@@ -185,13 +185,13 @@ export function setParamSource(
 	const entry = paramEntry(doc, uid, group, name);
 	if (!entry) return false;
 	delete entry.mode;
-	delete entry.expr;
-	delete entry.ref;
+	delete entry.expression;
+	delete entry.reference;
 	delete entry.triggers;
 	if (source) {
 		entry.mode = source.mode;
-		if (source.expr !== undefined) entry.expr = source.expr;
-		if (source.ref !== undefined) entry.ref = source.ref;
+		if (source.expression !== undefined) entry.expression = source.expression;
+		if (source.reference !== undefined) entry.reference = source.reference;
 		if (source.triggers) entry.triggers = true;
 	}
 	return true;

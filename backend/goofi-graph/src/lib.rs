@@ -344,7 +344,7 @@ const REF_VAR: &str = "ref";
 
 /// A param's source record, graph-side: the AUTHORED state — both texts retained whatever the
 /// mode, since a toggle is never destructive — and everything below it DERIVED from the active
-/// one, re-derived whenever it or a name the graph resolves changes.
+/// one at settle, against the graph as it then stands.
 struct ParamSource {
     state: SourceState,
     /// Compiled from [`Self::rewritten`], never from the authored text: the evaluator is handed
@@ -354,12 +354,19 @@ struct ParamSource {
     rewritten: String,
     /// Derived: one entry per variable `rewritten` names, resolved against the graph.
     vars: Vec<BoundVar>,
-    /// The rewrite's variable list BEFORE resolution — a variable that failed to resolve no longer
-    /// says what it was looking for, and that is what a new node or variable has to re-resolve.
-    terms: Vec<expr_rewrite::VarRef>,
-    /// Why the GRAPH could not bind this source. Written by `set_source` and nowhere else — it
-    /// describes the SOURCE, so it outlives any one instance.
+    /// What each of `vars` resolves, in step with it: a re-derivation tells a param read apart.
+    refs: Vec<expr_rewrite::VarRef>,
+    /// Why the GRAPH could not bind this source. It describes the SOURCE, so it outlives any one
+    /// instance.
     bind_error: Option<String>,
+}
+
+/// What a source derives to, before the compile.
+struct Derived {
+    rewritten: String,
+    vars: Vec<BoundVar>,
+    refs: Vec<expr_rewrite::VarRef>,
+    error: Option<String>,
 }
 
 impl ParamSource {
@@ -580,7 +587,6 @@ impl Graph {
         if let Some(c) = control {
             self.variables.set_control(name, c)?;
         }
-        self.invalidate_bindings_reading(name);
         Ok(())
     }
 
@@ -588,7 +594,6 @@ impl Graph {
     /// one is refused.
     pub fn remove_variable(&mut self, name: &str) -> Result<(), String> {
         self.variables.remove(name)?;
-        self.invalidate_bindings_reading(name);
         Ok(())
     }
 
@@ -605,14 +610,10 @@ impl Graph {
         self.variables.set_source(name, source)
     }
 
-    /// The follower's write: what a variable's source delivered. Answers whether anything changed,
-    /// and re-sends every binding that reads it when it did.
+    /// The follower's write: what a variable's source delivered. Answers whether anything changed;
+    /// the settle that follows re-sends every binding that reads it.
     pub fn follow_variable(&mut self, name: &str, value: goofi_core::variables::VariableValue) -> bool {
-        let changed = self.variables.follow(name, value);
-        if changed {
-            self.invalidate_bindings_reading(name);
-        }
-        changed
+        self.variables.follow(name, value)
     }
 
     /// Every followed variable, resolved: the variable, the producer's uid and slot, and the index.
@@ -669,7 +670,6 @@ impl Graph {
     pub fn rename_variable(&mut self, from: &str, to: &str) -> Result<Vec<Uid>, String> {
         self.variables.rename(from, to)?;
         let touched = self.rewrite_variable_reads(&[(from.to_string(), to.to_string())]);
-        self.invalidate_bindings_reading(to);
         Ok(touched)
     }
 
@@ -685,9 +685,6 @@ impl Graph {
         let moved = self.variables.rename_group(from, to)?;
         let touched = self.rewrite_variable_reads(&moved);
         self.arrangement.set_contents(&writes);
-        for (_, new) in &moved {
-            self.invalidate_bindings_reading(new);
-        }
         Ok(touched)
     }
 
@@ -716,94 +713,90 @@ impl Graph {
         referrers
     }
 
-    /// Re-resolve every expression that names a boundary PORT or a sub-patch FACADE. A leaf's
-    /// stream is fixed by its manifest, but a port relays and a facade exposes its ports — so
-    /// anything that moves a wire moves what `nd()` reads there. Free when the patch has neither.
-    fn rebind_ports(&mut self) {
-        let names: Vec<String> = self
-            .nodes
+    /// Derive every binding from its authored texts against the graph as it stands — the rewrite,
+    /// the variables, the handle — and touch the ones that moved, so their nodes are re-sent. Runs
+    /// at settle: a name, a wire, a variable or a value moved is what a settle is about.
+    fn derive_bindings(&mut self) {
+        let mut keys: Vec<(Uid, ParamKey)> =
+            self.leaves().flat_map(|(uid, e)| e.sources.keys().map(move |k| (uid, k.clone()))).collect();
+        keys.sort();
+        for (uid, key) in keys {
+            self.derive_one(uid, &key);
+        }
+    }
+
+    /// Derive one record from its authored texts, and touch it when the derivation moved.
+    fn derive_one(&mut self, uid: Uid, key: &ParamKey) {
+        let Some(prior) = self.leaf(uid).and_then(|e| e.sources.get(key)) else { return };
+        let state = prior.state.clone();
+        let derived = self.derive(uid, key, &state);
+        let edited: Vec<(Uid, ParamKey)> = self
+            .touched
             .iter()
-            .filter(|(_, e)| !matches!(e.kind, Kind::Leaf(_)))
-            .map(|(_, e)| e.name.clone())
-            .collect();
-        for name in names {
-            self.rebind_naming(&name);
-        }
-    }
-
-    /// Re-resolve EVERY binding, once the graph is whole. A load writes its nodes in file order,
-    /// so a binding restored before the leaf it names resolved against a graph that did not hold it
-    /// yet; settled state is the only point at which every name means what the patch says.
-    fn rebind_all(&mut self) {
-        let all = self.sources_where(|_| true);
-        self.rebind(&all);
-    }
-
-    /// Re-resolve and re-send every expression binding that reads variable `name`, so its new value
-    /// reaches the nodes reading it (only those bindings pay). Shared by the variable mutators.
-    fn invalidate_bindings_reading(&mut self, name: &str) {
-        let reading = self.sources_where(|b| {
-            b.terms.iter().any(|t| matches!(t, expr_rewrite::VarRef::Variable { key, .. } if key == name))
-        });
-        self.rebind(&reading);
-    }
-
-    /// Re-resolve and re-send every binding whose source SPELLS the display name `name` — in either
-    /// position, since a port's name is read as a node's and as its facade's slot label. §5.3's
-    /// "renamed, added, removed or restarted", stated once.
-    fn rebind_naming(&mut self, name: &str) {
-        let naming = self.sources_where(|b| {
-            b.terms.iter().any(|t| match t {
-                expr_rewrite::VarRef::Node { name: n, slot, .. } => {
-                    n == name || slot.as_deref() == Some(name)
-                }
-                expr_rewrite::VarRef::NodeParam { name: n, .. } => n == name,
-                _ => false,
+            .filter_map(|t| match t {
+                Touched::Param(uid, key) => Some((*uid, key.clone())),
+                _ => None,
             })
-        });
-        self.rebind(&naming);
-    }
-
-    /// Re-resolve every binding that reads param `key` of `target` — through `nd('name').params`
-    /// or the target's own `me.params` — so an authored edit reaches its readers. Evaluation
-    /// results never come through here, so a chain of driven params cannot cascade.
-    fn invalidate_bindings_reading_param(&mut self, target: Uid, key: &ParamKey) {
-        let Some(target_name) = self.name(target).map(str::to_string) else { return };
-        let reading: Vec<(Uid, ParamKey)> = self
-            .leaves()
-            .flat_map(|(uid, e)| e.sources.iter().map(move |(k, b)| (uid, k.clone(), b)))
-            .filter(|(consumer, _, b)| {
-                b.terms.iter().any(|t| match t {
-                    expr_rewrite::VarRef::NodeParam { name, group, param, .. } => {
-                        *name == target_name && *group == key.group && *param == key.name
-                    }
-                    expr_rewrite::VarRef::MeParam { group, param, .. } => {
-                        *consumer == target && *group == key.group && *param == key.name
-                    }
-                    _ => false,
-                })
-            })
-            .map(|(uid, k, _)| (uid, k))
             .collect();
-        self.rebind(&reading);
-    }
-
-    /// Every source matching a predicate, as `(node, param)` — the addressing `rebind` takes.
-    fn sources_where(&self, want: impl Fn(&ParamSource) -> bool) -> Vec<(Uid, ParamKey)> {
-        self.leaves()
-            .flat_map(|(uid, e)| e.sources.iter().map(move |(k, b)| (uid, k.clone(), b)))
-            .filter(|(_, _, b)| want(b))
-            .map(|(uid, key, _)| (uid, key))
-            .collect()
-    }
-
-    /// Re-run `set_source` on each of these records from its AUTHORED texts — the one operation
-    /// that re-derives the rewrite, the variables and the handle, and records delivery.
-    fn rebind(&mut self, sources: &[(Uid, ParamKey)]) {
-        for (uid, key) in sources {
-            let Some(state) = self.source_state(*uid, key) else { continue };
-            let _ = self.set_source(*uid, &key.group, &key.name, state);
+        if !self.moved(uid, prior, &derived, &edited) {
+            return;
         }
+        let (id, error) = self.compiled(prior, &derived);
+        let record = ParamSource {
+            state,
+            id,
+            rewritten: derived.rewritten,
+            vars: derived.vars,
+            refs: derived.refs,
+            bind_error: error,
+        };
+        if let Some(e) = self.leaf_mut(uid) {
+            e.sources.insert(key.clone(), record);
+        }
+        self.notify_param(uid, key);
+    }
+
+    /// Whether a derivation says something the record does not. A param read ships the value it
+    /// resolved when the binding was derived, and follows an authored edit of that param — never
+    /// its evaluation, or a chain of driven params would cascade through every settle.
+    fn moved(&self, consumer: Uid, prior: &ParamSource, next: &Derived, edited: &[(Uid, ParamKey)]) -> bool {
+        if prior.rewritten != next.rewritten || prior.bind_error != next.error || prior.refs != next.refs {
+            return true;
+        }
+        prior.vars.iter().zip(&next.vars).zip(&next.refs).any(|((was, now), r)| match r {
+            expr_rewrite::VarRef::NodeParam { name, group, param, .. } => {
+                self.uid_by_name(name).is_some_and(|uid| edited.iter().any(|(u, k)| *u == uid && k.group == *group && k.name == *param))
+            }
+            expr_rewrite::VarRef::MeParam { group, param, .. } => {
+                edited.iter().any(|(u, k)| *u == consumer && k.group == *group && k.name == *param)
+            }
+            _ => was != now,
+        })
+    }
+
+    /// The handle for a derivation: the prior one where the rewritten text is the text it
+    /// compiled, else a fresh compile, and the prior released. A refused compile is the error.
+    fn compiled(&self, prior: &ParamSource, next: &Derived) -> (Option<goofi_node::BindingId>, Option<String>) {
+        let evaluator = self.evaluator.as_ref();
+        if prior.state.mode == Mode::Expression && next.error.is_none() {
+            if prior.id.is_some() && prior.rewritten == next.rewritten {
+                return (prior.id, None);
+            }
+            let Some(ev) = evaluator else {
+                return (None, Some("no expression evaluator available".to_string()));
+            };
+            if let Some(id) = prior.id {
+                ev.release(id);
+            }
+            return match ev.compile(&next.rewritten) {
+                Ok(c) => (Some(c.id), None),
+                Err(e) => (None, Some(e.0)),
+            };
+        }
+        if let (Some(ev), Some(id)) = (evaluator, prior.id) {
+            ev.release(id);
+        }
+        (None, next.error.clone())
     }
 
     fn source_state(&self, uid: Uid, key: &ParamKey) -> Option<SourceState> {
@@ -1385,9 +1378,6 @@ impl Graph {
                     self.seed_default_expressions(uid, engine, manifest);
                 }
                 self.set_member_scope(uid, scope);
-                // A name that meant nothing a moment ago now names a producer (§5.3). This also
-                // covers undo-of-delete, which is how a binding survives a delete and a restore.
-                self.rebind_naming(&born);
                 return Ok(uid);
             }
         };
@@ -1398,7 +1388,6 @@ impl Graph {
             NodeEntry { kind, name: born.clone(), pos: [0.0, 0.0], viewers: serde_json::json!({}), baseline: serde_json::json!({}), record: Vec::new() },
         );
         self.set_member_scope(uid, scope);
-        self.rebind_naming(&born);
         Ok(uid)
     }
 
@@ -1583,9 +1572,6 @@ impl Graph {
         // `name_in_use` guarantees `name != old_name`, so the rename genuinely moved the
         // display name — propagate it into every expression that referenced it.
         let touched = self.rewrite_nd_refs_for_rename(uid, &old_name, name);
-        // …and re-resolve the ones ALREADY written against the new name: such a binding has no
-        // `nd('<old>')` for the rewrite to follow, and this rename is what makes it resolvable.
-        self.rebind_naming(name);
         // A multi slot names its senders, so the new name must reach every leaf this node feeds —
         // the resolved consumers, because a port relays and no engine plans a port.
         let fed: Vec<(Uid, &'static str)> =
@@ -2256,16 +2242,6 @@ impl Graph {
     }
 
 
-    /// The display names of a scope's ports, captured before a removal that drops them — a `nd()`
-    /// binding on a name nothing wears can never be re-resolved by a later edit, so the invalidation
-    /// has to happen at the removal.
-    fn stub_names(&self, scope: Uid) -> Vec<String> {
-        self.ports_of(scope)
-            .into_iter()
-            .filter_map(|p| self.name(p).map(str::to_string))
-            .collect()
-    }
-
     /// Dissolve a scope, answering the cables its removal JOINED — each pair of halves that met at
     /// a port, now one link. Uid-stable.
     pub fn expand_instance(
@@ -2275,7 +2251,6 @@ impl Graph {
         if !self.is_facade(scope) {
             return Err(format!("expand_instance: no such scope {scope}"));
         }
-        let dropped = self.stub_names(scope);
         let restored = self.scope_members(scope);
         let parent = self.scope_of(scope); // the grandparent scope members fall back to
 
@@ -2311,9 +2286,6 @@ impl Graph {
                 joined.push((a, so, b, si));
             }
         }
-        for name in dropped {
-            self.rebind_naming(&name);
-        }
         Ok(joined)
     }
 
@@ -2323,7 +2295,6 @@ impl Graph {
         if !self.is_facade(scope) {
             return Err(format!("remove_instance: no such scope {scope}"));
         }
-        let dropped = self.stub_names(scope);
         for m in self.scope_members(scope) {
             if self.is_facade(m) {
                 self.remove_instance(m)?; // nested scope subtree
@@ -2333,9 +2304,6 @@ impl Graph {
         }
         self.nodes.shift_remove(&scope);
         self.scope_of.remove(&scope);
-        for name in dropped {
-            self.rebind_naming(&name);
-        }
         Ok(())
     }
 
@@ -2361,9 +2329,7 @@ impl Graph {
         let e = self.nodes.shift_remove(&port)?;
         self.scope_of.remove(&port);
         let Kind::Port(p) = e.kind else { return None };
-        let st = (p, e.name, e.pos);
-        self.rebind_naming(&st.1);
-        Some(st)
+        Some((p, e.name, e.pos))
     }
 
     /// All links as resolved views (snapshot projection).
@@ -2405,10 +2371,6 @@ impl Graph {
                 e.remove(uid);
             }
         }
-        // §5.3: every binding that referenced this node by name is now unresolvable and must be
-        // told so — a variable naming a dead producer's service is one the node waits on forever.
-        let name = removed.name.clone();
-        self.rebind_naming(&name);
         // Drop any membership tag: a removed node has no scope. Leaving it dangling would make a
         // reused uid (a delete→undo that restores the scope) self-parent via `common_parent`.
         self.scope_of.remove(&uid);
@@ -2425,7 +2387,6 @@ impl Graph {
         for l in dropped.iter().filter(|l| l.node_in != uid) {
             self.touched.push(Touched::Slot(l.node_in, l.slot_in));
         }
-        self.rebind_ports();
         Ok(())
     }
 
@@ -2511,10 +2472,6 @@ impl Graph {
         for (out, so, into, si) in orphaned {
             let _ = self.remove_link(out, so, into, si);
         }
-        // The rebirth renamed every one of this node's services (§3.1), so a binding reading one
-        // holds a name that no longer resolves. Re-resolved, not patched: the slot may be gone too.
-        let name = self.nodes[&uid].name.clone();
-        self.rebind_naming(&name);
         Ok(())
     }
 
@@ -2544,7 +2501,6 @@ impl Graph {
         // The record has moved and the delivery is recorded for settle; nothing else happens
         // here. `on_param_changed` runs on the node's own thread, so its failure arrives as a fault.
         self.notify_param(uid, &key);
-        self.invalidate_bindings_reading_param(uid, &key);
         Ok(())
     }
 
@@ -2572,8 +2528,9 @@ impl Graph {
     }
 
     /// Set a param's source record: its mode, and the expression and reference it retains. A record
-    /// with nothing retained and a constant mode is removed. A bind error is stored on the record,
-    /// never a refusal — the source outlives any one instance.
+    /// with nothing retained and a constant mode is removed. The record is derived at once, so the
+    /// reply carries its bind error — never as a refusal, since the source outlives any one
+    /// instance — and again at every settle, against the graph as it then stands.
     pub fn set_source(
         &mut self,
         uid: Uid,
@@ -2581,110 +2538,78 @@ impl Graph {
         name: &str,
         state: SourceState,
     ) -> Result<(), String> {
-        if self.leaf(uid).is_none() {
+        let Some(leaf) = self.leaf(uid) else {
             return Err(format!("no such node {uid}"));
-        }
+        };
         let key = ParamKey::new(group, name);
-        // Only an empty record is a true unbind, and `unbind` owns the release on that path — so it
-        // goes FIRST. Releasing here too gave the evaluator two `release` calls for one handle.
+        // Only an empty record is a true unbind, and `unbind` owns the release on that path.
         if state.is_empty() {
             self.unbind(uid, &key);
             self.notify_param(uid, &key);
             return Ok(());
         }
-        // The prior compiled handle, kept below when the text it compiled is the text this
-        // record rewrites to, and released otherwise: this path REPLACES the record either way.
-        let prior = self
-            .leaf(uid)
-            .and_then(|e| e.sources.get(&key))
-            .and_then(|p| p.id.map(|id| (id, p.rewritten.clone())));
         // A record binds a real param: a dangling one is invisible in the descriptor and
         // unclearable from the UI.
-        let Some(param) =
-            goofi_node::param(&self.nodes[&uid].leaf().expect("a leaf").params, group, name).cloned()
-        else {
+        if goofi_node::param(&leaf.params, group, name).is_none() {
             return Err(format!("no such param `{group}/{name}`"));
-        };
-        // Both retained texts are scanned whatever the mode, because `terms` is what a later
-        // rename or variables edit re-resolves against. Only the active one gets variables and a handle.
+        }
+        if let Some(e) = self.leaf_mut(uid) {
+            match e.sources.get_mut(&key) {
+                Some(b) => b.state = state,
+                None => {
+                    e.sources.insert(
+                        key.clone(),
+                        ParamSource { state, id: None, rewritten: String::new(), vars: Vec::new(), refs: Vec::new(), bind_error: None },
+                    );
+                }
+            }
+        }
+        self.derive_one(uid, &key);
+        self.notify_param(uid, &key);
+        Ok(())
+    }
+
+    /// What a source's active text derives to against the graph: the rewrite, its variables
+    /// resolved, and why it cannot bind. Both retained texts are scanned, so a broken inactive
+    /// one is refused as it is typed.
+    fn derive(&self, uid: Uid, key: &ParamKey, state: &SourceState) -> Derived {
+        let param = self.leaf(uid).and_then(|e| goofi_node::param(&e.params, &key.group, &key.name).cloned());
         let scanned = (!state.expression.is_empty()).then(|| expr_rewrite::rewrite(&state.expression));
         let reference = (!state.reference.is_empty()).then(|| goofi_node::mailbox::split_index(&state.reference)
             .and_then(|(base, index)| parse_reference(base).map(|r| (r, index))));
-        let mut terms: Vec<expr_rewrite::VarRef> =
-            scanned.iter().flatten().flat_map(|(_, refs)| refs.clone()).collect();
-        if let Some(Ok((r, _))) = &reference {
-            terms.push(r.clone());
-        }
         let missing = |vars: &[BoundVar]| {
             vars.iter().find_map(|v| match v {
                 BoundVar::Missing { reason, .. } => Some(reason.clone()),
                 _ => None,
             })
         };
-        let (rewritten, vars, mut error) = match state.mode {
-            Mode::Constant => (String::new(), Vec::new(), None),
+        let none = |error: Option<String>| Derived { rewritten: String::new(), vars: Vec::new(), refs: Vec::new(), error };
+        let Some(param) = param else {
+            return none(Some(format!("no such param `{}/{}`", key.group, key.name)));
+        };
+        match state.mode {
+            Mode::Constant => none(None),
             Mode::Expression => match scanned {
                 Some(Ok((rewritten, refs))) => {
-                    let vars = self.resolve_vars(uid, &key, &refs);
+                    let vars = self.resolve_vars(uid, key, &refs);
                     let error = missing(&vars);
-                    (rewritten, vars, error)
+                    Derived { rewritten, vars, refs, error }
                 }
-                Some(Err(e)) => (state.expression.clone(), Vec::new(), Some(e.0)),
-                None => (String::new(), Vec::new(), Some("no expression to evaluate".to_string())),
+                Some(Err(e)) => Derived { rewritten: state.expression.clone(), vars: Vec::new(), refs: Vec::new(), error: Some(e.0) },
+                None => none(Some("no expression to evaluate".to_string())),
             },
             Mode::Reference => match reference {
                 Some(Ok((r, index))) => {
-                    let vars = self.resolve_vars(uid, &key, std::slice::from_ref(&r));
-                    let error = missing(&vars).or_else(|| self.reference_kind_error(&r, &param));
-                    (index.map_or_else(|| REF_VAR.to_string(), |i| format!("{REF_VAR}[{i}]")), vars, error)
+                    let refs = vec![r];
+                    let vars = self.resolve_vars(uid, key, &refs);
+                    let error = missing(&vars).or_else(|| self.reference_kind_error(&refs[0], &param));
+                    let rewritten = index.map_or_else(|| REF_VAR.to_string(), |i| format!("{REF_VAR}[{i}]"));
+                    Derived { rewritten, vars, refs, error }
                 }
-                Some(Err(e)) => (String::new(), Vec::new(), Some(e)),
-                None => (String::new(), Vec::new(), Some("no reference to follow".to_string())),
+                Some(Err(e)) => none(Some(e)),
+                None => none(Some("no reference to follow".to_string())),
             },
-        };
-        let evaluator = self.evaluator.clone();
-        let id = match (&evaluator, state.mode, error.is_none()) {
-            // Compiled once per text: a rebind for a moved name, value or variable keeps the handle
-            // the node already evaluates, and only a changed text pays a compile.
-            (Some(_), Mode::Expression, true) if prior.as_ref().is_some_and(|(_, text)| *text == rewritten) => {
-                prior.map(|(id, _)| id)
-            }
-            (Some(ev), Mode::Expression, true) => {
-                if let Some((id, _)) = prior {
-                    ev.release(id);
-                }
-                match ev.compile(&rewritten) {
-                    Ok(c) => Some(c.id),
-                    Err(e) => {
-                        error = Some(e.0);
-                        None
-                    }
-                }
-            }
-            (None, Mode::Expression, _) => {
-                error = Some("no expression evaluator available".to_string());
-                None
-            }
-            _ => {
-                if let (Some(ev), Some((id, _))) = (&evaluator, prior) {
-                    ev.release(id);
-                }
-                None
-            }
-        };
-        let record = ParamSource {
-            state,
-            id,
-            rewritten,
-            vars,
-            terms,
-            bind_error: error,
-        };
-        if let Some(e) = self.leaf_mut(uid) {
-            e.sources.insert(key.clone(), record);
         }
-        self.notify_param(uid, &key);
-        Ok(())
     }
 
     /// Why a resolved reference cannot feed this param: the producer's slot kind against the
@@ -3009,7 +2934,6 @@ impl Graph {
         }
         self.links.push(new);
         self.touched.push(Touched::Slot(node_in, slot_in));
-        self.rebind_ports();
         Ok(())
     }
 
@@ -3033,7 +2957,6 @@ impl Graph {
         if let Some(slot_in) = self.resolve_input(node_in, slot_in) {
             self.touched.push(Touched::Slot(node_in, slot_in));
         }
-        self.rebind_ports();
         Ok(())
     }
 
@@ -3076,6 +2999,7 @@ impl Graph {
         if self.open_batches > 0 {
             return;
         }
+        self.derive_bindings();
         let raw = std::mem::take(&mut self.touched);
         if raw.is_empty() && !self.engines().any(|e| e.dirty()) {
             return;
@@ -3137,10 +3061,9 @@ impl Graph {
         // The engines' own facts into `system.*`, from the state this settle just reached. It
         // not a command and never becomes one: the user's undoable act is the param they moved,
         // and this is what that param MEANS once the engine has answered.
-        for (name, value) in published {
-            if self.variables.publish(name, value) {
-                self.invalidate_bindings_reading(name);
-            }
+        let moved = published.into_iter().fold(false, |acc, (name, value)| self.variables.publish(name, value) || acc);
+        if moved {
+            self.derive_bindings();
         }
     }
 
@@ -3708,11 +3631,6 @@ impl Graph {
                 let _ = self.add_link(no, so, ni, si);
             }
         }
-        // A load writes its nodes straight into the maps, so it never pays the `rebind_naming` a
-        // live add does, and a binding parsed before the node it names resolved against nothing.
-        // Every binding is re-resolved here rather than the ports alone: a reference to a LEAF
-        // written earlier in the file is the same broken binding, and was left broken.
-        self.rebind_all();
         self.viewpoint = doc.get("viewpoint").cloned().unwrap_or(serde_json::Value::Null);
         // A corrupt arrangement costs the CHROME, never the patch. The reason is kept for the load
         // reply; an ABSENT arrangement is not a corrupt one and warns about nothing.

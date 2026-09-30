@@ -24,7 +24,7 @@ pub type EventId = u8;
 
 /// One resolved expression variable, graph-side: the model's spelling, which a view exposes and
 /// an engine projects onto its own wire vocabulary.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum BoundVar {
     /// A producer's output slot, and the doorbell id it rings this consumer with.
     Stream { var: String, producer: Uid, slot: &'static str, event_id: EventId },

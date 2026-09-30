@@ -3,7 +3,7 @@ import { FakeControl } from '$lib/test/fakeControl';
 import { SyncClient } from './syncClient.svelte';
 import { nodeView } from './graphDoc';
 
-const OSC = { type: 'Oscillator', name: 'osc', pos: { x: 0, y: 0 } };
+const OSC = { type: 'Oscillator', name: 'osc', pos: [0, 0] };
 
 /** A document as the manager sends it, whole. */
 const stateWith = (nodes: Record<string, unknown>) => ({

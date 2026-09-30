@@ -866,7 +866,7 @@ fn shaders_render_on_the_gpu() {
     let gen = g.add("graphics:Noise");
     g.ready(gen);
     let bound = g.doc()["nodes"][hex(gen)]["params"]["common"]["width"].clone();
-    assert_eq!((&bound["expr"], &bound["mode"]), (&j!("variables.system.default_width"), &j!("expression")),
+    assert_eq!((&bound["expression"], &bound["mode"]), (&j!("variables.system.default_width"), &j!("expression")),
                "the declared binding was seeded live, not flattened to a literal: {bound}");
     drawn(&g, gen, "the patch's default size", |d| shape(d) == vec![1024, 1024, 4]);
     g.call("variable entry edit", j!({ "name": "system.default_width", "value": 96 }));

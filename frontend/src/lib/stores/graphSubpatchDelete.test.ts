@@ -42,8 +42,8 @@ function withInstance(): { fc: FakeControl; g: GraphStore; d: DocSeed } {
 	// Seed as the manager sends it — the scope forest's single source.
 	const d = seed(fc).patch({
 		nodes: {
-			m1: { type: 'Buffer', name: 'buffer0', pos: { x: 0, y: 0 }, scope: 'sub' },
-			sub: { type: SCOPE_TYPE, name: 'subpatch0', pos: { x: 0, y: 0 } }
+			m1: { type: 'Buffer', name: 'buffer0', pos: [0, 0], scope: 'sub' },
+			sub: { type: SCOPE_TYPE, name: 'subpatch0', pos: [0, 0] }
 		}
 	});
 	return { fc, g, d };
