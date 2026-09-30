@@ -46,9 +46,11 @@ codegen-units = 1
 # target 24 GB, and CI ran out of disk. Workspace crates keep line tables; dependencies carry none.
 [profile.dev]
 debug = "line-tables-only"
+opt-level = 1
 
 [profile.dev.package."*"]
 debug = false
+opt-level = 2
 
 # A test target is a small crate against the big ones; its incremental cache is all cost.
 [profile.test]

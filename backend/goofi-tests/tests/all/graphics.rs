@@ -688,16 +688,16 @@ fn shaders_render_on_the_gpu() {
         read().filter(|t| t[0] > 0.0)
     });
     let mut held = opened;
-    for _ in 0..40 {
-        render(&g, 1);
-        let Some(now) = read() else { continue };
+    g.until("the buffer to accumulate", |g| {
+        render(g, 1);
+        let now = read()?;
         // Green is what the seed wrote and nothing since has touched; red is what each tick adds
         // to what the last one left. A buffer remade under the node loses both.
         assert!((now[1] - 0.75).abs() < 1e-3, "the seed the first tick wrote is gone: {now:?}");
         assert!(now[0] + 1e-3 >= held[0], "the buffer went backwards: {held:?} then {now:?}");
         held = now;
-    }
-    assert!(held[0] > opened[0], "nothing accumulated: {opened:?} then {held:?}");
+        (now[0] > opened[0]).then_some(())
+    });
     assert!(g.error(counter).is_none(), "a node with state is not a fault");
     g.call("node remove", j!({ "node": hex(counter) }));
 
