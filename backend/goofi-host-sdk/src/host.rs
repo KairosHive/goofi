@@ -123,13 +123,13 @@ impl<A: Ask> Handle<A> {
 
 impl<A: Ask> Node for Handle<A> {
     fn setup(&mut self, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
-        let request = goofi_codec::encode_request(p.groups(), &[]);
+        let request = goofi_codec::encode_request(p.groups(), &[]).map_err(|e| NodeError(e.to_string()))?;
         Self::done(self.call(Entry::Setup, ctx.now, &runs(&request)))
     }
 
     fn process(&mut self, inp: &Inputs<'_>, out: &mut Outputs<'_>, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
         let present = present(self.manifest.inputs.iter().map(|s| (s.name, s.multi)), inp);
-        let request = goofi_codec::encode_request(p.groups(), &present);
+        let request = goofi_codec::encode_request(p.groups(), &present).map_err(|e| NodeError(e.to_string()))?;
         match self.call(Entry::Process, ctx.now, &runs(&request)) {
             Ok(Response::Process(result)) => apply(result, inp, out, ctx),
             other => Self::done(other),
@@ -142,7 +142,7 @@ impl<A: Ask> Node for Handle<A> {
     }
 
     fn on_param_refreshed(&mut self, key: &ParamKey, p: &Params<'_>) -> Option<Vec<String>> {
-        let request = goofi_codec::encode_refresh_request(p.groups(), &key.group, &key.name);
+        let request = goofi_codec::encode_refresh_request(p.groups(), &key.group, &key.name).ok()?;
         match self.call(Entry::Refresh, 0.0, &[&request]) {
             Ok(Response::Options(options)) => options,
             _ => None,
@@ -150,7 +150,7 @@ impl<A: Ask> Node for Handle<A> {
     }
 
     fn on_pulse(&mut self, key: &ParamKey, p: &Params<'_>) -> NodeResult {
-        let request = goofi_codec::encode_pulse_request(p.groups(), &key.group, &key.name);
+        let request = goofi_codec::encode_pulse_request(p.groups(), &key.group, &key.name).map_err(|e| NodeError(e.to_string()))?;
         Self::done(self.call(Entry::Pulse, 0.0, &[&request]))
     }
 }

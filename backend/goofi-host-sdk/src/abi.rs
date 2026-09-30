@@ -100,8 +100,11 @@ unsafe fn call(
     }
     let request = request.as_slices();
     let mut out = Sink { sink, write };
-    match catch_unwind(AssertUnwindSafe(|| f(inst, &request))) {
-        Ok(Ok(Answer::Done)) => goofi_codec::encode_response(&[], &[], &mut out),
+    // An encoder decides before its first byte, so a refused answer leaves the sink for the error.
+    let encoded = match catch_unwind(AssertUnwindSafe(|| f(inst, &request))) {
+        Ok(Err(e)) => Err(e),
+        Err(p) => Err(goofi_node::panic_message(p)),
+        Ok(Ok(Answer::Done)) => goofi_codec::encode_response(&[], &[], &mut out).map_err(|e| e.to_string()),
         Ok(Ok(Answer::Process { outputs, inputs, clears })) => {
             // An output that IS an input crosses as that input's name: the host still holds it.
             let emitted: Vec<(&str, Emitted<'_>)> = outputs
@@ -112,11 +115,14 @@ unsafe fn call(
                     None => (name, Emitted::Frame(d)),
                 })
                 .collect();
-            goofi_codec::encode_response(&emitted, &clears, &mut out);
+            goofi_codec::encode_response(&emitted, &clears, &mut out).map_err(|e| e.to_string())
         }
-        Ok(Ok(Answer::Options(options))) => out.put(&goofi_codec::encode_options_response(&options)),
-        Ok(Err(e)) => out.put(&goofi_codec::encode_error_response(&e)),
-        Err(p) => out.put(&goofi_codec::encode_error_response(&goofi_node::panic_message(p))),
+        Ok(Ok(Answer::Options(options))) => {
+            goofi_codec::encode_options_response(&options).map(|bytes| out.put(&bytes)).map_err(|e| e.to_string())
+        }
+    };
+    if let Err(e) = encoded {
+        out.put(&goofi_codec::encode_error_response(&e));
     }
 }
 

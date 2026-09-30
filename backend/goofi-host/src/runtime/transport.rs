@@ -223,7 +223,7 @@ impl Transport for IoxTransport {
 
     /// Draining to empty rather than one frame per wake is §3.3's wake discipline: the notification
     /// is a hint, and a wire keeps only its newest frame.
-    fn drain_inputs(&self) -> Vec<(String, usize, Data)> {
+    fn drain_inputs(&self) -> Vec<(String, usize, Result<Data, String>)> {
         let mut out = Vec::new();
         for (slot, wires) in self.inputs.lock().iter() {
             for (index, wire) in wires.iter().enumerate() {
@@ -232,9 +232,7 @@ impl Transport for IoxTransport {
                     // One copy, off the loan the producer needs back; the frame then views it.
                     newest = Some(goofi_codec::decode_owned(sample.payload().to_vec()));
                 }
-                // A frame that cannot be decoded is a wire whose two ends disagree about the
-                // format; dropping it keeps the node running on its other inputs.
-                if let Some(Ok(frame)) = newest {
+                if let Some(frame) = newest {
                     out.push((slot.clone(), index, frame));
                 }
             }
@@ -315,13 +313,13 @@ impl Transport for IoxTransport {
 
     /// Encoded straight into each loan, sized by the frame's own length: a frame is never bytes
     /// on this side of the shared memory.
-    fn publish(&self, slot: &str, frame: &Data) {
-        let Some(port) = self.outputs.get(slot) else { return };
-        let len = goofi_codec::encoded_len(frame);
+    fn publish(&self, slot: &str, frame: &Data) -> Result<(), String> {
+        let Some(port) = self.outputs.get(slot) else { return Ok(()) };
+        let len = goofi_codec::encoded_len(frame).map_err(|e| e.to_string())?;
         let fill = |loan: &mut [std::mem::MaybeUninit<u8>]| {
             let mut out = goofi_codec::Fill::new(loan);
-            goofi_codec::encode_into(frame, &mut out);
-            assert!(out.full(), "a frame fills the loan its length asked for");
+            let filled = goofi_codec::encode_into(frame, &mut out).is_ok() && out.full();
+            assert!(filled, "a frame fills the loan its length asked for");
         };
         let targets = port.targets.lock();
         goofi_transport::publish_with(&port.publisher, len, fill, targets.iter().map(|(b, id)| (b, *id)));
@@ -339,6 +337,7 @@ impl Transport for IoxTransport {
                 *dropped += 1;
             }
         }
+        Ok(())
     }
 
     fn report(&self, status: WireStatus) {

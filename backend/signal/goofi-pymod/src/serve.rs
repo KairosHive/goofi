@@ -90,7 +90,8 @@ fn handle(
     let (params, arrived) = match decode_request(&[body]).map_err(pyo3::exceptions::PyValueError::new_err)? {
         Request::Process { params, slots } => (params, slots),
         Request::Refresh { params, group, name } => {
-            return Ok(encode_options_response(&crate::exec::run_refresh(py, instance, &params, &group, &name)));
+            let options = crate::exec::run_refresh(py, instance, &params, &group, &name);
+            return Ok(encode_options_response(&options).unwrap_or_else(|e| encode_error_response(&e.to_string())));
         }
         Request::Pulse { params, group, name } => {
             return Ok(match crate::exec::run_pulse(py, instance, &params, &group, &name) {
@@ -123,8 +124,10 @@ fn handle(
 
 fn response(outputs: &[(&str, Emitted<'_>)], clears: &[String]) -> Vec<u8> {
     let mut out = Vec::new();
-    encode_response(outputs, clears, &mut out);
-    out
+    match encode_response(outputs, clears, &mut out) {
+        Ok(()) => out,
+        Err(e) => encode_error_response(&e.to_string()),
+    }
 }
 
 /// Run `setup()` until it SUCCEEDS, then `process()`; a setup that raised is retried on the next

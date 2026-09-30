@@ -196,13 +196,25 @@ fn a_frame_reaches_a_wired_consumer_and_rings_its_slot() {
     consumer.wire_in("input", &[output_service(&base_of(Uid(5)), "out")]).unwrap();
     producer.wire_out("out", &[(door_service(&base_of(Uid(6))), 1)]).unwrap();
 
-    producer.publish("out", &frame(&[1.0, 2.0, 3.0]));
+    producer.publish("out", &frame(&[1.0, 2.0, 3.0])).unwrap();
     assert_eq!(consumer.wait(Some(WAIT)), vec![1], "woken by the slot's own event id");
     let got = consumer.drain_inputs();
     assert_eq!(got.len(), 1);
     assert_eq!((got[0].0.as_str(), got[0].1), ("input", 0), "slot, and its position in the wire order");
-    assert_eq!(f32s(&got[0].2), vec![1.0, 2.0, 3.0]);
+    assert_eq!(f32s(got[0].2.as_ref().expect("a frame that decodes")), vec![1.0, 2.0, 3.0]);
     assert!(consumer.drain_inputs().is_empty(), "a drained wire is empty");
+
+    // A wire whose producer writes something that is not a frame is that wire's error, delivered
+    // in its place: the node wears it, rather than never hearing of it.
+    let node = iox_node().unwrap();
+    let service = goofi_transport::data_service(&node, &output_service(&base_of(Uid(50)), "out")).unwrap();
+    let raw = goofi_transport::publisher(&service, "out", goofi_transport::INITIAL_SLICE).unwrap();
+    consumer.wire_in("input", &[output_service(&base_of(Uid(50)), "out")]).unwrap();
+    assert!(goofi_transport::publish(&raw, b"NOPE", Vec::<(&Doorbell, goofi_node::EventId)>::new()));
+    let got = consumer.drain_inputs();
+    assert_eq!(got.len(), 1, "the bytes reached the wire");
+    let why = got[0].2.as_ref().expect_err("bytes that are no frame are the wire's error");
+    assert!(why.contains("too small"), "the error says what was wrong: {why}");
 }
 
 #[test]
@@ -213,10 +225,10 @@ fn a_frame_larger_than_the_initial_slice_still_lands() {
     consumer.wire_in("input", &[output_service(&base_of(Uid(7)), "out")]).unwrap();
 
     let big: Vec<f32> = (0..80_000).map(|i| i as f32).collect(); // 320 KB, past the 64 KiB start
-    producer.publish("out", &frame(&big));
+    producer.publish("out", &frame(&big)).unwrap();
     let got = consumer.drain_inputs();
     assert_eq!(got.len(), 1, "the oversized frame was published and received");
-    assert_eq!(f32s(&got[0].2), big);
+    assert_eq!(f32s(got[0].2.as_ref().expect("a frame that decodes")), big);
 }
 
 #[test]
@@ -228,15 +240,15 @@ fn a_re_sent_wire_set_keeps_what_it_names_and_drops_what_it_omits() {
     let held = output_service(&base_of(Uid(9)), "out");
     let added = output_service(&base_of(Uid(11)), "out");
     consumer.wire_in("input", std::slice::from_ref(&held)).unwrap();
-    producer.publish("out", &frame(&[1.0])); // in flight, unread
+    producer.publish("out", &frame(&[1.0])).unwrap(); // in flight, unread
 
     consumer.wire_in("input", &[held, added]).unwrap();
     let got = consumer.drain_inputs();
     assert_eq!(got.len(), 1, "the second wire has nothing yet");
-    assert_eq!(f32s(&got[0].2), vec![1.0], "and the first still holds what it was sent");
+    assert_eq!(f32s(got[0].2.as_ref().expect("a frame that decodes")), vec![1.0], "and the first still holds what it was sent");
 
     consumer.wire_in("input", &[]).unwrap();
-    producer.publish("out", &frame(&[2.0]));
+    producer.publish("out", &frame(&[2.0])).unwrap();
     assert!(consumer.drain_inputs().is_empty(), "the dropped wire delivers nothing");
 }
 
@@ -255,7 +267,7 @@ fn a_slot_feeds_more_consumers_than_the_iceoryx2_defaults_allow() {
         })
         .collect();
 
-    producer.publish("out", &frame(&[7.0]));
+    producer.publish("out", &frame(&[7.0])).unwrap();
     for (i, consumer) in consumers.iter().enumerate() {
         assert_eq!(consumer.drain_inputs().len(), 1, "consumer {i} of {CONSUMERS} got the frame");
     }
@@ -278,10 +290,10 @@ fn a_multi_input_keeps_one_cell_per_wire_in_the_order_it_was_given() {
     let door = door_service(&base_of(Uid(21)));
     for (i, producer) in producers.iter().enumerate() {
         producer.wire_out("out", &[(door.clone(), 1)]).expect("ring this consumer");
-        producer.publish("out", &frame(&[i as f32]));
+        producer.publish("out", &frame(&[i as f32])).unwrap();
     }
     // Twice on one wire before the drain: latest-wins keeps the second, per wire.
-    producers[0].publish("out", &frame(&[100.0]));
+    producers[0].publish("out", &frame(&[100.0])).unwrap();
 
     let got = consumer.drain_inputs();
     assert_eq!(got.len(), WIRES as usize, "one cell per wire, none merged");
@@ -291,7 +303,7 @@ fn a_multi_input_keeps_one_cell_per_wire_in_the_order_it_was_given() {
         "the cells are indexed by position in the set"
     );
     assert_eq!(
-        got.iter().map(|(_, _, frame)| f32s(frame)[0]).collect::<Vec<_>>(),
+        got.iter().map(|(_, _, frame)| f32s(frame.as_ref().expect("a frame that decodes"))[0]).collect::<Vec<_>>(),
         (0..WIRES).rev().map(|i| if i == 0 { 100.0 } else { i as f32 }).collect::<Vec<f32>>(),
         "each cell holds its own producer's newest frame"
     );

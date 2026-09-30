@@ -576,7 +576,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 Some(_) => (None, None),
                 None => {
                     let held = latest.lock();
-                    (held.as_ref().map(goofi_codec::content_hash), held.as_ref().map(goofi_codec::stamp_hash))
+                    (held.as_ref().and_then(|d| goofi_codec::content_hash(d).ok()), held.as_ref().and_then(|d| goofi_codec::stamp_hash(d).ok()))
                 }
             };
             let same = hash.is_some() && served == Some(g_now) && hash == sent;
@@ -598,8 +598,8 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 Some(ready) => ready.clone(),
                 None => {
                     let Some(d) = latest.lock().clone() else { continue };
-                    if same {
-                        Bytes::from(goofi_codec::encode_stamps(d.meta()))
+                    let encoded = if same {
+                        goofi_codec::encode_stamps(d.meta())
                     } else {
                         let specs = union_specs(&specs.lock());
                         // A table has no texels to plan; an array is reduced to its viewers' plan.
@@ -615,11 +615,18 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                         // f32 either way, and a half or a texel only for a frame they can hold.
                         let narrowed = match depth {
                             goofi_view::Depth::U8 => goofi_core::reduce::quantize_u8(&out)
-                                .map(|(shape, texels, meta)| goofi_codec::encode_u8(&shape, &texels, &meta)),
+                                .map(|(shape, texels, meta)| goofi_codec::encode_u8(&shape, &texels, &meta)).transpose(),
                             goofi_view::Depth::F16 => goofi_codec::encode_f16(&out),
-                            goofi_view::Depth::F32 => None,
+                            goofi_view::Depth::F32 => Ok(None),
                         };
-                        Bytes::from(narrowed.unwrap_or_else(|| goofi_codec::encode(&out)))
+                        narrowed.and_then(|n| n.map_or_else(|| goofi_codec::encode(&out), Ok))
+                    };
+                    match encoded {
+                        Ok(bytes) => Bytes::from(bytes),
+                        Err(why) => {
+                            goofi_core::log::record(goofi_core::log::Source::component("reducer"), goofi_core::log::Level::Error, None, format!("{door}: the reduced frame cannot cross: {why}"));
+                            continue;
+                        }
                     }
                 }
             };

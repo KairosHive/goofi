@@ -41,6 +41,8 @@ pub struct GraphicsHalf {
     /// The sizes last seen: asked, and uploaded. Only a settle can re-plan a stage's target, so
     /// the half — which ticks beside the writers of both — is what asks for one when either moves.
     last: ((u32, u32), u64),
+    /// Why the last frame taken could not cross, until one does.
+    refused: Option<String>,
 }
 
 /// The upload size as one atomic word, and back; 0 is no upload yet.
@@ -65,7 +67,7 @@ impl GraphicsHalf {
         uploaded: Arc<AtomicU64>,
         size: usize,
     ) -> GraphicsHalf {
-        GraphicsHalf { producer: None, uploads, readers, tap, uploaded, size, last: ((u32::MAX, u32::MAX), 0) }
+        GraphicsHalf { producer: None, uploads, readers, tap, uploaded, size, last: ((u32::MAX, u32::MAX), 0), refused: None }
     }
 }
 
@@ -106,14 +108,20 @@ impl Half for GraphicsHalf {
         // Taken from UNDER the lock and encoded outside it: the render thread waits on this
         // mutex, so an encode held across it is the frontend stalling a node tick.
         let taken = self.tap.lock().frame.take();
-        match taken {
-            Some(Tapped::Full(frame)) => publish(0, &goofi_codec::encode(&frame)),
-            Some(Tapped::Texels { shape, bytes, meta }) => {
-                publish(0, &goofi_codec::encode_u8(&shape, &bytes, &meta))
+        let encoded = match taken {
+            Some(Tapped::Full(frame)) => Some(goofi_codec::encode(&frame)),
+            Some(Tapped::Texels { shape, bytes, meta }) => Some(goofi_codec::encode_u8(&shape, &bytes, &meta)),
+            None => None,
+        };
+        match encoded {
+            Some(Ok(bytes)) => {
+                self.refused = None;
+                publish(0, &bytes);
             }
+            Some(Err(why)) => self.refused = Some(format!("the output frame cannot cross: {why}")),
             None => {}
         }
         let seen = (crate::plan::asked(cx.params, self.size), self.uploaded.load(Ordering::Relaxed));
-        Ticked { errors: Vec::new(), replan: std::mem::replace(&mut self.last, seen) != seen }
+        Ticked { errors: Vec::new(), fault: self.refused.clone(), replan: std::mem::replace(&mut self.last, seen) != seen }
     }
 }

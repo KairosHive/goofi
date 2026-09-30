@@ -106,7 +106,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         meta.set_index(Some(i));
         let n: usize = shape.iter().product();
         let body: Vec<u8> = (0..n).flat_map(|_| fill.to_le_bytes()).collect();
-        goofi_codec::encode(&goofi_core::Data::array_f32(shape, body, meta).expect("a frame"))
+        goofi_codec::encode(&goofi_core::Data::array_f32(shape, body, meta).expect("a frame")).expect("a frame that crosses")
     };
     let open = |bytes: &[u8]| {
         let kind = goofi_record::frame::read(bytes, None).expect("a frame the recorder reads").kind;
@@ -213,7 +213,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         let values: Vec<u8> = (0..channels * samples).flat_map(|n| (n as f32).to_le_bytes()).collect();
         let data = goofi_core::Data::array_f32(vec![channels, samples], values, meta).expect("audio block");
         assert!(rec.take_frame(
-            &id, &goofi_codec::encode(&data), Some(rate), goofi_record::Timeline::Derived, i as f64, true,
+            &id, &goofi_codec::encode(&data).expect("a frame that crosses"), Some(rate), goofi_record::Timeline::Derived, i as f64, true,
         ));
     }
     let folder = rec.stop().expect("audio stopped").expect("audio folder");

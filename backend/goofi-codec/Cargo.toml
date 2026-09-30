@@ -13,3 +13,4 @@ half = "2"
 # Param transport in the subprocess request frame: serde-serialize the ParamGroups tree
 # (Param derives Serialize/Deserialize) — no per-variant juggling, lossless by construction.
 rmp-serde = "1"
+serde = "1"

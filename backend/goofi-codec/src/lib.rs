@@ -17,6 +17,41 @@ pub const MAGIC: &[u8; 4] = b"GOOF";
 pub const VERSION: u8 = 2;
 pub const HEADER_SIZE: usize = 14;
 
+/// Why a value cannot cross as a frame: a count or a length the format has no field wide enough
+/// for, or a part serde refused. Every encoder checks its lengths before it puts a byte.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EncodeError {
+    TooLong { what: &'static str, len: usize, max: usize },
+    Serialize(String),
+}
+
+impl std::fmt::Display for EncodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EncodeError::TooLong { what, len, max } => write!(f, "{what} of {len} exceeds the wire's {max}"),
+            EncodeError::Serialize(why) => write!(f, "does not serialize: {why}"),
+        }
+    }
+}
+
+impl std::error::Error for EncodeError {}
+
+fn u8_of(what: &'static str, n: usize) -> Result<[u8; 1], EncodeError> {
+    u8::try_from(n).map(|v| [v]).map_err(|_| EncodeError::TooLong { what, len: n, max: u8::MAX as usize })
+}
+
+fn u16_of(what: &'static str, n: usize) -> Result<[u8; 2], EncodeError> {
+    u16::try_from(n).map(u16::to_le_bytes).map_err(|_| EncodeError::TooLong { what, len: n, max: u16::MAX as usize })
+}
+
+fn u32_of(what: &'static str, n: usize) -> Result<[u8; 4], EncodeError> {
+    u32::try_from(n).map(u32::to_le_bytes).map_err(|_| EncodeError::TooLong { what, len: n, max: u32::MAX as usize })
+}
+
+fn packed<T: serde::Serialize + ?Sized>(what: &str, value: &T) -> Result<Vec<u8>, EncodeError> {
+    rmp_serde::to_vec(value).map_err(|e| EncodeError::Serialize(format!("{what}: {e}")))
+}
+
 /// Where an encoder writes. A frame's samples are offered apart from the bytes around them, so
 /// a sink that can hand memory on by reference does, and every other sink copies them.
 pub trait Out<'a> {
@@ -103,48 +138,59 @@ impl<'a> Out<'a> for Segments<'a> {
 }
 
 /// Encode a `Data` into a fresh GOOF v2 frame.
-pub fn encode(d: &Data) -> Vec<u8> {
-    let mut out = Vec::with_capacity(encoded_len(d));
-    encode_into(d, &mut out);
-    out
+pub fn encode(d: &Data) -> Result<Vec<u8>, EncodeError> {
+    let mut out = Vec::with_capacity(encoded_len(d)?);
+    encode_into(d, &mut out)?;
+    Ok(out)
 }
 
 /// How many bytes [`encode_into`] writes for `d`.
-pub fn encoded_len(d: &Data) -> usize {
+pub fn encoded_len(d: &Data) -> Result<usize, EncodeError> {
     let mut count = Count(0);
-    encode_into(d, &mut count);
-    count.0
+    encode_into(d, &mut count)?;
+    Ok(count.0)
 }
 
-/// Write `d`'s frame to `out`, the body in place: a frame is never built, then copied.
-pub fn encode_into<'a>(d: &'a Data, out: &mut impl Out<'a>) {
-    let meta = pack_meta(d);
-    let body = Body::of(d);
+/// Write `d`'s frame to `out`, the body in place: a frame is never built, then copied. An `Err`
+/// is decided before the first byte is put, so it leaves `out` as it was.
+pub fn encode_into<'a>(d: &'a Data, out: &mut impl Out<'a>) -> Result<(), EncodeError> {
+    let meta = pack_meta(d)?;
+    let body = Body::of(d)?;
+    let meta_len = u32_of("meta", meta.len())?;
+    let body_len = u32_of("body", body.len())?;
     out.put(MAGIC);
     out.put(&[VERSION, d.dtype_tag()]);
-    out.put(&(meta.len() as u32).to_le_bytes());
-    out.put(&(body.len() as u32).to_le_bytes());
+    out.put(&meta_len);
+    out.put(&body_len);
     out.put(&meta);
-    body.write(out);
+    body.write(out)
 }
 
-/// A frame's body, its length known before a byte of it is written.
+/// A frame's body, its every length checked before a byte of it is written.
 enum Body<'a> {
     /// `[u8 ndim][u8 dtype_str_len][dtype_str][ndim × u32 shape]`, then the samples themselves.
     Array { head: Vec<u8>, samples: &'a [u8] },
     Str(&'a [u8]),
     Texture(Vec<u8>),
-    Table(&'a indexmap::IndexMap<String, Data>),
+    /// Per entry: the key's length, the value frame's length, and that frame's length as bytes.
+    Table { map: &'a indexmap::IndexMap<String, Data>, count: [u8; 4], heads: Vec<([u8; 2], usize, [u8; 4])> },
 }
 
 impl<'a> Body<'a> {
-    fn of(d: &'a Data) -> Body<'a> {
-        match d.value() {
-            Value::Texture(t) => Body::Texture(rmp_serde::to_vec(&**t).expect("texture serialization")),
-            Value::Array(store) => Body::Array { head: array_head_bytes(b"<f4", store.shape()), samples: store.as_bytes() },
+    fn of(d: &'a Data) -> Result<Body<'a>, EncodeError> {
+        Ok(match d.value() {
+            Value::Texture(t) => Body::Texture(packed("texture", &**t)?),
+            Value::Array(store) => Body::Array { head: array_head_bytes(b"<f4", store.shape())?, samples: store.as_bytes() },
             Value::Str(s) => Body::Str(s.as_bytes()),
-            Value::Table(map) => Body::Table(map),
-        }
+            Value::Table(map) => {
+                let mut heads = Vec::with_capacity(map.len());
+                for (key, value) in map.iter() {
+                    let len = encoded_len(value)?;
+                    heads.push((u16_of("table key", key.len())?, len, u32_of("table value", len)?));
+                }
+                Body::Table { map, count: u32_of("table count", map.len())?, heads }
+            }
+        })
     }
 
     fn len(&self) -> usize {
@@ -152,11 +198,11 @@ impl<'a> Body<'a> {
             Body::Array { head, samples } => head.len() + samples.len(),
             Body::Str(s) => s.len(),
             Body::Texture(t) => t.len(),
-            Body::Table(map) => 4 + map.iter().map(|(k, v)| 2 + k.len() + 4 + encoded_len(v)).sum::<usize>(),
+            Body::Table { map, heads, .. } => 4 + map.keys().zip(heads).map(|(k, (_, len, _))| 2 + k.len() + 4 + len).sum::<usize>(),
         }
     }
 
-    fn write(self, out: &mut impl Out<'a>) {
+    fn write(self, out: &mut impl Out<'a>) -> Result<(), EncodeError> {
         match self {
             Body::Array { head, samples } => {
                 out.put(&head);
@@ -164,43 +210,43 @@ impl<'a> Body<'a> {
             }
             Body::Str(s) => out.put(s),
             Body::Texture(t) => out.put(&t),
-            Body::Table(map) => {
-                out.put(&(map.len() as u32).to_le_bytes());
-                for (key, value) in map.iter() {
-                    let kb = key.as_bytes();
-                    out.put(&(kb.len() as u16).to_le_bytes());
-                    out.put(kb);
-                    out.put(&(encoded_len(value) as u32).to_le_bytes());
-                    encode_into(value, out);
+            Body::Table { map, count, heads } => {
+                out.put(&count);
+                for ((key, value), (klen, _, vlen)) in map.iter().zip(heads) {
+                    out.put(&klen);
+                    out.put(key.as_bytes());
+                    out.put(&vlen);
+                    encode_into(value, out)?;
                 }
             }
         }
+        Ok(())
     }
 }
 
 /// An 8-bit array frame for the browser hop, where `Data` itself stays f32: the same header and
 /// the same meta, with a `|u1` body.
-pub fn encode_u8(shape: &[usize], texels: &[u8], meta: &goofi_core::Meta) -> Vec<u8> {
-    let mut body = array_head_bytes(b"|u1", shape);
+pub fn encode_u8(shape: &[usize], texels: &[u8], meta: &goofi_core::Meta) -> Result<Vec<u8>, EncodeError> {
+    let mut body = array_head_bytes(b"|u1", shape)?;
     body.extend_from_slice(texels);
-    frame(0, pack_array_meta(meta, shape, "uint8"), body)
+    frame(0, pack_array_meta(meta, shape, "uint8")?, body)
 }
 
 /// A half-float array frame for a line viewer's hop, where `Data` itself stays f32: the same
 /// header and the same meta, with a `<f2` body. `None` for a finite sample beyond a half's range.
-pub fn encode_f16(d: &Data) -> Option<Vec<u8>> {
-    let Value::Array(store) = d.value() else { return None };
+pub fn encode_f16(d: &Data) -> Result<Option<Vec<u8>>, EncodeError> {
+    let Value::Array(store) = d.value() else { return Ok(None) };
     let mut halves = Vec::with_capacity(store.as_bytes().len() / 2);
     for b in store.as_bytes().chunks_exact(4) {
-        let v = f32::from_le_bytes(b.try_into().expect("four bytes"));
+        let v = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
         if v.is_finite() && v.abs() > half::f16::MAX.to_f32() {
-            return None;
+            return Ok(None);
         }
         halves.extend_from_slice(&half::f16::from_f32(v).to_le_bytes());
     }
-    let mut body = array_head_bytes(b"<f2", store.shape());
+    let mut body = array_head_bytes(b"<f2", store.shape())?;
     body.extend_from_slice(&halves);
-    Some(frame(0, pack_array_meta(d.meta(), store.shape(), "float16"), body))
+    frame(0, pack_array_meta(d.meta(), store.shape(), "float16")?, body).map(Some)
 }
 
 /// The tag of a frame that carries the engine's per-emit stamps alone, with no body: sent when
@@ -211,22 +257,22 @@ const STAMP_KEYS: [&str; 3] = [META_TIME, META_INDEX, META_UFREQ];
 
 /// A 64-bit hash of what a frame SAYS: its kind, its body, and its meta without the engine's
 /// per-emit stamps — so a held value emitted again hashes as the frame before it.
-pub fn content_hash(d: &Data) -> u64 {
+pub fn content_hash(d: &Data) -> Result<u64, EncodeError> {
     let mut h = DefaultHasher::new();
-    hash_into(d, &mut h);
-    h.finish()
+    hash_into(d, &mut h)?;
+    Ok(h.finish())
 }
 
 /// A 64-bit hash of the stamps alone, the other half of [`content_hash`].
-pub fn stamp_hash(d: &Data) -> u64 {
+pub fn stamp_hash(d: &Data) -> Result<u64, EncodeError> {
     let mut h = DefaultHasher::new();
-    h.write(&pack(stamps(d.meta())));
-    h.finish()
+    h.write(&pack(stamps(d.meta()))?);
+    Ok(h.finish())
 }
 
 /// The stamps of `meta` as a frame of their own, under [`STAMPS_TAG`].
-pub fn encode_stamps(meta: &goofi_core::Meta) -> Vec<u8> {
-    frame(STAMPS_TAG, pack(stamps(meta)), Vec::new())
+pub fn encode_stamps(meta: &goofi_core::Meta) -> Result<Vec<u8>, EncodeError> {
+    frame(STAMPS_TAG, pack(stamps(meta))?, Vec::new())
 }
 
 /// Whether `frame` is a stamps frame: its meta is read with [`frame_meta`], and it has no data.
@@ -238,7 +284,7 @@ fn stamps(meta: &goofi_core::Meta) -> Vec<(Mp, Mp)> {
     carried(meta).into_iter().filter(|(k, _)| k.as_str().is_some_and(|k| STAMP_KEYS.contains(&k))).collect()
 }
 
-fn hash_into(d: &Data, h: &mut DefaultHasher) {
+fn hash_into(d: &Data, h: &mut DefaultHasher) -> Result<(), EncodeError> {
     h.write_u8(d.dtype_tag());
     let mut said: Vec<(Mp, Mp)> = carried(d.meta())
         .into_iter()
@@ -247,9 +293,9 @@ fn hash_into(d: &Data, h: &mut DefaultHasher) {
     // By key, so a frame that sets the same keys in another order says the same thing.
     said.sort_by(|(a, _), (b, _)| a.as_str().cmp(&b.as_str()));
     said.push((Mp::from(META_CHANNELS), channels_to_mp(d.meta().channels())));
-    h.write(&pack(said));
+    h.write(&pack(said)?);
     match d.value() {
-        Value::Texture(t) => h.write(&rmp_serde::to_vec(&**t).expect("texture serialization")),
+        Value::Texture(t) => h.write(&packed("texture", &**t)?),
         Value::Array(store) => {
             h.write_usize(store.shape().len());
             for &dim in store.shape() {
@@ -262,42 +308,43 @@ fn hash_into(d: &Data, h: &mut DefaultHasher) {
             h.write_usize(map.len());
             for (key, value) in map.iter() {
                 h.write(key.as_bytes());
-                hash_into(value, h);
+                hash_into(value, h)?;
             }
         }
     }
+    Ok(())
 }
 
 /// The header every frame carries, around a packed meta and a body.
-fn frame(dtype_tag: u8, meta: Vec<u8>, body: Vec<u8>) -> Vec<u8> {
+fn frame(dtype_tag: u8, meta: Vec<u8>, body: Vec<u8>) -> Result<Vec<u8>, EncodeError> {
     let mut out = Vec::with_capacity(HEADER_SIZE + meta.len() + body.len());
     out.extend_from_slice(MAGIC);
     out.push(VERSION);
     out.push(dtype_tag);
-    out.extend_from_slice(&(meta.len() as u32).to_le_bytes());
-    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(&u32_of("meta", meta.len())?);
+    out.extend_from_slice(&u32_of("body", body.len())?);
     out.extend_from_slice(&meta);
     out.extend_from_slice(&body);
-    out
+    Ok(out)
 }
 
 /// `[u8 ndim][u8 dtype_str_len][dtype_str][ndim × u32 shape]`: what stands before an array's samples.
-fn array_head_bytes(dtype_str: &[u8], shape: &[usize]) -> Vec<u8> {
+fn array_head_bytes(dtype_str: &[u8], shape: &[usize]) -> Result<Vec<u8>, EncodeError> {
     let mut out = Vec::with_capacity(2 + dtype_str.len() + 4 * shape.len());
-    out.push(shape.len() as u8);
-    out.push(dtype_str.len() as u8);
+    out.extend_from_slice(&u8_of("array rank", shape.len())?);
+    out.extend_from_slice(&u8_of("dtype string", dtype_str.len())?);
     out.extend_from_slice(dtype_str);
     for &dim in shape {
-        out.extend_from_slice(&(dim as u32).to_le_bytes());
+        out.extend_from_slice(&u32_of("array dim", dim)?);
     }
-    out
+    Ok(out)
 }
 
 /// Meta names the wire derives from the `Data` itself, so they are never taken from `Meta`.
 const DERIVED_KEYS: [&str; 2] = ["shape", "dtype"];
 
 /// Serialize a `Data`'s `Meta` to the msgpack map used in a GOOF frame.
-fn pack_meta(d: &Data) -> Vec<u8> {
+fn pack_meta(d: &Data) -> Result<Vec<u8>, EncodeError> {
     let meta = d.meta();
     match d.value() {
         Value::Texture(_) => pack(carried(meta)),
@@ -317,7 +364,7 @@ fn pack_meta(d: &Data) -> Vec<u8> {
 
 /// An array frame's meta: what the `Meta` carries, plus the shape, dtype and axes the wire
 /// derives. Shared with [`encode_u8`], whose frame has no `Data` to read them off.
-fn pack_array_meta(meta: &goofi_core::Meta, shape: &[usize], dtype: &str) -> Vec<u8> {
+fn pack_array_meta(meta: &goofi_core::Meta, shape: &[usize], dtype: &str) -> Result<Vec<u8>, EncodeError> {
     let mut entries = carried(meta);
     let dims: Vec<Mp> = shape.iter().map(|&d| Mp::from(d as u64)).collect();
     entries.push((Mp::from("shape"), Mp::Array(dims)));
@@ -337,10 +384,10 @@ fn carried(meta: &goofi_core::Meta) -> Vec<(Mp, Mp)> {
         .collect()
 }
 
-fn pack(entries: Vec<(Mp, Mp)>) -> Vec<u8> {
+fn pack(entries: Vec<(Mp, Mp)>) -> Result<Vec<u8>, EncodeError> {
     let mut buf = Vec::new();
-    rmpv::encode::write_value(&mut buf, &Mp::Map(entries)).expect("msgpack meta encode");
-    buf
+    rmpv::encode::write_value(&mut buf, &Mp::Map(entries)).map_err(|e| EncodeError::Serialize(format!("meta: {e}")))?;
+    Ok(buf)
 }
 
 fn channels_to_mp(ch: &goofi_core::Axes) -> Mp {
@@ -395,8 +442,8 @@ fn split_at(frame: &[u8]) -> std::result::Result<(u8, Range<usize>, Range<usize>
         return Err(format!("bad version {}", frame[4]));
     }
     let tag = frame[5];
-    let meta_len = u32::from_le_bytes(frame[6..10].try_into().unwrap()) as usize;
-    let body_len = u32::from_le_bytes(frame[10..14].try_into().unwrap()) as usize;
+    let meta_len = u32::from_le_bytes([frame[6], frame[7], frame[8], frame[9]]) as usize;
+    let body_len = u32::from_le_bytes([frame[10], frame[11], frame[12], frame[13]]) as usize;
     let meta_end = HEADER_SIZE.checked_add(meta_len).ok_or("metadata length overflow")?;
     let body_end = meta_end.checked_add(body_len).ok_or("body length overflow")?;
     if frame.len() < body_end {
@@ -523,10 +570,12 @@ impl<'s, 'a> Cursor<'s, 'a> {
         Ok(self.take(1, what)?[0] as usize)
     }
     fn u16(&mut self, what: &str) -> std::result::Result<usize, String> {
-        Ok(u16::from_le_bytes(self.take(2, what)?.try_into().unwrap()) as usize)
+        let b = self.take(2, what)?;
+        Ok(u16::from_le_bytes([b[0], b[1]]) as usize)
     }
     fn u32(&mut self, what: &str) -> std::result::Result<usize, String> {
-        Ok(u32::from_le_bytes(self.take(4, what)?.try_into().unwrap()) as usize)
+        let b = self.take(4, what)?;
+        Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
     }
     /// Everything left, which must lie in one segment.
     fn rest(mut self) -> std::result::Result<&'a [u8], String> {
@@ -674,23 +723,30 @@ pub type SourcedSlots = Vec<(String, String, Data)>;
 pub type Runs<'a> = Vec<Cow<'a, [u8]>>;
 
 /// One named slot's head: `[u16 name_len][name][u16 src_len][src][u32 frame_len]`.
-fn slot_head<'a>(out: &mut impl Out<'a>, name: &str, source: &str, frame_len: usize) {
-    for text in [name, source] {
-        let tb = text.as_bytes();
-        out.put(&(tb.len() as u16).to_le_bytes());
-        out.put(tb);
+fn slot_head(name: &str, source: &str, frame_len: usize) -> Result<Vec<u8>, EncodeError> {
+    let mut out = Vec::with_capacity(8 + name.len() + source.len());
+    for (what, text) in [("slot name", name), ("slot source", source)] {
+        out.extend_from_slice(&u16_of(what, text.len())?);
+        out.extend_from_slice(text.as_bytes());
     }
-    out.put(&(frame_len as u32).to_le_bytes());
+    out.extend_from_slice(&u32_of("slot frame", frame_len)?);
+    Ok(out)
 }
 
 /// Append a named-slot list: `[u16 n]` then n × `[u16 name_len][name][u16 src_len][src]
 /// [u32 frame_len][GOOF frame]`; `src` is the `node.slot` a multi-slot frame came from, else empty.
-pub fn encode_slots<'a>(slots: &[(&str, &str, &'a Data)], out: &mut impl Out<'a>) {
-    out.put(&(slots.len() as u16).to_le_bytes());
+pub fn encode_slots<'a>(slots: &[(&str, &str, &'a Data)], out: &mut impl Out<'a>) -> Result<(), EncodeError> {
+    let count = u16_of("slot count", slots.len())?;
+    let mut heads = Vec::with_capacity(slots.len());
     for (name, source, d) in slots {
-        slot_head(out, name, source, encoded_len(d));
-        encode_into(d, out);
+        heads.push(slot_head(name, source, encoded_len(d)?)?);
     }
+    out.put(&count);
+    for (head, (_, _, d)) in heads.iter().zip(slots) {
+        out.put(head);
+        encode_into(d, out)?;
+    }
+    Ok(())
 }
 
 fn read_slot_head<'a>(cur: &mut Cursor<'_, 'a>) -> std::result::Result<(String, String, usize), String> {
@@ -722,37 +778,38 @@ pub enum Request {
     Pulse { params: ParamMap, group: String, name: String },
 }
 
-fn encode_params(params: &ParamMap, out: &mut Vec<u8>) {
-    let pbytes = rmp_serde::to_vec(params).expect("param serialize (Param derives Serialize)");
-    out.extend_from_slice(&(pbytes.len() as u32).to_le_bytes());
+fn encode_params(params: &ParamMap, out: &mut Vec<u8>) -> Result<(), EncodeError> {
+    let pbytes = packed("params", params)?;
+    out.extend_from_slice(&u32_of("params", pbytes.len())?);
     out.extend_from_slice(&pbytes);
+    Ok(())
 }
 
 /// Encode a tick request: `[0][u32 params_len][params msgpack][slots]`, each slot with its source.
-pub fn encode_request<'a>(params: &ParamMap, slots: &[(&str, &str, &'a Data)]) -> Runs<'a> {
+pub fn encode_request<'a>(params: &ParamMap, slots: &[(&str, &str, &'a Data)]) -> Result<Runs<'a>, EncodeError> {
     let mut out = Segments::default();
     let mut head = vec![0u8];
-    encode_params(params, &mut head);
+    encode_params(params, &mut head)?;
     out.put(&head);
-    encode_slots(slots, &mut out);
-    out.finish()
+    encode_slots(slots, &mut out)?;
+    Ok(out.finish())
 }
 
 /// Encode a refresh request: `[1][u32 params_len][params msgpack][(group, name) msgpack]`.
-pub fn encode_refresh_request(params: &ParamMap, group: &str, name: &str) -> Vec<u8> {
+pub fn encode_refresh_request(params: &ParamMap, group: &str, name: &str) -> Result<Vec<u8>, EncodeError> {
     encode_keyed_request(1, params, group, name)
 }
 
 /// Encode a pulse request: `[2][u32 params_len][params msgpack][(group, name) msgpack]`.
-pub fn encode_pulse_request(params: &ParamMap, group: &str, name: &str) -> Vec<u8> {
+pub fn encode_pulse_request(params: &ParamMap, group: &str, name: &str) -> Result<Vec<u8>, EncodeError> {
     encode_keyed_request(2, params, group, name)
 }
 
-fn encode_keyed_request(tag: u8, params: &ParamMap, group: &str, name: &str) -> Vec<u8> {
+fn encode_keyed_request(tag: u8, params: &ParamMap, group: &str, name: &str) -> Result<Vec<u8>, EncodeError> {
     let mut out = vec![tag];
-    encode_params(params, &mut out);
-    out.extend_from_slice(&rmp_serde::to_vec(&(group, name)).expect("two strings"));
-    out
+    encode_params(params, &mut out)?;
+    out.extend_from_slice(&packed("param key", &(group, name))?);
+    Ok(out)
 }
 
 /// Decode a request written by [`encode_request`], [`encode_refresh_request`] or
@@ -807,22 +864,29 @@ pub enum Response {
 
 /// `[0][u32 clears_len][clears msgpack]`, then the slot list, where an input handed back unchanged
 /// is a slot whose `src` names it (`slot`, or `slot#index` on a multi slot) over an empty frame.
-pub fn encode_response<'a>(outputs: &[(&str, Emitted<'a>)], clear_inputs: &[String], out: &mut impl Out<'a>) {
-    out.put(&[0u8]);
-    let clears = rmp_serde::to_vec(clear_inputs).expect("strings");
-    out.put(&(clears.len() as u32).to_le_bytes());
-    out.put(&clears);
-    out.put(&(outputs.len() as u16).to_le_bytes());
+pub fn encode_response<'a>(outputs: &[(&str, Emitted<'a>)], clear_inputs: &[String], out: &mut impl Out<'a>) -> Result<(), EncodeError> {
+    let clears = packed("input clears", clear_inputs)?;
+    let clears_len = u32_of("input clears", clears.len())?;
+    let count = u16_of("output count", outputs.len())?;
+    let mut heads = Vec::with_capacity(outputs.len());
     for (name, emitted) in outputs {
-        match emitted {
-            Emitted::Frame(d) => {
-                slot_head(out, name, "", encoded_len(d));
-                encode_into(d, out);
-            }
-            Emitted::Input { slot, index: 0 } => slot_head(out, name, slot, 0),
-            Emitted::Input { slot, index } => slot_head(out, name, &format!("{slot}#{index}"), 0),
+        heads.push(match emitted {
+            Emitted::Frame(d) => slot_head(name, "", encoded_len(d)?)?,
+            Emitted::Input { slot, index: 0 } => slot_head(name, slot, 0)?,
+            Emitted::Input { slot, index } => slot_head(name, &format!("{slot}#{index}"), 0)?,
+        });
+    }
+    out.put(&[0u8]);
+    out.put(&clears_len);
+    out.put(&clears);
+    out.put(&count);
+    for (head, (_, emitted)) in heads.iter().zip(outputs) {
+        out.put(head);
+        if let Emitted::Frame(d) = emitted {
+            encode_into(d, out)?;
         }
     }
+    Ok(())
 }
 
 /// Encode a node-error response: `[1][utf8 message]`.
@@ -833,10 +897,10 @@ pub fn encode_error_response(msg: &str) -> Vec<u8> {
 }
 
 /// Encode a refresh response: `[2][Option<Vec<String>> msgpack]`.
-pub fn encode_options_response(options: &Option<Vec<String>>) -> Vec<u8> {
+pub fn encode_options_response(options: &Option<Vec<String>>) -> Result<Vec<u8>, EncodeError> {
     let mut out = vec![2u8];
-    out.extend_from_slice(&rmp_serde::to_vec(options).expect("strings"));
-    out
+    out.extend_from_slice(&packed("options", options)?);
+    Ok(out)
 }
 
 /// Decode a response, which the outputs then keep: each frame is a view of the reply it came in.

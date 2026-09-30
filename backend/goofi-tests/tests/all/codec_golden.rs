@@ -3,7 +3,11 @@
 
 use std::collections::BTreeMap;
 
-use goofi_codec::{encode, encode_f16, encode_u8, split_frame};
+use goofi_codec::{encode_f16, encode_u8, split_frame};
+
+fn encode(d: &Data) -> Vec<u8> {
+    goofi_codec::encode(d).expect("a frame that crosses")
+}
 use goofi_core::{Axes, Axis, Coord, Data, Meta};
 use indexmap::IndexMap;
 
@@ -30,8 +34,8 @@ impl Case {
     fn encode(&self) -> Vec<u8> {
         match self {
             Case::Frame(d) => encode(d),
-            Case::Texels(shape, texels, meta) => encode_u8(shape, texels, meta),
-            Case::Halves(d) => encode_f16(d).expect("every sample fits a half"),
+            Case::Texels(shape, texels, meta) => encode_u8(shape, texels, meta).expect("a frame that crosses"),
+            Case::Halves(d) => encode_f16(d).expect("a frame that crosses").expect("every sample fits a half"),
         }
     }
 }
@@ -172,7 +176,7 @@ fn goof_encoder_matches_python_golden() {
     // What a frame SAYS does not depend on the order its meta keys were set in.
     let said = |keys: [(&str, f64); 2]| {
         let meta = keys.iter().fold(Meta::new(), |m, (k, v)| m.with(*k, goofi_core::MetaValue::Float(*v)));
-        goofi_codec::content_hash(&arr(&[2], le_bytes(&[1.0, 2.0]), meta))
+        goofi_codec::content_hash(&arr(&[2], le_bytes(&[1.0, 2.0]), meta)).unwrap()
     };
     assert_eq!(said([("zz", 1.0), ("aa", 2.0)]), said([("aa", 2.0), ("zz", 1.0)]), "a key order changed the hash");
 }
@@ -184,7 +188,7 @@ fn a_request_carries_each_multi_frame_with_its_source_and_a_big_one_by_reference
     let a = &arr(&[3], le_bytes(&[1.0, 2.0, 3.0]), Meta::empty());
     let b = &arr(&[2], le_bytes(&[4.0, 5.0]), Meta::empty());
     let params = goofi_codec::ParamMap::new();
-    let runs = goofi_codec::encode_request(&params, &[("input", "alpha.out", a), ("input", "beta.out", b), ("gate", "", a)]);
+    let runs = goofi_codec::encode_request(&params, &[("input", "alpha.out", a), ("input", "beta.out", b), ("gate", "", a)]).expect("a request");
     let slices: Vec<&[u8]> = runs.iter().map(|r| &**r).collect();
     let goofi_codec::Request::Process { slots, .. } = goofi_codec::decode_request(&slices).expect("a request") else {
         panic!("a run, not a refresh");
@@ -197,7 +201,7 @@ fn a_request_carries_each_multi_frame_with_its_source_and_a_big_one_by_reference
     // A big frame's samples are a run of their own, the node's very bytes and never a copy of
     // them; what the runs say, read as one, is the same request.
     let big = &arr(&[4096], le_bytes(&[0.5; 4096]), Meta::empty());
-    let runs = goofi_codec::encode_request(&params, &[("input", "", big), ("gate", "", a)]);
+    let runs = goofi_codec::encode_request(&params, &[("input", "", big), ("gate", "", a)]).expect("a request");
     let samples = big.as_array().unwrap().as_bytes();
     assert!(runs.iter().any(|r| matches!(r, std::borrow::Cow::Borrowed(s) if s.as_ptr() == samples.as_ptr())), "by reference");
     let slices: Vec<&[u8]> = runs.iter().map(|r| &**r).collect();
@@ -212,7 +216,7 @@ fn a_request_carries_each_multi_frame_with_its_source_and_a_big_one_by_reference
     // with no bytes behind it, which the host resolves against what it sent.
     let mut reply = Vec::new();
     let emitted = [("out", goofi_codec::Emitted::Frame(b)), ("same", goofi_codec::Emitted::Input { slot: "input", index: 1 })];
-    goofi_codec::encode_response(&emitted, &["input".into()], &mut reply);
+    goofi_codec::encode_response(&emitted, &["input".into()], &mut reply).expect("a response");
     assert!(reply.len() < encode(b).len() + 64, "the reference carries no frame: {} bytes", reply.len());
     let goofi_codec::Response::Process(result) = goofi_codec::decode_response(reply).expect("a response") else {
         panic!("process output")

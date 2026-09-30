@@ -41,7 +41,7 @@ fn main() {
     let t = Instant::now();
     let mut total = 0usize;
     for _ in 0..n {
-        total += goofi_codec::encode(&frame).len();
+        total += goofi_codec::encode(&frame).unwrap().len();
     }
     let per = t.elapsed().as_secs_f64() / n as f64;
     println!(

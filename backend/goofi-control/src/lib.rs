@@ -136,6 +136,8 @@ pub struct Cx<'a> {
 #[derive(Default)]
 pub struct Ticked {
     pub errors: Vec<(ParamKey, Option<String>)>,
+    /// The half's standing process fault, if it has one — a frame it could not put on the wire.
+    pub fault: Option<String>,
     /// Only a settle can finish what this tick found.
     pub replan: bool,
 }
@@ -285,6 +287,8 @@ pub fn spawn<H: Half + 'static>(
                     binds: Vec::new(),
                     evaluated: IndexMap::new(),
                     errors: IndexMap::new(),
+                    bad_inputs: IndexMap::new(),
+                    fault: None,
                     pulsed: Vec::new(),
                     pulses: Vec::new(),
                     shared,
@@ -343,6 +347,10 @@ struct Control<H: Half> {
     binds: Vec<Bind>,
     evaluated: IndexMap<ParamKey, Param>,
     errors: IndexMap<ParamKey, String>,
+    /// Per Array inbox whose newest frame did not decode: why. Cleared by a frame that does.
+    bad_inputs: IndexMap<usize, String>,
+    /// The process fault last reported: the first bad inbox, else the half's own.
+    fault: Option<String>,
     /// The params a pulse raised, each lowered once a control tick has passed since its raise.
     pulsed: Vec<(usize, Instant)>,
     /// Every raise since the last tick, so a duty on the tick's cadence cannot miss the edge.
@@ -581,6 +589,16 @@ impl<H: Half> Control<H> {
     fn receive(&mut self) {
         let mut moved = false;
         let latest_only = self.half.latest_only();
+        let (half, bad) = (&mut self.half, &mut self.bad_inputs);
+        let mut arrived = |inbox: usize, payload: &[u8]| match goofi_codec::decode(payload) {
+            Ok(frame) => {
+                bad.shift_remove(&inbox);
+                moved |= half.arrive(inbox, &frame);
+            }
+            Err(why) => {
+                bad.insert(inbox, why);
+            }
+        };
         for s in &self.slots {
             // Taking a sample is free where decoding it is not, and only the last one survives:
             // a producer running flat out otherwise outruns this thread out of its own tick.
@@ -589,30 +607,33 @@ impl<H: Half> Control<H> {
                 while let Ok(Some(sample)) = s.subscriber.receive() {
                     newest = Some(sample);
                 }
-                if let Some(frame) = newest.and_then(|s| goofi_codec::decode(s.payload()).ok()) {
-                    moved |= self.half.arrive(s.inbox, &frame);
+                if let Some(sample) = newest {
+                    arrived(s.inbox, sample.payload());
                 }
                 continue;
             }
             while let Ok(Some(sample)) = s.subscriber.receive() {
-                if let Ok(frame) = goofi_codec::decode(sample.payload()) {
-                    moved |= self.half.arrive(s.inbox, &frame);
-                }
+                arrived(s.inbox, sample.payload());
             }
         }
         if moved {
             self.shared.ask_settle();
         }
         let mut touched = Vec::new();
+        let mut undecodable = Vec::new();
         for (i, b) in self.binds.iter_mut().enumerate() {
             for (var, _, subscriber) in &b.streams {
                 let mut newest = None;
                 while let Ok(Some(sample)) = subscriber.receive() {
-                    newest = goofi_codec::decode(sample.payload()).ok();
+                    newest = Some(goofi_codec::decode(sample.payload()));
                 }
-                if let Some(frame) = newest {
-                    b.expr.deliver(var, frame);
-                    touched.push(i);
+                match newest {
+                    Some(Ok(frame)) => {
+                        b.expr.deliver(var, frame);
+                        touched.push(i);
+                    }
+                    Some(Err(why)) => undecodable.push((b.key.clone(), format!("`{var}` does not decode: {why}"))),
+                    None => {}
                 }
             }
         }
@@ -621,7 +642,22 @@ impl<H: Half> Control<H> {
         for i in touched {
             self.evaluate(i, &mut pass);
         }
+        for (key, why) in undecodable {
+            self.record_error(key, Some(why), &mut pass);
+        }
+        self.refault(None);
         self.report(pass);
+    }
+
+    /// Report the process fault the node wears when it moved: the first bad inbox, else the half's.
+    fn refault(&mut self, half: Option<String>) {
+        let fault = self.bad_inputs.first().map(|(inbox, why)| format!("input {inbox} does not decode: {why}")).or(half);
+        if fault != self.fault {
+            self.fault = fault;
+            let since = self.time.now();
+            let fault = self.fault.clone().map(|msg| goofi_node::NodeFault::Process { msg, since });
+            self.shared.report(self.uid, Status::Fault { fault });
+        }
     }
 
     /// The paced duties: a binding with no stream re-evaluates, and the half says what goes out.
@@ -660,6 +696,7 @@ impl<H: Half> Control<H> {
         for (key, error) in ticked.errors {
             self.record_error(key, error, &mut pass);
         }
+        self.refault(ticked.fault);
         if ticked.replan {
             self.shared.ask_settle();
         }

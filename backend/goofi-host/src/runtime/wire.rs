@@ -113,14 +113,16 @@ pub trait Transport: Send + Sync {
     /// Ring exactly `targets` after each emit on this output slot — again the full desired set.
     fn wire_out(&self, slot: &str, targets: &[(ServiceName, EventId)]) -> Result<(), String>;
     /// Take every frame waiting on every wire, as `(slot, wire index, frame)`. The wire index is
-    /// the producer's position in the last `wire_in` set for that slot.
-    fn drain_inputs(&self) -> Vec<(String, usize, Data)>;
+    /// the producer's position in the last `wire_in` set for that slot; a frame that does not
+    /// decode is that wire's `Err`.
+    fn drain_inputs(&self) -> Vec<(String, usize, Result<Data, String>)>;
     /// Hold a recording publisher for exactly `slots` — again the full desired set.
     fn record_out(&self, slots: &[(String, u64)]) -> Result<(), String>;
     /// What the recording has cost this node, as the fault it is worn as. `None` while it is well.
     fn record_trouble(&self) -> Option<String>;
-    /// Emit a frame on an output slot, to every consumer of that slot at once.
-    fn publish(&self, slot: &str, frame: &Data);
+    /// Emit a frame on an output slot, to every consumer of that slot at once; `Err` is a frame
+    /// the wire format cannot carry.
+    fn publish(&self, slot: &str, frame: &Data) -> Result<(), String>;
     /// Report a transition to the graph.
     fn report(&self, status: WireStatus);
 }

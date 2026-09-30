@@ -102,7 +102,7 @@ impl Skeleton {
     ) -> Skeleton {
         let shared = Arc::new(Mutex::new(Shared {
             feeds: HashMap::new(),
-            block: goofi_codec::encode(block),
+            block: goofi_codec::encode(block).expect("a frame that crosses"),
             iox: goofi_transport::iox_node().expect("an iceoryx2 node for the skeleton"),
         }));
         let stop = Arc::new(AtomicBool::new(false));

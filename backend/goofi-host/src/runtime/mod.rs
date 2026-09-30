@@ -39,10 +39,10 @@ impl Transport for WakingTransport {
     fn record_trouble(&self) -> Option<String> {
         self.inner.record_trouble()
     }
-    fn drain_inputs(&self) -> Vec<(String, usize, Data)> {
+    fn drain_inputs(&self) -> Vec<(String, usize, Result<Data, String>)> {
         self.inner.drain_inputs()
     }
-    fn publish(&self, slot: &str, frame: &Data) {
+    fn publish(&self, slot: &str, frame: &Data) -> Result<(), String> {
         self.inner.publish(slot, frame)
     }
     fn report(&self, status: WireStatus) {
@@ -157,6 +157,8 @@ pub struct NodeRuntime {
     pub(crate) fault: Option<NodeFault>,
     /// The recording's own standing complaint, which a successful `process()` does not clear.
     record_trouble: Option<String>,
+    /// Per wire whose newest frame did not decode: why. Worn as the fault until that wire decodes.
+    input_trouble: HashMap<(String, usize), String>,
     /// A MAP, not a fault variant: several bindings can be errored at once, each on its own field.
     pub(crate) binding_errors: HashMap<ParamKey, String>,
     initialized: bool,
@@ -213,6 +215,7 @@ impl NodeRuntime {
             stage: NodeStage::Setup,
             fault: None,
             record_trouble: None,
+            input_trouble: HashMap::new(),
             binding_errors: HashMap::new(),
             initialized: false,
         };
@@ -267,8 +270,20 @@ impl NodeRuntime {
     pub fn run_once(&mut self) {
         // Frames FIRST: a control message may re-wire the slot a frame just arrived on, and
         // applying the wiring before draining would throw away the frame the old wire delivered.
+        let mut wires_moved = false;
         for (slot, wire, frame) in self.transport.drain_inputs() {
-            self.deliver_input(&slot, wire, frame);
+            match frame {
+                Ok(frame) => {
+                    wires_moved |= self.input_trouble.remove(&(slot.clone(), wire)).is_some();
+                    self.deliver_input(&slot, wire, frame);
+                }
+                Err(why) => wires_moved |= self.input_trouble.insert((slot, wire), why).is_none(),
+            }
+        }
+        // A wire that went bad or good is worn at once, except over a setup fault, which stands
+        // until its retry.
+        if wires_moved && !matches!(self.fault, Some(NodeFault::Setup { .. })) {
+            self.set_fault(None);
         }
         self.drain_control();
 
@@ -682,12 +697,18 @@ impl NodeRuntime {
                 // The engine's own meta goes on before anything leaves the node — there is no
                 // second stamping site.
                 let ufreq = stamp_meta(&mut outputs, self.ctx.now, &mut self.emits, &mut self.ufreq_meter);
+                let mut refused = None;
                 for (slot, frame) in outputs.iter() {
                     if let Some(frame) = frame {
-                        self.transport.publish(slot, frame);
+                        if let Err(why) = self.transport.publish(slot, frame) {
+                            refused.get_or_insert_with(|| format!("output `{slot}`: {why}"));
+                        }
                     }
                 }
                 self.report_ufreq(ufreq);
+                if let Some(msg) = refused {
+                    self.set_fault(Some(NodeFault::Process { msg, since: now_ms() }));
+                }
             }
             Err(e) => self.set_fault(Some(NodeFault::Process { msg: e.0, since: now_ms() })),
         }
@@ -779,14 +800,17 @@ impl NodeRuntime {
         }
     }
 
+    /// What the node wears while no run faults it: the first bad wire, else the recording's complaint.
+    fn standing_trouble(&self) -> Option<String> {
+        let mut wires: Vec<_> = self.input_trouble.iter().collect();
+        wires.sort();
+        wires.first().map(|((slot, wire), why)| format!("input `{slot}` wire {wire} does not decode: {why}")).or_else(|| self.record_trouble.clone())
+    }
+
     /// Install a fault, keeping `since` when nothing changed — the node reports only TRANSITIONS.
     /// An unchanged fault still moves `last_attempt`, or the backoff turns off entirely.
     fn set_fault(&mut self, next: Option<NodeFault>) {
-        let next = next.or_else(|| {
-            self.record_trouble
-                .as_ref()
-                .map(|msg| NodeFault::Process { msg: msg.clone(), since: now_ms() })
-        });
+        let next = next.or_else(|| self.standing_trouble().map(|msg| NodeFault::Process { msg, since: now_ms() }));
         let unchanged = match (&self.fault, &next) {
             (Some(current), Some(next)) => {
                 std::mem::discriminant(current) == std::mem::discriminant(next)

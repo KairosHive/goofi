@@ -103,8 +103,8 @@ impl Transport for Local {
     fn drain_control(&self) -> Vec<Envelope> {
         std::mem::take(&mut self.mail.lock().controls)
     }
-    fn drain_inputs(&self) -> Vec<(String, usize, Data)> {
-        self.mail.lock().inputs.drain().map(|(slot, d)| (slot, 0, d)).collect()
+    fn drain_inputs(&self) -> Vec<(String, usize, Result<Data, String>)> {
+        self.mail.lock().inputs.drain().map(|(slot, d)| (slot, 0, Ok(d))).collect()
     }
     fn wire_in(&self, slot: &str, services: &[ServiceName]) -> Result<(), String> {
         if services.is_empty() {
@@ -121,8 +121,9 @@ impl Transport for Local {
     fn record_trouble(&self) -> Option<String> {
         None
     }
-    fn publish(&self, slot: &str, frame: &Data) {
+    fn publish(&self, slot: &str, frame: &Data) -> Result<(), String> {
         (self.publish)(slot, frame);
+        Ok(())
     }
     fn report(&self, status: WireStatus) {
         (self.report)(status);

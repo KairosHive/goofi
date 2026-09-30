@@ -111,7 +111,7 @@ impl Node for RemoteNode {
         // Only the PRESENT frames cross the wire, a `multi` slot's each with its source; the child
         // rebuilds the declared kwarg set from `INPUTS`.
         let present = host::present(self.in_slots.iter().map(|(name, multi)| (*name, *multi)), inp);
-        let request = goofi_codec::encode_request(p.groups(), &present);
+        let request = goofi_codec::encode_request(p.groups(), &present).map_err(|e| NodeError(e.to_string()))?;
         // A node RAISE does not kill the child: its state is preserved and the error is instant.
         match self.ask(&host::runs(&request)).map_err(NodeError)? {
             goofi_codec::Response::Process(result) => host::apply(result, inp, out, ctx),
@@ -121,14 +121,16 @@ impl Node for RemoteNode {
     }
 
     fn on_param_refreshed(&mut self, key: &ParamKey, p: &Params<'_>) -> Option<Vec<String>> {
-        match self.ask(&[&goofi_codec::encode_refresh_request(p.groups(), &key.group, &key.name)]) {
+        let request = goofi_codec::encode_refresh_request(p.groups(), &key.group, &key.name).ok()?;
+        match self.ask(&[&request]) {
             Ok(goofi_codec::Response::Options(options)) => options,
             _ => None,
         }
     }
 
     fn on_pulse(&mut self, key: &ParamKey, p: &Params<'_>) -> NodeResult {
-        match self.ask(&[&goofi_codec::encode_pulse_request(p.groups(), &key.group, &key.name)]).map_err(NodeError)? {
+        let request = goofi_codec::encode_pulse_request(p.groups(), &key.group, &key.name).map_err(|e| NodeError(e.to_string()))?;
+        match self.ask(&[&request]).map_err(NodeError)? {
             goofi_codec::Response::NodeError(msg) => Err(NodeError(msg)),
             _ => Ok(()),
         }
