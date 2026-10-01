@@ -97,6 +97,16 @@ struct Service {
     pending: Pending,
     sequence: AtomicU64,
     output: Mutex<Option<BufReader<std::process::ChildStdout>>>,
+    /// Its stdin writer, its stdout reader and every call thread: joined once the child is stopped.
+    workers: Mutex<Vec<goofi_supervisor::worker::Worker>>,
+}
+
+impl Service {
+    fn adopt(&self, worker: std::io::Result<goofi_supervisor::worker::Worker>) {
+        let mut workers = self.workers.lock();
+        workers.retain(|w| !w.is_done());
+        workers.extend(worker);
+    }
 }
 
 fn write(input: &mpsc::Sender<Value>, message: &Value) -> Result<(), String> {
@@ -156,7 +166,7 @@ impl Service {
         let input = child.stdin.take().ok_or("missing Python stdin")?;
         let output = child.stdout.take().ok_or("missing Python stdout")?;
         let (tx, rx) = mpsc::channel();
-        let _ = goofi_supervisor::worker::spawn("goofi-plugin-handshake", move || {
+        let handshake_worker = goofi_supervisor::worker::spawn("goofi-plugin-handshake", move || {
             let mut reader = BufReader::new(output);
             let mut line = String::new();
             let result = reader
@@ -173,6 +183,9 @@ impl Service {
             let _ = tx.send((reader, result));
         });
         let handshake = rx.recv_timeout(TIMEOUT);
+        if let Ok(worker) = handshake_worker {
+            let _ = worker.join_within(Duration::from_secs(1));
+        }
         let (reader, contributions) = match handshake {
             Ok((reader, Ok(contributions))) => (reader, contributions),
             other => {
@@ -188,7 +201,7 @@ impl Service {
         let (sender, messages) = mpsc::channel::<Value>();
         // Pipe writes can block. Keep them off request threads so the deadline can kill a
         // service that stopped reading, including when the first payload exceeds the pipe.
-        let _ = goofi_supervisor::worker::spawn("goofi-plugin-stdin", move || {
+        let stdin_worker = goofi_supervisor::worker::spawn("goofi-plugin-stdin", move || {
             let mut input = input;
             for message in messages {
                 let sent = serde_json::to_writer(&mut input, &message)
@@ -210,16 +223,16 @@ impl Service {
                 }
             }
         });
-        Ok((
-            Arc::new(Self {
-                input: sender,
-                child: Mutex::new(child),
-                pending,
-                sequence: AtomicU64::new(1),
-                output: Mutex::new(Some(reader)),
-            }),
-            contributions,
-        ))
+        let service = Arc::new(Self {
+            input: sender,
+            child: Mutex::new(child),
+            pending,
+            sequence: AtomicU64::new(1),
+            output: Mutex::new(Some(reader)),
+            workers: Mutex::default(),
+        });
+        service.adopt(stdin_worker);
+        Ok((service, contributions))
     }
 
     fn listen(self: &Arc<Self>, state: AppState, plugin_id: String) {
@@ -233,7 +246,7 @@ impl Service {
         let pending = self.pending.clone();
         let input = self.input.clone();
         let service = self.clone();
-        let _ = goofi_supervisor::worker::spawn("goofi-plugin-stdout", move || {
+        let listener = goofi_supervisor::worker::spawn("goofi-plugin-stdout", move || {
             for line in reader.lines() {
                 let message = match line
                     .ok()
@@ -257,7 +270,7 @@ impl Service {
                     let state = state.clone();
                     let input = input.clone();
                     let plugin_id = plugin_id.clone();
-                    let _ = goofi_supervisor::worker::spawn("goofi-plugin-call", move || {
+                    let call = goofi_supervisor::worker::spawn("goofi-plugin-call", move || {
                         let chain: Vec<String> =
                             serde_json::from_value(message["chain"].clone()).unwrap_or_default();
                         CHAIN.with(|held| *held.borrow_mut() = chain);
@@ -277,6 +290,7 @@ impl Service {
                         };
                         let _ = write(&input, &reply);
                     });
+                    service.adopt(call);
                 }
             }
             service.kill();
@@ -287,6 +301,7 @@ impl Service {
                 let _ = tx.send(Err("plugin service stopped".into()));
             }
         });
+        self.adopt(listener);
     }
 
     fn request(&self, method: &str, data: Value, actor: &str) -> Reply {
@@ -335,6 +350,10 @@ impl Service {
         self.child
             .lock()
             .stop(Duration::from_secs(2));
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        for worker in std::mem::take(&mut *self.workers.lock()) {
+            let _ = worker.join_within(deadline.saturating_duration_since(std::time::Instant::now()));
+        }
     }
 }
 impl Drop for Service {

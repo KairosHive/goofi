@@ -6,7 +6,7 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-**Phase 1**: §5.11 and §5.7; then §3.4 and §3.5; then §4.F and §4.G1-G4; then §1.A2 and §1.A3.
+**Phase 1**: §5.11; then §3.4 and §3.5; then §4.F and §4.G1-G4; then §1.A2 and §1.A3.
 
 **Phase 2**: §2.B2-B5, §3.7-11, §4.H-I, §5.8-10 and 12-13.
 
@@ -150,10 +150,6 @@ one pass per `Kind` over the whole tree: finish, children on one shared deadline
 joined, ports, paths, devices. `boot` returns a `Manager { state, scope }` that is not `Clone`;
 dropping it is the shutdown.
 
-7. `Scope` and `Manager`; every detached thread gets an owner (`term.rs`, `plugins.rs`,
-    `arms.rs`, `reducer.rs`, `record.rs`); the record beat goes; `scratch()` and the mount are
-    leased as `Kind::Path`. The rest of the transport file splits into names, services and
-    exchange.
 8. Plugin scopes.
 9. PTY scopes: children join through a `Stoppable` trait and reap on exit watches; the
     sleeping stop thread, the 25 ms reap poll and the hand-made lease go.

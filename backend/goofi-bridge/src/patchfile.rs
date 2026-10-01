@@ -28,14 +28,13 @@ fn download_name(state: &AppState) -> String {
 fn pack(state: &AppState) -> Result<Vec<u8>, String> {
     let mount = state.mount();
     let tmp = crate::nonce_hex().and_then(|n| goofi_transport::scratch(state.iox.id(), &format!("export-{n}.gfi")))?;
+    let tmp = goofi_supervisor::scope::PathLease::new(tmp);
     let packed = {
         let g = state.graph.lock();
         let extra = crate::bundled_custom(&g, &state.custom);
-        goofi_graph::archive::write_gfi(&tmp, &g.serialize(), &mount, &extra)
-    }
-    .and_then(|()| std::fs::read(&tmp).map_err(|e| format!("{}: {e}", tmp.display())));
-    let _ = std::fs::remove_file(&tmp);
-    packed
+        goofi_graph::archive::write_gfi(tmp.path(), &g.serialize(), &mount, &extra)
+    };
+    packed.and_then(|()| std::fs::read(tmp.path()).map_err(|e| format!("{}: {e}", tmp.path().display())))
 }
 
 /// Run `work` off the async workers: a pack or a load holds the graph for seconds, and the sockets
@@ -67,21 +66,19 @@ pub(crate) async fn download(State(state): State<AppState>) -> Response {
 /// op. `adopt: false`, because the staged copy is deleted the moment the load returns.
 pub(crate) async fn upload(State(state): State<AppState>, body: Bytes) -> Response {
     let tmp = match crate::nonce_hex().and_then(|n| goofi_transport::scratch(state.iox.id(), &format!("import-{n}.gfi"))) {
-        Ok(tmp) => tmp,
+        Ok(tmp) => goofi_supervisor::scope::PathLease::new(tmp),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     };
-    if let Err(e) = std::fs::write(&tmp, &body) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("{}: {e}", tmp.display())).into_response();
+    if let Err(e) = std::fs::write(tmp.path(), &body) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("{}: {e}", tmp.path().display())).into_response();
     }
-    let Some(path) = tmp.to_str().map(str::to_string) else {
-        let _ = std::fs::remove_file(&tmp);
+    let Some(path) = tmp.path().to_str().map(str::to_string) else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "the temp directory's name is not UTF-8\n").into_response();
     };
     let loader = state.clone();
     let load = tokio::task::spawn_blocking(move || loader.call("session load", json!({ "path": path, "adopt": false }), "upload"))
         .await
         .unwrap_or_else(|e| Err(format!("the load task died: {e}")));
-    let _ = std::fs::remove_file(&tmp);
 
     match load {
         Ok(_) => (StatusCode::OK, "loaded\n").into_response(),

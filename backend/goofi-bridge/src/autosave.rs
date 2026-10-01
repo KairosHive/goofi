@@ -58,7 +58,7 @@ pub(crate) fn spawn(state: AppState) {
         }
     });
     if let Ok(worker) = worker {
-        owner.workers.lock().push(worker);
+        owner.scope.adopt(worker);
     }
 }
 

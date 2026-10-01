@@ -73,6 +73,11 @@ impl<T> Worker<T> {
         self.handle.take().expect("joined once").join()
     }
 
+    /// Whether the thread has ended.
+    pub fn is_done(&self) -> bool {
+        *self.done.0.lock()
+    }
+
     /// Wait up to `within` for the thread to end. `None` is the deadline: the thread runs on,
     /// detached, and stays listed until it ends.
     pub fn join_within(mut self, within: Duration) -> Option<std::thread::Result<T>> {

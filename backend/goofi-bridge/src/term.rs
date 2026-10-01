@@ -145,6 +145,7 @@ impl Harnesses {
             size: watch::channel(None).0,
             seats: AtomicU64::new(0),
             tail: Mutex::default(),
+            workers: Mutex::default(),
             _lease: goofi_supervisor::scope::lease(
                 goofi_supervisor::scope::Kind::Child,
                 format!("harness {agent} (pid {})", child.process_id().unwrap_or_default()),
@@ -154,7 +155,7 @@ impl Harnesses {
         // Drained unconditionally: a child whose output nobody reads blocks on a full buffer. A
         // failed `send` only means no socket is attached, which is the normal state.
         let answering = inst.clone();
-        let _ = goofi_supervisor::worker::spawn("goofi-term-drain", move || {
+        let drain = goofi_supervisor::worker::spawn("goofi-term-drain", move || {
             let mut buf = [0u8; 8192];
             while let Ok(n) = reader.read(&mut buf) {
                 if n == 0 {
@@ -173,24 +174,27 @@ impl Harnesses {
             // AFTER the final send, so a socket that waits on this was offered every byte.
             ended.send_replace(true);
         });
+        inst.workers.lock().extend(drain);
 
         // BEFORE the reaper starts, or a child that dies instantly announces a roster this
         // instance is not yet on.
         self.instances.lock().push((id.clone(), inst.clone()));
         let harnesses = self.clone();
         let reaped = id.clone();
-        let _ = goofi_supervisor::worker::spawn("goofi-term-reap", move || {
+        let exited = inst.clone();
+        let reaper = goofi_supervisor::worker::spawn("goofi-term-reap", move || {
             let mut child = child;
             let code = child.wait().map(|s| s.exit_code()).unwrap_or(1);
             // The exit is published FIRST — `wait` freed the pid, and the grace thread must see
             // it before it can aim a kill at a recycled process group.
-            inst.exit.send_replace(Some(code));
+            exited.exit.send_replace(Some(code));
             // A stack's lifetime follows its actor: dropped where the actor DIES, before the
             // broadcast — so an observer of `harness_changed` sees the stack gone too.
             history.lock().drop_actor(&actor_of(&reaped));
             let _ =
                 events.send(crate::event("harness_changed", harnesses.roster(&goofi_supervisor::home::agents())));
         });
+        inst.workers.lock().extend(reaper);
         Ok(id)
     }
 
@@ -229,6 +233,12 @@ impl Harnesses {
             for (_, inst) in &taken {
                 let _ = signal(inst, goofi_supervisor::child::force_kill);
             }
+            let deadline = std::time::Instant::now() + goofi_transport::SHUTDOWN_WAIT;
+            for (_, inst) in &taken {
+                for worker in std::mem::take(&mut *inst.workers.lock()) {
+                    let _ = worker.join_within(deadline.saturating_duration_since(std::time::Instant::now()));
+                }
+            }
         })
     }
 }
@@ -237,10 +247,12 @@ impl Harnesses {
 fn begin_stop(inst: Arc<Instance>) -> Result<(), String> {
     inst.stopping.store(true, Ordering::Relaxed);
     signal(&inst, goofi_supervisor::child::request_stop)?;
-    let _ = goofi_supervisor::worker::spawn("goofi-term-stop", move || {
+    let stopped = inst.clone();
+    let stop = goofi_supervisor::worker::spawn("goofi-term-stop", move || {
         std::thread::sleep(GRACE);
-        let _ = signal(&inst, goofi_supervisor::child::force_kill);
+        let _ = signal(&stopped, goofi_supervisor::child::force_kill);
     });
+    inst.workers.lock().extend(stop);
     Ok(())
 }
 
@@ -293,6 +305,8 @@ pub struct Instance {
     tail: Mutex<Vec<u8>>,
     /// Its entry in the resource index, for as long as the roster holds it.
     _lease: goofi_supervisor::scope::Lease,
+    /// Its drain, its reaper and its stop: joined once it is reaped.
+    workers: Mutex<Vec<goofi_supervisor::worker::Worker>>,
 }
 
 /// What an attach hands a `/term` socket: the replayed tail, then the live channels.

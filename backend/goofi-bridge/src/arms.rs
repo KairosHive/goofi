@@ -87,9 +87,10 @@ pub(crate) fn agent_start(
     // take the workspace out from under the child's cwd.
     let id = {
         let mount = state.mount.lock();
+        let dir = mount.as_ref().map(crate::Mount::path).unwrap_or_default();
         state.harnesses.spawn(
             h,
-            &mount,
+            &dir,
             &state.instance_id,
             &term::parent_env(),
             state.events.clone(),
@@ -1692,35 +1693,37 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
     // Every source mounts FRESH, and the live mount is swapped only once the manifest has parsed,
     // so a refused load leaves the open patch untouched on both planes. Staged and built off the
     // lock: the archive's own Rust nodes may take seconds to build.
-    let fresh = new_mount(state.iox.id())?;
+    let fresh = crate::Mount::new(state.iox.id())?;
+    let staged = fresh.path();
     if let Some(name) = payload.get("path").and_then(Value::as_str).and_then(|p| p.rsplit('/').next()) {
         goofi_supervisor::progress::report(format!("Opening {name}"));
     }
     let (content, from_path, recovered) =
-        stage_load(&fresh, &state.custom, payload).inspect_err(|_| remove_mount(&fresh))?;
-    prebuild(state, &fresh);
+        stage_load(&staged, &state.custom, payload)?;
+    prebuild(state, &staged);
     let opened = from_path.clone();
     let result = {
         let mut g = state.graph.lock();
         // ORDER is load-bearing: the types the patch SHIPS are registered before the manifest
         // resolves, or the unknown-type gate fires on the nodes the archive brought.
-        rescan(state, &mut g, &fresh);
+        rescan(state, &mut g, &staged);
         // Parse BEFORE anything is announced or committed.
         goofi_supervisor::progress::report("Starting the patch's nodes");
-        if let Err(e) = g.load_doc(&content, &fresh) {
+        if let Err(e) = g.load_doc(&content, &staged) {
             // Refused, so the registry the scan above swapped is re-derived from the mount that
-            // is still live.
+            // is still live; the staged mount goes with `fresh`.
             rescan(state, &mut g, &state.mount());
-            remove_mount(&fresh);
             return Err(e);
         }
         // Commit, now that nothing left can fail: the loaded patch's workspace becomes the live
         // one, and the replaced mount goes with the harnesses spawned into it.
-        let replaced = std::mem::replace(&mut *state.mount.lock(), fresh);
+        let replaced = state.mount.lock().replace(fresh);
         // Off this thread wherever there IS a wait: this runs under the graph lock, and a harness
         // that will not leave takes the whole grace — five seconds no op may be held for.
-        if let Some(finish) = state.reclaim(replaced) {
-            let _ = goofi_supervisor::worker::spawn("goofi-reclaim", finish);
+        if let Some(finish) = replaced.and_then(|mount| state.reclaim(mount)) {
+            if let Ok(worker) = goofi_supervisor::worker::spawn("goofi-reclaim", finish) {
+                state.scope.adopt(worker);
+            }
         }
         // Projected HERE, so the snapshot names the version the loaded document is at, and a
         // client can hold its fit until its replica reaches it.
@@ -2033,29 +2036,8 @@ pub(crate) fn record_start(
         .recorder
         .start(&root, &name, patch.as_deref(), payload.get("annotations"))
         .map_err(|e| format!("record start: {e}"))?;
-    spawn_record_beat(state, folder.clone());
     events.push(record_changed(state));
     Ok(json!({ "folder": folder.to_string_lossy() }))
-}
-
-/// How often a RUNNING recording re-announces itself. The elapsed time and the buffer health
-/// advance with no op to ride on, and every client reads the one broadcast.
-const RECORD_BEAT: std::time::Duration = std::time::Duration::from_secs(1);
-
-/// Re-announce the session on its own beat, for as long as THIS recording runs: the folder names
-/// it, so a stop and a fresh start inside one beat cannot leave two threads talking.
-fn spawn_record_beat(state: &AppState, folder: std::path::PathBuf) {
-    let state = state.clone();
-    let _ = goofi_supervisor::worker::spawn("goofi-record-beat", move || {
-        loop {
-            std::thread::sleep(RECORD_BEAT);
-            let s = state.recorder.status();
-            if !s.running || s.folder.as_deref() != Some(folder.as_path()) {
-                return;
-            }
-            let _ = state.events.send(record_changed(&state));
-        }
-    });
 }
 
 pub(crate) fn record_stop(

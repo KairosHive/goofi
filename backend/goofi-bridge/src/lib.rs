@@ -121,8 +121,8 @@ pub struct AppState {
     /// diffs against, and the only list it removes from.
     node_index: Arc<Mutex<std::collections::BTreeMap<String, Seen>>>,
     /// The tree a `.gfi` packs and unpacks. Behind a lock because a LOAD replaces it while every
-    /// handler holds its own clone of the state.
-    mount: Arc<Mutex<PathBuf>>,
+    /// handler holds its own clone of the state; `None` once the shutdown let it go.
+    mount: Arc<Mutex<Option<Mount>>>,
     /// The workspace as it was last packed or unpacked — what [`AppState::is_dirty`] compares the
     /// live mount against. Re-taken at BOTH ends.
     workspace_baseline: Arc<Mutex<Fingerprint>>,
@@ -147,8 +147,9 @@ pub struct AppState {
     record_worker: Arc<Mutex<Option<goofi_supervisor::worker::Worker>>>,
     /// Raised once, at shutdown: every worker of the manager's own reads it and leaves.
     stopping: Arc<goofi_transport::Halt>,
-    /// The manager's own threads — the status drain, the tap follower — joined at shutdown.
-    workers: Arc<Mutex<Vec<goofi_supervisor::worker::Worker>>>,
+    /// The manager's own threads — the status drain, the tap follower, the autosave — closed at
+    /// shutdown.
+    pub scope: Arc<goofi_supervisor::scope::Scope>,
 }
 
 /// How a `/data` socket detects a dead-but-not-closed peer, which a socket with no traffic cannot
@@ -194,14 +195,15 @@ impl AppState {
         let (events, _) = broadcast::channel(256);
         // Seeded BEFORE the baseline is taken, or the patch is dirty from boot, having written
         // the seed itself.
-        let mount = new_mount(iox.id())?;
-        term::seed_orientation(&mount);
-        seed_skills(&mount);
-        let workspace_baseline = goofi_graph::archive::fingerprint(&mount);
+        let mount = Mount::new(iox.id())?;
+        let dir = mount.path();
+        term::seed_orientation(&dir);
+        seed_skills(&dir);
+        let workspace_baseline = goofi_graph::archive::fingerprint(&dir);
         // Project the INITIAL graph — no nodes, but the seeded system variables — so a client that
         // connects to a fresh backend has the current state at once.
         let mut graph_val = fresh_graph(iox.clone(), (!mode.demo).then_some(clock), render)?;
-        graph_val.set_workspace(&mount);
+        graph_val.set_workspace(&dir);
         let mut doc = crate::doc::GraphDoc::new();
         doc.reconcile_root(projection::of(&graph_val));
         let recorder = Arc::new(goofi_record::Recorder::new(graph_val.time()));
@@ -231,7 +233,7 @@ impl AppState {
             roots: materialise_shipped(),
             custom: goofi_supervisor::home::custom_nodes(),
             node_index: Arc::new(Mutex::new(Default::default())),
-            mount: Arc::new(Mutex::new(mount)),
+            mount: Arc::new(Mutex::new(Some(mount))),
             workspace_baseline: Arc::new(Mutex::new(workspace_baseline)),
             changed: Arc::new(goofi_node::DrainWaker::default()),
             save_path: Arc::new(Mutex::new(None)),
@@ -242,7 +244,7 @@ impl AppState {
             record_drain: Arc::new(goofi_transport::Halt::default()),
             record_worker: Arc::new(Mutex::new(None)),
             stopping: Arc::new(goofi_transport::Halt::default()),
-            workers: Arc::new(Mutex::new(Vec::new())),
+            scope: Arc::new(goofi_supervisor::scope::Scope::default()),
         };
         spawn_follower(state.clone(), follow_rx);
         autosave::spawn(state.clone());
@@ -260,10 +262,8 @@ impl AppState {
         self.stopping.stop();
         // Parked workers read the stop when they wake.
         self.changed.notify();
-        let workers: Vec<_> = std::mem::take(&mut *self.workers.lock());
-        for worker in workers {
-            let _ = worker.join_within(goofi_transport::SHUTDOWN_WAIT);
-        }
+        self.scope.close(goofi_transport::SHUTDOWN_WAIT);
+        self.reducers.stop_all(goofi_transport::SHUTDOWN_WAIT);
         self.graph.lock().shutdown();
         self.release_mount();
     }
@@ -313,7 +313,7 @@ impl AppState {
     }
 
     pub fn mount(&self) -> PathBuf {
-        self.mount.lock().clone()
+        self.mount.lock().as_ref().map(Mount::path).unwrap_or_default()
     }
 
     /// Every node root OUTSIDE the open patch, in precedence order and each with the origin a
@@ -340,7 +340,7 @@ impl AppState {
     /// Drop the workspace mount, nonce directory and all, waiting HERE — what teardown wants,
     /// because nothing is waiting on teardown and a thread it left behind would not run.
     pub fn release_mount(&self) {
-        if let Some(finish) = self.reclaim(self.mount()) {
+        if let Some(finish) = self.mount.lock().take().and_then(|mount| self.reclaim(mount)) {
             finish();
         }
     }
@@ -352,30 +352,30 @@ impl AppState {
     /// `None` says it is already DONE: nothing was running in the mount, so nothing had to be
     /// waited for and the directory is gone.
     #[must_use]
-    pub(crate) fn reclaim(&self, mount: PathBuf) -> Option<impl FnOnce() + Send + 'static> {
-        let Some(insist) = self.harnesses.reap_all() else {
-            remove_mount(&mount);
-            return None;
-        };
+    pub(crate) fn reclaim(&self, mount: Mount) -> Option<impl FnOnce() + Send + 'static> {
+        let insist = self.harnesses.reap_all()?;
         Some(move || {
             insist();
-            remove_mount(&mount);
+            drop(mount);
         })
     }
 }
 
-/// A fresh, empty workspace mount: `<workspaces>/<session>/<nonce>/workspace`. The nonce directory
-/// wraps it so a load can rename an extracted tree onto `workspace` wholesale, and the autosave
-/// sits beside it; the session directory is what a clean shutdown removes and a crash leaves.
-fn new_mount(session: &str) -> Result<PathBuf, String> {
-    let dir = goofi_supervisor::session::workspace_dir(session).join(nonce_hex()?).join("workspace");
-    let _ = std::fs::create_dir_all(&dir);
-    Ok(dir)
-}
+/// A workspace mount: `<workspaces>/<session>/<nonce>/workspace`. The nonce directory is the
+/// leased path, so a load can rename an extracted tree onto `workspace` wholesale and the autosave
+/// sits beside it; it goes when the lease does — a clean shutdown removes it, a crash leaves it.
+pub(crate) struct Mount(goofi_supervisor::scope::PathLease);
 
-/// Reclaim a mount: the nonce directory, not just `workspace`, which would leave an empty husk.
-fn remove_mount(mount: &std::path::Path) {
-    let _ = std::fs::remove_dir_all(mount.parent().unwrap_or(mount));
+impl Mount {
+    fn new(session: &str) -> Result<Mount, String> {
+        let nonce = goofi_supervisor::session::workspace_dir(session).join(nonce_hex()?);
+        let _ = std::fs::create_dir_all(nonce.join("workspace"));
+        Ok(Mount(goofi_supervisor::scope::PathLease::new(nonce)))
+    }
+
+    pub(crate) fn path(&self) -> PathBuf {
+        self.0.path().join("workspace")
+    }
 }
 
 /// A 128-bit random name, hex — enough to keep two concurrent goofis from colliding.
@@ -695,6 +695,11 @@ pub fn spawn_workers(state: &AppState) {
             for ev in refreshed {
                 let _ = events.send(ev);
             }
+            // A running recording re-announces itself on this beat: its elapsed time and buffer
+            // health advance with no op to ride on.
+            if state.recorder.running() {
+                let _ = events.send(arms::record_changed(&state));
+            }
             // Every source's values and errors, whole, in ONE message: a client that just connected
             // is current within one period, and none of this is a delta it had to have heard.
             if !live.is_empty() {
@@ -727,7 +732,7 @@ pub fn spawn_workers(state: &AppState) {
         }
     });
     if let Ok(worker) = worker {
-        owner.workers.lock().push(worker);
+        owner.scope.adopt(worker);
     }
 }
 
@@ -1629,7 +1634,7 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
         }
     });
     if let Ok(worker) = worker {
-        owner.workers.lock().push(worker);
+        owner.scope.adopt(worker);
     }
 }
 

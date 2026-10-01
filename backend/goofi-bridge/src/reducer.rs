@@ -117,6 +117,8 @@ struct SlotReducer {
     /// The bridge's bell on the slot's view door — the same door the producer rings once a frame
     /// is out. A joiner, a spec, a tap, an ask, a settle and the stop all ring it; nothing polls.
     bell: Option<goofi_transport::Doorbell>,
+    /// The loop's thread, joined at shutdown.
+    worker: Option<goofi_supervisor::worker::Worker>,
 }
 
 impl SlotReducer {
@@ -205,6 +207,21 @@ impl SlotReducers {
         }
     }
 
+    /// Stop every loop and wait for each within one deadline.
+    pub fn stop_all(&self, within: Duration) {
+        let reducers: Vec<SlotReducer> = self.inner.lock().drain().map(|(_, r)| r).collect();
+        for reducer in &reducers {
+            reducer.stop.store(true, Ordering::Relaxed);
+            reducer.poke();
+        }
+        let deadline = std::time::Instant::now() + within;
+        for mut reducer in reducers {
+            if let Some(worker) = reducer.worker.take() {
+                worker.join_within(deadline.saturating_duration_since(std::time::Instant::now()));
+            }
+        }
+    }
+
     /// A fresh connection id.
     pub fn new_conn(&self) -> ConnId {
         self.next_conn.fetch_add(1, Ordering::Relaxed)
@@ -222,7 +239,7 @@ impl SlotReducers {
         map.entry(key.clone()).or_insert_with(|| {
             let door = goofi_transport::view_door_service(&self.instance, key.0, &key.1);
             let bell = shared_iox(&self.iox).and_then(|n| goofi_transport::Doorbell::open(&n, &door).ok());
-            let reducer = SlotReducer {
+            let mut reducer = SlotReducer {
                 specs: Arc::new(Mutex::new(HashMap::new())),
                 taps: Arc::new(Mutex::new(Vec::new())),
                 tx: broadcast::channel(16).0,
@@ -233,9 +250,10 @@ impl SlotReducers {
                 latest: Arc::new(Mutex::new(None)),
                 asked: Arc::new(AtomicBool::new(false)),
                 bell,
+                worker: None,
             };
             if reducer.bell.is_some() {
-                spawn_reducer(self, key.clone(), &reducer, door);
+                reducer.worker = spawn_reducer(self, key.clone(), &reducer, door);
             }
             reducer
         })
@@ -364,7 +382,7 @@ fn open_feed(graph: &Mutex<Graph>, iox: &SharedIox, uid: Uid, slot: &str) -> Opt
 
 /// Spawn the slot's loop on a plain thread, parked on the view door the producer and the bridge
 /// ring; a held serve, an idle expiry, a watch's grace and a snapshot's window are its deadlines.
-fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, door: String) {
+fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, door: String) -> Option<goofi_supervisor::worker::Worker> {
     let (graph, iox, follow) = (reducers.graph.clone(), reducers.iox.clone(), reducers.follow.clone());
     let cap = reducers.cap.clone();
     // Weak: the map owns this loop's entry, and the loop removes it; a strong one would be a cycle.
@@ -375,7 +393,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
     let asked = reducer.asked.clone();
     let (uid, slot) = key.clone();
     let failed = stop.clone();
-    if let Err(error) = goofi_transport::thread(format!("goofi-reduce-{slot}")).spawn(move || {
+    match goofi_transport::thread(format!("goofi-reduce-{slot}")).spawn(move || {
         let listener = shared_iox(&iox)
             .and_then(|n| goofi_transport::event_service(&n, &door).ok())
             .and_then(|d| d.listener_builder().create().ok());
@@ -639,8 +657,12 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             pending = false;
         }
     }) {
-        failed.store(true, Ordering::Relaxed);
-        eprintln!("could not start slot reducer: {error}");
+        Ok(worker) => Some(worker),
+        Err(error) => {
+            failed.store(true, Ordering::Relaxed);
+            eprintln!("could not start slot reducer: {error}");
+            None
+        }
     }
 }
 

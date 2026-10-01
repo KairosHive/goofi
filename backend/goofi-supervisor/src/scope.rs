@@ -2,9 +2,13 @@
 //! cannot drift from what exists. One per process; `session status` lists it.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+
+use crate::child::Child;
 use crate::sync::Mutex;
-use std::time::Instant;
+use crate::worker::Worker;
 
 /// What kind of thing a resource is, in the order a shutdown releases them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
@@ -88,4 +92,69 @@ pub fn inventory() -> Vec<Entry> {
         .collect();
     out.sort_by_key(|e| (e.kind, e.id));
     out
+}
+
+/// A path this process made: in the index while it lives, and removed when it goes.
+pub struct PathLease {
+    path: PathBuf,
+    _lease: Lease,
+}
+
+impl PathLease {
+    pub fn new(path: PathBuf) -> PathLease {
+        let lease = lease(Kind::Path, path.display().to_string());
+        PathLease { path, _lease: lease }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PathLease {
+    fn drop(&mut self) {
+        let _ = if self.path.is_dir() { std::fs::remove_dir_all(&self.path) } else { std::fs::remove_file(&self.path) };
+    }
+}
+
+/// An owner of what one part of the process holds: the threads it started, the children it
+/// spawned, and the steps that finish its work. `close` releases them in release order: the
+/// finishes, then the children on one shared deadline, then the threads.
+#[derive(Default)]
+pub struct Scope {
+    finishes: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
+    children: Mutex<Vec<Child>>,
+    workers: Mutex<Vec<Worker>>,
+}
+
+impl Scope {
+    /// A thread of this scope's own, joined at its close. One that ended is let go at once.
+    pub fn adopt(&self, worker: Worker) {
+        let mut workers = self.workers.lock();
+        workers.retain(|w| !w.is_done());
+        workers.push(worker);
+    }
+
+    pub fn adopt_child(&self, child: Child) {
+        self.children.lock().push(child);
+    }
+
+    /// A step to run first at the close, before anything is stopped.
+    pub fn finish(&self, step: impl FnOnce() + Send + 'static) {
+        self.finishes.lock().push(Box::new(step));
+    }
+
+    /// Release everything, within `within` for the children and the threads together.
+    pub fn close(&self, within: Duration) {
+        let deadline = Instant::now() + within;
+        for step in std::mem::take(&mut *self.finishes.lock()).into_iter().rev() {
+            step();
+        }
+        for mut child in std::mem::take(&mut *self.children.lock()) {
+            child.stop(deadline.saturating_duration_since(Instant::now()));
+        }
+        for worker in std::mem::take(&mut *self.workers.lock()) {
+            let _ = worker.join_within(deadline.saturating_duration_since(Instant::now()));
+        }
+    }
 }
