@@ -4,6 +4,8 @@
 //! evaluated params, for whoever is displaying them), `/term`, `/mcp`, and the SPA compiled into
 //! the binary.
 
+pub mod boot;
+pub use boot::{boot, Config, Manager};
 mod arms;
 pub mod autosave;
 pub mod phrase;

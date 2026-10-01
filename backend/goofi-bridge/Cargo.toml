@@ -15,6 +15,7 @@ goofi-node = { path = "../goofi-node" }
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-audio = { path = "../audio/goofi-audio" }
+goofi-window = { path = "../goofi-window" }
 goofi-graphics = { path = "../graphics/goofi-graphics" }
 goofi-core = { path = "../goofi-core" }
 goofi-codec = { path = "../goofi-codec" }

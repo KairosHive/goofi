@@ -991,6 +991,7 @@ dependencies = [
  "goofi-supervisor",
  "goofi-transport",
  "goofi-view",
+ "goofi-window",
  "libc",
  "notify",
  "portable-pty",

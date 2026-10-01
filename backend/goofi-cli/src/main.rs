@@ -4,13 +4,12 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
-use goofi_bridge::{serve_app, spawn_workers, AppState, HEADLESS_BUILD, SPA};
+use goofi_bridge::{serve_app, Config, HEADLESS_BUILD, SPA};
 use goofi_cli::{exposure_warning, parse_args, Cli, DEFAULT_PORT, USAGE};
 use goofi_supervisor::progress::report;
 use startup::Startup;
 
 mod startup;
-use goofi_node::{Isolation, Scanned};
 
 fn headless_env() -> bool {
     matches!(std::env::var("GOOFI_HEADLESS").as_deref(), Ok("1") | Ok("true"))
@@ -146,18 +145,12 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
         (0, 0) => "nothing left behind".to_string(),
         (d, s) => format!("removed {d} directories and {s} shared-memory segments of dead sessions"),
     });
-    report("Starting signal, audio and graphics engines");
-    let mut state = match AppState::with_instance(iox, session, mode, goofi_bridge::Clock::Internal, goofi_bridge::Clock::Internal) {
-        Ok(state) => state,
-        Err(e) => {
-            eprintln!("Could not start: {e}");
-            std::process::exit(1);
-        }
-    };
-    state.load = cli.load.clone().or_else(|| named_env("GOOFI_LOAD")).map(PathBuf::from);
-    state.demo_base = named_env("GOOFI_DEMO_BASE");
+    let mut config = Config::new(iox, mode, goofi_bridge::Clock::Internal, goofi_bridge::Clock::Internal);
+    config.instance = Some(session);
+    config.load = cli.load.clone().or_else(|| named_env("GOOFI_LOAD")).map(PathBuf::from);
+    config.demo_base = named_env("GOOFI_DEMO_BASE");
     let window = ui.clone();
-    let code = run(cli, python, state, async { let _ = shutdown.await; }, ui, Some(startup)).await;
+    let code = run(cli, python, config, async { let _ = shutdown.await; }, ui, Some(startup)).await;
     // The window loop ends once every plugin editor and window was unmade by the shutdown above.
     if let Some(window) = window {
         window.stop();
@@ -385,12 +378,12 @@ fn default_subproc_python() -> Result<String, String> {
         .ok_or_else(|| format!("no {} — {}", goofi_init::GIL_VENV, goofi_init::RUN_ME))
 }
 
-/// Everything the process does once it has a state, returning its exit code: `std::process::exit`
-/// unwinds nothing, so the workspace mount is reclaimed here rather than by a destructor.
+/// Everything the process does once it holds a session, returning its exit code:
+/// `std::process::exit` unwinds nothing, so the manager is dropped here, not by a destructor.
 async fn run(
     cli: Cli,
     subproc_python: String,
-    mut state: AppState,
+    mut config: Config,
     shutdown: impl Future<Output = ()>,
     ui: Option<goofi_window::Ui>,
     mut startup: Option<Startup>,
@@ -401,58 +394,39 @@ async fn run(
     let Cli { port, bind, extra_nodes, boot_only, headless, debug, demo, load: _, help: _ } = cli;
     let port = port.unwrap_or(DEFAULT_PORT);
 
-    report("Preparing plugins");
-    if let Err(error) = goofi_bridge::plugins::Plugins::load(&mut state, &goofi_supervisor::home::dir(), std::path::Path::new(&subproc_python)) {
-        let _ = goofi_supervisor::log::terminal_line(&format!("Could not load plugins: {error}"));
-    }
-    state.roots.extend(extra_nodes.iter().map(PathBuf::from));
-    // Every root the scan reads, the private library included: a node saved there may name
-    // packages exactly as a bundle's does.
-    let scanned: Vec<PathBuf> = state.node_roots().into_iter().map(|(d, _)| d).collect();
-    report("Checking node package requirements");
-    let ready = ensure_packages(&scanned, &subproc_python).and_then(|()| {
-        if boot_only {
-            return Ok(());
-        }
+    config.plugins = Some(goofi_supervisor::home::dir());
+    config.roots = extra_nodes.iter().map(PathBuf::from).collect();
+    // This binary is its own node host and its own plugin scanner.
+    config.host = std::env::current_exe().ok();
+    config.vst3_dirs = goofi_audio::vst3::platform_dirs();
+    config.ui = ui;
+    let python = subproc_python.clone();
+    config.requirements = Some(Box::new(move |dirs| ensure_packages(dirs, &python)));
+    config.python = Some(subproc_python);
+    if !boot_only {
         report("Preparing parameter expressions");
-        register_evaluator(&state)
-    });
-    if ready.is_ok() {
-        // Handed to the engine before anything scans, so the boot scan and every rescan share it.
-        goofi_bridge::signal_engine(&mut state.graph.lock())
-            .set_python(goofi_signal::Python::new(subproc_python.clone()));
-        if let Some(graphics) = goofi_bridge::try_graphics_engine(&mut state.graph.lock()) {
-            graphics.set_python(goofi_signal::Python::new(subproc_python.clone()));
-        }
-        {
-            let mut g = state.graph.lock();
-            // This binary is its own node host and its own plugin scanner.
-            if let Ok(own) = std::env::current_exe() {
-                goofi_bridge::signal_engine(&mut g).set_host(own);
+        config.evaluator = match evaluator() {
+            Ok(evaluator) => evaluator,
+            Err(error) => {
+                let _ = goofi_supervisor::log::terminal_line(&format!("Startup failed: {error}"));
+                return 1;
             }
-            if !demo {
-                let audio = goofi_bridge::audio_engine(&mut g);
-                if let Ok(own) = std::env::current_exe() {
-                    audio.set_vst3(own, goofi_audio::vst3::platform_dirs());
-                }
-                audio.set_ui(ui.clone());
-            }
-            // One screen for both engines: a plugin's editor and a `Window` node are the same thread.
-            if let Some(graphics) = goofi_bridge::try_graphics_engine(&mut g) {
-                graphics.set_ui(ui);
-            }
+        };
+    }
+    let manager = match goofi_bridge::boot(config) {
+        Ok(manager) => manager,
+        Err(error) => {
+            let _ = goofi_supervisor::log::terminal_line(&format!("Startup failed: {error}"));
+            return 1;
         }
-        boot_scan(&state);
-        if !demo {
-            report("Checking audio hosts");
-            goofi_supervisor::progress::note(format!("{}{}", goofi_audio::hosts(), goofi_audio::NO_ASIO_NOTE));
-        }
+    };
+    let state = &manager.state;
+    if !demo {
+        report("Checking audio hosts");
+        goofi_supervisor::progress::note(format!("{}{}", goofi_audio::hosts(), goofi_audio::NO_ASIO_NOTE));
     }
 
-    let code = if let Err(error) = ready {
-        let _ = goofi_supervisor::log::terminal_line(&format!("Startup failed: {error}"));
-        1
-    } else if boot_only {
+    let code = if boot_only {
         let names = goofi_bridge::catalog_type_names(&state.graph.lock());
         if let Some(startup) = startup.take() {
             startup.finish("Node library ready");
@@ -475,14 +449,13 @@ async fn run(
         if let Some(patch) = &state.load {
             report(format!("Opening patch {}", patch.display()));
         }
-        goofi_bridge::open_load(&state)
+        goofi_bridge::open_load(state)
     } {
         let _ = goofi_supervisor::log::terminal_line("refusing to start: the patch --load named did not open.");
         let _ = goofi_supervisor::log::terminal_line(&format!("  {e}"));
         1
     } else {
         report(format!("Starting services on {bind}:{port}"));
-        spawn_workers(&state);
         match tokio::net::TcpListener::bind((bind.as_str(), port)).await {
             Err(e) => {
                 let _ = goofi_supervisor::log::terminal_line(&format!("failed to bind {bind}:{port}: {e}"));
@@ -547,7 +520,7 @@ async fn run(
         let _ = goofi_supervisor::log::terminal_line("  Draining recording · waiting for queued frames to reach disk");
     }
     // The manager releases what it holds, in its one order; the window loop is the process's.
-    state.shutdown();
+    drop(manager);
     let _ = goofi_supervisor::log::terminal_line("  Stopped");
     code
 }
@@ -641,14 +614,13 @@ async fn managed_stop() {
     }
 }
 
-/// Install the pyo3 param-expression evaluator into the graph.
+/// The pyo3 param-expression evaluator the graph is booted with.
 #[cfg(feature = "python")]
-fn register_evaluator(state: &AppState) -> Result<(), String> {
+fn evaluator() -> Result<Option<std::sync::Arc<dyn goofi_node::ExprEvaluator>>, String> {
     let ev = goofi_python::inproc::PyExprEvaluator::new()
         .map_err(|e| format!("param-expression evaluator unavailable: {e}"))?;
-    state.graph.lock().set_evaluator(std::sync::Arc::new(ev));
     println!("  param-expression evaluator ready (free-threaded Python)");
-    Ok(())
+    Ok(Some(std::sync::Arc::new(ev)))
 }
 
 /// Hand the EMBEDDED interpreter the venv pyo3 was linked against: pyo3 links `libpython` from
@@ -728,58 +700,8 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) -> Result<(), String>
 fn ensure_packages(_dirs: &[PathBuf], _subproc_python: &str) -> Result<(), String> { Ok(()) }
 
 #[cfg(not(feature = "python"))]
-fn register_evaluator(_state: &AppState) -> Result<(), String> {
+fn evaluator() -> Result<Option<std::sync::Arc<dyn goofi_node::ExprEvaluator>>, String> {
     println!("  param expressions DISABLED — rebuild with `--features python` to enable the evaluator");
-    Ok(())
+    Ok(None)
 }
 
-/// One boot registration, reported — the boot registry starts empty, so a replacement here can
-/// only be two files claiming one name.
-fn note_replaced(name: &str, replaced: bool) {
-    if replaced {
-        eprintln!("warning: two node files claim the type name `{name}`; the later one wins");
-    }
-}
-
-#[cfg(feature = "python")]
-const NO_PYTHON_NOTE: &str = "";
-#[cfg(not(feature = "python"))]
-const NO_PYTHON_NOTE: &str = " (embedded Python disabled)";
-
-/// The boot scan, reported. It runs the bridge's own `rescan`, so the baseline the first refresh
-/// diffs against IS this scan.
-fn boot_scan(state: &AppState) {
-    report("Preparing native nodes (cached builds are reused)");
-    goofi_bridge::prebuild(state, &state.mount());
-    report("Indexing the node library");
-    let found = {
-        let mut g = state.graph.lock();
-        let patch = state.mount();
-        let found = goofi_bridge::rescan(state, &mut g, &patch).1;
-        g.boot_done();
-        found
-    };
-    let (mut n_native, mut n_in, mut n_sub, mut n_shader, mut n_bad) = (0u32, 0u32, 0u32, 0u32, 0u32);
-    for t in found {
-        match t.outcome {
-            Scanned::Registered { isolation, replaced } => {
-                note_replaced(&t.type_name, replaced);
-                match isolation {
-                    // Nothing at boot is hosted: a hosted node is one authored later.
-                    Isolation::Native | Isolation::Hosted => n_native += 1,
-                    Isolation::InProcess => n_in += 1,
-                    Isolation::Subprocess => n_sub += 1,
-                    Isolation::Shader => n_shader += 1,
-                }
-            }
-            Scanned::Unavailable(reason) => {
-                eprintln!("  node `{}` unavailable: {reason}", t.type_name);
-                n_bad += 1;
-            }
-        }
-    }
-    let bad = if n_bad > 0 { format!(", {n_bad} unavailable") } else { String::new() };
-    let total = n_native + n_in + n_sub + n_shader;
-    goofi_supervisor::progress::note(format!("Node library: {total} available{bad}"));
-    goofi_supervisor::progress::note(format!("{n_native} native · {n_in} in-process · {n_sub} subprocess · {n_shader} shaders{NO_PYTHON_NOTE}"));
-}

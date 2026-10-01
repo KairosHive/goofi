@@ -6,7 +6,7 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-**Phase 1**: §5.11; then §3.4 and §3.5; then §4.F and §4.G1-G4; then §1.A2 and §1.A3.
+**Phase 1**: §3.4 and §3.5; then §4.F and §4.G1-G4; then §1.A2 and §1.A3.
 
 **Phase 2**: §2.B2-B5, §3.7-11, §4.H-I, §5.8-10 and 12-13.
 
@@ -157,9 +157,6 @@ dropping it is the shutdown.
     `CREATE_NEW_PROCESS_GROUP` so Ctrl+C stays with goofi, a Job object per child with
     `KILL_ON_JOB_CLOSE` and `CTRL_BREAK` for a graceful stop in place of `taskkill`, and a
     blocking console-close handler bounded by the scope deadlines.
-11. `goofi_bridge::boot(Config) -> Manager` serves the binary and the harness. Plugins,
-    requirements, the evaluator and fixture registration are `Config` fields; tests boot with no
-    evaluator unless the `Config` asks for one.
 12. Situations move off direct `state.graph` locks to ops and harness probes; `AppState.graph`
     becomes crate-private; a harness gate on live instances replaces `RUST_TEST_THREADS`.
 13. Error enums (§6).

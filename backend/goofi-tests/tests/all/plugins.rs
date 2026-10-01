@@ -4,12 +4,10 @@ use std::path::Path;
 
 #[test]
 fn a_folder_plugin_registers_ops_nodes_hooks_and_persistent_sessions() {
-    let python = require_python();
+    let _python = require_python();
     let home = tempfile::tempdir().unwrap();
     goofi_tests::fixtures::plugin_package(home.path());
-    let mut goofi = Goofi::new();
-    goofi_bridge::plugins::Plugins::load(&mut goofi.state, home.path(), Path::new(&python.py))
-        .unwrap();
+    let goofi = Goofi::with_plugins(home.path());
     let listing = goofi.call("plugin list", j!({}));
     assert!(
         listing["plugins"][0]["error"].is_null(),
@@ -119,9 +117,7 @@ fn a_folder_plugin_registers_ops_nodes_hooks_and_persistent_sessions() {
     assert_eq!(annotation["subject"], "Alice");
     drop(goofi);
     assert!(home.path().join("plugin-data/example/stopped").is_file());
-    let mut reopened = Goofi::new();
-    goofi_bridge::plugins::Plugins::load(&mut reopened.state, home.path(), Path::new(&python.py))
-        .unwrap();
+    let reopened = Goofi::with_plugins(home.path());
     assert_eq!(
         reopened.call("plugin example status", j!({}))["subject"],
         "Bob"
@@ -137,7 +133,7 @@ fn a_folder_plugin_registers_ops_nodes_hooks_and_persistent_sessions() {
 
 #[test]
 fn conflicting_hooks_and_invalid_packages_leave_the_recorder_idle() {
-    let python = require_python();
+    let _python = require_python();
     let home = tempfile::tempdir().unwrap();
     goofi_tests::fixtures::plugin_package(home.path());
     let second = home.path().join("plugins/other");
@@ -151,9 +147,7 @@ fn conflicting_hooks_and_invalid_packages_leave_the_recorder_idle() {
     let bad = home.path().join("plugins/broken");
     std::fs::create_dir_all(&bad).unwrap();
     std::fs::write(bad.join("goofi-plugin.toml"), "invalid TOML").unwrap();
-    let mut goofi = Goofi::new();
-    goofi_bridge::plugins::Plugins::load(&mut goofi.state, home.path(), Path::new(&python.py))
-        .unwrap();
+    let goofi = Goofi::with_plugins(home.path());
     let listing = goofi.call("plugin list", j!({}));
     assert_eq!(listing["plugins"].as_array().unwrap().len(), 3);
     assert!(listing["plugins"]
@@ -183,14 +177,10 @@ fn pipewire_here() -> bool {
 
 #[test]
 fn a_virtual_cable_is_a_device_the_audio_nodes_can_name() {
-    let python = require_python();
+    let _python = require_python();
     let home = tempfile::tempdir().unwrap();
     goofi_tests::fixtures::virtual_cables(home.path());
-    let goofi = {
-        let mut goofi = Goofi::new();
-        goofi_bridge::plugins::Plugins::load(&mut goofi.state, home.path(), Path::new(&python.py)).unwrap();
-        goofi
-    };
+    let goofi = Goofi::with_plugins(home.path());
     let listing = goofi.call("plugin list", j!({}));
     assert!(listing["plugins"][0]["error"].is_null(), "{listing}; {:?}", goofi.call("log list", j!({})));
     let status = goofi.call("plugin virtual-cables list", j!({}));

@@ -83,8 +83,8 @@ pub struct Goofi {
     pub state: AppState,
     actor: String,
     patience: Duration,
-    /// The handle that minted the mount, and the only one whose drop is the session's end.
-    owner: bool,
+    /// The booted manager, held by the one handle whose drop is the instance's end.
+    manager: Option<goofi_bridge::Manager>,
     /// The window thread, with no screen: what the binary's main thread is where a display answers.
     windows: Option<(goofi_window::Ui, std::thread::JoinHandle<()>)>,
     /// This owner's entry in the watchdog's roll; a borrower carries none.
@@ -95,9 +95,9 @@ pub struct Goofi {
 /// the engine alive under libtest's `exit`.
 impl Drop for Goofi {
     fn drop(&mut self) {
-        if self.owner {
+        if let Some(manager) = self.manager.take() {
             running().lock().retain(|(t, _, _)| *t != self.token);
-            self.state.shutdown();
+            drop(manager);
             // Last: every plugin was unmade on it by the shutdown above.
             if let Some((ui, thread)) = self.windows.take() {
                 ui.stop();
@@ -185,54 +185,40 @@ impl Goofi {
     /// One whose graphics engine runs on its OWN timer clock, as the binary does — nothing to
     /// drive by hand, and nothing to mistake a driven frame for.
     pub fn timed() -> Goofi {
-        Goofi::boot(goofi_bridge::Mode::default(), goofi_bridge::Clock::Internal)
+        Goofi::boot(goofi_bridge::Mode::default(), goofi_bridge::Clock::Internal, None)
     }
 
     fn with_mode(mode: goofi_bridge::Mode) -> Goofi {
-        Goofi::boot(mode, goofi_bridge::Clock::External)
+        Goofi::boot(mode, goofi_bridge::Clock::External, None)
     }
 
-    fn boot(mode: goofi_bridge::Mode, render: goofi_bridge::Clock) -> Goofi {
+    /// Boot one with the plugins under `home`, as the binary loads its own home's.
+    pub fn with_plugins(home: &std::path::Path) -> Goofi {
+        Goofi::boot(goofi_bridge::Mode::default(), goofi_bridge::Clock::External, Some(home.to_path_buf()))
+    }
+
+    fn boot(mode: goofi_bridge::Mode, render: goofi_bridge::Clock, plugins: Option<PathBuf>) -> Goofi {
         walled_home();
-        let state = AppState::new(iox(), mode, goofi_bridge::Clock::External, render).expect("the state boots");
+        // The window thread has no screen: a `Window` node and a plugin editor open on a loop the
+        // suite owns, and no test reaches a desktop.
         let windows = (!mode.demo).then(window_thread);
-        {
-            let mut g = state.graph.lock();
-            fixtures::register(&mut g);
-            // The child the audio engine scans a bundle in — the suite's own stand-in for the
-            // binary — and no platform folder, so an installed plugin never reaches a test. A demo
-            // registers no audio engine at all, so there is nothing to hand it.
-            if !mode.demo {
-                let audio = goofi_bridge::audio_engine(&mut g);
-                audio.set_vst3(scanner(), Vec::new());
-                audio.set_ui(windows.as_ref().map(|(ui, _)| ui.clone()));
-            }
-            // The same stand-in hosts a node built after boot.
-            goofi_bridge::signal_engine(&mut g).set_host(scanner());
-            // The graphics engine gets the same screenless host, so a `Window` node opens a window
-            // the loop knows about and no test reaches a desktop.
-            if let Some(graphics) = goofi_bridge::try_graphics_engine(&mut g) {
-                graphics.set_ui(windows.as_ref().map(|(ui, _)| ui.clone()));
-            }
-            // The engine's Python door, as the CLI hands it at boot; a machine with none scans a
-            // `.py` file as unavailable, which is what a test that needs one then reports.
-            if let Some(subproc) = find_python() {
-                goofi_bridge::signal_engine(&mut g).set_python(goofi_signal::Python::new(subproc.clone()));
-                if let Some(graphics) = goofi_bridge::try_graphics_engine(&mut g) {
-                    graphics.set_python(goofi_signal::Python::new(subproc));
-                }
-            }
-            // The shipped tree is a root like any other: scanned at boot, as the CLI scans it.
-            let patch = state.mount();
-            goofi_bridge::rescan(&state, &mut g, &patch);
-            g.boot_done();
-        }
-        goofi_bridge::spawn_workers(&state);
+        let mut config = goofi_bridge::Config::new(iox(), mode, goofi_bridge::Clock::External, render);
+        // The suite's own stand-in for the binary scans a bundle and hosts a node built after
+        // boot; no platform folder, so an installed plugin never reaches a test.
+        config.host = Some(scanner());
+        config.ui = windows.as_ref().map(|(ui, _)| ui.clone());
+        // A machine with no Python scans a `.py` file as unavailable, which is what a test that
+        // needs one then reports.
+        config.python = find_python();
+        config.plugins = plugins;
+        config.register = Some(Box::new(fixtures::register));
+        let manager = goofi_bridge::boot(config).expect("the state boots");
+        let state = manager.state.clone();
         watchdog();
         static TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let token = TOKENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         running().lock().push((token, thread_name(), Instant::now()));
-        Goofi { state, actor: "test".into(), patience: WAIT, owner: true, windows, token }
+        Goofi { state, actor: "test".into(), patience: WAIT, manager: Some(manager), windows, token }
     }
 
     /// Boot one whose `/data` sockets probe on a short clock. Through [`Goofi::with_mode`], so
@@ -256,7 +242,7 @@ impl Goofi {
 
     /// A second client of the SAME instance, with its own undo stack — what two browser tabs are.
     pub fn client(&self, actor: &str) -> Goofi {
-        Goofi { state: self.state.clone(), actor: actor.into(), patience: self.patience, owner: false, windows: None, token: 0 }
+        Goofi { state: self.state.clone(), actor: actor.into(), patience: self.patience, manager: None, windows: None, token: 0 }
     }
 
     /// Run an op and unwrap it; an unexpected refusal is a failure here.
