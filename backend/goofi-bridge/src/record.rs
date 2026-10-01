@@ -43,11 +43,13 @@ struct Drain {
     graph: Arc<Mutex<Graph>>,
     recorder: Arc<Recorder>,
     time: Arc<Time>,
+    ports: goofi_transport::PortBundle<Ports>,
+}
+
+/// The drain's ports: the recorder's door, and one subscriber per armed slot.
+struct Ports {
     feeds: HashMap<(Uid, String), Feed>,
     listener: goofi_transport::Listener,
-    /// Declared LAST: fields drop in order, and a node dropped before its ports cannot remove its
-    /// own directory.
-    node: goofi_transport::IoxNode,
 }
 
 struct AudioCapture(std::sync::Weak<Mutex<Graph>>);
@@ -166,23 +168,23 @@ impl Drain {
     fn resolve(&mut self) -> bool {
         let wanted = armed(&self.graph.lock());
         let expected = wanted.len();
-        for key in self.feeds.keys().cloned().collect::<Vec<_>>() {
+        for key in self.ports.feeds.keys().cloned().collect::<Vec<_>>() {
             let why = match wanted.get(&key) {
-                Some((service, _)) if *service == self.feeds[&key].service => continue,
+                Some((service, _)) if *service == self.ports.feeds[&key].service => continue,
                 Some(_) => "reborn",
                 None => "disarmed",
             };
-            let mut feed = self.feeds.remove(&key).expect("a key just read");
+            let mut feed = self.ports.feeds.remove(&key).expect("a key just read");
             drain_feed(&self.recorder, &self.time, &mut feed, true);
             self.recorder.close(&feed.id, why);
         }
         for (key, (service, id)) in wanted {
-            if self.feeds.contains_key(&key) {
+            if self.ports.feeds.contains_key(&key) {
                 continue;
             }
             let shape = record_shape(id.engine);
             let timeline = timeline(id.engine).expect("armed filtered the engines above");
-            if let Ok(subscriber) = goofi_transport::open_record_subscriber(&self.node, &service, shape) {
+            if let Ok(subscriber) = goofi_transport::open_record_subscriber(self.ports.node(), &service, shape) {
                 let feed = Feed {
                     rate: id.engine == "audio",
                     id,
@@ -192,14 +194,14 @@ impl Drain {
                     timeline,
                     buffer: shape.buffer,
                 };
-                self.feeds.insert(key, feed);
+                self.ports.feeds.insert(key, feed);
             }
         }
-        self.feeds.len() == expected
+        self.ports.feeds.len() == expected
     }
 
     fn sweep(&mut self, finally: bool) {
-        for feed in self.feeds.values_mut() {
+        for feed in self.ports.feeds.values_mut() {
             drain_feed(&self.recorder, &self.time, feed, finally);
         }
     }
@@ -207,7 +209,7 @@ impl Drain {
     /// Every feed drained to exhaustion and let go. A stop asks for this before it closes a file,
     /// so the frames the last sweep did not reach are not the tail this recording loses.
     fn release(&mut self) {
-        for (_, mut feed) in self.feeds.drain().collect::<Vec<_>>() {
+        for (_, mut feed) in self.ports.feeds.drain().collect::<Vec<_>>() {
             drain_feed(&self.recorder, &self.time, &mut feed, true);
         }
     }
@@ -217,27 +219,25 @@ fn drain_epoch(graph: &Arc<Mutex<Graph>>) -> Arc<std::sync::atomic::AtomicU64> {
     graph.lock().epoch()
 }
 
-/// Start the one drain. `halt` is what stops it, and what a teardown waits on to a ceiling.
-pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>) {
+/// Start the one drain. `halt` is what stops it; the worker handed back is what a stop joins.
+pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>) -> Option<goofi_core::worker::Worker> {
     recorder.set_capture(Arc::new(AudioCapture(Arc::downgrade(&graph))));
     let (instance, time) = {
         let g = graph.lock();
         (g.instance().to_string(), g.time())
     };
-    let ran = halt.clone();
     let started = goofi_transport::thread("goofi-record").spawn(move || {
-        let Ok(node) = goofi_transport::iox_node() else {
-            halt.release();
-            return;
-        };
-        let door = goofi_transport::event_service(&node, &goofi_transport::record_door_service(&instance));
-        let listener = door.and_then(|d| d.listener_builder().create().map_err(|e| e.to_string()));
-        let Ok(listener) = listener else {
+        let ports = goofi_transport::PortBundle::open(|node| {
+            let door = goofi_transport::event_service(node, &goofi_transport::record_door_service(&instance))?;
+            let listener = door.listener_builder().create().map_err(|e| e.to_string())?;
+            Ok(Ports { feeds: HashMap::new(), listener })
+        });
+        let Ok(ports) = ports else {
             halt.release();
             return;
         };
         let epoch = drain_epoch(&graph);
-        let mut drain = Drain { graph, recorder, time, feeds: HashMap::new(), listener, node };
+        let mut drain = Drain { graph, recorder, time, ports };
         // The graph epoch the feeds were resolved against; `None` once they were let go. The lock
         // is taken to resolve ONLY when that epoch moved — never per wake, which is the publish rate.
         let mut resolved: Option<u64> = None;
@@ -246,7 +246,7 @@ pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>)
         while !halt.stopped() {
             // The event id is ignored, which spends none of the id budget: a burst across every
             // armed slot coalesces into one sweep.
-            let _ = drain.listener.timed_wait_all(|_| {}, WAKE);
+            let _ = drain.ports.listener.timed_wait_all(|_| {}, WAKE);
             // Read BEFORE the sweep: a sweep already under way when a stop asked is not an answer
             // to it.
             let mark = drain.recorder.sweeping();
@@ -265,10 +265,6 @@ pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>)
         }
         drain.release();
         drop(drain);
-        halt.release();
     });
-    if started.is_err() {
-        // The thread is what releases the halt, so a teardown must not wait on one that never ran.
-        ran.release();
-    }
+    started.ok()
 }

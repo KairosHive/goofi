@@ -113,9 +113,6 @@ impl Engine for LibraryEngine {
         self.id
     }
 
-    fn doorbell_driven(&self) -> bool {
-        false
-    }
 
     fn dirty(&self) -> bool {
         false

@@ -6,7 +6,7 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-**Phase 0**, each alone, in any order: §4.B-E, §4.J; §5.3-6.
+**Phase 0**: §5.5 and §5.6.
 
 **Phase 1**: §5.11 and §5.7; then §3.4 and §3.5; then §4.F and §4.G1-G4; then §1.A2 and §1.A3.
 
@@ -124,15 +124,6 @@ pulse edge), one `FaultState` and the stamps. An `Executor` trait (`arrive`, `pa
 the signal executor in the control thread, and `Local` goes. Data services keep no history; the
 one-shot race stays a documented property.
 
-- **B** `PortBundle<P>` drops its ports before its node; one `ServiceKind` table; the subprocess
-  service declares `max_nodes`; swallowed status and control loans are reported; a failed open in
-  `goofi-control` is retried, not deduplicated away; slots at index 64 and above get a doorbell.
-  Wheels rebuilt.
-- **C** The SDK hash rides the version symbol; `open` checks it, not the crate version.
-- **D** `doorbell_driven` and `NodeView.rings` go.
-- **E** One `Clock` enum; a `Timer` whose `catch_unwind` runs inside the held guard; the
-  graphics tick gets a panic guard; cpal contention gets its own counter (not an xrun) and
-  `render_into` a panic guard.
 - **F** One child RPC: `trait Call` with in-process, hosted and Python implementations behind
   one `CodecNode`; the frame is `[entry][now][payload]` for all; Python gets an eager `Setup`, a
   `Stop` and `now` (no `on_param_changed`); both directions wake on iceoryx2 events after a
@@ -149,7 +140,6 @@ one-shot race stays a documented property.
 - **H** Graphics host `.rs` files built after boot run hosted, as signal does; audio keeps
   loading in-process and never unloads (`audio-engine.md`).
 - **I** Native ABI stays bytes; params cross only as deltas, not the whole map per call.
-- **J** Leaked manifests are interned by type and describe hash, not moved to `Arc`.
 
 Fold graphics recording (`set_recorder` from the render thread) into the executor.
 
@@ -163,9 +153,6 @@ one pass per `Kind` over the whole tree: finish, children on one shared deadline
 joined, ports, paths, devices. `boot` returns a `Manager { state, scope }` that is not `Clone`;
 dropping it is the shutdown.
 
-3. Timed child waits (pidfd, `WaitForSingleObject`) replace polling in `Child::poll`,
-   `stop_recording` and `wait_released`; recording stop and engine release join their workers.
-4. The recorder's `Session` becomes `Take`.
 5. The supervisor split.
 6. One `Session` value: `hold()` locks a sibling `<id>.alive` file before the directory exists;
    `release()` is idempotent and runs on drop. Transport takes an explicit `Iox` handle built

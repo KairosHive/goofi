@@ -18,7 +18,7 @@ use goofi_node::{
     Status, Uid, Var,
 };
 use goofi_transport::{
-    data_service, door_service, event_service, iox_node, open_output_subscriber, output_service, publisher,
+    door_service, event_service, iox_node, open_output_subscriber, output_service, publisher, stream_service, ServiceKind,
     record_door_service, record_service, record_shape, take_where,
     ByteService, BytePublisher, ByteSubscriber, Doorbell, Halt, IoxNode, Listener, ServiceName, INITIAL_SLICE,
 };
@@ -258,7 +258,7 @@ pub fn spawn<H: Half + 'static>(
     let bell = Doorbell::open(bells, &door_service(&spawn.base))?;
     let mut outs = Vec::with_capacity(spawn.manifest.outputs.len());
     for out in spawn.manifest.outputs {
-        let service = data_service(&node, &output_service(&spawn.base, out.name))?;
+        let service = stream_service(&node, &output_service(&spawn.base, out.name), ServiceKind::Data)?;
         let publisher = publisher(&service, out.name, INITIAL_SLICE)?;
         outs.push(Out { service, publisher, bells: Vec::new(), record: None });
     }
@@ -283,6 +283,7 @@ pub fn spawn<H: Half + 'static>(
                     consts: Vec::new(),
                     outs,
                     retired: Vec::new(),
+                    reopen: None,
                     slots: Vec::new(),
                     binds: Vec::new(),
                     evaluated: IndexMap::new(),
@@ -362,8 +363,16 @@ struct Control<H: Half> {
     half: H,
     /// Ports a newer arming replaced, each kept until the recorder has let go of it.
     retired: Vec<goofi_transport::RecordPort>,
+    /// What the engine last wanted, kept while a port of it failed to open: the next tick applies
+    /// it again, so a service that was not there yet is reached when it is.
+    reopen: Option<Desired>,
     /// Last: every port above is built from it, and fields drop in declaration order.
     node: IoxNode,
+}
+
+/// A control half's trouble, logged under its engine; the log groups a repeat.
+fn trouble(engine: &str, text: &str) {
+    goofi_core::log::record(goofi_core::log::Source::component("control"), goofi_core::log::Level::Error, None, format!("{engine}: {text}"));
 }
 
 impl<H: Half> Control<H> {
@@ -382,7 +391,7 @@ impl<H: Half> Control<H> {
                 held
             });
             let mail = std::mem::take(&mut *self.mail.lock());
-            if let Some(d) = mail.desired {
+            if let Some(d) = mail.desired.or_else(|| self.reopen.take()) {
                 self.apply(d);
             }
             for key in mail.refresh {
@@ -415,11 +424,12 @@ impl<H: Half> Control<H> {
     }
 
     fn apply(&mut self, d: Desired) {
+        let wanted = d.clone();
         self.consts = d.consts;
         let (slots, binds): (Vec<Sub>, Vec<Sub>) = d.subs.into_iter().partition(|s| matches!(s, Sub::Slot { .. }));
-        self.apply_slots(slots);
+        let opened = self.apply_slots(slots) & self.apply_bells(d.targets);
+        self.reopen = (!opened).then_some(wanted);
         self.apply_binds(binds);
-        self.apply_bells(d.targets);
         self.apply_records(&d.record);
         for (i, c) in self.consts.iter().enumerate() {
             let bound = self.binds.iter().any(|b| b.param == i);
@@ -435,17 +445,25 @@ impl<H: Half> Control<H> {
         self.report(pass);
     }
 
-    fn apply_slots(&mut self, subs: Vec<Sub>) {
+    /// Answers whether every wire opened; one that did not is logged and tried again next tick.
+    fn apply_slots(&mut self, subs: Vec<Sub>) -> bool {
         let mut old = std::mem::take(&mut self.slots);
+        let mut opened = true;
         for sub in subs {
             let Sub::Slot { inbox, service } = sub else { continue };
-            let kept = take_where(&mut old, |s| s.service == service).map(|s| s.subscriber);
-            let Some(subscriber) = kept.or_else(|| open_output_subscriber(&self.node, &service).ok()) else { continue };
-            self.slots.push(SlotSub { inbox, service, subscriber });
+            let kept = take_where(&mut old, |s| s.service == service).map(|s| Ok(s.subscriber));
+            match kept.unwrap_or_else(|| open_output_subscriber(&self.node, &service)) {
+                Ok(subscriber) => self.slots.push(SlotSub { inbox, service, subscriber }),
+                Err(e) => {
+                    trouble(self.engine, &format!("wire `{service}` did not open: {e}"));
+                    opened = false;
+                }
+            }
         }
         for dropped in old {
             self.half.unwired(dropped.inbox);
         }
+        opened
     }
 
     fn apply_binds(&mut self, subs: Vec<Sub>) {
@@ -493,15 +511,23 @@ impl<H: Half> Control<H> {
         self.report(pass);
     }
 
-    fn apply_bells(&mut self, targets: Vec<Vec<(String, EventId)>>) {
+    /// Answers whether every bell opened; one that did not is logged and tried again next tick.
+    fn apply_bells(&mut self, targets: Vec<Vec<(String, EventId)>>) -> bool {
+        let mut opened = true;
         for (out, targets) in self.outs.iter_mut().zip(targets) {
             let mut old = std::mem::take(&mut out.bells);
             for (door, id) in targets {
-                let kept = take_where(&mut old, |(d, _, _)| *d == door).map(|(_, bell, _)| bell);
-                let Some(bell) = kept.or_else(|| Doorbell::open(&self.node, &door).ok()) else { continue };
-                out.bells.push((door, bell, id));
+                let kept = take_where(&mut old, |(d, _, _)| *d == door).map(|(_, bell, _)| Ok(bell));
+                match kept.unwrap_or_else(|| Doorbell::open(&self.node, &door)) {
+                    Ok(bell) => out.bells.push((door, bell, id)),
+                    Err(e) => {
+                        trouble(self.engine, &format!("bell onto `{door}` did not open: {e}"));
+                        opened = false;
+                    }
+                }
             }
         }
+        opened
     }
 
     /// The recorder's second publisher on every armed output, and none on the rest. It is opened
@@ -513,7 +539,7 @@ impl<H: Half> Control<H> {
         if !armed.is_empty() && self.record_bell.is_none() {
             match goofi_transport::Doorbell::open(&self.node, &self.record_door) {
                 Ok(bell) => self.record_bell = Some(Arc::new(bell)),
-                Err(e) => goofi_core::log::record(goofi_core::log::Source::component("control"), goofi_core::log::Level::Error, None, format!("{}: could not reach the recorder's door: {e}", self.engine)),
+                Err(e) => trouble(self.engine, &format!("could not reach the recorder's door: {e}")),
             }
         }
         for (out, decl) in self.outs.iter_mut().zip(self.manifest.outputs) {
@@ -551,7 +577,7 @@ impl<H: Half> Control<H> {
             );
             match opened {
                 Ok(port) => out.record = Some((serial, port)),
-                Err(e) => goofi_core::log::record(goofi_core::log::Source::component("control"), goofi_core::log::Level::Error, None, format!("{}: could not arm `{}`: {e}", self.engine, decl.name)),
+                Err(e) => trouble(self.engine, &format!("could not arm `{}`: {e}", decl.name)),
             }
         }
     }
@@ -672,6 +698,7 @@ impl<H: Half> Control<H> {
         let readers: Vec<bool> = self.outs.iter().map(|o| goofi_transport::subscribers(&o.service) > 0).collect();
         let recorded: Vec<bool> = self.outs.iter().map(|o| o.record.as_ref().is_some_and(|(_, r)| !r.retired())).collect();
         let outs = &self.outs;
+        let engine = self.engine;
         let record = |i: usize, bytes: &[u8]| {
             let Some((_, port)) = outs[i].record.as_ref() else { return };
             port.send(bytes.len(), |loan| goofi_transport::write_parts(loan, [bytes]));
@@ -691,7 +718,9 @@ impl<H: Half> Control<H> {
         };
         let ticked = self.half.tick(&cx, &mut |i, bytes| {
             let out = &outs[i];
-            goofi_transport::publish(&out.publisher, bytes, out.bells.iter().map(|(_, bell, id)| (bell, *id)));
+            if let Err(e) = goofi_transport::publish(&out.publisher, bytes, out.bells.iter().map(|(_, bell, id)| (bell, *id))) {
+                trouble(engine, &format!("output {i} was not published: {e}"));
+            }
         });
         for (key, error) in ticked.errors {
             self.record_error(key, error, &mut pass);

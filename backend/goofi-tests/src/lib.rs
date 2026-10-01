@@ -163,14 +163,14 @@ impl Goofi {
     /// One whose graphics engine runs on its OWN timer clock, as the binary does — nothing to
     /// drive by hand, and nothing to mistake a driven frame for.
     pub fn timed() -> Goofi {
-        Goofi::boot(goofi_bridge::Mode::default(), goofi_bridge::RenderClock::Timer)
+        Goofi::boot(goofi_bridge::Mode::default(), goofi_bridge::Clock::Internal)
     }
 
     fn with_mode(mode: goofi_bridge::Mode) -> Goofi {
-        Goofi::boot(mode, goofi_bridge::RenderClock::External)
+        Goofi::boot(mode, goofi_bridge::Clock::External)
     }
 
-    fn boot(mode: goofi_bridge::Mode, render: goofi_bridge::RenderClock) -> Goofi {
+    fn boot(mode: goofi_bridge::Mode, render: goofi_bridge::Clock) -> Goofi {
         walled_home();
         let state = AppState::new(mode, goofi_bridge::Clock::External, render).expect("the state boots");
         let windows = (!mode.demo).then(window_thread);

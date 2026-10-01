@@ -3046,11 +3046,9 @@ impl Graph {
             }
         }
         let edges = self.resolved_edges();
-        let rings: HashMap<&'static str, bool> =
-            self.engines().map(|e| (e.id(), e.doorbell_driven())).collect();
         let published = {
             let Graph { nodes, generations, instance, engines, watched, .. } = self;
-            let view = build_view(nodes, generations, instance, &edges, &rings, watched);
+            let view = build_view(nodes, generations, instance, &edges, watched);
             for e in engines.iter_mut() {
                 e.settle(&view, &touched);
             }
@@ -3808,7 +3806,6 @@ fn build_view<'a>(
     generations: &HashMap<Uid, u64>,
     instance: &'a str,
     edges: &'a [Edge],
-    rings: &HashMap<&'static str, bool>,
     watched: &HashSet<(Uid, String)>,
 ) -> GraphView<'a> {
     let nodes = nodes
@@ -3833,7 +3830,6 @@ fn build_view<'a>(
                     engine: leaf.engine,
                     name: e.name.as_str(),
                     generation: generations.get(uid).copied().unwrap_or(0),
-                    rings: rings.get(leaf.engine).copied().unwrap_or(true),
                     manifest: leaf.manifest,
                     params: leaf.params.as_ref(),
                     bindings,

@@ -72,7 +72,9 @@ impl crate::GraphicsEngine {
                     .filter(|d| !manifest.params.iter().any(|p| p.group == d.group && p.name == d.name)),
             )
             .collect();
-        let manifest = Box::leak(Box::new(NodeManifest {
+        // Keyed by the base manifest's address: it is interned by content, so the address is one.
+        let base = manifest as *const NodeManifest as u64;
+        let manifest = goofi_node::interned(manifest.type_name, base, || NodeManifest {
             params: Box::leak(params.into_boxed_slice()),
             type_name: manifest.type_name,
             tags: manifest.tags,
@@ -80,7 +82,7 @@ impl crate::GraphicsEngine {
             inputs: manifest.inputs,
             outputs: manifest.outputs,
             producer: manifest.producer,
-        }));
+        });
         let class = Arc::new(Class {
             manifest,
             feedback: false,

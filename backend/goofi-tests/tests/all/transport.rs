@@ -207,10 +207,10 @@ fn a_frame_reaches_a_wired_consumer_and_rings_its_slot() {
     // A wire whose producer writes something that is not a frame is that wire's error, delivered
     // in its place: the node wears it, rather than never hearing of it.
     let node = iox_node().unwrap();
-    let service = goofi_transport::data_service(&node, &output_service(&base_of(Uid(50)), "out")).unwrap();
+    let service = goofi_transport::stream_service(&node, &output_service(&base_of(Uid(50)), "out"), goofi_transport::ServiceKind::Data).unwrap();
     let raw = goofi_transport::publisher(&service, "out", goofi_transport::INITIAL_SLICE).unwrap();
     consumer.wire_in("input", &[output_service(&base_of(Uid(50)), "out")]).unwrap();
-    assert!(goofi_transport::publish(&raw, b"NOPE", Vec::<(&Doorbell, goofi_node::EventId)>::new()));
+    goofi_transport::publish(&raw, b"NOPE", Vec::<(&Doorbell, goofi_node::EventId)>::new()).unwrap();
     let got = consumer.drain_inputs();
     assert_eq!(got.len(), 1, "the bytes reached the wire");
     let why = got[0].2.as_ref().expect_err("bytes that are no frame are the wire's error");
@@ -320,7 +320,7 @@ fn crash_helper() {
         return; // the ordinary run: this test is only the child's entry point
     }
     let node = iox_node().expect("a node");
-    let _out = goofi_transport::data_service(&node, "goofi_crash_helper_out").expect("a service");
+    let _out = goofi_transport::stream_service(&node, "goofi_crash_helper_out", goofi_transport::ServiceKind::Data).expect("a service");
     println!("READY {}", goofi_transport::session().unwrap());
     if std::env::var(CRASH_HELPER).as_deref() == Ok("exit") {
         // A process that leaves through `exit`, with its ports still open and no release called:

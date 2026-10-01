@@ -40,12 +40,7 @@ pub const FPS: u32 = 30;
 /// The pace that rate asks of the clock thread.
 const PERIOD: Duration = Duration::from_nanos(1_000_000_000 / FPS as u64);
 
-/// What drives the ticks: the harness's `render(frames)`, or a clock of the engine's own.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Clock {
-    External,
-    Timer,
-}
+pub use goofi_core::time::Clock;
 
 /// The timing door: what the engine is doing, for `session status`.
 pub struct GraphicsStatus {
@@ -182,14 +177,18 @@ impl GraphicsEngine {
             shared.clone(),
         )));
         let inbox = runtime.lock().inbox.clone();
-        let ticker = (clock == Clock::Timer).then(|| {
+        let ticker = (clock == Clock::Internal).then(|| {
             let stop = Arc::new(AtomicBool::new(false));
             let (rt, halt) = (runtime.clone(), stop.clone());
             let thread = goofi_core::worker::thread("goofi-graphics-clock")
                 .spawn(move || {
                     let mut next = Instant::now();
                     while !halt.load(Ordering::Relaxed) {
-                        rt.lock().tick();
+                        // A tick that panics ends no clock: the cause is logged and the next
+                        // tick runs; the runtime's lock takes the poison over.
+                        if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rt.lock().tick())) {
+                            goofi_core::log::record(goofi_core::log::Source::component("graphics"), goofi_core::log::Level::Error, None, format!("the tick panicked: {}", goofi_node::panic_message(p)));
+                        }
                         next += PERIOD;
                         // A tick that overran does not try to catch up: the next one is now.
                         match next.checked_duration_since(Instant::now()) {
@@ -263,10 +262,7 @@ impl GraphicsEngine {
         GraphicsStatus {
             adapter: self.gpu.adapter.clone(),
             backend: self.gpu.backend.clone(),
-            clock: match self.clock {
-                Clock::External => "external",
-                Clock::Timer => "timer",
-            },
+            clock: self.clock.name(),
             windows: self.windows.len() as u64,
             frames: self.stats.frames.load(Ordering::Relaxed),
             stages: self.stats.stages.load(Ordering::Relaxed),
@@ -379,11 +375,6 @@ impl Engine for GraphicsEngine {
     fn rust_sdk(&self) -> Option<&'static str> { Some("goofi-graphics-sdk") }
     fn id(&self) -> &'static str {
         "graphics"
-    }
-
-    /// A control half is woken by a producer, as an audio one is; the render thread is not.
-    fn doorbell_driven(&self) -> bool {
-        true
     }
 
     fn dirty(&self) -> bool {

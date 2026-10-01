@@ -8,6 +8,24 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// what lets a render or callback thread read the time with no lock.
 static BASE: LazyLock<Instant> = LazyLock::new(Instant::now);
 
+/// What drives an engine with a clock of its own: the harness's hand, or the engine itself —
+/// the device the audio nodes name, or the render timer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Clock {
+    External,
+    Internal,
+}
+
+impl Clock {
+    /// The word `session status` carries for it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Clock::External => "external",
+            Clock::Internal => "internal",
+        }
+    }
+}
+
 fn since_base() -> u64 {
     BASE.elapsed().as_nanos() as u64
 }

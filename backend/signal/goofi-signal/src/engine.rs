@@ -158,9 +158,7 @@ impl SignalEngine {
     }
 
     fn replan(&mut self, view: &GraphView<'_>, key: SlotKey) {
-        // Engines FILTER the whole-graph view: a consumer that is never rung drains its boundary
-        // at its own clock, and its producers are told nothing.
-        let Some(consumer) = view.nodes.get(&key.0).filter(|n| n.rings) else { return };
+        let Some(consumer) = view.nodes.get(&key.0) else { return };
         let foreign = consumer.engine != self.id();
         let desired = desired_wires(view, &key);
         let previous = self.wire.planned(&key);
@@ -289,12 +287,10 @@ impl SignalEngine {
 fn desired_wires(view: &GraphView<'_>, key: &SlotKey) -> Vec<Wire> {
     match &key.1 {
         Slot::In(slot) => {
-            // A slot past the event-id budget takes no wires, exactly as it takes no rings.
-            let Some((_, decl)) = view
+            let Some(decl) = view
                 .nodes
                 .get(&key.0)
-                .and_then(|n| n.manifest.inputs.iter().enumerate().find(|(_, s)| s.name == *slot))
-                .filter(|(at, _)| *at < 64)
+                .and_then(|n| n.manifest.inputs.iter().find(|s| s.name == *slot))
             else {
                 return Vec::new();
             };
@@ -319,10 +315,6 @@ fn desired_wires(view: &GraphView<'_>, key: &SlotKey) -> Vec<Wire> {
 impl Engine for SignalEngine {
     fn id(&self) -> &'static str {
         "signal"
-    }
-
-    fn doorbell_driven(&self) -> bool {
-        true
     }
 
     fn dirty(&self) -> bool {

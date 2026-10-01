@@ -140,8 +140,9 @@ pub struct AppState {
     /// The one recorder every engine writes its armed streams to. Whether it runs is RUNTIME —
     /// `record status` and the `record_changed` event carry it, never the document.
     pub recorder: Arc<goofi_record::Recorder>,
-    /// The drain thread's stop flag, and what [`AppState::stop_recording`] waits on.
+    /// The drain thread's stop flag, and the thread [`AppState::stop_recording`] joins.
     record_drain: Arc<goofi_transport::Halt>,
+    record_worker: Arc<Mutex<Option<goofi_core::worker::Worker>>>,
     /// Raised once, at shutdown: every worker of the manager's own reads it and leaves.
     stopping: Arc<goofi_transport::Halt>,
     /// The manager's own threads — the status drain, the tap follower — joined at shutdown.
@@ -177,13 +178,13 @@ impl Default for DataLiveness {
 
 impl AppState {
     /// An instance named by a fresh id — a test's, several to a process.
-    pub fn new(mode: Mode, clock: Clock, render: RenderClock) -> Result<AppState, String> {
+    pub fn new(mode: Mode, clock: Clock, render: Clock) -> Result<AppState, String> {
         Self::with_instance(goofi_core::session::fresh_id()?, mode, clock, render)
     }
 
     /// An instance named by `instance` — the binary's, which names it after the session it holds,
     /// so the id a shell sets `GOOFI_SESSION` to is the one `session status` answers.
-    pub fn with_instance(instance: String, mode: Mode, clock: Clock, render: RenderClock) -> Result<AppState, String> {
+    pub fn with_instance(instance: String, mode: Mode, clock: Clock, render: Clock) -> Result<AppState, String> {
         // The session is decided — and what dead ones left is swept — HERE, by the manager,
         // before any engine exists: never by whoever happens to open the first port. The caches
         // under `.goofi/system` are swept in the same breath: a crash's part files, old versions.
@@ -238,12 +239,13 @@ impl AppState {
             presence: Arc::new(Mutex::new(presence::Presence::default())),
             recorder,
             record_drain: Arc::new(goofi_transport::Halt::default()),
+            record_worker: Arc::new(Mutex::new(None)),
             stopping: Arc::new(goofi_transport::Halt::default()),
             workers: Arc::new(Mutex::new(Vec::new())),
         };
         spawn_follower(state.clone(), follow_rx);
         autosave::spawn(state.clone());
-        record::spawn(state.graph.clone(), state.recorder.clone(), state.record_drain.clone());
+        *state.record_worker.lock() = record::spawn(state.graph.clone(), state.recorder.clone(), state.record_drain.clone());
         Ok(state)
     }
 
@@ -272,8 +274,8 @@ impl AppState {
         }
         self.plugins.stop(self);
         self.record_drain.stop();
-        while !self.record_drain.released() {
-            std::thread::sleep(std::time::Duration::from_millis(1));
+        if let Some(worker) = self.record_worker.lock().take() {
+            let _ = worker.join_within(goofi_transport::SHUTDOWN_WAIT);
         }
     }
 
@@ -967,7 +969,7 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
 /// The composed graph the app boots: the model plus the signal engine, registered first. A `None`
 /// audio clock asks for no audio engine at all, which takes every audio node out of the catalog.
 /// The graphics engine is always ASKED for, and a machine with no adapter simply has none.
-pub fn fresh_graph(clock: Option<Clock>, render: RenderClock) -> Result<Graph, String> {
+pub fn fresh_graph(clock: Option<Clock>, render: Clock) -> Result<Graph, String> {
     let mut g = Graph::new(goofi_core::session::fresh_id()?);
     let signal = goofi_signal::SignalEngine::new(
         g.instance().to_string(),
@@ -995,8 +997,7 @@ pub fn try_graphics_engine(g: &mut Graph) -> Option<&mut goofi_graphics::Graphic
     g.engine_mut("graphics").and_then(|e| e.as_any_mut().downcast_mut())
 }
 
-pub use goofi_audio::Clock;
-pub use goofi_graphics::Clock as RenderClock;
+pub use goofi_core::time::Clock;
 
 /// The audio engine registered in `g` — its external clock is the concrete door a test drives.
 pub fn audio_engine(g: &mut Graph) -> &mut goofi_audio::AudioEngine {

@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// A doorbell id: `0` is a control message, `1..=64` the index of an input slot in
-/// `manifest.inputs`, `65..=128` an expression channel the graph allocated at bind time.
+/// `manifest.inputs` (the slots past 63 share 64), `65..=128` an expression channel.
 pub type EventId = u8;
 
 /// One resolved expression variable, graph-side: the model's spelling, which a view exposes and
@@ -117,8 +117,6 @@ pub struct NodeView<'a> {
     pub engine: &'static str,
     pub name: &'a str,
     pub generation: u64,
-    /// Whether this node's engine wakes it by doorbell; a scheduled consumer is never rung.
-    pub rings: bool,
     pub manifest: &'static NodeManifest,
     pub params: &'a ParamGroups,
     pub bindings: Vec<BindingView<'a>>,
@@ -207,9 +205,6 @@ pub enum RequestKind {
 pub trait Engine: Send {
     /// The id a registration is keyed by, and the palette's provenance for this library.
     fn id(&self) -> &'static str;
-    /// Whether this engine's nodes wake on doorbells. A scheduled engine drains its boundary
-    /// subscribers before each tick instead, and a producer facing it rings nothing.
-    fn doorbell_driven(&self) -> bool;
     /// Whether this engine's drain marked work only a settle can finish — a Ready it collected,
     /// an ack that completed a phase. What makes the memo rule honest.
     fn dirty(&self) -> bool;
@@ -344,16 +339,16 @@ pub enum Via<'a> {
 
 impl GraphView<'_> {
     /// Every doorbell `(producer, slot)` rings, read off the view: wired consumer slots by
-    /// manifest position and `nd()` channels by the event id the graph allocated — only for
-    /// consumers whose engine wakes on doorbells, and never a slot past the event-id budget. In
-    /// one order for one settled state, so a list of them compares.
+    /// manifest position and `nd()` channels by the event id the graph allocated. An id is a
+    /// hint, so the slots past the budget share its last one. In one order for one settled state,
+    /// so a list of them compares.
     pub fn ringers(&self, producer: Uid, slot: &str) -> Vec<Ringer<'_>> {
         let wired = self.edges.iter().filter(|e| e.producer.0 == producer && e.producer.1 == slot).filter_map(|e| {
-            let node = self.nodes.get(&e.consumer.0).filter(|n| n.rings)?;
+            let node = self.nodes.get(&e.consumer.0)?;
             let at = node.manifest.inputs.iter().position(|s| s.name == e.consumer.1)?;
-            (at < 64).then_some(Ringer { consumer: e.consumer.0, event_id: at as EventId + 1, via: Via::Slot(e.consumer.1) })
+            Some(Ringer { consumer: e.consumer.0, event_id: (at + 1).min(64) as EventId, via: Via::Slot(e.consumer.1) })
         });
-        let bound = self.nodes.iter().filter(|(_, n)| n.rings).flat_map(|(uid, n)| {
+        let bound = self.nodes.iter().flat_map(|(uid, n)| {
             n.bindings.iter().filter(|b| b.live).flat_map(move |b| {
                 b.vars.iter().filter_map(move |v| match v {
                     BoundVar::Stream { producer: p, slot: s, event_id, .. } if *p == producer && *s == slot => {

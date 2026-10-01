@@ -10,7 +10,7 @@ use iceoryx2::prelude::*;
 use goofi_core::Data;
 use goofi_node::NodeManifest;
 use goofi_transport::{
-    control_service, data_service, door_service, event_service, iox_node, message_service,
+    control_service, door_service, event_service, iox_node, stream_service, ServiceKind,
     output_service, publisher, record_door_service,
     record_service, record_shape, service_base,
     status_service, ByteService, ByteSubscriber, Doorbell, EventService, IoxNode, INITIAL_SLICE,
@@ -88,15 +88,15 @@ impl IoxTransport {
         let door = event_service(&node, &door_service(&base))?;
         let listener = door.listener_builder().create().map_err(|e| format!("listener: {e}"))?;
 
-        let control = message_service(&node, &control_service(&base))?
+        let control = stream_service(&node, &control_service(&base), ServiceKind::Message)?
             .subscriber_builder()
             .create()
             .map_err(|e| format!("control subscriber: {e}"))?;
-        let status = publisher(&message_service(&node, &status_service(&base))?, "status", MESSAGE_SLICE)?;
+        let status = publisher(&stream_service(&node, &status_service(&base), ServiceKind::Message)?, "status", MESSAGE_SLICE)?;
 
         let mut outputs = HashMap::new();
         for out in manifest.outputs {
-            let service = data_service(&node, &output_service(&base, out.name))?;
+            let service = stream_service(&node, &output_service(&base, out.name), ServiceKind::Data)?;
             let publisher = publisher(&service, out.name, INITIAL_SLICE)?;
             outputs.insert(
                 out.name,
@@ -145,7 +145,7 @@ impl IoxTransport {
     /// Open this end of one wire, by the name that IS the wire's identity. `open_or_create` because
     /// a consumer may be wired before its producer has published — the service is the rendezvous.
     fn open_wire(&self, service: &ServiceName) -> Result<InputWire, String> {
-        let subscriber = data_service(&self.node, service)?
+        let subscriber = stream_service(&self.node, service, ServiceKind::Data)?
             .subscriber_builder()
             .create()
             .map_err(|e| format!("subscriber `{service}`: {e}"))?;
@@ -322,7 +322,8 @@ impl Transport for IoxTransport {
             assert!(filled, "a frame fills the loan its length asked for");
         };
         let targets = port.targets.lock();
-        goofi_transport::publish_with(&port.publisher, len, fill, targets.iter().map(|(b, id)| (b, *id)));
+        goofi_transport::publish_with(&port.publisher, len, fill, targets.iter().map(|(b, id)| (b, *id)))
+            .map_err(|e| format!("`{slot}`: {e}"))?;
         let mut records = self.records.lock();
         // A retired port is dropped HERE rather than at the disarm, so the release follows the
         // recorder's own reading and never outruns it.
@@ -341,9 +342,8 @@ impl Transport for IoxTransport {
     }
 
     fn report(&self, status: WireStatus) {
-        let bytes = status.encode();
-        if let Ok(sample) = self.status.loan_slice_uninit(bytes.len()) {
-            let _ = sample.write_from_slice(&bytes).send();
+        if let Err(e) = send_message(&self.status, &status.encode()) {
+            swallowed("status", &e);
         }
     }
 }
@@ -360,8 +360,8 @@ impl NodeChannel {
     /// `node` is the GRAPH's own, shared by every channel: the graph is one owner, and one
     /// iceoryx2 node per host cost a monitor triple and a `node.details` per graph node.
     pub fn open(node: &IoxNode, base: &str) -> Result<NodeChannel, String> {
-        let control = publisher(&message_service(node, &control_service(base))?, "control", MESSAGE_SLICE)?;
-        let status = message_service(node, &status_service(base))?
+        let control = publisher(&stream_service(node, &control_service(base), ServiceKind::Message)?, "control", MESSAGE_SLICE)?;
+        let status = stream_service(node, &status_service(base), ServiceKind::Message)?
             .subscriber_builder()
             .create()
             .map_err(|e| format!("status subscriber: {e}"))?;
@@ -391,10 +391,25 @@ impl ControlSink for NodeChannel {
     /// Publish, then ring `EventId(0)`. In that order: a node woken first would drain an empty
     /// mailbox and park again.
     fn send(&self, envelope: Envelope) {
-        let bytes = envelope.encode();
-        if let Ok(sample) = self.control.loan_slice_uninit(bytes.len()) {
-            let _ = sample.write_from_slice(&bytes).send();
+        if let Err(e) = send_message(&self.control, &envelope.encode()) {
+            swallowed("control", &e);
         }
         let _ = self.door.ring(CONTROL_EVENT_ID);
     }
+}
+
+/// One message on a stream: the loan and the send, either of which can fail.
+fn send_message(publisher: &BytePublisher, bytes: &[u8]) -> Result<(), String> {
+    let sample = publisher.loan_slice_uninit(bytes.len()).map_err(|e| format!("loan of {} bytes: {e}", bytes.len()))?;
+    sample.write_from_slice(bytes).send().map(|_| ()).map_err(|e| format!("send: {e}"))
+}
+
+/// A message that did not go out is reported, not dropped in silence: the log groups a repeat.
+fn swallowed(stream: &str, error: &str) {
+    goofi_core::log::record(
+        goofi_core::log::Source::component("transport"),
+        goofi_core::log::Level::Error,
+        None,
+        format!("the {stream} message was not sent: {error}"),
+    );
 }

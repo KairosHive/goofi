@@ -142,7 +142,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
         (d, s) => format!("removed {d} directories and {s} shared-memory segments of dead sessions"),
     });
     report("Starting signal, audio and graphics engines");
-    let mut state = match AppState::with_instance(session, mode, goofi_bridge::Clock::Device, goofi_bridge::RenderClock::Timer) {
+    let mut state = match AppState::with_instance(session, mode, goofi_bridge::Clock::Internal, goofi_bridge::Clock::Internal) {
         Ok(state) => state,
         Err(e) => {
             eprintln!("Could not start: {e}");

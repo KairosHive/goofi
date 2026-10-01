@@ -1613,6 +1613,7 @@ pub(crate) fn session_status(
             "channels": a.channels,
             "callbacks": a.callbacks,
             "xruns": a.xruns,
+            "contended": a.contended,
             "render_max_us": a.render_max_us,
         })),
         "graphics": graphics.map(|a| json!({

@@ -6,19 +6,16 @@
 use goofi_core::Data;
 
 use goofi_graph::{Graph, Uid};
-use goofi_transport::{iox_node, IoxNode};
+use goofi_transport::PortBundle;
 
 /// A subscriber on one output slot — a viewer, with no privileged path into the node (§7).
 pub struct OutputProbe {
-    subscriber: goofi_transport::ByteSubscriber,
+    subscriber: PortBundle<goofi_transport::ByteSubscriber>,
     /// The newest frame seen so far. Kept because the subscriber's queue is one deep and
     /// latest-wins.
     latest: std::cell::RefCell<Option<Data>>,
     /// Frames taken so far. `latest` alone cannot tell a stopped stream from a quiet one.
     seen: std::cell::Cell<u64>,
-    /// Must outlive the subscriber built from it, so it is declared LAST — Rust drops a struct's
-    /// fields in declaration order.
-    _node: IoxNode,
 }
 
 impl OutputProbe {
@@ -31,11 +28,10 @@ impl OutputProbe {
             "`{}` declares no output slot `{slot}`",
             manifest.type_name,
         );
-        let node = iox_node().expect("an iceoryx2 node for the probe");
-        let subscriber =
-            goofi_transport::open_output_subscriber(&node, &goofi_bridge::output_service_of(g, uid, slot))
-                .expect("a subscriber on the producer's output service");
-        OutputProbe { _node: node, subscriber, latest: std::cell::RefCell::new(None), seen: std::cell::Cell::new(0) }
+        let service = goofi_bridge::output_service_of(g, uid, slot);
+        let subscriber = PortBundle::open(|node| goofi_transport::open_output_subscriber(node, &service))
+            .expect("a subscriber on the producer's output service");
+        OutputProbe { subscriber, latest: std::cell::RefCell::new(None), seen: std::cell::Cell::new(0) }
     }
 
     /// Take everything waiting, keeping the newest. Answers whether anything arrived.

@@ -247,12 +247,31 @@ fn leak_str(s: &str) -> &'static str {
     Box::leak(s.to_string().into_boxed_str())
 }
 
-/// Build a `'static NodeManifest` from an introspection; a tag outside the vocabulary or an
-/// [`illegal_param`] refuses it.
+/// The one copy of a manifest per type and declaration: a rescan that reads the same declaration
+/// again is handed the copy already leaked, and a changed one gets a new copy beside it.
+pub fn interned(type_name: &str, digest: u64, build: impl FnOnce() -> NodeManifest) -> &'static NodeManifest {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static INTERNED: OnceLock<Mutex<HashMap<(String, u64), &'static NodeManifest>>> = OnceLock::new();
+    let mut held = INTERNED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    held.entry((type_name.to_string(), digest)).or_insert_with(|| Box::leak(Box::new(build())))
+}
+
+/// A digest of what a manifest is made of, for [`interned`].
+pub fn digest_of(what: &impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    what.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The `'static NodeManifest` of an introspection, interned by type and declaration; a tag
+/// outside the vocabulary or an [`illegal_param`] refuses it.
 pub fn leak_manifest(
     type_name: String,
     intro: &probe::Introspection,
 ) -> Result<&'static NodeManifest, String> {
+    let digest = digest_of(&serde_json::to_string(intro).map_err(|e| e.to_string())?);
     let tags = intro
         .tags
         .iter()
@@ -282,7 +301,7 @@ pub fn leak_manifest(
         return Err(reason);
     }
 
-    Ok(Box::leak(Box::new(NodeManifest {
+    Ok(interned(&type_name, digest, || NodeManifest {
         type_name: leak_str(&type_name),
         tags: Box::leak(tags.into_boxed_slice()),
         doc: leak_str(&intro.doc),
@@ -290,7 +309,7 @@ pub fn leak_manifest(
         outputs: Box::leak(outputs.into_boxed_slice()),
         params: Box::leak(params.into_boxed_slice()),
         producer: intro.producer,
-    })))
+    }))
 }
 
 fn param_decl(p: &probe::Param) -> ParamDecl {

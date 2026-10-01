@@ -155,7 +155,7 @@ fn tick_once(shared: &Mutex<Shared>) {
                 },
                 _ => s.block.as_slice(),
             };
-            goofi_transport::publish(publisher, payload, rings.iter().map(|(b, id)| (b, *id)));
+            goofi_transport::publish(publisher, payload, rings.iter().map(|(b, id)| (b, *id))).expect("published");
         }
     }
 }
@@ -165,9 +165,6 @@ impl Engine for Skeleton {
         self.id
     }
 
-    fn doorbell_driven(&self) -> bool {
-        false
-    }
 
     fn dirty(&self) -> bool {
         self.dirty
@@ -226,7 +223,7 @@ impl Engine for Skeleton {
             for out in node.manifest.outputs {
                 let publisher = held.remove(out.name).unwrap_or_else(|| {
                     let service = goofi_transport::output_service(&base, out.name);
-                    let svc = goofi_transport::data_service(iox, &service)
+                    let svc = goofi_transport::stream_service(iox, &service, goofi_transport::ServiceKind::Data)
                         .expect("the skeleton's data service");
                     goofi_transport::publisher(&svc, out.name, 64 * 1024)
                         .expect("the skeleton's publisher")
@@ -250,7 +247,7 @@ impl Engine for Skeleton {
             // wired later still sees data within one of ITS OWN wakes, and the tick re-publishes.
             for (slot, publisher, rings) in &feed.outs {
                 if *slot != "echo" {
-                    goofi_transport::publish(publisher, block, rings.iter().map(|(b, id)| (b, *id)));
+                    goofi_transport::publish(publisher, block, rings.iter().map(|(b, id)| (b, *id))).expect("published");
                 }
             }
         }

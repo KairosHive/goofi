@@ -412,7 +412,8 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(status["audio"]["rate"], 48000.0, "{status}");
     assert!(status["audio"]["device"].is_null(), "no device under the external clock: {status}");
     assert!(status["audio"]["channels"].as_u64().is_some_and(|c| c >= 1), "{status}");
-    assert_eq!((status["audio"]["callbacks"].as_u64(), status["audio"]["xruns"].as_u64()), (Some(0), Some(0)), "{status}");
+    assert_eq!((status["audio"]["callbacks"].as_u64(), status["audio"]["xruns"].as_u64(), status["audio"]["contended"].as_u64()),
+               (Some(0), Some(0), Some(0)), "{status}");
 
     // Step: the engine PUBLISHES what it decided into `system.*`, off the same read the status
     // answers from — so the two cannot drift, and an expression in any engine reads the rate with

@@ -687,7 +687,7 @@ fn open_input(
     clock: Clock,
 ) -> Result<Option<(cpal::Stream, u16)>, String> {
     let device = crate::host::device(crate::host::Kind::Input, name)?;
-    if !clock.owns_devices() {
+    if !crate::owns_devices(clock) {
         return Ok(None);
     }
     let supported = device.default_input_config().map_err(|e| format!("`{name}`: {e}"))?;

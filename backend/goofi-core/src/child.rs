@@ -203,14 +203,59 @@ impl Child {
         Ok(status)
     }
 
+    /// The child's end, or `None` at the deadline. A timed wait on the process where the OS has
+    /// one; a 10 ms ask elsewhere.
     fn poll(&mut self, deadline: Instant) -> Option<ExitStatus> {
         loop {
             match self.inner.try_wait() {
                 Ok(Some(status)) => return Some(status),
-                Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-                _ => return None,
+                Ok(None) => {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() || !self.park(left) {
+                        return self.inner.try_wait().ok().flatten();
+                    }
+                }
+                Err(_) => return None,
             }
         }
+    }
+
+    /// Park up to `within` for the child to end; `false` when the OS has no timed wait to offer,
+    /// so the caller asks again after a sleep.
+    #[cfg(target_os = "linux")]
+    fn park(&self, within: Duration) -> bool {
+        // SAFETY: `pidfd_open` on a child this process spawned and has not reaped; the fd is
+        // polled once and closed here.
+        let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, self.inner.id() as libc::pid_t, 0) };
+        if pidfd < 0 {
+            std::thread::sleep(within.min(Duration::from_millis(10)));
+            return true;
+        }
+        let mut fds = libc::pollfd { fd: pidfd as i32, events: libc::POLLIN, revents: 0 };
+        unsafe {
+            libc::poll(&mut fds, 1, within.as_millis().min(i32::MAX as u128) as i32);
+            libc::close(pidfd as i32);
+        }
+        true
+    }
+
+    #[cfg(windows)]
+    fn park(&self, within: Duration) -> bool {
+        use std::os::windows::io::AsRawHandle;
+        // SAFETY: a wait on the process handle std holds for this child, bounded by `within`.
+        unsafe {
+            windows_sys::Win32::System::Threading::WaitForSingleObject(
+                self.inner.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE,
+                within.as_millis().min(u32::MAX as u128) as u32,
+            );
+        }
+        true
+    }
+
+    #[cfg(not(any(target_os = "linux", windows)))]
+    fn park(&self, within: Duration) -> bool {
+        std::thread::sleep(within.min(Duration::from_millis(10)));
+        true
     }
 }
 

@@ -42,8 +42,8 @@ pub type Listener = iceoryx2::port::listener::Listener<Svc>;
 /// The id a listener is handed per wake, as iceoryx2 spells it.
 pub type WakeId = iceoryx2::prelude::EventId;
 
-/// `EventId(0)` is a control message; `1..=64` an input slot; `65..=128` an `nd()` channel (§3.2).
-/// 255 is the ceiling those three ranges are budgeted against.
+/// `EventId(0)` is a control message; `1..=64` an input slot, the slots past 63 sharing 64;
+/// `65..=128` an `nd()` channel. 255 is the ceiling those three ranges are budgeted against.
 const EVENT_ID_MAX: usize = 255;
 /// Every producer feeding this node needs a notifier, plus the graph. The default 16 busts on a
 /// 20-wire multi-input.
@@ -445,17 +445,84 @@ fn raise_fd_limit() {
 #[cfg(not(unix))]
 fn raise_fd_limit() {}
 
-/// The request or response service of one spawned node child: the parent's end and the child's
-/// are built through this one function, so the two cannot disagree on a limit. `open_or_create`:
-/// whichever side settles first waits for the other.
-pub fn subprocess_service(node: &IoxNode, name: &str) -> Result<ByteService, String> {
+/// The byte-stream services, one table: whichever side opens a service first fixes its shape for
+/// the other, so every end is built through [`stream_service`] and none can disagree on a limit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServiceKind {
+    /// Control and status: a message STREAM rather than a latest-wins cell, see [`MESSAGE_BUFFER`].
+    Message,
+    /// A data wire: one producer; no history, because a link never replays; one deep, latest wins.
+    Data,
+    /// A recorder's own service on an output slot: one reader, and a buffer deep enough that a
+    /// journal commit costs no frames. Depth is per service, so this is never the shared data one.
+    Record(RecordShape),
+    /// The request or response service of one spawned node child.
+    Exchange,
+}
+
+impl ServiceKind {
+    /// How deep each subscriber's buffer is, and how many subscribers the service takes.
+    fn shape(self) -> (usize, usize) {
+        match self {
+            ServiceKind::Message => (MESSAGE_BUFFER, MESSAGE_READERS),
+            ServiceKind::Data => (1, MAX_SUBSCRIBERS),
+            ServiceKind::Record(shape) => (shape.buffer, 1),
+            ServiceKind::Exchange => (2, 16),
+        }
+    }
+}
+
+/// A byte-stream service of `kind`, `open_or_create`: whichever side settles first waits for the
+/// other. One publisher always, because a slot, a mailbox and a request each have one writer.
+pub fn stream_service(node: &IoxNode, name: &str, kind: ServiceKind) -> Result<ByteService, String> {
+    let (buffer, subscribers) = kind.shape();
     node.service_builder(&parse_name(name)?)
         .publish_subscribe::<[u8]>()
+        .max_nodes(MAX_NODES)
         .enable_safe_overflow(true)
+        .history_size(0)
+        .subscriber_max_buffer_size(buffer)
         .max_publishers(1)
-        .max_subscribers(16)
+        .max_subscribers(subscribers)
         .open_or_create()
-        .map_err(|e| format!("service `{name}`: {e}"))
+        .map_err(|e| format!("{kind:?} service `{name}`: {e}"))
+}
+
+/// Ports and the node they were built from, dropped in that order: a node dropped before its
+/// ports cannot remove its own directory. The ports are reached through `Deref`.
+pub struct PortBundle<P> {
+    ports: P,
+    node: IoxNode,
+}
+
+impl<P> PortBundle<P> {
+    /// Build the ports on a fresh node of this session.
+    pub fn open(build: impl FnOnce(&IoxNode) -> Result<P, String>) -> Result<PortBundle<P>, String> {
+        PortBundle::on(iox_node()?, build)
+    }
+
+    /// Build the ports on `node`, which the bundle then owns.
+    pub fn on(node: IoxNode, build: impl FnOnce(&IoxNode) -> Result<P, String>) -> Result<PortBundle<P>, String> {
+        let ports = build(&node)?;
+        Ok(PortBundle { ports, node })
+    }
+
+    pub fn node(&self) -> &IoxNode {
+        &self.node
+    }
+}
+
+impl<P> std::ops::Deref for PortBundle<P> {
+    type Target = P;
+    fn deref(&self) -> &P {
+        &self.ports
+    }
+}
+
+impl<P> std::ops::DerefMut for PortBundle<P> {
+    fn deref_mut(&mut self) -> &mut P {
+        &mut self.ports
+    }
 }
 
 /// The largest frame an exchange carries in one sample; a publisher grows to it by powers of two.
@@ -465,27 +532,33 @@ pub const EXCHANGE_PAYLOAD: usize = 64 * 1024;
 /// request is re-published each idle millisecond, since the child's subscriber may still be
 /// connecting; the reply is the one carrying the same sequence.
 pub struct Exchange {
-    request: BytePublisher,
-    reply: ByteSubscriber,
+    ports: PortBundle<Pair<BytePublisher, ByteSubscriber>>,
     seq: u32,
-    _node: IoxNode,
+}
+
+/// The two ends of a request/response pair, whichever side holds them.
+pub struct Pair<Q, A> {
+    request: Q,
+    reply: A,
 }
 
 impl Exchange {
     /// Open the pair under `base`: `<base>_req` and `<base>_resp`, the names the child is told.
     pub fn open(base: &str) -> Result<Exchange, String> {
-        let node = iox_node()?;
-        let request = subprocess_service(&node, &format!("{base}_req"))?
-            .publisher_builder()
-            .initial_max_slice_len(EXCHANGE_PAYLOAD)
-            .allocation_strategy(AllocationStrategy::PowerOfTwo)
-            .create()
-            .map_err(|e| format!("request publisher: {e}"))?;
-        let reply = subprocess_service(&node, &format!("{base}_resp"))?
-            .subscriber_builder()
-            .create()
-            .map_err(|e| format!("reply subscriber: {e}"))?;
-        Ok(Exchange { request, reply, seq: 0, _node: node })
+        let ports = PortBundle::open(|node| {
+            let request = stream_service(node, &format!("{base}_req"), ServiceKind::Exchange)?
+                .publisher_builder()
+                .initial_max_slice_len(EXCHANGE_PAYLOAD)
+                .allocation_strategy(AllocationStrategy::PowerOfTwo)
+                .create()
+                .map_err(|e| format!("request publisher: {e}"))?;
+            let reply = stream_service(node, &format!("{base}_resp"), ServiceKind::Exchange)?
+                .subscriber_builder()
+                .create()
+                .map_err(|e| format!("reply subscriber: {e}"))?;
+            Ok(Pair { request, reply })
+        })?;
+        Ok(Exchange { ports, seq: 0 })
     }
 
     /// One request to `child` — its runs, written into the loan as one frame — answered within
@@ -494,14 +567,14 @@ impl Exchange {
     pub fn ask(&mut self, child: &mut goofi_core::child::Child, frame: &[&[u8]], timeout: Duration) -> Result<Vec<u8>, String> {
         self.seq = self.seq.wrapping_add(1);
         let seq = self.seq;
-        while matches!(self.reply.receive(), Ok(Some(_))) {}
+        while matches!(self.ports.reply.receive(), Ok(Some(_))) {}
         let seq_bytes = seq.to_le_bytes();
         let parts: Vec<&[u8]> = std::iter::once(&seq_bytes[..]).chain(frame.iter().copied()).collect();
         let deadline = Instant::now() + timeout;
         loop {
-            send_parts(&self.request, &parts)?;
+            send_parts(&self.ports.request, &parts)?;
             loop {
-                match self.reply.receive() {
+                match self.ports.reply.receive() {
                     Ok(Some(sample)) => {
                         let payload = sample.payload();
                         if payload.len() >= 4 && u32::from_le_bytes(payload[0..4].try_into().unwrap()) == seq {
@@ -526,10 +599,8 @@ impl Exchange {
 
 /// The child's end of an [`Exchange`]: the newest request not yet answered, and its answer.
 pub struct Served {
-    request: ByteSubscriber,
-    reply: BytePublisher,
+    ports: PortBundle<Pair<ByteSubscriber, BytePublisher>>,
     answered: Option<u32>,
-    _node: IoxNode,
 }
 
 impl Served {
@@ -540,18 +611,20 @@ impl Served {
     }
 
     pub fn open(request: &str, reply: &str) -> Result<Served, String> {
-        let node = iox_node()?;
-        let request = subprocess_service(&node, request)?
-            .subscriber_builder()
-            .create()
-            .map_err(|e| format!("request subscriber: {e}"))?;
-        let reply = subprocess_service(&node, reply)?
-            .publisher_builder()
-            .initial_max_slice_len(EXCHANGE_PAYLOAD)
-            .allocation_strategy(AllocationStrategy::PowerOfTwo)
-            .create()
-            .map_err(|e| format!("reply publisher: {e}"))?;
-        Ok(Served { request, reply, answered: None, _node: node })
+        let ports = PortBundle::open(|node| {
+            let request = stream_service(node, request, ServiceKind::Exchange)?
+                .subscriber_builder()
+                .create()
+                .map_err(|e| format!("request subscriber: {e}"))?;
+            let reply = stream_service(node, reply, ServiceKind::Exchange)?
+                .publisher_builder()
+                .initial_max_slice_len(EXCHANGE_PAYLOAD)
+                .allocation_strategy(AllocationStrategy::PowerOfTwo)
+                .create()
+                .map_err(|e| format!("reply publisher: {e}"))?;
+            Ok(Pair { request, reply })
+        })?;
+        Ok(Served { ports, answered: None })
     }
 
     /// The latest request, if a new one arrived: latest wins, and a re-publish of the one already
@@ -559,7 +632,7 @@ impl Served {
     pub fn request(&mut self) -> Result<Option<(u32, Vec<u8>)>, String> {
         let mut latest = None;
         loop {
-            match self.request.receive() {
+            match self.ports.request.receive() {
                 Ok(Some(s)) => latest = Some(s),
                 Ok(None) => break,
                 Err(e) => return Err(format!("iox receive: {e}")),
@@ -578,7 +651,7 @@ impl Served {
     }
 
     pub fn answer(&mut self, seq: u32, reply: &[u8]) -> Result<(), String> {
-        send_parts(&self.reply, &[&seq.to_le_bytes(), reply])?;
+        send_parts(&self.ports.reply, &[&seq.to_le_bytes(), reply])?;
         self.answered = Some(seq);
         Ok(())
     }
@@ -598,52 +671,6 @@ pub fn event_service(node: &IoxNode, name: &str) -> Result<EventService, String>
         .map_err(|e| format!("event service `{name}`: {e}"))
 }
 
-/// The control and status services: the same publish/subscribe shape as a data wire, but a message
-/// STREAM rather than a latest-wins cell — see [`MESSAGE_BUFFER`].
-pub fn message_service(node: &IoxNode, name: &str) -> Result<ByteService, String> {
-    node.service_builder(&parse_name(name)?)
-        .publish_subscribe::<[u8]>()
-        .max_nodes(MAX_NODES)
-        .enable_safe_overflow(true)
-        .history_size(0)
-        .subscriber_max_buffer_size(MESSAGE_BUFFER)
-        .max_publishers(1)
-        .max_subscribers(MESSAGE_READERS)
-        .open_or_create()
-        .map_err(|e| format!("message service `{name}`: {e}"))
-}
-
-/// The publish/subscribe service every data wire is: one publisher, because a slot has exactly one
-/// producer; no history, because a link never replays; a one-deep buffer, which is latest-wins.
-pub fn data_service(node: &IoxNode, name: &str) -> Result<ByteService, String> {
-    node.service_builder(&parse_name(name)?)
-        .publish_subscribe::<[u8]>()
-        .max_nodes(MAX_NODES)
-        .enable_safe_overflow(true)
-        .history_size(0)
-        .subscriber_max_buffer_size(1)
-        .max_publishers(1)
-        .max_subscribers(MAX_SUBSCRIBERS)
-        .open_or_create()
-        .map_err(|e| format!("data service `{name}`: {e}"))
-}
-
-/// A recorder's own service on an output slot: one subscriber, and a buffer deep enough that a
-/// journal commit does not cost frames. Depth is a service-level property, so this can never be
-/// the shared data service — 256 subscribers times this depth is half a gigabyte a slot.
-pub fn record_data_service(node: &IoxNode, name: &str, shape: RecordShape) -> Result<ByteService, String> {
-    node.service_builder(&parse_name(name)?)
-        .publish_subscribe::<[u8]>()
-        .max_nodes(MAX_NODES)
-        .enable_safe_overflow(true)
-        .history_size(0)
-        .subscriber_max_buffer_size(shape.buffer)
-        .max_publishers(1)
-        .max_subscribers(1)
-        .open_or_create()
-        .map_err(|e| format!("record service `{name}`: {e}"))
-}
-
 /// How many subscribers a data service has right now — whether anyone drinks from it.
 pub fn subscribers(service: &ByteService) -> usize {
     service.dynamic_config().number_of_subscribers()
@@ -651,7 +678,7 @@ pub fn subscribers(service: &ByteService) -> usize {
 
 /// Open a subscriber on an output slot's data service by name — a `/data` consumer's end of a wire.
 pub fn open_output_subscriber(node: &IoxNode, service: &str) -> Result<ByteSubscriber, String> {
-    data_service(node, service)?
+    stream_service(node, service, ServiceKind::Data)?
         .subscriber_builder()
         .create()
         .map_err(|e| format!("subscriber `{service}`: {e}"))
@@ -675,7 +702,7 @@ pub struct RecordPort {
 
 impl RecordPort {
     pub fn open(node: &IoxNode, service: &str, bell: &std::sync::Arc<Doorbell>, what: &str, shape: RecordShape) -> Result<RecordPort, String> {
-        let service = record_data_service(node, service, shape)?;
+        let service = stream_service(node, service, ServiceKind::Record(shape))?;
         let publisher = service
             .publisher_builder()
             .initial_max_slice_len(shape.slice)
@@ -688,7 +715,7 @@ impl RecordPort {
     /// One frame, written by `fill` into a loan of `len`, and the recorder's door rung. `false` is
     /// a refused loan, which the next frame's own number witnesses. A retired port sends nothing.
     pub fn send(&self, len: usize, fill: impl FnOnce(&mut [MaybeUninit<u8>])) -> bool {
-        !self.retired && publish_with(&self.publisher, len, fill, std::iter::once((&*self.bell, RECORD_EVENT_ID)))
+        !self.retired && publish_with(&self.publisher, len, fill, std::iter::once((&*self.bell, RECORD_EVENT_ID))).is_ok()
     }
 
     /// Disarmed: stop publishing, but stay open while the recorder still reads.
@@ -712,7 +739,7 @@ impl RecordPort {
 
 /// Open the recorder's end of an armed output slot's recording service.
 pub fn open_record_subscriber(node: &IoxNode, service: &str, shape: RecordShape) -> Result<ByteSubscriber, String> {
-    record_data_service(node, service, shape)?
+    stream_service(node, service, ServiceKind::Record(shape))?
         .subscriber_builder()
         .create()
         .map_err(|e| format!("record subscriber `{service}`: {e}"))
@@ -788,28 +815,29 @@ pub fn var_of(view: &GraphView<'_>, v: &BoundVar) -> (String, Var) {
 }
 
 /// Send one frame, then ring every bell. In that order, always: a consumer woken first drains
-/// nothing and parks. `false` says the loan failed — no shared memory, or a frame over a static
-/// publisher's slice — which is a caller's to count.
-pub fn publish<'a>(publisher: &BytePublisher, bytes: &[u8], bells: impl IntoIterator<Item = (&'a Doorbell, EventId)>) -> bool {
+/// nothing and parks. `Err` says the loan or the send failed — no shared memory, or a frame over
+/// a static publisher's slice — which is a caller's to count.
+pub fn publish<'a>(publisher: &BytePublisher, bytes: &[u8], bells: impl IntoIterator<Item = (&'a Doorbell, EventId)>) -> Result<(), String> {
     publish_with(publisher, bytes.len(), |loan| write_parts(loan, [bytes]), bells)
 }
 
 /// [`publish`] with the frame written by `fill` straight into a loan of `len` bytes, so a frame
 /// that is not bytes yet is encoded once, into shared memory. `fill` must write every byte.
+/// `Err` is the loan or the send that failed; a bell that does not ring is the ringer's trouble.
 pub fn publish_with<'a>(
     publisher: &BytePublisher,
     len: usize,
     fill: impl FnOnce(&mut [MaybeUninit<u8>]),
     bells: impl IntoIterator<Item = (&'a Doorbell, EventId)>,
-) -> bool {
-    let Ok(mut sample) = publisher.loan_slice_uninit(len) else { return false };
+) -> Result<(), String> {
+    let mut sample = publisher.loan_slice_uninit(len).map_err(|e| format!("loan of {len} bytes: {e}"))?;
     fill(sample.payload_mut());
     // SAFETY: `fill`'s contract is that the whole loan was written.
-    let _ = unsafe { sample.assume_init() }.send();
+    unsafe { sample.assume_init() }.send().map_err(|e| format!("send: {e}"))?;
     for (bell, id) in bells {
         let _ = bell.ring(id);
     }
-    true
+    Ok(())
 }
 
 /// Copy `parts`, one after the other, over a loan they fill exactly.
@@ -846,24 +874,23 @@ pub fn take_where<T>(held: &mut Vec<T>, keep: impl Fn(&T) -> bool) -> Option<T> 
 pub const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 
 /// Wait for every halt to release, up to [`SHUTDOWN_WAIT`]. Whether they all did.
-pub fn wait_released<'a>(halts: impl Iterator<Item = &'a Halt> + Clone, ceiling: Duration) -> bool {
+pub fn wait_released<'a>(halts: impl Iterator<Item = &'a Halt>, ceiling: Duration) -> bool {
     let deadline = Instant::now() + ceiling;
-    while halts.clone().any(|h| !h.released()) {
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(1));
+    let mut all = true;
+    for halt in halts {
+        all &= halt.wait_released_until(deadline);
     }
-    true
+    all
 }
 
 /// The two flags a node's thread is born holding: told to stop, and — once every port it owned
 /// is dropped, which is what releases the shared memory — released. The only thing a teardown
-/// can usefully wait for.
+/// can usefully wait for, and it parks the waiter rather than being polled.
 #[derive(Default)]
 pub struct Halt {
     stop: AtomicBool,
-    released: AtomicBool,
+    released: goofi_core::sync::Mutex<bool>,
+    done: goofi_core::sync::Condvar,
 }
 
 impl Halt {
@@ -874,9 +901,22 @@ impl Halt {
         self.stop.load(Ordering::Relaxed)
     }
     pub fn release(&self) {
-        self.released.store(true, Ordering::Release);
+        *self.released.lock() = true;
+        self.done.notify_all();
     }
     pub fn released(&self) -> bool {
-        self.released.load(Ordering::Acquire)
+        *self.released.lock()
+    }
+    /// Park until released or `deadline`; whether it was released.
+    pub fn wait_released_until(&self, deadline: Instant) -> bool {
+        let mut released = self.released.lock();
+        while !*released {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            released = self.done.wait_timeout(released, left);
+        }
+        true
     }
 }

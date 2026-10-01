@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use goofi_core::sync::Mutex;
@@ -71,19 +72,12 @@ const OPEN_WAIT: Duration = Duration::from_secs(2);
 /// The same ceiling for an ASIO driver, which loads a vendor runtime before it answers.
 const ASIO_OPEN_WAIT: Duration = Duration::from_secs(10);
 
-/// What drives the blocks: the harness's `drive(frames)`, or the device the `AudioOut` nodes name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Clock {
-    External,
-    Device,
-}
+pub use goofi_core::time::Clock;
 
-impl Clock {
-    /// Hardware belongs to the device clock alone: `drive(frames)` renders at the caller's speed,
-    /// and no live stream has a timeline that can meet it.
-    pub fn owns_devices(self) -> bool {
-        self == Clock::Device
-    }
+/// Hardware belongs to the internal clock alone: `drive(frames)` renders at the caller's speed,
+/// and no live stream has a timeline that can meet it.
+fn owns_devices(clock: Clock) -> bool {
+    clock == Clock::Internal
 }
 
 /// The timing door: what the clock is doing, for `session status`.
@@ -94,6 +88,9 @@ pub struct AudioStatus {
     pub channels: u16,
     pub callbacks: u64,
     pub xruns: u64,
+    /// Callbacks that found the runtime held and played silence: the lock was taken under the
+    /// graph lock, which is the thing to read, not an underrun.
+    pub contended: u64,
     pub render_max_us: u64,
 }
 
@@ -101,6 +98,7 @@ pub struct AudioStatus {
 pub(crate) struct Stats {
     callbacks: AtomicU64,
     xruns: AtomicU64,
+    contended: AtomicU64,
     render_max_us: AtomicU64,
     /// Raised by the stream's error callback; the drain closes the clock and tries the name once more.
     dead: AtomicBool,
@@ -225,10 +223,17 @@ where
                 let started = Instant::now();
                 scratch.resize(data.len(), 0.0);
                 match runtime.try_lock() {
-                    Some(mut rt) => rt.render_into(&mut scratch),
+                    // A panic must not unwind through cpal's callback: the block is silence and
+                    // the cause is logged; the runtime's lock takes the poison over.
+                    Some(mut rt) => {
+                        if let Err(p) = catch_unwind(AssertUnwindSafe(|| rt.render_into(&mut scratch))) {
+                            scratch.fill(0.0);
+                            goofi_core::log::record(goofi_core::log::Source::component("audio"), goofi_core::log::Level::Error, None, format!("the render panicked: {}", goofi_node::panic_message(p)));
+                        }
+                    }
                     None => {
                         scratch.fill(0.0);
-                        stats.xruns.fetch_add(1, Ordering::Relaxed);
+                        stats.contended.fetch_add(1, Ordering::Relaxed);
                     }
                 }
                 for (out, v) in data.iter_mut().zip(scratch.iter()) {
@@ -359,7 +364,8 @@ impl AudioEngine {
         let classes: HashMap<&'static str, Class> = nodes::BUILT_IN
             .iter()
             .map(|(type_name, m, make)| {
-                let manifest: &'static NodeManifest = Box::leak(Box::new(NodeManifest {
+                // One per process, whatever the engine count: keyed by the static descriptor.
+                let manifest = goofi_node::interned(type_name, *m as *const _ as u64, || NodeManifest {
                     type_name,
                     tags: m.tags,
                     doc: m.doc,
@@ -367,7 +373,7 @@ impl AudioEngine {
                     outputs: m.outputs,
                     params: m.params,
                     producer: false,
-                }));
+                });
                 (*type_name, Class { manifest, make: Arc::new(*make), plugin: None })
             })
             .collect();
@@ -476,15 +482,13 @@ impl AudioEngine {
     /// Read without the runtime lock: taking it under the graph lock would cost a callback its block.
     pub fn status(&self) -> AudioStatus {
         AudioStatus {
-            clock: match self.clock {
-                Clock::External => "external",
-                Clock::Device => "device",
-            },
+            clock: self.clock.name(),
             device: self.device.as_ref().map(|d| d.name.clone()),
             rate: self.audio.rate(),
             channels: self.device.as_ref().map_or(self.last.output.1, |d| d.channels),
             callbacks: self.stats.callbacks.load(Ordering::Relaxed),
             xruns: self.stats.xruns.load(Ordering::Relaxed),
+            contended: self.stats.contended.load(Ordering::Relaxed),
             render_max_us: self.stats.render_max_us.load(Ordering::Relaxed),
         }
     }
@@ -784,10 +788,6 @@ impl Engine for AudioEngine {
         "audio"
     }
 
-    fn doorbell_driven(&self) -> bool {
-        true
-    }
-
     fn dirty(&self) -> bool {
         self.dirty || self.shared.replan.load(Ordering::Acquire)
     }
@@ -969,7 +969,7 @@ impl Engine for AudioEngine {
             let strays = outs.iter().chain(ins.iter()).filter(|(_, d)| host::asio_driver(d).is_some_and(|k| k != held));
             faults.extend(strays.map(|(uid, _)| (*uid, format!("the ASIO driver is `{held}`, and only one loads at a time"))));
         }
-        if self.clock.owns_devices() {
+        if owns_devices(self.clock) {
             if let Some(why) = self.follow(clock.as_deref()) {
                 faults.extend(outs.iter().filter(|(_, device)| agrees(device)).map(|(uid, _)| (*uid, why.clone())));
             }

@@ -17,6 +17,12 @@ include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 /// The goofi version every artifact is stamped with and checked against.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// What an artifact's `goofi_version` must answer: the version and the SDK sources it was built
+/// against, so a node built on an SDK this binary does not carry is refused by name.
+pub fn built_against() -> String {
+    format!("{VERSION}+{SDK_HASH}")
+}
+
 /// One engine's authoring crate: what a node file compiles against, the crates it may reach
 /// beyond it, and the line that makes the generated crate a cdylib of that engine.
 pub struct Sdk {
@@ -30,21 +36,21 @@ pub const SIGNAL: Sdk = Sdk {
     name: "goofi-signal-sdk",
     dir: "backend/signal/goofi-signal-sdk",
     allow: &[("rustfft", "6.4.1"), ("realfft", "3"), ("libm", "0.2")],
-    glue: "goofi_signal_sdk::cdylib!(node);",
+    glue: "goofi_signal_sdk::cdylib!(node, {sdk});",
 };
 
 pub const GRAPHICS: Sdk = Sdk {
     name: "goofi-graphics-sdk",
     dir: "backend/graphics/goofi-graphics-sdk",
     allow: &[],
-    glue: "goofi_graphics_sdk::cdylib!(node);",
+    glue: "goofi_graphics_sdk::cdylib!(node, {sdk});",
 };
 
 pub const AUDIO: Sdk = Sdk {
     name: "goofi-audio-sdk",
     dir: "backend/audio/goofi-audio-sdk",
     allow: &[("libm", "0.2")],
-    glue: "goofi_audio_sdk::cdylib!(node);",
+    glue: "goofi_audio_sdk::cdylib!(node, {sdk});",
 };
 
 pub fn sdk(name: &str) -> Option<&'static Sdk> {
@@ -242,7 +248,7 @@ fn generate(sdk: &Sdk, source: &Path, sdk_root: &Path, crate_dir: &Path, crate_n
          #[forbid(unsafe_code)]\n#[path = {:?}]\nmod node;\n{}\n",
         source.display(),
         slash(&std::path::absolute(source).map_err(|e| e.to_string())?),
-        sdk.glue,
+        sdk.glue.replace("{sdk}", &format!("{SDK_HASH:?}")),
     );
     std::fs::create_dir_all(crate_dir.join("src")).map_err(|e| e.to_string())?;
     write_if_changed(&crate_dir.join("Cargo.toml"), manifest.as_bytes());
@@ -290,8 +296,8 @@ pub struct Opened {
     pub describe: String,
 }
 
-/// Load an artifact, once per path: `goofi_version` first — a mismatch is a refusal naming both
-/// versions, never a call into a stale ABI — then `goofi_describe`.
+/// Load an artifact, once per path: `goofi_version` first — a mismatch of the version or the SDK
+/// hash is a refusal naming both, never a call into a stale ABI — then `goofi_describe`.
 pub fn open(path: &Path) -> Result<Opened, String> {
     static DESCRIBED: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
     let mut described = DESCRIBED.get_or_init(Default::default).lock();
@@ -302,8 +308,9 @@ pub fn open(path: &Path) -> Result<Opened, String> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     // SAFETY: the two symbols are the ones `cdylib!` emits, with these signatures, at every version.
     let version = unsafe { c_string(library, c"goofi_version") }?;
-    if version != VERSION {
-        return Err(format!("{name}: built for goofi {version}, and this is {VERSION}"));
+    let expected = built_against();
+    if version != expected {
+        return Err(format!("{name}: built for goofi {version}, and this is {expected}"));
     }
     let describe = unsafe { c_string(library, c"goofi_describe") }?;
     described.insert(path.to_path_buf(), describe.clone());

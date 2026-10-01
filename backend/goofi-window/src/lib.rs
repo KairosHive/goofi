@@ -312,11 +312,15 @@ impl Host {
     }
 
     /// Call one registered handler with the tables unborrowed, so it may register or unregister:
-    /// taken out for the call, and put back where its entry still stands.
+    /// taken out for the call, and put back where its entry still stands. One that panicked is
+    /// not put back — its entry stays empty rather than firing the same panic every period.
     fn fire(&mut self, find: impl Fn(&mut Runloop) -> Option<&mut Option<Handler>>) {
         let taken = find(&mut self.runloop.borrow_mut()).and_then(Option::take);
         if let Some(mut handler) = taken {
-            let _ = catch_unwind(AssertUnwindSafe(&mut handler));
+            if let Err(p) = catch_unwind(AssertUnwindSafe(&mut handler)) {
+                goofi_core::log::record(goofi_core::log::Source::component("window"), goofi_core::log::Level::Error, None, format!("a plugin's run-loop handler panicked and is retired: {}", panic_text(p)));
+                return;
+            }
             if let Some(slot) = find(&mut self.runloop.borrow_mut()) {
                 *slot = Some(handler);
             }
@@ -330,6 +334,13 @@ impl Host {
 pub struct Runloop {
     timers: Vec<Timer>,
     fds: Vec<Fd>,
+}
+
+/// What a panic payload says, when it says anything.
+fn panic_text(p: Box<dyn std::any::Any + Send>) -> String {
+    p.downcast_ref::<&str>().map(|s| s.to_string())
+        .or_else(|| p.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "no message".into())
 }
 
 struct Timer {

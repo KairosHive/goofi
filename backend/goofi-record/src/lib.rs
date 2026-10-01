@@ -68,7 +68,7 @@ pub struct StreamStatus {
 fn finished(id: &StreamId, stream: &Arc<Mutex<Stream>>, why: &str) -> manifest::Entry {
     let mut s = stream.lock();
     let error = s.sync().err();
-    Session::entry(id, &s, Some(why.to_string()), error)
+    Take::entry(id, &s, Some(why.to_string()), error)
 }
 
 /// What a stream's kind puts in its manifest entry: the shape a reader needs to fold the file
@@ -94,7 +94,7 @@ struct Shape {
     quality: Option<goofi_core::record::VideoQuality>,
 }
 
-struct Session {
+struct Take {
     audio_window: Arc<goofi_core::record::FrameWindow>,
     folder: PathBuf,
     name: String,
@@ -107,7 +107,7 @@ struct Session {
     landed: Arc<Mutex<u64>>,
 }
 
-impl Session {
+impl Take {
     fn entry(
         id: &StreamId,
         s: &Stream,
@@ -180,7 +180,7 @@ impl Session {
 
     fn manifest(&self, time: &Time) -> Manifest {
         let mut streams = self.closed.clone();
-        streams.extend(self.open.iter().map(|(id, s)| Session::entry(id, &s.lock(), None, None)));
+        streams.extend(self.open.iter().map(|(id, s)| Take::entry(id, &s.lock(), None, None)));
         Manifest {
             goofi: env!("CARGO_PKG_VERSION"),
             name: self.name.clone(),
@@ -206,7 +206,7 @@ impl Session {
         self.open.remove(id)
     }
 
-    /// Close a stream this session OWNS outright — the caller holds no lock anyone else needs.
+    /// Close a stream this take OWNS outright — the caller holds no lock anyone else needs.
     fn close(&mut self, id: &StreamId, why: &str) {
         if let Some(s) = self.detach(id) {
             self.closed.push(finished(id, &s, why));
@@ -216,7 +216,7 @@ impl Session {
 
 pub struct Recorder {
     time: Arc<Time>,
-    session: Mutex<Option<Arc<Mutex<Session>>>>,
+    take: Mutex<Option<Arc<Mutex<Take>>>>,
     /// The thread that turns frames into files. A drain hands frames over and never formats one
     /// itself: at a producer's rate, formatting is what makes a drain fall behind its transport.
     writer: Mutex<Option<writer::Writer>>,
@@ -236,7 +236,7 @@ impl Recorder {
     pub fn new(time: Arc<Time>) -> Recorder {
         Recorder {
             time,
-            session: Mutex::new(None),
+            take: Mutex::new(None),
             writer: Mutex::new(None),
             encoders: Mutex::new(Arc::new(video::FfmpegEncoders)),
             noted: Mutex::new(Instant::now()),
@@ -264,24 +264,24 @@ impl Recorder {
         encoders.probe()
     }
 
-    /// Publish this session after releasing the current-session lock.
-    fn publish(&self, guard: MutexGuard<'_, Option<Arc<Mutex<Session>>>>) -> Result<(), String> {
-        let session = guard.as_ref().cloned();
+    /// Publish this take after releasing the current-take lock.
+    fn publish(&self, guard: MutexGuard<'_, Option<Arc<Mutex<Take>>>>) -> Result<(), String> {
+        let take = guard.as_ref().cloned();
         drop(guard);
-        match session {
-            Some(session) => self.publish_session(&session),
+        match take {
+            Some(take) => self.publish_take(&take),
             None => Ok(()),
         }
     }
 
-    fn publish_session(&self, session: &Mutex<Session>) -> Result<(), String> {
-        let mut session = session.lock();
-        let manifest = session.manifest(&self.time);
-        let folder = session.folder.clone();
-        session.version += 1;
-        let version = session.version;
-        let landed = session.landed.clone();
-        drop(session);
+    fn publish_take(&self, take: &Mutex<Take>) -> Result<(), String> {
+        let mut take = take.lock();
+        let manifest = take.manifest(&self.time);
+        let folder = take.folder.clone();
+        take.version += 1;
+        let version = take.version;
+        let landed = take.landed.clone();
+        drop(take);
         let mut landed = landed.lock();
         if *landed > version {
             return Ok(());
@@ -316,7 +316,7 @@ impl Recorder {
         Ok(())
     }
 
-    /// Mint the folder. Refused when a recording already runs — the session lock is the ONE
+    /// Mint the folder. Refused when a recording already runs — the take lock is the ONE
     /// authority on that, so no caller can check and then act past it.
     pub fn start(self: &Arc<Self>, root: &Path, name: &str, patch: Option<&Path>, annotations: Option<&serde_json::Value>) -> Result<PathBuf, String> {
         let _transition = self.transition.lock();
@@ -365,7 +365,7 @@ impl Recorder {
                 }
             }
         }
-        let session = Session {
+        let take = Take {
             folder: folder.clone(),
             name: name.to_string(),
             patch: patch.map(Path::to_path_buf),
@@ -377,11 +377,11 @@ impl Recorder {
             landed: Arc::new(Mutex::new(0)),
             audio_window: window.clone(),
         };
-        if let Err(error) = session.manifest(&self.time).write_atomic(&folder) {
+        if let Err(error) = take.manifest(&self.time).write_atomic(&folder) {
             let _ = std::fs::remove_dir_all(&folder);
             return Err(error);
         }
-        *self.session.lock() = Some(Arc::new(Mutex::new(session)));
+        *self.take.lock() = Some(Arc::new(Mutex::new(take)));
         *self.writer.lock() =
             Some(writer::Writer::new(Arc::downgrade(self)));
         if let Some(capture) = capture {
@@ -402,7 +402,7 @@ impl Recorder {
             return Ok(None);
         }
         if let Some(capture) = self.capture.lock().clone() {
-            let window = self.session.lock().as_ref().map(|s| s.lock().audio_window.clone());
+            let window = self.take.lock().as_ref().map(|s| s.lock().audio_window.clone());
             if let Some(window) = window {
                 capture.boundary(window, false)?;
             }
@@ -415,23 +415,23 @@ impl Recorder {
         // The writer goes FIRST: a file closed over a frame still queued is a frame the manifest
         // counted and the disk never got.
         drop(self.writer.lock().take());
-        let Some(session) = self.session.lock().take() else { return Ok(None) };
+        let Some(take) = self.take.lock().take() else { return Ok(None) };
         let streams = {
-            let mut session = session.lock();
-            session.stopped_utc = Some(self.time.utc());
-            std::mem::take(&mut session.open)
+            let mut take = take.lock();
+            take.stopped_utc = Some(self.time.utc());
+            std::mem::take(&mut take.open)
         };
         for (id, stream) in streams {
             let entry = finished(&id, &stream, "stopped");
-            session.lock().closed.push(entry);
+            take.lock().closed.push(entry);
         }
-        let folder = session.lock().folder.clone();
-        self.publish_session(&session)?;
+        let folder = take.lock().folder.clone();
+        self.publish_take(&take)?;
         Ok(Some(folder))
     }
 
     pub fn running(&self) -> bool {
-        self.session.lock().is_some()
+        self.take.lock().is_some()
     }
 
     /// Open a file for a stream, closing whatever that stream held. Everything queued for it
@@ -462,30 +462,30 @@ impl Recorder {
         t0_patch: f64,
         meta: StreamMeta,
     ) -> Result<(), String> {
-        let guard = self.session.lock();
-        let mut session = guard.as_ref().ok_or("no recording is running")?.lock();
-        session.close(id, "reopened");
+        let guard = self.take.lock();
+        let mut take = guard.as_ref().ok_or("no recording is running")?.lock();
+        take.close(id, "reopened");
         let t0_utc = self.time.utc_at(t0_patch);
         let base = format!("{}-{}__{}Z", id.node, id.slot, stamp_nanos(t0_utc));
         let encoders = self.encoders.lock().clone();
-        let file = session.free_name(&base, kind.extension(&*encoders));
+        let file = take.free_name(&base, kind.extension(&*encoders));
         let made =
-            Stream::create(&*encoders, &session.folder, file.clone(), kind.clone(), meta.clone(), t0_patch, t0_utc);
+            Stream::create(&*encoders, &take.folder, file.clone(), kind.clone(), meta.clone(), t0_patch, t0_utc);
         // A stream that could not open is an ENTRY, not an absence: a recording says what it was
         // asked for and did not get, or nobody reading it later can tell.
         let opened = match made {
             Ok(stream) => {
-                session.open.insert(id.clone(), Arc::new(Mutex::new(stream)));
+                take.open.insert(id.clone(), Arc::new(Mutex::new(stream)));
                 Ok(())
             }
             Err(why) => {
-                session.closed.push(Session::missing(id, &file, kind, &meta, t0_patch, t0_utc, &why));
+                take.closed.push(Take::missing(id, &file, kind, &meta, t0_patch, t0_utc, &why));
                 Err(why)
             }
         };
         // The manifest is a projection and is rewritten at every later publish, so a stream that
         // opened is OPEN even where the disk refused this snapshot.
-        drop(session);
+        drop(take);
         let _ = self.publish(guard);
         opened
     }
@@ -493,57 +493,57 @@ impl Recorder {
     /// Count what a stream lost and close it, on a thread of its own. Finalizing a video waits
     /// for its encoder, and a thread that renders must never wait for one.
     pub fn close_later(self: &Arc<Self>, id: &StreamId, why: &str, missed: u64, at: f64) {
-        let Some(session) = self.session.lock().as_ref().cloned() else { return };
-        let Some(stream) = session.lock().detach(id) else { return };
+        let Some(take) = self.take.lock().as_ref().cloned() else { return };
+        let Some(stream) = take.lock().detach(id) else { return };
         if missed > 0 {
             let mut stream = stream.lock();
             stream.dropped += missed;
             stream.dropped_at = Some(at);
         }
         let (rec, mine, said) = (self.clone(), id.clone(), why.to_string());
-        let (owner, closing) = (session.clone(), stream.clone());
+        let (owner, closing) = (take.clone(), stream.clone());
         let spawned = goofi_core::worker::thread("goofi-record-close").spawn(move || {
             rec.finish_close(&owner, &mine, &closing, &said);
         });
         if spawned.is_err() {
-            self.finish_close(&session, id, &stream, why);
+            self.finish_close(&take, id, &stream, why);
         }
     }
 
     /// Close a stream and finalize its file. A VIDEO's encoder is waited for here, so this is
     /// never called from a thread that renders — [`Recorder::close_later`] is that door.
     pub fn close(&self, id: &StreamId, why: &str) {
-        let Some(session) = self.session.lock().as_ref().cloned() else { return };
+        let Some(take) = self.take.lock().as_ref().cloned() else { return };
         if let Some(writer) = self.writer.lock().as_ref() {
             writer.flush();
         }
-        self.close_session(&session, id, why);
+        self.close_take(&take, id, why);
     }
 
     /// The close itself, with no flush: the WRITER's own door, as [`Recorder::open_now`] is. A
     /// writer that waited on its own queue would wait for ever, and nothing of this stream can
     /// still be queued when the thread that would write it is the caller.
     pub(crate) fn close_now(&self, id: &StreamId, why: &str) {
-        let Some(session) = self.session.lock().as_ref().cloned() else { return };
-        self.close_session(&session, id, why);
+        let Some(take) = self.take.lock().as_ref().cloned() else { return };
+        self.close_take(&take, id, why);
     }
 
-    fn close_session(&self, session: &Mutex<Session>, id: &StreamId, why: &str) {
-        let stream = session.lock().detach(id);
+    fn close_take(&self, take: &Mutex<Take>, id: &StreamId, why: &str) {
+        let stream = take.lock().detach(id);
         let Some(stream) = stream else { return };
-        self.finish_close(session, id, &stream, why);
+        self.finish_close(take, id, &stream, why);
     }
 
     fn finish_close(
         &self,
-        session: &Mutex<Session>,
+        take: &Mutex<Take>,
         id: &StreamId,
         stream: &Arc<Mutex<Stream>>,
         why: &str,
     ) {
         let entry = finished(id, stream, why);
-        session.lock().closed.push(entry);
-        let _ = self.publish_session(session);
+        take.lock().closed.push(entry);
+        let _ = self.publish_take(take);
     }
 
     /// Hand one frame over to be written. `false` is a queue that is full, or no recording at all —
@@ -563,7 +563,7 @@ impl Recorder {
         if id.engine == "audio" {
             let index = goofi_codec::frame_meta(bytes).ok().and_then(|m| m.index());
             if let Some(index) = index {
-                let window = self.session.lock().as_ref().map(|s| s.lock().audio_window.clone());
+                let window = self.take.lock().as_ref().map(|s| s.lock().audio_window.clone());
                 if window.is_none_or(|window| !window.contains(index)) {
                     return true;
                 }
@@ -590,9 +590,9 @@ impl Recorder {
 
     fn write(&self, id: &StreamId, read: frame::Incoming<'_>, at: f64) -> Result<(), String> {
         let stream = {
-            let guard = self.session.lock();
-            let session = guard.as_ref().ok_or("no recording is running")?.lock();
-            session.open.get(id).ok_or("no such open stream")?.clone()
+            let guard = self.take.lock();
+            let take = guard.as_ref().ok_or("no recording is running")?.lock();
+            take.open.get(id).ok_or("no such open stream")?.clone()
         };
         let done = stream.lock().write(at, read.written, read.meta.as_ref());
         done
@@ -601,10 +601,10 @@ impl Recorder {
     /// Whether the stream's open file still takes what a frame brings — a `false` is the caller's
     /// cue to open the next one, never to drop the frame. An unopened stream takes nothing.
     pub fn takes(&self, id: &StreamId, kind: &Kind, bytes: usize) -> bool {
-        let guard = self.session.lock();
-        let Some(session) = guard.as_ref() else { return false };
-        let session = session.lock();
-        let Some(stream) = session.open.get(id) else { return false };
+        let guard = self.take.lock();
+        let Some(take) = guard.as_ref() else { return false };
+        let take = take.lock();
+        let Some(stream) = take.open.get(id) else { return false };
         let takes = stream.lock().takes(kind, bytes);
         takes
     }
@@ -620,17 +620,17 @@ impl Recorder {
             }
             *noted = Instant::now();
         }
-        let _ = self.publish(self.session.lock());
+        let _ = self.publish(self.take.lock());
     }
 
     /// Hand one video readback to its encoder, dated by the tick that DREW it rather than the one
     /// that took it. `false` is a drop the caller counts: a real-time engine is never stalled.
     pub fn write_video(&self, id: &StreamId, texels: &[u8], at: f64) -> bool {
         let stream = {
-            let guard = self.session.lock();
-            let Some(session) = guard.as_ref() else { return false };
-            let session = session.lock();
-            let Some(stream) = session.open.get(id) else { return false };
+            let guard = self.take.lock();
+            let Some(take) = guard.as_ref() else { return false };
+            let take = take.lock();
+            let Some(stream) = take.open.get(id) else { return false };
             stream.clone()
         };
         let mut stream = stream.lock();
@@ -638,23 +638,23 @@ impl Recorder {
     }
 
     pub fn dropped(&self, id: &StreamId, count: u64, at: f64) {
-        let guard = self.session.lock();
-        let Some(session) = guard.as_ref() else { return };
-        let session = session.lock();
-        let Some(stream) = session.open.get(id) else { return };
+        let guard = self.take.lock();
+        let Some(take) = guard.as_ref() else { return };
+        let take = take.lock();
+        let Some(stream) = take.open.get(id) else { return };
         {
             let mut stream = stream.lock();
             stream.dropped += count;
             stream.dropped_at = Some(at);
         }
-        drop(session);
+        drop(take);
         let _ = self.publish(guard);
     }
 
     /// What a derived timeline last measured itself against patch time. The manifest carries it so
     /// an analyst can correct the stream against the ones that read the clock.
     pub fn drift(&self, id: &StreamId, seconds: f64) {
-        let guard = self.session.lock();
+        let guard = self.take.lock();
         if let Some(stream) = guard.as_ref().and_then(|s| s.lock().open.get(id).cloned()) {
             stream.lock().drift = Some(seconds);
         }
@@ -663,28 +663,28 @@ impl Recorder {
     /// Whether this stream has a file open right now — what a drain asks so it opens one exactly
     /// where the recorder holds none, rather than keeping a second belief about it.
     pub fn is_open(&self, id: &StreamId) -> bool {
-        self.session.lock().as_ref().is_some_and(|s| s.lock().open.contains_key(id))
+        self.take.lock().as_ref().is_some_and(|s| s.lock().open.contains_key(id))
     }
 
     /// How full the stream's feeding buffer is, as its drain last saw it.
     pub fn fill(&self, id: &StreamId, fill: f32) {
-        let guard = self.session.lock();
+        let guard = self.take.lock();
         if let Some(stream) = guard.as_ref().and_then(|s| s.lock().open.get(id).cloned()) {
             stream.lock().set_fill(fill);
         }
     }
 
     pub fn status(&self) -> Status {
-        let guard = self.session.lock();
-        let Some(session) = guard.as_ref() else {
+        let guard = self.take.lock();
+        let Some(take) = guard.as_ref() else {
             return Status { running: false, folder: None, started: None, streams: Vec::new() };
         };
-        let session = session.lock();
+        let take = take.lock();
         Status {
             running: true,
-            folder: Some(session.folder.clone()),
-            started: Some(session.started),
-            streams: session
+            folder: Some(take.folder.clone()),
+            started: Some(take.started),
+            streams: take
                 .open
                 .iter()
                 .map(|(id, s)| {

@@ -225,12 +225,13 @@ macro_rules! export {
 }
 
 /// What the generated crate spells around the node module: the three symbols the loader reads.
+/// `$sdk` is the hash of the SDK sources the crate was generated against.
 #[macro_export]
 macro_rules! cdylib {
-    ($node:ident) => {
+    ($node:ident, $sdk:literal) => {
         #[no_mangle]
         pub extern "C" fn goofi_version() -> *const ::std::ffi::c_char {
-            $crate::abi::version()
+            $crate::abi::version($sdk)
         }
         #[no_mangle]
         pub extern "C" fn goofi_describe() -> *const ::std::ffi::c_char {

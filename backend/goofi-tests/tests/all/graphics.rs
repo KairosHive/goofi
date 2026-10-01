@@ -939,7 +939,7 @@ fn the_engine_draws_on_its_own_clock() {
     let start = g.until("the clock turns", |g| {
         idle(g)["frames"].as_u64().filter(|f| *f > 3)
     });
-    assert_eq!(idle(&g)["clock"], "timer");
+    assert_eq!(idle(&g)["clock"], "internal");
     assert_eq!(idle(&g)["stages"], j!(0), "no reader, no stage, whatever the clock does");
 
     // Step: a viewer arrives and the frames it gets were drawn by nobody's hand.
