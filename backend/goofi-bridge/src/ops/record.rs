@@ -1,67 +1,43 @@
 //! Recording: arming outputs on the patch, and the one recorder every engine writes to.
 
-use schemars::JsonSchema;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{op, EffectOp, Endpoint, NoArgs, ReadOp, WriteOp};
 use crate::{vocab, AppState, Caller, Event, Txn};
 use goofi_graph::{Graph, Uid};
 
-// ---- record status (Read)
-op!(Status, "record status", 0, NoArgs, Value,
+op!(Status, "record status", 0, NoArgs,
     "Whether a recording runs, where it writes, and every armed stream's health: frames written, frames dropped, and how full its buffer is. The one read a panel, an agent and a test all use.",
     "{running: bool, folder: string | null, elapsed: number | null, streams: [{node, slot, engine, file, frames, dropped, fill}], error: null} — `error` is what the `record_changed` event puts a failed finalize in; a status read always answers null");
 
-// ---- record arm (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ArmArgs {
+op!(Arm, "record arm", 1, ArmArgs {
     pub output: Endpoint,
-}
-
-op!(Arm, "record arm", 1, ArmArgs, Value,
+},
     "Capture this output slot, addressed `node/slot`. Arming rides the node's own record, so it is undone, saved and copied with the node, and a re-wire elsewhere cannot disarm it. Arming while a recording runs opens a new file for that stream at once. `changed` is false when the slot was already armed, which records no command.",
     "{ok: true, changed: bool}");
 
-// ---- record quality (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct QualityArgs {
+op!(Quality, "record quality", 2, QualityArgs {
     pub output: Endpoint,
     pub quality: String,
-}
-
-op!(Quality, "record quality", 2, QualityArgs, Value,
+},
     "Set an armed video output's quality: small, high (default), or very_high. Saved with the patch and undoable. During recording, a change starts a new video file.",
     "{ok: true, changed: bool}");
 
-// ---- record disarm (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct DisarmArgs {
+op!(Disarm, "record disarm", 1, DisarmArgs {
     pub output: Endpoint,
-}
-
-op!(Disarm, "record disarm", 1, DisarmArgs, Value,
+},
     "Stop capturing this output slot. A file open for it is closed and named in the manifest. `changed` is false when the slot was not armed, which records no command.",
     "{ok: true, changed: bool}");
 
-// ---- record start (Effect)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct StartArgs {
+op!(Start, "record start", 1, StartArgs {
     pub name: Option<String>,
     pub root: Option<String>,
     pub annotations: Option<Value>,
-}
-
-op!(Start, "record start", 1, StartArgs, Value,
+},
     "Begin a recording. `name` names the folder, which otherwise carries the UTC of this moment; `root` overrides the recordings folder for this one recording. Either one absent is read from `variables.record.name` and `variables.record.root`. Refused when nothing is armed, and refused when one already runs.",
     "{folder: string}");
 
-// ---- record stop (Effect)
-op!(Stop, "record stop", 0, NoArgs, Value,
+op!(Stop, "record stop", 0, NoArgs,
     "End the recording: every file is closed and the manifest is finalized.",
     "{folder: string}");
 
@@ -76,9 +52,9 @@ fn slot_of(output: &Endpoint) -> &str {
     output.0.rsplit('/').next().unwrap_or(&output.0)
 }
 
-fn set_armed(tx: &mut Txn, op: &str, output: &Endpoint, arm: bool) -> Result<Value, String> {
-    let (uid, slot) = output.resolve(&tx.g, op, "output")?;
-    let slot = vocab::resolve_slot(&tx.g, op, uid, &slot)?;
+fn set_armed(tx: &mut Txn, output: &Endpoint, arm: bool) -> Result<Value, String> {
+    let (uid, slot) = output.resolve(&tx.g, "output")?;
+    let slot = vocab::resolve_slot(&tx.g, uid, &slot)?;
     let mut record = tx.g.recorded(uid).unwrap_or(&[]).to_vec();
     let held = record.iter().position(|s| s.slot == slot);
     match (arm, held) {
@@ -102,7 +78,7 @@ impl ReadOp for Status {
 
 impl WriteOp for Arm {
     fn run(tx: &mut Txn, a: ArmArgs) -> Result<Value, String> {
-        set_armed(tx, "record arm", &a.output, true)
+        set_armed(tx, &a.output, true)
     }
 
     fn label(a: &ArmArgs, _: &Value) -> String {
@@ -112,7 +88,7 @@ impl WriteOp for Arm {
 
 impl WriteOp for Disarm {
     fn run(tx: &mut Txn, a: DisarmArgs) -> Result<Value, String> {
-        set_armed(tx, "record disarm", &a.output, false)
+        set_armed(tx, &a.output, false)
     }
 
     fn label(a: &DisarmArgs, _: &Value) -> String {
@@ -122,15 +98,15 @@ impl WriteOp for Disarm {
 
 impl WriteOp for Quality {
     fn run(tx: &mut Txn, a: QualityArgs) -> Result<Value, String> {
-        let (uid, slot) = a.output.resolve(&tx.g, "record quality", "output")?;
-        let slot = vocab::resolve_slot(&tx.g, "record quality", uid, &slot)?;
+        let (uid, slot) = a.output.resolve(&tx.g, "output")?;
+        let slot = vocab::resolve_slot(&tx.g, uid, &slot)?;
         if tx.g.node_type(uid).and_then(|ty| tx.g.type_engine(&ty)) != Some("graphics") {
-            return Err("record quality: quality settings apply to video outputs only".into());
+            return Err("quality settings apply to video outputs only".into());
         }
         let quality = serde_json::from_value::<goofi_core::record::VideoQuality>(json!(a.quality))
-            .map_err(|_| "record quality: expected small, high, or very_high")?;
+            .map_err(|_| "expected small, high, or very_high")?;
         let mut record = tx.g.recorded(uid).unwrap_or(&[]).to_vec();
-        let output = record.iter_mut().find(|output| output.slot == slot).ok_or("record quality: arm the output first")?;
+        let output = record.iter_mut().find(|output| output.slot == slot).ok_or("arm the output first")?;
         if output.quality == quality {
             return Ok(json!({ "ok": true, "changed": false }));
         }
@@ -157,12 +133,12 @@ impl EffectOp for Start {
         let g = state.graph.lock();
         let armed: Vec<Uid> = g.all_uids().into_iter().filter(|u| !g.recorded(*u).unwrap_or(&[]).is_empty()).collect();
         if armed.is_empty() {
-            return Err("record start: nothing is armed — `record arm <node>/<slot>` first".into());
+            return Err("nothing is armed — `record arm <node>/<slot>` first".into());
         }
         // A recording is many streams across three engines, so a missing video encoder costs the
         // graphics stream alone — unless every armed stream is one, which would record nothing.
         if armed.iter().all(|u| stream_id(&g, *u, "").engine == "graphics") {
-            state.recorder.can_encode().map_err(|e| format!("record start: {e}"))?;
+            state.recorder.can_encode()?;
         }
         let root = record_arg(&g, a.root.as_deref(), "root")
             .map(std::path::PathBuf::from)
@@ -174,7 +150,7 @@ impl EffectOp for Start {
         let folder = state
             .recorder
             .start(&root, &name, patch.as_deref(), a.annotations.as_ref())
-            .map_err(|e| format!("record start: {e}"))?;
+            ?;
         state.events.send(record_changed(state));
         Ok(json!({ "folder": folder.to_string_lossy() }))
     }
@@ -182,7 +158,7 @@ impl EffectOp for Start {
 
 impl EffectOp for Stop {
     fn run(state: &AppState, _: NoArgs, _: &Caller) -> Result<Value, String> {
-        let folder = state.recorder.stop()?.ok_or("record stop: no recording runs")?;
+        let folder = state.recorder.stop()?.ok_or("no recording runs")?;
         state.events.send(record_changed(state));
         Ok(json!({ "folder": folder.to_string_lossy() }))
     }
@@ -198,19 +174,11 @@ pub(crate) fn record_state(state: &AppState) -> Value {
 pub(crate) fn record_state_at(state: &AppState, now: f64) -> Value {
     let s = state.recorder.status();
     let elapsed = s.started.map(|t0| now - t0);
-    let streams: Vec<Value> = s
-        .streams
-        .iter()
-        .map(|st| {
-            json!({ "node": st.node, "slot": st.slot, "engine": st.engine, "file": st.file,
-                    "frames": st.frames, "dropped": st.dropped, "fill": st.fill })
-        })
-        .collect();
     json!({
         "running": s.running,
         "folder": s.folder.map(|f| f.to_string_lossy().into_owned()),
         "elapsed": elapsed,
-        "streams": streams,
+        "streams": s.streams,
         "error": Value::Null,
     })
 }

@@ -1,7 +1,7 @@
 //! The editor's panel arrangement, held as a TREE: an ordered strip of tabs, each holding one root
 //! node, each split holding its children in order.
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -42,24 +42,11 @@ fn fraction(ratio: f64) -> Result<f64, String> {
 
 /// A split's axis. `Row` = children left→right, `Column` = top→bottom — the CSS `flex-direction`
 /// spelling the renderer maps straight through.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Axis {
     Row,
     Column,
-}
-
-/// One spelling, not two: the wire is `name`/`parse`, which the op argument already reads through.
-impl Serialize for Axis {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.name())
-    }
-}
-
-impl<'de> Deserialize<'de> for Axis {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Axis, D::Error> {
-        let s = String::deserialize(d)?;
-        Axis::parse(&s).ok_or_else(|| serde::de::Error::custom("an axis is `row` or `column`"))
-    }
 }
 
 impl Axis {
@@ -67,13 +54,6 @@ impl Axis {
         match self {
             Axis::Row => "row",
             Axis::Column => "column",
-        }
-    }
-    pub fn parse(s: &str) -> Option<Axis> {
-        match s {
-            "row" => Some(Axis::Row),
-            "column" => Some(Axis::Column),
-            _ => None,
         }
     }
 }
@@ -287,7 +267,7 @@ impl Layout {
     /// The first `Tab n` no tab is wearing. A LABEL is not unique — this only keeps a fresh tab
     /// from arriving under a name already on screen.
     fn free_name(&self) -> String {
-        (1..).map(|n| format!("Tab {n}")).find(|n| self.tab_named(n).is_none()).expect("unbounded")
+        goofi_core::fresh_name("Tab ", 1, |n| self.tab_named(n).is_some())
     }
 
     /// The FIRST tab wearing this label. Two may: a name is not addressing, and the uniqueness it
@@ -347,36 +327,18 @@ impl Layout {
 
     /// The node carrying `id`, or `None` — a tab is not one.
     pub fn node(&self, id: &str) -> Option<&Node> {
-        fn down<'a>(n: &'a Node, id: &str) -> Option<&'a Node> {
-            if n.id() == id {
-                return Some(n);
-            }
-            n.children().iter().find_map(|c| down(c, id))
-        }
-        self.tabs.iter().find_map(|t| down(&t.root, id))
+        self.path_of(id).map(|p| self.at(&p))
     }
 
-    /// The same, mutably.
     fn node_mut(&mut self, id: &str) -> Option<&mut Node> {
-        fn down<'a>(n: &'a mut Node, id: &str) -> Option<&'a mut Node> {
-            if n.id() == id {
-                return Some(n);
-            }
-            match n {
-                Node::Split { children, .. } => children.iter_mut().find_map(|c| down(c, id)),
-                Node::Panel { .. } => None,
-            }
-        }
-        self.tabs.iter_mut().find_map(|t| down(&mut t.root, id))
+        let p = self.path_of(id)?;
+        Some(self.at_mut(&p))
     }
 
     /// The tab `id` sits on — what a placement answers with, so a caller knows where its panel
     /// landed without walking the tree it was just handed.
     pub fn tab_of(&self, id: &str) -> Option<Id> {
-        fn holds(n: &Node, id: &str) -> bool {
-            n.id() == id || n.children().iter().any(|c| holds(c, id))
-        }
-        self.tabs.iter().find(|t| t.id == id || holds(&t.root, id)).map(|t| t.id.clone())
+        self.tab_index(id).or_else(|| self.path_of(id).map(|p| p.0)).map(|i| self.tabs[i].id.clone())
     }
 
     /// The id of a tab's root — what a caller gives content to after adding one.
@@ -469,12 +431,6 @@ impl Layout {
         let parent = self.at_mut(&parent_path);
         let Node::Split { children, .. } = parent else { unreachable!("a path only descends splits") };
         let gone = children.remove(mine);
-        let total: f64 = children.iter().map(Node::size).sum();
-        let total = if total > 0.0 { total } else { 1.0 };
-        for c in children.iter_mut() {
-            let v = c.size();
-            c.set_size(v + gone.size() * v / total);
-        }
         Layout::normalize(parent);
         let lone = matches!(parent, Node::Split { children, .. } if children.len() == 1);
         if lone {
@@ -900,20 +856,24 @@ impl Layout {
     /// Clear the node binding of every panel naming a uid in `gone`. A panel's `state` is opaque
     /// here save for this one key — a panel pointing at a deleted node is the one knowable wrong.
     pub fn unbind(&self, gone: &std::collections::HashSet<crate::Uid>) -> Vec<Write> {
-        let mut writes = Vec::new();
-        for n in self.nodes() {
-            let Node::Panel { id, panel_type, state, .. } = n else { continue };
-            let bound = state.get("node").and_then(|v| v.as_str());
-            if !bound.and_then(crate::Uid::from_hex).is_some_and(|u| gone.contains(&u)) {
-                continue;
-            }
-            let mut state = state.clone();
-            if let Some(o) = state.as_object_mut() {
-                o.insert("node".into(), Value::Null);
-            }
-            writes.push((id.clone(), Contents::Panel { panel_type: panel_type.clone(), state }));
-        }
-        writes
+        let bound = |state: &Value| state.get("node").and_then(Value::as_str).and_then(crate::Uid::from_hex);
+        self.rekey_panels(|_, state| bound(state).is_some_and(|u| gone.contains(&u)), "node", Value::Null)
+    }
+
+    /// Set `key` to `to` in the state of every panel `pick` takes.
+    fn rekey_panels(&self, pick: impl Fn(&str, &Value) -> bool, key: &str, to: Value) -> Vec<Write> {
+        self.nodes()
+            .filter_map(|n| match n {
+                Node::Panel { id, panel_type, state, .. } if pick(panel_type, state) => {
+                    let mut state = state.clone();
+                    if let Some(o) = state.as_object_mut() {
+                        o.insert(key.into(), to.clone());
+                    }
+                    Some((id.clone(), Contents::Panel { panel_type: panel_type.clone(), state }))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Every control panel and the group it names, in panel order.
@@ -931,19 +891,8 @@ impl Layout {
     /// Re-aim every control panel naming group `from` at `to`. A group's identity is its name, so
     /// a panel holds it the way an expression does, and one rename moves both.
     pub fn regroup(&self, from: &str, to: &str) -> Vec<Write> {
-        let mut writes = Vec::new();
-        for n in self.nodes() {
-            let Node::Panel { id, panel_type, state, .. } = n else { continue };
-            if panel_type != "control" || state.get("group").and_then(|v| v.as_str()) != Some(from) {
-                continue;
-            }
-            let mut state = state.clone();
-            if let Some(o) = state.as_object_mut() {
-                o.insert("group".into(), Value::String(to.to_string()));
-            }
-            writes.push((id.clone(), Contents::Panel { panel_type: panel_type.clone(), state }));
-        }
-        writes
+        let named = |t: &str, state: &Value| t == "control" && state.get("group").and_then(Value::as_str) == Some(from);
+        self.rekey_panels(named, "group", Value::String(to.to_string()))
     }
 
     /// Set a panel's type and/or state. `panel_type` lands FIRST because changing it clears the old

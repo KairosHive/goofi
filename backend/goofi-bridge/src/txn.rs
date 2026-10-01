@@ -10,7 +10,6 @@ use crate::{AppState, Caller, Event};
 pub struct Txn<'a> {
     pub state: &'a AppState,
     pub caller: &'a Caller,
-    pub actor: &'a str,
     pub g: MutexGuard<'a, Graph>,
     pub history: MutexGuard<'a, CommandHistory>,
     outbox: Vec<Event>,
@@ -20,9 +19,8 @@ pub struct Txn<'a> {
     mark: Option<usize>,
     edited: bool,
     preview: bool,
-    committed: bool,
-    /// What the history entry this transaction leaves says it did.
-    label: String,
+    /// What the write steps say they did; the history entry names one, or counts several.
+    labels: Vec<String>,
 }
 
 impl<'a> Txn<'a> {
@@ -30,23 +28,23 @@ impl<'a> Txn<'a> {
     pub fn begin(state: &'a AppState, caller: &'a Caller, preview: bool) -> Txn<'a> {
         let g = state.graph.lock();
         let history = state.history.lock();
-        Txn { state, caller, actor: &caller.actor, g, history, outbox: Vec::new(), echo: Vec::new(), mark: None, edited: false, preview, committed: false, label: String::new() }
+        Txn { state, caller, g, history, outbox: Vec::new(), echo: Vec::new(), mark: None, edited: false, preview, labels: Vec::new() }
     }
 
     /// Run `cmd` through the history. The first command clears the actor's redo run and takes
     /// the mark everything after is coalesced to, or rolled back to.
     pub fn apply(&mut self, cmd: Command) -> Result<Outcome, String> {
         if self.mark.is_none() && !self.preview {
-            self.history.clear_redo(self.actor);
+            self.history.clear_redo(&self.caller.actor);
             self.mark = Some(self.history.mark());
         }
         self.edited = true;
-        self.history.apply(&mut self.g, self.actor, cmd)
+        self.history.apply(&mut self.g, &self.caller.actor, cmd)
     }
 
-    /// Name the history entry this transaction leaves — what an undo button says it takes back.
+    /// Name a write step — what an undo button says it takes back.
     pub fn label(&mut self, label: String) {
-        self.label = label;
+        self.labels.push(label);
     }
 
     /// The graph moved by a path that is no command: the tail runs for this transaction.
@@ -70,7 +68,6 @@ impl<'a> Txn<'a> {
     /// The tail, once: settle, project, release the graph, then the delta and the outbox under
     /// the document guard. A transaction that moved nothing sends its outbox and no delta.
     pub fn commit(mut self) {
-        self.committed = true;
         let state = self.state;
         let mut outbox = std::mem::take(&mut self.outbox);
         if !self.edited {
@@ -81,9 +78,12 @@ impl<'a> Txn<'a> {
             }
             return;
         }
-        if let Some(mark) = self.mark {
+        if let Some(mark) = self.mark.take() {
             // The caller's own label, where it gave one, names the step over the op's.
-            let label = self.caller.label.clone().unwrap_or_else(|| std::mem::take(&mut self.label));
+            let label = self.caller.label.clone().unwrap_or_else(|| match self.labels.as_slice() {
+                [one] => one.clone(),
+                many => format!("{} edits", many.len()),
+            });
             self.history.coalesce(mark, label, self.caller.context.clone(), self.caller.group.clone());
         }
         if !self.preview {
@@ -106,9 +106,6 @@ impl<'a> Txn<'a> {
 impl Drop for Txn<'_> {
     /// Not committed — refused, or unwinding: what this transaction applied is taken back.
     fn drop(&mut self) {
-        if self.committed {
-            return;
-        }
         if let Some(mark) = self.mark {
             self.history.rollback(&mut self.g, mark);
         }

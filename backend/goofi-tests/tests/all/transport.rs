@@ -255,7 +255,7 @@ fn a_desired_state_reaches_the_executor_and_a_request_is_answered() {
         fleet.reports().iter().any(|(u, s)| *u == Uid(4) && *s == Status::Stage { stage: goofi_node::NodeStage::Ready }).then_some(())
     });
 
-    node.handle.refresh(key.clone());
+    node.handle.request(goofi_node::Request { kind: goofi_node::RequestKind::Refresh, key: key.clone() });
     let options = until("the refresh to answer", || {
         fleet.reports().into_iter().find_map(|(_, s)| match s {
             Status::RefreshOptions { options, .. } => Some(options),
@@ -263,7 +263,7 @@ fn a_desired_state_reaches_the_executor_and_a_request_is_answered() {
         })
     });
     assert_eq!(options, Some(vec!["a".to_string(), "b".to_string()]));
-    node.handle.pulse(key);
+    node.handle.request(goofi_node::Request { kind: goofi_node::RequestKind::Pulse, key });
     until("the pulse to fire", || (node.log.lock().pulses == [0]).then_some(()));
 }
 

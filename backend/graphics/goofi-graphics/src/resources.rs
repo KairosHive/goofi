@@ -1,5 +1,5 @@
 //! GPU texture allocation, upload, state, and readback resources shared by every graphics stage.
-use crate::gpu::{Gpu, Want, padded_row, target};
+use crate::gpu::{Gpu, Want, padded_row};
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -9,6 +9,23 @@ pub(crate) struct Target {
     pub(crate) texture: wgpu::Texture,
     pub(crate) view: wgpu::TextureView,
     pub(crate) size: (u32, u32),
+}
+
+impl Target {
+    /// A texture the engine renders into and reads back from, with its view.
+    fn new(gpu: &Gpu, label: &str, size: (u32, u32), format: wgpu::TextureFormat, usage: wgpu::TextureUsages) -> Target {
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        });
+        Target { view: texture.create_view(&Default::default()), texture, size }
+    }
 }
 
 /// One frame on its way off the GPU: the texture the blit converts into and the buffer the copy
@@ -129,8 +146,7 @@ impl Ring {
         let slots = (0..want.depth())
             .map(|_| {
                 let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC;
-                let texture = target(gpu, "readback", size, want.format(), usage);
-                let view = texture.create_view(&Default::default());
+                let texture = Target::new(gpu, "readback", size, want.format(), usage);
                 let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("readback"),
                     size: u64::from(padded_row(size.0, want.texel())) * u64::from(size.1),
@@ -138,7 +154,7 @@ impl Ring {
                     mapped_at_creation: false,
                 });
                 Slot {
-                    texture: Target { texture, view, size },
+                    texture,
                     buffer,
                     ready: Arc::new(AtomicBool::new(false)),
                     at: 0.0,
@@ -190,14 +206,8 @@ impl State {
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST;
-            let texture = target(gpu, "out", size, crate::gpu::FORMAT, usage);
-            let view = texture.create_view(&Default::default());
-            self.out = Some(Target { texture, view, size });
-            let fresh = || {
-                let texture = target(gpu, "state", size, crate::gpu::FORMAT, usage);
-                let view = texture.create_view(&Default::default());
-                Target { texture, view, size }
-            };
+            self.out = Some(Target::new(gpu, "out", size, crate::gpu::FORMAT, usage));
+            let fresh = || Target::new(gpu, "state", size, crate::gpu::FORMAT, usage);
             self.buffers = (0..buffers).map(|_| [fresh(), fresh()]).collect();
             self.count = 0;
             self.submitted = None;
@@ -242,9 +252,7 @@ impl State {
         let size = (up.width, up.height);
         if self.uploads[k].as_ref().is_none_or(|t| t.size != size) {
             let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
-            let texture = target(gpu, "upload", size, crate::gpu::FORMAT, usage);
-            let view = texture.create_view(&Default::default());
-            self.uploads[k] = Some(Target { texture, view, size });
+            self.uploads[k] = Some(Target::new(gpu, "upload", size, crate::gpu::FORMAT, usage));
         }
         let held = self.uploads[k].as_ref().expect("just made");
         write_upload(gpu, &held.texture, up);
@@ -331,8 +339,7 @@ impl Upload {
         if h == 0 || w == 0 || h > crate::plan::MAX_SIZE as usize || w > crate::plan::MAX_SIZE as usize {
             return None;
         }
-        let x: Vec<f32> =
-            a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes"))).collect();
+        let x: Vec<f32> = a.values().collect();
         let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
         for v in x.iter().filter(|v| v.is_finite()) {
             lo = lo.min(*v);

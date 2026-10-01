@@ -1,11 +1,8 @@
-//! Cross-engine transport: iceoryx2 names, rendezvous and endpoint machinery, one shared
-//! mechanism for every engine. A phone book, not a switchboard — the resolver here is pure name
-//! and config derivation, and whichever side settles first waits on `open_or_create`.
-
+//! Cross-engine transport: iceoryx2 names, rendezvous and endpoints for every engine. Names are
+//! pure derivation, and whichever side settles first waits on `open_or_create`.
 
 use iceoryx2::config::Config;
 use iceoryx2::prelude::*;
-
 
 pub mod exchange;
 pub mod names;
@@ -21,8 +18,6 @@ pub type ServiceName = String;
 /// The service variant every goofi port uses. `ipc_threadsafe` (rather than `ipc`) is what makes
 /// the ports `Send + Sync`, which an engine's transport must be.
 type Svc = ipc_threadsafe::Service;
-/// The iceoryx2 node every port of one owner is built from. It must outlive them, and it is what
-/// `max_nodes` counts on each service — so owners share one rather than minting one per port.
 /// An iceoryx2 node under the session's root and prefix, entered in the process's resource index
 /// for as long as it lives. Declare it AFTER the ports it minted, so they are dropped first.
 pub struct IoxNode {
@@ -50,9 +45,8 @@ pub fn wait_within(listener: &Listener, within: std::time::Duration, f: impl FnM
     let _ = listener.timed_wait_all(f, within.max(std::time::Duration::from_micros(1)));
 }
 
-/// Every port of one session is built against this: its iceoryx2 root and prefix, and
-/// iceoryx2's three automatic dead-node passes OFF — the session lock is the one liveness
-/// answer, and a pass over a directory only this session writes has nothing to find.
+/// The iceoryx2 root and prefix every port of one session is built against. The dead-node passes
+/// are off: the session lock is the one liveness answer.
 pub struct Iox {
     id: String,
     config: Config,
@@ -111,10 +105,8 @@ fn iox_root(id: &str) -> std::path::PathBuf {
     goofi_supervisor::session::system_dir(id).join("iox")
 }
 
-/// Raise the soft descriptor limit toward the hard one. A node costs about 45 descriptors, so the
-/// usual 1024 soft limit is a ceiling of twenty nodes, and it lands on whatever the user does
-/// next — which was a SAVE. Best effort, and capped rather than taken to the hard limit, because
-/// macOS refuses the infinite one it often reports there.
+/// Raise the soft descriptor limit (a node costs about 45) toward the hard one. Capped, because
+/// macOS refuses the infinite hard limit it often reports.
 #[cfg(unix)]
 fn raise_fd_limit() {
     const WANTED: libc::rlim_t = 65536;
@@ -144,11 +136,7 @@ pub struct PortBundle<P> {
 impl<P> PortBundle<P> {
     /// Build the ports on a fresh node of this session.
     pub fn open(iox: &Iox, build: impl FnOnce(&IoxNode) -> Result<P, String>) -> Result<PortBundle<P>, String> {
-        PortBundle::on(iox.node()?, build)
-    }
-
-    /// Build the ports on `node`, which the bundle then owns.
-    pub fn on(node: IoxNode, build: impl FnOnce(&IoxNode) -> Result<P, String>) -> Result<PortBundle<P>, String> {
+        let node = iox.node()?;
         let ports = build(&node)?;
         Ok(PortBundle { ports, node })
     }
@@ -171,10 +159,8 @@ impl<P> std::ops::DerefMut for PortBundle<P> {
     }
 }
 
-/// The stack a thread needs to OPEN an iceoryx2 service: the service's static config is parsed by
-/// serde and toml, whose debug-build frames overflow a platform default. `AGENTS.md` says what it
-/// cost. It is the main thread's own size, so a node thread is no more constrained than the
-/// process around it.
+/// The stack a thread needs to OPEN an iceoryx2 service: serde and toml parse its config, and their
+/// debug-build frames overflow a platform default. It is the main thread's own size.
 pub const STACK: usize = 8 * 1024 * 1024;
 
 /// A named thread with the stack [`STACK`] states. Every goofi thread that can reach this crate is

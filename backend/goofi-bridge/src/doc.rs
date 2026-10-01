@@ -89,17 +89,14 @@ pub struct GraphDoc {
 }
 
 impl GraphDoc {
-    /// An empty document at version 0.
     pub fn new() -> GraphDoc {
         GraphDoc { state: Value::Object(Map::new()), version: 0 }
     }
 
-    /// The whole document as plain JSON.
     pub fn to_json(&self) -> Value {
         self.state.clone()
     }
 
-    /// The version this document is at.
     pub fn version(&self) -> u64 {
         self.version
     }

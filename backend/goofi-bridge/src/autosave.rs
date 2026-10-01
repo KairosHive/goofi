@@ -37,7 +37,7 @@ fn dir_of(mount: &Path) -> PathBuf {
 /// Start the worker; it ends with `state.stopping`, before the mount goes.
 pub(crate) fn spawn(state: AppState) {
     let owner = state.clone();
-    let worker = goofi_supervisor::worker::spawn("goofi-autosave", move || {
+    owner.scope.spawn("goofi-autosave", move || {
         let mut last: Option<Stamp> = None;
         let mut watch = Watch::new(&state);
         loop {
@@ -57,9 +57,6 @@ pub(crate) fn spawn(state: AppState) {
             tick(&state, &mut last);
         }
     });
-    if let Ok(worker) = worker {
-        owner.scope.adopt(worker);
-    }
 }
 
 /// Every live mount, as given and symlink-free, and the waker its event pulses. ONE watcher serves

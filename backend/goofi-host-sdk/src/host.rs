@@ -151,7 +151,7 @@ impl<C: Call> Node for CodecNode<C> {
         self.seed(ctx.now, p)?;
         let present = present(self.in_slots.iter().copied(), inp);
         let request = goofi_codec::rpc::encode_request(&present).map_err(|e| NodeError(e.to_string()))?;
-        match self.call(Entry::Process, ctx.now, &runs(&request)) {
+        match self.call(Entry::Process, ctx.now, &request.iter().map(|r| &**r).collect::<Vec<_>>()) {
             Ok(Response::Process(result)) => apply(result, inp, out, ctx),
             other => Self::done(other),
         }
@@ -180,11 +180,6 @@ impl<C: Call> Node for CodecNode<C> {
         let request = goofi_codec::rpc::encode_pulse_request(&key.group, &key.name).map_err(|e| NodeError(e.to_string()))?;
         Self::done(self.call(Entry::Pulse, 0.0, &[&request]))
     }
-}
-
-/// A request's runs as the slices a [`Call`] takes.
-pub fn runs<'a>(request: &'a goofi_codec::rpc::Runs<'_>) -> Vec<&'a [u8]> {
-    request.iter().map(|r| &**r).collect()
 }
 
 /// Every present frame, a `multi` slot's under its one name repeated, each with its source; a

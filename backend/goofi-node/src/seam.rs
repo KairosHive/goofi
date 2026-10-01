@@ -62,16 +62,7 @@ impl DrainWaker {
     /// Park until a notify or `timeout`, and consume the wake either way. Answers whether a
     /// notify came, so a caller can tell a quiet window from a wake.
     pub fn wait_timeout(&self, timeout: Duration) -> bool {
-        let deadline = std::time::Instant::now() + timeout;
-        let mut woke = self.woke.lock();
-        while !*woke {
-            let left = deadline.saturating_duration_since(std::time::Instant::now());
-            if left.is_zero() {
-                break;
-            }
-            let guard = self.cv.wait_timeout(woke, left);
-            woke = guard;
-        }
+        let mut woke = self.cv.wait_timeout_while(self.woke.lock(), timeout, |w| !*w);
         std::mem::replace(&mut *woke, false)
     }
 }
@@ -172,6 +163,14 @@ pub enum Touched {
     Watch(Uid, &'static str),
 }
 
+impl Touched {
+    pub fn uid(&self) -> Uid {
+        match self {
+            Touched::Slot(u, _) | Touched::Param(u, _) | Touched::Record(u) | Touched::Watch(u, _) => *u,
+        }
+    }
+}
+
 /// One node class an engine advertises: the shared manifest plus the display tier. The engine a
 /// type belongs to is WHICH library advertises it — no tag field exists anywhere.
 #[derive(Clone, Copy)]
@@ -198,10 +197,8 @@ pub enum RequestKind {
     Pulse,
 }
 
-/// An engine: the runtime authority for its nodes. The graph applies every op to the MODEL and
-/// propagates through these doors; an engine owns instances, health reporting, within-engine
-/// transport and its own library, and the graph sees none of them. Engines run in the manager's
-/// process (decided 2026-09-15): the seam is in-memory, and the view it hands over is borrowed.
+/// An engine: the runtime authority for its nodes' instances, health, transport and library. The
+/// graph applies every op to the MODEL and propagates through these in-memory doors.
 pub trait Engine: Send {
     /// The id a registration is keyed by, and the palette's provenance for this library.
     fn id(&self) -> &'static str;
@@ -245,25 +242,14 @@ pub trait Engine: Send {
     fn universal_decls(&self, _manifest: &'static NodeManifest) -> Vec<ParamDecl> {
         Vec::new()
     }
-    /// The record a fresh instance of `manifest` starts from: the declared defaults in declared
-    /// order — the editor renders in insertion order — with `supplied` folded on top, so a patch
-    /// saved before a param existed still gets that param's default; then each universal group
-    /// rebuilt LAST in this engine's order, a declared or supplied value winning over the default.
-    /// By MANIFEST, not by name, so a type the library no longer answers for can still say what
-    /// its live nodes hold. Every engine answers this one way; none overrides it.
+    /// The declared defaults with `supplied` folded on top, then each universal group rebuilt LAST
+    /// in this engine's order. By MANIFEST, so a type the library no longer answers for still works.
     fn normalize_params(&self, manifest: &'static NodeManifest, supplied: Option<ParamGroups>) -> ParamGroups {
-        let mut params = ParamGroups::new();
-        for (group, entries) in manifest.default_params() {
-            params.entry(group).or_default().extend(entries);
-        }
+        let mut params = manifest.default_params();
         for (group, entries) in supplied.into_iter().flatten() {
             params.entry(group).or_default().extend(entries);
         }
-        let mut universal = ParamGroups::new();
-        for d in self.universal_decls(manifest) {
-            universal.entry(d.group.to_string()).or_default().insert(d.name.to_string(), d.spec.to_param());
-        }
-        for (group, defaults) in universal {
+        for (group, defaults) in crate::params_from_decls(&self.universal_decls(manifest)) {
             let mut held = params.shift_remove(&group).unwrap_or_default();
             let mut page: IndexMap<String, Param> =
                 defaults.into_iter().map(|(name, default)| { let value = held.shift_remove(&name).unwrap_or(default); (name, value) }).collect();
@@ -290,10 +276,8 @@ pub trait Engine: Send {
     fn settle(&mut self, view: &GraphView<'_>, touched: &[Touched]);
     /// Hand over every queued health report. A pull: the caller owns the pace.
     fn drain(&mut self, apply: &mut dyn FnMut(Uid, Status)) -> usize;
-    /// The facts this engine ALONE decides, for the `system.*` variables to carry — a rate, a
-    /// a driver. A pull like the drain, and the graph is the only writer, so an engine never needs
-    /// a store of its own for what the whole patch may read. Every name must be an ephemeral
-    /// variable: goofi says what it holds and no patch carries it.
+    /// The facts this engine ALONE decides, such as a rate or a driver, for the graph to write into
+    /// `system.*`. Every name must be an ephemeral variable, which no patch carries.
     fn published(&self) -> Vec<(&'static str, goofi_core::variables::VariableValue)> {
         Vec::new()
     }
@@ -314,11 +298,8 @@ pub trait Engine: Send {
     fn take_edits(&mut self) -> Vec<Edit> {
         Vec::new()
     }
-    /// What a slot's readers want of its frames: the box every reader is a viewer of would reduce
-    /// to anyway and the sample width they draw, or `None` for the frame itself — which is what a
-    /// variable following the slot, or a snapshot, requires. A producer that can make exactly that
-    /// spends nothing downstream; one that cannot ignores this. A strictly one-way projection of
-    /// the bridge's own plan, never a second owner of it.
+    /// What a slot's viewers want of its frames, or `None` for the frame itself. A producer that
+    /// can make exactly that spends nothing downstream; one that cannot ignores this.
     fn view_demand(&mut self, _uid: Uid, _slot: &str, _want: Option<goofi_view::ViewWant>) {}
     /// The graph's expression evaluator, shared with every engine that evaluates `nd()` bindings
     /// on its own thread. No-op for an engine that never does.
@@ -343,10 +324,8 @@ pub enum Via<'a> {
 }
 
 impl GraphView<'_> {
-    /// Every doorbell `(producer, slot)` rings, read off the view: wired consumer slots by
-    /// manifest position and `nd()` channels by the event id the graph allocated. An id is a
-    /// hint, so the slots past the budget share its last one. In one order for one settled state,
-    /// so a list of them compares.
+    /// Every doorbell `(producer, slot)` rings: wired slots by manifest position, `nd()` channels
+    /// by event id, slots past the budget sharing the last. One order per settled state.
     pub fn ringers(&self, producer: Uid, slot: &str) -> Vec<Ringer<'_>> {
         let wired = self.edges.iter().filter(|e| e.producer.0 == producer && e.producer.1 == slot).filter_map(|e| {
             let node = self.nodes.get(&e.consumer.0)?;

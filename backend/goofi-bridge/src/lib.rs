@@ -1,8 +1,5 @@
-//! The axum server: `/control` (JSON RPC + broadcast events, doc state and doc deltas among them),
-//! `/data/<node>/<slot>` (ONE reduced GOOF stream per slot, whatever the viewer count — the kind
-//! is not in the path, since viewers publish their ViewSpec inband), `/params/<node>` (one node's
-//! evaluated params, for whoever is displaying them), `/term`, `/mcp`, and the SPA compiled into
-//! the binary.
+//! The axum server: `/control` (JSON RPC, events, the document), `/data/<node>/<slot>` (ONE reduced
+//! stream per slot), `/params/<node>`, `/term`, `/mcp`, and the SPA compiled into the binary.
 
 pub mod boot;
 mod event;
@@ -28,7 +25,7 @@ pub mod schemas;
 pub mod term;
 pub mod vocab;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, MutexGuard};
 use goofi_supervisor::sync::Mutex;
@@ -61,11 +58,11 @@ pub const DEV_ROUTE_PREFIX: &str = "/dev/";
 /// The undo actor for a caller that names none — one shared stack, isolated from every named one.
 pub const DEFAULT_ACTOR: &str = "default";
 
-/// Who is calling, and what their history entry should carry: the actor whose stack it joins,
-/// an opaque navigation `context` handed back on the flip, a `label` that overrides the op's own,
-/// and a `group` token under which several calls merge into one step.
+/// Who is calling: the actor whose undo stack it joins, an opaque navigation `context`, a `label`
+/// that overrides the op's own, and a `group` token under which several calls merge into one step.
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 pub struct Caller {
+    #[serde(default)]
     pub actor: String,
     #[serde(default)]
     pub context: Value,
@@ -133,13 +130,11 @@ pub struct AppState {
     /// Liveness policy for `/data` sockets, injectable so a test need not sit through a
     /// production-length deadline.
     pub data_liveness: DataLiveness,
-    /// The node source roots beyond the patch's own, in precedence order — the shipped bundles
-    /// first, in name order, then each `--extra-nodes` — each holding a `nodes_<engine>/` per
-    /// engine. The patch's workspace is scanned last, and wins a name.
+    /// The node source roots beyond the patch's own, in precedence order: the shipped bundles, then
+    /// each `--extra-nodes`. The patch's workspace is scanned last, and wins a name.
     pub roots: Vec<PathBuf>,
-    /// The private node library — `$GOOFI_HOME/.goofi/custom/`, the ONE root goofi writes into.
-    /// Scanned after every other root and before the patch's own, so a node saved here beats a
-    /// shipped one and loses to the open patch's own file.
+    /// The private node library `$GOOFI_HOME/.goofi/custom/`, the ONE root goofi writes into. It beats a
+    /// shipped node and loses to the open patch's own file.
     pub custom: PathBuf,
     /// What the last scan found, by type name → the file's stamp: the baseline the next [`rescan`]
     /// diffs against, and the only list it removes from.
@@ -197,18 +192,7 @@ impl DataLiveness {
     };
 }
 
-impl Default for DataLiveness {
-    fn default() -> Self {
-        DataLiveness::DEFAULT
-    }
-}
-
 impl AppState {
-    /// An instance named by a fresh id — a test's, several to a process.
-    pub fn new(iox: Arc<goofi_transport::Iox>, mode: Mode, clock: Clock, render: Clock) -> Result<AppState, String> {
-        Self::with_instance(iox, goofi_supervisor::session::fresh_id()?, mode, clock, render)
-    }
-
     /// An instance named by `instance` — the binary's, which names it after the session it holds,
     /// so the id a shell sets `GOOFI_SESSION` to is the one `session status` answers.
     pub fn with_instance(iox: Arc<goofi_transport::Iox>, instance: String, mode: Mode, clock: Clock, render: Clock) -> Result<AppState, String> {
@@ -293,7 +277,7 @@ impl AppState {
         if let Err(error) = self.recorder.stop() {
             goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("Recording could not be finalized: {error}"));
         }
-        self.plugins.stop(self);
+        self.plugins.stop();
         self.record_drain.stop();
         if let Some(worker) = self.record_worker.lock().take() {
             let _ = worker.join_within(goofi_transport::SHUTDOWN_WAIT);
@@ -305,10 +289,8 @@ impl AppState {
         *self.bound.lock() = addr;
     }
 
-    /// The base URL a LOCAL client reaches this server at — a spawned harness, the session
-    /// file's reader. Loopback whenever loopback listens (a wildcard or loopback bind); the
-    /// bound address itself when `--bind` named one other interface, where loopback answers
-    /// nothing.
+    /// The base URL a LOCAL client reaches this server at: loopback whenever loopback listens, else the
+    /// bound address that `--bind` named.
     pub fn local_url(&self) -> String {
         let a = *self.bound.lock();
         match a.ip().is_unspecified() || a.ip().is_loopback() {
@@ -322,10 +304,8 @@ impl AppState {
         self.save_path.lock().clone()
     }
 
-    /// Where the open patch's workspace files live right now. Copied out rather than borrowed: no
-    /// filesystem walk may run while holding the lock.
-    /// The examples a public set offers, this instance's own among them. The patch file's STEM
-    /// is the slug, so one image serves every example and only `--load` differs.
+    /// The examples a public set offers, this instance's own among them. The patch file's STEM is the
+    /// slug, so one image serves every example and only `--load` differs.
     pub(crate) fn examples(&self) -> Option<Value> {
         let base = self.demo_base.as_deref()?;
         let stem = self.load.as_deref().and_then(std::path::Path::file_stem);
@@ -347,9 +327,8 @@ impl AppState {
         self.mount.lock().clone()
     }
 
-    /// Every node root OUTSIDE the open patch, in precedence order and each with the origin a
-    /// type found there wears — the one place that order is stated. The patch's own workspace is
-    /// scanned after these and wins a shared name.
+    /// Every node root OUTSIDE the open patch, in precedence order, each with the origin its types wear.
+    /// The patch's own workspace is scanned after these and wins a shared name.
     pub fn node_roots(&self) -> Vec<(PathBuf, goofi_graph::Origin)> {
         let named = |d: &PathBuf| {
             goofi_graph::Origin::Root(d.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
@@ -361,9 +340,8 @@ impl AppState {
         roots
     }
 
-    /// Forget one workspace file in the unsaved-changes baseline — what a MOVE out of the mount
-    /// leaves behind. A `.gfi` still carries the file, from the library, so the patch's saved
-    /// content did not change and the unsaved dot must not rise for it.
+    /// Forget one workspace file in the unsaved-changes baseline, after a MOVE out of the mount. The
+    /// `.gfi` still carries the file, so the unsaved dot must not rise for it.
     pub(crate) fn forget_baseline(&self, rel: &std::path::Path) {
         self.workspace_baseline.lock().remove(rel);
     }
@@ -376,12 +354,8 @@ impl AppState {
         }
     }
 
-    /// Reclaim one mount and everything living IN it: the harnesses spawned into it are asked to
-    /// leave FIRST, or one survives editing a patch out of a directory the next line deletes. The
-    /// directory goes only once they are GONE — a harness holds it as its cwd, and Windows will
-    /// not delete a directory that is one.
-    /// `None` says it is already DONE: nothing was running in the mount, so nothing had to be
-    /// waited for and the directory is gone.
+    /// Reclaim one mount: its harnesses leave FIRST, and the directory goes only once they are gone,
+    /// because a harness holds it as its cwd. `None` says nothing had to be waited for.
     #[must_use]
     pub(crate) fn reclaim(&self, mount: Mount) -> Option<impl FnOnce() + Send + 'static> {
         let insist = self.harnesses.reap_all()?;
@@ -392,10 +366,8 @@ impl AppState {
     }
 }
 
-/// A workspace mount: `<workspaces>/<session>/<nonce>/workspace`. The nonce directory is the
-/// leased path, so a load can rename an extracted tree onto `workspace` wholesale and the autosave
-/// sits beside it; it goes when the lease does — a clean shutdown removes it, a crash leaves it.
-/// Shared, so a save packing the directory keeps it until the pack is done: it goes on the last drop.
+/// A workspace mount: `<workspaces>/<session>/<nonce>/workspace`, with the nonce directory leased.
+/// Shared, so a save packing the directory keeps it until the pack is done.
 #[derive(Clone)]
 pub(crate) struct Mount(Arc<goofi_supervisor::scope::PathLease>);
 
@@ -453,43 +425,34 @@ pub fn save_archive(
     packed.map_err(|e| format!("save failed: {e}"))
 }
 
-/// The front half of a load, against a mount that is not yet live. It stops AT the manifest,
-/// because the patch's own node types must be registered before `load_doc` resolves the graph.
-/// Answers the manifest, the home the patch takes, and the recovery it came from, if one.
+/// The front half of a load, against a mount that is not yet live. It stops AT the manifest, because
+/// the patch's node types must be registered before `load_doc` resolves the graph.
 pub(crate) fn stage_load(
     mount: &std::path::Path,
     custom: &std::path::Path,
-    payload: &Value,
+    source: &ops::session::Source,
 ) -> Result<(String, Option<String>, Option<PathBuf>), String> {
-    let from_file = payload.get("path").and_then(|v| v.as_str()).filter(|p| !p.is_empty());
-    let inline = payload.get("content").and_then(|v| v.as_str());
-    let recover = payload.get("recover").and_then(|v| v.as_str());
+    use ops::session::Source;
     let mut recovered = None;
-    let (content, from_path, unpacked) = if let Some(dir) = recover {
-        // A crash's autosave: the layout a `.gfi` unpacks to, already unpacked. Its home is the
-        // patch's, so the save that follows lands where the lost session's would have.
-        let dir = autosave::recovery(dir)?;
-        let manifest = goofi_graph::archive::read_unpacked(&dir, mount)
-            .map_err(|e| format!("session recover failed: {e}"))?;
-        let home = autosave::home_of(&dir);
-        recovered = Some(dir);
-        (manifest, home, true)
-    } else if let Some(p) = from_file {
-        if inline.is_some() {
-            return Err("session load: a `path` to an archive or a `content` manifest, never both".into());
+    let (content, from_path, unpacked) = match source {
+        Source::Recover(dir) => {
+            // A crash's autosave: the layout a `.gfi` unpacks to, already unpacked. Its home is the
+            // patch's, so the save that follows lands where the lost session's would have.
+            let dir = autosave::recovery(dir)?;
+            let manifest = goofi_graph::archive::read_unpacked(&dir, mount)?;
+            let home = autosave::home_of(&dir);
+            recovered = Some(dir);
+            (manifest, home, true)
         }
-        // Expand `~` exactly as the browser does — the two must agree on what a path means.
-        let path = fsbrowse::resolve(p);
-        let manifest = goofi_graph::archive::read_gfi(std::path::Path::new(&path), mount)
-            .map_err(|e| format!("session load failed: {e}"))?;
-        // Whether this file becomes the patch's home — the target a later silent Save overwrites.
-        let adopt = payload.get("adopt").and_then(Value::as_bool).unwrap_or(true);
-        (manifest, adopt.then_some(path), true)
-    } else if let Some(content) = inline {
-        (content.to_string(), None, false)
-    } else {
-        // Naming no source IS the source: an empty patch, so New cannot drift from Load.
-        (Graph::new(goofi_supervisor::session::fresh_id()?).serialize(), None, false)
+        Source::File { path, adopt } => {
+            // Expand `~` exactly as the browser does — the two must agree on what a path means.
+            let path = fsbrowse::resolve(path);
+            let manifest = goofi_graph::archive::read_gfi(std::path::Path::new(&path), mount)?;
+            (manifest, adopt.then_some(path), true)
+        }
+        Source::Inline(content) => (content.clone(), None, false),
+        // The empty patch is a source like any other, so New cannot drift from Load.
+        Source::Empty => (Graph::new(goofi_supervisor::session::fresh_id()?).serialize(), None, false),
     };
     // Only a workspace goofi minted empty is seeded: an archive has just unpacked the patch's OWN
     // workspace into `mount`, and goofi does not write into someone's patch.
@@ -498,9 +461,8 @@ pub(crate) fn stage_load(
     } else {
         term::seed_orientation(mount);
     }
-    // BOTH ways, unlike the orientation: an unpacked workspace is the patch's own and goofi does
-    // not write into it, but a skill goofi has GAINED since the patch was saved is not something
-    // the patch has an opinion about. Absent-only, so nothing of the patch's is touched.
+    // BOTH ways, unlike the orientation: a skill goofi GAINED since the save is added, absent-only, so
+    // nothing of the patch's is touched.
     seed_skills(mount);
     Ok((content, from_path, recovered))
 }
@@ -575,36 +537,12 @@ fn local_routes(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// The uids whose error state changed since `last`, which is updated in place. A node first seen
-/// HEALTHY is not a change, and a memo answers for the node INSTANCE that reported it: a rebirth at
-/// a uid — a load, a restart — is a transition whatever its predecessor last said.
-fn error_transitions(
-    current: &[(String, u64, Option<String>)],
-    last: &mut HashMap<String, (u64, Option<String>)>,
-) -> Vec<String> {
-    let seen: HashSet<&String> = current.iter().map(|(u, ..)| u).collect();
-    let mut changed = Vec::new();
-    for (uid, generation, err) in current {
-        let is_changed = match last.get(uid) {
-            Some((g, e)) => g != generation || e != err,
-            None => err.is_some(),
-        };
-        if is_changed {
-            changed.push(uid.clone());
-        }
-        last.insert(uid.clone(), (*generation, err.clone()));
-    }
-    last.retain(|k, _| seen.contains(k));
-    changed
-}
-
 /// How often the drained reports are broadcast — the event rate, distinct from the drain, which
 /// is EVENT-WOKEN: a node's report notifies the waker, so nothing polls to discover one.
 const BROADCAST_PERIOD: Duration = Duration::from_millis(500);
 
-/// …and how often the drain refreshes the live pairs `/params` reads. A stage is a TRANSITION and
-/// a live value is a READOUT, so they cannot share a clock: on the health period alone, a slider
-/// following an expression moved twice a second.
+/// …and how often the drain refreshes the live pairs `/params` reads: a live value is a READOUT, and
+/// on the health period a slider following an expression moved twice a second.
 const LIVE_PERIOD: Duration = Duration::from_millis(50);
 
 /// One watch per node a `/params` socket displays, holding the node's last pair as the wire
@@ -624,7 +562,9 @@ impl LiveHub {
         let mut watches = self.watches.lock();
         watches.retain(|_, w| w.receiver_count() > 0);
         for (uid, w) in watches.iter() {
-            let text = pair_payload(&uid.to_hex(), &live_pair(g, *uid)).to_string();
+            let mut pair = live_pair(g, *uid);
+            pair["node"] = json!(uid.to_hex());
+            let text = pair.to_string();
             w.send_if_modified(|held| if *held == text { false } else { *held = text; true });
         }
     }
@@ -642,22 +582,18 @@ fn logged() -> &'static tokio::sync::watch::Sender<u64> {
     })
 }
 
-/// The background worker a live server needs — the status drain: take every node's reports, apply
-/// them to the graph, and broadcast the events that carry them.
-///
-/// It must never `set_dirty(true)` — a node reporting its own state is not a user edit — and must
-/// FORGET a uid on removal, so a stale error cannot outlive its node.
+/// The status drain: take every node's reports, apply them, and broadcast their events. It never
+/// sets dirty, and FORGETS a uid on removal so a stale error cannot outlive its node.
 pub fn spawn_workers(state: &AppState) {
     let owner = state.clone();
     let state = state.clone();
     let (graph, events) = (state.graph.clone(), state.events.clone());
-    let worker = goofi_supervisor::worker::spawn("goofi-status-drain", move || {
+    owner.scope.spawn("goofi-status-drain", move || {
         let waker = graph.lock().drain_waker();
         let period = BROADCAST_PERIOD;
-        let mut last_errors: HashMap<String, (u64, Option<String>)> = HashMap::new();
         // A node's stage changes on its own thread, with no RPC to ride on. It carries the error
         // too, because a facade HAS health and never reports one.
-        let mut last_stages: HashMap<String, NodeState> = HashMap::new();
+        let mut last: HashMap<String, NodeState> = HashMap::new();
         let mut next_broadcast = Instant::now() + period;
         let mut next_live = Instant::now() + LIVE_PERIOD;
         loop {
@@ -686,24 +622,18 @@ pub fn spawn_workers(state: &AppState) {
                     let refreshed = g.take_refreshed();
                     let g = &*g;
                     let mut rates: Vec<(String, f64)> = Vec::new();
-                    let mut errs: Vec<(String, u64, Option<String>)> = Vec::new();
-                    let mut stages: Vec<(String, NodeState)> = Vec::new();
+                    let mut stages: Vec<(String, bool, NodeState)> = Vec::new();
                     let leaves = g.node_uids();
                     for u in g.all_uids() {
                         let hex = u.to_hex();
                         if let Some(f) = g.node_ufreq(u) {
                             rates.push((hex.clone(), f));
                         }
-                        let generation = g.node_generation(u);
                         let err = g.last_error(u).map(str::to_string);
-                        // The console is a transcript of REPORTS, so only a node that runs enters it.
-                        if leaves.contains(&u) {
-                            errs.push((hex.clone(), generation, err.clone()));
-                        }
                         // The tier rides the TRANSITION channel, not the snapshot alone: a node
                         // added after connecting is in no snapshot, and a demotion changes it live.
                         let tier = g.node_tier(u).map(goofi_node::Isolation::wire);
-                        stages.push((hex, (generation, g.node_stage(u), err, tier)));
+                        stages.push((hex, leaves.contains(&u), (g.node_generation(u), g.node_stage(u), err, tier)));
                     }
                     let refreshed: Vec<Event> = refreshed
                         .into_iter()
@@ -712,7 +642,7 @@ pub fn spawn_workers(state: &AppState) {
                             param_state_update(g, uid, &[(&key.group, &key.name)])
                         })
                         .collect();
-                    Some((rates, errs, stages, refreshed, live_pairs(g)))
+                    Some((rates, stages, refreshed, live_pairs(g)))
                 })
             };
             // A knob turned in a plugin's own window is authoring, and enters by the door every
@@ -721,7 +651,7 @@ pub fn spawn_workers(state: &AppState) {
                 let payload = json!({ "node": e.uid.to_hex(), "param": format!("{}/{}", e.key.group, e.key.name), "value": goofi_graph::param_value_json(&e.value) });
                 let _ = state.call("node param edit", payload, "editor");
             }
-            let Some((rates, errs, stages, refreshed, live)) = collected else { continue };
+            let Some((rates, stages, refreshed, live)) = collected else { continue };
             // From NOW, not the deadline just passed: a worker held off the lock owes no burst of
             // catch-up broadcasts.
             next_broadcast = Instant::now() + period;
@@ -739,46 +669,36 @@ pub fn spawn_workers(state: &AppState) {
                 let nodes: serde_json::Map<String, Value> = live.into_iter().collect();
                 events.send(Event::ParamValues { nodes: Value::Object(nodes) });
             }
-            let changed = error_transitions(&errs, &mut last_errors);
             let stats: serde_json::Map<String, Value> =
                 rates.into_iter().map(|(node, ufreq)| (node, json!({ "updates_per_second": ufreq }))).collect();
             if !stats.is_empty() {
                 events.send(Event::NodeStats { stats: Value::Object(stats) });
             }
-            for hex in changed {
-                let err = errs.iter().find(|(h, ..)| *h == hex).and_then(|(.., e)| e.clone());
-                if let Some(text) = &err {
-                    goofi_supervisor::log::record(goofi_supervisor::log::Source { component: "node".into(), node: Some(hex.clone()) }, goofi_supervisor::log::Level::Error, None, text.clone());
-                }
-                events.send(Event::Error { node: hex, error: err });
-            }
-            last_stages.retain(|h, _| stages.iter().any(|(s, ..)| s == h));
-            for (node, now) in stages {
-                if last_stages.get(&node) == Some(&now) {
+            last.retain(|h, _| stages.iter().any(|(s, ..)| s == h));
+            for (node, leaf, now) in stages {
+                let prev = last.get(&node);
+                if prev == Some(&now) {
                     continue;
+                }
+                // The console is a transcript of REPORTS from a node that runs; a rebirth at a uid
+                // is a transition whatever its predecessor last said.
+                if leaf && prev.map_or(now.2.is_some(), |p| p.0 != now.0 || p.2 != now.2) {
+                    if let Some(text) = &now.2 {
+                        goofi_supervisor::log::record(goofi_supervisor::log::Source { component: "node".into(), node: Some(node.clone()) }, goofi_supervisor::log::Level::Error, None, text.clone());
+                    }
+                    events.send(Event::Error { node: node.clone(), error: now.2.clone() });
                 }
                 let ev =
                     json!({ "node": &node, "stage": now.1, "error": &now.2, "runtime": now.3 });
                 events.send(Event::NodeStage(ev));
-                last_stages.insert(node, now);
+                last.insert(node, now);
             }
         }
     });
-    if let Ok(worker) = worker {
-        owner.scope.adopt(worker);
-    }
 }
 
-/// One node's live pair as the wire carries it: the node it belongs to, beside the two maps.
-fn pair_payload(hex: &str, pair: &Value) -> Value {
-    let mut payload = pair.clone();
-    payload["node"] = json!(hex);
-    payload
-}
-
-/// What every node with a live source is currently producing and failing with. A node with neither
-/// is left out: a param back on its literal is one the DOCUMENT says is a constant, and that is
-/// what stops a client from reading a live value for it.
+/// What every node with a live source is producing and failing with. A node with neither is left
+/// out: the DOCUMENT says its params are constants.
 fn live_pairs(g: &Graph) -> Vec<(String, Value)> {
     g.all_uids()
         .into_iter()
@@ -787,9 +707,8 @@ fn live_pairs(g: &Graph) -> Vec<(String, Value)> {
         .collect()
 }
 
-/// One node's pair: what its driven params evaluate to and what they fail with, both maps WHOLE —
-/// so a param either of them no longer names is one whose value was withdrawn or whose error
-/// cleared. Two empty maps where nothing drives the node at all.
+/// One node's pair: its driven params' values and errors, both maps WHOLE, so a param a map no
+/// longer names was withdrawn or cleared.
 fn live_pair(g: &Graph, uid: Uid) -> Value {
     json!({
         "values": schemas::expression_value_map(g, uid),
@@ -801,9 +720,8 @@ fn live_pair(g: &Graph, uid: Uid) -> Value {
 /// A change in any of them is one `node_stage` event.
 type NodeState = (u64, &'static str, Option<String>, Option<&'static str>);
 
-/// The full router, optionally serving the SPA on the fallback. `dev_routes` opens `/dev/*`, the
-/// development surfaces. The [`origin`] guard goes on LAST, so it wraps every route — the WebSocket
-/// upgrades included, which CORS would not cover.
+/// The full router, optionally serving the SPA on the fallback; `dev_routes` opens `/dev/*`. The
+/// [`origin`] guard goes on LAST, so it wraps every route, the WebSocket upgrades included.
 pub fn app(state: AppState, spa: Spa, dev_routes: bool) -> Router {
     let mode = state.mode;
     let base = routes(state);
@@ -877,17 +795,8 @@ include!(concat!(env!("OUT_DIR"), "/skills.rs"));
 /// Where a workspace keeps the skills an agent spawned into it can read.
 pub const SKILLS_DIR: &str = "skills";
 
-/// Lay every shipped skill goofi carries into `mount/skills/`, per SKILL and absent-only: a skill
-/// the workspace already has is the patch's own and is never written over, and one goofi has
-/// gained since the patch was saved lands whole. That is what makes a load re-populate — the
-/// archive brings what it had, this adds what is new, and the save packages the union.
-///
-/// The unit is the skill DIRECTORY rather than the file, so an edit inside one — or a file deleted
-/// from one — survives a load. The cost is that deleting a whole skill from a patch brings it back
-/// on the next load; `.goofiignore` is the door for a patch that wants it gone for good.
-///
-/// Called BEFORE the workspace baseline is taken at every site, or a patch is dirty from the
-/// moment it opens, having been dirtied by goofi's own seeding.
+/// Lay every shipped skill DIRECTORY into `mount/skills/`, absent-only, so the patch's own skills stay.
+/// Called BEFORE the workspace baseline is taken, or goofi's own seeding dirties the patch.
 pub fn seed_skills(mount: &std::path::Path) {
     let root = mount.join(SKILLS_DIR);
     for (rel, bytes) in SHIPPED_SKILLS {
@@ -903,11 +812,8 @@ pub fn seed_skills(mount: &std::path::Path) {
     }
 }
 
-/// The shipped bundles, written under the home for this version AND this embed — every file of
-/// every bundle, beside the artifacts goofi's own build made of its nodes — so a shipped node
-/// loads with no toolchain and `library get` finds its file. Each bundle is a root like any
-/// other; these come pre-warmed. The tree is keyed by the embed's own content, so it is written
-/// once and never edited: a file a later build moves cannot stay behind as a second claimant.
+/// The shipped bundles, written once under the home, keyed by the embed's content, beside the
+/// artifacts goofi's build made, so a shipped node loads with no toolchain.
 fn materialise_shipped() -> Vec<PathBuf> {
     let home = goofi_supervisor::home::dir();
     let tree = goofi_supervisor::home::system().join("shipped").join(goofi_build::VERSION).join(SHIPPED_KEY);
@@ -941,7 +847,7 @@ pub fn bundled_custom(g: &Graph, custom: &std::path::Path) -> Vec<(String, PathB
     let mut out: Vec<(String, PathBuf)> = Vec::new();
     for uid in g.node_uids() {
         let Some(ty) = g.node_type(uid) else { continue };
-        if !g.is_custom_type(&ty) {
+        if g.origin(&ty) != Some(&goofi_graph::Origin::Custom) {
             continue;
         }
         let (Some(engine), bare) = goofi_node::split_type_id(&ty) else { continue };
@@ -1008,10 +914,8 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
     }
 }
 
-/// The composed graph the app boots: the model plus the signal engine, registered first. A `None`
-/// audio clock asks for no audio engine at all, which takes every audio node out of the catalog.
-/// The graphics engine is always ASKED for, and a machine with no adapter simply has none.
-/// A graph with every engine this machine has, and the one recorder its graphics engine encodes into.
+/// A graph with every engine this machine has, and the one recorder its graphics engine encodes
+/// into. A `None` audio clock asks for no audio engine at all.
 pub fn fresh_graph(iox: Arc<goofi_transport::Iox>, clock: Option<Clock>, render: Clock) -> Result<(Graph, Arc<goofi_record::Recorder>), String> {
     let mut g = Graph::new(goofi_supervisor::session::fresh_id()?);
     let recorder = Arc::new(goofi_record::Recorder::new(g.time()));
@@ -1096,9 +1000,8 @@ pub fn catalog_type_names(g: &Graph) -> Vec<String> {
         .collect()
 }
 
-/// The root a name was found under — none for an engine's own types — and that file's stamp: a
-/// copy that keeps its source's mtime, which a Finder copy and `fs::copy` on macOS do, is still
-/// another file.
+/// The root a name was found under (none for an engine's own types) and that file's stamp: a copy
+/// that keeps its source's mtime is still another file.
 type Seen = (Option<PathBuf>, Option<Stamp>);
 
 /// What a [`rescan`] changed, for the caller that asked.
@@ -1109,10 +1012,8 @@ pub struct ScanDiff {
     pub removed: Vec<String>,
 }
 
-/// Re-derive the registry from the roots that exist RIGHT NOW — every shipped root, then the
-/// patch's own workspace, one engine folder at a time, so a patch-local node of the same name
-/// wins. The previous scan's root and stamp per name are the baseline, so this answers a DIFF and
-/// removes only what it registered.
+/// Re-derive the registry from the roots that exist NOW, patch last so its node wins a name. The
+/// previous scan is the baseline, so this answers a DIFF and removes only what it registered.
 pub fn rescan(
     state: &AppState,
     g: &mut Graph,
@@ -1166,9 +1067,8 @@ pub(crate) fn restart_changed(g: &mut Graph, diff: &ScanDiff) {
     }
 }
 
-/// `POST /exec {commands, actor}` — the CLI's door, sharing the MCP tool's parse and batch
-/// semantics verbatim. Each entry answers its JSON and its rendered text, so the client prints
-/// without op knowledge; a refusal is one `{error}`, since a batch lands whole or not at all.
+/// `POST /exec {commands, actor}`: the CLI's door, with the MCP tool's parse and batch semantics.
+/// Each entry answers its JSON and its text; a refusal is one `{error}`.
 async fn exec_endpoint(State(state): State<AppState>, body: String) -> Response {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
@@ -1176,16 +1076,9 @@ async fn exec_endpoint(State(state): State<AppState>, body: String) -> Response 
         return (StatusCode::BAD_REQUEST, axum::Json(json!({ "error": "the body is JSON: {commands, actor}" })))
             .into_response();
     };
-    let lines: Vec<String> = req["commands"]
-        .as_array()
-        .map(|c| c.iter().map(|l| l.as_str().unwrap_or_default().to_string()).collect())
-        .unwrap_or_default();
+    let lines = phrase::command_lines(&req);
     let actor = req["actor"].as_str().unwrap_or(DEFAULT_ACTOR).to_string();
-    // Off the async workers: a batch can hold the graph lock for seconds (a `session load`
-    // provisions nodes), and the sockets must keep being polled meanwhile.
-    let ran = tokio::task::spawn_blocking(move || phrase::exec_lines(&state, &lines, &actor))
-        .await
-        .unwrap_or_else(|e| Err(format!("the exec task died: {e}")));
+    let ran = blocking(&state, move |state| phrase::exec_lines(state, &lines, &actor)).await;
     match ran {
         Ok(results) => {
             let entries: Vec<Value> = results
@@ -1200,10 +1093,16 @@ async fn exec_endpoint(State(state): State<AppState>, body: String) -> Response 
     }
 }
 
-/// The two messages that seed (or re-seed) a control socket: the hello snapshot, then the whole
-/// document. The filesystem reads — the mount walk, the agents config — happen BEFORE the graph
-/// lock is taken, because no filesystem read may run while the status-drain worker waits on it.
-fn control_seeds(state: &AppState, actor: &str) -> (String, String) {
+/// Run `work` off the async workers: a batch, a pack or a load holds the graph for seconds, and
+/// the sockets must keep being polled meanwhile.
+pub(crate) async fn blocking<T: Send + 'static>(state: &AppState, work: impl FnOnce(&AppState) -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || work(&state)).await.unwrap_or_else(|e| Err(format!("the task died: {e}")))
+}
+
+/// Seed (or re-seed) a control socket: the hello snapshot, then the whole document; false when a
+/// send fails. The filesystem reads happen BEFORE the graph lock, which the status drain waits on.
+async fn seed(tx: &mut futures_util::stream::SplitSink<WebSocket, Message>, state: &AppState, actor: &str) -> bool {
     let unsaved = state.is_dirty();
     let saved_at = state.save_path();
     let roster = state.harnesses.roster(&goofi_supervisor::home::agents());
@@ -1214,7 +1113,11 @@ fn control_seeds(state: &AppState, actor: &str) -> (String, String) {
         snap["history"] = state.history_labels(actor);
         Event::Hello(snap).text()
     };
-    (hello, doc_state(state))
+    let doc = {
+        let doc = state.doc.lock();
+        Event::DocState { v: doc.version(), doc: doc.to_json() }.text()
+    };
+    tx.send(Message::Text(hello.into())).await.is_ok() && tx.send(Message::Text(doc.into())).await.is_ok()
 }
 
 async fn handle_control(socket: WebSocket, state: AppState, named: Option<String>) {
@@ -1224,11 +1127,7 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
     // neither, and the replica desyncs silently. A re-delivery is read as stale and skipped.
     let mut events = state.events.subscribe();
 
-    let (hello, doc) = control_seeds(&state, named.as_deref().unwrap_or(DEFAULT_ACTOR));
-    if tx.send(Message::Text(hello.into())).await.is_err() {
-        return;
-    }
-    if tx.send(Message::Text(doc.into())).await.is_err() {
+    if !seed(&mut tx, &state, named.as_deref().unwrap_or(DEFAULT_ACTOR)).await {
         return;
     }
 
@@ -1259,14 +1158,14 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
     let mut pending: Option<tokio::task::JoinHandle<Option<String>>> = None;
     // What arrived while one ran, in order; a preview waiting here is replaced by a newer one of
     // its key, so a drag never replays the sizes it went through.
-    let mut queue: std::collections::VecDeque<(Option<String>, String)> = std::collections::VecDeque::new();
+    let mut queue: std::collections::VecDeque<Request> = std::collections::VecDeque::new();
     // Whose socket this is: the last actor it presented, whose drags in flight end with it.
     let mut actor: Option<String> = named;
     loop {
         if pending.is_none() {
-            if let Some((_, text)) = queue.pop_front() {
+            if let Some(req) = queue.pop_front() {
                 let state = state.clone();
-                pending = Some(tokio::task::spawn_blocking(move || dispatch(&state, text.as_str())));
+                pending = Some(tokio::task::spawn_blocking(move || dispatch(&state, req)));
             }
         }
         tokio::select! {
@@ -1290,14 +1189,13 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
             },
             incoming = rx.next() => match incoming {
                 Some(Ok(Message::Text(t))) => {
-                    let envelope: Envelope = serde_json::from_str(&t).unwrap_or_default();
-                    if envelope.actor.is_some() {
-                        actor = envelope.actor;
+                    let Ok(req) = serde_json::from_str::<Request>(&t) else { continue };
+                    if !req.caller.actor.is_empty() {
+                        actor = Some(req.caller.actor.clone());
                     }
-                    let key = envelope.preview;
-                    match key.as_ref().and_then(|k| queue.iter().position(|(q, _)| q.as_ref() == Some(k))) {
-                        Some(i) => queue[i].1 = t.to_string(),
-                        None => queue.push_back((key, t.to_string())),
+                    match req.preview.as_ref().and_then(|k| queue.iter().position(|q| q.preview.as_ref() == Some(k))) {
+                        Some(i) => queue[i] = req,
+                        None => queue.push_back(req),
                     }
                 }
                 Some(Ok(Message::Close(_))) | None => break,
@@ -1313,11 +1211,7 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
                 // Lagged past the shared ring, so both halves are re-seeded exactly as a fresh
                 // connection seeds them.
                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                    let (hello, doc) = control_seeds(&state, actor.as_deref().unwrap_or(DEFAULT_ACTOR));
-                    if tx.send(Message::Text(hello.into())).await.is_err() {
-                        break;
-                    }
-                    if tx.send(Message::Text(doc.into())).await.is_err() {
+                    if !seed(&mut tx, &state, actor.as_deref().unwrap_or(DEFAULT_ACTOR)).await {
                         break;
                     }
                 }
@@ -1373,9 +1267,8 @@ impl AppState {
     }
 }
 
-/// A per-node `state_update` event carrying a node's current params and error. `refreshed` names
-/// the params whose ⟳ refresh just completed — it must be sent on EVERY outcome, a refresh that
-/// found nothing included, or the button spins on.
+/// A per-node `state_update` event with a node's params and error. `refreshed` names the params
+/// whose refresh completed, sent on EVERY outcome, or the button spins on.
 pub(crate) fn param_state_update(g: &Graph, peer: Uid, refreshed: &[(&str, &str)]) -> Event {
     let Value::Object(mut body) = schemas::runtime_json(g, peer) else {
         unreachable!("runtime_json builds an object")
@@ -1406,18 +1299,10 @@ impl AppState {
         self.ops.iter().chain(self.plugins.operations()).find(|op| op.name == name).copied()
     }
 
-    /// Run one control op — the single entry point every surface shares. `actor` scopes the undo
-    /// history: whose undo, the way a browser tab's id does. The op's row does the work: its handler
-    /// runs, and its KIND decides the tail — a Write mutated the graph through the history, so
-    /// ONE re-mirror and one dirty decision happen here, where no write arm can forget either; a
-    /// Read touches nothing; an Effect's arm owns its own consequences.
+    /// Run one control op: the single entry point every surface shares, `actor` scoping the undo
+    /// history. A Write's re-mirror and dirty decision happen in the transaction, once.
     pub fn call(&self, op: &str, payload: Value, actor: &str) -> Result<Value, String> {
         self.call_as(op, payload, &Caller::new(actor), false)
-    }
-
-    /// The same, for a caller that says more than its actor: the browser, with its context.
-    pub fn call_from(&self, op: &str, payload: Value, caller: &Caller) -> Result<Value, String> {
-        self.call_as(op, payload, caller, false)
     }
 
     /// The op run as a PREVIEW: the same arm and command, and the graph moves for real, but the
@@ -1444,10 +1329,10 @@ impl AppState {
         let _scope = plugins::CallScope::enter(op)?;
         let _record_start = (op == "record start").then(|| self.plugins.record_start.lock());
         // A plugin patches the JSON; deserializing into the op's `Args` is the validation after it.
-        let payload = self.plugins.pre_op(self, op, payload, actor)?;
+        let payload = self.plugins.pre_op(op, payload, actor)?;
         let result = match spec.handler {
-            ops::Handler::PluginRead | ops::Handler::PluginEffect => self.plugins.call(self, op, &payload, actor),
-            ops::Handler::Read(f) => {
+            ops::Handler::PluginRead | ops::Handler::PluginEffect => self.plugins.call(op, &payload, actor),
+            ops::Handler::Read(f) | ops::Handler::Write(f) => {
                 let mut tx = Txn::begin(self, caller, preview);
                 let result = f(&mut tx, &payload);
                 // A refusal drops the transaction, which takes back what it applied.
@@ -1456,50 +1341,41 @@ impl AppState {
                 }
                 result
             }
-            ops::Handler::Write(f) => {
-                let mut tx = Txn::begin(self, caller, preview);
-                f(&mut tx, &payload).map(|(result, label)| {
-                    tx.label(label);
-                    tx.commit();
-                    result
-                })
-            }
             ops::Handler::Effect(f) => f(self, &payload, caller),
         };
-        self.plugins.post_op(self, op, &payload, &result, actor);
+        self.plugins.post_op(op, &payload, &result, actor);
         result
     }
 }
 
-/// What the socket reads off a `/control` request before it runs: whose it is, and whether it
-/// is a preview, keyed so a newer preview of the same key replaces an older one still waiting.
-#[derive(serde::Deserialize, Default)]
-struct Envelope {
-    actor: Option<String>,
+/// A `/control` request: `{id, op, payload, actor, preview?, context?, label?, group?}`. A newer
+/// preview of the same key replaces an older one still waiting.
+#[derive(serde::Deserialize)]
+struct Request {
+    #[serde(default)]
+    id: Value,
+    op: String,
+    #[serde(default = "empty_payload")]
+    payload: Value,
     preview: Option<String>,
+    #[serde(flatten)]
+    caller: Caller,
 }
 
-/// The `/control` envelope over [`AppState::call`]: `{id, op, payload, actor, preview?, context?,
-/// label?, group?}` in, `{id, result, history?}` or `{id, error}` out. A request with no numeric
-/// `id` wants no reply; a reply to a step the history took carries the actor's undo and redo.
-fn dispatch(state: &AppState, text: &str) -> Option<String> {
-    let req: Value = serde_json::from_str(text).ok()?;
-    let id = req.get("id").cloned().unwrap_or(Value::Null);
-    let op = req.get("op")?.as_str()?.to_string();
-    let payload = req.get("payload").cloned().unwrap_or_else(|| json!({}));
-    // The ACTOR scopes the undo history — whose undo, where `GOOFI_SESSION` says which server.
-    // Absent ⇒ the one shared actor, so a caller that presents none still works.
-    let mut caller: Caller = serde_json::from_value(req.clone()).unwrap_or_default();
+fn empty_payload() -> Value {
+    json!({})
+}
+
+/// Run a request; `{id, result, history?}` or `{id, error}` out. A request with no numeric `id`
+/// wants no reply; a reply to a step the history took carries the actor's undo and redo.
+fn dispatch(state: &AppState, req: Request) -> Option<String> {
+    let Request { id, op, payload, preview, mut caller } = req;
+    // Absent actor ⇒ the one shared actor, so a caller that presents none still works.
     if caller.actor.is_empty() {
         caller.actor = DEFAULT_ACTOR.to_string();
     }
-
-    let result = if req.get("preview").is_some_and(|p| !p.is_null()) {
-        state.preview(&op, payload, &caller.actor)
-    } else {
-        state.call_from(&op, payload, &caller)
-    };
-    let steps = state.find_op(&op).is_some_and(|o| o.handler.is_write()) || matches!(op.as_str(), "compound" | "undo" | "redo");
+    let result = state.call_as(&op, payload, &caller, preview.is_some());
+    let steps = state.find_op(&op).is_some_and(|o| o.handler.is_write() || o.moves_history());
     match id {
         Value::Number(_) => Some(match result {
             Ok(r) if steps => json!({ "id": id, "result": r, "history": state.history_labels(&caller.actor) }).to_string(),
@@ -1532,18 +1408,11 @@ pub(crate) fn reconcile_and_broadcast(state: &AppState, mut doc: MutexGuard<crat
     }
 }
 
-/// The whole document as an event — what seeds a fresh connection, and what recovers a lagged one.
-fn doc_state(state: &AppState) -> String {
-    let doc = state.doc.lock();
-    Event::DocState { v: doc.version(), doc: doc.to_json() }.text()
-}
-
-/// The follower: every tap's pick lands here, a batch at a time, and what changed a variable is
-/// written under the graph lock and broadcast as any edit is. It is the manager writing, not a
-/// caller, so it is no command and leaves no undo entry.
+/// The follower: every tap's pick lands here, a batch at a time, and a changed variable is written
+/// and broadcast as any edit is. It is the manager writing, so it leaves no undo entry.
 fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Followed>) {
     let owner = state.clone();
-    let worker = goofi_supervisor::worker::spawn("goofi-follower", move || {
+    owner.scope.spawn("goofi-follower", move || {
         let mut pace = reducer::Pace::new();
         loop {
             // A bounded wait, so the stop is read between batches.
@@ -1576,9 +1445,6 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
             }
         }
     });
-    if let Ok(worker) = worker {
-        owner.scope.adopt(worker);
-    }
 }
 
 /// Hand the reducers every followed slot, from settled state, after each mutation.
@@ -1609,11 +1475,8 @@ struct TermControl {
     rows: u16,
 }
 
-/// One `/term` socket: binary frames are PTY bytes in both directions, text frames are JSON control
-/// — `{op:"resize", cols, rows}` inbound, `{op:"size", cols, rows}` and `{exit_code}` outbound.
-///
-/// A resize is a PROPOSAL: [`term::Sizes`] arbitrates and the answer is broadcast to every view,
-/// the one that asked included. A view that says `0` retracts; closing the socket leaves the seat.
+/// One `/term` socket: binary frames are PTY bytes, text frames JSON control. A resize is a
+/// PROPOSAL that [`term::Sizes`] arbitrates; a view that says `0` retracts.
 async fn handle_term(socket: WebSocket, state: AppState, instance: String) {
     let (mut tx, mut rx) = socket.split();
     let Some(inst) = state.harnesses.get(&instance) else {
@@ -1691,16 +1554,15 @@ async fn handle_term(socket: WebSocket, state: AppState, instance: String) {
     farewell(tx, rx, 1000, "").await;
 }
 
-/// How EVERY socket here ends: by the handshake, never by dropping. A dropped connection is
-/// RESET, and a reset discards what is still in flight — so a peer that was not reading at that
-/// moment loses the last frames, the exit code and a refusal's own close code most of all.
+/// How EVERY socket here ends: by the handshake, never by dropping, because a reset discards what
+/// is still in flight, the exit code and a refusal's close code most of all.
 async fn farewell(
     mut tx: futures_util::stream::SplitSink<WebSocket, Message>,
     mut rx: futures_util::stream::SplitStream<WebSocket>,
     code: u16,
     reason: &str,
 ) {
-    if tx.send(close(code, reason)).await.is_err() {
+    if tx.send(Message::Close(Some(CloseFrame { code, reason: reason.into() }))).await.is_err() {
         return;
     }
     // The peer's own close is what says it read everything; the bound is for one that never sends it.
@@ -1717,13 +1579,6 @@ struct ViewMsg {
     op: String,
     #[serde(flatten)]
     declared: reducer::Declared,
-}
-
-fn close(code: u16, reason: &str) -> Message {
-    Message::Close(Some(CloseFrame {
-        code,
-        reason: reason.into(),
-    }))
 }
 
 /// How a bounded `/data` write ended: delivered, given up on (peer stalled past the bound), or
@@ -1800,18 +1655,8 @@ impl PeerLiveness {
     }
 }
 
-/// `/params/{node}` — one node's evaluated param values and their errors, as the [`LiveHub`]
-/// restates them at [`LIVE_PERIOD`].
-///
-/// PER CONNECTION, and opened only by what is displaying the node: a param nobody is looking at
-/// costs nothing, and a tab the browser has throttled falls behind on its own readout instead of
-/// lagging the shared control ring into a re-seed. The control plane carries the same pairs on the
-/// health period, so this socket is SMOOTHNESS and never the only carrier — which is why a lost
-/// frame here needs no recovery at all.
-///
-/// Like the sweep it hurries, it RESTATES the pair rather than diffing it, which is what a readout
-/// is: 20 frames a second of one node's numbers is nothing per connection, and it leaves nothing to
-/// seed — a tab that opened this socket late is current within a tick.
+/// `/params/{node}`: one node's evaluated params and errors, RESTATED each [`LIVE_PERIOD`], per
+/// connection. The control plane carries the same pairs, so a lost frame needs no recovery.
 async fn handle_params(socket: WebSocket, state: AppState, node: String) {
     let (mut tx, mut rx) = socket.split();
     let Some(uid) = Uid::from_hex(&node) else {
@@ -1855,23 +1700,19 @@ async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: Str
             return;
         }
     };
-    // The address must NAME an output slot — key or display label, resolved exactly as a
-    // snapshot's is — of a leaf, a port or a facade alike. What is behind it is a separate
-    // question, asked again below, because a port with nothing wired yet is a real node with no
-    // data, exactly as a leaf nobody has connected is.
+    // The address must NAME an output slot of a leaf, a port or a facade. What is behind it is asked
+    // again below, because a port with nothing wired is a real node with no data.
     let named = {
         let g = state.graph.lock();
-        vocab::resolve_slot(&g, "data", uid, &slot).ok()
+        vocab::resolve_slot(&g, uid, &slot).ok()
     };
     let Some(slot) = named else {
         farewell(tx, rx, 4004, "unknown node/slot").await;
         return;
     };
 
-    // The SHARED per-slot reducer, keyed on the PHYSICAL slot: a viewer on a facade port, one on the
-    // port inside the sub-patch and one on the leaf itself all coalesce onto the same one. Which
-    // physical slot a port stands in front of is graph state, so the socket re-asks rather than
-    // freezing the answer at open — a port wired later starts drawing, and a re-wire is followed.
+    // The SHARED reducer of the PHYSICAL slot, onto which a facade port, its inner port and the leaf
+    // coalesce. The socket re-asks which slot it is, so a later wire or re-wire is followed.
     let conn = state.reducers.new_conn();
     let epoch = state.graph.lock().epoch();
     let mut seen = epoch.load(std::sync::atomic::Ordering::Acquire);

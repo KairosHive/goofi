@@ -1,7 +1,5 @@
-//! The audio engine's executor on a node's runtime. The thread, the door, the desired state
-//! and the bindings are `goofi-runtime`'s, shared with every scheduled engine; what is here is
-//! what an ARRIVAL becomes on the audio plane, what a tap publishes, and the OS handles a node
-//! owns — a device, a MIDI port, a file — which are opened on this thread and never leave it.
+//! The audio engine's executor on a node's runtime: what an arrival becomes, what a tap publishes,
+//! and the OS handles a node owns (a device, a MIDI port, a file), opened on this thread alone.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -109,11 +107,6 @@ fn key_of(manifest: &NodeManifest, param: usize) -> ParamKey {
     ParamKey::new(manifest.params[param].group, manifest.params[param].name)
 }
 
-/// One output's tap: the ring the audio thread fills after every block.
-struct Tap {
-    ring: rtrb::Consumer<f32>,
-}
-
 /// The audio plane's half of a control thread.
 pub struct AudioHalf {
     uid: goofi_node::Uid,
@@ -126,7 +119,8 @@ pub struct AudioHalf {
     /// The pulse params raised since the last run, by index.
     pulses: Vec<usize>,
     inboxes: Vec<Inbox>,
-    taps: Vec<Tap>,
+    /// One per output: the ring the audio thread fills after every block.
+    taps: Vec<rtrb::Consumer<f32>>,
     ports: Ports,
     io: Io,
     /// One per output: the blocks the audio thread left, each wearing its own number.
@@ -166,7 +160,7 @@ impl AudioHalf {
             refused: None,
             pulses: Vec::new(),
             inboxes: birth.inboxes,
-            taps: birth.taps.into_iter().map(|ring| Tap { ring }).collect(),
+            taps: birth.taps,
             recs: birth.recs,
             play: ports.play.take().map(Play::new),
             ports,
@@ -175,9 +169,8 @@ impl AudioHalf {
         }
     }
 
-    /// The one refreshable list a type has — the graph refuses a refresh on any other param —
-    /// enumerated here rather than under the graph lock: every host's devices behind the platform
-    /// default, or the MIDI ports behind `none`.
+    /// The type's one refreshable list, off the graph lock: every host's devices behind the
+    /// platform default, or the MIDI ports behind `none`.
     fn enumerate(&self) -> Option<Vec<String>> {
         let named = |kind: crate::host::Kind| {
             let mut names = vec![DEFAULT_DEVICE.to_string()];
@@ -198,9 +191,8 @@ impl AudioHalf {
         }
     }
 
-    /// A device or a port a param names is opened here, on this thread, when the name moves — or
-    /// the clock's rate, or the stream died; a name that failed stands as an error on that param
-    /// until it moves.
+    /// Open the device or port a param names when the name, the clock's rate or the stream moves;
+    /// a name that failed stands as an error on that param until it moves.
     fn open_io(&mut self, consts: &[Param], errors: &mut Vec<(ParamKey, Option<String>)>) -> bool {
         let manifest = self.manifest;
         let (rate, clock) = (self.audio.rate(), self.audio.clock);
@@ -214,9 +206,7 @@ impl AudioHalf {
             let wanted = (text(consts, audio_in::P::DEVICE), rate, text(consts, audio_in::P::CHANNELS));
             if io.device.as_ref() != Some(&wanted) {
                 io.stream = None;
-                // A selection that does not parse is the CHANNELS param's error and not the
-                // device's: the device may be perfectly openable, and an error hung on the wrong
-                // param is one the reader looks for in the wrong place.
+                // A selection that does not parse is the CHANNELS param's error, not the device's.
                 let (stream, error, sel_error) = match crate::chanmap::parse(&wanted.2) {
                     Err(why) => (None, None, Some(why)),
                     Ok(sel) => match open_input(&wanted.0, wanted.1, sel.as_deref(), producer, io.dead.clone(), clock) {
@@ -263,9 +253,8 @@ impl AudioHalf {
         replan
     }
 
-    /// The file, driven from settled state: a name that moved is opened, a `position` that moved
-    /// or a `reset` skips, and the ring is kept a second ahead so the DSP half never runs dry. A
-    /// name that will not open stands as an error on it until it moves.
+    /// The file, from settled state: a moved name opens, a moved `position` or a `reset` skips, and
+    /// the ring is kept a second ahead. A name that will not open stands as an error until it moves.
     fn playback(&mut self, cx: &Cx<'_>) -> (Option<String>, bool) {
         let rate = self.audio.rate();
         let named = text(cx.consts, audio_playback::P::FILE);
@@ -353,13 +342,13 @@ impl Executor for AudioHalf {
                     self.refused = Some(format!("an oscillator takes [n] pitches or [2, n] pitches and phases, not {:?}", a.shape()));
                     return false;
                 }
-                Entry::Waveform { mix: false, .. } if channels_of(a.shape()).is_some_and(|c| c > crate::plan::CEILING as usize) => {
+                Entry::Waveform { mix: false, .. } if layout(a.shape()).is_some_and(|l| l.0 > crate::plan::CEILING as usize) => {
                     let most = crate::plan::CEILING;
                     self.refused = Some(format!("a waveform plays at most {most} channels, not {:?}: mix them", a.shape()));
                     return false;
                 }
                 Entry::Waveform { .. } if lasts(a.shape(), frame.meta().sfreq(), rate) > LONGEST_FRAME => {
-                    let (t, sf) = (samples_of(a.shape()).unwrap_or(0), frame.meta().sfreq().unwrap_or(rate));
+                    let (t, sf) = (layout(a.shape()).map_or(0, |l| l.1), frame.meta().sfreq().unwrap_or(rate));
                     self.refused = Some(format!("a frame of {t} samples at {sf} Hz lasts too long to play: at most {LONGEST_FRAME} s"));
                     return false;
                 }
@@ -399,7 +388,7 @@ impl Executor for AudioHalf {
             record_out(ring, cx, i, rate, &anchor, publish);
         }
         for (i, tap) in self.taps.iter_mut().enumerate() {
-            let Some((c, planar)) = drain_blocks(&mut tap.ring) else { continue };
+            let Some((c, planar)) = drain_blocks(tap) else { continue };
             if !cx.readers[i] {
                 continue;
             }
@@ -422,7 +411,7 @@ impl Executor for AudioHalf {
                 }
             }
             for (i, ring) in swap.taps {
-                self.taps[i].ring = ring;
+                self.taps[i] = ring;
             }
             for (i, ring) in swap.recs {
                 self.recs[i] = ring;
@@ -469,11 +458,8 @@ impl Inbox {
         (fits, wanted.is_some())
     }
 
-    /// Resample one frame linearly from its `sfreq` to the rate and enter it whole, as one chunk
-    /// headed by its channel count and length. A frame with no `sfreq` enters one sample per
-    /// sample. [`Entry::Pitches`] enters an `[n]` or `[2, n]` frame as pitches in Hz and phases
-    /// for one channel of sines, a volt per octave turned to Hz. Answers whether the plan must
-    /// settle again: the channel count moved, or the ring must be re-minted.
+    /// Resample one frame linearly from its `sfreq` to the rate and enter it as one chunk headed by
+    /// its channel count and length. Answers whether the channel count moved or the ring must grow.
     fn enter(&mut self, frame: &Data, rate: f64, entry: Entry) -> Option<bool> {
         let goofi_core::Value::Array(a) = frame.value() else { return None };
         let (mix, range) = match entry {
@@ -486,7 +472,7 @@ impl Inbox {
                     return Some(true);
                 }
                 let chunk = self.ring.write_chunk_uninit(n + 2).ok()?;
-                let values = a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes")));
+                let values = a.values();
                 let head = [width as f32, (n / width) as f32];
                 // Row 0 is the pitch; row 1, where there is one, stays the phase.
                 let values = values.enumerate().map(|(i, v)| match v.is_finite() {
@@ -499,18 +485,11 @@ impl Inbox {
                 return Some(self.chans.swap(1, Ordering::Relaxed) != 1 || resize);
             }
         };
-        // Where lane `ch` sample `i` sits: a signal frame is planar `[C, T]`, and a texture is
-        // texels — every channel of one position together, `[H, W, C]` in scan order.
-        let (c, t, lane, stride) = match *a.shape() {
-            [t] => (1, t, t, 1),
-            [c, t] => (c, t, t, 1),
-            [h, w, c] => (c, h * w, 1, c),
-            _ => return None,
-        };
+        let (c, t, lane, stride) = layout(a.shape())?;
         if c == 0 || t == 0 {
             return None;
         }
-        let mut x: Vec<f32> = a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes"))).collect();
+        let mut x: Vec<f32> = a.values().collect();
         // Any number of rows mix into one channel; unmixed, a port carries at most the ceiling.
         let (c, lane, stride) = match mix && c > 1 {
             true => {
@@ -556,27 +535,20 @@ impl Inbox {
     }
 }
 
-/// The samples per channel a waveform frame carries: `[T]`, `[C, T]`, or `[H, W, C]` texels.
-fn samples_of(shape: &[usize]) -> Option<usize> {
+/// A waveform frame's channels, samples per channel, and where lane `ch` sample `i` sits
+/// (`ch * lane + i * stride`): planar `[T]` or `[C, T]`, or `[H, W, C]` texels in scan order.
+fn layout(shape: &[usize]) -> Option<(usize, usize, usize, usize)> {
     match *shape {
-        [t] | [_, t] => Some(t),
-        [h, w, _] => Some(h * w),
+        [t] => Some((1, t, t, 1)),
+        [c, t] => Some((c, t, t, 1)),
+        [h, w, c] => Some((c, h * w, 1, c)),
         _ => None,
     }
 }
 
 /// How long a frame plays at `sfreq`, in seconds; one without a rate plays a sample per sample.
 fn lasts(shape: &[usize], sfreq: Option<f64>, rate: f64) -> f64 {
-    samples_of(shape).unwrap_or(0) as f64 / sfreq.filter(|sf| *sf > 0.0).unwrap_or(rate)
-}
-
-/// The channels a waveform frame carries: `[T]`, `[C, T]`, or `[H, W, C]` texels.
-fn channels_of(shape: &[usize]) -> Option<usize> {
-    match *shape {
-        [_] => Some(1),
-        [c, _] | [_, _, c] => Some(c),
-        _ => None,
-    }
+    layout(shape).map_or(0, |l| l.1) as f64 / sfreq.filter(|sf| *sf > 0.0).unwrap_or(rate)
 }
 
 /// How many rows an oscillator's frame has: pitches, or pitches over phases.
@@ -589,8 +561,7 @@ fn pitch_width(shape: &[usize]) -> Option<usize> {
 }
 
 /// Everything the audio thread pushed into a ring since the last read, as one planar `[C, T]`
-/// frame — up to a block whose channel count differs, which the next read starts from. The
-/// framing a tap and a take share, read in one place.
+/// frame, up to a block whose channel count differs.
 fn drain_blocks(ring: &mut rtrb::Consumer<f32>) -> Option<(usize, Vec<f32>)> {
     let mut chans = 0;
     let mut planar: Vec<Vec<f32>> = Vec::new();
@@ -640,10 +611,8 @@ fn take_block(ring: &mut rtrb::Consumer<f32>) -> Option<(usize, u64, u64, Vec<f3
     Some((c, crate::runtime::number_in(head[1], head[2]), head[3] as u64, planar))
 }
 
-/// Every whole block the audio thread left, as one frame each. The BLOCK carries its own number, so
-/// a block that never reached the ring leaves a gap the recorder counts, and the blocks around it
-/// keep the instants they were rendered at. An unarmed slot's blocks are dropped here, so the ring
-/// never fills while nobody records.
+/// Every whole block the audio thread left, as one frame each at the instant its own number gives;
+/// an unarmed slot's blocks are dropped, so the ring never fills while nobody records.
 fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64, anchor: &crate::runtime::Anchor, publish: &mut dyn FnMut(usize, Out<'_>)) {
     let drift = anchor.drift();
     while let Some((c, n, epoch, planar)) = take_block(ring) {
@@ -707,10 +676,8 @@ fn source_path(name: &str) -> PathBuf {
     }
 }
 
-/// The device's input stream, opened AT the clock's rate — a device that cannot is the error —
-/// its callback entering interleaved frames into the node's inbox as the Array crossing does.
-/// The name is resolved whatever the clock, so an absent one is still named; only the device
-/// clock opens what it resolved to.
+/// The device's input stream, opened AT the clock's rate, its callback entering frames into the
+/// node's inbox. Only the device clock opens it; an absent name is an error under any clock.
 fn open_input(
     name: &str,
     rate: f64,
@@ -727,9 +694,8 @@ fn open_input(
     let format = supported.sample_format();
     let mut config = supported.config();
     config.sample_rate = rate as u32;
-    // A device answers with every channel the interface has — eighteen on a Scarlett 4pre —
-    // and all of them are carried. A SELECTION opens the stream just wide enough to CONTAIN the
-    // highest channel it names, and only the selection leaves the callback.
+    // A selection opens the stream just wide enough to contain the highest channel it names, and
+    // only the selection leaves the callback.
     let device_width = config.channels;
     config.channels = match sel {
         Some(sel) => crate::chanmap::needed_width(sel).min(device_width),
@@ -750,10 +716,8 @@ fn open_input(
             return Err(format!("`{name}`: {why}"));
         }
     }
-    // The word the DRIVER speaks, not the one goofi would prefer. A shared-mode host reformats to
-    // `f32` for every client, so demanding it cost nothing and was never wrong there; a host that
-    // hands over the device's own word — a Focusrite's is `i32` — failed outright on a format goofi
-    // never asked about. Reading it and converting in the callback is the whole of the difference.
+    // The sample format the DRIVER speaks, converted in the callback: an exclusive host hands over
+    // the device's own word.
     let refused = |f| format!("the driver's sample format {f} is one goofi does not read");
     let sel = sel.map(<[u16]>::to_vec);
     let open = |f| {
@@ -764,14 +728,8 @@ fn open_input(
     Ok(Some((stream, channels)))
 }
 
-/// Why `wanted` Hz cannot be had from a device offering `ranges`, or `None` when it can.
-///
-/// A device that cannot run at the clock's rate is still the error — one rate crosses the graph —
-/// but the refusal should say what the device DOES offer. What a card is set to is set somewhere
-/// else, in a driver's own control panel or by another application holding it, so "unsupported"
-/// almost always means "go and change it", and the message is worth nothing if it does not say to
-/// what. A host that will not enumerate says nothing here: `ranges` is empty and the open is left
-/// to fail on its own terms rather than be refused on a guess.
+/// Why `wanted` Hz cannot be had from a device offering `ranges`, naming the rates it offers; an
+/// empty `ranges` refuses nothing and leaves the open to fail on its own.
 fn rate_refusal(wanted: u32, ranges: &[(u32, u32)]) -> Option<String> {
     if ranges.is_empty() || ranges.iter().any(|(lo, hi)| (*lo..=*hi).contains(&wanted)) {
         return None;
@@ -801,9 +759,8 @@ where
     T: cpal::SizedSample,
     f32: cpal::FromSample<T>,
 {
-    // The width the NODE emits, which is the selection's length or the whole opened stream. The
-    // selection is held by value in the callback and never read from the control thread again, so
-    // a change of selection is a new stream rather than a message to a live one.
+    // The width the node emits: the selection's length, or the whole stream. A new selection is a
+    // new stream, as the callback holds this one by value.
     let emitted = sel.as_ref().map_or(opened, |s| s.len() as u16);
     device
         .build_input_stream::<T, _, _>(
@@ -817,10 +774,8 @@ where
                     let _ = match &sel {
                         // No selection: the stream's own interleaving is already the answer.
                         None => chunk.fill_from_iter(header.chain(data.iter().map(|s| f32::from_sample_(*s)))),
-                        // A selection GATHERS: frame by frame, the named channels in the order they
-                        // were named, so `4-3` really does arrive swapped and a repeat really does
-                        // fan out. `sel` was checked against the opened width at open, so the index
-                        // is in range for every frame this stream will ever deliver.
+                        // A selection gathers the named channels in order, per frame; open checked
+                        // it against the opened width.
                         Some(sel) => chunk.fill_from_iter(header.chain((0..frames).flat_map(|f| {
                             sel.iter().map(move |c| f32::from_sample_(data[f * opened as usize + *c as usize]))
                         }))),

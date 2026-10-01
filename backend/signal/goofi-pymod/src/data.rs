@@ -123,11 +123,7 @@ impl Data {
         let Value::Array(store) = self.inner.value() else {
             return Err(pyo3::exceptions::PyTypeError::new_err("Data is not an array"));
         };
-        let np = py.import("numpy")?;
-        let bytes = PyBytes::new(py, store.as_bytes());
-        let flat = np.getattr("frombuffer")?.call1((bytes, "<f4"))?;
-        let shape: Vec<usize> = store.shape().to_vec();
-        flat.call_method1("reshape", (shape,))
+        numpy_f32(py, store.shape(), store.as_bytes())
     }
 
     /// The meta as a Python dict (builtins present; channels nested).
@@ -304,3 +300,8 @@ fn axes_to_dict<'py>(py: Python<'py>, axes: &Axes) -> PyResult<Bound<'py, PyDict
     Ok(d)
 }
 
+/// `bytes` as a fresh numpy `<f4` array of `shape`.
+pub fn numpy_f32<'py>(py: Python<'py>, shape: &[usize], bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
+    let flat = py.import("numpy")?.getattr("frombuffer")?.call1((PyBytes::new(py, bytes), "<f4"))?;
+    flat.call_method1("reshape", (shape.to_vec(),))
+}

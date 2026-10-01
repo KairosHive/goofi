@@ -158,14 +158,20 @@ pub fn encoded_len(d: &Data) -> Result<usize, EncodeError> {
 pub fn encode_into<'a>(d: &'a Data, out: &mut impl Out<'a>) -> Result<(), EncodeError> {
     let meta = pack_meta(d)?;
     let body = Body::of(d)?;
+    put_header(out, d.dtype_tag(), &meta, body.len())?;
+    body.write(out)
+}
+
+/// The header every frame carries, and its packed meta; the lengths are checked before a byte is put.
+fn put_header<'a>(out: &mut impl Out<'a>, dtype_tag: u8, meta: &[u8], body_len: usize) -> Result<(), EncodeError> {
     let meta_len = u32_of("meta", meta.len())?;
-    let body_len = u32_of("body", body.len())?;
+    let body_len = u32_of("body", body_len)?;
     out.put(MAGIC);
-    out.put(&[VERSION, d.dtype_tag()]);
+    out.put(&[VERSION, dtype_tag]);
     out.put(&meta_len);
     out.put(&body_len);
-    out.put(&meta);
-    body.write(out)
+    out.put(meta);
+    Ok(())
 }
 
 /// A frame's body, its every length checked before a byte of it is written.
@@ -239,8 +245,7 @@ pub fn encode_u8(shape: &[usize], texels: &[u8], meta: &goofi_core::Meta) -> Res
 pub fn encode_f16(d: &Data) -> Result<Option<Vec<u8>>, EncodeError> {
     let Value::Array(store) = d.value() else { return Ok(None) };
     let mut halves = Vec::with_capacity(store.as_bytes().len() / 2);
-    for b in store.as_bytes().chunks_exact(4) {
-        let v = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+    for v in store.values() {
         if v.is_finite() && v.abs() > half::f16::MAX.to_f32() {
             return Ok(None);
         }
@@ -317,15 +322,10 @@ fn hash_into(d: &Data, h: &mut DefaultHasher) -> Result<(), EncodeError> {
     Ok(())
 }
 
-/// The header every frame carries, around a packed meta and a body.
+/// A whole frame around a packed meta and a body.
 fn frame(dtype_tag: u8, meta: Vec<u8>, body: Vec<u8>) -> Result<Vec<u8>, EncodeError> {
     let mut out = Vec::with_capacity(HEADER_SIZE + meta.len() + body.len());
-    out.extend_from_slice(MAGIC);
-    out.push(VERSION);
-    out.push(dtype_tag);
-    out.extend_from_slice(&u32_of("meta", meta.len())?);
-    out.extend_from_slice(&u32_of("body", body.len())?);
-    out.extend_from_slice(&meta);
+    put_header(&mut out, dtype_tag, &meta, body.len())?;
     out.extend_from_slice(&body);
     Ok(out)
 }
@@ -351,14 +351,10 @@ fn pack_meta(d: &Data) -> Result<Vec<u8>, EncodeError> {
     match d.value() {
         Value::Texture(_) => pack(carried(meta)),
         Value::Array(store) => pack_array_meta(meta, store.shape(), "float32"),
-        Value::Str(_) => {
+        Value::Str(_) | Value::Table(_) => {
             let mut entries = carried(meta);
-            entries.push((Mp::from("dtype"), Mp::from("str")));
-            pack(entries)
-        }
-        Value::Table(_) => {
-            let mut entries = carried(meta);
-            entries.push((Mp::from("dtype"), Mp::from("table")));
+            let dtype = if matches!(d.value(), Value::Str(_)) { "str" } else { "table" };
+            entries.push((Mp::from("dtype"), Mp::from(dtype)));
             pack(entries)
         }
     }
@@ -469,14 +465,17 @@ pub fn frame_meta(frame: &[u8]) -> std::result::Result<goofi_core::Meta, String>
 pub fn array_head(body: &[u8]) -> Option<(&[u8], Vec<usize>, &[u8])> {
     let segments = [body];
     let mut cur = Cursor::new(&segments);
-    let ndim = cur.u8("array ndim").ok()?;
-    let dslen = cur.u8("array dtype len").ok()?;
-    let dtype = cur.take(dslen, "array dtype string").ok()?;
-    let mut shape = Vec::with_capacity(ndim);
-    for _ in 0..ndim {
-        shape.push(cur.u32("array shape").ok()?);
-    }
+    let (dtype, shape) = read_array_head(&mut cur).ok()?;
     Some((dtype, shape, cur.rest().ok()?))
+}
+
+/// `[u8 ndim][u8 dtype_len][dtype][ndim × u32 shape]`, read off the front of an array body.
+fn read_array_head<'a>(cur: &mut Cursor<'_, 'a>) -> std::result::Result<(&'a [u8], Vec<usize>), String> {
+    let ndim = cur.u8("array ndim")?;
+    let dslen = cur.u8("array dtype len")?;
+    let dtype = cur.take(dslen, "array dtype string")?;
+    let shape = (0..ndim).map(|_| cur.u32("array shape")).collect::<std::result::Result<_, _>>()?;
+    Ok((dtype, shape))
 }
 
 /// An array body's shape and its samples, BORROWED. The engine's own arrays are `<f4` already, so
@@ -600,15 +599,10 @@ impl<'s, 'a> Cursor<'s, 'a> {
 fn decode_array_body(buf: &Arc<Vec<u8>>, body: Range<usize>, meta: goofi_core::Meta) -> std::result::Result<Data, String> {
     let segments = [&buf[body.clone()]];
     let mut cur = Cursor::new(&segments);
-    let ndim = cur.u8("array ndim")?;
-    let dslen = cur.u8("array dtype len")?;
-    let dstr = std::str::from_utf8(cur.take(dslen, "array dtype string")?).map_err(|e| e.to_string())?;
+    let (dtype, shape) = read_array_head(&mut cur)?;
+    let dstr = std::str::from_utf8(dtype).map_err(|e| e.to_string())?;
     let src = goofi_core::SrcDtype::from_numpy_typestr(dstr)
         .ok_or_else(|| format!("unsupported dtype `{dstr}`"))?;
-    let mut shape = Vec::with_capacity(ndim);
-    for _ in 0..ndim {
-        shape.push(cur.u32("array shape")?);
-    }
     let samples = body.start + cur.off..body.end;
     // The shape×4 overflow guard lives in `array_shared`, deliberately.
     if src == goofi_core::SrcDtype::F32 {

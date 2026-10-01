@@ -21,24 +21,26 @@ pub enum Tapped {
     Texels { shape: Vec<usize>, bytes: Vec<u8>, meta: goofi_core::Meta },
 }
 
-/// Where the render thread leaves the frame it read back, until the half takes it. Latest wins,
-/// as every crossing into a scheduled engine is: what paces the readback is the ring's ONE slot in
-/// flight, so an accessory can never pace the engine and never has to be waited for. A re-arm flag
-/// beside it was a second owner of that pacing, and it cost a whole tick per frame — the half runs
-/// on another thread, so the tick that took a frame could never see it set again.
-#[derive(Default)]
-pub struct Tap {
-    pub frame: Option<Tapped>,
+/// The cells one node's half, the render thread and the engine share, made once at insert.
+pub struct Cells {
+    pub params: Arc<[AtomicU64]>,
+    /// Per ARRAY input: the frame the render thread has not uploaded yet.
+    pub uploads: Vec<Mutex<Option<Upload>>>,
+    /// The size of the last frame uploaded to the first ARRAY input, packed; what a zero axis
+    /// of `common` follows when no texture is wired behind the node.
+    pub uploaded: AtomicU64,
+    /// Whether anyone drinks from this output right now: the half writes it each tick.
+    pub readers: AtomicBool,
+    /// The frame the render thread read back, until the half takes it. Latest wins: the ring's
+    /// one slot in flight paces the readback.
+    pub tap: Mutex<Option<Tapped>>,
+    /// The box the readers want the readback fitted into, LIVE: a viewer never re-plans.
+    pub tap_box: AtomicU64,
 }
 
 pub struct GraphicsHalf {
     producer: Option<(HostExecutor, crate::producer::Source)>,
-    uploads: Vec<Arc<Mutex<Option<Upload>>>>,
-    readers: Arc<AtomicBool>,
-    tap: Arc<Mutex<Tap>>,
-    /// The size of the last frame uploaded to the first ARRAY input, packed; what a zero axis
-    /// of `common` follows when no texture is wired behind the node.
-    uploaded: Arc<AtomicU64>,
+    cells: Arc<Cells>,
     /// Where the universal `common` size starts in the param atomics.
     size: usize,
     /// The sizes last seen: asked, and uploaded. Only a settle can re-plan a stage's target, so
@@ -58,19 +60,8 @@ pub(crate) fn unpack(word: u64) -> Option<(u32, u32)> {
 }
 
 impl GraphicsHalf {
-    pub fn with_producer(mut self, producer: Option<(HostExecutor, crate::producer::Source)>) -> Self {
-        self.producer = producer;
-        self
-    }
-
-    pub fn new(
-        uploads: Vec<Arc<Mutex<Option<Upload>>>>,
-        readers: Arc<AtomicBool>,
-        tap: Arc<Mutex<Tap>>,
-        uploaded: Arc<AtomicU64>,
-        size: usize,
-    ) -> GraphicsHalf {
-        GraphicsHalf { producer: None, uploads, readers, tap, uploaded, size, last: ((u32::MAX, u32::MAX), 0), refused: None }
+    pub fn new(cells: Arc<Cells>, size: usize, producer: Option<(HostExecutor, crate::producer::Source)>) -> GraphicsHalf {
+        GraphicsHalf { producer, cells, size, last: ((u32::MAX, u32::MAX), 0), refused: None }
     }
 }
 
@@ -83,10 +74,10 @@ impl Executor for GraphicsHalf {
     /// crossing into a scheduled engine is.
     fn arrive(&mut self, inbox: usize, wire: usize, frame: &Data) -> bool {
         if let Some((producer, _)) = &mut self.producer { return producer.arrive(inbox, wire, frame); }
-        let Some(cell) = self.uploads.get(inbox) else { return false };
+        let Some(cell) = self.cells.uploads.get(inbox) else { return false };
         if let Some(up) = Upload::of(frame) {
             if inbox == 0 {
-                self.uploaded.store(pack((up.width, up.height)), Ordering::Relaxed);
+                self.cells.uploaded.store(pack((up.width, up.height)), Ordering::Relaxed);
             }
             *cell.lock() = Some(up);
         }
@@ -96,7 +87,7 @@ impl Executor for GraphicsHalf {
     fn rewire(&mut self, inbox: usize, wires: &[(String, String)]) {
         if let Some((producer, _)) = &mut self.producer { producer.rewire(inbox, wires); }
         if inbox == 0 && wires.is_empty() {
-            self.uploaded.store(0, Ordering::Relaxed);
+            self.cells.uploaded.store(0, Ordering::Relaxed);
         }
     }
     fn params_changed(&mut self, values: &[goofi_core::Param], trigger: bool) -> Ticked {
@@ -141,10 +132,10 @@ impl Executor for GraphicsHalf {
         }
         // What the render thread reads to decide whether this node runs at all.
         let readers = cx.readers.first().copied().unwrap_or(false);
-        self.readers.store(readers, Ordering::Relaxed);
+        self.cells.readers.store(readers, Ordering::Relaxed);
         // Taken from UNDER the lock and encoded outside it: the render thread waits on this
         // mutex, so an encode held across it is the frontend stalling a node tick.
-        let taken = self.tap.lock().frame.take();
+        let taken = self.cells.tap.lock().take();
         let encoded = match taken {
             Some(Tapped::Full(frame)) => Some(goofi_codec::encode(&frame)),
             Some(Tapped::Texels { shape, bytes, meta }) => Some(goofi_codec::encode_u8(&shape, &bytes, &meta)),
@@ -158,7 +149,7 @@ impl Executor for GraphicsHalf {
             Some(Err(why)) => self.refused = Some(format!("the output frame cannot cross: {why}")),
             None => {}
         }
-        let seen = (crate::plan::asked(cx.params, self.size), self.uploaded.load(Ordering::Relaxed));
+        let seen = (crate::plan::asked(cx.params, self.size), self.cells.uploaded.load(Ordering::Relaxed));
         ticked.replan |= std::mem::replace(&mut self.last, seen) != seen;
         ticked
     }

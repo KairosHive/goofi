@@ -4,9 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# The op authority for the MODEL, and nothing else. Nothing above goofi-node — goofi-core and
-# goofi-node alone, never goofi-transport or an engine — so the boundary is enforced by this
-# manifest: the graph provably never computes a service name or touches an endpoint.
+# The op authority for the MODEL. Never goofi-transport or an engine, so this manifest enforces
+# that the graph never computes a service name or touches an endpoint.
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-core = { path = "../goofi-core" }
@@ -14,14 +13,12 @@ goofi-node = { path = "../goofi-node" }
 # What a viewer asks of a producer, which `set_view_demand` carries to every engine.
 goofi-view = { path = "../goofi-view" }
 
-# One line: the random scope a graph's service names live in.
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
 walkdir = "2"
-# default-features off keeps the archive small and stamps every entry 1980-01-01 (the `time`
-# feature is what would make a repack differ); `deflate-flate2-zlib-rs` is the one deflate
-# spelling that selects a backend without dragging in zopfli.
+# No default features: every entry is stamped 1980-01-01, so a repack does not differ, and
+# `deflate-flate2-zlib-rs` selects a backend without zopfli.
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 ts-rs = { version = "12", features = ["serde-compat", "indexmap-impl", "serde-json-impl"] }

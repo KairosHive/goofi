@@ -301,10 +301,10 @@ pub struct Opened {
 /// Load an artifact, once per path: `goofi_version` first — a mismatch of the version or the SDK
 /// hash is a refusal naming both, never a call into a stale ABI — then `goofi_describe`.
 pub fn open(path: &Path) -> Result<Opened, String> {
-    static DESCRIBED: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
-    let mut described = DESCRIBED.get_or_init(Default::default).lock();
     let library = library(path)?;
-    if let Some(describe) = described.get(path) {
+    let mut opened = opened();
+    let entry = opened.get_mut(path).expect("`library` opened it");
+    if let Some(describe) = &entry.2 {
         return Ok(Opened { library, describe: describe.clone() });
     }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -315,7 +315,7 @@ pub fn open(path: &Path) -> Result<Opened, String> {
         return Err(format!("{name}: built for goofi {version}, and this is {expected}"));
     }
     let describe = unsafe { c_string(library, c"goofi_describe") }?;
-    described.insert(path.to_path_buf(), describe.clone());
+    entry.2 = Some(describe.clone());
     Ok(Opened { library, describe })
 }
 
@@ -323,27 +323,30 @@ pub fn open(path: &Path) -> Result<Opened, String> {
 /// kept private, and its own folder searched first. Every dynamic seam loads through here.
 pub fn library(path: &Path) -> Result<&'static libloading::Library, String> {
     let mut opened = opened();
-    if let Some(library) = opened.get(path) {
-        return Ok(library.0);
+    if let Some(entry) = opened.get(path) {
+        return Ok(entry.0);
     }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let (library, handle) = load(path).map_err(|e| format!("{name}: could not load: {e}"))?;
     let library: &'static libloading::Library = Box::leak(Box::new(library));
-    opened.insert(path.to_path_buf(), (library, handle));
+    opened.insert(path.to_path_buf(), (library, handle, None));
     Ok(library)
 }
 
 /// The OS handle of a library [`library`] opened — what a module's own entry hook is handed.
 #[cfg(unix)]
 pub fn handle(path: &Path) -> Option<*mut std::ffi::c_void> {
-    opened().get(path).map(|(_, handle)| *handle as *mut std::ffi::c_void)
+    opened().get(path).map(|(_, handle, _)| *handle as *mut std::ffi::c_void)
 }
 
 /// Sendable across the map: a handle is an address the loader owns for the life of the process.
 type Handle = usize;
 
-fn opened() -> std::sync::MutexGuard<'static, HashMap<PathBuf, (&'static libloading::Library, Handle)>> {
-    static OPENED: OnceLock<Mutex<HashMap<PathBuf, (&'static libloading::Library, Handle)>>> = OnceLock::new();
+/// Each opened library, its handle, and what it says it is once [`open`] asked.
+type Entry = (&'static libloading::Library, Handle, Option<String>);
+
+fn opened() -> std::sync::MutexGuard<'static, HashMap<PathBuf, Entry>> {
+    static OPENED: OnceLock<Mutex<HashMap<PathBuf, Entry>>> = OnceLock::new();
     OPENED.get_or_init(Default::default).lock()
 }
 

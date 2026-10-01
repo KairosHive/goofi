@@ -133,10 +133,14 @@ pub struct Link {
 }
 
 impl Link {
-    /// The key a link is stored under: both ends, so the map holds each wire once.
     pub fn key(&self) -> String {
-        format!("{}.{}>{}.{}", self.node_out, self.slot_out, self.node_in, self.slot_in)
+        link_key(&self.node_out, &self.slot_out, &self.node_in, &self.slot_in)
     }
+}
+
+/// The key a link is stored under: both ends, so the map holds each wire once.
+pub(crate) fn link_key(out: impl std::fmt::Display, slot_out: &str, inp: impl std::fmt::Display, slot_in: &str) -> String {
+    format!("{out}.{slot_out}>{inp}.{slot_in}")
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]

@@ -37,16 +37,9 @@ fn pack(state: &AppState) -> Result<Vec<u8>, String> {
     packed.and_then(|()| std::fs::read(tmp.path()).map_err(|e| format!("{}: {e}", tmp.path().display())))
 }
 
-/// Run `work` off the async workers: a pack or a load holds the graph for seconds, and the sockets
-/// must keep being polled meanwhile.
-async fn blocking<T: Send + 'static>(state: &AppState, work: fn(&AppState) -> Result<T, String>) -> Result<T, String> {
-    let state = state.clone();
-    tokio::task::spawn_blocking(move || work(&state)).await.unwrap_or_else(|e| Err(format!("the task died: {e}")))
-}
-
 /// `GET /patch.gfi` — pack the open patch and hand it over.
 pub(crate) async fn download(State(state): State<AppState>) -> Response {
-    match blocking(&state, pack).await {
+    match crate::blocking(&state, pack).await {
         Ok(bytes) => (
             [
                 (header::CONTENT_TYPE, "application/octet-stream".to_string()),
@@ -75,12 +68,8 @@ pub(crate) async fn upload(State(state): State<AppState>, body: Bytes) -> Respon
     let Some(path) = tmp.path().to_str().map(str::to_string) else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "the temp directory's name is not UTF-8\n").into_response();
     };
-    let loader = state.clone();
-    let load = tokio::task::spawn_blocking(move || loader.call("session load", json!({ "path": path, "adopt": false }), "upload"))
-        .await
-        .unwrap_or_else(|e| Err(format!("the load task died: {e}")));
-
-    match load {
+    let load = crate::blocking(&state, move |s| s.call("session load", json!({ "path": path, "adopt": false }), "upload"));
+    match load.await {
         Ok(_) => (StatusCode::OK, "loaded\n").into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, format!("{e}\n")).into_response(),
     }

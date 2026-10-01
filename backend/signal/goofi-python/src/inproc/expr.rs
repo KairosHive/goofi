@@ -8,7 +8,7 @@ use goofi_supervisor::sync::Mutex;
 use goofi_core::{Data, Param, Value};
 use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator, Local};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyModule, PyString};
+use pyo3::types::{PyDict, PyModule, PyString};
 
 /// The Python harness. The graph has already rewritten every `nd(..)` and `variables.*` term into a
 /// generated variable, so the expression is plain math over ordinary locals — with `np`, `math`'s
@@ -79,28 +79,10 @@ impl PyExprEvaluator {
 /// Convert a resolved `Data` to a Python object; a table is unsupported and reads as `None`.
 fn data_to_py(py: Python<'_>, d: &Data) -> PyResult<Py<PyAny>> {
     match d.value() {
-        Value::Array(s) => {
-            let np = PyModule::import(py, "numpy")?;
-            let raw = PyBytes::new(py, s.as_bytes());
-            let arr = np.getattr("frombuffer")?.call1((raw, "<f4"))?; // arrays are always f32
-            let shape: Vec<usize> = s.shape().to_vec();
-            Ok(arr.call_method1("reshape", (shape,))?.unbind())
-        }
+        Value::Array(s) => Ok(goofi_pymod::numpy_f32(py, s.shape(), s.as_bytes())?.unbind()),
         Value::Str(st) => Ok(PyString::new(py, st.as_ref()).into_any().unbind()),
         Value::Table(_) | Value::Texture(_) => Ok(py.None()),
     }
-}
-
-/// Convert a resolved `Param` to a native Python scalar.
-fn param_to_py(py: Python<'_>, p: &Param) -> PyResult<Py<PyAny>> {
-    use pyo3::IntoPyObject;
-    Ok(match p {
-        Param::Float { value, .. } => value.into_pyobject(py)?.into_any().unbind(),
-        Param::Int { value, .. } => value.into_pyobject(py)?.into_any().unbind(),
-        Param::Bool { value } => value.into_pyobject(py)?.to_owned().into_any().unbind(),
-        Param::Str { value, .. } => PyString::new(py, value).into_any().unbind(),
-        Param::Pulse => py.None(),
-    })
 }
 
 /// Extract a scalar `T`, falling back to `.item()` on a size-1 array because numpy 2.x rejects
@@ -174,7 +156,7 @@ impl ExprEvaluator for PyExprEvaluator {
             for (name, local) in ctx.locals {
                 let val: Py<PyAny> = match local {
                     Some(Local::Frame(d)) => data_to_py(py, d).map_err(|e| ExprError(e.to_string()))?,
-                    Some(Local::Value(p)) => param_to_py(py, p).map_err(|e| ExprError(e.to_string()))?,
+                    Some(Local::Value(p)) => goofi_pymod::exec::param_to_py(py, p).map(Bound::unbind).map_err(|e| ExprError(e.to_string()))?,
                     None => py.None(),
                 };
                 locals.set_item(name.as_str(), val).map_err(|e| ExprError(e.to_string()))?;

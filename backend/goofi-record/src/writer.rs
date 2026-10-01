@@ -22,8 +22,33 @@ use crate::StreamId;
 /// lane, shallow enough that a disk which cannot keep up says so instead of eating memory.
 const LANE: usize = 1024;
 
-/// Frames a lane has finished with, kept so a frame costs a copy and never an allocation.
-type Free = Arc<Mutex<Vec<Vec<u8>>>>;
+/// Buffers finished with, at most `cap`, kept so a frame costs a copy and never an allocation.
+#[derive(Clone)]
+pub(crate) struct Pool {
+    free: Arc<Mutex<Vec<Vec<u8>>>>,
+    cap: usize,
+}
+
+impl Pool {
+    pub(crate) fn new(cap: usize) -> Pool {
+        Pool { free: Arc::default(), cap }
+    }
+
+    /// A buffer that holds a copy of `bytes`.
+    pub(crate) fn filled(&self, bytes: &[u8]) -> Vec<u8> {
+        let mut buffer = self.free.lock().pop().unwrap_or_default();
+        buffer.clear();
+        buffer.extend_from_slice(bytes);
+        buffer
+    }
+
+    pub(crate) fn give_back(&self, buffer: Vec<u8>) {
+        let mut free = self.free.lock();
+        if free.len() < self.cap {
+            free.push(buffer);
+        }
+    }
+}
 
 pub struct Queued {
     pub id: StreamId,
@@ -48,13 +73,13 @@ struct Lane {
 pub struct Writer {
     rec: std::sync::Weak<crate::Recorder>,
     lanes: Mutex<HashMap<StreamId, Lane>>,
-    free: Free,
+    free: Pool,
 }
 
 impl Writer {
     /// WEAK, because the recorder owns the writer: an `Arc` back would be a cycle neither drops.
     pub fn new(rec: std::sync::Weak<crate::Recorder>) -> Writer {
-        Writer { rec, lanes: Mutex::new(HashMap::new()), free: Free::default() }
+        Writer { rec, lanes: Mutex::new(HashMap::new()), free: Pool::new(LANE) }
     }
 
     /// Take one frame off the caller. `false` is a lane that is full or DEAD — which the CALLER
@@ -69,10 +94,7 @@ impl Writer {
         at: f64,
         wait: bool,
     ) -> bool {
-        let mut buffer = self.free.lock().pop().unwrap_or_default();
-        buffer.clear();
-        buffer.extend_from_slice(bytes);
-        let queued = Queued { id: id.clone(), bytes: buffer, rate, timeline, at };
+        let queued = Queued { id: id.clone(), bytes: self.free.filled(bytes), rate, timeline, at };
         let mut lanes = self.lanes.lock();
         let lane = lanes.entry(id.clone()).or_insert_with(|| self.lane());
         if wait {
@@ -82,7 +104,7 @@ impl Writer {
             Ok(()) => true,
             Err(TrySendError::Full(job) | TrySendError::Disconnected(job)) => {
                 if let Job::Frame(q) = job {
-                    give_back(&self.free, q.bytes);
+                    self.free.give_back(q.bytes);
                 }
                 false
             }
@@ -140,14 +162,7 @@ fn end(mut lane: Lane) {
     }
 }
 
-fn give_back(free: &Free, buffer: Vec<u8>) {
-    let mut free = free.lock();
-    if free.len() < LANE {
-        free.push(buffer);
-    }
-}
-
-fn run(rx: Receiver<Job>, rec: &std::sync::Weak<crate::Recorder>, free: &Free) {
+fn run(rx: Receiver<Job>, rec: &std::sync::Weak<crate::Recorder>, free: &Pool) {
     // A stream that could not be written is DEAD and its lane ends with it, so every later frame
     // is refused at `take` instead of counted as written; the close is what files the reason.
     for job in rx.iter() {
@@ -155,7 +170,7 @@ fn run(rx: Receiver<Job>, rec: &std::sync::Weak<crate::Recorder>, free: &Free) {
             Job::Frame(q) => {
                 let Some(rec) = rec.upgrade() else { return };
                 let written = rec.write_queued(&q);
-                give_back(free, q.bytes);
+                free.give_back(q.bytes);
                 if let Err(why) = written {
                     rec.close_now(&q.id, &format!("the frame could not be written: {why}"));
                     return;

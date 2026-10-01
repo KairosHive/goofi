@@ -11,20 +11,8 @@ use startup::Startup;
 
 mod startup;
 
-fn headless_env() -> bool {
-    matches!(std::env::var("GOOFI_HEADLESS").as_deref(), Ok("1") | Ok("true"))
-}
-
-fn debug_env() -> bool {
-    matches!(std::env::var("GOOFI_DEBUG").as_deref(), Ok("1") | Ok("true"))
-}
-
-fn demo_env() -> bool {
-    matches!(std::env::var("GOOFI_DEMO").as_deref(), Ok("1") | Ok("true"))
-}
-
-fn boot_only_env() -> bool {
-    matches!(std::env::var("GOOFI_BOOT_ONLY").as_deref(), Ok("1") | Ok("true"))
+fn env_flag(name: &str) -> bool {
+    matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true"))
 }
 
 /// A set variable that is empty names nothing — a platform spells an unset variable that way.
@@ -33,9 +21,8 @@ fn named_env(name: &str) -> Option<String> {
 }
 
 fn main() {
-    // Bare or flag-first argv serves — what `cargo run` depends on. A bare WORD is a command for
-    // a running server, except the few the client itself owns (`ops::RESERVED`'s doors). The
-    // client path is three blocking syscalls, so only the serve arm builds a runtime.
+    // Bare or flag-first argv serves, as `cargo run` needs; a bare WORD is a command for a running
+    // server, except the doors the client owns. Only the serve arm builds a runtime.
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let rest = match argv.first().map(String::as_str) {
         None => argv,
@@ -60,11 +47,8 @@ fn main() {
             .expect("the serve runtime")
             .block_on(serve_main(rest, ui))
     };
-    // Where a display answers, the main thread is the window thread — a plugin's editor lives
-    // there — and the server runs beside it; where none does, it serves as it always did.
-    // Always a goofi thread, never the process's own: a main-thread stack is the PE header's on
-    // Windows, and opening a service needs more than that.
-    // A server that dies must end the process: the window loop below would otherwise outlive it.
+    // Where a display answers, the main thread is the window thread; the server runs beside it on a
+    // goofi thread (a Windows main-thread stack is too small), and its death ends the process.
     let served = goofi_transport::thread("goofi-serve")
         .spawn(|| {
             if std::panic::catch_unwind(std::panic::AssertUnwindSafe(serve)).is_err() {
@@ -90,10 +74,10 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
         }
     };
     // The three doors meet here, once: a binary built headless has no app to serve at all.
-    cli.headless |= headless_env() || HEADLESS_BUILD;
-    cli.debug |= debug_env();
-    cli.demo |= demo_env();
-    cli.boot_only = boot_only_env();
+    cli.headless |= env_flag("GOOFI_HEADLESS") || HEADLESS_BUILD;
+    cli.debug |= env_flag("GOOFI_DEBUG");
+    cli.demo |= env_flag("GOOFI_DEMO");
+    cli.boot_only = env_flag("GOOFI_BOOT_ONLY");
     if cli.help {
         // `goofi --help` / a flag mix that asked: the SERVE usage, not the op help door.
         println!(
@@ -156,7 +140,6 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
         window.stop();
     }
     // Last, after every port is gone: the record, then the ephemeral directory and shared memory.
-    // The PROCESS releases its session, never `run` — a test runs several servers in one.
     release_session();
     std::process::exit(code);
 }
@@ -225,10 +208,8 @@ fn client_main(mut words: Vec<String>) -> i32 {
     forward(&[shell_words::join(words.iter().map(String::as_str))], json)
 }
 
-/// The completion callback: a running server answers with its LIVE vocabulary (its node uids,
-/// its types); with none, the compiled-in registry answers the static half — same fallback shape
-/// as [`help_main`]. Quiet on every failure: a completion must never print an error into a
-/// half-typed command line.
+/// The completion callback: a running server answers with its LIVE vocabulary, else the built-in
+/// registry. Quiet on every failure: a completion must never print into a half-typed line.
 fn complete_line(rest: &[String]) -> i32 {
     let line = rest.first().map(String::as_str).unwrap_or_default();
     if let Ok(target) = goofi_client::resolve_target() {
@@ -247,13 +228,11 @@ fn complete_line(rest: &[String]) -> i32 {
     0
 }
 
-/// `goofi completions zsh|bash` — the script that wires a shell's TAB to [`complete_line`]. The
-/// script holds NO vocabulary: every keystroke asks `goofi op complete`, so completions are as
-/// current as the server answering them.
+/// `goofi completions zsh|bash` — the script that wires a shell's TAB to [`complete_line`]. It
+/// holds NO vocabulary: every keystroke asks `goofi op complete`.
 fn print_completions(shell: Option<&str>) -> i32 {
-    // zsh: `words` holds the current (partial) word last; joining keeps its emptiness, so the
-    // callback can tell `node<TAB>` from `node <TAB>`. compinit is bootstrapped when the rc file
-    // has not run it yet — `compdef` does not exist before it has.
+    // zsh: joining `words` keeps the partial word's emptiness, so `node<TAB>` differs from
+    // `node <TAB>`. compinit is bootstrapped when the rc file has not run it, for `compdef`.
     const ZSH: &str = r#"# goofi completion — add to ~/.zshrc:  eval "$(goofi completions zsh)"
 _goofi() {
 	local -a cands lines
@@ -641,15 +620,12 @@ fn point_embedded_python_at_its_venv() {
 #[cfg(not(feature = "python"))]
 fn point_embedded_python_at_its_venv() {}
 
-/// Every node directory's requirements, checked against the interpreter each is asked of before the
-/// scan imports anything. Startup requires a successful check and all required packages.
-/// A terminal can approve installation; a failed or declined installation stops startup.
+/// Every node directory's requirements, checked against their interpreters before the scan imports
+/// anything. A terminal can approve installation; a failed or declined one stops startup.
 #[cfg(feature = "python")]
 fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) -> Result<(), String> {
     use std::io::IsTerminal;
-    let shared = goofi_init::requirements_in(dirs);
-    let gil_only: Vec<PathBuf> =
-        shared.iter().cloned().chain(goofi_init::gil_requirements_in(dirs)).collect();
+    let (shared, gil_only) = goofi_init::requirement_sets(dirs);
     if gil_only.is_empty() {
         return Ok(());
     }

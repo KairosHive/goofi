@@ -15,7 +15,7 @@ mod params;
 mod serve;
 mod stream;
 
-pub use data::Data;
+pub use data::{numpy_f32, Data};
 
 use pyo3::prelude::*;
 

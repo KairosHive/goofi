@@ -49,7 +49,6 @@ pub enum Var {
     Missing(String),
 }
 
-/// One frame as a scalar param of `target`'s type — what a reference copies on arrival.
 /// The one threshold a number crosses to read as true — for a `Bool` and for a pulse's gate.
 pub fn gate(x: f64) -> bool {
     x > 0.0
@@ -60,11 +59,16 @@ fn value_as(value: &Param, target: &Param) -> Result<Param, String> {
     if let (Param::Str { value, .. }, Param::Str { options, refresh, .. }) = (value, target) {
         return Ok(Param::Str { value: value.clone(), options: options.clone(), refresh: *refresh });
     }
-    match (value.as_f64(), target) {
-        (Some(x), Param::Float { vmin, vmax, .. }) => Ok(Param::Float { value: x, vmin: *vmin, vmax: *vmax }),
-        (Some(x), Param::Int { vmin, vmax, options, .. }) => Ok(Param::Int { value: x.round() as i64, vmin: *vmin, vmax: *vmax, options: options.clone() }),
-        (Some(x), Param::Bool { .. } | Param::Pulse) => Ok(Param::Bool { value: gate(x) }),
-        _ => Err(format!("`{value:?}` does not fit `{target:?}`")),
+    value.as_f64().and_then(|x| number_as(x, target)).ok_or_else(|| format!("`{value:?}` does not fit `{target:?}`"))
+}
+
+/// A number in `target`'s shape; `None` for a string. A pulse is a GATE: it fires on the rise.
+fn number_as(x: f64, target: &Param) -> Option<Param> {
+    match target {
+        Param::Float { vmin, vmax, .. } => Some(Param::Float { value: x, vmin: *vmin, vmax: *vmax }),
+        Param::Int { vmin, vmax, options, .. } => Some(Param::Int { value: x.round() as i64, vmin: *vmin, vmax: *vmax, options: options.clone() }),
+        Param::Bool { .. } | Param::Pulse => Some(Param::Bool { value: gate(x) }),
+        Param::Str { .. } => None,
     }
 }
 
@@ -80,6 +84,7 @@ pub fn split_index(source: &str) -> Result<(&str, Option<usize>), String> {
     Ok((base, Some(index)))
 }
 
+/// One frame as a scalar param of `target`'s type — what a reference copies on arrival.
 fn scalar_of(frame: &Data, target: &Param, index: Option<usize>) -> Result<Param, String> {
     match (frame.value(), target) {
         (goofi_core::Value::Texture(_), _) => Err("a reference cannot read an unrendered texture submission".into()),
@@ -88,17 +93,8 @@ fn scalar_of(frame: &Data, target: &Param, index: Option<usize>) -> Result<Param
         }
         (goofi_core::Value::Array(a), _) if index.is_some() || a.shape().iter().product::<usize>() == 1 => {
             let at = index.unwrap_or(0);
-            let bytes: [u8; 4] = a.as_bytes().chunks_exact(4).nth(at)
-                .ok_or_else(|| format!("reference index {at} is outside frame {:?}", a.shape()))?
-                .try_into().map_err(|_| "reference element is not f32".to_string())?;
-            let x = f32::from_le_bytes(bytes) as f64;
-            Ok(match target {
-                Param::Float { vmin, vmax, .. } => Param::Float { value: x, vmin: *vmin, vmax: *vmax },
-                Param::Int { vmin, vmax, options, .. } => Param::Int { value: x.round() as i64, vmin: *vmin, vmax: *vmax, options: options.clone() },
-                // A pulse is a GATE here: the same threshold, and the runtime fires on its rise.
-                Param::Bool { .. } | Param::Pulse => Param::Bool { value: gate(x) },
-                Param::Str { .. } => return Err("a string param references a STRING output".to_string()),
-            })
+            let x = a.values().nth(at).ok_or_else(|| format!("reference index {at} is outside frame {:?}", a.shape()))? as f64;
+            number_as(x, target).ok_or_else(|| "a string param references a STRING output".to_string())
         }
         (goofi_core::Value::Array(a), _) => {
             Err(format!("a reference needs one element, and this frame is {:?}", a.shape()))

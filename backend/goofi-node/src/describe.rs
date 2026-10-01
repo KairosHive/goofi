@@ -60,15 +60,13 @@ fn sdk_engine(source: &str) -> Option<String> {
     })
 }
 
-/// Every node file in `dir` that is `engine`'s, sorted: its path, the type it names, and the
-/// stamp a rescan diffs.
-/// How many files in `dir` name a node by extension: what a scan of the folder reads.
+/// How many files in `dir` name a node: what a scan of the folder reads.
 pub fn node_file_count(dir: &Path) -> usize {
-    std::fs::read_dir(dir).map_or(0, |rd| {
-        rd.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "py" || x == "wgsl" || x == "rs")).count()
-    })
+    std::fs::read_dir(dir).map_or(0, |rd| rd.flatten().filter(|e| type_name_of(&e.path()).is_some()).count())
 }
 
+/// Every node file in `dir` that is `engine`'s, sorted: its path, the type it names, and the
+/// stamp a rescan diffs.
 pub fn node_files(dir: &Path, engine: &str) -> Vec<(PathBuf, String, Option<crate::Stamp>)> {
     let mut paths: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.path())).collect(),
@@ -172,7 +170,7 @@ pub fn describe(
 
 /// The first slot name the name rule refuses, phrased for the palette — a reference spells
 /// `node.slot` and an expression reads a slot as an attribute, so a bad name never registers.
-pub fn illegal_slot(intro: &probe::Introspection) -> Option<String> {
+fn illegal_slot(intro: &probe::Introspection) -> Option<String> {
     intro
         .inputs
         .iter()
@@ -186,11 +184,19 @@ pub fn illegal_slot(intro: &probe::Introspection) -> Option<String> {
 /// node cannot PRODUCE another engine's kind, so a file declaring one is in the wrong folder. An
 /// engine-local kind on an INPUT is a crossing, and every engine routes a foreign arrival as a
 /// frame off the wire — which is what lets a crossing declare the plane it crosses FROM.
-pub fn foreign_output(intro: &probe::Introspection, own: Option<goofi_core::SlotType>) -> Option<String> {
+fn foreign_output(intro: &probe::Introspection, own: Option<goofi_core::SlotType>) -> Option<String> {
     intro.outputs.iter().find_map(|s| {
         let kind = goofi_core::SlotType::from_name(&s.kind).filter(|k| Some(*k) != own)?;
         Some(format!("output `{}` is {}", s.name, kind.engine_local()?))
     })
+}
+
+/// [`leak_manifest`] of an introspection whose slot names are legal and whose outputs are `own`'s.
+pub fn manifest_of(type_name: &str, intro: &probe::Introspection, own: Option<goofi_core::SlotType>) -> Result<&'static NodeManifest, String> {
+    if let Some(reason) = illegal_slot(intro).or_else(|| foreign_output(intro, own)) {
+        return Err(reason);
+    }
+    leak_manifest(type_name.to_string(), intro)
 }
 
 /// The first param declaration the inspector cannot draw, phrased for the palette: a name declared

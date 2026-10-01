@@ -28,7 +28,9 @@ pub mod expr_rewrite;
 
 pub use goofi_node::Uid;
 
+use expr_rewrite::Target;
 use goofi_core::variables::NAME_RULE;
+use subpatch::Dir;
 
 /// What a node IS. The thin distinction the backend keeps and the frontend never sees: a leaf runs,
 /// so it carries a thread and params; a facade and a port do not, so they carry neither.
@@ -126,17 +128,19 @@ struct NodeEntry {
     scope: Option<Uid>,
     /// Opaque: persisted and round-tripped, never interpreted.
     viewers: serde_json::Value,
-    /// The values the touched-only filter counts FROM, `group/name` to value — opaque here in the
-    /// same way `viewers` is. A plugin's params are touched when they differ from the plugin's
-    /// factory default, and loading a preset moves hundreds of them at once, so the filter that
-    /// exists to show the few in play fills with the ones the preset moved. Clearing records the
-    /// current values as the new zero, and the filter counts from there.
+    /// The values the touched-only filter counts FROM, `group/name` to value, opaque like
+    /// `viewers`. Clearing records the current values as the new zero, so a preset load can be reset.
     baseline: serde_json::Value,
     /// The output slots armed for recording, in the order they were armed.
     record: Vec<RecordedOutput>,
 }
 
 impl NodeEntry {
+    /// A record at ROOT with nothing shown, counted from or armed; a restore sets those after.
+    fn new(kind: Kind, name: String, pos: [f64; 2]) -> NodeEntry {
+        let empty = serde_json::json!({});
+        NodeEntry { kind, name, pos, scope: None, viewers: empty.clone(), baseline: empty, record: Vec::new() }
+    }
     fn leaf(&self) -> Option<&Leaf> {
         match &self.kind {
             Kind::Leaf(l) => Some(l),
@@ -151,39 +155,23 @@ impl NodeEntry {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct LinkView {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Link {
     pub node_out: Uid,
     pub slot_out: &'static str,
     pub node_in: Uid,
     pub slot_in: &'static str,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Link {
-    node_out: Uid,
-    slot_out: &'static str,
-    node_in: Uid,
-    slot_in: &'static str,
-}
-
 impl Link {
-    /// The key a link is held under — both ends, as the document spells it.
     fn key(&self) -> String {
-        format!("{}.{}>{}.{}", self.node_out, self.slot_out, self.node_in, self.slot_in)
+        doc::link_key(self.node_out, self.slot_out, self.node_in, self.slot_in)
     }
 }
 
 /// A param's value as JSON, and the one definition of it — the inverse of [`param_from_json`].
 pub fn param_value_json(p: &Param) -> serde_json::Value {
-    use serde_json::json;
-    match p {
-        Param::Float { value, .. } => json!(value),
-        Param::Int { value, .. } => json!(value),
-        Param::Bool { value } => json!(value),
-        Param::Str { value, .. } => json!(value),
-        Param::Pulse => serde_json::Value::Null,
-    }
+    doc::Scalar::of(p).map_or(serde_json::Value::Null, |s| s.to_json())
 }
 
 /// Coerce a JSON scalar into a `Param` of `existing`'s type, keeping its bounds.
@@ -206,9 +194,8 @@ pub fn param_from_json(existing: &Param, v: &serde_json::Value) -> Param {
     }
 }
 
-/// The one params bag — `node add`'s birth entries and `node param edit` both fold into
-/// `{group: {param: value | {value, expression, reference, mode, triggers}}}` — as one [`Command::EditParam`]
-/// per entry, typed and merged against the params the node holds NOW.
+/// The one params bag, `{group: {param: value | {value, expression, reference, mode, triggers}}}`,
+/// as one [`Command::EditParam`] per entry, typed against the params the node holds NOW.
 pub fn param_commands(
     g: &Graph,
     uid: Uid,
@@ -255,9 +242,8 @@ fn coerced_value(existing: &Param, v: &serde_json::Value) -> Param {
 const PULSE_HOLDS_NO_VALUE: &str =
     "this param is a pulse and holds no value; fire it with `node param request`";
 
-/// One `params.<group>.<name>` entry: a bare literal, or `{value, expression, reference, mode,
-/// triggers}`. No param type is an object, so the two forms cannot be confused. A text given names
-/// its mode unless one is said; a mode or a trigger alone edits what is retained.
+/// One `params.<group>.<name>` entry: a bare literal, or an object (no param type is one). A text
+/// given names its mode unless one is said; a mode or a trigger alone edits what is retained.
 fn param_change(
     existing: &Param,
     cur: Option<SourceState>,
@@ -364,9 +350,8 @@ pub enum Mode {
 /// an evaluator.
 const REF_VAR: &str = "ref";
 
-/// A param's source record, graph-side: the AUTHORED state — both texts retained whatever the
-/// mode, since a toggle is never destructive — and everything below it DERIVED from the active
-/// one at settle, against the graph as it then stands.
+/// A param's source record: the AUTHORED state, both texts retained whatever the mode, and
+/// everything below it DERIVED from the active one at settle.
 struct ParamSource {
     state: SourceState,
     /// Compiled from [`Self::rewritten`], never from the authored text: the evaluator is handed
@@ -406,7 +391,6 @@ pub struct SourceInfo {
     pub error: Option<String>,
 }
 
-/// The authoritative graph + scheduler.
 /// One end of a wire, resolved once: the slot's `&'static` name, its dtype, and whether it takes
 /// many wires. A leaf reads it off its manifest; a port answers for itself.
 #[derive(Clone, Copy)]
@@ -426,9 +410,8 @@ pub enum Stream {
     Open(Uid),
 }
 
-/// A type the palette greys: why, and what it last resolved to. The manifest is kept because the
-/// instances already born from it are still running and still wired — a row with no slots would
-/// erase them from every canvas while the data still flows.
+/// A type the palette greys: why, and what it last resolved to. The manifest is kept because
+/// instances born from it still run, and a row with no slots would erase them from every canvas.
 struct Greyed {
     reason: String,
     last: Option<(&'static str, &'static NodeManifest)>,
@@ -481,9 +464,8 @@ struct Runtime {
     origins: std::collections::HashMap<String, Origin>,
     /// A process-lifetime counter: undo restores deleted uids, so none is ever handed out twice.
     next_uid: u64,
-    /// Every uid's birth generation, bumped on EVERY birth and never reset — it keeps a reborn
-    /// node's service names clear of its predecessor's, whose teardown does not block. Survives
-    /// `clear()` and `load_doc`; never enters the archive.
+    /// Every uid's birth generation, bumped on EVERY birth and never reset, so a reborn node's
+    /// service names stay clear of its predecessor's. Never enters the archive.
     generations: HashMap<Uid, u64>,
     /// The last arming serial minted; every arming of a slot gets the next one.
     arm_serial: u64,
@@ -589,9 +571,8 @@ impl Graph {
         &self.patch.variables
     }
 
-    /// Apply one variable change (a NEW variable lands at ordered position `at` — a delete/rename undo
-    /// re-adds at the original slot; `None` leaves the value alone). Every binding that READS this
-    /// variable is re-resolved and re-sent — a variable's value is shipped inline.
+    /// Apply one variable change; a NEW variable lands at position `at`, and `None` leaves the value
+    /// alone. The next settle re-sends every binding that reads it.
     pub fn apply_variable_change(
         &mut self,
         name: &str,
@@ -599,30 +580,12 @@ impl Graph {
         at: Option<usize>,
         control: Option<Option<goofi_core::variables::Control>>,
     ) -> Result<(), String> {
-        if let Some(c) = &control {
-            let held = value.as_ref().or_else(|| self.patch.variables.get(name)).ok_or_else(|| format!("no such variable `{name}`"))?;
-            self.patch.variables.check_control(name, held, c.as_ref())?;
-        }
-        if let Some(value) = &value {
-            let next_control = control.as_ref().map(|c| c.as_ref()).unwrap_or_else(|| self.patch.variables.control(name));
-            if let Some(c) = next_control {
-                if !c.fits(value) {
-                    return Err(c.mismatch(value));
-                }
-            }
-        }
-        self.patch.variables.apply_change(name, value, at)?;
-        if let Some(c) = control {
-            self.patch.variables.set_control(name, c)?;
-        }
-        Ok(())
+        self.patch.variables.apply_change(name, value, at, control)
     }
 
-    /// Delete a variable, and with it the widget, the source and the lock that rode on it. A system
-    /// one is refused.
-    pub fn remove_variable(&mut self, name: &str) -> Result<(), String> {
-        self.patch.variables.remove(name)?;
-        Ok(())
+    /// The store's own writes, for a command that needs no graph-side follow-up.
+    pub(crate) fn variables_mut(&mut self) -> &mut goofi_core::variables::VariableStore {
+        &mut self.patch.variables
     }
 
     /// Set or clear what a variable follows, answering what it followed. The reference is held to
@@ -668,19 +631,14 @@ impl Graph {
         self.resolve_stream(node, Some(slot))
     }
 
-    /// Lock or unlock one variable, answering the lock it held.
-    pub fn set_variable_lock(&mut self, name: &str, lock: goofi_core::variables::Lock) -> Result<goofi_core::variables::Lock, String> {
-        self.patch.variables.set_lock(name, lock)
-    }
-
-    /// Lock or unlock a whole group, answering the lock it held.
-    pub fn set_variable_group_lock(&mut self, group: &str, lock: Option<goofi_core::variables::Lock>) -> Result<Option<goofi_core::variables::Lock>, String> {
-        self.patch.variables.set_group_lock(group, lock)
+    /// Whether a group name is held: by the variables, or by a control panel that names it.
+    pub fn group_taken(&self, group: &str) -> bool {
+        self.patch.variables.has_group(group) || self.patch.arrangement.control_panels().iter().any(|(_, held)| held == group)
     }
 
     /// Add an empty group.
     pub fn add_variable_group(&mut self, group: &str, at: Option<usize>) -> Result<(), String> {
-        if self.patch.arrangement.control_panels().iter().any(|(_, held)| held == group) {
+        if self.group_taken(group) {
             return Err(format!("variable group `{group}` already exists"));
         }
         self.patch.variables.add_group(group, at)
@@ -719,19 +677,19 @@ impl Graph {
     /// Follow a set of variable renames into every expression that spells one, answering the nodes
     /// whose source text changed.
     fn rewrite_variable_reads(&mut self, moved: &[(String, String)]) -> Vec<Uid> {
-        let rename = |name: &str| {
-            moved.iter().find(|(old, _)| old == name).map(|(_, new)| new.clone())
-        };
-        let mut edits: Vec<(Uid, ParamKey, SourceState)> = Vec::new();
-        for (uid, entry) in self.leaves() {
-            for (key, b) in &entry.sources {
-                if let Some(expression) = expr_rewrite::rename_variables(&b.state.expression, rename) {
-                    let mut state = b.state.clone();
-                    state.expression = expression;
-                    edits.push((uid, key.clone(), state));
-                }
-            }
-        }
+        let rename = |name: &str| moved.iter().find(|(old, _)| old == name).map(|(_, new)| new.clone());
+        self.rewrite_sources(|s| {
+            Some(SourceState { expression: expr_rewrite::rename_variables(&s.expression, rename)?, ..s.clone() })
+        })
+    }
+
+    /// Re-set every source `edit` rewrites, answering the distinct nodes whose source changed.
+    fn rewrite_sources(&mut self, edit: impl Fn(&SourceState) -> Option<SourceState>) -> Vec<Uid> {
+        let edit = &edit;
+        let edits: Vec<(Uid, ParamKey, SourceState)> = self
+            .leaves()
+            .flat_map(|(uid, l)| l.sources.iter().filter_map(move |(k, b)| Some((uid, k.clone(), edit(&b.state)?))))
+            .collect();
         let mut referrers: Vec<Uid> = Vec::new();
         for (uid, key, state) in edits {
             if self.set_source(uid, &key.group, &key.name, state).is_ok() && !referrers.contains(&uid) {
@@ -741,9 +699,8 @@ impl Graph {
         referrers
     }
 
-    /// Derive every binding from its authored texts against the graph as it stands — the rewrite,
-    /// the variables, the handle — and touch the ones that moved, so their nodes are re-sent. Runs
-    /// at settle: a name, a wire, a variable or a value moved is what a settle is about.
+    /// Derive every binding from its authored texts against the graph as it stands, and touch the
+    /// ones that moved, so their nodes are re-sent. Runs at settle.
     fn derive_bindings(&mut self) {
         let mut keys: Vec<(Uid, ParamKey)> =
             self.leaves().flat_map(|(uid, e)| e.sources.keys().map(move |k| (uid, k.clone()))).collect();
@@ -784,18 +741,17 @@ impl Graph {
         self.notify_param(uid, key);
     }
 
-    /// Whether a derivation says something the record does not. A param read ships the value it
-    /// resolved when the binding was derived, and follows an authored edit of that param — never
-    /// its evaluation, or a chain of driven params would cascade through every settle.
+    /// Whether a derivation says something the record does not. A param read follows an authored
+    /// edit of that param, never its evaluation, or driven params would cascade through every settle.
     fn moved(&self, consumer: Uid, prior: &ParamSource, next: &Derived, edited: &[(Uid, ParamKey)]) -> bool {
         if prior.rewritten != next.rewritten || prior.bind_error != next.error || prior.refs != next.refs {
             return true;
         }
-        prior.vars.iter().zip(&next.vars).zip(&next.refs).any(|((was, now), r)| match r {
-            expr_rewrite::VarRef::NodeParam { name, group, param, .. } => {
+        prior.vars.iter().zip(&next.vars).zip(&next.refs).any(|((was, now), r)| match &r.target {
+            Target::NodeParam { name, group, param } => {
                 self.uid_by_name(name).is_some_and(|uid| edited.iter().any(|(u, k)| *u == uid && k.group == *group && k.name == *param))
             }
-            expr_rewrite::VarRef::MeParam { group, param, .. } => {
+            Target::MeParam { group, param } => {
                 edited.iter().any(|(u, k)| *u == consumer && k.group == *group && k.name == *param)
             }
             _ => was != now,
@@ -875,8 +831,6 @@ impl Graph {
         self.engines().find(|e| e.id() == id)
     }
 
-    /// One registered engine, by id — how the composition root reaches a concrete door through
-    /// [`Engine::as_any_mut`].
     /// Tell whichever engine owns `uid` what its readers want of `slot`. Offered to every engine
     /// rather than routed: an engine that does not hold the uid, or cannot render to size, no-ops.
     pub fn set_view_demand(&mut self, uid: Uid, slot: &str, want: Option<goofi_view::ViewWant>) {
@@ -916,7 +870,7 @@ impl Graph {
     }
 
     pub fn engine_mut(&mut self, id: &str) -> Option<&mut dyn Engine> {
-        self.runtime.engines.iter_mut().map(|e| e.as_mut() as &mut dyn Engine).find(|e| e.id() == id)
+        self.engines_mut().find(|e| e.id() == id)
     }
 
     /// Whether a node of `engine`'s `type_name` has an editor window of its own.
@@ -945,11 +899,6 @@ impl Graph {
     /// the param op — the one door a value enters the document by.
     pub fn take_edits(&mut self) -> Vec<Edit> {
         self.engines_mut().flat_map(|e| e.take_edits()).collect()
-    }
-
-    /// The manifest `type_name` resolves to, from whichever engine's library advertises it.
-    pub fn type_manifest(&self, type_name: &str) -> Option<&'static NodeManifest> {
-        self.library_entry(type_name).map(|(_, l)| l.manifest)
     }
 
     /// Every advertised entry with the id of the engine that advertises it, in registration order.
@@ -982,12 +931,10 @@ impl Graph {
         self.resolve_type(type_ref).ok()
     }
 
-    /// The universal param group an engine adds to every one of its nodes — the palette and the
-    /// default-expression seeding read declarations through this one door. By ENGINE and MANIFEST,
-    /// which every caller already holds: a name would have to be resolved, and two engines may
-    /// offer one.
+    /// The universal param group an engine adds to every one of its nodes. By ENGINE and MANIFEST,
+    /// because a name would have to be resolved, and two engines may offer one.
     pub fn universal_decls(&self, engine: &str, manifest: &'static NodeManifest) -> Vec<ParamDecl> {
-        self.engines().find(|e| e.id() == engine).map(|e| e.universal_decls(manifest)).unwrap_or_default()
+        self.engine(engine).map(|e| e.universal_decls(manifest)).unwrap_or_default()
     }
 
     /// Forget the unavailable row for a type that now resolves — a registration's caller clears
@@ -1047,7 +994,7 @@ impl Graph {
                     self.runtime.unavailable.remove(&t.type_name);
                 }
                 // A name a library still answers is never greyed: one name, one row.
-                goofi_node::Scanned::Unavailable(reason) if !self.known_type(&t.type_name) => {
+                goofi_node::Scanned::Unavailable(reason) if self.library_entry(&t.type_name).is_none() => {
                     // A file that broke keeps the manifest it last loaded: its instances are still
                     // running on it, still wired, and a row with no slots would erase them.
                     let last = held.get(&t.type_name).copied().or_else(|| self.last_owner(&t.type_name));
@@ -1110,11 +1057,6 @@ impl Graph {
         self.library_entry(type_name).map(|(id, _)| id)
     }
 
-    /// Whether a type name resolves to a registered type.
-    fn known_type(&self, type_name: &str) -> bool {
-        self.library_entry(type_name).is_some()
-    }
-
     /// The ONE phrasing for a rejected type, shared by `build_node` and the load gate. An
     /// unavailable type names its missing dependency; anything else reads as the typo it is.
     fn reject_type(&self, type_name: &str) -> String {
@@ -1164,7 +1106,7 @@ impl Graph {
     /// Which node INSTANCE this uid holds: bumped on every birth, so a report from the node born at
     /// a uid is distinguishable from its predecessor's last one.
     pub fn node_generation(&self, uid: Uid) -> u64 {
-        self.generation(uid)
+        self.runtime.generations.get(&uid).copied().unwrap_or(0)
     }
 
     /// The flat arrangement — pages, splits and panels. Reads plan against this; writes go through
@@ -1215,30 +1157,9 @@ impl Graph {
         self.runtime.origins.insert(name.to_string(), Origin::Patch);
     }
 
-    /// Whether `type_name` came from the open patch (see [`Graph::set_type_origins`]). Everything
-    /// else — built-ins and the shipped node directory alike — reads as shipped.
-    pub fn is_patch_type(&self, type_name: &str) -> bool {
-        matches!(self.runtime.origins.get(type_name), Some(Origin::Patch))
-    }
-
-    /// Whether `type_name` came from the private library — the root `library save` writes into.
-    pub fn is_custom_type(&self, type_name: &str) -> bool {
-        matches!(self.runtime.origins.get(type_name), Some(Origin::Custom))
-    }
-
-    /// The node root `type_name` was scanned from, by its directory name — none for the patch's
-    /// own, the private library's and a plugin's.
-    pub fn bundle_of(&self, type_name: &str) -> Option<&str> {
-        match self.runtime.origins.get(type_name) {
-            Some(Origin::Root(bundle)) => Some(bundle),
-            _ => None,
-        }
-    }
-
-    /// Whether `type_name` came from an engine's own scan rather than from a node root — a VST3
-    /// plugin is one, and the palette shows them as their own family.
-    pub fn is_plugin_type(&self, type_name: &str) -> bool {
-        matches!(self.runtime.origins.get(type_name), Some(Origin::Plugin))
+    /// Where `type_name` was scanned from (see [`Graph::set_type_origins`]).
+    pub fn origin(&self, type_name: &str) -> Option<&Origin> {
+        self.runtime.origins.get(type_name)
     }
 
     pub fn node_count(&self) -> usize {
@@ -1303,27 +1224,8 @@ impl Graph {
     /// Derived fresh on read, so a binding that recovers on a node which never runs again still
     /// clears. Initialization failure wins, then a process error, then the smallest errored key.
     pub fn last_error(&self, uid: Uid) -> Option<&str> {
-        if let Some(leaf) = self.leaf(uid) {
-            return entry_error(leaf, self.health(uid));
-        }
-        // A facade runs nothing, so its health is its members': the first errored descendant, at any
-        // depth. Derived HERE, so a human's badge and an agent's read are one answer. The walked
-        // set doubles as the cycle guard a hand-edited `.gfi` needs.
-        let mut walk = vec![uid];
-        let mut at = 0;
-        while at < walk.len() {
-            let u = walk[at];
-            at += 1;
-            if let Some(err) = self.leaf(u).and_then(|l| entry_error(l, self.health(u))) {
-                return Some(err);
-            }
-            for m in self.scope_members(u) {
-                if !walk.contains(&m) {
-                    walk.push(m);
-                }
-            }
-        }
-        None
+        // A facade runs nothing, so its health is its members': the first errored descendant.
+        self.subtree_of(&[uid]).into_iter().find_map(|u| entry_error(self.leaf(u)?, self.health(u)))
     }
 
     /// How long this node's CURRENT error has been standing, or `None` when it is healthy. The
@@ -1355,7 +1257,7 @@ impl Graph {
     /// normalization, resolved without constructing the node. Also what the palette renders.
     pub fn default_params_of(&self, type_name: &str, supplied: Option<ParamGroups>) -> Result<ParamGroups, String> {
         let (id, manifest) = self.owner_of(type_name).ok_or_else(|| self.reject_type(type_name))?;
-        Ok(self.engines().find(|e| e.id() == id).expect("the owner named it").normalize_params(manifest, supplied))
+        Ok(self.engine(id).expect("the owner named it").normalize_params(manifest, supplied))
     }
 
     /// The engine and manifest a name resolves to — the library's, or the one a greyed name last
@@ -1372,10 +1274,8 @@ impl Graph {
         self.create_node(type_name, None, "", params.as_ref().map(values_of), None)
     }
 
-    /// Create the node `type_name` names — a leaf, a sub-patch facade or a boundary port — at
-    /// `uid` when one is given and a fresh mint otherwise. The last two run nothing, so they carry
-    /// no manifest, no thread and no params; what a port carries instead is the `scope` it is a
-    /// port OF, which is what makes it one. An empty or taken `name` is minted fresh.
+    /// Create a leaf, a sub-patch facade or a boundary port at `uid`, or at a fresh mint. A port
+    /// needs the `scope` it is a port OF; an empty or taken `name` is minted fresh.
     pub fn create_node(
         &mut self,
         type_name: &str,
@@ -1417,10 +1317,7 @@ impl Graph {
         };
         let uid = self.claim(uid);
         let born = self.pick_name(name, &base, None);
-        self.patch.nodes.insert(
-            uid,
-            NodeEntry { kind, name: born.clone(), pos: [0.0, 0.0], scope: None, viewers: serde_json::json!({}), baseline: serde_json::json!({}), record: Vec::new() },
-        );
+        self.patch.nodes.insert(uid, NodeEntry::new(kind, born, [0.0, 0.0]));
         self.set_member_scope(uid, scope);
         Ok(uid)
     }
@@ -1433,9 +1330,8 @@ impl Graph {
         uid
     }
 
-    /// The display name a create lands on: the one asked for, or a fresh `base<N>` when it is
-    /// empty, already worn, or not a legal name. A CREATE degrades where a rename refuses, because
-    /// this is also the restore path — a hand-edited archive must cost one name, not the patch.
+    /// The name asked for, or a fresh `base<N>` when it is empty, worn or illegal. A create degrades
+    /// where a rename refuses: a hand-edited archive must cost one name, not the patch.
     fn pick_name(&self, want: &str, base: &str, except: Option<Uid>) -> String {
         match self.name_taken(want, except) || !goofi_core::variables::is_valid_name(want) {
             true => self.fresh_name(base),
@@ -1470,6 +1366,31 @@ impl Graph {
         }
     }
 
+    /// What a restore re-applies after the create: the place, the sources and the blobs it carried.
+    pub(crate) fn restore_extras(
+        &mut self,
+        uid: Uid,
+        pos: [f64; 2],
+        sources: &[(String, String, SourceState)],
+        viewers: Option<serde_json::Value>,
+        baseline: Option<serde_json::Value>,
+        record: Option<Vec<RecordedOutput>>,
+    ) {
+        let _ = self.set_node_pos(uid, pos);
+        for (group, name, s) in sources {
+            let _ = self.set_source(uid, group, name, s.clone());
+        }
+        if let Some(v) = baseline {
+            let _ = self.set_node_baseline(uid, v);
+        }
+        if let Some(v) = viewers {
+            let _ = self.set_node_viewers(uid, v);
+        }
+        if let Some(r) = record {
+            let _ = self.set_recorded(uid, r);
+        }
+    }
+
     /// Where a leaf's record lands, whichever door it came through — a fresh add, an undo of a
     /// delete, a load. Its instance is born at the next settle, so a rolled-back add runs nothing.
     fn insert_node_at(
@@ -1481,23 +1402,8 @@ impl Graph {
         values: doc::Values,
     ) {
         self.runtime.changed.push(Change::Added(uid));
-        self.patch.nodes.insert(
-            uid,
-            NodeEntry {
-                kind: Kind::Leaf(Box::new(Leaf {
-                    manifest: entry.manifest,
-                    isolation: entry.isolation,
-                    engine,
-                    values,
-                    sources: HashMap::new(),
-                })),
-                name,
-                pos: [0.0, 0.0],
-                scope: None,
-                viewers: serde_json::json!({}), baseline: serde_json::json!({}),
-                record: Vec::new(),
-            },
-        );
+        let leaf = Leaf { manifest: entry.manifest, isolation: entry.isolation, engine, values, sources: HashMap::new() };
+        self.patch.nodes.insert(uid, NodeEntry::new(Kind::Leaf(Box::new(leaf)), name, [0.0, 0.0]));
     }
 
     /// Every display name in the patch with the uid wearing it — leaves, sub-patch facades and
@@ -1512,9 +1418,8 @@ impl Graph {
         self.named().any(|(_, n)| n == name)
     }
 
-    /// Is `name` already worn by something other than `except` — `None` when nothing is exempt, as
-    /// for a node not yet born? `AddNode` and `EditNode` both tolerate a collision as a no-op, so
-    /// the user-facing error is raised at the RPC boundary.
+    /// Is `name` already worn by something other than `except`? The commands tolerate a collision
+    /// as a no-op, so the user-facing error is raised at the RPC boundary.
     pub fn name_taken(&self, name: &str, except: Option<Uid>) -> bool {
         self.named().any(|(u, n)| Some(u) != except && n == name)
     }
@@ -1564,15 +1469,6 @@ impl Graph {
             .collect()
     }
 
-    /// The physical `(node, slot)` a boundary port's data lives on, or `None` while nothing is
-    /// behind it. One call into [`Graph::stream`], which is the walk a cable follows too.
-    pub fn stub_stream(&self, port: Uid) -> Option<(Uid, &'static str)> {
-        match self.stream(port, subpatch::BOUNDARY_SLOT)? {
-            Stream::At(leaf, slot) => Some((leaf, slot)),
-            Stream::Open(_) => None,
-        }
-    }
-
     /// A node's params as of now. An owned snapshot rather than a borrow: cloning the `Arc` is
     /// cheap, and a `&` would borrow the whole graph for as long as the caller held it.
     pub fn params(&self, uid: Uid) -> Option<ParamGroups> {
@@ -1605,10 +1501,15 @@ impl Graph {
         Ok(params)
     }
 
-    /// A param's re-enumerated options where the instance has answered a refresh — the overlay a
-    /// projection reads over the record's declared options. Never persisted; dies with the instance.
-    pub fn refreshed_options(&self, uid: Uid, group: &str, name: &str) -> Option<&[String]> {
-        self.health(uid)?.options.get(&ParamKey::new(group, name)).map(Vec::as_slice)
+    /// `p` as a projection shows it: an instance that answered a refresh shows its live options
+    /// over the declared ones. Never persisted; dies with the instance.
+    pub fn shown_param(&self, uid: Uid, group: &str, name: &str, p: &Param) -> Param {
+        let mut p = p.clone();
+        let live = self.health(uid).and_then(|h| h.options.get(&ParamKey::new(group, name)));
+        if let (Param::Str { options, .. }, Some(live)) = (&mut p, live) {
+            *options = Some(live.clone());
+        }
+        p
     }
 
     /// Rename a node. Every `nd('old')` in the patch follows to `nd('new')`, and the referrer uids
@@ -1649,25 +1550,15 @@ impl Graph {
                 (slot == Some(old) && Some(n) == facade.as_deref()).then(|| new.to_string()),
             )
         };
-        let mut edits: Vec<(Uid, ParamKey, SourceState)> = Vec::new();
-        for (ruid, entry) in self.leaves() {
-            for (key, b) in &entry.sources {
-                let expression = expr_rewrite::rename_refs(&b.state.expression, rename);
-                let reference = expr_rewrite::rename_reference(&b.state.reference, rename);
-                if expression.is_some() || reference.is_some() {
-                    let mut state = b.state.clone();
-                    state.expression = expression.unwrap_or(state.expression);
-                    state.reference = reference.unwrap_or(state.reference);
-                    edits.push((ruid, key.clone(), state));
-                }
-            }
-        }
-        let mut referrers: Vec<Uid> = Vec::new();
-        for (ruid, key, state) in edits {
-            if self.set_source(ruid, &key.group, &key.name, state).is_ok() && !referrers.contains(&ruid) {
-                referrers.push(ruid);
-            }
-        }
+        let referrers = self.rewrite_sources(|s| {
+            let expression = expr_rewrite::rename_refs(&s.expression, rename);
+            let reference = expr_rewrite::rename_reference(&s.reference, rename);
+            (expression.is_some() || reference.is_some()).then(|| SourceState {
+                expression: expression.unwrap_or_else(|| s.expression.clone()),
+                reference: reference.unwrap_or_else(|| s.reference.clone()),
+                ..s.clone()
+            })
+        });
         // A variable follows a producer by the same spelling, so the one rename reaches it too.
         let followed: Vec<(String, goofi_core::variables::VariableSource)> = self
             .patch.variables
@@ -1681,8 +1572,6 @@ impl Graph {
         for (name, source) in followed {
             let _ = self.patch.variables.set_source(&name, Some(source));
         }
-        // Expressions live only on the live flat nodes now (no def templates) — the loop above has
-        // already followed the rename into every one.
         referrers
     }
 
@@ -1713,13 +1602,8 @@ impl Graph {
         Ok(())
     }
 
-    /// What the node holds RIGHT NOW, in the shape a baseline is stored in: one entry per param,
-    /// keyed `group/name`, carrying the active source and the three things a change can happen to.
-    /// Pulse params are left out — they hold no value, so nothing about one can be "changed".
-    ///
-    /// This is the snapshot the Clear button takes. It records the SOURCE as well as the literal
-    /// because a param moving from a constant to an expression is a change even when the number it
-    /// evaluates to is the same.
+    /// What the node holds now, as a baseline: per `group/name`, the value and the source, since a
+    /// move from a constant to an expression is a change. A pulse holds no value and is left out.
     pub fn touched_baseline(&self, uid: Uid) -> serde_json::Value {
         let Some(leaf) = self.patch.nodes.get(&uid).and_then(|e| e.leaf()) else {
             return serde_json::json!({});
@@ -1779,9 +1663,6 @@ impl Graph {
         self.patch.nodes.get(&uid).map(|e| e.record.as_slice())
     }
 
-    // Grouping never touches the flat runtime — the members stay the exact live nodes they were,
-    // and only their membership re-tags.
-
     /// The parent scope of a node/scope (`None` = ROOT). Absent ⇒ ROOT, so a plain flat graph
     /// needs no entries.
     pub fn scope_of(&self, uid: Uid) -> Option<Uid> {
@@ -1795,10 +1676,8 @@ impl Graph {
     }
 
 
-    /// Chain-resolve a scope's stub port to the single physical inner leaf `(uid, slot)` it exposes,
-    /// walking nested scopes; `None` if unwired.
-    pub fn resolve_stub(&self, scope: Uid, stub: &str) -> subpatch::StubInner {
-        let port = Uid::from_hex(stub).filter(|p| self.stub(*p).is_some_and(|(s, _)| s == scope))?;
+    /// The leaf `(uid, slot)` a port exposes, walking nested ports; `None` if unwired.
+    fn resolve_stub(&self, port: Uid) -> Option<(Uid, &'static str)> {
         let mut at = port;
         // A hand-edited `.gfi` can persist a cyclic chain; walking it must stop, not recurse.
         let mut seen: Vec<Uid> = Vec::new();
@@ -1810,23 +1689,20 @@ impl Graph {
             let (node, slot) = self.port_inner(at)?;
             match self.stub(node).is_some() {
                 true => at = node,
-                false => return Some((node, slot.to_string())),
+                false => return Some((node, slot)),
             }
         }
     }
 
-    /// The output slots of anything a uid names: `(key, label, dtype)`. A leaf's declarations; a
-    /// facade's OUT ports, keyed by the port uid so a rename cannot orphan a wire or a panel, and
-    /// LABELLED by the port's own name so nothing has to keep a second map; and the single `value`
-    /// a port wears — either direction, because a port RELAYS rather than produces, so what it
-    /// stands in front of is readable from both sides of the wall.
-    pub fn output_slots(&self, uid: Uid) -> Vec<(String, String, goofi_core::SlotType)> {
+    /// The slots of anything a uid names on one side, as `(key, label, dtype)`: a leaf's
+    /// declarations, a facade's ports keyed by uid and labelled by name, and a port's one `value`.
+    pub fn slots(&self, uid: Uid, dir: subpatch::Dir) -> Vec<(String, String, goofi_core::SlotType)> {
         if self.is_facade(uid) {
             return self
                 .ports_of(uid)
                 .into_iter()
                 .filter_map(|id| self.stub(id).map(|(_, p)| (id, p)))
-                .filter(|(_, p)| p.dir == subpatch::Dir::Out)
+                .filter(|(_, p)| p.dir == dir)
                 .map(|(id, p)| (id.to_hex(), self.name(id).unwrap_or("").to_string(), p.dtype))
                 .collect();
         }
@@ -1834,37 +1710,12 @@ impl Graph {
             let slot = subpatch::BOUNDARY_SLOT.to_string();
             return vec![(slot.clone(), slot, st.dtype)];
         }
-        self.patch.nodes
-            .get(&uid)
-            .and_then(|e| e.leaf())
-            .map(|e| {
-                e.manifest.outputs.iter().map(|o| (o.name.to_string(), o.name.to_string(), o.kind)).collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// The input slots of anything a uid names, as [`Graph::output_slots`] gives the output ones:
-    /// a leaf's declarations, a facade's IN ports, and a port's single `value` — which it wears on
-    /// both sides, because it relays and so consumes and produces the one wire.
-    pub fn input_slots(&self, uid: Uid) -> Vec<(String, String, goofi_core::SlotType)> {
-        if self.is_facade(uid) {
-            return self
-                .ports_of(uid)
-                .into_iter()
-                .filter_map(|id| self.stub(id).map(|(_, p)| (id, p)))
-                .filter(|(_, p)| p.dir == subpatch::Dir::In)
-                .map(|(id, p)| (id.to_hex(), self.name(id).unwrap_or("").to_string(), p.dtype))
-                .collect();
+        let Some(m) = self.manifest(uid) else { return Vec::new() };
+        let own = |name: &str, kind| (name.to_string(), name.to_string(), kind);
+        match dir {
+            Dir::Out => m.outputs.iter().map(|o| own(o.name, o.kind)).collect(),
+            Dir::In => m.inputs.iter().map(|s| own(s.name, s.kind)).collect(),
         }
-        if let Some((_, st)) = self.stub(uid) {
-            let slot = subpatch::BOUNDARY_SLOT.to_string();
-            return vec![(slot.clone(), slot, st.dtype)];
-        }
-        self.leaf(uid)
-            .map(|e| {
-                e.manifest.inputs.iter().map(|s| (s.name.to_string(), s.name.to_string(), s.kind)).collect()
-            })
-            .unwrap_or_default()
     }
 
     /// The type id of anything a uid names — a leaf's `engine:Name`, or the bare structural name
@@ -1891,16 +1742,14 @@ impl Graph {
         }
     }
 
-    /// THE resolution: what real leaf slot an address stands for. A port relays, so the walk takes
-    /// one hop per boundary, however deep the nesting. `Open` is the port the walk stopped at
-    /// because nothing feeds it yet — a legitimate answer, never an error. `None` only when the
-    /// address names no output slot at all. One function, so `nd()` and a cable follow one wiring.
+    /// What real leaf slot an address stands for, one hop per port. `Open` is the port where nothing
+    /// feeds the walk yet; `None` means no output slot. `nd()` and a cable both resolve here.
     pub fn stream(&self, uid: Uid, slot: &str) -> Option<Stream> {
         let (mut at, mut slot) = self.normalise(uid, slot);
         let mut seen: Vec<Uid> = Vec::new();
         loop {
             if self.leaf(at).is_some() {
-                return Some(Stream::At(at, self.resolve_output(at, &slot)?));
+                return Some(Stream::At(at, self.slot_face(at, &slot, Dir::Out)?.name));
             }
             // A hand-edited `.gfi` can persist a cyclic chain; walking it must stop, not recurse.
             if seen.contains(&at) {
@@ -1911,21 +1760,16 @@ impl Graph {
             let Some((next, next_slot)) = self.stub_feed(at) else {
                 return Some(Stream::Open(at));
             };
-            (at, slot) = (next, next_slot);
+            (at, slot) = (next, next_slot.to_string());
         }
     }
 
     /// The wire on a port's INSIDE — the member it feeds (an IN port) or drains (an OUT port). An
     /// ordinary link, so this is a lookup rather than a field beside `links` to keep in step.
-    pub fn port_inner(&self, port: Uid) -> Option<(Uid, &'static str)> {
-        let (_, st) = self.stub(port)?;
-        match st.dir {
-            subpatch::Dir::In => {
-                self.patch.links.values().find(|l| l.node_out == port).map(|l| (l.node_in, l.slot_in))
-            }
-            subpatch::Dir::Out => {
-                self.patch.links.values().find(|l| l.node_in == port).map(|l| (l.node_out, l.slot_out))
-            }
+    fn port_inner(&self, port: Uid) -> Option<(Uid, &'static str)> {
+        match self.stub(port)?.1.dir {
+            Dir::In => self.patch.links.values().find(|l| l.node_out == port).map(|l| (l.node_in, l.slot_in)),
+            Dir::Out => self.stub_feed(port),
         }
     }
 
@@ -1950,20 +1794,17 @@ impl Graph {
         out
     }
 
-    /// One hop back from a port to whatever feeds it — the wire arriving AT it, whichever side of
-    /// the wall that is. A port relays, so its direction decides which side is which but never what
-    /// the answer is: the stream is simply what is wired in.
-    fn stub_feed(&self, port: Uid) -> Option<(Uid, String)> {
-        self.patch.links.values().find(|l| l.node_in == port).map(|l| (l.node_out, l.slot_out.to_string()))
+    /// One hop back from a port to whatever feeds it: the wire arriving AT it, whichever side of
+    /// the wall that is.
+    fn stub_feed(&self, port: Uid) -> Option<(Uid, &'static str)> {
+        self.patch.links.values().find(|l| l.node_in == port).map(|l| (l.node_out, l.slot_out))
     }
 
-    /// The scope an end of a wire FACES. A leaf faces the scope it lives in; a port relays across a
-    /// wall, so it faces its own scope on one side and the parent on the other. Two ends may be
-    /// linked exactly when their faces agree — which is one rule for a cable inside a sub-patch, a
-    /// cable outside it, and the refusal of an in-port wired the wrong way round.
+    /// The scope an end of a wire FACES: a leaf its own, a port its scope on one side and the parent
+    /// on the other. Two ends may be linked exactly when their faces agree.
     fn face(&self, uid: Uid, producer: bool) -> Option<Option<Uid>> {
         if let Some((scope, st)) = self.stub(uid) {
-            let inward = st.dir == subpatch::Dir::In;
+            let inward = st.dir == Dir::In;
             return Some(match inward == producer {
                 true => Some(scope),
                 false => self.scope_of(scope),
@@ -1972,43 +1813,22 @@ impl Graph {
         self.patch.nodes.contains_key(&uid).then(|| self.scope_of(uid))
     }
 
-    /// One end of a wire: the `&'static` name a link is keyed by, the dtype the cross-dtype check
-    /// needs, and whether it takes many wires. Owned rather than a borrowed decl, because a PORT
-    /// has no manifest to borrow one from — its dtype is its own, fixed by its type at birth.
-    fn find_output(&self, uid: Uid, slot: &str) -> Option<SlotFace> {
+    /// One end of a wire: `Out` for the producer end, `In` for the consumer end. A port wears the
+    /// one `value` slot on both sides, because it relays.
+    fn slot_face(&self, uid: Uid, slot: &str, dir: subpatch::Dir) -> Option<SlotFace> {
         if let Some((_, st)) = self.stub(uid) {
             return (slot == subpatch::BOUNDARY_SLOT)
                 .then_some(SlotFace { name: subpatch::BOUNDARY_SLOT, kind: st.dtype, multi: false });
         }
-        self.leaf(uid)?
-            .manifest
-            .outputs
-            .iter()
-            .find(|o| o.name == slot)
-            .map(|o| SlotFace { name: o.name, kind: o.kind, multi: false })
-    }
-
-    /// The consumer end, as [`Graph::find_output`] is the producer end. A port wears the one
-    /// `value` slot on both sides: it relays, so it is a consumer and a producer of the same wire.
-    fn find_input(&self, uid: Uid, slot: &str) -> Option<SlotFace> {
-        if let Some((_, st)) = self.stub(uid) {
-            return (slot == subpatch::BOUNDARY_SLOT)
-                .then_some(SlotFace { name: subpatch::BOUNDARY_SLOT, kind: st.dtype, multi: false });
+        let m = self.manifest(uid)?;
+        match dir {
+            Dir::Out => {
+                m.outputs.iter().find(|o| o.name == slot).map(|o| SlotFace { name: o.name, kind: o.kind, multi: false })
+            }
+            Dir::In => {
+                m.inputs.iter().find(|s| s.name == slot).map(|s| SlotFace { name: s.name, kind: s.kind, multi: s.multi })
+            }
         }
-        self.leaf(uid)?
-            .manifest
-            .inputs
-            .iter()
-            .find(|s| s.name == slot)
-            .map(|s| SlotFace { name: s.name, kind: s.kind, multi: s.multi })
-    }
-
-    fn output_slot_type(&self, uid: Uid, slot: &str) -> Option<goofi_core::SlotType> {
-        self.find_output(uid, slot).map(|o| o.kind)
-    }
-
-    fn input_slot_type(&self, uid: Uid, slot: &str) -> Option<goofi_core::SlotType> {
-        self.find_input(uid, slot).map(|s| s.kind)
     }
 
     /// Move a node or scope into `scope` (`None` = ROOT), returning its prior membership — the one
@@ -2034,16 +1854,9 @@ impl Graph {
         }
     }
 
-    /// The member of `member_set` that transitively contains `uid`, or `None` when it lies outside
-    /// every member. Lets link classification treat a buried leaf as inside the group.
-    fn containing_member(&self, uid: Uid, member_set: &std::collections::HashSet<Uid>) -> Option<Uid> {
-        let mut cur = uid;
-        loop {
-            if member_set.contains(&cur) {
-                return Some(cur);
-            }
-            cur = self.scope_of(cur)?;
-        }
+    /// `uid` and every scope above it, innermost first.
+    fn ancestors(&self, uid: Uid) -> impl Iterator<Item = Uid> + '_ {
+        std::iter::successors(Some(uid), |u| self.scope_of(*u))
     }
 
     /// The stub on nested scope `scope` whose chain-to-leaf resolution is exactly `(leaf, slot)`
@@ -2052,20 +1865,7 @@ impl Graph {
         self.ports_of(scope)
             .into_iter()
             .filter(|id| self.stub(*id).is_some_and(|(_, p)| p.dir == dir))
-            .find(|id| self.resolve_stub(scope, &id.to_hex()).is_some_and(|(u, sl)| u == leaf && sl == slot))
-    }
-
-    /// The direct member of `scope` on the path from `leaf` up the `scope_of` tree, or `leaf` itself
-    /// when it is a direct member. `None` if `leaf` is not inside `scope`.
-    fn direct_child_containing(&self, scope: Uid, leaf: Uid) -> Option<Uid> {
-        let mut cur = leaf;
-        loop {
-            let parent = self.scope_of(cur)?;
-            if parent == scope {
-                return Some(cur);
-            }
-            cur = parent;
-        }
+            .find(|id| self.resolve_stub(*id).is_some_and(|(u, sl)| u == leaf && sl == slot))
     }
 
     /// The inner-slot key a group boundary stub should reference for a crossing link: the real slot,
@@ -2091,39 +1891,37 @@ impl Graph {
         }
         // No port exposes the leaf — mint one. Its inner is the leaf directly when the leaf is a
         // direct member, else the (recursively ensured) port on the intermediate nested scope.
-        let child = self.direct_child_containing(member, leaf).unwrap_or(leaf);
+        let child = self.ancestors(leaf).find(|u| self.scope_of(*u) == Some(member)).unwrap_or(leaf);
         let inner = if child == leaf {
             (leaf, slot.to_string())
         } else {
             let child_stub = self.expose_in_nested_member(child, leaf, slot, dir, minted);
             (child, child_stub)
         };
-        let dtype = match dir {
-            subpatch::Dir::Out => self.output_slot_type(leaf, slot),
-            subpatch::Dir::In => self.input_slot_type(leaf, slot),
-        }
-        .unwrap_or(goofi_core::SlotType::Array);
-        let base = self.pos(member).unwrap_or([0.0, 0.0]);
-        let pos = match dir {
-            subpatch::Dir::Out => [base[0] + 220.0, base[1]],
-            subpatch::Dir::In => [base[0] - 40.0, base[1]],
-        };
-        let ty = subpatch::boundary_type_name(dir, dtype);
-        let Ok(id) = self.create_node(ty, None, "", None, Some(member)) else {
+        let at = self.pos(member).unwrap_or([0.0, 0.0]);
+        let Ok(id) = self.mint_port(member, dir, leaf, slot, at) else {
             return slot.to_string();
         };
-        let _ = self.set_node_pos(id, pos);
         minted.push((member, id));
         let (node, slot) = inner;
         let _ = match dir {
-            subpatch::Dir::In => self.add_link(id, subpatch::BOUNDARY_SLOT, node, &slot),
-            subpatch::Dir::Out => self.add_link(node, &slot, id, subpatch::BOUNDARY_SLOT),
+            Dir::In => self.add_link(id, subpatch::BOUNDARY_SLOT, node, &slot),
+            Dir::Out => self.add_link(node, &slot, id, subpatch::BOUNDARY_SLOT),
         };
         id.to_hex()
     }
 
+    /// Mint a port of `scope` for `end.slot`, placed beside `at` on the side `dir` faces.
+    fn mint_port(&mut self, scope: Uid, dir: Dir, end: Uid, slot: &str, at: [f64; 2]) -> Result<Uid, String> {
+        let dtype = self.slot_face(end, slot, dir).map_or(goofi_core::SlotType::Array, |f| f.kind);
+        let id = self.create_node(subpatch::boundary_type_name(dir, dtype), None, "", None, Some(scope))?;
+        let dx = if dir == Dir::Out { 220.0 } else { -40.0 };
+        let _ = self.set_node_pos(id, [at[0] + dx, at[1]]);
+        Ok(id)
+    }
+
     /// The single common parent scope of `members`, or an error if the set is empty or spans several
-    /// scopes. Shared by `group_nodes` and `restore_scope`.
+    /// scopes.
     fn common_parent(&self, members: &[Uid]) -> Result<Option<Uid>, String> {
         if members.is_empty() {
             return Err("group: empty selection".into());
@@ -2143,7 +1941,7 @@ impl Graph {
         Ok(parent.unwrap())
     }
 
-    /// Like [`Self::group_nodes`], but records into `minted` every stub it has to MINT on a
+    /// Group `members` into a new scope at `pos`, recording into `minted` every port it MINTS on a
     /// pre-existing nested member, so the `Group` inverse can un-mint them.
     pub fn group_nodes_capturing(
         &mut self,
@@ -2151,25 +1949,18 @@ impl Graph {
         pos: [f64; 2],
         minted: &mut Vec<(Uid, Uid)>,
     ) -> Result<Uid, String> {
-        use subpatch::Dir;
         // 1. Validate BEFORE any mutation: each exists, and all share one parent scope.
         let parent = self.common_parent(members)?;
         let member_set: std::collections::HashSet<Uid> = members.iter().copied().collect();
         let scope_uid = self.mint();
-        // Registered BEFORE its ports are minted. A port's label comes from the patch's ONE display
-        // namespace, so a batch that names every port out of the state it started in hands each of
-        // them the same label — and `nd()` then cannot tell two ports apart.
+        // Registered BEFORE its ports are minted, so each port's fresh name sees the ones before it
+        // and `nd()` can tell two ports apart.
         let disp = self.fresh_name("subpatch");
-        self.patch.nodes.insert(
-            scope_uid,
-            NodeEntry { kind: Kind::Facade, name: disp, pos, scope: None, viewers: serde_json::json!({}), baseline: serde_json::json!({}), record: Vec::new() },
-        );
+        self.patch.nodes.insert(scope_uid, NodeEntry::new(Kind::Facade, disp, pos));
         self.set_member_scope(scope_uid, parent);
 
-        // 2. Classify each link by TRANSITIVE containment. Exactly one endpoint inside mints a
-        //    port for the slot it crosses at, and the cable is SPLIT in two around it — the outer
-        //    half ends at the port, the inner half carries it to the member. Both are ordinary
-        //    links; several cables leaving one slot share one port.
+        // 2. A link with exactly one end inside (transitively) is SPLIT at a port minted for the
+        //    slot it crosses; several cables leaving one slot share one port.
         let mut ports: std::collections::HashMap<(Uid, &'static str, bool), Uid> =
             std::collections::HashMap::new();
         let mut wires: Vec<(Uid, String, Uid, String)> = Vec::new();
@@ -2177,10 +1968,10 @@ impl Graph {
         let (mut in_n, mut out_n) = (0usize, 0usize);
         // Snapshot the links: `expose_in_nested_member` may MINT an intermediate stub and needs
         // `&mut self`, so the classification cannot hold a borrow on `self.patch.links`.
-        let links: Vec<Link> = self.patch.links.values().cloned().collect();
+        let links = self.links_view();
         for l in &links {
-            let out_m = self.containing_member(l.node_out, &member_set);
-            let in_m = self.containing_member(l.node_in, &member_set);
+            let out_m = self.ancestors(l.node_out).find(|u| member_set.contains(u));
+            let in_m = self.ancestors(l.node_in).find(|u| member_set.contains(u));
             let (member, at_slot, outward) = match (out_m, in_m) {
                 (Some(om), None) => (om, l.slot_out, true),
                 (None, Some(im)) => (im, l.slot_in, false),
@@ -2191,37 +1982,17 @@ impl Graph {
             let port = match ports.get(&key) {
                 Some(id) => *id,
                 None => {
-                    let (dir, dtype, at) = match outward {
-                        true => (
-                            Dir::Out,
-                            self.output_slot_type(end, at_slot).unwrap_or(goofi_core::SlotType::Array),
-                            [pos[0] + 220.0, pos[1] + 40.0 * out_n as f64],
-                        ),
-                        false => (
-                            Dir::In,
-                            self.input_slot_type(end, at_slot).unwrap_or(goofi_core::SlotType::Array),
-                            [pos[0] - 40.0, pos[1] + 40.0 * in_n as f64],
-                        ),
-                    };
+                    let (dir, n) = if outward { (Dir::Out, &mut out_n) } else { (Dir::In, &mut in_n) };
                     let inner_slot = self.expose_in_nested_member(member, end, at_slot, dir, minted);
-                    let ty = subpatch::boundary_type_name(dir, dtype);
-                    let id = self.create_node(ty, None, "", None, Some(scope_uid))?;
-                    let _ = self.set_node_pos(id, at);
-                    match outward {
-                        true => {
-                            wires.push((member, inner_slot, id, subpatch::BOUNDARY_SLOT.to_string()));
-                            out_n += 1;
-                        }
-                        false => {
-                            wires.push((id, subpatch::BOUNDARY_SLOT.to_string(), member, inner_slot));
-                            in_n += 1;
-                        }
-                    }
+                    let id = self.mint_port(scope_uid, dir, end, at_slot, [pos[0], pos[1] + 40.0 * *n as f64])?;
+                    *n += 1;
+                    let b = subpatch::BOUNDARY_SLOT.to_string();
+                    wires.push(if outward { (member, inner_slot, id, b) } else { (id, b, member, inner_slot) });
                     ports.insert(key, id);
                     id
                 }
             };
-            cut.push(l.clone());
+            cut.push(*l);
             wires.push(match outward {
                 true => (
                     port,
@@ -2267,21 +2038,10 @@ impl Graph {
         if self.is_facade(scope_id) {
             return Err(format!("restore_scope: scope {scope_id} already live"));
         }
-        // The parent is captured explicitly rather than derived from members, so an EMPTY scope
-        // restores fine. Re-tag only members that actually exist.
-        // An empty name means MINT one, the rule every create uses — which is what lets a COPY
-        // land beside its original.
-        self.patch.nodes.insert(
-            scope_id,
-            NodeEntry {
-                kind: Kind::Facade,
-                name: self.pick_name(&name, "subpatch", Some(scope_id)),
-                pos,
-                scope: None,
-                viewers: serde_json::json!({}), baseline: serde_json::json!({}),
-                record: Vec::new(),
-            },
-        );
+        // The parent is captured, not derived from members, so an EMPTY scope restores. An empty
+        // name mints one, which lets a COPY land beside its original.
+        let name = self.pick_name(&name, "subpatch", Some(scope_id));
+        self.patch.nodes.insert(scope_id, NodeEntry::new(Kind::Facade, name, pos));
         for &m in members {
             if self.patch.nodes.contains_key(&m) {
                 self.set_member_scope(m, Some(scope_id));
@@ -2311,10 +2071,7 @@ impl Graph {
         let ports: Vec<Uid> = self.ports_of(scope);
         let mut splices: Vec<(Uid, &'static str, Uid, &'static str)> = Vec::new();
         for &port in &ports {
-            let Some(feed) = self.patch.links.values().find(|l| l.node_in == port).map(|l| (l.node_out, l.slot_out))
-            else {
-                continue;
-            };
+            let Some(feed) = self.stub_feed(port) else { continue };
             for l in self.patch.links.values().filter(|l| l.node_out == port) {
                 splices.push((feed.0, feed.1, l.node_in, l.slot_in));
             }
@@ -2356,8 +2113,6 @@ impl Graph {
         Ok(())
     }
 
-    /// The port of the ENCLOSING scope that exposes `(scope, port)`, if one does. Read through
-    /// `inner`, so it answers the same before and after the port itself is gone.
     /// Take every cable that touches `uid` off the graph, through the door `remove_link` is — so
     /// the consumers it fed are re-planned rather than left holding a feed that has gone.
     fn cut_cables(&mut self, uid: Uid) {
@@ -2381,16 +2136,8 @@ impl Graph {
     }
 
     /// All links as resolved views (snapshot projection).
-    pub fn links_view(&self) -> Vec<LinkView> {
-        self.patch.links
-            .values()
-            .map(|l| LinkView {
-                node_out: l.node_out,
-                slot_out: l.slot_out,
-                node_in: l.node_in,
-                slot_in: l.slot_in,
-            })
-            .collect()
+    pub fn links_view(&self) -> Vec<Link> {
+        self.patch.links.values().copied().collect()
     }
 
     /// Release every compiled expression handle a node entry holds, so the evaluator's
@@ -2422,7 +2169,7 @@ impl Graph {
             .links
             .values()
             .filter(|l| l.node_out == uid || l.node_in == uid)
-            .cloned()
+            .copied()
             .collect();
         self.patch.links
             .retain(|_, l| l.node_out != uid && l.node_in != uid);
@@ -2485,9 +2232,6 @@ impl Graph {
         for key in keys {
             self.touched.push(Touched::Param(uid, key));
         }
-        // `bindings` are left untouched — their compiled handles may only be dropped through
-        // `release_entry_bindings`, and `bind_error` describes a SOURCE this rebirth did not touch.
-
         // A wire onto a slot the reshape retired can never propagate and cannot be repaired — the
         // slot is gone from the palette. Keeping it draws a cable the runtime ignores.
         let orphaned: Vec<(Uid, &'static str, Uid, &'static str)> = self
@@ -2495,8 +2239,8 @@ impl Graph {
             .links
             .values()
             .filter(|l| {
-                (l.node_in == uid && self.input_slot_type(uid, l.slot_in).is_none())
-                    || (l.node_out == uid && self.output_slot_type(uid, l.slot_out).is_none())
+                (l.node_in == uid && self.slot_face(uid, l.slot_in, Dir::In).is_none())
+                    || (l.node_out == uid && self.slot_face(uid, l.slot_out, Dir::Out).is_none())
             })
             .map(|l| (l.node_out, l.slot_out, l.node_in, l.slot_in))
             .collect();
@@ -2536,9 +2280,8 @@ impl Graph {
         Ok(())
     }
 
-    /// One request to a node's own thread, addressed by param: a refresh re-enumerates a
-    /// refreshable `Str`'s options (they arrive as a later `RefreshOptions` status), a pulse
-    /// fires a pulse param. Not a command: a request holds no state, so there is nothing to undo.
+    /// One request to a node's own thread: a refresh re-enumerates a `Str`'s options, a pulse fires.
+    /// Not a command: a request holds no state, so there is nothing to undo.
     pub fn request(&mut self, uid: Uid, group: &str, name: &str, kind: goofi_node::RequestKind) -> Result<(), String> {
         let entry = self.leaf(uid).ok_or_else(|| format!("no such node {uid}"))?;
         let typed = self.typed(entry);
@@ -2560,10 +2303,8 @@ impl Graph {
         Ok(())
     }
 
-    /// Set a param's source record: its mode, and the expression and reference it retains. A record
-    /// with nothing retained and a constant mode is removed. The record is derived at once, so the
-    /// reply carries its bind error — never as a refusal, since the source outlives any one
-    /// instance — and again at every settle, against the graph as it then stands.
+    /// Set a param's source record; an empty one is removed. It is derived at once, so a bind error
+    /// rides the record rather than refusing, and again at every settle.
     pub fn set_source(
         &mut self,
         uid: Uid,
@@ -2603,8 +2344,7 @@ impl Graph {
     }
 
     /// What a source's active text derives to against the graph: the rewrite, its variables
-    /// resolved, and why it cannot bind. Both retained texts are scanned, so a broken inactive
-    /// one is refused as it is typed.
+    /// resolved, and why it cannot bind.
     fn derive(&self, uid: Uid, key: &ParamKey, state: &SourceState) -> Derived {
         let param = self.leaf(uid).and_then(|e| goofi_node::param(&self.typed(e), &key.group, &key.name).cloned());
         let scanned = (!state.expression.is_empty()).then(|| expr_rewrite::rewrite(&state.expression));
@@ -2648,9 +2388,9 @@ impl Graph {
     /// Why a resolved reference cannot feed this param: the producer's slot kind against the
     /// param's type. `None` when they agree, or when the producer was not found (already reported).
     fn reference_kind_error(&self, r: &expr_rewrite::VarRef, param: &Param) -> Option<String> {
-        let expr_rewrite::VarRef::Node { name, slot: Some(slot), .. } = r else { return None };
+        let Target::Node { name, slot: Some(slot) } = &r.target else { return None };
         let uid = self.uid_by_name(name)?;
-        let kind = self.output_slots(uid).into_iter().find(|(_, label, _)| label == slot)?.2;
+        let kind = self.slots(uid, Dir::Out).into_iter().find(|(_, label, _)| label == slot)?.2;
         let wants = match param {
             Param::Str { .. } => goofi_core::SlotType::String,
             _ => goofi_core::SlotType::Array,
@@ -2709,26 +2449,27 @@ impl Graph {
             Err(reason) => BoundVar::Missing { var: var.to_string(), reason },
         };
         refs.iter()
-            .map(|r| match r {
-                expr_rewrite::VarRef::Variable { var, key } => match self.patch.variables.get(key) {
-                    Some(v) => BoundVar::Value { var: var.clone(), value: variable_as_param(v) },
+            .map(|r| (r.var.as_str(), &r.target))
+            .map(|(var, t)| match t {
+                Target::Variable { key } => match self.patch.variables.get(key) {
+                    Some(v) => BoundVar::Value { var: var.to_string(), value: variable_as_param(v) },
                     None => BoundVar::Missing {
-                        var: var.clone(),
+                        var: var.to_string(),
                         reason: format!("variable `{key}` is not defined"),
                     },
                 },
-                expr_rewrite::VarRef::Node { var, name, slot } => {
+                Target::Node { name, slot } => {
                     stream(var, &mut taken, self.resolve_stream(name, slot.as_deref()))
                 }
-                expr_rewrite::VarRef::MeOut { var, slot } => {
+                Target::MeOut { slot } => {
                     stream(var, &mut taken, self.resolve_own_stream(consumer, slot.as_deref()))
                 }
-                expr_rewrite::VarRef::NodeParam { var, name, group, param } => {
+                Target::NodeParam { name, group, param } => {
                     value(var, self.uid_by_name(name)
                         .ok_or_else(|| format!("no node named `{name}`"))
                         .and_then(|uid| self.param_value_of(uid, name, group, param)))
                 }
-                expr_rewrite::VarRef::MeParam { var, group, param } => {
+                Target::MeParam { group, param } => {
                     value(var, self.param_value_of(consumer, "me", group, param))
                 }
             })
@@ -2738,19 +2479,9 @@ impl Graph {
     /// This node's own output, for `me.out.slot` and bare `me` — a leaf's manifest is the slot
     /// vocabulary.
     fn resolve_own_stream(&self, uid: Uid, slot: Option<&str>) -> Result<(Uid, &'static str), String> {
-        let entry = self.leaf(uid).ok_or("`me` reads a running node")?;
-        let outputs = entry.manifest.outputs;
-        match slot {
-            Some(want) => outputs
-                .iter()
-                .find(|o| o.name == want)
-                .map(|o| (uid, o.name))
-                .ok_or_else(|| format!("this node has no output `{want}`")),
-            None if outputs.len() == 1 => Ok((uid, outputs[0].name)),
-            None if outputs.is_empty() => Err("this node has no outputs".to_string()),
-            None => Err("`me` is ambiguous: this node has multiple outputs; use `me.out.<slot>`"
-                .to_string()),
-        }
+        let outputs = self.leaf(uid).ok_or("`me` reads a running node")?.manifest.outputs;
+        let bare = || "`me` is ambiguous: this node has multiple outputs; use `me.out.<slot>`".to_string();
+        pick_output(outputs, |o| o.name, slot, "this node", bare).map(|o| (uid, o.name))
     }
 
     /// A param's EFFECTIVE value for an expression: the evaluated report when the param is
@@ -2771,24 +2502,11 @@ impl Graph {
         let uid = self.uid_by_name(name).ok_or_else(|| format!("no node named `{name}`"))?;
         // The slot vocabulary is one question and the stream behind it another, and every node kind
         // answers both — a leaf, a facade whose outputs are its ports, and a port itself.
-        let outputs = self.output_slots(uid);
-        let key = match slot {
-            // A reference is by NAME, because `nd()` reads the one display namespace: a facade's
-            // slot is its port's name, never the uid the document keys it by.
-            Some(want) => outputs
-                .iter()
-                .find(|(_, label, _)| label == want)
-                .map(|(key, _, _)| key.clone())
-                .ok_or_else(|| format!("node `{name}` has no output `{want}`"))?,
-            None if outputs.len() == 1 => outputs[0].0.clone(),
-            None if outputs.is_empty() => return Err(format!("node `{name}` has no outputs")),
-            None => {
-                return Err(format!(
-                    "nd('{name}') is ambiguous: it has multiple outputs; use nd('{name}').out.<slot>"
-                ))
-            }
-        };
-        match self.stream(uid, &key) {
+        let outputs = self.slots(uid, Dir::Out);
+        // By NAME, because `nd()` reads the one display namespace: a facade's slot is its port's name.
+        let bare = || format!("nd('{name}') is ambiguous: it has multiple outputs; use nd('{name}').out.<slot>");
+        let key = &pick_output(&outputs, |(_, label, _)| label, slot, &format!("node `{name}`"), bare)?.0;
+        match self.stream(uid, key) {
             Some(Stream::At(leaf, slot)) => Ok((leaf, slot)),
             Some(Stream::Open(port)) => Err(format!(
                 "port `{}` has nothing wired to it yet",
@@ -2854,9 +2572,8 @@ impl Graph {
         self.named().find(|(_, n)| *n == name).map(|(u, _)| u)
     }
 
-    /// A node reference as any caller may spell it: a uid, or the unique display name. An
-    /// existing uid wins a hex-looking name; a well-formed uid that names nothing stays a uid, so
-    /// an idempotent remove keeps its meaning.
+    /// A node reference as a uid or the display name. An existing uid wins a hex-looking name; a
+    /// well-formed uid that names nothing stays a uid, so an idempotent remove keeps its meaning.
     pub fn resolve_ref(&self, raw: &str) -> Option<Uid> {
         match Uid::from_hex(raw) {
             Some(uid) if self.exists(uid) => Some(uid),
@@ -2864,27 +2581,10 @@ impl Graph {
         }
     }
 
-    /// Resolve an output slot name to its `&'static` manifest name.
-    fn resolve_output(&self, uid: Uid, slot: &str) -> Option<&'static str> {
-        self.find_output(uid, slot).map(|o| o.name)
-    }
-    fn resolve_input(&self, uid: Uid, slot: &str) -> Option<&'static str> {
-        self.find_input(uid, slot).map(|i| i.name)
-    }
-
-    /// Whether input `slot` on node `uid` is a `multi` (variadic) slot — i.e. it
-    /// accepts many wires and lives in `multi_inputs` rather than `inputs`.
-    fn is_multi_input(&self, uid: Uid, slot: &str) -> bool {
-        self.find_input(uid, slot).is_some_and(|i| i.multi)
-    }
-
     /// The wire currently feeding a SINGLE input `(node_in, slot)` — the one an `add_link` would
     /// evict, so the `AddLink` command's inverse can restore it. `None` for a multi input.
     pub fn single_input_source(&self, node_in: Uid, slot: &str) -> Option<(Uid, &'static str)> {
-        let slot = self.resolve_input(node_in, slot)?;
-        if self.is_multi_input(node_in, slot) {
-            return None;
-        }
+        let slot = self.slot_face(node_in, slot, Dir::In).filter(|f| !f.multi)?.name;
         self.patch.links
             .values()
             .find(|l| l.node_in == node_in && l.slot_in == slot)
@@ -2894,11 +2594,11 @@ impl Graph {
     /// Does this exact (resolved) wire already exist? Lets a command detect an idempotent AddLink,
     /// so its inverse is a no-op too instead of destroying the pre-existing wire.
     pub fn has_link(&self, node_out: Uid, slot_out: &str, node_in: Uid, slot_in: &str) -> bool {
-        let (Some(slot_out), Some(slot_in)) =
-            (self.resolve_output(node_out, slot_out), self.resolve_input(node_in, slot_in))
+        let (Some(out), Some(inp)) = (self.slot_face(node_out, slot_out, Dir::Out), self.slot_face(node_in, slot_in, Dir::In))
         else {
             return false;
         };
+        let (slot_out, slot_in) = (out.name, inp.name);
         self.patch.links.contains_key(&Link { node_out, slot_out, node_in, slot_in }.key())
     }
 
@@ -2917,10 +2617,10 @@ impl Graph {
         // Each slot's face, taken once: it carries both the `&'static` name a link is keyed by and
         // the dtype the check below needs, so there is no second lookup that could fail on its own.
         let out = self
-            .find_output(node_out, slot_out)
+            .slot_face(node_out, slot_out, Dir::Out)
             .ok_or_else(|| format!("no output slot `{slot_out}` on {node_out}"))?;
         let inp = self
-            .find_input(node_in, slot_in)
+            .slot_face(node_in, slot_in, Dir::In)
             .ok_or_else(|| format!("no input slot `{slot_in}` on {node_in}"))?;
         let (slot_out, slot_in) = (out.name, inp.name);
         // Both ends must face the same scope, or the cable crosses a wall without a port to carry
@@ -2957,7 +2657,7 @@ impl Graph {
         }
         // A multi slot keeps its wires in connection order, which IS `links`' own order; a single
         // input takes one, so a second wire EVICTS the first. The node hears one declarative set.
-        if !self.is_multi_input(node_in, slot_in) {
+        if !inp.multi {
             self.patch.links
                 .retain(|_, l| !(l.node_in == node_in && l.slot_in == slot_in));
         }
@@ -2973,18 +2673,11 @@ impl Graph {
         node_in: Uid,
         slot_in: &str,
     ) -> Result<(), String> {
-        let before = self.patch.links.len();
-        self.patch.links.retain(|_, l| {
-            !(l.node_out == node_out
-                && l.slot_out == slot_out
-                && l.node_in == node_in
-                && l.slot_in == slot_in)
-        });
-        if self.patch.links.len() == before {
+        if self.patch.links.shift_remove(&doc::link_key(node_out, slot_out, node_in, slot_in)).is_none() {
             return Err("no such link".into());
         }
-        if let Some(slot_in) = self.resolve_input(node_in, slot_in) {
-            self.touched.push(Touched::Slot(node_in, slot_in));
+        if let Some(f) = self.slot_face(node_in, slot_in, Dir::In) {
+            self.touched.push(Touched::Slot(node_in, f.name));
         }
         Ok(())
     }
@@ -3008,10 +2701,6 @@ impl Graph {
         next
     }
 
-    fn generation(&self, uid: Uid) -> u64 {
-        self.runtime.generations.get(&uid).copied().unwrap_or(0)
-    }
-
     /// Deliver what the batch changed: one decision per touched item, from settled state, each
     /// item once however often the batch touched it. Free when nothing was.
     pub fn settle(&mut self) {
@@ -3026,41 +2715,15 @@ impl Graph {
         // Port consumers expand to the leaf inputs behind them, a node the batch also removed is
         // owed nothing, and each item is delivered once however often the batch touched it.
         let mut touched: Vec<Touched> = Vec::new();
-        for t in raw {
-            match t {
-                Touched::Slot(uid, slot) => {
-                    let sinks: Vec<(Uid, &'static str)> = if self.leaf(uid).is_some() {
-                        vec![(uid, slot)]
-                    } else {
-                        self.sinks(uid, subpatch::BOUNDARY_SLOT)
-                    };
-                    for (n, sl) in sinks {
-                        let t = Touched::Slot(n, sl);
-                        if !touched.contains(&t) {
-                            touched.push(t);
-                        }
-                    }
-                }
-                Touched::Param(uid, key) => {
-                    if self.leaf(uid).is_none() {
-                        continue;
-                    }
-                    let t = Touched::Param(uid, key);
-                    if !touched.contains(&t) {
-                        touched.push(t);
-                    }
-                }
-                Touched::Record(uid) => {
-                    if self.leaf(uid).is_some() && !touched.contains(&Touched::Record(uid)) {
-                        touched.push(Touched::Record(uid));
-                    }
-                }
-                Touched::Watch(uid, slot) => {
-                    let t = Touched::Watch(uid, slot);
-                    if self.leaf(uid).is_some() && !touched.contains(&t) {
-                        touched.push(t);
-                    }
-                }
+        let expanded = raw.into_iter().flat_map(|t| match t {
+            Touched::Slot(uid, _) if self.leaf(uid).is_none() => {
+                self.sinks(uid, subpatch::BOUNDARY_SLOT).into_iter().map(|(n, sl)| Touched::Slot(n, sl)).collect()
+            }
+            t => vec![t],
+        });
+        for t in expanded {
+            if self.leaf(t.uid()).is_some() && !touched.contains(&t) {
+                touched.push(t);
             }
         }
         for t in &touched {
@@ -3080,18 +2743,16 @@ impl Graph {
         };
         // A wire made or cut, or a node reborn, changes what its producer owes its viewers.
         self.offer_view_wants(&edges);
-        // The engines' own facts into `system.*`, from the state this settle just reached. It
-        // not a command and never becomes one: the user's undoable act is the param they moved,
-        // and this is what that param MEANS once the engine has answered.
+        // The engines' own facts into `system.*`, from the state this settle reached. Not a
+        // command: the user's undoable act is the param they moved.
         let moved = published.into_iter().fold(false, |acc, (name, value)| self.patch.variables.publish(name, value) || acc);
         if moved {
             self.derive_bindings();
         }
     }
 
-    /// Bring the instances level with the leaves the batch left: removals, then births, then a
-    /// rebirth for a restart or a node removed and restored. A uid changed to where it began
-    /// costs nothing, so an add plus its rollback never reaches an engine.
+    /// Bring the instances level with the leaves the batch left: removals, births, then rebirths.
+    /// A uid changed back to where it began costs nothing.
     fn net_instances(&mut self, changed: &[Change]) {
         let mut uids: Vec<Uid> = Vec::new();
         for uid in changed.iter().map(|c| match c {
@@ -3160,9 +2821,8 @@ impl Graph {
             .collect()
     }
 
-    /// The status-drain worker's engine-side half: take every engine's waiting reports and
-    /// apply the health plane. Answers how many landed, so a caller can tell a quiet graph from
-    /// one it stopped hearing.
+    /// Take every engine's waiting reports and apply the health plane. Answers how many landed,
+    /// so a caller can tell a quiet graph from one it stopped hearing.
     pub fn drain_status(&mut self) -> usize {
         let mut applied = 0;
         {
@@ -3178,11 +2838,6 @@ impl Graph {
         // the drain marked pending.
         self.settle();
         applied
-    }
-
-    /// Apply one health report — the drain's door, public so a test can inject one.
-    pub fn apply_status(&mut self, uid: Uid, status: Status) {
-        apply_status_to(&self.patch.nodes, &mut self.runtime.instances, &mut self.runtime.refreshed, uid, status);
     }
 
     /// The params whose options were re-enumerated since the last call — the worker's cue to echo
@@ -3209,26 +2864,13 @@ impl Graph {
         // An un-echoed refresh names a node the patch no longer holds — and a load restores uids,
         // so that number can come back and the echo be read as an answer nobody asked for.
         self.runtime.refreshed.clear();
-        // Variables are patch CONTENT, so a load starts from a fresh seeded store; `dyn_types` is
-        // catalog and stays.
+        // Variables are patch CONTENT, so a load starts from a fresh seeded store.
         self.patch.variables = goofi_core::variables::VariableStore::new();
         // Time belongs to the PATCH: one loaded an hour in must read what it would at boot. Every
         // engine holds this same object, so there is nothing to push.
         self.runtime.time.restart();
     }
 
-    /// Take the name a RESTORE asks for. It goes through the same gate a create does, so an
-    /// archive naming something illegal or already worn costs that NAME and not the patch.
-    fn force_set_name(&mut self, uid: Uid, name: &str) {
-        let Some(base) = self.node_type(uid).map(|t| name_base(goofi_node::bare(&t))) else { return };
-        let name = self.pick_name(name, &base, Some(uid));
-        if let Some(e) = self.patch.nodes.get_mut(&uid) {
-            e.name = name;
-        }
-    }
-
-    /// The `patch.yaml` manifest inside the archive: `nodes`/`links` and a flat `scopes` block
-    /// under `root`, `variables` at the top. A plain flat patch has an empty `scopes` block.
     /// Every uid `roots` reaches: the roots, whatever their scopes hold to any depth, and those
     /// scopes' ports. The subtree a copy, a delete and an export all mean by "these nodes".
     pub fn subtree_of(&self, roots: &[Uid]) -> Vec<Uid> {
@@ -3246,9 +2888,8 @@ impl Graph {
         out
     }
 
-    /// The records of `uids` and the links between them, in the document's own shape, so what a
-    /// clipboard holds and what a patch holds are ONE format. A link rides only when BOTH of its
-    /// ends are in the fragment; a cable reaching out of it was never the fragment's.
+    /// The records of `uids` and the links with BOTH ends among them, in the document's own shape:
+    /// a clipboard and a patch are ONE format.
     pub fn fragment(&self, uids: &[Uid]) -> doc::PatchDoc {
         let want: HashSet<Uid> = uids.iter().copied().collect();
         let mut nodes = IndexMap::new();
@@ -3319,9 +2960,8 @@ impl Graph {
         Ok(values_of(&self.folded(&rec.type_id, &asked)?))
     }
 
-    /// The one gate a load and a paste pass. Every leaf's type resolves or the whole document is
-    /// refused; what cannot land is dropped and said — a value its type no longer declares, a
-    /// link with an end outside the document, a variable that is not `group.element`.
+    /// The one gate a load and a paste pass. Every leaf's type resolves or the document is refused;
+    /// what cannot land is dropped and said.
     pub fn admit(&self, mut doc: doc::PatchDoc) -> Result<(doc::PatchDoc, Vec<String>), String> {
         let mut warnings = Vec::new();
         for (key, rec) in doc.nodes.iter_mut() {
@@ -3364,8 +3004,7 @@ impl Graph {
     }
 
     /// Add an admitted fragment under `scope`, shifted by `offset`, on FRESH uids. Answers the ONE
-    /// command that does it — so a paste is one undo step — beside what each record's uid became,
-    /// which is what a caller selects afterwards.
+    /// command that does it, and what each record's uid became.
     pub fn import_fragment(
         &mut self,
         doc: &doc::PatchDoc,
@@ -3380,18 +3019,14 @@ impl Graph {
         // `uid -> fresh uid` for every record, so a link and a `scope` are remapped before
         // anything is created.
         let idmap: HashMap<String, Uid> = nodes.keys().map(|old| (old.clone(), self.mint())).collect();
-        // The names the copy will wear, picked BEFORE anything is built, because an expression in
-        // the fragment spells a NAME: a source left naming the original binds the copy to it, and
-        // outlives the original's deletion as a broken reference.
+        // The names the copy will wear, picked BEFORE anything is built: an expression spells a
+        // NAME, and one left naming the original would bind the copy to it.
         let mut taken: std::collections::HashSet<String> =
             self.patch.nodes.values().map(|e| e.name.clone()).collect();
         let mut renamed: HashMap<String, String> = HashMap::new();
         for rec in nodes.values() {
             let base = name_base(goofi_node::bare(&rec.type_id));
-            let fresh = (0..)
-                .map(|n| format!("{base}{n}"))
-                .find(|c| !taken.contains(c))
-                .expect("an unbounded counter finds a free name");
+            let fresh = goofi_core::fresh_name(&base, 0, |c| taken.contains(c));
             taken.insert(fresh.clone());
             renamed.insert(rec.name.clone(), fresh);
         }
@@ -3407,13 +3042,6 @@ impl Graph {
                 m
             });
         let at = |p: [f64; 2]| [p[0] + offset[0], p[1] + offset[1]];
-        // A facade before the members that name it, and a port after every facade: a port is a
-        // port OF a scope, so it takes its scope at birth where everything else is placed below.
-        let kind_order = |ty: &str| match (ty == subpatch::SCOPE_TYPE, subpatch::boundary_type(ty)) {
-            (true, _) => 0,
-            (_, Some(_)) => 2,
-            _ => 1,
-        };
         let mut order: Vec<&String> = nodes.keys().collect();
         order.sort_by_key(|old| kind_order(&nodes[*old].type_id));
         let mut cmds: Vec<Command> = Vec::new();
@@ -3518,9 +3146,8 @@ impl Graph {
         serde_yaml_ng::to_string(&archive).unwrap_or_default()
     }
 
-    /// Replace the graph from a `.gfi` manifest, `workspace` becoming what its nodes are born
-    /// into. The document is admitted before the current graph is torn down (a rejected load is
-    /// a no-op); what was dropped on the way in is answered as warnings.
+    /// Replace the graph from a `.gfi` manifest, born into `workspace`. A rejected document leaves
+    /// the graph as it was; what was dropped on the way in is answered as warnings.
     pub fn load_doc(&mut self, text: &str, workspace: &std::path::Path) -> Result<Vec<String>, String> {
         let archive = doc::Archive::parse(text)?;
         let (doc, mut warnings) = self.admit(archive.patch)?;
@@ -3534,9 +3161,9 @@ impl Graph {
         // Variables load BEFORE nodes so a node's `variables.*` default-expression resolves at
         // instantiation, IN FILE ORDER. Malformed entries are skipped (best-effort load).
         for (name, v) in &doc.variables {
-            let _ = self.patch.variables.apply_change(name, Some(v.value.clone()), None);
+            let _ = self.patch.variables.apply_change(name, Some(v.value.clone()), None, None);
             if let Some(c) = &v.control {
-                let _ = self.patch.variables.set_control(name, Some(c.clone()));
+                let _ = self.patch.variables.apply_change(name, None, None, Some(Some(c.clone())));
             }
             if let Some(s) = &v.source {
                 let _ = self.patch.variables.set_source(name, Some(s.clone()));
@@ -3559,70 +3186,19 @@ impl Graph {
             claimed.insert(uid);
             idmap.insert(old.clone(), uid);
         }
-        let blob = |v: &Option<serde_json::Value>| v.clone().unwrap_or_else(|| serde_json::json!({}));
-        // Then the facades, before anything that can name one.
-        for (old, rec) in doc.nodes.iter().filter(|(_, r)| r.type_id == subpatch::SCOPE_TYPE) {
-            self.patch.nodes.insert(
-                idmap[old],
-                NodeEntry {
-                    kind: Kind::Facade,
-                    name: String::new(),
-                    pos: rec.pos,
-                    scope: None,
-                    viewers: serde_json::json!({}), baseline: serde_json::json!({}),
-                    record: Vec::new(),
-                },
-            );
-            self.force_set_name(idmap[old], &rec.name);
-            if let Some(v) = &rec.viewers {
-                let _ = self.set_node_viewers(idmap[old], v.clone());
-            }
-            if let Some(v) = &rec.baseline {
-                let _ = self.set_node_baseline(idmap[old], v.clone());
-            }
-            let _ = self.set_recorded(idmap[old], rec.record.clone());
-        }
-        for (old, rec) in doc.nodes.iter().filter(|(_, r)| !structural(&r.type_id)) {
-            let values = self.record_params(rec)?;
-            let (engine, entry) = self.resolve_type(&rec.type_id)?;
-            // The record's KEY is its uid — restored, not reminted (see `restore_uid`). The name is
-            // the type's fresh one only until the record's own `name` lands, just below.
-            let uid = idmap[old];
-            let name = self.fresh_name(&name_base(goofi_node::bare(&rec.type_id)));
-            self.insert_node_at(uid, name, engine, entry, values);
-            self.force_set_name(uid, &rec.name);
-            let _ = self.set_node_pos(uid, rec.pos);
-            if let Some(v) = &rec.viewers {
-                let _ = self.set_node_viewers(uid, v.clone());
-            }
-            if let Some(v) = &rec.baseline {
-                let _ = self.set_node_baseline(uid, v.clone());
-            }
-            let _ = self.set_recorded(uid, rec.record.clone());
-            for (group, name, state) in sources_of(rec) {
-                let _ = self.set_source(uid, &group, &name, state);
-            }
-        }
         let parent_of = |rec: &doc::NodeRecord| rec.scope.as_deref().and_then(|s| idmap.get(s)).copied();
-        // The ports. Each is a member record whose type carries its direction and dtype, so nothing
-        // about it is re-derived from the wire it will get below. A port with no scope is not one.
-        for (old, rec) in &doc.nodes {
-            let Some((dir, dtype)) = subpatch::boundary_type(&rec.type_id) else { continue };
-            let Some(scope) = parent_of(rec).filter(|s| self.is_facade(*s)) else { continue };
-            let uid = idmap[old];
-            self.patch.nodes.insert(
-                uid,
-                NodeEntry {
-                    kind: Kind::Port(subpatch::Port { dir, dtype }),
-                    name: String::new(),
-                    pos: rec.pos,
-                    scope: Some(scope),
-                    viewers: blob(&rec.viewers),
-                    baseline: blob(&rec.baseline),
-                    record: rec.record.clone(),
-                },
-            );
-            self.force_set_name(uid, &rec.name);
+        let mut order: Vec<(&String, &doc::NodeRecord)> = doc.nodes.iter().collect();
+        order.sort_by_key(|(_, rec)| kind_order(&rec.type_id));
+        for (old, rec) in order {
+            // A port with no scope is not one.
+            let port = subpatch::boundary_type(&rec.type_id).is_some();
+            let scope = parent_of(rec).filter(|s| port && self.is_facade(*s));
+            if port && scope.is_none() {
+                continue;
+            }
+            let params = (!structural(&rec.type_id)).then(|| self.record_params(rec)).transpose()?;
+            let uid = self.create_node(&rec.type_id, Some(idmap[old]), &rec.name, params, scope)?;
+            self.restore_extras(uid, rec.pos, &sources_of(rec), rec.viewers.clone(), rec.baseline.clone(), Some(rec.record.clone()));
         }
         // Membership, from each record's own `scope`, once every record that can hold one is in.
         for (old, rec) in &doc.nodes {
@@ -3671,14 +3247,23 @@ fn values_of(params: &ParamGroups) -> doc::Values {
         .collect()
 }
 
+/// A facade before the members that name it, and a port after every facade: a port is a port OF
+/// a scope, so it takes its scope at birth where everything else is placed after.
+fn kind_order(ty: &str) -> u8 {
+    match (ty == subpatch::SCOPE_TYPE, subpatch::boundary_type(ty)) {
+        (true, _) => 0,
+        (_, Some(_)) => 2,
+        _ => 1,
+    }
+}
+
 /// Is this a type the MODEL owns rather than the palette — a sub-patch facade or a boundary port?
 fn structural(ty: &str) -> bool {
     ty == subpatch::SCOPE_TYPE || subpatch::boundary_type(ty).is_some()
 }
 
-/// The stem a minted display name counts from: a leaf's type, and the kind's own word for the two
-/// that have no type to be named after. Legal by construction — the graph never mints a name its
-/// own rule refuses.
+/// The stem a minted display name counts from: a leaf's type, or the kind's own word. Legal by
+/// construction: the graph never mints a name its own rule refuses.
 pub fn name_base(type_name: &str) -> String {
     let base: String = match subpatch::boundary_type(type_name) {
         Some((dir, _)) => dir.name().to_string(),
@@ -3691,9 +3276,8 @@ pub fn name_base(type_name: &str) -> String {
     }
 }
 
-/// A viewer blob under the uids a paste minted. A facade keys its blob by PORT UID, so a copy that
-/// kept the original's keys would point at slots it does not have; a leaf keys its by slot NAME,
-/// which no remap names, so it rides through unchanged.
+/// A viewer blob under the uids a paste minted. A facade keys its blob by PORT UID, which must
+/// follow the copy; a leaf keys its by slot NAME, which rides through unchanged.
 fn remap_slots(viewers: &serde_json::Value, idmap: &HashMap<String, Uid>) -> serde_json::Value {
     match viewers.as_object() {
         None => viewers.clone(),
@@ -3714,6 +3298,23 @@ fn sources_of(rec: &doc::NodeRecord) -> Vec<(String, String, SourceState)> {
         .collect()
 }
 
+/// The output `want` names by label, else the only one. `who` names the node in the errors, and
+/// `bare` refuses a bare reference to several outputs.
+fn pick_output<'a, T>(
+    slots: &'a [T],
+    label: fn(&T) -> &str,
+    want: Option<&str>,
+    who: &str,
+    bare: impl FnOnce() -> String,
+) -> Result<&'a T, String> {
+    match (want, slots) {
+        (Some(want), _) => slots.iter().find(|s| label(s) == want).ok_or_else(|| format!("{who} has no output `{want}`")),
+        (None, [one]) => Ok(one),
+        (None, []) => Err(format!("{who} has no outputs")),
+        (None, _) => Err(bare()),
+    }
+}
+
 /// A reference's `node.slot` as the one variable its record resolves — the same term an
 /// expression's `nd('node').out.slot` rewrites to.
 fn parse_reference(reference: &str) -> Result<expr_rewrite::VarRef, String> {
@@ -3723,10 +3324,9 @@ fn parse_reference(reference: &str) -> Result<expr_rewrite::VarRef, String> {
     if !goofi_core::variables::is_valid_name(name) || !goofi_core::variables::is_valid_name(slot) {
         return Err(format!("`{reference}` is not a legal reference: {NAME_RULE}"));
     }
-    Ok(expr_rewrite::VarRef::Node {
+    Ok(expr_rewrite::VarRef {
         var: REF_VAR.to_string(),
-        name: name.to_string(),
-        slot: Some(slot.to_string()),
+        target: Target::Node { name: name.to_string(), slot: Some(slot.to_string()) },
     })
 }
 

@@ -1,57 +1,37 @@
 //! The arrangement: tabs, panels and splits, and where this client is looking.
 
-use schemars::JsonSchema;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{op, EffectOp, PanelType, ReadOp, WriteOp};
 use crate::{inspect, vocab, AppState, Caller, Txn};
 use goofi_graph::{Graph, Uid};
 
-// ---- layout inspect (Read)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct InspectArgs {
+op!(Inspect, "layout inspect", 1, InspectArgs {
     pub tab: Option<String>,
-}
-
-op!(Inspect, "layout inspect", 1, InspectArgs, Value,
+},
     "The arrangement as a tree: every tab, split and panel with its id, order and share of its parent. How a caller discovers the ids every layout op addresses. `tab` narrows it to one tab; no arg = all of them.",
     "{text: string}");
 
-// ---- layout panel add (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PanelAddArgs {
+op!(PanelAdd, "layout panel add", 0, PanelAddArgs {
     pub beside: Option<String>,
     pub side: Option<String>,
     pub ratio: Option<f64>,
     pub name: Option<String>,
     pub index: Option<i64>,
-}
-
-op!(PanelAdd, "layout panel add", 0, PanelAddArgs, Value,
+},
     "A fresh empty panel. With `--beside` it divides that panel, on its `left`/`right`/`top`/`bottom` (`--side`, default right), taking `--ratio` of its space (default half). Bare, it lands on a new tab at `--index` in the strip, labelled `--name` — minted (`Tab 2`, `Tab 3`, …) unless you give one.",
     "{id, tab, text} — the born panel, the tab it is on, and the arrangement as `layout inspect` draws it");
 
-// ---- layout panel edit (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PanelEditArgs {
+op!(PanelEdit, "layout panel edit", 1, PanelEditArgs {
     pub panel: String,
     #[serde(rename = "type")]
     pub ty: Option<PanelType>,
     pub state: Option<Value>,
-}
-
-op!(PanelEdit, "layout panel edit", 1, PanelEditArgs, Value,
+},
     "Edit a PANEL's content: its type, its state, or both in one call and one undo. State MERGES key by key — send only what changes, and null to clear a key. A new type clears the old type's state, so send both together to rebind. `type` is one of: {panel_types}. A viewer panel's `state.kind` is one of: {viewer_kinds}; a STRING or TABLE slot ignores it and uses its own.",
     "{text} — the resulting arrangement, as `layout inspect` draws it");
 
-// ---- layout move (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct MoveArgs {
+op!(Move, "layout move", 1, MoveArgs {
     pub entry: String,
     pub beside: Option<String>,
     pub side: Option<String>,
@@ -60,55 +40,33 @@ pub struct MoveArgs {
     pub within: Option<String>,
     pub index: Option<i64>,
     pub name: Option<String>,
-}
-
-op!(Move, "layout move", 1, MoveArgs, Value,
+},
     "Move a layout entry — a panel, a whole split's subtree, or a tab; one op per drag gesture, so a drop is one undo step. With `--beside` (and `--side`, `--ratio`) it lands beside that panel. With `--in` it lands inside that split, at `--index` among its children. Bare, a TAB moves to `--index` in the strip, and anything else wraps onto a tab of its own, labelled `--name`. Taking a tab's last panel takes the tab with it.",
     "{id, tab, text} — what was moved, the tab it is on, and the arrangement as `layout inspect` draws it");
 
-// ---- layout remove (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RemoveArgs {
+op!(Remove, "layout remove", 1, RemoveArgs {
     pub entry: String,
-}
-
-op!(Remove, "layout remove", 1, RemoveArgs, Value,
+},
     "Close a layout entry: a panel, a whole split's subtree, or a tab and every panel on it. Its space goes to its siblings; a tab keeps its last panel, and the last tab stays.",
     "{text} — the resulting arrangement, as `layout inspect` draws it");
 
-// ---- layout tab edit (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct TabEditArgs {
+op!(TabEdit, "layout tab edit", 1, TabEditArgs {
     pub tab: String,
     pub name: String,
-}
-
-op!(TabEdit, "layout tab edit", 1, TabEditArgs, Value,
+},
     "Relabel a TAB. Its id and every panel on it stand; the strip index is where it sits, which `layout move` owns.",
     "{text} — the resulting arrangement, as `layout inspect` draws it");
 
-// ---- layout split edit (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SplitEditArgs {
+op!(SplitEdit, "layout split edit", 1, SplitEditArgs {
     pub split: String,
     pub fraction: Vec<f64>,
-}
-
-op!(SplitEdit, "layout split edit", 1, SplitEditArgs, Value,
+},
     "Set the shares of ALL of a SPLIT's children at once, in child order — what a resize drag commits. Renormalized to fill the slot.",
     "{text} — the resulting arrangement, as `layout inspect` draws it");
 
-// ---- layout viewpoint edit (Effect)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ViewpointEditArgs {
+op!(ViewpointEdit, "layout viewpoint edit", 0, ViewpointEditArgs {
     pub value: Value,
-}
-
-op!(ViewpointEdit, "layout viewpoint edit", 0, ViewpointEditArgs, Value,
+},
     "Store where this client is looking — active tab, maximize, camera, each panel's sub-patch path. ONE stored value, replaced whole, last writer wins; persisted in the `.gfi`, never converged, never dirtying.",
     "{ok: true}");
 
@@ -121,11 +79,11 @@ fn apply_layout(tx: &mut Txn, cmd: goofi_graph::Command) -> Result<Value, String
 
 /// Which side of a target a newcomer lands on. ONE argument, because an axis and a half are two
 /// halves of one answer; absent defaults right, and a word that is not a side is refused.
-fn parse_side(side: Option<&str>, op: &str) -> Result<goofi_graph::layout::Side, String> {
+fn parse_side(side: Option<&str>) -> Result<goofi_graph::layout::Side, String> {
     match side {
         None => Ok(goofi_graph::layout::Side::Right),
         Some(v) => goofi_graph::layout::Side::parse(v)
-            .ok_or_else(|| format!("{op}: side is `left`, `right`, `top` or `bottom`, not {v}")),
+            .ok_or_else(|| format!("side is `left`, `right`, `top` or `bottom`, not {v}")),
     }
 }
 
@@ -146,14 +104,12 @@ impl ReadOp for Inspect {
 }
 
 impl WriteOp for PanelAdd {
-    /// A fresh empty panel: beside a target, or on a new tab of its own.
     fn run(tx: &mut Txn, a: PanelAddArgs) -> Result<Value, String> {
-        const OP: &str = "layout panel add";
         let ratio = a.ratio.unwrap_or(0.5);
         match a.beside.as_deref() {
             // Beside a target, dividing it — the drop on a panel's edge.
             Some(target) => {
-                let side = parse_side(a.side.as_deref(), OP)?;
+                let side = parse_side(a.side.as_deref())?;
                 let (plan, fresh) = tx.g.arrangement().split_panel(target, side, ratio)?;
                 let cmd = goofi_graph::Command::LayoutBirth { plan, born: fresh.clone() };
                 let text = apply_layout(tx, cmd)?;
@@ -181,12 +137,11 @@ impl WriteOp for PanelAdd {
 }
 
 impl WriteOp for PanelEdit {
-    /// Edit a PANEL's content: its type, its state, or both — one call, one undo.
     fn run(tx: &mut Txn, a: PanelEditArgs) -> Result<Value, String> {
         let ty = a.ty.map(|t| t.0);
         let panel_state = a.state.filter(|v| !v.is_null());
         if ty.is_none() && panel_state.is_none() {
-            return Err("layout panel edit: give a type, a state, or both".into());
+            return Err("give a type, a state, or both".into());
         }
         // A panel bound to a node that is not there renders empty and explains nothing.
         let named = panel_state
@@ -196,7 +151,7 @@ impl WriteOp for PanelEdit {
             .filter(|n| !n.is_empty());
         if let Some(node) = named {
             if !bindable_node(&tx.g, node) {
-                return Err(format!("layout panel edit: no node `{node}` in this patch"));
+                return Err(format!("no node `{node}` in this patch"));
             }
         }
         // The slot is checked against the node this write LEAVES the panel bound to: its own, or
@@ -211,11 +166,7 @@ impl WriteOp for PanelEdit {
         // that nothing holds — so no panel ever waits on a name.
         let panel_state = match (ty.as_deref(), panel_state) {
             (Some("control"), state) if state.as_ref().and_then(|s| s.get("group")).is_none() => {
-                let taken = tx.g.arrangement().control_panels();
-                let fresh = (0..)
-                    .map(|n| format!("control{n}"))
-                    .find(|c| !tx.g.variables().has_group(c) && !taken.iter().any(|(_, held)| held == c))
-                    .expect("the integers do not run out");
+                let fresh = goofi_core::fresh_name("control", 0, |c| tx.g.group_taken(c));
                 let mut s = state.and_then(|s| s.as_object().cloned()).unwrap_or_default();
                 s.insert("group".into(), json!(fresh));
                 Some(Value::Object(s))
@@ -235,10 +186,8 @@ impl WriteOp for PanelEdit {
 }
 
 impl WriteOp for Move {
-    /// Move a layout entry — a panel, a subtree or a tab; ONE op per drag gesture, so a drop is
-    /// one undo step and peers never see an arrangement that was not on somebody's screen.
+    const LABEL: &str = "Move panel";
     fn run(tx: &mut Txn, a: MoveArgs) -> Result<Value, String> {
-        const OP: &str = "layout move";
         let entry = a.entry;
         let index = index_of(a.index);
         let ratio = a.ratio.unwrap_or(0.5);
@@ -246,12 +195,10 @@ impl WriteOp for Move {
         // id says which — as it does for the edit trio and `layout remove`.
         let is_tab = tx.g.arrangement().tab_index(&entry).is_some();
         let (plan, placed) = match (a.beside.as_deref(), a.within.as_deref()) {
-            (Some(_), Some(_)) => {
-                return Err(format!("{OP}: `--beside` and `--in` are two destinations — give one"))
-            }
+            (Some(_), Some(_)) => return Err("`--beside` and `--in` are two destinations — give one".into()),
             // Beside a target, dividing it; the side defaults right, as a birth's does.
             (Some(target), None) => {
-                let side = parse_side(a.side.as_deref(), OP)?;
+                let side = parse_side(a.side.as_deref())?;
                 (tx.g.arrangement().insert_at_panel(&entry, target, side, ratio)?, entry.clone())
             }
             // Inside a split, at an index — the drop into a container that exists.
@@ -259,7 +206,7 @@ impl WriteOp for Move {
                 (tx.g.arrangement().move_subtree(&entry, parent, index.unwrap_or(0))?, entry.clone())
             }
             (None, None) if is_tab => {
-                let at = index.ok_or(format!("{OP}: a tab moves to an `--index` in the strip"))?;
+                let at = index.ok_or("a tab moves to an `--index` in the strip")?;
                 tx.g.arrangement().reorder_tab(&entry, at)?;
                 let cmd = goofi_graph::Command::LayoutReorderTab { tab: entry.clone(), to_index: at };
                 let text = apply_layout(tx, cmd)?;
@@ -279,26 +226,18 @@ impl WriteOp for Move {
         let tab = tx.g.arrangement().tab_of(&placed).unwrap_or_default();
         Ok(json!({ "id": placed, "tab": tab, "text": text["text"] }))
     }
-
-    fn label(_: &MoveArgs, _: &Value) -> String {
-        "Move panel".into()
-    }
 }
 
 impl WriteOp for Remove {
+    const LABEL: &str = "Close panel";
     fn run(tx: &mut Txn, a: RemoveArgs) -> Result<Value, String> {
-        // A tab is closed whole; anything else is closed with promote. Planned here only so a bad
-        // id answers teachably: `LayoutClose` re-plans it under this same lock, and DEGRADES
-        // rather than errors.
+        // Planned here only so a bad id answers teachably: `LayoutClose` re-plans it under this
+        // same lock, and DEGRADES rather than errors.
         match tx.g.arrangement().tab_index(&a.entry) {
             Some(_) => tx.g.arrangement().remove_tab(&a.entry)?,
             None => tx.g.arrangement().remove_subtree(&a.entry)?,
         };
         apply_layout(tx, goofi_graph::Command::LayoutClose { born: a.entry })
-    }
-
-    fn label(_: &RemoveArgs, _: &Value) -> String {
-        "Close panel".into()
     }
 }
 
@@ -315,22 +254,16 @@ impl WriteOp for TabEdit {
 }
 
 impl WriteOp for SplitEdit {
-    /// Set the shares of ALL of a SPLIT's children at once — what a resize drag commits.
+    const LABEL: &str = "Resize split";
     fn run(tx: &mut Txn, a: SplitEditArgs) -> Result<Value, String> {
         // Planned here only so a bad split or a wrong fraction count answers teachably; the
         // command re-plans it under this same lock.
         tx.g.arrangement().resize_split(&a.split, &a.fraction)?;
         apply_layout(tx, goofi_graph::Command::LayoutResizeSplit { split: a.split, fractions: a.fraction })
     }
-
-    fn label(_: &SplitEditArgs, _: &Value) -> String {
-        "Resize split".into()
-    }
 }
 
 impl EffectOp for ViewpointEdit {
-    /// Where THIS client is looking: not a doc root, so it neither drags a peer nor raises the
-    /// unsaved dot, but it still rides the `.gfi` and `hello`.
     fn run(state: &AppState, a: ViewpointEditArgs, _: &Caller) -> Result<Value, String> {
         state.graph.lock().set_viewpoint(a.value);
         // No projection: the viewpoint is the manifest's alone. The pulse is for the autosave,

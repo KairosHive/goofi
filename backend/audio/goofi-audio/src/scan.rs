@@ -47,20 +47,10 @@ impl AudioEngine {
     }
 
     fn load_rust(&mut self, artifact: &Path, type_name: &str) -> Result<bool, String> {
-        if !self.rust_loaded.contains_key(artifact) {
-            let opened = goofi_build::open(artifact)?;
-            let intro = goofi_node::parse_introspection(&opened.describe)?;
-            if let Some(reason) = goofi_node::illegal_slot(&intro)
-                .or_else(|| goofi_node::foreign_output(&intro, Some(goofi_core::SlotType::Audio)))
-            {
-                return Err(reason);
-            }
-            let manifest = goofi_node::leak_manifest(type_name.to_string(), &intro)?;
-            let loaded = unsafe { Loaded::open(opened.library, manifest) }?;
-            self.rust_loaded.insert(artifact.to_path_buf(), Arc::new(loaded));
-        }
-        let loaded = self.rust_loaded[artifact].clone();
-        let manifest = loaded.manifest;
+        let opened = goofi_build::open(artifact)?;
+        let intro = goofi_node::parse_introspection(&opened.describe)?;
+        let manifest = goofi_node::manifest_of(type_name, &intro, Some(goofi_core::SlotType::Audio))?;
+        let loaded = unsafe { Loaded::open(opened.library, manifest) }?;
         let class = Class { manifest, make: Arc::new(move |_| loaded.instantiate()), plugin: None };
         Ok(self.classes.insert(manifest.type_name, class).is_some())
     }

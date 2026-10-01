@@ -6,6 +6,7 @@ use crate::{Graph, Uid};
 use goofi_core::variables::{Control, VariableValue};
 use goofi_core::Param;
 
+use crate::subpatch::Dir;
 use crate::Mode;
 use goofi_node::param;
 
@@ -59,9 +60,8 @@ impl SourceState {
     }
 }
 
-/// The captured state to recreate a scope EXACTLY — the inverse of [`Command::Expand`], which
-/// restores the exact scope id rather than minting a fresh one. Its PORTS are not in here: they
-/// are nodes, so they come back as the `AddNode` children beside this command.
+/// The captured state to recreate a scope EXACTLY, at its own id: the inverse of [`Command::Expand`].
+/// Its PORTS are nodes, so they come back as the `AddNode` children beside this command.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScopeRestore {
     pub scope_id: Uid,
@@ -92,9 +92,8 @@ pub enum Command {
         baseline: Option<serde_json::Value>,
         /// Captured armed output slots to restore; `None` for a user add (defaults to none).
         record: Option<Vec<RecordedOutput>>,
-        /// The scope to create the node INSIDE (`None` = ROOT). A PORT's membership rides HERE and
-        /// nowhere else: one cannot be created without a scope. Every other kind is placed by a
-        /// [`Command::SetScope`] child, after every uid the capture names exists.
+        /// The scope a PORT is created inside, since one cannot exist without it. Every other kind
+        /// is placed by a [`Command::SetScope`] child, after every uid the capture names exists.
         scope: Option<Uid>,
     },
     RemoveNode {
@@ -129,8 +128,7 @@ pub enum Command {
         record: Vec<RecordedOutput>,
     },
     /// Replace the values the touched filter counts from, WHOLE. `None` snapshots what the node
-    /// holds NOW, which is what the Clear button does; `Some` restores a captured blob, which is
-    /// what its inverse does.
+    /// holds NOW (the Clear button); `Some` restores a captured blob (its inverse).
     SetBaseline {
         uid: Uid,
         baseline: Option<serde_json::Value>,
@@ -144,9 +142,8 @@ pub enum Command {
         value: Option<Param>,
         source: Option<SourceState>,
     },
-    /// Add or edit a variable: `Some(value)` upserts, `None` leaves the value alone — an edit to the
-    /// widget beside it. `at` is the ordered slot to re-add at — only a delete's captured inverse
-    /// carries one, since order is observable.
+    /// Add or edit a variable: `Some(value)` upserts, `None` edits only the widget. `at` is the
+    /// slot a delete's inverse re-adds at, since order is observable.
     EditVariable {
         name: String,
         value: Option<VariableValue>,
@@ -269,8 +266,7 @@ impl Command {
     }
 
     /// What a FRESH caller must satisfy, checked in [`CommandHistory::apply`] ONLY, so `flip` keeps
-    /// its tolerance. `Compound` is absent: its later children need a graph its earlier ones have
-    /// not built yet.
+    /// its tolerance. `Compound` is absent: its later children need what its earlier ones build.
     fn precondition(&self, g: &Graph) -> Result<(), String> {
         match self {
             Command::Expand { scope } => {
@@ -283,7 +279,7 @@ impl Command {
             }
             // A collapsed sub-patch facade is editable here (name/pos), so either kind counts.
             Command::EditNode { uid, .. } => {
-                (g.is_leaf(*uid) || g.is_facade(*uid) || g.stub(*uid).is_some())
+                g.exists(*uid)
                     .then_some(())
                     .ok_or_else(|| format!("no node, sub-patch or port {}", uid.to_hex()))
             }
@@ -346,15 +342,13 @@ impl Command {
             }
 
             Command::AddNode { type_name, pos, uid, name, params, sources, viewers, baseline, record, scope } => {
-                // A peer dissolved the scope this restore names. Tolerated HERE, because a replay
-                // that errors wedges the actor's stack for good; the fresh caller is refused by
-                // this command's precondition instead.
+                // A peer dissolved the scope this restore names. Tolerated, because a replay that
+                // errors wedges the actor's stack; the precondition refuses a fresh caller.
                 if scope.is_some_and(|s| !g.is_facade(s)) {
                     return Ok(Applied::Skipped(Skip::Gone));
                 }
-                // Idempotent: the uid is already present (a redo racing another client's add) —
-                // reuse it, and re-place it only when a scope was ASKED for, since an
-                // unconditional re-parent to ROOT would yank an already-placed node out.
+                // Idempotent: a redo racing another client's add reuses the uid, and re-places it
+                // only when a scope was ASKED for, or a placed node would be yanked to ROOT.
                 let u = match uid.filter(|u| g.exists(*u)) {
                     Some(u) => {
                         if let Some(s) = scope {
@@ -364,20 +358,7 @@ impl Command {
                     }
                     None => g.create_node(&type_name, uid, name.as_deref().unwrap_or(""), params, scope)?,
                 };
-                let _ = g.set_node_pos(u, pos);
-                // Re-apply captured source records and viewer state; a user add carries none.
-                for (group, name, s) in &sources {
-                    let _ = g.set_source(u, group, name, s.clone());
-                }
-                if let Some(v) = baseline {
-                    let _ = g.set_node_baseline(u, v);
-                }
-                if let Some(v) = viewers {
-                    let _ = g.set_node_viewers(u, v);
-                }
-                if let Some(r) = record {
-                    let _ = g.set_recorded(u, r);
-                }
+                g.restore_extras(u, pos, &sources, viewers, baseline, record);
                 Ok(Applied::done(Outcome::Uid(u), Command::RemoveNode { uid: u }))
             }
 
@@ -465,7 +446,7 @@ impl Command {
 
             Command::EditNode { uid, name, pos, viewers } => {
                 // A node, a scope facade or a boundary port; only a vanished uid is the no-op.
-                if !g.is_leaf(uid) && !g.is_facade(uid) && g.stub(uid).is_none() {
+                if !g.exists(uid) {
                     return Ok(Applied::Skipped(Skip::Gone)); // idempotent: it is gone
                 }
                 let old_pos = pos.map(|_| g.pos(uid).unwrap_or([0.0, 0.0]));
@@ -566,7 +547,7 @@ impl Command {
                 let at = g.variables().index_of(&name);
                 let old_control = Some(g.variables().control(&name).cloned());
                 let (old_source, old_lock) = (g.variables().source(&name).cloned(), g.variables().own_lock(&name));
-                g.remove_variable(&name)?;
+                g.variables_mut().remove(&name)?;
                 let mut inverse = vec![Command::EditVariable { name: name.clone(), value: old, at, control: old_control }];
                 if old_source.is_some() {
                     inverse.push(Command::SourceVariable { name: name.clone(), source: old_source });
@@ -606,12 +587,12 @@ impl Command {
             }
 
             Command::LockVariable { name, lock } => {
-                let old = g.set_variable_lock(&name, lock)?;
+                let old = g.variables_mut().set_lock(&name, lock)?;
                 Ok(Applied::done(Outcome::Ok, Command::LockVariable { name, lock: old }))
             }
 
             Command::LockVariableGroup { group, lock } => {
-                let old = g.set_variable_group_lock(&group, lock)?;
+                let old = g.variables_mut().set_group_lock(&group, lock)?;
                 Ok(Applied::done(Outcome::Ok, Command::LockVariableGroup { group, lock: old }))
             }
 
@@ -718,8 +699,8 @@ impl Command {
             }
 
             Command::Group { members, pos, restore } => {
-                // `minted` collects any stub `group_nodes` must add to a PRE-EXISTING nested member
-                // — a side effect on a scope OUTSIDE the new one, which Expand alone would not undo.
+                // `minted` collects any port grouping adds to a PRE-EXISTING nested member, which
+                // Expand alone would not undo.
                 let mut minted: Vec<(Uid, Uid)> = Vec::new();
                 let scope = match restore {
                     None => g.group_nodes_capturing(&members, pos, &mut minted)?,
@@ -752,41 +733,19 @@ impl Command {
                 let seen = g.viewers(scope).filter(|v| v.as_object().is_some_and(|m| !m.is_empty())).cloned();
                 // Its ports come back as the NODES they are, and their cables as the links they
                 // are — after the facade, which is what a port needs to be a port of.
-                let ports: Vec<Command> = g
-                    .ports_of(scope)
-                    .into_iter()
-                    .map(|id| Command::AddNode {
-                        type_name: g.node_type(id).unwrap_or_default(),
-                        pos: g.pos(id).unwrap_or([0.0, 0.0]),
-                        uid: Some(id),
-                        name: g.name(id).map(str::to_string),
-                        params: None,
-                        sources: vec![],
-                        viewers: g.viewers(id).cloned(),
-                        baseline: g.baseline(id).cloned(),
-                        record: g.recorded(id).filter(|r| !r.is_empty()).map(<[RecordedOutput]>::to_vec),
-                        scope: Some(scope),
-                    })
-                    .collect();
+                let ports: Vec<Command> = g.ports_of(scope).into_iter().map(|id| capture_node(g, id)).collect();
                 let cables: Vec<Command> = g
                     .links_view()
-                    .into_iter()
+                    .iter()
                     .filter(|l| g.stub(l.node_in).is_some_and(|(s, _)| s == scope)
                         || g.stub(l.node_out).is_some_and(|(s, _)| s == scope))
-                    .map(|l| Command::AddLink {
-                        node_out: l.node_out,
-                        slot_out: l.slot_out.to_string(),
-                        node_in: l.node_in,
-                        slot_in: l.slot_in.to_string(),
-                    })
+                    .map(relink)
                     .collect();
                 let sparent = g.scope_of(scope); // the scope's parent, captured before it dissolves
                 let members = g.scope_members(scope);
                 let spliced = g.expand_instance(scope)?;
-                // The wall's removal JOINED each crossing cable's two halves; putting the wall back
-                // means taking those joins out, then restoring both halves against the ports.
-                // Ordered so the REVERSE is legal too, since that reverse is the redo: the joins go
-                // before the wall comes back, and come back after it goes again.
+                // The removal JOINED each crossing cable's halves: the joins go before the wall
+                // comes back, then both halves return, which keeps the redo legal too.
                 let mut inverse: Vec<Command> = spliced
                     .into_iter()
                     .map(|(a, so, b, si)| Command::RemoveLink {
@@ -833,8 +792,7 @@ fn variable_group_members(g: &Graph, group: &str) -> (Vec<String>, Vec<String>) 
 }
 
 /// A per-ACTOR undo/redo history over one shared [`Graph`]. An entry holds ONE toggle, and
-/// executing it returns the next — so an entry ping-pongs and stays uid-stable. Scoped by actor,
-/// so one client's timeline is independent of another's.
+/// executing it returns the next, so an entry ping-pongs and stays uid-stable.
 #[derive(Default)]
 pub struct CommandHistory {
     entries: Vec<HistoryEntry>,
@@ -849,9 +807,8 @@ struct Preview {
 }
 
 struct HistoryEntry {
-    /// The command that flips this entry's state: its inverse when applied, its forward when undone.
-    /// `None` once a flip found nothing to do: the entry stays, so the actor's stack keeps its
-    /// shape, and flips nothing after.
+    /// The command that flips this entry's state. `None` once a flip found nothing to do: the entry
+    /// stays, so the actor's stack keeps its shape.
     toggle: Option<Command>,
     actor: String,
     undone: bool,
@@ -974,9 +931,8 @@ impl CommandHistory {
         self.previews.retain(|p| p.actor != actor);
     }
 
-    /// Fold everything after `mark` into ONE entry, so a transaction is a single undo step, and
-    /// name it. An entry sharing the actor's `group` token with the one before it merges into it:
-    /// what a client meant as one step is one step.
+    /// Fold everything after `mark` into ONE named entry, so a transaction is a single undo step. An
+    /// entry sharing the actor's `group` token with the one before it merges into it.
     pub fn coalesce(&mut self, mark: usize, label: String, context: Value, group: Option<String>) {
         if self.entries.len() < mark + 1 {
             return;
@@ -1065,8 +1021,6 @@ impl CommandHistory {
     }
 }
 
-/// Capture the exact inverse to restore the subtree rooted at `root`, BEFORE the caller removes it.
-/// The Compound recreates every node, scope, membership, pruned stub and touching link, uid-stable.
 /// The wires a leaf about to go leaves behind: each consumer of one of its outputs is fed by the
 /// first wired input of the leaf, in declaration order, whose source feeds the consumer's slot.
 fn bridges_around(g: &Graph, uid: Uid) -> Vec<Command> {
@@ -1075,72 +1029,39 @@ fn bridges_around(g: &Graph, uid: Uid) -> Vec<Command> {
         slots.into_iter().find(|(n, _, _)| n == name).map(|(_, _, kind)| kind)
     };
     let sources: Vec<(Uid, &'static str, goofi_core::SlotType)> = g
-        .input_slots(uid)
+        .slots(uid, Dir::In)
         .iter()
         .filter_map(|(name, _, _)| links.iter().find(|l| l.node_in == uid && l.slot_in == name.as_str()))
-        .filter_map(|l| kind_of(g.output_slots(l.node_out), l.slot_out).map(|kind| (l.node_out, l.slot_out, kind)))
+        .filter_map(|l| kind_of(g.slots(l.node_out, Dir::Out), l.slot_out).map(|kind| (l.node_out, l.slot_out, kind)))
         .collect();
     links
         .iter()
         .filter(|l| l.node_out == uid && l.node_in != uid)
         .filter_map(|l| {
-            let into = kind_of(g.input_slots(l.node_in), l.slot_in)?;
-            let (node_out, slot_out, _) = sources.iter().find(|(src, _, kind)| *src != l.node_in && kind.feeds(into))?;
-            Some(Command::AddLink {
-                node_out: *node_out,
-                slot_out: slot_out.to_string(),
-                node_in: l.node_in,
-                slot_in: l.slot_in.to_string(),
-            })
+            let into = kind_of(g.slots(l.node_in, Dir::In), l.slot_in)?;
+            let &(node_out, slot_out, _) = sources.iter().find(|(src, _, kind)| *src != l.node_in && kind.feeds(into))?;
+            Some(relink(&crate::Link { node_out, slot_out, node_in: l.node_in, slot_in: l.slot_in }))
         })
         .collect()
 }
 
+/// Capture the exact inverse to restore the subtree rooted at `root`, BEFORE the caller removes it.
+/// The Compound recreates every node, scope, membership, pruned stub and touching link, uid-stable.
 fn capture_subtree_restore(g: &Graph, root: Uid) -> (Command, std::collections::HashSet<Uid>) {
     // Where the restored top returns to: `None` = ROOT (a top-level instance / leaf).
     let orig_parent = g.scope_of(root);
 
-    // Discovery order, so a facade always precedes the members that name it. Ports are held apart
-    // only because a port is a port OF a scope: it takes its scope at birth, so it is created after
-    // every facade rather than before.
-    let mut members: Vec<Uid> = Vec::new();
-    let mut ports: Vec<Uid> = Vec::new();
-    let mut stack = vec![root];
-    while let Some(u) = stack.pop() {
-        if g.stub(u).is_some() {
-            ports.push(u);
-            continue;
-        }
-        members.push(u);
-        if g.is_facade(u) {
-            stack.extend(g.scope_members(u));
-        }
-    }
+    // A facade precedes its members; a port takes its scope at birth, so it comes after them all.
+    let (ports, members): (Vec<Uid>, Vec<Uid>) = g.subtree_of(&[root]).into_iter().partition(|u| g.stub(*u).is_some());
 
     let mut cmds: Vec<Command> = Vec::new();
 
-    // ONE loop: every member of any kind is recreated at ROOT, uid-stable, with the full persisted
-    // state its kind carries — a leaf's params and expression bindings, and everyone's viewers.
-    // Membership is restored by the `SetScope` children below, not here — see the field's doc.
-    for &u in members.iter().chain(&ports) {
-        let sources = g.param_sources(u);
-        cmds.push(Command::AddNode {
-            type_name: g.node_type(u).unwrap_or_default(),
-            pos: g.pos(u).unwrap_or([0.0, 0.0]),
-            uid: Some(u),
-            name: g.name(u).map(str::to_string),
-            params: g.values(u),
-            sources,
-            viewers: g.viewers(u).filter(|v| v.as_object().is_some_and(|m| !m.is_empty())).cloned(),
-            baseline: g.baseline(u).filter(|v| v.as_object().is_some_and(|m| !m.is_empty())).cloned(),
-            record: g.recorded(u).filter(|r| !r.is_empty()).map(<[RecordedOutput]>::to_vec),
-            scope: g.stub(u).map(|(s, _)| s),
-        });
-    }
+    // Every member of any kind is recreated at ROOT, uid-stable, with all it persists; the
+    // `SetScope` children below restore membership.
+    cmds.extend(members.iter().chain(&ports).map(|&u| capture_node(g, u)));
 
-    // Membership, once every uid exists. A PORT is not here: its scope rode its `AddNode`, because
-    // a port cannot be created without one, and one owner is the rule. The root's own is last, so a
-    // member delete puts the top back INSIDE its enclosing scope; a top-level one lands at ROOT.
+    // Membership, once every uid exists; a port's rode its `AddNode`. The root's own is last, so a
+    // member delete puts the top back INSIDE its enclosing scope.
     for &u in &members {
         if u == root {
             continue;
@@ -1151,20 +1072,30 @@ fn capture_subtree_restore(g: &Graph, root: Uid) -> (Command, std::collections::
         cmds.push(Command::SetScope { uid: root, scope: orig_parent });
     }
 
-    // Every link touching the subtree, after all endpoints exist — an enclosing port's wire
-    // included, since its other end is in here. The set is handed back too: it is what a panel
-    // bound to one of these uids has to stop naming, so it holds ONLY what is going.
+    // Every link touching the subtree, after all endpoints exist. The set is handed back too: a
+    // panel bound to one of these uids has to stop naming it.
     let subtree: std::collections::HashSet<Uid> = members.iter().chain(&ports).copied().collect();
-    for l in g.links_view() {
-        if subtree.contains(&l.node_out) || subtree.contains(&l.node_in) {
-            cmds.push(Command::AddLink {
-                node_out: l.node_out,
-                slot_out: l.slot_out.to_string(),
-                node_in: l.node_in,
-                slot_in: l.slot_in.to_string(),
-            });
-        }
-    }
-
+    cmds.extend(g.links_view().iter().filter(|l| subtree.contains(&l.node_out) || subtree.contains(&l.node_in)).map(relink));
     (Command::Compound(cmds), subtree)
+}
+
+/// The `AddNode` that recreates `u` uid-stable, with everything its kind persists.
+fn capture_node(g: &Graph, u: Uid) -> Command {
+    let blob = |v: Option<&Value>| v.filter(|v| v.as_object().is_some_and(|m| !m.is_empty())).cloned();
+    Command::AddNode {
+        type_name: g.node_type(u).unwrap_or_default(),
+        pos: g.pos(u).unwrap_or([0.0, 0.0]),
+        uid: Some(u),
+        name: g.name(u).map(str::to_string),
+        params: g.values(u),
+        sources: g.param_sources(u),
+        viewers: blob(g.viewers(u)),
+        baseline: blob(g.baseline(u)),
+        record: g.recorded(u).filter(|r| !r.is_empty()).map(<[RecordedOutput]>::to_vec),
+        scope: g.stub(u).map(|(s, _)| s),
+    }
+}
+
+fn relink(l: &crate::Link) -> Command {
+    Command::AddLink { node_out: l.node_out, slot_out: l.slot_out.to_string(), node_in: l.node_in, slot_in: l.slot_in.to_string() }
 }

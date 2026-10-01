@@ -1,6 +1,5 @@
-//! A `.vst3` bundle as a source of audio node types. A child `goofi` scans it — a plugin that
-//! crashes at load takes the scanner down, never the server — and its classes become manifests
-//! here, each hosted behind [`AudioNode`] by `node`.
+//! A `.vst3` bundle as a source of audio node types: a child `goofi` scans it, so a crash takes
+//! the scanner down and never the server, and each class is hosted behind [`AudioNode`] by `node`.
 // The bindings mirror the C++ headers, so a host object's trait methods carry their names.
 #![allow(non_snake_case)]
 
@@ -24,7 +23,7 @@ use vst3::{ComPtr, ComWrapper};
 
 use crate::nodes::{self, Class};
 use crate::AudioEngine;
-pub(crate) use node::{Derived, Kind};
+pub(crate) use node::Derived;
 use node::Plugin;
 
 /// A stepped parameter with this many steps or fewer is a `Str` of the plugin's own strings.
@@ -38,10 +37,8 @@ const MAX_PARAMS: usize = 4096;
 /// a plugin that blocks at load must not wedge every op.
 const SCAN_WAIT: Duration = Duration::from_secs(20);
 
-/// The host's half of a cache key: the sources that decide what goofi reads out of a plugin, as
-/// `goofi-build`'s `SDK_HASH` is the sources an authored node compiles against. The BINARY's mtime
-/// was the first spelling, and it changes on every relink of the same code, so a `cargo build`
-/// rescanned every plugin on the machine.
+/// The host's half of a cache key: a digest of the sources that decide what goofi reads out of a
+/// plugin, not the binary's mtime, which every relink moves.
 static SCANNER: LazyLock<String> = LazyLock::new(|| {
     goofi_build::digest(
         [include_str!("mod.rs"), include_str!("host.rs"), include_str!("module.rs"), include_str!("node.rs")]
@@ -170,63 +167,23 @@ fn describe_class(factory: &module::Factory, cid: TUID, name: String, sub_catego
     let component: ComPtr<IComponent> = factory.create(&cid)?;
     unsafe {
         ok(component.initialize(context.as_ptr()), "initialize")?;
-        let described = describe_initialized(factory, &component, &context, cid, name, sub_categories);
+        // One object or two: a separate controller is paired as a live instance pairs it.
+        let own: Option<ComPtr<IEditController>> = component.cast();
+        let (separate, wired) = node::pair(factory, &component, &context);
+        let buses = |dir: BusDirection| -> Vec<u16> {
+            let n = component.getBusCount(MediaTypes_::kAudio as MediaType, dir);
+            node::channel_counts(&component, dir, n).map(|c| c.clamp(0, u16::MAX as i32) as u16).collect()
+        };
+        let inputs = buses(BusDirections_::kInput as BusDirection);
+        let outputs = buses(BusDirections_::kOutput as BusDirection);
+        let events = component.getBusCount(MediaTypes_::kEvent as MediaType, BusDirections_::kInput as BusDirection) > 0;
+        let controller = own.as_ref().or(separate.as_ref());
+        let params = controller.map(|c| params_of(c)).unwrap_or_default();
+        let units = controller.map(|c| units_of(c)).unwrap_or_default();
+        node::unpair(separate.as_ref(), wired.as_ref());
         component.terminate();
-        described
+        Ok(ClassInfo { cid: cid.map(|b| b as u8), name, inputs, outputs, events, params, sub_categories, units })
     }
-}
-
-/// The body between `initialize` and `terminate`, so no `?` can leave a component initialized.
-unsafe fn describe_initialized(
-    factory: &module::Factory,
-    component: &ComPtr<IComponent>,
-    context: &ComPtr<FUnknown>,
-    cid: TUID,
-    name: String,
-    sub_categories: String,
-) -> Result<ClassInfo, String> {
-    // One object or two: a controller of its own is created and initialized alongside.
-    let own: Option<ComPtr<IEditController>> = component.cast();
-    let separate = match &own {
-        Some(_) => None,
-        None => {
-            let mut ccid: TUID = [0; 16];
-            (component.getControllerClassId(&mut ccid) == kResultOk)
-                .then(|| factory.create::<IEditController>(&ccid))
-                .transpose()?
-        }
-    };
-    // A separate controller publishes its parameters only once it is connected to its processor
-    // over IConnectionPoint and seeded with the processor's state; held, to undo before terminate.
-    let mut wired: Option<node::Wire> = None;
-    if let Some(c) = &separate {
-        ok(c.initialize(context.as_ptr()), "initialize the controller")?;
-        wired = node::introduce(component, c);
-    }
-    let audio = MediaTypes_::kAudio as MediaType;
-    let buses = |dir: BusDirection| -> Vec<u16> {
-        (0..component.getBusCount(audio, dir))
-            .map(|i| {
-                let mut info: BusInfo = std::mem::zeroed();
-                component.getBusInfo(audio, dir, i, &mut info);
-                info.channelCount.clamp(0, u16::MAX as i32) as u16
-            })
-            .collect()
-    };
-    let inputs = buses(BusDirections_::kInput as BusDirection);
-    let outputs = buses(BusDirections_::kOutput as BusDirection);
-    let events = component.getBusCount(MediaTypes_::kEvent as MediaType, BusDirections_::kInput as BusDirection) > 0;
-    let controller = own.as_ref().or(separate.as_ref());
-    let params = controller.map(|c| params_of(c)).unwrap_or_default();
-    let units = controller.map(|c| units_of(c)).unwrap_or_default();
-    // Before the controller is terminated: the component outlives this call.
-    if let Some(wire) = &wired {
-        node::sunder(wire);
-    }
-    if let Some(c) = &separate {
-        c.terminate();
-    }
-    Ok(ClassInfo { cid: cid.map(|b| b as u8), name, inputs, outputs, events, params, sub_categories, units })
 }
 
 /// The plugin's own parameter families. A plugin that implements no `IUnitInfo` has none, which is
@@ -317,12 +274,8 @@ fn scan_bundle(engine: &mut AudioEngine, bundle: &Path) -> Vec<ScannedType> {
     }
 }
 
-/// The scanner's verdict for this binary, from the cache or from a child. A REFUSAL is remembered
-/// as an answer is: a plugin that crashes or hangs the scanner costs one child EVER rather than one
-/// per load, which on a machine full of plugins is what a patch load waits for. Keyed by the
-/// binary's stamp — the same "did the source change" a rescan asks everywhere else — and by the
-/// scanner's, since what a host reads out of a plugin is the host's answer as much as the plugin's.
-/// A bundle carried inside a patch lands on a fresh path every load, so it is scanned once again.
+/// The scanner's verdict for this binary, from the cache keyed by its stamp and the scanner's, or
+/// from a child. A refusal is cached too, so a plugin that crashes the scanner costs one child.
 fn described(scanner: &Path, bundle: &Path, binary: &Path, stamp: Stamp) -> Result<Bundle, String> {
     let dir = goofi_build::base_dir(&goofi_supervisor::home::dir()).join("vst3");
     let key = key_of(binary, stamp);
@@ -354,9 +307,8 @@ fn key_of(binary: &Path, (len, modified): Stamp) -> String {
     goofi_build::digest([binary.as_os_str().as_encoded_bytes(), &len[..], &nanos[..], SCANNER.as_bytes()])
 }
 
-/// One child, its output going to a FILE — never a pipe, which a plugin's chatter could fill while
-/// nobody is reading it. A spawn that fails is goofi's own doing rather than the plugin's, which is
-/// why it is the one refusal [`described`] never remembers.
+/// One child, its output going to a FILE, never a pipe a plugin's chatter could fill. A failed
+/// spawn is goofi's own, so [`described`] never caches it.
 fn spawn_scanner(scanner: &Path, bundle: &Path, part: &Path, errors: &Path) -> Result<goofi_supervisor::child::Child, String> {
     let sink = std::fs::File::create(errors).map_err(|e| format!("{}: {e}", errors.display()))?;
     let both = sink.try_clone().map_err(|e| e.to_string())?;
@@ -372,11 +324,7 @@ fn spawn_scanner(scanner: &Path, bundle: &Path, part: &Path, errors: &Path) -> R
 
 /// The child's verdict, under a ceiling, in its own words where it left any.
 fn answered(child: &mut goofi_supervisor::child::Child, errors: &Path) -> Result<(), String> {
-    let status = match child.wait_within(SCAN_WAIT) {
-        Err(e) => Err(format!("the scanner could not be waited for: {e}")),
-        Ok(Some(status)) => Ok(status),
-        Ok(None) => Err(format!("the scanner did not answer in {}s", SCAN_WAIT.as_secs())),
-    };
+    let status = child.wait_within(SCAN_WAIT).ok_or_else(|| format!("the scanner did not answer in {}s", SCAN_WAIT.as_secs()));
     let said = std::fs::read_to_string(errors).unwrap_or_default().trim().to_string();
     let _ = std::fs::remove_file(errors);
     match status? {
@@ -411,10 +359,8 @@ impl AudioEngine {
             return ScannedType { type_name, stamp: Some(stamp), outcome };
         }
         let (intro, params) = introspection(vendor, &class);
-        // The refusal is HERE, where the palette can carry it: an insert-time one would offer a
-        // type that every `node add` then answers with the same words, for ever.
-        // Params are trimmed to fit by `introspection`; BUSES cannot be, since dropping one would
-        // silently rechannel the plugin. So only a bus count can still refuse a class.
+        // Refused at scan, where the palette shows it. Params are trimmed to fit; a bus is not, as
+        // dropping one would silently rechannel the plugin.
         let widest = intro.inputs.len().max(intro.outputs.len());
         if widest > MAX_PORTS {
             let reason = format!("declares {widest} audio buses, and {MAX_PORTS} is the ceiling");
@@ -438,9 +384,8 @@ const OMITTED: i32 = ParameterInfo_::ParameterFlags_::kIsHidden
     | ParameterInfo_::ParameterFlags_::kIsReadOnly
     | ParameterInfo_::ParameterFlags_::kIsBypass;
 
-/// A program list is the plugin's own PRESETS, and it is the one param a plugin is entitled to
-/// refuse automation on and still mean something: choosing a preset is what a player does first.
-/// Its step strings are the preset names, so it arrives as a named list rather than an index.
+/// A program list is the plugin's PRESETS: offered without automation, as a list of the preset
+/// names.
 const PROGRAM: i32 = ParameterInfo_::ParameterFlags_::kIsProgramChange;
 
 /// A param goofi can drive says so itself. Requiring it is what keeps the 128x16 MIDI CC mapping
@@ -449,7 +394,7 @@ const AUTOMATABLE: i32 = ParameterInfo_::ParameterFlags_::kCanAutomate;
 
 /// The manifest a class derives to, and — in the same pass, so they cannot drift — how each of
 /// its params reaches the plugin.
-fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<(ParamID, Kind)>) {
+fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<(ParamID, f64)>) {
     let audio = goofi_core::SlotType::Audio.name().to_string();
     let float = |default: f64, min: f64, max: f64| probe::ParamSpec::Float { default, min, max };
     let voice = |name: &str, doc: &str, spec: probe::ParamSpec| probe::Param {
@@ -480,24 +425,24 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
     let groups = unit_groups(class);
     // Named and specced over the WHOLE offered set, so the name a param gets never depends on
     // whether it was chosen — which is what lets one be adopted later under that same name.
-    let catalog: Vec<(ParamID, Kind, probe::Param)> = offered
+    let catalog: Vec<(ParamID, f64, probe::Param)> = offered
         .iter()
         .map(|p| {
             let group = groups.get(&p.unit).cloned().unwrap_or_else(|| "plugin".into());
             let name = unique(lower_camel(&p.title).unwrap_or_else(|| "param".into()), names.entry(group.clone()).or_default());
-            let (spec, kind, doc) = if p.steps <= 0 {
+            let (spec, steps, doc) = if p.steps <= 0 {
                 let shown = format!("{} {}", p.shown, p.units);
-                (float(p.default.clamp(0.0, 1.0), 0.0, 1.0), Kind::Float, format!("{}, normalized; {} by default.", p.title, shown.trim()))
+                (float(p.default.clamp(0.0, 1.0), 0.0, 1.0), 1.0, format!("{}, normalized; {} by default.", p.title, shown.trim()))
             } else if p.steps <= STR_STEPS {
                 let options = distinct(&p.steps_shown, p.steps as usize + 1);
                 let at = ((p.default * p.steps as f64).round() as usize).min(options.len() - 1);
                 let default = options[at].clone();
-                (probe::ParamSpec::Str { default, options, refresh: false }, Kind::Stepped(p.steps as f64), p.title.clone())
+                (probe::ParamSpec::Str { default, options, refresh: false }, p.steps as f64, p.title.clone())
             } else {
                 let default = (p.default * p.steps as f64).round() as i64;
-                (probe::ParamSpec::Int { default, min: 0, max: p.steps as i64, options: vec![] }, Kind::Stepped(p.steps as f64), p.title.clone())
+                (probe::ParamSpec::Int { default, min: 0, max: p.steps as i64, options: vec![] }, p.steps as f64, p.title.clone())
             };
-            (p.id, kind, probe::Param { group, name, doc: Some(doc), expression: None, section: 0, show: None, spec })
+            (p.id, steps, probe::Param { group, name, doc: Some(doc), expression: None, section: 0, show: None, spec })
         })
         .collect();
     // `chosen` bounds the KINDS too, which is what keeps a param's index and the id it writes back
@@ -505,9 +450,9 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
     let room = MAX_PARAMS - params.len();
     let keep: HashSet<ParamID> = chosen(&offered, room, &groups).into_iter().map(|p| p.id).collect();
     let mut kinds = Vec::new();
-    for (id, kind, param) in catalog.iter().filter(|(id, ..)| keep.contains(id)) {
+    for (id, steps, param) in catalog.iter().filter(|(id, ..)| keep.contains(id)) {
         params.push(param.clone());
-        kinds.push((*id, *kind));
+        kinds.push((*id, *steps));
     }
     // A plugin has no tag to name its vendor, so the doc line does — unless its name already has.
     let named = match class.name.starts_with(vendor) {
@@ -532,9 +477,8 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
         doc,
         tags: vec![tag.as_str().to_string()],
         producer: false,
-        // A plugin that takes notes takes them by CABLE too: `voice` is `audio:MidiIn`'s bundle —
-        // gates, then pitches, then velocities — so one wire carries a whole keyboard and the
-        // voice params stay as the manual override for anything not driven by it.
+        // A plugin that takes notes takes `audio:MidiIn`'s bundle by cable too; the voice params
+        // stay as the manual override.
         inputs: (0..class.inputs.len())
             .map(|i| probe::Slot { name: numbered("input", i), kind: audio.clone(), trigger: false, multi: true, required: false })
             .chain(class.events.then(|| probe::Slot {
@@ -551,7 +495,6 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
     (intro, kinds)
 }
 
-/// The alnum words of `s`, capitalized and joined: a legal name, or none.
 /// The plugin's own units as goofi param groups. Unit 0 is the root every plugin has, and a name
 /// that cannot be an identifier has no group, so both fall to `plugin`.
 fn unit_groups(class: &ClassInfo) -> HashMap<i32, String> {
@@ -622,6 +565,7 @@ fn chosen<'a>(offered: &[&'a ParamInfo], room: usize, groups: &HashMap<i32, Stri
     out
 }
 
+/// The alnum words of `s`, capitalized and joined: a legal name, or none.
 fn camel(s: &str) -> Option<String> {
     let name: String = s
         .split(|c: char| !c.is_ascii_alphanumeric())

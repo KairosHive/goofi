@@ -309,11 +309,7 @@ impl Stream {
             Sink::Array(n) => n.sync()?,
             Sink::Table(c) => c.sync()?,
             Sink::Audio(w) => w.sync()?,
-            Sink::Text(f) => {
-                use std::io::Write;
-                f.flush().map_err(|e| e.to_string())?;
-                f.get_ref().sync_data().map_err(|e| e.to_string())?;
-            }
+            Sink::Text(f) => sync_file(f)?,
             Sink::Video(v) => v.finish()?,
         }
         if let Some(beside) = &mut self.beside {
@@ -322,4 +318,11 @@ impl Stream {
         self.synced = Instant::now();
         Ok(())
     }
+}
+
+/// Flush `file` and reach the disk.
+pub(crate) fn sync_file(file: &mut std::io::BufWriter<std::fs::File>) -> Result<(), String> {
+    use std::io::Write;
+    file.flush().map_err(|e| e.to_string())?;
+    file.get_ref().sync_data().map_err(|e| e.to_string())
 }

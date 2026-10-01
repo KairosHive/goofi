@@ -1,31 +1,15 @@
-//! Which of a device's channels a patch means, written the way an interface labels its sockets.
-//!
-//! WASAPI publishes an interface as one stereo endpoint per pair, so "which channels" was never a
-//! question a patch could ask: the endpoint WAS the answer. ASIO hands over the whole card at once
-//! — eighteen inputs and eight outputs on a Scarlett — and the question becomes unavoidable. This
-//! is the one place it is answered, for `AudioIn` and `AudioOut` alike, so the two spell it the
-//! same and a patch reads the same on either node.
-//!
-//! The spelling is the front panel's: `1`, `2`, `1-2`, `3-4`, `1,3-4`. ONE-BASED, because that is
-//! what is silkscreened next to the socket, and a selection written `0-1` for the first pair would
-//! be right in the code and wrong at the desk. `all` — the default — is the whole device, and is
-//! what every patch written before this param meant.
-//!
-//! A range may count down: `4-3` is channel 4 then channel 3, which is how a pair is swapped
-//! without a node in between. Order is kept exactly as written, so a selection is a PATCHBAY and
-//! not a set — `3-4` and `4-3` are different answers, and duplicates are allowed because sending
-//! one source to two destinations is a real thing to want.
+//! Which of a device's channels a patch means, for `AudioIn` and `AudioOut` alike: a 1-based,
+//! ordered selection that may repeat a channel, or `all` for the whole device.
+
+use goofi_audio_sdk::{ParamDecl, ParamSpec};
 
 use crate::plan::CEILING;
 
 /// What a `channels` param means when it names the whole device.
 pub const ALL: &str = "all";
 
-/// The 0-based device channels `spec` names, in order, or `None` for the whole device.
-///
-/// `Err` is a message for the param, so it says what was wrong AND what the spelling is: a
-/// selection is typed by hand, and the common mistakes — a zero, a bare dash, a stray letter —
-/// are all ones a person makes once and then never again once told.
+/// The 0-based device channels `spec` names, in order, or `None` for the whole device. `Err` is a
+/// message for the param: what was wrong, and how a selection is spelled.
 pub fn parse(spec: &str) -> Result<Option<Vec<u16>>, String> {
     let spec = spec.trim();
     if spec.is_empty() || spec.eq_ignore_ascii_case(ALL) {
@@ -76,8 +60,18 @@ pub fn needed_width(sel: &[u16]) -> u16 {
     sel.iter().copied().max().map_or(1, |c| c + 1)
 }
 
-/// The doc every `channels` param carries, so the two nodes say the same thing.
-pub const DOC: &str = "which of the device's channels to use, counting from 1 as the device labels \
+/// The `channels` param both device nodes carry, so the two spell a selection the same.
+pub const PARAM: ParamDecl = ParamDecl {
+    group: "audio",
+    name: "channels",
+    spec: ParamSpec::Str { default: ALL, options: &[], refresh: false },
+    expression: None,
+    doc: Some(
+        "which of the device's channels to use, counting from 1 as the device labels \
 them: `1`, `1-2`, `3-4`, `1,3-4`, or `all` for every channel. A range may count down — `4-3` is \
 channel 4 then channel 3 — and the order written is the order used. WASAPI publishes a card as \
-stereo endpoints, so a selection past `1-2` usually means naming the card's `ASIO: ` device.";
+stereo endpoints, so a selection past `1-2` usually means naming the card's `ASIO: ` device.",
+    ),
+    section: 0,
+    show: None,
+};

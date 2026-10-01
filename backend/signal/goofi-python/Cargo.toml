@@ -19,15 +19,13 @@ goofi-core = { path = "../../goofi-core" }
 goofi-transport = { path = "../../goofi-transport" }
 goofi-node = { path = "../../goofi-node" }
 goofi-host-sdk = { path = "../../goofi-host-sdk" }
+# The subprocess tier's child: the exchange the hosted tier speaks, the child runs `goofi.serve`.
+goofi-runtime = { path = "../../goofi-runtime" }
 # The probe's introspection JSON, and the memo it is kept in.
 serde_json = "1"
 sha2 = "0.10"
 # The venv layout, for the site-packages a probe's memo is keyed on.
 goofi-init = { path = "../../goofi-init" }
-# The subprocess transport: `goofi-codec` request/response frames over iceoryx2 shared memory,
-# the Rust crate on BOTH ends (the child runs `goofi.serve` from the abi3 wheel, same 0.9.3 ABI).
-goofi-codec = { path = "../../goofi-codec" }
-iceoryx2 = "0.9.3"
 # The dual-built goofi pyclass crate, linked (rlib, `host`) into the embedded FT interpreter.
 goofi_pymod = { path = "../goofi-pymod", package = "goofi-pymod", features = ["host"], optional = true }
 pyo3 = { version = "0.29", features = ["auto-initialize"], optional = true }

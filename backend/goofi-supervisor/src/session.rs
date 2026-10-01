@@ -105,7 +105,7 @@ fn sweep_dead_parts(dir: &Path, skip: &[&str], depth: usize) {
         let name = entry.file_name().to_string_lossy().into_owned();
         if let Some(id) = session_id_in(&name) {
             if !alive(id) {
-                let _ = if path.is_dir() { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };
+                remove_tree(&path);
             }
             continue;
         }
@@ -119,7 +119,12 @@ fn sweep_dead_parts(dir: &Path, skip: &[&str], depth: usize) {
 fn session_id_in(name: &str) -> Option<&str> {
     name.split(['.', '-'])
         .filter_map(|s| s.strip_prefix('s'))
-        .find(|id| id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+        .find(|id| is_id(id))
+}
+
+/// Whether `s` has the shape of a session id.
+fn is_id(s: &str) -> bool {
+    s.len() == 16 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// The session this process runs under: HELD — its `<id>.alive` lock is the one aliveness
@@ -233,21 +238,6 @@ pub fn sessions() -> Vec<Record> {
     out
 }
 
-/// Every entry under the session base that no process holds: a dead session's directory, its
-/// lock file, or a stray — judged by the lock alone.
-pub fn dead() -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(system_base()) else { return Vec::new() };
-    entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let id = name.strip_suffix(".alive").unwrap_or(&name);
-            !alive(id)
-        })
-        .collect()
-}
-
 /// What a sweep removed: directories of dead sessions, and shared-memory segments they left.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Swept {
@@ -255,13 +245,17 @@ pub struct Swept {
     pub segments: usize,
 }
 
-/// The boot pass: every dead session's directory, and every shared-memory segment whose session
-/// is not alive — each judged by the lock alone. The workspaces are the manager's to sweep.
+/// The boot pass: every entry under the session base no lock holds (a dead session's directory,
+/// its lock file, a stray) and every segment of a dead session. Workspaces are the manager's.
 pub fn sweep_dead() -> Swept {
     let mut swept = Swept::default();
-    for path in dead() {
-        swept.directories += usize::from(path.is_dir());
-        remove_tree(&path);
+    for entry in fs::read_dir(system_base()).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !alive(name.strip_suffix(".alive").unwrap_or(&name)) {
+            let path = entry.path();
+            swept.directories += usize::from(path.is_dir());
+            remove_tree(&path);
+        }
     }
     let mut known = std::collections::HashMap::new();
     swept.segments = sweep_shared_memory(|id| !*known.entry(id.to_string()).or_insert_with(|| alive(id)));
@@ -288,7 +282,7 @@ fn shm_dir() -> PathBuf {
 /// The session id a segment name carries, when the name is one of ours.
 fn shm_owner(name: &str) -> Option<&str> {
     let id = name.strip_prefix('g')?.split_once('_')?.0;
-    (id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit())).then_some(id)
+    is_id(id).then_some(id)
 }
 
 /// Remove every segment of ours whose owning session `dead` says so of.
@@ -310,20 +304,14 @@ pub fn remove_tree(path: &Path) {
     let _ = if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) };
 }
 
-/// On Windows the files iceoryx2 writes carry a protected DACL their owner cannot unlink through
-/// (eclipse-iceoryx/iceoryx2#1869), so each is taken back by name first.
+/// On Windows iceoryx2's files carry a protected DACL (eclipse-iceoryx/iceoryx2#1869), so each
+/// path is taken back by name, contents first, then unlinked.
 #[cfg(windows)]
 pub fn remove_tree(path: &Path) {
-    take_path(path);
-}
-
-/// Take one path's DACL back, then unlink it — contents first, since a directory goes empty only.
-#[cfg(windows)]
-fn take_path(path: &Path) {
     let dir = path.is_dir();
     if dir {
         for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
-            take_path(&entry.path());
+            remove_tree(&entry.path());
         }
     }
     grant_owner(path);

@@ -3,7 +3,7 @@
 
 use std::io;
 use std::sync::Arc;
-use crate::sync::{Condvar, Mutex};
+use crate::sync::Latch;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -34,7 +34,7 @@ impl Builder {
 
     pub fn spawn<T: Send + 'static>(self, f: impl FnOnce() -> T + Send + 'static) -> io::Result<Worker<T>> {
         let lease = scope::lease(Kind::Worker, self.name.clone());
-        let done = Arc::new((Mutex::new(false), Condvar::new()));
+        let done = Arc::new(Latch::default());
         let finished = done.clone();
         let mut builder = std::thread::Builder::new().name(self.name.clone());
         if let Some(stack) = self.stack {
@@ -51,40 +51,28 @@ impl Builder {
 }
 
 /// Marks the thread finished on every exit, a panic included.
-struct Ending(Arc<(Mutex<bool>, Condvar)>);
+struct Ending(Arc<Latch>);
 
 impl Drop for Ending {
     fn drop(&mut self) {
-        let (flag, wake) = &*self.0;
-        *flag.lock() = true;
-        wake.notify_all();
+        self.0.open();
     }
 }
 
 /// A running thread. Dropping the handle detaches it; the thread stays listed until it ends.
 pub struct Worker<T = ()> {
     handle: Option<JoinHandle<T>>,
-    done: Arc<(Mutex<bool>, Condvar)>,
+    done: Arc<Latch>,
 }
 
 /// A watch on a thread's end that any number of holders can wait on, the handle kept elsewhere.
 #[derive(Clone)]
-pub struct Done(Arc<(Mutex<bool>, Condvar)>);
+pub struct Done(Arc<Latch>);
 
 impl Done {
     /// Wait up to `within` for the thread to end; whether it did.
     pub fn wait_within(&self, within: Duration) -> bool {
-        let (flag, wake) = &*self.0;
-        let deadline = Instant::now() + within;
-        let mut finished = flag.lock();
-        while !*finished {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return false;
-            }
-            finished = wake.wait_timeout(finished, left);
-        }
-        true
+        self.0.wait_until(Instant::now() + within)
     }
 }
 
@@ -101,7 +89,7 @@ impl<T> Worker<T> {
 
     /// Whether the thread has ended.
     pub fn is_done(&self) -> bool {
-        *self.done.0.lock()
+        self.done.is_open()
     }
 
     /// Wait up to `within` for the thread to end. `None` is the deadline: the thread runs on,

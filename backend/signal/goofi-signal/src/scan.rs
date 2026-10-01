@@ -2,8 +2,7 @@
 //! interpreter that will run it and registered on the tier its imports allow; an `.rs` file is
 //! built through goofi-build — or found built — and loaded behind its version symbol.
 
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 
 use goofi_node::{Isolation, Scanned, ScannedType};
 use goofi_signal_sdk::host::Loaded;
@@ -57,9 +56,7 @@ impl SignalEngine {
     fn register_rust(&mut self, path: &Path, type_name: &str) -> Scanned {
         let base = goofi_build::base_dir(&goofi_supervisor::home::dir());
         let hosted = self.booted;
-        let loaded = goofi_build::built(&goofi_build::SIGNAL, path, &base).and_then(|artifact| {
-            if hosted { self.host_rust(&artifact, type_name) } else { self.load_rust(&artifact, type_name) }
-        });
+        let loaded = goofi_build::built(&goofi_build::SIGNAL, path, &base).and_then(|artifact| self.load_rust(artifact, type_name));
         match loaded {
             Ok(replaced) => Scanned::Registered { isolation: if hosted { Isolation::Hosted } else { Isolation::Native }, replaced },
             Err(reason) => {
@@ -69,37 +66,29 @@ impl SignalEngine {
         }
     }
 
-    /// After boot: the library is described by a child and run by one, so this process never
-    /// loads it — a re-authored node's newest build is what runs.
-    fn host_rust(&mut self, artifact: &Path, type_name: &str) -> Result<bool, String> {
-        let host = self.host.clone().ok_or("no host executable was named, so a node built after boot cannot run")?;
-        let intro = goofi_node::parse_introspection(&goofi_runtime::hosted::describe(&host, artifact)?)?;
-        if let Some(reason) = goofi_node::illegal_slot(&intro).or_else(|| goofi_node::foreign_output(&intro, None)) {
-            return Err(reason);
-        }
-        let manifest = goofi_node::leak_manifest(type_name.to_string(), &intro)?;
-        let artifact = artifact.to_path_buf();
-        let iox = self.iox.clone();
-        let factory: goofi_signal_sdk::NodeFactory =
-            Box::new(move |_| Box::new(goofi_runtime::hosted::Hosted::node(iox.clone(), host.clone(), artifact.clone(), manifest)));
-        Ok(self.register_dyn_type(manifest, factory, &goofi_node::HOSTED))
-    }
-
-    fn load_rust(&mut self, artifact: &Path, type_name: &str) -> Result<bool, String> {
-        if !self.rust_loaded.contains_key(artifact) {
-            let opened = goofi_build::open(artifact)?;
-            let intro = goofi_node::parse_introspection(&opened.describe)?;
-            if let Some(reason) = goofi_node::illegal_slot(&intro).or_else(|| goofi_node::foreign_output(&intro, None)) {
-                return Err(reason);
+    /// After boot the library is described and run by a child, so this process never loads it
+    /// and a re-authored node's newest build is what runs.
+    fn load_rust(&mut self, artifact: PathBuf, type_name: &str) -> Result<bool, String> {
+        let host = match self.booted {
+            true => Some(self.host.clone().ok_or("no host executable was named, so a node built after boot cannot run")?),
+            false => None,
+        };
+        let describe = match &host {
+            Some(host) => goofi_runtime::hosted::describe(host, &artifact)?,
+            None => goofi_build::open(&artifact)?.describe,
+        };
+        let manifest = goofi_node::manifest_of(type_name, &goofi_node::parse_introspection(&describe)?, None)?;
+        let (factory, tier): (goofi_signal_sdk::NodeFactory, _) = match host {
+            Some(host) => {
+                let iox = self.iox.clone();
+                (Box::new(move |_| Box::new(goofi_runtime::hosted::node(iox.clone(), host.clone(), artifact.clone(), manifest))), &goofi_node::HOSTED)
             }
-            let manifest = goofi_node::leak_manifest(type_name.to_string(), &intro)?;
-            let loaded = unsafe { Loaded::open(opened.library, manifest) }?;
-            self.rust_loaded.insert(artifact.to_path_buf(), Arc::new(loaded));
-        }
-        let loaded = self.rust_loaded[artifact].clone();
-        let manifest = loaded.manifest();
-        let factory: goofi_signal_sdk::NodeFactory = Box::new(move |_| loaded.instantiate());
-        Ok(self.register_dyn_type(manifest, factory, &goofi_node::NATIVE))
+            None => {
+                let loaded = unsafe { Loaded::open(goofi_build::open(&artifact)?.library, manifest) }?;
+                (Box::new(move |_| loaded.instantiate()), &goofi_node::NATIVE)
+            }
+        };
+        Ok(self.register_dyn_type(manifest, factory, tier))
     }
 }
 
@@ -107,18 +96,9 @@ impl SignalEngine {
     fn register(&mut self, type_name: &str, probed: Probed) -> Scanned {
         let subproc = self.python.as_ref().map(|p| p.subproc.clone()).unwrap_or_default();
         match probed {
-            Probed::InProcess(d) => {
+            Probed::InProcess(d) | Probed::Subprocess(d) => {
                 let (manifest, factory, tier) = routed(self.iox.clone(), d, &subproc);
-                let isolation = tier.get();
-                Scanned::Registered { isolation, replaced: self.register_dyn_type(manifest, factory, tier) }
-            }
-            Probed::Subprocess(d) => {
-                let t = goofi_python::subproc::node_type_from(self.iox.clone(), &subproc, d);
-                let isolation = t.isolation.get();
-                Scanned::Registered {
-                    isolation,
-                    replaced: self.register_dyn_type(t.manifest, t.factory, t.isolation),
-                }
+                Scanned::Registered { isolation: tier.get(), replaced: self.register_dyn_type(manifest, factory, tier) }
             }
             // The latest scan is the answer: a stale runtime type is displaced first.
             Probed::Unavailable(reason) => {

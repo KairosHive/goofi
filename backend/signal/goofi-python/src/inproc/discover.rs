@@ -3,9 +3,8 @@
 
 use std::path::Path;
 
-use crate::{discover_one as probe_discover_one, Discovered, Discovery};
-use goofi_host_sdk::NodeFactory;
-use goofi_node::{Isolation, NodeManifest, Params};
+use crate::{discover_one as probe_discover_one, Discovery};
+use goofi_node::{Isolation, Params};
 use goofi_host_sdk::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
 
 use super::PyNode;
@@ -28,15 +27,8 @@ impl Node for FailedNode {
     }
 }
 
-/// Build a [`PyNode`], or a [`FailedNode`] — never a panic, because this runs under the graph mutex.
-fn build_py_node(source: &str, in_slots: Vec<(&'static str, bool)>, out_slots: Vec<&'static str>) -> Box<dyn Node> {
-    match PyNode::from_source(source, in_slots, out_slots) {
-        Ok(n) => Box::new(n),
-        Err(e) => Box::new(FailedNode(format!("Python node construction failed: {e}"))),
-    }
-}
-
-/// As [`build_py_node`], with the node wired to demote its own type when the GIL tripwire fires.
+/// Build a [`PyNode`] wired to demote its own type when the GIL tripwire fires, or a
+/// [`FailedNode`] — never a panic, because this runs under the graph mutex.
 pub fn build_routed(
     source: &str,
     in_slots: Vec<(&'static str, bool)>,
@@ -49,31 +41,8 @@ pub fn build_routed(
     }
 }
 
-/// A discovered Python node type, ready to register into a `Graph`.
-pub struct PyNodeType {
-    pub manifest: &'static NodeManifest,
-    pub isolation: &'static goofi_node::IsolationCell,
-    pub factory: NodeFactory,
-}
-
 /// Probe one file for this tier, reporting all three outcomes; the [`Discovered`] it yields
 /// carries the `gil_safe` flag that routes between tiers.
 pub fn probe(path: &Path, ft_python: &str, memo: &Path) -> Discovery {
     probe_discover_one(path, ft_python, Isolation::InProcess, memo)
-}
-
-/// Turn a probe-[`Discovered`] into an in-process [`PyNodeType`], without a second spawn.
-pub fn node_type_from(d: Discovered) -> PyNodeType {
-    let path = d.source.clone();
-    py_type_from_discovered(&path, d)
-}
-
-fn py_type_from_discovered(path: &Path, d: Discovered) -> PyNodeType {
-    let manifest = d.manifest;
-    let in_slots: Vec<(&'static str, bool)> = manifest.inputs.iter().map(|s| (s.name, s.multi)).collect();
-    let out_slots: Vec<&'static str> = manifest.outputs.iter().map(|o| o.name).collect();
-    let source = std::fs::read_to_string(path).unwrap_or_default();
-    let factory: NodeFactory =
-        Box::new(move |_p| build_py_node(&source, in_slots.clone(), out_slots.clone()));
-    PyNodeType { manifest, isolation: d.isolation, factory }
 }

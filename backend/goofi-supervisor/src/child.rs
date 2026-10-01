@@ -106,7 +106,7 @@ impl Spawn<'_> {
         };
         let (log_out, log_err) = (matches!(stdout, Out::Log), matches!(stderr, Out::Log));
         cmd.stdout(wire(stdout)).stderr(wire(stderr));
-        let armed = arm(cmd)?;
+        let (alive, _shared) = arm(cmd)?;
         let mut inner = cmd.spawn()?;
         let lease = scope::lease(Kind::Child, format!("{name} (pid {})", inner.id()));
         let mut drains = Vec::new();
@@ -116,7 +116,7 @@ impl Spawn<'_> {
         if log_err {
             drains.extend(inner.stderr.take().and_then(|err| drain(&name, err, source, "stderr")));
         }
-        Ok(Child { inner, name, alive: Some(armed.into_writer()), reaped: false, drains, _lease: lease })
+        Ok(Child { inner, name, alive: Some(alive), reaped: false, drains, _lease: lease })
     }
 }
 
@@ -131,7 +131,7 @@ pub fn output(name: impl Into<String>, cmd: &mut Command, within: Duration) -> i
     // the other cannot deadlock against its reader.
     let stdout = child.inner.stdout.take().and_then(reader);
     let stderr = child.inner.stderr.take().and_then(reader);
-    let status = child.wait_within(within)?;
+    let status = child.wait_within(within);
     let collect = |r: Option<crate::worker::Worker<Vec<u8>>>| r.and_then(|h| h.join().ok()).unwrap_or_default();
     let (stdout, stderr) = (collect(stdout), collect(stderr));
     let status = status.ok_or_else(|| {
@@ -153,22 +153,19 @@ impl Child {
     /// Ask the child's group to leave, wait `grace`, then insist. Returns how it ended, or `None`
     /// when it had to be killed.
     pub fn stop(&mut self, grace: Duration) -> Option<ExitStatus> {
-        if self.reaped {
-            return None;
+        if !self.reaped {
+            // Closed first: this reaches a child that watches the pipe even where a signal or a
+            // dead handle defeats the kill.
+            drop(self.alive.take());
+            let _ = request_stop(self.inner.id());
         }
-        // Closed first: this reaches a child that watches the pipe even where a signal or a dead
-        // handle defeats the kill.
-        drop(self.alive.take());
-        let _ = request_stop(self.inner.id());
-        let ended = self.poll(Instant::now() + grace);
-        self.reaped = true;
-        if ended.is_none() {
-            let _ = force_kill(self.inner.id());
-            let _ = self.inner.kill();
-            let _ = self.inner.wait();
-        }
-        self.settle_log();
-        ended
+        self.wait_within(grace)
+    }
+
+    fn kill_and_reap(&mut self) {
+        let _ = force_kill(self.inner.id());
+        let _ = self.inner.kill();
+        let _ = self.inner.wait();
     }
 
     /// The last lines a dead child printed are in the log before its end is reported. A
@@ -179,20 +176,18 @@ impl Child {
         }
     }
 
-    /// Wait for a tool to finish, killing it at the deadline. `Ok(None)` is the deadline.
-    pub fn wait_within(&mut self, within: Duration) -> io::Result<Option<ExitStatus>> {
+    /// Wait for a tool to finish, killing it at the deadline. `None` is the deadline.
+    pub fn wait_within(&mut self, within: Duration) -> Option<ExitStatus> {
         if self.reaped {
-            return Ok(None);
+            return None;
         }
         let ended = self.poll(Instant::now() + within);
         self.reaped = true;
         if ended.is_none() {
-            let _ = force_kill(self.inner.id());
-            let _ = self.inner.kill();
-            let _ = self.inner.wait();
+            self.kill_and_reap();
         }
         self.settle_log();
-        Ok(ended)
+        ended
     }
 
     /// Wait for the child to end on its own, however long that takes.
@@ -211,36 +206,35 @@ impl Child {
                 Ok(Some(status)) => return Some(status),
                 Ok(None) => {
                     let left = deadline.saturating_duration_since(Instant::now());
-                    if left.is_zero() || !self.park(left) {
+                    if left.is_zero() {
                         return self.inner.try_wait().ok().flatten();
                     }
+                    self.park(left);
                 }
                 Err(_) => return None,
             }
         }
     }
 
-    /// Park up to `within` for the child to end; `false` when the OS has no timed wait to offer,
-    /// so the caller asks again after a sleep.
+    /// Park up to `within` for the child to end, or 10 ms where the OS has no timed wait.
     #[cfg(target_os = "linux")]
-    fn park(&self, within: Duration) -> bool {
+    fn park(&self, within: Duration) {
         // SAFETY: `pidfd_open` on a child this process spawned and has not reaped; the fd is
         // polled once and closed here.
         let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, self.inner.id() as libc::pid_t, 0) };
         if pidfd < 0 {
             std::thread::sleep(within.min(Duration::from_millis(10)));
-            return true;
+            return;
         }
         let mut fds = libc::pollfd { fd: pidfd as i32, events: libc::POLLIN, revents: 0 };
         unsafe {
             libc::poll(&mut fds, 1, within.as_millis().min(i32::MAX as u128) as i32);
             libc::close(pidfd as i32);
         }
-        true
     }
 
     #[cfg(windows)]
-    fn park(&self, within: Duration) -> bool {
+    fn park(&self, within: Duration) {
         use std::os::windows::io::AsRawHandle;
         // SAFETY: a wait on the process handle std holds for this child, bounded by `within`.
         unsafe {
@@ -249,13 +243,11 @@ impl Child {
                 within.as_millis().min(u32::MAX as u128) as u32,
             );
         }
-        true
     }
 
     #[cfg(not(any(target_os = "linux", windows)))]
-    fn park(&self, within: Duration) -> bool {
+    fn park(&self, within: Duration) {
         std::thread::sleep(within.min(Duration::from_millis(10)));
-        true
     }
 }
 
@@ -277,9 +269,7 @@ impl Drop for Child {
     fn drop(&mut self) {
         if !self.reaped && self.inner.try_wait().ok().flatten().is_none() {
             drop(self.alive.take());
-            let _ = force_kill(self.inner.id());
-            let _ = self.inner.kill();
-            let _ = self.inner.wait();
+            self.kill_and_reap();
         }
         self.settle_log();
     }
@@ -348,28 +338,15 @@ fn taskkill(pid: u32, force: bool) -> Result<Output, String> {
 
 // ---- the liveness pipe ----
 
-/// The armed pipe, holding the read end open across the `spawn` that inherits it.
-struct Armed {
-    writer: PipeWriter,
-    reader: PipeReader,
-}
-
-impl Armed {
-    fn into_writer(self) -> PipeWriter {
-        drop(self.reader);
-        self.writer
-    }
-}
-
 /// Create the liveness pipe, arrange for `cmd`'s child to inherit the read end, and name it in
-/// [`LIVENESS_ENV`]. The returned value must outlive `cmd.spawn()`.
-fn arm(cmd: &mut Command) -> io::Result<Armed> {
+/// [`LIVENESS_ENV`]. The returned read end must outlive `cmd.spawn()`.
+fn arm(cmd: &mut Command) -> io::Result<(PipeWriter, PipeReader)> {
     let (reader, writer) = io::pipe()?;
     // Only the READ end is shared: std pipes are CLOEXEC, so the child's EOF means this
     // process died, not that a cousin still holds a write end.
     let value = share_read_end(cmd, &reader)?;
     cmd.env(LIVENESS_ENV, value);
-    Ok(Armed { writer, reader })
+    Ok((writer, reader))
 }
 
 /// Made inheritable HERE, not in a `pre_exec` hook: a hook forces fork-and-exec, whose child can

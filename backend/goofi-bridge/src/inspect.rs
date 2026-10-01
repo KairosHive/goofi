@@ -5,9 +5,8 @@ use std::path::{Path, PathBuf};
 use goofi_graph::{Graph, Uid};
 use serde_json::{json, Value};
 
-/// A node as a mermaid id — its NAME, which is what an op takes back and what a reader of the
-/// diagram would type. A name is a letter then letters and digits, which is a mermaid id already;
-/// the uid is the fallback, and mermaid ids may not start with a digit, hence the leading `n`.
+/// A node as a mermaid id: its NAME, which is what an op takes back. The uid is the fallback, and
+/// mermaid ids may not start with a digit, hence the leading `n`.
 fn mid(g: &Graph, uid: Uid) -> String {
     match g.name(uid) {
         Some(name) => name.to_string(),
@@ -74,7 +73,7 @@ fn age(g: &Graph, uid: Uid) -> String {
 pub fn patch(g: &Graph, scope: Option<Uid>) -> Result<String, String> {
     if let Some(s) = scope {
         if !g.is_facade(s) {
-            return Err(format!("nodes inspect: no sub-patch `{}`", crate::named(g, s)));
+            return Err(format!("no sub-patch `{}`", crate::named(g, s)));
         }
     }
     let mut out = format!(
@@ -170,15 +169,6 @@ fn param_line(p: &goofi_core::Param, source: Option<&goofi_graph::SourceInfo>) -
     }
 }
 
-/// The node a slot's frames really come from: itself for a leaf, and for a port — which relays
-/// rather than runs — whatever is behind it. `slot` names a facade's port by uid.
-fn behind(g: &Graph, uid: Uid, slot: &str) -> Uid {
-    match g.stream(uid, slot) {
-        Some(goofi_graph::Stream::At(leaf, _)) => leaf,
-        _ => uid,
-    }
-}
-
 /// `node state`: what the node is, what its params say, which output slots it has and whether it
 /// is emitting on them. The frames themselves are only on `/data/<node>/<slot>`.
 pub fn node(
@@ -189,7 +179,7 @@ pub fn node(
     want_error: bool,
 ) -> Result<String, String> {
     let type_name = g.node_type(uid)
-        .ok_or_else(|| format!("node state: no node `{}`", uid.to_hex()))?;
+        .ok_or_else(|| format!("no node `{}`", uid.to_hex()))?;
     // A port and a facade never run, so they wear no tier and reach no stage; everything else a
     // read says about a node, they answer.
     let runtime = match g.node_tier(uid) {
@@ -202,7 +192,7 @@ pub fn node(
     // and carries the port's display name beside it — so nothing here re-derives a label.
     let outputs = crate::vocab::output_slots(g, uid);
     if let Some(s) = slot {
-        crate::vocab::check_slot(g, "node state", uid, s)?;
+        crate::vocab::resolve_slot(g, uid, s)?;
     }
 
     if want_params {
@@ -210,12 +200,7 @@ pub fn node(
         for (group, names) in g.params(uid).iter().flat_map(|p| p.iter()) {
             for (name, p) in names {
                 let source = g.param_source(uid, group, name);
-                let mut shown = p.clone();
-                if let (goofi_core::Param::Str { options, .. }, Some(live)) =
-                    (&mut shown, g.refreshed_options(uid, group, name))
-                {
-                    *options = Some(live.to_vec());
-                }
+                let shown = g.shown_param(uid, group, name, p);
                 out.push_str(&format!("  {group}.{name} = {}\n", param_line(&shown, source.as_ref())));
             }
         }
@@ -228,7 +213,7 @@ pub fn node(
     for (key, name, kind) in outputs.iter().filter(|(k, l, _)| slot.is_none_or(|s| s == k || s == l)) {
         // `ufreq` measures how often a node RUNS, so it is read off whichever node the frames
         // really come from — itself for a leaf, the node behind it for a port.
-        let rate = match g.node_ufreq(behind(g, uid, key)) {
+        let rate = match g.node_ufreq(crate::stream_behind(g, uid, key).map_or(uid, |(leaf, _)| leaf)) {
             Some(hz) => format!("emitting at {hz:.1} Hz"),
             None => "nothing emitted yet".to_string(),
         };
@@ -244,34 +229,31 @@ pub fn node(
     Ok(out)
 }
 
+/// One variable as `variable list` and `control list` answer it.
+pub(crate) fn variable_json(g: &Graph, name: &str, v: &goofi_core::variables::Variable) -> Value {
+    let mut e = goofi_graph::variable_to_json(&v.value);
+    e["name"] = json!(name);
+    // What holds it, its own lock and its group's together — the answer a writer needs.
+    e["lock"] = json!(g.variables().lock_of(name));
+    if let Some(c) = &v.control {
+        e["control"] = json!(c);
+    }
+    if let Some(s) = &v.source {
+        e["source"] = json!(s);
+    }
+    e
+}
+
 /// `variable list`: what an expression can read and the variable writes can set.
 pub fn variables(g: &Graph) -> Value {
-    let entries: Vec<Value> = g
-        .variables()
-        .entries()
-        .map(|(name, v)| {
-            let (control, source) = (v.control.as_ref(), v.source.as_ref());
-            let mut e = goofi_graph::variable_to_json(&v.value);
-            e["name"] = json!(name);
-            // What holds it, its own lock and its group's together — the answer a writer needs.
-            e["lock"] = serde_json::to_value(g.variables().lock_of(name)).expect("a plain record");
-            if let Some(c) = control {
-                e["control"] = serde_json::to_value(c).expect("a plain record");
-            }
-            if let Some(s) = source {
-                e["source"] = serde_json::to_value(s).expect("a plain record");
-            }
-            e
-        })
-        .collect();
+    let entries: Vec<Value> = g.variables().entries().map(|(name, v)| variable_json(g, name, v)).collect();
     let groups: serde_json::Map<String, Value> =
         g.variables().groups().map(|(group, lock)| (group.to_string(), json!({ "lock": lock }))).collect();
     json!({ "variables": entries, "groups": groups })
 }
 
-/// `library get`: one type's provenance, what its file hides, and — when `source` asks — the file
-/// itself, under `text`: the entry's own `source` is where the TYPE came from, and one key cannot
-/// be both.
+/// `library get`: one type's provenance, what its file hides, and with `source` the file itself
+/// under `text`, since the entry's own `source` is where the TYPE came from.
 pub fn node_source(
     g: &Graph,
     ty: &str,
@@ -279,9 +261,9 @@ pub fn node_source(
     roots: &[(PathBuf, goofi_graph::Origin)],
     source: bool,
 ) -> Result<Value, String> {
-    let (engine, entry) = g.resolve_type(ty).map_err(|e| format!("library get: {e}"))?;
+    let (engine, entry) = g.resolve_type(ty)?;
     let ty = &goofi_node::qualify(engine, entry.manifest.type_name);
-    let mut info = crate::schemas::node_type_info(g, engine, entry.manifest, crate::schemas::Detail::Full);
+    let mut info = crate::schemas::palette_row(g, engine, ty, Some(entry.manifest), None, crate::schemas::Detail::Full);
     // `.rev()` is load-bearing: `rescan` scans the roots forwards and lets each overwrite the
     // last, so a first-match search walks them backwards.
     let workspace: Vec<PathBuf> = g.engine_ids().into_iter().map(|id| mount.join(goofi_node::folder_of(id))).collect();
@@ -292,7 +274,7 @@ pub fn node_source(
     };
     let dirs = workspace
         .into_iter()
-        .filter(|_| g.is_patch_type(ty))
+        .filter(|_| g.origin(ty) == Some(&goofi_graph::Origin::Patch))
         .map(|d| (d, "patch"))
         .chain(roots.iter().rev().map(|(d, o)| (d.clone(), word(o))));
     // The file names the type, so the path re-derives without a registry; the registry says only

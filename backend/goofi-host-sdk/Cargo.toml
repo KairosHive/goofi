@@ -17,4 +17,3 @@ goofi-codec = { path = "../goofi-codec" }
 indexmap = "2"
 libloading = { version = "0.8", optional = true }
 goofi-build = { path = "../goofi-build", optional = true }
-rmp-serde = "1"

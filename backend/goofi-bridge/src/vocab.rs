@@ -82,19 +82,16 @@ pub static VIEWER_KINDS: &[ViewerKind] = &[
     ViewerKind { id: "table", draws: Draws::Pinned("TABLE"), doc: "the rows of a TABLE slot" },
 ];
 
-/// The row for `id`, if the panel type exists.
 pub fn panel_type(id: &str) -> Option<&'static PanelType> {
     PANEL_TYPES.iter().find(|p| p.id == id)
 }
 
-/// Every panel type's id — the JSON-Schema `enum` an agent's tool list carries.
 pub fn panel_type_ids() -> Vec<&'static str> {
     PANEL_TYPES.iter().map(|p| p.id).collect()
 }
 
-/// The viewer kind a slot of each dtype opens with: the first kind that serves that dtype, which
-/// for a pinned one is the pin. An engine-local kind serves none directly — it reaches a viewer
-/// through its engine's tap — so it names what draws what the tap makes.
+/// The viewer kind a slot of each dtype opens with: the first kind that serves that dtype. An
+/// engine-local kind reaches a viewer through its engine's tap, so it names what draws the tap's.
 pub fn default_kind(dtype: SlotType) -> &'static str {
     if dtype == SlotType::Texture {
         return "image";
@@ -102,7 +99,6 @@ pub fn default_kind(dtype: SlotType) -> &'static str {
     VIEWER_KINDS.iter().find(|k| k.dtype() == dtype.name()).map_or("line", |k| k.id)
 }
 
-/// Every viewer kind's id.
 pub fn viewer_kind_ids() -> Vec<&'static str> {
     VIEWER_KINDS.iter().map(|k| k.id).collect()
 }
@@ -291,7 +287,7 @@ pub fn boundary_catalog(d: crate::schemas::Detail) -> Vec<(String, String, Value
                 "type": name,
                 "doc": format!("Sub-patch {} ({})", dir.name(), dtype.name().to_lowercase()),
             });
-            if d.full() {
+            if d == crate::schemas::Detail::Full {
                 info["source"] = json!("builtin");
                 info["tags"] = json!([]);
                 info["available"] = json!(true);
@@ -309,39 +305,25 @@ pub fn boundary_catalog(d: crate::schemas::Detail) -> Vec<(String, String, Value
 /// A node's OUTPUT slots as `(key, label, dtype-name)`. The graph owns this — which slots a thing
 /// exposes is a fact about the graph, not a vocabulary — so this is the one read, widened.
 pub fn output_slots(g: &goofi_graph::Graph, uid: goofi_graph::Uid) -> Vec<(String, String, &'static str)> {
-    g.output_slots(uid).into_iter().map(|(k, l, d)| (k, l, d.name())).collect()
+    g.slots(uid, Dir::Out).into_iter().map(|(k, l, d)| (k, l, d.name())).collect()
 }
 
 /// Check one word against a vocabulary, refusing with the whole set.
-fn check(op: &str, field: &str, word: &str, valid: Vec<&'static str>) -> Result<(), String> {
+fn check(field: &str, word: &str, valid: Vec<&'static str>) -> Result<(), String> {
     match valid.contains(&word) {
         true => Ok(()),
-        false => Err(format!("{op}: no {field} `{word}` — this app has: {}", valid.join(", "))),
+        false => Err(format!("no {field} `{word}` — this app has: {}", valid.join(", "))),
     }
 }
 
 /// Resolve a slot word — key or display label — to the KEY, refusing by naming the real ones.
-pub fn resolve_slot(
-    g: &goofi_graph::Graph,
-    op: &str,
-    uid: goofi_graph::Uid,
-    slot: &str,
-) -> Result<String, String> {
+pub fn resolve_slot(g: &goofi_graph::Graph, uid: goofi_graph::Uid, slot: &str) -> Result<String, String> {
     let slots = output_slots(g, uid);
     if let Some((key, _, _)) = slots.iter().find(|(key, label, _)| key == slot || label == slot) {
         return Ok(key.clone());
     }
     let have: Vec<&str> = slots.iter().map(|(_, l, _)| l.as_str()).collect();
-    Err(format!("{op}: node `{}` has no output slot `{slot}` — it has: {}", crate::named(g, uid), have.join(", ")))
-}
-
-pub(crate) fn check_slot(
-    g: &goofi_graph::Graph,
-    op: &str,
-    uid: goofi_graph::Uid,
-    slot: &str,
-) -> Result<(), String> {
-    resolve_slot(g, op, uid, slot).map(|_| ())
+    Err(format!("node `{}` has no output slot `{slot}` — it has: {}", crate::named(g, uid), have.join(", ")))
 }
 
 /// Validate a `node edit` viewer patch — `--viewer` entries already folded to `{slot: view}`. A
@@ -351,14 +333,13 @@ pub fn check_viewers(
     uid: goofi_graph::Uid,
     viewers: &serde_json::Map<String, Value>,
 ) -> Result<(), String> {
-    const OP: &str = "node edit";
     if g.node_type(uid).is_none() {
         return Ok(());
     }
     for (slot, view) in viewers {
-        check_slot(g, OP, uid, slot)?;
+        resolve_slot(g, uid, slot)?;
         if let Some(kind) = view.get("kind").and_then(Value::as_str).filter(|k| !k.is_empty()) {
-            check(OP, "viewer kind", kind, viewer_kind_ids())?;
+            check("viewer kind", kind, viewer_kind_ids())?;
         }
     }
     Ok(())
@@ -373,23 +354,22 @@ pub fn check_panel(
     state: Option<&Value>,
     bound: Option<goofi_graph::Uid>,
 ) -> Result<(), String> {
-    const OP: &str = "layout panel edit";
     if let Some(t) = ty {
         if !plugins.admits_panel(t) {
-            check(OP, "panel type", t, panel_type_ids())?;
+            check("panel type", t, panel_type_ids())?;
         }
     }
     let key = |k: &str| state.and_then(|s| s.get(k)).and_then(Value::as_str).filter(|v| !v.is_empty());
     if let Some(kind) = key("kind") {
-        check(OP, "viewer kind", kind, viewer_kind_ids())?;
+        check("viewer kind", kind, viewer_kind_ids())?;
     }
     if let (Some(slot), Some(uid)) = (key("slot"), bound) {
-        check_slot(g, OP, uid, slot)?;
+        resolve_slot(g, uid, slot)?;
     }
     // Refused against the type this write LEAVES the panel with: a `{type, state}` pair is one act.
     if key("node").is_some() {
         if let Some(t) = ty.and_then(panel_type).filter(|t| !t.accepts_node) {
-            return Err(format!("{OP}: a `{}` panel does not bind a node", t.id));
+            return Err(format!("a `{}` panel does not bind a node", t.id));
         }
     }
     Ok(())

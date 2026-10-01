@@ -489,7 +489,7 @@ mod inproc {
     use goofi_node::{ParamGroups, Params};
     use goofi_signal_sdk::{Inputs, MultiFrames, Node, NodeCtx, Outputs};
     use goofi_python::inproc::PyNode;
-    use goofi_python::subproc::{RemoteNode, Subproc};
+    use goofi_python::subproc::{subproc, RemoteNode};
     use indexmap::IndexMap;
 
     /// Run one node once with `data` on its single slot, one frame per source on its multi slot
@@ -560,7 +560,7 @@ class Absent(goofi.Node):
         let mut here = PyNode::from_source(PARITY, vec![("data", false)], vec!["out"]).expect("PyNode");
         here.setup(&mut NodeCtx::new(), &Params::new(&params)).expect("in-process setup");
         let (_, a) = once(&mut here, Some(frame()), &[], &params);
-        let mut there = RemoteNode::new(Subproc::new(goofi_tests::iox(), &py, PARITY), vec![("data", false)]);
+        let mut there = RemoteNode::new(subproc(goofi_tests::iox(), &py, PARITY), vec![("data", false)]);
         there.setup(&mut NodeCtx::new(), &Params::new(&params)).expect("subprocess setup");
         let (_, b) = once(&mut there, Some(frame()), &[], &params);
 
@@ -583,7 +583,7 @@ class Absent(goofi.Node):
         let mut here = PyNode::from_source(ABSENT, vec![("data", false)], vec!["out"]).expect("PyNode");
         here.setup(&mut NodeCtx::new(), &Params::new(&p)).expect("in-process setup");
         let (a_res, a) = once(&mut here, None, &[], &p);
-        let mut there = RemoteNode::new(Subproc::new(goofi_tests::iox(), &py, ABSENT), vec![("data", false)]);
+        let mut there = RemoteNode::new(subproc(goofi_tests::iox(), &py, ABSENT), vec![("data", false)]);
         there.setup(&mut NodeCtx::new(), &Params::new(&p)).expect("subprocess setup");
         let (b_res, b) = once(&mut there, None, &[], &p);
 

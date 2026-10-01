@@ -75,9 +75,8 @@ fn cell(d: &goofi_core::Data) -> String {
         goofi_core::Value::Table(_) => "<table>".into(),
         goofi_core::Value::Texture(_) => "<texture submission>".into(),
         goofi_core::Value::Array(a) => {
-            let mut it = a.as_bytes().chunks_exact(4);
-            match (a.shape().iter().product::<usize>(), it.next()) {
-                (1, Some(b)) => f32::from_le_bytes([b[0], b[1], b[2], b[3]]).to_string(),
+            match (a.shape().iter().product::<usize>(), a.values().next()) {
+                (1, Some(v)) => v.to_string(),
                 _ => format!("<{:?}>", a.shape()),
             }
         }

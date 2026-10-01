@@ -1,7 +1,6 @@
 //! Demand that `cargo run -p goofi-init` has been run.
 
 use std::path::Path;
-use std::process::Command;
 
 fn main() {
     require_python_env();
@@ -25,15 +24,11 @@ fn require_python_env() {
 
 /// Stage the interpreter's `python*.dll` beside the executable: Windows' loader searches there and
 /// never a uv-managed venv. A no-op on unix, which has no such DLL.
-fn copy_interpreter_dlls(py: &Path) -> bool {
-    let (Some(base), Some(out)) = (query(py, "import sys;print(sys.base_prefix)"), std::env::var_os("OUT_DIR"))
-    else {
-        return false;
-    };
+fn copy_interpreter_dlls(py: &Path) {
+    let (Some(base), Some(out)) = (goofi_init::base_prefix(py), std::env::var_os("OUT_DIR")) else { return };
     // OUT_DIR is `<target>/<profile>/build/<pkg>-<hash>/out`; three levels up is `<target>/<profile>`.
-    let Some(profile_dir) = Path::new(&out).ancestors().nth(3) else { return false };
-    let Ok(entries) = std::fs::read_dir(&base) else { return false };
-    let mut relocated = false;
+    let Some(profile_dir) = Path::new(&out).ancestors().nth(3) else { return };
+    let Ok(entries) = std::fs::read_dir(&base) else { return };
     for dll in entries.flatten().map(|e| e.path()).filter(|p| {
         p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dll"))
             && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("python"))
@@ -43,19 +38,9 @@ fn copy_interpreter_dlls(py: &Path) -> bool {
             .ok()
             .zip(std::fs::metadata(&dll).ok())
             .is_some_and(|(a, b)| a.len() == b.len());
-        if same || std::fs::copy(&dll, &dest).is_ok() {
-            relocated = true;
+        if !same {
+            let _ = std::fs::copy(&dll, &dest);
         }
     }
-    relocated
-}
-
-fn query(py: &Path, code: &str) -> Option<String> {
-    let out = Command::new(py).args(["-c", code]).output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
-    (!s.is_empty()).then_some(s)
 }
 

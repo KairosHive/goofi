@@ -90,8 +90,7 @@ impl Beside {
     }
 
     pub fn sync(&mut self) -> Result<(), String> {
-        self.file.flush().map_err(|e| e.to_string())?;
-        self.file.get_ref().sync_data().map_err(|e| e.to_string())?;
+        crate::stream::sync_file(&mut self.file)?;
         self.synced = Instant::now();
         Ok(())
     }

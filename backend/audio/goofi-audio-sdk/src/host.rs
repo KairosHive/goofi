@@ -56,34 +56,29 @@ impl Handle {
         }
     }
 
-    fn remember(&self, entry: &str, answer: Result<Vec<u8>, String>) -> Vec<u8> {
-        match answer {
-            Ok(bytes) => bytes,
-            Err(text) => {
-                *self.panicked.borrow_mut() = Some(format!("{entry}: {text}"));
-                Vec::new()
-            }
+    /// Call entry `name` on a live node; a panic is kept for the next `process` to raise.
+    fn entry(&self, name: &str, entry: impl FnOnce(*mut c_void, *mut c_void, Write) -> bool) -> Vec<u8> {
+        if self.node.is_null() {
+            return Vec::new();
         }
+        self.call(entry).unwrap_or_else(|text| {
+            *self.panicked.borrow_mut() = Some(format!("{name}: {text}"));
+            Vec::new()
+        })
     }
 }
 
 impl AudioNode for Handle {
     fn channels(&self, ins: &[u16], params: &[f64], outs: usize) -> Vec<u16> {
         let mut out = vec![1u16; outs];
-        if !self.node.is_null() {
-            let answer = self.call(|node, sink, write| unsafe {
-                (self.vtable.channels)(node, ins.as_ptr(), ins.len(), params.as_ptr(), params.len(), out.as_mut_ptr(), outs, sink, write)
-            });
-            self.remember("channels", answer);
-        }
+        self.entry("channels", |node, sink, write| unsafe {
+            (self.vtable.channels)(node, ins.as_ptr(), ins.len(), params.as_ptr(), params.len(), out.as_mut_ptr(), outs, sink, write)
+        });
         out
     }
 
     fn prepare(&mut self, rate: f64) {
-        if !self.node.is_null() {
-            let answer = self.call(|node, sink, write| unsafe { (self.vtable.prepare)(node, rate, sink, write) });
-            self.remember("prepare", answer);
-        }
+        self.entry("prepare", |node, sink, write| unsafe { (self.vtable.prepare)(node, rate, sink, write) });
     }
 
     fn process(&mut self, b: &mut Block<'_>) {
@@ -113,26 +108,16 @@ impl AudioNode for Handle {
 
     fn feedback(&self) -> bool {
         let mut answer = false;
-        if !self.node.is_null() {
-            let asked = self.call(|node, sink, write| unsafe { (self.vtable.feedback)(node, &mut answer, sink, write) });
-            self.remember("feedback", asked);
-        }
+        self.entry("feedback", |node, sink, write| unsafe { (self.vtable.feedback)(node, &mut answer, sink, write) });
         answer
     }
 
     fn save(&self) -> Vec<u8> {
-        if self.node.is_null() {
-            return Vec::new();
-        }
-        let answer = self.call(|node, sink, write| unsafe { (self.vtable.save)(node, sink, write) });
-        self.remember("save", answer)
+        self.entry("save", |node, sink, write| unsafe { (self.vtable.save)(node, sink, write) })
     }
 
     fn load(&mut self, bytes: &[u8]) {
-        if !self.node.is_null() {
-            let answer = self.call(|node, sink, write| unsafe { (self.vtable.load)(node, bytes.as_ptr(), bytes.len(), sink, write) });
-            self.remember("load", answer);
-        }
+        self.entry("load", |node, sink, write| unsafe { (self.vtable.load)(node, bytes.as_ptr(), bytes.len(), sink, write) });
     }
 }
 

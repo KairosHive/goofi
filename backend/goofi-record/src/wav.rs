@@ -67,8 +67,7 @@ impl Wav {
         let end = self.file.stream_position().map_err(|e| e.to_string())?;
         self.sizes()?;
         self.file.seek(SeekFrom::Start(end)).map_err(|e| e.to_string())?;
-        self.file.flush().map_err(|e| e.to_string())?;
-        self.file.get_ref().sync_data().map_err(|e| e.to_string())
+        crate::stream::sync_file(&mut self.file)
     }
 
     fn head(&mut self, rate: f64) -> Result<(), String> {

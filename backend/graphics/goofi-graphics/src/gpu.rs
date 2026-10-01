@@ -253,33 +253,7 @@ impl Gpu {
             bind_group_layouts: &[Some(&blit_group)],
             immediate_size: 0,
         });
-        let blit = |entry: &str, format: wgpu::TextureFormat| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("blit"),
-                layout: Some(&blit_layout),
-                vertex: wgpu::VertexState {
-                    module: &module,
-                    entry_point: Some("vs"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: Some(entry),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
+        let blit = |entry: &str, format| pipeline(&device, Some("blit"), &module, &blit_layout, entry, &[format]);
         let blits = [
             blit("screen", Want::Screen.format()),
             blit("tap", Want::Tap.format()),
@@ -334,19 +308,7 @@ impl Gpu {
                 wgpu::BindGroupEntry { binding: 1, resource: out_size.as_entire_binding() },
             ],
         });
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: None,
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: into,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let mut pass = clear_pass(encoder, std::slice::from_ref(into));
         pass.set_pipeline(&self.blits[index]);
         pass.set_bind_group(0, &group, &[]);
         pass.draw(0..3, 0..1);
@@ -414,28 +376,51 @@ impl Gpu {
     }
 }
 
-fn one_texel() -> wgpu::Extent3d {
-    wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }
+/// A full-screen pass's pipeline: `vs`, then `fs` into one unblended target per format.
+pub fn pipeline(
+    device: &wgpu::Device,
+    label: Option<&str>,
+    module: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    fs: &str,
+    formats: &[wgpu::TextureFormat],
+) -> wgpu::RenderPipeline {
+    let targets: Vec<Option<wgpu::ColorTargetState>> = formats
+        .iter()
+        .map(|&format| Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL }))
+        .collect();
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label,
+        layout: Some(layout),
+        vertex: wgpu::VertexState { module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState { module, entry_point: Some(fs), targets: &targets, compilation_options: Default::default() }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
-/// A texture the engine renders into and reads back from.
-pub fn target(
-    gpu: &Gpu,
-    label: &str,
-    (w, h): (u32, u32),
-    format: wgpu::TextureFormat,
-    usage: wgpu::TextureUsages,
-) -> wgpu::Texture {
-    gpu.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage,
-        view_formats: &[],
+/// A pass that clears each view to transparent and stores what it draws.
+pub fn clear_pass<'e>(encoder: &'e mut wgpu::CommandEncoder, views: &[wgpu::TextureView]) -> wgpu::RenderPass<'e> {
+    let ops = wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store };
+    let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = views
+        .iter()
+        .map(|view| Some(wgpu::RenderPassColorAttachment { view, resolve_target: None, depth_slice: None, ops }))
+        .collect();
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: None,
+        color_attachments: &attachments,
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
     })
+}
+
+fn one_texel() -> wgpu::Extent3d {
+    wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }
 }
 
 /// A `copy_texture_to_buffer` row pitch: the GPU pads every row to 256 bytes.

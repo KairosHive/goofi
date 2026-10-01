@@ -132,24 +132,24 @@ fn free_threaded() -> Option<String> {
     None
 }
 
-/// A discovered in-process type, registered ROUTED: its tier cell decides the tier at every
-/// build, so the runtime GIL tripwire demoting it is all a re-route takes.
-#[cfg(feature = "embed")]
+/// A discovered type, registered ROUTED: its tier cell decides the tier at every build, so the
+/// runtime GIL tripwire demoting it is all a re-route takes.
 pub fn routed(
     iox: std::sync::Arc<goofi_transport::Iox>,
     d: Discovered,
     subproc: &str,
 ) -> (&'static goofi_node::NodeManifest, goofi_host_sdk::NodeFactory, &'static goofi_node::IsolationCell) {
-    let t = crate::routed_node_type(iox, d, subproc);
-    (t.manifest, t.factory, t.isolation)
-}
-
-#[cfg(not(feature = "embed"))]
-pub fn routed(
-    iox: std::sync::Arc<goofi_transport::Iox>,
-    d: Discovered,
-    subproc: &str,
-) -> (&'static goofi_node::NodeManifest, goofi_host_sdk::NodeFactory, &'static goofi_node::IsolationCell) {
-    let t = crate::subproc::node_type_from(iox, subproc, d);
-    (t.manifest, t.factory, t.isolation)
+    let (manifest, tier) = (d.manifest, d.isolation);
+    let in_slots = goofi_host_sdk::host::in_slots(manifest);
+    #[cfg(feature = "embed")]
+    let out_slots: Vec<&'static str> = manifest.outputs.iter().map(|o| o.name).collect();
+    let source = std::fs::read_to_string(&d.source).unwrap_or_default();
+    let python = subproc.to_string();
+    let factory: goofi_host_sdk::NodeFactory = Box::new(move |_p| match tier.get() {
+        #[cfg(feature = "embed")]
+        goofi_node::Isolation::InProcess => crate::inproc::build_routed(&source, in_slots.clone(), out_slots.clone(), tier),
+        _ => Box::new(crate::subproc::RemoteNode::new(crate::subproc::subproc(iox.clone(), &python, &source), in_slots.clone()))
+            as Box<dyn goofi_host_sdk::Node>,
+    });
+    (manifest, factory, tier)
 }

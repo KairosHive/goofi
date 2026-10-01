@@ -84,8 +84,7 @@ impl Npy {
         let end = self.file.stream_position().map_err(|e| e.to_string())?;
         self.head()?;
         self.file.seek(SeekFrom::Start(end)).map_err(|e| e.to_string())?;
-        self.file.flush().map_err(|e| e.to_string())?;
-        self.file.get_ref().sync_data().map_err(|e| e.to_string())
+        crate::stream::sync_file(&mut self.file)
     }
 
     fn head(&mut self) -> Result<(), String> {

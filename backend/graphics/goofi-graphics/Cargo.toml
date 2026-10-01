@@ -24,3 +24,4 @@ wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan",
 naga = { version = "30", features = ["wgsl-in"] }
 pollster = "0.4"
 half = "2"
+serde = { version = "1", features = ["derive"] }

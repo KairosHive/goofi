@@ -1014,7 +1014,6 @@ dependencies = [
 name = "goofi-build"
 version = "3.0.0"
 dependencies = [
- "goofi-core",
  "goofi-supervisor",
  "libloading 0.8.9",
  "sha2",
@@ -1117,6 +1116,7 @@ dependencies = [
  "half",
  "naga",
  "pollster",
+ "serde",
  "wgpu",
 ]
 
@@ -1137,7 +1137,6 @@ dependencies = [
  "goofi-node",
  "indexmap",
  "libloading 0.8.9",
- "rmp-serde",
 ]
 
 [[package]]
@@ -1164,7 +1163,6 @@ dependencies = [
  "goofi-core",
  "goofi-supervisor",
  "goofi-transport",
- "iceoryx2",
  "indexmap",
  "pyo3",
  "pythonize",
@@ -1176,15 +1174,14 @@ name = "goofi-python"
 version = "3.0.0"
 dependencies = [
  "goofi-build",
- "goofi-codec",
  "goofi-core",
  "goofi-host-sdk",
  "goofi-init",
  "goofi-node",
  "goofi-pymod",
+ "goofi-runtime",
  "goofi-supervisor",
  "goofi-transport",
- "iceoryx2",
  "indexmap",
  "pyo3",
  "serde_json",
@@ -1222,7 +1219,6 @@ name = "goofi-signal"
 version = "3.0.0"
 dependencies = [
  "goofi-build",
- "goofi-codec",
  "goofi-core",
  "goofi-node",
  "goofi-python",
@@ -1230,7 +1226,6 @@ dependencies = [
  "goofi-signal-sdk",
  "goofi-supervisor",
  "goofi-transport",
- "rmp-serde",
 ]
 
 [[package]]
@@ -1300,12 +1295,10 @@ dependencies = [
 name = "goofi-transport"
 version = "3.0.0"
 dependencies = [
- "goofi-core",
  "goofi-node",
  "goofi-supervisor",
  "iceoryx2",
  "libc",
- "windows-sys 0.61.2",
 ]
 
 [[package]]

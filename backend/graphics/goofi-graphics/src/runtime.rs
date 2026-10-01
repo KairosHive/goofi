@@ -152,7 +152,7 @@ impl Runtime {
         // What an earlier tick put on the device and the device has finished since.
         self.take();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
-        let mut started: Vec<(Uid, Want, Slot, (u32, u32))> = Vec::new();
+        let mut started: Vec<(Uid, Want, Slot)> = Vec::new();
         for (i, drawn) in want.iter().enumerate() {
             if !drawn {
                 continue;
@@ -188,8 +188,7 @@ impl Runtime {
                 .get(&stage.uid).is_some_and(|why| why.starts_with("readback:"));
             if clear { self.trouble(stage.uid, None); }
             let Some(state) = self.states.get_mut(&stage.uid) else { continue };
-            let shrunk_from = stage.size;
-            for (k, cell) in stage.uploads.iter().enumerate() {
+            for (k, cell) in stage.cells.uploads.iter().enumerate() {
                 if let Some(up) = cell.lock().take() {
                     state.upload(&self.gpu, k, &up);
                 }
@@ -199,7 +198,7 @@ impl Runtime {
             let res = [(stage.size.0 as f32).to_le_bytes(), (stage.size.1 as f32).to_le_bytes()].concat();
             self.gpu.queue.write_buffer(&state.resolution, 0, &res);
             if let Some(buf) = &state.params {
-                let bytes = shader::uniform_bytes(stage.decls, &stage.params, &state.ranges);
+                let bytes = shader::uniform_bytes(stage.decls, &stage.cells.params, &state.ranges);
                 self.gpu.queue.write_buffer(buf, 0, &bytes);
             }
             if let Some(produced) = &produced {
@@ -240,35 +239,12 @@ impl Runtime {
                 // The output, then one target per state buffer — the order the prelude writes them in.
                 let targets: Vec<wgpu::TextureView> =
                     std::iter::once(out_view.clone()).chain(state.buffers.iter().map(|b| b[1].view.clone())).collect();
-                {
-                    let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = targets
-                        .iter()
-                        .map(|view| {
-                            Some(wgpu::RenderPassColorAttachment {
-                                view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })
-                        })
-                        .collect();
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: None,
-                        color_attachments: &attachments,
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    pass.set_pipeline(pipeline);
-                    pass.set_bind_group(0, &group0, &[]);
-                    pass.set_bind_group(1, &group1, &[]);
-                    pass.set_bind_group(2, &group2, &[]);
-                    pass.draw(0..3, 0..1);
-                }
+                let mut pass = crate::gpu::clear_pass(&mut encoder, &targets);
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &group0, &[]);
+                pass.set_bind_group(1, &group1, &[]);
+                pass.set_bind_group(2, &group2, &[]);
+                pass.draw(0..3, 0..1);
             }
             let out_view = self.states[&stage.uid].out.as_ref().expect("output allocated").view.clone();
             self.stats.stages.fetch_add(1, Ordering::Relaxed);
@@ -296,11 +272,11 @@ impl Runtime {
                     },
                     wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
                 );
-                started.push((stage.uid, w, slot, shrunk_from));
+                started.push((stage.uid, w, slot));
             }
         }
         self.gpu.queue.submit([encoder.finish()]);
-        for (uid, w, mut slot, _from) in started {
+        for (uid, w, mut slot) in started {
             slot.at = t;
             let ready = slot.ready.clone();
             slot.buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
@@ -418,9 +394,9 @@ impl Runtime {
                 }
                 // Read off the stage and the borrow ended, so the recorder's own counters below
                 // may take `self` mutably.
-                let (window, tap_cell) = {
+                let (window, cells) = {
                     let stage = &self.plan.stages[i];
-                    (stage.window, stage.tap.clone())
+                    (stage.window, stage.cells.clone())
                 };
                 match w {
                     Want::Screen => {
@@ -456,7 +432,7 @@ impl Runtime {
                             Data::array_f32(shape, rows, meta).ok().map(Tapped::Full)
                         };
                         if let Some(held) = held {
-                            tap_cell.lock().frame = Some(held);
+                            *cells.tap.lock() = Some(held);
                         }
                     }
                 }

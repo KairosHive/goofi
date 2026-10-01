@@ -85,3 +85,27 @@ impl Condvar {
         self.0.wait_timeout_while(guard, dur, condition).unwrap_or_else(PoisonError::into_inner).0
     }
 }
+
+/// A flag set once, which any number of threads can wait on until a deadline.
+#[derive(Default, Debug)]
+pub struct Latch {
+    set: Mutex<bool>,
+    cv: Condvar,
+}
+
+impl Latch {
+    pub fn open(&self) {
+        *self.set.lock() = true;
+        self.cv.notify_all();
+    }
+
+    pub fn is_open(&self) -> bool {
+        *self.set.lock()
+    }
+
+    /// Park until open or `deadline`; whether it is open.
+    pub fn wait_until(&self, deadline: std::time::Instant) -> bool {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        *self.cv.wait_timeout_while(self.set.lock(), left, |set| !*set)
+    }
+}

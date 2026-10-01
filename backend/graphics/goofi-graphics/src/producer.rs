@@ -33,18 +33,7 @@ impl crate::GraphicsEngine {
         self.host = Some(exe);
     }
 
-    /// The probes a scan of `dir` would spawn, as work for off the lock.
-    pub(crate) fn prepare(&self, dir: &Path) -> Option<Box<dyn FnOnce() + Send>> {
-        let python = self.python.clone()?;
-        let files: Vec<(std::path::PathBuf, String)> = goofi_node::node_files(dir, "graphics")
-            .into_iter()
-            .filter(|(p, _, _)| p.extension().is_some_and(|e| e == "py"))
-            .map(|(p, name, _)| (p, name))
-            .collect();
-        (!files.is_empty()).then(|| Box::new(move || goofi_python::catalog::warm(&files, &python)) as Box<dyn FnOnce() + Send>)
-    }
-
-    pub(crate) fn register_host(&mut self, path: &Path, name: &str) -> Result<bool, String> {
+    pub(crate) fn register_host(&mut self, path: &Path, name: &str) -> Result<Arc<Class>, String> {
         let (manifest, factory, isolation): (_, Factory, _) = if path.extension().is_some_and(|e| e == "rs") {
             let base = goofi_build::base_dir(&goofi_supervisor::home::dir());
             let artifact = goofi_build::built(&goofi_build::GRAPHICS, path, &base)?;
@@ -55,17 +44,11 @@ impl crate::GraphicsEngine {
                 Some(host) => goofi_runtime::hosted::describe(host, &artifact)?,
                 None => goofi_build::open(&artifact)?.describe,
             };
-            let intro = goofi_node::parse_introspection(&describe)?;
-            if let Some(why) =
-                goofi_node::illegal_slot(&intro).or_else(|| goofi_node::foreign_output(&intro, Some(SlotType::Texture)))
-            {
-                return Err(why);
-            }
-            let manifest = goofi_node::leak_manifest(name.into(), &intro)?;
+            let manifest = goofi_node::manifest_of(name, &goofi_node::parse_introspection(&describe)?, Some(SlotType::Texture))?;
             match host {
                 Some(host) => {
                     let iox = self.iox.clone();
-                    let factory: Factory = Arc::new(move |_| Box::new(goofi_runtime::hosted::Hosted::node(iox.clone(), host.clone(), artifact.clone(), manifest)));
+                    let factory: Factory = Arc::new(move |_| Box::new(goofi_runtime::hosted::node(iox.clone(), host.clone(), artifact.clone(), manifest)));
                     (manifest, factory, &goofi_node::HOSTED)
                 }
                 None => {
@@ -104,6 +87,7 @@ impl crate::GraphicsEngine {
             .copied()
             .chain(
                 goofi_runtime::common_decls(manifest)
+                    .into_iter()
                     .filter(|d| !manifest.params.iter().any(|p| p.group == d.group && p.name == d.name)),
             )
             .collect();
@@ -118,18 +102,7 @@ impl crate::GraphicsEngine {
             outputs: manifest.outputs,
             producer: manifest.producer,
         });
-        let class = Arc::new(Class {
-            manifest,
-            feedback: false,
-            window: false,
-            state: Vec::new(),
-            kind: Kind::Host(factory),
-            isolation,
-        });
-        let displaced = self.classes.insert(name.into(), class);
-        let replaced = displaced.is_some();
-        crate::gpu::give_back(displaced);
-        Ok(replaced)
+        Ok(Arc::new(Class { manifest, feedback: false, window: false, state: Vec::new(), kind: Kind::Host(factory), isolation }))
     }
 }
 

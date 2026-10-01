@@ -140,6 +140,11 @@ fn f16_to_f32(bits: u16) -> f32 {
     if sign == 1 { -val } else { val }
 }
 
+/// `{prefix}{n}` for the first `n` from `start` that `taken` does not hold.
+pub fn fresh_name(prefix: &str, start: usize, taken: impl Fn(&str) -> bool) -> String {
+    (start..).map(|n| format!("{prefix}{n}")).find(|c| !taken(c)).expect("an unbounded counter finds a free name")
+}
+
 /// Reinterpret a foreign little-endian buffer as f32 LE bytes; the flag is false when no cast ran.
 pub fn cast_to_f32(src: SrcDtype, bytes: &[u8]) -> Result<(Vec<u8>, bool)> {
     let sz = src.itemsize();
@@ -198,6 +203,10 @@ impl ArrayStore {
     }
     pub fn as_bytes(&self) -> &[u8] {
         &self.buf[self.samples.clone()]
+    }
+    /// The samples, each a little-endian f32.
+    pub fn values(&self) -> impl Iterator<Item = f32> + '_ {
+        self.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
     pub fn ndim(&self) -> usize {
         self.shape.len()
@@ -521,16 +530,10 @@ pub struct DataInner {
 #[derive(Clone, Debug)]
 pub struct Data(Arc<DataInner>);
 
-/// Non-array frames report 0 dims.
+/// Non-array frames report an empty shape.
 impl goofi_view::Reducible for Data {
     fn dtype_tag(&self) -> u8 {
         self.0.value.dtype_tag()
-    }
-    fn ndim(&self) -> usize {
-        match &self.0.value {
-            Value::Array(s) => s.shape().len(),
-            _ => 0,
-        }
     }
     fn shape(&self) -> &[usize] {
         match &self.0.value {

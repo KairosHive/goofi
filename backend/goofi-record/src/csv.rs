@@ -23,10 +23,6 @@ impl Csv {
         Ok(csv)
     }
 
-    pub fn columns(&self) -> &[String] {
-        &self.columns
-    }
-
     /// One frame as one row. A column the frame does not hold is empty rather than absent, so
     /// every row has the same width as the header.
     pub fn write(&mut self, at: f64, cells: &[(String, String)]) -> Result<(), String> {
@@ -45,8 +41,7 @@ impl Csv {
     }
 
     pub fn sync(&mut self) -> Result<(), String> {
-        self.file.flush().map_err(|e| e.to_string())?;
-        self.file.get_ref().sync_data().map_err(|e| e.to_string())
+        crate::stream::sync_file(&mut self.file)
     }
 }
 

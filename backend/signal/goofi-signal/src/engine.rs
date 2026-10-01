@@ -31,8 +31,6 @@ pub struct SignalEngine {
     dyn_types: HashMap<&'static str, DynType>,
     /// The interpreters a `.py` file is probed and run with; none until the host provides them.
     pub(crate) python: Option<crate::scan::Python>,
-    /// Every built artifact loaded so far, by path: a library is opened once and never closed.
-    pub(crate) rust_loaded: HashMap<std::path::PathBuf, Arc<goofi_signal_sdk::host::Loaded>>,
     /// Set once the boot scan is over: a Rust node registered after that runs hosted.
     pub(crate) booted: bool,
     /// The executable that hosts a node built after boot — goofi's own binary, or the harness's.
@@ -58,7 +56,6 @@ impl SignalEngine {
             dirty: false,
             dyn_types: HashMap::new(),
             python: None,
-            rust_loaded: HashMap::new(),
             booted: false,
             host: None,
             bells: None,
@@ -89,7 +86,7 @@ impl SignalEngine {
 
     /// The params as this engine counts them: the author's, then the universal `common` group.
     fn decls_of(manifest: &'static NodeManifest) -> Vec<goofi_node::ParamDecl> {
-        manifest.params.iter().copied().chain(crate::common_decls(manifest)).collect()
+        manifest.params.iter().copied().chain(goofi_runtime::common_decls(manifest)).collect()
     }
 }
 
@@ -192,10 +189,7 @@ impl Engine for SignalEngine {
 
     fn request(&mut self, uid: Uid, request: goofi_node::Request) {
         if let Some(handle) = self.hosts.get(&uid) {
-            match request.kind {
-                goofi_node::RequestKind::Refresh => handle.refresh(request.key),
-                goofi_node::RequestKind::Pulse => handle.pulse(request.key),
-            }
+            handle.request(request);
         }
     }
 
@@ -206,7 +200,7 @@ impl Engine for SignalEngine {
 
     /// The `common` scheduling group: signal semantics, added to every signal node.
     fn universal_decls(&self, manifest: &'static NodeManifest) -> Vec<goofi_node::ParamDecl> {
-        crate::common_decls(manifest).collect()
+        goofi_runtime::common_decls(manifest).to_vec()
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
@@ -216,10 +210,7 @@ impl Engine for SignalEngine {
     /// Stop every node and WAIT for each to release its shared memory — a ceiling, because only a
     /// process about to EXIT has no "a moment later".
     fn shutdown(&mut self) {
-        for host in self.hosts.values() {
-            host.stop();
-        }
-        goofi_transport::wait_released(self.hosts.values().map(|h| &*h.halt), goofi_transport::SHUTDOWN_WAIT);
+        goofi_runtime::stop_all(self.hosts.values());
         self.hosts.clear();
     }
 }

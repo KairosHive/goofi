@@ -1,7 +1,7 @@
 //! Folder plugins: discovery, isolated Python services, and shared operation hooks.
 
 use crate::{
-    ops::{ArgDecl, Kind, Row},
+    ops::{ArgDecl, Row},
     AppState,
 };
 use serde::Deserialize;
@@ -104,13 +104,22 @@ struct Service {
     scope: goofi_supervisor::scope::Scope,
 }
 
-impl Service {
-    fn adopt(&self, worker: std::io::Result<goofi_supervisor::worker::Worker>) {
-        if let Ok(worker) = worker {
-            self.scope.adopt(worker);
-        }
+impl Package {
+    fn new(manifest: Manifest, root: PathBuf) -> Package {
+        Package { manifest, root, frontend: None, contributions: Contributions::default(), service: None, error: None }
     }
 
+    /// Withdraw everything the package offers, and keep `error` as the reason.
+    fn fail(&mut self, error: String) {
+        log(&self.manifest.id, &error);
+        self.error = Some(error);
+        self.service = None;
+        self.frontend = None;
+        self.contributions = Contributions::default();
+    }
+}
+
+impl Service {
     fn write(&self, message: Value) -> Result<(), String> {
         self.input
             .lock()
@@ -121,16 +130,11 @@ impl Service {
     }
 }
 
-fn log(id: &str, level: &str, message: &str) {
+fn log(id: &str, message: &str) {
     use goofi_supervisor::log::{record, Level, Source};
-    let level = match level {
-        "error" => Level::Error,
-        "warning" => Level::Warning,
-        _ => Level::Info,
-    };
     record(
         Source::component(&format!("plugin:{id}")),
-        level,
+        Level::Error,
         None,
         message,
     );
@@ -205,9 +209,17 @@ impl Service {
         let pending: Pending = Arc::default();
         let replies = pending.clone();
         let (sender, messages) = mpsc::channel::<Value>();
+        let service = Arc::new(Self {
+            input: Mutex::new(Some(sender)),
+            child: Mutex::new(child),
+            pending,
+            sequence: AtomicU64::new(1),
+            output: Mutex::new(Some(reader)),
+            scope: goofi_supervisor::scope::Scope::default(),
+        });
         // Pipe writes can block. Keep them off request threads so the deadline can kill a
         // service that stopped reading, including when the first payload exceeds the pipe.
-        let stdin_worker = goofi_supervisor::worker::spawn("goofi-plugin-stdin", move || {
+        service.scope.spawn("goofi-plugin-stdin", move || {
             let mut input = input;
             for message in messages {
                 let sent = serde_json::to_writer(&mut input, &message)
@@ -229,15 +241,6 @@ impl Service {
                 }
             }
         });
-        let service = Arc::new(Self {
-            input: Mutex::new(Some(sender)),
-            child: Mutex::new(child),
-            pending,
-            sequence: AtomicU64::new(1),
-            output: Mutex::new(Some(reader)),
-            scope: goofi_supervisor::scope::Scope::default(),
-        });
-        service.adopt(stdin_worker);
         Ok((service, contributions))
     }
 
@@ -251,7 +254,7 @@ impl Service {
         };
         let pending = self.pending.clone();
         let service = self.clone();
-        let listener = goofi_supervisor::worker::spawn("goofi-plugin-stdout", move || {
+        self.scope.spawn("goofi-plugin-stdout", move || {
             for line in reader.lines() {
                 let message = match line
                     .ok()
@@ -275,7 +278,7 @@ impl Service {
                     let state = state.clone();
                     let writer = service.clone();
                     let plugin_id = plugin_id.clone();
-                    let call = goofi_supervisor::worker::spawn("goofi-plugin-call", move || {
+                    service.scope.spawn("goofi-plugin-call", move || {
                         let chain: Vec<String> =
                             serde_json::from_value(message["chain"].clone()).unwrap_or_default();
                         CHAIN.with(|held| *held.borrow_mut() = chain);
@@ -285,7 +288,7 @@ impl Service {
                         CHAIN.with(|held| held.borrow_mut().clear());
                         if id == 0 {
                             if let Err(error) = result {
-                                log(&plugin_id, "error", &format!("log write: {error}"));
+                                log(&plugin_id, &format!("log write: {error}"));
                             }
                             return;
                         }
@@ -295,7 +298,6 @@ impl Service {
                         };
                         let _ = writer.write(reply);
                     });
-                    service.adopt(call);
                 }
             }
             // The service is dead from here: close its input, fail what waits, and leave the
@@ -308,7 +310,6 @@ impl Service {
                 let _ = tx.send(Err("plugin service stopped".into()));
             }
         });
-        self.adopt(listener);
     }
 
     fn request(&self, method: &str, data: Value, actor: &str) -> Reply {
@@ -441,37 +442,16 @@ impl Plugins {
                         Err(e) => e,
                         _ => "plugin ID must match its folder; api must be 1".into(),
                     };
-                    log(&id, "error", &error);
-                    packages.push(Package {
-                        manifest: Manifest {
-                            id,
-                            version: String::new(),
-                            api: 1,
-                        },
-                        root: dir,
-                        frontend: None,
-                        contributions: Contributions::default(),
-                        service: None,
-                        error: Some(error),
-                    });
+                    let mut package = Package::new(Manifest { id, version: String::new(), api: 1 }, dir);
+                    package.fail(error);
+                    packages.push(package);
                     continue;
                 }
             };
             goofi_supervisor::progress::report(format!("Preparing plugin {}", manifest.id));
-            let mut package = Package {
-                manifest,
-                root: dir,
-                frontend: None,
-                contributions: Contributions::default(),
-                service: None,
-                error: None,
-            };
+            let mut package = Package::new(manifest, dir);
             if let Err(error) = package.prepare(home, python, &sdk, state) {
-                log(&package.manifest.id, "error", &error);
-                package.error = Some(error);
-                package.service = None;
-                package.contributions = Contributions::default();
-                package.frontend = None;
+                package.fail(error);
             }
             packages.push(package);
         }
@@ -497,17 +477,9 @@ impl Plugins {
                     .pre_op
                     .iter()
                     .chain(&package.contributions.post_op)
-                    .find(|name| {
-                        !names.contains(*name)
-                            || matches!(name.as_str(), "compound" | "undo" | "redo")
-                    });
+                    .find(|name| !names.contains(*name) || state.find_op(name).is_some_and(|o| o.moves_history()));
                 if let Some(name) = invalid {
-                    let error = format!("unsupported hook operation: {name}");
-                    log(&package.manifest.id, "error", &error);
-                    package.error = Some(error);
-                    package.service = None;
-                    package.frontend = None;
-                    package.contributions = Contributions::default();
+                    package.fail(format!("unsupported hook operation: {name}"));
                     removed = true;
                 }
             }
@@ -520,9 +492,8 @@ impl Plugins {
             .flat_map(|package| {
                 let leak = |s: &str| -> &'static str { Box::leak(s.to_string().into_boxed_str()) };
                 package.contributions.ops.iter().map(move |op| {
-                    let kind = if op.kind == "read" { Kind::Read } else { Kind::Effect };
                     let args: &'static [ArgDecl] = Box::leak(ArgDecl::parse_list(&op.args).into_boxed_slice());
-                    Row::plugin(leak(&op.name), kind, args, leak(&op.doc), leak(&op.result))
+                    Row::plugin(leak(&op.name), op.kind == "read", args, leak(&op.doc), leak(&op.result))
                 })
             })
             .collect();
@@ -540,7 +511,7 @@ impl Plugins {
         for package in &state.plugins.packages {
             if let Some(service) = &package.service {
                 if let Err(error) = service.request("start", json!({}), &package.manifest.id) {
-                    log(&package.manifest.id, "error", &format!("on_start: {error}"));
+                    log(&package.manifest.id, &format!("on_start: {error}"));
                     service.kill();
                 }
             }
@@ -575,7 +546,7 @@ impl Plugins {
         })
     }
 
-    pub fn pre_op(&self, _state: &AppState, op: &str, mut args: Value, actor: &str) -> Reply {
+    pub fn pre_op(&self, op: &str, mut args: Value, actor: &str) -> Reply {
         let mut changed = BTreeMap::new();
         for package in &self.packages {
             if !package.contributions.pre_op.iter().any(|name| name == op) {
@@ -614,7 +585,7 @@ impl Plugins {
         Ok(args)
     }
 
-    pub fn post_op(&self, _state: &AppState, op: &str, args: &Value, result: &Reply, actor: &str) {
+    pub fn post_op(&self, op: &str, args: &Value, result: &Reply, actor: &str) {
         for package in &self.packages {
             if !package.contributions.post_op.iter().any(|name| name == op) {
                 continue;
@@ -628,16 +599,12 @@ impl Plugins {
                 Err(error) => data["error"] = json!(error),
             }
             if let Err(error) = service.request("post_op", data, actor) {
-                log(
-                    &package.manifest.id,
-                    "error",
-                    &format!("post_op {op}: {error}"),
-                );
+                log(&package.manifest.id, &format!("post_op {op}: {error}"));
             }
         }
     }
 
-    pub fn call(&self, _state: &AppState, op: &str, args: &Value, actor: &str) -> Reply {
+    pub fn call(&self, op: &str, args: &Value, actor: &str) -> Reply {
         let package = self
             .packages
             .iter()
@@ -653,14 +620,14 @@ impl Plugins {
             .request("op", json!({"name": name, "args": args}), actor)
     }
 
-    pub fn stop(&self, _state: &AppState) {
+    pub fn stop(&self) {
         if self.stopped.swap(true, Ordering::SeqCst) {
             return;
         }
         for package in self.packages.iter().rev() {
             if let Some(service) = &package.service {
                 if let Err(error) = service.request("stop", json!({}), &package.manifest.id) {
-                    log(&package.manifest.id, "error", &error);
+                    log(&package.manifest.id, &error);
                 }
                 service.kill();
             }
@@ -808,7 +775,7 @@ impl Package {
     }
 }
 
-pub(crate) fn list(tx: &mut crate::Txn, _: &Value) -> Reply {
+pub(crate) fn list(tx: &mut crate::Txn) -> Reply {
     let state = tx.state;
     let packages: Vec<_> = state.plugins.packages.iter().map(|p| {
         let dead = p.service.as_ref().is_some_and(|s| s.child.lock().try_wait().ok().flatten().is_some());

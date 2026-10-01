@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::child::Child;
 use crate::sync::Mutex;
 use crate::worker::Worker;
 
@@ -113,17 +112,13 @@ impl PathLease {
 
 impl Drop for PathLease {
     fn drop(&mut self) {
-        let _ = if self.path.is_dir() { std::fs::remove_dir_all(&self.path) } else { std::fs::remove_file(&self.path) };
+        crate::session::remove_tree(&self.path);
     }
 }
 
-/// An owner of what one part of the process holds: the threads it started, the children it
-/// spawned, and the steps that finish its work. `close` releases them in release order: the
-/// finishes, then the children on one shared deadline, then the threads.
+/// An owner of the threads one part of the process started, joined at `close` on one deadline.
 #[derive(Default)]
 pub struct Scope {
-    finishes: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
-    children: Mutex<Vec<Child>>,
     workers: Mutex<Vec<Worker>>,
 }
 
@@ -135,24 +130,16 @@ impl Scope {
         workers.push(worker);
     }
 
-    pub fn adopt_child(&self, child: Child) {
-        self.children.lock().push(child);
+    /// Start a thread of this scope's own; one that cannot start is not adopted.
+    pub fn spawn(&self, name: impl Into<String>, f: impl FnOnce() + Send + 'static) {
+        if let Ok(worker) = crate::worker::spawn(name, f) {
+            self.adopt(worker);
+        }
     }
 
-    /// A step to run first at the close, before anything is stopped.
-    pub fn finish(&self, step: impl FnOnce() + Send + 'static) {
-        self.finishes.lock().push(Box::new(step));
-    }
-
-    /// Release everything, within `within` for the children and the threads together.
+    /// Join every thread, within `within` for all of them together.
     pub fn close(&self, within: Duration) {
         let deadline = Instant::now() + within;
-        for step in std::mem::take(&mut *self.finishes.lock()).into_iter().rev() {
-            step();
-        }
-        for mut child in std::mem::take(&mut *self.children.lock()) {
-            child.stop(deadline.saturating_duration_since(Instant::now()));
-        }
         for worker in std::mem::take(&mut *self.workers.lock()) {
             let _ = worker.join_within(deadline.saturating_duration_since(Instant::now()));
         }

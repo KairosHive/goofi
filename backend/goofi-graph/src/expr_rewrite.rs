@@ -7,50 +7,23 @@ use goofi_node::ExprError;
 
 /// One variable of a rewritten expression, before the graph resolves it to a service or a value.
 #[derive(Clone, Debug, PartialEq)]
-pub enum VarRef {
-    /// `nd('name').out.slot`, or bare `nd('name')` for a single-output node.
-    Node { var: String, name: String, slot: Option<String> },
-    /// `nd('name').params.group.param` — a node's param, read where the binding is derived.
-    NodeParam { var: String, name: String, group: String, param: String },
-    /// `me.out.slot`, or bare `me` for a node with one output.
-    MeOut { var: String, slot: Option<String> },
-    /// `me.params.group.param` — this node's own param.
-    MeParam { var: String, group: String, param: String },
-    Variable { var: String, key: String },
-}
-
-impl VarRef {
-    pub fn var(&self) -> &str {
-        match self {
-            VarRef::Node { var, .. }
-            | VarRef::NodeParam { var, .. }
-            | VarRef::MeOut { var, .. }
-            | VarRef::MeParam { var, .. }
-            | VarRef::Variable { var, .. } => var,
-        }
-    }
+pub struct VarRef {
+    pub var: String,
+    pub target: Target,
 }
 
 /// What a term refers to. Two terms with equal targets share one variable, and one mailbox.
-#[derive(Clone, PartialEq)]
-enum Target {
+#[derive(Clone, Debug, PartialEq)]
+pub enum Target {
+    /// `nd('name').out.slot`, or bare `nd('name')` for a single-output node.
     Node { name: String, slot: Option<String> },
+    /// `nd('name').params.group.param` — a node's param, read where the binding is derived.
     NodeParam { name: String, group: String, param: String },
+    /// `me.out.slot`, or bare `me` for a node with one output.
     MeOut { slot: Option<String> },
+    /// `me.params.group.param` — this node's own param.
     MeParam { group: String, param: String },
     Variable { key: String },
-}
-
-impl Target {
-    fn into_ref(self, var: String) -> VarRef {
-        match self {
-            Target::Node { name, slot } => VarRef::Node { var, name, slot },
-            Target::NodeParam { name, group, param } => VarRef::NodeParam { var, name, group, param },
-            Target::MeOut { slot } => VarRef::MeOut { var, slot },
-            Target::MeParam { group, param } => VarRef::MeParam { var, group, param },
-            Target::Variable { key } => VarRef::Variable { var, key },
-        }
-    }
 }
 
 /// One span of the source to replace, and what it refers to.
@@ -135,18 +108,16 @@ pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
     let terms = merge(terms);
 
     let mut vars: Vec<VarRef> = Vec::new();
-    let mut targets: Vec<Target> = Vec::new();
     let mut out = String::with_capacity(source.len());
     let mut cursor = 0;
     for term in terms {
         // Two spellings of one reference share ONE variable: `nd('a').out.x + nd('a').out.x`
         // subscribes once.
-        let var = match targets.iter().position(|t| *t == term.target) {
-            Some(at) => vars[at].var().to_string(),
+        let var = match vars.iter().find(|v| v.target == term.target) {
+            Some(v) => v.var.clone(),
             None => {
                 let var = format!("__v{}", vars.len());
-                vars.push(term.target.clone().into_ref(var.clone()));
-                targets.push(term.target);
+                vars.push(VarRef { var: var.clone(), target: term.target });
                 var
             }
         };
@@ -196,16 +167,7 @@ pub fn rename_refs(
             edits.push((at - was.len(), at, label));
         }
     }
-    if edits.is_empty() {
-        return None;
-    }
-    // Splice right-to-left, so earlier byte offsets stay valid as the string is edited.
-    let mut out = source.to_string();
-    edits.sort_by_key(|(start, _, _)| *start);
-    for (start, end, repl) in edits.into_iter().rev() {
-        out.replace_range(start..end, &repl);
-    }
-    Some(out)
+    splice(source, edits)
 }
 
 /// Rewrite the `variables.<group>.<element>` terms `rename` answers for, leaving every other byte
@@ -217,10 +179,14 @@ pub fn rename_variables(source: &str, rename: impl Fn(&str) -> Option<String>) -
             edits.push((read.end - read.name.len(), read.end, to));
         }
     }
+    splice(source, edits)
+}
+
+/// Apply `edits` right-to-left, so earlier byte offsets stay valid; `None` when there are none.
+fn splice(source: &str, mut edits: Vec<(usize, usize, String)>) -> Option<String> {
     if edits.is_empty() {
         return None;
     }
-    // Splice right-to-left, so earlier byte offsets stay valid as the string is edited.
     let mut out = source.to_string();
     edits.sort_by_key(|(start, _, _)| *start);
     for (start, end, repl) in edits.into_iter().rev() {

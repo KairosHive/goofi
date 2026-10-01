@@ -1,7 +1,5 @@
 //! The patch variables, and the control panels that draw a group of them as widgets.
 
-use schemars::JsonSchema;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{op, Any, EffectOp, NoArgs, ReadOp, WriteOp};
@@ -9,15 +7,11 @@ use crate::{inspect, AppState, Caller, Event, Txn};
 use goofi_core::variables::{Control, ControlKind, Lock, VariableSource, VariableValue};
 use goofi_graph::{Command, Graph};
 
-// ---- variable list (Read)
-op!(List, "variable list", 0, NoArgs, Value,
+op!(List, "variable list", 0, NoArgs,
     "Every patch variable — what an expression can read and the variable writes can set — each with the lock that holds it (its own and its group's together), and every group that carries a lock. The `system` group is goofi's own: config-locked for life, and its EPHEMERAL members — `system.goofi_home` and the `system.audio_*` facts the audio engine publishes — are goofi's own value, never saved into a patch.",
     "{variables: [{name, type, value, lock: {config, value}, control?, source?}], groups: {group: {lock}}}");
 
-// ---- variable entry add (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EntryAddArgs {
+op!(EntryAdd, "variable entry add", 1, EntryAddArgs {
     pub name: Option<String>,
     pub group: Option<String>,
     #[serde(rename = "type")]
@@ -27,16 +21,11 @@ pub struct EntryAddArgs {
     #[serde(default, deserialize_with = "super::nullable")]
     #[schemars(with = "Option<Value>")]
     pub control: Option<Option<Control>>,
-}
-
-op!(EntryAdd, "variable entry add", 1, EntryAddArgs, Value,
+},
     "Create a patch variable. Give `group` alone to add a float entry with value 0 and the first free entry0/entry1/... name. Otherwise `name`, `type` and `value` are required. `name` is `group.element` — every variable is in a group. `type` is one of float/int/bool/string; a name the patch already holds is refused — `variable entry edit` changes one. `control` makes it a control-panel element: {kind, min, max, step, options, x, y, w, h}, where kind is knob/slider/number/text/toggle/dropdown/paint and must be able to draw the type.",
     "{name, value} — the name and value as stored");
 
-// ---- variable entry edit (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EntryEditArgs {
+op!(EntryEdit, "variable entry edit", 1, EntryEditArgs {
     pub name: String,
     pub value: Option<Any>,
     #[serde(rename = "type")]
@@ -45,106 +34,65 @@ pub struct EntryEditArgs {
     #[serde(default, deserialize_with = "super::nullable")]
     #[schemars(with = "Option<Value>")]
     pub control: Option<Option<Control>>,
-}
-
-op!(EntryEdit, "variable entry edit", 1, EntryEditArgs, Value,
+},
     "Change an existing variable's value, type-coerced to the type it holds. An explicit `type` changes the type, converting the current value when no value is supplied (an unsupported conversion uses an empty value); config-locked entries refuse type changes. A control widget must support the new type. A value-locked variable refuses the edit, and so does an ephemeral one (system.goofi_home, system.audio_*). `control` sets the control-panel widget and its place, `null` clears it, and giving one makes `value` optional — which is what a panel sends when it moves a widget; a config-locked variable refuses it.",
     "{value} — the value as stored, type-coerced");
 
-// ---- variable entry remove (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EntryRemoveArgs {
+op!(EntryRemove, "variable entry remove", 1, EntryRemoveArgs {
     pub name: String,
-}
-
-op!(EntryRemove, "variable entry remove", 1, EntryRemoveArgs, Value,
+},
     "Delete a patch variable. A config-locked one refuses, and a system variable always is.",
     "{removed: true}");
 
-// ---- variable entry source (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EntrySourceArgs {
+op!(EntrySource, "variable entry source", 2, EntrySourceArgs {
     pub name: String,
     pub reference: String,
     pub index: Option<i64>,
-}
-
-op!(EntrySource, "variable entry source", 2, EntrySourceArgs, Value,
+},
     "Make a variable FOLLOW one producer output, `node.slot`, at that producer's rate: the manager writes the variable on every frame that changes it, and nobody else may set it until the source is cleared with an empty reference. `index` picks one number out of a frame wider than one — a MIDI controller's `cc` is 128 of them — and a frame that holds one number needs none. The reference follows a node rename exactly as a param's does. A config-locked variable refuses; a value-locked one holds its value and takes nothing.",
     "{source: {reference, index} | null}");
 
-// ---- variable entry lock (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EntryLockArgs {
+op!(EntryLock, "variable entry lock", 1, EntryLockArgs {
     pub name: String,
     pub config: Option<bool>,
     pub value: Option<bool>,
-}
-
-op!(EntryLock, "variable entry lock", 1, EntryLockArgs, Value,
+},
     "Lock or unlock one variable on its own account: `config` freezes its name, its widget and its place in a group, `value` freezes its value alone. An axis not named keeps what it has, and its group's lock holds it besides. The system group's locks are goofi's own.",
     "{lock: {config, value}} — the variable's own lock as stored");
 
-// ---- variable entry rename (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EntryRenameArgs {
+op!(EntryRename, "variable entry rename", 2, EntryRenameArgs {
     pub name: String,
     pub to: String,
-}
-
-op!(EntryRename, "variable entry rename", 2, EntryRenameArgs, Value,
+},
     "Rename a variable, and rewrite every expression that reads it. `to` is a full `group.element`, so one op both renames an element and moves it to another group.",
     "{name} — the name as stored");
 
-// ---- variable group add (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct GroupAddArgs {
+op!(GroupAdd, "variable group add", 1, GroupAddArgs {
     pub group: Option<String>,
-}
-
-op!(GroupAdd, "variable group add", 1, GroupAddArgs, Value,
+},
     "Create an empty variables group. Without a name, use the first free group0/group1/... name.",
     "{group} — the created group name");
 
-// ---- variable group rename (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct GroupRenameArgs {
+op!(GroupRename, "variable group rename", 2, GroupRenameArgs {
     pub from: String,
     pub to: String,
-}
-
-op!(GroupRename, "variable group rename", 2, GroupRenameArgs, Value,
+},
     "Rename a group, moving every member with it and rewriting every expression that reads one. A config-locked group refuses, and the system group always does.",
     "{group} — the group as stored");
 
-// ---- variable group lock (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct GroupLockArgs {
+op!(GroupLock, "variable group lock", 1, GroupLockArgs {
     pub group: String,
     pub config: Option<bool>,
     pub value: Option<bool>,
-}
-
-op!(GroupLock, "variable group lock", 1, GroupLockArgs, Value,
+},
     "Lock or unlock a whole group, reaching every member: `config` freezes every name, widget and the membership itself — nothing is added, renamed or removed — and `value` freezes every value. An axis not named keeps what it has. The system group's lock is goofi's own.",
     "{lock: {config, value}} — the group's lock as stored");
 
-// ---- control list (Read)
-op!(ControlList, "control list", 0, NoArgs, Value,
+op!(ControlList, "control list", 0, NoArgs,
     "Every control panel and the group it draws, and every group holding a widget: each element with its value, its widget (`control`), its lock and what it follows (`source`).",
     "{panels: [{panel, group}], groups: {group: {lock, elements: [{name, element, type, value, control, lock, source?}]}}}");
 
-// ---- control add (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ControlAddArgs {
+op!(ControlAdd, "control add", 2, ControlAddArgs {
     pub group: String,
     pub kind: String,
     pub element: Option<String>,
@@ -157,16 +105,11 @@ pub struct ControlAddArgs {
     pub max: Option<f64>,
     pub step: Option<f64>,
     pub options: Option<Value>,
-}
-
-op!(ControlAdd, "control add", 2, ControlAddArgs, Value,
+},
     "Bear a widget in a control panel's group: a variable of the kind's own type, carrying the widget. `kind` is knob/slider/number/text/toggle/dropdown/paint. `element` is minted `knob0`, `knob1`, … when not given, and the cell is the first free one when `x`/`y` are not. A config-locked group refuses it, as it refuses every other edit to what it holds.",
     "{name, control} — the variable's full name and the widget as stored");
 
-// ---- control edit (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ControlEditArgs {
+op!(ControlEdit, "control edit", 2, ControlEditArgs {
     pub group: String,
     pub element: String,
     pub name: Option<String>,
@@ -179,48 +122,31 @@ pub struct ControlEditArgs {
     pub y: Option<f64>,
     pub w: Option<f64>,
     pub h: Option<f64>,
-}
-
-op!(ControlEdit, "control edit", 2, ControlEditArgs, Value,
+},
     "Change a widget: `name` renames the element (every expression reading it follows), and the rest re-shape the widget, its range, its options or its cell. ONE undo step, and refused by a config lock.",
     "{name} — the element's full name after the edit");
 
-// ---- control remove (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ControlRemoveArgs {
+op!(ControlRemove, "control remove", 2, ControlRemoveArgs {
     pub group: String,
     pub element: String,
-}
-
-op!(ControlRemove, "control remove", 2, ControlRemoveArgs, Value,
+},
     "Delete a widget and the variable under it. Refused by a config lock.",
     "{removed: true}");
 
-// ---- control paint (Effect)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ControlPaintArgs {
+op!(ControlPaint, "control paint", 2, ControlPaintArgs {
     pub group: String,
     pub element: String,
     pub steps: String,
-}
-
-op!(ControlPaint, "control paint", 2, ControlPaintArgs, Value,
+},
     "Draw on a `paint` widget with turtle steps — another hand on the pad, not a second painter: the op parses the script and the WIDGET makes the strokes, by the code a mouse reaches. So a pad nobody has open draws nothing, and the reply says how many clients heard it. `steps` is one step per line and the whole block is one submission; `//` to end of line is a comment, and `#` cannot be one because it opens every colour. Coordinates span a 1000 square whatever pixel size the pad is, the origin is the TOP-left with y running down, heading 0 faces +x and `right` turns clockwise. The steps: `forward <d>`, `back <d>`, `left <deg>`, `right <deg>`, `heading <deg>`, `goto <x> <y>`, `home` (the middle, facing +x), `up`, `down`, `curve <c1x> <c1y> <c2x> <c2y> <x> <y>` — a cubic bezier in the turtle's OWN frame, +x along the heading and +y to its right, which it leaves along the curve's exit tangent — `pen <#rgb|#rrggbb|#rrggbbaa|erase>`, `width <w>`, `soft <s>` and `clear`. `pen`, `width` and `soft` are the widget's own colour, size and softness, so a script says what a hand would set.",
     "{steps, marks, clients} — the steps read, the strokes they make, and how many clients were listening");
 
-// ---- control source (Write)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ControlSourceArgs {
+op!(ControlSource, "control source", 2, ControlSourceArgs {
     pub group: String,
     pub element: String,
     pub reference: String,
     pub index: Option<i64>,
-}
-
-op!(ControlSource, "control source", 2, ControlSourceArgs, Value,
+},
     "Make a widget FOLLOW one producer output, `node.slot`, with `index` picking one number out of a wide frame — a MIDI controller's `cc` is 128 of them — so a knob on a controller drives the widget. An empty reference clears it. Refused by a config lock.",
     "{source: {reference, index} | null}");
 
@@ -230,32 +156,33 @@ impl ReadOp for List {
     }
 }
 
+/// `v` as a variable value of type `ty`, refused when it is not one.
+fn typed(ty: &str, v: Value) -> Result<VariableValue, String> {
+    goofi_graph::variable_from_json(&json!({ "value": v, "type": ty })).ok_or_else(|| format!("`{v}` is not a {ty}"))
+}
+
 impl WriteOp for EntryAdd {
-    /// Create a typed variable.
     fn run(tx: &mut Txn, a: EntryAddArgs) -> Result<Value, String> {
         let name = match (&a.group, a.name) {
-            (Some(_), Some(_)) => return Err("variable entry add: give either name or group".to_string()),
+            (Some(_), Some(_)) => return Err("give either name or group".to_string()),
             (Some(group), None) => {
                 if !tx.g.variables().has_group(group) {
                     return Err(format!("no variable group `{group}`"));
                 }
-                (0..).map(|i| format!("{group}.entry{i}"))
-                    .find(|name| tx.g.variables().get(name).is_none())
-                    .ok_or("no free entry name")?
+                goofi_core::fresh_name(&format!("{group}.entry"), 0, |n| tx.g.variables().get(n).is_some())
             }
             (None, Some(name)) => name,
-            (None, None) => return Err("variable entry add: missing field `name`".into()),
+            (None, None) => return Err("missing field `name`".into()),
         };
         if tx.g.variables().get(&name).is_some() {
-            return Err(format!("variable entry add: `{name}` already exists — `variable entry edit` changes it"));
+            return Err(format!("`{name}` already exists — `variable entry edit` changes it"));
         }
         let value = match (a.group.is_some(), a.ty, a.value) {
             (true, None, None) => VariableValue::Float(0.0),
             (_, ty, val) => {
-                let ty = ty.ok_or("variable entry add: missing field `type`")?;
-                let val = val.map(|v| v.0).filter(|v| !v.is_null()).ok_or("variable entry add: missing value")?;
-                goofi_graph::variable_from_json(&json!({ "value": val, "type": ty }))
-                    .ok_or_else(|| format!("variable entry add: `{val}` is not a {ty}"))?
+                let ty = ty.ok_or("missing field `type`")?;
+                let val = val.map(|v| v.0).filter(|v| !v.is_null()).ok_or("missing value")?;
+                typed(&ty, val)?
             }
         };
         tx.apply(Command::EditVariable { name: name.clone(), value: Some(value.clone()), at: None, control: a.control })?;
@@ -273,22 +200,19 @@ impl WriteOp for EntryEdit {
         let name = a.name;
         let held = tx.g.variables().get(&name).map(goofi_graph::variable_to_json);
         let Some(held) = held else {
-            return Err(format!("variable entry edit: no variable `{name}` — `variable entry add` creates one"));
+            return Err(format!("no variable `{name}` — `variable entry add` creates one"));
         };
         let ty = a.ty.clone().unwrap_or_else(|| held["type"].as_str().unwrap_or_default().to_string());
         // A control-only edit is what the panel sends when it moves a widget, so the value is optional
         // once a `control` is given — and the entry keeps the one it holds, followed or locked as it may be.
         let value = match a.value.map(|v| v.0).filter(|v| !v.is_null()) {
-            Some(val) => Some(
-                goofi_graph::variable_from_json(&json!({ "value": val, "type": ty }))
-                    .ok_or_else(|| format!("variable entry edit: `{val}` is not a {ty}"))?,
-            ),
+            Some(val) => Some(typed(&ty, val)?),
             None if a.ty.is_some() => Some(
                 tx.g.variables().get(&name).and_then(|value| value.converted_to(&ty))
-                    .ok_or_else(|| format!("variable entry edit: unknown type `{ty}`"))?,
+                    .ok_or_else(|| format!("unknown type `{ty}`"))?,
             ),
             None if a.control.is_some() => None,
-            None => return Err("variable entry edit: missing value".to_string()),
+            None => return Err("missing value".to_string()),
         };
         let stored = match &value {
             Some(v) => goofi_graph::variable_to_json(v)["value"].clone(),
@@ -309,9 +233,6 @@ impl WriteOp for EntryEdit {
 
 impl WriteOp for EntryRemove {
     fn run(tx: &mut Txn, a: EntryRemoveArgs) -> Result<Value, String> {
-        if tx.g.variables().get(&a.name).is_none() {
-            return Err(format!("variable entry remove: no variable `{}`", a.name));
-        }
         tx.apply(Command::RemoveVariable { name: a.name })?;
         Ok(json!({ "removed": true }))
     }
@@ -322,9 +243,9 @@ impl WriteOp for EntryRemove {
 }
 
 /// `index` picks one number out of a frame wider than one; a whole number or nothing.
-fn source_of(op: &str, reference: &str, index: Option<i64>) -> Result<Option<VariableSource>, String> {
+fn source_of(reference: &str, index: Option<i64>) -> Result<Option<VariableSource>, String> {
     let index = index
-        .map(|i| usize::try_from(i).map_err(|_| format!("{op}: `index` is a whole number, not `{i}`")))
+        .map(|i| usize::try_from(i).map_err(|_| format!("`index` is a whole number, not `{i}`")))
         .transpose()?;
     let reference = reference.trim().to_string();
     Ok((!reference.is_empty()).then_some(VariableSource { reference, index }))
@@ -332,10 +253,7 @@ fn source_of(op: &str, reference: &str, index: Option<i64>) -> Result<Option<Var
 
 impl WriteOp for EntrySource {
     fn run(tx: &mut Txn, a: EntrySourceArgs) -> Result<Value, String> {
-        if tx.g.variables().get(&a.name).is_none() {
-            return Err(format!("variable entry source: no variable `{}`", a.name));
-        }
-        let source = source_of("variable entry source", &a.reference, a.index)?;
+        let source = source_of(&a.reference, a.index)?;
         tx.apply(Command::SourceVariable { name: a.name, source: source.clone() })?;
         Ok(json!({ "source": source }))
     }
@@ -352,9 +270,6 @@ fn lock_over(held: Lock, config: Option<bool>, value: Option<bool>) -> Lock {
 
 impl WriteOp for EntryLock {
     fn run(tx: &mut Txn, a: EntryLockArgs) -> Result<Value, String> {
-        if tx.g.variables().get(&a.name).is_none() {
-            return Err(format!("variable entry lock: no variable `{}`", a.name));
-        }
         let lock = lock_over(tx.g.variables().own_lock(&a.name), a.config, a.value);
         tx.apply(Command::LockVariable { name: a.name, lock })?;
         Ok(json!({ "lock": lock }))
@@ -378,15 +293,7 @@ impl WriteOp for EntryRename {
 
 impl WriteOp for GroupAdd {
     fn run(tx: &mut Txn, a: GroupAddArgs) -> Result<Value, String> {
-        let group = match a.group {
-            Some(group) => group,
-            None => {
-                let panels = tx.g.arrangement().control_panels();
-                (0..).map(|i| format!("group{i}"))
-                    .find(|name| !tx.g.variables().has_group(name) && !panels.iter().any(|(_, group)| group == name))
-                    .ok_or("no free group name")?
-            }
-        };
+        let group = a.group.unwrap_or_else(|| goofi_core::fresh_name("group", 0, |n| tx.g.group_taken(n)));
         tx.apply(Command::AddVariableGroup { group: group.clone(), at: None })?;
         Ok(json!({ "group": group }))
     }
@@ -427,24 +334,12 @@ fn parse_kind(v: &str) -> Result<ControlKind, String> {
 }
 
 /// A control panel's element, addressed `group` + `element`, as the `control` ops read it.
-fn element_of(g: &Graph, op: &str, group: &str, element: &str) -> Result<String, String> {
+fn element_of(g: &Graph, group: &str, element: &str) -> Result<String, String> {
     let name = format!("{group}.{element}");
     if g.variables().control(&name).is_none() {
-        return Err(format!("{op}: no element `{element}` in control panel `{group}`"));
+        return Err(format!("no element `{element}` in control panel `{group}`"));
     }
     Ok(name)
-}
-
-fn element_json(g: &Graph, name: &str, value: &VariableValue) -> Value {
-    let mut e = goofi_graph::variable_to_json(value);
-    e["name"] = json!(name);
-    e["element"] = json!(name.split_once('.').map(|(_, el)| el).unwrap_or(name));
-    e["lock"] = serde_json::to_value(g.variables().lock_of(name)).expect("a plain record");
-    e["control"] = serde_json::to_value(g.variables().control(name)).expect("a plain record");
-    if let Some(s) = g.variables().source(name) {
-        e["source"] = serde_json::to_value(s).expect("a plain record");
-    }
-    e
 }
 
 impl ReadOp for ControlList {
@@ -465,7 +360,11 @@ impl ReadOp for ControlList {
                 .variables()
                 .entries()
                 .filter(|(name, v)| v.control.is_some() && name.split_once('.').is_some_and(|(gr, _)| gr == group))
-                .map(|(name, v)| element_json(&tx.g, name, &v.value))
+                .map(|(name, v)| {
+                    let mut e = inspect::variable_json(&tx.g, name, v);
+                    e["element"] = json!(name.split_once('.').map_or(name, |(_, el)| el));
+                    e
+                })
                 .collect();
             groups.insert(group.clone(), json!({ "lock": tx.g.variables().group_lock(&group), "elements": elements }));
         }
@@ -474,29 +373,24 @@ impl ReadOp for ControlList {
 }
 
 impl WriteOp for ControlAdd {
-    /// Bear a widget: the manager mints its name and its cell where none is given.
     fn run(tx: &mut Txn, a: ControlAddArgs) -> Result<Value, String> {
         use goofi_core::variables::{free_cell, is_valid_identifier};
         let group = a.group;
         if !is_valid_identifier(&group) {
-            return Err(format!("control add: invalid group `{group}`: {}", goofi_core::variables::VARIABLE_NAME_RULE));
+            return Err(format!("invalid group `{group}`: {}", goofi_core::variables::VARIABLE_NAME_RULE));
         }
-        let kind = parse_kind(&a.kind).map_err(|e| format!("control add: {e}"))?;
+        let kind = parse_kind(&a.kind)?;
         let element = match a.element {
             Some(e) => e,
-            None => (0..)
-                .map(|n| format!("{}{n}", kind.as_str()))
-                .find(|e| tx.g.variables().get(&format!("{group}.{e}")).is_none())
-                .expect("the integers do not run out"),
+            None => goofi_core::fresh_name(kind.as_str(), 0, |e| tx.g.variables().get(&format!("{group}.{e}")).is_some()),
         };
         let name = format!("{group}.{element}");
         if tx.g.variables().get(&name).is_some() {
-            return Err(format!("control add: `{name}` already exists — `control edit` changes it"));
+            return Err(format!("`{name}` already exists — `control edit` changes it"));
         }
         let born = kind.born_value();
         let value = match a.value.map(|v| v.0).filter(|v| !v.is_null()) {
-            Some(v) => goofi_graph::variable_from_json(&json!({ "value": v, "type": born.type_name() }))
-                .ok_or_else(|| format!("control add: `{v}` is not a {}", born.type_name()))?,
+            Some(v) => typed(born.type_name(), v)?,
             None => born,
         };
         let (bw, bh) = kind.born_box();
@@ -524,7 +418,7 @@ impl WriteOp for ControlAdd {
                 record.as_object_mut().unwrap().entry(key).or_insert(or);
             }
         }
-        let control: Control = serde_json::from_value(record.clone()).map_err(|e| format!("control add: {e}"))?;
+        let control: Control = serde_json::from_value(record.clone()).map_err(|e| e.to_string())?;
         tx.apply(Command::EditVariable { name: name.clone(), value: Some(value), at: None, control: Some(Some(control)) })?;
         Ok(json!({ "name": name, "control": record }))
     }
@@ -536,7 +430,7 @@ impl WriteOp for ControlAdd {
 
 impl WriteOp for ControlEdit {
     fn run(tx: &mut Txn, a: ControlEditArgs) -> Result<Value, String> {
-        let name = element_of(&tx.g, "control edit", &a.group, &a.element)?;
+        let name = element_of(&tx.g, &a.group, &a.element)?;
         let mut cmds = Vec::new();
         let mut target = name.clone();
         if let Some(to) = &a.name {
@@ -548,7 +442,7 @@ impl WriteOp for ControlEdit {
         let mut record = serde_json::to_value(tx.g.variables().control(&name)).expect("a plain record");
         let mut touched = false;
         if let Some(kind) = &a.kind {
-            parse_kind(kind).map_err(|e| format!("control edit: {e}"))?;
+            parse_kind(kind)?;
         }
         let fields = [
             ("kind", json!(a.kind)), ("min", json!(a.min)), ("max", json!(a.max)), ("step", json!(a.step)),
@@ -561,11 +455,11 @@ impl WriteOp for ControlEdit {
             }
         }
         if touched {
-            let control: Control = serde_json::from_value(record).map_err(|e| format!("control edit: {e}"))?;
+            let control: Control = serde_json::from_value(record).map_err(|e| e.to_string())?;
             cmds.push(Command::EditVariable { name: target.clone(), value: None, at: None, control: Some(Some(control)) });
         }
         if cmds.is_empty() {
-            return Err("control edit: nothing to change — give a name, a kind, a range, options or a cell".into());
+            return Err("nothing to change — give a name, a kind, a range, options or a cell".into());
         }
         tx.apply(Command::Compound(cmds))?;
         Ok(json!({ "name": target }))
@@ -578,7 +472,7 @@ impl WriteOp for ControlEdit {
 
 impl WriteOp for ControlRemove {
     fn run(tx: &mut Txn, a: ControlRemoveArgs) -> Result<Value, String> {
-        let name = element_of(&tx.g, "control remove", &a.group, &a.element)?;
+        let name = element_of(&tx.g, &a.group, &a.element)?;
         tx.apply(Command::RemoveVariable { name })?;
         Ok(json!({ "removed": true }))
     }
@@ -589,22 +483,21 @@ impl WriteOp for ControlRemove {
 }
 
 impl EffectOp for ControlPaint {
-    /// Turtle steps as the strokes a pad makes. The op PARSES — so a refusal names the line — and
-    /// the widget draws, through the very code a hand at the pad reaches: the CLI is another hand
-    /// on the same canvas, never a second painter. What the widget then commits is the one write.
+    /// The op PARSES, so a refusal names the line, and the widget draws: what the widget then
+    /// commits is the one write.
     fn run(state: &AppState, a: ControlPaintArgs, _: &Caller) -> Result<Value, String> {
         let name = {
             let g = state.graph.lock();
-            let name = element_of(&g, "control paint", &a.group, &a.element)?;
+            let name = element_of(&g, &a.group, &a.element)?;
             match g.variables().control(&name).map(|c| c.kind) {
                 Some(ControlKind::Paint) => name,
-                Some(other) => {
-                    return Err(format!("control paint: `{name}` is a {} widget; only a `paint` one takes steps", other.as_str()))
+                other => {
+                    let kind = other.map_or("", ControlKind::as_str);
+                    return Err(format!("`{name}` is a {kind} widget; only a `paint` one takes steps"));
                 }
-                None => return Err(format!("control paint: `{name}` is not a control element")),
             }
         };
-        let steps = goofi_core::turtle::parse(&a.steps).map_err(|e| format!("control paint: {e}"))?;
+        let steps = goofi_core::turtle::parse(&a.steps)?;
         let marks = goofi_core::turtle::marks(&steps);
         state.events.send(Event::ControlPaint { name, marks: json!(marks) });
         // A pad is drawn on by whoever has it OPEN, so what the caller needs to know is whether
@@ -615,8 +508,8 @@ impl EffectOp for ControlPaint {
 
 impl WriteOp for ControlSource {
     fn run(tx: &mut Txn, a: ControlSourceArgs) -> Result<Value, String> {
-        let name = element_of(&tx.g, "control source", &a.group, &a.element)?;
-        let source = source_of("control source", &a.reference, a.index)?;
+        let name = element_of(&tx.g, &a.group, &a.element)?;
+        let source = source_of(&a.reference, a.index)?;
         tx.apply(Command::SourceVariable { name, source: source.clone() })?;
         Ok(json!({ "source": source }))
     }

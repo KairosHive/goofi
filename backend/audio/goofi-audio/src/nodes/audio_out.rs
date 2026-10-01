@@ -1,29 +1,11 @@
 use goofi_audio_sdk::goofi_core::SlotType;
 use goofi_audio_sdk::{AudioNode, Block, Manifest, ParamDecl, ParamSpec, SlotDecl, Tag};
 
-use crate::nodes::Birth;
-
 pub const TYPE: &str = "AudioOut";
 
 goofi_audio_sdk::params! {
-    DEVICE = ParamDecl {
-        group: "audio",
-        name: "device",
-        spec: ParamSpec::Str { default: crate::DEFAULT_DEVICE, options: &[crate::DEFAULT_DEVICE], refresh: true },
-        expression: None,
-        doc: Some("the output device the engine's clock follows; every AudioOut names the same one"),
-        section: 0,
-        show: None,
-    },
-    CHANNELS = ParamDecl {
-        group: "audio",
-        name: "channels",
-        spec: ParamSpec::Str { default: crate::chanmap::ALL, options: &[], refresh: false },
-        expression: None,
-        doc: Some(crate::chanmap::DOC),
-        section: 0,
-        show: None,
-    },
+    DEVICE = crate::nodes::device("the output device the engine's clock follows; every AudioOut names the same one"),
+    CHANNELS = crate::chanmap::PARAM,
     GAIN = ParamDecl {
         group: "audio",
         name: "gain",
@@ -52,18 +34,10 @@ pub static MANIFEST: Manifest = Manifest {
 /// The device is the clock and the sum; the node itself holds nothing.
 pub struct AudioOut;
 
-impl AudioOut {
-    pub fn new(_birth: Birth) -> AudioOut {
-        AudioOut
-    }
-}
-
 impl AudioNode for AudioOut {
     fn audio_params(&self, _declared: usize) -> usize {
         0
     }
-
-    fn prepare(&mut self, _rate: f64) {}
 
     fn process(&mut self, _b: &mut Block<'_>) {}
 }

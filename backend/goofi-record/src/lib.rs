@@ -50,6 +50,7 @@ pub struct Status {
     pub streams: Vec<StreamStatus>,
 }
 
+#[derive(serde::Serialize)]
 pub struct StreamStatus {
     pub node: String,
     pub slot: String,
@@ -67,29 +68,6 @@ fn finished(id: &StreamId, stream: &Arc<Mutex<Stream>>, why: &str) -> manifest::
     Take::entry(id, &s, Some(why.to_string()), error)
 }
 
-/// What a stream's kind puts in its manifest entry: the shape a reader needs to fold the file
-/// back, and — for a video alone — what its encoding costs.
-fn shape_of(kind: &Kind) -> Shape {
-    match kind {
-        Kind::Array => Shape::default(),
-        Kind::Table { columns } => Shape { columns: Some(columns.clone()), ..Shape::default() },
-        Kind::Text => Shape::default(),
-        Kind::Audio { .. } => Shape::default(),
-        Kind::Video { size, fps, quality } => {
-            Shape { size: Some(*size), fps: Some(*fps), encoding: Some(video::CLIP), quality: Some(*quality), ..Shape::default() }
-        }
-    }
-}
-
-#[derive(Default)]
-struct Shape {
-    columns: Option<Vec<String>>,
-    size: Option<(u32, u32)>,
-    fps: Option<f64>,
-    encoding: Option<&'static str>,
-    quality: Option<goofi_core::record::VideoQuality>,
-}
-
 struct Take {
     audio_window: Arc<goofi_core::record::FrameWindow>,
     folder: PathBuf,
@@ -104,50 +82,14 @@ struct Take {
 }
 
 impl Take {
-    fn entry(
-        id: &StreamId,
-        s: &Stream,
-        because: Option<String>,
-        error: Option<String>,
-    ) -> manifest::Entry {
-        let shape = shape_of(&s.kind);
-        manifest::Entry {
-            file: s.file.clone(),
-            node: id.node.clone(),
-            slot: id.slot.clone(),
-            uid: id.uid.to_hex(),
-            engine: id.engine,
-            t0_utc: stamp_nanos(s.t0_utc),
-            t0_patch: s.t0_patch,
-            sfreq: s.meta.sfreq,
-            timeline: s.meta.timeline.name(),
-            drift: s.drift,
-            channels: s.meta.channels,
-            frame: s.frame(),
-            columns: shape.columns,
-            size: shape.size,
-            fps: shape.fps,
-            encoding: shape.encoding,
-            quality: shape.quality,
-            frames: s.frames(),
-            dropped: s.lost(),
-            dropped_at: s.dropped_at,
-            closed_because: because,
-            error,
-        }
-    }
-
-    /// The entry a stream that never opened leaves behind.
-    fn missing(
-        id: &StreamId,
-        file: &str,
-        kind: Kind,
-        meta: &StreamMeta,
-        t0_patch: f64,
-        t0_utc: SystemTime,
-        why: &str,
-    ) -> manifest::Entry {
-        let shape = shape_of(&kind);
+    /// A stream's entry with no counts: what it is, and the shape a reader needs to fold the file
+    /// back — for a video, also what its encoding costs.
+    fn base(id: &StreamId, file: &str, kind: &Kind, meta: &StreamMeta, t0_patch: f64, t0_utc: SystemTime) -> manifest::Entry {
+        let (columns, video) = match kind {
+            Kind::Table { columns } => (Some(columns.clone()), None),
+            Kind::Video { size, fps, quality } => (None, Some((*size, *fps, *quality))),
+            Kind::Array | Kind::Text | Kind::Audio { .. } => (None, None),
+        };
         manifest::Entry {
             file: file.to_string(),
             node: id.node.clone(),
@@ -161,16 +103,29 @@ impl Take {
             drift: None,
             channels: meta.channels,
             frame: None,
-            columns: shape.columns,
-            size: shape.size,
-            fps: shape.fps,
-            encoding: shape.encoding,
-            quality: shape.quality,
+            columns,
+            size: video.map(|v| v.0),
+            fps: video.map(|v| v.1),
+            encoding: video.map(|_| video::CLIP),
+            quality: video.map(|v| v.2),
             frames: 0,
             dropped: 0,
             dropped_at: None,
-            closed_because: Some("never opened".to_string()),
-            error: Some(why.to_string()),
+            closed_because: None,
+            error: None,
+        }
+    }
+
+    fn entry(id: &StreamId, s: &Stream, because: Option<String>, error: Option<String>) -> manifest::Entry {
+        manifest::Entry {
+            drift: s.drift,
+            frame: s.frame(),
+            frames: s.frames(),
+            dropped: s.lost(),
+            dropped_at: s.dropped_at,
+            closed_because: because,
+            error,
+            ..Take::base(id, &s.file, &s.kind, &s.meta, s.t0_patch, s.t0_utc)
         }
     }
 
@@ -196,15 +151,9 @@ impl Take {
             .expect("a free name, of endlessly many")
     }
 
-    /// Take a stream out. Nothing else can reach it once it is out of the map, which is what
-    /// lets the caller finalize it with no lock held.
-    fn detach(&mut self, id: &StreamId) -> Option<Arc<Mutex<Stream>>> {
-        self.open.remove(id)
-    }
-
     /// Close a stream this take OWNS outright — the caller holds no lock anyone else needs.
     fn close(&mut self, id: &StreamId, why: &str) {
-        if let Some(s) = self.detach(id) {
+        if let Some(s) = self.open.remove(id) {
             self.closed.push(finished(id, &s, why));
         }
     }
@@ -501,7 +450,8 @@ impl Recorder {
                 Ok(())
             }
             Err(why) => {
-                take.closed.push(Take::missing(id, &file, kind, &meta, t0_patch, t0_utc, &why));
+                let base = Take::base(id, &file, &kind, &meta, t0_patch, t0_utc);
+                take.closed.push(manifest::Entry { closed_because: Some("never opened".into()), error: Some(why.clone()), ..base });
                 Err(why)
             }
         };
@@ -516,7 +466,7 @@ impl Recorder {
     /// for its encoder, and a thread that renders must never wait for one.
     pub fn close_later(self: &Arc<Self>, id: &StreamId, why: &str, missed: u64, at: f64) {
         let Some(take) = self.take.lock().as_ref().cloned() else { return };
-        let Some(stream) = take.lock().detach(id) else { return };
+        let Some(stream) = take.lock().open.remove(id) else { return };
         if missed > 0 {
             let mut stream = stream.lock();
             stream.dropped += missed;
@@ -535,12 +485,11 @@ impl Recorder {
     /// Close a stream and finalize its file. A VIDEO's encoder is waited for here, so this is
     /// never called from a thread that renders — [`Recorder::close_later`] is that door.
     pub fn close(&self, id: &StreamId, why: &str) {
-        let Some(take) = self.take.lock().as_ref().cloned() else { return };
         if let Some(writer) = self.writer.lock().as_ref() {
             writer.flush();
             writer.forget(id);
         }
-        self.close_take(&take, id, why);
+        self.close_now(id, why);
     }
 
     /// The close itself, with no flush: the WRITER's own door, as [`Recorder::open_now`] is. A
@@ -548,13 +497,9 @@ impl Recorder {
     /// still be queued when the thread that would write it is the caller.
     pub(crate) fn close_now(&self, id: &StreamId, why: &str) {
         let Some(take) = self.take.lock().as_ref().cloned() else { return };
-        self.close_take(&take, id, why);
-    }
-
-    fn close_take(&self, take: &Mutex<Take>, id: &StreamId, why: &str) {
-        let stream = take.lock().detach(id);
+        let stream = take.lock().open.remove(id);
         let Some(stream) = stream else { return };
-        self.finish_close(take, id, &stream, why);
+        self.finish_close(&take, id, &stream, why);
     }
 
     fn finish_close(
@@ -611,12 +556,14 @@ impl Recorder {
         self.write(&q.id, read, q.at)
     }
 
+    /// The stream `id` has open, if a recording runs.
+    fn stream(&self, id: &StreamId) -> Option<Arc<Mutex<Stream>>> {
+        let stream = self.take.lock().as_ref()?.lock().open.get(id).cloned();
+        stream
+    }
+
     fn write(&self, id: &StreamId, read: frame::Incoming<'_>, at: f64) -> Result<(), String> {
-        let stream = {
-            let guard = self.take.lock();
-            let take = guard.as_ref().ok_or("no recording is running")?.lock();
-            take.open.get(id).ok_or("no such open stream")?.clone()
-        };
+        let stream = self.stream(id).ok_or("no such open stream")?;
         let done = stream.lock().write(at, read.written, read.meta.as_ref());
         done
     }
@@ -624,12 +571,7 @@ impl Recorder {
     /// Whether the stream's open file still takes what a frame brings — a `false` is the caller's
     /// cue to open the next one, never to drop the frame. An unopened stream takes nothing.
     pub fn takes(&self, id: &StreamId, kind: &Kind, bytes: usize) -> bool {
-        let guard = self.take.lock();
-        let Some(take) = guard.as_ref() else { return false };
-        let take = take.lock();
-        let Some(stream) = take.open.get(id) else { return false };
-        let takes = stream.lock().takes(kind, bytes);
-        takes
+        self.stream(id).is_some_and(|s| s.lock().takes(kind, bytes))
     }
 
     /// Rewrite the manifest for what the sweeps since the last one changed, on [`NOTE_EVERY`].
@@ -649,15 +591,7 @@ impl Recorder {
     /// Hand one video readback to its encoder, dated by the tick that DREW it rather than the one
     /// that took it. `false` is a drop the caller counts: a real-time engine is never stalled.
     pub fn write_video(&self, id: &StreamId, texels: &[u8], at: f64) -> bool {
-        let stream = {
-            let guard = self.take.lock();
-            let Some(take) = guard.as_ref() else { return false };
-            let take = take.lock();
-            let Some(stream) = take.open.get(id) else { return false };
-            stream.clone()
-        };
-        let mut stream = stream.lock();
-        stream.write_video(texels, at)
+        self.stream(id).is_some_and(|s| s.lock().write_video(texels, at))
     }
 
     pub fn dropped(&self, id: &StreamId, count: u64, at: f64) {
@@ -677,8 +611,7 @@ impl Recorder {
     /// What a derived timeline last measured itself against patch time. The manifest carries it so
     /// an analyst can correct the stream against the ones that read the clock.
     pub fn drift(&self, id: &StreamId, seconds: f64) {
-        let guard = self.take.lock();
-        if let Some(stream) = guard.as_ref().and_then(|s| s.lock().open.get(id).cloned()) {
+        if let Some(stream) = self.stream(id) {
             stream.lock().drift = Some(seconds);
         }
     }
@@ -686,13 +619,12 @@ impl Recorder {
     /// Whether this stream has a file open right now — what a drain asks so it opens one exactly
     /// where the recorder holds none, rather than keeping a second belief about it.
     pub fn is_open(&self, id: &StreamId) -> bool {
-        self.take.lock().as_ref().is_some_and(|s| s.lock().open.contains_key(id))
+        self.stream(id).is_some()
     }
 
     /// How full the stream's feeding buffer is, as its drain last saw it.
     pub fn fill(&self, id: &StreamId, fill: f32) {
-        let guard = self.take.lock();
-        if let Some(stream) = guard.as_ref().and_then(|s| s.lock().open.get(id).cloned()) {
+        if let Some(stream) = self.stream(id) {
             stream.lock().set_fill(fill);
         }
     }

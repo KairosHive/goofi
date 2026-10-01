@@ -54,10 +54,7 @@ pub struct Plan {
     pub arena_len: usize,
     /// What the device hears: every agreeing `AudioOut`'s input times its gain, summed here.
     pub output: (Region, u16),
-    /// Per agreeing `AudioOut`: where its input and its gain read.
-    /// Per `AudioOut`: what it plays, its gain, and the DEVICE channels its own channels land on.
-    /// `None` is the whole device — every channel on the channel of the same number — which is
-    /// what every patch written before `channels` existed means.
+    /// Per `AudioOut`: input, gain, and the device channels it lands on; `None` is the whole device.
     pub sinks: Vec<(Source, Source, Option<Vec<u16>>)>,
 }
 
@@ -114,12 +111,8 @@ pub(crate) fn is_edge<V>(b: &BindingView<'_>, live: &HashMap<Uid, V>) -> bool {
     b.live && b.id.is_none() && b.vars.len() == 1 && b.vars[0].wire().is_some_and(|(p, _)| live.contains_key(&p))
 }
 
-/// Kahn over port edges and same-engine references, ties by uid. A node whose type answers
-/// `feedback()` ignores its in-edges and runs before every other root, reading its producers'
-/// regions as the previous block left them. A loop with no such node is excluded and named; what
-/// the loop feeds still runs, reading silence at that jack. A `silent` `AudioOut` runs but does
-/// not sum, and a `disabled` node is not in the plan at all: what it fed, by wire or by
-/// reference, reads silence.
+/// Kahn over port edges and same-engine references; a `feedback()` node reads the previous block.
+/// A `silent` `AudioOut` does not sum, and what a loop or a `disabled` node fed reads silence.
 pub fn compile(
     view: &GraphView<'_>,
     all: &HashMap<Uid, Instance>,
@@ -166,10 +159,7 @@ pub fn compile(
         .iter()
         .map(|(uid, inst)| (*uid, if inst.twin.feedback() { Vec::new() } else { feeds(*uid) }))
         .collect();
-    let (order, stuck) = kahn(live, &inbound, &HashSet::new());
-    // A node Kahn could not order is IN a loop when it reaches itself; the rest are only fed by one.
-    let members: HashSet<Uid> = stuck.iter().copied().filter(|u| reaches_itself(*u, &inbound, &stuck)).collect();
-    let (order, _) = if members.is_empty() { (order, stuck) } else { kahn(live, &inbound, &members) };
+    let (order, members) = goofi_runtime::schedule(&inbound, &HashSet::new(), |u| live[&u].twin.feedback());
     let mut faults: Vec<(Uid, String)> =
         members.iter().map(|u| (*u, "in a loop with no feedback node, so it does not run".to_string())).collect();
 
@@ -227,10 +217,8 @@ pub fn compile(
             })
             .collect();
         if inst.manifest.type_name == crate::nodes::audio_out::TYPE && !silent.contains(uid) {
-            // A selection that does not parse plays NOTHING rather than everything: a typo that
-            // silently reverted to the whole device would put a signal on channels the patch took
-            // care to keep clear, and on a live rig that is the expensive direction to be wrong in.
-            // The fault carries the parser's own message.
+            // A selection that does not parse plays NOTHING, never the whole device, and the
+            // fault carries the parser's message.
             let spec = str_of(view.nodes[uid].params, &inst.manifest.params[crate::nodes::audio_out::P::CHANNELS]);
             match crate::chanmap::parse(&spec) {
                 Ok(sel) => plan.sinks.push((
@@ -245,9 +233,8 @@ pub fn compile(
         let scalars_at = alloc_strip(params.len(), &mut plan.arena_len);
         plan.stages.push(Stage { idx: inst.idx, serial: inst.serial, ins, params, outs, audio_params, scalars_at });
     }
-    // The device is opened as wide as the furthest channel any sink reaches. Without a selection
-    // that is the sink's own width, as it always was; with one it is one past the highest channel
-    // NAMED, so an `AudioOut` on `3-4` opens four channels however narrow what feeds it is.
+    // The device opens as wide as the furthest channel any sink reaches: its own width, or one
+    // past the highest channel its selection names.
     let width = plan
         .sinks
         .iter()
@@ -269,56 +256,9 @@ pub fn compile(
 
 /// A `Str` param's text at plan time, off the node's record rather than a control half's consts:
 /// the plan is compiled from the desired state, and that is where a channel selection lives.
-fn str_of(params: &goofi_node::ParamGroups, d: &goofi_audio_sdk::ParamDecl) -> String {
+pub(crate) fn str_of(params: &goofi_node::ParamGroups, d: &goofi_audio_sdk::ParamDecl) -> String {
     match param_of(params, d) {
         goofi_core::Param::Str { value, .. } => value,
         _ => String::new(),
     }
-}
-
-/// The order Kahn finds — feedback nodes first, then by uid — and the nodes it could not place.
-/// Edges out of `dropped` nodes do not count, so what a loop feeds is placed on silence.
-fn kahn(live: &HashMap<Uid, &Instance>, inbound: &HashMap<Uid, Vec<Uid>>, dropped: &HashSet<Uid>) -> (Vec<Uid>, Vec<Uid>) {
-    let mut indegree: HashMap<Uid, usize> = HashMap::new();
-    let mut successors: HashMap<Uid, Vec<Uid>> = HashMap::new();
-    for (uid, from) in inbound {
-        if dropped.contains(uid) {
-            continue;
-        }
-        let from: Vec<Uid> = from.iter().copied().filter(|p| !dropped.contains(p)).collect();
-        indegree.insert(*uid, from.len());
-        for p in from {
-            successors.entry(p).or_default().push(*uid);
-        }
-    }
-    let mut order: Vec<Uid> = Vec::with_capacity(live.len());
-    let mut ready: Vec<Uid> = indegree.iter().filter(|(_, d)| **d == 0).map(|(u, _)| *u).collect();
-    while !ready.is_empty() {
-        ready.sort_by_key(|u| std::cmp::Reverse((!live[u].twin.feedback(), u.0)));
-        let u = ready.pop().unwrap();
-        order.push(u);
-        for s in successors.get(&u).into_iter().flatten() {
-            let d = indegree.get_mut(s).unwrap();
-            *d -= 1;
-            if *d == 0 {
-                ready.push(*s);
-            }
-        }
-    }
-    let stuck: Vec<Uid> = indegree.keys().filter(|u| !order.contains(u)).copied().collect();
-    (order, stuck)
-}
-
-fn reaches_itself(start: Uid, inbound: &HashMap<Uid, Vec<Uid>>, within: &[Uid]) -> bool {
-    let mut seen: HashSet<Uid> = HashSet::new();
-    let mut stack: Vec<Uid> = inbound.get(&start).into_iter().flatten().copied().filter(|p| within.contains(p)).collect();
-    while let Some(u) = stack.pop() {
-        if u == start {
-            return true;
-        }
-        if seen.insert(u) {
-            stack.extend(inbound.get(&u).into_iter().flatten().copied().filter(|p| within.contains(p)));
-        }
-    }
-    false
 }

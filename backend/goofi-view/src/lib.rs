@@ -103,10 +103,9 @@ pub const UNDECLARED_MAX: usize = 512;
 /// many axes cannot cost the stream's whole rate through the two the cap misses.
 pub const UNDECLARED_BUDGET: usize = UNDECLARED_MAX * UNDECLARED_MAX;
 
-/// What a producer is asked to fit its readback into for a reader that declared nothing: ONE
-/// texel, the cheapest frame that is still a frame. No pixels were asked for, so the metadata is
-/// the whole product.
-pub const UNDECLARED_BOX: (u32, u32) = (1, 1);
+/// What a producer is asked for by readers that declared nothing: ONE texel, the cheapest frame
+/// that is still a frame, because the metadata is the whole product.
+pub const UNDECLARED_WANT: ViewWant = ViewWant { size: (1, 1), depth: Depth::F32 };
 
 /// The sample depth a reader takes, narrowest first: 8-bit texels, a half float, or the f32 the
 /// wire itself carries.
@@ -147,8 +146,6 @@ pub struct ViewSpec {
 pub trait Reducible {
     /// 0=array, 1=string, 2=table (matches the wire dtype tag).
     fn dtype_tag(&self) -> u8;
-    /// Number of dimensions (0 for a non-array payload).
-    fn ndim(&self) -> usize;
     /// The shape (empty for a non-array payload).
     fn shape(&self) -> &[usize];
 }
@@ -168,7 +165,7 @@ impl ViewSpec {
         if frame.dtype_tag() != ViewDtype::Array.tag() {
             return true;
         }
-        let ndim = frame.ndim();
+        let ndim = frame.shape().len();
         for &(cmp, n) in &self.ndim {
             if !cmp.holds(ndim, n) {
                 return false;
@@ -247,7 +244,7 @@ struct Fold {
 /// whole is not reduced for anyone. `None` where NOTHING admits the frame: no viewer here can
 /// draw it, so none of them has asked for anything.
 fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<Fold> {
-    let ndim = frame.ndim();
+    let ndim = frame.shape().len();
     let mut order: Vec<usize> = Vec::new(); // first-seen dim order → stable output
     let mut folded: HashMap<usize, usize> = HashMap::new();
     let mut whole: HashSet<usize> = HashSet::new();
@@ -294,7 +291,7 @@ pub struct ViewWant {
 pub fn asked_box<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<ViewWant> {
     // Nothing admits it, so nobody here is drawing it — and a frame nobody draws needs no pixels.
     let Some(fold) = fold_axes(specs, frame) else {
-        return Some(ViewWant { size: UNDECLARED_BOX, depth: Depth::F32 });
+        return Some(UNDECLARED_WANT);
     };
     if !fold.aspect {
         return None;

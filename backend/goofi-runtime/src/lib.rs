@@ -1,12 +1,7 @@
-//! One runtime for every node of a scheduled engine: a thread of its own, parked on the node's
-//! door, that holds the desired state, the bindings, the ports and the reports. It is the one
-//! writer of the node's param atomics — a constant and an evaluated binding land through the
-//! same hand — the crossing every Array input enters through, and the tap every reader of an
-//! output drinks from.
-//!
-//! What an arrival BECOMES and what a run puts out is the engine's, behind [`Executor`].
+//! One runtime per node of a scheduled engine: a thread parked on the node's door that holds its
+//! desired state, bindings, ports and reports. What a run does is the engine's, behind [`Executor`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -184,6 +179,57 @@ impl Faults {
     }
 }
 
+/// A scheduled engine's order: Kahn's, feedback nodes first and then by uid, skipping `dropped`,
+/// and the nodes in a loop with no feedback node, which the order then leaves out.
+pub fn schedule(inbound: &HashMap<Uid, Vec<Uid>>, dropped: &HashSet<Uid>, feedback: impl Fn(Uid) -> bool) -> (Vec<Uid>, HashSet<Uid>) {
+    let kahn = |dropped: &HashSet<Uid>| {
+        let mut indegree: HashMap<Uid, usize> = HashMap::new();
+        let mut successors: HashMap<Uid, Vec<Uid>> = HashMap::new();
+        for (uid, from) in inbound.iter().filter(|(u, _)| !dropped.contains(u)) {
+            let from: Vec<Uid> = from.iter().copied().filter(|p| !dropped.contains(p)).collect();
+            indegree.insert(*uid, from.len());
+            for p in from {
+                successors.entry(p).or_default().push(*uid);
+            }
+        }
+        let mut order: Vec<Uid> = Vec::with_capacity(indegree.len());
+        let mut ready: Vec<Uid> = indegree.iter().filter(|(_, d)| **d == 0).map(|(u, _)| *u).collect();
+        while !ready.is_empty() {
+            ready.sort_by_key(|u| std::cmp::Reverse((!feedback(*u), u.0)));
+            let u = ready.pop().expect("not empty");
+            order.push(u);
+            for s in successors.get(&u).into_iter().flatten() {
+                let d = indegree.get_mut(s).expect("a successor is in the graph");
+                *d -= 1;
+                if *d == 0 {
+                    ready.push(*s);
+                }
+            }
+        }
+        let stuck: Vec<Uid> = indegree.keys().filter(|u| !order.contains(u)).copied().collect();
+        (order, stuck)
+    };
+    let (order, stuck) = kahn(dropped);
+    // A node Kahn could not place is IN a loop when it reaches itself; the rest are only fed by one.
+    let members: HashSet<Uid> = stuck.iter().copied().filter(|u| reaches_itself(*u, inbound, &stuck)).collect();
+    let order = if members.is_empty() { order } else { kahn(&members.union(dropped).copied().collect()).0 };
+    (order, members)
+}
+
+fn reaches_itself(start: Uid, inbound: &HashMap<Uid, Vec<Uid>>, within: &[Uid]) -> bool {
+    let mut seen: HashSet<Uid> = HashSet::new();
+    let mut stack: Vec<Uid> = inbound.get(&start).into_iter().flatten().copied().filter(|p| within.contains(p)).collect();
+    while let Some(u) = stack.pop() {
+        if u == start {
+            return true;
+        }
+        if seen.insert(u) {
+            stack.extend(inbound.get(&u).into_iter().flatten().copied().filter(|p| within.contains(p)));
+        }
+    }
+    false
+}
+
 /// This run's settled state, as [`Executor::run`] reads it.
 pub struct Cx<'a> {
     /// The live typed value per declared param — a constant, or what its binding last evaluated to.
@@ -234,9 +280,8 @@ pub struct Ticked {
 pub trait Executor {
     /// A frame arrived on wire `wire` of Array input `inbox`; `true` asks for a settle.
     fn arrive(&mut self, inbox: usize, wire: usize, frame: &Data) -> bool;
-    /// Whether only the NEWEST frame on an input matters. An executor that DRAWS the frame as it
-    /// stands says yes and is handed one per pass; one that accumulates every sample — audio's
-    /// resampling inbox — says no and is handed all of them.
+    /// Whether only the NEWEST frame on an input matters: yes is handed one per pass, and no (an
+    /// executor that accumulates every sample, as audio's resampling inbox does) is handed all.
     fn latest_only(&self) -> bool {
         false
     }
@@ -289,7 +334,7 @@ struct Flush {
 /// The engine's end of one runtime.
 pub struct Handle {
     mail: Arc<Mutex<Mail>>,
-    pub halt: Arc<Halt>,
+    halt: Arc<Halt>,
     bell: Doorbell,
     /// What was last sent, so a settle that changes nothing says nothing.
     last: Mutex<Option<Desired>>,
@@ -326,13 +371,13 @@ impl Handle {
         fresh
     }
 
-    pub fn refresh(&self, key: ParamKey) {
-        self.mail.lock().refresh.push(key);
-        let _ = self.bell.ring(0);
-    }
-
-    pub fn pulse(&self, key: ParamKey) {
-        self.mail.lock().pulse.push(key);
+    pub fn request(&self, request: goofi_node::Request) {
+        let mut mail = self.mail.lock();
+        match request.kind {
+            goofi_node::RequestKind::Refresh => mail.refresh.push(request.key),
+            goofi_node::RequestKind::Pulse => mail.pulse.push(request.key),
+        }
+        drop(mail);
         let _ = self.bell.ring(0);
     }
 
@@ -340,6 +385,12 @@ impl Handle {
         self.halt.stop();
         let _ = self.bell.ring(0);
     }
+}
+
+/// Stop every handle, then WAIT for each to release its shared memory, under one ceiling.
+pub fn stop_all<'a>(handles: impl Iterator<Item = &'a Handle> + Clone) {
+    handles.clone().for_each(Handle::stop);
+    goofi_transport::wait_released(handles.map(|h| &*h.halt));
 }
 
 impl Drop for Handle {
@@ -363,9 +414,8 @@ pub struct Spawn {
     pub time: Arc<goofi_core::time::Time>,
 }
 
-/// Create the node's services on the caller's thread, where a failure can still be reported, and
-/// park the runtime on them. `make` builds the engine's executor ON that thread, so it may hold
-/// what does not cross one — an audio stream, a MIDI connection, a node's own Python module.
+/// Create the node's services on the caller's thread, where a failure can be reported, and park the
+/// runtime on them. `make` builds the executor ON that thread, so it may hold what cannot cross one.
 pub fn spawn<E: Executor + 'static>(
     iox: &Iox,
     spawn: Spawn,
@@ -415,7 +465,6 @@ pub fn spawn<E: Executor + 'static>(
                     trouble: None,
                     reopen: None,
                     slots: Vec::new(),
-                    wiring: BTreeMap::new(),
                     binds: Vec::new(),
                     evaluated: IndexMap::new(),
                     errors: IndexMap::new(),
@@ -460,6 +509,15 @@ struct SlotSub {
     subscriber: ByteSubscriber,
 }
 
+/// Per inbox, the wires it holds in order: what the executor is told.
+fn wiring(slots: &[SlotSub]) -> BTreeMap<usize, Vec<(ServiceName, String)>> {
+    let mut wiring: BTreeMap<usize, Vec<_>> = BTreeMap::new();
+    for s in slots {
+        wiring.entry(s.inbox).or_default().push((s.service.clone(), s.source.clone()));
+    }
+    wiring
+}
+
 struct Bind {
     param: usize,
     key: ParamKey,
@@ -495,8 +553,6 @@ struct Runtime<E: Executor> {
     values: Vec<Param>,
     outs: Vec<Out_>,
     slots: Vec<SlotSub>,
-    /// Per inbox, the wires it holds in order — what the executor was last told.
-    wiring: BTreeMap<usize, Vec<(ServiceName, String)>>,
     binds: Vec<Bind>,
     evaluated: IndexMap<ParamKey, Param>,
     errors: IndexMap<ParamKey, String>,
@@ -644,6 +700,7 @@ impl<E: Executor> Runtime<E> {
     /// Answers whether every wire opened; one that did not is logged and tried again next tick.
     /// An inbox whose wire set moved is told the whole set.
     fn apply_slots(&mut self, subs: Vec<Sub>) -> bool {
+        let before = wiring(&self.slots);
         let mut old = std::mem::take(&mut self.slots);
         let mut opened = true;
         for sub in subs {
@@ -658,20 +715,12 @@ impl<E: Executor> Runtime<E> {
             }
         }
         self.slots.sort_by_key(|s| (s.inbox, s.wire));
-        let mut wiring: BTreeMap<usize, Vec<(ServiceName, String)>> = BTreeMap::new();
-        for s in &self.slots {
-            wiring.entry(s.inbox).or_default().push((s.service.clone(), s.source.clone()));
-        }
-        for inbox in self.wiring.keys().copied().collect::<Vec<_>>() {
-            wiring.entry(inbox).or_default();
-        }
-        for (inbox, wires) in &wiring {
-            if self.wiring.get(inbox).is_none_or(|w| w != wires) {
-                self.exec.rewire(*inbox, wires);
+        let after = wiring(&self.slots);
+        for inbox in before.keys().chain(after.keys()).collect::<std::collections::BTreeSet<_>>() {
+            if before.get(inbox) != after.get(inbox) {
+                self.exec.rewire(*inbox, after.get(inbox).map_or(&[], Vec::as_slice));
             }
         }
-        wiring.retain(|_, w| !w.is_empty());
-        self.wiring = wiring;
         opened
     }
 
@@ -754,10 +803,8 @@ impl<E: Executor> Runtime<E> {
         opened
     }
 
-    /// The recorder's second publisher on every armed output, and none on the rest. It is opened
-    /// here rather than at birth because the segment is a whole budget and an unarmed slot owes
-    /// none of it — and it is let go by the RECORDER's reading rather than by the disarm, or the
-    /// frames already delivered would go with it.
+    /// The recorder's second publisher on every armed output: opened by arming, because a segment
+    /// is a whole budget, and released by the recorder's read, so delivered frames stay.
     fn apply_records(&mut self, armed: &[(String, u64)]) {
         let shape = record_shape(self.engine);
         let mut failed = Vec::new();
@@ -1075,9 +1122,8 @@ impl<E: Executor> Runtime<E> {
     }
 }
 
-/// What one pass of binding evaluations changed. The values ride as the WHOLE sparse map, never a
-/// delta — the graph replaces its copy with it, so a value it stops being told is one it would
-/// otherwise preview for ever.
+/// What one pass of binding evaluations changed. The values ride as the WHOLE sparse map, which
+/// the graph's copy is replaced with, so a value it is no longer told does not stay.
 #[derive(Default)]
 struct Pass {
     values: bool,
@@ -1104,9 +1150,8 @@ pub fn scalar_of(params: &ParamGroups, d: &ParamDecl) -> f64 {
     scalar(&param_of(params, d))
 }
 
-/// A `Str` param's text; every other kind — a number, a bool, a valueless pulse — has none, and
-/// so has a param the first desired state has not delivered yet: a runtime ticks from the moment
-/// its thread starts, and its consts arrive after that, not before.
+/// A `Str` param's text; any other kind has none, and nor has a param whose first desired state
+/// has not arrived yet, since a runtime ticks before its consts arrive.
 pub fn text(consts: &[Param], param: usize) -> String {
     match consts.get(param) {
         Some(Param::Str { value, .. }) => value.clone(),

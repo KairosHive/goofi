@@ -13,7 +13,7 @@ use goofi_graph::Graph;
 use goofi_node::{Isolation, IsolationCell, NodeManifest, OutputDecl, ParamDecl, ParamGroups, Params, SlotDecl};
 use goofi_signal_sdk::{Inputs, Node, NodeCtx, NodeResult, Outputs};
 use goofi_python::inproc::PyNode;
-use goofi_python::subproc::{RemoteNode, Subproc};
+use goofi_python::subproc::{subproc, RemoteNode};
 
 static BENCH_TIER: IsolationCell = IsolationCell::new(Isolation::InProcess);
 
@@ -176,7 +176,7 @@ fn rebuild(m: &'static NodeManifest, python: &str) -> Factory {
         "bench_ftpy" => Box::new(|_| Box::new(PyNode::from_source(PY_SRC, vec![("data", false)], vec!["out"]).expect("PyNode")) as Box<dyn Node>),
         _ => {
             let py = python.to_string();
-            Box::new(move |_| Box::new(RemoteNode::new(Subproc::new(goofi_tests::iox(), py.clone(), PY_SRC), vec![("data", false)])) as Box<dyn Node>)
+            Box::new(move |_| Box::new(RemoteNode::new(subproc(goofi_tests::iox(), py.clone(), PY_SRC), vec![("data", false)])) as Box<dyn Node>)
         }
     }
 }

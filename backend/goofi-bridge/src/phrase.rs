@@ -1,21 +1,15 @@
 //! The phrase layer: ONE parser from a command line to an op call, and one renderer from a
-//! result to the text a caller reads. Every transport that speaks lines shares it — the MCP tool
-//! and, next, `/exec` and the CLI — so the surfaces cannot drift.
+//! result to text. Every transport that speaks lines shares it, so the surfaces cannot drift.
 
 use serde_json::{json, Map, Value};
 
 use crate::ops::{ArgDecl, Entry, Row, TREE};
 
-/// A command line as bash would hand it to argv — same words, same quoting.
-pub fn split(line: &str) -> Result<Vec<String>, String> {
-    shell_words::split(line).map_err(|e| format!("{e}"))
-}
-
 /// Where a word-by-word descent of the phrase tree ended — the one state machine under
 /// [`resolve`] and [`complete`].
 enum Stop {
-    /// The words named a leaf: its full phrase, and how many words it took.
-    Op(String, usize),
+    /// The words named a leaf: its full phrase.
+    Op(String),
     /// The words ran out inside a group: what can come next, and the phrase so far.
     Children(&'static [Entry], String),
     /// A word matched nothing at its level; the phrase walked before the miss.
@@ -25,25 +19,22 @@ enum Stop {
 fn walk(words: &[String]) -> Stop {
     let mut children = TREE;
     let mut prefix = String::new();
-    for (i, word) in words.iter().enumerate() {
+    for word in words {
         match children.iter().find(|e| e.word() == word) {
             Some(Entry::Group(w, _, kids)) => {
                 prefix.push_str(w);
                 prefix.push(' ');
                 children = kids;
             }
-            Some(Entry::Leaf(op)) => return Stop::Op(op.name.to_string(), i + 1),
+            Some(Entry::Leaf(op)) => return Stop::Op(op.name.to_string()),
             None => return Stop::Unknown(prefix),
         }
     }
     Stop::Children(children, prefix)
 }
 
-/// The op a word sequence names, against the rows THIS server serves. Answers the op and how many
-/// words its phrase consumed. A refusal teaches: the served phrases under the words that DID
-/// match — and a phrase the tree spells that no row serves is a mode withholding that group,
-/// which the refusal names rather than naming the mode: several modes withhold, and the caller
-/// wants to know WHAT is missing.
+/// The op a word sequence names among the served rows, and how many words it took. A refusal
+/// names the served phrases under the words that matched, or the group a mode withholds.
 pub fn resolve<'a>(ops: &'a [Row], words: &[String]) -> Result<(&'a Row, usize), String> {
     let line = words.join(" ");
     if let Some(op) = ops.iter().find(|op| {
@@ -53,10 +44,7 @@ pub fn resolve<'a>(ops: &'a [Row], words: &[String]) -> Result<(&'a Row, usize),
         return Ok((op, op.name.split(' ').count()));
     }
     let prefix = match walk(words) {
-        Stop::Op(name, used) => match ops.iter().find(|o| o.name == name) {
-            Some(op) => return Ok((op, used)),
-            None => name,
-        },
+        Stop::Op(name) => name,
         Stop::Children(_, prefix) | Stop::Unknown(prefix) => prefix,
     };
     let near: Vec<&str> = match prefix.is_empty() {
@@ -77,10 +65,9 @@ pub fn resolve<'a>(ops: &'a [Row], words: &[String]) -> Result<(&'a Row, usize),
 }
 
 /// One line, parsed against the registry: the phrase, then every argument as a flag the op's own
-/// schema types. Answers the op and the payload the socket envelope would carry — one payload
-/// shape, whichever surface spelled it.
+/// schema types. Answers the op and the payload the socket envelope would carry.
 pub fn parse<'a>(ops: &'a [Row], line: &str) -> Result<(&'a Row, Value), String> {
-    let words = split(line)?;
+    let words = shell_words::split(line).map_err(|e| e.to_string())?;
     if words.is_empty() {
         return Err("empty command".into());
     }
@@ -134,9 +121,8 @@ fn typed(op: &Row, key: &str, ty: &str, raw: String) -> Result<Value, String> {
     }
 }
 
-/// Where a scan of an op's argument words rests — what the NEXT word may be. The one grammar
-/// under [`parse_flags`] and [`complete_args`]: the parser folds the emitted values, completion
-/// reads the resting state.
+/// Where a scan of an op's argument words rests: what the NEXT word may be. The one grammar
+/// under [`parse_flags`] and [`complete_args`].
 enum Expect<'a> {
     /// `--name` was given and its value is pending.
     Value(&'a str, &'a str),
@@ -144,10 +130,8 @@ enum Expect<'a> {
     Open(Option<&'a ArgDecl>),
 }
 
-/// Step through `words` against the op's args schema, emitting each `(decl name, typed value)`.
-/// Leading bare words fill the positionals in declaration order — a list-typed one is variadic,
-/// and the first flag closes them. Each positional stays reachable as a flag too, so the sugar
-/// never hides a spelling; a bool is `--x` / `--no-x`; any value can ride inline as `--flag=v`.
+/// Step through `words` against the op's args, emitting each `(decl name, typed value)`. Leading
+/// bare words fill the positionals (a list one is variadic) until the first flag.
 fn scan<'a>(
     op: &Row,
     decls: &'a [ArgDecl],
@@ -234,8 +218,7 @@ fn flat(v: &Value) -> bool {
 }
 
 /// JSON as a caller reads it, with ONE departure from a plain pretty print: a list of flat
-/// records puts one record per line. Every catalog read answers that shape, and a field per line
-/// spent three lines of punctuation on every line of content.
+/// records puts one record per line, the shape every catalog read answers.
 pub fn pretty(v: &Value) -> String {
     fn go(v: &Value, pad: usize) -> String {
         let (inner, close) = (" ".repeat(pad + 2), " ".repeat(pad));
@@ -263,9 +246,8 @@ pub fn pretty(v: &Value) -> String {
     go(v, 0)
 }
 
-/// An op's answer as the text a caller reads: prose and bare strings verbatim, everything else
-/// as JSON. A result carrying NPY is DATA, not text — the text form points at the pipe,
-/// and only the CLI's own renderer writes the bytes.
+/// An op's answer as text: prose and bare strings verbatim, everything else as JSON. A result
+/// carrying NPY is DATA: the text form points at the pipe, and only the CLI writes the bytes.
 pub fn render(result: &Value) -> String {
     if let Value::String(s) = result {
         return s.clone();
@@ -285,9 +267,13 @@ pub fn render(result: &Value) -> String {
     }
 }
 
-/// One or several command lines, run as every line transport runs them — `goofi_exec`, `/exec`
-/// and `goofi -` share this door. A single line answers help when it asks for it, else executes
-/// directly; several lines run as ONE batch. A parse refusal names its command index.
+/// The command lines a `{commands: [...]}` body carries; a line that is not a string is empty.
+pub fn command_lines(body: &Value) -> Vec<String> {
+    body["commands"].as_array().map(|c| c.iter().map(|l| l.as_str().unwrap_or_default().to_string()).collect()).unwrap_or_default()
+}
+
+/// One or several command lines, as every line transport runs them. A single line may ask for
+/// help; several lines run as ONE batch. A parse refusal names its command index.
 pub fn exec_lines(
     state: &crate::AppState,
     lines: &[String],
@@ -298,7 +284,7 @@ pub fn exec_lines(
         return Err("`commands` is a non-empty list of command lines".into());
     }
     if let [line] = lines {
-        let words = split(line).map_err(|e| format!("command 0: {e}"))?;
+        let words = shell_words::split(line).map_err(|e| format!("command 0: {e}"))?;
         if let Some(text) = help(&table, &words) {
             return Ok(vec![json!({ "text": text })]);
         }
@@ -402,10 +388,8 @@ fn doc_line(entry: &Entry) -> String {
     }
 }
 
-/// What can come NEXT on a partial command line, as `(word, doc)` candidates — the completion
-/// read behind `op complete`. The line's trailing word, unless the line ends in whitespace, is a
-/// partial that filters. `state` is where the LIVE candidates come from — a `uid` offers the
-/// patch's own nodes — and `None` (the offline client) still answers everything static.
+/// What can come NEXT on a partial command line, as `(word, doc)` candidates; a trailing partial
+/// word filters. `state` gives the LIVE candidates, and `None` still answers everything static.
 pub fn complete(
     ops: &[Row],
     state: Option<&crate::AppState>,

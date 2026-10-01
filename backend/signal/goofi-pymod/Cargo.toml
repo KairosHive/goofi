@@ -19,10 +19,8 @@ pyo3 = { version = "0.29", optional = true }
 # serde<->PyObject: pythonizes the meta map to/from a Python dict (with pyo3, so gated).
 pythonize = { version = "0.29", optional = true }
 serde_json = "1"
-# The `goofi.serve` subprocess child loop (wheel only): the shared request/response
-# frame codec is shared with the host; iceoryx2 is used by the wheel only.
+# The `goofi.serve` child loop (wheel only) and the frame codec it shares with the host.
 goofi-codec = { path = "../../goofi-codec", optional = true }
-iceoryx2 = { version = "0.9.3", optional = true }
 goofi-transport = { path = "../../goofi-transport", optional = true }
 
 [features]
@@ -30,5 +28,5 @@ goofi-transport = { path = "../../goofi-transport", optional = true }
 # interpreter. The wheel build turns on extension-module (+ abi3, no libpython link);
 # the host build turns on auto-initialize (links the FT interpreter directly).
 default = []
-extension-module = ["dep:pyo3", "dep:pythonize", "dep:goofi-codec", "dep:iceoryx2", "dep:goofi-transport", "pyo3/extension-module", "pyo3/abi3-py38"]
+extension-module = ["dep:pyo3", "dep:pythonize", "dep:goofi-codec", "dep:goofi-transport", "pyo3/extension-module", "pyo3/abi3-py38"]
 host = ["dep:goofi-codec", "dep:pyo3", "dep:pythonize", "pyo3/auto-initialize"]

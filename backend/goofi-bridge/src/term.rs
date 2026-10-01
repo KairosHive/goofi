@@ -1,12 +1,5 @@
-//! The harness plane: one PTY per spawned agent, launched from the config list as a bash
-//! command line — no detection, no adapters. A command that cannot launch fails ON its PTY,
-//! where every agent already shows its output.
-//!
-//! The environment is inherited whole but for the embedded interpreter's, so the agent's own
-//! login and auth work; the terminal contract, `GOOFI_SESSION`/`GOOFI_ACTOR` and goofi's own
-//! directory on PATH are overlaid.
-//! Nothing here emulates a terminal; a bounded tail of output replays on attach, so a command
-//! that fails before any viewer arrives — or a page reload — still shows its words.
+//! The harness plane: one PTY per spawned agent, launched from the config list as a shell command
+//! line. A bounded tail of output replays on attach, so an early failure still shows its words.
 
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
@@ -37,9 +30,8 @@ pub struct Harnesses {
 }
 
 impl Harnesses {
-    /// The roster the snapshot seeds and `harness_changed` broadcasts — one shape for both: the
-    /// live instances, and the CONFIG's launchable list, `_`-test entries withheld. `config` is
-    /// `home::agents()`, read by the CALLER so the disk read runs off whatever lock it holds.
+    /// The roster the snapshot seeds and `harness_changed` broadcasts: the live instances and the
+    /// CONFIG's launchable list, `_`-test entries withheld. The CALLER reads `config` off its locks.
     pub fn roster(&self, config: &(Vec<goofi_supervisor::home::Agent>, Option<String>)) -> Value {
         let instances: Vec<Value> = self.instances.lock().iter()
             .map(|(id, i)| {
@@ -71,10 +63,8 @@ impl Harnesses {
         self.instances.lock().iter().find(|(k, _)| k == id).map(|(_, i)| i.clone())
     }
 
-    /// Launch the config entry named `agent` on a PTY with the patch workspace as its cwd. The
-    /// command runs under a LOGIN shell, so it resolves as the user's own terminal would, and a
-    /// command that cannot launch fails on the PTY itself. `env` is the parent environment it
-    /// inherits; the reaper announces the exit on `events`, the caller announces the spawn.
+    /// Launch the config entry `agent` on a PTY under a LOGIN shell, with the workspace as its cwd.
+    /// `env` is the parent environment; the reaper announces the exit, the caller the spawn.
     pub fn spawn(
         self: &Arc<Self>,
         agent: &str,
@@ -212,10 +202,8 @@ impl Harnesses {
         begin_stop(inst)
     }
 
-    /// Ask every instance to leave and clear the roster. The roster is cleared and every child is
-    /// signalled HERE, so a harness started after this call is never caught by it; the returned
-    /// closure waits out the grace and then insists, and the caller decides which thread pays.
-    /// `None` when nothing was running, which is the case with nothing to wait for.
+    /// Signal every instance to leave and clear the roster HERE; the closure waits out the grace and
+    /// then insists, on the caller's thread. `None` when nothing was running.
     #[must_use]
     pub fn reap_all(&self) -> Option<impl FnOnce() + Send + 'static> {
         let taken = std::mem::take(&mut *self.instances.lock());
@@ -322,9 +310,8 @@ pub struct Attached {
 }
 
 impl Instance {
-    /// A replay of the tail, the live output, the exit code, and the end-of-stream that says the
-    /// output is complete. Snapshot and subscribe share the lock the drain sends under, so replay
-    /// meets live with no byte lost or doubled.
+    /// The tail, the live output, the exit code and the end-of-stream. Snapshot and subscribe share
+    /// the lock the drain sends under, so replay meets live with no byte lost or doubled.
     pub fn attach(&self) -> Attached {
         let tail = self.tail.lock();
         Attached {
@@ -400,9 +387,8 @@ pub fn seed_orientation(mount: &Path) {
     }
 }
 
-/// Answer ConPTY's cursor-position query, which BLOCKS the child until something replies — but only
-/// while no viewer is attached, since xterm.js gives the real position and a second reply is typed
-/// input.
+/// Answer ConPTY's cursor-position query, which BLOCKS the child, but only while no viewer is
+/// attached: xterm.js gives the real position, and a second reply is typed input.
 fn answer_cursor_query(inst: &Instance, bytes: &[u8]) -> Vec<u8> {
     if inst.output.receiver_count() > 0 {
         return bytes.to_vec();
@@ -433,8 +419,8 @@ fn take_cursor_queries(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Reach the instance with one of [`crate::proc`]'s two asks, skipped once the child has been
-/// reaped, since a recycled pid would name a stranger.
+/// Reach the instance with `goofi_supervisor::child`'s request_stop or force_kill, skipped once the
+/// child has been reaped, since a recycled pid would name a stranger.
 fn signal(inst: &Instance, how: fn(u32) -> Result<(), String>) -> Result<(), String> {
     if inst.exit_code().is_some() {
         return Ok(());
@@ -466,11 +452,8 @@ fn shell_command(command: &str) -> CommandBuilder {
     }
 }
 
-/// The directory `goofi` must resolve out of: the running binary's own. It is the binary ITSELF
-/// rather than a launcher laid beside it, because a launcher is a script and a script has a
-/// dialect — `cmd` reads no extensionless file and no bash-family shell reads a `.cmd`. Copying
-/// the binary instead is not open either: Windows loads a process's DLLs from the directory it
-/// runs out of, and `python3*.dll` sits beside this one.
+/// The directory `goofi` must resolve out of: the running binary's own, because a launcher script
+/// has a shell dialect and a copied binary loses the `python3*.dll` beside it on Windows.
 fn own_dir() -> Result<PathBuf, String> {
     let me = std::env::current_exe().map_err(|e| format!("the running binary: {e}"))?;
     me.parent().map(Path::to_path_buf).ok_or_else(|| "the running binary has no directory".into())

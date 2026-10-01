@@ -91,16 +91,14 @@ impl<'a> Out<'a> for Sink {
 /// Every entry the same way: decode, call, encode — a refusal or a panic is an error reply.
 unsafe fn call(
     node: *mut c_void,
-    ctx: Option<Ctx>,
+    ctx: Ctx,
     request: Segments,
     sink: *mut c_void,
     write: Write,
     f: impl FnOnce(&mut Instance, &[&[u8]]) -> Result<Answer, String>,
 ) {
     let inst = &mut *(node as *mut Instance);
-    if let Some(ctx) = ctx {
-        inst.ctx.now = ctx.now;
-    }
+    inst.ctx.now = ctx.now;
     let request = request.as_slices();
     let mut out = Sink { sink, write };
     // An encoder decides before its first byte, so a refused answer leaves the sink for the error.
@@ -132,7 +130,7 @@ unsafe fn call(
 /// # Safety
 /// `node` came from [`instance`]; `request` and `sink` are the host's for the call.
 pub unsafe extern "C" fn setup(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
-    call(node, Some(ctx), request, sink, write, |inst, req| {
+    call(node, ctx, request, sink, write, |inst, req| {
         let Request::Setup { params } = goofi_codec::rpc::decode_request(req)? else {
             return Err("a setup was expected".into());
         };
@@ -145,7 +143,7 @@ pub unsafe extern "C" fn setup(node: *mut c_void, ctx: Ctx, request: Segments, s
 /// # Safety
 /// As [`setup`].
 pub unsafe extern "C" fn process(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
-    call(node, Some(ctx), request, sink, write, |inst, req| {
+    call(node, ctx, request, sink, write, |inst, req| {
         let Request::Process { slots } = goofi_codec::rpc::decode_request(req)? else {
             return Err("a run was expected".into());
         };
@@ -178,8 +176,7 @@ pub unsafe extern "C" fn process(node: *mut c_void, ctx: Ctx, request: Segments,
 /// # Safety
 /// As [`setup`]; `request` is a codec param request: the one value that moved.
 pub unsafe extern "C" fn on_param_changed(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
-    let _ = ctx;
-    call(node, None, request, sink, write, |inst, req| {
+    call(node, ctx, request, sink, write, |inst, req| {
         let Request::Param { group, name, value } = goofi_codec::rpc::decode_request(req)? else {
             return Err("a moved param was expected".into());
         };
@@ -192,8 +189,7 @@ pub unsafe extern "C" fn on_param_changed(node: *mut c_void, ctx: Ctx, request: 
 /// # Safety
 /// As [`setup`]; `request` is a codec refresh request.
 pub unsafe extern "C" fn on_param_refreshed(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
-    let _ = ctx;
-    call(node, None, request, sink, write, |inst, req| {
+    call(node, ctx, request, sink, write, |inst, req| {
         let Request::Refresh { group, name } = goofi_codec::rpc::decode_request(req)? else {
             return Err("a refresh was expected".into());
         };
@@ -204,8 +200,7 @@ pub unsafe extern "C" fn on_param_refreshed(node: *mut c_void, ctx: Ctx, request
 /// # Safety
 /// As [`setup`]; `request` is a codec pulse request.
 pub unsafe extern "C" fn on_pulse(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
-    let _ = ctx;
-    call(node, None, request, sink, write, |inst, req| {
+    call(node, ctx, request, sink, write, |inst, req| {
         let Request::Pulse { group, name } = goofi_codec::rpc::decode_request(req)? else {
             return Err("a pulse was expected".into());
         };

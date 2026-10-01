@@ -495,12 +495,6 @@ pub struct Rings {
     pub recs: Vec<(usize, rtrb::Producer<f32>)>,
 }
 
-impl Rings {
-    pub fn is_empty(&self) -> bool {
-        self.inboxes.is_empty() && self.taps.is_empty() && self.recs.is_empty()
-    }
-}
-
 /// What comes back to be dropped off the audio thread — and what it put out of the plan.
 pub enum Retired {
     Slot(Slot),

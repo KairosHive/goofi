@@ -16,7 +16,6 @@ use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
 use vst3::{Class, ComPtr, ComRef, ComWrapper};
 
-use super::node::Derived;
 use crate::control::AudioShared;
 use goofi_window::{Host, Runloop, Window};
 
@@ -35,7 +34,6 @@ thread_local! {
 /// window while one is open.
 struct Running {
     controller: ComPtr<IEditController>,
-    _class: Arc<Derived>,
     _handler: ComWrapper<Handler>,
     editor: Option<Editor>,
 }
@@ -47,12 +45,12 @@ struct Editor {
 }
 
 /// A plugin came up: its controller edits through here from now on, and a view can be asked of it.
-pub(super) fn register(uid: Uid, controller: ComPtr<IEditController>, class: Arc<Derived>, shared: Arc<AudioShared>) {
+pub(super) fn register(uid: Uid, controller: ComPtr<IEditController>, shared: Arc<AudioShared>) {
     let handler = ComWrapper::new(Handler { uid, shared });
     if let Some(h) = handler.to_com_ptr::<IComponentHandler>() {
         unsafe { controller.setComponentHandler(h.as_ptr()) };
     }
-    PLUGINS.with(|p| p.borrow_mut().insert(uid, Running { controller, _class: class, _handler: handler, editor: None }));
+    PLUGINS.with(|p| p.borrow_mut().insert(uid, Running { controller, _handler: handler, editor: None }));
 }
 
 /// The plugin is going: its window first, then its place here — before its halves are torn down.

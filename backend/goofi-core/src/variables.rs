@@ -577,21 +577,6 @@ impl VariableStore {
         self.entries.get(name)?.control.as_ref()
     }
 
-    pub fn check_control(&self, name: &str, value: &VariableValue, control: Option<&Control>) -> Result<(), String> {
-        self.config_locked(name)?;
-        match control {
-            Some(c) if !c.fits(value) => Err(c.mismatch(value)),
-            _ => Ok(()),
-        }
-    }
-
-    pub fn set_control(&mut self, name: &str, control: Option<Control>) -> Result<(), String> {
-        let value = self.get(name).ok_or_else(|| format!("no such variable `{name}`"))?;
-        self.check_control(name, value, control.as_ref())?;
-        self.entries[name].control = control;
-        Ok(())
-    }
-
     /// Set an existing variable. A type change also requires an unlocked configuration.
     pub fn set(&mut self, name: &str, value: VariableValue) -> Result<(), String> {
         if is_ephemeral(name) {
@@ -717,12 +702,29 @@ impl VariableStore {
         name: &str,
         value: Option<VariableValue>,
         at: Option<usize>,
+        control: Option<Option<Control>>,
     ) -> Result<(), String> {
-        match value {
-            Some(v) if self.entries.contains_key(name) => self.set(name, v),
-            Some(v) => self.add(name, v, at),
-            None if self.entries.contains_key(name) => Ok(()),
-            None => Err(format!("no such variable `{name}`")),
+        // The widget that will be held must fit the value that will be held, checked before any write.
+        let held = value.as_ref().or_else(|| self.get(name)).ok_or_else(|| format!("no such variable `{name}`"))?;
+        let widget = match &control {
+            Some(c) => {
+                self.config_locked(name)?;
+                c.as_ref()
+            }
+            None if value.is_some() => self.control(name),
+            None => None,
+        };
+        if let Some(c) = widget.filter(|c| !c.fits(held)) {
+            return Err(c.mismatch(held));
         }
+        match value {
+            Some(v) if self.entries.contains_key(name) => self.set(name, v)?,
+            Some(v) => self.add(name, v, at)?,
+            None => {}
+        }
+        if let Some(c) = control {
+            self.entries[name].control = c;
+        }
+        Ok(())
     }
 }

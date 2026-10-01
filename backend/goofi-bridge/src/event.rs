@@ -28,7 +28,6 @@ pub enum Event {
 }
 
 impl Event {
-    /// The wire text.
     pub fn text(&self) -> String {
         serde_json::to_string(self).expect("an event serializes")
     }

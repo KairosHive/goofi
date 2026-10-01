@@ -6,7 +6,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use goofi_core::probe;
-use goofi_node::{illegal_slot, leak_manifest, parse_introspection, type_name_of, Isolation, IsolationCell, NodeManifest};
+use goofi_node::{manifest_of, parse_introspection, type_name_of, Isolation, IsolationCell, NodeManifest};
 use sha2::{Digest, Sha256};
 
 /// A discovered Python node type: its manifest, its tier cell — leaked per type, and written at
@@ -127,10 +127,7 @@ pub fn discover_one(path: &Path, python: &str, isolation: Isolation, memo: &Path
     match introspect_memoised(path, python, memo) {
         Ok(intro) => {
             let own = (goofi_node::engine_of(path).as_deref() == Some("graphics")).then_some(goofi_core::SlotType::Texture);
-            if let Some(reason) = illegal_slot(&intro).or_else(|| goofi_node::foreign_output(&intro, own)) {
-                return Discovery::Unavailable { type_name, reason };
-            }
-            match leak_manifest(type_name.clone(), &intro) {
+            match manifest_of(&type_name, &intro, own) {
                 Ok(manifest) => Discovery::Found(Discovered {
                     manifest,
                     isolation: IsolationCell::leak(isolation),

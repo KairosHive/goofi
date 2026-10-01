@@ -92,8 +92,7 @@ pub fn init(root: &Path) -> Result<(), String> {
     // The bundles' packages every time, never gated on presence: a bundle added since the last
     // run names new ones, and uv answers a satisfied list in milliseconds.
     let dirs = bundle_dirs(root);
-    let shared = requirements_in(&dirs);
-    let gil_only: Vec<PathBuf> = shared.iter().cloned().chain(gil_requirements_in(&dirs)).collect();
+    let (shared, gil_only) = requirement_sets(&dirs);
     for (venv, py, reqs) in [(FT_VENV, &ft, &shared), (GIL_VENV, &gil, &gil_only)] {
         install_wheel(root, venv, py)?;
         if !reqs.is_empty() {
@@ -163,17 +162,17 @@ fn npm<'a>(args: impl IntoIterator<Item = &'a str>) -> Command {
     cmd
 }
 
+/// Whether `cmd` runs and succeeds, with its output discarded.
+fn answers(cmd: &mut Command) -> bool {
+    cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
+}
+
 fn require_npm() -> Result<(), String> {
-    npm(["--version"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map_err(|_| {
-            "goofi needs `npm` on PATH — the app is compiled into the binary, so building it is \
-             part of building goofi. Install Node.js from https://nodejs.org and re-run."
-                .to_string()
-        })
-        .and_then(|s| s.success().then_some(()).ok_or_else(|| "`npm --version` failed".into()))
+    answers(&mut npm(["--version"])).then_some(()).ok_or_else(|| {
+        "goofi needs a working `npm` on PATH — the app is compiled into the binary, so building it \
+         is part of building goofi. Install Node.js from https://nodejs.org and re-run."
+            .to_string()
+    })
 }
 
 /// The system libraries cpal's Linux hosts link, each with the Debian package that carries it.
@@ -188,12 +187,7 @@ const AUDIO_LIBS: &[(&str, &str)] = &[
 
 #[cfg(target_os = "linux")]
 fn pkg_config(args: &[&str]) -> bool {
-    Command::new("pkg-config")
-        .args(args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    answers(Command::new("pkg-config").args(args))
 }
 
 /// goofi offers every audio host the machine runs, and on Linux each links a system library. A
@@ -228,12 +222,7 @@ fn require_audio_libs() -> Result<(), String> {
     let installed = ["C:/Program Files/LLVM/bin/libclang.dll", "C:/Program Files (x86)/LLVM/bin/libclang.dll"]
         .iter()
         .any(|p| Path::new(p).is_file());
-    let on_path = Command::new("clang")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
+    let on_path = answers(Command::new("clang").arg("--version"));
     if named || installed || on_path {
         return Ok(());
     }
@@ -249,16 +238,11 @@ fn require_audio_libs() -> Result<(), String> {
 }
 
 fn require_uv() -> Result<(), String> {
-    uv(["--version"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map_err(|_| {
-            "goofi needs `uv` on PATH — it owns the Python interpreters the node tiers run on. \
-             Install it from https://docs.astral.sh/uv/ and re-run."
-                .to_string()
-        })
-        .and_then(|s| s.success().then_some(()).ok_or_else(|| "`uv --version` failed".into()))
+    answers(&mut uv(["--version"])).then_some(()).ok_or_else(|| {
+        "goofi needs a working `uv` on PATH — it owns the Python interpreters the node tiers run \
+         on. Install it from https://docs.astral.sh/uv/ and re-run."
+            .to_string()
+    })
 }
 
 fn ensure_venv(root: &Path, name: &str, python: &str) -> Result<PathBuf, String> {
@@ -321,15 +305,12 @@ pub fn bundle_dirs(root: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// The `requirements.txt` each of `dirs` carries — what its nodes import beyond goofi's own.
-pub fn requirements_in(dirs: &[PathBuf]) -> Vec<PathBuf> {
-    named_in(dirs, "requirements.txt")
-}
-
-/// The `requirements-gil.txt` each of `dirs` carries: packages that ship no free-threaded wheel,
-/// asked of the subprocess interpreter alone — which is the tier that exists for them.
-pub fn gil_requirements_in(dirs: &[PathBuf]) -> Vec<PathBuf> {
-    named_in(dirs, "requirements-gil.txt")
+/// The `requirements.txt` files of `dirs`, asked of both interpreters, and those plus every
+/// `requirements-gil.txt` (no free-threaded wheel), asked of the subprocess interpreter alone.
+pub fn requirement_sets(dirs: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let shared = named_in(dirs, "requirements.txt");
+    let gil = shared.iter().cloned().chain(named_in(dirs, "requirements-gil.txt")).collect();
+    (shared, gil)
 }
 
 fn named_in(dirs: &[PathBuf], file: &str) -> Vec<PathBuf> {
@@ -382,14 +363,7 @@ fn has_goofi(py: &Path) -> bool {
          raise SystemExit(0 if m.version('goofi') == '{}' else 1)",
         env!("CARGO_PKG_VERSION")
     );
-    Command::new(py)
-        .args(["-c", &probe])
-        .env_remove("PYTHONPATH")
-        .env_remove("PYTHONHOME")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    answers(Command::new(py).args(["-c", &probe]).env_remove("PYTHONPATH").env_remove("PYTHONHOME"))
 }
 
 /// Point pyo3 at the free-threaded venv, for every cargo command from here on. The repo-local
@@ -419,7 +393,7 @@ fn write_config(root: &Path, ft: &Path) -> Result<(), String> {
         .unwrap_or_default();
     // Stated on every platform: a Windows interpreter loaded from beside the executable cannot
     // infer its own home, and unix is unaffected by being told what it would have worked out.
-    let home = query(ft, "import sys;print(sys.base_prefix)")
+    let home = base_prefix(ft)
         .map(|h| format!("PYTHONHOME = {h:?}\n"))
         .unwrap_or_default();
 
@@ -448,6 +422,11 @@ fn host_triple() -> Result<String, String> {
         .lines()
         .find_map(|l| l.strip_prefix("host: ").map(str::to_string))
         .ok_or_else(|| "`rustc -vV` reported no host triple".to_string())
+}
+
+/// The base install a venv's interpreter runs from.
+pub fn base_prefix(py: &Path) -> Option<String> {
+    query(py, "import sys;print(sys.base_prefix)")
 }
 
 fn query(py: &Path, code: &str) -> Option<String> {

@@ -187,7 +187,8 @@ fn apply_params(py: Python<'_>, instance: &Bound<'_, PyAny>, params: &Groups) ->
     Ok(())
 }
 
-fn param_to_py<'py>(py: Python<'py>, p: &Param) -> PyResult<Bound<'py, PyAny>> {
+/// A `Param` as a native Python scalar.
+pub fn param_to_py<'py>(py: Python<'py>, p: &Param) -> PyResult<Bound<'py, PyAny>> {
     Ok(match p {
         Param::Float { value, .. } => value.into_bound_py_any(py)?,
         Param::Int { value, .. } => value.into_bound_py_any(py)?,

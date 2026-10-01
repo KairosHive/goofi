@@ -21,32 +21,22 @@ use crate::control::AudioShared;
 use goofi_window::{self as ui, Ui};
 use goofi_node::Uid;
 
-/// The tempo the host reports. A CONSTANT for now, and a lie only in the sense that goofi has no
-/// transport of its own to tell the truth from — but a plausible tempo is what a synced plugin
-/// needs to run at all, where zero is what stops it.
+/// The tempo the host reports: a constant, as goofi has no transport, but a synced plugin stops
+/// at zero.
 const TEMPO: f64 = 120.0;
 
 /// What a note-on's `tuning` is denominated in: VST3 spells the per-note offset in cents where
 /// goofi's pitch is volts per octave, and a round's residual is never more than half a semitone.
 const CENTS_PER_SEMITONE: f32 = 100.0;
 
-/// The bend a wheel at full travel is taken to mean. It is the MIDI default and it is an
-/// ASSUMPTION: a plugin picks its own range and mostly does not publish one, so a detune is wrong
-/// by whatever ratio it differs — measured 12 on Synplant. `roadmap/vst3-per-note-tuning.md` holds
-/// what was measured and what would replace the guess.
+/// The bend a wheel at full travel is taken to mean: the MIDI default, an ASSUMPTION a plugin may
+/// not share. `roadmap/vst3-per-note-tuning.md` holds what was measured.
 const BEND_SEMITONES: f32 = 2.0;
 
 /// One voice's gate, pitch or velocity for one sample, whichever source is carrying it.
 type Reader<'a> = dyn Fn(usize, usize, usize) -> f32 + 'a;
 /// Whether a gate reading means the note is down — a level for a param, a velocity for the cable.
 type Gate = dyn Fn(f32) -> bool;
-
-/// How a goofi param's scalar becomes the plugin's normalized value.
-#[derive(Clone, Copy)]
-pub enum Kind {
-    Float,
-    Stepped(f64),
-}
 
 /// What the scan derived for one class: enough to stage a block and to instantiate.
 pub struct Derived {
@@ -55,7 +45,9 @@ pub struct Derived {
     pub cid: TUID,
     pub inputs: Vec<u16>,
     pub outputs: Vec<u16>,
-    pub params: Vec<(ParamID, Kind)>,
+    /// Per plugin param: its id, and the steps a goofi scalar is divided by to normalize it (1
+    /// for a continuous one).
+    pub params: Vec<(ParamID, f64)>,
 }
 
 pub struct Plugin {
@@ -104,9 +96,8 @@ impl AudioNode for Plugin {
         (0..outs).map(|i| self.class.outputs.get(i).copied().unwrap_or(1).max(1)).collect()
     }
 
-    /// Only the voice params are read per sample, to place a note inside the block. A plugin
-    /// parameter is one value per block whatever drives it, so it needs no port — which is what
-    /// lets a synth declare thousands of them.
+    /// Only the voice params are ports, read per sample; a plugin parameter is one value per
+    /// block, which lets a synth declare thousands.
     fn audio_params(&self, declared: usize) -> usize {
         declared.saturating_sub(self.class.params.len())
     }
@@ -118,7 +109,7 @@ impl AudioNode for Plugin {
             None => Live::open(class, rate).map(|opened| {
                 opened.load(blob);
                 if let (Some(_), Some(uid), Some(shared), Some(controller)) = (host, *uid, shared.clone(), opened.controller()) {
-                    editor::register(uid, controller, class.clone(), shared);
+                    editor::register(uid, controller, shared);
                 }
                 *live = Some(opened)
             }),
@@ -164,9 +155,8 @@ struct Live {
     _host: ComPtr<FUnknown>,
     component: ComPtr<IComponent>,
     processor: ComPtr<IAudioProcessor>,
-    /// The plugin's OTHER half, connected to the component for as long as this instance lives. Not
-    /// here to be read — nothing asks it anything — but because a plugin whose halves were never
-    /// introduced can sit muted, exactly as it reports no parameters when the scanner skips this.
+    /// The plugin's other half, connected for as long as this instance lives: a plugin whose
+    /// halves were never introduced can sit muted.
     controller: Option<ComPtr<IEditController>>,
     wired: Option<Wire>,
     changes: ComWrapper<Changes>,
@@ -203,10 +193,8 @@ impl Live {
         };
         let (controller, wired) = unsafe { pair(&factory, &component, &host) };
         let (ins, outs) = unsafe { arrange(&component, &processor, class) };
-        // A per-note offset has two spellings and only one is widely honoured: `tuning` on the
-        // note-on is exact and OPTIONAL — Vital ignores it, measured — where the pitch wheel is
-        // universal because it is an ordinary parameter. So ask which parameter each channel's
-        // wheel is, and prefer it; the note's own field is the fallback where there is none.
+        // A per-note offset prefers each channel's pitch-wheel parameter, which every plugin
+        // honours; the note-on's optional `tuning` is the fallback.
         let (bend, bend_ids) = unsafe { wheels(controller.as_ref(), &component, class.params.len()) };
         let changes = ComWrapper::new(Changes::new(class.params.iter().map(|(id, _)| *id).chain(bend_ids)));
         let changes_ptr = changes.to_com_ptr().expect("changes are an IParameterChanges");
@@ -293,13 +281,8 @@ impl Live {
         // The voice params, if any, are the ones the manifest carries beyond the plugin's own.
         let voice = b.scalars.len() - class.params.len();
         self.changes.clear();
-        for (i, (_, kind)) in class.params.iter().enumerate() {
-            let raw = b.scalars[voice + i] as f64;
-            let value = match kind {
-                Kind::Float => raw,
-                Kind::Stepped(steps) => raw / steps,
-            }
-            .clamp(0.0, 1.0);
+        for (i, (_, steps)) in class.params.iter().enumerate() {
+            let value = (b.scalars[voice + i] as f64 / steps).clamp(0.0, 1.0);
             if self.sent[i].to_bits() != value.to_bits() {
                 self.sent[i] = value;
                 self.changes.set(i, value);
@@ -307,14 +290,11 @@ impl Live {
         }
         self.events.clear();
         if voice == 3 {
-            // The `voice` cable is the last input and carries pitches then velocities, so it
-            // answers the same three reads the params do — one wire where there were three
-            // bindings. It carries no gate because MIDI carries none: a velocity of zero is the
-            // note off, which is what lets eight voices fit where five did.
+            // The `voice` cable is the last input: pitches then velocities, no gate, as a
+            // velocity of zero is the note off.
             let cable = b.ins.last().filter(|p| p.wired() && p.channels() >= 2);
-            // Each source answers the same three reads, but NOT the same gate: a param gate is a
-            // level and crosses at GATE_HIGH, while the cable's gate is MIDI's — any velocity
-            // above zero is on, so a note played softly still sounds.
+            // A param gate crosses at GATE_HIGH; the cable's gate is MIDI's, any velocity above
+            // zero.
             let (voices, read, held): (usize, &Reader<'_>, &Gate) = match cable {
                     Some(p) => {
                         let n = p.channels() as usize / 2;
@@ -329,9 +309,8 @@ impl Live {
                 for s in 0..BLOCK {
                     match (held(read(0, c, s)), self.held[c]) {
                         (true, None) => {
-                            // A plugin's note IS an integer, so the round stays; what it threw away
-                            // is what `tuning` carries, which is how a continuous pitch survives a
-                            // boundary that only speaks in semitones.
+                            // A plugin's note is an integer; what the round threw away rides as
+                            // `tuning`.
                             let want = (60.0 + 12.0 * read(1, c, s)).clamp(0.0, 127.0);
                             let note = want.round();
                             let off = want - note;
@@ -425,16 +404,14 @@ unsafe fn wheels(
 }
 
 /// A component and its controller, each holding the other's connection point.
-pub(super) type Wire = (ComPtr<IConnectionPoint>, ComPtr<IConnectionPoint>);
+type Wire = (ComPtr<IConnectionPoint>, ComPtr<IConnectionPoint>);
 
 /// What pairing yields: the other half, and the connection to undo before tearing it down.
 type Pair = (Option<ComPtr<IEditController>>, Option<Wire>);
 
-/// The component's other half, introduced to it. The SAME sequence the scanner performs, and for
-/// the same reason: the two are peers, and a plugin that cannot talk to its own controller behaves
-/// as though it has nothing to say. Every step is optional — a single-object plugin needs none of
-/// it — so a failure anywhere leaves the instance exactly as it was rather than refusing it.
-unsafe fn pair(
+/// The component's separate controller, initialized, connected and seeded with the component's
+/// state, for the scan and a live instance alike. Every step is optional; a failure changes nothing.
+pub(super) unsafe fn pair(
     factory: &module::Factory,
     component: &ComPtr<IComponent>,
     context: &ComPtr<FUnknown>,
@@ -450,13 +427,6 @@ unsafe fn pair(
     if controller.initialize(context.as_ptr()) != kResultOk {
         return (None, None);
     }
-    let wired = introduce(component, &controller);
-    (Some(controller), wired)
-}
-
-/// Connect a component and its controller, then seed the controller with the component's state —
-/// the one sequence both the scan and the runtime need. The returned wire is undone by [`sunder`].
-pub(super) unsafe fn introduce(component: &ComPtr<IComponent>, controller: &ComPtr<IEditController>) -> Option<Wire> {
     let wired = match (component.cast::<IConnectionPoint>(), controller.cast::<IConnectionPoint>()) {
         (Some(cp), Some(ccp)) if cp.connect(ccp.as_ptr()) == kResultOk && ccp.connect(cp.as_ptr()) == kResultOk => {
             Some((cp, ccp))
@@ -470,21 +440,24 @@ pub(super) unsafe fn introduce(component: &ComPtr<IComponent>, controller: &ComP
             controller.setComponentState(s.as_ptr());
         }
     }
-    wired
+    (Some(controller), wired)
 }
 
-/// Undo an [`introduce`], both directions, before either half is terminated.
-pub(super) unsafe fn sunder(wire: &Wire) {
-    let (cp, ccp) = wire;
-    ccp.disconnect(cp.as_ptr());
-    cp.disconnect(ccp.as_ptr());
+/// Undo a [`pair`]: the wire both ways BEFORE the controller is terminated, or the component
+/// points at a torn-down controller.
+pub(super) unsafe fn unpair(controller: Option<&ComPtr<IEditController>>, wired: Option<&Wire>) {
+    if let Some((cp, ccp)) = wired {
+        ccp.disconnect(cp.as_ptr());
+        cp.disconnect(ccp.as_ptr());
+    }
+    if let Some(c) = controller {
+        c.terminate();
+    }
 }
 
-/// The buses activated at the plugin's own default arrangements, and the staging sized from what
-/// the LIVE instance then reports — never the scan's cached counts, which a plugin whose default
-/// layout lives outside its binary can disagree with.
+/// The buses at the plugin's default arrangements, staged at the widths the LIVE instance reports,
+/// never the scan's cached counts.
 unsafe fn arrange(component: &ComPtr<IComponent>, processor: &ComPtr<IAudioProcessor>, class: &Derived) -> (Buses, Buses) {
-    let audio = MediaTypes_::kAudio as MediaType;
     let (input, output) = (BusDirections_::kInput as BusDirection, BusDirections_::kOutput as BusDirection);
     let arrangements = |dir: BusDirection, n: usize| -> Vec<SpeakerArrangement> {
         (0..n as int32)
@@ -497,21 +470,21 @@ unsafe fn arrange(component: &ComPtr<IComponent>, processor: &ComPtr<IAudioProce
     };
     let (mut ins, mut outs) = (arrangements(input, class.inputs.len()), arrangements(output, class.outputs.len()));
     processor.setBusArrangements(ins.as_mut_ptr(), ins.len() as int32, outs.as_mut_ptr(), outs.len() as int32);
-    let widths = |dir: BusDirection, n: usize| -> Vec<u16> {
-        (0..n as int32)
-            .map(|i| {
-                let mut info: BusInfo = std::mem::zeroed();
-                component.getBusInfo(audio, dir, i, &mut info);
-                info.channelCount.max(1) as u16
-            })
-            .collect()
-    };
+    let widths = |dir, n: usize| -> Vec<u16> { channel_counts(component, dir, n as int32).map(|c| c.max(1) as u16).collect() };
     (Buses::new(&widths(input, ins.len())), Buses::new(&widths(output, outs.len())))
 }
 
-/// Activate the audio and event buses — AFTER `setupProcessing` and BEFORE `setActive`, the order
-/// Steinberg's own host uses. Activating before the processing setup left some plugins (IK's
-/// T-RackS among them) rendering silence, asked to route buses before the block shape was set.
+/// The channel count of each of the first `n` audio buses in `dir`.
+pub(super) unsafe fn channel_counts(component: &ComPtr<IComponent>, dir: BusDirection, n: int32) -> impl Iterator<Item = int32> + '_ {
+    (0..n).map(move |i| {
+        let mut info: BusInfo = std::mem::zeroed();
+        component.getBusInfo(MediaTypes_::kAudio as MediaType, dir, i, &mut info);
+        info.channelCount
+    })
+}
+
+/// Activate the audio and event buses AFTER `setupProcessing` and BEFORE `setActive`, as
+/// Steinberg's own host does: earlier left some plugins rendering silence.
 unsafe fn activate_buses(component: &ComPtr<IComponent>, n_in: usize, n_out: usize) {
     let audio = MediaTypes_::kAudio as MediaType;
     let input = BusDirections_::kInput as BusDirection;
@@ -534,22 +507,14 @@ impl Drop for Live {
                 self.processor.setProcessing(0);
                 self.component.setActive(0);
             }
-            // Undone BEFORE either half is terminated: a component left pointing at a torn-down
-            // controller is a use-after-free the plugin performs on itself.
-            if let Some(wire) = &self.wired {
-                sunder(wire);
-            }
-            if let Some(c) = &self.controller {
-                c.terminate();
-            }
+            unpair(self.controller.as_ref(), self.wired.as_ref());
             self.component.terminate();
         }
     }
 }
 
-/// Staged bus buffers: one block per channel per bus, and the pointer tables a plugin reads.
-/// Every access after construction goes through the pointers, so the plugin's writes and ours
-/// never race a Rust borrow.
+/// Staged bus buffers and the pointer tables a plugin reads. Every access goes through the
+/// pointers, so the plugin's writes and ours never race a Rust borrow.
 struct Buses {
     _samples: Vec<Vec<[f32; BLOCK]>>,
     pointers: Vec<Vec<*mut f32>>,

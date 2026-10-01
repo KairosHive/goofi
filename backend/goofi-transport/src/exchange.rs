@@ -1,12 +1,9 @@
-//! A spawned child's request/response pair over two byte streams and one bell, the parent's end
-//! and the child's. Neither side polls: the child rings when its ports stand, and each side rings
-//! once it has written.
+//! A spawned child's request/response pair over two byte streams and one bell. Neither side
+//! polls: the child rings when its ports stand, and each side rings once it has written.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use iceoryx2::prelude::*;
-
-use crate::services::{event_service, stream_service, write_parts, Doorbell, ServiceKind};
+use crate::services::{event_service, publish_with, publisher, stream_service, subscriber, write_parts, Doorbell, ServiceKind};
 use crate::{BytePublisher, ByteSubscriber, Iox, Listener, PortBundle};
 
 /// The largest frame an exchange carries in one sample; a publisher grows to it by powers of two.
@@ -20,9 +17,8 @@ const ANSWERED: u8 = 2;
 /// How long one wait on the bell lasts before the other side's liveness is looked at.
 const SLICE: Duration = Duration::from_millis(100);
 
-/// A spawned child's request/response pair, the parent's end: `[u32 seq][frame]` each way, and
-/// the reply is the one carrying the same sequence. The parent opens its end BEFORE the child
-/// starts, so the child's `READY` ring is never missed.
+/// The parent's end: `[u32 seq][frame]` each way, the reply carrying the request's sequence. It
+/// opens BEFORE the child starts, so the child's `READY` ring is never missed.
 pub struct Exchange {
     ports: PortBundle<Pair<BytePublisher, ByteSubscriber>>,
     seq: u32,
@@ -52,39 +48,41 @@ fn rang(listener: &Listener, id: u8, within: Duration) -> bool {
     heard
 }
 
+/// A `[u32 seq][frame]` message, split.
+fn split_seq(payload: &[u8]) -> Option<(u32, &[u8])> {
+    let (seq, frame) = payload.split_first_chunk::<4>()?;
+    Some((u32::from_le_bytes(*seq), frame))
+}
+
 impl Exchange {
     /// Open the pair under `base`: `<base>_req`, `<base>_resp` and `<base>_bell`, the names the
     /// child is told.
     pub fn open(iox: &Iox, base: &str) -> Result<Exchange, String> {
         let ports = PortBundle::open(iox, |node| {
-            let request = stream_service(node, &format!("{base}_req"), ServiceKind::Exchange)?
-                .publisher_builder()
-                .initial_max_slice_len(EXCHANGE_PAYLOAD)
-                .allocation_strategy(AllocationStrategy::PowerOfTwo)
-                .create()
-                .map_err(|e| format!("request publisher: {e}"))?;
-            let reply = stream_service(node, &format!("{base}_resp"), ServiceKind::Exchange)?
-                .subscriber_builder()
-                .create()
-                .map_err(|e| format!("reply subscriber: {e}"))?;
+            let request = publisher(&stream_service(node, &format!("{base}_req"), ServiceKind::Exchange)?, "request", EXCHANGE_PAYLOAD)?;
+            let reply = subscriber(&stream_service(node, &format!("{base}_resp"), ServiceKind::Exchange)?, "reply")?;
             let (bell, listener) = bell(node, base)?;
             Ok(Pair { request, reply, bell, listener })
         })?;
         Ok(Exchange { ports, seq: 0, ready: false })
     }
 
-    /// One request to `child` — its runs, written into the loan as one frame — and its answer.
-    /// The wait ends only when the child answers, exits, or the thread's halt is raised: a slow
-    /// child is not an error. The first request waits for the child's `READY` before it is written.
+    /// One request to `child` and its answer. The wait ends only when the child answers, exits, or
+    /// the thread's halt is raised: a slow child is not an error.
     pub fn ask(&mut self, child: &mut goofi_supervisor::child::Child, frame: &[&[u8]]) -> Result<Vec<u8>, String> {
         let seq = self.send(child, frame)?;
+        self.answer(child, seq, None)
+    }
+
+    /// The answer to request `seq`. With `by`, the wait is a stop's and ends at that deadline;
+    /// without it, at the thread's halt.
+    pub fn answer(&mut self, child: &mut goofi_supervisor::child::Child, seq: u32, by: Option<Instant>) -> Result<Vec<u8>, String> {
         loop {
             loop {
                 match self.ports.reply.receive() {
                     Ok(Some(sample)) => {
-                        let payload = sample.payload();
-                        if payload.len() >= 4 && u32::from_le_bytes(payload[0..4].try_into().unwrap()) == seq {
-                            return Ok(payload[4..].to_vec());
+                        if let Some((_, frame)) = split_seq(sample.payload()).filter(|(s, _)| *s == seq) {
+                            return Ok(frame.to_vec());
                         }
                     }
                     Ok(None) => break,
@@ -92,40 +90,41 @@ impl Exchange {
                 }
             }
             // Checked AFTER draining, so a child that answered and then exited still gets its answer through.
-            check(child)?;
+            check(child, by)?;
             rang(&self.ports.listener, ANSWERED, SLICE);
         }
     }
 
-    /// Write one request and ring, without waiting for the answer: what a stop sends, since the
-    /// child's exit is the answer it waits for.
+    /// Write one request and ring; [`Self::answer`] waits for what comes back.
     pub fn send(&mut self, child: &mut goofi_supervisor::child::Child, frame: &[&[u8]]) -> Result<u32, String> {
         while !self.ready {
             self.ready = rang(&self.ports.listener, READY, SLICE);
             if !self.ready {
-                check(child)?;
+                check(child, None)?;
             }
         }
         self.seq = self.seq.wrapping_add(1);
         let seq = self.seq;
         while matches!(self.ports.reply.receive(), Ok(Some(_))) {}
         let seq_bytes = seq.to_le_bytes();
-        let parts: Vec<&[u8]> = std::iter::once(&seq_bytes[..]).chain(frame.iter().copied()).collect();
-        send_parts(&self.ports.request, &parts)?;
-        let _ = self.ports.bell.ring(ASKED);
+        let len = 4 + frame.iter().map(|p| p.len()).sum::<usize>();
+        let parts = std::iter::once(&seq_bytes[..]).chain(frame.iter().copied());
+        publish_with(&self.ports.request, len, |loan| write_parts(loan, parts), [(&self.ports.bell, ASKED)])?;
         Ok(seq)
     }
 }
 
-/// Whether the child is still there to answer, and this thread still asks.
-fn check(child: &mut goofi_supervisor::child::Child) -> Result<(), String> {
+/// Whether the child is still there to answer, and the wait still runs: to `by` when given,
+/// else until this thread's halt.
+fn check(child: &mut goofi_supervisor::child::Child, by: Option<Instant>) -> Result<(), String> {
     if let Ok(Some(status)) = child.try_wait() {
         return Err(format!("the child exited: {status}"));
     }
-    if crate::Halt::worn_stopped() {
-        return Err("the node is stopping".into());
+    match by {
+        Some(by) if Instant::now() >= by => Err("the child did not answer its stop".into()),
+        None if crate::Halt::worn_stopped() => Err("the node is stopping".into()),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// The child's end of an [`Exchange`]: the newest request not yet answered, and its answer.
@@ -144,16 +143,8 @@ impl Served {
     /// Open the child's end under `base` and ring `READY`: from here on a request reaches it.
     pub fn open(iox: &Iox, base: &str) -> Result<Served, String> {
         let ports = PortBundle::open(iox, |node| {
-            let request = stream_service(node, &format!("{base}_req"), ServiceKind::Exchange)?
-                .subscriber_builder()
-                .create()
-                .map_err(|e| format!("request subscriber: {e}"))?;
-            let reply = stream_service(node, &format!("{base}_resp"), ServiceKind::Exchange)?
-                .publisher_builder()
-                .initial_max_slice_len(EXCHANGE_PAYLOAD)
-                .allocation_strategy(AllocationStrategy::PowerOfTwo)
-                .create()
-                .map_err(|e| format!("reply publisher: {e}"))?;
+            let request = subscriber(&stream_service(node, &format!("{base}_req"), ServiceKind::Exchange)?, "request")?;
+            let reply = publisher(&stream_service(node, &format!("{base}_resp"), ServiceKind::Exchange)?, "reply", EXCHANGE_PAYLOAD)?;
             let (bell, listener) = bell(node, base)?;
             Ok(Pair { request, reply, bell, listener })
         })?;
@@ -174,31 +165,14 @@ impl Served {
             }
         }
         let Some(sample) = latest else { return Ok(None) };
-        let payload = sample.payload();
-        if payload.len() < 4 {
-            return Ok(None);
-        }
-        let seq = u32::from_le_bytes(payload[0..4].try_into().unwrap());
-        if self.answered == Some(seq) {
-            return Ok(None);
-        }
-        Ok(Some((seq, payload[4..].to_vec())))
+        let fresh = split_seq(sample.payload()).filter(|(seq, _)| self.answered != Some(*seq));
+        Ok(fresh.map(|(seq, frame)| (seq, frame.to_vec())))
     }
 
     pub fn answer(&mut self, seq: u32, reply: &[u8]) -> Result<(), String> {
-        send_parts(&self.ports.reply, &[&seq.to_le_bytes(), reply])?;
+        let seq_bytes = seq.to_le_bytes();
+        publish_with(&self.ports.reply, 4 + reply.len(), |loan| write_parts(loan, [&seq_bytes[..], reply]), [(&self.ports.bell, ANSWERED)])?;
         self.answered = Some(seq);
-        let _ = self.ports.bell.ring(ANSWERED);
         Ok(())
     }
-}
-
-/// One message of `parts` onto a service; the caller rings.
-fn send_parts(publisher: &BytePublisher, parts: &[&[u8]]) -> Result<(), String> {
-    let len = parts.iter().map(|p| p.len()).sum();
-    let mut sample = publisher.loan_slice_uninit(len).map_err(|e| format!("iox loan: {e}"))?;
-    write_parts(sample.payload_mut(), parts.iter().copied());
-    // SAFETY: `write_parts` filled the loan exactly.
-    unsafe { sample.assume_init() }.send().map_err(|e| format!("iox send: {e}"))?;
-    Ok(())
 }

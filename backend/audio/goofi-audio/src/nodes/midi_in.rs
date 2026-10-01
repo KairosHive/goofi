@@ -171,8 +171,6 @@ impl AudioNode for MidiIn {
         (0..outs).map(|i| if i == 3 { voices * 2 } else { voices }).collect()
     }
 
-    fn prepare(&mut self, _rate: f64) {}
-
     fn process(&mut self, b: &mut Block<'_>) {
         let voices = (b.outs[0].channels() as usize).max(1);
         if self.voices.len() < voices {

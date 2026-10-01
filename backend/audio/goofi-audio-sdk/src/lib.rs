@@ -162,7 +162,7 @@ pub trait AudioNode: Send {
     }
     /// Once on the control thread before the first block, again only when the rate changes.
     /// Allocate here, for `BLOCK` frames; per-channel state is a `Lanes` fitted in `process`.
-    fn prepare(&mut self, rate: f64);
+    fn prepare(&mut self, _rate: f64) {}
     /// One block, on the audio thread.
     fn process(&mut self, b: &mut Block<'_>);
     /// `true` for a type whose outputs come from the PREVIOUS block's inputs — the one way a

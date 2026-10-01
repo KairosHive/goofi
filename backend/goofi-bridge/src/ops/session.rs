@@ -1,51 +1,36 @@
 //! The session: its identity and health, the document as a whole, and the save, load, new and
 //! recover doors that replace it.
 
-use schemars::JsonSchema;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{op, EffectOp, NoArgs, ReadOp};
 use crate::schemas::Detail;
 use crate::{autosave, fsbrowse, inspect, schemas, AppState, Caller, Event, Txn};
 
-// ---- session status (Read)
-op!(Status, "session status", 0, NoArgs, Value,
+op!(Status, "session status", 0, NoArgs,
     "The session's identity AND its health: which instance this is, where the patch lives, whether it differs from disk, and every standing error with how long it has stood. One read for `is my patch healthy, and have I saved it`.",
     "{instance_id, save_path: string | null, workspace, dirty: bool, errors: [{node, path, error, standing}], audio, graphics} — `node` is the name to pass back, `path` where it sits; `audio` and `graphics` carry that engine's clock and counters — `graphics.windows` is how many `Window` nodes have a window open — and are null where the engine is not registered");
 
-// ---- session state (Read)
-op!(State, "session state", 0, NoArgs, Value,
+op!(State, "session state", 0, NoArgs,
     "The whole replicated document, exact and ATOMIC: nodes, links, variables and arrangement in one read — what every client mirrors, read without the sync protocol that carries it. ONE `nodes` map carries leaves, sub-patch facades and boundary ports alike, each naming its scope, and a port's inner wire is in `links` like any other cable. Narrowing is the caller's: pipe it through `jq`.",
     "{nodes, links, variables, arrangement} — nodes and variables keyed by id, links a list.");
 
-// ---- session manifest (Read)
-op!(Manifest, "session manifest", 0, NoArgs, Value,
+op!(Manifest, "session manifest", 0, NoArgs,
     "The open patch as YAML — the manifest a `.gfi` holds, diffable and versionable.",
     "{yaml: string}");
 
-// ---- session save (Effect)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SaveArgs {
+op!(Save, "session save", 1, SaveArgs {
     pub path: Option<String>,
     pub overwrite: Option<bool>,
-}
-
-op!(Save, "session save", 1, SaveArgs, Value,
+},
     "Pack the patch and its workspace to a `.gfi`. With no `path` it saves to the patch's home — refused when the patch has never been saved — and a given `path` becomes the new home. Set `overwrite` to false to refuse an existing file; normal Save replaces the current file.",
     "{path: string}");
 
-// ---- session load (Effect)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct LoadArgs {
+op!(Load, "session load", 1, LoadArgs {
     pub path: Option<String>,
     pub content: Option<String>,
     pub adopt: Option<bool>,
-}
-
-op!(Load, "session load", 1, LoadArgs, Value,
+},
     "Replace the open patch, losing unsaved work. `path` names a `.gfi` and brings its \
                    workspace with it; `--content` is an inline YAML manifest and carries no workspace. \
                    Exactly ONE of the two — the empty patch is `session new`. `adopt` (default true) \
@@ -55,79 +40,40 @@ op!(Load, "session load", 1, LoadArgs, Value,
                    deleted immediately.",
     "{ok: true, warnings: string[]} — what the load dropped on the way in, if anything");
 
-// ---- session new (Effect)
-op!(New, "session new", 0, NoArgs, Value,
+op!(New, "session new", 0, NoArgs,
     "Replace the open patch with the empty one, losing unsaved work. The undo history is cleared, so this cannot be taken back.",
     "{ok: true, warnings: string[]} — what the load dropped on the way in, if anything");
 
-// ---- session recoverable (Read)
-op!(Recoverable, "session recoverable", 0, NoArgs, Value,
+op!(Recoverable, "session recoverable", 0, NoArgs,
     "Every autosave a goofi that did not shut down cleanly left behind: unsaved work, kept beside the crashed session's workspace. `workspace` is what `session recover` and `session discard` take; `home` is the `.gfi` the patch was saved as, null for one never saved; `at` is when the autosave was taken, in seconds since the epoch.",
     "{recoveries: [{workspace, home: string | null, at: float | null}]}");
 
-// ---- session recover (Effect)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RecoverArgs {
+op!(Recover, "session recover", 1, RecoverArgs {
     pub workspace: Option<String>,
-}
-
-op!(Recover, "session recover", 1, RecoverArgs, Value,
+},
     "Replace the open patch with a crash's autosave, losing unsaved work. The recovered patch is UNSAVED work with its old home: a plain Save writes it where the lost session would have. The autosave is removed once it is open.",
     "{ok: true, warnings: string[]} — what the load dropped on the way in, if anything");
 
-// ---- session discard (Effect)
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct DiscardArgs {
+op!(Discard, "session discard", 1, DiscardArgs {
     pub workspace: Option<String>,
-}
-
-op!(Discard, "session discard", 1, DiscardArgs, Value,
+},
     "Remove a crash's autosave without opening it. Refused for a workspace a running goofi owns.",
     "{ok: true}");
 
 impl ReadOp for Status {
-    /// The open patch's identity AND its health.
     fn run(tx: &mut Txn, _: NoArgs) -> Result<Value, String> {
-        // The walks (dirty, mount) run before the graph lock, as everywhere.
-        let save_path = tx.state.save_path();
-        let workspace = goofi_core::path::to_slash(&tx.state.mount());
-        let dirty = tx.state.is_dirty();
-        let errors = inspect::errors(&tx.g);
-        // A demo registers no audio engine, and a machine with no adapter no graphics one. Status is
-        // a READ: it answers what is there.
-        let audio = crate::try_audio_engine(&mut tx.g).map(|a| a.status());
-        let graphics = crate::try_graphics_engine(&mut tx.g).map(|a| a.status());
         Ok(json!({
             // The id is what the session-file probe verifies: a listener that answers with another
             // id — or none — is not this session.
             "instance_id": &*tx.state.instance_id,
-            "save_path": save_path,
-            "workspace": workspace,
-            "dirty": dirty,
-            "errors": errors,
-            // The timing door: what the clock is doing, read by hand on a device before it is trusted.
-            // Null where there is no audio engine to ask — a demo runs the signal plane alone.
-            "audio": audio.map(|a| json!({
-                "clock": a.clock,
-                "device": a.device,
-                "rate": a.rate,
-                "channels": a.channels,
-                "callbacks": a.callbacks,
-                "xruns": a.xruns,
-                "contended": a.contended,
-                "render_max_us": a.render_max_us,
-            })),
-            "graphics": graphics.map(|a| json!({
-                "clock": a.clock,
-                "adapter": a.adapter,
-                "backend": a.backend,
-                "windows": a.windows,
-                "frames": a.frames,
-                "stages": a.stages,
-                "tick_max_us": a.tick_max_us,
-            })),
+            "save_path": tx.state.save_path(),
+            "workspace": goofi_core::path::to_slash(&tx.state.mount()),
+            "dirty": tx.state.is_dirty(),
+            "errors": inspect::errors(&tx.g),
+            // The clock and counters, null where the engine is not registered: a demo has no audio
+            // engine, and a machine with no adapter no graphics one.
+            "audio": crate::try_audio_engine(&mut tx.g).map(|a| a.status()),
+            "graphics": crate::try_graphics_engine(&mut tx.g).map(|a| a.status()),
             // Every resource this process holds — children, workers, ports, paths, devices — from the
             // one index a lease enters and leaves. What is held at ANY moment, not what was made.
             "resources": goofi_supervisor::scope::inventory(),
@@ -153,11 +99,11 @@ impl EffectOp for Save {
         // means the patch's HOME, and a patch that never had one is refused rather than guessed at.
         let path = match a.path.as_deref() {
             Some(p) => fsbrowse::resolve(p),
-            None => state.save_path().ok_or("session save: this patch has no home yet — give a path")?,
+            None => state.save_path().ok_or("this patch has no home yet — give a path")?,
         };
         // Held through the pack, so a load that replaces the mount meanwhile cannot delete the
         // directory being zipped.
-        let held = state.hold_mount().ok_or("session save: the session has no workspace")?;
+        let held = state.hold_mount().ok_or("the session has no workspace")?;
         let mount = held.path();
         // Taken under the guard, zipped off it. The workspace is sampled BEFORE the pack:
         // baselining after would call a file written during the zip packed, which LOSES an edit.
@@ -168,16 +114,14 @@ impl EffectOp for Save {
             (g.serialize(), crate::bundled_custom(&g, &state.custom), goofi_graph::archive::fingerprint(&mount), revision)
         };
         crate::save_archive(std::path::Path::new(&path), &manifest, &mount, &extra, a.overwrite.unwrap_or(true))?;
-        // Adopted under the graph guard, which orders every commit, and only while the patch that
-        // was packed is still the open one: a load that landed during the zip minted a new mount,
-        // and the file written is that OTHER patch's, never the new one's home.
+        // Adopted under the graph guard, which orders every commit, and only while the packed patch
+        // is still the open one: a load during the zip minted a new mount.
         let _g = state.graph.lock();
         if state.mount() != mount {
             return Ok(json!({ "path": path }));
         }
-        // An edit that landed during the zip is not in the file, so the patch stays dirty.
-        // Announced unconditionally, since a patch dirtied by a workspace file alone has no flag
-        // transition to announce.
+        // An edit that landed during the zip is not in the file, so the patch stays dirty. Announced
+        // unconditionally: a patch dirtied by a workspace file alone has no flag transition.
         if state.doc.lock().version() == revision {
             *state.workspace_baseline.lock() = packed;
             state.set_dirty(false);
@@ -193,24 +137,33 @@ impl EffectOp for Save {
     }
 }
 
+/// Where a replacement patch comes from.
+pub(crate) enum Source {
+    Empty,
+    /// A `.gfi`, and whether it becomes the home a later silent save overwrites.
+    File { path: String, adopt: bool },
+    /// An inline YAML manifest, which carries no workspace.
+    Inline(String),
+    /// A crash's autosave workspace.
+    Recover(String),
+}
+
 /// The core every patch replacement shares, so nothing after the read can drift between the
-/// sources: a `.gfi`, an inline manifest, or nothing at all — the empty patch.
-fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
+/// sources.
+fn load_patch(state: &AppState, source: &Source) -> Result<Value, String> {
     // Read OFF the graph lock, as the hello does: the roster's config half is a disk read.
     let agents = goofi_supervisor::home::agents();
-    // Every source mounts FRESH, and the live mount is swapped only once the manifest has parsed,
-    // so a refused load leaves the open patch untouched on both planes. Staged and built off the
-    // lock: the archive's own Rust nodes may take seconds to build.
+    // Every source mounts FRESH and swaps in only once the manifest parsed, so a refused load
+    // leaves the open patch untouched. Staged off the lock: its Rust nodes may take seconds.
     let fresh = crate::Mount::new(state.iox.id())?;
     let staged = fresh.path();
-    if let Some(name) = payload.get("path").and_then(Value::as_str).and_then(|p| p.rsplit('/').next()) {
-        goofi_supervisor::progress::report(format!("Opening {name}"));
+    if let Source::File { path, .. } = source {
+        goofi_supervisor::progress::report(format!("Opening {}", path.rsplit('/').next().unwrap_or(path)));
     }
-    let (content, from_path, recovered) = crate::stage_load(&staged, &state.custom, payload)?;
+    let (content, from_path, recovered) = crate::stage_load(&staged, &state.custom, source)?;
     crate::prebuild(state, &staged);
-    // Stopped once the source is staged, so a path that cannot be read ends nothing. The load
-    // restarts the clock, so the recording has no timeline left; its end is SAID here, because
-    // the manifest can still refuse below and no GraphReplaced would carry it.
+    // Stopped once the source is staged, as the load restarts the clock. Its end is SAID here: the
+    // manifest can still refuse below, and then no GraphReplaced would carry it.
     match state.recorder.stop() {
         Ok(Some(_)) => state.events.send(super::record::record_changed(state)),
         Ok(None) => {}
@@ -243,9 +196,7 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         // Off this thread wherever there IS a wait: this runs under the graph lock, and a harness
         // that will not leave takes the whole grace — five seconds no op may be held for.
         if let Some(finish) = replaced.and_then(|mount| state.reclaim(mount)) {
-            if let Ok(worker) = goofi_supervisor::worker::spawn("goofi-reclaim", finish) {
-                state.scope.adopt(worker);
-            }
+            state.scope.spawn("goofi-reclaim", finish);
         }
         // Projected HERE, so the snapshot names the version the loaded document is at, and a
         // client can hold its fit until its replica reaches it.
@@ -296,17 +247,19 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
 
 /// The patch at `path`, through the one replacement every source shares.
 pub(crate) fn load_file(state: &AppState, path: &std::path::Path) -> Result<Value, String> {
-    load_patch(state, &json!({ "path": path.to_string_lossy() }))
+    load_patch(state, &Source::File { path: path.to_string_lossy().into_owned(), adopt: true })
 }
 
 impl EffectOp for Load {
     fn run(state: &AppState, a: LoadArgs, _: &Caller) -> Result<Value, String> {
-        // A source is REQUIRED: no bare word may be the destructive New. `session new` is explicit.
-        let has_source = a.path.as_deref().is_some_and(|p| !p.is_empty()) || a.content.is_some();
-        if !has_source {
-            return Err("session load: give a `path` or `--content` — `session new` opens the empty patch".into());
-        }
-        load_patch(state, &json!({ "path": a.path, "content": a.content, "adopt": a.adopt }))
+        let source = match (a.path.filter(|p| !p.is_empty()), a.content) {
+            (Some(_), Some(_)) => return Err("a `path` to an archive or a `content` manifest, never both".into()),
+            (Some(path), None) => Source::File { path, adopt: a.adopt.unwrap_or(true) },
+            (None, Some(content)) => Source::Inline(content),
+            // A source is REQUIRED: no bare word may be the destructive New.
+            (None, None) => return Err("give a `path` or `--content` — `session new` opens the empty patch".into()),
+        };
+        load_patch(state, &source)
     }
 }
 
@@ -315,7 +268,7 @@ impl EffectOp for New {
         // A demo withholds Load, so the reset is the only way back to the example it was given.
         match state.load.as_deref().filter(|_| state.mode.demo) {
             Some(example) => load_file(state, example),
-            None => load_patch(state, &json!({})),
+            None => load_patch(state, &Source::Empty),
         }
     }
 }
@@ -330,15 +283,15 @@ impl ReadOp for Recoverable {
 impl EffectOp for Recover {
     fn run(state: &AppState, a: RecoverArgs, _: &Caller) -> Result<Value, String> {
         let dir = a.workspace.filter(|p| !p.is_empty())
-            .ok_or("session recover: give the `workspace` a `session recoverable` entry names")?;
-        load_patch(state, &json!({ "recover": dir }))
+            .ok_or("give the `workspace` a `session recoverable` entry names")?;
+        load_patch(state, &Source::Recover(dir))
     }
 }
 
 impl EffectOp for Discard {
     fn run(_: &AppState, a: DiscardArgs, _: &Caller) -> Result<Value, String> {
         let dir = a.workspace.filter(|p| !p.is_empty())
-            .ok_or("session discard: give the `workspace` a `session recoverable` entry names")?;
+            .ok_or("give the `workspace` a `session recoverable` entry names")?;
         autosave::discard(&autosave::recovery(&dir)?)?;
         Ok(json!({ "ok": true }))
     }

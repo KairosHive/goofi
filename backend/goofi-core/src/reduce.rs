@@ -20,10 +20,7 @@ pub fn reduce_for_view(frame: &Data, plan: &MergedViewSpec) -> Data {
     let mut shape = store.shape().to_vec();
     let mut axes = frame.meta().channels().clone();
     // A dim the producer already cut keeps its entry: that one names the true origin.
-    let mut reduced: BTreeMap<String, MetaValue> = match frame.meta().reduced() {
-        Some(MetaValue::Map(m)) => m.clone(),
-        _ => BTreeMap::new(),
-    };
+    let mut reduced = reduced_map(frame.meta());
     let mut shrunk = false;
 
     // Descending dim so a reduction never invalidates a not-yet-processed lower dim.
@@ -129,7 +126,7 @@ pub fn quantize_u8(frame: &Data) -> Option<(Vec<usize>, Vec<u8>, crate::Meta)> {
     if shape.len() != 2 && shape.len() != 3 {
         return None;
     }
-    let values = || store.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes")));
+    let values = || store.values();
     let colour = shape.len() == 3 && shape[2] >= 3;
     let (lo, hi) = if colour {
         (0.0, 1.0)
@@ -155,10 +152,7 @@ pub fn quantize_u8(frame: &Data) -> Option<(Vec<usize>, Vec<u8>, crate::Meta)> {
 /// Say what window a frame's texels span, so a reader maps one back to a value. ONE spelling,
 /// whether the quantization happened here or on a GPU that wrote the texels directly.
 pub fn note_depth(meta: &mut crate::Meta, lo: f32, hi: f32) {
-    let mut reduced = match meta.reduced() {
-        Some(MetaValue::Map(m)) => m.clone(),
-        _ => BTreeMap::new(),
-    };
+    let mut reduced = reduced_map(meta);
     reduced.insert(
         "depth".to_string(),
         MetaValue::Map(BTreeMap::from([
@@ -192,13 +186,12 @@ pub struct AxisReduction {
     pub centers: Vec<usize>,
 }
 
-/// Row-major strides for dimension `dim`: (outer count, axis length, inner element count), so
-/// element `(o, a, i)` sits at flat index `(o*axis + a)*inner + i`.
-fn strides(shape: &[usize], dim: usize) -> (usize, usize, usize) {
-    let outer: usize = shape[..dim].iter().product();
-    let axis = shape[dim];
-    let inner: usize = shape[dim + 1..].iter().product();
-    (outer, axis, inner)
+/// What `meta` already says was reduced, as a map to extend.
+fn reduced_map(meta: &Meta) -> BTreeMap<String, MetaValue> {
+    match meta.reduced() {
+        Some(MetaValue::Map(m)) => m.clone(),
+        _ => BTreeMap::new(),
+    }
 }
 
 /// Keep at most `max` evenly spaced entries of one axis, each copied whole with everything inside
@@ -208,7 +201,7 @@ pub fn reduce_axis(bytes: &[u8], shape: &[usize], dim: usize, max: usize) -> Opt
     if elements == 0 || elements.checked_mul(4)? != bytes.len() || dim >= shape.len() || max == 0 {
         return None;
     }
-    let (outer, axis, inner) = strides(shape, dim);
+    let (outer, axis, inner) = crate::stream::split(shape, dim);
     let idx = subsample_idx(axis, max);
     if idx.len() >= axis {
         return None;

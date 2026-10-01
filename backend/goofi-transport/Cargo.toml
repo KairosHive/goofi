@@ -7,16 +7,11 @@ license.workspace = true
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-node = { path = "../goofi-node" }
-goofi-core = { path = "../goofi-core" }
 
 # The cross-engine plane, at the version the Python child links — the two open the same services
 # over the shared 0.9.3 ABI, and `Cargo.lock` is what actually holds them together (this is a
 # caret requirement, as in the other crates that already depend on it).
 iceoryx2 = "0.9.3"
 
-# `atexit`, on every platform: the session's release when nothing else ran it.
+# The descriptor limit.
 libc = "0.2"
-
-# Taking a refused node's DACL back so its owner can unlink it — see `grant_owner`.
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation"] }

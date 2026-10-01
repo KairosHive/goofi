@@ -8,7 +8,7 @@ pub struct Stream {
 }
 
 /// The dimensions outside `dim`, `dim` itself, and the dimensions inside it.
-fn split(shape: &[usize], dim: usize) -> (usize, usize, usize) {
+pub(crate) fn split(shape: &[usize], dim: usize) -> (usize, usize, usize) {
     (
         shape[..dim].iter().product(),
         shape.get(dim).copied().unwrap_or(0),

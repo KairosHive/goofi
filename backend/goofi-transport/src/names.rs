@@ -23,16 +23,6 @@ pub fn door_service(base: &str) -> ServiceName {
     format!("goofi_{base}_door")
 }
 
-/// Graph → node control messages.
-pub fn control_service(base: &str) -> ServiceName {
-    format!("goofi_{base}_ctl")
-}
-
-/// Node → graph status transitions.
-pub fn status_service(base: &str) -> ServiceName {
-    format!("goofi_{base}_sts")
-}
-
 /// One output slot's data service — the name a consumer is given in its `InSlot` set.
 pub fn output_service(base: &str, slot: &str) -> ServiceName {
     format!("goofi_{base}_out_{slot}")

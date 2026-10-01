@@ -52,8 +52,6 @@ impl AudioNode for Fed {
         0
     }
 
-    fn prepare(&mut self, _rate: f64) {}
-
     fn process(&mut self, b: &mut Block<'_>) {
         let out = &mut b.outs[0];
         match &mut self.inbox {
@@ -68,6 +66,19 @@ impl AudioNode for Fed {
 }
 
 pub type Born = fn(Birth) -> Box<dyn AudioNode>;
+
+/// The `device` param of a device node, with its own doc.
+pub const fn device(doc: &'static str) -> goofi_audio_sdk::ParamDecl {
+    goofi_audio_sdk::ParamDecl {
+        group: "audio",
+        name: "device",
+        spec: goofi_audio_sdk::ParamSpec::Str { default: crate::DEFAULT_DEVICE, options: &[crate::DEFAULT_DEVICE], refresh: true },
+        expression: None,
+        doc: Some(doc),
+        section: 0,
+        show: None,
+    }
+}
 
 /// One node class the engine can build, built in or loaded.
 #[derive(Clone)]
@@ -84,7 +95,7 @@ pub fn built_in(type_name: &str) -> bool {
 }
 
 pub static BUILT_IN: &[(&str, &Manifest, Born)] = &[
-    (audio_out::TYPE, &audio_out::MANIFEST, |b| Box::new(audio_out::AudioOut::new(b))),
+    (audio_out::TYPE, &audio_out::MANIFEST, |_| Box::new(audio_out::AudioOut)),
     // The device drops what piled up; the file keeps it, or a skip is what a late tick sounds like.
     (audio_in::TYPE, &audio_in::MANIFEST, |b| Box::new(Fed::new(b, true))),
     (audio_playback::TYPE, &audio_playback::MANIFEST, |b| Box::new(Fed::new(b, false))),

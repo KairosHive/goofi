@@ -15,7 +15,8 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use goofi_supervisor::sync::Mutex;
-use std::time::{Duration, Instant};
+use crate::writer::Pool;
+use std::time::Duration;
 
 /// One video file being written. A frame is `width * height` tight-packed texels of four 8-bit
 /// unsigned RGBA channels, row 0 the top — the graphics engine's readback exactly as
@@ -170,8 +171,7 @@ impl Preset {
             .stderr(Out::Null)
             .spawn()
             .map_err(|e| format!("{MISSING} ({e})"))?;
-        Ok(child.wait_within(Duration::from_secs(5)).map_err(|e| e.to_string())?
-            .is_some_and(|status| status.success()))
+        Ok(child.wait_within(Duration::from_secs(5)).is_some_and(|status| status.success()))
     }
 }
 
@@ -293,18 +293,13 @@ impl Drop for Ffmpeg {
 /// 8 MB, so a deeper queue only postpones the same loss and hides it behind memory.
 const QUEUE: usize = 2;
 
-const FLUSH_EVERY: Duration = Duration::from_secs(1);
-
 type Job = (Vec<u8>, f64);
-
-/// Reuse completed frame buffers to limit allocations.
-type Free = Arc<Mutex<Vec<Vec<u8>>>>;
 
 pub struct Video {
     frames: Option<SyncSender<Job>>,
     writer: Option<goofi_supervisor::worker::Worker>,
     counts: Counts,
-    free: Free,
+    free: Pool,
 }
 
 impl Video {
@@ -322,7 +317,7 @@ impl Video {
         let beside = crate::beside::Beside::create(&out)?;
         let (tx, rx) = sync_channel(QUEUE);
         let counts = Counts::default();
-        let free = Free::default();
+        let free = Pool::new(QUEUE);
         let writer = {
             let (counts, free) = (counts.clone(), free.clone());
             goofi_supervisor::worker::thread("goofi-record-video")
@@ -342,15 +337,12 @@ impl Video {
         if self.counts.queued.load(Ordering::Relaxed) >= QUEUE as u64 {
             return false;
         }
-        let mut buffer = self.free.lock().pop().unwrap_or_default();
-        buffer.clear();
-        buffer.extend_from_slice(texels);
         self.counts.queued.fetch_add(1, Ordering::Relaxed);
-        match tx.try_send((buffer, at)) {
+        match tx.try_send((self.free.filled(texels), at)) {
             Ok(()) => true,
             Err(TrySendError::Full((buffer, _))) => {
                 self.counts.queued.fetch_sub(1, Ordering::Relaxed);
-                give_back(&self.free, buffer);
+                self.free.give_back(buffer);
                 false
             }
             Err(TrySendError::Disconnected(_)) => {
@@ -404,13 +396,6 @@ struct Counts {
     error: Arc<Mutex<Option<String>>>,
 }
 
-fn give_back(free: &Free, buffer: Vec<u8>) {
-    let mut free = free.lock();
-    if free.len() < QUEUE {
-        free.push(buffer);
-    }
-}
-
 /// The one thread that touches the encoder: the render thread hands frames over and never waits
 /// on a disk. Its buffers go back to `free` as the queue drains.
 fn encode(
@@ -418,9 +403,8 @@ fn encode(
     mut encoder: Box<dyn Encoder>,
     mut beside: crate::beside::Beside,
     counts: &Counts,
-    free: &Free,
+    free: &Pool,
 ) {
-    let mut flushed = Instant::now();
     // The FIRST error is what killed the stream; `finish` on a dead encoder only says so again.
     let died = |counts: &Counts, why: String| {
         counts.dead.store(true, Ordering::Relaxed);
@@ -441,18 +425,14 @@ fn encode(
             break;
         }
         counts.encoded.fetch_add(1, Ordering::Relaxed);
-        give_back(free, buffer);
-        if flushed.elapsed() >= FLUSH_EVERY {
-            let _ = beside.sync();
-            flushed = Instant::now();
-        }
+        free.give_back(buffer);
     }
     // A dead encoder still owes its counters: what the queue holds is LOST, never forgotten, or
     // `fill` reads a queue that never empties.
     for (buffer, _) in rx.try_iter() {
         counts.queued.fetch_sub(1, Ordering::Relaxed);
         counts.lost.fetch_add(1, Ordering::Relaxed);
-        give_back(free, buffer);
+        free.give_back(buffer);
     }
     let _ = beside.sync();
     if let Err(why) = encoder.finish() {

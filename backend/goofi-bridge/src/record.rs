@@ -15,7 +15,6 @@ use goofi_transport::{record_shape, Halt};
 /// The longest a sweep waits on the door — a CEILING on the park, never a cadence.
 const WAKE: Duration = Duration::from_millis(20);
 
-
 /// The engines whose armed slots publish GOOF frames on a record service, and how each one dates a
 /// frame: a signal node reads the clock at its `process`, and the audio engine counts samples — so
 /// one timeline carries the scheduler's jitter and the other cannot. Graphics is not here: it
@@ -32,11 +31,8 @@ struct Feed {
     subscriber: goofi_transport::ByteSubscriber,
     /// The one frame the writer's lane refused, kept for the next sweep.
     held: Option<Vec<u8>>,
-    /// How this engine dates a frame, and how deep the recorder's end of its service is.
+    /// How this engine dates a frame.
     timeline: Timeline,
-    /// Whether this engine's frames are AUDIO — the one stream kind that is a wav.
-    rate: bool,
-    buffer: usize,
 }
 
 struct Drain {
@@ -107,14 +103,14 @@ fn armed(g: &Graph) -> HashMap<(Uid, String), (String, StreamId)> {
     out
 }
 
-
 /// One frame onto the writer, read for what only this thread can read. The file it belongs in, and
 /// every byte of formatting, is the writer's: formatting here made the drain slower than a fast
 /// producer, and a drain that falls behind its transport loses another stream's frames.
 fn hand(recorder: &Recorder, time: &Time, feed: &Feed, bytes: &[u8], finally: bool, drift: &mut Option<f64>) -> bool {
     let meta = goofi_codec::frame_meta(bytes).ok();
     let at = meta.as_ref().and_then(|m| m.time()).unwrap_or_else(|| time.now());
-    let rate = feed.rate.then(|| meta.as_ref().and_then(|m| m.sfreq()).unwrap_or_default());
+    // AUDIO is the one stream kind that is a wav.
+    let rate = (feed.id.engine == "audio").then(|| meta.as_ref().and_then(|m| m.sfreq()).unwrap_or_default());
     if let Some(goofi_core::MetaValue::Float(d)) = meta.as_ref().and_then(|m| m.get(goofi_core::META_DRIFT)) {
         *drift = Some(*d);
     }
@@ -145,16 +141,13 @@ fn drain_feed(recorder: &Recorder, time: &Time, feed: &mut Feed, finally: bool) 
         }
         taken += 1;
     }
-    if taken > 0 {
-        recorder.fill(&feed.id, taken as f32 / feed.buffer as f32);
-    }
-    // Once per sweep, like the counts above: a derived timeline says how far it has walked from
-    // patch time, and the manifest carries the last word.
+    // Once per sweep: a derived timeline says how far it has walked from patch time.
     if let Some(d) = drift {
         recorder.drift(&feed.id, d);
     }
-    // Once per sweep: every count already rode its own write, so only the manifest is left.
+    // Every count already rode its own write, so only the fill and the manifest are left.
     if taken > 0 {
+        recorder.fill(&feed.id, taken as f32 / record_shape(feed.id.engine).buffer as f32);
         recorder.note();
     }
 }
@@ -183,16 +176,7 @@ impl Drain {
             let shape = record_shape(id.engine);
             let timeline = timeline(id.engine).expect("armed filtered the engines above");
             if let Ok(subscriber) = goofi_transport::open_record_subscriber(self.ports.node(), &service, shape) {
-                let feed = Feed {
-                    rate: id.engine == "audio",
-                    id,
-                    service,
-                    subscriber,
-                    held: None,
-                    timeline,
-                    buffer: shape.buffer,
-                };
-                self.ports.feeds.insert(key, feed);
+                self.ports.feeds.insert(key, Feed { id, service, subscriber, held: None, timeline });
             }
         }
         self.ports.feeds.len() == expected
@@ -211,10 +195,6 @@ impl Drain {
             drain_feed(&self.recorder, &self.time, &mut feed, true);
         }
     }
-}
-
-fn drain_epoch(graph: &Arc<Mutex<Graph>>) -> Arc<std::sync::atomic::AtomicU64> {
-    graph.lock().epoch()
 }
 
 /// Start the one drain. `halt` is what stops it; the worker handed back is what a stop joins.
@@ -236,7 +216,7 @@ pub fn spawn(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, recorder:
             halt.release();
             return;
         };
-        let epoch = drain_epoch(&graph);
+        let epoch = graph.lock().epoch();
         let mut drain = Drain { graph, recorder, time, ports };
         // The graph epoch the feeds were resolved against; `None` once they were let go. The lock
         // is taken to resolve ONLY when that epoch moved — never per wake, which is the publish rate.

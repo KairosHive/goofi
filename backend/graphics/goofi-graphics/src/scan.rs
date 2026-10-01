@@ -37,7 +37,10 @@ pub(crate) fn scan(engine: &mut GraphicsEngine, dir: &Path) -> Vec<ScannedType> 
         // A file with no stamp to compare is read again: unreadable metadata proves nothing.
         let seen = stamp.map(|s| (path.clone(), s));
         let unchanged = seen.is_some() && engine.stamps.get(&type_name) == seen.as_ref() && engine.classes.contains_key(&type_name);
-        let registered = if unchanged { Ok(false) } else { engine.register(&path, &type_name) };
+        let registered = match unchanged {
+            true => Ok(false),
+            false => engine.register(&path, &type_name).map(|class| engine.classes.insert(type_name.clone(), class).map(crate::gpu::give_back).is_some()),
+        };
         let outcome = match registered {
             Ok(replaced) => {
                 match seen {
@@ -63,36 +66,20 @@ pub(crate) fn scan(engine: &mut GraphicsEngine, dir: &Path) -> Vec<ScannedType> 
 impl GraphicsEngine {
     /// One file: its header is the manifest, its text plus the prelude is what naga judges, and
     /// only then does a pipeline get asked for.
-    pub(crate) fn register(&mut self, path: &Path, type_name: &str) -> Result<bool, String> {
+    pub(crate) fn register(&mut self, path: &Path, type_name: &str) -> Result<Arc<Class>, String> {
         if path.extension().is_some_and(|ext| ext != "wgsl") {
             return self.register_host(path, type_name);
         }
         let source = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let intro = shader::header(&source)?;
-        if let Some(reason) = goofi_node::illegal_slot(&intro) {
-            return Err(reason);
-        }
-        let manifest = goofi_node::leak_manifest(type_name.to_string(), &intro)?;
-        let full = format!("{source}{}", shader::prelude(manifest, &intro.state));
-        shader::validate(&full)?;
-        let job = Job {
-            source: full,
-            params: !manifest.params.is_empty() || shader::array_inputs(manifest).next().is_some(),
-            inputs: manifest.inputs.len(),
-            state: intro.state.len(),
-        };
-        let pipeline = self.compiler.build(job);
-        let class =
-            Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, kind: Kind::Shader(pipeline), isolation: &goofi_node::SHADER });
-        let displaced = self.classes.insert(type_name.to_string(), class);
-        let replaced = displaced.is_some();
-        crate::gpu::give_back(displaced);
-        Ok(replaced)
+        let manifest = goofi_node::manifest_of(type_name, &intro, Some(goofi_core::SlotType::Texture))?;
+        let pipeline = self.compiler.shader(manifest, &source, &intro.state)?;
+        Ok(Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, kind: Kind::Shader(pipeline), isolation: &goofi_node::SHADER }))
     }
 }
 
 /// What one pipeline is built from: the whole text naga passed, and the shape of its layout.
-pub struct Job {
+struct Job {
     source: String,
     params: bool,
     inputs: usize,
@@ -100,10 +87,12 @@ pub struct Job {
 }
 
 impl Compiler {
-    pub fn program(&self, manifest: &'static NodeManifest, source: &str) -> Result<Built, String> {
-        let full = format!("{source}{}", shader::prelude(manifest, &[]));
+    /// `source` plus the prelude, once naga passes it, queued for a pipeline.
+    pub fn shader(&self, manifest: &'static NodeManifest, source: &str, state: &[String]) -> Result<Built, String> {
+        let full = format!("{source}{}", shader::prelude(manifest, state));
         shader::validate(&full)?;
-        Ok(self.build(Job { source: full, params: !manifest.params.is_empty(), inputs: manifest.inputs.len(), state: 0 }))
+        let params = !manifest.params.is_empty() || shader::array_inputs(manifest).next().is_some();
+        Ok(self.build(Job { source: full, params, inputs: manifest.inputs.len(), state: state.len() }))
     }
 }
 
@@ -144,7 +133,7 @@ impl Compiler {
         Compiler { jobs: thread.is_some().then_some(jobs), halt, thread }
     }
 
-    pub fn build(&self, job: Job) -> Built {
+    fn build(&self, job: Job) -> Built {
         let cell: Built = Arc::new(OnceLock::new());
         let sent = self.jobs.as_ref().is_some_and(|jobs| jobs.send(Order { job, cell: cell.clone() }).is_ok());
         if !sent {
@@ -177,33 +166,8 @@ fn compile(gpu: &Gpu, job: &Job) -> Result<Arc<wgpu::RenderPipeline>, String> {
         source: wgpu::ShaderSource::Wgsl(job.source.as_str().into()),
     });
     let layout = gpu.layout(job.params, job.inputs, job.state);
-    // The output, then one target per state buffer — the order [`shader::prelude`] writes them in.
-    let targets: Vec<Option<wgpu::ColorTargetState>> = (0..1 + job.state)
-        .map(|_| {
-            Some(wgpu::ColorTargetState { format: crate::gpu::FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })
-        })
-        .collect();
-    let pipeline = gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: None,
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            module: &module,
-            entry_point: Some("vs"),
-            buffers: &[],
-            compilation_options: Default::default(),
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: &module,
-            entry_point: Some("fs"),
-            targets: &targets,
-            compilation_options: Default::default(),
-        }),
-        multiview_mask: None,
-        cache: None,
-    });
+    // The output, then one target per state buffer: the order [`shader::prelude`] writes them in.
+    let pipeline = crate::gpu::pipeline(&gpu.device, None, &module, &layout, "fs", &vec![crate::gpu::FORMAT; 1 + job.state]);
     match pollster::block_on(scope.pop()) {
         Some(e) => Err(format!("the device refused the pipeline: {e}")),
         None => Ok(Arc::new(pipeline)),

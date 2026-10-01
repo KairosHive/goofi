@@ -1,7 +1,5 @@
-//! The op registry — a phrase TREE, and the single place the op SET is declared. Every op is on
-//! every transport: the socket names a flat row directly, the phrase layer walks the tree word by
-//! word, and the frontend's `OpName` union is generated from the flat rows. An op is a type: its
-//! typed `Args` are the validation on every path, and its row is built from the type once.
+//! The op registry: a phrase TREE, and the single place the op SET is declared. An op is a type;
+//! its typed `Args` are the validation on every transport, and its row is built from it once.
 
 pub mod history;
 pub mod host;
@@ -22,31 +20,6 @@ use serde_json::{json, Value};
 use crate::{AppState, Caller, Txn};
 use goofi_graph::{Graph, Uid};
 
-/// What calling an op IS. The transaction, the dirty decision and the re-mirror are all READ off
-/// this kind, never declared beside it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    /// Reads state, changes nothing: never dirties, never re-mirrors.
-    Read,
-    /// Routes every mutation through the command history, so it has an exact inverse; the shared
-    /// tail in [`AppState::call`] re-mirrors and raises the unsaved dot.
-    Write,
-    /// Owns its consequences itself — re-mirror, events and dirty transitions — because they are
-    /// not a graph command's: a save, a process, a restart, the history ops.
-    Effect,
-}
-
-impl Kind {
-    /// The kind as the word `op list` answers with.
-    pub fn name(self) -> &'static str {
-        match self {
-            Kind::Read => "read",
-            Kind::Write => "write",
-            Kind::Effect => "effect",
-        }
-    }
-}
-
 /// One op's contract: its full phrase, its documentation and its typed arguments. Deserializing
 /// the payload into `Args` is the validation on every path, so every `Args` denies unknown fields.
 pub trait Op: 'static {
@@ -59,60 +32,63 @@ pub trait Op: 'static {
     /// list-typed positional is variadic; every positional stays reachable as a flag too.
     const POSITIONAL: usize = 0;
     type Args: DeserializeOwned + JsonSchema + Clone;
-    type Out: Serialize;
 }
 
 /// A read: it runs on the transaction, which holds the graph, and changes nothing.
 pub trait ReadOp: Op {
-    fn run(tx: &mut Txn, a: Self::Args) -> Result<Self::Out, String>;
+    fn run(tx: &mut Txn, a: Self::Args) -> Result<Value, String>;
 }
 
 /// A write: it runs on the transaction and routes every mutation through the history.
 pub trait WriteOp: Op {
-    fn run(tx: &mut Txn, a: Self::Args) -> Result<Self::Out, String>;
-    /// The history entry's label — what an undo button says it takes back.
-    fn label(a: &Self::Args, o: &Self::Out) -> String;
+    /// The history entry's label: what an undo button says it takes back.
+    const LABEL: &'static str = "";
+    fn run(tx: &mut Txn, a: Self::Args) -> Result<Value, String>;
+    fn label(_: &Self::Args, _: &Value) -> String {
+        Self::LABEL.into()
+    }
 }
 
 /// An effect: it holds what it needs itself and owns its consequences.
 pub trait EffectOp: Op {
-    fn run(cx: &AppState, a: Self::Args, caller: &Caller) -> Result<Self::Out, String>;
+    fn run(cx: &AppState, a: Self::Args, caller: &Caller) -> Result<Value, String>;
 }
 
-pub type ReadFn = fn(&mut Txn, &Value) -> Result<Value, String>;
-/// A write's erased entry answers its result AND its history label.
-pub type WriteFn = fn(&mut Txn, &Value) -> Result<(Value, String), String>;
+/// A read or a write, erased: a write also names its history entry on the transaction.
+pub type TxnFn = fn(&mut Txn, &Value) -> Result<Value, String>;
 pub type EffectFn = fn(&AppState, &Value, &Caller) -> Result<Value, String>;
 
-/// An op's handler and its KIND in one field.
+/// An op's handler, which is also its KIND.
 #[derive(Clone, Copy)]
 pub enum Handler {
     PluginRead,
     PluginEffect,
-    Read(ReadFn),
-    Write(WriteFn),
+    /// Reads state, changes nothing: never dirties, never re-mirrors.
+    Read(TxnFn),
+    /// Routes every mutation through the command history, so it has an exact inverse; the shared
+    /// tail in [`AppState::call`] re-mirrors and raises the unsaved dot.
+    Write(TxnFn),
+    /// Owns its consequences itself, because they are not a graph command's: a save, a process,
+    /// a restart, the history ops.
     Effect(EffectFn),
 }
 
 impl Handler {
-    pub fn kind(&self) -> Kind {
+    /// The kind as the word `op list` answers with.
+    pub fn name(&self) -> &'static str {
         match self {
-            Handler::Read(_) | Handler::PluginRead => Kind::Read,
-            Handler::Write(_) => Kind::Write,
-            Handler::Effect(_) | Handler::PluginEffect => Kind::Effect,
+            Handler::Read(_) | Handler::PluginRead => "read",
+            Handler::Write(_) => "write",
+            Handler::Effect(_) | Handler::PluginEffect => "effect",
         }
     }
     pub fn is_write(&self) -> bool {
-        self.kind() == Kind::Write
-    }
-    pub fn is_read(&self) -> bool {
-        self.kind() == Kind::Read
+        matches!(self, Handler::Write(_))
     }
 }
 
 /// One declared argument, as the phrase layer, completion and `op list` read it. `ty` is the
-/// CLI's type word: `uid`, `string`, `float`, `int`, `bool`, `float2`, `json`, `any`,
-/// `param_addr`, `endpoint`, `panel_type`, with `[]` for a list.
+/// CLI's type word (`uid`, `float`, `float2`, `any`, `endpoint`, …), with `[]` for a list.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ArgDecl {
     pub name: String,
@@ -165,16 +141,14 @@ pub struct Row {
 
 impl Row {
     /// A plugin's row, from the declarations its manifest carries.
-    pub fn plugin(name: &'static str, kind: Kind, args: &'static [ArgDecl], doc: &'static str, result: &'static str) -> Row {
-        let handler = match kind {
-            Kind::Read => Handler::PluginRead,
-            _ => Handler::PluginEffect,
-        };
+    pub fn plugin(name: &'static str, read: bool, args: &'static [ArgDecl], doc: &'static str, result: &'static str) -> Row {
+        let handler = if read { Handler::PluginRead } else { Handler::PluginEffect };
         Row { name, handler, args: ArgSpec::Listed(args), positional: 0, doc, result }
     }
 
-    pub fn kind(&self) -> Kind {
-        self.handler.kind()
+    /// Whether the op steps the history without being a write: a plugin may not hook it.
+    pub fn moves_history(&self) -> bool {
+        matches!(self.name, "compound" | "undo" | "redo")
     }
 
     /// The declared arguments, in declaration order.
@@ -272,23 +246,24 @@ fn args_of<T: Op>(v: &Value) -> Result<T::Args, String> {
     serde_json::from_value(v.clone()).map_err(|e| format!("{}: {e}", T::NAME))
 }
 
-fn to_value<O: Serialize>(o: O) -> Result<Value, String> {
-    serde_json::to_value(o).map_err(|e| e.to_string())
+/// Every refusal an op's run answers is prefixed with its phrase here, once.
+fn refusal<T: Op>(e: String) -> String {
+    format!("{}: {e}", T::NAME)
 }
 
 fn erased_read<T: ReadOp>(tx: &mut Txn, v: &Value) -> Result<Value, String> {
-    to_value(T::run(tx, args_of::<T>(v)?)?)
+    T::run(tx, args_of::<T>(v)?).map_err(refusal::<T>)
 }
 
-fn erased_write<T: WriteOp>(tx: &mut Txn, v: &Value) -> Result<(Value, String), String> {
+fn erased_write<T: WriteOp>(tx: &mut Txn, v: &Value) -> Result<Value, String> {
     let a = args_of::<T>(v)?;
-    let out = T::run(tx, a.clone())?;
-    let label = T::label(&a, &out);
-    Ok((to_value(out)?, label))
+    let out = T::run(tx, a.clone()).map_err(refusal::<T>)?;
+    tx.label(T::label(&a, &out));
+    Ok(out)
 }
 
 fn erased_effect<T: EffectOp>(cx: &AppState, v: &Value, caller: &Caller) -> Result<Value, String> {
-    to_value(T::run(cx, args_of::<T>(v)?, caller)?)
+    T::run(cx, args_of::<T>(v)?, caller).map_err(refusal::<T>)
 }
 
 const fn row<T: Op>(handler: Handler) -> Row {
@@ -308,8 +283,15 @@ pub const fn effect<T: EffectOp>() -> Row {
 }
 
 /// One op's contract in one line: the type, its phrase, its positionals, its args and result types.
+/// An inline `Args { .. }` is declared here, so every one denies unknown fields.
 macro_rules! op {
-    ($t:ident, $name:literal, $positional:literal, $args:ty, $out:ty, $doc:expr, $result:expr) => {
+    ($t:ident, $name:literal, $positional:literal, $args:ident { $($body:tt)* }, $doc:expr, $result:expr) => {
+        #[derive(Clone, Debug, ::serde::Deserialize, ::schemars::JsonSchema)]
+        #[serde(deny_unknown_fields)]
+        pub struct $args { $($body)* }
+        $crate::ops::op!($t, $name, $positional, $args, $doc, $result);
+    };
+    ($t:ident, $name:literal, $positional:literal, $args:ty, $doc:expr, $result:expr) => {
         pub struct $t;
         impl $crate::ops::Op for $t {
             const NAME: &'static str = $name;
@@ -317,7 +299,6 @@ macro_rules! op {
             const RESULT: &'static str = $result;
             const POSITIONAL: usize = $positional;
             type Args = $args;
-            type Out = $out;
         }
     };
 }
@@ -328,14 +309,14 @@ pub(crate) use op;
 #[serde(deny_unknown_fields)]
 pub struct NoArgs {}
 
-/// A `format` word on a string schema: the vocabulary the CLI completes and the phrase layer
-/// types by. Each newtype below is one such word.
+/// A `format` word: the vocabulary the CLI completes and the phrase layer types by. Each
+/// newtype below is one such word.
 macro_rules! word {
-    ($t:ident, $format:literal, $doc:literal) => {
+    ($t:ident, $inner:ty, $schema:tt, $doc:literal) => {
         #[doc = $doc]
         #[derive(Clone, Debug, Deserialize, Serialize)]
         #[serde(transparent)]
-        pub struct $t(pub String);
+        pub struct $t(pub $inner);
         impl JsonSchema for $t {
             fn schema_name() -> Cow<'static, str> {
                 stringify!($t).into()
@@ -344,62 +325,44 @@ macro_rules! word {
                 true
             }
             fn json_schema(_: &mut SchemaGenerator) -> Schema {
-                schemars::json_schema!({ "type": "string", "format": $format })
+                schemars::json_schema!($schema)
             }
         }
     };
 }
 
-word!(NodeRef, "uid", "A node, by its display name or its uid.");
-word!(Endpoint, "endpoint", "`node/slot`, split on the FIRST `/`, the node half a uid or a name.");
-word!(ParamAddr, "param_addr", "`group/param`, split on the FIRST `/`.");
-word!(PanelType, "panel_type", "A panel type id, one of the vocabulary's.");
+word!(NodeRef, String, { "type": "string", "format": "uid" }, "A node, by its display name or its uid.");
+word!(Endpoint, String, { "type": "string", "format": "endpoint" }, "`node/slot`, split on the FIRST `/`, the node half a uid or a name.");
+word!(ParamAddr, String, { "type": "string", "format": "param_addr" }, "`group/param`, split on the FIRST `/`.");
+word!(PanelType, String, { "type": "string", "format": "panel_type" }, "A panel type id, one of the vocabulary's.");
+word!(Any, Value, { "format": "any" }, "A value of any JSON shape; on a command line, JSON when it parses and the bare string otherwise.");
 
 impl NodeRef {
-    pub fn resolve(&self, g: &Graph, op: &str) -> Result<Uid, String> {
-        g.resolve_ref(&self.0).ok_or_else(|| format!("{op}: `{}` names no node — give a uid or a node's name", self.0))
+    pub fn resolve(&self, g: &Graph) -> Result<Uid, String> {
+        g.resolve_ref(&self.0).ok_or_else(|| format!("`{}` names no node — give a uid or a node's name", self.0))
     }
 
     /// A list resolved whole or refused whole: a caller that named one bad node asked for a batch
     /// that is not the one it would get.
-    pub fn resolve_all(list: &[NodeRef], g: &Graph, op: &str) -> Result<Vec<Uid>, String> {
-        list.iter().map(|n| n.resolve(g, op)).collect()
+    pub fn resolve_all(list: &[NodeRef], g: &Graph) -> Result<Vec<Uid>, String> {
+        list.iter().map(|n| n.resolve(g)).collect()
     }
 }
 
 impl Endpoint {
     /// The slot half may itself be a port uid (wiring a facade from outside), so it is never
     /// validated here.
-    pub fn resolve(&self, g: &Graph, op: &str, key: &str) -> Result<(Uid, String), String> {
-        let (node, slot) =
-            self.0.split_once('/').ok_or_else(|| format!("{op}: `{key}` is `node/slot`, not `{}`", self.0))?;
-        let uid = g.resolve_ref(node).ok_or_else(|| format!("{op}: `{node}` in `{key}` names no node"))?;
+    pub fn resolve(&self, g: &Graph, key: &str) -> Result<(Uid, String), String> {
+        let (node, slot) = self.0.split_once('/').ok_or_else(|| format!("`{key}` is `node/slot`, not `{}`", self.0))?;
+        let uid = g.resolve_ref(node).ok_or_else(|| format!("`{node}` in `{key}` names no node"))?;
         Ok((uid, slot.to_string()))
     }
 }
 
 impl ParamAddr {
-    pub fn split(&self, op: &str) -> Result<(String, String), String> {
-        let (group, name) =
-            self.0.split_once('/').ok_or_else(|| format!("{op}: `{}` is not `group/param`", self.0))?;
+    pub fn split(&self) -> Result<(String, String), String> {
+        let (group, name) = self.0.split_once('/').ok_or_else(|| format!("`{}` is not `group/param`", self.0))?;
         Ok((group.to_string(), name.to_string()))
-    }
-}
-
-/// A value of any JSON shape; on a command line, JSON when it parses and the bare string otherwise.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(transparent)]
-pub struct Any(pub Value);
-
-impl JsonSchema for Any {
-    fn schema_name() -> Cow<'static, str> {
-        "Any".into()
-    }
-    fn inline_schema() -> bool {
-        true
-    }
-    fn json_schema(_: &mut SchemaGenerator) -> Schema {
-        schemars::json_schema!({ "format": "any" })
     }
 }
 
@@ -575,9 +538,8 @@ pub fn find(name: &str) -> Option<&'static Row> {
 /// The rows one server serves. A mode does not REGISTER what it withholds — the one spelling of
 /// each mode, so `op list`, the phrase resolver and the MCP all shrink with it.
 pub fn table(mode: crate::Mode) -> Vec<Row> {
-    // What a demo drops: the host's filesystem, the agents it would spawn, the two ops that read
-    // or write a `.gfi` beside them, and the one that writes a node file into the host's own home
-    // — every visitor shares one process. `session new` stays: it is the visitor's reset.
+    // What a demo drops: what reaches the host's files or spawns on it, since every visitor
+    // shares one process. `session new` stays: it is the visitor's reset.
     const DEMO_DROPS: [&str; 8] =
         ["dir", "agent", "session save", "session load", "library save",
          "session recoverable", "session recover", "session discard"];
@@ -598,7 +560,7 @@ pub fn typescript() -> String {
     let names: Vec<String> =
         registry().iter().map(|o| format!("\t| '{}'", o.name)).collect();
     let kinds: Vec<String> =
-        registry().iter().map(|o| format!("\t'{}': '{}'", o.name, o.kind().name())).collect();
+        registry().iter().map(|o| format!("\t'{}': '{}'", o.name, o.handler.name())).collect();
     format!(
         "// GENERATED from backend/goofi-bridge/src/ops/mod.rs — do not edit by hand.\n\
          // The manager's op registry is the only place an op name is declared: naming one that is\n\

@@ -3,15 +3,14 @@
 //! its readback into.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use goofi_supervisor::sync::Mutex;
 
 use goofi_core::SlotType;
 use goofi_node::{GraphView, ParamDecl, Uid};
 
 use crate::gpu::Want;
-use crate::half::{Tap, Upload};
+use crate::half::Cells;
 use crate::scan::Built;
 use crate::Instance;
 
@@ -80,17 +79,9 @@ pub struct Stage {
     pub size: (u32, u32),
     pub natural: (bool, bool),
     pub decls: &'static [ParamDecl],
-    pub params: Arc<[AtomicU64]>,
-    pub uploads: Vec<Arc<Mutex<Option<Upload>>>>,
-    /// Whether anyone drinks from this output right now — the half writes it each tick.
-    pub readers: Arc<AtomicBool>,
+    pub cells: Arc<Cells>,
     /// The window on the machine's own screen this stage draws into, once one is open.
     pub window: Option<goofi_window::Id>,
-    /// The box this stage's readers asked its readback to fit in, LIVE: a viewer appearing,
-    /// resizing or leaving writes this cell and never a plan.
-    pub tap_box: Arc<AtomicU64>,
-    /// Where the tick leaves the frame it read back, for the half to publish.
-    pub tap: Arc<Mutex<Tap>>,
     /// This output slot's arming, as the last settle left it.
     pub record: Option<Record>,
 }
@@ -102,14 +93,14 @@ impl Stage {
     pub fn wants(&self, recording: bool) -> [Option<(u32, u32)>; 4] {
         let mut wants = [None; 4];
         wants[Want::Screen as usize] = self.window.map(|_| self.size);
-        let asked = unpack(self.tap_box.load(Ordering::Relaxed));
+        let asked = unpack(self.cells.tap_box.load(Ordering::Relaxed));
         let tap = asked.map_or(self.size, |w| goofi_view::fit(self.size, w.size));
         // The two taps are one reader in two formats, so at most one of them is ever wanted.
         let which = match asked.map(|w| w.depth) {
             Some(goofi_view::Depth::U8) => Want::TapU8,
             _ => Want::Tap,
         };
-        wants[which as usize] = self.readers.load(Ordering::Relaxed).then_some(tap);
+        wants[which as usize] = self.cells.readers.load(Ordering::Relaxed).then_some(tap);
         // A recorder takes the frame at its own size: a recording is the evidence, and evidence
         // is never fitted to a box somebody's screen happened to have.
         wants[Want::Record as usize] = (recording && self.record.is_some()).then_some(self.size);
@@ -174,11 +165,7 @@ pub fn compile(
         .iter()
         .map(|(uid, i)| (*uid, if i.class.feedback && !mine.contains(uid) { Vec::new() } else { feeds(*uid) }))
         .collect();
-    let (order, stuck) = kahn(live, &inbound, &mine);
-    // A node Kahn could not place is IN a loop when it reaches itself; the rest are only fed by one.
-    let members: HashSet<Uid> = stuck.iter().copied().filter(|u| reaches_itself(*u, &inbound, &stuck)).collect();
-    let dropped: HashSet<Uid> = members.union(&mine).copied().collect();
-    let order = if members.is_empty() { order } else { kahn(live, &inbound, &dropped).0 };
+    let (order, members) = goofi_runtime::schedule(&inbound, &mine, |u| live[&u].class.feedback);
     let mut faults: Vec<(Uid, String)> = members
         .iter()
         .map(|u| (*u, "in a loop with no feedback node, so it does not render".to_string()))
@@ -196,23 +183,15 @@ pub fn compile(
         if let Some((_, built)) = &inst.program {
             if let Some(Err(why)) = built.get() { faults.push((*uid, format!("texture program: {why}"))); }
         }
-        let mut upload = 0;
-        let inputs = inst
-            .class
-            .manifest
+        let manifest = inst.class.manifest;
+        let inputs = manifest
             .inputs
             .iter()
             .map(|s| match s.kind {
                 SlotType::Texture => wires.get(&(*uid, s.name)).and_then(|p| at.get(p)).map_or(Input::None, |i| Input::Stage(*i)),
-                _ => {
-                    let k = upload;
-                    upload += 1;
-                    // From the settled view: an unwired ARRAY input is transparent black.
-                    match view.wires_into(*uid, s.name).next() {
-                        Some(_) => Input::Upload(k),
-                        None => Input::None,
-                    }
-                }
+                // From the settled view: an unwired ARRAY input is transparent black.
+                _ if view.wires_into(*uid, s.name).next().is_none() => Input::None,
+                _ => Input::Upload(crate::shader::array_inputs(manifest).position(|n| n == s.name).expect("an array input")),
             })
             .collect();
         stages.push(Stage {
@@ -226,12 +205,8 @@ pub fn compile(
             size: sizes[uid],
             natural: (inst.asked().0 == 0, inst.asked().1 == 0),
             decls: inst.class.manifest.params,
-            params: inst.params.clone(),
-            uploads: inst.uploads.clone(),
-            readers: inst.readers.clone(),
-            tap: inst.tap.clone(),
+            cells: inst.cells.clone(),
             window: windows.get(uid).copied(),
-            tap_box: inst.tap_box.clone(),
             record: recorded(view, *uid, inst),
         });
     }
@@ -308,7 +283,7 @@ fn size_of(
             Some(p) => size_of(p, live, wires, sizes, visiting),
             None => live.get(&uid).and_then(|i| {
                 i.source.as_ref().and_then(|s| s.lock().as_ref().map(|f| f.size))
-                    .or_else(|| crate::half::unpack(i.uploaded.load(Ordering::Relaxed)))
+                    .or_else(|| crate::half::unpack(i.cells.uploaded.load(Ordering::Relaxed)))
             }).unwrap_or((GENERATOR, GENERATOR)),
         };
         answer = (if w == 0 { fw } else { w }, if h == 0 { fh } else { h });
@@ -316,55 +291,4 @@ fn size_of(
     visiting.pop();
     sizes.insert(uid, answer);
     answer
-}
-
-/// The order Kahn finds — feedback nodes first, then by uid — and what it could not place.
-fn kahn(
-    live: &HashMap<Uid, Instance>,
-    inbound: &HashMap<Uid, Vec<Uid>>,
-    dropped: &HashSet<Uid>,
-) -> (Vec<Uid>, Vec<Uid>) {
-    let mut indegree: HashMap<Uid, usize> = HashMap::new();
-    let mut successors: HashMap<Uid, Vec<Uid>> = HashMap::new();
-    for (uid, from) in inbound {
-        if dropped.contains(uid) {
-            continue;
-        }
-        let from: Vec<Uid> = from.iter().copied().filter(|p| !dropped.contains(p)).collect();
-        indegree.insert(*uid, from.len());
-        for p in from {
-            successors.entry(p).or_default().push(*uid);
-        }
-    }
-    let mut order: Vec<Uid> = Vec::with_capacity(live.len());
-    let mut ready: Vec<Uid> = indegree.iter().filter(|(_, d)| **d == 0).map(|(u, _)| *u).collect();
-    while !ready.is_empty() {
-        ready.sort_by_key(|u| std::cmp::Reverse((!live[u].class.feedback, u.0)));
-        let u = ready.pop().expect("not empty");
-        order.push(u);
-        for s in successors.get(&u).into_iter().flatten() {
-            let d = indegree.get_mut(s).expect("a successor is in the graph");
-            *d -= 1;
-            if *d == 0 {
-                ready.push(*s);
-            }
-        }
-    }
-    let stuck: Vec<Uid> = indegree.keys().filter(|u| !order.contains(u)).copied().collect();
-    (order, stuck)
-}
-
-fn reaches_itself(start: Uid, inbound: &HashMap<Uid, Vec<Uid>>, within: &[Uid]) -> bool {
-    let mut seen: HashSet<Uid> = HashSet::new();
-    let mut stack: Vec<Uid> =
-        inbound.get(&start).into_iter().flatten().copied().filter(|p| within.contains(p)).collect();
-    while let Some(u) = stack.pop() {
-        if u == start {
-            return true;
-        }
-        if seen.insert(u) {
-            stack.extend(inbound.get(&u).into_iter().flatten().copied().filter(|p| within.contains(p)));
-        }
-    }
-    false
 }
