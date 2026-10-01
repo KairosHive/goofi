@@ -415,7 +415,7 @@ fn an_expression_reads_a_port_and_follows_the_wire_behind_it() {
     // unlike a node's, that stream MOVES when somebody wires the sub-patch, so the binding has to
     // be re-resolved by the graph rather than re-written by the user.
     let g = Goofi::new();
-    g.state.graph.lock().set_evaluator(Arc::new(Always));
+    g.graph().set_evaluator(Arc::new(Always));
     let osc = g.add("LFO");
     let buf = g.add("Buffer");
     let inst = group(&g, &[hex(buf)]);
@@ -549,7 +549,7 @@ fn an_expression_reads_a_port_and_follows_the_wire_behind_it() {
     let path = dir.path().join("renamed.gfi");
     g.call("session save", j!({ "path": path.to_string_lossy() }));
     let back = Goofi::new();
-    back.state.graph.lock().set_evaluator(Arc::new(Always));
+    back.graph().set_evaluator(Arc::new(Always));
     back.call("session load", j!({ "path": path.to_string_lossy() }));
     let loaded_buf = back.nodes().into_iter()
         .find(|u| back.doc()["nodes"][u]["name"] == "buffer0")

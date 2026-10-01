@@ -146,6 +146,7 @@ impl Harnesses {
             seats: AtomicU64::new(0),
             tail: Mutex::default(),
             workers: Mutex::default(),
+            reaped: Mutex::new(None),
             _lease: goofi_supervisor::scope::lease(
                 goofi_supervisor::scope::Kind::Child,
                 format!("harness {agent} (pid {})", child.process_id().unwrap_or_default()),
@@ -193,7 +194,10 @@ impl Harnesses {
             history.lock().drop_actor(&actor_of(&reaped));
             events.send(crate::Event::HarnessChanged(harnesses.roster(&goofi_supervisor::home::agents())));
         });
-        inst.workers.lock().extend(reaper);
+        if let Ok(reaper) = reaper {
+            *inst.reaped.lock() = Some(reaper.done());
+            inst.workers.lock().push(reaper);
+        }
         Ok(id)
     }
 
@@ -224,13 +228,10 @@ impl Harnesses {
         }
         Some(move || {
             let deadline = std::time::Instant::now() + GRACE;
-            while taken.iter().any(|(_, i)| i.exit_code().is_none())
-                && std::time::Instant::now() < deadline
-            {
-                std::thread::sleep(std::time::Duration::from_millis(25));
-            }
             for (_, inst) in &taken {
-                let _ = signal(inst, goofi_supervisor::child::force_kill);
+                if !inst.reaped_within(deadline.saturating_duration_since(std::time::Instant::now())) {
+                    let _ = signal(inst, goofi_supervisor::child::force_kill);
+                }
             }
             let deadline = std::time::Instant::now() + goofi_transport::SHUTDOWN_WAIT;
             for (_, inst) in &taken {
@@ -242,14 +243,16 @@ impl Harnesses {
     }
 }
 
-/// Ask a running instance to leave, and insist after the grace.
+/// Ask a running instance to leave, and insist after the grace — a wait on the reap, so a child
+/// that leaves at once releases the thread at once.
 fn begin_stop(inst: Arc<Instance>) -> Result<(), String> {
     inst.stopping.store(true, Ordering::Relaxed);
     signal(&inst, goofi_supervisor::child::request_stop)?;
     let stopped = inst.clone();
     let stop = goofi_supervisor::worker::spawn("goofi-term-stop", move || {
-        std::thread::sleep(GRACE);
-        let _ = signal(&stopped, goofi_supervisor::child::force_kill);
+        if !stopped.reaped_within(GRACE) {
+            let _ = signal(&stopped, goofi_supervisor::child::force_kill);
+        }
     });
     inst.workers.lock().extend(stop);
     Ok(())
@@ -306,6 +309,8 @@ pub struct Instance {
     _lease: goofi_supervisor::scope::Lease,
     /// Its drain, its reaper and its stop: joined once it is reaped.
     workers: Mutex<Vec<goofi_supervisor::worker::Worker>>,
+    /// The reaper's end, which is the exit: what a stop's grace waits on.
+    reaped: Mutex<Option<goofi_supervisor::worker::Done>>,
 }
 
 /// What an attach hands a `/term` socket: the replayed tail, then the live channels.
@@ -368,6 +373,12 @@ impl Instance {
 
     pub fn exit_code(&self) -> Option<u32> {
         *self.exit.borrow()
+    }
+
+    /// Whether the child was reaped within `within`; one with no reaper counts as reaped.
+    fn reaped_within(&self, within: std::time::Duration) -> bool {
+        let reaped = self.reaped.lock().clone();
+        reaped.is_none_or(|done| done.wait_within(within))
     }
 }
 

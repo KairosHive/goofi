@@ -101,7 +101,7 @@ pub struct AppState {
     /// What every port of this manager and its engines is built against: the session's iceoryx2.
     pub iox: Arc<goofi_transport::Iox>,
     pub plugins: Arc<plugins::Plugins>,
-    pub graph: Arc<Mutex<Graph>>,
+    pub(crate) graph: Arc<Mutex<Graph>>,
     /// What this instance serves, one owner: the op table, the routes and the engines read it.
     pub mode: Mode,
     /// The patch `--load` named, opened before the first client connects. A demo reads it as the
@@ -334,6 +334,12 @@ impl AppState {
         let base = self.demo_base.as_deref()?;
         let stem = self.load.as_deref().and_then(std::path::Path::file_stem);
         Some(schemas::examples(base, stem.and_then(|s| s.to_str())))
+    }
+
+    /// The graph under its lock: the harness's and the CLI's door for a READ. An op is the way
+    /// to change it, and holds the lock through its tail.
+    pub fn graph(&self) -> MutexGuard<'_, Graph> {
+        self.graph.lock()
     }
 
     pub fn mount(&self) -> PathBuf {

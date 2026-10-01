@@ -74,6 +74,46 @@ fn timed<F: std::future::Future>(bound: Duration, f: F) -> tokio::time::Timeout<
     tokio::time::timeout(bound, f)
 }
 
+/// How many test threads may hold a live instance at once.
+const LIVE: usize = 8;
+
+struct Gate {
+    holders: goofi_supervisor::sync::Mutex<Vec<(std::thread::ThreadId, usize)>>,
+    freed: goofi_supervisor::sync::Condvar,
+}
+
+impl Gate {
+    fn enter(&self) {
+        let me = std::thread::current().id();
+        let mut holders = self.holders.lock();
+        if let Some(h) = holders.iter_mut().find(|(t, _)| *t == me) {
+            h.1 += 1;
+            return;
+        }
+        while holders.len() >= LIVE {
+            holders = self.freed.wait(holders);
+        }
+        holders.push((me, 1));
+    }
+
+    fn leave(&self) {
+        let me = std::thread::current().id();
+        let mut holders = self.holders.lock();
+        if let Some(i) = holders.iter().position(|(t, _)| *t == me) {
+            holders[i].1 -= 1;
+            if holders[i].1 == 0 {
+                holders.swap_remove(i);
+                self.freed.notify_all();
+            }
+        }
+    }
+}
+
+fn gate() -> &'static Gate {
+    static GATE: Gate = Gate { holders: goofi_supervisor::sync::Mutex::new(Vec::new()), freed: goofi_supervisor::sync::Condvar::new() };
+    &GATE
+}
+
 fn thread_name() -> String {
     std::thread::current().name().unwrap_or("?").to_string()
 }
@@ -98,6 +138,7 @@ impl Drop for Goofi {
         if let Some(manager) = self.manager.take() {
             running().lock().retain(|(t, _, _)| *t != self.token);
             drop(manager);
+            gate().leave();
             // Last: every plugin was unmade on it by the shutdown above.
             if let Some((ui, thread)) = self.windows.take() {
                 ui.stop();
@@ -212,6 +253,9 @@ impl Goofi {
         config.python = find_python();
         config.plugins = plugins;
         config.register = Some(Box::new(fixtures::register));
+        // At most LIVE instances at once across the binary's test threads, counted per thread so
+        // a situation that boots a second one never waits on itself. What the thread count was.
+        gate().enter();
         let manager = goofi_bridge::boot(config).expect("the state boots");
         let state = manager.state.clone();
         watchdog();
@@ -283,9 +327,14 @@ impl Goofi {
     /// Set one param's literal value, answering `{value, error}` — the value as STORED, coerced
     /// to the param's declared type.
     #[track_caller]
+    /// The graph under its lock, for a situation's own look at the runtime.
+    pub fn graph(&self) -> std::sync::MutexGuard<'_, goofi_graph::Graph> {
+        self.state.graph()
+    }
+
     /// A node's display NAME, from a uid or from a name — how every op addresses it.
     pub fn name(&self, node: &str) -> String {
-        let g = self.state.graph.lock();
+        let g = self.state.graph();
         let uid = g.resolve_ref(node).unwrap_or_else(|| panic!("`{node}` names no node"));
         g.name(uid).unwrap_or_default().to_string()
     }
@@ -343,7 +392,7 @@ impl Goofi {
         factory: goofi_signal_sdk::NodeFactory,
         tier: &'static goofi_node::IsolationCell,
     ) {
-        goofi_bridge::register_dyn_type(&mut self.state.graph.lock(), manifest, factory, tier);
+        goofi_bridge::register_dyn_type(&mut self.state.graph(), manifest, factory, tier);
     }
 
     /// The LEAF node uids in the replicated projection, sorted. One map carries every entity, so
@@ -414,7 +463,7 @@ impl Goofi {
     /// Open a subscriber on one output slot — the same door `/data` opens.
     #[track_caller]
     pub fn probe(&self, node: Uid, slot: &str) -> OutputProbe {
-        OutputProbe::open(&self.state.iox, &self.state.graph.lock(), node, slot)
+        OutputProbe::open(&self.state.iox, &self.state.graph(), node, slot)
     }
 
     /// Poll `f` until it answers `Some`, or fail naming `what`.
@@ -465,14 +514,14 @@ impl Goofi {
 
     /// A node's runtime stage, as the status-drain worker filed it.
     pub fn stage(&self, node: Uid) -> String {
-        let mut g = self.state.graph.lock();
+        let mut g = self.state.graph();
         g.drain_status();
         g.node_stage(node).to_string()
     }
 
     /// A node's standing error, if it has one.
     pub fn error(&self, node: Uid) -> Option<String> {
-        let mut g = self.state.graph.lock();
+        let mut g = self.state.graph();
         g.drain_status();
         g.last_error(node).map(str::to_owned)
     }
@@ -527,14 +576,14 @@ fn scanner() -> PathBuf {
 /// Render `frames` on the audio engine's external clock and hand back what the device would get,
 /// interleaved, with its channel count.
 pub fn drive(g: &Goofi, frames: usize) -> (Vec<f32>, u16) {
-    let mut graph = g.state.graph.lock();
+    let mut graph = g.graph();
     goofi_bridge::audio_engine(&mut graph).drive(frames)
 }
 
 /// Wait until every audio control half has taken what the patch last asked of it: one whole
 /// control tick each, acknowledged, so a param edit is in the next block `drive` renders.
 pub fn applied(g: &Goofi) {
-    let acks = goofi_bridge::audio_engine(&mut g.state.graph.lock()).flush_recording();
+    let acks = goofi_bridge::audio_engine(&mut g.graph()).flush_recording();
     for ack in acks {
         let _ = ack.recv_timeout(WAIT).expect("a control half acknowledges its tick");
     }
@@ -543,7 +592,7 @@ pub fn applied(g: &Goofi) {
 /// Tick the graphics engine's external clock `frames` times, on this thread — what the binary's
 /// own timer clock does, at the caller's pace.
 pub fn render(g: &Goofi, frames: usize) {
-    let mut graph = g.state.graph.lock();
+    let mut graph = g.graph();
     goofi_bridge::graphics_engine(&mut graph).render(frames);
 }
 
@@ -1058,7 +1107,7 @@ pub fn install_all(g: &Goofi, files: &[(&str, &str)]) -> Vec<String> {
         })
         .collect();
     g.call("library refresh", j!({}));
-    let graph = g.state.graph.lock();
+    let graph = g.graph();
     for ((file, _), name) in files.iter().zip(&names) {
         if let Some((_, reason)) = graph.unavailable_types().find(|(n, _)| goofi_node::bare(n) == name) {
             panic!("{file} scanned as unavailable: {reason}");

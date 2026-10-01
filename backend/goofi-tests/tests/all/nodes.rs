@@ -47,9 +47,9 @@ fn first_f32(d: &Data) -> f32 {
 /// Watch one node's `out` slot until it carries `want`. The probe is opened per call because a
 /// restart is a REBIRTH onto the next generation's service, and the frame in flight may be old.
 fn emits(g: &Goofi, uid: goofi_tests::Uid, want: f32) {
-    let probe = OutputProbe::open(&g.state.iox, &g.state.graph.lock(), uid, "out");
+    let probe = OutputProbe::open(&g.state.iox, &g.graph(), uid, "out");
     g.until(&format!("{uid} to emit {want}"), |g| {
-        let mut graph = g.state.graph.lock();
+        let mut graph = g.graph();
         probe.frame(&mut graph).filter(|d| first_f32(d) == want)
     });
 }
@@ -183,7 +183,7 @@ fn loading_a_patch_registers_the_nodes_it_ships_before_resolving_them() {
     let opened = Goofi::new();
     opened.call("session load", j!({ "path": target.to_string_lossy() }));
     assert_eq!(opened.nodes().len(), 1);
-    let uid = opened.state.graph.lock().node_uids()[0];
+    let uid = opened.graph().node_uids()[0];
     emits(&opened, uid, 5.0); // the instance runs the patch's code
 
     // `new` swaps in an empty workspace, so a type the previous patch brought stops being addable.
@@ -214,10 +214,10 @@ const PY_LEVEL: &str = "import goofi\nimport numpy as np\nclass Level(goofi.Node
 
 /// Drive the audio clock and watch one node's `out` tap until it holds `want`.
 fn holds(g: &Goofi, uid: goofi_tests::Uid, want: f32) {
-    let probe = OutputProbe::open(&g.state.iox, &g.state.graph.lock(), uid, "out");
+    let probe = OutputProbe::open(&g.state.iox, &g.graph(), uid, "out");
     g.until(&format!("{uid} to hold {want}"), |g| {
         drive(g, 4800);
-        probe.frame(&mut g.state.graph.lock()).filter(|d| first_f32(d) == want)
+        probe.frame(&mut g.graph()).filter(|d| first_f32(d) == want)
     });
 }
 
@@ -328,7 +328,7 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
     assert_eq!(rescan(&g)["added"], j!(["signal:Doomed"]));
     let doomed = g.add("Doomed");
     g.call("node remove", j!({ "node": goofi_tests::hex(doomed) }));
-    g.until("the doomed instance to be gone", |g| (g.state.graph.lock().node_count() == 2).then_some(()));
+    g.until("the doomed instance to be gone", |g| (g.graph().node_count() == 2).then_some(()));
     assert!(g.call("library list", j!({}))["types"].as_array().is_some(), "the server answers after the drop");
 
     // A hosted node that ABORTS takes its child, not goofi: the node reports the exit, and the
@@ -409,7 +409,7 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
     opened.call("session load", j!({ "path": target.to_string_lossy() }));
     let of_type = |ty: &str| {
         let doc = opened.doc();
-        let uids = opened.state.graph.lock().node_uids();
+        let uids = opened.graph().node_uids();
         uids.into_iter().find(|u| doc["nodes"][goofi_tests::hex(*u)]["type"] == ty).expect(ty)
     };
     emits(&opened, of_type("signal:Twice"), 3.0);
@@ -574,7 +574,7 @@ fn a_node_saved_to_the_private_library_leaves_the_patch_rides_the_archive_and_st
             "the archive's copy is dropped where the library already holds it, byte for byte");
     assert_eq!(source(&opened, "signal:MyKept"), "custom");
     assert_eq!(opened.call("session status", j!({}))["dirty"], false, "…and dropping it is not an edit");
-    let running = |g: &Goofi| g.state.graph.lock().node_uids()[0];
+    let running = |g: &Goofi| g.graph().node_uids()[0];
     emits(&opened, running(&opened), 1.0);
 
     // The library is the ONE source: an edit there reaches the patch that was saved before it.

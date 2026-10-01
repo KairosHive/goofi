@@ -23,13 +23,13 @@ fn a_shipped_node_runs_with_no_cargo_and_an_authored_one_says_what_it_needs() {
     assert!(g.call("library list", j!({}))["types"].as_array().unwrap().iter().all(|v| v["type"] != "signal:Stale"),
             "a file an earlier build left in the home is not a node");
     let uid = g.add("LFO");
-    let probe = OutputProbe::open(&g.state.iox, &g.state.graph.lock(), uid, "out");
-    g.until("the shipped LFO to emit", |g| probe.frame(&mut g.state.graph.lock()));
+    let probe = OutputProbe::open(&g.state.iox, &g.graph(), uid, "out");
+    g.until("the shipped LFO to emit", |g| probe.frame(&mut g.graph()));
     let osc = g.add("Osc");
-    let tap = OutputProbe::open(&g.state.iox, &g.state.graph.lock(), osc, "out");
+    let tap = OutputProbe::open(&g.state.iox, &g.graph(), osc, "out");
     g.until("the shipped audio oscillator to sound", |g| {
         drive(g, 4800);
-        tap.frame(&mut g.state.graph.lock()).filter(|d| f32s(d).iter().any(|v| v.abs() > 0.5))
+        tap.frame(&mut g.graph()).filter(|d| f32s(d).iter().any(|v| v.abs() > 0.5))
     });
 
     let dir = g.state.mount().join("nodes_signal");

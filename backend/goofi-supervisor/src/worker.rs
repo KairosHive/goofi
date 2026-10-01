@@ -67,7 +67,33 @@ pub struct Worker<T = ()> {
     done: Arc<(Mutex<bool>, Condvar)>,
 }
 
+/// A watch on a thread's end that any number of holders can wait on, the handle kept elsewhere.
+#[derive(Clone)]
+pub struct Done(Arc<(Mutex<bool>, Condvar)>);
+
+impl Done {
+    /// Wait up to `within` for the thread to end; whether it did.
+    pub fn wait_within(&self, within: Duration) -> bool {
+        let (flag, wake) = &*self.0;
+        let deadline = Instant::now() + within;
+        let mut finished = flag.lock();
+        while !*finished {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            finished = wake.wait_timeout(finished, left);
+        }
+        true
+    }
+}
+
 impl<T> Worker<T> {
+    /// The watch on this thread's end.
+    pub fn done(&self) -> Done {
+        Done(self.done.clone())
+    }
+
     /// Wait for the thread to end, however long that takes.
     pub fn join(mut self) -> std::thread::Result<T> {
         self.handle.take().expect("joined once").join()
@@ -81,17 +107,6 @@ impl<T> Worker<T> {
     /// Wait up to `within` for the thread to end. `None` is the deadline: the thread runs on,
     /// detached, and stays listed until it ends.
     pub fn join_within(mut self, within: Duration) -> Option<std::thread::Result<T>> {
-        let (flag, wake) = &*self.done;
-        let deadline = Instant::now() + within;
-        let mut finished = flag.lock();
-        while !*finished {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return None;
-            }
-            finished = wake.wait_timeout(finished, left);
-        }
-        drop(finished);
-        Some(self.handle.take().expect("joined once").join())
+        self.done().wait_within(within).then(|| self.handle.take().expect("joined once").join())
     }
 }

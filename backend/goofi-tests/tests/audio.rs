@@ -128,7 +128,7 @@ fn near(a: usize, b: usize) -> bool {
 #[test]
 fn a_patch_sounds_under_the_external_clock() {
     let g = Goofi::new();
-    g.state.graph.lock().set_evaluator(Arc::new(FirstVar::default()));
+    g.graph().set_evaluator(Arc::new(FirstVar::default()));
 
     // Step: the palette lists the audio engine's types, and a chain of three sounds at once.
     let types = g.call("library list", j!({}));
@@ -983,7 +983,7 @@ fn a_patch_sounds_under_the_external_clock() {
     // so the scheduler's noise can neither take the node nor hide an overrun.
     let cost = |g: &Goofi, ms: u64| {
         let ms = std::time::Duration::from_millis(ms);
-        goofi_bridge::audio_engine(&mut g.state.graph.lock()).state_cost(trap, Some(ms));
+        goofi_bridge::audio_engine(&mut g.graph()).state_cost(trap, Some(ms));
     };
     cost(&g, 2);
     for _ in 0..4 {
@@ -1298,7 +1298,7 @@ fn settled(g: &Goofi, uid: Uid, what: &str) -> Vec<f32> {
 #[test]
 fn one_signal_speaks_through_another_band_by_band() {
     let g = Goofi::new();
-    g.state.graph.lock().set_evaluator(Arc::new(FirstVar::default()));
+    g.graph().set_evaluator(Arc::new(FirstVar::default()));
 
     // Step: with nothing behind `gains` every band is open, so a tone through the bank is still
     // that tone, at that pitch — louder, because neighbouring bands overlap and add.
@@ -1525,7 +1525,7 @@ fn lane(x: &[f32], c: usize, channels: u16) -> Vec<f32> {
 #[test]
 fn an_audio_out_lands_on_the_channels_it_names() {
     let g = Goofi::new();
-    g.state.graph.lock().set_evaluator(Arc::new(FirstVar::default()));
+    g.graph().set_evaluator(Arc::new(FirstVar::default()));
 
     let osc = g.add("Osc");
     let out = g.add("AudioOut");

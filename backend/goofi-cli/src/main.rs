@@ -427,7 +427,7 @@ async fn run(
     }
 
     let code = if boot_only {
-        let names = goofi_bridge::catalog_type_names(&state.graph.lock());
+        let names = goofi_bridge::catalog_type_names(&state.graph());
         if let Some(startup) = startup.take() {
             startup.finish("Node library ready");
         }

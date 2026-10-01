@@ -6,7 +6,7 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-§4.I, §5.8-10 and 12-13.
+§5.10.
 
 ## 1. The patch model and the runtime are two types
 
@@ -70,8 +70,6 @@ preview's latest-wins slot is not a queue).
 `goofi-runtime` holds every node's thread, desired state, bindings, ports and faults behind one
 `Executor` trait; data services keep no history, and the one-shot race stays a documented property.
 
-- **I** Native ABI stays bytes; params cross only as deltas, not the whole map per call.
-
 Audio keeps loading `.rs` files in-process and never unloads them (`audio-engine.md`). Fold
 graphics recording (`set_recorder` from the render thread) into the executor.
 
@@ -84,22 +82,20 @@ one pass per `Kind` over the whole tree: finish, children on one shared deadline
 joined, ports, paths, devices. `boot` returns a `Manager { state, scope }` that is not `Clone`;
 dropping it is the shutdown.
 
-8. Plugin scopes.
-9. PTY scopes: children join through a `Stoppable` trait and reap on exit watches; the
-    sleeping stop thread, the 25 ms reap poll and the hand-made lease go.
-10. Windows process control (`windows-cleanup.md`); needs a Windows host:
-    `CREATE_NEW_PROCESS_GROUP` so Ctrl+C stays with goofi, a Job object per child with
-    `KILL_ON_JOB_CLOSE` and `CTRL_BREAK` for a graceful stop in place of `taskkill`, and a
-    blocking console-close handler bounded by the scope deadlines.
-12. Situations move off direct `state.graph` locks to ops and harness probes; `AppState.graph`
-    becomes crate-private; a harness gate on live instances replaces `RUST_TEST_THREADS`.
-13. Error enums (§6).
+- Windows process control (`windows-cleanup.md`); needs a Windows host:
+  `CREATE_NEW_PROCESS_GROUP` so Ctrl+C stays with goofi, a Job object per child with
+  `KILL_ON_JOB_CLOSE` and `CTRL_BREAK` for a graceful stop in place of `taskkill`, and a
+  blocking console-close handler bounded by the scope deadlines.
 
-## 6. Errors, locks, lexers
+Not to be done: a supervisor `Child` over the PTY child (portable-pty spawns and reaps it, and
+the reaper holds its handle in `wait`; a stop reaches it by pid, so the roster lease stays the
+instance's own).
 
-- Error enums only where a caller branches or a boundary needs context: transport (keeping the
-  iceoryx2 kind, so the Windows handle limit is a named fault), record, build, and `io::Error`
-  in the supervisor; graph and bridge `Result<_, String>` become §3's `OpError`.
+## 6. Errors
+
+Error enums only where a caller branches or a boundary needs context. No caller branches on a
+transport, record, build or supervisor error today, so each stays a `String`; the first caller
+that branches — the Windows handle limit as a named fault is §5.10's — brings the enum with it.
 
 ## Smaller items
 

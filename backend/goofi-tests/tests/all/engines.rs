@@ -337,7 +337,7 @@ fn gfx_frame() -> goofi_core::Data {
 }
 
 fn register_skeletons(t: &Goofi) {
-    let mut g = t.state.graph.lock();
+    let mut g = t.graph();
     let waker = g.drain_waker();
     g.set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
     g.register_engine(Box::new(Skeleton::new(
@@ -375,7 +375,7 @@ fn a_scheduled_engine_beside_the_signal_one() {
 
     // Step: a THIRD engine takes a name the signal engine ships. A type id is `engine:Name`, so
     // both are advertised, both are addressable, and the bare name is refused as ambiguous.
-    t.state.graph.lock().register_engine(Box::new(LibraryEngine::named("twin", &["LFO"])));
+    t.graph().register_engine(Box::new(LibraryEngine::named("twin", &["LFO"])));
 
     let rows = t.call("library list", j!({}))["types"].clone();
     let ids: Vec<&str> = rows.as_array().unwrap().iter().map(|r| r["type"].as_str().unwrap()).collect();
@@ -522,12 +522,12 @@ fn a_scheduled_engine_beside_the_signal_one() {
     t.call("node remove", j!({ "node": hex(picker) }));
 
     // Step: a restart is a rebirth through the same trait doors — new generation, new services.
-    let generation = t.state.graph.lock().node_generation(audio);
+    let generation = t.graph().node_generation(audio);
     let stale_probe = t.probe(audio, "out");
     t.call("node restart", j!({ "node": hex(audio) }));
     t.ready(audio);
     assert_eq!(
-        t.state.graph.lock().node_generation(audio),
+        t.graph().node_generation(audio),
         generation + 1,
         "the rebirth minted a fresh generation"
     );
