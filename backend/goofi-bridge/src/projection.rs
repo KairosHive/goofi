@@ -80,22 +80,11 @@ pub fn of(g: &Graph) -> Value {
         .collect();
 
     let mut variables = Map::new();
-    for (name, value, lock, control, source) in g.variables().entries() {
-        let mut entry = goofi_graph::variable_to_json(value);
-        if let Value::Object(m) = &mut entry {
-            if let Some(c) = control {
-                m.insert("control".into(), serde_json::to_value(c).expect("a plain record"));
-            }
-            if let Some(s) = source {
-                let mut record = serde_json::to_value(s).expect("a plain record");
-                if let (Value::Object(r), Some(error)) = (&mut record, g.variable_source_error(s)) {
-                    r.insert("error".into(), Value::String(error));
-                }
-                m.insert("source".into(), record);
-            }
-            if !lock.is_default() {
-                m.insert("lock".into(), serde_json::to_value(lock).expect("a plain record"));
-            }
+    for (name, v) in g.variables().entries() {
+        let mut entry = serde_json::to_value(v).expect("a plain record");
+        // Why a source delivers nothing rides beside it, so the panel can say so.
+        if let Some(error) = v.source.as_ref().and_then(|s| g.variable_source_error(s)) {
+            entry["source"]["error"] = Value::String(error);
         }
         variables.insert(name.to_string(), entry);
     }

@@ -366,14 +366,36 @@ fn group_of(name: &str) -> &str {
     split_variable(name).map(|(g, _)| g).unwrap_or(name)
 }
 
+/// One variable: its typed value beside the widget, source and lock it carries. The serde
+/// shape is the `.gfi`'s and the doc's: `{type, value, control?, source?, lock?}`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Variable {
+    #[serde(flatten)]
+    pub value: VariableValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<Control>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<VariableSource>,
+    /// The variable's OWN lock, apart from its group's; absent is the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock: Option<Lock>,
+}
+
+impl Variable {
+    pub fn of(value: VariableValue) -> Variable {
+        Variable { value, control: None, source: None, lock: None }
+    }
+
+    pub fn own_lock(&self) -> Lock {
+        self.lock.unwrap_or_default()
+    }
+}
+
 /// The authoritative variables map. Locks decide what a caller may change, and the insertion order
 /// is observable (the panel, the `.gfi` and the mirror all read it).
 #[derive(Clone)]
 pub struct VariableStore {
-    values: IndexMap<String, VariableValue>,
-    controls: IndexMap<String, Control>,
-    sources: IndexMap<String, VariableSource>,
-    locks: IndexMap<String, Lock>,
+    entries: IndexMap<String, Variable>,
     groups: IndexMap<String, Lock>,
 }
 
@@ -385,13 +407,7 @@ impl Default for VariableStore {
 
 impl VariableStore {
     pub fn new() -> VariableStore {
-        let mut s = VariableStore {
-            values: IndexMap::new(),
-            controls: IndexMap::new(),
-            sources: IndexMap::new(),
-            locks: IndexMap::new(),
-            groups: IndexMap::new(),
-        };
+        let mut s = VariableStore { entries: IndexMap::new(), groups: IndexMap::new() };
         s.reassert_system();
         s
     }
@@ -402,44 +418,39 @@ impl VariableStore {
     pub fn reassert_system(&mut self) {
         for def in SYSTEM_VARIABLES {
             if def.ephemeral {
-                self.values.insert(def.name.to_string(), (def.value)());
-                self.locks.insert(def.name.to_string(), Lock { config: false, value: true });
+                let mut v = Variable::of((def.value)());
+                v.lock = Some(Lock { config: false, value: true });
+                self.entries.insert(def.name.to_string(), v);
             } else {
-                self.values.entry(def.name.to_string()).or_insert_with(def.value);
+                self.entries.entry(def.name.to_string()).or_insert_with(|| Variable::of((def.value)()));
             }
         }
         self.groups.insert(SYSTEM_GROUP.to_string(), Lock { config: true, value: false });
     }
 
     pub fn get(&self, name: &str) -> Option<&VariableValue> {
-        self.values.get(name)
+        self.entries.get(name).map(|v| &v.value)
     }
     pub fn contains(&self, name: &str) -> bool {
-        self.values.contains_key(name)
+        self.entries.contains_key(name)
     }
 
-    /// Every variable in order, with its OWN lock, the control record that makes it an element, and
-    /// the source it follows.
-    pub fn entries(&self) -> impl Iterator<Item = (&str, &VariableValue, Lock, Option<&Control>, Option<&VariableSource>)> {
-        self.values.iter().map(|(k, v)| {
-            (k.as_str(), v, self.locks.get(k).copied().unwrap_or_default(), self.controls.get(k), self.sources.get(k))
-        })
+    /// Every variable in order, whole.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &Variable)> {
+        self.entries.iter().map(|(k, v)| (k.as_str(), v))
     }
 
     pub fn source(&self, name: &str) -> Option<&VariableSource> {
-        self.sources.get(name)
+        self.entries.get(name)?.source.as_ref()
     }
 
     /// Set or clear what a variable follows, answering what it followed. A source is config.
     pub fn set_source(&mut self, name: &str, source: Option<VariableSource>) -> Result<Option<VariableSource>, String> {
-        if !self.values.contains_key(name) {
+        if !self.entries.contains_key(name) {
             return Err(format!("no such variable `{name}`"));
         }
         self.config_locked(name)?;
-        Ok(match source {
-            Some(s) => self.sources.insert(name.to_string(), s),
-            None => self.sources.shift_remove(name),
-        })
+        Ok(std::mem::replace(&mut self.entries[name].source, source))
     }
 
     /// The follower's own write: what the source delivered, coerced to the type held. It answers
@@ -447,31 +458,26 @@ impl VariableStore {
     pub fn follow(&mut self, name: &str, value: VariableValue) -> bool {
         // A variable with no source has no follower: a pick already in flight when one is cleared
         // would otherwise land after, and overwrite the value the clearing author then typed.
-        if is_ephemeral(name) || self.lock_of(name).value || !self.sources.contains_key(name) {
+        if is_ephemeral(name) || self.lock_of(name).value || self.source(name).is_none() {
             return false;
         }
-        let Some(existing) = self.values.get(name) else { return false };
-        let coerced = value.coerced_like(existing);
-        if *existing == coerced {
-            return false;
-        }
-        self.values.insert(name.to_string(), coerced);
-        true
+        self.move_value(name, value)
     }
 
     /// An ENGINE's own published fact, which is why it passes the value lock: the lock exists to
     /// keep every other writer out, and the engine is the one it is held for. Only an ephemeral
     /// name takes one. Answers whether the value MOVED, which is what a rebind is worth doing for.
     pub fn publish(&mut self, name: &str, value: VariableValue) -> bool {
-        if !is_ephemeral(name) {
+        is_ephemeral(name) && self.move_value(name, value)
+    }
+
+    fn move_value(&mut self, name: &str, value: VariableValue) -> bool {
+        let Some(existing) = self.entries.get_mut(name) else { return false };
+        let coerced = value.coerced_like(&existing.value);
+        if existing.value == coerced {
             return false;
         }
-        let Some(existing) = self.values.get(name) else { return false };
-        let coerced = value.coerced_like(existing);
-        if *existing == coerced {
-            return false;
-        }
-        self.values.insert(name.to_string(), coerced);
+        existing.value = coerced;
         true
     }
 
@@ -487,7 +493,7 @@ impl VariableStore {
 
     /// A variable's OWN lock, apart from its group's.
     pub fn own_lock(&self, name: &str) -> Lock {
-        self.locks.get(name).copied().unwrap_or_default()
+        self.entries.get(name).map(Variable::own_lock).unwrap_or_default()
     }
 
     pub fn group_lock(&self, group: &str) -> Lock {
@@ -496,7 +502,7 @@ impl VariableStore {
 
     /// What holds `name` right now: its own lock and its group's together.
     pub fn lock_of(&self, name: &str) -> Lock {
-        self.locks.get(name).copied().unwrap_or_default().or(self.group_lock(group_of(name)))
+        self.own_lock(name).or(self.group_lock(group_of(name)))
     }
 
     /// Set a variable's own lock, answering the one it held. The system group's are not a caller's.
@@ -504,14 +510,11 @@ impl VariableStore {
         if group_of(name) == SYSTEM_GROUP {
             return Err(format!("`{name}` is goofi's own; its lock is not yours to set"));
         }
-        if !self.values.contains_key(name) {
+        let Some(v) = self.entries.get_mut(name) else {
             return Err(format!("no such variable `{name}`"));
-        }
-        let old = self.locks.get(name).copied().unwrap_or_default();
-        match lock.is_default() {
-            true => drop(self.locks.shift_remove(name)),
-            false => drop(self.locks.insert(name.to_string(), lock)),
-        }
+        };
+        let old = v.own_lock();
+        v.lock = (!lock.is_default()).then_some(lock);
         Ok(old)
     }
 
@@ -551,7 +554,7 @@ impl VariableStore {
         if self.group_lock(group).config || self.group_lock(group).value {
             return Err(format!("variable group `{group}` is locked"));
         }
-        if self.values.keys().any(|name| group_of(name) == group) {
+        if self.entries.keys().any(|name| group_of(name) == group) {
             return Err(format!("variable group `{group}` is not empty"));
         }
         self.groups.shift_remove(group).ok_or_else(|| format!("no variable group `{group}`"))?;
@@ -567,7 +570,7 @@ impl VariableStore {
     }
 
     pub fn control(&self, name: &str) -> Option<&Control> {
-        self.controls.get(name)
+        self.entries.get(name)?.control.as_ref()
     }
 
     pub fn check_control(&self, name: &str, value: &VariableValue, control: Option<&Control>) -> Result<(), String> {
@@ -579,12 +582,9 @@ impl VariableStore {
     }
 
     pub fn set_control(&mut self, name: &str, control: Option<Control>) -> Result<(), String> {
-        let value = self.values.get(name).ok_or_else(|| format!("no such variable `{name}`"))?;
+        let value = self.get(name).ok_or_else(|| format!("no such variable `{name}`"))?;
         self.check_control(name, value, control.as_ref())?;
-        match control {
-            Some(c) => { self.controls.insert(name.to_string(), c); }
-            None => { self.controls.shift_remove(name); }
-        }
+        self.entries[name].control = control;
         Ok(())
     }
 
@@ -596,15 +596,15 @@ impl VariableStore {
         if self.lock_of(name).value {
             return Err(format!("variable `{name}` is value-locked"));
         }
-        if let Some(s) = self.sources.get(name) {
+        if let Some(s) = self.source(name) {
             return Err(format!("variable `{name}` follows `{}`; clear its source to set it", s.reference));
         }
-        match self.values.get(name) {
+        match self.get(name) {
             Some(existing) => {
                 if existing.type_name() != value.type_name() {
                     self.config_locked(name)?;
                 }
-                self.values.insert(name.to_string(), value);
+                self.entries[name].value = value;
                 Ok(())
             }
             None => Err(format!("no such variable `{name}`")),
@@ -617,62 +617,50 @@ impl VariableStore {
         if !is_valid_variable_name(name) {
             return Err(format!("invalid variable name `{name}`: {VARIABLE_NAME_RULE}"));
         }
-        if self.values.contains_key(name) {
+        if self.entries.contains_key(name) {
             return Err(format!("variable `{name}` already exists"));
         }
         if self.group_lock(group_of(name)).config {
             return Err(format!("group `{}` is config-locked", group_of(name)));
         }
-        let at = at.unwrap_or(usize::MAX).min(self.values.len());
-        self.values.shift_insert(at, name.to_string(), value);
+        let at = at.unwrap_or(usize::MAX).min(self.entries.len());
+        self.entries.shift_insert(at, name.to_string(), Variable::of(value));
         Ok(())
     }
 
     /// Ordered position of `name` — a delete's inverse captures it to re-add at the original slot.
     pub fn index_of(&self, name: &str) -> Option<usize> {
-        self.values.get_index_of(name)
+        self.entries.get_index_of(name)
     }
 
     /// Remove a variable; errors when it is config-locked or absent.
     pub fn remove(&mut self, name: &str) -> Result<(), String> {
-        if !self.values.contains_key(name) {
+        if !self.entries.contains_key(name) {
             return Err(format!("no such variable `{name}`"));
         }
         self.config_locked(name)?;
-        self.values.shift_remove(name);
-        self.controls.shift_remove(name);
-        self.sources.shift_remove(name);
-        self.locks.shift_remove(name);
+        self.entries.shift_remove(name);
         Ok(())
     }
 
     /// Rename a variable, keeping its ordered position; its own lock travels with it.
     pub fn rename(&mut self, from: &str, to: &str) -> Result<(), String> {
-        if !self.values.contains_key(from) {
+        if !self.entries.contains_key(from) {
             return Err(format!("no such variable `{from}`"));
         }
         self.config_locked(from)?;
         if !is_valid_variable_name(to) {
             return Err(format!("invalid variable name `{to}`: {VARIABLE_NAME_RULE}"));
         }
-        if self.values.contains_key(to) {
+        if self.entries.contains_key(to) {
             return Err(format!("variable `{to}` already exists"));
         }
         if self.group_lock(group_of(to)).config && group_of(to) != group_of(from) {
             return Err(format!("group `{}` is config-locked", group_of(to)));
         }
-        let at = self.values.get_index_of(from).expect("checked above");
-        let value = self.values.shift_remove(from).expect("the index answered");
-        self.values.shift_insert(at, to.to_string(), value);
-        if let Some(c) = self.controls.shift_remove(from) {
-            self.controls.insert(to.to_string(), c);
-        }
-        if let Some(l) = self.locks.shift_remove(from) {
-            self.locks.insert(to.to_string(), l);
-        }
-        if let Some(s) = self.sources.shift_remove(from) {
-            self.sources.insert(to.to_string(), s);
-        }
+        let at = self.entries.get_index_of(from).expect("checked above");
+        let variable = self.entries.shift_remove(from).expect("the index answered");
+        self.entries.shift_insert(at, to.to_string(), variable);
         Ok(())
     }
 
@@ -693,12 +681,12 @@ impl VariableStore {
             return Err(format!("variable group `{to}` already exists"));
         }
         let moved: Vec<(String, String)> = self
-            .values
+            .entries
             .keys()
             .filter_map(|k| split_variable(k).filter(|(g, _)| *g == from).map(|(_, e)| (k.clone(), format!("{to}.{e}"))))
             .collect();
         for (old, new) in &moved {
-            if self.values.contains_key(new.as_str()) {
+            if self.entries.contains_key(new.as_str()) {
                 return Err(format!("variable `{new}` already exists"));
             }
             self.config_locked(old)?;
@@ -715,7 +703,7 @@ impl VariableStore {
 
     /// Whether a group has an explicit record or an entry.
     pub fn has_group(&self, group: &str) -> bool {
-        self.groups.contains_key(group) || self.values.keys().any(|k| group_of(k) == group)
+        self.groups.contains_key(group) || self.entries.keys().any(|k| group_of(k) == group)
     }
 
     /// Apply one change: `Some(v)` sets or adds (a NEW variable lands at `at`); `None` leaves the
@@ -727,9 +715,9 @@ impl VariableStore {
         at: Option<usize>,
     ) -> Result<(), String> {
         match value {
-            Some(v) if self.values.contains_key(name) => self.set(name, v),
+            Some(v) if self.entries.contains_key(name) => self.set(name, v),
             Some(v) => self.add(name, v, at),
-            None if self.values.contains_key(name) => Ok(()),
+            None if self.entries.contains_key(name) => Ok(()),
             None => Err(format!("no such variable `{name}`")),
         }
     }

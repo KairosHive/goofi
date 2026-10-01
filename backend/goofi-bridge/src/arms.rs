@@ -887,8 +887,8 @@ pub(crate) fn control_list(tx: &mut Txn, _payload: &Value) -> Result<Value, Stri
     let mut groups = serde_json::Map::new();
     let named: Vec<String> = tx.g.arrangement().control_panels().into_iter().map(|(_, group)| group).collect();
     let mut order: Vec<String> = named.clone();
-    for (name, _, _, control, _) in tx.g.variables().entries() {
-        if let (Some(_), Some((group, _))) = (control, name.split_once('.')) {
+    for (name, v) in tx.g.variables().entries() {
+        if let (Some(_), Some((group, _))) = (&v.control, name.split_once('.')) {
             if !order.iter().any(|o| o == group) {
                 order.push(group.to_string());
             }
@@ -898,8 +898,8 @@ pub(crate) fn control_list(tx: &mut Txn, _payload: &Value) -> Result<Value, Stri
         let elements: Vec<Value> = tx.g
             .variables()
             .entries()
-            .filter(|(name, _, _, control, _)| control.is_some() && name.split_once('.').is_some_and(|(gr, _)| gr == group))
-            .map(|(name, value, ..)| element_json(&tx.g, name, value))
+            .filter(|(name, v)| v.control.is_some() && name.split_once('.').is_some_and(|(gr, _)| gr == group))
+            .map(|(name, v)| element_json(&tx.g, name, &v.value))
             .collect();
         groups.insert(group.clone(), json!({ "lock": tx.g.variables().group_lock(&group), "elements": elements }));
     }
@@ -941,7 +941,7 @@ pub(crate) fn control_add(tx: &mut Txn, payload: &Value) -> Result<Value, String
                 .variables()
                 .entries()
                 .filter(|(n, ..)| n.split_once('.').is_some_and(|(gr, _)| gr == group))
-                .filter_map(|(_, _, _, c, _)| c.map(|c| (c.x, c.y, c.w, c.h)))
+                .filter_map(|(_, v)| v.control.as_ref().map(|c| (c.x, c.y, c.w, c.h)))
                 .collect();
             free_cell(&taken, w, h)
         }
@@ -1137,7 +1137,7 @@ pub(crate) fn variable_lock(tx: &mut Txn, payload: &Value) -> Result<Value, Stri
     if tx.g.variables().get(&name).is_none() {
         return Err(format!("variable entry lock: no variable `{name}`"));
     }
-    let held = tx.g.variables().entries().find(|(n, ..)| *n == name).map(|(_, _, l, ..)| l).unwrap_or_default();
+    let held = tx.g.variables().own_lock(&name);
     let lock = parse_lock(payload, held).map_err(|e| format!("variable entry lock: {e}"))?;
     tx.apply(goofi_graph::Command::LockVariable { name, lock })?;
     Ok(json!({ "lock": lock }))

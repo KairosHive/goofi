@@ -646,8 +646,8 @@ impl Graph {
     pub fn variable_sources(&self) -> Vec<(String, Uid, String, Option<usize>)> {
         self.patch.variables
             .entries()
-            .filter_map(|(name, _, _, _, source)| {
-                let s = source?;
+            .filter_map(|(name, v)| {
+                let s = v.source.as_ref()?;
                 let (uid, slot) = self.resolve_variable_source(s).ok()?;
                 Some((name.to_string(), uid, slot.to_string(), s.index))
             })
@@ -1637,8 +1637,8 @@ impl Graph {
         let followed: Vec<(String, goofi_core::variables::VariableSource)> = self
             .patch.variables
             .entries()
-            .filter_map(|(name, _, _, _, source)| {
-                let s = source?;
+            .filter_map(|(name, v)| {
+                let s = v.source.as_ref()?;
                 let reference = expr_rewrite::rename_reference(&s.reference, rename)?;
                 Some((name.to_string(), goofi_core::variables::VariableSource { reference, index: s.index }))
             })
@@ -3458,15 +3458,7 @@ impl Graph {
             .variables
             .entries()
             .filter(|(name, ..)| !self.patch.variables.is_ephemeral(name))
-            .map(|(name, value, lock, control, source)| {
-                let variable = doc::Variable {
-                    value: value.clone(),
-                    control: control.cloned(),
-                    source: source.cloned(),
-                    lock: (!lock.is_default()).then_some(lock),
-                };
-                (name.to_string(), variable)
-            })
+            .map(|(name, v)| (name.to_string(), v.clone()))
             .collect();
         // The system group's lock is goofi's own and re-asserted on load, so a file never carries it.
         patch.variable_groups = self

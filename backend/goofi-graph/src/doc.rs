@@ -2,7 +2,8 @@
 //! paste admits. Every spelling the `.gfi` and the clipboard carry is a field here.
 
 use goofi_core::record::RecordedOutput;
-use goofi_core::variables::{Control, Lock, VariableSource, VariableValue};
+use goofi_core::variables::Lock;
+pub use goofi_core::variables::Variable;
 use goofi_core::Param;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -128,19 +129,6 @@ impl Link {
     pub fn key(&self) -> String {
         format!("{}.{}>{}.{}", self.node_out, self.slot_out, self.node_in, self.slot_in)
     }
-}
-
-/// One variable: its typed value beside the widget, source and lock it carries.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Variable {
-    #[serde(flatten)]
-    pub value: VariableValue,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub control: Option<Control>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<VariableSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lock: Option<Lock>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

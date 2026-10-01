@@ -249,8 +249,9 @@ pub fn variables(g: &Graph) -> Value {
     let entries: Vec<Value> = g
         .variables()
         .entries()
-        .map(|(name, v, _, control, source)| {
-            let mut e = goofi_graph::variable_to_json(v);
+        .map(|(name, v)| {
+            let (control, source) = (v.control.as_ref(), v.source.as_ref());
+            let mut e = goofi_graph::variable_to_json(&v.value);
             e["name"] = json!(name);
             // What holds it, its own lock and its group's together — the answer a writer needs.
             e["lock"] = serde_json::to_value(g.variables().lock_of(name)).expect("a plain record");
