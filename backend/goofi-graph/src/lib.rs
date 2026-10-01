@@ -20,7 +20,7 @@ pub mod subpatch;
 pub mod layout;
 
 pub mod command;
-pub use command::{open_batch, open_preview, BatchScope, Command, CommandHistory, Outcome, PreviewScope, SourceState};
+pub use command::{open_batch, open_preview, Applied, BatchScope, Command, CommandHistory, Ctx, Outcome, PreviewScope, Skip, SourceState};
 
 pub mod expr_rewrite;
 

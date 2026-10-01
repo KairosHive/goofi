@@ -426,7 +426,7 @@ pub(crate) fn node_add(
     if let Some(entries) = payload.get("param").filter(|v| !v.is_null()) {
         let bag = param_entries_bag(entries).map_err(|e| format!("node add: {e}"))?;
         for cmd in goofi_graph::param_commands(&g, uid, &bag).map_err(|e| format!("node add: {e}"))? {
-            cmd.execute(&mut g).map_err(|e| format!("node add: {e}"))?;
+            cmd.execute(&mut g, goofi_graph::Ctx::Fresh).map_err(|e| format!("node add: {e}"))?;
         }
     }
     // A bare uid: the node itself arrives via the doc mirror.
@@ -593,10 +593,6 @@ pub(crate) fn node_touched_clear(
     // inverse captures the blob it replaced.
     state.history.lock().apply(&mut g, actor, goofi_graph::Command::SetBaseline { uid, baseline: None })?;
     let cleared = g.baseline(uid).and_then(|b| b.as_object()).map_or(0, serde_json::Map::len);
-    // The zero point is document state and reaches no engine, so nothing else would mirror it:
-    // without this the graph holds the new baseline and every client still reads the old one.
-    drop(g);
-    resync_and_broadcast(state);
     Ok(json!({ "ok": true, "cleared": cleared }))
 }
 

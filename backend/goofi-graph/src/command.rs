@@ -20,6 +20,28 @@ pub enum Outcome {
     Nodes(Vec<Uid>),
 }
 
+/// Who is executing: a fresh caller is held to the command's precondition; a replay — an undo, a
+/// redo, a rollback — converges on what a peer left behind instead of wedging its stack.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ctx { Fresh, Replay }
+
+/// Why a command changed nothing: its target is gone, or the state it expected has moved on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Skip { Gone, Stale }
+
+/// What executing a command did: the outcome and the exact inverse, or nothing at all.
+#[derive(Debug)]
+pub enum Applied {
+    Done(Outcome, Box<Command>),
+    Skipped(Skip),
+}
+
+impl Applied {
+    fn done(outcome: Outcome, inverse: Command) -> Applied {
+        Applied::Done(outcome, Box::new(inverse))
+    }
+}
+
 /// A param's source record as [`Command::EditParam`] carries it: the mode, and the expression and
 /// reference it retains whatever the mode. Nothing retained and a constant mode is no record.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -274,12 +296,9 @@ impl Command {
         }
     }
 
-    /// Apply this command to `g`, returning its result and the exact inverse command.
-    pub fn execute(self, g: &mut Graph) -> Result<(Outcome, Command), String> {
-        self.execute_mode(g, false)
-    }
-
-    fn execute_mode(self, g: &mut Graph, fresh: bool) -> Result<(Outcome, Command), String> {
+    /// Apply this command to `g`: its result and exact inverse, or why it was skipped.
+    pub fn execute(self, g: &mut Graph, ctx: Ctx) -> Result<Applied, String> {
+        let fresh = ctx == Ctx::Fresh;
         if fresh {
             self.precondition(g)?;
         }
@@ -294,30 +313,35 @@ impl Command {
                 // Nodes ACCUMULATE where the other outcomes overwrite: they are a list of runtime
                 // echoes owed, and a later child returning nothing does not cancel an earlier one.
                 let mut echoes: Vec<Uid> = Vec::new();
+                let mut skipped = Skip::Gone;
                 for c in cmds {
-                    match c.execute_mode(g, fresh) {
-                        Ok((res, inv)) => {
+                    match c.execute(g, ctx) {
+                        Ok(Applied::Done(res, inv)) => {
                             match res {
                                 Outcome::Nodes(ns) => echoes.extend(ns),
                                 other => last = other,
                             }
-                            inverses.push(inv);
+                            inverses.push(*inv);
                         }
+                        Ok(Applied::Skipped(why)) => skipped = why,
                         // A Compound is a restoration UNIT, so abandoning one half-applied leaves
                         // a graph mutation no client is told about. Unwind what landed, newest first.
                         Err(e) => {
                             for inv in inverses.into_iter().rev() {
                                 // Best-effort by necessity: stopping the unwind on an inverse that
                                 // will not re-apply leaves strictly more wreckage than finishing.
-                                let _ = inv.execute(g);
+                                let _ = inv.execute(g, Ctx::Replay);
                             }
                             return Err(e);
                         }
                     }
                 }
+                if inverses.is_empty() {
+                    return Ok(Applied::Skipped(skipped));
+                }
                 inverses.reverse(); // undo the children back-to-front
                 let out = if echoes.is_empty() { last } else { Outcome::Nodes(echoes) };
-                Ok((out, Command::Compound(inverses)))
+                Ok(Applied::done(out, Command::Compound(inverses)))
             }
 
             Command::AddNode { type_name, pos, uid, name, params, sources, viewers, baseline, record, scope } => {
@@ -325,7 +349,7 @@ impl Command {
                 // that errors wedges the actor's stack for good; the fresh caller is refused by
                 // this command's precondition instead.
                 if scope.is_some_and(|s| !g.is_facade(s)) {
-                    return Ok((Outcome::Ok, Command::Compound(vec![])));
+                    return Ok(Applied::Skipped(Skip::Gone));
                 }
                 // Idempotent: the uid is already present (a redo racing another client's add) —
                 // reuse it, and re-place it only when a scope was ASKED for, since an
@@ -353,14 +377,14 @@ impl Command {
                 if let Some(r) = record {
                     let _ = g.set_recorded(u, r);
                 }
-                Ok((Outcome::Uid(u), Command::RemoveNode { uid: u }))
+                Ok(Applied::done(Outcome::Uid(u), Command::RemoveNode { uid: u }))
             }
 
             Command::RemoveNode { uid } => {
                 // Handles a plain leaf, a sub-patch member (leaf or nested scope), OR a top-level
                 // instance — nothing live at this uid is the idempotent no-op.
                 if !g.exists(uid) {
-                    return Ok((Outcome::Ok, Command::Compound(vec![])));
+                    return Ok(Applied::Skipped(Skip::Gone));
                 }
                 // A leaf hands its consumers its own sources before it goes, so a chain stays one.
                 let bridges = if g.is_leaf(uid) { bridges_around(g, uid) } else { Vec::new() };
@@ -381,26 +405,31 @@ impl Command {
                 // and re-binding runs AFTER the nodes are back, which `Compound` replays in order.
                 let mut steps = Vec::new();
                 for bridge in bridges {
-                    steps.push(bridge.execute(g)?.1);
+                    if let Applied::Done(_, inv) = bridge.execute(g, ctx)? {
+                        steps.push(*inv);
+                    }
                 }
                 steps.push(inverse);
                 if !unbind.is_empty() {
-                    steps.push(Command::LayoutContents { writes: unbind }.execute(g)?.1);
+                    let unbound = Command::LayoutContents { writes: unbind };
+                    if let Applied::Done(_, inv) = unbound.execute(g, ctx)? {
+                        steps.push(*inv);
+                    }
                 }
                 let inverse = if steps.len() == 1 { steps.remove(0) } else { Command::Compound(steps) };
-                Ok((Outcome::Ok, inverse))
+                Ok(Applied::done(Outcome::Ok, inverse))
             }
 
             Command::AddLink { node_out, slot_out, node_in, slot_in } => {
                 // An endpoint is gone, so the wire cannot exist and restoring it is a no-op.
                 // Without this a concurrent delete would error through `flip`, wedging the actor's stack.
                 if !g.wirable(node_out) || !g.wirable(node_in) {
-                    return Ok((Outcome::Ok, Command::Compound(vec![])));
+                    return Ok(Applied::Skipped(Skip::Gone));
                 }
                 // Idempotent: the exact wire already exists, so its inverse must be one too — a
                 // bare RemoveLink would DESTROY the pre-existing wire on undo.
                 if g.has_link(node_out, &slot_out, node_in, &slot_in) {
-                    return Ok((Outcome::Ok, Command::Compound(vec![])));
+                    return Ok(Applied::Skipped(Skip::Stale));
                 }
                 // A single-input connect EVICTS a prior wire, so capture the displaced one for the
                 // inverse. A multi input appends, and reconnecting the same wire displaces nothing.
@@ -421,22 +450,22 @@ impl Command {
                     ]),
                     None => remove_new,
                 };
-                Ok((Outcome::Ok, inverse))
+                Ok(Applied::done(Outcome::Ok, inverse))
             }
 
             Command::RemoveLink { node_out, slot_out, node_in, slot_in } => {
                 // The wire is already gone. This guard is what lets two clients' undo of a
                 // connect converge instead of wedging one of the stacks.
                 if g.remove_link(node_out, &slot_out, node_in, &slot_in).is_err() {
-                    return Ok((Outcome::Ok, Command::Compound(vec![])));
+                    return Ok(Applied::Skipped(Skip::Gone));
                 }
-                Ok((Outcome::Ok, Command::AddLink { node_out, slot_out, node_in, slot_in }))
+                Ok(Applied::done(Outcome::Ok, Command::AddLink { node_out, slot_out, node_in, slot_in }))
             }
 
             Command::EditNode { uid, name, pos, viewers } => {
                 // A node, a scope facade or a boundary port; only a vanished uid is the no-op.
                 if !g.is_leaf(uid) && !g.is_facade(uid) && g.stub(uid).is_none() {
-                    return Ok((Outcome::Ok, Command::Compound(vec![]))); // idempotent: it is gone
+                    return Ok(Applied::Skipped(Skip::Gone)); // idempotent: it is gone
                 }
                 let old_pos = pos.map(|_| g.pos(uid).unwrap_or([0.0, 0.0]));
                 // A rename rewrites `nd('old')` → `nd('new')` in referring expressions; report the
@@ -469,29 +498,29 @@ impl Command {
                     g.set_node_viewers(uid, v)?;
                 }
                 let out = if referrers.is_empty() { Outcome::Ok } else { Outcome::Nodes(referrers) };
-                Ok((out, Command::EditNode { uid, name: inv_name, pos: old_pos, viewers: old_viewers }))
+                Ok(Applied::done(out, Command::EditNode { uid, name: inv_name, pos: old_pos, viewers: old_viewers }))
             }
 
             Command::SetRecorded { uid, record } => {
                 let Some(was) = g.recorded(uid).map(<[RecordedOutput]>::to_vec) else {
-                    return Ok((Outcome::Ok, Command::Compound(vec![]))); // idempotent: it is gone
+                    return Ok(Applied::Skipped(Skip::Gone)); // idempotent: it is gone
                 };
                 g.set_recorded(uid, record)?;
-                Ok((Outcome::Ok, Command::SetRecorded { uid, record: was }))
+                Ok(Applied::done(Outcome::Ok, Command::SetRecorded { uid, record: was }))
             }
 
             Command::SetBaseline { uid, baseline } => {
                 let Some(was) = g.baseline(uid).cloned() else {
-                    return Ok((Outcome::Ok, Command::Compound(vec![]))); // idempotent: it is gone
+                    return Ok(Applied::Skipped(Skip::Gone)); // idempotent: it is gone
                 };
                 let next = baseline.unwrap_or_else(|| g.touched_baseline(uid));
                 g.set_node_baseline(uid, next)?;
-                Ok((Outcome::Ok, Command::SetBaseline { uid, baseline: Some(was) }))
+                Ok(Applied::done(Outcome::Ok, Command::SetBaseline { uid, baseline: Some(was) }))
             }
 
             Command::EditParam { uid, group, name, value, source } => {
                 if !g.is_leaf(uid) {
-                    return Ok((Outcome::Ok, Command::Compound(vec![]))); // idempotent: node gone
+                    return Ok(Applied::Skipped(Skip::Gone)); // idempotent: node gone
                 }
                 let old_value = match &value {
                     Some(_) => Some(
@@ -515,7 +544,7 @@ impl Command {
                 if let Some(s) = &source {
                     g.set_source(uid, &group, &name, s.clone())?;
                 }
-                Ok((Outcome::Ok, Command::EditParam { uid, group, name, value: old_value, source: old_source }))
+                Ok(Applied::done(Outcome::Ok, Command::EditParam { uid, group, name, value: old_value, source: old_source }))
             }
 
             Command::EditVariable { name, value, at, control } => {
@@ -523,7 +552,7 @@ impl Command {
                 let old_control = control.is_some().then(|| g.variables().control(&name).cloned());
                 let set_value = value.is_some();
                 g.apply_variable_change(&name, value, at, control)?;
-                Ok((Outcome::Ok, match old {
+                Ok(Applied::done(Outcome::Ok, match old {
                     None => Command::RemoveVariable { name },
                     Some(held) => Command::EditVariable { name, value: set_value.then_some(held), at: None, control: old_control },
                 }))
@@ -544,7 +573,7 @@ impl Command {
                 if !old_lock.is_default() {
                     inverse.push(Command::LockVariable { name, lock: old_lock });
                 }
-                Ok((Outcome::Ok, match inverse.len() {
+                Ok(Applied::done(Outcome::Ok, match inverse.len() {
                     1 => inverse.pop().expect("one"),
                     _ => Command::Compound(inverse),
                 }))
@@ -552,18 +581,18 @@ impl Command {
 
             Command::RenameVariable { from, to } => {
                 let touched = g.rename_variable(&from, &to)?;
-                Ok((Outcome::Nodes(touched), Command::RenameVariable { from: to, to: from }))
+                Ok(Applied::done(Outcome::Nodes(touched), Command::RenameVariable { from: to, to: from }))
             }
 
             Command::AddVariableGroup { group, at } => {
                 g.add_variable_group(&group, at)?;
-                Ok((Outcome::Ok, Command::RemoveVariableGroup { group }))
+                Ok(Applied::done(Outcome::Ok, Command::RemoveVariableGroup { group }))
             }
 
             Command::RemoveVariableGroup { group } => {
                 let at = g.variables().group_index(&group);
                 g.remove_variable_group(&group)?;
-                Ok((Outcome::Ok, Command::AddVariableGroup { group, at }))
+                Ok(Applied::done(Outcome::Ok, Command::AddVariableGroup { group, at }))
             }
 
             Command::RenameVariableGroup { from, to, members } => {
@@ -572,40 +601,40 @@ impl Command {
                 }
                 let touched = g.rename_variable_group(&from, &to)?;
                 let members = Some(variable_group_members(g, &to));
-                Ok((Outcome::Nodes(touched), Command::RenameVariableGroup { from: to, to: from, members }))
+                Ok(Applied::done(Outcome::Nodes(touched), Command::RenameVariableGroup { from: to, to: from, members }))
             }
 
             Command::LockVariable { name, lock } => {
                 let old = g.set_variable_lock(&name, lock)?;
-                Ok((Outcome::Ok, Command::LockVariable { name, lock: old }))
+                Ok(Applied::done(Outcome::Ok, Command::LockVariable { name, lock: old }))
             }
 
             Command::LockVariableGroup { group, lock } => {
                 let old = g.set_variable_group_lock(&group, lock)?;
-                Ok((Outcome::Ok, Command::LockVariableGroup { group, lock: old }))
+                Ok(Applied::done(Outcome::Ok, Command::LockVariableGroup { group, lock: old }))
             }
 
             Command::SourceVariable { name, source } => {
                 let old = g.set_variable_source(&name, source)?;
-                Ok((Outcome::Ok, Command::SourceVariable { name, source: old }))
+                Ok(Applied::done(Outcome::Ok, Command::SourceVariable { name, source: old }))
             }
 
             Command::LayoutReorderTab { tab, to_index } => {
                 // Read BEFORE the move, so the inverse names where the tab is standing right now —
                 // and degrade when a peer has closed it, as every other layout inverse does.
                 let Some(from) = g.arrangement().tab_index(&tab) else {
-                    return Ok((Outcome::Ok, Command::Compound(vec![])));
+                    return Ok(Applied::Skipped(Skip::Gone));
                 };
                 let Ok(writes) = g.arrangement().reorder_tab(&tab, to_index) else {
-                    return Ok((Outcome::Ok, Command::Compound(vec![])));
+                    return Ok(Applied::Skipped(Skip::Stale));
                 };
                 g.arrangement_mut().apply(writes);
-                Ok((Outcome::Ok, Command::LayoutReorderTab { tab, to_index: from }))
+                Ok(Applied::done(Outcome::Ok, Command::LayoutReorderTab { tab, to_index: from }))
             }
 
             Command::LayoutBirth { plan, born } => {
                 g.arrangement_mut().apply(plan);
-                Ok((Outcome::Ok, Command::LayoutClose { born }))
+                Ok(Applied::done(Outcome::Ok, Command::LayoutClose { born }))
             }
 
             Command::LayoutClose { born } => {
@@ -618,30 +647,30 @@ impl Command {
                 // The subtree itself and where its root sat — the two things its revive needs,
                 // captured before anything moves. The slots the promote rewrote are NOT among them.
                 let (Ok(next), Some(dead)) = (plan, g.arrangement().dead_subtree(&born)) else {
-                    return Ok((Outcome::Ok, Command::Compound(vec![])));
+                    return Ok(Applied::Skipped(Skip::Stale));
                 };
                 let home = g.arrangement().home_of(&born);
                 g.arrangement_mut().apply(next);
-                Ok((Outcome::Ok, Command::LayoutRevive { dead, born, home }))
+                Ok(Applied::done(Outcome::Ok, Command::LayoutRevive { dead, born, home }))
             }
 
             Command::LayoutRevive { dead, born, home } => {
                 let Ok(next) = g.arrangement().revive(&dead, home.as_ref()) else {
-                    return Ok((Outcome::Ok, Command::Compound(vec![])));
+                    return Ok(Applied::Skipped(Skip::Stale));
                 };
                 g.arrangement_mut().apply(next);
-                Ok((Outcome::Ok, Command::LayoutClose { born }))
+                Ok(Applied::done(Outcome::Ok, Command::LayoutClose { born }))
             }
 
             Command::LayoutResizeSplit { split, fractions } => {
                 let Some(from) = g.arrangement().fractions(&split) else {
-                    return Ok((Outcome::Ok, Command::Compound(vec![])));
+                    return Ok(Applied::Skipped(Skip::Gone));
                 };
                 let Ok(next) = g.arrangement().resize_split(&split, &fractions) else {
-                    return Ok((Outcome::Ok, Command::Compound(vec![])));
+                    return Ok(Applied::Skipped(Skip::Stale));
                 };
                 g.arrangement_mut().apply(next);
-                Ok((Outcome::Ok, Command::LayoutResizeSplit { split, fractions: from }))
+                Ok(Applied::done(Outcome::Ok, Command::LayoutResizeSplit { split, fractions: from }))
             }
 
             Command::LayoutMove { plan, root, home } => {
@@ -656,10 +685,10 @@ impl Command {
                 // A stale replay — a peer closed or carried it off first. Degrade to a no-op like
                 // `LayoutClose`: an `Err` inside `flip` wedges that actor's undo stack.
                 let (Some(plan), Some(back)) = (plan, back) else {
-                    return Ok((Outcome::Ok, Command::Compound(vec![])));
+                    return Ok(Applied::Skipped(Skip::Stale));
                 };
                 g.arrangement_mut().apply(plan);
-                Ok((Outcome::Ok, Command::LayoutMove { plan: None, root, home: Some(back) }))
+                Ok(Applied::done(Outcome::Ok, Command::LayoutMove { plan: None, root, home: Some(back) }))
             }
 
             Command::LayoutContents { writes } => {
@@ -670,21 +699,21 @@ impl Command {
                     .filter_map(|(id, _)| Some((id.clone(), g.arrangement().contents(id)?)))
                     .collect();
                 g.arrangement_mut().set_contents(&writes);
-                Ok((Outcome::Ok, Command::LayoutContents { writes: back }))
+                Ok(Applied::done(Outcome::Ok, Command::LayoutContents { writes: back }))
             }
 
             Command::SetScope { uid, scope } => {
                 // Idempotent: the uid is gone (a redo racing a delete) → no-op.
                 if !g.exists(uid) {
-                    return Ok((Outcome::Ok, Command::Compound(vec![])));
+                    return Ok(Applied::Skipped(Skip::Gone));
                 }
                 // The destination scope was dissolved. `SetScope` is never a user RPC, so this is
                 // always a stale replay and the restored member simply lands at ROOT.
                 if scope.is_some_and(|s| !g.is_facade(s)) {
-                    return Ok((Outcome::Ok, Command::Compound(vec![])));
+                    return Ok(Applied::Skipped(Skip::Gone));
                 }
                 let old = g.reparent(uid, scope)?;
-                Ok((Outcome::Ok, Command::SetScope { uid, scope: old }))
+                Ok(Applied::done(Outcome::Ok, Command::SetScope { uid, scope: old }))
             }
 
             Command::Group { members, pos, restore } => {
@@ -707,12 +736,12 @@ impl Command {
                     cmds.extend(minted.into_iter().map(|(_, id)| Command::RemoveNode { uid: id }));
                     Command::Compound(cmds)
                 };
-                Ok((Outcome::Uid(scope), inverse))
+                Ok(Applied::done(Outcome::Uid(scope), inverse))
             }
 
             Command::Expand { scope } => {
                 if !g.is_facade(scope) {
-                    return Ok((Outcome::Ok, Command::Compound(vec![]))); // idempotent: already expanded/gone
+                    return Ok(Applied::Skipped(Skip::Gone)); // idempotent: already expanded/gone
                 }
                 // Capture the scope verbatim BEFORE dissolving, so the inverse re-groups it exactly.
                 let name = g.name(scope).unwrap_or("").to_string();
@@ -779,13 +808,13 @@ impl Command {
                 }));
                 inverse.extend(ports);
                 inverse.extend(cables);
-                Ok((Outcome::Ok, Command::Compound(inverse)))
+                Ok(Applied::done(Outcome::Ok, Command::Compound(inverse)))
             }
 
         })();
         match result {
             // Variable boundary refusals during replay leave a peer's current state in place.
-            Err(_) if variable && !fresh => Ok((Outcome::Ok, Command::Compound(vec![]))),
+            Err(_) if variable && !fresh => Ok(Applied::Skipped(Skip::Stale)),
             other => other,
         }
     }
@@ -820,7 +849,9 @@ struct Preview {
 
 struct HistoryEntry {
     /// The command that flips this entry's state: its inverse when applied, its forward when undone.
-    toggle: Command,
+    /// `None` once a flip found nothing to do: the entry stays, so the actor's stack keeps its
+    /// shape, and flips nothing after.
+    toggle: Option<Command>,
     actor: String,
     undone: bool,
     /// The batch whose step made this entry — a compound settles by this stamp, never by a
@@ -884,7 +915,10 @@ impl CommandHistory {
         let key = cmd.key();
         if PREVIEWING.get() {
             let key = key.ok_or("this op cannot be previewed")?;
-            let (outcome, inverse) = cmd.execute_mode(g, true)?;
+            let Applied::Done(outcome, inverse) = cmd.execute(g, Ctx::Fresh)? else {
+                return Ok(Outcome::Ok);
+            };
+            let inverse = *inverse;
             // The first preview of a drag keeps the way back; the ones after it change nothing here.
             if !self.previews.iter().any(|p| p.actor == actor && p.key == key) {
                 self.previews.push(Preview { actor: actor.to_string(), key, inverse });
@@ -892,10 +926,13 @@ impl CommandHistory {
             return Ok(outcome);
         }
         // The fresh-caller gate. `flip` deliberately does NOT call this — see `Command::precondition`.
-        let (outcome, inverse) = cmd.execute_mode(g, true)?;
+        let (outcome, inverse) = match cmd.execute(g, Ctx::Fresh)? {
+            Applied::Done(outcome, inverse) => (outcome, Some(*inverse)),
+            Applied::Skipped(_) => (Outcome::Ok, None),
+        };
         // A commit that ends a drag inverts to the state before the drag, not before its last preview.
         let inverse = match self.previews.iter().position(|p| p.actor == actor && Some(&p.key) == key.as_ref()) {
-            Some(i) => self.previews.remove(i).inverse,
+            Some(i) => Some(self.previews.remove(i).inverse),
             None => inverse,
         };
         // Record EVERY successful command, a forward no-op included: the client records one entry
@@ -920,7 +957,7 @@ impl CommandHistory {
             if self.previews[i].actor != actor {
                 continue;
             }
-            let _ = self.previews.remove(i).inverse.execute(g);
+            let _ = self.previews.remove(i).inverse.execute(g, Ctx::Replay);
             moved = true;
         }
         moved
@@ -952,10 +989,9 @@ impl CommandHistory {
             return;
         }
         // Newest first: each toggle is an inverse, and a Compound applies its children in order.
-        let toggle =
-            Command::Compound(mine.iter().rev().map(|&i| self.entries.remove(i).toggle).collect());
+        let toggles: Vec<Command> = mine.iter().rev().filter_map(|&i| self.entries.remove(i).toggle).collect();
         self.entries.push(HistoryEntry {
-            toggle,
+            toggle: (!toggles.is_empty()).then_some(Command::Compound(toggles)),
             actor: actor.to_string(),
             undone: false,
             batch: None,
@@ -969,7 +1005,9 @@ impl CommandHistory {
             (0..self.entries.len()).filter(|&i| self.entries[i].batch == Some(batch)).collect();
         for &i in mine.iter().rev() {
             // Best-effort by necessity, exactly as `Compound`'s own unwind is.
-            let _ = self.entries.remove(i).toggle.execute(g);
+            if let Some(toggle) = self.entries.remove(i).toggle {
+                let _ = toggle.execute(g, Ctx::Replay);
+            }
         }
     }
 
@@ -999,8 +1037,12 @@ impl CommandHistory {
     }
 
     fn flip(&mut self, g: &mut Graph, idx: usize, undone: bool) -> Result<bool, String> {
-        let (_out, next) = self.entries[idx].toggle.clone().execute(g)?;
-        self.entries[idx].toggle = next;
+        if let Some(toggle) = self.entries[idx].toggle.clone() {
+            self.entries[idx].toggle = match toggle.execute(g, Ctx::Replay)? {
+                Applied::Done(_, next) => Some(*next),
+                Applied::Skipped(_) => None,
+            };
+        }
         self.entries[idx].undone = undone;
         Ok(true)
     }

@@ -24,16 +24,10 @@ fn download_name(state: &AppState) -> String {
         .unwrap_or_else(|| "patch.gfi".into())
 }
 
-/// `GET /patch.gfi` — pack the open patch and hand it over. Packed under the graph lock, so the
-/// manifest and the workspace describe one moment.
-pub(crate) async fn download(State(state): State<AppState>) -> Response {
+/// Pack the open patch under the graph lock, so the manifest and the workspace describe one moment.
+fn pack(state: &AppState) -> Result<Vec<u8>, String> {
     let mount = state.mount();
-    let tmp = match crate::nonce_hex().and_then(|n| goofi_transport::scratch(&format!("export-{n}.gfi"))) {
-        Ok(tmp) => tmp,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
-    };
-    // Scoped so the guard is gone before this function can yield — a std MutexGuard held across an
-    // await makes the handler's future non-Send, and axum will not take it.
+    let tmp = crate::nonce_hex().and_then(|n| goofi_transport::scratch(&format!("export-{n}.gfi")))?;
     let packed = {
         let g = state.graph.lock();
         let extra = crate::bundled_custom(&g, &state.custom);
@@ -41,8 +35,19 @@ pub(crate) async fn download(State(state): State<AppState>) -> Response {
     }
     .and_then(|()| std::fs::read(&tmp).map_err(|e| format!("{}: {e}", tmp.display())));
     let _ = std::fs::remove_file(&tmp);
+    packed
+}
 
-    match packed {
+/// Run `work` off the async workers: a pack or a load holds the graph for seconds, and the sockets
+/// must keep being polled meanwhile.
+async fn blocking<T: Send + 'static>(state: &AppState, work: fn(&AppState) -> Result<T, String>) -> Result<T, String> {
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || work(&state)).await.unwrap_or_else(|e| Err(format!("the task died: {e}")))
+}
+
+/// `GET /patch.gfi` — pack the open patch and hand it over.
+pub(crate) async fn download(State(state): State<AppState>) -> Response {
+    match blocking(&state, pack).await {
         Ok(bytes) => (
             [
                 (header::CONTENT_TYPE, "application/octet-stream".to_string()),
@@ -68,11 +73,14 @@ pub(crate) async fn upload(State(state): State<AppState>, body: Bytes) -> Respon
     if let Err(e) = std::fs::write(&tmp, &body) {
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("{}: {e}", tmp.display())).into_response();
     }
-    let Some(path) = tmp.to_str() else {
+    let Some(path) = tmp.to_str().map(str::to_string) else {
         let _ = std::fs::remove_file(&tmp);
         return (StatusCode::INTERNAL_SERVER_ERROR, "the temp directory's name is not UTF-8\n").into_response();
     };
-    let load = state.call("session load", json!({ "path": path, "adopt": false }), "upload");
+    let loader = state.clone();
+    let load = tokio::task::spawn_blocking(move || loader.call("session load", json!({ "path": path, "adopt": false }), "upload"))
+        .await
+        .unwrap_or_else(|e| Err(format!("the load task died: {e}")));
     let _ = std::fs::remove_file(&tmp);
 
     match load {

@@ -6,7 +6,7 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-**Phase 0**, each alone, in any order: §3.1-3, §3.6; §4.B-E, §4.J; §5.3-6.
+**Phase 0**, each alone, in any order: §4.B-E, §4.J; §5.3-6.
 
 **Phase 1**: §5.11 and §5.7; then §3.4 and §3.5; then §4.F and §4.G1-G4; then §1.A2 and §1.A3.
 
@@ -84,11 +84,6 @@ The registry stays the explicit `TREE` in `ops.rs`, with `write::<NodeAdd>()` le
 `const fn`. The graph stays a `Mutex`. Each op dispatches on its own blocking task and the graph
 mutex orders them.
 
-1. `node_touched_clear` stops resyncing itself.
-2. Dispatch off the tokio workers through `spawn_blocking`, for `/control` and `POST /patch.gfi`.
-3. Notifiers: logs push through a `log::set_listener` watch; `/params` reads a `LiveHub` of
-   per-uid watches that the status drain fills at `LIVE_PERIOD` pacing and the transaction tail
-   refreshes.
 4. `Txn` holds the graph and history guards, an outbox of typed events, and `touched`/`edited`
    flags. The tail runs once when the transaction saw a change: fold the entries into one
    labelled entry, settle, render events from settled state, mark unsaved and bump `revision`,
@@ -97,8 +92,6 @@ mutex orders them.
    run, reads included; the settle counter, `OPEN_BATCH`, `BatchScope` and `HistoryEntry.batch`
    go.
 5. One `Event` enum and one `Broadcaster`; the events vec parameter goes.
-6. `Command::execute(g, Ctx::Fresh | Ctx::Replay) -> Applied = Done(outcome, inverse) |
-   Skipped(Gone | Stale)` replaces the empty-compound inverses.
 7. **a-c** The op trait; `arms.rs` splits into `ops/<group>.rs`; `AppState` splits with it.
    Deserializing into `Args` is the validation on every path; `Op::validate` and the hook gate
    go; a plugin `pre_op` patches JSON before deserialization. The repeated pos parsing and

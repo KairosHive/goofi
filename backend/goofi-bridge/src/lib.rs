@@ -99,6 +99,9 @@ pub struct AppState {
     /// Pulsed after every settle, for whoever derives its address from the graph: a `/data`
     /// socket re-asks which physical slot stands behind its port on the pulse, not on a clock.
     settled: Arc<tokio::sync::watch::Sender<u64>>,
+    /// The live pairs the `/params` sockets read, filled off the graph lock by the status drain
+    /// and the op tail, so a readout never takes it.
+    live: Arc<LiveHub>,
     /// The central per-session command history. Locked AFTER `graph`, BEFORE `doc`.
     pub history: Arc<Mutex<goofi_graph::CommandHistory>>,
     /// Liveness policy for `/data` sockets, injectable so a test need not sit through a
@@ -220,6 +223,7 @@ impl AppState {
             dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reducers,
             settled: Arc::new(tokio::sync::watch::channel(0).0),
+            live: Arc::new(LiveHub::default()),
             history: Arc::new(Mutex::new(goofi_graph::CommandHistory::new())),
             data_liveness: DataLiveness::DEFAULT,
             roots: materialise_shipped(),
@@ -563,10 +567,45 @@ fn error_transitions(
 /// is EVENT-WOKEN: a node's report notifies the waker, so nothing polls to discover one.
 const BROADCAST_PERIOD: Duration = Duration::from_millis(500);
 
-/// …and how often `/params` re-reads one node's evaluated values. A stage is a TRANSITION and a
-/// live value is a READOUT, so they cannot share a clock: on the health period alone, a slider
+/// …and how often the drain refreshes the live pairs `/params` reads. A stage is a TRANSITION and
+/// a live value is a READOUT, so they cannot share a clock: on the health period alone, a slider
 /// following an expression moved twice a second.
 const LIVE_PERIOD: Duration = Duration::from_millis(50);
+
+/// One watch per node a `/params` socket displays, holding the node's last pair as the wire
+/// carries it. A pair equal to the held one wakes nobody; a watch nobody reads is dropped.
+#[derive(Default)]
+pub(crate) struct LiveHub {
+    watches: Mutex<HashMap<Uid, tokio::sync::watch::Sender<String>>>,
+}
+
+impl LiveHub {
+    fn subscribe(&self, uid: Uid) -> tokio::sync::watch::Receiver<String> {
+        self.watches.lock().entry(uid).or_insert_with(|| tokio::sync::watch::channel(String::new()).0).subscribe()
+    }
+
+    /// Restate every displayed node's pair from the graph as it stands.
+    fn fill(&self, g: &Graph) {
+        let mut watches = self.watches.lock();
+        watches.retain(|_, w| w.receiver_count() > 0);
+        for (uid, w) in watches.iter() {
+            let text = pair_payload(&uid.to_hex(), &live_pair(g, *uid)).to_string();
+            w.send_if_modified(|held| if *held == text { false } else { *held = text; true });
+        }
+    }
+}
+
+/// The log's sequence number, pushed by the log on every record: what a `/control` socket parks
+/// on for its next batch. Process-wide, as the log is.
+fn logged() -> &'static tokio::sync::watch::Sender<u64> {
+    static LOGGED: std::sync::OnceLock<tokio::sync::watch::Sender<u64>> = std::sync::OnceLock::new();
+    LOGGED.get_or_init(|| {
+        let tx = tokio::sync::watch::channel(0).0;
+        let pusher = tx.clone();
+        let _ = goofi_core::log::set_listener(move |seq| { pusher.send_replace(seq); });
+        tx
+    })
+}
 
 /// The background worker a live server needs — the status drain: take every node's reports, apply
 /// them to the graph, and broadcast the events that carry them.
@@ -585,9 +624,11 @@ pub fn spawn_workers(state: &AppState) {
         // too, because a facade HAS health and never reports one.
         let mut last_stages: HashMap<String, NodeState> = HashMap::new();
         let mut next_broadcast = Instant::now() + period;
+        let mut next_live = Instant::now() + LIVE_PERIOD;
         loop {
-            // Parked until a report lands or the broadcast pace comes due — pacing, not polling.
-            let wait = next_broadcast.saturating_duration_since(Instant::now()).min(period);
+            // Parked until a report lands or a pace comes due — pacing, not polling.
+            let now = Instant::now();
+            let wait = next_broadcast.min(next_live).saturating_duration_since(now);
             waker.wait_timeout(wait);
             if state.stopping.stopped() {
                 return;
@@ -597,6 +638,10 @@ pub fn spawn_workers(state: &AppState) {
                 let mut g = graph.lock();
                 g.drain_status();
                 state.settled_now();
+                if Instant::now() >= next_live {
+                    state.live.fill(&g);
+                    next_live = Instant::now() + LIVE_PERIOD;
+                }
                 let edits = g.take_edits();
                 (edits, if !due {
                     None
@@ -1141,8 +1186,28 @@ async fn handle_control(socket: WebSocket, state: AppState) {
         return;
     }
 
+    // The log so far, then a batch per push; nothing ticks for one.
+    let mut logged = logged().subscribe();
     let mut log_cursor = None;
-    let mut log_tick = tokio::time::interval(Duration::from_millis(50));
+    let send_logs = |cursor: &mut Option<u64>| -> Option<String> {
+        let batch = goofi_core::log::since(*cursor);
+        if *cursor == Some(batch.cursor) {
+            return None;
+        }
+        *cursor = Some(batch.cursor);
+        match serde_json::to_value(batch) {
+            Ok(payload) => Some(event("logs", payload)),
+            Err(e) => {
+                goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("the log batch does not serialize: {e}"));
+                None
+            }
+        }
+    };
+    if let Some(logs) = send_logs(&mut log_cursor) {
+        if tx.send(Message::Text(logs.into())).await.is_err() {
+            return;
+        }
+    }
     // The op in flight, run off this task: a load builds nodes for seconds, and the log lines
     // and events it raises meanwhile must reach the client that asked. One at a time, in order.
     let mut pending: Option<tokio::task::JoinHandle<Option<String>>> = None;
@@ -1159,13 +1224,13 @@ async fn handle_control(socket: WebSocket, state: AppState) {
             }
         }
         tokio::select! {
-            _ = log_tick.tick() => {
-                let batch = goofi_core::log::since(log_cursor);
-                if log_cursor != Some(batch.cursor) {
-                    log_cursor = Some(batch.cursor);
-                    match serde_json::to_value(batch) {
-                        Ok(payload) => if tx.send(Message::Text(event("logs", payload).into())).await.is_err() { break; },
-                        Err(e) => goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("the log batch does not serialize: {e}")),
+            pushed = logged.changed() => {
+                if pushed.is_err() {
+                    break;
+                }
+                if let Some(logs) = send_logs(&mut log_cursor) {
+                    if tx.send(Message::Text(logs.into())).await.is_err() {
+                        break;
                     }
                 }
             },
@@ -1584,6 +1649,7 @@ fn resync_and_broadcast(state: &AppState) {
     g.settle();
     state.changed.notify();
     sync_followers(state, &g);
+    state.live.fill(&g);
     let projection = projection::of(&g);
     let doc = state.doc.lock();
     drop(g);
@@ -1790,7 +1856,8 @@ impl PeerLiveness {
     }
 }
 
-/// `/params/{node}` — one node's evaluated param values and their errors, at [`LIVE_PERIOD`].
+/// `/params/{node}` — one node's evaluated param values and their errors, as the [`LiveHub`]
+/// restates them at [`LIVE_PERIOD`].
 ///
 /// PER CONNECTION, and opened only by what is displaying the node: a param nobody is looking at
 /// costs nothing, and a tab the browser has throttled falls behind on its own readout instead of
@@ -1809,27 +1876,17 @@ async fn handle_params(socket: WebSocket, state: AppState, node: String) {
     };
     // Not resolved to a live node: a port with nothing behind it and a node still being born are
     // both real addresses with nothing to say yet, exactly as `/data` treats them.
-    let mut tick = tokio::time::interval(LIVE_PERIOD);
-    // A readout has no catch-up: a peer that took its time is sent the value NOW, never the burst
-    // of ticks it was too slow to receive.
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // A pair equal to the last one sent says nothing new; the peer holds it.
-    let mut sent: Option<String> = None;
+    let mut live = state.live.subscribe(uid);
     loop {
         tokio::select! {
-            _ = tick.tick() => {
-                let pair = {
-                    let g = state.graph.lock();
-                    live_pair(&g, uid)
-                };
-                let text = pair_payload(&uid.to_hex(), &pair).to_string();
-                if sent.as_deref() == Some(text.as_str()) {
-                    continue;
+            moved = live.changed() => {
+                if moved.is_err() {
+                    break;
                 }
-                if tx.send(Message::Text(text.clone().into())).await.is_err() {
+                let text = live.borrow_and_update().clone();
+                if tx.send(Message::Text(text.into())).await.is_err() {
                     return;
                 }
-                sent = Some(text);
             }
             incoming = rx.next() => match incoming {
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,

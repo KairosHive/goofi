@@ -131,9 +131,22 @@ pub fn since(cursor: Option<u64>) -> Batch {
 }
 
 pub fn record(source: Source, level: Level, stream: Option<&str>, text: impl Into<String>) {
-    global().lock().unwrap_or_else(|e| e.into_inner()).record(Message {
-        source, level, stream: stream.map(str::to_string), text: text.into(),
-    });
+    let seq = {
+        let mut log = global().lock().unwrap_or_else(|e| e.into_inner());
+        log.record(Message { source, level, stream: stream.map(str::to_string), text: text.into() });
+        log.seq
+    };
+    if let Some(listener) = LISTENER.get() {
+        listener(seq);
+    }
+}
+
+static LISTENER: OnceLock<Box<dyn Fn(u64) + Send + Sync>> = OnceLock::new();
+
+/// Told the new sequence number after every record, outside the log's lock. Set once per process;
+/// a second listener is refused, since the log has one reader side.
+pub fn set_listener(listener: impl Fn(u64) + Send + Sync + 'static) -> Result<(), String> {
+    LISTENER.set(Box::new(listener)).map_err(|_| "the log listener is already set".to_string())
 }
 
 /// A child's stderr line is a warning unless it says otherwise: a traceback or an `ERROR:` line
