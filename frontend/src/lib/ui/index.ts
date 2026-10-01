@@ -1,8 +1,5 @@
 /** The in-house primitive library; import primitives from here, not by file. */
-export { Button } from 'panelty';
-export { IconButton } from 'panelty';
-export { Icon } from 'panelty';
-export { type ButtonVariant, type ButtonSize } from 'panelty';
+export { Button, IconButton, Icon, TabStrip as Tabs, type ButtonVariant, type ButtonSize, type TabItem } from 'panelty';
 export { ICONS, type IconName } from './icons';
 
 export { default as ScrollArea } from './ScrollArea.svelte';
@@ -15,12 +12,9 @@ export { default as Knob } from './Knob.svelte';
 export { default as Select } from './Select.svelte';
 export { default as Combobox, type ComboOption } from './Combobox.svelte';
 export { default as TextInput } from './TextInput.svelte';
-export { default as TextArea } from './TextArea.svelte';
 export { MODE_ATTRS } from './inputMode';
 export { default as Toggle } from './Toggle.svelte';
 
-export { TabStrip as Tabs } from 'panelty';
-export { type TabItem } from 'panelty';
 export { default as Disclosure } from './Disclosure.svelte';
 
 export { default as Popover } from './Popover.svelte';

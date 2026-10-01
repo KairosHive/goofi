@@ -4,7 +4,7 @@ import { FakeControl } from '$lib/test/fakeControl';
 import { seed, type DocSeed } from '$lib/test/docSeed';
 import { GraphStore } from './graph.svelte';
 import { history } from './history.svelte';
-import { docParams, setParamValue } from '$lib/crdt/graphDoc';
+import { nodesMap } from '$lib/crdt/graphDoc';
 import type { NodeInstanceInfo, NodeTypeInfo } from '$lib/api/control';
 import { typeInfo } from '$lib/test/typeInfo';
 
@@ -101,7 +101,7 @@ describe('GraphStore.updateParam — guards a non-existent param', () => {
 		const d = seed(fc);
 		g.nodeTypes = catalog(); // catalog present → node identity + params come from the doc
 		d.node('uidA', 'Oscillator', 'osc0', [0, 0]);
-		setParamValue(g.doc, 'uidA', 'common', 'frequency', 0); // the current value the guard must treat as present
+		d.patch({ nodes: { uidA: { params: { common: { frequency: { value: 0 } } } } } }); // the current value the guard must treat as present
 
 		// The guard keys on the param's EXISTENCE, not the truthiness of its value, so editing a
 		// param whose current value is 0/false/'' still issues the command (a missing param throws).
@@ -126,7 +126,7 @@ describe('GraphStore.setSource — guards a non-existent param', () => {
 		// `expr` onto a phantom param entry — the graph rejects it and the re-mirror never prunes it.
 		await expect(g.setSource('uidA', 'nope', 'missing', { expression: "nd('x')" })).rejects.toThrow();
 		expect(history().canUndo).toBe(false);
-		expect(docParams(g.doc, 'uidA').nope?.missing?.source).toBeUndefined();
+		expect(nodesMap(g.doc).uidA?.params).toBeUndefined();
 	});
 });
 

@@ -3,11 +3,11 @@
 	import type { PanelProps } from 'panelty';
 	import type { NodeInstanceInfo } from '$lib/api/control';
 	import { graph } from '$lib/stores/graph.svelte';
-	import { ui } from '$lib/stores/ui.svelte';
 	import { linkedNodeName } from 'panelty';
 	import { Bar, StatusDot, EmptyState } from '$lib/ui';
 	import { nodeHealth } from '$lib/editor/nodeHealth';
 	import NodeSelect from './NodeSelect.svelte';
+	import NodeDropHint from './NodeDropHint.svelte';
 	import type { Snippet } from 'svelte';
 
 	let {
@@ -24,12 +24,9 @@
 	} = $props();
 
 	const g = graph();
-	const uiStore = ui();
 
 	const linkedName = $derived(linkedNodeName(linkState));
 	const node = $derived(linkedName ? g.nodeById(linkedName) : null);
-	const dragActive = $derived(uiStore.nodeDrag !== null);
-	const over = $derived(uiStore.nodeDragTarget === panelId);
 </script>
 
 <div class="linked" role="group" data-testid="node-linked-panel">
@@ -69,9 +66,7 @@
 		</div>
 	{/if}
 
-	{#if dragActive}
-		<div class="node-drop-hint" class:active={over} data-testid="node-drop-hint"></div>
-	{/if}
+	<NodeDropHint {panelId} />
 </div>
 
 <style>
@@ -97,9 +92,8 @@
 		padding: var(--ring);
 		scroll-padding: var(--ring);
 	}
-	/* Touch: the strip's cog and bar take a shorter floor than the 44px hit, following the rem
-	   up to a maximum, so a phone's viewer keeps its height for the data. `.nlp-bar` travels to
-	   `Bar` as a prop; `.linked` keeps the rule scoped. */
+	/* Touch: the strip's cog and bar take a floor below the 44px hit, so a phone's viewer keeps
+	   its height for the data. `.nlp-bar` goes to `Bar` as a prop; `.linked` scopes the rule. */
 	@media (hover: none) and (pointer: coarse) {
 		.linked {
 			--strip-control: min(32px, 2rem);
@@ -125,8 +119,5 @@
 		flex: 1;
 		display: grid;
 		place-items: center;
-		padding: var(--space-7);
-		text-align: center;
-		color: var(--text-muted);
 	}
 </style>

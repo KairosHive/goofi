@@ -1,10 +1,5 @@
-<!-- Field — the labelled-control frame: a real `<label>` for=-linked to the first live control
-     (see field.ts), plus an `adornment` that is a SIBLING of the label, never inside it. The row
-     wraps on its OWN width rather than on a breakpoint, so one field per line is the resting
-     shape and the label steps above the value only where the two cannot share a line.
-     Given `onExpand`, the label is a disclosure summary instead: a caret plus a press target the
-     whole name wide, for a row that reveals more beneath itself. `row` keeps the label and the
-     control on one line whatever the width, for a narrow menu of short controls. -->
+<!-- Field — a `<label>` linked to the first live control (see field.ts), with a sibling `adornment`.
+     The row wraps on its own width; `onExpand` makes the label a disclosure summary. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -46,7 +41,7 @@
 <div {...rest} class={`ui-field ${klass}`.trim()} class:row title={doc ?? rest.title}>
 	{#if onExpand}
 		<button type="button" class="ui-field-label ui-field-summary" class:stretched={stretchSummary} aria-expanded={expanded} onclick={onExpand}>
-			<span class="ui-field-caret" class:open={expanded}><Icon name="chevron-right" /></span>{label}
+			<span class="disclosure-caret" class:open={expanded}><Icon name="chevron-right" /></span>{label}
 		</button>
 	{:else}
 		<label class="ui-field-label" for={controlId}>{label}</label>
@@ -100,7 +95,6 @@
 		text-align: left;
 	}
 	.ui-field-summary:not(.stretched):focus-visible {
-		outline: var(--focus-width) solid var(--focus-ink);
 		outline-offset: 2px;
 		border-radius: var(--radius-sm);
 	}
@@ -125,20 +119,8 @@
 		outline: var(--focus-width) solid var(--focus-ink);
 		outline-offset: 2px;
 	}
-	.ui-field-caret {
-		flex-shrink: 0;
-		display: flex;
-		align-items: center;
-		font-size: var(--fs-micro);
-		color: var(--text-muted);
-		transition: transform var(--dur-slow) var(--ease);
-	}
-	.ui-field-caret.open {
-		transform: rotate(90deg);
-	}
-	/* ONE flex item, so a field too narrow for a single line drops the whole value under the label
-	   instead of orphaning the adornment on a line of its own. Its basis IS the wrap threshold, and
-	   it sits ABOVE the stack threshold below so the two stages cannot both leave a control squeezed. */
+	/* ONE flex item, so a narrow field drops the whole value under the label. Its basis is the wrap
+	   threshold, above the stack threshold below, so the two stages cannot both squeeze a control. */
 	.ui-field-value {
 		flex: 1 1 18rem;
 		min-width: 0;

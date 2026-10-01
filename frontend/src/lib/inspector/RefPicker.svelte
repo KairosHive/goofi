@@ -1,7 +1,5 @@
-<!--
-  RefPicker — a param's reference as two lists, node then slot, each over the live catalogue
-  filtered by what this param may reference. The pair commits as one `node.slot`.
--->
+<!-- A param's reference as two lists, node then slot, each filtered by what the param may reference;
+     the pair commits as one `node.slot`. -->
 <script lang="ts">
 	import { Combobox, NumberInput } from '$lib/ui';
 	import { liveCatalogue } from './expr/catalogue';
@@ -23,10 +21,10 @@
 	const want = $derived(wantedDtype(paramType));
 	let node = $state('');
 	let slot = $state('');
-	const index = $derived(value?.match(/\[(\d+)\]$/)?.[1]);
+	const [, base, index] = $derived(value?.match(/^(.*?)(?:\[(\d+)\])?$/) ?? []);
 	// The committed value is adopted whenever it moves; a half-picked pair stays local until then.
 	$effect(() => {
-		[node, slot] = splitReference(value?.replace(/\[\d+\]$/, '') ?? null);
+		[node, slot] = splitReference(base ?? null);
 	});
 
 	function pickNode(n: string): void {

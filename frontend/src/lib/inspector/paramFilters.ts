@@ -1,25 +1,16 @@
 /** Which params a reader is actually interested in, so a plugin's hundreds collapse to the few in play. */
 import { PARAM_MODES, type ParamDescriptor, type ParamMode } from '$lib/api/types';
-import type { ParamGroups, ParamHit } from './paramSearch';
-
-/**
- * The zero point one param is measured from: what it held when the reader last cleared, or — with
- * nothing cleared — the type's own declared default with no source on it.
- */
-export interface ParamBaseline {
-	value?: unknown;
-	mode?: string;
-	expression?: string | null;
-	reference?: string | null;
-}
+import type { NodeInstanceInfo } from '$lib/api/control';
+import type { ParamGroups } from './paramSearch';
 
 /** A node's cleared zero points, keyed `group/name`. Absent for a node nobody has cleared. */
-export type Baseline = Record<string, ParamBaseline> | undefined;
+export type Baseline = NodeInstanceInfo['baseline'];
+/** One param's zero point: what it held at the last clear, or with none its default and no source. */
+export type ParamBaseline = NonNullable<Baseline>[string];
 
 /** How a param is addressed in a baseline, and in the non-default list beside it. */
 export const paramKey = (group: string, name: string): string => `${group}/${name}`;
 
-/** The zero point for one param: the recorded one, or the declared default with no source. */
 function zero(d: ParamDescriptor, base: Baseline, group: string, name: string): ParamBaseline {
 	return base?.[paramKey(group, name)] ?? { value: d.default, mode: 'constant', expression: '', reference: '' };
 }
@@ -35,17 +26,8 @@ function sameZero(a: ParamBaseline, b: ParamBaseline): boolean {
 	);
 }
 
-/**
- * Whether a param has MOVED from its zero point — its constant value, its expression, or its
- * reference. DERIVED rather than recorded: a knob turned in a plugin's own window enters the
- * document by the same param door as any other author, so its value alone already says it moved,
- * and there is no second record of "which knobs were turned" to keep in step.
- *
- * What IS recorded is the zero point, and only because a plugin's declared default is its FACTORY
- * default: loading a preset moves hundreds of params off it at once, so the filter that exists to
- * show the few in play fills with everything the preset moved, and reshuffles at every preset
- * change. Clearing records the current state as the new zero.
- */
+/** Whether the active source moved from its zero point; the zero is recorded only because presets
+ *  move a factory default. */
 export function isModified(d: ParamDescriptor, base?: Baseline, group = '', name = ''): boolean {
 	const z = zero(d, base, group, name);
 	const mode = d.mode ?? 'constant';
@@ -59,11 +41,8 @@ export function isModified(d: ParamDescriptor, base?: Baseline, group = '', name
 	return d.value !== z.value;
 }
 
-/**
- * What a reader has narrowed one group's list to. The two questions are AND'd, because they are
- * about different things: WHERE a param takes its value from, and WHETHER it still holds its
- * default. Every source with `nonDefault` off is no narrowing at all, which is where a node opens.
- */
+/** What a reader has narrowed one group's list to: WHERE a param takes its value from, AND whether
+ *  it still holds its default. */
 export interface Filters {
 	/** Only the params that have moved off their zero point. */
 	nonDefault: boolean;
@@ -123,32 +102,10 @@ export function admits(f: Filters, d: ParamDescriptor, list: NonDefault, group =
 	return !f.nonDefault || list.has(paramKey(group, name));
 }
 
-/**
- * Whether the inspector shows a param: its `show` holds for its controller's value, and the
- * controller is shown too. Presentation only; a hidden param keeps its value and its source.
- */
+/** Whether the inspector shows a param: its `show` holds for its controller's value, and the
+ *  controller is shown too. A hidden param keeps its value and its source. */
 export function shown(groups: ParamGroups | undefined, group: string, name: string): boolean {
 	const show = groups?.[group]?.[name]?.show;
 	const controller = show && groups?.[show.group]?.[show.name];
 	return !controller || (show.any_of.includes(String(controller.value)) && shown(groups, show.group, show.name));
-}
-
-/** Every param the filters admit, in the groups `order` names and their order. */
-export function filteredRows(
-	groups: ParamGroups | undefined,
-	f: Filters,
-	list: NonDefault,
-	order?: string[]
-): ParamHit[] {
-	const names = order ?? Object.keys(groups ?? {});
-	return names.flatMap((group) =>
-		Object.entries(groups?.[group] ?? {})
-			.filter(([name, descriptor]) => admits(f, descriptor, list, group, name))
-			.map(([name, descriptor]) => ({ group, name, descriptor }))
-	);
-}
-
-/** The admitted subset of rows already gathered — a search narrowed to what the filters admit. */
-export function onlyAdmitted(rows: ParamHit[], f: Filters, list: NonDefault): ParamHit[] {
-	return rows.filter((r) => admits(f, r.descriptor, list, r.group, r.name));
 }

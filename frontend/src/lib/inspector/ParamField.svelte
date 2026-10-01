@@ -1,14 +1,8 @@
-<!--
-  ParamField — one inspector row: the name, and the one control `controlKind(descriptor)` chooses.
-  That control is the row in EVERY mode — driven, it is disabled and reads out what the source
-  produces, since the param's own face is what a reader recognises. The entry background opens a second row
-  holding the three-way switch — constant, expression, reference — and the editor of whichever
-  source is active. `vmin/vmax` are SOFT bounds: they scope only the Slider's track, and the
-  NumberInput beside it commits what is typed.
--->
+<!-- One param row: the control controlKind chooses, disabled when a source drives it; the expander
+     holds the source switch and editor. -->
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
-	import type { ParamDescriptor, ParamMode, SourcePatch } from '$lib/api/types';
+	import { PARAM_MODES, type ParamDescriptor, type ParamMode, type SourcePatch } from '$lib/api/types';
 	import {
 		Field,
 		Slider,
@@ -21,8 +15,9 @@
 		Segmented
 	} from '$lib/ui';
 	import { ui } from '$lib/stores/ui.svelte';
-	import { controlKind } from './controlKind';
-	import { sourceForMode } from './paramSeed';
+	import { stepOf } from '$lib/ui/knob';
+	import { controlKind, isNumeric } from './controlKind';
+	import { MODE_FACE, sourceForMode } from './paramSeed';
 	import ExprEditor from './expr/ExprEditor.svelte';
 	import MidiLearn from './MidiLearn.svelte';
 	import RefPicker from './RefPicker.svelte';
@@ -38,7 +33,6 @@
 		refreshing = false,
 		selfName,
 		dropZone = null,
-		class: klass = '',
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
 		paramName: string;
@@ -60,7 +54,7 @@
 	const uiStore = ui();
 	let row = $state<HTMLDivElement>();
 	const over = $derived(
-		(dropZone !== null && uiStore.nodeDragZone === dropZone) ||
+		(dropZone !== null && uiStore.nodeDragOver === dropZone) ||
 		(uiStore.variableDrag !== null && uiStore.variableDrag.target === row)
 	);
 
@@ -79,8 +73,8 @@
 
 	// `step` uses the declared bounds; a native `'any'` would
 	// NaN the NumberInput's scrub arithmetic.
-	const num = $derived(descriptor.type === 'float' || descriptor.type === 'int' ? descriptor : null);
-	const step = $derived(num ? (num.type === 'int' ? 1 : Math.max((num.vmax - num.vmin) / 200, 1e-6)) : 1);
+	const num = $derived(isNumeric(descriptor) ? descriptor : null);
+	const step = $derived(num ? (num.type === 'int' ? 1 : stepOf(num.vmin, num.vmax)) : 1);
 
 	const options = $derived(descriptor.type === 'string' ? (descriptor.options ?? []) : []);
 
@@ -97,6 +91,12 @@
 		if (descriptor.mode === 'reference') picking = false;
 	});
 
+	const MODE_TITLE: Record<ParamMode, string> = {
+		constant: 'a value set here by hand, unchanging until you edit it',
+		expression: 'Python over nd(), variables and me, evaluated at control rate',
+		reference: "one node's output slot, followed at that node's rate"
+	};
+
 	function choose(mode: ParamMode): void {
 		picking = false;
 		if (mode === descriptor.mode) return;
@@ -109,7 +109,7 @@
 </script>
 
 <div
-	class={`pf-param ${klass}`.trim()}
+	class="pf-param"
 	bind:this={row}
 	use:acceptVariable
 	data-variable-drop
@@ -171,7 +171,6 @@
 					data-testid="param-toggle"
 				/>
 			{:else if kind === 'select'}
-				<!-- A non-refreshable dropdown passes no `onRefresh`, so the Select renders no ⟳. -->
 				<Select
 					{options}
 					value={String(descriptor.value)}
@@ -242,33 +241,15 @@
 					onChange={() => onSetSource({ triggers: !descriptor.triggers })}
 				/>
 			{/if}
-			<!-- `picking` lights the reference segment before one is committed, whatever the mode says. -->
 			<Segmented
 				value={picking ? 'reference' : descriptor.mode}
 				bad={!!descriptor.error}
-				segments={[
-					{
-						id: 'constant',
-						label: 'C',
-						name: 'Constant',
-						title: 'Constant — a value set here by hand, unchanging until you edit it',
-						testid: 'param-mode-constant'
-					},
-					{
-						id: 'expression',
-						label: 'E',
-						name: 'Expression',
-						title: 'Expression — Python over nd(), variables and me, evaluated at control rate',
-						testid: 'param-mode-expression'
-					},
-					{
-						id: 'reference',
-						label: 'R',
-						name: 'Reference',
-						title: "Reference — one node's output slot, followed at that node's rate",
-						testid: 'param-mode-reference'
-					}
-				]}
+				segments={PARAM_MODES.map((id) => ({
+					id,
+					...MODE_FACE[id],
+					title: `${MODE_FACE[id].name} — ${MODE_TITLE[id]}`,
+					testid: `param-mode-${id}`
+				}))}
 				onChange={(m) => choose(m as ParamMode)}
 				aria-label={`${paramName} source`}
 				data-testid="param-mode"
@@ -313,7 +294,6 @@
 	.pf-param.armed {
 		outline: 1px dashed var(--border-strong);
 		outline-offset: var(--space-2);
-		border-radius: var(--radius-sm);
 	}
 	.pf-param.over {
 		outline: 1px solid var(--accent);

@@ -1,4 +1,5 @@
 /** Shared snap-to-edges/center/gap logic for the node drag and the placement preview. */
+import { NODE } from './nodeMetrics';
 
 export type Bounds = {
 	left: number;
@@ -13,7 +14,6 @@ export type Guide = { x?: number; y?: number; opacity: number };
 
 const SNAP_THRESHOLD = 15; // engage snap within this many flow-units
 const SNAP_RANGE = 45; // start fading in guide hints from this far out
-export const DEFAULT_NODE_W = 233; // fallback before a node has been measured
 export const DEFAULT_NODE_H = 168; // a typical node: header + one open viewer (36 + 7u)
 
 export function makeBounds(x: number, y: number, w: number, h: number): Bounds {
@@ -27,6 +27,18 @@ export function makeBounds(x: number, y: number, w: number, h: number): Bounds {
 	};
 }
 
+const GAPS = { x: [0, NODE.width * 0.25], y: [0, DEFAULT_NODE_H * 0.5] };
+const AXES = ['y', 'x'] as const;
+
+/** Every [mine, other] edge pair on one axis: equal edges, abutting edges at each gap, centres. */
+function pairs(me: Bounds, oe: Bounds, axis: 'x' | 'y'): [number, number][] {
+	const [lo, hi, c] = axis === 'x' ? (['left', 'right', 'cx'] as const) : (['top', 'bottom', 'cy'] as const);
+	return GAPS[axis].flatMap((gap) => {
+		const p: [number, number][] = [[me[lo], oe[lo]], [me[hi], oe[hi]], [me[lo], oe[hi] + gap], [me[hi], oe[lo] - gap]];
+		return gap === 0 ? [...p, [me[c], oe[c]]] : p;
+	});
+}
+
 export function computeSnapDelta(
 	draggedBounds: Bounds[],
 	targets: Bounds[],
@@ -36,95 +48,27 @@ export function computeSnapDelta(
 		return { dx: 0, dy: 0, guides: [] };
 	}
 
-	const V_GAPS = [0, DEFAULT_NODE_H * 0.5];
-	const H_GAPS = [0, DEFAULT_NODE_W * 0.25];
-	let bestDistY = Infinity;
-	let bestDy = 0;
-	let bestDistX = Infinity;
-	let bestDx = 0;
-
-	for (const me of draggedBounds) {
-		for (const oe of targets) {
-			for (const gap of V_GAPS) {
-				const yPairs: [number, number][] = [
-					[me.top, oe.top],
-					[me.bottom, oe.bottom],
-					[me.top, oe.bottom + gap],
-					[me.bottom, oe.top - gap]
-				];
-				if (gap === 0) yPairs.push([me.cy, oe.cy]);
-				for (const [myE, otherE] of yPairs) {
-					const d = Math.abs(myE - otherE);
-					if (d < SNAP_THRESHOLD && d < bestDistY) {
-						bestDistY = d;
-						bestDy = otherE - myE;
-					}
+	const best = { x: { dist: Infinity, d: 0 }, y: { dist: Infinity, d: 0 } };
+	for (const me of draggedBounds)
+		for (const oe of targets)
+			for (const axis of AXES)
+				for (const [mine, other] of pairs(me, oe, axis)) {
+					const d = Math.abs(mine - other);
+					if (d < SNAP_THRESHOLD && d < best[axis].dist) best[axis] = { dist: d, d: other - mine };
 				}
-			}
-			for (const gap of H_GAPS) {
-				const xPairs: [number, number][] = [
-					[me.left, oe.left],
-					[me.right, oe.right],
-					[me.left, oe.right + gap],
-					[me.right, oe.left - gap]
-				];
-				if (gap === 0) xPairs.push([me.cx, oe.cx]);
-				for (const [myE, otherE] of xPairs) {
-					const d = Math.abs(myE - otherE);
-					if (d < SNAP_THRESHOLD && d < bestDistX) {
-						bestDistX = d;
-						bestDx = otherE - myE;
-					}
-				}
-			}
-		}
-	}
-
-	const dx = bestDistX < Infinity ? bestDx : 0;
-	const dy = bestDistY < Infinity ? bestDy : 0;
+	const dx = best.x.d;
+	const dy = best.y.d;
 
 	const guides: Guide[] = [];
 	for (const me of draggedBounds) {
-		const shifted: Bounds = {
-			left: me.left + dx,
-			right: me.right + dx,
-			top: me.top + dy,
-			bottom: me.bottom + dy,
-			cx: me.cx + dx,
-			cy: me.cy + dy
-		};
-		for (const oe of targets) {
-			for (const gap of V_GAPS) {
-				const yPairs: [number, number][] = [
-					[shifted.top, oe.top],
-					[shifted.bottom, oe.bottom],
-					[shifted.top, oe.bottom + gap],
-					[shifted.bottom, oe.top - gap]
-				];
-				if (gap === 0) yPairs.push([shifted.cy, oe.cy]);
-				for (const [myE, otherE] of yPairs) {
-					const d = Math.abs(myE - otherE);
-					if (d < SNAP_RANGE) {
-						guides.push({ y: otherE, opacity: d < 0.5 ? 1 : 1 - d / SNAP_RANGE });
-					}
+		const shifted = makeBounds(me.left + dx, me.top + dy, me.right - me.left, me.bottom - me.top);
+		for (const oe of targets)
+			for (const axis of AXES)
+				for (const [mine, other] of pairs(shifted, oe, axis)) {
+					const d = Math.abs(mine - other);
+					const opacity = d < 0.5 ? 1 : 1 - d / SNAP_RANGE;
+					if (d < SNAP_RANGE) guides.push(axis === 'x' ? { x: other, opacity } : { y: other, opacity });
 				}
-			}
-			for (const gap of H_GAPS) {
-				const xPairs: [number, number][] = [
-					[shifted.left, oe.left],
-					[shifted.right, oe.right],
-					[shifted.left, oe.right + gap],
-					[shifted.right, oe.left - gap]
-				];
-				if (gap === 0) xPairs.push([shifted.cx, oe.cx]);
-				for (const [myE, otherE] of xPairs) {
-					const d = Math.abs(myE - otherE);
-					if (d < SNAP_RANGE) {
-						guides.push({ x: otherE, opacity: d < 0.5 ? 1 : 1 - d / SNAP_RANGE });
-					}
-				}
-			}
-		}
 	}
 
 	return { dx, dy, guides };

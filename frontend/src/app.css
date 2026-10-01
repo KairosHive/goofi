@@ -386,6 +386,12 @@ textarea {
 	   select's hover, say) — focus is not one of them; see the ring below. */
 	transition: border-color var(--dur-fast) var(--ease);
 }
+input:disabled,
+select:disabled,
+textarea:disabled {
+	opacity: var(--disabled-opacity);
+	cursor: not-allowed;
+}
 
 /* Keyboard focus is visible app-wide (accent = state, meaning #2). Applies only to keyboard
    focus, so mouse clicks stay quiet. Components must not `outline: none` without this fallback.
@@ -430,11 +436,35 @@ textarea {
 	scrollbar-color: var(--surface-3) transparent;
 }
 
-/* The dashed frame marking a panel as a node drop target while a node is dragged out of an
-   editor; it fills in when the cursor is over that panel. Global for the same reason as the
-   scrollbar skin above: it is ONE affordance worn by two panels (NodeLinkedPanel, serving
-   Parameters/Viewer/Metadata, and ConsolePanel's node filter), and it was byte-identical in both
-   — including the markup line — until this rule replaced the pair. The host must be positioned. */
+/* The tone pill's type and tone vocabulary: Badge, Chip, Segmented and StatusDot share them. */
+.pill-type {
+	font-family: var(--font-sans);
+	font-size: var(--fs-micro);
+	font-weight: 600;
+	line-height: 1;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+.t-accent { --tone: var(--accent); --tone-fill: var(--accent-fill); }
+.t-success { --tone: var(--success); --tone-fill: var(--success-fill); }
+.t-warning { --tone: var(--warning); --tone-fill: var(--warning-fill); }
+.t-danger { --tone: var(--danger); --tone-fill: var(--danger-fill); }
+
+/* The rotating caret of Field, Disclosure and MetadataField; global so the three cannot drift. */
+.disclosure-caret {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	font-size: var(--fs-micro);
+	color: var(--text-muted);
+	transition: transform var(--dur-slow) var(--ease);
+}
+.disclosure-caret.open {
+	transform: rotate(90deg);
+}
+
+/* The dashed frame on a node drop target while a node is dragged out of an editor; it fills
+   in under the cursor. The host must be positioned. */
 .node-drop-hint {
 	position: absolute;
 	inset: 4px;
@@ -446,6 +476,24 @@ textarea {
 .node-drop-hint.active {
 	border-style: solid;
 	background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+/* A ChoiceGrid launcher that fills its panel. `--bg`, not `--surface-1`: a tile is
+   `--surface-1` and carries its separation by that step. */
+.launcher {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	height: 100%;
+	min-height: 0;
+	background: var(--bg);
+}
+/* Inline alert text in a panel. */
+.error-text {
+	margin: 0;
+	color: var(--danger);
+	font-size: var(--fs-small);
+	overflow-wrap: anywhere;
 }
 /* Both axes: the two horizontal wearers (the tab strip, the panel-header control strip) need the
    height, and it is inert for the vertical ones, which pin `overflow-x: hidden`. */

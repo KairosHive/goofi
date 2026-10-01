@@ -1,11 +1,11 @@
-<!-- NumberInput — a dumb numeric control: `value` in, `onChange` out, committed on blur / Enter,
-     with arrow steps and optional drag-to-scrub. `type=text` because `type=number` reports "" for
-     an in-progress "5." and would drop the point. -->
+<!-- NumberInput — commits on blur or Enter, with arrow steps and optional drag-to-scrub. It is
+     `type=text` because `type=number` reports "" for an in-progress "5." and drops the point. -->
 <script lang="ts">
 	import { untrack, onDestroy } from 'svelte';
 	import type { HTMLInputAttributes } from 'svelte/elements';
 	import { useLiveValue } from './liveValue.svelte';
 	import { claimFieldControlId } from './field';
+	import { onStep } from './knob';
 
 	let {
 		value,
@@ -51,18 +51,13 @@
 		if (max !== undefined) n = Math.min(max, n);
 		return n;
 	}
-	/** `n` back on the step's decimal grid; only the incremental paths, never a typed value. */
-	function snap(n: number): number {
-		const decimals = (String(step).split('.')[1] ?? '').length;
-		return decimals ? Number(n.toFixed(decimals)) : n;
-	}
 
 	// Each press is a complete gesture, so it commits at once, from the buffer and not the prop.
 	function stepBy(e: KeyboardEvent, dir: 1 | -1): void {
 		e.preventDefault();
 		const typed = Number(text.trim());
 		const base = text.trim() !== '' && Number.isFinite(typed) ? typed : live.value;
-		const v = clamp(snap(base + dir * step));
+		const v = clamp(onStep(base + dir * step, step));
 		text = fmt(v);
 		live.commit(v);
 	}
@@ -101,7 +96,7 @@
 				scrubbing = true;
 				live.begin();
 			}
-			const v = clamp(snap(startVal + Math.round(dx / 2) * step));
+			const v = clamp(onStep(startVal + Math.round(dx / 2) * step, step));
 			text = fmt(v);
 			live.input(v);
 		};
@@ -168,9 +163,5 @@
 	.ui-number-scrub {
 		cursor: ew-resize;
 		touch-action: pan-y;
-	}
-	.ui-number:disabled {
-		opacity: var(--disabled-opacity);
-		cursor: not-allowed;
 	}
 </style>

@@ -1,5 +1,5 @@
 /** Wire shapes for parameter descriptors, assembled from the generated Rust types. */
-import type { Mode, ParamBase, ParamKind, VideoQuality } from './generated';
+import type { Mode, ParamBase, ParamEntry, ParamKind, VideoQuality } from './generated';
 
 export type { ParamBase, ParamShow, VideoQuality } from './generated';
 
@@ -12,12 +12,7 @@ export const PARAM_MODES = keys<ParamMode>({ constant: 0, expression: 0, referen
 export const VIDEO_QUALITIES = keys<VideoQuality>({ small: 0, high: 0, very_high: 0 });
 
 /** What `node param edit` takes beside a value: any subset, and a text given implies its mode. */
-export interface SourcePatch {
-	mode?: ParamMode;
-	expression?: string;
-	reference?: string;
-	triggers?: boolean;
-}
+export type SourcePatch = Omit<ParamEntry, 'value'>;
 
 type Kind<T extends ParamKind['type']> = ParamBase & Extract<ParamKind, { type: T }>;
 export type FloatParam = Kind<'float'>;

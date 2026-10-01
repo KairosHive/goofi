@@ -1,7 +1,5 @@
 /** Imperative handles a node-editor panel exposes to the rest of the app. */
 export interface EditorCommands {
-	openAddMenu: () => void;
-	fitView: () => void;
 	focusNode: (name: string) => void;
 	selectAll: () => void;
 	clearSelection: () => void;
@@ -32,12 +30,7 @@ export function editorFor(panelId: string | null): EditorCommands | null {
 	return first.done ? null : first.value;
 }
 
-/** Handles for `panelId` if and only if it is a live editor panel. No fallback. */
-export function editorAt(panelId: string | null): EditorCommands | null {
-	return panelId ? (registry.get(panelId) ?? null) : null;
-}
-
 /** The editor an app-global command means: the active one, or the only one; never a guess. */
 export function activeOrOnlyEditor(panelId: string | null): EditorCommands | null {
-	return editorAt(panelId) ?? (registry.size === 1 ? (registry.values().next().value ?? null) : null);
+	return (panelId ? registry.get(panelId) : undefined) ?? (registry.size === 1 ? (registry.values().next().value ?? null) : null);
 }

@@ -1,6 +1,5 @@
-/** One drawing per viewer of an array kind: the plots it holds on the host's surface, and what
- * the feed still shows in the DOM for it — corner labels, placed text, a message, the hover.
- * A drawing lives where its surface does, in the data worker; nothing here touches the DOM. */
+/** One drawing per viewer of an array kind, in the data worker: its plots on the host's surface, and
+ * what the feed shows in the DOM for it (corner labels, placed text, a message, the hover). */
 import type { ArrayData, DataFrame } from '$lib/codec/decode';
 import type { ImagePlot, LinePlot, Plot, Surface } from 'plotluck';
 import { axisNames, imageProbe, lineProbe, trajectoryProbe, type Drag, type Probe } from './hover';
@@ -81,6 +80,7 @@ export abstract class Base implements Drawing {
 	clear(): void {
 		for (const p of this.plots) p.clear();
 		this.probe = null;
+		this.drag = null;
 		this.labels = [];
 		this.texts = [];
 		this.message = null;

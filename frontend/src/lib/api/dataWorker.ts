@@ -1,6 +1,5 @@
-/** Data-plane Web Worker: one WebSocket per (node, slot), each frame decoded on arrival and
- * drawn here on the plot surfaces the main thread handed over; a frame goes to the main thread
- * only where a reader there asked for it. `frames.ts` owns the demand, `drawings.ts` the handles. */
+/** Data-plane Web Worker: one WebSocket per (node, slot), each frame decoded on arrival and drawn
+ * here; a frame goes to the main thread only where a reader there asked for it. */
 import { decodeData, decodeStamps, isArrayFrame, type DataFrame } from '$lib/codec/decode';
 import { createSurface, type Surface } from 'plotluck';
 import type { DrawBox, Drawing, DrawnState } from '$lib/viewers/drawing';
@@ -8,9 +7,8 @@ import type { ProbeBox } from '$lib/viewers/hover';
 import { isRenderable, makeDrawing, type ViewerKind } from '$lib/viewers/registry';
 import type { SettingsMap } from '$lib/viewers/module';
 import { summaryOf } from '$lib/viewers/viewMeta';
-import { headOf, type StreamNews, type ToMain, type ToWorker } from './dataProtocol';
-import { dataUrl } from './dataUrl';
-import { streamKey } from './streamKey';
+import { headOf, streamKey, type StreamNews, type ToMain, type ToWorker } from './dataProtocol';
+import { wsUrl } from './wsUrl';
 
 interface SlotState {
 	node: string;
@@ -171,14 +169,7 @@ function render(d: DrawingState, f: DataFrame): void {
 	if (!isArrayFrame(f) || !isRenderable(d.kind, f.data, d.settings)) {
 		// A frame this kind cannot draw takes the fallback text; the trace before it must not stay under it.
 		d.drawing.clear();
-		state = {
-			has: true,
-			fallback: isArrayFrame(f) ? summaryOf(f.data, f.meta) : null,
-			labels: [],
-			texts: [],
-			message: null,
-			drag: false
-		};
+		state = { ...stateOf(d, true), fallback: isArrayFrame(f) ? summaryOf(f.data, f.meta) : null };
 	} else {
 		d.drawing.push(f, d.settings, d.box);
 		state = stateOf(d, true);
@@ -229,12 +220,11 @@ function ensureSlot(node: string, slot: string): SlotState {
 	const k = streamKey(node, slot);
 	let st = slots.get(k);
 	if (!st) {
-		const proto = self.location.protocol === 'https:' ? 'wss:' : 'ws:';
 		st = {
 			node,
 			slot,
 			ws: null,
-			url: dataUrl(proto, self.location.host, node, slot),
+			url: wsUrl(['data', node, slot], self.location),
 			opened: false,
 			closed: false,
 			reconnectMs: 250,

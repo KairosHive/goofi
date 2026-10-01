@@ -1,24 +1,15 @@
-/** One value per channel on the scalp, or the connectivity between channels: a topomap, a ring
- * of chords, or the electrodes in 3-D, turned by a drag. The field is a plot of its own; the
- * head, the chords and the dots are paths over it; the channel names are the feed's text. */
+/** One value per channel on the scalp, or the connectivity between channels: a topomap, a ring of
+ * chords, or the electrodes in 3-D, turned by a drag. A field plot under paths; names are DOM text. */
 import type { ArrayData, DataFrame } from '$lib/codec/decode';
-import { paths, seriesColor, type FieldPlot, type PathBuilder, type PathPlot, type Rgba, type Surface } from 'plotluck';
+import { extent, paths, seriesColor, type FieldPlot, type PathBuilder, type PathPlot, type Rgba, type Surface } from 'plotluck';
 import { project, type Camera } from './brain3d';
 import { makeLUTCache } from './colormaps';
 import { Base, type DrawBox, type PlacedText } from './drawing';
-import { electrodeAt, lift } from './eegLayout';
+import { electrodeAt, HEAD_RADIUS, lift } from './eegLayout';
 import { formatTick } from './format';
 import { axisNames, type Drag, type Probe } from './hover';
 import type { SettingsMap } from './module';
-import {
-	buildLayout,
-	evaluateAt,
-	fieldCentres,
-	headFrame,
-	HEAD_RADIUS,
-	solveWeights,
-	type TopoLayout
-} from './topomapInterp';
+import { buildLayout, evaluateAt, fieldCentres, headFrame, solveWeights, type TopoLayout } from './topomapInterp';
 
 /** The radius of a drawn electrode dot, in px. */
 const DOT = 2;
@@ -53,31 +44,32 @@ interface Edge {
 }
 
 /** The window the values are read against: their own, or the one asked for. */
-function valueWindow(values: Iterable<number>, s: SettingsMap): [number, number] {
-	let lo = Number(s.vmin ?? -1);
-	let hi = Number(s.vmax ?? 1);
-	if (s.auto !== false) {
-		lo = Infinity;
-		hi = -Infinity;
-		for (const v of values) {
-			if (!Number.isFinite(v)) continue;
-			if (v < lo) lo = v;
-			if (v > hi) hi = v;
-		}
-		if (!(hi > lo)) {
-			lo = -1;
-			hi = 1;
-		}
-	}
-	return [lo, hi];
+function valueWindow(values: number[], s: SettingsMap): [number, number] {
+	if (s.auto === false) return [Number(s.vmin), Number(s.vmax)];
+	const e = extent(values);
+	return e && e[1] > e[0] ? e : [-1, 1];
 }
+
+/** The point of `pts` nearest `(px, py)` within `r`, with its squared distance. */
+function nearest<T extends { x: number; y: number }>(pts: T[], px: number, py: number, r: number): { p: T; d: number } | null {
+	let best: { p: T; d: number } | null = null;
+	for (const p of pts) {
+		const d = (p.x - px) ** 2 + (p.y - py) ** 2;
+		if (d <= r * r && (!best || d <= best.d)) best = { p, d };
+	}
+	return best;
+}
+
+/** A quadratic Bézier from `p` to `q` about `c`, at `t`, in any number of dimensions. */
+const bow = (p: number[], c: number[], q: number[], t: number): number[] =>
+	p.map((v, j) => (1 - t) ** 2 * v + 2 * (1 - t) * t * c[j] + t * t * q[j]);
 
 function lutRgba(L: Uint8Array, t: number, alpha: number): Rgba {
 	const i = ((t * 255) | 0) * 3;
 	return [L[i] / 255, L[i + 1] / 255, L[i + 2] / 255, alpha];
 }
 
-export type BrainMode = 'topomap' | 'ring' | '3d';
+type BrainMode = 'topomap' | 'ring' | '3d';
 
 /** What the brain viewer draws for a frame of `ndim` axes: its setting, or under `auto` a
  * topomap of one value per channel and a ring of a channel-by-channel matrix. */
@@ -130,8 +122,15 @@ export class BrainDrawing extends Base {
 		this.message = null;
 		this.texts = [];
 		if (mode === 'topomap') this.paintTopomap(arr, channels, settings, box);
-		else if (mode === 'ring') this.paintRing(arr, channels, settings, box);
-		else this.paint3d(arr, channels, settings, box);
+		else if (channels.length < 2) this.fail('need ≥ 2 recognized channels');
+		else {
+			this.field.clear();
+			this.edges = this.edgesOf(arr, channels, settings);
+			this.names = channels.map((c) => c.name);
+			const L = this.lutFor(String(settings.colormap ?? 'magma'));
+			if (mode === 'ring') this.paintRing(channels, box, L);
+			else this.paint3d(channels, settings, box, L);
+		}
 		this.probe = mode === 'topomap' ? this.topomapProbe : this.pointProbe;
 		this.drag = mode === '3d' ? this.rotate : null;
 	}
@@ -144,11 +143,8 @@ export class BrainDrawing extends Base {
 	}
 
 	private fail(msg: string): void {
+		this.clear();
 		this.message = msg;
-		this.field.clear();
-		this.path.clear();
-		this.weights = null;
-		this.placed = [];
 	}
 
 	// ── topomap ──────────────────────────────────────────────────────────────────────────────
@@ -201,21 +197,12 @@ export class BrainDrawing extends Base {
 		const { cx, cy, side, radius } = headFrame(box.w, box.h);
 		if ((px - cx) ** 2 + (py - cy) ** 2 > radius * radius) return null;
 		const reach = box.tol * 3;
-		let near: (typeof this.electrodes)[number] | null = null;
-		let best = reach * reach;
-		for (const e of this.electrodes) {
-			const ex = cx + (e.x - 0.5) * side;
-			const ey = cy + (e.y - 0.5) * side;
-			const d = (ex - px) ** 2 + (ey - py) ** 2;
-			if (d <= best) {
-				best = d;
-				near = { ...e, x: ex, y: ey };
-			}
-		}
-		if (near) {
-			const t = Math.min(1, Math.max(0, (Math.sqrt(best) - DOT) / (reach - DOT)));
+		const at = this.electrodes.map((e) => ({ ...e, x: cx + (e.x - 0.5) * side, y: cy + (e.y - 0.5) * side }));
+		const hit = nearest(at, px, py, reach);
+		if (hit) {
+			const t = Math.min(1, Math.max(0, (Math.sqrt(hit.d) - DOT) / (reach - DOT)));
 			const r = DOT + (6 - DOT) * (1 - t);
-			return { mark: { x: near.x, y: near.y, r }, lines: [[formatTick(near.value)], [near.name]] };
+			return { mark: { x: hit.p.x, y: hit.p.y, r }, lines: [[formatTick(hit.p.value)], [hit.p.name]] };
 		}
 		const v = evaluateAt(layout, weights, 0.5 + (px - cx) / side, 0.5 + (py - cy) / side);
 		return { mark: null, lines: [[formatTick(v)]] };
@@ -256,13 +243,8 @@ export class BrainDrawing extends Base {
 		return best;
 	}
 
-	private paintRing(arr: ArrayData, channels: Channel[], s: SettingsMap, box: DrawBox): void {
+	private paintRing(channels: Channel[], box: DrawBox, L: Uint8Array): void {
 		const { w, h } = box;
-		this.field.clear();
-		if (channels.length < 2) return this.fail('need ≥ 2 recognized channels');
-		this.edges = this.edgesOf(arr, channels, s);
-		this.names = channels.map((c) => c.name);
-		const L = this.lutFor(String(s.colormap ?? 'magma'));
 		const n = channels.length;
 		const cx = w / 2;
 		const cy = h / 2;
@@ -285,13 +267,11 @@ export class BrainDrawing extends Base {
 		for (const e of this.edges) {
 			const a = this.placed[e.a];
 			const b = this.placed[e.b];
-			const mx = cx + ((a.x + b.x) / 2 - cx) * PULL;
-			const my = cy + ((a.y + b.y) / 2 - cy) * PULL;
+			const m = [cx + ((a.x + b.x) / 2 - cx) * PULL, cy + ((a.y + b.y) / 2 - cy) * PULL];
 			const pts: number[] = [];
 			for (let k = 0; k <= STEPS; k++) {
-				const t = k / STEPS;
-				const u = 1 - t;
-				pts.push((u * u * a.x + 2 * u * t * mx + t * t * b.x) / w, (u * u * a.y + 2 * u * t * my + t * t * b.y) / h);
+				const [x, y] = bow([a.x, a.y], m, [b.x, b.y], k / STEPS);
+				pts.push(x / w, y / h);
 			}
 			this.chord(p, pts, L, e.t);
 		}
@@ -316,15 +296,7 @@ export class BrainDrawing extends Base {
 	}
 
 	private readonly pointProbe: Probe = (px, py, box) => {
-		let near: (typeof this.placed)[number] | null = null;
-		let best = box.tol * box.tol;
-		for (const p of this.placed) {
-			const d = (p.x - px) ** 2 + (p.y - py) ** 2;
-			if (d <= best) {
-				best = d;
-				near = p;
-			}
-		}
+		const near = nearest(this.placed, px, py, box.tol)?.p;
 		if (!near) return null;
 		const e = this.strongest(near.i);
 		const lines = [[near.name]];
@@ -342,24 +314,18 @@ export class BrainDrawing extends Base {
 		if (l) this.push(l.frame, l.settings, l.box);
 	};
 
-	private paint3d(arr: ArrayData, channels: Channel[], s: SettingsMap, box: DrawBox): void {
+	private paint3d(channels: Channel[], s: SettingsMap, box: DrawBox, L: Uint8Array): void {
 		const { w, h } = box;
-		this.field.clear();
-		if (channels.length < 2) return this.fail('need ≥ 2 recognized channels');
 		// How far a 3-D edge dips into the head: 0 is the straight chord, 1 a bow through the centre.
 		const curve = Math.min(1, Math.max(0, Number(s.curve ?? 0.1)));
-		this.edges = this.edgesOf(arr, channels, s);
-		this.names = channels.map((c) => c.name);
-		const L = this.lutFor(String(s.colormap ?? 'magma'));
 		const view = project(this.camera, w, h);
-		const at = (q: [number, number, number]): [number, number] => {
-			const v = view(q);
+		const at = (q: number[]): [number, number] => {
+			const v = view(q as [number, number, number]);
 			return [v.x / w, v.y / h];
 		};
 		const p = paths();
-		// The head: its equator, and the two great circles through the vertex, as the scaffold
-		// the electrodes hang on. The nose is a wedge off the front, so the way the head faces
-		// reads at a glance from any angle.
+		// The equator and two great circles through the vertex are the scaffold; the nose is a
+		// wedge off the front, so the way the head faces reads from any angle.
 		const circles: number[][] = [[], [], []];
 		for (let k = 0; k <= 64; k++) {
 			const a = (k / 64) * Math.PI * 2;
@@ -380,19 +346,8 @@ export class BrainDrawing extends Base {
 				// A quadratic bow in head space, its control point the chord's middle pulled past
 				// the centre: at 1 the bow's own middle is the centre itself.
 				const [q, r] = [lifted[e.a], lifted[e.b]];
-				const pull = 1 - 2 * curve;
-				const c = [((q[0] + r[0]) / 2) * pull, ((q[1] + r[1]) / 2) * pull, ((q[2] + r[2]) / 2) * pull];
-				for (let k = 0; k <= STEPS; k++) {
-					const t = k / STEPS;
-					const u = 1 - t;
-					pts.push(
-						...at([
-							u * u * q[0] + 2 * u * t * c[0] + t * t * r[0],
-							u * u * q[1] + 2 * u * t * c[1] + t * t * r[1],
-							u * u * q[2] + 2 * u * t * c[2] + t * t * r[2]
-						])
-					);
-				}
+				const c = q.map((v, j) => ((v + r[j]) / 2) * (1 - 2 * curve));
+				for (let k = 0; k <= STEPS; k++) pts.push(...at(bow(q, c, r, k / STEPS)));
 			}
 			this.chord(p, pts, L, e.t);
 		}

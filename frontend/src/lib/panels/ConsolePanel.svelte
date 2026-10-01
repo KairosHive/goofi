@@ -4,28 +4,28 @@
 	import type { PanelProps } from 'panelty';
 	import { consoleStore, type ConsoleEntry, type LogLevel } from '$lib/stores/console.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
-	import { ui } from '$lib/stores/ui.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
+	import { errorText } from '$lib/stores/notify.svelte';
 	import { linkedNodeName } from 'panelty';
 	import { copyText } from '$lib/clipboard';
 	import { estimateRowHeight } from './consoleRowHeight';
 	import NodeSelect from './NodeSelect.svelte';
+	import NodeDropHint from './NodeDropHint.svelte';
 	import { Bar, Chip, Badge, Icon, IconButton, EmptyState } from '$lib/ui';
 	import { onDestroy, tick } from 'svelte';
 
 	let { panelId, state: linkState }: PanelProps = $props();
 	const sel = selection();
-	const uiStore = ui();
 	const cs = consoleStore();
 
 	const filterName = $derived(linkedNodeName(linkState)); // the bound node's uid (identity)
-	const nodeLabel = (uid: string): string => graph().nodeById(uid)?.name ?? uid;
 	const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
-	const sourceLabel = (entry: ConsoleEntry): string => entry.node ? nodeLabel(entry.node) : entry.component;
-	const dragActive = $derived(uiStore.nodeDrag !== null);
-	const over = $derived(uiStore.nodeDragTarget === panelId);
+	const sourceLabel = (entry: ConsoleEntry): string =>
+		entry.node ? (graph().nodeById(entry.node)?.name ?? entry.node) : entry.component;
+	const log = (text: string, level?: LogLevel) => getControl().call('log write', { text, level, component: 'command' });
 
-	let levels = $state(new Set<LogLevel>(['info', 'warning', 'error']));
+	const LEVELS: LogLevel[] = ['info', 'warning', 'error'];
+	let levels = $state(new Set(LEVELS));
 	let query = $state('');
 	let command = $state('');
 	let busy = $state(false);
@@ -51,19 +51,17 @@
 		command = '';
 		completions = [];
 		try {
-			await getControl().call('log write', { text: `› ${line}`, component: 'command' });
+			await log(`› ${line}`);
 			const response = await fetch('/exec', {
 				method: 'POST', headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ commands: [line], actor: getControl().actor })
 			});
 			const result = await response.json();
 			if (!response.ok || result.error) throw new Error(result.error ?? `Request failed (${response.status})`);
-			for (const entry of result.results) {
-				await getControl().call('log write', { text: entry.text, component: 'command' });
-			}
+			for (const entry of result.results) await log(entry.text);
 		} catch (error) {
-			const text = error instanceof Error ? error.message : String(error);
-			try { await getControl().call('log write', { text, level: 'error', component: 'command' }); }
+			const text = errorText(error);
+			try { await log(text, 'error'); }
 			catch { commandError = text; }
 		} finally { busy = false; }
 	}
@@ -158,13 +156,10 @@
 
 	// Cumulative row offsets: cum[i] = total height of rows [0, i).
 	const layout = $derived.by<{ n: number; cum: Float64Array; height: number }>(() => {
-		cs.version;
-		measured;
-		const v = view;
-		const n = v ? v.total() : 0;
+		const n = view.total();
 		const cum = new Float64Array(n + 1);
 		const floor = contentFloor();
-		for (let i = 0; i < n; i++) cum[i + 1] = cum[i] + heightOf(v!.get(i), floor);
+		for (let i = 0; i < n; i++) cum[i + 1] = cum[i] + heightOf(view.get(i), floor);
 		return { n, cum, height: cum[n] };
 	});
 
@@ -184,10 +179,10 @@
 	const end = $derived(Math.min(layout.n, indexAt(layout.cum, scrollTop + viewportH) + OVERSCAN + 1));
 	const windowRows = $derived.by<ConsoleEntry[]>(() => {
 		const rows: ConsoleEntry[] = [];
-		for (let i = start; i < Math.min(end, view.total()); i++) rows.push(view.get(i));
+		for (let i = start; i < end; i++) rows.push(view.get(i));
 		return rows;
 	});
-	const topPad = $derived(layout.cum[Math.min(start, layout.n)]);
+	const topPad = $derived(layout.cum[start]);
 	const bottomPad = $derived(Math.max(0, layout.height - layout.cum[Math.min(end, layout.n)]));
 
 	function onScroll(): void {
@@ -211,18 +206,14 @@
 			});
 		}
 	});
-
-	function focus(name: string): void {
-		if (sel.activeEditorId) sel.selectNodes(sel.activeEditorId, [name]);
-	}
 </script>
 
 <div class="wrap" data-testid="console-panel">
 	<Bar>
 		{#snippet start()}
-			{#each ['info', 'warning', 'error'] as level}
-				<Chip density="chrome" tone={levels.has(level as LogLevel) ? 'accent' : 'neutral'}
-					aria-pressed={levels.has(level as LogLevel)} onclick={() => toggleLevel(level as LogLevel)}
+			{#each LEVELS as level}
+				<Chip density="chrome" tone={levels.has(level) ? 'accent' : 'neutral'}
+					aria-pressed={levels.has(level)} onclick={() => toggleLevel(level)}
 					title="Show {level} messages">{#if level === 'info'}<Icon name="info" />{/if}{level}</Chip>
 			{/each}
 		{/snippet}
@@ -263,7 +254,7 @@
 							aria-label={sourceLabel(row)}
 							onclick={(ev) => {
 								ev.stopPropagation();
-								if (row.node) focus(row.node);
+								if (row.node && sel.activeEditorId) sel.selectNodes(sel.activeEditorId, [row.node]);
 							}}>{Array.from(sourceLabel(row))[0]}</button
 						>
 					{/if}
@@ -315,9 +306,7 @@
 		<button type="submit" disabled={busy || !command.trim()}>{busy ? 'Running…' : 'Run'}</button>
 	</form>
 
-	{#if dragActive}
-		<div class="node-drop-hint" class:active={over} data-testid="node-drop-hint"></div>
-	{/if}
+	<NodeDropHint {panelId} />
 </div>
 
 <style>

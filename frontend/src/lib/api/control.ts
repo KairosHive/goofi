@@ -3,15 +3,13 @@ import type { LogBatch } from '$lib/stores/console.svelte';
 import type { ParamDescriptor } from '$lib/api/types';
 import type { OpName } from '$lib/api/ops';
 import type { TAGS } from '$lib/api/vocab';
+import type { Link } from './generated';
+import type { LiveSource } from './paramLive';
+import { wsUrl } from './wsUrl';
 
 /** Control-plane protocol version. Bump it together with PROTOCOL_VERSION in
  * `backend/goofi-bridge/src/schemas.rs`. */
 export const PROTOCOL_VERSION = 5;
-
-/** Whether a backend-reported protocol version is compatible with this build. */
-export function isProtocolCompatible(remote: unknown): boolean {
-	return remote === PROTOCOL_VERSION;
-}
 
 /** A node's lifecycle stage. 'error' is terminal: the backend does not auto-restart it. */
 export type NodeStage = 'creating' | 'setup' | 'ready' | 'error';
@@ -23,9 +21,8 @@ export interface NodeTypeInfo {
 	/** The qualified `engine:Name` id; a structural type is bare. `engineOf` reads the engine. */
 	type: string;
 	tags: (typeof TAGS)[number][];
-	/** Which tree the type came from; an `--extra-nodes` directory reads as `builtin`. `custom` is
-	 * the user's own private library, `patch` the open patch's workspace, and `plugin` an engine's
-	 * own find rather than any tree's — a VST3 class, window or no window. */
+	/** Which tree the type came from: `custom` the user's own library, `patch` the open patch's
+	 * workspace, `plugin` an engine's own find (a VST3 class); an `--extra-nodes` root is `builtin`. */
 	source: 'builtin' | 'custom' | 'patch' | 'plugin';
 	/** The node root the type was scanned from, by directory name — a shipped bundle, or an
 	 * `--extra-nodes` root. Absent for `custom`, `patch` and `plugin`, which name no root. */
@@ -50,27 +47,18 @@ export interface ScanDiff {
 	removed: string[];
 }
 
-/** A node's self-reported execution telemetry. */
 export interface NodeStats {
 	updates_per_second: number;
 }
 
-export interface NodeInstanceInfo {
+export interface NodeInstanceInfo
+	extends Pick<NodeTypeInfo, 'type' | 'doc' | 'editor' | 'input_slots' | 'input_multi' | 'output_slots' | 'params'> {
 	/** The universal node identity, stable across rename/restart/reload. */
 	uid: string;
 	/** Mutable display name — the label only, never an identity key. */
 	name: string;
-	type: string;
-	doc: string;
-	/** Whether this node has an editor window of its own to open, from its type's row. */
-	editor?: boolean;
-	input_slots: Record<string, string>;
-	/** Names of the variadic (multi) input slots. */
-	input_multi?: string[];
-	output_slots: Record<string, string>;
 	/** Optional per-slot display label, keyed by slot id; the slot id is shown when absent. */
 	slot_labels?: Record<string, string>;
-	params: Record<string, Record<string, ParamDescriptor>>;
 	pos: [number, number];
 	/** Per-output-slot view state restored from the .gfi patch. */
 	viewers: Record<string, { collapsed?: boolean; kind?: string; settings?: Record<string, unknown> }>;
@@ -94,15 +82,8 @@ export interface SubpatchMeta {
 	memberCount: number;
 }
 
-export interface LinkInfo {
-	/** Source / target node UIDs (not display names). */
-	node_out: string;
-	node_in: string;
-	slot_out: string;
-	slot_in: string;
-}
+export type LinkInfo = Link;
 
-/** Canonical string key for a link — its four slot endpoints. */
 export function linkKey(l: LinkInfo): string {
 	return `${l.node_out}.${l.slot_out}→${l.node_in}.${l.slot_in}`;
 }
@@ -150,13 +131,13 @@ export interface GraphSnapshot {
 	history?: HistoryLabels;
 	/** Per-node runtime state, seeded here because its live stream pushes only transitions. */
 	runtime: Record<string, { stage?: NodeStage; error?: string | null; runtime?: NodeRuntime }>;
-	/** The node palette, carried on `hello`/`graph_replaced`. Absent on an older backend. */
+	/** The node palette, carried on `hello`/`graph_replaced`. */
 	node_types?: NodeTypeInfo[];
 	save_path: string | null;
 	unsaved_changes: boolean;
 	/** Where THIS client was last looking — persisted with the patch, never converged to a peer. */
 	viewpoint?: unknown;
-	/** The spawned agent harnesses and the installed ones. Absent on an older backend. */
+	/** The spawned agent harnesses and the installed ones. */
 	harnesses?: HarnessRoster;
 	/** A PUBLIC goofi: no terminal, no agents, no filesystem, no save or load, no audio. Carried
 	 * on `hello` alone, because it is decided once at start. */
@@ -257,18 +238,7 @@ export type ControlEvent =
 	| { event: 'node_stats'; payload: { stats: Record<string, NodeStats> } }
 	// Every driven node's LIVE source state, both maps whole: what its driven params evaluate to,
 	// and what they fail with. Applied surgically, never a wholesale params replace.
-	| {
-			event: 'param_values';
-			payload: {
-				nodes: Record<
-					string,
-					{
-						values: Record<string, Record<string, number | string | boolean>>;
-						errors: Record<string, Record<string, string>>;
-					}
-				>;
-			};
-	  }
+	| { event: 'param_values'; payload: { nodes: Record<string, LiveSource> } }
 	| { event: 'unsaved_changes'; payload: { unsaved_changes: boolean } }
 	| { event: 'save_path_changed'; payload: { save_path: string | null } }
 	// The whole recording state, so a client never has to diff transitions.
@@ -331,18 +301,19 @@ const isLabels = (v: unknown): v is HistoryLabels =>
 
 /** This tab's stable actor id, minted once per tab in `sessionStorage`. */
 function readOrMintActor(): string {
+	const fresh = () => `s${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
 	try {
 		// The STORAGE key keeps its historical spelling: renaming it would hand every open tab a
 		// fresh actor mid-upgrade, orphaning its undo stack.
 		const KEY = 'goofi:session';
 		let s = sessionStorage.getItem(KEY);
 		if (!s) {
-			s = crypto?.randomUUID?.() ?? `s${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+			s = crypto?.randomUUID?.() ?? fresh();
 			sessionStorage.setItem(KEY, s);
 		}
 		return s;
 	} catch {
-		return `s${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+		return fresh();
 	}
 }
 
@@ -363,16 +334,11 @@ export class ControlClient implements Control {
 	private retryMs = 250;
 
 	constructor(url?: string) {
-		const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
 		// The actor rides the URL so the hello already carries this tab's undo and redo.
-		this.url = url ?? `${proto}//${location.host}/control?actor=${encodeURIComponent(this.actor)}`;
+		this.url = url ?? `${wsUrl(['control'])}?actor=${encodeURIComponent(this.actor)}`;
 	}
 
 	connect(): void {
-		this._open();
-	}
-
-	private _open(): void {
 		if (this.ws) return;
 		const ws = new WebSocket(this.url);
 		this.ws = ws;
@@ -422,7 +388,7 @@ export class ControlClient implements Control {
 			payload && typeof payload === 'object'
 				? (payload as { protocol_version?: unknown }).protocol_version
 				: undefined;
-		if (this._protocolMismatch || isProtocolCompatible(remote)) return;
+		if (this._protocolMismatch || remote === PROTOCOL_VERSION) return;
 		this._protocolMismatch = true;
 		for (const h of this.protocolListeners) h(true);
 	}
@@ -434,7 +400,7 @@ export class ControlClient implements Control {
 		this.pending.clear();
 		const delay = this.retryMs;
 		this.retryMs = Math.min(this.retryMs * 2, 5000);
-		setTimeout(() => this._open(), delay);
+		setTimeout(() => this.connect(), delay);
 	}
 
 	private _setConnected(v: boolean): void {
@@ -443,7 +409,6 @@ export class ControlClient implements Control {
 		for (const h of this.connectListeners) h(v);
 	}
 
-	/** Subscribe to all incoming events. Returns an unsubscribe fn. */
 	on(handler: EventHandler): () => void {
 		this.handlers.add(handler);
 		return () => this.handlers.delete(handler);
@@ -462,7 +427,6 @@ export class ControlClient implements Control {
 		return () => this.protocolListeners.delete(handler);
 	}
 
-	/** Issue an RPC. Returns a promise resolving to the server's result. */
 	call<T = unknown>(op: OpName, payload: Record<string, unknown> = {}, step?: Step): Promise<T> {
 		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
 			return Promise.reject(new Error('control socket not connected'));
@@ -494,7 +458,6 @@ export class ControlClient implements Control {
 	}
 }
 
-/** Process-wide singleton (one bridge ↔ one tab). */
 let _client: ControlClient | null = null;
 export function getControl(): ControlClient {
 	if (!_client) {

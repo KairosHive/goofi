@@ -2,7 +2,7 @@
  * the feed draws the answer. Positions are in the body's layout px. */
 import type { ArrayData } from '$lib/codec/decode';
 import type { LineData, Range } from 'plotluck';
-import { isU8, sampleRange, toUnit } from './depth';
+import { sampleRange, toUnit } from './depth';
 import { formatTick } from './format';
 
 export interface Hover {
@@ -160,7 +160,7 @@ export function imageProbe(arr: ArrayData, stretch: boolean, meta: Record<string
 	const rowNames = axisNames(meta, 0);
 	const colNames = axisNames(meta, 1);
 	// 8-bit texels read back in the node's own units, as the drawing maps them.
-	const range = isU8(arr.dtype) ? (sampleRange(meta) ?? [0, 1]) : null;
+	const range = sampleRange(arr.dtype, meta);
 	const value = (t: number): number => (range ? toUnit(t, range) : t);
 	return (px, py, box) => {
 		if (iw <= 0 || ih <= 0) return null;

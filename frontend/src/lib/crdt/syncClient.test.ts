@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { FakeControl } from '$lib/test/fakeControl';
 import { SyncClient } from './syncClient.svelte';
 import { nodeView } from './graphDoc';
+import type { Op } from './ops';
 
 const OSC = { type: 'Oscillator', name: 'osc', pos: [0, 0] };
 
@@ -14,11 +15,9 @@ const stateWith = (nodes: Record<string, unknown>) => ({
 	arrangement: {}
 });
 
-function started(): { ctl: FakeControl; client: SyncClient } {
+function started(changed: (ops: Op[] | null) => void = () => {}): { ctl: FakeControl; client: SyncClient } {
 	const ctl = new FakeControl();
-	const client = new SyncClient(ctl);
-	client.start();
-	return { ctl, client };
+	return { ctl, client: new SyncClient(ctl, changed) };
 }
 
 describe('SyncClient', () => {
@@ -116,20 +115,12 @@ describe('SyncClient', () => {
 	it('fires the change callback on a seed, on a delta and on a reset, naming what moved', () => {
 		// A seed and a reset replace the whole document (`null`); a delta hands over its own ops,
 		// so the store re-derives only the roots — and under `nodes`, the uids — they name.
-		const { ctl, client } = started();
 		const changes: unknown[] = [];
-		client.onDocChange((ops) => changes.push(ops));
+		const { ctl, client } = started((ops) => changes.push(ops));
 		const ops = [{ op: 'put' as const, path: ['nodes', '1'], value: { ...OSC, name: 'renamed' } }];
 		ctl.emit({ event: 'doc_state', payload: { v: 1, doc: stateWith({ '1': OSC }) } });
 		ctl.emit({ event: 'doc_patch', payload: { from: 1, v: 2, ops } });
 		client.reset();
 		expect(changes).toEqual([null, ops, null]);
-	});
-
-	it('stop() unsubscribes, so a later event no longer moves the replica', () => {
-		const { ctl, client } = started();
-		client.stop();
-		ctl.emit({ event: 'doc_state', payload: { v: 1, doc: stateWith({ '1': OSC }) } });
-		expect(client.synced).toBe(false);
 	});
 });

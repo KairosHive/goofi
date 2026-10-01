@@ -1,12 +1,10 @@
-/**
- * A node as the editor reads it: ONE stable object per uid whose fields are read off the reactive
- * replica, the static catalog and the event-sourced runtime overlay on every access. Nothing is
- * assembled or diffed: a reader of `node.name` re-runs for that leaf of the document alone.
- */
+/** A node as the editor reads it: ONE stable object per uid, whose fields read the replica, the
+ * catalog and the runtime overlay on each access, so a reader re-runs for its own leaf alone. */
 import type { NodeInstanceInfo, NodeTypeInfo, NodeStage, NodeStats, NodeRuntime } from '$lib/api/control';
 import { PARAM_MODES, type ParamDescriptor, type ParamMode } from '$lib/api/types';
 import { boundaryType } from '$lib/api/vocab';
 import { nodesMap, nodeView, viewersJson, baselineJson, type Doc, type FacadeFace } from './graphDoc';
+import { obj, type Obj } from './ops';
 
 /** What the runtime planes report about one node — never in the document. */
 export interface RuntimeOverlay {
@@ -30,9 +28,6 @@ export interface ViewSources {
 	face(uid: string): FacadeFace | undefined;
 	runtime(uid: string): RuntimeOverlay | undefined;
 }
-
-type Obj = Record<string, unknown>;
-const obj = (v: unknown): Obj => (v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : {});
 
 /** Define `getters` as enumerable accessors on `target`, so a spread or a stringify reads them too. */
 function accessors<T extends object>(target: T, getters: Record<string, () => unknown>): T {

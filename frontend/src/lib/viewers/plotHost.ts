@@ -1,5 +1,5 @@
 /** How a viewer finds the surface it draws on and the card it sits in: two Svelte contexts. */
-import { getContext, setContext } from 'svelte';
+import { createContext } from 'svelte';
 import { createSurface, type SurfaceHandle } from '$lib/api/drawings';
 import type { Rect, View } from 'plotluck';
 
@@ -16,21 +16,8 @@ export interface PlotAnchor {
 	readonly el: HTMLElement | null;
 }
 
-const HOST = Symbol('plot-host');
-const ANCHOR = Symbol('plot-anchor');
-
-export function provideSurface(host: PlotHost): void {
-	setContext(HOST, host);
-}
-export function useSurface(): PlotHost | undefined {
-	return getContext(HOST);
-}
-export function provideAnchor(anchor: PlotAnchor): void {
-	setContext(ANCHOR, anchor);
-}
-export function useAnchor(): PlotAnchor | undefined {
-	return getContext(ANCHOR);
-}
+export const [useSurface, provideSurface] = createContext<PlotHost>();
+export const [useAnchor, provideAnchor] = createContext<PlotAnchor>();
 
 /** `el`'s box inside `anchor` by the offset chain: layout units, transforms excluded. */
 export function offsetIn(el: HTMLElement, anchor: HTMLElement): Rect {

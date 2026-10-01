@@ -3,7 +3,8 @@
 	import type { PanelProps } from 'panelty';
 	import type { Context, NodeDrag, NodeDrop, Panel } from '../../../../sdk/frontend';
 	import { notify } from '$lib/stores/notify.svelte';
-	import { ui } from '$lib/stores/ui.svelte';
+	import { splitDrop, ui } from '$lib/stores/ui.svelte';
+	import NodeDropHint from '$lib/panels/NodeDropHint.svelte';
 
 	let { panelId, state: panelState, setState, panel, ctx }: PanelProps & { panel: Panel; ctx: Context } = $props();
 	let element: HTMLDivElement;
@@ -11,12 +12,10 @@
 	const uiStore = ui();
 	const accepts = $derived(panel.accepts_node === true);
 	const dragActive = $derived(accepts && uiStore.nodeDrag !== null);
-	const over = $derived(uiStore.nodeDragTarget === panelId);
+	const over = $derived(uiStore.nodeDragOver === panelId);
+	const under = $derived(uiStore.nodeDragOver === null ? null : splitDrop(uiStore.nodeDragOver));
 	// The zone under the pointer, as the plugin spelled it: what follows `<panelId>#`.
-	const zone = $derived.by(() => {
-		const z = uiStore.nodeDragZone;
-		return z !== null && z.startsWith(`${panelId}#`) ? z.slice(panelId.length + 1) : null;
-	});
+	const zone = $derived(under?.owner === panelId ? under.zone : null);
 	const drag = $derived<NodeDrag | null>(
 		dragActive ? { node: uiStore.nodeDrag as string, over: over || zone !== null, zone } : null
 	);
@@ -56,7 +55,7 @@
 			return () => {
 				drops.clear();
 				drags.clear();
-				try { cleanup?.(); } catch (cause) { notify().failure(`Plugin panel ${panel.title}`, cause); }
+				fenced(() => cleanup?.());
 			};
 		} catch (cause) {
 			error = String(cause);
@@ -68,9 +67,7 @@
 <div class="plugin-panel">
 	<div class="plugin-root" data-plugin-panel bind:this={element}></div>
 	{#if error}<p role="alert">{error}</p>{/if}
-	{#if dragActive}
-		<div class="node-drop-hint" class:active={over} data-testid="node-drop-hint"></div>
-	{/if}
+	{#if accepts}<NodeDropHint {panelId} />{/if}
 </div>
 
 <style>

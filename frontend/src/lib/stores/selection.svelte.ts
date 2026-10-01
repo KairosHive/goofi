@@ -1,6 +1,7 @@
 /** Graph selection, keyed per editor panel; a selection is replaced, never mutated in place. */
 import { graph } from './graph.svelte';
 import type { NodeInstanceInfo } from '$lib/api/control';
+import { sameKeys } from '$lib/editor/slotProximity';
 
 interface PanelSel {
 	nodes: Set<string>;
@@ -8,10 +9,10 @@ interface PanelSel {
 }
 const EMPTY: PanelSel = { nodes: new Set(), edges: new Set() };
 
-function setEq(a: Set<string>, b: Set<string>): boolean {
-	if (a.size !== b.size) return false;
-	for (const x of a) if (!b.has(x)) return false;
-	return true;
+function toggled(set: Set<string>, x: string): Set<string> {
+	const next = new Set(set);
+	if (!next.delete(x)) next.add(x);
+	return next;
 }
 
 class SelectionStore {
@@ -38,14 +39,16 @@ class SelectionStore {
 	private write(panelId: string, next: PanelSel): void {
 		// A no-op write would allocate a fresh selection object, retriggering the editor's flowNodes
 		// effect mid-drag so Svelte Flow's onnodedragstart never fires.
-		const cur = this.map[panelId];
-		if (cur && setEq(cur.nodes, next.nodes) && setEq(cur.edges, next.edges)) return;
+		const cur = this.sel(panelId);
+		if (sameKeys(cur.nodes, next.nodes) && sameKeys(cur.edges, next.edges)) return;
 		this.map = { ...this.map, [panelId]: next };
-		// A real selection change re-arms a dismissed inspector — here and nowhere else.
-		if (this.inspectorDismissed[panelId]) {
-			const { [panelId]: _, ...rest } = this.inspectorDismissed;
-			this.inspectorDismissed = rest;
-		}
+		// A real selection change re-arms a dismissed inspector.
+		this.undismiss(panelId);
+	}
+	private undismiss(panelId: string): void {
+		if (!this.inspectorDismissed[panelId]) return;
+		const { [panelId]: _, ...rest } = this.inspectorDismissed;
+		this.inspectorDismissed = rest;
 	}
 
 	nodes(panelId: string | null): Set<string> {
@@ -63,55 +66,30 @@ class SelectionStore {
 		return graph().nodeById(name);
 	}
 
-	/** Selected node of the last-focused editor — for standalone panels. */
-	get activeSelectedNode(): NodeInstanceInfo | null {
-		return this.selectedNode(this.activeEditorId);
-	}
-
 	setActiveEditor(panelId: string): void {
 		if (this.activeEditorId !== panelId) this.activeEditorId = panelId;
 	}
 
-	/** Whether `panelId`'s inspector pane appears; a null panel id reads as off. */
-	inspectorEnabledFor(panelId: string | null): boolean {
-		return panelId !== null ? (this.inspectorOn[panelId] ?? true) : false;
-	}
-	toggleInspectorFor(panelId: string): void {
-		this.inspectorOn = { ...this.inspectorOn, [panelId]: !this.inspectorEnabledFor(panelId) };
+	/** The ◧'s verb: set the standing preference; turning it on also lifts a dismissal. */
+	setInspector(panelId: string, on: boolean): void {
+		this.inspectorOn = { ...this.inspectorOn, [panelId]: on };
+		if (on) this.undismiss(panelId);
 	}
 	/** Close the pane until the selection next changes. The ✕'s verb — never the ◧'s. */
 	dismissInspectorFor(panelId: string): void {
 		this.inspectorDismissed = { ...this.inspectorDismissed, [panelId]: true };
 	}
-	/** Bring the pane back regardless of how it was hidden — the ◧'s "show" half. */
-	showInspectorFor(panelId: string): void {
-		this.inspectorOn = { ...this.inspectorOn, [panelId]: true };
-		if (this.inspectorDismissed[panelId]) {
-			const { [panelId]: _, ...rest } = this.inspectorDismissed;
-			this.inspectorDismissed = rest;
-		}
-	}
-	/** What the pane actually renders from: the standing preference minus a live dismissal. */
+	/** What the pane renders from: the standing preference minus a live dismissal; null is off. */
 	inspectorVisibleFor(panelId: string | null): boolean {
-		return (
-			this.inspectorEnabledFor(panelId) &&
-			!(panelId !== null && (this.inspectorDismissed[panelId] ?? false))
-		);
+		return panelId !== null && (this.inspectorOn[panelId] ?? true) && !this.inspectorDismissed[panelId];
 	}
 
 	/** A click adds rather than replaces on a modifier OR while multi-select mode is on; folded in
 	 * here, not at each call site, so no caller can forget the mode. */
 	clickNode(panelId: string, name: string, modifier: boolean): void {
 		const cur = this.sel(panelId);
-		const additive = modifier || this.multiSelect;
-		if (additive) {
-			const nodes = new Set(cur.nodes);
-			if (nodes.has(name)) nodes.delete(name);
-			else nodes.add(name);
-			this.write(panelId, { nodes, edges: cur.edges });
-		} else {
-			this.write(panelId, { nodes: new Set([name]), edges: cur.edges });
-		}
+		const nodes = modifier || this.multiSelect ? toggled(cur.nodes, name) : new Set([name]);
+		this.write(panelId, { nodes, edges: cur.edges });
 	}
 
 	selectNodes(panelId: string, names: Iterable<string>): void {
@@ -126,15 +104,8 @@ class SelectionStore {
 	/** Same fold as `clickNode`; the mode covers edges too, since a plain edge click clears nodes. */
 	clickEdge(panelId: string, id: string, modifier: boolean): void {
 		const cur = this.sel(panelId);
-		const additive = modifier || this.multiSelect;
-		if (additive) {
-			const edges = new Set(cur.edges);
-			if (edges.has(id)) edges.delete(id);
-			else edges.add(id);
-			this.write(panelId, { nodes: cur.nodes, edges });
-		} else {
-			this.write(panelId, { nodes: new Set(), edges: new Set([id]) });
-		}
+		if (modifier || this.multiSelect) this.write(panelId, { nodes: cur.nodes, edges: toggled(cur.edges, id) });
+		else this.write(panelId, { nodes: new Set(), edges: new Set([id]) });
 	}
 
 	/** The same fold, on empty canvas: with the mode on, a stray tap must not wipe the selection. */

@@ -1,32 +1,22 @@
-<!-- Disclosure — one collapse control: a caret plus a `summary` that toggles `children` in and
-     out of the DOM. `open` is bindable and also reports through `onToggle`.
-     `--disclosure-surface` and `--disclosure-hover` seat the summary row on a ground of its own; the
-     body keeps whatever is behind it. -->
+<!-- Disclosure — a caret plus a `summary` that mounts `children` on toggle. `--disclosure-surface`
+     and `--disclosure-hover` give the summary row a ground of its own. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { Icon } from 'panelty';
 
 	let {
-		open = $bindable(false),
-		onToggle,
 		summary,
 		children,
 		class: klass = '',
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
-		open?: boolean;
-		onToggle?: (open: boolean) => void;
 		summary: Snippet;
 		children?: Snippet;
 	} = $props();
 
+	let open = $state(false);
 	const bodyId = $props.id();
-
-	function toggle(): void {
-		open = !open;
-		onToggle?.(open);
-	}
 </script>
 
 <div {...rest} class={`ui-disclosure ${klass}`.trim()}>
@@ -35,9 +25,9 @@
 		class="ui-disclosure-summary"
 		aria-expanded={open}
 		aria-controls={bodyId}
-		onclick={toggle}
+		onclick={() => (open = !open)}
 	>
-		<span class="ui-disclosure-caret" class:open><Icon name="chevron-right" /></span>
+		<span class="disclosure-caret" class:open><Icon name="chevron-right" /></span>
 		<span class="ui-disclosure-label">{@render summary()}</span>
 	</button>
 	{#if open}
@@ -73,7 +63,6 @@
 		background: var(--disclosure-hover, var(--surface-2));
 	}
 	.ui-disclosure-summary:focus-visible {
-		outline: var(--focus-width) solid var(--focus-ink);
 		outline-offset: -2px;
 	}
 	.ui-disclosure-label {
@@ -81,17 +70,6 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-	}
-	.ui-disclosure-caret {
-		flex-shrink: 0;
-		display: flex;
-		align-items: center;
-		font-size: var(--fs-micro);
-		color: var(--text-muted);
-		transition: transform var(--dur-slow) var(--ease);
-	}
-	.ui-disclosure-caret.open {
-		transform: rotate(90deg);
 	}
 	.ui-disclosure-body {
 		min-width: 0;

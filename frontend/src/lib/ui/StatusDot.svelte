@@ -1,7 +1,8 @@
 <!-- StatusDot — a flat filled circle whose `tone` colour-codes health; aria-hidden unless an
      `aria-label` is passed. -->
 <script module lang="ts">
-	export type StatusTone = 'ok' | 'error' | 'warn';
+	import type { BadgeTone } from './Badge.svelte';
+	export type StatusTone = Extract<BadgeTone, 'success' | 'warning' | 'danger'>;
 	export type StatusDotSize = 'sm' | 'md';
 </script>
 
@@ -33,6 +34,7 @@
 <style>
 	.ui-status-dot {
 		display: inline-block;
+		background: var(--tone);
 		flex-shrink: 0;
 		width: var(--status-dot-size);
 		height: var(--status-dot-size);
@@ -44,15 +46,6 @@
 	}
 	.ui-status-dot.s-md {
 		--status-dot-size: 0.625rem;
-	}
-	.ui-status-dot.t-ok {
-		background: var(--success);
-	}
-	.ui-status-dot.t-error {
-		background: var(--danger);
-	}
-	.ui-status-dot.t-warn {
-		background: var(--warning);
 	}
 	.ui-status-dot.pulse {
 		animation: status-blink 1.1s steps(1, end) infinite;

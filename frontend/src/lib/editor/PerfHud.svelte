@@ -1,27 +1,21 @@
 <!-- The app-wide paint rate in the TopBar, ticked off a timer rather than a perpetual rAF. -->
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { perfStats } from '$lib/api/perfStats.svelte';
-
-	const p = perfStats();
+	import { paints as p } from '$lib/api/frames';
 
 	onMount(() => {
 		const id = setInterval(() => p.tick(), 250);
 		return () => clearInterval(id);
 	});
-
-	const active = $derived(p.fps > 0.05);
 </script>
 
-{#if active}
-	<span
-		class="hud"
-		data-testid="perf-hud"
-		title="Paints per second: how often the page draws a new batch of frames, whatever the stream count. Streams served together paint together, so this reads the viewer cap at rest."
-	>
-		<span class="fps">{p.fps.toFixed(0)} fps</span>
-	</span>
-{/if}
+<span
+	class="hud"
+	data-testid="perf-hud"
+	title="Paints per second: how often the page draws a new batch of frames, whatever the stream count. Streams served together paint together, so this reads the viewer cap at rest."
+>
+	<span class="fps">{p.rate.toFixed(0)} fps</span>
+</span>
 
 <style>
 	.hud {

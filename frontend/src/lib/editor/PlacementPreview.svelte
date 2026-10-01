@@ -1,16 +1,12 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
+	import { on } from 'svelte/events';
 	import { ViewportPortal, useSvelteFlow } from '@xyflow/svelte';
 	import { dtypeColor } from './categoryColor';
 	import { bareName } from './typeId';
 	import SnapGuides from './SnapGuides.svelte';
-	import {
-		computeSnapDelta,
-		makeBounds,
-		DEFAULT_NODE_W,
-		DEFAULT_NODE_H,
-		type Bounds
-	} from './snap';
+	import { computeSnapDelta, makeBounds, DEFAULT_NODE_H, type Bounds } from './snap';
+	import { NODE } from './nodeMetrics';
 	import { createTouchPlacement, ghostOrigin, type GhostAnchor } from './touchPlacement';
 	import type { NodeTypeInfo } from '$lib/api/control';
 
@@ -30,7 +26,7 @@
 
 	let mouseClient = $state<{ x: number; y: number }>(untrack(() => ({ x: initialClient.x, y: initialClient.y })));
 	let altKey = $state(false);
-	let ghostW = $state(DEFAULT_NODE_W);
+	let ghostW = $state<number>(NODE.width);
 	let ghostH = $state(DEFAULT_NODE_H);
 	/** Which point of the ghost the input holds; asked of the EVENT, so a hybrid device stays right. */
 	let anchor = $state<GhostAnchor>('top-left');
@@ -110,10 +106,8 @@
 		onCommit([Math.round(snappedX), Math.round(snappedY)]);
 	}
 
-	/**
-	 * The pan block and the synthetic-click suppression, in one handler: SvelteFlow pans off
-	 * `touchstart`, and cancelling it also suppresses the compat mouse cascade after the commit.
-	 */
+	/** The pan block and the synthetic-click suppression: SvelteFlow pans off `touchstart`, and
+	 * cancelling it also suppresses the compat mouse cascade after the commit. */
 	function onTouchStart(e: TouchEvent): void {
 		if (!touch.active) return;
 		e.stopPropagation();
@@ -121,28 +115,21 @@
 	}
 
 	$effect(() => {
-		window.addEventListener('mousemove', onMouseMove);
-		window.addEventListener('keydown', onKeyDown, true);
-		window.addEventListener('click', onWindowClick, true);
-		window.addEventListener('mousedown', onWindowMouseDown, true);
-		window.addEventListener('pointerdown', onPointerDown, true);
-		window.addEventListener('pointermove', onPointerMove, true);
-		window.addEventListener('pointerup', onPointerUp, true);
-		window.addEventListener('pointercancel', touch.cancel, true);
-		// `passive: false` is load-bearing: Chromium makes window-level touchstart listeners passive
-		// by default, which would drop the `preventDefault` above — and the click suppression with it.
-		window.addEventListener('touchstart', onTouchStart, { capture: true, passive: false });
-		return () => {
-			window.removeEventListener('mousemove', onMouseMove);
-			window.removeEventListener('keydown', onKeyDown, true);
-			window.removeEventListener('click', onWindowClick, true);
-			window.removeEventListener('mousedown', onWindowMouseDown, true);
-			window.removeEventListener('pointerdown', onPointerDown, true);
-			window.removeEventListener('pointermove', onPointerMove, true);
-			window.removeEventListener('pointerup', onPointerUp, true);
-			window.removeEventListener('pointercancel', touch.cancel, true);
-			window.removeEventListener('touchstart', onTouchStart, true);
-		};
+		const capture = { capture: true };
+		const offs = [
+			on(window, 'mousemove', onMouseMove),
+			on(window, 'keydown', onKeyDown, capture),
+			on(window, 'click', onWindowClick, capture),
+			on(window, 'mousedown', onWindowMouseDown, capture),
+			on(window, 'pointerdown', onPointerDown, capture),
+			on(window, 'pointermove', onPointerMove, capture),
+			on(window, 'pointerup', onPointerUp, capture),
+			on(window, 'pointercancel', touch.cancel, capture),
+			// `passive: false` is load-bearing: Chromium makes window-level touchstart passive by
+			// default, which would drop the `preventDefault` above and the click suppression with it.
+			on(window, 'touchstart', onTouchStart, { capture: true, passive: false })
+		];
+		return () => offs.forEach((off) => off());
 	});
 </script>
 

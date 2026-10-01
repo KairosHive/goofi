@@ -1,6 +1,5 @@
-/** Test double for `Control`: it records every `call`, and a test drives the event stream with `emit`.
- * It keeps the manager's half of the history too — one labelled entry per write, merged under a
- * group token — so a store test sees the undo and redo the real manager would answer. */
+/** Test double for `Control`: it records every `call`, a test drives events with `emit`, and it
+ * keeps the manager's per-write history, so a store test sees the undo and redo the manager would. */
 import { historyFeed, type Control, type ControlEvent, type Step } from '$lib/api/control';
 import { OP_KINDS, type OpName } from '$lib/api/ops';
 

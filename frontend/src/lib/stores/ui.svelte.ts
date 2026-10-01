@@ -25,6 +25,12 @@ export function slotKey(node: string, slot: string): string {
 	return `${node}|${slot}`;
 }
 
+/** A drop target's owner, and the zone tail after its `#` (null for a whole panel). */
+export function splitDrop(target: string): { owner: string; zone: string | null } {
+	const cut = target.indexOf('#');
+	return cut < 0 ? { owner: target, zone: null } : { owner: target.slice(0, cut), zone: target.slice(cut + 1) };
+}
+
 export class UIStore {
 	/** Ids of the in-panel editors that own the keyboard. NOT `$state`: every registrant is an
 	 * `$effect`, so a reactive Set makes each a dependency of what it writes — the count is. */
@@ -46,11 +52,8 @@ export class UIStore {
 	/** Node being dragged out of an editor to link into a panel, or null. */
 	nodeDrag = $state<string | null>(null);
 
-	/** Id of the linkable panel the dragged node is over, or null. */
-	nodeDragTarget = $state<string | null>(null);
-
-	/** The `data-node-drop` value of the drop zone the dragged node is over, or null. */
-	nodeDragZone = $state<string | null>(null);
+	/** What the dragged node is over: a linkable panel's id or a zone's `data-node-drop`, or null. */
+	nodeDragOver = $state<string | null>(null);
 
 	/** Variable being dragged from a widget label to a parameter. */
 	variableDrag = $state.raw<{ name: string; x: number; y: number; target: Element | null } | null>(null);
@@ -58,17 +61,12 @@ export class UIStore {
 	/** Input slots an in-flight cable drag is near ({@link slotKey} keys); replaced, never mutated. */
 	cableNear = $state.raw<ReadonlySet<string>>(new Set());
 
-	setCableNear(keys: ReadonlySet<string>): void {
-		this.cableNear = keys;
-	}
-
 	isCableNear(node: string, slot: string): boolean {
 		return this.cableNear.has(slotKey(node, slot));
 	}
 
-	/** What a node dropped on a panel or a marked drop zone MEANS, by the OWNER of the target — a
-	 * panel id, or whatever a zone's owner minted. The editor knows where a drop landed and never
-	 * what it means. Not `$state`: it is read by an event handler, never rendered. */
+	/** What a node dropped on a panel or a drop zone means, by the owner of the target. The editor
+	 * knows where a drop landed, never what it means; an event handler reads it, so not `$state`. */
 	#nodeDrops = new Map<string, NodeDrop>();
 
 	/** Take an owner's drop meaning, and give back the undo of that registration. */
@@ -79,14 +77,12 @@ export class UIStore {
 		};
 	}
 
-	/** Hand node `uid` to what owns `target`; false when nobody claimed it. A zone names its owner
-	 * before the `#`, and what the owner reads after it. */
+	/** Hand node `uid` to what owns `target`; false when nobody claimed it. */
 	dropNode(target: string, uid: string, at: DropPoint): boolean {
-		const cut = target.indexOf('#');
-		const owner = cut < 0 ? target : target.slice(0, cut);
+		const { owner, zone } = splitDrop(target);
 		const drop = this.#nodeDrops.get(owner);
 		if (!drop) return false;
-		drop(uid, cut < 0 ? '' : target.slice(cut + 1), at);
+		drop(uid, zone ?? '', at);
 		return true;
 	}
 
@@ -101,16 +97,6 @@ export class UIStore {
 	closeEditor(id: string): void {
 		if (!this.#editors.delete(id)) return;
 		this.#openCount = this.#editors.size;
-	}
-
-	requestSlotClick(seed: SlotClickSeed): void {
-		this.pendingSlotClick = seed;
-	}
-
-	consumeSlotClick(): SlotClickSeed | null {
-		const seed = this.pendingSlotClick;
-		this.pendingSlotClick = null;
-		return seed;
 	}
 }
 

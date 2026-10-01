@@ -1,7 +1,5 @@
-/**
- * A node editor's camera, kept per PANEL rather than per component instance, so a layout reshape
- * does not throw the user's framing away. Never pruned: a panel id is never reissued.
- */
+/** A node editor's camera, kept per PANEL rather than per component instance, so a layout reshape
+ * keeps the user's framing. Never pruned: a panel id is never reissued. */
 import type { Viewport } from '@xyflow/svelte';
 
 export interface Camera {

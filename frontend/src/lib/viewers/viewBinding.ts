@@ -1,10 +1,7 @@
-/**
- * A ViewBinding is one viewer instance's kind + settings; the components read nothing else.
- * The inline binding is built at its single use site (SlotViewer), which needs runes.
- */
+/** A ViewBinding is one viewer instance's kind and settings; the components read nothing else. */
 import { resolveKind, resolveSettings, type ViewerKind } from './registry';
 import type { SettingValue, SettingsMap } from './module';
-import { asStateObject } from 'panelty';
+import type { SlotView } from './inlineView';
 
 export interface ViewBinding {
 	readonly kind: ViewerKind;
@@ -13,26 +10,24 @@ export interface ViewBinding {
 	setSetting(key: string, value: SettingValue): void;
 }
 
-/** Docked Viewer panel binding, backed by the panel state the manager holds. */
-export function panelBinding(
-	getState: () => unknown,
-	setState: (s: unknown, label: string) => void,
-	dtype: string | null
+/** A binding over a raw stored view; `write` merges the patch it is given into that view. */
+export function viewBinding(
+	dtype: string | null,
+	read: () => SlotView,
+	write: (patch: SlotView, label: string) => void
 ): ViewBinding {
-	const raw = () => asStateObject(getState());
-	const rawSettings = (): SettingsMap => (raw().settings as SettingsMap) ?? {};
 	return {
 		get kind() {
-			return resolveKind(dtype, raw().kind as ViewerKind | undefined);
+			return resolveKind(dtype, read().kind);
 		},
 		get settings() {
-			return resolveSettings(this.kind, rawSettings());
+			return resolveSettings(this.kind, read().settings);
 		},
 		setKind(kind) {
-			setState({ ...raw(), kind }, `Viewer → ${kind}`);
+			write({ kind }, `Viewer → ${kind}`);
 		},
 		setSetting(key, value) {
-			setState({ ...raw(), settings: { ...rawSettings(), [key]: value } }, `Viewer ${key}`);
+			write({ settings: { [key]: value } }, `Viewer ${key}`);
 		}
 	};
 }

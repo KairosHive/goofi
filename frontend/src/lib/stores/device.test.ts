@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { kbInset } from './deviceClassify';
+import { kbInset } from './device';
 
 describe('kbInset (soft-keyboard overlap)', () => {
 	it('is the positive gap between layout height and the visual viewport', () => {

@@ -107,27 +107,20 @@
 			{/snippet}
 		</Bar>
 		<div class="host" bind:this={host} data-testid="agent-terminal"></div>
-	{:else if g.demo}
-		<div class="launcher" data-testid="agent-launcher">
-			<EmptyState>
-				{#snippet title()}Agents are off in this demo{/snippet}
-				{#snippet hint()}
-					A public goofi runs no terminal and spawns no agent. Run goofi locally for those.
-				{/snippet}
-			</EmptyState>
-		</div>
 	{:else}
 		<div class="launcher" data-testid="agent-launcher">
 			<EmptyState>
-				{#snippet title()}No agent running here{/snippet}
+				{#snippet title()}{g.demo ? 'Agents are off in this demo' : 'No agent running here'}{/snippet}
 				{#snippet hint()}
-					{hs.configError
-						? hs.configError
-						: hs.agents.length === 0
-							? 'The config lists no agents — add [[agents]] entries to config.toml in your goofi home.'
-							: 'It runs in this patch workspace, editing the patch with you.'}
+					{g.demo
+						? 'A public goofi runs no terminal and spawns no agent. Run goofi locally for those.'
+						: hs.configError
+							? hs.configError
+							: hs.agents.length === 0
+								? 'The config lists no agents — add [[agents]] entries to config.toml in your goofi home.'
+								: 'It runs in this patch workspace, editing the patch with you.'}
 				{/snippet}
-				<ChoiceGrid {choices} />
+				{#if !g.demo}<ChoiceGrid {choices} />{/if}
 			</EmptyState>
 		</div>
 	{/if}
@@ -151,14 +144,5 @@
 		padding: var(--space-2);
 		padding-bottom: calc(var(--space-2) + var(--kb-inset, 0px));
 		touch-action: pan-y;
-	}
-	/* `--bg`, not `--surface-1`: a tile is `--surface-1` and carries its separation by that step. */
-	.launcher {
-		flex: 1;
-		display: flex;
-		flex-direction: column;
-		justify-content: center;
-		min-height: 0;
-		background: var(--bg);
 	}
 </style>

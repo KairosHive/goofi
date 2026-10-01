@@ -1,9 +1,5 @@
-<!--
-  ExprEditor — the param's expression surface: a Python expression with goofi's completions. It
-  reads the graph store, so it lives here and never in `$lib/ui`, which must stay a leaf layer.
--->
+<!-- A param's Python expression with goofi's completions; it reads the graph store, so it is not in $lib/ui. -->
 <script lang="ts">
-	import { loadExprEditor } from './load';
 	import type { ExprEditorHandle } from './editor';
 	import { liveCatalogue } from './catalogue';
 
@@ -14,8 +10,7 @@
 		label,
 		placeholder = '',
 		testid,
-		selfName,
-		disabled = false
+		selfName
 	}: {
 		value: string;
 		error?: string | null;
@@ -27,7 +22,6 @@
 		testid: string;
 		/** The edited node's display name — what `me` completes against. */
 		selfName?: string;
-		disabled?: boolean;
 	} = $props();
 
 	let host = $state<HTMLDivElement | null>(null);
@@ -40,7 +34,7 @@
 		if (!el) return;
 		let live = true;
 		let mounted: ExprEditorHandle | null = null;
-		loadExprEditor().then((mod) => {
+		import('./editor').then((mod) => {
 			if (!live) return;
 			const attributes = { 'data-testid': testid, 'aria-label': label };
 			mounted = mod.createExprEditor(el, {
@@ -69,7 +63,7 @@
 	});
 </script>
 
-<div class="expr-host" class:disabled bind:this={host} inert={disabled || undefined}>
+<div class="expr-host" bind:this={host}>
 	{#if !handle}
 		<!-- The stand-in until the lazy chunk lands: out of flow, so the host's height never depends on it. -->
 		<pre class="stand-in" aria-hidden="true">{value}</pre>
@@ -92,9 +86,6 @@
 		border-radius: var(--radius-sm);
 		overflow: hidden;
 		tab-size: 4;
-	}
-	.expr-host.disabled {
-		opacity: 0.5;
 	}
 	/* Restated because CodeMirror's base theme pins `outline: none` at a specificity app.css cannot reach. */
 	.expr-host:has(:focus-visible) {

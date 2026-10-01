@@ -40,7 +40,6 @@ const bind = (
 const line = (max: number) => ({
 	dtype: 'array' as const,
 	ndim: [['le', 3]] as [import('$lib/viewers/module').DimCmp, number][],
-	dims: [],
 	reduce: [{ dim: -1, max }]
 });
 
@@ -66,8 +65,8 @@ describe('one paint loop', () => {
 	it('delivers every stream of a batch at once, and takes the paint count from the worker', async () => {
 		// The worker's flush is the page's one paint loop: a batch is one of its flushes. Nothing
 		// here paints on its own, so the HUD's "fps" is the worker's count and never a sum of two.
-		const { perfStats } = await import('./perfStats.svelte');
-		const delivered = vi.spyOn(perfStats(), 'delivered');
+		const { paints } = await import('./frames');
+		const delivered = vi.spyOn(paints, 'add');
 		const gotA: DataFrame[] = [];
 		const gotB: DataFrame[] = [];
 		const offA = bind('osc-a', 'out', (f) => gotA.push(f));

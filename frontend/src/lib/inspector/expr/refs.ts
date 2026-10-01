@@ -1,33 +1,25 @@
 /** What the reference picker offers: the nodes with an output a param may reference, and those
  *  outputs — the typing rule the manager holds, applied before the pick. */
-import type { ExprCatalogue } from './catalogue';
+import type { CatalogueSlot, ExprCatalogue } from './catalogue';
+import type { ComboOption } from '$lib/ui';
 import { feeds, type SlotDtype } from '$lib/api/vocab';
 
-export interface PickerOption {
-	label: string;
-	detail?: string;
-}
-
 /** The output kind a param of `type` may reference: a string reads a STRING, everything else an ARRAY. */
-export function wantedDtype(paramType: string): string {
+export function wantedDtype(paramType: string): SlotDtype {
 	return paramType === 'string' ? 'STRING' : 'ARRAY';
 }
 
-const may = (slot: string, wanted: string) => feeds(slot as SlotDtype, wanted as SlotDtype);
+const fitting = (slots: CatalogueSlot[], dtype: SlotDtype) => slots.filter((s) => feeds(s.dtype as SlotDtype, dtype));
 
-export function refNodes(cat: ExprCatalogue, dtype: string): PickerOption[] {
-	return cat.nodes
-		.filter((n) => n.slots.some((s) => may(s.dtype, dtype)))
-		.map((n) => ({
-			label: n.name,
-			detail: n.slots.filter((s) => may(s.dtype, dtype)).map((s) => s.name).join(', ')
-		}));
+export function refNodes(cat: ExprCatalogue, dtype: SlotDtype): ComboOption[] {
+	return cat.nodes.flatMap((n) => {
+		const slots = fitting(n.slots, dtype);
+		return slots.length ? [{ label: n.name, detail: slots.map((s) => s.name).join(', ') }] : [];
+	});
 }
 
-export function refSlots(cat: ExprCatalogue, node: string, dtype: string): PickerOption[] {
-	return (cat.nodes.find((n) => n.name === node)?.slots ?? [])
-		.filter((s) => may(s.dtype, dtype))
-		.map((s) => ({ label: s.name, detail: s.dtype }));
+export function refSlots(cat: ExprCatalogue, node: string, dtype: SlotDtype): ComboOption[] {
+	return fitting(cat.nodes.find((n) => n.name === node)?.slots ?? [], dtype).map((s) => ({ label: s.name, detail: s.dtype }));
 }
 
 /** `node.slot` split at its one dot; a malformed or empty value is two empty halves. */

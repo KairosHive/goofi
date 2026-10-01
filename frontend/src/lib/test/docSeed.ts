@@ -1,10 +1,8 @@
 /** Fill a store replica the way the manager does — by emitting `doc_state` / `doc_patch`, never by writing into it. */
-import { diffOps } from '$lib/crdt/ops';
+import { diffOps, isObj, type Obj } from '$lib/crdt/ops';
 import { emptyDoc, type Doc } from '$lib/crdt/graphDoc';
 import { SCOPE_TYPE } from '$lib/api/vocab';
 import type { FakeControl } from './fakeControl';
-
-type Obj = Record<string, unknown>;
 
 export class DocSeed {
 	private doc: Doc = emptyDoc();
@@ -13,10 +11,6 @@ export class DocSeed {
 	/** Seeds the empty document at once: a replica refuses a patch until it has a base. */
 	constructor(private fc: FakeControl) {
 		this.push();
-	}
-
-	get state(): Doc {
-		return this.doc;
 	}
 
 	get version(): number {
@@ -58,17 +52,9 @@ export class DocSeed {
 		return this.node(uid, type, name, pos, { scope });
 	}
 
-	links(list: Obj[]): this {
-		return this.patch({ links: list });
-	}
-
 	/** One variable, `{value, type, system}`. */
 	variable(name: string, rec: Obj): this {
 		return this.patch({ variables: { [name]: rec } });
-	}
-
-	arrangement(id: string, rec: Obj): this {
-		return this.patch({ arrangement: { [id]: rec } });
 	}
 
 	remove(root: string, key: string): this {
@@ -79,8 +65,6 @@ export class DocSeed {
 export function seed(fc: FakeControl): DocSeed {
 	return new DocSeed(fc);
 }
-
-const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /** A test spells a change as a merge: an object merges, `null` removes, anything else replaces whole. */
 function merge(target: Obj, patch: Obj): void {

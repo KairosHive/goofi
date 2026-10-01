@@ -4,6 +4,7 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { useLiveValue } from './liveValue.svelte';
 	import { claimFieldControlId } from './field';
+	import { stepOf } from './knob';
 
 	let {
 		value,
@@ -35,8 +36,7 @@
 		(v) => onInput?.(v)
 	);
 
-	// A default step gives the range ~200 stops across the span.
-	const stp = $derived(step ?? Math.max((max - min) / 200, 1e-6));
+	const stp = $derived(stepOf(min, max, step));
 
 	function fmtBound(v: number): string {
 		if (!Number.isFinite(v)) return '';
@@ -86,9 +86,6 @@
 		border: none;
 		/* A vertical touch gesture scrolls; a horizontal one drags the thumb. */
 		touch-action: pan-y;
-	}
-	.ui-slider-range:disabled {
-		opacity: var(--disabled-opacity);
 	}
 	.ui-slider-bound {
 		flex-shrink: 0;

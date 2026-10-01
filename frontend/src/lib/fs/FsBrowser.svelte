@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { graph } from '$lib/stores/graph.svelte';
 	import { consoleStore } from '$lib/stores/console.svelte';
-	import { ui } from '$lib/stores/ui.svelte';
-	import { FS_SORTS, type FsEntry, type FsRoot, type FsSort } from '$lib/api/control';
-	import { downloadPatch } from '$lib/api/patchFile';
+	import { FS_SORTS, getControl, type DirListing, type FsEntry, type FsRoot, type FsSort } from '$lib/api/control';
+	import { downloadPatch, patchStem } from '$lib/api/patchFile';
+	import { errorText } from '$lib/stores/notify.svelte';
 	import { Bar, Button, ConfirmDialog, Dialog, EmptyState, Icon, IconButton, ScrollArea, TextInput } from '$lib/ui';
 	import { onMount, untrack } from 'svelte';
 
@@ -62,7 +62,7 @@
 			working = null;
 		} catch (e) {
 			// The log stays up under the error, so the user can read what the backend said.
-			failure = e instanceof Error ? e.message : String(e);
+			failure = errorText(e);
 		}
 	}
 	function back(): void {
@@ -72,13 +72,6 @@
 	function pick(path: string, overwrite?: boolean): void {
 		void run(() => onPick(path, overwrite));
 	}
-
-	// A modal: the app's global chords stand down while it is up.
-	const standdownId = $props.id();
-	$effect(() => {
-		ui().openEditor(standdownId);
-		return () => ui().closeEditor(standdownId);
-	});
 
 	// The order is this viewer's own convenience, so it lives in the browser, best-effort.
 	const SORT_KEY = 'goofi.fs.sort';
@@ -141,7 +134,7 @@
 		error = null;
 		selected = null;
 		try {
-			const res = await g.listDir(path || undefined, sort.by, sort.reverse);
+			const res = await getControl().call<DirListing>('dir list', { path: path || undefined, sort: sort.by, reverse: sort.reverse });
 			if (seq !== navSeq) return;
 			cwd = res.path;
 			pathDraft = res.path;
@@ -150,7 +143,7 @@
 			roots = res.roots;
 		} catch (e) {
 			if (seq !== navSeq) return;
-			error = e instanceof Error ? e.message : String(e);
+			error = errorText(e);
 		}
 	}
 
@@ -165,7 +158,7 @@
 			void go(entry.path);
 		} else if (entry.is_gfi) {
 			if (mode === 'load') pick(entry.path);
-			else filename = entry.name.replace(/\.gfi$/, '');
+			else filename = patchStem(entry.name);
 		}
 	}
 
@@ -173,7 +166,7 @@
 		if (entry.kind === 'dir') return;
 		if (entry.is_gfi) {
 			selected = entry.path;
-			if (mode === 'save') filename = entry.name.replace(/\.gfi$/, '');
+			if (mode === 'save') filename = patchStem(entry.name);
 		}
 	}
 
@@ -184,12 +177,12 @@
 		const full = `${dir}/${name.endsWith('.gfi') ? name : name + '.gfi'}`;
 		checking = true;
 		try {
-			const target = await g.statPath(full);
+			const target = await getControl().call<{ path: string; kind: 'file' | 'dir' | 'missing' }>('dir stat', { path: full });
 			if (target.kind === 'dir') error = 'Choose a file name. This path is a folder.';
 			else if (target.kind === 'file') replacing = target.path;
 			else pick(target.path);
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = errorText(e);
 		} finally {
 			checking = false;
 		}
@@ -494,7 +487,6 @@
 		color: var(--text-muted);
 	}
 	.root {
-		font: inherit;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -504,7 +496,6 @@
 		text-align: left;
 		padding: var(--space-3) var(--space-4);
 		border-radius: var(--radius-sm);
-		cursor: pointer;
 		transition: background var(--dur-fast) var(--ease);
 	}
 	.root.active,
@@ -544,19 +535,14 @@
 		font-family: var(--font-mono);
 	}
 	.col {
-		font: inherit;
 		background: transparent;
 		border: none;
 		padding: 0;
 		color: var(--text-muted);
 		text-align: left;
-		cursor: pointer;
 	}
 	.col.on {
 		color: var(--text);
-	}
-	.col:focus-visible {
-		outline: var(--focus-width) solid var(--focus-ink);
 	}
 	.col.size,
 	.entry .size {
@@ -577,7 +563,6 @@
 		padding: var(--space-2) 0;
 	}
 	.entry {
-		font: inherit;
 		font-family: var(--font-mono);
 		width: 100%;
 		text-align: left;
@@ -585,7 +570,6 @@
 		border: none;
 		border-radius: var(--radius-sm);
 		color: var(--text);
-		cursor: pointer;
 		transition: background var(--dur-fast) var(--ease);
 	}
 	.entry:hover {

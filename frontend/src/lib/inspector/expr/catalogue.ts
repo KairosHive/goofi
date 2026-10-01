@@ -1,5 +1,6 @@
 /** What the expression completion source knows about the patch: node names, output slots, variables. */
 import { graph, type GraphStore } from '$lib/stores/graph.svelte';
+import type { VariableView } from '$lib/crdt/graphDoc';
 
 export interface CatalogueSlot {
 	name: string;
@@ -20,13 +21,7 @@ export interface CatalogueNode {
 	params: CatalogueGroup[];
 }
 
-export interface CatalogueVariable {
-	/** The full `group.element`. */
-	name: string;
-	group: string;
-	element: string;
-	type: string;
-}
+export type CatalogueVariable = Pick<VariableView, 'name' | 'group' | 'element' | 'type'>;
 
 export interface ExprCatalogue {
 	nodes: CatalogueNode[];
@@ -39,24 +34,19 @@ export interface ExprCatalogue {
  * test can drive this against a seeded one. */
 export function liveCatalogue(g: GraphStore = graph()): ExprCatalogue {
 	return {
-		// Everything `nd()` can name — leaves, boundary ports and sub-patch facades alike. A facade
-		// keys its slots by port uid, and `nd()` addresses them by the port's NAME, so the label is
-		// what is offered.
-		nodes: g.bindable.flatMap(({ uid }) => {
-			const n = g.nodeById(uid);
-			if (!n) return [];
-			return [{
-				name: n.name,
-				slots: Object.entries(n.output_slots).map(([key, dtype]) => ({
-					name: n.slot_labels?.[key] ?? key,
-					dtype
-				})),
-				params: Object.entries(n.params ?? {}).map(([group, names]) => ({
-					group,
-					names: Object.keys(names)
-				}))
-			}];
-		}),
-		variables: g.variables.map((gv) => ({ name: gv.name, group: gv.group, element: gv.element, type: gv.type }))
+		// Everything `nd()` can name, facades included. A facade keys its slots by port uid and
+		// `nd()` takes the port's name, so the label is offered.
+		nodes: g.nodes.map((n) => ({
+			name: n.name,
+			slots: Object.entries(n.output_slots).map(([key, dtype]) => ({
+				name: n.slot_labels?.[key] ?? key,
+				dtype
+			})),
+			params: Object.entries(n.params ?? {}).map(([group, names]) => ({
+				group,
+				names: Object.keys(names)
+			}))
+		})),
+		variables: g.variables
 	};
 }

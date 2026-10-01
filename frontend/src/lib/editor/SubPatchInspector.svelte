@@ -1,4 +1,4 @@
-<!-- Inspector body for a selected sub-patch node, standing in for ParamForm's param groups. -->
+<!-- Inspector body for a selected sub-patch node, standing in for the inspector's param groups. -->
 <script lang="ts">
 	import type { NodeInstanceInfo } from '$lib/api/control';
 	import { graph } from '$lib/stores/graph.svelte';

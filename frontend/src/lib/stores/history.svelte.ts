@@ -1,9 +1,8 @@
-/** Undo/redo as the MANAGER keeps it: every write is a step in this actor's history there, and
- * this store only mirrors what the replies say is on top. A transaction hands its calls one
- * step, which the manager merges into one entry under the transaction's label. */
+/** Undo/redo as the manager keeps it: every write is a step in this actor's history there, and
+ * this store mirrors the labels the replies put on top. */
 import { getControl, historyFeed, type Control, type HistoryLabels, type Step } from '$lib/api/control';
 import { asNavContext, captureNavContext, restoreNavContext } from './navContext';
-import { pulseRestored } from './undoFlash';
+import { flash } from './flash.svelte';
 import { graph, type GraphStore } from './graph.svelte';
 import { notify } from './notify.svelte';
 
@@ -15,10 +14,14 @@ interface FlipReply extends HistoryLabels {
 }
 
 export class HistoryStore {
-	canUndo = $state(false);
-	canRedo = $state(false);
 	undoLabel = $state<string | null>(null);
 	redoLabel = $state<string | null>(null);
+	get canUndo(): boolean {
+		return this.undoLabel !== null;
+	}
+	get canRedo(): boolean {
+		return this.redoLabel !== null;
+	}
 
 	/** Re-entrancy guard: a held Ctrl+Z must not send a second flip before the first answers. */
 	private replaying = false;
@@ -40,8 +43,6 @@ export class HistoryStore {
 	adopt(h: HistoryLabels): void {
 		this.undoLabel = h.undo;
 		this.redoLabel = h.redo;
-		this.canUndo = h.undo !== null;
-		this.canRedo = h.redo !== null;
 	}
 
 	private async flip(op: 'undo' | 'redo'): Promise<void> {
@@ -62,19 +63,14 @@ export class HistoryStore {
 		const ctx = reply.changed ? asNavContext(reply.context) : null;
 		if (ctx) {
 			await restoreNavContext(ctx);
-			pulseRestored(ctx, this.graph());
+			const g = this.graph();
+			flash().pulse(Object.values(ctx.selection).flatMap((s) => s.nodes).filter((n) => g.nodeById(n)));
 		}
 	}
 
-	async undo(): Promise<void> {
-		return this.flip('undo');
-	}
+	undo = (): Promise<void> => this.flip('undo');
+	redo = (): Promise<void> => this.flip('redo');
 
-	async redo(): Promise<void> {
-		return this.flip('redo');
-	}
-
-	/** Every write inside `fn` is ONE step under `label`; a nested transaction rides the outer one. */
 	/** Run `fn` with one step every call inside hands on, so the manager merges them under
 	 * `label`. Given an enclosing `within`, the calls join that step instead. */
 	transaction<T>(label: string, fn: (step: Step) => Promise<T>, within?: Step): Promise<T> {

@@ -1,10 +1,10 @@
-/**
- * Thin-plate spline interpolation for EEG topomaps, approximating MNE's `plot_topomap`.
- * The ring of extra points outside the head carries its neighbours' mean, as MNE's `border="mean"`.
- * The weights are solved here; the field is evaluated per pixel by the plot surface.
- */
+/** Thin-plate spline weights for EEG topomaps, as MNE's `plot_topomap`; the plot surface evaluates
+ * the field. A ring outside the head carries its neighbours' mean, as MNE's `border="mean"`. */
+import { HEAD_RADIUS } from './eegLayout';
 
 const TPS_EPS_SQ = 1e-12;
+/** The extra points on the ring outside the head. */
+const RING = 16;
 
 function tpsKernel(r2: number): number {
 	if (r2 <= TPS_EPS_SQ) return 0;
@@ -66,67 +66,32 @@ function invertMatrix(m: Float64Array, n: number): Float64Array {
 	return out;
 }
 
-function buildRing(
-	realX: Float64Array,
-	realY: Float64Array,
-	count: number,
-	radius: number,
-	k: number
-): { x: Float64Array; y: Float64Array; nn: number[][] } {
-	const x = new Float64Array(count);
-	const y = new Float64Array(count);
+/** Writes the ring at `radius` into the tail of `posX`/`posY`; each ring point's `k` nearest real channels. */
+function buildRing(posX: Float64Array, posY: Float64Array, nReal: number, radius: number, k: number): number[][] {
+	const count = posX.length - nReal;
 	const nn: number[][] = new Array(count);
-	const nReal = realX.length;
-	const kk = Math.min(k, nReal);
 	const buf: { i: number; d: number }[] = new Array(nReal);
 	for (let i = 0; i < count; i++) {
 		const theta = (i * 2 * Math.PI) / count - Math.PI / 2;
-		x[i] = 0.5 + Math.cos(theta) * radius;
-		y[i] = 0.5 + Math.sin(theta) * radius;
-		for (let j = 0; j < nReal; j++) {
-			const dx = realX[j] - x[i];
-			const dy = realY[j] - y[i];
-			buf[j] = { i: j, d: dx * dx + dy * dy };
-		}
+		const x = (posX[nReal + i] = 0.5 + Math.cos(theta) * radius);
+		const y = (posY[nReal + i] = 0.5 + Math.sin(theta) * radius);
+		for (let j = 0; j < nReal; j++) buf[j] = { i: j, d: (posX[j] - x) ** 2 + (posY[j] - y) ** 2 };
 		buf.sort((a, b) => a.d - b.d);
-		const lst: number[] = new Array(kk);
-		for (let j = 0; j < kk; j++) lst[j] = buf[j].i;
-		nn[i] = lst;
+		nn[i] = buf.slice(0, k).map((b) => b.i);
 	}
-	return { x, y, nn };
+	return nn;
 }
 
-export function buildLayout(
-	channelPositions: ReadonlyArray<readonly [number, number]>,
-	layoutKey: string,
-	opts: { extraCount?: number; extraRadius?: number; knnForBorder?: number } = {}
-): TopoLayout | null {
+export function buildLayout(channelPositions: ReadonlyArray<readonly [number, number]>, layoutKey: string): TopoLayout {
 	const nReal = channelPositions.length;
-	if (nReal < 3) return null;
-	const extraCount = opts.extraCount ?? 16;
-	const extraRadius = opts.extraRadius ?? 0.52;
-	const knn = opts.knnForBorder ?? 3;
-
-	const realX = new Float64Array(nReal);
-	const realY = new Float64Array(nReal);
-	for (let i = 0; i < nReal; i++) {
-		realX[i] = channelPositions[i][0];
-		realY[i] = channelPositions[i][1];
-	}
-	const ring = buildRing(realX, realY, extraCount, extraRadius, knn);
-	const nExtra = ring.nn.length;
-	const nTotal = nReal + nExtra;
-
+	const nTotal = nReal + RING;
 	const posX = new Float64Array(nTotal);
 	const posY = new Float64Array(nTotal);
-	for (let i = 0; i < nReal; i++) {
-		posX[i] = realX[i];
-		posY[i] = realY[i];
-	}
-	for (let i = 0; i < nExtra; i++) {
-		posX[nReal + i] = ring.x[i];
-		posY[nReal + i] = ring.y[i];
-	}
+	channelPositions.forEach(([x, y], i) => {
+		posX[i] = x;
+		posY[i] = y;
+	});
+	const extraNN = buildRing(posX, posY, nReal, 0.52, 3);
 
 	const dim = nTotal + 3;
 	const M = new Float64Array(dim * dim);
@@ -146,12 +111,11 @@ export function buildLayout(
 	}
 
 	const Minv = invertMatrix(M, dim);
-	return { nReal, nExtra, posX, posY, extraNN: ring.nn, Minv, layoutKey };
+	return { nReal, nExtra: RING, posX, posY, extraNN, Minv, layoutKey };
 }
 
-/** The head's radius in the layout's unit square, and the electrodes' place inside a `w`×`h` box:
- * the centre, and the side of the centred square the [0, 1]² layout fills. */
-export const HEAD_RADIUS = 0.45;
+/** The electrodes' place inside a `w`×`h` box: the centre, the side of the centred square the
+ * [0, 1]² layout fills, and the head's radius in px. */
 export function headFrame(w: number, h: number): { cx: number; cy: number; side: number; radius: number } {
 	const side = Math.min(w, h);
 	return { cx: w / 2, cy: h / 2, side, radius: side * HEAD_RADIUS };

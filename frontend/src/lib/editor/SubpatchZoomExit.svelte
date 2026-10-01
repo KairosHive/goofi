@@ -3,11 +3,11 @@
 <script lang="ts">
 	import { useViewport, useSvelteFlow, useStore, getViewportForBounds } from '@xyflow/svelte';
 
-	let { entered, onExit }: { entered: string | null; onExit: () => void } = $props();
+	// `options` and `minZoom` are the editor's fit framing, which the exit zoom is measured against.
+	type Props = { entered: string | null; options: { maxZoom: number; padding: number }; minZoom: number; onExit: () => void };
+	let { entered, options, minZoom, onExit }: Props = $props();
 
 	const EXIT_RATIO = 0.5; // pop at half the all-node-fit zoom ("50% past fit")
-	const FIT_MAX_ZOOM = 1; // must match the editor's FIT_OPTIONS maxZoom
-	const FIT_PADDING = 0.18; // must match the editor's FIT_OPTIONS padding
 
 	const vp = useViewport();
 	const store = useStore();
@@ -35,7 +35,7 @@
 		if (!w || !h || ids.length === 0) return null;
 		const bounds = getNodesBounds(ids);
 		if (!bounds.width || !bounds.height) return null;
-		return getViewportForBounds(bounds, w, h, 0.05, FIT_MAX_ZOOM, FIT_PADDING).zoom;
+		return getViewportForBounds(bounds, w, h, minZoom, options.maxZoom, options.padding).zoom;
 	});
 
 	$effect(() => {

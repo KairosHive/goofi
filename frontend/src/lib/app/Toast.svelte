@@ -33,10 +33,8 @@
 		border-radius: var(--radius-md);
 		background: var(--danger);
 		color: var(--on-danger);
-		font: inherit;
 		font-size: var(--fs-small);
 		text-align: left;
 		box-shadow: var(--shadow-1);
-		cursor: pointer;
 	}
 </style>

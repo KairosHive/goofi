@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { cellAt, movedBy, overlaps, resizedBy, sameCell, snap, turnedBy, type Cell } from './controlLayout';
+import { cellAt, movedBy, resizedBy, sameCell, snap, type Cell } from './controlLayout';
+import { turnedBy } from '$lib/ui/knob';
 
 /* The control panel's decisions, driven the way the component drives them. The component cannot
  * mount in vitest, so everything that DECIDES lives here and everything that draws lives there. */
@@ -14,16 +15,6 @@ describe('snap', () => {
 
 	it('never lets a widget collapse to nothing', () => {
 		expect(snap({ x: 0, y: 0, w: 0, h: -4 })).toEqual({ x: 0, y: 0, w: 1, h: 1 });
-	});
-});
-
-describe('overlaps', () => {
-	const a: Cell = { x: 0, y: 0, w: 2, h: 2 };
-	it('is true only where the two cells share a square', () => {
-		expect(overlaps(a, { x: 1, y: 1, w: 2, h: 2 })).toBe(true);
-		// Edge to edge is not an overlap: a widget may sit right beside another.
-		expect(overlaps(a, { x: 2, y: 0, w: 2, h: 2 })).toBe(false);
-		expect(overlaps(a, { x: 0, y: 2, w: 2, h: 2 })).toBe(false);
 	});
 });
 

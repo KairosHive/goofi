@@ -1,4 +1,4 @@
-<!-- /dev/ui — gallery of every `$lib/ui` primitive; the `tests/e2e` gallery specs drive it. -->
+<!-- /dev/ui — a gallery of every `$lib/ui` primitive; the e2e integrity sweep reads the page. -->
 <script lang="ts">
 	import {
 		Button,
@@ -32,22 +32,19 @@
 		type TabItem,
 		type BadgeTone,
 		type StatusTone,
-		type StatusDotSize,
 		type Choice
 	} from '$lib/ui';
 
-	let chosen = $state('—');
 	const choices: Choice[] = [
-		{ id: 'wave', label: 'Waveform', icon: 'activity', choose: () => (chosen = 'wave') },
-		{ id: 'terminal', label: 'Terminal', icon: 'terminal', choose: () => (chosen = 'terminal') },
-		{ id: 'plain', label: 'No icon of its own', choose: () => (chosen = 'plain') }
+		{ id: 'wave', label: 'Waveform', icon: 'activity', choose: () => {} },
+		{ id: 'terminal', label: 'Terminal', icon: 'terminal', choose: () => {} },
+		{ id: 'plain', label: 'No icon of its own', choose: () => {} }
 	];
 
 	const variants: ButtonVariant[] = ['default', 'primary', 'ghost', 'danger'];
 	const sizes: ButtonSize[] = ['sm', 'md'];
 	const badgeTones: BadgeTone[] = ['neutral', 'accent', 'success', 'warning', 'danger'];
-	const statusTones: StatusTone[] = ['ok', 'error', 'warn'];
-	const dotSizes: StatusDotSize[] = ['sm', 'md'];
+	const statusTones: StatusTone[] = ['success', 'warning', 'danger'];
 	const glyphs: Record<ButtonVariant, IconName> = {
 		default: 'settings',
 		primary: 'plus',
@@ -55,24 +52,14 @@
 		danger: 'x'
 	};
 
-	let gain = $state(1);
 	let cutoff = $state(0.3);
 	let cqValue = $state(0.4);
-	let sliderExtend = $state(5);
 	let fieldOpen = $state(false);
 	let swapMode = $state<'number' | 'text' | 'raw'>('number');
 	let swapNum = $state(2);
 	let swapText = $state('sin(x)');
 	let refreshValue = $state('sine');
-	let refreshing = $state(false);
-	let refreshCount = $state(0);
-	let stalePick = $state('unplugged-device');
-	let emptyPick = $state('');
-	let labelledPick = $state('out0');
 	let textText = $state('hello');
-	let textDecimal = $state('3.14');
-	let textSearch = $state('');
-	let textPath = $state('/home/user/patch.gfi');
 	let toggled = $state(false);
 
 	const tabItems: TabItem[] = [
@@ -81,28 +68,15 @@
 		{ id: 'video', label: 'Video' }
 	];
 	let activeTab = $state('signal');
-	let disclosureOpen = $state(false);
-	let disclosureToggles = $state(0);
 
 	let popoverAnchor = $state<HTMLElement | null>(null);
 	let popoverOpen = $state(false);
-	let menuPopoverAnchor = $state<HTMLElement | null>(null);
-	let menuPopoverOpen = $state(false);
 	let dialogOpen = $state(false);
 	let confirmOpen = $state(false);
 
-	let chipCount = $state(0);
 	let segment = $state('a');
 	let segmentSet = $state<string[]>(['x']);
 	let combo = $state('beta');
-
-	function doRefresh(): void {
-		refreshing = true;
-		refreshCount += 1;
-		setTimeout(() => {
-			refreshing = false;
-		}, 150);
-	}
 </script>
 
 <main class="gallery">
@@ -118,9 +92,6 @@
 					</Button>
 				{/each}
 			{/each}
-			<Button variant="primary" size="md" disabled data-testid="ui-button-disabled">
-				disabled
-			</Button>
 		</div>
 	</section>
 
@@ -129,25 +100,17 @@
 		<div class="grid">
 			{#each variants as variant (variant)}
 				{#each sizes as size (size)}
-					<IconButton
-						{variant}
-						{size}
-						label={`${variant} ${size} action`}
-						data-testid={`ui-icon-${variant}-${size}`}
-					>
+					<IconButton {variant} {size} label={`${variant} ${size} action`}>
 						<Icon name={glyphs[variant]} />
 					</IconButton>
 				{/each}
 			{/each}
-			<IconButton variant="default" size="md" disabled label="disabled action" data-testid="ui-icon-disabled">
-				<Icon name={glyphs.default} />
-			</IconButton>
 		</div>
 	</section>
 
 	<section>
 		<h2>Icon (the whole vendored set)</h2>
-		<div class="grid" data-testid="ui-icon-set">
+		<div class="grid">
 			{#each Object.keys(ICONS) as IconName[] as name (name)}
 				<span class="icon-tile" title={name}><Icon {name} /></span>
 			{/each}
@@ -157,7 +120,7 @@
 	<section>
 		<h2>ScrollArea</h2>
 		<div class="scroll-frame">
-			<ScrollArea data-testid="ui-scrollarea">
+			<ScrollArea>
 				<div class="rows">
 					{#each Array.from({ length: 30 }, (_, i) => i) as i (i)}
 						<div class="box">row {i}</div>
@@ -169,12 +132,12 @@
 
 	<section>
 		<h2>Bar</h2>
-		<Bar data-testid="ui-bar">
+		<Bar>
 			{#snippet start()}
-				<span data-testid="ui-bar-start">Title</span>
+				<span>Title</span>
 			{/snippet}
 			{#snippet end()}
-				<div class="grid" data-testid="ui-bar-end">
+				<div class="grid">
 					<Button size="sm">Save</Button>
 					<IconButton size="sm" label="Settings"><Icon name="settings" /></IconButton>
 				</div>
@@ -185,52 +148,21 @@
 	<section>
 		<h2>Field composition (the north star)</h2>
 		<div class="form">
-			<Field label="cutoff" data-testid="ui-compose-field">
-				<Slider
-					value={cutoff}
-					onChange={(v) => (cutoff = v)}
-					min={0}
-					max={1}
-					step={0.01}
-					data-testid="ui-compose-slider"
-				/>
-				<NumberInput
-					value={cutoff}
-					onChange={(v) => (cutoff = v)}
-					min={0}
-					max={1}
-					step={0.01}
-					scrub
-					data-testid="ui-compose-number"
-				/>
+			<Field label="cutoff">
+				<Slider value={cutoff} onChange={(v) => (cutoff = v)} min={0} max={1} step={0.01} />
+				<NumberInput value={cutoff} onChange={(v) => (cutoff = v)} min={0} max={1} step={0.01} scrub />
 			</Field>
-			<span class="readout" data-testid="ui-compose-value">{cutoff}</span>
-		</div>
-	</section>
-
-	<section>
-		<h2>Field + NumberInput (commit-on-blur)</h2>
-		<div class="form">
-			<Field label="gain" data-testid="ui-field-single">
-				<NumberInput value={gain} onChange={(v) => (gain = v)} data-testid="ui-field-number" />
-			</Field>
-			<span class="readout" data-testid="ui-field-committed">{gain}</span>
 		</div>
 	</section>
 
 	<section>
 		<h2>Field as a disclosure summary (the param row)</h2>
 		<div class="form">
-			<Field
-				label="frequency"
-				data-testid="ui-field-expand"
-				expanded={fieldOpen}
-				onExpand={() => (fieldOpen = !fieldOpen)}
-			>
+			<Field label="frequency" expanded={fieldOpen} onExpand={() => (fieldOpen = !fieldOpen)}>
 				<Slider value={cutoff} onChange={(v) => (cutoff = v)} min={20} max={20000} />
 			</Field>
 			{#if fieldOpen}
-				<span class="readout" data-testid="ui-field-expand-body">what the caret revealed</span>
+				<span class="readout">what the caret revealed</span>
 			{/if}
 		</div>
 	</section>
@@ -238,38 +170,21 @@
 	{#snippet swapChips()}
 		<Chip
 			tone={swapMode === 'number' ? 'neutral' : 'accent'}
-			onclick={() => (swapMode = swapMode === 'number' ? 'text' : 'number')}
-			data-testid="ui-field-swap-fx">fx</Chip
+			onclick={() => (swapMode = swapMode === 'number' ? 'text' : 'number')}>fx</Chip
 		>
-		<Chip
-			onclick={() => (swapMode = swapMode === 'raw' ? 'text' : 'raw')}
-			data-testid="ui-field-swap-expand"><Icon name="maximize-2" /></Chip
-		>
+		<Chip onclick={() => (swapMode = swapMode === 'raw' ? 'text' : 'raw')}><Icon name="maximize-2" /></Chip>
 	{/snippet}
 
 	<section>
 		<h2>Field with a swapping control region (the ParamField shape)</h2>
 		<div class="form">
-			<Field label="swap" data-testid="ui-field-swap" adornment={swapChips}>
+			<Field label="swap" adornment={swapChips}>
 				{#if swapMode === 'number'}
-					<NumberInput
-						value={swapNum}
-						onChange={(v) => (swapNum = v)}
-						data-testid="ui-field-swap-number"
-					/>
+					<NumberInput value={swapNum} onChange={(v) => (swapNum = v)} />
 				{:else if swapMode === 'text'}
-					<TextInput
-						value={swapText}
-						onChange={(v) => (swapText = v)}
-						data-testid="ui-field-swap-text"
-					/>
+					<TextInput value={swapText} onChange={(v) => (swapText = v)} />
 				{:else}
-					<textarea
-						rows="2"
-						aria-label="swap raw"
-						bind:value={swapText}
-						data-testid="ui-field-swap-raw"
-					></textarea>
+					<textarea rows="2" aria-label="swap raw" bind:value={swapText}></textarea>
 				{/if}
 			</Field>
 		</div>
@@ -277,152 +192,46 @@
 
 	<section>
 		<h2>Knob</h2>
-		<div class="form">
-			<div style="width: 64px; height: 64px">
-				<Knob
-					value={cutoff}
-					onChange={(v) => (cutoff = v)}
-					min={0}
-					max={1}
-					step={0.01}
-					label="Cutoff"
-					data-testid="ui-knob"
-				/>
-			</div>
-			<div style="width: 64px; height: 64px">
-				<Knob
-					value={cutoff}
-					onChange={(v) => (cutoff = v)}
-					disabled
-					label="Cutoff, disabled"
-					data-testid="ui-knob-disabled"
-				/>
-			</div>
+		<div style="width: 64px; height: 64px">
+			<Knob value={cutoff} onChange={(v) => (cutoff = v)} min={0} max={1} step={0.01} label="Cutoff" />
 		</div>
 	</section>
 
 	<section>
 		<h2>Slider</h2>
 		<div class="form">
-			<Slider
-				value={cutoff}
-				onChange={(v) => (cutoff = v)}
-				min={0}
-				max={1}
-				step={0.01}
-				data-testid="ui-slider"
-			/>
-			<Slider
-				value={sliderExtend}
-				onChange={(v) => (sliderExtend = v)}
-				min={0}
-				max={1}
-				data-testid="ui-slider-extend"
-			/>
-			<!-- The face a driven param wears: the value, and no way to move it. -->
-			<Slider
-				value={cutoff}
-				onChange={(v) => (cutoff = v)}
-				min={0}
-				max={1}
-				disabled
-				data-testid="ui-slider-disabled"
-			/>
+			<Slider value={cutoff} onChange={(v) => (cutoff = v)} min={0} max={1} step={0.01} />
 		</div>
 	</section>
 
 	<section>
 		<h2>Select (with refresh)</h2>
 		<div class="form">
-			<Field label="waveform" data-testid="ui-select-field">
+			<Field label="waveform">
 				<Select
 					value={refreshValue}
 					onChange={(v) => (refreshValue = v)}
 					options={['sine', 'square', 'saw', 'triangle']}
-					onRefresh={doRefresh}
-					{refreshing}
-					data-testid="ui-select"
+					onRefresh={() => {}}
 				/>
 			</Field>
-			<span class="readout" data-testid="ui-select-refreshes">{refreshCount}</span>
-			<span class="readout" data-testid="ui-select-value">{refreshValue}</span>
-			<Field label="driven" data-testid="ui-select-disabled-field">
-				<Select
-					value={refreshValue}
-					onChange={(v) => (refreshValue = v)}
-					options={['sine', 'square', 'saw', 'triangle']}
-					disabled
-					data-testid="ui-select-disabled"
-				/>
-			</Field>
-			<Field label="stale value" data-testid="ui-select-stale-field">
-				<Select
-					value={stalePick}
-					onChange={(v) => (stalePick = v)}
-					options={['sine', 'square', 'saw', 'triangle']}
-					data-testid="ui-select-stale"
-				/>
-			</Field>
-			<Field label="empty value" data-testid="ui-select-empty-field">
-				<Select
-					value={emptyPick}
-					onChange={(v) => (emptyPick = v)}
-					options={['sine', 'square', 'saw', 'triangle']}
-					data-testid="ui-select-empty"
-				/>
-			</Field>
-			<Field label="labelled" data-testid="ui-select-labelled-field">
-				<Select
-					value={labelledPick}
-					onChange={(v) => (labelledPick = v)}
-					options={['out0', 'out1']}
-					labels={{ out0: 'envelope · array', out1: 'trigger · array' }}
-					data-testid="ui-select-labelled"
-				/>
-			</Field>
-			<span class="readout" data-testid="ui-select-labelled-value">{labelledPick}</span>
 		</div>
 	</section>
 
 	<section>
-		<h2>TextInput (inputmode variants)</h2>
+		<h2>TextInput</h2>
 		<div class="form">
 			<Field label="text">
-				<TextInput value={textText} onChange={(v) => (textText = v)} inputmode="text" data-testid="ui-text-text" />
+				<TextInput value={textText} onChange={(v) => (textText = v)} />
 			</Field>
-			<Field label="decimal">
-				<TextInput
-					value={textDecimal}
-					onChange={(v) => (textDecimal = v)}
-					inputmode="decimal"
-					data-testid="ui-text-decimal"
-				/>
-			</Field>
-			<Field label="search">
-				<TextInput
-					value={textSearch}
-					onChange={(v) => (textSearch = v)}
-					inputmode="search"
-					placeholder="search…"
-					data-testid="ui-text-search"
-				/>
-			</Field>
-			<Field label="path">
-				<TextInput value={textPath} onChange={(v) => (textPath = v)} inputmode="path" data-testid="ui-text-path" />
-			</Field>
-			<span class="readout" data-testid="ui-text-committed">{textText}</span>
 		</div>
 	</section>
 
 	<section>
 		<h2>Toggle</h2>
 		<div class="form">
-			<Field label="enabled" data-testid="ui-toggle-field">
-				<Toggle value={toggled} onChange={(v) => (toggled = v)} data-testid="ui-toggle" />
-			</Field>
-			<span class="readout" data-testid="ui-toggle-value">{toggled ? 'on' : 'off'}</span>
-			<Field label="driven" data-testid="ui-toggle-disabled-field">
-				<Toggle value={toggled} onChange={(v) => (toggled = v)} disabled data-testid="ui-toggle-disabled" />
+			<Field label="enabled">
+				<Toggle value={toggled} onChange={(v) => (toggled = v)} />
 			</Field>
 		</div>
 	</section>
@@ -430,29 +239,20 @@
 	<section>
 		<h2>Tabs (the connected bar)</h2>
 		<div class="tabs-demo">
-			<Tabs items={tabItems} active={activeTab} onSelect={(id) => (activeTab = id)} data-testid="ui-tabs" />
-			<div class="tabs-body" data-testid="ui-tabs-body">
-				<span data-testid="ui-tabs-active">{activeTab}</span> panel content
-			</div>
+			<Tabs items={tabItems} active={activeTab} onSelect={(id) => (activeTab = id)} />
+			<div class="tabs-body">{activeTab} panel content</div>
 		</div>
 	</section>
 
 	<section>
 		<h2>Disclosure</h2>
 		<div class="form">
-			<Disclosure
-				bind:open={disclosureOpen}
-				onToggle={() => (disclosureToggles += 1)}
-				data-testid="ui-disclosure"
-			>
+			<Disclosure>
 				{#snippet summary()}
 					Advanced options
 				{/snippet}
-				<p class="disclosure-content" data-testid="ui-disclosure-content">
-					Collapsed by default; the caret rotates and this region mounts on toggle.
-				</p>
+				<p class="disclosure-content">Collapsed by default; the caret rotates and this region mounts on toggle.</p>
 			</Disclosure>
-			<span class="readout" data-testid="ui-disclosure-toggles">{disclosureToggles}</span>
 		</div>
 	</section>
 
@@ -460,43 +260,13 @@
 		<h2>Popover (anchored + clamped)</h2>
 		<div class="pop-row">
 			<span class="pop-anchor" bind:this={popoverAnchor}>
-				<Button onclick={() => (popoverOpen = !popoverOpen)} data-testid="ui-popover-trigger">
-					{popoverOpen ? 'Close' : 'Open'} popover
-				</Button>
+				<Button onclick={() => (popoverOpen = !popoverOpen)}>{popoverOpen ? 'Close' : 'Open'} popover</Button>
 			</span>
 		</div>
-		<Popover
-			anchor={popoverAnchor}
-			open={popoverOpen}
-			onDismiss={() => (popoverOpen = false)}
-			data-testid="ui-popover"
-		>
-			<div class="pop-content" data-testid="ui-popover-content">
+		<Popover anchor={popoverAnchor} open={popoverOpen} onDismiss={() => (popoverOpen = false)}>
+			<div class="pop-content">
 				<strong>Anchored overlay</strong>
 				<p>Portalled, clamped on-screen, self-dismissing on Escape or an outside click.</p>
-			</div>
-		</Popover>
-
-		<div class="pop-row">
-			<span class="pop-anchor" bind:this={menuPopoverAnchor}>
-				<Button
-					onclick={() => (menuPopoverOpen = !menuPopoverOpen)}
-					data-testid="ui-menu-popover-trigger"
-				>
-					{menuPopoverOpen ? 'Close' : 'Open'} menu popover
-				</Button>
-			</span>
-		</div>
-		<Popover
-			anchor={menuPopoverAnchor}
-			open={menuPopoverOpen}
-			onDismiss={() => (menuPopoverOpen = false)}
-			role="menu"
-			data-testid="ui-menu-popover"
-		>
-			<div class="pop-content" data-testid="ui-menu-popover-content">
-				<strong>Menu-role overlay</strong>
-				<p>The consumer passes role="menu" via rest; the primitive imposes nothing over it.</p>
 			</div>
 		</Popover>
 	</section>
@@ -504,22 +274,15 @@
 	<section>
 		<h2>Dialog (centered + focus-trap)</h2>
 		<div class="form">
-			<Button onclick={() => (dialogOpen = true)} data-testid="ui-dialog-trigger">Open dialog</Button>
+			<Button onclick={() => (dialogOpen = true)}>Open dialog</Button>
 		</div>
-		<Dialog open={dialogOpen} onClose={() => (dialogOpen = false)} data-testid="ui-dialog">
-			<div class="dialog-content" data-testid="ui-dialog-content">
+		<Dialog open={dialogOpen} onClose={() => (dialogOpen = false)}>
+			<div class="dialog-content">
 				<h3>Confirm action</h3>
 				<p>A centered modal: focus is trapped inside, Escape and a backdrop click both close it.</p>
-				<p class="filler">
-					{#each { length: 40 } as _, i (i)}
-						Overflowing line {i + 1} — the dialog scrolls its own content.
-					{/each}
-				</p>
 				<div class="grid end">
-					<Button onclick={() => (dialogOpen = false)} data-testid="ui-dialog-cancel">Cancel</Button>
-					<Button variant="primary" onclick={() => (dialogOpen = false)} data-testid="ui-dialog-confirm">
-						Confirm
-					</Button>
+					<Button onclick={() => (dialogOpen = false)}>Cancel</Button>
+					<Button variant="primary" onclick={() => (dialogOpen = false)}>Confirm</Button>
 				</div>
 			</div>
 		</Dialog>
@@ -528,18 +291,15 @@
 	<section>
 		<h2>ConfirmDialog (one question, the answers as buttons)</h2>
 		<div class="form">
-			<Button onclick={() => (confirmOpen = true)} data-testid="ui-confirm-trigger">Ask</Button>
+			<Button onclick={() => (confirmOpen = true)}>Ask</Button>
 		</div>
 		<ConfirmDialog
 			open={confirmOpen}
 			question="Throw this away?"
 			detail="The dialog owns the question, the prose and the row; the caller supplies the answers."
 			onClose={() => (confirmOpen = false)}
-			data-testid="ui-confirm"
 		>
-			<Button variant="danger" onclick={() => (confirmOpen = false)} data-testid="ui-confirm-yes">
-				Throw away
-			</Button>
+			<Button variant="danger" onclick={() => (confirmOpen = false)}>Throw away</Button>
 			<Button variant="ghost" onclick={() => (confirmOpen = false)}>Cancel</Button>
 		</ConfirmDialog>
 	</section>
@@ -548,7 +308,7 @@
 		<h2>Badge (static tone pill)</h2>
 		<div class="grid">
 			{#each badgeTones as tone (tone)}
-				<Badge {tone} data-testid={`ui-badge-${tone}`}>{tone}</Badge>
+				<Badge {tone}>{tone}</Badge>
 			{/each}
 		</div>
 	</section>
@@ -563,7 +323,6 @@
 				placeholder="greek"
 				testid="ui-combobox"
 			/>
-			<span class="readout" data-testid="ui-combobox-value">{combo}</span>
 		</div>
 	</section>
 
@@ -579,14 +338,6 @@
 				]}
 				onChange={(id) => (segment = id)}
 				aria-label="sample"
-				data-testid="ui-segmented"
-			/>
-			<Segmented
-				value={segment === 'a' ? 'lone' : null}
-				segments={[{ id: 'lone', label: 'lone' }]}
-				onChange={() => (segment = segment === 'a' ? 'b' : 'a')}
-				aria-label="lone sample"
-				data-testid="ui-segmented-lone"
 			/>
 			<Segmented
 				value={segmentSet}
@@ -600,7 +351,6 @@
 						? segmentSet.filter((s) => s !== id)
 						: [...segmentSet, id])}
 				aria-label="set sample"
-				data-testid="ui-segmented-set"
 			/>
 		</div>
 	</section>
@@ -609,12 +359,8 @@
 		<h2>Chip (pressable tone pill)</h2>
 		<div class="grid">
 			{#each badgeTones as tone (tone)}
-				<Chip {tone} data-testid={`ui-chip-${tone}`}>{tone}</Chip>
+				<Chip {tone}>{tone}</Chip>
 			{/each}
-		</div>
-		<div class="form">
-			<Chip tone="accent" onclick={() => (chipCount += 1)} data-testid="ui-chip">click me</Chip>
-			<span class="readout" data-testid="ui-chip-count">{chipCount}</span>
 		</div>
 	</section>
 
@@ -622,81 +368,35 @@
 		<h2>StatusDot (no glow)</h2>
 		<div class="grid">
 			{#each statusTones as tone (tone)}
-				<div class="dot-label">
-					<StatusDot {tone} data-testid={`ui-statusdot-${tone}`} />
-					<span class="readout">{tone}</span>
-				</div>
+				<StatusDot {tone} />
 			{/each}
-		</div>
-		<div class="grid">
-			{#each dotSizes as size (size)}
-				<StatusDot tone="ok" {size} data-testid={`ui-statusdot-size-${size}`} />
-			{/each}
-		</div>
-		<div class="grid">
-			<StatusDot tone="error" pulse data-testid="ui-statusdot-pulse" />
 		</div>
 	</section>
 
 	<section>
 		<h2>ChoiceGrid (icon-over-label tiles)</h2>
-		<ChoiceGrid {choices} data-testid="ui-choicegrid" />
-		<div class="readout" data-testid="ui-choicegrid-value">{chosen}</div>
+		<ChoiceGrid {choices} />
 	</section>
 
 	<section>
 		<h2>EmptyState (centred placeholder)</h2>
 		<div class="empty-frame">
-			<EmptyState data-testid="ui-emptystate">
+			<EmptyState>
 				{#snippet title()}No nodes yet{/snippet}
 				{#snippet hint()}Add a node from the palette to get started.{/snippet}
 			</EmptyState>
 		</div>
 		<div class="empty-frame">
-			<EmptyState data-testid="ui-emptystate-bare" />
+			<EmptyState />
 		</div>
 	</section>
 
 	<section>
 		<h2>Field in a narrow @container (single-column stack)</h2>
-		<div class="cq-box cq-narrow" data-testid="ui-cq-narrow">
-			<Field label="cutoff" data-testid="ui-cq-narrow-field">
-				<Slider
-					value={cqValue}
-					onChange={(v) => (cqValue = v)}
-					min={0}
-					max={1}
-					step={0.01}
-					data-testid="ui-cq-narrow-slider"
-				/>
-				<NumberInput
-					value={cqValue}
-					onChange={(v) => (cqValue = v)}
-					min={0}
-					max={1}
-					step={0.01}
-					data-testid="ui-cq-narrow-number"
-				/>
-			</Field>
-		</div>
-		<div class="cq-box cq-wide" data-testid="ui-cq-wide">
-			<Field label="cutoff" data-testid="ui-cq-wide-field">
-				<Slider
-					value={cqValue}
-					onChange={(v) => (cqValue = v)}
-					min={0}
-					max={1}
-					step={0.01}
-					data-testid="ui-cq-wide-slider"
-				/>
-				<NumberInput
-					value={cqValue}
-					onChange={(v) => (cqValue = v)}
-					min={0}
-					max={1}
-					step={0.01}
-					data-testid="ui-cq-wide-number"
-				/>
+		<div class="cq-box">
+			<Field label="cutoff">
+				<Slider value={cqValue} onChange={(v) => (cqValue = v)} min={0} max={1} step={0.01} />
+				<NumberInput value={cqValue} onChange={(v) => (cqValue = v)} min={0} max={1} step={0.01} />
 			</Field>
 		</div>
 	</section>
@@ -735,11 +435,6 @@
 		display: flex;
 		font-size: var(--fs-title);
 		color: var(--text-dim);
-	}
-	.dot-label {
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
 	}
 	.rows {
 		display: flex;
@@ -816,28 +511,19 @@
 		flex-direction: column;
 		gap: var(--space-6);
 	}
-	.dialog-content .filler {
-		color: var(--text-muted);
-	}
 	.dialog-content h3 {
 		margin: 0;
 		font-size: var(--fs-strong);
 		color: var(--text);
 	}
-	/* Widths sit either side of the Field's @container threshold. */
+	/* Narrower than the Field's @container threshold. */
 	.cq-box {
 		container-type: inline-size;
 		box-sizing: border-box;
-		margin-top: var(--space-4);
+		width: 200px;
 		padding: var(--space-4);
 		border: 1px dashed var(--border);
 		border-radius: var(--radius-sm);
-	}
-	.cq-narrow {
-		width: 200px;
-	}
-	.cq-wide {
-		width: 360px;
 	}
 	.empty-frame {
 		display: grid;

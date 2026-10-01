@@ -34,12 +34,7 @@ const confirmClose: Partial<Record<PanelTypeId, (panelId: string) => boolean>> =
 	}
 };
 
-let done = false;
-
 export function registerAppPanels(): void {
-	if (done) return;
-	done = true;
-
 	for (const t of PANEL_TYPES) {
 		registerPanel({
 			id: t.id,

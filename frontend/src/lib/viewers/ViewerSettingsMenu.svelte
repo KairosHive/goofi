@@ -1,15 +1,14 @@
 <!-- Per-slot viewer settings: a cog opening a Popover of the kind's settings, one under the
      other. Its role is `group`, not a menu — nothing in it is a menuitem. -->
 <script lang="ts">
-	import { settingsSchemaFor } from './registry';
-	import type { SettingDescriptor, SettingValue } from './module';
+	import { MODULES } from './registry';
+	import type { SettingDescriptor } from './module';
 	import type { ViewBinding } from './viewBinding';
 	import { Popover, Icon, IconButton, Field, ScrollArea, EmptyState, Toggle, Select, NumberInput } from '$lib/ui';
 
 	let { binding }: { binding: ViewBinding } = $props();
 
-	const kind = $derived(binding.kind);
-	const schema = $derived(settingsSchemaFor(kind));
+	const schema = $derived(MODULES[binding.kind].settings);
 	const settings = $derived(binding.settings);
 
 	let open = $state(false);
@@ -23,9 +22,6 @@
 
 	function visible(s: SettingDescriptor): boolean {
 		return !s.showWhen || s.showWhen.anyOf.includes(settings[s.showWhen.key]);
-	}
-	function set(key: string, value: SettingValue): void {
-		binding.setSetting(key, value);
 	}
 </script>
 
@@ -63,17 +59,17 @@
 			{#each schema.filter(visible) as s (s.key)}
 				<Field label={s.label} row>
 					{#if s.type === 'toggle'}
-						<Toggle value={settings[s.key] as boolean} onChange={(v) => set(s.key, v)} />
+						<Toggle value={settings[s.key] as boolean} onChange={(v) => binding.setSetting(s.key, v)} />
 					{:else if s.type === 'select'}
 						<Select
 							options={s.options ?? []}
 							value={settings[s.key] as string}
-							onChange={(v) => set(s.key, v)}
+							onChange={(v) => binding.setSetting(s.key, v)}
 						/>
 					{:else}
 						<NumberInput
 							value={settings[s.key] as number}
-							onChange={(v) => set(s.key, v)}
+							onChange={(v) => binding.setSetting(s.key, v)}
 							min={s.min}
 							max={s.max}
 							step={s.step ?? 1}

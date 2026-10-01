@@ -2,15 +2,11 @@
  *  ranks it into the same popup as its own sources. */
 import { syntaxTree } from '@codemirror/language';
 import { pythonLanguage } from '@codemirror/lang-python';
-import type { Completion, CompletionContext, CompletionSource } from '@codemirror/autocomplete';
-import type { Extension } from '@codemirror/state';
-import type { EditorState } from '@codemirror/state';
+import type { Completion, CompletionContext } from '@codemirror/autocomplete';
+import type { EditorState, Extension } from '@codemirror/state';
 import type { SyntaxNode } from '@lezer/common';
-import { CURATED_NUMPY } from './numpy';
 import type { CatalogueNode, ExprCatalogue } from './catalogue';
 
-/** What a cursor position means, and the range a completion there replaces; `null` leaves the stock
- *  Python sources to answer alone. */
 export type RefTarget = { self: true } | { name: string };
 
 export type ExprContext =
@@ -49,14 +45,18 @@ function firstArg(argList: SyntaxNode | null): SyntaxNode | null {
 	return null;
 }
 
+/** A plain string literal's quote and body, and whether it is closed; null for any other literal. */
+function literal(state: EditorState, str: SyntaxNode): { quote: string; body: string; terminated: boolean } | null {
+	const raw = text(state, str);
+	const quote = raw[0];
+	const terminated = raw.length > 1 && raw.endsWith(quote);
+	return quote === "'" || quote === '"' ? { quote, terminated, body: raw.slice(1, terminated ? -1 : undefined) } : null;
+}
+
 /** The string a `nd('…')` call names its node with, or null when it is not a plain literal. */
 function ndArgName(state: EditorState, call: SyntaxNode): string | null {
 	const arg = firstArg(call.getChild('ArgList'));
-	if (!arg || arg.name !== 'String') return null;
-	const raw = text(state, arg);
-	const q = raw[0];
-	if (q !== "'" && q !== '"') return null;
-	return raw.length > 1 && raw.endsWith(q) ? raw.slice(1, -1) : raw.slice(1);
+	return arg?.name === 'String' ? (literal(state, arg)?.body ?? null) : null;
 }
 
 /** The cursor is inside a string: a node name iff that string is `nd`'s FIRST argument. */
@@ -65,15 +65,13 @@ function stringContext(state: EditorState, str: SyntaxNode, pos: number): ExprCo
 	if (!argList || argList.name !== 'ArgList') return null;
 	if (!isNdCall(state, argList.parent)) return null;
 	if (firstArg(argList)?.from !== str.from) return null;
-	const raw = text(state, str);
-	const quote = raw[0];
-	if (quote !== "'" && quote !== '"') return null;
-	const terminated = raw.length > 1 && raw.endsWith(quote);
+	const lit = literal(state, str);
+	if (!lit) return null;
 	// The literal's CONTENT: accepting replaces all of it, tail of the old name included.
 	const from = str.from + 1;
-	const to = terminated ? str.to - 1 : str.to;
+	const to = lit.terminated ? str.to - 1 : str.to;
 	if (pos < from || pos > to) return null;
-	return { kind: 'node', from, to, quote, terminated, callClosed: !!argList.getChild(')') };
+	return { kind: 'node', from, to, quote: lit.quote, terminated: lit.terminated, callClosed: !!argList.getChild(')') };
 }
 
 /** The reference a member chain hangs off — `nd('x')` or `me` — and the attributes between. */
@@ -132,7 +130,8 @@ function memberContext(state: EditorState, node: SyntaxNode, pos: number): ExprC
 	return null;
 }
 
-/** Classify a cursor position. */
+/** What a cursor position means, and the range a completion there replaces; `null` leaves the stock
+ *  Python sources to answer alone. */
 export function exprContext(state: EditorState, pos: number): ExprContext | null {
 	const node = syntaxTree(state).resolveInner(pos, -1);
 	if (node.name === 'Comment') return null;
@@ -144,9 +143,8 @@ export function exprContext(state: EditorState, pos: number): ExprContext | null
 	return null;
 }
 
-/** The evaluator's injected scope (`expr.rs`'s `eval` variables): goofi's own four names, then
- * `time()` and `from math import *` — the common slice of math's namespace, since the full list
- * lives Python-side and only eval is authoritative. */
+/** The evaluator's injected scope (`expr.rs`'s `eval` variables): goofi's own names, `time()`, and
+ *  the common slice of `from math import *`, since only eval is authoritative. */
 const SCOPE: Completion[] = [
 	{ label: 'nd', type: 'function', detail: "node reference — nd('name')", boost: 1 },
 	{ label: 'me', type: 'variable', detail: 'this node — me.out / me.params', boost: 1 },
@@ -160,6 +158,17 @@ const SCOPE: Completion[] = [
 		.split(' ')
 		.map((label) => ({ label, type: 'function', detail: 'math' })),
 	...'pi e tau inf nan'.split(' ').map((label) => ({ label, type: 'constant', detail: 'math' }))
+];
+
+/** The numpy names offered after `np.`: hand-picked, never the real namespace. */
+const NUMPY: Completion[] = [
+	...('abs angle arange arccos arcsin arctan arctan2 argmax argmin argsort array asarray blackman ceil clip ' +
+		'concatenate cos cosh cumsum degrees diff dot exp eye flip floor full hamming hanning hstack imag interp ' +
+		'isfinite isnan linspace log log2 log10 max maximum mean median min minimum nanmean nanstd ones percentile ' +
+		'power prod radians ravel real reshape roll round sign sin sinh sort sqrt square std sum tan tanh transpose ' +
+		'unwrap var vstack where zeros').split(' ').map((label) => ({ label, type: 'function' })),
+	...'e inf nan newaxis pi'.split(' ').map((label) => ({ label, type: 'constant' })),
+	...'fft linalg random'.split(' ').map((label) => ({ label, type: 'namespace' }))
 ];
 
 /** One node-name entry; a multi-output node steers to a `.slot`, since bare use of one raises. */
@@ -215,36 +224,28 @@ export function entriesFor(ctx: ExprContext, cat: ExprCatalogue): Completion[] {
 				.filter((g) => g.group === ctx.group)
 				.flatMap((g) => g.names.map((n) => ({ label: n, type: 'property' })));
 		case 'variables': {
-			const groups: string[] = [];
-			for (const g of cat.variables) if (!groups.includes(g.group)) groups.push(g.group);
-			return groups.map((group) => ({
-				label: group,
-				detail: `${cat.variables.filter((g) => g.group === group).length} variable${
-					cat.variables.filter((g) => g.group === group).length === 1 ? '' : 's'
-				}`,
-				type: 'namespace'
-			}));
+			const counts = new Map<string, number>();
+			for (const v of cat.variables) counts.set(v.group, (counts.get(v.group) ?? 0) + 1);
+			return [...counts].map(([label, n]) => ({ label, detail: `${n} variable${n === 1 ? '' : 's'}`, type: 'namespace' }));
 		}
 		case 'variableGroup':
 			return cat.variables
 				.filter((g) => g.group === ctx.group)
 				.map((g) => ({ label: g.element, detail: g.type, type: 'variable' }));
 		case 'numpy':
-			return CURATED_NUMPY.map((e) => ({ label: e.name, type: e.type }));
+			return NUMPY;
 		case 'scope':
 			return SCOPE;
 	}
 }
 
-function goofiCompletionSource(catalogue: () => ExprCatalogue): CompletionSource {
-	return (ctx: CompletionContext) => {
-		const where = exprContext(ctx.state, ctx.pos);
-		if (!where) return null;
-		const options = entriesFor(where, catalogue());
-		return options.length ? { from: where.from, to: where.to, options } : null;
-	};
-}
-
 export function goofiLanguageData(catalogue: () => ExprCatalogue): Extension {
-	return pythonLanguage.data.of({ autocomplete: goofiCompletionSource(catalogue) });
+	return pythonLanguage.data.of({
+		autocomplete: (ctx: CompletionContext) => {
+			const where = exprContext(ctx.state, ctx.pos);
+			if (!where) return null;
+			const options = entriesFor(where, catalogue());
+			return options.length ? { from: where.from, to: where.to, options } : null;
+		}
+	});
 }

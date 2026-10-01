@@ -2,9 +2,8 @@
 	import ViewerFeed from './ViewerFeed.svelte';
 	import ViewerControls from './ViewerControls.svelte';
 	import { slotView, isSlotExpanded } from './inlineView';
-	import { drawsOnSurface, resolveKind, resolveSettings, type ViewerKind } from './registry';
-	import type { SettingsMap } from './module';
-	import type { ViewBinding } from './viewBinding';
+	import { drawsOnSurface } from './registry';
+	import { viewBinding } from './viewBinding';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { dtypeColor } from '$lib/editor/categoryColor';
@@ -18,33 +17,19 @@
 	// Inside the flow, so the viewer can size its demand to the zoom it is drawn under.
 	const vp = useViewport();
 
-	// Built here, its single use site, so viewBinding.ts stays rune-free.
 	const rec = $derived(g.nodeById(node));
-	// Raw (pre-resolution) snapshot of this slot's view state, the base the next edit merges into.
-	function snap(): { kind?: ViewerKind; settings: SettingsMap } {
-		const v = slotView(rec, slot);
-		return { kind: v.kind, settings: { ...v.settings } };
-	}
-	const binding: ViewBinding = {
-		get kind() {
-			return resolveKind(dtype, slotView(rec, slot).kind);
-		},
-		get settings() {
-			return resolveSettings(this.kind, slotView(rec, slot).settings);
-		},
-		setKind(k) {
-			g.setSlotView(node, slot, { ...snap(), kind: k });
-		},
-		setSetting(key, value) {
-			const before = snap();
-			g.setSlotView(node, slot, { kind: before.kind, settings: { ...before.settings, [key]: value } });
-		}
-	};
+	const binding = $derived(
+		viewBinding(
+			dtype,
+			() => slotView(rec, slot),
+			(v) => g.setSlotView(node, slot, v)
+		)
+	);
 
 	function onSlotClick(e: MouseEvent): void {
 		// Opens the add-node menu seeded to wire onto this output; outputs fan out, so nothing disconnects.
 		e.stopPropagation();
-		ui().requestSlotClick({ node, slot, dtype, side: 'source', clientX: e.clientX, clientY: e.clientY });
+		ui().pendingSlotClick = { node, slot, dtype, side: 'source', clientX: e.clientX, clientY: e.clientY };
 	}
 
 	const expanded = $derived(isSlotExpanded(rec, slot));
@@ -190,8 +175,6 @@
 		/* Keep the plot inside its slot; the node surface clips the outer corners. */
 		overflow: hidden;
 		display: flex;
-		align-items: stretch;
-		justify-content: stretch;
 		padding: 4px 6px 7px;
 		background: var(--bg);
 	}
@@ -201,11 +184,6 @@
 		padding: 0;
 		border: solid var(--bg);
 		border-width: 4px 6px 7px;
-	}
-	.body > :global(*) {
-		flex-grow: 1;
-		min-width: 0;
-		min-height: 0;
 	}
 
 	/* This header is one `--node-u` and `.surface` clips it, so nothing inside may take the 44px

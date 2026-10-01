@@ -4,11 +4,11 @@
 	import '../app.css';
 	import '@xyflow/svelte/dist/style.css';
 	import { onMount } from 'svelte';
-	import { device } from '$lib/stores/device.svelte';
+	import { trackKeyboardInset } from '$lib/stores/device';
 
 	let { children } = $props();
 
-	onMount(() => device().init());
+	onMount(trackKeyboardInset);
 </script>
 
 {@render children?.()}

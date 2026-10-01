@@ -6,7 +6,7 @@
 	import { bareName, familyColor } from './typeId';
 	import { nodeTypeTitle } from './nodeTypeTitle';
 	import { nodeTypeSource } from './nodeTypeSource';
-	import type { NodeTypeInfo } from '$lib/api/control';
+	import { getControl, type NodeTypeInfo, type ScanDiff } from '$lib/api/control';
 	import { boundaryType } from '$lib/api/vocab';
 	import { ui, type SlotClickSeed } from '$lib/stores/ui.svelte';
 	import { seedSlot } from './seedSlot';
@@ -17,7 +17,6 @@
 		onPick: (type: NodeTypeInfo) => void;
 		onClose: () => void;
 		seed?: SlotClickSeed | null;
-		/** Synthetic types prepended to the list: the In/Out boundaries, inside a sub-patch only. */
 		/** Offer the sub-patch boundary types — they are a port OF a sub-patch, so they exist only
 		 * inside one. */
 		boundary?: boolean;
@@ -33,7 +32,6 @@
 			openingTab(seed ? (g.nodeById(seed.node)?.type ?? null) : null, uiStore.paletteTab)
 		)
 	);
-	let listEl = $state<HTMLDivElement | null>(null);
 	let inputEl = $state<HTMLInputElement | null>(null);
 	let highlighted = $state(0);
 
@@ -76,7 +74,7 @@
 	async function rescan(): Promise<void> {
 		rescanning = true;
 		try {
-			const d = await g.rescanNodes();
+			const d = await getControl().call<ScanDiff>('library refresh', {});
 			const parts = [
 				d.added.length && `${d.added.length} added`,
 				d.changed.length && `${d.changed.length} reloaded`,
@@ -188,7 +186,7 @@
 		</div>
 	{/if}
 
-	<div class="list" bind:this={listEl} data-testid="add-menu-list">
+	<div class="list" data-testid="add-menu-list">
 		{#each filtered as t, idx (t.type)}
 			<button
 				type="button"

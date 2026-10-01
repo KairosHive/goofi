@@ -2,10 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { ParamDescriptor } from '$lib/api/types';
 import {
 	admits,
-	filteredRows,
 	isModified,
 	narrowing,
-	onlyAdmitted,
 	settleNonDefault,
 	SHOW_ALL,
 	toggleSource,
@@ -138,35 +136,28 @@ describe('admits', () => {
 	});
 });
 
-describe('filteredRows', () => {
-	const groups = {
+describe('admits over a row list', () => {
+	const groups: Record<string, Record<string, ParamDescriptor>> = {
 		common: { frequency: float(0.7, 0.5), amplitude: float(0.5, 0.5) },
 		shape: { curve: expr('t'), target: ref('lfo.out') }
 	};
+	const rowsOf = (f: Filters, names = Object.keys(groups)) =>
+		names.flatMap((g) => Object.entries(groups[g]).filter(([n, d]) => admits(f, d, NONE, g, n)).map(([n]) => n));
 
 	// The tabs stay up under a filter, so the caller names the ONE group it is showing.
 	it('answers only the groups it is given', () => {
-		expect(filteredRows(groups, SHOW_ALL, NONE, ['shape']).map((r) => r.name)).toEqual([
-			'curve',
-			'target'
-		]);
+		expect(rowsOf(SHOW_ALL, ['shape'])).toEqual(['curve', 'target']);
 	});
 
 	it('narrows one group to the sources still ticked', () => {
 		const mapped = F({ sources: ['expression'] });
-		expect(filteredRows(groups, mapped, NONE, ['shape']).map((r) => r.name)).toEqual(['curve']);
-		expect(filteredRows(groups, mapped, NONE, ['common'])).toEqual([]);
+		expect(rowsOf(mapped, ['shape'])).toEqual(['curve']);
+		expect(rowsOf(mapped, ['common'])).toEqual([]);
 	});
 
-	it('spans every group when given none, which is what a search hands back', () => {
-		expect(filteredRows(groups, SHOW_ALL, NONE).length).toBe(4);
-	});
-
-	it('narrows rows already gathered by a search', () => {
-		const rows = filteredRows(groups, SHOW_ALL, NONE);
-		expect(onlyAdmitted(rows, F({ sources: ['expression'] }), NONE).map((r) => r.name)).toEqual([
-			'curve'
-		]);
+	it('spans every group, which is what a search hands back, and narrows it to the sources ticked', () => {
+		expect(rowsOf(SHOW_ALL).length).toBe(4);
+		expect(rowsOf(F({ sources: ['expression'] }))).toEqual(['curve']);
 	});
 });
 

@@ -1,5 +1,5 @@
 /** Curated EEG 10-20 electrode layout, azimuthal-equidistant and normalized to [0, 1]². */
-export const EEG_LAYOUT: Record<string, [number, number]> = {
+const EEG_LAYOUT: Record<string, [number, number]> = {
 	Fpz: [0.5, 0.05],
 	Fz: [0.5, 0.27],
 	Cz: [0.5, 0.5],
@@ -63,19 +63,21 @@ export const EEG_LAYOUT: Record<string, [number, number]> = {
 };
 
 /** The head radius of the layout, in its unit square: Cz is its centre and the rim its edge. */
-const RIM = 0.45;
+export const HEAD_RADIUS = 0.45;
 
 /** An electrode's place on the unit sphere: x right, y anterior, z up. The layout is the
  * azimuthal-equidistant view of that sphere, so a point is lifted back by its distance from Cz. */
 export function lift([x, y]: [number, number]): [number, number, number] {
 	const dx = x - 0.5;
 	const dy = 0.5 - y;
-	const polar = Math.min(1, Math.hypot(dx, dy) / RIM) * (Math.PI / 2);
+	const polar = Math.min(1, Math.hypot(dx, dy) / HEAD_RADIUS) * (Math.PI / 2);
 	const azimuth = Math.atan2(dy, dx);
 	return [Math.sin(polar) * Math.cos(azimuth), Math.sin(polar) * Math.sin(azimuth), Math.cos(polar)];
 }
 
+const BY_NAME = new Map(Object.entries(EEG_LAYOUT).map(([k, p]) => [k.toLowerCase(), p]));
+
 /** The layout's place for a channel name, whatever its case. */
 export function electrodeAt(name: string): [number, number] | null {
-	return EEG_LAYOUT[name] ?? EEG_LAYOUT[name.toUpperCase()] ?? null;
+	return BY_NAME.get(name.toLowerCase()) ?? null;
 }

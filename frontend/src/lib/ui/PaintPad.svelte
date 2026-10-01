@@ -1,15 +1,7 @@
-<!-- PaintPad — a canvas you paint on, whose value is a `data:image/png;base64,…` URL. That is a
-     STRING like any other, so a drawing crosses the wire, saves into the patch and is read by an
-     expression through machinery that was already there; nothing new had to learn about images.
-
-     The stroke is committed on pointer UP, never per move: a data URL runs to tens of kilobytes,
-     and one per pointer event would put megabytes a second through the document.
-
-     ONE colour control: the swatch, which opens the platform's own picker. A hue wheel and a
-     brightness slider stood beside it and were three doors onto one colour — the wheel could not
-     say what the picker could, so the two disagreed on every grey. -->
+<!-- PaintPad — a canvas whose value is a PNG data URL, a plain string. A stroke commits on pointer
+     UP, never per move, because one data URL per pointer event would flood the document. -->
 <script lang="ts">
-	import { Button } from '$lib/ui';
+	import { Button } from 'panelty';
 	import type { Mark } from '$lib/api/control';
 
 	let {
@@ -25,11 +17,9 @@
 		disabled?: boolean;
 	} = $props();
 
-	/** The bitmap's own size, independent of the widget's box: resizing the widget rescales the
-	    picture rather than cropping it. */
+	/** The bitmap's own size: resizing the widget rescales the picture rather than cropping it. */
 	const SIZE = 512;
-	/** The square everything OUTSIDE the bitmap is said in — a pointer's position, a brush across,
-	    a turtle step. One space, so `width 40` from the CLI is the brush the slider says 40. */
+	/** The units of pointer positions, brush widths and turtle steps, so CLI and slider agree. */
 	const SPAN = 1000;
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
@@ -73,8 +63,7 @@
 		};
 	}
 
-	/** ONE stroke, whatever asked for it. A hand at the pad and a turtle step from the CLI both
-	    arrive here, so there is no second painter to disagree with this one. */
+	/** ONE stroke painter, for a hand at the pad and a turtle step from the CLI alike. */
 	function paint(
 		from: { x: number; y: number },
 		to: { x: number; y: number },
@@ -101,13 +90,8 @@
 		ctx.restore();
 	}
 
-	function stroke(from: { x: number; y: number }, to: { x: number; y: number }): void {
-		paint(from, to, erasing ? 'erase' : hex, size, soft);
-	}
-
-	/** A turtle script's strokes, made and then committed as ONE change — the script is a
-	    submission, so the pad answers it the way a pointer answers a gesture, not a move. */
-	let done = $state(0);
+	/** A turtle script's strokes, committed as ONE change, as a pointer gesture is. */
+	let done = 0;
 	$effect(() => {
 		const batch = pending;
 		if (!batch || batch.id === done || !canvas) return;
@@ -134,14 +118,14 @@
 		last = p;
 		(e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
 		// A tap is a dot, so the shortest stroke still leaves a mark.
-		stroke(p, { x: p.x + 0.01, y: p.y });
+		paint(p, { x: p.x + 0.01, y: p.y }, erasing ? 'erase' : hex, size, soft);
 		e.preventDefault();
 	}
 	function move(e: PointerEvent): void {
 		if (!drawing || !last) return;
 		const p = at(e);
 		if (!p) return;
-		stroke(last, p);
+		paint(last, p, erasing ? 'erase' : hex, size, soft);
 		last = p;
 	}
 	function up(): void {

@@ -2,17 +2,15 @@
 	import type { DataFrame } from '$lib/codec/decode';
 	import type { SettingsMap } from './module';
 	import TableTree from './TableTree.svelte';
+	import { tableChildren } from './tableTree';
 
-	type Props = { frame: DataFrame; settings?: SettingsMap };
-	const { frame, settings = {} }: Props = $props();
-
-	const decimals = $derived(Math.max(0, Math.min(10, Number(settings.decimals ?? 3))));
-	const table = $derived(frame.data as Record<string, DataFrame>);
+	type Props = { frame: DataFrame; settings: SettingsMap };
+	const { frame, settings }: Props = $props();
 </script>
 
 <div class="container" data-testid="table-viewer">
-	{#each Object.entries(table) as [k, v] (k)}
-		<TableTree name={k} frame={v} {decimals} />
+	{#each tableChildren(frame) as [k, v] (k)}
+		<TableTree name={k} frame={v} decimals={Number(settings.decimals)} />
 	{/each}
 </div>
 

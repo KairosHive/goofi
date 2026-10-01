@@ -6,7 +6,7 @@ describe('Flash', () => {
 		vi.useFakeTimers();
 		try {
 			const f = new Flash();
-			f.pulse(['osc0', 'buf0'], 700);
+			f.pulse(['osc0', 'buf0']);
 			expect(f.active('osc0')).toBe(true);
 			expect(f.active('buf0')).toBe(true);
 			expect(f.active('other')).toBe(false);
@@ -22,7 +22,7 @@ describe('Flash', () => {
 
 	it('ignores an empty pulse', () => {
 		const f = new Flash();
-		f.pulse([], 700);
+		f.pulse([]);
 		expect(f.active('x')).toBe(false);
 	});
 
@@ -30,9 +30,9 @@ describe('Flash', () => {
 		vi.useFakeTimers();
 		try {
 			const f = new Flash();
-			f.pulse(['osc0'], 700);
+			f.pulse(['osc0']);
 			vi.advanceTimersByTime(500);
-			f.pulse(['osc0'], 700); // restart the clock
+			f.pulse(['osc0']); // restart the clock
 			vi.advanceTimersByTime(500); // 1000 since first, 500 since second
 			expect(f.active('osc0')).toBe(true);
 			vi.advanceTimersByTime(200); // 700 since second

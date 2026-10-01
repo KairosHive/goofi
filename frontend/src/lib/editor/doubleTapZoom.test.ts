@@ -5,9 +5,9 @@ import {
 	DOUBLE_TAP_MS,
 	TAP_MS,
 	TAP_SLOP_PX,
-	ZOOM_PX_PER_DOUBLING,
-	type FlowViewport
+	ZOOM_PX_PER_DOUBLING
 } from './doubleTapZoom';
+import type { Viewport as FlowViewport } from '@xyflow/svelte';
 
 const at = (x: number, y: number) => ({ clientX: x, clientY: y });
 

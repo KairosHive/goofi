@@ -1,6 +1,5 @@
 /** goofi's `LayoutHost` — the one place a layout gesture becomes a manager op plus its undo step. */
-import type { LayoutHost, TabRef } from 'panelty';
-import type { Direction } from 'panelty';
+import type { Direction, LayoutHost, TabRef } from 'panelty';
 import { history } from './history.svelte';
 import { getControl, type Control, type Step } from '$lib/api/control';
 import type { OpName } from '$lib/api/ops';
@@ -11,17 +10,12 @@ interface Placed {
 	tab: string;
 }
 
-/** How the host reaches the manager. */
-export interface HostDeps {
-	control: () => Control;
-}
-
 /** Which SIDE of a target a drop lands on — the manager's spelling of the axis-and-half the panel
  * system raises as a pair. One word, so the two cannot disagree on the way over. */
 const SIDE = { row: ['right', 'left'], column: ['bottom', 'top'] } as const;
 const side = (d: Direction, placeBefore: boolean): string => SIDE[d][placeBefore ? 1 : 0];
 
-export function goofiLayoutHost(deps: HostDeps): LayoutHost {
+export function goofiLayoutHost(deps: { control: () => Control }): LayoutHost {
 	/** Send one op; the manager records its step, and a refusal answers null. */
 	async function cmd<T>(op: OpName, payload: Record<string, unknown>, step?: Step): Promise<T | null> {
 		try {
@@ -81,24 +75,14 @@ export function goofiLayoutHost(deps: HostDeps): LayoutHost {
 			return true;
 		},
 
-		async setPanel(panel, patch, label = 'Change panel') {
+		async setPanel(panel, patch) {
 			return landed(await cmd('layout panel edit', { panel, ...patch }));
 		},
 
 		// One op either way: a drop onto the tab bar names no target, a drop on an edge names one.
 		async movePanel(subtree, to) {
-			if ('newTab' in to) {
-				return landed(
-					await cmd('layout move', { entry: subtree, index: to.newTab })
-				);
-			}
-			return landed(
-				await cmd('layout move', {
-					entry: subtree,
-					beside: to.panel,
-					side: side(to.direction, to.placeBefore)
-				})
-			);
+			const where = 'newTab' in to ? { index: to.newTab } : { beside: to.panel, side: side(to.direction, to.placeBefore) };
+			return landed(await cmd('layout move', { entry: subtree, ...where }));
 		}
 	};
 }

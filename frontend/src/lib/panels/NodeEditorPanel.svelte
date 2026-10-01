@@ -1,6 +1,5 @@
-<!-- Node-editor panel — the SvelteFlow graph and its interaction logic. Each instance owns its own
-     viewport but reads the shared graph and selection stores. Editor-scoped keyboard shortcuts are
-     gated on this being the active panel; app-global ones live in AppShell. -->
+<!-- Node-editor panel: the SvelteFlow graph and its gestures. Each instance owns its viewport, and
+     its keyboard shortcuts act only while it is the active panel; app-global ones live in AppShell. -->
 <script lang="ts">
 	import {
 		SvelteFlow,
@@ -10,12 +9,12 @@
 		type Connection,
 		type Edge,
 		type FitViewOptions,
-		type Node
+		type Node,
+		type Viewport
 	} from '@xyflow/svelte';
 	import GoofiNode from '$lib/editor/GoofiNode.svelte';
 	import AddNodeMenu from '$lib/editor/AddNodeMenu.svelte';
 	import PlacementPreview from '$lib/editor/PlacementPreview.svelte';
-	import FitToGraph from '$lib/editor/FitToGraph.svelte';
 	import { camera } from '$lib/editor/camera';
 	import FlowApi from '$lib/editor/FlowApi.svelte';
 	import FlowSurface from '$lib/editor/FlowSurface.svelte';
@@ -23,14 +22,7 @@
 	import type { SurfaceHandle } from '$lib/api/drawings';
 	import SubpatchZoomExit from '$lib/editor/SubpatchZoomExit.svelte';
 	import SnapGuides from '$lib/editor/SnapGuides.svelte';
-	import {
-		computeSnapDelta,
-		makeBounds,
-		DEFAULT_NODE_W,
-		DEFAULT_NODE_H,
-		type Bounds,
-		type Guide
-	} from '$lib/editor/snap';
+	import { computeSnapDelta, makeBounds, type Bounds, type Guide } from '$lib/editor/snap';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
@@ -43,6 +35,7 @@
 	import { portal } from 'panelty';
 	import {
 		linkKey,
+		type LinkInfo,
 		type NodeInstanceInfo,
 		type NodeTypeInfo,
 		type Step
@@ -58,22 +51,19 @@
 		type SlotAnchor
 	} from '$lib/editor/slotProximity';
 	import { createLongPress } from 'panelty';
-	import { createDoubleTapZoom, zoomStep, type FlowViewport } from '$lib/editor/doubleTapZoom';
+	import { createDoubleTapZoom, zoomStep } from '$lib/editor/doubleTapZoom';
 	import { eventPoint } from '$lib/editor/eventPoint';
-	import { serializeClipboard, parseClipboard, fragmentCentre } from '$lib/editor/clipboard';
+	import { serializeClipboard, parseClipboard, fragmentCentre, centroid } from '$lib/editor/clipboard';
 	import { copyText } from '$lib/clipboard';
 	import { registerEditor, unregisterEditor } from './editorCommands';
-	import InspectorOverlay from './InspectorOverlay.svelte';
+	import SidePane from './SidePane.svelte';
 	import { arrayToPath, asStateObject, pathToArray } from 'panelty';
 	import { Button, IconButton, EmptyState, isTextEditingTarget } from '$lib/ui';
 	import { clampToViewport, overlayViewport } from 'panelty';
 	import { onMount, tick, untrack } from 'svelte';
+	import { on } from 'svelte/events';
 
 	let { panelId, state: panelState, setState }: PanelProps = $props();
-
-	function samePath(a: string[], b: string[]): boolean {
-		return a.length === b.length && a.every((v, i) => v === b[i]);
-	}
 
 	const g = graph();
 	const uiStore = ui();
@@ -96,7 +86,7 @@
 	let rootEl = $state<HTMLDivElement | null>(null);
 
 	/** Which edge of the menu's own box the requested open point names. */
-	type MenuAlign = 'start' | 'center' | 'end';
+	type MenuAlign = 'start' | 'end';
 
 	let menuOpen = $state(false);
 	// The REQUESTED spawn point and the RENDERED one are separate, so the placement effect never
@@ -132,7 +122,7 @@
 	});
 
 	/** Open the add-node menu at a viewport point — the one placement path for all four entry
-	 * points. The point names the menu's left, centre or right edge; the effect below clamps it. */
+	 * points. The point names the menu's left or right edge; the effect below clamps it. */
 	function openAddMenu(
 		x: number,
 		y: number,
@@ -145,6 +135,11 @@
 		menuSeed = seed;
 		swallowMenuClick = swallowNextDismiss;
 		menuOpen = true;
+	}
+
+	function closeMenu(): void {
+		menuOpen = false;
+		menuSeed = null;
 	}
 
 	/** The coarse-pointer door onto the add-node menu. Armed for `touch` alone: a held mouse button
@@ -166,7 +161,7 @@
 	// Double-tap-and-drag zoom, beside pinch; the seam is `zoomOnDoubleClick={false}` below.
 	const tapZoom = createDoubleTapZoom();
 	// Sampled ONCE at the start, so the drag cannot accumulate rounding.
-	let zoomFrom: FlowViewport | null = null;
+	let zoomFrom: Viewport | null = null;
 	let zoomAnchor: { x: number; y: number } | null = null;
 
 	/** The pan block. On `touchstart`, not `pointerdown`: SvelteFlow pans by d3-zoom, which binds
@@ -212,8 +207,7 @@
 		const at = menuAt;
 		const place = (): void => {
 			const r = el.getBoundingClientRect();
-			const left =
-				at.align === 'center' ? at.x - r.width / 2 : at.align === 'end' ? at.x - r.width : at.x;
+			const left = at.align === 'end' ? at.x - r.width : at.x;
 			// `overlayViewport()`, not `window.innerHeight`: this menu focuses its search on open, so
 			// the soft keyboard is on its way up as it lands and the layout viewport does not shrink.
 			const p = clampToViewport(
@@ -234,7 +228,7 @@
 		const seed = uiStore.pendingSlotClick;
 		if (!seed) return;
 		if (!isActive()) return;
-		uiStore.consumeSlotClick();
+		uiStore.pendingSlotClick = null;
 		const source = seed.side === 'source';
 		openAddMenu(
 			seed.clientX + (source ? 12 : -12),
@@ -258,25 +252,14 @@
 	let reconcileTick = $state(0);
 
 	// The stack of instance ids this editor has descended into; empty = top level.
-	let enteredPath = $state<string[]>(untrack(() => pathToArray(asStateObject(panelState).subpatchPath)));
+	const enteredPath = $derived(pathToArray(asStateObject(panelState).subpatchPath));
 	const entered = $derived(enteredPath.length ? enteredPath[enteredPath.length - 1] : null);
 
-	/** Write the current path back into the panel's state. Classified as NAVIGATION: descending into
-	 * a sub-patch is looking, not editing, so it must not mark the patch unsaved. */
-	function persistEnteredPath(): void {
-		untrack(() => {
-			const path = arrayToPath(enteredPath);
-			if (asStateObject(panelState).subpatchPath === path) return;
-			setState({ ...asStateObject(panelState), subpatchPath: path }, 'navigation');
-		});
+	/** Write the path into the panel's state as NAVIGATION: descending into a sub-patch is looking,
+	 * not editing, so it must not mark the patch unsaved. */
+	function setPath(path: string[]): void {
+		setState({ ...asStateObject(panelState), subpatchPath: arrayToPath(path) }, 'navigation');
 	}
-
-	// Follow an EXTERNAL path change — a patch load that reuses this panel id, so the component is
-	// not remounted. Our own writes leave the two equal.
-	$effect(() => {
-		const persisted = pathToArray(asStateObject(panelState).subpatchPath);
-		if (!samePath(persisted, untrack(() => enteredPath))) enteredPath = persisted;
-	});
 
 	/** uid → the scope it is drawn in. Membership rides the record, so this is a read, not a walk. */
 	const memberIndex = $derived(new Map(g.nodes.map((n) => [n.uid, n.scope])));
@@ -290,16 +273,14 @@
 		if (!isScope(instId)) return;
 		if (enteredPath[enteredPath.length - 1] === instId) return; // already inside it
 		sel.clear(panelId);
-		enteredPath = [...enteredPath, instId];
-		persistEnteredPath();
+		setPath([...enteredPath, instId]);
 		setTimeout(fitView, 60); // frame the inside once it has rendered
 	}
 
 	/** Pop the breadcrumb back to `depth` levels (0 = top of the patch). */
 	function exitToDepth(depth: number): void {
 		sel.clear(panelId);
-		enteredPath = enteredPath.slice(0, depth);
-		persistEnteredPath();
+		setPath(enteredPath.slice(0, depth));
 		setTimeout(fitView, 60);
 	}
 
@@ -308,10 +289,7 @@
 		if (enteredPath.length === 0) return;
 		let depth = enteredPath.length;
 		while (depth > 0 && !isScope(enteredPath[depth - 1])) depth--;
-		if (depth !== enteredPath.length) {
-			enteredPath = enteredPath.slice(0, depth);
-			persistEnteredPath();
-		}
+		if (depth !== enteredPath.length) setPath(enteredPath.slice(0, depth));
 	});
 
 	/** Resolve a link endpoint to what is actually drawn in the entered scope: the facade of the
@@ -395,56 +373,42 @@
 		const names = selectedUids();
 		if (names.length === 0) return;
 		// Place the collapsed group node at the centroid of its members.
-		const pts = names.map((n) => g.nodeById(n)?.pos).filter((p): p is [number, number] => !!p);
-		const pos: [number, number] = pts.length
-			? [
-					Math.round(pts.reduce((a, p) => a + p[0], 0) / pts.length),
-					Math.round(pts.reduce((a, p) => a + p[1], 0) / pts.length)
-				]
-			: [0, 0];
+		const [x, y] = centroid(names.map((n) => g.nodeById(n)?.pos).filter((p): p is [number, number] => !!p));
 		try {
-			const instId = await g.groupNodes(names, pos);
+			const instId = await g.groupNodes(names, [Math.round(x), Math.round(y)]);
 			sel.selectNodes(panelId, [instId]);
 		} catch (e) {
 			console.warn('group failed', e);
 		}
 	}
 
+	/** The link a Flow connection or edge names; null while it lacks an end. */
+	function linkOf(c: { source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }): LinkInfo | null {
+		if (!c.source || !c.target || !c.sourceHandle || !c.targetHandle) return null;
+		return { node_out: c.source, node_in: c.target, slot_out: c.sourceHandle, slot_in: c.targetHandle };
+	}
+
 	function onConnect(c: Connection): void {
-		if (!c.source || !c.target || !c.sourceHandle || !c.targetHandle) return;
+		const link = linkOf(c);
+		if (!link) return;
 		// Every cable is one `add_link`, the pill's included: a port is a node to the op vocabulary,
 		// and a top-level wire to a collapsed facade is spliced to the inner leaf by the bridge.
-		void g
-			.addLink({
-				node_out: c.source,
-				node_in: c.target,
-				slot_out: c.sourceHandle,
-				slot_in: c.targetHandle
-			})
-			.catch((e) => {
-				notify().failure('Connect', e);
-				reconcileTick++;
-			});
+		void g.addLink(link).catch((e) => {
+			notify().failure('Connect', e);
+			reconcileTick++;
+		});
 	}
 
 	/** Drag an existing edge's endpoint to a new slot. Remove + add are one history entry, so a
 	 * single undo reverts the move. */
 	function onReconnect(oldEdge: Edge, c: Connection): void {
-		const oldSo = oldEdge.sourceHandle;
-		const oldSi = oldEdge.targetHandle;
-		if (!c.source || !c.target || !c.sourceHandle || !c.targetHandle || !oldSo || !oldSi) return;
+		const was = linkOf(oldEdge);
+		const link = linkOf(c);
+		if (!was || !link) return;
 		void history()
 			.transaction('Reconnect link', async (step) => {
-				await g.removeLink({ node_out: oldEdge.source, node_in: oldEdge.target, slot_out: oldSo, slot_in: oldSi }, step);
-				await g.addLink(
-					{
-						node_out: c.source as string,
-						node_in: c.target as string,
-						slot_out: c.sourceHandle as string,
-						slot_in: c.targetHandle as string
-					},
-					step
-				);
+				await g.removeLink(was, step);
+				await g.addLink(link, step);
 			})
 			// `transaction` re-throws, so a refused move needs this catch: the rebuild puts every
 			// cable back where `g.links` says it is.
@@ -462,12 +426,9 @@
 	// Input names, revealed by proximity while a cable is in flight. The anchors are snapshotted
 	// ONCE per drag in FLOW space, so a canvas that pans or zooms mid-drag needs no invalidation.
 	let cableAnchors: SlotAnchor[] = [];
-	let cableNear: ReadonlySet<string> = new Set();
 
 	function publishCableNear(next: ReadonlySet<string>): void {
-		if (sameKeys(next, cableNear)) return; // don't invalidate every node for an unchanged set
-		cableNear = next;
-		uiStore.setCableNear(next);
+		if (!sameKeys(next, uiStore.cableNear)) uiStore.cableNear = next; // an equal set invalidates no node
 	}
 
 	function onCableMove(e: PointerEvent): void {
@@ -482,12 +443,10 @@
 
 	function onCableStart(): void {
 		cableAnchors = inputAnchors(
-			flowNodes.flatMap((f) => {
-				// Boundary pills carry no name tag; only real nodes have a `.conn-label` to reveal.
-				const n = f.type === 'goofi' ? (f.data?.node as NodeInstanceInfo | undefined) : undefined;
-				if (!n) return [];
+			flowNodes.map((f) => {
+				const n = f.data.node as NodeInstanceInfo;
 				const multi = new Set(n.input_multi ?? []);
-				return [{ uid: f.id, x: f.position.x, y: f.position.y, slots: Object.keys(n.input_slots ?? {}), multi }];
+				return { uid: f.id, x: f.position.x, y: f.position.y, slots: Object.keys(n.input_slots ?? {}), multi };
 			}),
 			slotKey
 		);
@@ -503,29 +462,19 @@
 	}
 
 	/** A node's snap footprint when Svelte Flow has not measured it yet. */
-	function nodeFallbackSize(flowNode: Node | undefined): { width: number; height: number } {
-		const node = flowNode?.data?.node as NodeInstanceInfo | undefined;
-		if (node) {
-			const inputs = Object.keys(node.input_slots ?? {});
-			const outputs = Object.keys(node.output_slots ?? {});
-			const multi = new Set(node.input_multi ?? []);
-			return nodeSurfaceSize(
-				inputUnits(inputs, (s) => multi.has(s)),
-				outputs.map((s) => isSlotExpanded(node, s))
-			);
-		}
-		return { width: DEFAULT_NODE_W, height: DEFAULT_NODE_H };
+	function nodeFallbackSize(node: NodeInstanceInfo): { width: number; height: number } {
+		const multi = new Set(node.input_multi ?? []);
+		return nodeSurfaceSize(
+			inputUnits(Object.keys(node.input_slots ?? {}), (s) => multi.has(s)),
+			Object.keys(node.output_slots ?? {}).map((s) => isSlotExpanded(node, s))
+		);
 	}
 
-	function nodeBoundsFromFlow(flowNode: Node | undefined, x: number, y: number): Bounds {
-		let w = flowNode?.measured?.width;
-		let h = flowNode?.measured?.height;
-		if (w == null || h == null) {
-			const fb = nodeFallbackSize(flowNode);
-			w ??= fb.width;
-			h ??= fb.height;
-		}
-		return makeBounds(x, y, w, h);
+	function nodeBoundsFromFlow(n: Node): Bounds {
+		const { width, height } = n.measured ?? {};
+		if (width != null && height != null) return makeBounds(n.position.x, n.position.y, width, height);
+		const fb = nodeFallbackSize(n.data.node as NodeInstanceInfo);
+		return makeBounds(n.position.x, n.position.y, width ?? fb.width, height ?? fb.height);
 	}
 
 	/** Snap-target bounds for every node on screen in THIS editor, shared by the node drag and the
@@ -534,13 +483,13 @@
 		const targets: Bounds[] = [];
 		for (const n of flowNodes) {
 			if (exclude.has(n.id)) continue;
-			targets.push(nodeBoundsFromFlow(n, n.position.x, n.position.y));
+			targets.push(nodeBoundsFromFlow(n));
 		}
 		return targets;
 	}
 
 	function dragSnapDelta(nodes: Node[], altKey: boolean): { dx: number; dy: number; guides: Guide[] } {
-		const draggedBounds = nodes.map((n) => nodeBoundsFromFlow(n, n.position.x, n.position.y));
+		const draggedBounds = nodes.map(nodeBoundsFromFlow);
 		return computeSnapDelta(draggedBounds, snapTargetBounds(new Set(nodes.map((n) => n.id))), altKey);
 	}
 
@@ -601,13 +550,36 @@
 	}
 
 	/** Put the dragged nodes back where the drag started. */
-	function revertDragged(dragged: Set<string>): void {
+	function revertDragged(nodes: Node[]): void {
+		const dragged = new Set(nodes.map((n) => n.id));
 		flowNodes = flowNodes.map((n) => {
 			if (!dragged.has(n.id)) return n;
 			const o = dragOrigin.get(n.id);
 			if (o) pinned.set(n.id, { x: o.x, y: o.y });
 			return o ? { ...n, position: { x: o.x, y: o.y } } : n;
 		});
+	}
+
+	/** Snap the dragged nodes to their neighbours, and pin and draw them where the snap puts them. */
+	function snapDragged(nodes: Node[], event: MouseEvent | TouchEvent): { dx: number; dy: number; guides: Guide[] } {
+		const snap = dragSnapDelta(nodes, (event as MouseEvent).altKey === true);
+		const at = new Map(nodes.map((n) => [n.id, { x: n.position.x + snap.dx, y: n.position.y + snap.dy }]));
+		for (const [id, p] of at) pinned.set(id, { ...p });
+		if (!snap.dx && !snap.dy) return snap;
+		flowNodes = flowNodes.map((n) => {
+			const p = at.get(n.id);
+			return p ? { ...n, position: p } : n;
+		});
+		return snap;
+	}
+
+	/** Release what a node drag holds: its scroll listener, the shared drag fields and the overlays. */
+	function endNodeDrag(): void {
+		document.removeEventListener('scroll', measureTargets, { capture: true });
+		uiStore.nodeDrag = null;
+		uiStore.nodeDragOver = null;
+		linkGhost = null;
+		snapGuides = [];
 	}
 
 	function onNodeDragStart(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): void {
@@ -625,35 +597,20 @@
 	}
 
 	function onNodeDrag(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): void {
-		const dragged = new Set(args.nodes.map((n) => n.id));
 		const target = linkTargetAt(args.event);
 		if (target) {
 			// A reference drag, not a coordinate move: the node snaps back and a ghost follows.
-			uiStore.nodeDragTarget = 'panel' in target ? target.panel : null;
-			uiStore.nodeDragZone = 'zone' in target ? target.zone : null;
+			uiStore.nodeDragOver = 'zone' in target ? target.zone : target.panel;
 			// `eventPoint`, because a TouchEvent carries no `clientX` of its own.
 			const p = eventPoint(args.event) ?? { clientX: 0, clientY: 0 };
 			linkGhost = { x: p.clientX, y: p.clientY, name: g.nodeById(args.nodes[0]?.id ?? '')?.name ?? '' };
 			snapGuides = [];
-			revertDragged(dragged);
+			revertDragged(args.nodes);
 			return;
 		}
-		uiStore.nodeDragTarget = null;
-		uiStore.nodeDragZone = null;
+		uiStore.nodeDragOver = null;
 		linkGhost = null;
-		const current = new Map<string, { x: number; y: number }>();
-		for (const n of args.nodes) current.set(n.id, { x: n.position.x, y: n.position.y });
-		const alt = (args.event as MouseEvent).altKey === true;
-		const { dx, dy, guides } = dragSnapDelta(args.nodes, alt);
-		snapGuides = guides;
-		for (const [id, c] of current) pinned.set(id, { x: c.x + dx, y: c.y + dy });
-		if (dx === 0 && dy === 0) return;
-		flowNodes = flowNodes.map((n) => {
-			if (!dragged.has(n.id)) return n;
-			const c = current.get(n.id);
-			if (!c) return n;
-			return { ...n, position: { x: c.x + dx, y: c.y + dy } };
-		});
+		snapGuides = snapDragged(args.nodes, args.event).guides;
 	}
 
 	function onNodeDragStop(args: {
@@ -661,11 +618,10 @@
 		nodes: Node[];
 		event: MouseEvent | TouchEvent;
 	}): void {
-		const dragged = new Set(args.nodes.map((n) => n.id));
 		const target = linkTargetAt(args.event);
 		if (target) {
-			revertDragged(dragged);
-			for (const id of dragged) pinned.delete(id);
+			revertDragged(args.nodes);
+			for (const n of args.nodes) pinned.delete(n.id);
 			const uid = args.nodes[0]?.id ?? '';
 			const p = eventPoint(args.event) ?? { clientX: 0, clientY: 0 };
 			const where = 'zone' in target ? target.zone : target.panel;
@@ -674,18 +630,7 @@
 				ws.linkNodeToPanel(target.panel, uid);
 			}
 		} else {
-			const current = new Map<string, { x: number; y: number }>();
-			for (const n of args.nodes) current.set(n.id, { x: n.position.x, y: n.position.y });
-			const alt = (args.event as MouseEvent).altKey === true;
-			const { dx, dy } = dragSnapDelta(args.nodes, alt);
-			if (dx !== 0 || dy !== 0) {
-				flowNodes = flowNodes.map((n) => {
-					if (!dragged.has(n.id)) return n;
-					const c = current.get(n.id);
-					if (!c) return n;
-					return { ...n, position: { x: c.x + dx, y: c.y + dy } };
-				});
-			}
+			const { dx, dy } = snapDragged(args.nodes, args.event);
 			const moves = args.nodes.map(
 				(n) => [n.id, [Math.round(n.position.x + dx), Math.round(n.position.y + dy)]] as [string, [number, number]]
 			);
@@ -694,33 +639,26 @@
 				for (const [id] of moves) pinned.delete(id);
 			});
 		}
-		document.removeEventListener('scroll', measureTargets, { capture: true });
-		uiStore.nodeDrag = null;
-		uiStore.nodeDragTarget = null;
-		uiStore.nodeDragZone = null;
-		linkGhost = null;
-		snapGuides = [];
+		endNodeDrag();
 	}
 
-	let lastPaneClickAt = 0;
-	let lastPaneClickPos = { x: 0, y: 0 };
 	const DOUBLE_CLICK_MS = 350;
+	type Tap = { at: number; x: number; y: number };
+	const tapOf = (e: MouseEvent): Tap => ({ at: performance.now(), x: e.clientX, y: e.clientY });
+	/** True when `e` repeats the click `prev` soon enough and within `slop` screen px of it. */
+	function repeats(prev: Tap, e: MouseEvent, slop: number): boolean {
+		return performance.now() - prev.at < DOUBLE_CLICK_MS && Math.hypot(e.clientX - prev.x, e.clientY - prev.y) < slop;
+	}
 
+	let lastPaneClick: Tap = { at: 0, x: 0, y: 0 };
 	function onPaneClick(args: { event: MouseEvent }): void {
-		const now = performance.now();
-		const here = { x: args.event.clientX, y: args.event.clientY };
-		const dt = now - lastPaneClickAt;
-		const ddx = here.x - lastPaneClickPos.x;
-		const ddy = here.y - lastPaneClickPos.y;
-		const close = ddx * ddx + ddy * ddy < 30 * 30;
-		if (dt < DOUBLE_CLICK_MS && close) {
-			openAddMenu(here.x - 8, here.y + 8);
-			lastPaneClickAt = 0;
+		if (repeats(lastPaneClick, args.event, 30)) {
+			openAddMenu(args.event.clientX - 8, args.event.clientY + 8);
+			lastPaneClick.at = 0;
 			return;
 		}
-		lastPaneClickAt = now;
-		lastPaneClickPos = here;
-		menuOpen = false;
+		lastPaneClick = tapOf(args.event);
+		closeMenu();
 		sel.clickPane(panelId, args.event.shiftKey);
 		// SvelteFlow calls `unselectNodesAndEdges()` immediately AFTER this callback, whatever the
 		// store decided, so wherever the store KEEPS the selection it must be re-derived after it.
@@ -741,21 +679,13 @@
 		sel.clickNode(panelId, args.node.id, mouse.shiftKey || mouse.ctrlKey || mouse.metaKey);
 	}
 
-	function sameMembers(set: Set<string>, ids: string[]): boolean {
-		if (set.size !== ids.length) return false;
-		for (const id of ids) if (!set.has(id)) return false;
-		return true;
-	}
-
 	/** Mirror a finished marquee into the store. Keyed on start/end, never `onselectionchange`: a
 	 * store-driven selection replaces every flowNodes object and Flow then emits transient echoes. */
 	function onSelectionEnd(): void {
 		if (!boxSelecting) return;
 		boxSelecting = false;
 		const nodeIds = flowNodes.filter((n) => n.selected).map((n) => n.id);
-		const edgeIds = flowEdges.filter((e) => e.selected).map((e) => e.id);
-		if (sameMembers(sel.nodes(panelId), nodeIds) && sameMembers(sel.edges(panelId), edgeIds)) return;
-		sel.setSelection(panelId, nodeIds, edgeIds);
+		sel.setSelection(panelId, nodeIds, flowEdges.filter((e) => e.selected).map((e) => e.id));
 	}
 
 	// Double-click to enter a sub-patch, detected here because `onnodeclick` suppresses the 2nd
@@ -763,9 +693,7 @@
 	const DBL_PX = 6; // a real double-click barely moves the pointer…
 	const DBL_PX_TOUCH = 16; // …but a finger does, and 6px is well under any tap slop
 	let lastClickInst = '';
-	let lastClickAt = 0;
-	let lastClickX = 0;
-	let lastClickY = 0;
+	let lastClick: Tap = { at: 0, x: 0, y: 0 };
 	/** The node a click landed on, or ''. */
 	function nodeUnder(target: EventTarget | null): string {
 		return (
@@ -773,7 +701,6 @@
 		);
 	}
 	function onCanvasClick(event: MouseEvent): void {
-		const now = performance.now();
 		const hereNode = nodeUnder(event.target);
 		// …of which only a sub-patch instance is something this gesture can ENTER.
 		const here = isScope(hereNode) ? hereNode : '';
@@ -781,9 +708,7 @@
 		const slop = (event as PointerEvent).pointerType === 'touch' ? DBL_PX_TOUCH : DBL_PX;
 		if (
 			lastClickInst &&
-			now - lastClickAt < DOUBLE_CLICK_MS &&
-			Math.abs(event.clientX - lastClickX) < slop &&
-			Math.abs(event.clientY - lastClickY) < slop &&
+			repeats(lastClick, event, slop) &&
 			// A second click resolving to a DIFFERENT NODE is that node's first click. Asked of the
 			// NODE, not the instance: '' is reserved for the inspector having slid over it.
 			(hereNode === '' || hereNode === lastClickInst)
@@ -797,9 +722,7 @@
 			enterInstance(inst);
 			return;
 		}
-		lastClickAt = now;
-		lastClickX = event.clientX;
-		lastClickY = event.clientY;
+		lastClick = tapOf(event);
 		lastClickInst = here;
 	}
 
@@ -826,14 +749,10 @@
 	/** Escape's rungs inside the canvas: the menu, then the selection, then the sub-patch. False
 	 * when none of them was there to take it. */
 	function escapeLadder(): boolean {
-		if (menuOpen) {
-			menuOpen = false;
-			menuSeed = null;
-		} else if (sel.nodes(panelId).size || sel.edges(panelId).size) {
-			sel.clear(panelId);
-		} else if (enteredPath.length) {
-			exitToDepth(enteredPath.length - 1); // step one level up
-		} else return false;
+		if (menuOpen) closeMenu();
+		else if (sel.nodes(panelId).size || sel.edges(panelId).size) sel.clear(panelId);
+		else if (enteredPath.length) exitToDepth(enteredPath.length - 1); // step one level up
+		else return false;
 		return true;
 	}
 
@@ -883,9 +802,8 @@
 		}
 	}
 
-	/** The single delete path, for SvelteFlow's `ondelete` and the app header's Delete row. Nodes go
-	 * as ONE batch so undo restores them all BEFORE their links — and a boundary port is one of
-	 * them, because `remove_node` and `remove_link` both answer for a port. */
+	/** The single delete path, for SvelteFlow's `ondelete` and the header's Delete row. Nodes go as
+	 * ONE batch, ports included, so undo restores them all BEFORE their links. */
 	async function deleteElements({ nodes, edges }: { nodes: Node[]; edges: Edge[] }): Promise<void> {
 		const nodeIds = nodes.map((n) => n.id);
 		const deleted = new Set(nodeIds);
@@ -894,9 +812,7 @@
 		await history()
 			.transaction('Delete selection', async (step) => {
 				if (nodeIds.length) await g.removeNodes(nodeIds, step);
-				for (const e of links)
-					if (e.sourceHandle && e.targetHandle)
-						await g.removeLink({ node_out: e.source, node_in: e.target, slot_out: e.sourceHandle, slot_in: e.targetHandle }, step);
+				for (const link of links.map(linkOf)) if (link) await g.removeLink(link, step);
 			})
 			.catch((err) => notify().failure('Delete', err));
 		sel.clear(panelId);
@@ -921,9 +837,8 @@
 		sel.selectNodes(panelId, childrenOfScope(entered ?? ROOT_ID, memberIndex));
 	}
 
-	/** Put the selection on the clipboard, answering what was put there. The manager reads the
-	 * SUBTREE, so a sub-patch's members, ports and nested scopes come with it — which is what makes
-	 * the payload paste-able into a patch that never held those uids. */
+	/** Put the selection on the clipboard and answer what was put there. The manager reads the
+	 * SUBTREE, so a sub-patch's members, ports and nested scopes come with it. */
 	async function copySelection(): Promise<string[]> {
 		const uids = selectedUids();
 		if (uids.length === 0) return [];
@@ -934,9 +849,8 @@
 		return uids;
 	}
 
-	/** Cut: the copy, then the delete, as ONE history entry — so one undo puts the nodes back and
-	 * the clipboard still holds them. The delete waits on the copy, or a failed write would take
-	 * the nodes with it. */
+	/** Cut: the copy, then the delete as ONE history entry. The delete waits on the copy, or a
+	 * failed write would take the nodes with it. */
 	async function cutSelection(): Promise<void> {
 		const uids = await copySelection();
 		if (uids.length === 0) return;
@@ -955,9 +869,8 @@
 	}
 
 
-	/** Paste what the platform clipboard holds. The `paste` EVENT is the door that always works —
-	 * `navigator.clipboard.readText` needs a secure context, and goofi is served over plain http on
-	 * a LAN — so a menu item, which has no event to read, asks for it and says so when refused. */
+	/** The menu's paste. `navigator.clipboard.readText` needs a secure context, which plain http on
+	 * a LAN is not, so a refusal points to the keyboard's `paste` event. */
 	async function pasteClipboard(): Promise<void> {
 		try {
 			await pasteText(await navigator.clipboard.readText());
@@ -983,13 +896,6 @@
 		);
 		const created = Object.values(rename);
 		if (created.length > 0) sel.selectNodes(panelId, created);
-	}
-
-	/** Open the add-node menu centered over this panel, for callers that name a panel not a point. */
-	function openAddMenuCentered(): void {
-		const r = rootEl?.getBoundingClientRect();
-		if (r) openAddMenu(r.left + r.width / 2, r.top + 60, 'center');
-		else openAddMenu(window.innerWidth / 2, 80, 'center');
 	}
 
 	async function autoLink(
@@ -1056,19 +962,27 @@
 	let screenToFlow = $state<((p: { x: number; y: number }) => { x: number; y: number }) | undefined>(
 		undefined
 	);
-	let getViewport = $state<(() => FlowViewport) | undefined>(undefined);
-	let setViewport = $state<((v: FlowViewport) => void) | undefined>(undefined);
+	let getViewport = $state<(() => Viewport) | undefined>(undefined);
+	let setViewport = $state<((v: Viewport) => void) | undefined>(undefined);
+	let flowFit = $state<((o?: FitViewOptions) => Promise<boolean>) | undefined>(undefined);
 
 	// A layout reshape or a page switch DESTROYS this component, so the camera outliving it is what
 	// carries the framing across.
 	const cam = camera(untrack(() => panelId));
-	let viewport = $state<FlowViewport>(cam.viewport ?? { x: 0, y: 0, zoom: 0.85 });
+	let viewport = $state<Viewport>(cam.viewport ?? { x: 0, y: 0, zoom: 0.85 });
+
+	// Fit the whole graph after a wholesale load, never on an interactive add.
 	$effect(() => {
-		cam.viewport = viewport;
+		const epoch = g.loadEpoch;
+		if (!flowFit || epoch === cam.fittedEpoch || !g.loadSettled) return;
+		cam.fittedEpoch = epoch;
+		// An empty load must not arm a fit that the first placed node would then satisfy.
+		if (g.nodes.length > 0) void flowFit(FIT_OPTIONS);
 	});
 
+	/** The Controls button's own fit, which takes Flow's default framing. */
 	function fitView(): void {
-		rootEl?.querySelector<HTMLButtonElement>('.svelte-flow__controls-fitview')?.click();
+		void flowFit?.();
 	}
 
 	/** Select a node in this editor — the shared handle for focusing one from elsewhere. */
@@ -1076,9 +990,8 @@
 		sel.selectNodes(panelId, [uid]);
 	}
 
-	/** The platform's own paste, which carries the text with it — so it needs no permission and no
-	 * secure context. Guarded exactly as the key handler is: a paste into a text field is that
-	 * field's, and a paste into a panel that is not active is not this editor's. */
+	/** The platform's paste, which carries its text and so needs no permission or secure context.
+	 * Guarded as the key handler is: a text field or an inactive panel keeps its own paste. */
 	function onPaste(e: ClipboardEvent): void {
 		const t = e.target as HTMLElement | null;
 		if (e.defaultPrevented || !canvasHasClipboard(t) || t?.closest?.('dialog[open]')) return;
@@ -1090,8 +1003,6 @@
 
 	onMount(() => {
 		registerEditor(panelId, {
-			openAddMenu: openAddMenuCentered,
-			fitView,
 			focusNode,
 			selectAll,
 			clearSelection: () => sel.clear(panelId),
@@ -1103,49 +1014,34 @@
 			duplicateSelection: () => void duplicateSelection(),
 			hasSelection
 		});
-		// `document`, not `window`: the shell listens on window, so this always runs first — which is
-		// what gives the canvas's own Escape the key ahead of the shell's.
-		document.addEventListener('keydown', onKeydown);
-		window.addEventListener('paste', onPaste);
-		window.addEventListener('mousemove', trackMouse);
-		rootEl?.addEventListener('click', onCanvasClick, true);
-		rootEl?.addEventListener('pointerdown', onCanvasPointerDown);
-		rootEl?.addEventListener('pointermove', canvasPress.move);
-		rootEl?.addEventListener('pointerup', canvasPress.cancel);
-		rootEl?.addEventListener('pointercancel', canvasPress.cancel);
-		// CAPTURE, so these run before d3-zoom's own listeners; `passive: false` so the
-		// `preventDefault` above is honoured.
-		const touchOpts = { capture: true, passive: false } as const;
-		rootEl?.addEventListener('touchstart', onCanvasTouchStart, touchOpts);
-		rootEl?.addEventListener('touchmove', onCanvasTouchMove, touchOpts);
-		rootEl?.addEventListener('touchend', onCanvasTouchEnd, touchOpts);
-		rootEl?.addEventListener('touchcancel', tapZoom.cancel, true);
+		const root = rootEl as HTMLDivElement;
+		// CAPTURE, so the touch handlers run before d3-zoom's own; `passive: false` so their
+		// `preventDefault` is honoured.
+		const touchOpts = { capture: true, passive: false };
+		const offs = [
+			// `document`, not `window`: the shell listens on window, so the canvas's Escape goes first.
+			on(document, 'keydown', onKeydown),
+			on(window, 'paste', onPaste),
+			on(window, 'mousemove', trackMouse),
+			on(root, 'click', onCanvasClick, { capture: true }),
+			on(root, 'pointerdown', onCanvasPointerDown),
+			on(root, 'pointermove', canvasPress.move),
+			on(root, 'pointerup', canvasPress.cancel),
+			on(root, 'pointercancel', canvasPress.cancel),
+			on(root, 'touchstart', onCanvasTouchStart, touchOpts),
+			on(root, 'touchmove', onCanvasTouchMove, touchOpts),
+			on(root, 'touchend', onCanvasTouchEnd, touchOpts),
+			on(root, 'touchcancel', tapZoom.cancel, { capture: true })
+		];
 		return () => {
+			offs.forEach((off) => off());
 			unregisterEditor(panelId);
-			rootEl?.removeEventListener('click', onCanvasClick, true);
-			rootEl?.removeEventListener('pointerdown', onCanvasPointerDown);
-			rootEl?.removeEventListener('pointermove', canvasPress.move);
-			rootEl?.removeEventListener('pointerup', canvasPress.cancel);
-			rootEl?.removeEventListener('pointercancel', canvasPress.cancel);
-			rootEl?.removeEventListener('touchstart', onCanvasTouchStart, true);
-			rootEl?.removeEventListener('touchmove', onCanvasTouchMove, true);
-			rootEl?.removeEventListener('touchend', onCanvasTouchEnd, true);
-			rootEl?.removeEventListener('touchcancel', tapZoom.cancel, true);
 			canvasPress.cancel(); // a press in flight must not fire into an unmounted editor
 			tapZoom.cancel(); // …and neither may a zoom gesture keep writing a torn-down viewport
 			onCableEnd(); // …nor may a cable in flight leave name tags lit on a torn-down canvas
 			// Do NOT forget this panel's selection here: unmount also fires on a tab switch, and the
 			// selection must survive switching away and back.
-			document.removeEventListener('keydown', onKeydown);
-			window.removeEventListener('paste', onPaste);
-			window.removeEventListener('mousemove', trackMouse);
-			// A drag in flight must not leave drop outlines lit on the other panels, nor its listener.
-			document.removeEventListener('scroll', measureTargets, { capture: true });
-			if (uiStore.nodeDrag !== null) {
-				uiStore.nodeDrag = null;
-				uiStore.nodeDragTarget = null;
-				uiStore.nodeDragZone = null;
-			}
+			endNodeDrag(); // a drag in flight must not leave drop outlines lit on the other panels
 		};
 	});
 </script>
@@ -1194,16 +1090,15 @@
 			fitViewOptions={FIT_OPTIONS}
 			minZoom={MIN_ZOOM}
 			maxZoom={MAX_ZOOM}
-			bind:viewport
+			bind:viewport={() => viewport, (v) => (viewport = cam.viewport = v)}
 			zoomOnDoubleClick={false}
 			autoPanOnNodeDrag={false}
 		>
 			<!-- `showLock` off: goofi has no read-only mode, so Flow's lock reads as breakage. -->
 			<Controls showLock={false} />
-			<FitToGraph {panelId} options={FIT_OPTIONS} />
-			<FlowApi bind:screenToFlowPosition={screenToFlow} bind:getViewport bind:setViewport />
+			<FlowApi bind:screenToFlowPosition={screenToFlow} bind:getViewport bind:setViewport bind:fitView={flowFit} />
 			<FlowSurface bind:surface={plotSurface} />
-			<SubpatchZoomExit {entered} onExit={() => exitToDepth(enteredPath.length - 1)} />
+			<SubpatchZoomExit {entered} options={FIT_OPTIONS} minZoom={MIN_ZOOM} onExit={() => exitToDepth(enteredPath.length - 1)} />
 			{#if pendingPlacement}
 				<PlacementPreview
 					typeInfo={pendingPlacement.typeInfo}
@@ -1234,17 +1129,7 @@
 		<!-- Fixed and positioned in VIEWPORT coordinates, so both portal to <body>: `.panel-body`
 		     is a query container and must never become their containing block. -->
 		{#if menuOpen}
-			<div
-				class="menu-overlay"
-				use:portal
-				onclick={() => {
-					menuOpen = false;
-					menuSeed = null;
-				}}
-				role="presentation"
-			></div>
-		{/if}
-		{#if menuOpen}
+			<div class="menu-overlay" use:portal onclick={closeMenu} role="presentation"></div>
 			<div
 				class="menu-anchor"
 				bind:this={menuEl}
@@ -1256,19 +1141,10 @@
 					seed={menuSeed}
 					boundary={entered !== null}
 					onPick={(typeInfo) => {
-						const seed = menuSeed;
-						menuOpen = false;
-						menuSeed = null;
-						pendingPlacement = {
-							typeInfo,
-							seed,
-							initialClient: { x: mouseX, y: mouseY }
-						};
+						pendingPlacement = { typeInfo, seed: menuSeed, initialClient: { x: mouseX, y: mouseY } };
+						closeMenu();
 					}}
-					onClose={() => {
-						menuOpen = false;
-						menuSeed = null;
-					}}
+					onClose={closeMenu}
 				/>
 			</div>
 		{/if}
@@ -1282,15 +1158,14 @@
 				title={inspectorOn ? 'Hide the inspector' : 'Show the inspector when a node is selected'}
 				aria-pressed={inspectorOn}
 				data-testid="inspector-toggle"
-				onclick={() =>
-					inspectorOn ? sel.toggleInspectorFor(panelId) : sel.showInspectorFor(panelId)}
+				onclick={() => sel.setInspector(panelId, !inspectorOn)}
 			>
 				◧
 			</IconButton>
 		{/if}
 
 		<!-- Its ✕ DISMISSES, holding only until the selection changes; the ◧ above is the switch. -->
-		<InspectorOverlay
+		<SidePane
 			node={selectedNode}
 			enabled={inspectorOn}
 			onClose={() => sel.dismissInspectorFor(panelId)}
@@ -1298,7 +1173,6 @@
 	</div>
 </SvelteFlowProvider>
 
-<!-- Portaled to <body> so it floats above every panel. -->
 {#if linkGhost}
 	<div class="link-ghost" use:portal style="left: {linkGhost.x}px; top: {linkGhost.y}px">
 		<span class="lg-icon">🔗</span>{linkGhost.name}

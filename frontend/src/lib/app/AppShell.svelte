@@ -2,7 +2,7 @@
 	import { loadPlugins } from '$lib/plugins/runtime.svelte';
 	import TopBar from '$lib/editor/TopBar.svelte';
 	import FsBrowser from '$lib/fs/FsBrowser.svelte';
-	import { uploadPatch } from '$lib/api/patchFile';
+	import { patchName, patchStem, uploadPatch } from '$lib/api/patchFile';
 	import ErrorPanel from '$lib/editor/ErrorPanel.svelte';
 	import Toast from '$lib/app/Toast.svelte';
 	import AgentClose from '$lib/app/AgentClose.svelte';
@@ -21,7 +21,7 @@
 	import { ui } from '$lib/stores/ui.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
-	import { undoKeyAction, escapeKeyAction } from '$lib/app/shellKeys';
+	import { shellKeyAction } from '$lib/app/shellKeys';
 	import { isTextEditingTarget } from '$lib/ui';
 	import { exposeAgentApi } from '$lib/agent';
 	import { Button } from '$lib/ui';
@@ -57,10 +57,6 @@
 		}
 	}
 
-	function saveAs(): void {
-		fsMode = 'save';
-	}
-
 	function triggerLoad(): void {
 		fsMode = 'load';
 	}
@@ -69,7 +65,7 @@
 	// succeeds; a failure stays in the dialog with its log, so the rejection reaches it.
 	async function onFsPick(pickedPath: string, overwrite = false): Promise<void> {
 		if (fsMode === 'save') await g.save(pickedPath, overwrite);
-		else if (fsMode === 'load') await g.load(pickedPath);
+		else if (fsMode === 'load') await getControl().call('session load', { path: pickedPath });
 		fsMode = null;
 	}
 
@@ -80,48 +76,22 @@
 	}
 
 	function onKeydown(e: KeyboardEvent): void {
-		const standdown = ui().modalOpen;
-		const meta = e.ctrlKey || e.metaKey;
+		// The DOM answers for a native modal: it closes itself on Escape, and marks no event.
+		const modal = ui().modalOpen || !!(e.target as HTMLElement | null)?.closest?.('dialog[open]');
 		const key = e.key.toLowerCase();
-		if (meta && (key === 's' || key === 'o')) {
+		if ((e.ctrlKey || e.metaKey) && (key === 's' || key === 'o')) {
 			// Claimed even when standing down: that is what keeps Chrome's own Save/Open off screen.
 			e.preventDefault();
-			if (standdown) return;
-			if (key === 's') void triggerSave();
+			if (modal) return;
+			if (key === 's') triggerSave();
 			else triggerLoad();
 			return;
 		}
-		// The DOM answers for a native modal too: it closes itself on Escape, and marks no event.
-		const modal =
-			standdown || Boolean((e.target as HTMLElement | null)?.closest?.('dialog[open]'));
-		if (
-			escapeKeyAction(
-				{ key: e.key, editing: isTextEditingTarget(e.target), consumed: e.defaultPrevented },
-				modal,
-				ws.maximizedPanelId !== null
-			) === 'exit-maximize'
-		) {
-			e.preventDefault();
-			ws.exitMaximize();
-			return;
-		}
-		const undoRedo = undoKeyAction(
-			{
-				key: e.key,
-				ctrlKey: e.ctrlKey,
-				metaKey: e.metaKey,
-				shiftKey: e.shiftKey,
-				editing: isTextEditingTarget(e.target)
-			},
-			standdown
-		);
-		if (undoRedo === 'undo') {
-			e.preventDefault();
-			void history().undo();
-		} else if (undoRedo === 'redo') {
-			e.preventDefault();
-			void history().redo();
-		}
+		const action = shellKeyAction(e, modal || isTextEditingTarget(e.target), ws.maximizedPanelId !== null);
+		if (!action) return;
+		e.preventDefault();
+		if (action === 'exit-maximize') ws.exitMaximize();
+		else void history()[action]();
 	}
 
 	function onPointerDown(e: PointerEvent): void {
@@ -132,28 +102,22 @@
 		if (selection?.toString()) selection.removeAllRanges();
 	}
 
-	// No leave-page prompt: the browser holds no state, the manager does, so closing a tab loses
-	// nothing — only the debounced viewpoint push is flushed.
-	function onBeforeUnload(): void {
-		if (pushTimer) {
-			clearTimeout(pushTimer);
-			pushTimer = null;
-			void g.setViewpoint(ws.viewpoint());
-		}
-	}
-
 	// The viewpoint is this client's alone: stored, never converged, and it cannot dirty the patch.
 	let pushTimer: ReturnType<typeof setTimeout> | null = null;
+	const greeted = $derived(g.sessionEpoch > 0);
+	function flushViewpoint(): void {
+		if (!pushTimer) return;
+		clearTimeout(pushTimer);
+		pushTimer = null;
+		void g.setViewpoint(ws.viewpoint());
+	}
 
 	$effect(() => {
 		void ws.viewpointEpoch; // track: bumped by every viewpoint change
 		// A fresh client must not overwrite the stored viewpoint with its own default.
-		if (!g.hadHello) return;
+		if (!greeted) return;
 		if (pushTimer) clearTimeout(pushTimer);
-		pushTimer = setTimeout(() => {
-			pushTimer = null;
-			void g.setViewpoint(ws.viewpoint());
-		}, 400);
+		pushTimer = setTimeout(flushViewpoint, 400);
 	});
 
 	onMount(() => {
@@ -170,7 +134,8 @@
 		});
 		window.addEventListener('pointerdown', onPointerDown, true);
 		window.addEventListener('keydown', onKeydown);
-		window.addEventListener('beforeunload', onBeforeUnload);
+		// No leave-page prompt: the manager holds the state; only the debounced viewpoint is flushed.
+		window.addEventListener('beforeunload', flushViewpoint);
 		const offProto = getControl().onProtocolMismatch(() => (protocolMismatch = true));
 		const leave = presence().start();
 		return () => {
@@ -180,7 +145,7 @@
 			cleanup?.();
 			window.removeEventListener('pointerdown', onPointerDown, true);
 			window.removeEventListener('keydown', onKeydown);
-			window.removeEventListener('beforeunload', onBeforeUnload);
+			window.removeEventListener('beforeunload', flushViewpoint);
 			offProto();
 			if (pushTimer) clearTimeout(pushTimer);
 		};
@@ -188,7 +153,7 @@
 </script>
 
 <svelte:head>
-	<title>{g.unsavedChanges ? '● ' : ''}{g.savePath ? g.savePath.split('/').pop() : 'goofi'}</title
+	<title>{g.unsavedChanges ? '● ' : ''}{g.savePath ? patchName(g.savePath) : 'goofi'}</title
 	>
 </svelte:head>
 
@@ -199,7 +164,7 @@
 			<Button size="sm" onclick={() => location.reload()}>Reload</Button>
 		</div>
 	{/if}
-	<TopBar onSave={triggerSave} onSaveAs={saveAs} onLoad={triggerLoad}>
+	<TopBar onSave={triggerSave} onSaveAs={() => (fsMode = 'save')} onLoad={triggerLoad}>
 		{#snippet tabs()}
 			<WorkspaceTabs />
 		{/snippet}
@@ -212,7 +177,7 @@
 	{#if fsMode}
 		<FsBrowser
 			mode={fsMode}
-			suggestedName={g.savePath ? (g.savePath.split('/').pop() ?? '').replace(/\.gfi$/, '') : ''}
+			suggestedName={g.savePath ? patchStem(g.savePath) : ''}
 			onPick={onFsPick}
 			onFilePick={onFsFilePick}
 			onClose={() => (fsMode = null)}

@@ -1,7 +1,4 @@
-/**
- * Per-(node, slot) INLINE viewer view-state, derived on read from the node's `viewers` blob.
- * Docked viewer PANELS do not use this — see `viewBinding.panelBinding`.
- */
+/** Per-(node, slot) INLINE viewer view-state, derived on read from the node's `viewers` blob. */
 import type { NodeInstanceInfo } from '$lib/api/control';
 import type { ViewerKind } from './registry';
 import type { SettingsMap } from './module';

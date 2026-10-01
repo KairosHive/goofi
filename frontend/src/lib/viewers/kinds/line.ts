@@ -4,7 +4,7 @@ import { drawnNdim, manual } from '../module';
 import { LineDrawing, TrajectoryDrawing } from '../drawing';
 
 /** The line viewer's two drawings of a (C, N) frame. */
-export const LINE_MODES = ['series', 'trajectory'] as const;
+const LINE_MODES = ['series', 'trajectory'] as const;
 /** The traces a line plot can tell apart, whatever its height: past this, channels are subsampled. */
 const MAX_ROWS = 32;
 const MAX_POINTS = 4096;
@@ -30,7 +30,6 @@ export const line: ViewerModule = {
 			return {
 				dtype: 'array',
 				ndim: [['eq', 2]],
-				dims: [],
 				reduce: [
 					{ dim: 0, max: 'whole' },
 					{ dim: -1, max: Math.min(w, MAX_POINTS) }
@@ -42,7 +41,6 @@ export const line: ViewerModule = {
 		return {
 			dtype: 'array',
 			ndim: drawnNdim('line'),
-			dims: [],
 			reduce: [
 				{ dim: 0, max: MAX_ROWS },
 				{ dim: -1, max: w }

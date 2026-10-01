@@ -6,17 +6,13 @@
 	import NodeLinkedPanel from './NodeLinkedPanel.svelte';
 	import ViewerFeed from '$lib/viewers/ViewerFeed.svelte';
 	import ViewerControls from '$lib/viewers/ViewerControls.svelte';
-	import { panelBinding, type ViewBinding } from '$lib/viewers/viewBinding';
+	import { viewBinding, type ViewBinding } from '$lib/viewers/viewBinding';
+	import type { SlotView } from '$lib/viewers/inlineView';
 	import { asStateObject } from 'panelty';
 	import { workspace } from 'panelty';
 	import { Select } from '$lib/ui';
 	import type { SurfaceHandle } from '$lib/api/drawings';
 	import { mountSurface, provideAnchor, provideSurface } from '$lib/viewers/plotHost';
-
-	interface ViewerState {
-		node?: string | null;
-		slot?: string | null;
-	}
 
 	let props: PanelProps = $props();
 	const ws = workspace();
@@ -55,27 +51,16 @@
 		};
 	});
 
-	function st(): ViewerState {
-		return asStateObject(props.state) as ViewerState;
-	}
-	function curSlot(node: NodeInstanceInfo): string | null {
-		const cur = st();
-		const names = Object.keys(node.output_slots);
-		return cur.slot && node.output_slots[cur.slot] ? cur.slot : (names[0] ?? null);
-	}
-	function pick(slot: string): void {
-		ws.setPanelSlot(props.panelId, slot);
-	}
-
 	// One place, so the controls and content snippets (separate scopes) don't each re-derive it.
 	function view(node: NodeInstanceInfo): { slot: string | null; dtype: string | null; binding: ViewBinding } {
-		const slot = curSlot(node);
+		const want = asStateObject(props.state).slot;
+		const slot = typeof want === 'string' && node.output_slots[want] ? want : (Object.keys(node.output_slots)[0] ?? null);
 		const dtype = slot ? node.output_slots[slot] : null;
-		const binding = panelBinding(
-			() => props.state,
-			(s, label) => props.setState(s, 'authored', label),
-			dtype
-		);
+		const raw = () => asStateObject(props.state) as SlotView;
+		const binding = viewBinding(dtype, raw, (patch, label) => {
+			const settings = { ...raw().settings, ...patch.settings };
+			props.setState({ ...raw(), ...patch, settings }, 'authored', label);
+		});
 		return { slot, dtype, binding };
 	}
 </script>
@@ -86,7 +71,7 @@
 		<Select
 			density="chrome"
 			value={slot ?? ''}
-			onChange={(v) => pick(v)}
+			onChange={(v) => ws.setPanelSlot(props.panelId, v)}
 			options={Object.keys(node.output_slots)}
 			labels={Object.fromEntries(
 				Object.entries(node.output_slots).map(([name, dt]) => [

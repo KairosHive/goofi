@@ -4,8 +4,10 @@
  */
 import { EMPTY_PANEL_TYPE, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
 import { ROOT_ID } from '$lib/editor/subpatchScene';
-import { PARAM_MODES, VIDEO_QUALITIES, type VideoQuality, type ParamMode } from '$lib/api/types';
+import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
+import type { Link, Lock, VariableSource, VariableValue } from '$lib/api/generated';
 import type { LayoutNode, Workspace } from 'panelty';
+import { isObj, obj, type Obj } from './ops';
 
 export type Doc = Record<string, unknown>;
 
@@ -22,13 +24,6 @@ export interface NodeView {
 	scope: string;
 }
 
-export interface LinkView {
-	node_out: string;
-	slot_out: string;
-	node_in: string;
-	slot_in: string;
-}
-
 /** What a sub-patch facade exposes, derived from the records that name it. */
 export interface FacadeFace {
 	input_slots: Record<string, string>;
@@ -37,10 +32,6 @@ export interface FacadeFace {
 	memberCount: number;
 }
 
-type Obj = Record<string, unknown>;
-
-const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v);
-const obj = (v: unknown): Obj => (isObj(v) ? v : {});
 const str = (m: Obj | undefined, key: string): string => {
 	const v = m?.[key];
 	return typeof v === 'string' ? v : '';
@@ -54,21 +45,6 @@ export function nodesMap(doc: Doc): Record<string, Obj> {
 	return obj(doc.nodes) as Record<string, Obj>;
 }
 
-/** The links in connection order — a keyed map, so a wire made or cut is one key's delta. */
-export function linksArray(doc: Doc): Obj[] {
-	return Object.values(obj(doc.links)) as Obj[];
-}
-
-/** The scope a record names, or `'__root__'`. The doc omits the key at the top level, because a
- * merge patch spends `null` on "delete this key" and could not tell that from a move out. */
-function scopeOf(rec: Obj | undefined): string {
-	return optStr(rec, 'scope') ?? ROOT_ID;
-}
-
-function variablesMap(doc: Doc): Record<string, Obj> {
-	return obj(doc.variables) as Record<string, Obj>;
-}
-
 function pos2(m: Obj | undefined): [number, number] {
 	const p = m?.pos;
 	const n = (i: number) => (Array.isArray(p) && typeof p[i] === 'number' ? (p[i] as number) : 0);
@@ -78,18 +54,7 @@ function pos2(m: Obj | undefined): [number, number] {
 export function nodeView(doc: Doc, uid: string): NodeView | null {
 	const n = nodesMap(doc)[uid];
 	if (!n) return null;
-	return { uid, type: str(n, 'type'), name: str(n, 'name'), pos: pos2(n), scope: scopeOf(n) };
-}
-
-/** Every record the canvas draws: leaf, sub-patch facade and boundary port alike, in one list,
- * because the document carries them in one map and they are one kind of thing to the editor. */
-export function nodeViews(doc: Doc): NodeView[] {
-	const out: NodeView[] = [];
-	for (const uid of Object.keys(nodesMap(doc))) {
-		const v = nodeView(doc, uid);
-		if (v) out.push(v);
-	}
-	return out;
+	return { uid, type: str(n, 'type'), name: str(n, 'name'), pos: pos2(n), scope: optStr(n, 'scope') ?? ROOT_ID };
 }
 
 /** Each facade's face, keyed by its uid: a PORT is the facade's slot, keyed by the port's stable
@@ -113,90 +78,6 @@ export function facadeFaces(doc: Doc): Map<string, FacadeFace> {
 		face.slot_labels[uid] = str(rec, 'name');
 	}
 	return out;
-}
-
-/** A param's source record as the document carries it: the mode, and the texts it retains. */
-export interface ParamSource {
-	mode: ParamMode;
-	expression?: string;
-	reference?: string;
-	triggers?: boolean;
-}
-
-export type DocParamLeaves = Record<
-	string,
-	Record<string, { value?: number | string | boolean; source?: ParamSource }>
->;
-
-export function docParams(doc: Doc, uid: string): DocParamLeaves {
-	const out: DocParamLeaves = {};
-	const params = obj(nodesMap(doc)[uid]?.params);
-	for (const [group, g] of Object.entries(params)) {
-		out[group] = {};
-		for (const [name, raw] of Object.entries(obj(g))) {
-			const entry = obj(raw);
-			const leaf: DocParamLeaves[string][string] = {};
-			const v = entry.value;
-			if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') leaf.value = v;
-			if (typeof entry.mode === 'string' && (PARAM_MODES as readonly string[]).includes(entry.mode)) {
-				const source: ParamSource = { mode: entry.mode as ParamMode };
-				if (typeof entry.expression === 'string') source.expression = entry.expression;
-				if (typeof entry.reference === 'string') source.reference = entry.reference;
-				if (entry.triggers === true) source.triggers = true;
-				leaf.source = source;
-			}
-			out[group][name] = leaf;
-		}
-	}
-	return out;
-}
-
-/** The param entry, get-or-inserted, or `undefined` when the node is absent — never mint a phantom node. */
-function paramEntry(doc: Doc, uid: string, group: string, name: string): Obj | undefined {
-	const node = nodesMap(doc)[uid];
-	if (!node) return undefined;
-	const into = (parent: Obj, key: string): Obj => {
-		if (!parent[key] || typeof parent[key] !== 'object') parent[key] = {};
-		return parent[key] as Obj;
-	};
-	return into(into(into(node, 'params'), group), name);
-}
-
-/** Write a param value — a test-seed double, because the replica is READ-ONLY in production. */
-export function setParamValue(
-	doc: Doc,
-	uid: string,
-	group: string,
-	name: string,
-	value: number | string | boolean
-): boolean {
-	const entry = paramEntry(doc, uid, group, name);
-	if (!entry) return false;
-	entry.value = value;
-	return true;
-}
-
-/** Write (or, with `null`, clear) a param's source record — a test-seed double, as [`setParamValue`] is. */
-export function setParamSource(
-	doc: Doc,
-	uid: string,
-	group: string,
-	name: string,
-	source: ParamSource | null
-): boolean {
-	const entry = paramEntry(doc, uid, group, name);
-	if (!entry) return false;
-	delete entry.mode;
-	delete entry.expression;
-	delete entry.reference;
-	delete entry.triggers;
-	if (source) {
-		entry.mode = source.mode;
-		if (source.expression !== undefined) entry.expression = source.expression;
-		if (source.reference !== undefined) entry.reference = source.reference;
-		if (source.triggers) entry.triggers = true;
-	}
-	return true;
 }
 
 /** A node's touched-filter zero points (`{"group/name": {value, mode, …}}`), or `undefined`. */
@@ -227,8 +108,9 @@ export function recordedSlots(doc: Doc): { uid: string; slot: string; quality: V
 	return out;
 }
 
-export function linkViews(doc: Doc): LinkView[] {
-	return linksArray(doc).map((m) => ({
+/** The links in connection order — a keyed map, so a wire made or cut is one key's delta. */
+export function linkViews(doc: Doc): Link[] {
+	return (Object.values(obj(doc.links)) as Obj[]).map((m) => ({
 		node_out: str(m, 'node_out'),
 		slot_out: str(m, 'slot_out'),
 		node_in: str(m, 'node_in'),
@@ -237,7 +119,7 @@ export function linkViews(doc: Doc): LinkView[] {
 }
 
 /** A variable's declared scalar type — it disambiguates float↔int after JS's number normalization. */
-export type VariableType = 'float' | 'int' | 'bool' | 'string';
+export type VariableType = VariableValue['type'];
 
 /** A control element's widget, its range and its place in the panel's grid. */
 export interface ControlView {
@@ -255,18 +137,10 @@ export interface ControlView {
 }
 
 /** What holds a variable or a group: `config` its name, widget and membership, `value` its value. */
-export interface LockView {
-	config: boolean;
-	value: boolean;
-}
+export type LockView = Lock;
 
-/** What a variable follows: one producer output, and the number it reads out of a wide frame. */
-export interface SourceView {
-	reference: string;
-	index?: number;
-	/** Why the source delivers nothing: the node or the output it names is not there. */
-	error?: string;
-}
+/** What a variable follows; `error` says why it delivers nothing (its node or output is gone). */
+export type SourceView = VariableSource & { error?: string };
 
 export interface VariableView {
 	/** The full `group.element` — what an expression spells and every op names. */
@@ -312,7 +186,7 @@ export function effectiveLock(gv: VariableView, group: LockView | undefined): Lo
 /** All variables, in the document's key order (system-first, then user in creation order). */
 export function variableViews(doc: Doc): VariableView[] {
 	const out: VariableView[] = [];
-	for (const [name, raw] of Object.entries(variablesMap(doc))) {
+	for (const [name, raw] of Object.entries(obj(doc.variables))) {
 		const g = obj(raw);
 		const value = g.value;
 		const type = g.type;
@@ -363,7 +237,7 @@ function layoutNode(raw: unknown, root: boolean): { node: LayoutNode; size: numb
 	const size = root ? 1 : typeof n.size === 'number' ? n.size : 0;
 	if (n.kind === 'panel') {
 		return {
-			node: { kind: 'panel', id, panelType: optStr(n, 'panel_type') ?? EMPTY_PANEL_TYPE, state: panelState(n.state) },
+			node: { kind: 'panel', id, panelType: optStr(n, 'panel_type') ?? EMPTY_PANEL_TYPE, state: n.state ?? undefined },
 			size
 		};
 	}
@@ -381,11 +255,6 @@ function layoutNode(raw: unknown, root: boolean): { node: LayoutNode; size: numb
 		node: { kind: 'split', id, direction: n.axis === 'column' ? 'column' : 'row', children, sizes },
 		size
 	};
-}
-
-/** A panel's opaque bag; absent and null read alike. */
-function panelState(raw: unknown): unknown {
-	return raw === null ? undefined : raw;
 }
 
 /** The tab strip as the panel system draws it; a tab whose root will not parse is dropped. */
@@ -411,9 +280,8 @@ const RESERVED = new Set(
 	 while with yield`.split(/\s+/)
 );
 
-/** Whether `name` is legal in the ONE expression namespace — the exact mirror of the Rust
- * `is_valid_identifier`. Every name an expression can spell is held to it, because an expression
- * reads one as an ATTRIBUTE: `variables.gain`, and a sub-patch's slot in `nd('chain').drain`. */
+/** Whether `name` is legal in the ONE expression namespace, as the Rust `is_valid_identifier` says.
+ * An expression reads every name as an ATTRIBUTE: `variables.gain`, `nd('chain').drain`. */
 export function isValidIdentifier(name: string): boolean {
 	return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !RESERVED.has(name);
 }

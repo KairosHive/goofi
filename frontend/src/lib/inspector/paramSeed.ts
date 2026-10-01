@@ -17,6 +17,13 @@ export function expressionFor(reference: string, outputs: number): string {
 	return outputs === 1 ? `nd('${node}')` : `nd('${node}').out.${slot}`;
 }
 
+/** The source switch's face per mode, shared by the row's switch and the form's filter strip. */
+export const MODE_FACE: Record<ParamMode, { label: string; name: string }> = {
+	constant: { label: 'C', name: 'Constant' },
+	expression: { label: 'E', name: 'Expression' },
+	reference: { label: 'R', name: 'Reference' }
+};
+
 /** Restore a saved source, or seed a new expression from the value. */
 export function sourceForMode(d: ParamDescriptor, mode: ParamMode): SourcePatch {
 	return mode === 'expression' && !d.expression ? { expression: literalFor(d) } : { mode };

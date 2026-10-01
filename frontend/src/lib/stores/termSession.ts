@@ -1,5 +1,7 @@
 /** One live xterm `Terminal` and `/term` socket per harness instance, both kept OUTSIDE the panel
  * so a close and re-open loses nothing. `TerminalLike` narrows xterm to the calls this drives. */
+import { wsUrl } from '$lib/api/wsUrl';
+
 export interface TerminalLike {
 	open(el: HTMLElement): void;
 	/** What `open` built — undefined until it has. */
@@ -31,8 +33,7 @@ export class TermSession {
 	}
 
 	private open(): void {
-		const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-		const ws = new WebSocket(`${proto}//${location.host}/term/${encodeURIComponent(this.id)}`);
+		const ws = new WebSocket(wsUrl(['term', this.id]));
 		ws.binaryType = 'arraybuffer';
 		ws.addEventListener('message', (e: MessageEvent) => this.receive(e.data));
 		// The panel measures its container INSIDE this handshake, so that first proposal is dropped.

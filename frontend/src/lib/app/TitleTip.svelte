@@ -1,16 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { createLongPress } from 'panelty';
-	import { clampToViewport, overlayViewport } from 'panelty';
+	import { Popover } from '$lib/ui';
 	import { nearestTitle } from './titleTip';
 
 	const LINGER_MS = 5000;
 
 	let tip = $state<{ el: HTMLElement; text: string } | null>(null);
-	let tipEl = $state<HTMLDivElement | null>(null);
-	let pos = $state({ left: 0, top: 0 });
-	// Hidden until the first measurement lands, so the bubble never flashes at (0,0).
-	let placed = $state(false);
 
 	let armed: { el: HTMLElement; text: string } | null = null;
 	let swallowClick = false;
@@ -25,7 +21,6 @@
 
 	function hide(): void {
 		tip = null;
-		placed = false;
 		if (lingerTimer) clearTimeout(lingerTimer);
 		lingerTimer = null;
 	}
@@ -70,52 +65,19 @@
 			if (lingerTimer) clearTimeout(lingerTimer);
 		};
 	});
-
-	$effect(() => {
-		const t = tip;
-		const el = tipEl;
-		if (!t || !el) return;
-		const place = (): void => {
-			const m = el.getBoundingClientRect();
-			pos = clampToViewport(
-				t.el.getBoundingClientRect(),
-				{ width: m.width, height: m.height },
-				overlayViewport(),
-				{ flip: true }
-			);
-			placed = true;
-		};
-		place();
-		const vv = window.visualViewport;
-		vv?.addEventListener('resize', place);
-		return () => vv?.removeEventListener('resize', place);
-	});
 </script>
 
-{#if tip}
-	<div
-		class="title-tip"
-		role="tooltip"
-		bind:this={tipEl}
-		data-testid="title-tip"
-		style="left: {pos.left}px; top: {pos.top}px; visibility: {placed ? 'visible' : 'hidden'}"
-	>
-		{tip.text}
-	</div>
-{/if}
+<Popover anchor={tip?.el ?? null} open={!!tip} onDismiss={hide} flip role="tooltip" data-testid="title-tip" class="title-tip"
+	>{tip?.text}</Popover
+>
 
 <style>
-	.title-tip {
-		position: fixed;
-		z-index: var(--z-toast);
-		max-width: min(24rem, 90vw);
-		padding: var(--space-3) var(--space-5);
-		background: var(--surface-2);
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-sm);
-		box-shadow: var(--shadow-2);
-		color: var(--text);
-		font-size: var(--fs-small);
+	:global(.title-tip) {
+		--popover-z: var(--z-toast);
+		--popover-min-width: 0;
+		--popover-max-width: min(24rem, 90vw);
+		--popover-pad: var(--space-3) var(--space-5);
+		--popover-radius: var(--radius-sm);
 		pointer-events: none;
 		white-space: pre-wrap;
 	}

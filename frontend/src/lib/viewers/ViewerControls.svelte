@@ -6,18 +6,14 @@
 	import { Select } from '$lib/ui';
 
 	let { dtype, binding }: { dtype: string; binding: ViewBinding } = $props();
-
-	const kind = $derived(binding.kind);
 </script>
 
-<!-- No wrapper: these are two controls in the host strip, which owns their gap. stopPropagation
-     so picking a kind on a node header does not also toggle the slot's collapse. -->
-<!-- Every unpinned dtype gets the choice: what a texture or an audio slot delivers to a
-     viewer is an array off its engine's tap, so the array kinds are exactly its options. -->
+<!-- No wrapper: the host strip owns the gap. Every unpinned dtype, texture and audio too, gets the
+     array kinds; stopPropagation keeps a pick on a node header from toggling the slot's collapse. -->
 {#if !pinnedKind(dtype)}
 	<Select
 		density="chrome"
-		value={kind}
+		value={binding.kind}
 		options={[...ARRAY_KINDS]}
 		onChange={(k) => binding.setKind(k as ViewerKind)}
 		onclick={(e) => e.stopPropagation()}

@@ -17,6 +17,11 @@ export interface FrameHead {
 	text?: string;
 }
 
+/** The routing key of a (node, slot) stream; one stream per slot, so a viewer `kind` is not in it. */
+export function streamKey(node: string, slot: string): string {
+	return `${node} ${slot}`;
+}
+
 /** A frame's head: what a thread that holds no frame is told of it. */
 export function headOf(f: DataFrame): FrameHead {
 	const head: FrameHead = { dtype: f.dtype, meta: f.meta };

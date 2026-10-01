@@ -17,8 +17,7 @@
 	let lastFrame = $state.raw<DataFrame | null>(null);
 	/** This panel's identity in the slot's viewer registry; it binds with a null spec, so it
 	 *  constrains nothing a real viewer asked for. */
-	const token =
-		typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `md-${Math.random()}`;
+	const token = $props.id();
 	$effect(() => {
 		const fst = slots[0] ?? null;
 		if (internalSlot === null || !slots.includes(internalSlot)) internalSlot = fst;

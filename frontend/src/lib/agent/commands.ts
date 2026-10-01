@@ -1,13 +1,11 @@
 /** Flat, typed command facade over the store logic the UI uses; paired with `query` for reads. */
-import type { VideoQuality } from '$lib/api/types';
 import type { SourcePatch } from '$lib/api/types';
-import { graph, type Cell, type ControlPatch } from '$lib/stores/graph.svelte';
+import { graph } from '$lib/stores/graph.svelte';
 import { selection } from '$lib/stores/selection.svelte';
 import { workspace } from 'panelty';
 import { history } from '$lib/stores/history.svelte';
 import type { LinkInfo } from '$lib/api/control';
-import type { ControlView } from '$lib/crdt/graphDoc';
-import type { VariableType, LockView } from '$lib/crdt/graphDoc';
+import type { ControlView, VariableType } from '$lib/crdt/graphDoc';
 
 /** The editor panel that viewport/selection verbs default to. */
 function activeEditor(): string | null {
@@ -38,32 +36,8 @@ export const commands = {
 		control?: ControlView
 	): Promise<void> => graph().addVariable(name, value, type, control),
 	removeVariable: (name: string): Promise<void> => graph().removeVariable(name),
-	setVariableControl: (name: string, control: ControlView): Promise<void> =>
-		graph().setVariableControl(name, control),
-	renameVariable: (from: string, to: string): Promise<void> => graph().renameVariable(from, to),
-	renameVariableGroup: (from: string, to: string): Promise<void> => graph().renameVariableGroup(from, to),
-	setVariableSource: (name: string, reference: string, index?: number): Promise<void> =>
-		graph().setVariableSource(name, reference, index),
-	addControl: (group: string, kind: ControlView['kind'], cell?: Cell): Promise<string> =>
-		graph().addControl(group, kind, cell),
-	editControl: (group: string, element: string, patch: ControlPatch): Promise<void> =>
-		graph().editControl(group, element, patch),
-	removeControl: (group: string, element: string): Promise<void> => graph().removeControl(group, element),
-	sourceControl: (group: string, element: string, reference: string, index?: number): Promise<void> =>
-		graph().sourceControl(group, element, reference, index),
-	lockVariable: (name: string, lock: Partial<LockView>): Promise<void> => graph().lockVariable(name, lock),
-	addVariableEntry: (group: string): Promise<string> => graph().addVariableEntry(group),
-	addVariableGroup: (): Promise<string> => graph().addVariableGroup(),
-	setVariableType: (name: string, type: VariableType): Promise<void> => graph().setVariableType(name, type),
-	lockVariableGroup: (group: string, lock: Partial<LockView>): Promise<void> =>
-		graph().lockVariableGroup(group, lock),
 
 	armSlot: (node: string, slot: string): Promise<void> => graph().armSlot(node, slot),
-	setRecordQuality: (node: string, slot: string, quality: VideoQuality): Promise<void> =>
-		graph().setRecordQuality(node, slot, quality),
-	disarmSlot: (node: string, slot: string): Promise<void> => graph().disarmSlot(node, slot),
-	startRecording: (name = '', root = ''): Promise<string> => graph().startRecording(name, root),
-	stopRecording: (): Promise<string> => graph().stopRecording(),
 
 	save: (path: string): Promise<{ path: string }> => graph().save(path),
 	newPatch: (): Promise<void> => graph().newPatch(),

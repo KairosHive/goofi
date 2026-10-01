@@ -1,6 +1,5 @@
-/** The main thread's handles on the plot surfaces and drawings the worker owns: a surface is a
- * canvas whose control went to the worker, a drawing a viewer's picture on it. Each posts what
- * changed and hears back what the DOM still shows. */
+/** The main thread's handles on the worker's surfaces (canvases whose control went to it) and
+ * drawings (a viewer's picture on one): each posts what changed and hears what the DOM shows. */
 import { listen, post } from './data';
 import type { DrawBox, DrawnState } from '$lib/viewers/drawing';
 import type { Hover, ProbeBox } from '$lib/viewers/hover';

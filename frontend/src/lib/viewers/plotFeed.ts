@@ -2,7 +2,7 @@
 import type { ArrayData, DataFrame } from '$lib/codec/decode';
 import { extent, type ImagePlot, type LineData } from 'plotluck';
 import { decimateMinMax } from './decimate';
-import { isU8, sampleRange } from './depth';
+import { sampleRange } from './depth';
 import type { SettingsMap } from './module';
 
 /** `cols` is the plot's width in device px: a frame denser than two samples per column is min/max folded. */
@@ -31,17 +31,16 @@ export function pushImage(plot: ImagePlot, frame: DataFrame, settings: SettingsM
 	const values = arr.values;
 	const [height, width] = arr.shape;
 	const channels = arr.shape.length === 3 ? arr.shape[2] : 1;
-	const u8 = isU8(arr.dtype);
 	// An 8-bit texel samples in [0, 1] whatever the frame's units, so a manual range is scaled with it.
-	const texels = (u8 && sampleRange(frame.meta)) || [0, 1];
-	const t0 = u8 ? texels[0] : 0;
-	const tw = u8 ? texels[1] - texels[0] || 1 : 1;
+	const range = sampleRange(arr.dtype, frame.meta);
+	const [t0, t1] = range ?? [0, 1];
+	const tw = t1 - t0 || 1;
 	let lo = 0;
 	let hi = 1;
 	if (channels <= 2 && settings.auto === false) {
 		lo = (Number(settings.vmin ?? 0) - t0) / tw;
 		hi = (Number(settings.vmax ?? 1) - t0) / tw;
-	} else if (channels <= 2 && !u8) {
+	} else if (channels <= 2 && !range) {
 		[lo, hi] = extent(values) ?? [0, 1];
 	}
 	plot.push({ values, width, height, channels, lo, hi });

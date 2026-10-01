@@ -6,7 +6,7 @@
 	import { isSlotExpanded } from '$lib/viewers/inlineView';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { flash } from '$lib/stores/flash.svelte';
-	import { NODE, inputPorts, inputUnits } from './nodeMetrics';
+	import { NODE, inputPorts, inputUnits, slotHeight } from './nodeMetrics';
 	import { nodeHealth } from './nodeHealth';
 	import { StatusDot } from '$lib/ui';
 	import { formatUpdateRate } from './nodeStats';
@@ -41,12 +41,12 @@
 
 	function onInputClick(e: MouseEvent, slot: string, dtype: string): void {
 		e.stopPropagation();
-		uiStore.requestSlotClick({ node: node.uid, slot, dtype, side: 'target', clientX: e.clientX, clientY: e.clientY });
+		uiStore.pendingSlotClick = { node: node.uid, slot, dtype, side: 'target', clientX: e.clientX, clientY: e.clientY };
 	}
 
 	function onOutputClick(e: MouseEvent, slot: string, dtype: string): void {
 		e.stopPropagation();
-		uiStore.requestSlotClick({ node: node.uid, slot, dtype, side: 'source', clientX: e.clientX, clientY: e.clientY });
+		uiStore.pendingSlotClick = { node: node.uid, slot, dtype, side: 'source', clientX: e.clientX, clientY: e.clientY };
 	}
 
 	const health = $derived(nodeHealth(node));
@@ -71,7 +71,7 @@
 		let y = NODE.border + NODE.header;
 		return outputs.map((slot) => {
 			const top = y + NODE.unit / 2;
-			y += isSlotExpanded(node, slot) ? NODE.unit + NODE.viewer : NODE.unit;
+			y += slotHeight(isSlotExpanded(node, slot));
 			return { slot, dtype: node.output_slots[slot], top };
 		});
 	});

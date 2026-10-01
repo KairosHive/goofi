@@ -8,6 +8,9 @@ export const NODE = {
 	border: 1
 } as const;
 
+/** An output slot's height in px, with its inline viewer open or closed. */
+export const slotHeight = (open: boolean): number => (open ? NODE.unit + NODE.viewer : NODE.unit);
+
 /** A slot's height in units: a multi (list) slot is 2× tall. */
 const slotUnits = (multi: boolean): number => (multi ? 2 : 1);
 
@@ -39,10 +42,7 @@ export function nodeSurfaceSize(
 	inputUnitsTotal: number,
 	outputExpanded: boolean[]
 ): { width: number; height: number } {
-	const slotsStack = outputExpanded.reduce(
-		(h, open) => h + (open ? NODE.unit + NODE.viewer : NODE.unit),
-		0
-	);
+	const slotsStack = outputExpanded.reduce((h, open) => h + slotHeight(open), 0);
 	const inputBody = Math.max(inputUnitsTotal, 1) * NODE.unit;
 	return { width: NODE.width, height: NODE.header + Math.max(slotsStack, inputBody) };
 }

@@ -12,14 +12,6 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return v !== null && typeof v === 'object' && !Array.isArray(v) && !isTypedArray(v);
 }
 
-function formatScalar(v: unknown): string {
-	if (v === null) return 'null';
-	if (v === undefined) return 'undefined';
-	if (typeof v === 'bigint') return v.toString();
-	if (typeof v === 'string') return v;
-	return String(v);
-}
-
 /** Compact single-line form, used for lists and anything nested inside one. */
 export function formatMetaInline(v: unknown): string {
 	if (isList(v)) {
@@ -29,7 +21,7 @@ export function formatMetaInline(v: unknown): string {
 	if (isPlainObject(v)) {
 		return '{' + Object.entries(v).map(([k, x]) => `${k}: ${formatMetaInline(x)}`).join(', ') + '}';
 	}
-	return formatScalar(v);
+	return String(v);
 }
 
 /** Undo a viewer reduction's `meta.reduced` artifacts, so the inspector shows what the node
@@ -86,5 +78,5 @@ export function formatMetaValue(value: unknown, indent = 0): string {
 			)
 			.join('\n');
 	}
-	return formatScalar(value);
+	return String(value);
 }

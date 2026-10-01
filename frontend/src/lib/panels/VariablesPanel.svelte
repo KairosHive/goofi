@@ -7,8 +7,7 @@
 
 	let {}: PanelProps = $props();
 	const g = graph();
-	const variables = $derived(g.variables);
-	const groups = $derived(groupedVariables(variables, g.variableGroups));
+	const groups = $derived(groupedVariables(g.variables, g.variableGroups));
 	let panel: HTMLDivElement;
 	let open = $state<Record<string, boolean>>({});
 	let editing = $state<string | null>(null);
@@ -19,7 +18,7 @@
 
 	$effect(() => {
 		const name = focusEntry;
-		if (name && variables.some((entry) => entry.name === name)) {
+		if (name && g.variables.some((entry) => entry.name === name)) {
 			focusEntry = null;
 			void tick().then(() => {
 				const input = panel.querySelector<HTMLInputElement>(`[data-name="${name}"] [data-testid="variable-name"]`);
@@ -44,11 +43,11 @@
 		input.select();
 	}
 
-	async function addGroup(): Promise<void> {
+	async function guarded(op: () => Promise<void>): Promise<void> {
 		busy = true;
 		error = '';
 		try {
-			editGroup(await g.addVariableGroup());
+			await op();
 		} catch (reason) {
 			report(reason);
 		} finally {
@@ -75,18 +74,6 @@
 			error = '';
 		} catch (reason) {
 			report(reason);
-		}
-	}
-
-	async function addEntry(group: string): Promise<void> {
-		busy = true;
-		error = '';
-		try {
-			focusEntry = await g.addVariableEntry(group);
-		} catch (reason) {
-			report(reason);
-		} finally {
-			busy = false;
 		}
 	}
 
@@ -186,15 +173,15 @@
 							{/each}
 							{#if !lock.config}
 								<Button class="add-row" variant="ghost" size="sm" data-testid="variable-add-in" disabled={busy}
-									onclick={() => void addEntry(grp.group)}><Icon name="plus" />entry</Button>
+									onclick={() => void guarded(async () => { focusEntry = await g.addVariableEntry(grp.group); })}><Icon name="plus" />entry</Button>
 							{/if}
 						</div>
 					{/if}
 				</section>
 			{/each}
 			<Button class="add-row new-group" variant="ghost" size="sm" data-testid="variable-add-group-btn"
-				disabled={busy} onclick={() => void addGroup()}><Icon name="plus" />group</Button>
-			{#if error}<p class="error" role="alert">{error}</p>{/if}
+				disabled={busy} onclick={() => void guarded(async () => editGroup(await g.addVariableGroup()))}><Icon name="plus" />group</Button>
+			{#if error}<p class="error-text" role="alert">{error}</p>{/if}
 		</div>
 	</ScrollArea>
 </div>
@@ -266,9 +253,6 @@
 	.group-name-input {
 		width: 12ch;
 		flex: 1;
-		background: var(--surface-1);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
 	}
 	.grp-tags {
 		display: inline-flex;
@@ -307,7 +291,6 @@
 		justify-content: center;
 	}
 	.gp-body :global(.new-group) { margin-top: var(--space-4); }
-	.error { color: var(--danger); font-size: var(--fs-small); overflow-wrap: anywhere; }
 	@container (max-width: 280px) {
 		.entry { grid-template-columns: minmax(0, 1fr) auto var(--hit); }
 		.entry-name { grid-column: 1 / -1; }

@@ -1,7 +1,7 @@
-/** Who else is in this patch, and where their pointers are. One `/presence` socket per tab: open
- * is join, close is leave, and the server deals each peer a hue. Pointers are fractions of the
- * window, so a peer's point lands in the same panel on any screen. */
+/** Who else is in this patch, and where their pointers are: one `/presence` socket per tab. Pointers
+ * are window fractions, so a peer's point lands in the same panel on any screen. */
 import { workspace } from 'panelty';
+import { wsUrl } from '$lib/api/wsUrl';
 
 export interface Peer {
 	id: number;
@@ -12,10 +12,6 @@ export interface Cursor extends Peer {
 	tab: string;
 	x: number;
 	y: number;
-}
-
-export function presenceUrl(proto: string, host: string): string {
-	return `${proto}//${host}/presence`;
 }
 
 export class PresenceStore {
@@ -73,8 +69,7 @@ export class PresenceStore {
 	}
 
 	private connect(): void {
-		const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-		const ws = new WebSocket(presenceUrl(proto, location.host));
+		const ws = new WebSocket(wsUrl(['presence']));
 		this.ws = ws;
 		ws.addEventListener('message', (e: MessageEvent) => this.receive(String(e.data)));
 		ws.addEventListener('close', () => {

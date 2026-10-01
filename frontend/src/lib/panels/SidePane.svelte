@@ -1,42 +1,51 @@
-<!-- SidePane — a drag-resizable pane anchored to the host panel's edge: the right edge, or the
-     bottom when the host is portrait. It stays MOUNTED and parked when closed, so open and close
-     are the same visible slide; `onClosed` fires when the closing slide has finished. -->
+<!-- The selected node's inspector, on a drag-resizable pane at the host's right or (portrait) bottom
+     edge. It stays mounted and parked when closed, so open and close are the same visible slide. -->
 <script lang="ts">
-	import type { Snippet } from 'svelte';
 	import { beginDrag } from 'panelty';
 	import { onDestroy } from 'svelte';
-	import { PANE_AXES, coordOf, paneSizeAt, type PaneAxis, type PaneDrag } from './paneDrag';
+	import Inspector from '$lib/inspector/Inspector.svelte';
+	import type { NodeInstanceInfo } from '$lib/api/control';
 
 	let {
-		open,
-		onClosed,
-		testid = 'side-pane',
-		children
+		node,
+		enabled,
+		onClose
 	}: {
-		open: boolean;
-		onClosed?: () => void;
-		testid?: string;
-		children?: Snippet;
+		node: NodeInstanceInfo | null;
+		enabled: boolean;
+		/** Dismiss this editor's inspector until the selection changes. */
+		onClose: () => void;
 	} = $props();
+
+	/** Closing is a real outro, so the last node stays rendered until the slide finishes. */
+	let renderedNode = $state<NodeInstanceInfo | null>(null);
+	const open = $derived(enabled && node !== null);
+	$effect(() => {
+		if (open) renderedNode = node;
+	});
+
+	type PaneAxis = 'x' | 'y';
+	/** localStorage key, one per axis, so the two anchors cannot overwrite each other's. */
+	const keyOf = (axis: PaneAxis): string => (axis === 'x' ? 'goofi.panelWidth' : 'goofi.panelHeight');
 
 	/** A persisted pane size, or `null` — the resting size is then the stylesheet's own `clamp()`. */
 	function storedSize(axis: PaneAxis): number | null {
 		try {
-			const n = parseInt(localStorage.getItem(PANE_AXES[axis].key) ?? '', 10);
+			const n = parseInt(localStorage.getItem(keyOf(axis)) ?? '', 10);
 			return Number.isFinite(n) ? n : null;
 		} catch {
 			return null; // private mode; persistence is best-effort
 		}
 	}
 
-	/** Keyed exactly as `PANE_AXES` is, so a drag's axis selects the state it writes. */
+	/** Keyed by axis, so a drag's axis selects the state it writes. */
 	let paneSize = $state({ x: storedSize('x'), y: storedSize('y') });
 	let resizing = $state(false);
 	let paneEl = $state<HTMLElement | null>(null);
 
 	function finishTransition(e: TransitionEvent): void {
 		if (e.target !== e.currentTarget || e.propertyName !== 'transform' || open) return;
-		onClosed?.();
+		renderedNode = null;
 	}
 
 	/** The in-flight resize's teardown; non-null only between pointerdown and its resolution. */
@@ -49,29 +58,29 @@
 		// Read back off the pane rather than re-derived: the axis is the container query's answer.
 		const axis: PaneAxis =
 			getComputedStyle(el).getPropertyValue('--pane-axis').trim() === 'y' ? 'y' : 'x';
-		const dim = PANE_AXES[axis];
+		const size = (r: DOMRect): number => (axis === 'x' ? r.width : r.height);
+		const at = (p: PointerEvent): number => (axis === 'x' ? p.clientX : p.clientY);
 		// The RENDERED size, not the stored one: the bounds live in CSS, so a value restored from a
 		// wider screen is not what is on screen.
-		const drag: PaneDrag = {
-			startSize: dim.sizeOf(el.getBoundingClientRect()),
-			startPos: coordOf(axis, e)
-		};
+		const startSize = size(el.getBoundingClientRect());
+		const startPos = at(e);
 		resizing = true;
 		// The RENDERED size is what is persisted, so the store can never drift outside CSS's bounds.
 		const finish = (): void => {
 			resizing = false;
 			teardownResize = null;
-			const size = dim.sizeOf(el.getBoundingClientRect());
-			paneSize[axis] = size;
+			const now = size(el.getBoundingClientRect());
+			paneSize[axis] = now;
 			try {
-				localStorage.setItem(dim.key, String(Math.round(size)));
+				localStorage.setItem(keyOf(axis), String(Math.round(now)));
 			} catch {
 				/* private mode; persistence is best-effort */
 			}
 		};
 		teardownResize = beginDrag(e.currentTarget as HTMLElement, e.pointerId, {
+			// Unclamped: both bounds are the stylesheet's `clamp()`.
 			move: (m) => {
-				paneSize[axis] = paneSizeAt(drag, coordOf(axis, m));
+				paneSize[axis] = startSize - (at(m) - startPos);
 			},
 			// One resolution for both: the size is applied live, so commit and cancel agree.
 			commit: finish,
@@ -90,7 +99,7 @@
 	ontransitionend={finishTransition}
 	style:--pane-w={paneSize.x === null ? null : `${paneSize.x}px`}
 	style:--pane-h={paneSize.y === null ? null : `${paneSize.y}px`}
-	data-testid={testid}
+	data-testid="auto-side-panel"
 >
 	<!-- The size arrives as CUSTOM PROPERTIES: which axis it feeds is the container query's
 	     decision below, and an inline `width` cannot be beaten by any query. -->
@@ -101,7 +110,7 @@
 		onpointerdown={startResize}
 		data-testid="panel-resize-handle"
 	></div>
-	{@render children?.()}
+	<Inspector node={renderedNode} {onClose} />
 </aside>
 
 <style>
@@ -176,9 +185,8 @@
 	.side-panel.resizing .resize-handle::after {
 		background: var(--accent);
 	}
-	/* Touch: an 8px seam is under a fifth of --hit, so a `::before` widens the HIT area alone. It
-	   leans OUTWARD, over the host: inward is the pane's first column, which carries its leading
-	   control, and a band over a control is a control no finger can reach. */
+	/* Touch: a `::before` widens the 8px seam's HIT area to --hit. It leans OUTWARD, over the host,
+	   because inward it would cover the pane's leading control. */
 	@media (hover: none) and (pointer: coarse) {
 		.resize-handle::before {
 			content: '';

@@ -1,17 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { panelBinding } from './viewBinding';
+import { viewBinding } from './viewBinding';
+import type { SlotView } from './inlineView';
 
-describe('panelBinding', () => {
-	it('resolves kind/settings from panel state and writes back via setState', () => {
+describe('viewBinding', () => {
+	it('resolves kind/settings from the stored view and writes back via write', () => {
 		let state: Record<string, unknown> = { node: 'n', slot: 's' };
-		const b = panelBinding(
-			() => state,
+		const b = viewBinding(
+			'ARRAY',
+			() => state as SlotView,
 			(s) => {
 				// `edit_panel` MERGES the state it is handed, so the double does too — that is
 				// the seam, and a binding writes only the key it changed.
-				state = { ...state, ...(s as Record<string, unknown>) };
-			},
-			'ARRAY'
+				const settings = { ...(state.settings as object), ...s.settings };
+				state = { ...state, ...s, settings };
+			}
 		);
 		expect(b.kind).toBe('line'); // default
 		b.setKind('image');
@@ -24,11 +26,10 @@ describe('panelBinding', () => {
 	});
 
 	it('forces the string viewer for STRING dtype regardless of stored kind', () => {
-		const state = { kind: 'image' };
-		const b = panelBinding(
-			() => state,
-			() => {},
-			'STRING'
+		const b = viewBinding(
+			'STRING',
+			() => ({ kind: 'image' }),
+			() => {}
 		);
 		expect(b.kind).toBe('string');
 	});

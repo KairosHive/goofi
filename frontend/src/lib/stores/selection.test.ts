@@ -121,7 +121,8 @@ describe('dismissing the inspector holds only until the selection changes', () =
 		expect(sel.inspectorVisibleFor('p')).toBe(true);
 		sel.dismissInspectorFor('p');
 		expect(sel.inspectorVisibleFor('p')).toBe(false);
-		expect(sel.inspectorEnabledFor('p'), 'the ◧ preference is untouched').toBe(true);
+		sel.clickNode('p', 'n2', false);
+		expect(sel.inspectorVisibleFor('p'), 'the ◧ preference is untouched').toBe(true);
 	});
 
 	it('deselecting and re-selecting the node brings the pane back', () => {
@@ -144,7 +145,7 @@ describe('dismissing the inspector holds only until the selection changes', () =
 	it('the ◧ preference is the real off-switch: selection changes never revive it', () => {
 		const sel = selection();
 		sel.clickNode('p', 'n1', false);
-		sel.toggleInspectorFor('p');
+		sel.setInspector('p', false);
 		expect(sel.inspectorVisibleFor('p')).toBe(false);
 		sel.clickNode('p', 'n2', false);
 		expect(sel.inspectorVisibleFor('p'), 'disabled stays disabled').toBe(false);

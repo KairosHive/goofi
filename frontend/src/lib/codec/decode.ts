@@ -19,19 +19,16 @@ export interface ArrayData {
 	values: Float32Array | Uint8Array;
 }
 
-const MAGIC = new Uint8Array([0x47, 0x4f, 0x4f, 0x46]); // 'GOOF'
-
 const decoder = new TextDecoder('utf-8');
 
 function checkMagic(view: DataView, off: number): void {
-	if (
-		view.getUint8(off) !== MAGIC[0] ||
-		view.getUint8(off + 1) !== MAGIC[1] ||
-		view.getUint8(off + 2) !== MAGIC[2] ||
-		view.getUint8(off + 3) !== MAGIC[3]
-	) {
-		throw new Error('Invalid Data frame: bad magic');
-	}
+	if (view.getUint32(off) !== 0x474f4f46) throw new Error('Invalid Data frame: bad magic'); // 'GOOF'
+}
+
+/** The msgpack meta block of `len` bytes at `at`; `{}` when empty or not an object. */
+function readMeta(view: DataView, at: number, len: number): Record<string, unknown> {
+	const m = len > 0 ? msgpackDecode(new Uint8Array(view.buffer, view.byteOffset + at, len)) : {};
+	return m && typeof m === 'object' ? (m as Record<string, unknown>) : {};
 }
 
 /** The stamps of a stamps frame, or null for a frame with data in it. */
@@ -39,12 +36,9 @@ export function decodeStamps(buf: ArrayBuffer): Record<string, unknown> | null {
 	const view = new DataView(buf);
 	checkMagic(view, 0);
 	if (view.getUint8(5) !== STAMPS_TAG) return null;
-	const metaLen = view.getUint32(6, true);
-	const m = metaLen > 0 ? msgpackDecode(new Uint8Array(buf, HEADER_SIZE, metaLen)) : {};
-	return m && typeof m === 'object' ? (m as Record<string, unknown>) : {};
+	return readMeta(view, HEADER_SIZE, view.getUint32(6, true));
 }
 
-/** Decode an encoded GOOF buffer into a DataFrame. */
 export function decodeData(buf: ArrayBuffer | Uint8Array): DataFrame {
 	const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -61,14 +55,7 @@ function decodeInto(view: DataView, off: number): DataFrame {
 	const metaLen = view.getUint32(off + 6, true);
 	const bodyLen = view.getUint32(off + 10, true);
 	const headerEnd = off + HEADER_SIZE;
-	const meta =
-		metaLen > 0
-			? ((): Record<string, unknown> => {
-					const slice = new Uint8Array(view.buffer, view.byteOffset + headerEnd, metaLen);
-					const m = msgpackDecode(slice);
-					return (m && typeof m === 'object' ? (m as Record<string, unknown>) : {}) ?? {};
-				})()
-			: {};
+	const meta = readMeta(view, headerEnd, metaLen);
 	const bodyStart = headerEnd + metaLen;
 	const bodyEnd = bodyStart + bodyLen;
 	let data: ArrayData | string | Record<string, DataFrame>;
@@ -179,7 +166,4 @@ export function isArrayFrame(f: DataFrame): f is DataFrame & { data: ArrayData }
 }
 export function isStringFrame(f: DataFrame): f is DataFrame & { data: string } {
 	return f.dtype === 'STRING';
-}
-export function isTableFrame(f: DataFrame): f is DataFrame & { data: Record<string, DataFrame> } {
-	return f.dtype === 'TABLE';
 }

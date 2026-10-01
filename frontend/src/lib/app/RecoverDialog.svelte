@@ -2,18 +2,21 @@
      Each row opens its autosave; its × removes it. Dismissing keeps every recovery on disk. -->
 <script lang="ts">
 	import { tick } from 'svelte';
+	import { getControl, type Recovery } from '$lib/api/control';
+	import { patchName } from '$lib/api/patchFile';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { Button, ConfirmDialog, Icon, IconButton } from '$lib/ui';
 
 	const g = graph();
+	const ctl = getControl();
+	let recoveries = $state<Recovery[]>([]);
 	let dismissed = $state(false);
-	const open = $derived(!dismissed && g.recoveries.length > 0);
+	const open = $derived(!dismissed && recoveries.length > 0);
 	let later = $state<HTMLElement | null>(null);
 
-	// A modal focuses its first control, which would be the first patch in the list; the safe
-	// answer takes it instead, once the dialog is open — an `autofocus` fires at mount, when it
-	// is still closed.
+	// A modal focuses its first control (a patch row); the safe answer takes focus instead, once
+	// open, since an `autofocus` fires at mount while the dialog is still closed.
 	$effect(() => {
 		if (!open) return;
 		void tick().then(() => later?.querySelector('button')?.focus());
@@ -24,12 +27,11 @@
 	$effect(() => {
 		if (g.sessionEpoch === 0 || g.demo) return;
 		dismissed = false;
-		void g.refreshRecoveries().catch((e) => notify().failure('Recover', e));
+		ctl.call<{ recoveries: Recovery[] }>('session recoverable', {}).then(
+			(r) => (recoveries = r.recoveries),
+			(e) => notify().failure('Recover', e)
+		);
 	});
-
-	function name(home: string | null): string {
-		return home ? (home.split('/').pop() ?? home) : 'Unsaved patch';
-	}
 
 	function when(at: number | null): string {
 		if (at === null) return '';
@@ -40,9 +42,14 @@
 		return new Date(at * 1000).toLocaleString();
 	}
 
+	function forget(workspace: string): void {
+		recoveries = recoveries.filter((r) => r.workspace !== workspace);
+	}
+
 	async function recover(workspace: string): Promise<void> {
 		try {
-			await g.recover(workspace);
+			await ctl.call('session recover', { workspace });
+			forget(workspace);
 			dismissed = true;
 		} catch (e) {
 			notify().failure('Recover', e);
@@ -51,7 +58,8 @@
 
 	async function discard(workspace: string): Promise<void> {
 		try {
-			await g.discardRecovery(workspace);
+			await ctl.call('session discard', { workspace });
+			forget(workspace);
 		} catch (e) {
 			notify().failure('Discard', e);
 		}
@@ -67,10 +75,10 @@
 >
 	{#snippet body()}
 		<ul class="rows">
-			{#each g.recoveries as r (r.workspace)}
+			{#each recoveries as r (r.workspace)}
 				<li class="row" data-testid="recover-entry">
 					<button class="entry" title={r.home ?? undefined} onclick={() => recover(r.workspace)}>
-						<span class="nm">{name(r.home)}</span>
+						<span class="nm">{r.home ? patchName(r.home) : 'Unsaved patch'}</span>
 						<span class="at">{when(r.at)}</span>
 					</button>
 					<IconButton
@@ -107,7 +115,6 @@
 		background: var(--surface-3);
 	}
 	.entry {
-		font: inherit;
 		display: flex;
 		align-items: baseline;
 		gap: var(--space-4);
@@ -119,7 +126,6 @@
 		border-radius: var(--radius-sm);
 		color: var(--text);
 		padding: var(--space-3) var(--space-4);
-		cursor: pointer;
 	}
 	.row:hover {
 		background: var(--surface-4);

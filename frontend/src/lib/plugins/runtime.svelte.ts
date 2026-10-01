@@ -5,9 +5,8 @@ import { notify } from '$lib/stores/notify.svelte';
 import PluginPanel from './PluginPanel.svelte';
 import type { Component } from 'svelte';
 import type { PanelProps } from 'panelty';
-import type { Activate, Context, Header, Panel, PanelContext, Plugin } from '../../../../sdk/frontend';
+import type { Activate, Context, Header, Plugin } from '../../../../sdk/frontend';
 
-export type { Panel, PanelContext };
 export interface HeaderEntry extends Header { key: string }
 export const pluginHeaders = $state<{ entries: HeaderEntry[] }>({ entries: [] });
 
@@ -27,32 +26,31 @@ function context(id: string): Context {
 export function activatePlugin(id: string): { plugin: Plugin; ctx: Context; commit: () => void; dispose: () => void } {
 	identifier(id);
 	const ctx = context(id);
-	const registered = new Set<string>();
 	const panels: Parameters<typeof registerPanel>[0][] = [];
 	let committed = false;
-	const headers = new Set<string>();
 	let disposed = false;
+	const prefix = `plugin:${id}:`;
+	/** Check one registration and answer its key; `taken` says whether a key is in use already. */
+	function claim(entryId: string, kind: string, taken: (key: string) => boolean): string {
+		identifier(entryId);
+		if (disposed) throw new Error('Plugin frontend is disposed');
+		const key = prefix + entryId;
+		if (taken(key)) throw new Error(`Duplicate plugin ${kind}: ${entryId}`);
+		return key;
+	}
 	const plugin: Plugin = {
 		register_panel(panel) {
-			identifier(panel.id);
 			if (typeof panel.title !== 'string' || typeof panel.mount !== 'function') throw new Error('A panel needs a title and mount function');
 			if (panel.accepts_node !== undefined && typeof panel.accepts_node !== 'boolean') throw new Error('accepts_node must be a boolean');
-			if (disposed) throw new Error('Plugin frontend is disposed');
+			const key = claim(panel.id, 'panel', (k) => panels.some((p) => p.id === k));
 			if (committed) throw new Error('Panels must register during activation');
-			const key = `plugin:${id}:${panel.id}`;
-			if (registered.has(key)) throw new Error(`Duplicate plugin panel: ${panel.id}`);
-			registered.add(key);
 			// The adapter supplies the framework's existing panel props to arbitrary DOM content.
 			const component: Component<PanelProps> = (internals, props) => PluginPanel(internals, { get panelId() { return props.panelId; }, get state() { return props.state; }, get setState() { return props.setState; }, panel, ctx });
 			panels.push({ id: key, title: panel.title, icon: 'square-dashed', component, acceptsNode: panel.accepts_node === true });
 		},
 		register_header(entry) {
-			identifier(entry.id);
 			validateHeader(entry);
-			if (disposed) throw new Error('Plugin frontend is disposed');
-			const key = `plugin:${id}:${entry.id}`;
-			if (headers.has(key)) throw new Error(`Duplicate plugin header: ${entry.id}`);
-			headers.add(key);
+			const key = claim(entry.id, 'header', (k) => pluginHeaders.entries.some((e) => e.key === k));
 			let active = true;
 			pluginHeaders.entries = [...pluginHeaders.entries, { ...entry, key }];
 			return {
@@ -68,7 +66,6 @@ export function activatePlugin(id: string): { plugin: Plugin; ctx: Context; comm
 				dispose() {
 					if (!active) return;
 					active = false;
-					headers.delete(key);
 					pluginHeaders.entries = pluginHeaders.entries.filter((value) => value.key !== key);
 				}
 			};
@@ -83,15 +80,18 @@ export function activatePlugin(id: string): { plugin: Plugin; ctx: Context; comm
 		},
 		dispose() {
 			disposed = true;
-			pluginHeaders.entries = pluginHeaders.entries.filter((entry) => !headers.has(entry.key));
+			pluginHeaders.entries = pluginHeaders.entries.filter((entry) => !entry.key.startsWith(prefix));
 		}
 	};
 }
 
+/** Whether a header entry ignores activation. */
+export const headerInert = (entry: HeaderEntry): boolean => !!entry.disabled || !entry.onActivate;
+
 export function activateHeader(entry: HeaderEntry): void {
-	if (entry.disabled || !entry.onActivate) return;
+	if (headerInert(entry)) return;
 	try {
-		void Promise.resolve(entry.onActivate()).catch((error) => notify().failure('Plugin header', error));
+		void Promise.resolve(entry.onActivate?.()).catch((error) => notify().failure('Plugin header', error));
 	} catch (error) {
 		notify().failure('Plugin header', error);
 	}

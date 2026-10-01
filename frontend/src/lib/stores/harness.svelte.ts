@@ -11,8 +11,6 @@ import type {
 import { endTermSession, liveTermSessions } from './termSession';
 import { notify } from './notify.svelte';
 
-export type { HarnessRoster };
-
 /** How an instance is named wherever it is offered. */
 export function harnessLabel(i: { harness: string; id: string }): string {
 	return `${i.harness} · ${i.id.slice(0, 6)}`;
@@ -32,11 +30,6 @@ export class HarnessStore {
 	constructor(ctl: Control = getControl()) {
 		this.ctl = ctl;
 		ctl.on((ev) => this.handle(ev));
-	}
-
-	/** What the badge counts. */
-	get running(): number {
-		return this.instances.length;
 	}
 
 	/** Any mounted agent panel — where a question about an unshown instance can be asked. */

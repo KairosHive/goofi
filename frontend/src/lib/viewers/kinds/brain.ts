@@ -5,7 +5,7 @@ import { BrainDrawing, brainMode } from '../brainDrawing';
 import { COLORMAPS } from '../colormaps';
 
 /** The brain viewer's drawings: `auto` is a topomap of a 1-D frame and a ring of a (C, C) one. */
-export const BRAIN_MODES = ['auto', 'topomap', 'ring', '3d'] as const;
+const BRAIN_MODES = ['auto', 'topomap', 'ring', '3d'] as const;
 
 export const brain: ViewerModule = {
 	id: 'brain',
@@ -25,6 +25,5 @@ export const brain: ViewerModule = {
 		const mode = brainMode(s, shape.length);
 		return shape.length === 1 ? mode === 'topomap' : mode !== 'topomap' && shape[0] === shape[1];
 	},
-	variant: () => '',
 	drawing: (surface) => new BrainDrawing(surface)
 };

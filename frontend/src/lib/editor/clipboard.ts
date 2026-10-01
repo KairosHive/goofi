@@ -1,10 +1,7 @@
-/** The clipboard payload: goofi's own graph fragment, and the version that says so.
- * Putting it THERE is `$lib/clipboard`'s job; this module is only the shape. */
-/** Bumped when the payload shape changes, so an older tab's text is refused rather than half-read. */
-const CLIP_VERSION = 3;
+/** The clipboard payload: a graph fragment in the shape a `.gfi` carries, and its version. Putting
+ * it on the platform clipboard is `$lib/clipboard`'s job; this module is only the shape. */
+const CLIP_VERSION = 3; // bumped on a shape change, so an older tab's text is refused
 
-/** What a copy puts on the clipboard: goofi's own graph fragment, in the shape a `.gfi` carries,
- * so what the manager reads back is the format it already writes. */
 export interface Clipboard {
 	__goofi_clip__: number;
 	doc: GraphFragment;
@@ -33,16 +30,17 @@ export function parseClipboard(text: string): Clipboard | null {
 	return clip;
 }
 
-/** The centre of a fragment's ROOTS, which is what a paste anchors at a point. A record naming a
- * scope inside the fragment is drawn in that scope's own space, so its position is not on the
- * canvas the anchor is measured on. */
-export function fragmentCentre(doc: GraphFragment): [number, number] {
-	const at = Object.values(doc.nodes ?? {})
-		.filter((n) => n.scope === undefined)
-		.map((n) => n.pos ?? [0, 0]);
-	if (at.length === 0) return [0, 0];
+/** The mean of `points`; the origin when there are none. */
+export function centroid(points: [number, number][]): [number, number] {
+	if (points.length === 0) return [0, 0];
 	return [
-		at.reduce((a, p) => a + (p[0] ?? 0), 0) / at.length,
-		at.reduce((a, p) => a + (p[1] ?? 0), 0) / at.length
+		points.reduce((a, p) => a + (p[0] ?? 0), 0) / points.length,
+		points.reduce((a, p) => a + (p[1] ?? 0), 0) / points.length
 	];
+}
+
+/** The centre of a fragment's ROOTS, where a paste anchors. A record in a scope inside the fragment
+ * is drawn in that scope's own space, not on the canvas the anchor is measured on. */
+export function fragmentCentre(doc: GraphFragment): [number, number] {
+	return centroid(Object.values(doc.nodes ?? {}).filter((n) => n.scope === undefined).map((n) => n.pos ?? [0, 0]));
 }

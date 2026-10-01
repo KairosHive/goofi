@@ -4,7 +4,7 @@ import type { ArrayData } from '$lib/codec/decode';
 import type { Surface } from 'plotluck';
 import { DEFAULT_KIND, VIEWER_KINDS, type SlotDtype, type ViewerKind } from '$lib/api/vocab';
 import type { Drawing } from './drawing';
-import { boxAsk, type SettingDescriptor, type SettingsMap, type ViewSpec, type ViewerModule } from './module';
+import { boxAsk, type SettingsMap, type ViewSpec, type ViewerModule } from './module';
 import { line } from './kinds/line';
 import { image } from './kinds/image';
 import { brain } from './kinds/brain';
@@ -25,9 +25,8 @@ export function pinnedKind(dtype: string | null): ViewerKind | null {
 	return VIEWER_KINDS.find((k) => k.dtype !== 'ARRAY' && k.dtype === dtype)?.id ?? null;
 }
 
-/** The viewer kind to actually use: a dtype-pinned kind wins over the stored one, and a slot
- * nobody has chosen for — or one stored under a word the vocabulary no longer has — opens with
- * what draws its dtype. */
+/** The viewer kind to use: a dtype-pinned kind wins over the stored one, and a slot with no
+ * choice, or with a kind the vocabulary no longer has, opens with what draws its dtype. */
 export function resolveKind(dtype: string | null, stored: ViewerKind | undefined): ViewerKind {
 	const known = stored && ARRAY_KINDS.includes(stored) ? stored : undefined;
 	return pinnedKind(dtype) ?? known ?? DEFAULT_KIND[(dtype ?? 'ARRAY') as SlotDtype] ?? 'line';
@@ -46,9 +45,6 @@ export function makeDrawing(kind: ViewerKind, surface: Surface, variant: string)
 	return make(surface, variant);
 }
 
-export function settingsSchemaFor(kind: ViewerKind): SettingDescriptor[] {
-	return MODULES[kind].settings;
-}
 
 /** A kind's declared defaults with the explicit overrides applied on top. */
 export function resolveSettings(kind: ViewerKind, overrides: SettingsMap | undefined): SettingsMap {
@@ -65,7 +61,7 @@ export function isRenderable(kind: ViewerKind, spec: ArrayData | null, settings:
 	const draws = VIEWER_KINDS.find((k) => k.id === kind)?.draws;
 	if (!draws) return true;
 	if (s.length < draws[0] || s.length > draws[1]) return false;
-	return MODULES[kind].renders(s, settings);
+	return MODULES[kind].renders?.(s, settings) ?? true;
 }
 
 /** Floor so a 0-px / collapsed layout never asks for a degenerate reduction. */
@@ -75,10 +71,8 @@ function px(v: number): number {
 	return Math.max(CAP_FLOOR, Math.round(v) || CAP_FLOOR);
 }
 
-/** What a kind accepts but cannot draw: it shows a summary of such a frame, so it asks for a small
- * preview — the same box an image viewer asks for, so the fold stays homogeneous and takes the
- * largest box per dim rather than falling out to the whole frame. `null` where a kind draws
- * everything it accepts. */
+/** What a kind accepts but cannot draw, asked as the image viewer's box so the fold stays homogeneous;
+ * `null` where a kind draws everything it accepts. */
 function describeSpec(kind: ViewerKind, w: number, h: number): ViewSpec | null {
 	const k = VIEWER_KINDS.find((x) => x.id === kind);
 	if (!k?.draws || !k.accepts || k.accepts[1] <= k.draws[1]) return null;

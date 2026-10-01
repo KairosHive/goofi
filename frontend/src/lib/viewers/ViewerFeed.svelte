@@ -3,8 +3,9 @@
 <script lang="ts">
 	import { bindViewer } from '$lib/api/frames';
 	import { createDrawing, type DrawingHandle } from '$lib/api/drawings';
-	import type { DataFrame } from '$lib/codec/decode';
-	import ViewerSurface from './ViewerSurface.svelte';
+	import { isStringFrame, type DataFrame } from '$lib/codec/decode';
+	import StringViewer from './StringViewer.svelte';
+	import TableViewer from './TableViewer.svelte';
 	import HighDimFallback from './HighDimFallback.svelte';
 	import type { ViewBinding } from './viewBinding';
 	import { EmptyState } from '$lib/ui';
@@ -28,7 +29,7 @@
 	const host = useSurface();
 	const anchor = useAnchor();
 	const onSurface = $derived(drawsOnSurface(kind));
-	const variant = $derived(MODULES[kind].variant(settings));
+	const variant = $derived(MODULES[kind].variant?.(settings) ?? '');
 
 	// What a text kind shows: its frame, read on this thread.
 	let frame = $state.raw<DataFrame | null>(null);
@@ -48,8 +49,7 @@
 	// Below a readable zoom the viewer unsubscribes and keeps its last frame as a thumbnail.
 	let frozen = $state(false);
 	// Stable per-instance token so multiple viewers of one slot collect (not evict).
-	const token =
-		typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `vf-${Math.random()}`;
+	const token = $props.id();
 
 	// The drawing of an array kind, in the worker, and what it reports for the DOM.
 	const NOTHING: DrawnState = { has: false, fallback: null, labels: [], texts: [], message: null, drag: false };
@@ -59,7 +59,6 @@
 	// Whether the feed holds the pointer: a finger reading it, or a drag on the drawing.
 	let held = false;
 	let hover = $state.raw<Hover | null>(null);
-	let pointer = $state.raw<{ x: number; y: number } | null>(null);
 	// The pointer in viewport px: the readout is portalled, so the window edge is its only bound.
 	let client = $state.raw<{ x: number; y: number } | null>(null);
 	let readoutW = $state(0);
@@ -119,7 +118,7 @@
 			});
 		});
 		ro.observe(el);
-		if (anchor?.el) ro.observe(anchor.el);
+		if (anchor.el) ro.observe(anchor.el);
 		return () => {
 			io.disconnect();
 			ro.disconnect();
@@ -139,7 +138,7 @@
 	});
 
 	$effect(() => {
-		const s = host?.surface;
+		const s = host.surface;
 		const el = container;
 		if (!onSurface || !s || !el) return;
 		const d = createDrawing(
@@ -174,7 +173,7 @@
 		const d = drawing;
 		const a = anchor;
 		void layout;
-		if (!d || !a?.el || !container) return;
+		if (!d || !a.el || !container) return;
 		const o = offsetIn(container, a.el);
 		d.place(a.x + o.x, a.y + o.y, o.w, o.h, a.z);
 	});
@@ -225,7 +224,6 @@
 			drawing?.drag(at.x - dragging.x, at.y - dragging.y, probeBox());
 			dragging = at;
 		}
-		pointer = at;
 		client = { x: e.clientX, y: e.clientY };
 		if (boxW && boxH) drawing?.pointer({ ...at, box: probeBox() });
 	}
@@ -243,7 +241,6 @@
 		if (held && e.type === 'pointerleave') return;
 		dragging = null;
 		held = false;
-		pointer = null;
 		client = null;
 		hover = null;
 		drawing?.pointer(null);
@@ -267,16 +264,20 @@
 		<EmptyState>
 			{#snippet hint()}node has no output slots{/snippet}
 		</EmptyState>
-	{:else if onSurface && !host?.surface}
+	{:else if onSurface && !host.surface}
 		<EmptyState>
 			{#snippet hint()}WebGL2 is not available{/snippet}
 		</EmptyState>
-	{:else if !onSurface}
-		<ViewerSurface {frame} {settings} />
-	{:else if !drawn.has}
+	{:else if onSurface ? !drawn.has : !frame}
 		<EmptyState>
 			{#snippet hint()}no data yet{/snippet}
 		</EmptyState>
+	{:else if !onSurface && frame}
+		{#if isStringFrame(frame)}
+			<StringViewer {frame} {settings} />
+		{:else}
+			<TableViewer {frame} {settings} />
+		{/if}
 	{:else}
 		{#if drawn.fallback}
 			<HighDimFallback summary={drawn.fallback} />
@@ -296,7 +297,7 @@
 		{#if drawn.message}
 			<span class="message">{drawn.message}</span>
 		{/if}
-		{#if hover && pointer}
+		{#if hover && client}
 			{#if hover.mark}
 				<span
 					class="mark"
@@ -325,18 +326,14 @@
 </div>
 
 <style>
+	/* A finger on a viewer reads it, so the page gets no scroll or pan from it, and a held one
+	   selects no text. */
 	.viewer-feed {
 		position: relative;
 		flex: 1;
 		min-width: 0;
 		min-height: 0;
 		display: flex;
-		align-items: stretch;
-		justify-content: stretch;
-	}
-	/* A finger on a viewer reads it, so the page gets no scroll or pan from it, and a held one
-	   selects no text. */
-	.viewer-feed {
 		touch-action: none;
 		user-select: none;
 		-webkit-user-select: none;
@@ -347,18 +344,22 @@
 		min-width: 0;
 		min-height: 0;
 	}
-	/* The range labels: the surface draws no text, so its corners are annotated here — on hover,
-	   on a selected card, and always in a docked panel. */
-	.tick {
+	.tick,
+	.placed,
+	.message {
 		position: absolute;
-		opacity: 0;
-		transition: opacity var(--dur-slow) var(--ease);
-		padding: var(--space-1);
 		font-family: var(--font-mono);
 		font-size: var(--fs-micro);
 		line-height: 1;
 		color: var(--text-dim);
 		pointer-events: none;
+	}
+	/* The range labels: the surface draws no text, so its corners are annotated here — on hover,
+	   on a selected card, and always in a docked panel. */
+	.tick {
+		opacity: 0;
+		transition: opacity var(--dur-slow) var(--ease);
+		padding: var(--space-1);
 	}
 	.viewer-feed:hover .tick,
 	:global(.svelte-flow__node.selected) .tick,
@@ -372,20 +373,12 @@
 		}
 	}
 	/* Text a drawing places on its picture, turned about its anchor; a message sits in the middle. */
-	.placed,
-	.message {
-		position: absolute;
-		font-family: var(--font-mono);
-		font-size: var(--fs-micro);
-		line-height: 1;
-		color: var(--text-dim);
-		white-space: nowrap;
-		pointer-events: none;
-	}
 	.placed {
+		white-space: nowrap;
 		transform-origin: 0 50%;
 	}
 	.message {
+		white-space: nowrap;
 		left: 50%;
 		top: 50%;
 		transform: translate(-50%, -50%);

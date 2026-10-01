@@ -12,8 +12,9 @@ test('a node dropped on a cable row names that cable as its device', async ({ pa
 	test.skip(!!status.unsupported, `no PipeWire here: ${status.unsupported}`);
 	const cable = `e2e ${Date.now()}`;
 	let split = false;
+	let out: string | null = null;
 	try {
-		const out = await addNode(page, 'audio:AudioOut', [30, 60]);
+		out = await addNode(page, 'audio:AudioOut', [30, 60]);
 		await waitForNode(page, out);
 		await splitRight(page);
 		split = true;
@@ -51,6 +52,7 @@ test('a node dropped on a cable row names that cable as its device', async ({ pa
 		await expect(panel.getByTestId('cables-status')).toContainText('0 cables');
 	} finally {
 		await rawCall(page, 'plugin virtual-cables remove', { name: cable });
+		if (out) await rawCall(page, 'node remove', { node: out });
 		if (split) await closeSplit(page);
 		await restorePanelType(page);
 	}

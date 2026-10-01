@@ -1,4 +1,6 @@
 /** Double-tap, then drag to zoom — the one-handed zoom recognizer and its viewport arithmetic. */
+import type { Viewport } from '@xyflow/svelte';
+import type { ScreenPoint } from './eventPoint';
 
 /** How long a touch may last and still be a tap. Must stay under the 500 ms long press. */
 export const TAP_MS = 300;
@@ -9,46 +11,23 @@ export const TAP_SLOP_PX = 24;
 /** The drag distance that doubles (or halves) the zoom. */
 export const ZOOM_PX_PER_DOUBLING = 150;
 
-export interface TapPoint {
-	clientX: number;
-	clientY: number;
-}
+export function createDoubleTapZoom() {
+	let press: { p: ScreenPoint; t: number } | null = null;
+	let first: { p: ScreenPoint; t: number } | null = null;
+	let origin: ScreenPoint | null = null;
 
-export interface DoubleTapZoom {
-	/** True while the zoom gesture is in flight. */
-	readonly active: boolean;
-	/** A finger landed. True if it completed a double tap, which the caller keeps off the panner. */
-	down(p: TapPoint, now: number): boolean;
-	/** The zoom multiplier against the zoom the gesture started at; null if this is not the gesture. */
-	move(p: TapPoint): number | null;
-	/** A finger lifted: it ends a gesture in flight, or is remembered as a first tap. */
-	up(p: TapPoint, now: number): void;
-	/** Drop everything — a cancelled touch, or a second finger arriving for a pinch. */
-	cancel(): void;
-}
-
-export function createDoubleTapZoom(
-	opts: { tapMs?: number; doubleTapMs?: number; slopPx?: number; pxPerDoubling?: number } = {}
-): DoubleTapZoom {
-	const tapMs = opts.tapMs ?? TAP_MS;
-	const doubleTapMs = opts.doubleTapMs ?? DOUBLE_TAP_MS;
-	const slop = opts.slopPx ?? TAP_SLOP_PX;
-	const pxPerDoubling = opts.pxPerDoubling ?? ZOOM_PX_PER_DOUBLING;
-
-	let press: { p: TapPoint; t: number } | null = null;
-	let first: { p: TapPoint; t: number } | null = null;
-	let origin: TapPoint | null = null;
-
-	const far = (a: TapPoint, b: TapPoint): boolean =>
-		Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) > slop;
+	const far = (a: ScreenPoint, b: ScreenPoint): boolean =>
+		Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) > TAP_SLOP_PX;
 
 	return {
+		/** True while the zoom gesture is in flight. */
 		get active(): boolean {
 			return origin !== null;
 		},
-		down(p, now) {
+		/** A finger landed. True if it completed a double tap, which the caller keeps off the panner. */
+		down(p: ScreenPoint, now: number): boolean {
 			press = { p: { clientX: p.clientX, clientY: p.clientY }, t: now };
-			if (!first || now - first.t > doubleTapMs || far(p, first.p)) {
+			if (!first || now - first.t > DOUBLE_TAP_MS || far(p, first.p)) {
 				first = null;
 				return false;
 			}
@@ -56,13 +35,15 @@ export function createDoubleTapZoom(
 			origin = { clientX: p.clientX, clientY: p.clientY };
 			return true;
 		},
-		move(p) {
+		/** The zoom multiplier against the zoom the gesture started at; null if this is not the gesture. */
+		move(p: ScreenPoint): number | null {
 			// Measured from the press ORIGIN, so a drift cannot creep past the slop step by step.
 			if (press && far(p, press.p)) press = null;
 			if (!origin) return null;
-			return Math.pow(2, (origin.clientY - p.clientY) / pxPerDoubling);
+			return Math.pow(2, (origin.clientY - p.clientY) / ZOOM_PX_PER_DOUBLING);
 		},
-		up(p, now) {
+		/** A finger lifted: it ends a gesture in flight, or is remembered as a first tap. */
+		up(p: ScreenPoint, now: number): void {
 			const ended = press;
 			press = null;
 			if (origin) {
@@ -71,9 +52,10 @@ export function createDoubleTapZoom(
 				first = null;
 				return;
 			}
-			first = ended && now - ended.t <= tapMs && !far(p, ended.p) ? { p: ended.p, t: now } : null;
+			first = ended && now - ended.t <= TAP_MS && !far(p, ended.p) ? { p: ended.p, t: now } : null;
 		},
-		cancel() {
+		/** Drop everything — a cancelled touch, or a second finger arriving for a pinch. */
+		cancel(): void {
 			press = null;
 			first = null;
 			origin = null;
@@ -81,23 +63,14 @@ export function createDoubleTapZoom(
 	};
 }
 
-/** A SvelteFlow viewport: the pan in screen px and the zoom, i.e. `translate(x, y) scale(zoom)`. */
-export interface FlowViewport {
-	x: number;
-	y: number;
-	zoom: number;
-}
-
-/**
- * The viewport that scales `from` by `factor` while holding the flow point `anchor` under the same
- * screen point. The zoom is clamped BEFORE the offset, or the pan derives from a zoom never taken.
- */
+/** The viewport that scales `from` by `factor` and holds the flow point `anchor` still on screen.
+ * The zoom is clamped BEFORE the offset, or the pan derives from a zoom never taken. */
 export function zoomStep(
-	from: FlowViewport,
+	from: Viewport,
 	anchor: { x: number; y: number },
 	factor: number,
 	limits: { min: number; max: number }
-): FlowViewport {
+): Viewport {
 	const zoom = Math.min(limits.max, Math.max(limits.min, from.zoom * factor));
 	return {
 		x: from.x + anchor.x * (from.zoom - zoom),

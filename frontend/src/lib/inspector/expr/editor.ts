@@ -4,12 +4,7 @@ import { EditorState, Prec, type Extension } from '@codemirror/state';
 import { EditorView, keymap, placeholder, tooltips, type KeyBinding } from '@codemirror/view';
 import { syntaxHighlighting } from '@codemirror/language';
 import { python } from '@codemirror/lang-python';
-import {
-	acceptCompletion,
-	autocompletion,
-	closeCompletion,
-	type CompletionSource
-} from '@codemirror/autocomplete';
+import { acceptCompletion, autocompletion, closeCompletion } from '@codemirror/autocomplete';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { setDiagnostics } from '@codemirror/lint';
 import { MARGIN, overlayViewport } from 'panelty';
@@ -38,48 +33,14 @@ export interface ExprEditorHandle {
 	destroy(): void;
 }
 
-/* Parented to `document.body` because an inspector panel clips its overflow, and sized against
-   `overlayViewport()` — CodeMirror's default `innerHeight` would park the list under the keyboard. */
-const popup = (): Extension =>
-	tooltips({
-		parent: document.body,
-		position: 'fixed',
-		tooltipSpace: () => {
-			const vp = overlayViewport();
-			return { top: MARGIN, left: MARGIN, bottom: vp.height - MARGIN, right: vp.width - MARGIN };
-		}
-	});
-
-/** The commit-on-change discipline both editors share: one committed value, compared before each
- *  send, and adopted when the outside world moves it. */
-interface Committer {
-	send(view: EditorView): void;
-	adopt(next: string): void;
-}
-
-function committer(doc: string, onCommit: (value: string) => void): Committer {
-	let committed = doc;
-	return {
-		send: (view) => {
-			const next = view.state.doc.toString();
-			if (next === committed) return;
-			committed = next;
-			onCommit(next);
-		},
-		adopt: (next) => {
-			committed = next;
-		}
+export function createExprEditor(host: HTMLElement, opts: ExprEditorOptions): ExprEditorHandle {
+	let committed = opts.doc;
+	const commit = (view: EditorView): void => {
+		const next = view.state.doc.toString();
+		if (next === committed) return;
+		committed = next;
+		opts.onCommit(next);
 	};
-}
-
-/** The editor both configurations share: one line, the app's popup placement, Enter commits unless
- *  a completion takes it, blur commits — plus whatever `own` adds in front. */
-function mount(
-	host: HTMLElement,
-	opts: { doc: string; placeholder?: string; attributes: Record<string, string> },
-	commit: (view: EditorView) => void,
-	own: Extension[]
-): EditorView {
 	/* Escape must fall THROUGH once there is no popup: it is the app's, and it dismisses the auto
 	   inspector pane. */
 	const keys: KeyBinding[] = [
@@ -87,10 +48,22 @@ function mount(
 		{ key: 'Enter', run: (view) => acceptCompletion(view) || (commit(view), true) }
 	];
 	const extensions: Extension[] = [
-		...own,
+		python(),
+		goofiLanguageData(opts.catalogue),
+		syntaxHighlighting(exprHighlight),
+		autocompletion(),
 		history(),
 		exprTheme,
-		popup(),
+		/* Parented to `document.body` because an inspector panel clips its overflow, and sized against
+		   `overlayViewport()`: CodeMirror's default `innerHeight` would park the list under the keyboard. */
+		tooltips({
+			parent: document.body,
+			position: 'fixed',
+			tooltipSpace: () => {
+				const vp = overlayViewport();
+				return { top: MARGIN, left: MARGIN, bottom: vp.height - MARGIN, right: vp.width - MARGIN };
+			}
+		}),
 		EditorView.contentAttributes.of(opts.attributes),
 		Prec.high(keymap.of(keys)),
 		keymap.of([...historyKeymap, ...defaultKeymap]),
@@ -104,42 +77,22 @@ function mount(
 		singleLineExpression
 	];
 	if (opts.placeholder) extensions.push(placeholder(opts.placeholder));
-	return new EditorView({ state: EditorState.create({ doc: opts.doc, extensions }), parent: host });
-}
-
-function handleFor(
-	view: EditorView,
-	adopt: (next: string) => void,
-	setError: (error: string | null) => void
-): ExprEditorHandle {
+	const view = new EditorView({ state: EditorState.create({ doc: opts.doc, extensions }), parent: host });
+	const setError = (error: string | null): void => {
+		view.dispatch(setDiagnostics(view.state, expressionDiagnostics(error, view.state.doc)));
+	};
+	setError(opts.error);
 	return {
 		setValue: (next) => {
-			if (next === view.state.doc.toString()) {
-				adopt(next);
-				return;
-			}
 			// A live echo must not yank the document from under live typing; the committed value is
 			// left alone, so the local text still commits on blur.
-			if (view.hasFocus) return;
-			view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: next } });
-			adopt(next);
+			if (next !== view.state.doc.toString()) {
+				if (view.hasFocus) return;
+				view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: next } });
+			}
+			committed = next;
 		},
 		setError,
 		destroy: () => view.destroy()
 	};
-}
-
-export function createExprEditor(host: HTMLElement, opts: ExprEditorOptions): ExprEditorHandle {
-	const { send: commit, adopt } = committer(opts.doc, opts.onCommit);
-	const view = mount(host, opts, commit, [
-		python(),
-		goofiLanguageData(opts.catalogue),
-		syntaxHighlighting(exprHighlight),
-		autocompletion()
-	]);
-	const showError = (error: string | null): void => {
-		view.dispatch(setDiagnostics(view.state, expressionDiagnostics(error, view.state.doc)));
-	};
-	showError(opts.error);
-	return handleFor(view, adopt, showError);
 }

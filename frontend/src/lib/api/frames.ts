@@ -1,12 +1,10 @@
 /** The viewer registry: what each stream is asked for, and the frames this thread reads; a
  * drawing consumes its frames in the worker's paint loop, a reader here gets each flush's batch. */
-import { closeStream, declareRate, listen, openStream, sendSpecs } from './data';
-import { headOf, type FrameHead } from './dataProtocol';
-import { perfStats } from './perfStats.svelte';
-import { RateMeter } from './rateMeter';
+import { listen, post } from './data';
+import { headOf, streamKey, type FrameHead } from './dataProtocol';
+import { RateMeter } from './rateMeter.svelte';
 import type { DataFrame } from '$lib/codec/decode';
 import type { ViewSpec } from '$lib/viewers/module';
-import { streamKey } from './streamKey';
 import { flushSync } from 'svelte';
 
 type FrameCallback = (frame: DataFrame) => void;
@@ -35,10 +33,8 @@ interface Slot {
 
 const slots = new Map<string, Slot>();
 
-const nowMs =
-	typeof performance !== 'undefined' && typeof performance.now === 'function'
-		? (): number => performance.now()
-		: (): number => Date.now();
+/** The worker's paints a second, app-wide; drops are per stream (`dropRate`), never summed. */
+export const paints = new RateMeter();
 
 let measured = false;
 /** Count animation frames for half a second and declare the display's rate to every socket, so
@@ -51,7 +47,7 @@ function measureDisplayRate(): void {
 	const step = (t: number): void => {
 		if (start < 0) start = t;
 		else frames++;
-		if (t - start >= 500) declareRate(Math.round((frames * 1000) / (t - start)));
+		if (t - start >= 500) post({ op: 'rate', fps: Math.round((frames * 1000) / (t - start)) });
 		else requestAnimationFrame(step);
 	};
 	requestAnimationFrame(step);
@@ -69,14 +65,14 @@ function reconcile(node: string, slot: string, k: string): void {
 	if (want === have) return;
 
 	if (want === null) {
-		closeStream(node, slot);
+		post({ op: 'unsub', node, slot });
 		synced.delete(k);
 		slots.delete(k);
 		return;
 	}
 	const { specs, frames } = JSON.parse(want) as Demand;
-	if (have === null) openStream(node, slot, frames);
-	sendSpecs(node, slot, specs, frames);
+	if (have === null) post({ op: 'sub', node, slot, frames });
+	post({ op: 'spec', node, slot, specs, frames });
 	synced.set(k, want);
 }
 
@@ -120,28 +116,28 @@ function ensureSlot(k: string): Slot {
 			viewers: new Map(),
 			current: null,
 			head: null,
-			drops: new RateMeter(nowMs()),
-			arrivals: new RateMeter(nowMs())
+			drops: new RateMeter(),
+			arrivals: new RateMeter()
 		};
 		slots.set(k, s);
 	}
 	return s;
 }
 
-function deliver(s: Slot, frame: DataFrame): void {
-	for (const { cb } of [...s.viewers.values()]) {
-		if (!cb) continue;
-		try {
-			cb(frame);
-		} catch (err) {
-			console.error('frame consumer crashed', err);
-		}
+function feed(cb: FrameCallback, frame: DataFrame): void {
+	try {
+		cb(frame);
+	} catch (err) {
+		console.error('frame consumer crashed', err);
 	}
 }
 
+function deliver(s: Slot, frame: DataFrame): void {
+	for (const { cb } of [...s.viewers.values()]) if (cb) feed(cb, frame);
+}
+
 /** Bind a viewer to a (node, slot) stream under `token`, so several viewers of one slot collect
- * rather than evict. Re-binding with changed `specs` reports a resize or a kind switch. A
- * viewer with no `cb` draws in the worker and only states its demand here. */
+ * rather than evict; a re-bind reports new `specs`, and a viewer with no `cb` draws in the worker. */
 export function bindViewer(
 	node: string,
 	slot: string,
@@ -155,13 +151,7 @@ export function bindViewer(
 	s.viewers.set(token, { cb, specs });
 	scheduleReconcile(node, slot, k);
 	// An open stream sends nothing new for a joiner, so replay the current frame to it alone.
-	if (cb && s.current) {
-		try {
-			cb(s.current);
-		} catch (err) {
-			console.error('frame consumer crashed', err);
-		}
-	}
+	if (cb && s.current) feed(cb, s.current);
 	return () => {
 		const cur = slots.get(k);
 		if (cur?.viewers.get(token)?.cb !== cb) return; // already replaced by a later bind
@@ -197,12 +187,12 @@ listen((m) => {
 		if (delivered) flushSync();
 	} else if ('stats' in m) {
 		// The worker's paints and, per stream, what the wire delivered and what it coalesced.
-		if (m.stats.paints > 0) perfStats().delivered(m.stats.paints);
+		if (m.stats.paints > 0) paints.add(m.stats.paints);
 		for (const [node, slot, arrivals, drops] of m.stats.streams) {
 			const s = slots.get(streamKey(node, slot));
 			if (!s) continue;
-			s.arrivals.delivered(arrivals);
-			s.drops.dropped(drops);
+			s.arrivals.add(arrivals);
+			s.drops.add(drops);
 		}
 	}
 });
@@ -211,8 +201,8 @@ listen((m) => {
 export function dropRate(node: string, slot: string): number | null {
 	const s = slots.get(streamKey(node, slot));
 	if (!s) return null;
-	s.drops.tick(nowMs());
-	return s.drops.dps;
+	s.drops.tick();
+	return s.drops.rate;
 }
 
 /** Frames a second arriving on ONE stream, before any coalescing. Null when nothing is
@@ -220,8 +210,8 @@ export function dropRate(node: string, slot: string): number | null {
 export function arrivalRate(node: string, slot: string): number | null {
 	const s = slots.get(streamKey(node, slot));
 	if (!s) return null;
-	s.arrivals.tick(nowMs());
-	return s.arrivals.fps;
+	s.arrivals.tick();
+	return s.arrivals.rate;
 }
 
 /** The latest frame for a (node, slot), or null when no reader on this thread holds one. */

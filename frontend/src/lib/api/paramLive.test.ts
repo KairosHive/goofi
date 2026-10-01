@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { paramsUrl, ParamLive, type LiveSource } from './paramLive';
+import { ParamLive, type LiveSource } from './paramLive';
 
 /** A stand-in for the browser's `WebSocket`, CONNECTING at birth as a real one is. */
 class FakeSocket {
@@ -37,12 +37,6 @@ const live = (): ParamLive => {
 };
 
 describe('the live param plane', () => {
-	it('addresses one node', () => {
-		expect(paramsUrl('ws:', 'localhost:8000', '000000000001')).toBe(
-			'ws://localhost:8000/params/000000000001'
-		);
-	});
-
 	it('opens one socket per node and hands each frame to the store', () => {
 		const p = live();
 		p.watch('n1');

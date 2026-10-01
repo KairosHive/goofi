@@ -21,7 +21,7 @@
 	<div class="chip-host" data-testid="error-chip">
 		<span class="chip-anchor" bind:this={anchorEl}>
 			<Chip tone="danger" aria-expanded={chipOpen} onclick={() => (chipOpen = !chipOpen)}>
-				<StatusDot tone="error" size="sm" />
+				<StatusDot tone="danger" size="sm" />
 				{activeNodes.length}
 				{activeNodes.length === 1 ? 'error' : 'errors'}
 			</Chip>

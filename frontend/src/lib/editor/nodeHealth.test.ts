@@ -18,7 +18,7 @@ describe('nodeHealth', () => {
 	it('reports booting stages with a stage label, on the amber tone', () => {
 		expect(nodeHealth({ stage: 'creating' })).toEqual({
 			kind: 'booting',
-			tone: 'warn',
+			tone: 'warning',
 			title: 'creating…',
 			label: 'creating…',
 			status: 'ini',
@@ -28,7 +28,7 @@ describe('nodeHealth', () => {
 		});
 		expect(nodeHealth({ stage: 'setup' })).toEqual({
 			kind: 'booting',
-			tone: 'warn',
+			tone: 'warning',
 			title: 'setting up…',
 			label: 'setting up…',
 			status: 'ini',
@@ -83,7 +83,7 @@ describe('nodeHealth', () => {
 		// raised keeps its stage, and the two get different indicators — one blinks.
 		const dead = nodeHealth({ stage: 'error', error: 'ModuleNotFoundError: torch' });
 		expect(dead.kind).toBe('dead');
-		expect(dead.tone).toBe('error');
+		expect(dead.tone).toBe('danger');
 		expect(dead.title).toBe('ModuleNotFoundError: torch');
 		// …and it still reads as dead when the manager had no message to go with it.
 		expect(nodeHealth({ stage: 'error' }).kind).toBe('dead');

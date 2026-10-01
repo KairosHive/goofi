@@ -31,7 +31,7 @@
 </script>
 
 {#snippet row()}
-	<span class="caret" class:available={expandable} class:open><Icon name="chevron-right" /></span>
+	<span class="disclosure-caret" class:available={expandable} class:open><Icon name="chevron-right" /></span>
 	<span class="key">{name}</span>
 	<!-- Keep the inline space measurable while the value is shown below. -->
 	<span class="preview" class:concealed={open} aria-hidden={open} bind:this={preview}>{firstLine}{multiline ? '…' : ''}</span>
@@ -70,20 +70,12 @@
 	button.row:hover {
 		background: var(--surface-2);
 	}
-	.caret {
-		display: flex;
+	.disclosure-caret {
 		align-self: center;
-		flex: 0 0 auto;
 		visibility: hidden;
-		font-size: var(--fs-micro);
-		color: var(--text-muted);
-		transition: transform var(--dur-slow) var(--ease);
 	}
-	.caret.available {
+	.disclosure-caret.available {
 		visibility: visible;
-	}
-	.caret.open {
-		transform: rotate(90deg);
 	}
 	.key {
 		flex: 0 1 auto;

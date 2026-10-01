@@ -1,16 +1,19 @@
+/** What a rejection says: its message, or the value itself. */
+export function errorText(e: unknown): string {
+	return (e as Error)?.message ?? String(e);
+}
+
 /** The app's one transient alarm channel — not a queue: the latest message wins. */
 export class NotifyStore {
-	/** The line currently on screen, or null. */
 	message = $state<string | null>(null);
 
-	/** Publish `text`, replacing whatever was showing. */
 	raise(text: string): void {
 		this.message = text;
 	}
 
 	/** Raise a verb plus whatever an RPC rejection threw. */
 	failure(verb: string, e: unknown): void {
-		this.raise(`${verb} failed: ${(e as Error)?.message ?? e}`);
+		this.raise(`${verb} failed: ${errorText(e)}`);
 	}
 
 	/** Dismiss — a click on the toast, or its own timeout. */

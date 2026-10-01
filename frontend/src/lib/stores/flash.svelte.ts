@@ -3,20 +3,19 @@ export class Flash {
 	private _active = $state.raw(new Set<string>());
 	private timers = new Map<string, ReturnType<typeof setTimeout>>();
 
-	/** Whether `name` is currently flashing (reactive). */
 	active(name: string): boolean {
 		return this._active.has(name);
 	}
 
-	/** Flash each name for `ms`, restarting the window for any already flashing. */
-	pulse(names: string[], ms = 700): void {
+	/** Flash each name for 700 ms (GoofiNode's 0.7s ring), restarting any already flashing. */
+	pulse(names: string[]): void {
 		if (!names.length) return;
 		const next = new Set(this._active);
 		for (const n of names) {
 			next.add(n);
 			const existing = this.timers.get(n);
 			if (existing) clearTimeout(existing);
-			this.timers.set(n, setTimeout(() => this._clear(n), ms));
+			this.timers.set(n, setTimeout(() => this._clear(n), 700));
 		}
 		this._active = next;
 	}

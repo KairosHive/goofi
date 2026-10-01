@@ -7,7 +7,9 @@
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
-	import { Bar, Button, Field, Icon, IconButton, ScrollArea, Select, StatusDot, TextInput } from '$lib/ui';
+	import NodeDropHint from './NodeDropHint.svelte';
+	import { byName } from './nodeChoices';
+	import { Bar, Button, EmptyState, Field, Icon, IconButton, ScrollArea, Select, StatusDot, TextInput } from '$lib/ui';
 
 	const { panelId }: PanelProps = $props();
 
@@ -20,8 +22,6 @@
 	let root = $state('');
 	let failure = $state<string | null>(null);
 
-	const dragActive = $derived(uiStore.nodeDrag !== null);
-	const over = $derived(uiStore.nodeDragTarget === panelId);
 	const rec = $derived(g.record);
 
 	let nodeMenu = $state<DropPoint | null>(null);
@@ -53,7 +53,7 @@
 
 	const nodeItems = $derived(g.nodes
 		.filter((node) => Object.keys(node.output_slots ?? {}).length > 0)
-		.toSorted((a, b) => a.name.localeCompare(b.name))
+		.toSorted(byName)
 		.map((node): MenuItem => ({
 			label: node.name,
 			action: () => { if (nodeMenu) chooseSlots(node.uid, nodeMenu); }
@@ -119,12 +119,6 @@
 
 	const dropping = $derived(rows.some((r) => r.losing));
 
-	function clock(seconds: number | null): string {
-		const t = Math.max(0, Math.floor(seconds ?? 0));
-		const m = Math.floor(t / 60);
-		return `${String(m).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
-	}
-
 	function toggle(): void {
 		failure = null;
 		const act = rec.running ? g.stopRecording() : g.startRecording(name, root);
@@ -136,12 +130,12 @@
 	<Bar>
 		{#snippet start()}
 			<StatusDot
-				tone={rec.running ? (dropping ? 'warn' : 'ok') : 'error'}
+				tone={rec.running ? (dropping ? 'warning' : 'success') : 'danger'}
 				size="sm"
 				pulse={rec.running}
 				title={rec.running ? 'A recording runs' : 'No recording runs'}
 			/>
-			<span class="elapsed" data-testid="recorder-elapsed">{clock(rec.elapsed)}</span>
+			<span class="elapsed" data-testid="recorder-elapsed">{g.recordClock}</span>
 		{/snippet}
 		{#snippet end()}
 			<Button
@@ -189,19 +183,21 @@
 		<div class="folder" data-testid="recorder-folder" title={rec.folder}>{rec.folder}</div>
 	{/if}
 	{#if failure ?? rec.error}
-		<div class="failure" data-testid="recorder-error">{failure ?? rec.error}</div>
+		<div class="error-text failure" data-testid="recorder-error">{failure ?? rec.error}</div>
 	{/if}
 
 	<ScrollArea>
 		{#if rows.length === 0}
-			<p class="hint">No slot is armed. Add a node above or drag one here to record its output slots.</p>
+			<EmptyState>
+				{#snippet hint()}No slot is armed. Add a node above or drag one here to record its output slots.{/snippet}
+			</EmptyState>
 		{:else}
 			<ul class="streams">
 				{#each rows as r (r.uid + '/' + r.slot)}
 					<li class="row" data-testid="recorder-stream" data-output={`${r.uid}/${r.slot}`}>
 						<div class="stream-status">
 							<StatusDot
-								tone={r.losing ? 'warn' : 'ok'}
+								tone={r.losing ? 'warning' : 'success'}
 								size="sm"
 								title={r.losing
 									? `Dropping frames — ${r.dropped} lost`
@@ -241,9 +237,7 @@
 		{/if}
 	</ScrollArea>
 
-	{#if dragActive}
-		<div class="node-drop-hint" class:active={over} data-testid="node-drop-hint"></div>
-	{/if}
+	<NodeDropHint {panelId} />
 </div>
 
 {#if nodeMenu}
@@ -261,7 +255,8 @@
 		height: 100%;
 		min-height: 0;
 	}
-	.elapsed {
+	.elapsed,
+	.num {
 		font-family: var(--font-mono);
 		font-size: var(--fs-small);
 		color: var(--text-muted);
@@ -288,15 +283,6 @@
 	.folder {
 		color: var(--text-muted);
 		font-family: var(--font-mono);
-	}
-	.failure {
-		color: var(--danger);
-	}
-	.hint {
-		margin: 0;
-		padding: var(--space-6) var(--space-3);
-		text-align: center;
-		color: var(--text-muted);
 	}
 	.streams {
 		list-style: none;
@@ -327,8 +313,6 @@
 		gap: var(--space-2);
 		min-height: var(--hit);
 		padding-left: var(--space-2);
-		border-radius: var(--radius-sm);
-		background: var(--surface-2);
 	}
 	.who {
 		flex: 1 1 auto;
@@ -345,12 +329,6 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-family: var(--font-mono);
-	}
-	.num {
-		font-family: var(--font-mono);
-		font-size: var(--fs-small);
-		font-variant-numeric: tabular-nums;
-		color: var(--text-muted);
 	}
 	.drops.bad {
 		color: var(--warning);

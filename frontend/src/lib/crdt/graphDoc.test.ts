@@ -2,11 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
 	nodesMap,
 	nodeView,
-	nodeViews,
-	setParamSource,
 	linkViews,
 	facadeFaces,
-	docParams,
 	variableViews,
 	variableGroupLocks,
 	effectiveLock,
@@ -16,6 +13,7 @@ import {
 	arrangementTabs,
 	type Doc
 } from './graphDoc';
+import { liveNode, type ViewSources } from './liveNode.svelte';
 
 /** A document in the exact shape `goofi_bridge::projection` builds. */
 function seedDoc(): Doc {
@@ -40,6 +38,12 @@ function seedDoc(): Doc {
 	};
 }
 
+/** The production reader of a node's params, over `doc` alone: no catalog, face or runtime. */
+const live = (doc: Doc, uid: string) => {
+	const cx: ViewSources = { doc: () => doc, catalog: () => undefined, face: () => undefined, runtime: () => undefined };
+	return liveNode(uid, cx).params;
+};
+
 describe('graphDoc readers', () => {
 	it('reads node identity views', () => {
 		const doc = seedDoc();
@@ -51,16 +55,21 @@ describe('graphDoc readers', () => {
 			uid: 'b', type: 'Buffer', name: 'buf0', pos: [0, 0], scope: '__root__'
 		});
 		expect(nodeView(doc, 'missing')).toBeNull();
-		expect(nodeViews(doc).map((n) => n.uid)).toEqual(['a', 'b']);
+		expect(Object.keys(nodesMap(doc))).toEqual(['a', 'b']);
 	});
 
 	it('reads param values and expression sources', () => {
 		const doc = seedDoc();
-		expect(docParams(doc, 'a').common?.max_frequency?.value).toBe(30);
-		expect(docParams(doc, 'a').oscillator?.waveform?.value).toBe('sine');
-		expect(docParams(doc, 'a').common?.nope?.value).toBeUndefined();
-		expect(docParams(doc, 'a').oscillator?.waveform?.source?.expression).toBe("nd('lfo')");
-		expect(docParams(doc, 'a').common?.max_frequency?.source).toBeUndefined();
+		const p = live(doc, 'a');
+		expect(p.common?.max_frequency?.value).toBe(30);
+		expect(p.oscillator?.waveform?.value).toBe('sine');
+		expect(p.common?.nope?.value).toBeUndefined();
+		expect(p.oscillator?.waveform?.mode).toBe('expression');
+		expect(p.oscillator?.waveform?.expression).toBe("nd('lfo')");
+		expect(p.common?.max_frequency?.mode).toBe('constant');
+		expect(p.common?.max_frequency?.expression).toBeNull();
+		// A node with no params → empty.
+		expect(live(doc, 'b')).toEqual({});
 	});
 
 	it('reads links', () => {
@@ -90,7 +99,7 @@ describe('graphDoc readers', () => {
 
 		// ONE list, because the document is one map: leaf, facade and port alike, each carrying the
 		// scope it is drawn in.
-		expect(nodeViews(doc).map((n) => [n.uid, n.scope])).toEqual([
+		expect(Object.keys(nodesMap(doc)).map((uid) => [uid, nodeView(doc, uid)?.scope])).toEqual([
 			['a', '__root__'],
 			['b', '__root__'],
 			['m1', 'i1'],
@@ -106,19 +115,6 @@ describe('graphDoc readers', () => {
 		});
 		// A uid that names a LEAF has no face, however much it looks like a scope from outside.
 		expect(facadeFaces(doc).has('a')).toBe(false);
-	});
-
-	it('reads a node param leaves (value + source record) via docParams', () => {
-		const doc = seedDoc();
-		const p = docParams(doc, 'a');
-		expect(p.common.max_frequency).toEqual({ value: 30 });
-		// waveform in seedDoc carries a value AND a source record.
-		expect(p.oscillator.waveform).toEqual({
-			value: 'sine',
-			source: { mode: 'expression', expression: "nd('lfo')" }
-		});
-		// A node with no params → empty.
-		expect(docParams(doc, 'b')).toEqual({});
 	});
 
 	it('an unwired port is a slot like any other — a facade with nothing behind it still has a face', () => {
@@ -147,40 +143,10 @@ describe('graphDoc readers', () => {
 	it('a wrongly-typed or absent root reads as empty rather than throwing', () => {
 		// The manager is the sole author, so this can only mean the two ends have drifted — and a
 		// half-drawn graph reports that better than a blank page does.
-		expect(nodeViews({})).toEqual([]);
+		expect(nodesMap({})).toEqual({});
 		expect(linkViews({ links: 'not a map' })).toEqual([]);
 		expect(variableViews({ variables: null })).toEqual([]);
 		expect(facadeFaces({ nodes: 7 }).size).toBe(0);
-	});
-});
-
-describe('graphDoc.setParamSource — the test-seed source write', () => {
-	it('writes a record in place and docParams reads it back', () => {
-		const doc = seedDoc();
-		expect(
-			setParamSource(doc, 'a', 'common', 'max_frequency', { mode: 'reference', reference: 'f.out', triggers: true })
-		).toBe(true);
-		expect(docParams(doc, 'a').common?.max_frequency?.source).toEqual({
-			mode: 'reference',
-			reference: 'f.out',
-			triggers: true
-		});
-		// The committed value is untouched — only the binding was written.
-		expect(docParams(doc, 'a').common?.max_frequency?.value).toBe(30);
-	});
-
-	it('clears a record when passed null', () => {
-		const doc = seedDoc();
-		// `waveform` is seeded WITH a record in seedDoc.
-		expect(docParams(doc, 'a').oscillator?.waveform?.source).toBeDefined();
-		expect(setParamSource(doc, 'a', 'oscillator', 'waveform', null)).toBe(true);
-		expect(docParams(doc, 'a').oscillator?.waveform?.source).toBeUndefined();
-	});
-
-	it('no-ops (returns false) when the node is absent — never mint a phantom', () => {
-		const doc = seedDoc();
-		expect(setParamSource(doc, 'ghost', 'common', 'x', { mode: 'expression', expression: 'nd()' })).toBe(false);
-		expect(nodesMap(doc).ghost).toBeUndefined();
 	});
 });
 

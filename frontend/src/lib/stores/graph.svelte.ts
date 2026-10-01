@@ -6,17 +6,14 @@ import {
 	type Control,
 	type ControlEvent,
 	type DemoExample,
-	type Recovery,
-	type DirListing,
-	type FsSort,
 	type GraphSnapshot,
 	type LinkInfo,
 	type NodeInstanceInfo,
 	type NodeTypeInfo,
 	type RecordStatus,
-	type ScanDiff,
 	type Step
 } from '$lib/api/control';
+import type { OpName } from '$lib/api/ops';
 import { boundaryType, feeds, type SlotDtype } from '$lib/api/vocab';
 import { wantedDtype } from '$lib/inspector/expr/refs';
 import { bareName } from '$lib/editor/typeId';
@@ -41,31 +38,14 @@ import {
 	type VariableType,
 	type LockView
 } from '$lib/crdt/graphDoc';
-
-/** A grid cell, in the control panel's units. */
-export interface Cell {
-	x: number;
-	y: number;
-	w: number;
-	h: number;
-}
-
-/** What `control edit` takes: any subset, and `name` is the element's new name. */
-export interface ControlPatch extends Partial<Cell> {
-	name?: string;
-	kind?: ControlView['kind'];
-	min?: number;
-	max?: number;
-	step?: number;
-	options?: string[];
-}
+import type { Cell } from '$lib/panels/controlLayout';
 import { liveNode, type RuntimeOverlay, type ViewSources } from '$lib/crdt/liveNode.svelte';
 import { ParamLive, type LiveSource } from '$lib/api/paramLive';
 import type { SourcePatch } from '$lib/api/types';
 import type { GraphFragment } from '$lib/editor/clipboard';
 
-/** Safety net: lift a ⟳ spinner after this long when a node never reports the refresh done.
- * Generous — an LSL resolve blocks the node's ctrl thread ~4s. */
+/** Lift a ⟳ spinner after this long when a node never reports the refresh done. Generous: an
+ * LSL resolve blocks the node's ctrl thread ~4s. */
 const REFRESH_SPINNER_TIMEOUT_MS = 15000;
 
 /** Stable key for an in-flight param refresh; U+001F cannot occur in a uid/group/name. */
@@ -104,17 +84,15 @@ const IDLE_RECORD: RecordStatus = {
 export class GraphStore {
 	nodeTypes = $state.raw<NodeTypeInfo[] | null>(null);
 
-	/** One live view per node the document holds, in the document's order; each is the one object
-	 * its uid ever answers with, and its fields are reads of the document, the catalog and the
-	 * runtime overlay. The list itself follows the document's membership alone. */
+	/** One live view per node the document holds, in document order. Each is the one object its
+	 * uid answers with; its fields read the document, the catalog and the runtime overlay. */
 	nodes: NodeInstanceInfo[] = $derived(Object.keys(nodesMap(this.doc)).flatMap((uid) => this._views.get(uid) ?? []));
 	/** The live views, by uid — made as a node enters the document, dropped as it leaves. */
 	private _views = new Map<string, NodeInstanceInfo>();
 	/** What the runtime planes reported per node the document holds. */
 	private _rt = $state<Record<string, RuntimeOverlay>>({});
-	/** The same, for a node the runtime planes named before the document materialized it: the
-	 * stage and error planes ride their own channel in no defined order against the doc, so a
-	 * report outrunning the doc is routine. Taken by the node's view when it is made. */
+	/** The same, for a node the runtime planes named before the doc held it (their channels have
+	 * no order against the doc). The node's view takes it when it is made. */
 	private _stash: Record<string, RuntimeOverlay> = {};
 	private _byType = $derived(new Map((this.nodeTypes ?? []).map((t) => [t.type, t])));
 	private _faces = $derived(facadeFaces(this.doc));
@@ -127,21 +105,15 @@ export class GraphStore {
 	links: LinkInfo[] = $derived(linkViews(this.doc));
 	savePath = $state<string | null>(null);
 	unsavedChanges = $state(false);
-	/** What a goofi that did not shut down cleanly left behind, as the manager last listed it. */
-	recoveries = $state<Recovery[]>([]);
-	/** What the server said it is. Every affordance a demo withholds reads THIS, never a list of
-	 * its own. */
+	/** What the server said it is. Every affordance a demo withholds reads this. */
 	demo = $state(false);
 	/** The public set this instance belongs to, empty everywhere else. */
 	examples = $state<DemoExample[]>([]);
 	connected = $state(false);
 	/** Latches on the first connect and never clears — see {@link disconnected}. */
 	private _everConnected = $state(false);
-	hadHello = $state(false);
-	/** The startup hook: counts the SERVER sessions this page has connected to, bumped on the
-	 * first hello from a manager it has not seen. Startup UI keys on this — an offer made "at the
-	 * start" is made at the start of a session, which a page that outlived the last server sees
-	 * without a reload. Never on page load, and never on a transient reconnect. */
+	/** The startup hook: counts the server sessions this page saw, bumped on the first hello from
+	 * a new manager. Never on page load or on a transient reconnect; 0 until the first hello. */
 	sessionEpoch = $state(0);
 
 	/** Every armed output slot, doc-authoritative: the document is the one owner of what is armed. */
@@ -149,6 +121,11 @@ export class GraphStore {
 
 	/** The recording SESSION, as the backend last reported it. Pushed, never derived here. */
 	record = $state<RecordStatus>(IDLE_RECORD);
+	/** The recording's elapsed time as `mm:ss`. */
+	recordClock = $derived.by(() => {
+		const t = Math.max(0, Math.floor(this.record.elapsed ?? 0));
+		return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+	});
 
 	/** The streams whose drop count MOVED on the last report, keyed `node/slot`. */
 	dropping = $state.raw<ReadonlySet<string>>(new Set());
@@ -178,10 +155,8 @@ export class GraphStore {
 	/** instance_id of the manager we last hydrated from; a change is a fresh session, not a reconnect. */
 	private _lastInstanceId: string | null = null;
 
-	/** The control client (injectable for tests; defaults to the live WS one). */
 	private ctl: Control;
-
-	/** The document driver — the browser replica of the manager's control-plane document. */
+	/** The browser replica of the manager's control-plane document. */
 	private _sync: SyncClient;
 
 	/** The connection was ESTABLISHED and is now gone. Not `!connected`: at boot that would alarm
@@ -197,12 +172,9 @@ export class GraphStore {
 			if (c) this._everConnected = true;
 		});
 		ctl.on((ev) => this._handle(ev));
-		this._sync = new SyncClient(ctl);
-		this._sync.onDocChange((ops) => this._syncFromDoc(ops));
-		this._sync.start();
+		this._sync = new SyncClient(ctl, (ops) => this._syncFromDoc(ops));
 	}
 
-	/** The control-plane document — the one projection a client reads. */
 	get doc(): Doc {
 		return this._sync.doc;
 	}
@@ -249,10 +221,8 @@ export class GraphStore {
 		// A `hello` always carries the palette; `graph_replaced` never does — the `node_types` event
 		// is what re-announces it there.
 		if (snap.node_types?.length) this.nodeTypes = snap.node_types;
-		// The snapshot and the doc delta ride separate channels in no defined order, so the runtime
-		// overlay lands on the node's own entry, or on the stash its view will take. A NEW session's
-		// nodes are all still to come — its document follows this hello, and the reset between
-		// drops every view — so its whole overlay is stashed. The stash is this snapshot's alone.
+		// Snapshot and doc delta cross in no order: the overlay lands on the node's own entry or on
+		// the stash. A new session's nodes are all still to come, so its whole overlay is stashed.
 		const freshSession = snap.instance_id !== this._lastInstanceId;
 		this._stash = {};
 		for (const [uid, rt] of Object.entries(snap.runtime ?? {})) {
@@ -310,12 +280,9 @@ export class GraphStore {
 		switch (ev.event) {
 			case 'hello': {
 				// Not wholesale: a `hello` is also what a transient reconnect delivers.
-				const fresh = this._replaceSnapshot(ev.payload);
-				this.hadHello = true;
-				if (fresh) {
-					// A NEW session mints uids from 1 again, so the stale replica must fall NOW,
-					// synchronously, before this connection answers the server's binary hello SV.
-					// Projections first: `_resetProjection` reads `this.nodes`.
+				if (this._replaceSnapshot(ev.payload)) {
+					// A new session mints uids from 1 again, so the stale replica falls now, before
+					// this connection answers the server's binary hello SV. Projections first.
 					this._resetProjection();
 					this._sync.reset();
 					this._onWholesaleLoad(ev.payload.doc_version);
@@ -331,9 +298,8 @@ export class GraphStore {
 				break;
 			case 'state_update': {
 				const t = this._runtimeOf(ev.payload.node);
-				// Params are doc-owned: only the refreshed options are the runtime's. NOT the error:
-				// an echo is taken before the node has re-evaluated the source the op just moved,
-				// so it would carry the PREVIOUS source's failure. The live plane owns that field.
+				// Only the refreshed options are the runtime's. Not the param error: an echo predates
+				// the re-evaluation, so it carries the previous source's failure.
 				for (const [group, names] of Object.entries(ev.payload.params ?? {})) {
 					for (const [name, desc] of Object.entries(names)) {
 						const d = desc as { options?: string[] | null };
@@ -388,44 +354,9 @@ export class GraphStore {
 				this.savePath = ev.payload.save_path;
 				break;
 			case 'node_types':
-				this._applyNodeTypes(ev.payload.types);
+				this.nodeTypes = ev.payload.types;
 				break;
 		}
-	}
-
-	/** Adopt a palette catalog; the views read their descriptors off it. */
-	private _applyNodeTypes(types: NodeTypeInfo[]): void {
-		this.nodeTypes = types;
-	}
-
-	/** Re-derive the node registry from disk and report what changed; explicit, since there is no
-	 * watcher. The fresh catalog arrives as a `node_types` event in every open tab. */
-	async rescanNodes(): Promise<ScanDiff> {
-		return this.ctl.call<ScanDiff>('library refresh', {});
-	}
-
-	/** Move one of the patch's own node files into the private library, where every later patch
-	 * finds it. The fresh catalog arrives as a `node_types` event in every open tab. */
-	async saveNodeToLibrary(type: string, overwrite: boolean, name?: string): Promise<{ type: string; path: string }> {
-		return this.ctl.call<{ type: string; path: string }>('library save', { type, overwrite, ...(name ? { name } : {}) });
-	}
-
-	/** The private library's own file for this type, hidden behind the patch's — what a save to the
-	 * library would replace, and null where it would land on nothing. */
-	async libraryFileBehind(type: string): Promise<string | null> {
-		const r = await this.ctl.call<{ provenance?: string; path?: string; shadowed?: { provenance: string; path: string }[] }>(
-			'library get',
-			{ type }
-		);
-		if (r.provenance === 'custom') return r.path ?? null;
-		return r.shadowed?.find((s) => s.provenance === 'custom')?.path ?? null;
-	}
-
-	/** Where this patch's workspace files live — a per-run temp directory under a random name. It
-	 * rides `session status` beside the save path, because both answer "where does this patch live". */
-	async openWorkspace(): Promise<string> {
-		const r = await this.ctl.call<{ workspace: string }>('session status', {});
-		return r.workspace;
 	}
 
 	/** Adopt a recording report. Which streams are DROPPING is the counts that moved since the
@@ -484,12 +415,6 @@ export class GraphStore {
 		await this.ctl.call('node restart', { node: uid });
 	}
 
-	/** Open a node's own editor window. It appears on the machine the SERVER runs on, so this is a
-	 * request the page sends, never something it draws. */
-	async showNodeEditor(uid: string): Promise<void> {
-		await this.ctl.call('node editor', { node: uid });
-	}
-
 	async addLink(link: LinkInfo, step?: Step): Promise<void> {
 		await this.ctl.call('link add', linkEndpoints(link), step);
 	}
@@ -503,11 +428,15 @@ export class GraphStore {
 		this.ctl.preview(`param ${node} ${group}/${name}`, 'node param edit', { node, param: `${group}/${name}`, value });
 	}
 
+	/** Send a param op on `group/name`; a guarded call refuses a param the node does not hold. */
+	private _paramCall(op: OpName, node: string, group: string, name: string, extra: Record<string, unknown>, guard = true): Promise<unknown> {
+		if (guard && !this.nodeById(node)?.params?.[group]?.[name])
+			return Promise.reject(new Error(`${op}: no param ${group}.${name} on node ${node}`));
+		return this.ctl.call(op, { node, param: `${group}/${name}`, ...extra });
+	}
+
 	async updateParam(node: string, group: string, name: string, value: unknown): Promise<void> {
-		// Guard on EXISTENCE, not truthiness — a real param may hold 0, false or ''.
-		const param = this.nodeById(node)?.params?.[group]?.[name];
-		if (!param) throw new Error(`node param edit: no param ${group}.${name} on node ${node}`);
-		await this.ctl.call('node param edit', { node, param: `${group}/${name}`, value });
+		await this._paramCall('node param edit', node, group, name, { value });
 	}
 
 	/** Add a NEW user variable; the server refuses a name the patch already holds. A `control` makes
@@ -526,7 +455,6 @@ export class GraphStore {
 		this.ctl.preview(`variable ${name}`, 'variable entry edit', { name, value });
 	}
 
-	/** Edit an existing variable's value, keeping its type. */
 	async setVariableValue(name: string, value: number | string | boolean): Promise<void> {
 		if (!this.variables.some((g) => g.name === name)) throw new Error(`no variable ${name}`);
 		await this.ctl.call('variable entry edit', { name, value });
@@ -546,7 +474,6 @@ export class GraphStore {
 		return result.group;
 	}
 
-	/** Remove a user variable (a system variable is refused by the server). */
 	async removeVariable(name: string): Promise<void> {
 		await this.ctl.call('variable entry remove', { name });
 	}
@@ -562,7 +489,6 @@ export class GraphStore {
 		await this.ctl.call('variable entry edit', { name, control });
 	}
 
-	/** Rename a group, moving every member with it. */
 	async renameVariableGroup(from: string, to: string): Promise<void> {
 		await this.ctl.call('variable group rename', { from, to });
 	}
@@ -580,7 +506,7 @@ export class GraphStore {
 	}
 
 	/** Change a widget's name, kind, range, options or place, through the `control` door. */
-	async editControl(group: string, element: string, patch: ControlPatch): Promise<void> {
+	async editControl(group: string, element: string, patch: Partial<ControlView> & { name?: string }): Promise<void> {
 		await this.ctl.call('control edit', { group, element, ...patch });
 	}
 
@@ -589,26 +515,20 @@ export class GraphStore {
 		await this.ctl.call('control source', index === undefined ? { group, element, reference } : { group, element, reference, index });
 	}
 
-	/** The first output of node `uid` that can feed the variable named `name`, as `node.slot`. */
-	feedFor(name: string, uid: string): string | null {
-		const gv = this.variables.find((v) => v.name === name);
-		return gv ? this.referenceFor(uid, gv.type) : null;
-	}
-
 	/** The `node.slot` a param or a variable of `type` may follow on node `uid`, or null for none. A
 	 * facade keys its slots by port uid and a reference names the port, so the LABEL is the half. */
 	referenceFor(uid: string, type: string): string | null {
 		const node = this.nodeById(uid);
 		if (!node) return null;
 		const want = wantedDtype(type);
-		const key = Object.entries(node.output_slots).find(([, d]) => feeds(d as SlotDtype, want as SlotDtype))?.[0];
-		return key ? `${node.name}.${node.slot_labels?.[key] ?? key}` : null;
+		const key = Object.entries(node.output_slots).find(([, d]) => feeds(d as SlotDtype, want))?.[0];
+		return key ? slotReference(node, key) : null;
 	}
 
 	/** Make the widget named `name` follow the first output of node `uid` that can feed it. */
 	async linkControl(name: string, uid: string): Promise<string | null> {
 		const gv = this.variables.find((v) => v.name === name);
-		const reference = this.feedFor(name, uid);
+		const reference = gv ? this.referenceFor(uid, gv.type) : null;
 		if (gv && reference) await this.sourceControl(gv.group, gv.element, reference);
 		return reference;
 	}
@@ -633,7 +553,7 @@ export class GraphStore {
 		const key = refreshKey(node, group, name);
 		this._beginRefresh(key);
 		try {
-			await this.ctl.call('node param request', { node, param: `${group}/${name}`, request: 'refresh' });
+			await this._paramCall('node param request', node, group, name, { request: 'refresh' }, false);
 		} catch (e) {
 			// A failed dispatch means the node never re-scans, so do not wait out the safety timeout.
 			this._endRefresh(key);
@@ -641,21 +561,11 @@ export class GraphStore {
 		}
 	}
 
-	/** Take every param's default from what the node holds now — the zero point the non-default
-	 * filter reads. It edits no param, so an expression or a reference keeps driving; it IS
-	 * undoable, since the zero point is document state a later reader depends on. */
-	async clearNonDefault(node: string): Promise<void> {
-		await this.ctl.call('node baseline', { node });
-	}
-
 	/** Fire a pulse param: a request the node acts on, with no value and so no inverse to undo. */
 	async pulse(node: string, group: string, name: string): Promise<void> {
-		const param = this.nodeById(node)?.params?.[group]?.[name];
-		if (!param) throw new Error(`node param request: no param ${group}.${name} on node ${node}`);
-		await this.ctl.call('node param request', { node, param: `${group}/${name}`, request: 'pulse' });
+		await this._paramCall('node param request', node, group, name, { request: 'pulse' });
 	}
 
-	/** Whether a ⟳ refresh is in flight for this param. */
 	isRefreshing(node: string, group: string, name: string): boolean {
 		return refreshKey(node, group, name) in this._refreshing;
 	}
@@ -677,9 +587,7 @@ export class GraphStore {
 	/** Edit a param's source record: any subset of mode, expression, reference and triggers. A text
 	 * given implies its mode; an empty text clears it. The manager's rules are the op's. */
 	async setSource(node: string, group: string, name: string, source: SourcePatch): Promise<void> {
-		const d = this.nodeById(node)?.params?.[group]?.[name];
-		if (!d) throw new Error(`node param edit: no param ${group}.${name} on node ${node}`);
-		await this.ctl.call('node param edit', { node, param: `${group}/${name}`, ...source });
+		await this._paramCall('node param edit', node, group, name, { ...source });
 	}
 
 	async setNodePos(uid: string, pos: [number, number]): Promise<void> {
@@ -695,7 +603,6 @@ export class GraphStore {
 		await this.ctl.call('compound', { ops });
 	}
 
-	/** Set a node's mutable display name (uid identity is unchanged). */
 	async renameNode(uid: string, name: string): Promise<void> {
 		const oldName = this.nodeById(uid)?.name ?? '';
 		if (oldName === name) return;
@@ -719,55 +626,19 @@ export class GraphStore {
 		return this.ctl.call<{ path: string }>('session save', { path, overwrite });
 	}
 
-	/** Ask the manager what earlier sessions left unsaved; the list is disk truth, read on ask. */
-	async refreshRecoveries(): Promise<void> {
-		const r = await this.ctl.call<{ recoveries: Recovery[] }>('session recoverable', {});
-		this.recoveries = r.recoveries;
-	}
-
-	/** Open a crash's autosave in place of the open patch: unsaved work, with its old home. */
-	async recover(workspace: string): Promise<void> {
-		await this.ctl.call('session recover', { workspace });
-		this.recoveries = this.recoveries.filter((r) => r.workspace !== workspace);
-	}
-
-	/** Remove a crash's autosave without opening it. */
-	async discardRecovery(workspace: string): Promise<void> {
-		await this.ctl.call('session discard', { workspace });
-		this.recoveries = this.recoveries.filter((r) => r.workspace !== workspace);
-	}
-
 	/** Reset to an empty, unnamed patch. Nothing is written here: a New emits no
 	 * `save_path_changed`, so the `graph_replaced` snapshot is the sole carrier of the null path. */
 	async newPatch(): Promise<void> {
 		await this.ctl.call('session new', {});
 	}
 
-	/** Group the named nodes into a sub-patch. Returns its instance id. */
 	async groupNodes(members: string[], pos?: [number, number]): Promise<string> {
 		const r = await this.ctl.call<{ inst_id: string }>('nodes group', { nodes: members, pos });
 		return r.inst_id;
 	}
 
-	/** Dissolve a sub-patch instance back into its member nodes. */
 	async expandInstance(instId: string): Promise<void> {
 		await this.ctl.call('nodes ungroup', { subpatch: instId });
-	}
-
-	async statPath(path: string): Promise<{ path: string; kind: 'file' | 'dir' | 'missing' }> {
-		return this.ctl.call('dir stat', { path });
-	}
-
-	/** List one directory level on the BACKEND filesystem (full FS, no jail). No path opens the
-	 * folder of the last patch loaded or saved. */
-	async listDir(path: string | undefined, sort: FsSort, reverse: boolean): Promise<DirListing> {
-		return this.ctl.call<DirListing>('dir list', { path, sort, reverse });
-	}
-
-	/** Load a patch from a BACKEND filesystem path; destructive, and it resets the session, so
-	 * there is no history entry. A `.gfi` is a zip, so a path is the only door the client has. */
-	async load(path: string): Promise<void> {
-		await this.ctl.call('session load', { path });
 	}
 
 	/** Resolve a node by uid — the ONE accessor, and every kind of node record answers it. Read
@@ -776,15 +647,8 @@ export class GraphStore {
 		return nodesMap(this.doc)[id] === undefined ? null : (this._views.get(id) ?? null);
 	}
 
-	/** Every node a panel can bind or a picker can list. ROOT is the canvas, and it is not one. */
-	get bindable(): { uid: string; name: string }[] {
-		return this.nodes.map((n) => ({ uid: n.uid, name: n.name }));
-	}
-
-	/** One node's live source state, both maps WHOLE: a driven param neither names has no live value
-	 * and shows its literal again, and no standing error. Written leaf by leaf, so a param whose
-	 * value did not move wakes nobody; the one door the control plane's own event and the faster
-	 * `/params` socket both come through. */
+	/** One node's live source state, both maps whole: a driven param neither names shows its
+	 * literal again. Leaf by leaf, so an unmoved value wakes nobody. */
 	applyLiveSource(node: string, live: LiveSource): void {
 		const t = this._rt[node];
 		if (!t) return;
@@ -815,9 +679,8 @@ export class GraphStore {
 		return r.rename ?? {};
 	}
 
-	/** Duplicate `uids` in place — a copy and a paste, which is what a duplicate IS, so a sub-patch
-	 * and a leaf go through the one door. `instId` is where the selection came FROM: a fragment
-	 * names a scope only when that scope is in it, so a member copied alone names none. */
+	/** Duplicate `uids` in place as a copy and a paste. `instId` is where the selection came from:
+	 * a fragment names a scope only when that scope is in it. */
 	async cloneNodes(
 		uids: string[],
 		offset: [number, number] = [40, 40],
@@ -828,9 +691,6 @@ export class GraphStore {
 		return this.pasteNodes(await this.copyNodes(uids), offset, instId, step);
 	}
 
-
-
-	/** Delete several nodes as ONE undoable step. */
 	async removeNodes(uids: Iterable<string>, within?: Step): Promise<void> {
 		const uidList = [...uids];
 		if (uidList.length === 0) return;
@@ -841,7 +701,11 @@ export class GraphStore {
 			for (const uid of uidList) await this.removeNode(uid, step);
 		}, within);
 	}
+}
 
+/** The `node.slot` reference to `slot`; a facade keys slots by port uid, so the label names it. */
+export function slotReference(node: NodeInstanceInfo, slot: string): string {
+	return `${node.name}.${node.slot_labels?.[slot] ?? slot}`;
 }
 
 let _live: ParamLive | null = null;

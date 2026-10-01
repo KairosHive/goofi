@@ -21,6 +21,5 @@ export const image: ViewerModule = {
 		return spec;
 	},
 	renders: (shape) => shape.length === 2 || [1, 2, 3, 4].includes(shape[2]),
-	variant: () => '',
 	drawing: (surface) => new ImageDrawing(surface)
 };

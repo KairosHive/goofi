@@ -1,5 +1,5 @@
 import type { ArrayData } from '$lib/codec/decode';
-import { isU8, reportedDtype, sampleRange, toUnit } from './depth';
+import { reportedDtype, sampleRange, toUnit } from './depth';
 
 export interface ViewSummary {
 	shape: number[];
@@ -9,9 +9,8 @@ export interface ViewSummary {
 	max: number | null;
 }
 
-/** The shape the frame CAME from: a producer that pre-shrank for its viewers, or a reduction on
- * the way out, records each axis's original length — and a panel naming a shape must name the
- * node's, not the preview's. */
+/** The shape the frame CAME from: a pre-shrinking producer or a reduction records each axis's
+ * original length, and a panel names the node's shape, not the preview's. */
 function originShape(shape: number[], meta?: Record<string, unknown>): number[] {
 	const reduced = meta?.reduced;
 	if (!reduced || typeof reduced !== 'object') return shape;
@@ -23,7 +22,7 @@ function originShape(shape: number[], meta?: Record<string, unknown>): number[] 
  * came over the 8-bit hop carries the range its texels span, and a texel is not a value. */
 export function summaryOf(arraySpec: ArrayData, meta?: Record<string, unknown>): ViewSummary {
 	const v = arraySpec.values;
-	const range = isU8(arraySpec.dtype) ? sampleRange(meta) : null;
+	const range = sampleRange(arraySpec.dtype, meta);
 	let mn = Infinity;
 	let mx = -Infinity;
 	let sum = 0;

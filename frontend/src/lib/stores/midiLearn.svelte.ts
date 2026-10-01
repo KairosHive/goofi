@@ -3,6 +3,7 @@ import type { NodeInstanceInfo } from '$lib/api/control';
 import type { ArrayData } from '$lib/codec/decode';
 import { feeds, type SlotDtype } from '$lib/api/vocab';
 import { notify } from '$lib/stores/notify.svelte';
+import { slotReference } from '$lib/stores/graph.svelte';
 
 /** One pending MIDI mapping across widgets and parameters. */
 class MidiLearn {
@@ -33,7 +34,7 @@ class MidiLearn {
 		const whole = [{ dim: 0, max: 'whole' as const }, { dim: -1, max: 'whole' as const }];
 		for (const [slot] of slots) {
 			let baseline: number[] | null = null;
-			this.unbind.push(bindViewer(node.uid, slot, `midi-learn:${target}`, [{ dtype: 'array', ndim: [], dims: [], reduce: whole }], (frame) => {
+			this.unbind.push(bindViewer(node.uid, slot, `midi-learn:${target}`, [{ dtype: 'array', ndim: [], reduce: whole }], (frame) => {
 				if (this.target !== target) return;
 				const values = (frame.data as ArrayData).values;
 				if (!values) return;
@@ -44,7 +45,7 @@ class MidiLearn {
 				const index = Array.from(values).findIndex((v, i) => Number.isFinite(v) && v !== baseline![i]);
 				if (index < 0) return;
 				this.stop();
-				commit(`${node.name}.${node.slot_labels?.[slot] ?? slot}`, index);
+				commit(slotReference(node, slot), index);
 			}));
 		}
 	}

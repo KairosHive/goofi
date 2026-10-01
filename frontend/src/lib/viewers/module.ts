@@ -16,18 +16,11 @@ export interface AxisReduce {
 	max: number | 'whole';
 }
 
-export interface DimConstraint {
-	dim: number;
-	cmp: DimCmp;
-	n: number;
-}
-
 /** Per-viewer ViewSpec: a compatibility predicate plus a reduction request. The wire shape
  * mirrors Rust `goofi_view::ViewSpec`; `ndim` is a conjunction. */
 export interface ViewSpec {
 	dtype: ViewDtype;
 	ndim: [DimCmp, number][];
-	dims: DimConstraint[];
 	reduce: AxisReduce[];
 	depth?: Depth;
 	/** The asks on dims 0 and 1 are one box: shrunk by one factor, so a picture keeps its aspect. */
@@ -60,9 +53,9 @@ export interface ViewerModule {
 	/** What one viewer `w`×`h` device px wide asks of a frame it draws, under `settings`. */
 	ask(w: number, h: number, settings: SettingsMap): ViewSpec;
 	/** Whether a frame of `shape` draws under `settings`; its dim count is already in range. */
-	renders(shape: number[], settings: SettingsMap): boolean;
+	renders?(shape: number[], settings: SettingsMap): boolean;
 	/** The drawing the settings choose, by name; the feed remakes the drawing when it changes. */
-	variant(settings: SettingsMap): string;
+	variant?(settings: SettingsMap): string;
 	/** The drawing of an array kind on a surface; a text kind fills its card with a component. */
 	readonly drawing: ((surface: Surface, variant: string) => Drawing) | null;
 }
@@ -81,7 +74,6 @@ export function boxAsk(kind: ViewerKind, w: number, h: number, ndim = drawnNdim(
 	return {
 		dtype: 'array',
 		ndim,
-		dims: [],
 		reduce: [
 			{ dim: 0, max: h },
 			{ dim: 1, max: w }
@@ -96,7 +88,6 @@ export function wholeAsk(kind: ViewerKind, ndim: number): ViewSpec {
 	return {
 		dtype: 'array',
 		ndim: drawnNdim(kind),
-		dims: [],
 		reduce: Array.from({ length: ndim }, (_, dim) => ({ dim, max: 'whole' }))
 	};
 }

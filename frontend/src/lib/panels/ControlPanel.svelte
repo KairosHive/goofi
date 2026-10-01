@@ -1,7 +1,4 @@
-<!-- Control panel — knobs, sliders and text widgets over ONE group of variables. Edit mode is this panel's
-     own view and nothing else: out of it a drag turns a widget; in it the same drag moves it, the
-     corner resizes it, a strip above the board holds the name and the palette, and the picked
-     widget's form opens beside the widget itself. Every change it makes is a variables op, so the
+<!-- Control panel: widgets over ONE group of variables. Every change is a variables op, so the
      manager owns the state and this panel owns only the drawing and the gesture in flight. -->
 <script lang="ts">
 	import { onDestroy, tick } from 'svelte';
@@ -16,6 +13,7 @@
 	import { midiLearn } from '$lib/stores/midiLearn.svelte';
 	import RefPicker from '$lib/inspector/RefPicker.svelte';
 	import {
+		Bar,
 		Chip,
 		PaintPad,
 		EmptyState,
@@ -29,24 +27,12 @@
 		Segmented,
 		Select,
 		Slider,
-		TextArea,
 		TextInput,
 		Toggle,
 		isTextEditingTarget
 	} from '$lib/ui';
-	import {
-		BORN,
-		COLUMNS,
-		KINDS,
-		TYPE_OF,
-		cellAt,
-		movedBy,
-		resizedBy,
-		sameCell,
-		type Cell,
-		type Kind,
-		type Units
-	} from './controlLayout';
+	import { CONTROL_COLUMNS, CONTROL_KINDS } from '$lib/api/vocab';
+	import { KIND, cellAt, movedBy, resizedBy, sameCell, type Cell, type Kind, type Units } from './controlLayout';
 
 	interface ControlState {
 		group?: string;
@@ -80,8 +66,6 @@
 	// The form hangs off the picked widget's own cell, and follows it wherever a drag lands it.
 	const anchor = $derived.by(() => {
 		if (!board || !pickedView) return null;
-		const at = placed(pickedView);
-		void [at.x, at.y, at.w, at.h];
 		return board.querySelector<HTMLElement>(`[data-testid="control-${group}-${pickedView.element}"]`);
 	});
 
@@ -114,7 +98,7 @@
 		const cs = getComputedStyle(el);
 		const gap = parseFloat(cs.rowGap) || 0;
 		const inner = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-		const x = (inner + gap) / COLUMNS;
+		const x = (inner + gap) / CONTROL_COLUMNS;
 		const row = parseFloat(cs.gridAutoRows);
 		return { x, y: Number.isFinite(row) ? row + gap : x, gap };
 	}
@@ -126,9 +110,19 @@
 		if (!board || !zone) return null;
 		const z = zone.getBoundingClientRect();
 		if (e.clientX < z.left || e.clientX > z.right || e.clientY < z.top || e.clientY > z.bottom) return null;
-		const r = board.getBoundingClientRect();
-		const cs = getComputedStyle(board);
-		return { x: e.clientX - r.left - parseFloat(cs.paddingLeft), y: e.clientY - r.top - parseFloat(cs.paddingTop) };
+		const o = origin(board);
+		return { x: e.clientX - o.x, y: e.clientY - o.y };
+	}
+
+	/** The board's grid origin in client pixels. */
+	function origin(b: HTMLElement): { x: number; y: number } {
+		const r = b.getBoundingClientRect();
+		const cs = getComputedStyle(b);
+		return { x: r.left + parseFloat(cs.paddingLeft), y: r.top + parseFloat(cs.paddingTop) };
+	}
+
+	function bornCell(kind: Kind, point: { x: number; y: number }, u: Units): Cell {
+		return cellAt(point.x, point.y, KIND[kind].w, KIND[kind].h, u, CONTROL_COLUMNS);
 	}
 
 	/** The ghost's top-left for a pointer at `e`: the cell it would land on, in pixels, while over
@@ -137,14 +131,9 @@
 		const point = onBoard(e);
 		if (point && board) {
 			const u = unitsOf(board);
-			const born = BORN[kind];
-			const cell = cellAt(point.x, point.y, born.w, born.h, u, COLUMNS);
-			const r = board.getBoundingClientRect();
-			const cs = getComputedStyle(board);
-			return {
-				at: { x: r.left + parseFloat(cs.paddingLeft) + cell.x * u.x, y: r.top + parseFloat(cs.paddingTop) + cell.y * u.y },
-				snapped: true
-			};
+			const cell = bornCell(kind, point, u);
+			const o = origin(board);
+			return { at: { x: o.x + cell.x * u.x, y: o.y + cell.y * u.y }, snapped: true };
 		}
 		return { at: { x: e.clientX - w / 2, y: e.clientY - h / 2 }, snapped: false };
 	}
@@ -246,8 +235,8 @@
 		uiStore.variableDrag = null;
 		const [dx, dy] = [e.clientX - drag.x, e.clientY - drag.y];
 		drag.to = drag.resize
-			? resizedBy(drag.from, dx, dy, drag.units, COLUMNS)
-			: movedBy(drag.from, dx, dy, drag.units, COLUMNS);
+			? resizedBy(drag.from, dx, dy, drag.units, CONTROL_COLUMNS)
+			: movedBy(drag.from, dx, dy, drag.units, CONTROL_COLUMNS);
 	}
 
 	// ONE op per gesture, so a drag is one undo step, the way every other frozen drag is.
@@ -276,7 +265,7 @@
 	function liftChip(e: PointerEvent, kind: Kind): void {
 		if (!board) return;
 		const u = unitsOf(board);
-		const born = BORN[kind];
+		const born = KIND[kind];
 		const [w, h] = [born.w * u.x - u.gap, born.h * u.y - u.gap];
 		lift = { kind, ...ghostAt(e, kind, w, h), w, h, from: { x: e.clientX, y: e.clientY } };
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -302,17 +291,12 @@
 	}
 
 	async function bear(kind: Kind, point: { x: number; y: number } | null): Promise<void> {
-		const born = BORN[kind];
-		const cell = point && board ? cellAt(point.x, point.y, born.w, born.h, unitsOf(board), COLUMNS) : undefined;
+		const cell = point && board ? bornCell(kind, point, unitsOf(board)) : undefined;
 		try {
 			picked = await g.addControl(group, kind, cell);
 		} catch {
 			/* refused */
 		}
-	}
-
-	function zero(type: VariableView['type']): Value {
-		return type === 'bool' ? false : type === 'string' ? '' : 0;
 	}
 
 	async function rename(gv: VariableView, raw: string): Promise<void> {
@@ -335,32 +319,17 @@
 		input?.select();
 	}
 
-	function optionsOf(raw: string): string[] {
-		return raw
-			.split(',')
-			.map((s) => s.trim())
-			.filter((s) => s !== '');
-	}
-
-	/** What the palette ghost of `kind` shows: a value in the middle of the range it is born with. */
-	function sample(kind: Kind): Value {
-		return TYPE_OF[kind] === 'float' ? 0.5 : zero(TYPE_OF[kind]);
-	}
+	const learn = (gv: VariableView) => (ref: string, index: number) =>
+		void g.sourceControl(group, gv.element, ref, index).catch(() => {});
 
 	// A widget is either set by hand or LINKED to one output of a node. `linking` is the link
 	// segment lit before a node is chosen, so the picker shows with nothing to show yet.
-	let linking = $state(false);
-	$effect(() => {
-		if (pickedView?.source) linking = false;
-	});
-	$effect(() => {
-		void picked;
-		linking = false;
-	});
+	let linkingFor = $state<string | null>(null);
+	const linking = $derived(!!pickedView && linkingFor === picked && !pickedView.source);
 
 	function setSource(pv: VariableView, reference: string): void {
 		if (midiLearn.target === `control:${pv.name}`) midiLearn.stop();
-		linking = false;
+		linkingFor = null;
 		void g.sourceControl(group, pv.element, reference).catch(() => {});
 	}
 
@@ -399,23 +368,25 @@
 	{:else if c.kind === 'paint'}
 		<PaintPad value={String(value)} {onChange} pending={painting?.name === name ? painting : null} />
 	{:else}
-		<TextArea value={String(value)} aria-label={label} {onChange} />
+		<TextInput multiline value={String(value)} aria-label={label} {onChange} />
 	{/if}
 {/snippet}
 
 <div class="wrap" data-testid="control-panel" data-group={group} data-edit={edit}>
-	<div class="bar">
-		<span class="title">{group}</span>
-		<IconButton
-			variant={edit ? 'primary' : 'ghost'}
-			size="sm"
-			data-testid="control-edit-toggle"
-			title={edit ? 'Done editing' : 'Edit this panel'}
-			label={edit ? 'Done editing' : 'Edit this panel'}
-			disabled={!named}
-			onclick={() => setEdit(!edit)}><Icon name={edit ? 'check' : 'pencil'} /></IconButton
-		>
-	</div>
+	<Bar style="--bar-bg: transparent; --bar-border: 1px solid var(--border)">
+		{#snippet start()}<span class="title">{group}</span>{/snippet}
+		{#snippet end()}
+			<IconButton
+				variant={edit ? 'primary' : 'ghost'}
+				size="sm"
+				data-testid="control-edit-toggle"
+				title={edit ? 'Done editing' : 'Edit this panel'}
+				label={edit ? 'Done editing' : 'Edit this panel'}
+				disabled={!named}
+				onclick={() => setEdit(!edit)}><Icon name={edit ? 'check' : 'pencil'} /></IconButton
+			>
+		{/snippet}
+	</Bar>
 
 	{#if edit}
 		<div class="strip">
@@ -430,7 +401,7 @@
 				/>
 			</div>
 			<div class="palette" data-testid="control-palette">
-				{#each KINDS as kind (kind)}
+				{#each CONTROL_KINDS as { id: kind } (kind)}
 					<Chip
 						tone={lift?.kind === kind ? 'accent' : 'neutral'}
 						data-testid={`control-palette-${kind}`}
@@ -455,7 +426,7 @@
 				class="board"
 				data-testid="control-board"
 				bind:this={board}
-				style={`--columns: ${COLUMNS}`}
+				style={`--columns: ${CONTROL_COLUMNS}`}
 				onpointermove={move}
 				onpointerup={up}
 				onpointercancel={() => { drag = null; cancelVariable(); }}
@@ -525,8 +496,7 @@
 						{#if edit}
 							{#if gv.type === 'float' || gv.type === 'int'}
 								<div class="learn">
-									<MidiLearn label={gv.element} target={`control:${gv.name}`} testid="control-learn"
-										onLearn={(ref, index) => { void g.sourceControl(group, gv.element, ref, index).catch(() => {}); }} />
+									<MidiLearn label={gv.element} target={`control:${gv.name}`} testid="control-learn" onLearn={learn(gv)} />
 								</div>
 							{/if}
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -550,7 +520,7 @@
 						{#if edit && uiStore.nodeDrag !== null}
 							<div
 								class="node-drop-hint"
-								class:active={uiStore.nodeDragZone === `${props.panelId}#${gv.name}`}
+								class:active={uiStore.nodeDragOver === `${props.panelId}#${gv.name}`}
 								data-testid="node-drop-hint"
 							></div>
 						{/if}
@@ -594,7 +564,7 @@
 							<Select
 								data-testid="control-props-kind"
 								value={pc.kind}
-								options={KINDS.filter((k) => TYPE_OF[k] === pv.type)}
+								options={CONTROL_KINDS.filter((k) => k.type === pv.type).map((k) => k.id)}
 								onChange={(v) => setControl(pv, { kind: v as Kind })}
 							/>
 						</Field>
@@ -610,7 +580,7 @@
 										testid: 'control-source-link'
 									}
 								]}
-								onChange={(id) => (id === 'link' ? (linking = true) : pv.source ? setSource(pv, '') : (linking = false))}
+								onChange={(id) => (id === 'link' ? (linkingFor = picked) : pv.source ? setSource(pv, '') : (linkingFor = null))}
 								aria-label="source"
 								data-testid="control-source"
 							/>
@@ -626,7 +596,7 @@
 							</Field>
 						{/if}
 						{#if pv.source?.error}
-							<p class="source-error" role="alert" data-testid="control-source-error">{pv.source.error}</p>
+							<p class="error-text" role="alert" data-testid="control-source-error">{pv.source.error}</p>
 						{/if}
 						{#if pv.source}
 							<Field label="index" doc="Which number of a wide frame the widget reads — a controller's cc holds 128. Learn, on the widget, finds it">
@@ -646,15 +616,14 @@
 									inputmode="text"
 									data-testid="control-props-options"
 									value={(pc.options ?? []).join(', ')}
-									onChange={(v) => setControl(pv, { options: optionsOf(v) })}
+									onChange={(v) => setControl(pv, { options: v.split(',').map((o) => o.trim()).filter(Boolean) })}
 								/>
 							</Field>
 						{/if}
 						<!-- The corner buttons' door for a finger: a cell is narrower than two finger-sized targets. -->
 						<div class="touch-actions">
 							{#if pv.type === 'float' || pv.type === 'int'}
-								<MidiLearn label={pv.element} target={`control:${pv.name}`} testid="control-learn"
-									onLearn={(ref, index) => { void g.sourceControl(group, pv.element, ref, index).catch(() => {}); }} />
+								<MidiLearn label={pv.element} target={`control:${pv.name}`} testid="control-learn" onLearn={learn(pv)} />
 							{/if}
 							<Chip tone="danger" data-testid="control-delete" onclick={() => void g.removeControl(group, pv.element)}>delete</Chip>
 						</div>
@@ -665,7 +634,7 @@
 	{/if}
 
 	{#if variableGrab && uiStore.variableDrag}
-		<div class="variable-ghost" style={`left: ${uiStore.variableDrag.x + 12}px; top: ${uiStore.variableDrag.y + 12}px`} aria-hidden="true">variables.{uiStore.variableDrag.name}</div>
+		<div class="ghost variable-ghost" style={`left: ${uiStore.variableDrag.x + 12}px; top: ${uiStore.variableDrag.y + 12}px`} aria-hidden="true">variables.{uiStore.variableDrag.name}</div>
 	{/if}
 
 	{#if lift}
@@ -674,7 +643,7 @@
 				<div class="widget">
 					{@render widget(
 						{ kind: lift.kind, min: 0, max: 1, step: 0.01, x: 0, y: 0, w: 0, h: 0 },
-						sample(lift.kind),
+						({ float: 0.5, int: 0, bool: false, string: '' } as const)[KIND[lift.kind].type],
 						lift.kind,
 						() => {}
 					)}
@@ -687,9 +656,6 @@
 
 <style>
 	.variable-ghost {
-		position: fixed;
-		z-index: 10000;
-		pointer-events: none;
 		padding: var(--space-2);
 		background: var(--surface-3);
 		color: var(--text);
@@ -703,15 +669,7 @@
 		height: 100%;
 		min-height: 0;
 	}
-	.bar {
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
-		padding: var(--space-2) var(--space-3);
-		border-bottom: 1px solid var(--border);
-	}
 	.title {
-		flex: 1;
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -850,12 +808,6 @@
 	}
 	.widget.broken {
 		outline: 1px dashed var(--danger);
-	}
-	.source-error {
-		margin: 0;
-		color: var(--danger);
-		font-size: var(--fs-small);
-		overflow-wrap: anywhere;
 	}
 	.label {
 		touch-action: none;

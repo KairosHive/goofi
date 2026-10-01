@@ -3,6 +3,12 @@ import { history } from './history.svelte';
 import { notify } from './notify.svelte';
 import { FakeControl } from '$lib/test/fakeControl';
 import { GraphStore } from './graph.svelte';
+import { flash } from './flash.svelte';
+import { captureNavContext, type NavContext } from './navContext';
+import { historyFeed } from '$lib/api/control';
+import { seed } from '$lib/test/docSeed';
+import { typeInfo } from '$lib/test/typeInfo';
+import { workspace } from 'panelty';
 
 // The MANAGER owns the history: every write is a step there, and this store mirrors the labels its
 // replies put on top. The fake control plays the manager's half, one entry per write.
@@ -122,5 +128,33 @@ describe('HistoryStore — a transaction is one step', () => {
 		).rejects.toThrow('boom');
 		await g.removeNode('b');
 		expect(fc.undoStack.map((e) => e.label)).toEqual(['Add + boom', 'node remove']);
+	});
+});
+
+describe('HistoryStore — a flip pulses what it restored', () => {
+	beforeEach(() => history().reset());
+
+	it('pulses the selected nodes that are on the canvas, and skips the ones that are not', async () => {
+		const { fc, g } = booted();
+		const d = seed(fc);
+		g.nodeTypes = [typeInfo({ type: 'Oscillator', input_slots: {}, output_slots: { out: 'ARRAY' }, params: {} })];
+		// uid and display name kept distinct, so a lookup that confuses the two is caught.
+		d.node('uf_present', 'Oscillator', 'display-present', [0, 0]);
+		const ctx: NavContext = {
+			activeWorkspaceId: workspace().state.activeWorkspaceId,
+			activePanelId: null,
+			enteredPath: {},
+			selection: { p: { nodes: ['uf_present', 'uf_absent'], edges: [] } }
+		};
+		historyFeed.context = () => ctx;
+		try {
+			await g.removeNode('x');
+		} finally {
+			historyFeed.context = captureNavContext;
+		}
+		await history().undo();
+
+		expect(flash().active('uf_present')).toBe(true);
+		expect(flash().active('uf_absent')).toBe(false); // not in the graph — no flash, no throw
 	});
 });

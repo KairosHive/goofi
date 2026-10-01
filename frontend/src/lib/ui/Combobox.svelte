@@ -1,6 +1,5 @@
-<!-- Combobox — a text field over a closed list of names: a press opens the list, typing filters
-     it, and only a name ON the list commits, by pick, Enter or blur. Typed text that is no name is
-     dropped, so a half-typed name is never sent. -->
+<!-- Combobox — a text field over a closed list of names: typing filters the list, and only a name
+     ON the list commits, by pick, Enter or blur, so a half-typed name is never sent. -->
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { Icon } from 'panelty';
@@ -35,14 +34,10 @@
 	const ownId = $props.id();
 	const fieldId = claimFieldControlId(ownId);
 	let box = $state<HTMLDivElement | null>(null);
-	let input = $state<HTMLInputElement | null>(null);
 	let open = $state(false);
-	let typed = $state('');
+	let typed = $derived(value);
 	let all = $state<ComboOption[]>([]);
 	let active = $state(0);
-	$effect(() => {
-		typed = value;
-	});
 	const shown = $derived.by(() => {
 		const q = typed.trim().toLowerCase();
 		return q === '' || q === value.toLowerCase() ? all : all.filter((o) => o.label.toLowerCase().includes(q));
@@ -91,7 +86,6 @@
 
 <div {...rest} bind:this={box} class={`ui-combo ${klass}`.trim()}>
 	<input
-		bind:this={input}
 		id={fieldId}
 		type="text"
 		role="combobox"
@@ -107,8 +101,8 @@
 		value={typed}
 		data-testid={testid}
 		onfocus={show}
-		onpointerdown={() => {
-			if (!open && document.activeElement === input) show();
+		onpointerdown={(e) => {
+			if (!open && document.activeElement === e.currentTarget) show();
 		}}
 		onblur={() => {
 			if (open) settle();
@@ -162,10 +156,6 @@
 		padding-right: var(--space-6);
 		color: var(--text);
 		font-family: var(--font-mono);
-	}
-	.ui-combo-input:disabled {
-		opacity: var(--disabled-opacity);
-		cursor: not-allowed;
 	}
 	/* Decoration over the input's own right edge; the input owns every press. */
 	.ui-combo-caret {
