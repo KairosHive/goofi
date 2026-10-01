@@ -74,8 +74,16 @@ impl Call for Hosted {
     fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
         if entry == Entry::Stop {
             if let Some((mut child, mut exchange)) = self.live.take() {
-                let _ = exchange.ask(&mut child, &[&rpc::call_head(Entry::Stop, now)], STOP_TIMEOUT);
-                child.stop(Duration::ZERO);
+                // An answered child leaves by itself and releases its ports on the way; a signal
+                // would cut that short, so only the deadline kills it. One that did not answer is stopped.
+                match exchange.ask(&mut child, &[&rpc::call_head(Entry::Stop, now)], STOP_TIMEOUT) {
+                    Ok(_) => {
+                        let _ = child.wait_within(STOP_TIMEOUT);
+                    }
+                    Err(_) => {
+                        child.stop(Duration::ZERO);
+                    }
+                }
             }
             return Ok(rpc::done());
         }

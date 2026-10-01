@@ -516,6 +516,7 @@ impl Recorder {
         let Some(take) = self.take.lock().as_ref().cloned() else { return };
         if let Some(writer) = self.writer.lock().as_ref() {
             writer.flush();
+            writer.forget(id);
         }
         self.close_take(&take, id, why);
     }

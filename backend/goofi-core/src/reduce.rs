@@ -19,7 +19,12 @@ pub fn reduce_for_view(frame: &Data, plan: &MergedViewSpec) -> Data {
     let mut bytes = Cow::Borrowed(store.as_bytes());
     let mut shape = store.shape().to_vec();
     let mut axes = frame.meta().channels().clone();
-    let mut reduced: BTreeMap<String, MetaValue> = BTreeMap::new();
+    // A dim the producer already cut keeps its entry: that one names the true origin.
+    let mut reduced: BTreeMap<String, MetaValue> = match frame.meta().reduced() {
+        Some(MetaValue::Map(m)) => m.clone(),
+        _ => BTreeMap::new(),
+    };
+    let mut shrunk = false;
 
     // Descending dim so a reduction never invalidates a not-yet-processed lower dim.
     let mut planned = plan.axes.clone();
@@ -34,6 +39,10 @@ pub fn reduce_for_view(frame: &Data, plan: &MergedViewSpec) -> Data {
         bytes = Cow::Owned(r.bytes);
         shape[ax.dim] = r.new_len;
         axes = axes.sliced(ax.dim, &r.centers);
+        shrunk = true;
+        if reduced.contains_key(&ax.dim.to_string()) {
+            continue;
+        }
         let mut entry = axis_record(orig_len);
         if let Some(coords) = verbatim {
             let list = coords
@@ -47,7 +56,7 @@ pub fn reduce_for_view(frame: &Data, plan: &MergedViewSpec) -> Data {
         }
         reduced.insert(ax.dim.to_string(), MetaValue::Map(entry));
     }
-    if reduced.is_empty() {
+    if !shrunk {
         return frame.clone();
     }
     let mut meta = frame.meta().clone();

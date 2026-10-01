@@ -57,8 +57,8 @@ impl Writer {
         Writer { rec, lanes: Mutex::new(HashMap::new()), free: Free::default() }
     }
 
-    /// Take one frame off the caller. `false` is a lane that is full — which the CALLER accounts
-    /// for by the NEXT frame that is written, whose own number says what went missing before it.
+    /// Take one frame off the caller. `false` is a lane that is full or DEAD — which the CALLER
+    /// accounts for by the NEXT frame that is written, whose own number says what went missing.
     ///
     pub fn take(
         &self,
@@ -98,6 +98,14 @@ impl Writer {
         Lane { jobs: tx, thread }
     }
 
+    /// End the stream's lane: a stream closed on purpose starts afresh on its next frame, where a
+    /// lane that died with the stream before it would refuse every frame of the stream after it.
+    pub fn forget(&self, id: &StreamId) {
+        if let Some(lane) = self.lanes.lock().remove(id) {
+            end(lane);
+        }
+    }
+
     /// Wait for everything already queued, on every lane, to reach its file. Called with NO lock a
     /// lane needs.
     pub fn flush(&self) {
@@ -119,13 +127,16 @@ impl Writer {
 
 impl Drop for Writer {
     fn drop(&mut self) {
-        let mut lanes = self.lanes.lock();
-        for (_, mut lane) in lanes.drain() {
-            drop(lane.jobs);
-            if let Some(thread) = lane.thread.take() {
-                let _ = thread.join();
-            }
+        for (_, lane) in self.lanes.lock().drain() {
+            end(lane);
         }
+    }
+}
+
+fn end(mut lane: Lane) {
+    drop(lane.jobs);
+    if let Some(thread) = lane.thread.take() {
+        let _ = thread.join();
     }
 }
 
@@ -137,20 +148,18 @@ fn give_back(free: &Free, buffer: Vec<u8>) {
 }
 
 fn run(rx: Receiver<Job>, rec: &std::sync::Weak<crate::Recorder>, free: &Free) {
-    // A stream that could not be written is DEAD, and the close is what files the reason: opening
-    // a file per frame against a full disk is worse than stopping, and a write that fails
-    // silently is the recording lying about what it holds.
-    let mut failed = false;
+    // A stream that could not be written is DEAD and its lane ends with it, so every later frame
+    // is refused at `take` instead of counted as written; the close is what files the reason.
     for job in rx.iter() {
         match job {
             Job::Frame(q) => {
-                if let (false, Some(rec)) = (failed, rec.upgrade()) {
-                    if let Err(why) = rec.write_queued(&q) {
-                        rec.close_now(&q.id, &format!("the frame could not be written: {why}"));
-                        failed = true;
-                    }
-                }
+                let Some(rec) = rec.upgrade() else { return };
+                let written = rec.write_queued(&q);
                 give_back(free, q.bytes);
+                if let Err(why) = written {
+                    rec.close_now(&q.id, &format!("the frame could not be written: {why}"));
+                    return;
+                }
             }
             Job::Flush(ack) => {
                 let _ = ack.try_send(());

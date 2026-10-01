@@ -653,15 +653,15 @@ fn parse_meta(bytes: &[u8]) -> std::result::Result<goofi_core::Meta, String> {
         match key {
             // shape/dtype are derived from the body — ignore the redundant keys.
             "shape" | "dtype" => {}
-            "channels" => meta.set_channels(parse_channels(&val)),
+            "channels" => meta.set_channels(parse_channels(&val)?),
             other => meta.set(other, mp_to_mv(&val)),
         }
     }
     Ok(meta)
 }
 
-fn parse_channels(v: &Mp) -> goofi_core::Axes {
-    // Entries may arrive out of order, so `with` pads up to the max labeled dim.
+fn parse_channels(v: &Mp) -> std::result::Result<goofi_core::Axes, String> {
+    // Entries may arrive out of order, so `with_checked` pads up to the max labeled dim.
     let mut axes = goofi_core::Axes::new();
     if let Mp::Map(entries) = v {
         for (k, list) in entries {
@@ -674,11 +674,13 @@ fn parse_channels(v: &Mp) -> goofi_core::Axes {
             };
             if let Mp::Array(items) = list {
                 let coords: Vec<Coord> = items.iter().map(mp_to_coord).collect();
-                axes = axes.with(dim, goofi_core::Axis::coords(coords));
+                axes = axes
+                    .with_checked(dim, goofi_core::Axis::coords(coords))
+                    .ok_or_else(|| format!("channels dim{dim} exceeds the array rank bound"))?;
             }
         }
     }
-    axes
+    Ok(axes)
 }
 
 fn mp_to_coord(v: &Mp) -> Coord {

@@ -100,10 +100,18 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         slot: "out".into(),
         engine: "signal",
     };
+    // The first four frames come from a labelled 256 Hz source; the rest from one that says neither.
     let array = |shape: Vec<usize>, fill: f32, i: u64| {
         let mut meta = goofi_core::Meta::empty();
         meta.set_time(Some(i as f64 / 256.0));
         meta.set_index(Some(i));
+        if i < 4 {
+            meta.set_sfreq(Some(256.0));
+            meta.set_channels(goofi_core::Axes::new().with(
+                0,
+                goofi_core::Axis::coords((0..shape[0]).map(|c| goofi_core::Coord::Str(format!("ch{c}").into())).collect::<Vec<_>>()),
+            ));
+        }
         let n: usize = shape.iter().product();
         let body: Vec<u8> = (0..n).flat_map(|_| fill.to_le_bytes()).collect();
         goofi_codec::encode(&goofi_core::Data::array_f32(shape, body, meta).expect("a frame")).expect("a frame that crosses")
@@ -191,6 +199,22 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     assert_eq!(lines[8]["shape"], j!([6]), "…and the one that moved is said once");
     assert_eq!(lines[9].get("shape"), None, "…and then held again");
     assert_eq!(lines[9]["meta"]["index"], j!(9), "the meta rides beside the samples");
+    // Step: a key is said where it MOVED, and a key that goes away is said as `null` ONCE, so a
+    // reader carrying keys forward unsets it rather than keeping the first source's value.
+    assert_eq!(lines[0]["meta"]["sfreq"], j!(256.0));
+    assert_eq!(lines[0]["meta"]["channels"]["dim0"], j!(["ch0", "ch1", "ch2", "ch3"]), "{}", lines[0]);
+    assert_eq!(lines[1]["meta"].get("sfreq"), None, "a rate that HELD is not said again");
+    assert_eq!(lines[4]["meta"]["sfreq"], serde_json::Value::Null, "{}", lines[4]);
+    assert_eq!(lines[4]["meta"]["channels"], serde_json::Value::Null, "{}", lines[4]);
+    assert_eq!(lines[5]["meta"].get("sfreq"), None, "an unset key is not unset again");
+    let carried = lines.iter().fold(serde_json::Map::new(), |mut carry, line| {
+        for (k, v) in line["meta"].as_object().into_iter().flatten() {
+            if v.is_null() { carry.remove(k); } else { carry.insert(k.clone(), v.clone()); }
+        }
+        carry
+    });
+    assert_eq!(carried.get("sfreq"), None, "the reader ends with no rate: {carried:?}");
+    assert_eq!(carried.get("channels"), None, "and no channel names: {carried:?}");
 
     // Step: a KILLED writer loses the tail and nothing else — the property every other format
     // this replaced was rejected over. Truncated mid-frame, the whole values are still there.
@@ -445,9 +469,37 @@ fn arming_survives_a_rewire_and_rides_the_document() {
 
     g.call("record disarm", j!({ "output": goofi_tests::ep(&src, "out") }));
     assert!(g.doc()["nodes"][&src]["record"].as_array().is_none_or(|r| r.is_empty()), "disarming empties the node's record");
+    g.until("the disarmed stream to leave the take", |g| (frames(g, &src_name) == 0).then_some(()));
 
-    g.call("record stop", j!({}));
-    assert_eq!(g.call("record status", j!({}))["running"], j!(false));
+    // Step: a stream whose disk refused a frame is dead for THAT arming only: what follows is
+    // refused rather than counted as written, and a re-arm starts afresh and writes.
+    let id = goofi_record::StreamId { uid: src_uid, node: src_name.clone(), slot: "out".into(), engine: "signal" };
+    let refused = |folder: &str| mine(folder, &src_name).iter().any(|e| e["closed_because"].as_str().is_some_and(|w| w.starts_with("the frame could not be written")));
+    g.call("record arm", j!({ "output": goofi_tests::ep(&src, "out") }));
+    g.until("the re-armed slot to reach the disk", |g| (frames(g, &src_name) > 0).then_some(()));
+    assert!(g.state.recorder.take_frame(&id, b"not a frame", None, goofi_record::Timeline::Measured, 0.0, true), "the lane takes what it cannot yet read");
+    g.until("the refused frame to end the stream", |_| refused(&folder).then_some(()));
+    let late_before = frames(&g, &late_name);
+    g.until("a sweep after the end", |g| (frames(g, &late_name) > late_before).then_some(()));
+    assert_eq!(frames(&g, &src_name), 0, "a frame the dead lane refused is not a frame written");
+    assert_eq!(g.call("record status", j!({}))["running"], j!(true), "one stream's end ends nothing");
+    g.call("record disarm", j!({ "output": goofi_tests::ep(&src, "out") }));
+    g.call("record arm", j!({ "output": goofi_tests::ep(&src, "out") }));
+    g.until("the re-armed slot to reach the disk again", |g| (frames(g, &src_name) > 0).then_some(()));
+    g.call("record disarm", j!({ "output": goofi_tests::ep(&src, "out") }));
+
+    // Step: a load whose source cannot be read ends nothing — the recording runs on. A manifest
+    // refused once staged DOES end it, and every client hears so even though no patch replaced.
+    let mut events = g.events();
+    let nodes_before = g.doc()["nodes"].as_object().expect("nodes").len();
+    g.refuse("session load", j!({ "path": root.path().join("missing.gfi") }));
+    assert_eq!(g.call("record status", j!({}))["running"], j!(true), "an unreadable path ends no recording");
+    assert_eq!(g.call("record status", j!({}))["folder"], j!(folder));
+    g.refuse("session load", j!({ "content": "nodes: [" }));
+    assert_eq!(g.call("record status", j!({}))["running"], j!(false), "a refused manifest still restarted the clock");
+    assert_eq!(events.next("record_changed")["running"], j!(false), "the end is announced to every client");
+    assert_eq!(g.doc()["nodes"].as_object().expect("nodes").len(), nodes_before, "the open patch is untouched");
+    assert_eq!(g.refuse("record stop", j!({})), "record stop: no recording runs");
     assert!(std::path::Path::new(&folder).join("manifest.json").exists(), "the folder holds a manifest");
 
     // …and the video the graphics slot left is a file, an instant per encoded frame beside it,

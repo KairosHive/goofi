@@ -66,28 +66,17 @@
 	}
 
 	// The dialog stays up while the operation runs, showing its progress, and closes once it
-	// has settled either way; a failure is said by the toast.
+	// succeeds; a failure stays in the dialog with its log, so the rejection reaches it.
 	async function onFsPick(pickedPath: string, overwrite = false): Promise<void> {
-		const mode = fsMode;
-		try {
-			if (mode === 'save') await g.save(pickedPath, overwrite);
-			else if (mode === 'load') await g.load(pickedPath);
-		} catch (e) {
-			notify().failure(mode === 'save' ? 'Save' : 'Load', e);
-		} finally {
-			fsMode = null;
-		}
+		if (fsMode === 'save') await g.save(pickedPath, overwrite);
+		else if (fsMode === 'load') await g.load(pickedPath);
+		fsMode = null;
 	}
 
 	/** Upload a `.gfi` from the user's own machine, for what the backend's browser cannot reach. */
 	async function onFsFilePick(file: File): Promise<void> {
-		try {
-			await uploadPatch(file);
-		} catch (e) {
-			notify().failure('Open', e);
-		} finally {
-			fsMode = null;
-		}
+		await uploadPatch(file);
+		fsMode = null;
 	}
 
 	function onKeydown(e: KeyboardEvent): void {

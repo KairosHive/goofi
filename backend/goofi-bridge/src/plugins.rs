@@ -94,7 +94,8 @@ type Reply = Result<Value, String>;
 type Pending = Arc<Mutex<HashMap<u64, mpsc::Sender<Reply>>>>;
 
 struct Service {
-    input: mpsc::Sender<Value>,
+    /// The one Sender to the stdin writer; taken when the service stops, which ends that thread.
+    input: Mutex<Option<mpsc::Sender<Value>>>,
     child: Mutex<goofi_supervisor::child::Child>,
     pending: Pending,
     sequence: AtomicU64,
@@ -109,12 +110,15 @@ impl Service {
             self.scope.adopt(worker);
         }
     }
-}
 
-fn write(input: &mpsc::Sender<Value>, message: &Value) -> Result<(), String> {
-    input
-        .send(message.clone())
-        .map_err(|_| "plugin service input closed".into())
+    fn write(&self, message: Value) -> Result<(), String> {
+        self.input
+            .lock()
+            .as_ref()
+            .ok_or("the service is stopped")?
+            .send(message)
+            .map_err(|_| "plugin service input closed".into())
+    }
 }
 
 fn log(id: &str, level: &str, message: &str) {
@@ -226,7 +230,7 @@ impl Service {
             }
         });
         let service = Arc::new(Self {
-            input: sender,
+            input: Mutex::new(Some(sender)),
             child: Mutex::new(child),
             pending,
             sequence: AtomicU64::new(1),
@@ -246,7 +250,6 @@ impl Service {
             return;
         };
         let pending = self.pending.clone();
-        let input = self.input.clone();
         let service = self.clone();
         let listener = goofi_supervisor::worker::spawn("goofi-plugin-stdout", move || {
             for line in reader.lines() {
@@ -270,7 +273,7 @@ impl Service {
                     }
                 } else if let Some(id) = message["call"].as_u64() {
                     let state = state.clone();
-                    let input = input.clone();
+                    let writer = service.clone();
                     let plugin_id = plugin_id.clone();
                     let call = goofi_supervisor::worker::spawn("goofi-plugin-call", move || {
                         let chain: Vec<String> =
@@ -290,12 +293,14 @@ impl Service {
                             Ok(value) => json!({"reply": id, "result": value}),
                             Err(error) => json!({"reply": id, "error": error}),
                         };
-                        let _ = write(&input, &reply);
+                        let _ = writer.write(reply);
                     });
                     service.adopt(call);
                 }
             }
-            service.kill();
+            // The service is dead from here: close its input, fail what waits, and leave the
+            // join to `kill`, which this thread must not call on itself.
+            service.input.lock().take();
             for (_, tx) in pending
                 .lock()
                 .drain()
@@ -322,9 +327,8 @@ impl Service {
             .lock()
             .insert(id, tx);
         let chain = CHAIN.with(|chain| chain.borrow().clone());
-        if let Err(error) = write(
-            &self.input,
-            &json!({"id": id, "method": method, "data": data, "actor": actor, "chain": chain}),
+        if let Err(error) = self.write(
+            json!({"id": id, "method": method, "data": data, "actor": actor, "chain": chain}),
         ) {
             self.pending
                 .lock()
@@ -349,6 +353,7 @@ impl Service {
     /// Ask the service to leave and insist after a short grace, so a Python that is flushing
     /// its data gets to; a service that stopped answering gets no longer than that.
     fn kill(&self) {
+        self.input.lock().take();
         self.child
             .lock()
             .stop(Duration::from_secs(2));

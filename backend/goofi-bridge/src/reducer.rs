@@ -442,8 +442,9 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             };
             let interval = serve_interval(&specs.lock(), f64::from_bits(cap.load(Ordering::Relaxed)));
             // Armed only when a serve is owed: a fresh frame after an idle tick waits for the next.
+            // A tick already passed stays owed, so the pass after this wait serves it.
             let duties = [
-                owed.then(|| pace.due(interval, now)).filter(|at| *at > now),
+                owed.then(|| pace.due(interval, now)),
                 (feed.is_some() && !wanted).then_some(asked_at + IDLE),
                 grace.filter(|at| *at > now),
                 snapped.map(|at| at + IDLE).filter(|at| *at > now),
@@ -451,7 +452,8 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             let mut poked = false;
             let mut note = |id: goofi_transport::WakeId| poked |= id.as_value() == goofi_transport::VIEW_POKE_ID as usize;
             let _ = match duties.into_iter().flatten().min() {
-                Some(at) => listener.timed_wait_all(&mut note, at.saturating_duration_since(now)),
+                // At least 1 µs: a zero timeval would block for ever.
+                Some(at) => listener.timed_wait_all(&mut note, at.saturating_duration_since(now).max(Duration::from_micros(1))),
                 None => listener.blocking_wait_all(&mut note),
             };
             if stop.load(Ordering::Relaxed) {

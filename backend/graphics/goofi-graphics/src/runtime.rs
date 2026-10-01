@@ -1,7 +1,7 @@
 //! What the render thread owns: the plan, one GPU state per live node, and the tick that draws
 //! every demanded stage once and reads back the ones somebody is watching.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
@@ -100,11 +100,15 @@ impl Runtime {
         let _gate = crate::gpu::gate();
         self.plan = Plan::default();
         self.states.clear();
+        self.presenting.clear();
     }
 
     fn set_plan(&mut self, plan: Plan) {
         let _gate = crate::gpu::gate();
         self.plan = plan;
+        // A closed window's entry would hold its waiting frame for the engine's life.
+        let live: HashSet<_> = self.plan.stages.iter().filter_map(|s| s.window).collect();
+        self.presenting.retain(|id, _| live.contains(id));
     }
 
     /// Everything the graph asked for since the last tick, applied on this thread — every GPU

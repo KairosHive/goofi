@@ -155,7 +155,10 @@ impl EffectOp for Save {
             Some(p) => fsbrowse::resolve(p),
             None => state.save_path().ok_or("session save: this patch has no home yet — give a path")?,
         };
-        let mount = state.mount();
+        // Held through the pack, so a load that replaces the mount meanwhile cannot delete the
+        // directory being zipped.
+        let held = state.hold_mount().ok_or("session save: the session has no workspace")?;
+        let mount = held.path();
         // Taken under the guard, zipped off it. The workspace is sampled BEFORE the pack:
         // baselining after would call a file written during the zip packed, which LOSES an edit.
         let (manifest, extra, packed, revision) = {
@@ -165,20 +168,26 @@ impl EffectOp for Save {
             (g.serialize(), crate::bundled_custom(&g, &state.custom), goofi_graph::archive::fingerprint(&mount), revision)
         };
         crate::save_archive(std::path::Path::new(&path), &manifest, &mount, &extra, a.overwrite.unwrap_or(true))?;
-        // Decided under the graph guard, which orders every commit: an edit that landed during the
-        // zip is not in the file, so the patch stays dirty. Announced unconditionally, since a
-        // patch dirtied by a workspace file alone has no flag transition to announce.
+        // Adopted under the graph guard, which orders every commit, and only while the patch that
+        // was packed is still the open one: a load that landed during the zip minted a new mount,
+        // and the file written is that OTHER patch's, never the new one's home.
         let _g = state.graph.lock();
+        if state.mount() != mount {
+            return Ok(json!({ "path": path }));
+        }
+        // An edit that landed during the zip is not in the file, so the patch stays dirty.
+        // Announced unconditionally, since a patch dirtied by a workspace file alone has no flag
+        // transition to announce.
         if state.doc.lock().version() == revision {
             *state.workspace_baseline.lock() = packed;
             state.set_dirty(false);
             state.events.send(Event::UnsavedChanges { unsaved_changes: false });
         }
-        drop(_g);
         // The patch's home, stored ONLY on success and announced as well as stored: an
         // already-connected peer gets no new snapshot to read it from.
         *state.save_path.lock() = Some(path.clone());
         state.events.send(Event::SavePathChanged { save_path: json!(&path) });
+        drop(_g);
         fsbrowse::remember(&path);
         Ok(json!({ "path": path }))
     }
@@ -187,13 +196,6 @@ impl EffectOp for Save {
 /// The core every patch replacement shares, so nothing after the read can drift between the
 /// sources: a `.gfi`, an inline manifest, or nothing at all — the empty patch.
 fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
-    // The load restarts the clock, so the recording has no timeline left; a manifest that could
-    // not be finalized is SAID, because the patch asked for is not the recording's disk.
-    if let Err(e) = state.recorder.stop() {
-        let mut ended = super::record::record_state(state);
-        ended["error"] = json!(format!("the recording could not be finalized: {e}"));
-        state.events.send(Event::RecordChanged(ended));
-    }
     // Read OFF the graph lock, as the hello does: the roster's config half is a disk read.
     let agents = goofi_supervisor::home::agents();
     // Every source mounts FRESH, and the live mount is swapped only once the manifest has parsed,
@@ -206,6 +208,18 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
     }
     let (content, from_path, recovered) = crate::stage_load(&staged, &state.custom, payload)?;
     crate::prebuild(state, &staged);
+    // Stopped once the source is staged, so a path that cannot be read ends nothing. The load
+    // restarts the clock, so the recording has no timeline left; its end is SAID here, because
+    // the manifest can still refuse below and no GraphReplaced would carry it.
+    match state.recorder.stop() {
+        Ok(Some(_)) => state.events.send(super::record::record_changed(state)),
+        Ok(None) => {}
+        Err(e) => {
+            let mut ended = super::record::record_state(state);
+            ended["error"] = json!(format!("the recording could not be finalized: {e}"));
+            state.events.send(Event::RecordChanged(ended));
+        }
+    }
     let opened = from_path.clone();
     let result = {
         let mut g = state.graph.lock();

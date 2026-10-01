@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { FakeControl } from '$lib/test/fakeControl';
 import { seed, type DocSeed } from '$lib/test/docSeed';
 import { GraphStore } from './graph.svelte';
+import { history } from './history.svelte';
 import { slotView, isSlotExpanded } from '$lib/viewers/inlineView';
 import { workspace } from 'panelty';
 import type { NodeTypeInfo, GraphSnapshot } from '$lib/api/control';
@@ -72,6 +73,23 @@ describe('GraphStore — a new backend session clears what the old one drew', ()
 		expect(g.nodes.length, 'the graph survives a reconnect to the same backend').toBe(2);
 		expect(g.links.length).toBe(1);
 		expect(g.sessionEpoch, 'a reconnect is not a start').toBe(1);
+	});
+
+	it('keeps the history labels the first hello carries, after the reset', () => {
+		// A reloaded tab keeps its actor, so the manager still holds its steps and the hello says
+		// so. The reset a first hello runs must not win over the labels it arrived with.
+		history().reset();
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		g.nodeTypes = catalog();
+		fc.emit({ event: 'hello', payload: { ...snap('sess1'), history: { undo: 'Add node', redo: null } } });
+
+		expect(history().undoLabel, 'the undo on top at the manager').toBe('Add node');
+		expect(history().canUndo).toBe(true);
+		expect(history().canRedo).toBe(false);
+
+		fc.emit({ event: 'hello', payload: snap('sess2') });
+		expect(history().canUndo, 'a new session carries no history, and the mirror follows').toBe(false);
 	});
 });
 

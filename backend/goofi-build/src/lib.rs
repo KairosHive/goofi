@@ -153,7 +153,9 @@ fn build(sdk: &Sdk, source: &Path, base: &Path, key: &str, artifact: &Path) -> R
     }
     goofi_supervisor::progress::report(format!("Building native node {}", source.file_name().unwrap_or_default().to_string_lossy()));
     let crate_dir = base.join("crates").join(key);
-    let crate_name = format!("goofi_node_{}", stem_of(source).to_lowercase());
+    // The key in the crate name keeps one source's uplift apart from another's in the shared
+    // target, so a build never reads back what a concurrent process placed there.
+    let crate_name = format!("goofi_node_{}_{}", stem_of(source).to_lowercase(), &key[..12]);
     generate(sdk, source, &sdk_root(base), &crate_dir, &crate_name)?;
     let mut cmd = Command::new(cargo);
     cmd.args(["build", "--release", "--message-format", "short", "--color", "never"]).current_dir(&crate_dir);

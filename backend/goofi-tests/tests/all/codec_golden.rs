@@ -251,6 +251,20 @@ fn malformed_and_deep_frames_are_refused_before_reduction() {
     let mut wrong_tag = good.clone();
     wrong_tag[5] = 0x7f;
     assert!(goofi_codec::decode(&wrong_tag).is_err(), "an unknown dtype tag");
+    // A channels dim beyond any array rank: a pad to it would overflow or allocate gigabytes.
+    for key in ["dim18446744073709551615", "dim4000000000"] {
+        let (tag, _, body) = goofi_codec::split_frame(&good).unwrap();
+        let channels = rmpv::Value::Map(vec![(key.into(), rmpv::Value::Array(vec!["a".into()]))]);
+        let mut meta = Vec::new();
+        rmpv::encode::write_value(&mut meta, &rmpv::Value::Map(vec![("channels".into(), channels)])).unwrap();
+        let mut frame = b"GOOF\x02".to_vec();
+        frame.push(tag);
+        frame.extend_from_slice(&(meta.len() as u32).to_le_bytes());
+        frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        frame.extend_from_slice(&meta);
+        frame.extend_from_slice(body);
+        assert!(goofi_codec::decode(&frame).unwrap_err().contains("rank"), "{key} must be refused");
+    }
 
     use goofi_core::reduce::reduce_axis;
     for shape in [vec![usize::MAX, 2], vec![10], vec![0, usize::MAX]] {

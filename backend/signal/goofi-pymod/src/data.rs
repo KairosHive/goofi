@@ -254,7 +254,11 @@ fn dict_to_axes(v: &Bound<'_, PyAny>) -> PyResult<Axes> {
         let Some(dim) = key.strip_prefix("dim").and_then(|s| s.parse::<usize>().ok()) else {
             continue;
         };
-        axes = axes.with(dim, Axis::coords(list_to_coords(&list)?));
+        axes = axes
+            .with_checked(dim, Axis::coords(list_to_coords(&list)?))
+            .ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(format!("channels {key} exceeds the array rank bound"))
+            })?;
     }
     Ok(axes)
 }

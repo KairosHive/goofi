@@ -1,5 +1,5 @@
 //! The sidecar every stream has: one line per frame, holding the instant it was made and whatever
-//! of the `Meta` the file itself has nowhere to put has MOVED since the line before.
+//! of the `Meta` the file itself has nowhere to put has MOVED since the line before; `null` UNSETS.
 //!
 //! It is JSON lines rather than a packed array of instants because a line is the unit a kill can
 //! truncate to, and because the same file then serves a `.wav`, which carries no metadata at all,

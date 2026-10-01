@@ -88,8 +88,16 @@ impl Call for Subproc {
     fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
         if entry == Entry::Stop {
             if let Some(mut live) = self.live.take() {
-                let _ = live.exchange.ask(&mut live.child, &[&rpc::call_head(Entry::Stop, now)], STOP_TIMEOUT);
-                live.child.stop(Duration::ZERO);
+                // An answered child leaves by itself and releases its ports on the way; a signal
+                // would cut that short, so only the deadline kills it. One that did not answer is stopped.
+                match live.exchange.ask(&mut live.child, &[&rpc::call_head(Entry::Stop, now)], STOP_TIMEOUT) {
+                    Ok(_) => {
+                        let _ = live.child.wait_within(STOP_TIMEOUT);
+                    }
+                    Err(_) => {
+                        live.child.stop(Duration::ZERO);
+                    }
+                }
             }
             return Ok(rpc::done());
         }

@@ -146,6 +146,8 @@ export interface GraphSnapshot {
 	instance_id: string;
 	/** The document version this frame goes with; a replica behind it is still mid-load. */
 	doc_version: number;
+	/** This actor's undo and redo on top at the manager, carried on `hello` alone. */
+	history?: HistoryLabels;
 	/** Per-node runtime state, seeded here because its live stream pushes only transitions. */
 	runtime: Record<string, { stage?: NodeStage; error?: string | null; runtime?: NodeRuntime }>;
 	/** The node palette, carried on `hello`/`graph_replaced`. Absent on an older backend. */
@@ -403,11 +405,7 @@ export class ControlClient implements Control {
 			return;
 		}
 		if ('event' in obj && typeof obj.event === 'string') {
-			if (obj.event === 'hello') {
-				this._checkProtocol(obj.payload);
-				const history = (obj.payload as { history?: unknown } | null)?.history;
-				if (isLabels(history)) historyFeed.labels(history);
-			}
+			if (obj.event === 'hello') this._checkProtocol(obj.payload);
 			for (const h of this.handlers) {
 				try {
 					h(msg as ControlEvent);

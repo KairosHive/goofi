@@ -346,6 +346,11 @@ impl AppState {
         self.mount.lock().as_ref().map(Mount::path).unwrap_or_default()
     }
 
+    /// A hold on the live mount: its directory stays while the hold does, whatever a load replaces.
+    pub(crate) fn hold_mount(&self) -> Option<Mount> {
+        self.mount.lock().clone()
+    }
+
     /// Every node root OUTSIDE the open patch, in precedence order and each with the origin a
     /// type found there wears — the one place that order is stated. The patch's own workspace is
     /// scanned after these and wins a shared name.
@@ -394,13 +399,15 @@ impl AppState {
 /// A workspace mount: `<workspaces>/<session>/<nonce>/workspace`. The nonce directory is the
 /// leased path, so a load can rename an extracted tree onto `workspace` wholesale and the autosave
 /// sits beside it; it goes when the lease does — a clean shutdown removes it, a crash leaves it.
-pub(crate) struct Mount(goofi_supervisor::scope::PathLease);
+/// Shared, so a save packing the directory keeps it until the pack is done: it goes on the last drop.
+#[derive(Clone)]
+pub(crate) struct Mount(Arc<goofi_supervisor::scope::PathLease>);
 
 impl Mount {
     fn new(session: &str) -> Result<Mount, String> {
         let nonce = goofi_supervisor::session::workspace_dir(session).join(nonce_hex()?);
         let _ = std::fs::create_dir_all(nonce.join("workspace"));
-        Ok(Mount(goofi_supervisor::scope::PathLease::new(nonce)))
+        Ok(Mount(Arc::new(goofi_supervisor::scope::PathLease::new(nonce))))
     }
 
     pub(crate) fn path(&self) -> PathBuf {
@@ -982,7 +989,8 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
         let sdks: Vec<(&'static str, &'static goofi_build::Sdk)> =
             g.rust_sdks().into_iter().filter_map(|(id, sdk)| goofi_build::sdk(sdk).map(|s| (id, s))).collect();
         let dirs = roots.iter().cloned().chain(g.engine_ids().into_iter().map(|id| patch.join(goofi_node::folder_of(id))));
-        let prepared: Vec<_> = dirs.flat_map(|d| g.prepare(&d)).collect();
+        // A root that is no directory is nothing to prepare, as the scan itself reads it.
+        let prepared: Vec<_> = dirs.filter(|d| d.is_dir()).flat_map(|d| g.prepare(&d)).collect();
         (sdks, prepared)
     };
     let base = goofi_build::base_dir(&goofi_supervisor::home::dir());

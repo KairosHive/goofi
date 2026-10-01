@@ -1053,6 +1053,33 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
                     "reduce": [{ "dim": 0, "max": 128 }, { "dim": 1, "max": 128 }], "aspect": true }]))
         .await;
     holds_at(vec![64, 128, 4], "a viewer that cannot draw the frame shrank one that can");
+
+    // Step: a frame cut TWICE — by `GraphicsIn` on the way over and by the reducer for a viewer —
+    // still names what `GraphicsIn` read as its origin — the engine's box, never its own 16 —
+    // on the dim the reducer cut and on the one it left alone.
+    let down = g.add("signal:GraphicsIn");
+    g.link(big, "out", down, "input");
+    g.set_param(down, "graphics", "size", 16);
+    let mut twice = Viewer::open(&base, &hex(down), "out").await;
+    twice
+        .view(j!([{ "dtype": "array", "ndim": [["ge", 2], ["le", 3]], "dims": [],
+                    "reduce": [{ "dim": 1, "max": 8 }] }]))
+        .await;
+    // `GraphicsIn` bounds each axis at 16, so a width of 8 is the reducer's own cut.
+    let cut = twice.until(|d| shape(d).len() == 3 && shape(d)[1] == 8).await;
+    let origin = |dim: &str| match cut.meta().reduced() {
+        Some(goofi_core::MetaValue::Map(dims)) => match dims.get(dim) {
+            Some(goofi_core::MetaValue::Map(axis)) => match axis.get("orig_len") {
+                Some(goofi_core::MetaValue::Uint(n)) => Some(*n),
+                Some(goofi_core::MetaValue::Int(n)) => Some(*n as u64),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    };
+    assert!(origin("1").is_some_and(|n| n > 16), "{:?}", cut.meta().reduced());
+    assert!(origin("0").is_some_and(|n| n > 16), "{:?}", cut.meta().reduced());
 }
 
 /// A division of the plane, walked through its four geometries. The law under all of them is the

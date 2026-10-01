@@ -888,6 +888,8 @@ impl Engine for AudioEngine {
     fn remove(&mut self, uid: Uid) {
         if let Some(inst) = self.live.remove(&uid) {
             inst.control.stop();
+            // A swap the half never took would be adopted by the uid's next half, over fresh rings.
+            self.audio.swaps.lock().remove(&uid);
             self.send(Msg::Remove(inst.idx));
             // The box comes back NOW, its state kept, so a restart's birth finds it: one callback
             // may find the runtime taken — a click at an authoring event, accepted.

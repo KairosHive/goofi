@@ -663,6 +663,12 @@ fn a_patch_sounds_under_the_external_clock() {
     let span = second[second.len() - 1] - second[0];
     assert!((span - 0.05).abs() < 0.002, "a whole tenth is a twentieth of the ramp: {span}");
 
+    // …and the crossing's rings, grown past their seed for a frame this long, do not outlive the
+    // node: deleted and undone, it hears the ramp again through the rings its new half was born with.
+    g.call("node remove", j!({ "node": hex(signal_in) }));
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    sounds(&g, "the ramp entering the undone crossing", |x| peak(x) > 0.0);
+
     // …and a frame shorter than the wait for the next one loops rather than holding its last
     // sample: sixty samples at 6 kHz are 480 at the rate, the whole ramp every 480.
     g.set_param(ramp, "ramp", "sfreq", 6000.0);
@@ -674,6 +680,25 @@ fn a_patch_sounds_under_the_external_clock() {
     });
     g.set_param(ramp, "ramp", "sfreq", 256.0);
     g.set_param(ramp, "ramp", "length", 512);
+
+    // …and a frame that would last longer than any ring is minted for — a thousand samples said to
+    // be at a hundredth of a hertz — is refused on `mode` and names its length, the process alive.
+    let slow = g.add("Meta");
+    g.set_param(slow, "meta", "sfreq", 0.01);
+    g.set_param(ramp, "ramp", "length", 1000);
+    g.link(ramp, "out", slow, "input");
+    g.link(slow, "out", signal_in, "input");
+    g.until("a frame of a hundred thousand seconds refused", |g| {
+        drive(g, TENTH);
+        g.error(signal_in).filter(|e| e.contains("1000 samples at 0.01 Hz") && e.contains("too long"))
+    });
+    g.set_param(ramp, "ramp", "length", 512);
+    g.link(ramp, "out", signal_in, "input");
+    g.call("node remove", j!({ "node": hex(slow) }));
+    g.until("a frame that plays clears the refusal", |g| {
+        drive(g, TENTH);
+        g.error(signal_in).is_none().then_some(())
+    });
 
     // Step: `smoothing` crossfades one frame into the next: a held quarter becomes a held 1 over
     // a twentieth of a second, which is 2400 samples at the rate however late the frame arrived.

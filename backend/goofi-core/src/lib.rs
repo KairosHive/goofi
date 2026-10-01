@@ -226,6 +226,9 @@ impl Axis {
     }
 }
 
+/// Array rank is a u8 on the wire, so no dimension at or above this bound can carry labels.
+pub const MAX_RANK: usize = 256;
+
 /// Positional per-dimension labels; trailing unlabeled dimensions may be omitted (`len <= ndim`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Axes(pub Vec<Axis>);
@@ -255,6 +258,10 @@ impl Axes {
         }
         self.0[dim] = axis;
         self
+    }
+    /// `with` for a `dim` read off a wire: `None` when no array can have that dimension.
+    pub fn with_checked(self, dim: usize, axis: Axis) -> Option<Axes> {
+        (dim < MAX_RANK).then(|| self.with(dim, axis))
     }
 
     /// Subset dimension `dim`'s coords to `indices`; a missing index is skipped.
@@ -831,13 +838,8 @@ impl Param {
 /// What a sidecar has already said, key by key, so the next line can be a DELTA against it.
 pub type Said = BTreeMap<String, Vec<u8>>;
 
-/// Write the entries of `meta` that MOVED since `said` as a JSON object, and remember them.
-/// Answers whether anything was written.
-///
-/// Two entries never reach a line: a `Null`, which says nothing, and the instant, because a
-/// sidecar's own `t` is the one owner of that. Everything else is written once and carried
-/// forward by the reader — `sfreq` and the channel names are the stream's, not the frame's, and
-/// repeating them per frame cost more than the samples on a narrow fast stream.
+/// Write the entries of `meta` that MOVED since `said` as a JSON object, and remember them: the
+/// reader carries a key forward until a `null` UNSETS it. The instant stays out; `t` owns it.
 pub fn write_meta_delta(
     out: &mut impl std::io::Write,
     meta: &Meta,
@@ -869,6 +871,16 @@ pub fn write_meta_delta(
                 said.insert(key.clone(), scratch.clone());
             }
         }
+    }
+    // A key said before that is now gone, `Null` or unrepresentable: one `null` unsets it.
+    let gone: Vec<String> =
+        said.keys().filter(|k| meta.get(k).is_none_or(|v| !in_json(v))).cloned().collect();
+    for key in gone {
+        out.write_all(if opened { b"," } else { b"{" })?;
+        serde_json::to_writer(&mut *out, &key).map_err(std::io::Error::other)?;
+        out.write_all(b":null")?;
+        opened = true;
+        said.remove(&key);
     }
     if opened {
         out.write_all(b"}")?;

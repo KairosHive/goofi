@@ -24,6 +24,8 @@ use crate::{wav, Clock, DEFAULT_DEVICE, NO_DEVICE, RATE};
 /// An inbox is born this many floats wide and follows the frames that arrive: four of the
 /// newest, grown when one does not fit and shrunk when it is sixteen times too wide.
 pub const INBOX_SEED: usize = 4096;
+/// The longest a frame may play, in seconds: what bounds the ring minted for it.
+pub const LONGEST_FRAME: f64 = 10.0;
 /// A device's or a file's feed holds a second at sixteen channels; a chunk that does not fit is dropped.
 pub const DEVICE_RING: usize = RATE as usize * 16;
 /// A tap holds a quarter second of blocks at `width`, what a reader takes between two ticks;
@@ -356,6 +358,11 @@ impl Executor for AudioHalf {
                     self.refused = Some(format!("a waveform plays at most {most} channels, not {:?}: mix them", a.shape()));
                     return false;
                 }
+                Entry::Waveform { .. } if lasts(a.shape(), frame.meta().sfreq(), rate) > LONGEST_FRAME => {
+                    let (t, sf) = (samples_of(a.shape()).unwrap_or(0), frame.meta().sfreq().unwrap_or(rate));
+                    self.refused = Some(format!("a frame of {t} samples at {sf} Hz lasts too long to play: at most {LONGEST_FRAME} s"));
+                    return false;
+                }
                 _ => {}
             }
         }
@@ -454,11 +461,12 @@ impl Inbox {
         if !fits {
             self.pending = Some(frame.clone());
         }
-        let resize = !fits || need * 16 < capacity;
-        if resize {
-            self.wanted.store(need * 4, Ordering::Relaxed);
+        let resize = !fits || need.saturating_mul(16) < capacity;
+        let wanted = need.checked_mul(4).filter(|_| resize);
+        if let Some(wanted) = wanted {
+            self.wanted.store(wanted, Ordering::Relaxed);
         }
-        (fits, resize)
+        (fits, wanted.is_some())
     }
 
     /// Resample one frame linearly from its `sfreq` to the rate and enter it whole, as one chunk
@@ -546,6 +554,20 @@ impl Inbox {
         self.pos = pos + n as f64 * step - t as f64;
         Some(moved || resize)
     }
+}
+
+/// The samples per channel a waveform frame carries: `[T]`, `[C, T]`, or `[H, W, C]` texels.
+fn samples_of(shape: &[usize]) -> Option<usize> {
+    match *shape {
+        [t] | [_, t] => Some(t),
+        [h, w, _] => Some(h * w),
+        _ => None,
+    }
+}
+
+/// How long a frame plays at `sfreq`, in seconds; one without a rate plays a sample per sample.
+fn lasts(shape: &[usize], sfreq: Option<f64>, rate: f64) -> f64 {
+    samples_of(shape).unwrap_or(0) as f64 / sfreq.filter(|sf| *sf > 0.0).unwrap_or(rate)
 }
 
 /// The channels a waveform frame carries: `[T]`, `[C, T]`, or `[H, W, C]` texels.

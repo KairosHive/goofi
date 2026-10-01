@@ -321,6 +321,8 @@ export class GraphStore {
 					this._onWholesaleLoad(ev.payload.doc_version);
 					this.sessionEpoch += 1;
 				}
+				// After the reset: a reloaded tab keeps its actor, and the manager still holds its steps.
+				if (ev.payload.history) history().adopt(ev.payload.history);
 				break;
 			}
 			case 'graph_replaced':

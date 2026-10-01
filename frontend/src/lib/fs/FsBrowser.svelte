@@ -10,7 +10,7 @@
 	type Props = {
 		mode: 'save' | 'load';
 		suggestedName?: string;
-		/** Settles when the pick is done; the dialog shows the log meanwhile. */
+		/** Settles when the pick is done; the dialog shows the log meanwhile and keeps it on a rejection. */
 		onPick: (path: string, overwrite?: boolean) => Promise<void>;
 		onClose: () => void;
 		/** The through-the-browser copy, for locations the backend cannot reach. */
@@ -42,6 +42,7 @@
 	// since the pick, read off the one console store.
 	const cs = consoleStore();
 	let working = $state<number | null>(null);
+	let failure = $state<string | null>(null);
 	let logEl = $state<HTMLElement | null>(null);
 	const progress = $derived.by(() => {
 		if (working === null) return [];
@@ -50,6 +51,7 @@
 	});
 	$effect(() => {
 		void progress.length;
+		void failure;
 		if (logEl) logEl.scrollTop = logEl.scrollHeight;
 	});
 	async function run(task: () => Promise<void>): Promise<void> {
@@ -57,9 +59,15 @@
 		working = cs.mark();
 		try {
 			await task();
-		} finally {
 			working = null;
+		} catch (e) {
+			// The log stays up under the error, so the user can read what the backend said.
+			failure = e instanceof Error ? e.message : String(e);
 		}
+	}
+	function back(): void {
+		failure = null;
+		working = null;
 	}
 	function pick(path: string, overwrite?: boolean): void {
 		void run(() => onPick(path, overwrite));
@@ -197,17 +205,20 @@
 	});
 
 	const title = $derived(
-		working !== null
-			? mode === 'save' ? 'Saving patch…' : 'Loading patch…'
-			: mode === 'save' ? 'Save patch' : 'Load patch'
+		failure !== null
+			? mode === 'save' ? 'Save failed' : 'Load failed'
+			: working !== null
+				? mode === 'save' ? 'Saving patch…' : 'Loading patch…'
+				: mode === 'save' ? 'Save patch' : 'Load patch'
 	);
+	const busy = $derived(working !== null && failure === null);
 </script>
 
 <!-- `nokey`: SvelteFlow's delete key is a bare window listener, so Backspace here would delete the canvas selection. -->
 <Dialog
 	open
 	class="nokey"
-	onClose={() => working === null && onClose()}
+	onClose={() => !busy && onClose()}
 	style="--dialog-pad: 0; --dialog-bg: var(--surface-1); --dialog-max-width: min(1100px, 94vw); width: 100%"
 	aria-label={title}
 	data-testid="fs-browser"
@@ -227,11 +238,14 @@
 		{#if working !== null}
 			<div class="body progress" data-testid="fs-progress" aria-live="polite">
 				<!-- Three dots in turn, no ring: the frame's own accent, drawn small and quiet. -->
-				<span class="spinner" aria-hidden="true"><i></i><i></i><i></i></span>
+				<span class="spinner" class:done={failure !== null} aria-hidden="true"><i></i><i></i><i></i></span>
 				<ul class="log" bind:this={logEl}>
 					{#each progress as row (row.uid)}
 						<li class={row.level}>{row.text}</li>
 					{/each}
+					{#if failure !== null}
+						<li class="error" data-testid="fs-failure">{failure}</li>
+					{/if}
 				</ul>
 			</div>
 		{:else}
@@ -352,11 +366,13 @@
 				{/if}
 			{/snippet}
 			{#snippet end()}
-				<Button variant="ghost" onclick={onClose} disabled={working !== null}>Cancel</Button>
-				{#if mode === 'save'}
-					<Button variant="primary" onclick={confirmSave} disabled={checking || working !== null} data-testid="fs-save">Save</Button>
+				<Button variant="ghost" onclick={onClose} disabled={busy}>Cancel</Button>
+				{#if failure !== null}
+					<Button variant="primary" onclick={back} data-testid="fs-back">Back</Button>
+				{:else if mode === 'save'}
+					<Button variant="primary" onclick={confirmSave} disabled={checking || busy} data-testid="fs-save">Save</Button>
 				{:else}
-					<Button variant="primary" disabled={!selected || working !== null} onclick={confirmOpen} data-testid="fs-open">
+					<Button variant="primary" disabled={!selected || busy} onclick={confirmOpen} data-testid="fs-open">
 						Open
 					</Button>
 				{/if}
@@ -422,6 +438,10 @@
 	}
 	.spinner i:nth-child(3) {
 		animation-delay: 0.4s;
+	}
+	.spinner.done i {
+		animation: none;
+		background: var(--danger);
 	}
 	@keyframes fs-pulse {
 		0%,

@@ -11,7 +11,7 @@
 type Link = { node_out: string; node_in: string; slot_in: string };
 import { test, expect, type Browser, type Page } from '@playwright/test';
 import { touchSession } from '../lib/touch';
-import { closeAddedTab, closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
+import { appReady, closeAddedTab, closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
 import {
 	armSocketControl,
 	backendDoc,
@@ -872,6 +872,35 @@ test.describe('the control socket', () => {
 			await restoreSocket(page).catch(() => {});
 			await clearGraph(peer);
 			await peerCtx.close();
+		}
+	});
+
+	test('a reloaded tab keeps the undo the manager still holds for it', async ({ page }) => {
+		// The actor lives in sessionStorage, so a reload rejoins as the same editor. The hello then
+		// carries this actor's history, and the fresh-session reset must not drop it on the floor.
+		await page.goto('/');
+		await waitForApp(page);
+		await clearGraph(page);
+		const undoButton = page.getByTestId('topbar-undo');
+		try {
+			const uid = await addNode(page, 'LFO');
+			await waitForNode(page, uid);
+			await expect(undoButton, 'the reply enabled Undo').toBeEnabled();
+			const title = await undoButton.getAttribute('title');
+			expect(title, 'and named the step').toMatch(/^Undo .+/);
+
+			await page.reload();
+			await appReady(page);
+			await waitForNode(page, uid);
+			await expect(undoButton, 'the hello re-enabled Undo for the same actor').toBeEnabled();
+			await expect(undoButton, 'with the step it still holds').toHaveAttribute('title', title!);
+
+			await undo(page);
+			await expect
+				.poll(() => backendNodes(page), { message: 'and the undo reaches the manager' })
+				.toEqual([]);
+		} finally {
+			await clearGraph(page);
 		}
 	});
 
