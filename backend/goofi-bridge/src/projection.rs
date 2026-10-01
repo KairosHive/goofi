@@ -68,14 +68,16 @@ pub fn of(g: &Graph) -> Value {
         }
     }
 
-    let links: Vec<Value> = g
+    // Keyed as the archive keys them, so a wire made or cut is one key's delta.
+    let links: Map<String, Value> = g
         .links_view()
         .into_iter()
         .map(|l| {
-            json!({
-                "node_out": l.node_out.to_hex(), "slot_out": l.slot_out.to_string(),
-                "node_in": l.node_in.to_hex(), "slot_in": l.slot_in.to_string(),
-            })
+            let link = goofi_graph::doc::Link {
+                node_out: l.node_out.to_hex(), slot_out: l.slot_out.to_string(),
+                node_in: l.node_in.to_hex(), slot_in: l.slot_in.to_string(),
+            };
+            (link.key(), serde_json::to_value(&link).expect("a plain record"))
         })
         .collect();
 

@@ -44,23 +44,23 @@ interface Port {
 function scope(
 	uid: string,
 	o: { name: string; parent?: string; pos?: [number, number]; ports?: Port[] }
-): { nodes: Record<string, unknown>; links: unknown[] } {
+): { nodes: Record<string, unknown>; links: Record<string, unknown> } {
 	const pos = o.pos ?? [0, 0];
 	const nodes: Record<string, unknown> = {
 		[uid]: node(SCOPE_TYPE, o.name, o.parent === ROOT_ID ? undefined : o.parent)
 	};
-	(nodes[uid] as Record<string, unknown>).pos = { x: pos[0], y: pos[1] };
-	const links: unknown[] = [];
+	(nodes[uid] as Record<string, unknown>).pos = [pos[0], pos[1]];
+	const links: Record<string, unknown> = {};
 	for (const p of o.ports ?? []) {
 		const pp = p.pos ?? [0, 0];
 		nodes[p.uid] = { type: p.type, name: p.name, pos: [pp[0], pp[1]], scope: uid };
 		if (!p.inner) continue;
 		const [n, s] = p.inner;
-		links.push(
+		const l =
 			boundaryType(p.type)!.dir === 'in'
 				? { node_out: p.uid, slot_out: BOUNDARY_SLOT, node_in: n, slot_in: s }
-				: { node_out: n, slot_out: s, node_in: p.uid, slot_in: BOUNDARY_SLOT }
-		);
+				: { node_out: n, slot_out: s, node_in: p.uid, slot_in: BOUNDARY_SLOT };
+		links[`${l.node_out}.${l.slot_out}>${l.node_in}.${l.slot_in}`] = l;
 	}
 	return { nodes, links };
 }
@@ -188,7 +188,7 @@ describe('a collapsed scope’s inline viewer, which is a node’s inline viewer
 
 		// Ungroup: the facade and its port leave the doc, taking the blob with them. That uid can be
 		// re-minted by a later backend, and what comes back must start clean.
-		d.patch({ nodes: { i9: null, p9: null, m9: { scope: null } }, links: [] });
+		d.patch({ nodes: { i9: null, p9: null, m9: { scope: null } }, links: {} });
 		expect(g.nodeById('i9')).toBeNull();
 		d.patch(spec);
 		expect(slotView(g.nodeById('i9'), 'p9').kind, 'the re-minted scope inherits no kind').toBeUndefined();

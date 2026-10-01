@@ -99,7 +99,7 @@ fn grouping_mints_a_port_for_every_crossing_cable_and_expanding_gives_them_back(
     // A crossing cable now STOPS at the port it crosses at, and the port carries it the rest of the
     // way: one wire each side of the wall, both ordinary links. Where the frames really go is the
     // graph's to resolve at plan time, not something the stored link has to spell out.
-    let links = g.doc()["links"].as_array().cloned().unwrap_or_default();
+    let links = g.doc()["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
     let wire = |a: &str, b: &str| links.iter().any(|l| l["node_out"] == a && l["node_in"] == b);
     assert!(wire(&hex(osc), &inp), "the cable in stops at the port: {links:?}");
     assert!(wire(&inp, &hex(buf)), "…and the port carries it to the member: {links:?}");
@@ -111,7 +111,7 @@ fn grouping_mints_a_port_for_every_crossing_cable_and_expanding_gives_them_back(
     g.call("nodes ungroup", j!({ "subpatch": inst }));
     assert!(g.instances().is_empty(), "the instance dropped out of the forest");
     assert_eq!(g.nodes().len(), 3, "and every leaf came back to root");
-    let after = g.doc()["links"].as_array().cloned().unwrap_or_default();
+    let after = g.doc()["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
     assert_eq!(after.len(), 2, "each cable is whole again, spliced across the vanished ports: {after:?}");
     let whole = |a: &str, b: &str| after.iter().any(|l| l["node_out"] == a && l["node_in"] == b);
     assert!(whole(&hex(osc), &hex(buf)) && whole(&hex(buf), &hex(sink)),
@@ -121,7 +121,7 @@ fn grouping_mints_a_port_for_every_crossing_cable_and_expanding_gives_them_back(
     // each cable is two halves again, and the join the wall's removal made is gone. A join left
     // behind is a cable running straight through a restored boundary that both ends face across.
     g.call("undo", j!({}));
-    let regrouped = g.doc()["links"].as_array().cloned().unwrap_or_default();
+    let regrouped = g.doc()["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
     let back = |a: &str, b: &str| regrouped.iter().any(|l| l["node_out"] == a && l["node_in"] == b);
     assert_eq!(g.ports(&inst).len(), 2, "both ports came back: {:?}", g.ports(&inst));
     assert!(back(&hex(osc), &inp) && back(&inp, &hex(buf)), "the cable in is two halves again: {regrouped:?}");
@@ -132,7 +132,7 @@ fn grouping_mints_a_port_for_every_crossing_cable_and_expanding_gives_them_back(
     // joins may only go back once the wall is down again, which is what refuses if they are not.
     g.call("redo", j!({}));
     assert!(g.instances().is_empty(), "redo expands it again");
-    assert_eq!(g.doc()["links"].as_array().map(|l| l.len()), Some(2), "each cable whole once more");
+    assert_eq!(g.doc()["links"].as_object().map(|l| l.len()), Some(2), "each cable whole once more");
 
     // Widen the selection and the cable between the two stops crossing, so nothing is minted for it.
     let both = group(&g, &[hex(osc), hex(buf)]);
@@ -252,7 +252,7 @@ fn a_cable_onto_a_boundary_stops_at_the_port_and_the_stream_runs_through() {
     // Two cables, one per scope, and BOTH end at the port: the facade address the caller named is
     // folded onto its port, and the port carries it the rest of the way. What the frames really do
     // is the graph's to resolve, so no stored link has to spell the far end out.
-    let links = g.doc()["links"].as_array().cloned().unwrap_or_default();
+    let links = g.doc()["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
     assert_eq!(links.len(), 2, "the external cable and the port's inner one: {links:?}");
     assert_eq!(g.inner(&bnd), Some((hex(buf), "input".into())), "the inner one, inside the scope");
     let outer = links.iter().find(|l| l["node_out"] == hex(osc)).expect("the external cable");
@@ -326,7 +326,7 @@ fn a_boundary_wires_to_a_nested_scopes_own_port() {
     g.call("node remove", j!({ "node": ib }));
     assert!(g.ports(&outer).contains(&ob), "the outer port stayed: {:?}", g.ports(&outer));
     assert_eq!(g.inner(&ob), None, "…and went unwired rather than naming a slot nothing has");
-    let links = g.doc()["links"].as_array().cloned().unwrap_or_default();
+    let links = g.doc()["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
     assert!(links.iter().all(|l| l["node_in"] != ob && l["node_out"] != ob),
             "so no cable is drawn at it: {links:?}");
 
@@ -710,7 +710,7 @@ fn a_sub_patch_is_copied_whole_and_the_copy_owes_the_original_nothing() {
 
     // Wiring INSIDE the copy is the original's; wiring to the patch AROUND it is not, because a copy
     // is a new node and a new node arrives unconnected.
-    let links = doc["links"].as_array().cloned().unwrap_or_default();
+    let links = doc["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
     let touches = |uid: &str| links.iter().filter(|l| l["node_out"] == uid || l["node_in"] == uid).count();
     assert_eq!(touches(&copy), 0, "the copied facade is not wired into the patch: {links:?}");
     assert!(touches(&leaf) > 0, "but its innards are wired to each other: {links:?}");

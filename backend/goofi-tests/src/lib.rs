@@ -386,7 +386,7 @@ impl Goofi {
         // A port now wears a cable on BOTH sides, so which one is "inner" is its direction's
         // answer: an In port FEEDS the scope, an Out port drains it.
         let inward = doc["nodes"][port]["type"].as_str()?.starts_with("In");
-        doc["links"].as_array()?.iter().find_map(|l| {
+        doc["links"].as_object()?.values().find_map(|l| {
             let (a, b) = (l["node_out"].as_str()?, l["node_in"].as_str()?);
             match inward {
                 true if a == port => Some((b.to_string(), l["slot_in"].as_str()?.to_string())),

@@ -141,7 +141,7 @@ test.describe('the control socket', () => {
 					[osc, buf]
 				);
 				await expect
-					.poll(async () => (await backendDoc(page)).links.length, {
+					.poll(async () => Object.keys((await backendDoc(page)).links).length, {
 						message: 'the link reached the manager'
 					})
 					.toBe(1);
@@ -379,7 +379,7 @@ test.describe('the control socket', () => {
 				);
 				await expect
 					.poll(async () =>
-						(await backendDoc(page)).links.some(
+						Object.values((await backendDoc(page)).links).some(
 							(l: { node_out: string; node_in: string }) => l.node_out === port && l.node_in === buf
 						)
 					)
@@ -403,7 +403,7 @@ test.describe('the control socket', () => {
 				);
 				await expect
 					.poll(async () =>
-						(await backendDoc(page)).links.some(
+						Object.values((await backendDoc(page)).links).some(
 							(l: { node_out: string; node_in: string }) => l.node_out === feeder && l.node_in === port
 						),
 						{ message: 'the manager stores the cable against the PORT' }
@@ -441,7 +441,7 @@ test.describe('the control socket', () => {
 				await expect.poll(async () => (await backendDoc(page)).nodes[port]).toBeUndefined();
 				await expect
 					.poll(async () =>
-						(await backendDoc(page)).links.some(
+						Object.values((await backendDoc(page)).links).some(
 							(l: { node_out: string }) => l.node_out === port
 						)
 					)
@@ -587,7 +587,7 @@ test.describe('the control socket', () => {
 					.filter(([, n]: [string, any]) => n.scope === scope)
 					.map(([uid]) => uid);
 				expect(
-					doc.links.some(
+					Object.values(doc.links as Record<string, unknown>).some(
 						(l: { node_out: string; node_in: string; slot_in: string }) =>
 							within.includes(l.node_out) && within.includes(l.node_in) && l.slot_in === 'input'
 					),
@@ -615,7 +615,7 @@ test.describe('the control socket', () => {
 				);
 				expect(await expectAgreement(page, 'after remove')).toEqual([]);
 				await expect
-					.poll(async () => (await backendDoc(page)).links.length, {
+					.poll(async () => Object.keys((await backendDoc(page)).links).length, {
 						message: 'and the link went with the nodes'
 					})
 					.toBe(0);

@@ -1192,7 +1192,7 @@ fn a_deleted_node_hands_its_wires_through() {
     g.link(src, "out", mid, "input");
     g.link(mid, "out", sink, "input");
     let wires = |g: &Goofi| -> Vec<(String, String)> {
-        let links = g.doc()["links"].as_array().cloned().unwrap_or_default();
+        let links = g.doc()["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
         links.iter().map(|l| (l["node_out"].as_str().unwrap().into(), l["node_in"].as_str().unwrap().into())).collect()
     };
     g.call("node remove", j!({ "node": hex(mid) }));

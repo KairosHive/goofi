@@ -77,7 +77,7 @@ impl GraphDoc {
     pub fn new() -> GraphDoc {
         let mut state = Map::new();
         for root in ROOTS {
-            state.insert(root.to_string(), if root == "links" { Value::Array(vec![]) } else { Value::Object(Map::new()) });
+            state.insert(root.to_string(), Value::Object(Map::new()));
         }
         GraphDoc { state: Value::Object(state), version: 0 }
     }

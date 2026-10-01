@@ -34,7 +34,7 @@ function seedDoc(): Doc {
 			},
 			b: { type: 'Buffer', name: 'buf0' }
 		},
-		links: [{ node_out: 'a', slot_out: 'out', node_in: 'b', slot_in: 'data' }],
+		links: { 'a.out>b.data': { node_out: 'a', slot_out: 'out', node_in: 'b', slot_in: 'data' } },
 		variables: {},
 		arrangement: {}
 	};
@@ -82,10 +82,10 @@ describe('graphDoc readers', () => {
 				i1: { type: 'SubPatch', name: 'subpatch0', pos: [5, 6] },
 				p1: { type: 'OutArray', name: 'wave', pos: [1, 2], scope: 'i1' }
 			},
-			links: [
-				...(base.links as unknown[]),
-				{ node_out: 'm1', slot_out: 'out', node_in: 'p1', slot_in: 'value' }
-			]
+			links: {
+				...(base.links as Record<string, unknown>),
+				'm1.out>p1.value': { node_out: 'm1', slot_out: 'out', node_in: 'p1', slot_in: 'value' }
+			}
 		};
 
 		// ONE list, because the document is one map: leaf, facade and port alike, each carrying the
@@ -127,7 +127,7 @@ describe('graphDoc readers', () => {
 		const doc: Doc = {
 			...seedDoc(),
 			nodes: { i1: { type: 'SubPatch', name: 's' }, p1: { type: 'InArray', name: 'a', scope: 'i1' } },
-			links: []
+			links: {}
 		};
 		expect(facadeFaces(doc).get('i1')).toEqual({
 			input_slots: { p1: 'ARRAY' },
@@ -148,7 +148,7 @@ describe('graphDoc readers', () => {
 		// The manager is the sole author, so this can only mean the two ends have drifted — and a
 		// half-drawn graph reports that better than a blank page does.
 		expect(nodeViews({})).toEqual([]);
-		expect(linkViews({ links: 'not an array' })).toEqual([]);
+		expect(linkViews({ links: 'not a map' })).toEqual([]);
 		expect(variableViews({ variables: null })).toEqual([]);
 		expect(facadeFaces({ nodes: 7 }).size).toBe(0);
 	});

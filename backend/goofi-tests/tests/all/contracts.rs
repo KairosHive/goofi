@@ -530,7 +530,7 @@ fn the_control_plane_document_carries_no_null_leaf() {
     let ports: Vec<String> = doc["nodes"].as_object().unwrap().iter()
         .filter(|(_, n)| n["scope"] == inst).map(|(u, _)| u.clone()).collect();
     assert!(!ports.is_empty(), "the group left no port: {}", doc["nodes"]);
-    assert!(doc["links"].as_array().unwrap().iter().any(|l| {
+    assert!(doc["links"].as_object().unwrap().values().any(|l| {
                 ports.iter().any(|p| l["node_out"] == p.as_str() || l["node_in"] == p.as_str())
             }),
             "no port is wired, so this test would not reach the inner-wire link: {}", doc["links"]);

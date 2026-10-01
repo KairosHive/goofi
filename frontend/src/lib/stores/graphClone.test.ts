@@ -19,7 +19,7 @@ describe('copy / paste / duplicate — the store carries the manager’s fragmen
 		const d = seed(fc);
 		d.node('uidA', 'Oscillator', 'oscillator0', [0, 0]);
 		d.instance('i1', 'subpatch0', [10, 10]);
-		const doc = { nodes: { uidA: { pos: [0, 0] }, i1: { pos: [10, 10] } }, links: [] };
+		const doc = { nodes: { uidA: { pos: [0, 0] }, i1: { pos: [10, 10] } }, links: {} };
 		fc.setCallResult('nodes copy', { doc });
 		fc.setCallResult('nodes paste', { rename: { uidA: 'newA', i1: 'newI' } });
 
@@ -42,7 +42,7 @@ describe('copy / paste / duplicate — the store carries the manager’s fragmen
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
 		seed(fc);
-		fc.setCallResult('nodes copy', { doc: { nodes: { m1: { pos: [0, 0] } }, links: [] } });
+		fc.setCallResult('nodes copy', { doc: { nodes: { m1: { pos: [0, 0] } }, links: {} } });
 		fc.setCallResult('nodes paste', { rename: { m1: 'newM' } });
 
 		await g.cloneNodes(['m1'], [40, 40], 'i1');

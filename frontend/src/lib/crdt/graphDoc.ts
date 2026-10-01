@@ -10,7 +10,7 @@ import type { LayoutNode, Workspace } from 'panelty';
 export type Doc = Record<string, unknown>;
 
 export function emptyDoc(): Doc {
-	return { nodes: {}, links: [], variables: {}, arrangement: {} };
+	return { nodes: {}, links: {}, variables: {}, arrangement: {} };
 }
 
 export interface NodeView {
@@ -53,8 +53,9 @@ export function nodesMap(doc: Doc): Record<string, Obj> {
 	return obj(doc.nodes) as Record<string, Obj>;
 }
 
+/** The links in connection order — a keyed map, so a wire made or cut is one key's delta. */
 export function linksArray(doc: Doc): Obj[] {
-	return Array.isArray(doc.links) ? (doc.links as Obj[]) : [];
+	return Object.values(obj(doc.links)) as Obj[];
 }
 
 /** The scope a record names, or `'__root__'`. The doc omits the key at the top level, because a

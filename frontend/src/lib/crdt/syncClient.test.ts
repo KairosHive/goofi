@@ -8,7 +8,7 @@ const OSC = { type: 'Oscillator', name: 'osc', pos: [0, 0] };
 /** A document as the manager sends it, whole. */
 const stateWith = (nodes: Record<string, unknown>) => ({
 	nodes,
-	links: [],
+	links: {},
 	instances: {},
 	variables: {},
 	arrangement: {}

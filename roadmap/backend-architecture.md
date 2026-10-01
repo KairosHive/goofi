@@ -6,7 +6,7 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-§2.B3-B5, §3.7-11, §4.H-I, §5.8-10 and 12-13.
+§2.B3c-B5, §3.7-11, §4.H-I, §5.8-10 and 12-13.
 
 ## 1. The patch model and the runtime are two types
 
@@ -37,8 +37,8 @@ variables as an ordered map. `viewpoint` and ephemeral variables stay out of the
 node's class derives from the catalog, not pinned per instance. Values a type no longer declares
 drop on load or paste. Rename `doc.rs`'s existing `Patch` type (Applied/Stale/Gap).
 
-- **B3a-e** The graph stores the `PatchDoc`: scope, links, values-only params;
-  `projection.rs` deleted.
+- **B3c-e** The graph stores the `PatchDoc`: values-only params, typed params derived from the
+  catalog class and held by the instance; `projection.rs` deleted.
 - **B4** The replica delta becomes path ops, `doc_patch {from, v, ops: [put | del]}`, with Rust
   and TypeScript appliers. Blobs travel as real JSON; `json_string` goes; the AGENTS.md rule
   that document leaves cannot be null goes. The patch's fields are private; `PatchMut` is the

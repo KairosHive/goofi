@@ -120,6 +120,9 @@ struct NodeEntry {
     kind: Kind,
     name: String,
     pos: [f64; 2],
+    /// The scope this record is a member of; `None` is ROOT. The ONE source of truth for
+    /// parentage and membership.
+    scope: Option<Uid>,
     /// Opaque: persisted and round-tripped, never interpreted.
     viewers: serde_json::Value,
     /// The values the touched-only filter counts FROM, `group/name` to value — opaque here in the
@@ -161,6 +164,13 @@ struct Link {
     slot_out: &'static str,
     node_in: Uid,
     slot_in: &'static str,
+}
+
+impl Link {
+    /// The key a link is held under — both ends, as the document spells it.
+    fn key(&self) -> String {
+        format!("{}.{}>{}.{}", self.node_out, self.slot_out, self.node_in, self.slot_in)
+    }
 }
 
 /// A param's value as JSON, and the one definition of it — the inverse of [`param_from_json`].
@@ -436,12 +446,11 @@ pub enum Origin {
 /// The document: what the archive, the replica and a paste fragment project.
 struct Patch {
     nodes: IndexMap<Uid, NodeEntry>,
-    links: Vec<Link>,
+    /// Keyed by [`Link::key`], in connection order — which IS a multi input's wire order.
+    links: IndexMap<String, Link>,
     /// The panel arrangement, held FLAT — the fifth doc root. Every mutation is an ordinary
     /// command, so the layout has exactly one projection, as nodes and links do.
     arrangement: layout::Layout,
-    /// uid → parent scope (absent = ROOT). The ONE source of truth for parentage and membership.
-    scope_of: HashMap<Uid, Option<Uid>>,
     /// Patch-scoped variables, system ones seeded and re-asserted by every `clear`/load.
     variables: goofi_core::variables::VariableStore,
 }
@@ -540,9 +549,8 @@ impl Graph {
         Graph {
             patch: Patch {
                 nodes: IndexMap::new(),
-                links: Vec::new(),
+                links: IndexMap::new(),
                 arrangement: layout::Layout::default(),
-                scope_of: HashMap::new(),
                 variables: goofi_core::variables::VariableStore::new(),
             },
             viewpoint: serde_json::Value::Null,
@@ -1411,7 +1419,7 @@ impl Graph {
         let born = self.pick_name(name, &base, None);
         self.patch.nodes.insert(
             uid,
-            NodeEntry { kind, name: born.clone(), pos: [0.0, 0.0], viewers: serde_json::json!({}), baseline: serde_json::json!({}), record: Vec::new() },
+            NodeEntry { kind, name: born.clone(), pos: [0.0, 0.0], scope: None, viewers: serde_json::json!({}), baseline: serde_json::json!({}), record: Vec::new() },
         );
         self.set_member_scope(uid, scope);
         Ok(uid)
@@ -1485,6 +1493,7 @@ impl Graph {
                 })),
                 name,
                 pos: [0.0, 0.0],
+                scope: None,
                 viewers: serde_json::json!({}), baseline: serde_json::json!({}),
                 record: Vec::new(),
             },
@@ -1531,11 +1540,11 @@ impl Graph {
         self.patch.nodes.get(&uid).map(|e| e.pos)
     }
 
-    /// The boundary port a uid names, with the scope holding it. Ports are few and scopes fewer, so
-    /// this scans rather than keeping a second index beside `scopes`.
+    /// The boundary port a uid names, with the scope holding it.
     pub fn stub(&self, uid: Uid) -> Option<(Uid, subpatch::Port)> {
-        match self.patch.nodes.get(&uid)?.kind {
-            Kind::Port(p) => Some((self.patch.scope_of.get(&uid).copied().flatten()?, p)),
+        let e = self.patch.nodes.get(&uid)?;
+        match e.kind {
+            Kind::Port(p) => Some((e.scope?, p)),
             Kind::Leaf(_) | Kind::Facade => None,
         }
     }
@@ -1748,7 +1757,7 @@ impl Graph {
     /// The parent scope of a node/scope (`None` = ROOT). Absent ⇒ ROOT, so a plain flat graph
     /// needs no entries.
     pub fn scope_of(&self, uid: Uid) -> Option<Uid> {
-        self.patch.scope_of.get(&uid).copied().flatten()
+        self.patch.nodes.get(&uid)?.scope
     }
 
     /// Everything `scope_of` places inside `scope`, ports included — they are members like any
@@ -1884,10 +1893,10 @@ impl Graph {
         let (_, st) = self.stub(port)?;
         match st.dir {
             subpatch::Dir::In => {
-                self.patch.links.iter().find(|l| l.node_out == port).map(|l| (l.node_in, l.slot_in))
+                self.patch.links.values().find(|l| l.node_out == port).map(|l| (l.node_in, l.slot_in))
             }
             subpatch::Dir::Out => {
-                self.patch.links.iter().find(|l| l.node_in == port).map(|l| (l.node_out, l.slot_out))
+                self.patch.links.values().find(|l| l.node_in == port).map(|l| (l.node_out, l.slot_out))
             }
         }
     }
@@ -1898,7 +1907,7 @@ impl Graph {
         let (mut out, mut seen) = (Vec::new(), Vec::new());
         let mut stack = vec![(node, slot)];
         while let Some((n, s)) = stack.pop() {
-            for l in self.patch.links.iter().filter(|l| l.node_out == n && l.slot_out == s) {
+            for l in self.patch.links.values().filter(|l| l.node_out == n && l.slot_out == s) {
                 match self.stub(l.node_in).is_some() {
                     // A hand-edited `.gfi` can persist a cyclic chain; walking it must stop.
                     true if !seen.contains(&l.node_in) => {
@@ -1917,7 +1926,7 @@ impl Graph {
     /// the wall that is. A port relays, so its direction decides which side is which but never what
     /// the answer is: the stream is simply what is wired in.
     fn stub_feed(&self, port: Uid) -> Option<(Uid, String)> {
-        self.patch.links.iter().find(|l| l.node_in == port).map(|l| (l.node_out, l.slot_out.to_string()))
+        self.patch.links.values().find(|l| l.node_in == port).map(|l| (l.node_out, l.slot_out.to_string()))
     }
 
     /// The scope an end of a wire FACES. A leaf faces the scope it lives in; a port relays across a
@@ -1990,16 +1999,10 @@ impl Graph {
         Ok(old)
     }
 
-    /// Re-tag a member's scope. `scope_of` is the single source of truth for parentage, so this is
-    /// the one place membership changes. `None` = ROOT scope.
+    /// Re-tag a member's scope: the one place membership changes. `None` = ROOT scope.
     fn set_member_scope(&mut self, member: Uid, scope: Option<Uid>) {
-        match scope {
-            Some(p) => {
-                self.patch.scope_of.insert(member, Some(p));
-            }
-            None => {
-                self.patch.scope_of.remove(&member);
-            }
+        if let Some(e) = self.patch.nodes.get_mut(&member) {
+            e.scope = scope;
         }
     }
 
@@ -2131,7 +2134,7 @@ impl Graph {
         let disp = self.fresh_name("subpatch");
         self.patch.nodes.insert(
             scope_uid,
-            NodeEntry { kind: Kind::Facade, name: disp, pos, viewers: serde_json::json!({}), baseline: serde_json::json!({}), record: Vec::new() },
+            NodeEntry { kind: Kind::Facade, name: disp, pos, scope: None, viewers: serde_json::json!({}), baseline: serde_json::json!({}), record: Vec::new() },
         );
         self.set_member_scope(scope_uid, parent);
 
@@ -2146,7 +2149,7 @@ impl Graph {
         let (mut in_n, mut out_n) = (0usize, 0usize);
         // Snapshot the links: `expose_in_nested_member` may MINT an intermediate stub and needs
         // `&mut self`, so the classification cannot hold a borrow on `self.patch.links`.
-        let links = self.patch.links.clone();
+        let links: Vec<Link> = self.patch.links.values().cloned().collect();
         for l in &links {
             let out_m = self.containing_member(l.node_out, &member_set);
             let in_m = self.containing_member(l.node_in, &member_set);
@@ -2208,7 +2211,7 @@ impl Graph {
         }
         // The whole cable goes, so the two halves replace it rather than racing its single-input
         // eviction — a port wired to a member's input would otherwise evict the very cable it carries.
-        self.patch.links.retain(|l| !cut.contains(l));
+        self.patch.links.retain(|_, l| !cut.contains(l));
 
         // 3. Re-tag membership. Members stay live; only `scope_of` changes.
         for &m in members {
@@ -2246,6 +2249,7 @@ impl Graph {
                 kind: Kind::Facade,
                 name: self.pick_name(&name, "subpatch", Some(scope_id)),
                 pos,
+                scope: None,
                 viewers: serde_json::json!({}), baseline: serde_json::json!({}),
                 record: Vec::new(),
             },
@@ -2279,25 +2283,23 @@ impl Graph {
         let ports: Vec<Uid> = self.ports_of(scope);
         let mut splices: Vec<(Uid, &'static str, Uid, &'static str)> = Vec::new();
         for &port in &ports {
-            let Some(feed) = self.patch.links.iter().find(|l| l.node_in == port).map(|l| (l.node_out, l.slot_out))
+            let Some(feed) = self.patch.links.values().find(|l| l.node_in == port).map(|l| (l.node_out, l.slot_out))
             else {
                 continue;
             };
-            for l in self.patch.links.iter().filter(|l| l.node_out == port) {
+            for l in self.patch.links.values().filter(|l| l.node_out == port) {
                 splices.push((feed.0, feed.1, l.node_in, l.slot_in));
             }
         }
-        self.patch.links.retain(|l| !ports.contains(&l.node_in) && !ports.contains(&l.node_out));
+        self.patch.links.retain(|_, l| !ports.contains(&l.node_in) && !ports.contains(&l.node_out));
 
         for &m in &restored {
             self.set_member_scope(m, parent);
         }
         for p in &ports {
             self.patch.nodes.shift_remove(p);
-            self.patch.scope_of.remove(p);
         }
         self.patch.nodes.shift_remove(&scope);
-        self.patch.scope_of.remove(&scope);
         // …and only now, with the members up one level and the wall gone, do the two halves of each
         // cable become one link that both ends can face.
         let mut joined = Vec::new();
@@ -2323,7 +2325,6 @@ impl Graph {
             }
         }
         self.patch.nodes.shift_remove(&scope);
-        self.patch.scope_of.remove(&scope);
         Ok(())
     }
 
@@ -2347,7 +2348,6 @@ impl Graph {
         // the port does, so what the port relayed to is re-planned rather than left subscribed.
         self.cut_cables(port);
         let e = self.patch.nodes.shift_remove(&port)?;
-        self.patch.scope_of.remove(&port);
         let Kind::Port(p) = e.kind else { return None };
         Some((p, e.name, e.pos))
     }
@@ -2355,7 +2355,7 @@ impl Graph {
     /// All links as resolved views (snapshot projection).
     pub fn links_view(&self) -> Vec<LinkView> {
         self.patch.links
-            .iter()
+            .values()
             .map(|l| LinkView {
                 node_out: l.node_out,
                 slot_out: l.slot_out,
@@ -2387,19 +2387,17 @@ impl Graph {
         if removed.leaf().is_some() {
             self.runtime.changed.push(Change::Removed(uid));
         }
-        // Drop any membership tag: a removed node has no scope. Leaving it dangling would make a
-        // reused uid (a delete→undo that restores the scope) self-parent via `common_parent`.
-        self.patch.scope_of.remove(&uid);
         // Drop links touching the node, then re-plan every consumer slot one of them fed. Links
         // INTO it need none: its thread is halted and its services are going with it.
         let dropped: Vec<Link> = self
-            .patch.links
-            .iter()
+            .patch
+            .links
+            .values()
             .filter(|l| l.node_out == uid || l.node_in == uid)
             .cloned()
             .collect();
         self.patch.links
-            .retain(|l| l.node_out != uid && l.node_in != uid);
+            .retain(|_, l| l.node_out != uid && l.node_in != uid);
         for l in dropped.iter().filter(|l| l.node_in != uid) {
             self.touched.push(Touched::Slot(l.node_in, l.slot_in));
         }
@@ -2466,8 +2464,9 @@ impl Graph {
         // A wire onto a slot the reshape retired can never propagate and cannot be repaired — the
         // slot is gone from the palette. Keeping it draws a cable the runtime ignores.
         let orphaned: Vec<(Uid, &'static str, Uid, &'static str)> = self
-            .patch.links
-            .iter()
+            .patch
+            .links
+            .values()
             .filter(|l| {
                 (l.node_in == uid && self.input_slot_type(uid, l.slot_in).is_none())
                     || (l.node_out == uid && self.output_slot_type(uid, l.slot_out).is_none())
@@ -2858,7 +2857,7 @@ impl Graph {
             return None;
         }
         self.patch.links
-            .iter()
+            .values()
             .find(|l| l.node_in == node_in && l.slot_in == slot)
             .map(|l| (l.node_out, l.slot_out))
     }
@@ -2871,7 +2870,7 @@ impl Graph {
         else {
             return false;
         };
-        self.patch.links.contains(&Link { node_out, slot_out, node_in, slot_in })
+        self.patch.links.contains_key(&Link { node_out, slot_out, node_in, slot_in }.key())
     }
 
     pub fn add_link(
@@ -2924,16 +2923,16 @@ impl Graph {
             node_in,
             slot_in,
         };
-        if self.patch.links.contains(&new) {
+        if self.patch.links.contains_key(&new.key()) {
             return Ok(()); // idempotent
         }
         // A multi slot keeps its wires in connection order, which IS `links`' own order; a single
         // input takes one, so a second wire EVICTS the first. The node hears one declarative set.
         if !self.is_multi_input(node_in, slot_in) {
             self.patch.links
-                .retain(|l| !(l.node_in == node_in && l.slot_in == slot_in));
+                .retain(|_, l| !(l.node_in == node_in && l.slot_in == slot_in));
         }
-        self.patch.links.push(new);
+        self.patch.links.insert(new.key(), new);
         self.touched.push(Touched::Slot(node_in, slot_in));
         Ok(())
     }
@@ -2946,7 +2945,7 @@ impl Graph {
         slot_in: &str,
     ) -> Result<(), String> {
         let before = self.patch.links.len();
-        self.patch.links.retain(|l| {
+        self.patch.links.retain(|_, l| {
             !(l.node_out == node_out
                 && l.slot_out == slot_out
                 && l.node_in == node_in
@@ -3115,7 +3114,7 @@ impl Graph {
     /// wire order. Computed once per settle, so no engine re-implements the relay walk.
     fn resolved_edges(&self) -> Vec<Edge> {
         self.patch.links
-            .iter()
+            .values()
             .filter(|l| self.leaf(l.node_in).is_some())
             .filter_map(|l| match self.stream(l.node_out, l.slot_out)? {
                 Stream::At(u, s) => {
@@ -3169,7 +3168,6 @@ impl Graph {
         self.runtime.changed.extend(removed.into_iter().map(Change::Removed));
         self.patch.nodes.clear();
         self.patch.links.clear();
-        self.patch.scope_of.clear();
         // Whatever the batch touched addressed nodes this clear destroyed; the generations stay,
         // keeping whatever is born at those uids next clear of what just died.
         self.touched.clear();
@@ -3260,7 +3258,7 @@ impl Graph {
         let links = self
             .patch
             .links
-            .iter()
+            .values()
             .filter(|l| want.contains(&l.node_out) && want.contains(&l.node_in))
             .map(|l| {
                 let link = doc::Link {
@@ -3529,6 +3527,7 @@ impl Graph {
                     kind: Kind::Facade,
                     name: String::new(),
                     pos: rec.pos,
+                    scope: None,
                     viewers: serde_json::json!({}), baseline: serde_json::json!({}),
                     record: Vec::new(),
                 },
@@ -3564,35 +3563,32 @@ impl Graph {
                 let _ = self.set_source(uid, &group, &name, state);
             }
         }
-        // Membership, from each record's own `scope`. It is set before the ports so a port's
-        // scope is already a member of whatever holds IT.
-        for (old, rec) in &doc.nodes {
-            let parent = rec.scope.as_deref().and_then(|s| idmap.get(s)).copied();
-            if parent.is_some() {
-                self.set_member_scope(idmap[old], parent);
-            }
-        }
+        let parent_of = |rec: &doc::NodeRecord| rec.scope.as_deref().and_then(|s| idmap.get(s)).copied();
         // The ports. Each is a member record whose type carries its direction and dtype, so nothing
-        // about it is re-derived from the wire it will get below.
+        // about it is re-derived from the wire it will get below. A port with no scope is not one.
         for (old, rec) in &doc.nodes {
             let Some((dir, dtype)) = subpatch::boundary_type(&rec.type_id) else { continue };
+            let Some(scope) = parent_of(rec).filter(|s| self.is_facade(*s)) else { continue };
             let uid = idmap[old];
-            // A port with no scope is not one, and the membership pass above is what gave it its.
-            if self.scope_of(uid).is_none() {
-                continue;
-            }
             self.patch.nodes.insert(
                 uid,
                 NodeEntry {
                     kind: Kind::Port(subpatch::Port { dir, dtype }),
                     name: String::new(),
                     pos: rec.pos,
+                    scope: Some(scope),
                     viewers: blob(&rec.viewers),
                     baseline: blob(&rec.baseline),
                     record: rec.record.clone(),
                 },
             );
             self.force_set_name(uid, &rec.name);
+        }
+        // Membership, from each record's own `scope`, once every record that can hold one is in.
+        for (old, rec) in &doc.nodes {
+            if let Some(parent) = parent_of(rec) {
+                self.set_member_scope(idmap[old], Some(parent));
+            }
         }
         for l in doc.links.values() {
             let (Some(no), Some(ni)) = (idmap.get(&l.node_out).copied(), idmap.get(&l.node_in).copied()) else {

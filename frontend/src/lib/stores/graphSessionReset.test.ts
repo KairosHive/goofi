@@ -88,7 +88,7 @@ function hydrate(fc: FakeControl, viewers?: Record<string, unknown>): DocSeed {
 			},
 			n2: { type: 'Oscillator', name: 'osc-n2', pos: [0, 0] }
 		},
-		links: [{ node_out: 'n1', slot_out: 'out', node_in: 'n2', slot_in: 'in' }]
+		links: { 'n1.out>n2.in': { node_out: 'n1', slot_out: 'out', node_in: 'n2', slot_in: 'in' } }
 	});
 }
 
