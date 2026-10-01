@@ -140,6 +140,10 @@ impl Drop for Watch {
 /// autosave removed, so what a crash leaves is exactly what was not on disk.
 fn tick(state: &AppState, last: &mut Option<Stamp>) {
     let mount = state.mount();
+    // The mount is released at shutdown; a tick that outlives it has nowhere to write.
+    if mount.as_os_str().is_empty() {
+        return;
+    }
     let dir = dir_of(&mount);
     let seen = archive::fingerprint(&mount);
     if !state.dirty_against(&seen) {
