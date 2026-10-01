@@ -599,12 +599,12 @@ impl<E: Executor> Runtime<E> {
             }
             Some(at) => {
                 let wait = at.saturating_duration_since(Instant::now());
-                // A timed wait's zero means NO timeout, and a due run takes what already rang.
-                let _ = if wait.is_zero() {
-                    self.listener.try_wait_all(|_| {})
+                // A due run takes what already rang; a wait still ahead is floored by the transport.
+                if wait.is_zero() {
+                    let _ = self.listener.try_wait_all(|_| {});
                 } else {
-                    self.listener.timed_wait_all(|_| {}, wait)
-                };
+                    goofi_transport::wait_within(&self.listener, wait, |_| {});
+                }
             }
         }
     }

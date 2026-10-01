@@ -246,7 +246,7 @@ pub fn spawn(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, recorder:
         while !halt.stopped() {
             // The event id is ignored, which spends none of the id budget: a burst across every
             // armed slot coalesces into one sweep.
-            let _ = drain.ports.listener.timed_wait_all(|_| {}, WAKE);
+            goofi_transport::wait_within(&drain.ports.listener, WAKE, |_| {});
             // Read BEFORE the sweep: a sweep already under way when a stop asked is not an answer
             // to it.
             let mark = drain.recorder.sweeping();

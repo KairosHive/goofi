@@ -217,6 +217,10 @@ fn a_ring_landing_mid_drain_is_not_lost_and_each_id_wakes_once() {
     assert_eq!(wait(&listener), vec![1]);
     bell.ring(2).unwrap(); // lands while "draining"
     assert_eq!(wait(&listener), vec![2], "retained across the re-park");
+    // A wait under a microsecond returns: a zero timeval would otherwise park until a ring.
+    goofi_transport::wait_within(&listener, std::time::Duration::from_nanos(1), |_| {});
+    bell.ring(2).unwrap();
+    assert_eq!(wait(&listener), vec![2], "the listener is still parked on after the short wait");
     bell.ring(0).unwrap();
     bell.ring(3).unwrap();
     let mut got = Vec::new();

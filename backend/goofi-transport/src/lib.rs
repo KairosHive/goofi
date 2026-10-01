@@ -44,6 +44,12 @@ pub type Listener = iceoryx2::port::listener::Listener<Svc>;
 /// The id a listener is handed per wake, as iceoryx2 spells it.
 pub type WakeId = iceoryx2::prelude::EventId;
 
+/// Park on `listener` for at most `within`, at least 1 µs: iceoryx2 reads a zero timeval as NO
+/// timeout, so a shorter wait would park until something rings, which a source never gets.
+pub fn wait_within(listener: &Listener, within: std::time::Duration, f: impl FnMut(WakeId)) {
+    let _ = listener.timed_wait_all(f, within.max(std::time::Duration::from_micros(1)));
+}
+
 /// Every port of one session is built against this: its iceoryx2 root and prefix, and
 /// iceoryx2's three automatic dead-node passes OFF — the session lock is the one liveness
 /// answer, and a pass over a directory only this session writes has nothing to find.

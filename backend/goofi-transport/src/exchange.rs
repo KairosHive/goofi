@@ -48,7 +48,7 @@ fn bell(node: &crate::IoxNode, base: &str) -> Result<(Doorbell, Listener), Strin
 /// Wait on the bell for up to `within`, answering whether `id` rang.
 fn rang(listener: &Listener, id: u8, within: Duration) -> bool {
     let mut heard = false;
-    let _ = listener.timed_wait_all(|event| heard |= event.as_value() == id as usize, within);
+    crate::wait_within(listener, within, |event| heard |= event.as_value() == id as usize);
     heard
 }
 
