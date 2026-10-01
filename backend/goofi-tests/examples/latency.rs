@@ -13,6 +13,8 @@ fn main() {
     g.update_param(src, "constant", "length", Param::int(256, 1, 1_000_000)).unwrap();
     let buf = g.add_node("Buffer", None).unwrap();
     g.update_param(buf, "buffer", "size", Param::int(1024, 1, 10_000_000)).unwrap();
+    // A node is born at settle; the probe opens the services that birth names.
+    g.settle();
     let probe = OutputProbe::open(&goofi_tests::iox(), &g, buf, "out");
     g.add_link(src, "out", buf, "input").unwrap();
 

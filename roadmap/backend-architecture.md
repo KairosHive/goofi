@@ -6,29 +6,14 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-**Phase 1**: §1.A2 and §1.A3.
-
-**Phase 2**: §2.B2-B5, §3.7-11, §4.H-I, §5.8-10 and 12-13.
+§2.B2-B5, §3.7-11, §4.H-I, §5.8-10 and 12-13.
 
 ## 1. The patch model and the runtime are two types
 
-`Graph { patch: PatchDoc, viewpoint, runtime: Runtime }`. `Runtime` holds the engines, waker,
-instance, epoch, time, evaluator, the catalog (classes, unavailable, origins), the mint
-(`next_uid`, generations, `arm_serial`), an `instances` table (engine, generation, health, typed
-params, bindings, serials), `watched`, `view_wants` and `refreshed`. No index beside the patch;
-settle builds its own short-lived maps. The patch holds param values only; typed params with
-bounds derive from the catalog class. `next_uid` stays a process-lifetime counter because undo
-restores deleted uids. `arrangement_warning` becomes a return value of load. `VariableStore`'s
-parallel maps become one `IndexMap<String, Variable>`. `touched` and `open_batches` move into
-§3's `Txn`.
-
-- **A2** The `Runtime` struct with the `instances` table.
-- **A3** Births at settle: commands record `Added`, `Removed` and `Restart` in the transaction's
-  change log and never call the engine. Settle does removals, then births (mint a generation),
-  then remove+insert for a restart or a changed class, then bindings, `build_view` and
-  `engine.settle`. Serials are minted at settle; events that read runtime state are built after
-  settle. The benches in `goofi-tests/examples/` settle after `add_node`. The editing situation
-  proves an add plus a rollback performs zero inserts.
+Remaining in the split: the patch holds param values only, with typed params and bounds derived
+from the catalog class (§2.B3); `VariableStore`'s parallel maps become one
+`IndexMap<String, Variable>`; `touched` and `open_batches` move into §3's `Txn`; arming serials
+are minted at settle, and events that read runtime state are built after settle.
 
 ## 2. One typed document, and contracts generated from it
 

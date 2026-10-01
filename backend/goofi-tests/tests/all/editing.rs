@@ -3,7 +3,7 @@
 
 use serde_json::{Map, Value};
 
-use goofi_tests::{f32s, Client, Goofi, ep, hex, j};
+use goofi_tests::{f32s, fixtures::LibraryEngine, Client, Goofi, ep, hex, j};
 
 /// The arrangement flattened to an id-keyed map with a `parent` on each node.
 fn entries(g: &Goofi) -> Map<String, Value> {
@@ -296,6 +296,18 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     ] }));
     assert!(why.contains("step 1"), "the refusal names the step that failed: {why}");
     assert!(g.doc()["variables"]["patch.tmp"].is_null(), "the step that landed was taken back: {why}");
+    // …and a node added in a refused batch is never born: births happen at settle, from the state
+    // the whole batch left, so the add plus its rollback cost the engine nothing.
+    let twin = LibraryEngine::named("twin", &["Stillborn"]);
+    let births = twin.births();
+    g.state.graph.lock().register_engine(Box::new(twin));
+    g.refuse("compound", j!({ "ops": [
+        { "op": "node add", "payload": { "type": "twin:Stillborn" } },
+        { "op": "node edit", "payload": { "node": GHOST, "name": "renamed" } },
+    ] }));
+    assert!(births.lock().is_empty(), "a rolled-back add reached the engine: {:?}", births.lock());
+    let kept = g.add("twin:Stillborn");
+    assert_eq!(*births.lock(), vec![kept], "a committed add is born once");
     // A READ rides a batch — its result in the bare list the batch answers — while an EFFECT is
     // refused: its consequences are not the history's to take back, so it runs alone.
     let ridden = g.call("compound", j!({ "ops": [
@@ -333,7 +345,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let built = g.doc();
 
     // A compound is ONE step though it is an add plus a remove composed.
-    let expected_steps = 60 + 2 * goofi_core::variables::ControlKind::ALL.len();
+    let expected_steps = 61 + 2 * goofi_core::variables::ControlKind::ALL.len();
     let mut steps = 0;
     while g.call("undo", j!({}))["changed"] == true {
         steps += 1;

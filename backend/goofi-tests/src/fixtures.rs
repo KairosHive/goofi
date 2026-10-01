@@ -92,6 +92,8 @@ pub struct LibraryEngine {
     types: Vec<LibraryEntry>,
     pending: Vec<(Uid, Status)>,
     shown: Arc<Mutex<HashSet<Uid>>>,
+    /// Every uid ever inserted, in order — what a test reads to count the births a batch cost.
+    born: Arc<Mutex<Vec<Uid>>>,
 }
 
 impl LibraryEngine {
@@ -104,7 +106,12 @@ impl LibraryEngine {
                 LibraryEntry { manifest: Box::leak(Box::new(m)), isolation: &goofi_node::NATIVE }
             })
             .collect();
-        LibraryEngine { id, types, pending: Vec::new(), shown: Arc::default() }
+        LibraryEngine { id, types, pending: Vec::new(), shown: Arc::default(), born: Arc::default() }
+    }
+
+    /// A handle on the birth log, held past `register_engine`.
+    pub fn births(&self) -> Arc<Mutex<Vec<Uid>>> {
+        self.born.clone()
     }
 }
 
@@ -123,6 +130,7 @@ impl Engine for LibraryEngine {
     }
 
     fn insert(&mut self, uid: Uid, _type_name: &str, _generation: u64, _params: &ParamGroups) -> Option<String> {
+        self.born.lock().push(uid);
         self.pending.push((uid, Status::Stage { stage: NodeStage::Ready }));
         None
     }

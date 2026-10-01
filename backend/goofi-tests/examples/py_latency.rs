@@ -50,6 +50,7 @@ fn build(n: usize, src: &'static str, len: i64) -> (Graph, Vec<OutputProbe>) {
     let mut probes = Vec::new();
     for _ in 0..n {
         let py = g.add_node("PyNode", None).unwrap();
+        g.settle();
         probes.push(OutputProbe::open(&goofi_tests::iox(), &g, py, "out"));
         g.add_link(osc, "out", py, "data").unwrap();
     }

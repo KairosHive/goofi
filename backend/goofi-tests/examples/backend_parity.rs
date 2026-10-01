@@ -94,6 +94,7 @@ fn bench(manifest: &'static NodeManifest, factory: Factory, len: i64, n: usize, 
     let mut probes = Vec::new();
     for _ in 0..n {
         let node = g.add_node(manifest.type_name, None).unwrap();
+        g.settle();
         probes.push(OutputProbe::open(&goofi_tests::iox(), &g, node, "out"));
         g.add_link(src, "out", node, "data").unwrap();
         nodes.push(node);

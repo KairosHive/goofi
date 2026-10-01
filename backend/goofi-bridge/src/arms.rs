@@ -1340,12 +1340,15 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         rescan(state, &mut g, &staged);
         // Parse BEFORE anything is announced or committed.
         goofi_supervisor::progress::report("Starting the patch's nodes");
-        if let Err(e) = g.load_doc(&content, &staged) {
-            // Refused, so the registry the scan above swapped is re-derived from the mount that
-            // is still live; the staged mount goes with `fresh`.
-            rescan(state, &mut g, &state.mount());
-            return Err(e);
-        }
+        let layout_warning = match g.load_doc(&content, &staged) {
+            Ok(warning) => warning,
+            Err(e) => {
+                // Refused, so the registry the scan above swapped is re-derived from the mount
+                // that is still live; the staged mount goes with `fresh`.
+                rescan(state, &mut g, &state.mount());
+                return Err(e);
+            }
+        };
         // Commit, now that nothing left can fail: the loaded patch's workspace becomes the live
         // one, and the replaced mount goes with the harnesses spawned into it.
         let replaced = state.mount.lock().replace(fresh);
@@ -1395,7 +1398,7 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         }
         // A stored arrangement this model admits but cannot render falls back to the default, so
         // the reply says so rather than leaving the change unexplained.
-        json!({ "ok": true, "layout_warning": g.arrangement_warning() })
+        json!({ "ok": true, "layout_warning": layout_warning })
     };
     if let Some(path) = &opened {
         fsbrowse::remember(path);
