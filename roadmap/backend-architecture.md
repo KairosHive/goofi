@@ -6,13 +6,12 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-§2.B3c-B5, §3.7-11, §4.H-I, §5.8-10 and 12-13.
+§2.B4-B5, §3.7-11, §4.H-I, §5.8-10 and 12-13.
 
 ## 1. The patch model and the runtime are two types
 
-Remaining in the split: the patch holds param values only, with typed params and bounds derived
-from the catalog class (§2.B3); `touched` and `open_batches` move into §3's `Txn`; arming serials
-are minted at settle, and events that read runtime state are built after settle.
+Remaining in the split: `touched` and `open_batches` move into §3's `Txn`; arming serials are
+minted at settle, and events that read runtime state are built after settle.
 
 ## 2. One typed document, and contracts generated from it
 
@@ -37,13 +36,12 @@ variables as an ordered map. `viewpoint` and ephemeral variables stay out of the
 node's class derives from the catalog, not pinned per instance. Values a type no longer declares
 drop on load or paste. Rename `doc.rs`'s existing `Patch` type (Applied/Stale/Gap).
 
-- **B3c-e** The graph stores the `PatchDoc`: values-only params, typed params derived from the
-  catalog class and held by the instance; `projection.rs` deleted.
 - **B4** The replica delta becomes path ops, `doc_patch {from, v, ops: [put | del]}`, with Rust
   and TypeScript appliers. Blobs travel as real JSON; `json_string` goes; the AGENTS.md rule
   that document leaves cannot be null goes. The patch's fields are private; `PatchMut` is the
   only writer and records the paths it touched; an order-changing edit re-sends its parent map.
-  `GraphDoc` keeps only the version; the deep diff and the follower's re-projection go.
+  `GraphDoc` keeps only the version; the deep diff, `projection.rs` and the follower's
+  re-projection go: the replica is the `PatchDoc` with the runtime's overlays.
 - **B5** Generated TypeScript (ts-rs) for the document, param descriptors and frame tags.
 
 ## 3. Typed ops with one transaction tail

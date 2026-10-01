@@ -50,8 +50,9 @@ struct Leaf {
     isolation: &'static IsolationCell,
     /// The id of the engine whose library resolved this node's type — its runtime authority.
     engine: &'static str,
-    /// The param RECORD — the literals `serialize` writes. An evaluated value must never reach it.
-    params: Arc<ParamGroups>,
+    /// The param RECORD — the literals `serialize` writes, every param of the class. An evaluated
+    /// value must never reach it; the typed params with bounds derive from the class on read.
+    values: doc::Values,
     /// The graph resolves each source's references and ships it; the NODE evaluates it.
     sources: HashMap<ParamKey, ParamSource>,
 }
@@ -517,12 +518,6 @@ impl Drop for Graph {
     fn drop(&mut self) {
         self.shutdown();
     }
-}
-
-/// `Arc::make_mut` clones only while a reader holds the previous snapshot, so a caller that took
-/// one keeps a consistent version and an unshared record is edited in place.
-fn edit_params(leaf: &mut Leaf, edit: impl FnOnce(&mut ParamGroups)) {
-    edit(Arc::make_mut(&mut leaf.params));
 }
 
 /// A variable as the [`Param`] an expression variable carries. The bounds are a carrier's, not a
@@ -1369,7 +1364,7 @@ impl Graph {
 
     /// Instantiate a node by type name. `params` defaults to the type's defaults.
     pub fn add_node(&mut self, type_name: &str, params: Option<ParamGroups>) -> Result<Uid, String> {
-        self.create_node(type_name, None, "", params, None)
+        self.create_node(type_name, None, "", params.as_ref().map(values_of), None)
     }
 
     /// Create the node `type_name` names — a leaf, a sub-patch facade or a boundary port — at
@@ -1381,7 +1376,7 @@ impl Graph {
         type_name: &str,
         uid: Option<Uid>,
         name: &str,
-        params: Option<ParamGroups>,
+        params: Option<doc::Values>,
         scope: Option<Uid>,
     ) -> Result<Uid, String> {
         if let Some(u) = uid.filter(|u| self.patch.nodes.contains_key(u)) {
@@ -1403,10 +1398,10 @@ impl Graph {
                 // default expressions its type declares.
                 let seed = params.is_none();
                 let (engine, entry) = self.resolve_type(type_name)?;
-                let params = self.default_params_of(type_name, params)?;
+                let values = values_of(&self.folded(type_name, &params.unwrap_or_default())?);
                 let uid = self.claim(uid);
                 let born = self.pick_name(name, &name_base(goofi_node::bare(type_name)), None);
-                self.insert_node_at(uid, born.clone(), engine, entry, params);
+                self.insert_node_at(uid, born.clone(), engine, entry, values);
                 let manifest = entry.manifest;
                 if seed {
                     self.seed_default_expressions(uid, engine, manifest);
@@ -1478,7 +1473,7 @@ impl Graph {
         name: String,
         engine: &'static str,
         entry: LibraryEntry,
-        params: ParamGroups,
+        values: doc::Values,
     ) {
         self.runtime.changed.push(Change::Added(uid));
         self.patch.nodes.insert(
@@ -1488,7 +1483,7 @@ impl Graph {
                     manifest: entry.manifest,
                     isolation: entry.isolation,
                     engine,
-                    params: Arc::new(params),
+                    values,
                     sources: HashMap::new(),
                 })),
                 name,
@@ -1575,8 +1570,34 @@ impl Graph {
 
     /// A node's params as of now. An owned snapshot rather than a borrow: cloning the `Arc` is
     /// cheap, and a `&` would borrow the whole graph for as long as the caller held it.
-    pub fn params(&self, uid: Uid) -> Option<Arc<ParamGroups>> {
-        self.leaf(uid).map(|e| e.params.clone())
+    pub fn params(&self, uid: Uid) -> Option<ParamGroups> {
+        self.leaf(uid).map(|l| self.typed(l))
+    }
+
+    /// The literals a leaf holds, as the document spells them.
+    pub fn values(&self, uid: Uid) -> Option<doc::Values> {
+        self.leaf(uid).map(|l| l.values.clone())
+    }
+
+    /// A leaf's params as its class declares them NOW, with the record's literals folded in:
+    /// the one derivation of a typed param, so no record can carry a stale bound or option.
+    fn typed(&self, leaf: &Leaf) -> ParamGroups {
+        self.folded(&goofi_node::qualify(leaf.engine, leaf.manifest.type_name), &leaf.values).unwrap_or_default()
+    }
+
+    /// The class's params with `values` folded in, each coerced to its declared type; a value
+    /// the class does not declare is ignored.
+    fn folded(&self, type_ref: &str, values: &doc::Values) -> Result<ParamGroups, String> {
+        let mut params = self.default_params_of(type_ref, None)?;
+        for (group, names) in values {
+            let Some(g) = params.get_mut(group) else { continue };
+            for (name, value) in names {
+                if let Some(existing) = g.get_mut(name) {
+                    *existing = param_from_json(existing, &value.to_json());
+                }
+            }
+        }
+        Ok(params)
     }
 
     /// A param's re-enumerated options where the instance has answered a refresh — the overlay a
@@ -1699,7 +1720,7 @@ impl Graph {
             return serde_json::json!({});
         };
         let mut out = serde_json::Map::new();
-        for (group, names) in &*leaf.params {
+        for (group, names) in &self.typed(leaf) {
             for (name, p) in names {
                 if matches!(p, Param::Pulse) {
                     continue;
@@ -2421,22 +2442,12 @@ impl Graph {
         let entry = self.leaf(uid).ok_or_else(|| format!("no such node {uid}"))?;
         // Qualified, because the node's own engine is the one to re-resolve it in.
         let type_ref = &goofi_node::qualify(entry.engine, entry.manifest.type_name);
-        let held = entry.params.clone();
-        // Fold what the node HAS onto what its type declares NOW: only the saved VALUE carries
-        // over — bounds, options and variant are the edited file's to state.
-        let mut params = self.default_params_of(type_ref, None)?;
-        for (group, held) in &*held {
-            let Some(g) = params.get_mut(group) else { continue };
-            for (name, value) in held {
-                if let Some(slot) = g.get_mut(name) {
-                    *slot = param_from_json(slot, &param_value_json(value));
-                }
-            }
-        }
         // Resolve BEFORE touching the entry: a type that no longer resolves leaves the old
         // instance running rather than half-killing the node.
         let (engine, lib) = self.resolve_type(type_ref)?;
-        let params = self.default_params_of(type_ref, Some(params))?;
+        // Only the saved VALUES carry over — bounds, options and variant are the edited file's
+        // to state — and a value the class no longer declares goes.
+        let declared = self.default_params_of(type_ref, None)?;
 
         // A restart is a rebirth at this uid, which settle does: the corpse is halted and the
         // reborn node takes a fresh generation, so it never re-opens names the corpse still holds.
@@ -2447,9 +2458,18 @@ impl Graph {
         entry.manifest = lib.manifest;
         entry.isolation = lib.isolation;
         entry.engine = engine;
-        // A swap, not a new record: the graph's readers hold this very handle, so replacing it
-        // would leave them reading the corpse's params.
-        entry.params = Arc::new(params);
+        entry.values.retain(|group, names| {
+            names.retain(|name, _| declared.get(group).is_some_and(|g| g.contains_key(name)));
+            !names.is_empty()
+        });
+        for (group, names) in &declared {
+            let held = entry.values.entry(group.clone()).or_default();
+            for (name, p) in names {
+                if let (false, Some(v)) = (held.contains_key(name), doc::Scalar::of(p)) {
+                    held.insert(name.clone(), v);
+                }
+            }
+        }
         // The rebirth renamed the node's door, so every subscription onto it is re-planned.
         let keys: Vec<ParamKey> = entry.sources.keys().cloned().collect();
         for slot in lib.manifest.inputs {
@@ -2486,15 +2506,16 @@ impl Graph {
         name: &str,
         value: Param,
     ) -> Result<(), String> {
-        let entry = self
-            .leaf_mut(uid)
-            .ok_or_else(|| format!("no such node {uid}"))?;
-        if entry.params.get(group).is_none() {
-            return Err(format!("no such param group `{group}`"));
+        let leaf = self.leaf(uid).ok_or_else(|| format!("no such node {uid}"))?;
+        let declared = self.typed(leaf);
+        let Some(existing) = goofi_node::param(&declared, group, name) else {
+            return Err(format!("no such param `{group}/{name}`"));
+        };
+        // Coerced to the DECLARED type: a literal is only ever a value of the class's param.
+        if let Some(v) = doc::Scalar::of(&param_from_json(existing, &param_value_json(&value))) {
+            let leaf = self.leaf_mut(uid).expect("looked up above");
+            leaf.values.entry(group.to_string()).or_default().insert(name.to_string(), v);
         }
-        edit_params(entry, |p| {
-            p.entry(group.to_string()).or_default().insert(name.to_string(), value.clone());
-        });
         // A LITERAL on a driven param switches it to constant, which is what the node does with
         // this write's `SetParam`; what the record retained stays retained.
         let key = ParamKey::new(group, name);
@@ -2513,7 +2534,8 @@ impl Graph {
     /// fires a pulse param. Not a command: a request holds no state, so there is nothing to undo.
     pub fn request(&mut self, uid: Uid, group: &str, name: &str, kind: goofi_node::RequestKind) -> Result<(), String> {
         let entry = self.leaf(uid).ok_or_else(|| format!("no such node {uid}"))?;
-        let param = goofi_node::param(&entry.params, group, name)
+        let typed = self.typed(entry);
+        let param = goofi_node::param(&typed, group, name)
             .ok_or_else(|| format!("no such param `{group}.{name}`"))?;
         match kind {
             goofi_node::RequestKind::Refresh if !matches!(param, Param::Str { refresh: true, .. }) => {
@@ -2554,7 +2576,7 @@ impl Graph {
         }
         // A record binds a real param: a dangling one is invisible in the descriptor and
         // unclearable from the UI.
-        if goofi_node::param(&leaf.params, group, name).is_none() {
+        if goofi_node::param(&self.typed(leaf), group, name).is_none() {
             return Err(format!("no such param `{group}/{name}`"));
         }
         if let Some(e) = self.leaf_mut(uid) {
@@ -2577,7 +2599,7 @@ impl Graph {
     /// resolved, and why it cannot bind. Both retained texts are scanned, so a broken inactive
     /// one is refused as it is typed.
     fn derive(&self, uid: Uid, key: &ParamKey, state: &SourceState) -> Derived {
-        let param = self.leaf(uid).and_then(|e| goofi_node::param(&e.params, &key.group, &key.name).cloned());
+        let param = self.leaf(uid).and_then(|e| goofi_node::param(&self.typed(e), &key.group, &key.name).cloned());
         let scanned = (!state.expression.is_empty()).then(|| expr_rewrite::rewrite(&state.expression));
         let reference = (!state.reference.is_empty()).then(|| goofi_node::mailbox::split_index(&state.reference)
             .and_then(|(base, index)| parse_reference(base).map(|r| (r, index))));
@@ -2732,7 +2754,7 @@ impl Graph {
             .ok_or_else(|| format!("`{who}` holds no params: a port relays and a facade fronts"))?;
         self.health(uid)
             .and_then(|h| h.evaluated.get(&ParamKey::new(group, name)).cloned())
-            .or_else(|| goofi_node::param(&entry.params, group, name).cloned())
+            .or_else(|| goofi_node::param(&self.typed(entry), group, name).cloned())
             .ok_or_else(|| format!("`{who}` has no param `{group}/{name}`"))
     }
 
@@ -3035,9 +3057,10 @@ impl Graph {
             }
         }
         let edges = self.resolved_edges();
+        let typed: HashMap<Uid, ParamGroups> = self.leaves().map(|(u, l)| (u, self.typed(l))).collect();
         let published = {
             let Runtime { generations, instance, engines, watched, .. } = &mut self.runtime;
-            let view = build_view(&self.patch.nodes, generations, instance, &edges, watched);
+            let view = build_view(&self.patch.nodes, &typed, generations, instance, &edges, watched);
             for e in engines.iter_mut() {
                 e.settle(&view, &touched);
             }
@@ -3092,7 +3115,7 @@ impl Graph {
         let generation = self.bump_generation(uid);
         let (engine, type_name, params) = {
             let leaf = self.leaf(uid).expect("a leaf is what is born");
-            (leaf.engine, leaf.manifest.type_name, leaf.params.clone())
+            (leaf.engine, leaf.manifest.type_name, self.typed(leaf))
         };
         let boot_error = self
             .engine_mut(engine)
@@ -3222,7 +3245,7 @@ impl Graph {
         for (uid, e) in self.patch.nodes.iter().filter(|(u, _)| want.contains(u)) {
             let mut params = IndexMap::new();
             if let Some(leaf) = e.leaf() {
-                for (group, names) in &*leaf.params {
+                for (group, names) in &self.typed(leaf) {
                     let entries: IndexMap<String, doc::ParamEntry> = names
                         .iter()
                         .filter_map(|(name, p)| {
@@ -3273,19 +3296,15 @@ impl Graph {
         doc::PatchDoc { nodes, links, ..Default::default() }
     }
 
-    /// The params a record asks for, folded over the type's defaults. NON-seeding, because a
+    /// The literals a record asks for, folded over the type's defaults. NON-seeding, because a
     /// restore must not re-synthesize a binding the user had unbound.
-    fn record_params(&self, rec: &doc::NodeRecord) -> Result<ParamGroups, String> {
-        let mut params = self.default_params_of(&rec.type_id, None)?;
-        for (group, names) in &rec.params {
-            let Some(g) = params.get_mut(group) else { continue };
-            for (name, entry) in names {
-                if let (Some(existing), Some(value)) = (g.get_mut(name), &entry.value) {
-                    *existing = param_from_json(existing, &value.to_json());
-                }
-            }
-        }
-        Ok(params)
+    fn record_params(&self, rec: &doc::NodeRecord) -> Result<doc::Values, String> {
+        let asked: doc::Values = rec
+            .params
+            .iter()
+            .map(|(g, names)| (g.clone(), names.iter().filter_map(|(n, e)| Some((n.clone(), e.value.clone()?))).collect()))
+            .collect();
+        Ok(values_of(&self.folded(&rec.type_id, &asked)?))
     }
 
     /// The one gate a load and a paste pass. Every leaf's type resolves or the whole document is
@@ -3542,14 +3561,13 @@ impl Graph {
             let _ = self.set_recorded(idmap[old], rec.record.clone());
         }
         for (old, rec) in doc.nodes.iter().filter(|(_, r)| !structural(&r.type_id)) {
-            let params = self.record_params(rec)?;
+            let values = self.record_params(rec)?;
             let (engine, entry) = self.resolve_type(&rec.type_id)?;
-            let params = self.default_params_of(&rec.type_id, Some(params))?;
             // The record's KEY is its uid — restored, not reminted (see `restore_uid`). The name is
             // the type's fresh one only until the record's own `name` lands, just below.
             let uid = idmap[old];
             let name = self.fresh_name(&name_base(goofi_node::bare(&rec.type_id)));
-            self.insert_node_at(uid, name, engine, entry, params);
+            self.insert_node_at(uid, name, engine, entry, values);
             self.force_set_name(uid, &rec.name);
             let _ = self.set_node_pos(uid, rec.pos);
             if let Some(v) = &rec.viewers {
@@ -3620,6 +3638,14 @@ fn qualified(engine: &'static str, scanned: Vec<goofi_node::ScannedType>) -> Vec
     scanned
         .into_iter()
         .map(|t| goofi_node::ScannedType { type_name: goofi_node::qualify(engine, &t.type_name), ..t })
+        .collect()
+}
+
+/// The literals of a typed record — what the patch keeps of it; a pulse has none.
+fn values_of(params: &ParamGroups) -> doc::Values {
+    params
+        .iter()
+        .map(|(group, names)| (group.clone(), names.iter().filter_map(|(n, p)| Some((n.clone(), doc::Scalar::of(p)?))).collect()))
         .collect()
 }
 
@@ -3732,11 +3758,10 @@ fn apply_status_to(
         }
         Status::ParamValues { evaluated } => {
             // A pulse holds no value: what an engine evaluated for one is its edge memory.
-            let params = &entry.params;
-            health.evaluated = evaluated
-                .into_iter()
-                .filter(|(key, _)| !matches!(goofi_node::param(params, &key.group, &key.name), Some(Param::Pulse)))
-                .collect();
+            let pulse = |key: &ParamKey| {
+                entry.manifest.params.iter().any(|d| d.group == key.group && d.name == key.name && matches!(d.spec.to_param(), Param::Pulse))
+            };
+            health.evaluated = evaluated.into_iter().filter(|(key, _)| !pulse(key)).collect();
         }
     }
     // Stamp when the error first read the way it does now — re-stamped only when the message
@@ -3750,6 +3775,7 @@ fn apply_status_to(
 /// The settled view, borrowed from the one model — built at the settle point and nowhere else.
 fn build_view<'a>(
     nodes: &'a IndexMap<Uid, NodeEntry>,
+    typed: &'a HashMap<Uid, ParamGroups>,
     generations: &HashMap<Uid, u64>,
     instance: &'a str,
     edges: &'a [Edge],
@@ -3778,7 +3804,7 @@ fn build_view<'a>(
                     name: e.name.as_str(),
                     generation: generations.get(uid).copied().unwrap_or(0),
                     manifest: leaf.manifest,
-                    params: leaf.params.as_ref(),
+                    params: &typed[uid],
                     bindings,
                     recorded: e.record.as_slice(),
                     watched: leaf.manifest.outputs.iter().filter(|o| watched.contains(&(*uid, o.name.to_string()))).map(|o| o.name).collect(),

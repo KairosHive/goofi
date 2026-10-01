@@ -89,6 +89,10 @@ impl ParamEntry {
     }
 }
 
+/// Every param's literal, by group and name: what the patch holds of a node's params. Bounds,
+/// options and types are the class's, derived from the catalog on every read.
+pub type Values = IndexMap<String, IndexMap<String, Scalar>>;
+
 /// A param value as the document spells it. The declared type coerces it on the way in.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]

@@ -6,7 +6,7 @@ use goofi_core::variables::{Control, VariableValue};
 use goofi_core::Param;
 
 use crate::Mode;
-use goofi_node::{param, ParamGroups};
+use goofi_node::param;
 
 /// What a command produced, for the caller. Kept serde-free so the engine needs no JSON dep.
 #[derive(Clone, Debug, PartialEq)]
@@ -82,7 +82,7 @@ pub enum Command {
         uid: Option<Uid>,
         name: Option<String>,
         /// `Some` restores captured params (a `RemoveNode` inverse); `None` uses the type's defaults.
-        params: Option<ParamGroups>,
+        params: Option<crate::doc::Values>,
         /// Captured source records `(group, name, state)` to re-apply. Empty for a user add.
         sources: Vec<(String, String, SourceState)>,
         /// Captured viewer view-state blob to restore; `None` for a user add (defaults to empty).
@@ -1089,7 +1089,7 @@ fn capture_subtree_restore(g: &Graph, root: Uid) -> (Command, std::collections::
             pos: g.pos(u).unwrap_or([0.0, 0.0]),
             uid: Some(u),
             name: g.name(u).map(str::to_string),
-            params: g.params(u).map(|p| (*p).clone()),
+            params: g.values(u),
             sources,
             viewers: g.viewers(u).filter(|v| v.as_object().is_some_and(|m| !m.is_empty())).cloned(),
             baseline: g.baseline(u).filter(|v| v.as_object().is_some_and(|m| !m.is_empty())).cloned(),

@@ -138,7 +138,7 @@ pub fn describe_node_params(g: &Graph, uid: Uid) -> Value {
     let ty = g.node_type(uid).unwrap_or_default();
     let universal = g.universal_decls(goofi_node::split_type_id(&ty).0.unwrap_or_default(), m);
     let mut groups = Map::new();
-    for (gname, group) in &*params {
+    for (gname, group) in &params {
         let mut names = Map::new();
         for (n, param) in group {
             let source = g.param_source(uid, gname, n);
