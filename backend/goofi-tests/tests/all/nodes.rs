@@ -273,18 +273,26 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
     emits(&g, second, 2.0);
     assert_eq!(hosts(&g).len(), 2, "{:?}", hosts(&g));
     let born: Vec<u32> = twice_hosts().difference(&before).copied().collect();
-    let [pid] = born[..] else { panic!("one new host child, not {born:?}") };
-    let environ = std::fs::read(format!("/proc/{pid}/environ")).expect("the child's environment");
-    let base = environ.split(|b| *b == 0).find_map(|kv| kv.strip_prefix(b"GOOFI_IOX_BASE=")).expect("a base").to_vec();
-    let iox = goofi_supervisor::session::system_dir(&goofi_tests::session_id()).join("iox");
-    let left_behind = || -> Vec<String> {
-        let services = std::fs::read_dir(iox.join("services")).into_iter().flatten().flatten()
-            .filter(|e| std::fs::read(e.path()).unwrap_or_default().windows(base.len()).any(|w| w == base));
-        let nodes = std::fs::read_dir(iox.join("nodes")).into_iter().flatten().flatten()
-            .filter(|e| e.file_name().to_str().and_then(|n| n.parse::<u128>().ok()).is_some_and(|id| id as u32 == pid));
-        services.chain(nodes).map(|e| e.path().to_string_lossy().into_owned()).collect()
+    // Only Linux has /proc to find the child by; elsewhere the leftover check stands down.
+    let left_behind: Box<dyn Fn() -> Vec<String>> = match cfg!(target_os = "linux") {
+        false => Box::new(Vec::new),
+        true => {
+            let [pid] = born[..] else { panic!("one new host child, not {born:?}") };
+            let environ = std::fs::read(format!("/proc/{pid}/environ")).expect("the child's environment");
+            let base = environ.split(|b| *b == 0).find_map(|kv| kv.strip_prefix(b"GOOFI_IOX_BASE=")).expect("a base").to_vec();
+            let iox = goofi_supervisor::session::system_dir(&goofi_tests::session_id()).join("iox");
+            let root = iox.display().to_string();
+            let left_behind = move || -> Vec<String> {
+                let services = std::fs::read_dir(iox.join("services")).into_iter().flatten().flatten()
+                    .filter(|e| std::fs::read(e.path()).unwrap_or_default().windows(base.len()).any(|w| w == base));
+                let nodes = std::fs::read_dir(iox.join("nodes")).into_iter().flatten().flatten()
+                    .filter(|e| e.file_name().to_str().and_then(|n| n.parse::<u128>().ok()).is_some_and(|id| id as u32 == pid));
+                services.chain(nodes).map(|e| e.path().to_string_lossy().into_owned()).collect()
+            };
+            assert!(!left_behind().is_empty(), "the running child owns entries under {root}");
+            Box::new(left_behind)
+        }
     };
-    assert!(!left_behind().is_empty(), "the running child owns entries under {}", iox.display());
     g.call("node remove", j!({ "node": goofi_tests::hex(second) }));
     g.until("the removed instance's child to be gone", |g| (hosts(g).len() == 1).then_some(()));
     let start = std::time::Instant::now();

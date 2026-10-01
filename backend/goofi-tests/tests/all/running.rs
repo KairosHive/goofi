@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use goofi_tests::fixtures::Latch;
@@ -113,20 +113,18 @@ fn a_producer_paces_itself_to_its_rate_cap_and_follows_a_live_change() {
     g.set_param(osc, "common", "max_frequency", 5.0);
     g.ready(osc);
 
-    // Read from the index STAMP: a data wire is one deep, so a poll loop counts its own rate.
-    let runs = |window: Duration| {
-        let (mut first, mut last, end) = (None, 0, Instant::now() + window);
-        while Instant::now() < end {
-            if let Some(i) = probe.latest().and_then(|d| d.meta().index()) {
-                first.get_or_insert(i);
-                last = i;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        last - first.unwrap_or(last)
+    // Frames counted against the producer's own stamps: a slow runner stretches both alike.
+    let at_most = |cap: f64, frames: u64| {
+        let first = g.until("a first stamped frame", |_| probe.latest().and_then(|d| Some((d.meta().index()?, d.meta().time()?))));
+        let last = g.until("frames to count", |_| {
+            let d = probe.latest()?;
+            let (i, t) = (d.meta().index()?, d.meta().time()?);
+            (i >= first.0 + frames).then_some((i, t))
+        });
+        let (n, span) = (last.0 - first.0, last.1 - first.1);
+        assert!(n as f64 <= cap * span + 1.0, "{n} frames in {span:.3} s of stamps, OVER the {cap} Hz cap");
     };
-    let slow = runs(Duration::from_millis(800));
-    assert!(slow <= 8, "5 Hz produced {slow} frames in 0.8 s — the cap is not honoured");
+    at_most(5.0, 4);
 
     g.set_param(osc, "common", "max_frequency", 60.0);
     // Half the old period apart, which the 5 Hz cap never allows.
@@ -138,8 +136,7 @@ fn a_producer_paces_itself_to_its_rate_cap_and_follows_a_live_change() {
     g.set_param(osc, "output", "mode", "block");
     g.set_param(osc, "output", "sfreq", 1000.0);
     g.until("the new cap to take hold", |_| probe.latest().filter(|d| d.meta().sfreq() == Some(1000.0)));
-    let fast = runs(Duration::from_millis(1000));
-    assert!(fast <= 201, "a 200 Hz cap delivered {fast} frames in a second — OVER the cap");
+    at_most(200.0, 100);
 }
 
 #[test]

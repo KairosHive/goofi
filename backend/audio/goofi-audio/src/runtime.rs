@@ -568,9 +568,10 @@ impl Runtime {
             Msg::Remove(idx) => self.slab[idx].take().map(Retired::Slot),
             Msg::Rings { idx, serial, mut rings } => {
                 // Swapped in place, the old ends going back; rings for a slot that left go back whole.
+                // An inbox swaps its ring alone: the frame in hand and its crossfade play on.
                 if let Some(slot) = self.slab[idx].as_mut().filter(|s| s.serial == serial) {
                     for (i, frames) in &mut rings.inboxes {
-                        std::mem::swap(&mut slot.inboxes[*i], frames);
+                        std::mem::swap(&mut slot.inboxes[*i].ring, &mut frames.ring);
                     }
                     for (i, tap) in &mut rings.taps {
                         std::mem::swap(&mut slot.taps[*i], tap);

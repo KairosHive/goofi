@@ -91,13 +91,8 @@ impl Call for Spawned {
     /// the next call starts a fresh one. A stop is the child's last call, then its end.
     fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
         if entry == Entry::Stop {
-            if let Some((mut child, mut exchange)) = self.live.take() {
-                // A child that answered its stop leaves by itself and releases its ports on the
-                // way; a kill would cut that short, so each half has its own grace.
-                let stop = &[&rpc::call_head(Entry::Stop, now)[..]];
-                let by = std::time::Instant::now() + STOP_TIMEOUT;
-                let _ = exchange.send(&mut child, stop).and_then(|seq| exchange.answer(&mut child, seq, Some(by)));
-                let _ = child.wait_within(STOP_TIMEOUT);
+            if let Some(live) = self.live.take() {
+                end(live, now);
             }
             return Ok(rpc::done());
         }
@@ -109,10 +104,20 @@ impl Call for Spawned {
         let frame: Vec<&[u8]> = std::iter::once(&head[..]).chain(request.iter().copied()).collect();
         let reply = exchange.ask(child, &frame);
         if reply.is_err() {
-            self.live = None;
+            // Halted mid-call or failed: it still ends by its stop, as a kill would leave its ports.
+            end(self.live.take().expect("spawned"), now);
         }
         reply
     }
+}
+
+/// A child's last call, then its end. One that answered its stop leaves by itself and releases
+/// its ports on the way; a kill would cut that short, so each half has its own grace.
+fn end((mut child, mut exchange): (Child, Exchange), now: f64) {
+    let stop = &[&rpc::call_head(Entry::Stop, now)[..]];
+    let by = std::time::Instant::now() + STOP_TIMEOUT;
+    let _ = exchange.send(&mut child, stop).and_then(|seq| exchange.answer(&mut child, seq, Some(by)));
+    let _ = child.wait_within(STOP_TIMEOUT);
 }
 
 /// The child side, `goofi host …`: `describe <artifact>` prints what the library says it is;

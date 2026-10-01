@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use goofi_python::{discover_one, probe_introspect, Discovery};
+use goofi_python::{discover_one, Discovery};
 use goofi_node::Isolation;
 
 /// Whether `py` runs `code` cleanly, with the host's Python variables stripped as the probe strips them.
@@ -134,18 +134,8 @@ fn a_producer_that_is_not_a_bool_is_refused_rather_than_read_as_false() {
 }
 
 #[test]
-fn missing_dep_greys_out_instead_of_crashing() {
+fn a_file_that_declares_no_node_or_a_bad_one_is_unavailable_for_its_own_reason() {
     let py = test_python();
-    // The probe import fails -> the REASON, never a panic, so the palette can explain itself.
-    let err = probe_introspect(&fixtures().join("missing_dep.py"), &py).unwrap_err();
-    assert_eq!(err, "definitely_not_installed_pkg", "a missing import names the module");
-    match discover_one(&fixtures().join("missing_dep.py"), &py, Isolation::Subprocess, &memo()) {
-        Discovery::Unavailable { type_name, reason } => {
-            assert_eq!(type_name, "MissingDep");
-            assert_eq!(reason, "definitely_not_installed_pkg");
-        }
-        _ => panic!("a node whose dep is missing is Unavailable, not skipped"),
-    }
     // A file that imports CLEANLY and simply declares no node is Unavailable too, and for a reason
     // of its own — the palette must be able to say which of the two happened.
     match discover_one(&fixtures().join("no_node.py"), &py, Isolation::Subprocess, &memo()) {

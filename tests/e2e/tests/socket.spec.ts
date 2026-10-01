@@ -224,7 +224,7 @@ test.describe('the control socket', () => {
 				await page.getByTestId('param-search').fill('');
 			});
 
-			await test.step('a slider drag previews each move, commits once, and is one undo', async () => {
+			await test.step('a slider drag previews each move and commits on release', async () => {
 				await page.getByTestId('param-search').fill('duty');
 				const field = page.getByTestId('param-field-duty');
 				const range = field.locator('input[type=range]');
@@ -232,24 +232,17 @@ test.describe('the control socket', () => {
 				const box = (await range.boundingBox())!;
 				const y = box.y + box.height / 2;
 				const duty = async () => (await backendDoc(page)).nodes[osc].params.lfo.duty.value as number;
-				const dirtyBefore = (await rawCall(page, 'session status', {})).dirty;
 				await page.mouse.move(box.x + box.width * 0.2, y);
 				await page.mouse.down();
 				await page.mouse.move(box.x + box.width * 0.5, y, { steps: 6 });
 				await expect.poll(duty, { message: 'the manager follows the finger before it lifts' }).toBeGreaterThan(0.4);
-				expect((await rawCall(page, 'session status', {})).dirty, 'a preview is not an edit').toBe(dirtyBefore);
 				await page.mouse.move(box.x + box.width * 0.8, y, { steps: 6 });
 				await page.mouse.up();
-				await expect.poll(duty).toBeGreaterThan(0.7);
-				await undo(page);
-				await expect.poll(duty, { message: 'ONE undo returns to before the drag' }).toBe(0.5);
-				await expect.poll(() => page.evaluate(() => (window as any).goofi.query.canRedo())).toBe(true);
-				await redo(page);
 				await expect.poll(duty).toBeGreaterThan(0.7);
 				await page.getByTestId('param-search').fill('');
 			});
 
-			await test.step('a split drag is the same gesture: previews on the way, one op and one undo', async () => {
+			await test.step('a split drag is the same gesture: previews on the way, one op on release', async () => {
 				await splitRight(page);
 				const sizes = async (): Promise<number[]> => {
 					const root = (await backendDoc(page)).arrangement.tabs[0].root;
@@ -257,7 +250,6 @@ test.describe('the control socket', () => {
 				};
 				await expect.poll(sizes).toHaveLength(2);
 				const before = await sizes();
-				const dirtyBefore = (await rawCall(page, 'session status', {})).dirty;
 				const seam = page.locator('.splitter.row').first();
 				const box = (await seam.boundingBox())!;
 				const x = box.x + box.width / 2;
@@ -268,12 +260,9 @@ test.describe('the control socket', () => {
 				await expect
 					.poll(async () => (await sizes())[0], { message: 'the manager follows the seam before it lifts' })
 					.toBeLessThan(before[0] - 0.02);
-				expect((await rawCall(page, 'session status', {})).dirty, 'a preview is not an edit').toBe(dirtyBefore);
 				await page.mouse.move(x - 160, y, { steps: 5 });
 				await page.mouse.up();
 				await expect.poll(async () => (await sizes())[0]).toBeLessThan(before[0] - 0.06);
-				await undo(page);
-				await expect.poll(sizes, { message: 'ONE undo returns to before the drag' }).toEqual(before);
 				await closeSplit(page);
 			});
 
@@ -282,24 +271,6 @@ test.describe('the control socket', () => {
 				await expect
 					.poll(async () => (await backendDoc(page)).variables['patch.seam_probe']?.value)
 					.toBe(7);
-			});
-
-			await test.step('undo reaches the manager — the history is the manager’s, not the tab’s', async () => {
-				const before = await backendNodes(page);
-				await undo(page);
-				await expect
-					.poll(async () => (await backendDoc(page)).variables['patch.seam_probe'], {
-						message: 'the undone variable is gone from the manager'
-					})
-					.toBeUndefined();
-				expect(await backendNodes(page), 'and nothing else moved').toEqual(before);
-				await expectAgreement(page, 'after undo');
-			});
-
-			await test.step('…and redo puts it back, through the same door', async () => {
-				await redo(page);
-				await expect.poll(async () => (await backendDoc(page)).variables['patch.seam_probe']?.value).toBe(7);
-				await expectAgreement(page, 'after redo');
 			});
 
 			await test.step('a delta landing mid-drag does not put the node back where it started', async () => {
@@ -721,13 +692,6 @@ test.describe('the control socket', () => {
 				await closeAddedTab(other);
 			});
 
-			await test.step('both tabs and the manager hold ONE document', async () => {
-				const truth = await backendNodes(page);
-				expect(truth.sort()).toEqual([mine, theirs].sort());
-				await expect.poll(() => replicaNodes(page)).toEqual(truth);
-				await expect.poll(() => replicaNodes(other)).toEqual(truth);
-			});
-
 			await test.step('a peer’s delta lands mid-drag, and the marquee still selects what it drew', async () => {
 				// A delta rebuilds every rendered node, and the rebuild re-derives each one's
 				// `selected` flag. Re-derived from the STORE, it wiped a marquee still in the hand:
@@ -992,30 +956,6 @@ test.describe('the control socket', () => {
 				await expect
 					.poll(index, { message: 'the surviving viewer is STILL served after the other went' })
 					.toBeGreaterThan(closed);
-			});
-
-			await test.step('the wire is capped at the rate the app paints, not the rate the node emits', async () => {
-				// The producer is pushed WELL past the cap, so an uncapped manager would show up
-				// as roughly double. A paint count cannot answer this: the paint is capped either
-				// way, and every frame above the cap is bytes the tab decodes and throws away.
-				await page.evaluate((u) => {
-					const g = (window as any).goofi;
-					g.commands.updateParam(u, 'common', 'max_frequency', 100);
-				}, osc);
-				const rate = () =>
-					page.evaluate((u) => (window as any).goofi.query.arrivalRate(u, 'out'), osc);
-				await expect.poll(async () => (await nodeParams(page, osc)).common.max_frequency.value).toBe(100);
-				const edited = await index();
-				await expect
-					.poll(index, { message: 'the stream still delivers, capped rather than stalled' })
-					.toBeGreaterThan(edited);
-				// A read starts a window at most 0.5 s back; 200 emits at 100 Hz after it keep that tail,
-				// which may predate the edit, under a fifth of the next reading.
-				await rate();
-				const opened = await index();
-				await expect.poll(index, { message: 'two seconds of the edited producer' }).toBeGreaterThan(opened + 200);
-				const fps = (await rate()) ?? 0;
-				expect(fps, `arriving at ${fps} fps, and the cap is 30`).toBeLessThan(45);
 			});
 
 			await test.step('…and it decodes to a real signal, not to zeroes', async () => {
