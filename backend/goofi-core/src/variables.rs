@@ -2,10 +2,11 @@
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// A patch variable's value — a typed scalar. The serde shape is the `{type, value}` of the `.gfi`
 /// and the doc: the tag is what preserves float-vs-int through JSON's whole-float normalization.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", content = "value", rename_all = "lowercase")]
 pub enum VariableValue {
     Float(f64),
@@ -58,7 +59,7 @@ impl VariableValue {
 }
 
 /// What a control element is drawn as.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum ControlKind {
     Knob,
@@ -147,7 +148,8 @@ pub fn free_cell(taken: &[(f64, f64, f64, f64)], w: f64, h: f64) -> (f64, f64) {
 
 /// A variable drawn in a control panel: the widget, its range, and its place in the grid. Carrying
 /// one is what makes a variable an ELEMENT — there is no second list of what a panel holds.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[ts(optional_fields)]
 pub struct Control {
     pub kind: ControlKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -188,7 +190,7 @@ impl Control {
 
 /// A lock on a variable or a whole group: `config` freezes the name, the type, the widget and
 /// membership; `value` freezes the value alone. A group's lock reaches every member.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct Lock {
     #[serde(default)]
     pub config: bool,
@@ -209,7 +211,8 @@ impl Lock {
 /// What a variable follows: one producer output, `node.slot`, and for a frame wider than one
 /// number the index it reads. A followed variable is written by the manager on every frame and by
 /// nobody else — a MIDI knob bound to a widget is one.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[ts(optional_fields)]
 pub struct VariableSource {
     pub reference: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -368,7 +371,8 @@ fn group_of(name: &str) -> &str {
 
 /// One variable: its typed value beside the widget, source and lock it carries. The serde
 /// shape is the `.gfi`'s and the doc's: `{type, value, control?, source?, lock?}`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[ts(optional_fields)]
 pub struct Variable {
     #[serde(flatten)]
     pub value: VariableValue,

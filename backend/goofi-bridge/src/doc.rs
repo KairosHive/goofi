@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 /// One step of a delta. A path is `[root]` or `[root, key]`: the roots are maps keyed by uid,
 /// link key or variable name, and the arrangement moves whole.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum Op {
     Put { path: Vec<String>, value: Value },

@@ -714,3 +714,21 @@ fn mp_to_mv(v: &Mp) -> MetaValue {
         Mp::Ext(_, _) => MetaValue::Null,
     }
 }
+
+/// The frontend's frame constants, generated from the tags above and checked into the tree.
+pub fn typescript() -> String {
+    let names = goofi_core::DTYPE_NAMES;
+    let tags = names.iter().enumerate().map(|(i, n)| format!("\t{i}: '{n}'")).collect::<Vec<_>>().join(",\n");
+    let union = names.iter().map(|n| format!("'{n}'")).collect::<Vec<_>>().join(" | ");
+    format!(
+        "// GENERATED from backend/goofi-codec/src/lib.rs — do not edit by hand. The GOOF header's\n\
+         // version, size and tags are declared once, in the codec. Regenerate by running\n\
+         // `cargo test -p goofi-tests contracts::`, which rewrites this file when it drifts.\n\
+         export const VERSION = {VERSION};\n\
+         export const HEADER_SIZE = {HEADER_SIZE};\n\
+         /** The tag of a frame that carries a held frame's per-emit stamps and no body. */\n\
+         export const STAMPS_TAG = {STAMPS_TAG};\n\
+         export type DataType = {union};\n\
+         export const DTYPE_TAG: Record<number, DataType> = {{\n{tags}\n}};\n"
+    )
+}

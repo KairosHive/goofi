@@ -1,13 +1,8 @@
 /** Decode side of the GOOF wire format, whose source of truth is backend/goofi-codec/src/lib.rs. */
 import { decode as msgpackDecode } from '@msgpack/msgpack';
+import { DTYPE_TAG, HEADER_SIZE, STAMPS_TAG, VERSION, type DataType } from './frame';
 
-export type DataType = 'ARRAY' | 'STRING' | 'TABLE';
-
-const DTYPE_TAG: Record<number, DataType> = {
-	0: 'ARRAY',
-	1: 'STRING',
-	2: 'TABLE'
-};
+export type { DataType } from './frame';
 
 /** A decoded Data frame. */
 export interface DataFrame {
@@ -39,17 +34,13 @@ function checkMagic(view: DataView, off: number): void {
 	}
 }
 
-/** The tag of a frame that carries a held frame's per-emit stamps (`time`, `index`, `ufreq`) and
- * no body: the reducer sends it in place of a frame that says what the last one said. */
-const STAMPS_TAG = 4;
-
 /** The stamps of a stamps frame, or null for a frame with data in it. */
 export function decodeStamps(buf: ArrayBuffer): Record<string, unknown> | null {
 	const view = new DataView(buf);
 	checkMagic(view, 0);
 	if (view.getUint8(5) !== STAMPS_TAG) return null;
 	const metaLen = view.getUint32(6, true);
-	const m = metaLen > 0 ? msgpackDecode(new Uint8Array(buf, 14, metaLen)) : {};
+	const m = metaLen > 0 ? msgpackDecode(new Uint8Array(buf, HEADER_SIZE, metaLen)) : {};
 	return m && typeof m === 'object' ? (m as Record<string, unknown>) : {};
 }
 
@@ -63,13 +54,13 @@ export function decodeData(buf: ArrayBuffer | Uint8Array): DataFrame {
 function decodeInto(view: DataView, off: number): DataFrame {
 	checkMagic(view, off);
 	const version = view.getUint8(off + 4);
-	if (version !== 2) throw new Error(`Unsupported GOOF version ${version}`);
+	if (version !== VERSION) throw new Error(`Unsupported GOOF version ${version}`);
 	const dtypeTag = view.getUint8(off + 5);
 	const dtype = DTYPE_TAG[dtypeTag];
 	if (!dtype) throw new Error(`Unknown dtype tag ${dtypeTag}`);
 	const metaLen = view.getUint32(off + 6, true);
 	const bodyLen = view.getUint32(off + 10, true);
-	const headerEnd = off + 14;
+	const headerEnd = off + HEADER_SIZE;
 	const meta =
 		metaLen > 0
 			? ((): Record<string, unknown> => {
@@ -92,8 +83,10 @@ function decodeInto(view: DataView, off: number): DataFrame {
 		data = arr;
 	} else if (dtype === 'STRING') {
 		data = decoder.decode(new Uint8Array(view.buffer, view.byteOffset + bodyStart, bodyLen));
-	} else {
+	} else if (dtype === 'TABLE') {
 		data = decodeTable(view, bodyStart);
+	} else {
+		throw new Error(`A ${dtype} frame does not decode in the browser`);
 	}
 	return { dtype, data, meta };
 }

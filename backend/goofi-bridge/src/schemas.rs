@@ -2,7 +2,10 @@
 //! These are the wire contract: co-edit the frontend when a field or shape changes.
 
 use goofi_core::Param;
-use goofi_graph::{Graph, SourceInfo, Uid};
+use goofi_graph::doc::Scalar;
+use goofi_graph::{Graph, Mode, SourceInfo, Uid};
+use serde::Serialize;
+use ts_rs::TS;
 use goofi_node::{NodeManifest, ParamGroups};
 use serde_json::{json, Map, Value};
 
@@ -31,60 +34,85 @@ pub(crate) fn examples(base: &str, current: Option<&str>) -> Value {
         .collect()
 }
 
-/// A single param descriptor, discriminated on `type`. `doc` is the type declaration's help text,
-/// which the runtime [`Param`] cannot carry. The source fields are the record's: an empty text is
-/// `null`, and a param with no record is a constant.
-pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi_node::ParamDecl>) -> Value {
-    let mut m = Map::new();
-    m.insert("value".into(), goofi_graph::param_value_json(p));
-    m.insert("doc".into(), decl.and_then(|d| d.doc).map(|d| json!(d)).unwrap_or(Value::Null));
-    m.insert("default".into(), decl.map(|d| declared_default(d.spec)).unwrap_or(Value::Null));
-    m.insert("section".into(), json!(decl.map_or(0, |d| d.section)));
-    let show = decl.and_then(|d| Some((d.group, d.show?)));
-    m.insert("show".into(), show.map_or(Value::Null, |(group, s)| {
-        let (group, name) = s.controller(group);
-        json!({ "group": group, "name": name, "any_of": s.any_of })
-    }));
-    m.insert(
-        "refreshable".into(),
-        json!(matches!(p, Param::Str { refresh: true, .. })),
-    );
-    let text = |t: &str| if t.is_empty() { Value::Null } else { json!(t) };
-    m.insert("mode".into(), json!(source.map(|s| s.state.mode).unwrap_or_default()));
-    m.insert("expression".into(), source.map(|s| text(&s.state.expression)).unwrap_or(Value::Null));
-    m.insert("reference".into(), source.map(|s| text(&s.state.reference)).unwrap_or(Value::Null));
-    m.insert("triggers".into(), json!(source.is_some_and(|s| s.state.triggers)));
-    m.insert(
-        "error".into(),
-        source.and_then(|s| s.error.as_ref()).map(|s| json!(s)).unwrap_or(Value::Null),
-    );
-    match p {
-        Param::Float { vmin, vmax, .. } => {
-            m.insert("type".into(), json!("float"));
-            m.insert("vmin".into(), json!(vmin));
-            m.insert("vmax".into(), json!(vmax));
+/// A param descriptor's shared half: the declaration's help and default, and the source record's
+/// state. An empty source text is `null`, and a param with no record is a constant.
+#[derive(Serialize, TS)]
+pub struct ParamBase {
+    pub doc: Option<String>,
+    /// What the declaration says this param is worth untouched; `None` for a pulse.
+    pub default: Option<Scalar>,
+    /// The index of the param's section inside its group; the inspector draws a line between two.
+    pub section: u8,
+    /// The inspector shows the param only while this holds; `None` shows it always.
+    pub show: Option<ParamShow>,
+    /// True when the node declared a refresh method for this param.
+    pub refreshable: bool,
+    pub mode: Mode,
+    pub expression: Option<String>,
+    pub reference: Option<String>,
+    /// When true, an arrival that changes the value wakes the node's `process()`.
+    pub triggers: bool,
+    /// The active source's bind, compile or arrival error.
+    pub error: Option<String>,
+}
+
+/// Holds while the param `group.name` has one of `any_of`, compared as text.
+#[derive(Serialize, TS)]
+pub struct ParamShow {
+    pub group: String,
+    pub name: String,
+    pub any_of: Vec<String>,
+}
+
+/// A descriptor's typed half: the value with the bounds or options its type carries.
+#[derive(Serialize, TS)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ParamKind {
+    Float { value: f64, vmin: f64, vmax: f64 },
+    Int { value: i64, vmin: i64, vmax: i64, options: Vec<i64> },
+    Bool { value: bool },
+    #[serde(rename = "string")]
+    Str { value: String, options: Option<Vec<String>> },
+    /// A request rather than a value: it holds none, and firing it is the whole edit.
+    Pulse { value: () },
+}
+
+/// A single param descriptor, discriminated on `type`.
+#[derive(Serialize)]
+pub struct ParamDescriptor {
+    #[serde(flatten)]
+    pub base: ParamBase,
+    #[serde(flatten)]
+    pub kind: ParamKind,
+}
+
+pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi_node::ParamDecl>) -> ParamDescriptor {
+    let text = |t: &str| (!t.is_empty()).then(|| t.to_string());
+    let base = ParamBase {
+        doc: decl.and_then(|d| d.doc).map(str::to_string),
+        default: decl.and_then(|d| Scalar::of(&d.spec.to_param())),
+        section: decl.map_or(0, |d| d.section),
+        show: decl.and_then(|d| Some((d.group, d.show?))).map(|(group, s)| {
+            let (group, name) = s.controller(group);
+            ParamShow { group: group.into(), name: name.into(), any_of: s.any_of.iter().map(|a| a.to_string()).collect() }
+        }),
+        refreshable: matches!(p, Param::Str { refresh: true, .. }),
+        mode: source.map(|s| s.state.mode).unwrap_or_default(),
+        expression: source.and_then(|s| text(&s.state.expression)),
+        reference: source.and_then(|s| text(&s.state.reference)),
+        triggers: source.is_some_and(|s| s.state.triggers),
+        error: source.and_then(|s| s.error.clone()),
+    };
+    let kind = match p {
+        Param::Float { value, vmin, vmax } => ParamKind::Float { value: *value, vmin: *vmin, vmax: *vmax },
+        Param::Int { value, vmin, vmax, options } => {
+            ParamKind::Int { value: *value, vmin: *vmin, vmax: *vmax, options: options.clone() }
         }
-        Param::Int { vmin, vmax, options, .. } => {
-            m.insert("options".into(), json!(options));
-            m.insert("type".into(), json!("int"));
-            m.insert("vmin".into(), json!(vmin));
-            m.insert("vmax".into(), json!(vmax));
-        }
-        Param::Bool { .. } => {
-            m.insert("type".into(), json!("bool"));
-        }
-        Param::Str { options, .. } => {
-            m.insert("type".into(), json!("string"));
-            m.insert(
-                "options".into(),
-                options.as_ref().map(|o| json!(o)).unwrap_or(Value::Null),
-            );
-        }
-        Param::Pulse => {
-            m.insert("type".into(), json!("pulse"));
-        }
-    }
-    Value::Object(m)
+        Param::Bool { value } => ParamKind::Bool { value: *value },
+        Param::Str { value, options, .. } => ParamKind::Str { value: value.clone(), options: options.clone() },
+        Param::Pulse => ParamKind::Pulse { value: () },
+    };
+    ParamDescriptor { base, kind }
 }
 
 /// A param's declaration; a node's own wins over the owning engine's universal one — resolved
@@ -103,19 +131,6 @@ fn param_decl(
         .find(|d| d.group == group && d.name == name)
 }
 
-/// What the declaration says this param is worth before anyone edits it, so a reader can tell a
-/// touched param from an untouched one without keeping a second record of which were touched.
-fn declared_default(spec: goofi_node::ParamSpec) -> Value {
-    use goofi_node::ParamSpec as S;
-    match spec {
-        S::Float { default, .. } => json!(default),
-        S::Int { default, .. } => json!(default),
-        S::Bool { default } => json!(default),
-        S::Str { default, .. } => json!(default),
-        S::Pulse => Value::Null,
-    }
-}
-
 /// Type-level params for the palette, and the projection param tooltips are rendered from.
 pub fn describe_params(g: &Graph, engine: &str, p: &ParamGroups, m: &'static NodeManifest) -> Value {
     let universal = g.universal_decls(engine, m);
@@ -123,7 +138,7 @@ pub fn describe_params(g: &Graph, engine: &str, p: &ParamGroups, m: &'static Nod
     for (gname, grp) in p {
         let mut names = Map::new();
         for (n, param) in grp {
-            names.insert(n.clone(), describe_param(param, None, param_decl(m, &universal, gname, n)));
+            names.insert(n.clone(), json!(describe_param(param, None, param_decl(m, &universal, gname, n))));
         }
         groups.insert(gname.clone(), Value::Object(names));
     }
@@ -142,11 +157,11 @@ pub fn describe_node_params(g: &Graph, uid: Uid) -> Value {
         let mut names = Map::new();
         for (n, param) in group {
             let source = g.param_source(uid, gname, n);
-            let mut v = describe_param(param, source.as_ref(), param_decl(m, &universal, gname, n));
-            if let (Param::Str { .. }, Some(live)) = (param, g.refreshed_options(uid, gname, n)) {
-                v["options"] = json!(live);
+            let mut d = describe_param(param, source.as_ref(), param_decl(m, &universal, gname, n));
+            if let (ParamKind::Str { options, .. }, Some(live)) = (&mut d.kind, g.refreshed_options(uid, gname, n)) {
+                *options = Some(live.to_vec());
             }
-            names.insert(n.clone(), v);
+            names.insert(n.clone(), json!(d));
         }
         groups.insert(gname.clone(), Value::Object(names));
     }
@@ -377,4 +392,43 @@ pub fn snapshot(
         }
     }
     snap
+}
+
+/// The frontend's generated types: the document, the deltas, the param descriptor and the
+/// variable records, each declared once in Rust and checked into the tree.
+pub fn typescript() -> String {
+    use goofi_core::record::{RecordedOutput, VideoQuality};
+    use goofi_core::variables::{Control, ControlKind, Lock, Variable, VariableSource, VariableValue};
+    use goofi_graph::doc::{Archive, Group, Link, NodeRecord, ParamEntry, PatchDoc};
+    let cfg = ts_rs::Config::new().with_large_int("number");
+    let decls = [
+        serde_json::Value::decl(&cfg),
+        Scalar::decl(&cfg),
+        Mode::decl(&cfg),
+        ParamEntry::decl(&cfg),
+        VideoQuality::decl(&cfg),
+        RecordedOutput::decl(&cfg),
+        NodeRecord::decl(&cfg),
+        Link::decl(&cfg),
+        VariableValue::decl(&cfg),
+        ControlKind::decl(&cfg),
+        Control::decl(&cfg),
+        Lock::decl(&cfg),
+        VariableSource::decl(&cfg),
+        Variable::decl(&cfg),
+        Group::decl(&cfg),
+        PatchDoc::decl(&cfg),
+        Archive::decl(&cfg),
+        crate::doc::Op::decl(&cfg),
+        ParamShow::decl(&cfg),
+        ParamBase::decl(&cfg),
+        ParamKind::decl(&cfg),
+    ];
+    let body = decls.iter().map(|d| format!("export {d}\n")).collect::<String>();
+    format!(
+        "// GENERATED from the Rust types in goofi-core, goofi-graph and goofi-bridge — do not edit by\n\
+         // hand. The document, its deltas, a variable and a param descriptor are each declared once,\n\
+         // in Rust; a field that is not there is a type error here. Regenerate by running\n\
+         // `cargo test -p goofi-tests contracts::`, which rewrites this file when it drifts.\n\n{body}"
+    )
 }

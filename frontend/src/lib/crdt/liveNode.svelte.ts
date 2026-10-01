@@ -46,7 +46,7 @@ function accessors<T extends object>(target: T, getters: Record<string, () => un
 const UNKNOWN: ParamDescriptor = {
 	type: 'unknown',
 	value: undefined,
-	default: undefined,
+	default: null,
 	doc: null,
 	refreshable: false,
 	mode: 'constant',

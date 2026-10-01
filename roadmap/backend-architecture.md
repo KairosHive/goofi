@@ -6,7 +6,7 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-§2.B5, §3.7-11, §4.H-I, §5.8-10 and 12-13.
+§3.7-11, §4.H-I, §5.8-10 and 12-13.
 
 ## 1. The patch model and the runtime are two types
 
@@ -35,8 +35,6 @@ Spellings: `expression`/`reference`, `pos` as `[x, y]`, links as a keyed map, so
 variables as an ordered map. `viewpoint` and ephemeral variables stay out of the replica. A
 node's class derives from the catalog, not pinned per instance. Values a type no longer declares
 drop on load or paste. Rename `doc.rs`'s existing `Patch` type (Applied/Stale/Gap).
-
-- **B5** Generated TypeScript (ts-rs) for the document, param descriptors and frame tags.
 
 ## 3. Typed ops with one transaction tail
 

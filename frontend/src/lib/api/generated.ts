@@ -1,0 +1,66 @@
+// GENERATED from the Rust types in goofi-core, goofi-graph and goofi-bridge — do not edit by
+// hand. The document, its deltas, a variable and a param descriptor are each declared once,
+// in Rust; a field that is not there is a type error here. Regenerate by running
+// `cargo test -p goofi-tests contracts::`, which rewrites this file when it drifts.
+
+export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in string]: JsonValue } | null;
+export type Scalar = boolean | number | number | string;
+export type Mode = "constant" | "expression" | "reference";
+export type ParamEntry = { value?: Scalar, mode?: Mode, expression?: string, reference?: string, triggers?: boolean, };
+export type VideoQuality = "small" | "high" | "very_high";
+export type RecordedOutput = { slot: string, quality: VideoQuality, };
+export type NodeRecord = { type: string, name: string, pos: [number, number], 
+/**
+ * The scope this record is a member of; absent is ROOT.
+ */
+scope?: string, params: { [key in string]: { [key in string]: ParamEntry } }, viewers?: JsonValue, baseline?: JsonValue, record: Array<RecordedOutput>, };
+export type Link = { node_out: string, slot_out: string, node_in: string, slot_in: string, };
+export type VariableValue = { "type": "float", "value": number } | { "type": "int", "value": number } | { "type": "bool", "value": boolean } | { "type": "string", "value": string };
+export type ControlKind = "knob" | "slider" | "number" | "text" | "toggle" | "dropdown" | "paint";
+export type Control = { kind: ControlKind, min?: number, max?: number, step?: number, options: Array<string>, x: number, y: number, w: number, h: number, };
+export type Lock = { config: boolean, value: boolean, };
+export type VariableSource = { reference: string, index?: number, };
+export type Variable = { control?: Control, source?: VariableSource, 
+/**
+ * The variable's OWN lock, apart from its group's; absent is the default.
+ */
+lock?: Lock, } & ({ "type": "float", "value": number } | { "type": "int", "value": number } | { "type": "bool", "value": boolean } | { "type": "string", "value": string });
+export type Group = { lock: Lock, };
+export type PatchDoc = { 
+/**
+ * Keyed by uid spelling; a key that is not one is reminted on the way in.
+ */
+nodes: { [key in string]: NodeRecord }, 
+/**
+ * Keyed `out.slot>in.slot`, which is derived from the link and never read back.
+ */
+links: { [key in string]: Link }, variables: { [key in string]: Variable }, variable_groups: { [key in string]: Group }, arrangement?: JsonValue, };
+export type Archive = { version: number, goofi: string, patch: PatchDoc, viewpoint?: JsonValue, };
+export type Op = { "op": "put", path: Array<string>, value: JsonValue, } | { "op": "del", path: Array<string>, };
+export type ParamShow = { group: string, name: string, any_of: Array<string>, };
+export type ParamBase = { doc: string | null, 
+/**
+ * What the declaration says this param is worth untouched; `None` for a pulse.
+ */
+default: Scalar | null, 
+/**
+ * The index of the param's section inside its group; the inspector draws a line between two.
+ */
+section: number, 
+/**
+ * The inspector shows the param only while this holds; `None` shows it always.
+ */
+show: ParamShow | null, 
+/**
+ * True when the node declared a refresh method for this param.
+ */
+refreshable: boolean, mode: Mode, expression: string | null, reference: string | null, 
+/**
+ * When true, an arrival that changes the value wakes the node's `process()`.
+ */
+triggers: boolean, 
+/**
+ * The active source's bind, compile or arrival error.
+ */
+error: string | null, };
+export type ParamKind = { "type": "float", value: number, vmin: number, vmax: number, } | { "type": "int", value: number, vmin: number, vmax: number, options: Array<number>, } | { "type": "bool", value: boolean, } | { "type": "string", value: string, options: Array<string> | null, } | { "type": "pulse", value: null, };

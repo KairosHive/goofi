@@ -129,6 +129,8 @@ fn every_op_and_vocabulary_row_is_well_formed_documented_and_reachable() {
 fn the_generated_frontend_artifacts_still_match_the_tables_they_come_from() {
     regenerated("frontend/src/lib/api/ops.ts", typescript());
     regenerated("frontend/src/lib/api/vocab.ts", vocab::typescript());
+    regenerated("frontend/src/lib/api/generated.ts", goofi_bridge::schemas::typescript());
+    regenerated("frontend/src/lib/codec/frame.ts", goofi_codec::typescript());
 
     // `PROTOCOL_VERSION` is the one number both halves declare by hand, and each comments that the
     // other must be bumped with it — which is the definition of a pair that drifts. A client one

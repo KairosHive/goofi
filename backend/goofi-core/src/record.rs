@@ -1,6 +1,7 @@
 //! Per-output recording settings shared by the graph and encoders.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// One recording's audio interval, in engine blocks. Only the audio clock opens
@@ -36,7 +37,7 @@ impl FrameWindow {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum VideoQuality {
     Small,
@@ -63,7 +64,7 @@ impl VideoQuality {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct RecordedOutput {
     pub slot: String,
     pub quality: VideoQuality,

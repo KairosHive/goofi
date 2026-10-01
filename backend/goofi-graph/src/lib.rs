@@ -351,7 +351,7 @@ pub fn variable_from_json(entry: &serde_json::Value) -> Option<goofi_core::varia
 }
 
 /// The active source of a param's value.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     #[default]

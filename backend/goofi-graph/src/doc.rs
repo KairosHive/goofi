@@ -8,6 +8,7 @@ use goofi_core::Param;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::{Mode, SourceState};
 
@@ -16,7 +17,8 @@ pub const MANIFEST_VERSION: i64 = 2;
 
 /// One patch's worth of nodes, links, variables and chrome. A fragment is one with no variables
 /// and no arrangement; the archive body is one with both.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(optional_fields)]
 pub struct PatchDoc {
     /// Keyed by uid spelling; a key that is not one is reminted on the way in.
     #[serde(default)]
@@ -33,7 +35,8 @@ pub struct PatchDoc {
 }
 
 /// A leaf, a sub-patch facade or a boundary port: one record kind, told apart by `type`.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(optional_fields)]
 pub struct NodeRecord {
     #[serde(rename = "type")]
     pub type_id: String,
@@ -55,7 +58,8 @@ pub struct NodeRecord {
 }
 
 /// One param's literal and, when it has one, its source record inline.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(optional_fields)]
 pub struct ParamEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<Scalar>,
@@ -94,7 +98,7 @@ impl ParamEntry {
 pub type Values = IndexMap<String, IndexMap<String, Scalar>>;
 
 /// A param value as the document spells it. The declared type coerces it on the way in.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(untagged)]
 pub enum Scalar {
     Bool(bool),
@@ -120,7 +124,7 @@ impl Scalar {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Link {
     pub node_out: String,
     pub slot_out: String,
@@ -135,14 +139,15 @@ impl Link {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
 pub struct Group {
     #[serde(default)]
     pub lock: Lock,
 }
 
 /// The `.gfi` manifest: the document with the version that says how to read it.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
+#[ts(optional_fields)]
 pub struct Archive {
     pub version: i64,
     pub goofi: String,

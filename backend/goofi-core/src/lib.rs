@@ -489,8 +489,11 @@ pub enum Value {
     Table(Arc<IndexMap<String, Data>>),
 }
 
+/// The GOOF dtype tag bytes by name: a frame's sixth byte indexes this table.
+pub const DTYPE_NAMES: [&str; 4] = ["ARRAY", "STRING", "TABLE", "TEXTURE"];
+
 impl Value {
-    /// The GOOF dtype tag byte (0=ARRAY, 1=STRING, 2=TABLE).
+    /// The GOOF dtype tag byte, an index into [`DTYPE_NAMES`].
     pub fn dtype_tag(&self) -> u8 {
         match self {
             Value::Array(_) => 0,

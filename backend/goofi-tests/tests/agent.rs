@@ -200,7 +200,8 @@ async fn several_commands_are_one_batch_and_a_refused_step_takes_the_whole_batch
     let patch = tab.event("doc_patch").await;
     for step in results.as_array().unwrap() {
         let uid = step["uid"].as_str().expect("a birth reply");
-        assert!(patch["patch"]["nodes"].get(uid).is_some(),
+        let puts = patch["ops"].as_array().expect("a delta is a list of ops");
+        assert!(puts.iter().any(|op| op["path"] == json!(["nodes", uid])),
                 "the ONE settle patch carries {uid}: {patch}");
     }
 

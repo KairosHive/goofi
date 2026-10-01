@@ -21,3 +21,4 @@ serde_json = "1"
 # `Reducible` seam for `Data` — the allowed signal→shared dependency direction; goofi-view
 # never depends back on goofi-core.
 goofi-view = { path = "../goofi-view" }
+ts-rs = { version = "12", features = ["serde-compat", "indexmap-impl", "serde-json-impl"] }

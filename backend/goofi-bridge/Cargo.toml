@@ -44,6 +44,7 @@ shell-words = "1"
 toml = "0.8"
 # The PTY the agent harness runs on (wezterm's crate).
 portable-pty = "0.9"
+ts-rs = { version = "12", features = ["serde-compat", "indexmap-impl", "serde-json-impl"] }
 # SIGTERM then SIGKILL, to the process GROUP: `portable_pty::ChildKiller` offers neither the
 # graceful phase nor any reach past the harness into what it spawned. Windows has no equivalent and
 # reaches for `taskkill` instead, so this is the one dependency that is genuinely one platform's —

@@ -24,3 +24,4 @@ walkdir = "2"
 # feature is what would make a repack differ); `deflate-flate2-zlib-rs` is the one deflate
 # spelling that selects a backend without dragging in zopfli.
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+ts-rs = { version = "12", features = ["serde-compat", "indexmap-impl", "serde-json-impl"] }

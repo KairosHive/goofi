@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { controlKind } from './controlKind';
 import type {
-	BaseParam,
+	ParamBase,
 	FloatParam,
 	IntParam,
 	BoolParam,
@@ -16,7 +16,7 @@ import type {
 // string is text, anything else is unknown. The MODE decides nothing here — a row wears its own
 // control in every mode, disabled where a source drives it — and the source's own editor is the
 // second row, which is ParamField's business. Kept pure so that switch is thin and this is the SSOT.
-const base: Omit<BaseParam, 'value'> = {
+const base: ParamBase = {
 	default: null,
 	doc: null,
 	refreshable: false,
@@ -45,6 +45,7 @@ const intParam = (over: Partial<IntParam> = {}): IntParam => ({
 	default: 0,
 	vmin: 0,
 	vmax: 10,
+	options: [],
 	...over
 });
 const boolParam = (over: Partial<BoolParam> = {}): BoolParam => ({
