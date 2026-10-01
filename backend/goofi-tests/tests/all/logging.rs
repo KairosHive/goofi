@@ -1,5 +1,5 @@
 //! One console session, from component output to retained groups and counter-only updates.
-use goofi_core::log::{self, Level, Log, Message, Source};
+use goofi_supervisor::log::{self, Level, Log, Message, Source};
 use goofi_tests::{Goofi, j};
 
 #[test]
@@ -67,9 +67,11 @@ fn bounded_log_evicts_the_least_recent_group() {
 fn process_capture_child() {
     let Some(path) = std::env::var_os("GOOFI_LOG_CAPTURE_RESULT") else { return };
     log::capture_stdio().unwrap();
-    let startup = goofi_core::startup::Startup::begin("capture-test");
-    goofi_core::startup::report("Checking captured startup");
-    startup.finish("Capture test ready");
+    // What the binary's startup screen writes, on the terminal the capture saved.
+    goofi_supervisor::log::terminal_line("  goofi capture-test · starting").unwrap();
+    goofi_supervisor::progress::report("Checking captured startup");
+    goofi_supervisor::log::terminal_line("  > Checking captured startup").unwrap();
+    goofi_supervisor::log::terminal_line("  ✓ Capture test ready").unwrap();
     println!("native stdout marker");
     eprintln!("native stderr marker");
     let deadline = std::time::Instant::now() + goofi_tests::WAIT;

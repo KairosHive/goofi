@@ -182,7 +182,7 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     assert_eq!(reborn["source"]["reference"], "level.out", "…and what it follows: {reborn}");
     let held = g.call("variable list", j!({}))["variables"].as_array().unwrap().iter()
         .find(|e| e["name"] == "system.goofi_home").cloned().unwrap();
-    assert_eq!(held["value"], j!(goofi_core::path::to_slash(&goofi_core::home::dir())));
+    assert_eq!(held["value"], j!(goofi_core::path::to_slash(&goofi_supervisor::home::dir())));
 
     let snap = ev.next("graph_replaced");
     assert_eq!(snap["runtime"][hex(late)]["stage"], "creating",
@@ -528,8 +528,8 @@ fn autosave_dir(g: &Goofi) -> std::path::PathBuf {
 /// cannot let go of its own session's lock. Answers the nonce directory, and where the next boot
 /// moves it to for safekeeping, both as goofi spells them.
 fn crashed_copy(dir: &std::path::Path) -> (String, String) {
-    let id = goofi_core::session::fresh_id().unwrap();
-    let dead = goofi_core::session::workspace_dir(&id).join(dir.file_name().unwrap());
+    let id = goofi_supervisor::session::fresh_id().unwrap();
+    let dead = goofi_supervisor::session::workspace_dir(&id).join(dir.file_name().unwrap());
     fn copy(from: &std::path::Path, to: &std::path::Path) {
         std::fs::create_dir_all(to).unwrap();
         for entry in std::fs::read_dir(from).unwrap().flatten() {
@@ -542,7 +542,7 @@ fn crashed_copy(dir: &std::path::Path) -> (String, String) {
         }
     }
     copy(dir, &dead);
-    let kept = goofi_core::session::recovery_base().join(&id).join(dir.file_name().unwrap());
+    let kept = goofi_supervisor::session::recovery_base().join(&id).join(dir.file_name().unwrap());
     (goofi_core::path::to_slash(&dead), goofi_core::path::to_slash(&kept))
 }
 
@@ -584,7 +584,7 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
     let (foreign, elsewhere) = crashed_copy(&dir);
     let sidecar = std::path::Path::new(&foreign).join("autosave.json");
     std::fs::write(&sidecar, std::fs::read_to_string(&sidecar).unwrap().replace(
-        &goofi_core::path::to_slash(&goofi_core::home::system()), "/somewhere/else/.goofi/system")).unwrap();
+        &goofi_core::path::to_slash(&goofi_supervisor::home::system()), "/somewhere/else/.goofi/system")).unwrap();
     assert!(g.call("session recoverable", j!({}))["recoveries"].as_array().unwrap().is_empty());
     let opened = Goofi::new();
     assert!(!std::path::Path::new(&left).exists(), "the boot moved it out of temp");
@@ -626,7 +626,7 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
 
     // The boot pass: a dead session's directory with no autosave held nothing and goes. A clean
     // shutdown leaves neither.
-    let husk = goofi_core::session::workspace_dir(&goofi_core::session::fresh_id().unwrap()).join("nonce");
+    let husk = goofi_supervisor::session::workspace_dir(&goofi_supervisor::session::fresh_id().unwrap()).join("nonce");
     std::fs::create_dir_all(husk.join("workspace")).unwrap();
     std::fs::write(husk.join("workspace").join("AGENTS.md"), b"seeded").unwrap();
     let _booted = Goofi::new();

@@ -13,7 +13,7 @@ pub struct Python {
 
 impl Python {
     pub fn new(subproc: String) -> Python {
-        let memo = goofi_build::base_dir(&goofi_core::home::dir()).join("probes");
+        let memo = goofi_build::base_dir(&goofi_supervisor::home::dir()).join("probes");
         Python { subproc, free_threaded: free_threaded(), memo }
     }
 

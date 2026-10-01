@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
 use goofi_graph::archive;
@@ -37,7 +37,7 @@ fn dir_of(mount: &Path) -> PathBuf {
 /// Start the worker; it ends with `state.stopping`, before the mount goes.
 pub(crate) fn spawn(state: AppState) {
     let owner = state.clone();
-    let worker = goofi_core::worker::spawn("goofi-autosave", move || {
+    let worker = goofi_supervisor::worker::spawn("goofi-autosave", move || {
         let mut last: Option<Stamp> = None;
         let mut watch = Watch::new(&state);
         loop {
@@ -86,7 +86,7 @@ fn watch(mount: &Path) -> bool {
                 static SAID: std::sync::Once = std::sync::Once::new();
                 SAID.call_once(|| {
                     let why = format!("autosave: no watcher on the workspace, so it is walked every {CAP:?}: {e}");
-                    goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Warning, None, why);
+                    goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Warning, None, why);
                 });
             }
         }
@@ -160,7 +160,7 @@ fn tick(state: &AppState, last: &mut Option<Stamp>) {
     let written = archive::write_manifest(&dir, &manifest)
         .and_then(|()| std::fs::write(dir.join(SIDECAR), sidecar.to_string()).map_err(|e| e.to_string()));
     if let Err(e) = written {
-        goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("autosave: {e}"));
+        goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("autosave: {e}"));
         return;
     }
     *last = Some((manifest, seen));
@@ -214,7 +214,7 @@ fn move_tree(from: &Path, to: &Path) -> Result<(), String> {
 
 /// This process's `GOOFI_HOME` system directory, as the sidecar spells it.
 fn system() -> String {
-    goofi_core::path::to_slash(&goofi_core::home::system())
+    goofi_core::path::to_slash(&goofi_supervisor::home::system())
 }
 
 /// The boot pass over the workspaces: a dead session's directory that carries an autosave is
@@ -224,25 +224,25 @@ fn system() -> String {
 pub fn sweep_dead() -> usize {
     let mut swept = 0;
     let own = system();
-    for (id, dir) in nonces(&goofi_core::session::workspaces_base(), |id| !goofi_core::session::alive(id)) {
+    for (id, dir) in nonces(&goofi_supervisor::session::workspaces_base(), |id| !goofi_supervisor::session::alive(id)) {
         let Some(nonce) = dir.file_name() else { continue };
         let done = if archive::has_manifest(&dir) {
             if sidecar(&dir)["system"] != own {
                 continue;
             }
-            move_tree(&dir, &goofi_core::session::recovery_base().join(&id).join(nonce)).is_ok()
+            move_tree(&dir, &goofi_supervisor::session::recovery_base().join(&id).join(nonce)).is_ok()
         } else {
             std::fs::remove_dir_all(&dir).is_ok()
         };
         swept += usize::from(done);
-        let _ = std::fs::remove_dir(goofi_core::session::workspace_dir(&id));
+        let _ = std::fs::remove_dir(goofi_supervisor::session::workspace_dir(&id));
     }
     swept
 }
 
 /// Every recovery on this machine, oldest session first.
 pub fn recoverable() -> Vec<Value> {
-    nonces(&goofi_core::session::recovery_base(), |_| true)
+    nonces(&goofi_supervisor::session::recovery_base(), |_| true)
         .into_iter()
         .filter(|(_, dir)| archive::has_manifest(dir))
         .map(|(_, dir)| entry(&dir))
@@ -253,7 +253,7 @@ pub fn recoverable() -> Vec<Value> {
 /// autosave in it. Anything else is refused — this is the one path an op removes wholesale.
 pub fn recovery(workspace: &str) -> Result<PathBuf, String> {
     let dir = PathBuf::from(crate::fsbrowse::resolve(workspace));
-    let base = goofi_core::path::canonical(&goofi_core::session::recovery_base()).map_err(|e| e.to_string())?;
+    let base = goofi_core::path::canonical(&goofi_supervisor::session::recovery_base()).map_err(|e| e.to_string())?;
     let under = dir.parent().and_then(Path::parent) == Some(base.as_path());
     if !under {
         return Err(format!("{workspace}: not a recovery goofi keeps"));

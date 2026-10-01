@@ -24,7 +24,7 @@ pub const COLD_START_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The spawned child plus the exchange it answers on.
 struct Running {
-    child: goofi_core::child::Child,
+    child: goofi_supervisor::child::Child,
     exchange: Exchange,
 }
 
@@ -41,8 +41,8 @@ impl Running {
             .env("PYTHONUNBUFFERED", "1");
         // The source rides stdin, never the environment: Windows caps a whole environment
         // block at 32767 characters, and a node file is text of no stated size.
-        let mut child = goofi_core::child::run(format!("python node ({python})"), &mut cmd)
-            .source(goofi_core::log::source())
+        let mut child = goofi_supervisor::child::run(format!("python node ({python})"), &mut cmd)
+            .source(goofi_supervisor::log::source())
             .stdin_piped()
             .spawn()
             .map_err(|e| format!("spawn `{python}`: {e}"))?;

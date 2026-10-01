@@ -23,7 +23,7 @@ type Svc = ipc_threadsafe::Service;
 /// for as long as it lives. Declare it AFTER the ports it minted, so they are dropped first.
 pub struct IoxNode {
     node: iceoryx2::node::Node<Svc>,
-    _lease: goofi_core::registry::Lease,
+    _lease: goofi_supervisor::scope::Lease,
 }
 
 impl std::ops::Deref for IoxNode {
@@ -182,7 +182,7 @@ pub struct Iox {
 }
 
 impl Iox {
-    pub fn new(session: &goofi_core::session::Session) -> Result<Iox, String> {
+    pub fn new(session: &goofi_supervisor::session::Session) -> Result<Iox, String> {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             set_log_level_from_env_or(LogLevel::Error);
@@ -193,7 +193,7 @@ impl Iox {
         let root = iox_root(&id).to_string_lossy().replace('\\', "/");
         let path = iceoryx2::prelude::Path::new(root.as_bytes()).map_err(|e| format!("iceoryx2 refuses the root {root}: {e:?}"))?;
         config.global.set_root_path(&path);
-        let prefix = goofi_core::session::shm_prefix(&id);
+        let prefix = goofi_supervisor::session::shm_prefix(&id);
         config.global.prefix = iceoryx2::prelude::FileName::new(prefix.as_bytes()).map_err(|e| format!("iceoryx2 refuses the prefix {prefix}: {e:?}"))?;
         config.global.service.cleanup_dead_nodes_on_open = false;
         config.global.node.cleanup_dead_nodes_on_creation = false;
@@ -204,7 +204,7 @@ impl Iox {
 
     /// A child's: the session its parent named in `GOOFI_SESSION`.
     pub fn from_env() -> Result<Iox, String> {
-        Iox::new(&goofi_core::session::Session::join_from_env()?)
+        Iox::new(&goofi_supervisor::session::Session::join_from_env()?)
     }
 
     pub fn id(&self) -> &str {
@@ -217,21 +217,21 @@ impl Iox {
         let node = NodeBuilder::new().config(&self.config).create::<Svc>().map_err(|e| format!("iox node: {e}"))?;
         // Named by the thread that opened it, which is what a reader of the inventory can act on.
         let owner = std::thread::current().name().unwrap_or("?").to_string();
-        Ok(IoxNode { node, _lease: goofi_core::registry::lease(goofi_core::registry::Kind::Port, owner) })
+        Ok(IoxNode { node, _lease: goofi_supervisor::scope::lease(goofi_supervisor::scope::Kind::Port, owner) })
     }
 }
 
 /// A path for a file needed for a moment — a `.gfi` packed or uploaded — under the session's
 /// ephemeral directory, so a crash's leftover is swept with the session.
 pub fn scratch(session: &str, name: &str) -> Result<std::path::PathBuf, String> {
-    let dir = goofi_core::session::system_dir(session).join("scratch");
+    let dir = goofi_supervisor::session::system_dir(session).join("scratch");
     let _ = std::fs::create_dir_all(&dir);
     Ok(dir.join(name))
 }
 
 /// Where iceoryx2 keeps a session's files: node directories, service configs, monitors.
 fn iox_root(id: &str) -> std::path::PathBuf {
-    goofi_core::session::system_dir(id).join("iox")
+    goofi_supervisor::session::system_dir(id).join("iox")
 }
 
 /// Raise the soft descriptor limit toward the hard one. A node costs about 45 descriptors, so the
@@ -376,7 +376,7 @@ impl Exchange {
     /// One request to `child` — its runs, written into the loan as one frame — answered within
     /// `timeout`; a child that exited or fell silent is the error, so the owner can start a
     /// fresh one.
-    pub fn ask(&mut self, child: &mut goofi_core::child::Child, frame: &[&[u8]], timeout: Duration) -> Result<Vec<u8>, String> {
+    pub fn ask(&mut self, child: &mut goofi_supervisor::child::Child, frame: &[&[u8]], timeout: Duration) -> Result<Vec<u8>, String> {
         self.seq = self.seq.wrapping_add(1);
         let seq = self.seq;
         while matches!(self.ports.reply.receive(), Ok(Some(_))) {}
@@ -565,8 +565,8 @@ pub const STACK: usize = 8 * 1024 * 1024;
 
 /// A named thread with the stack [`STACK`] states. Every goofi thread that can reach this crate is
 /// built here, so the platform default never decides.
-pub fn thread(name: impl Into<String>) -> goofi_core::worker::Builder {
-    goofi_core::worker::thread(name).stack_size(STACK)
+pub fn thread(name: impl Into<String>) -> goofi_supervisor::worker::Builder {
+    goofi_supervisor::worker::thread(name).stack_size(STACK)
 }
 
 /// A publisher that can grow past its initial pool: a GOOF frame is variable-size, and `Static`
@@ -701,8 +701,8 @@ pub fn wait_released<'a>(halts: impl Iterator<Item = &'a Halt>, ceiling: Duratio
 #[derive(Default)]
 pub struct Halt {
     stop: AtomicBool,
-    released: goofi_core::sync::Mutex<bool>,
-    done: goofi_core::sync::Condvar,
+    released: goofi_supervisor::sync::Mutex<bool>,
+    done: goofi_supervisor::sync::Condvar,
 }
 
 impl Halt {

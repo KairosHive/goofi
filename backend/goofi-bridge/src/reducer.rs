@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 use std::time::Duration;
 
 use axum::body::Bytes;
@@ -624,7 +624,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                     match encoded {
                         Ok(bytes) => Bytes::from(bytes),
                         Err(why) => {
-                            goofi_core::log::record(goofi_core::log::Source::component("reducer"), goofi_core::log::Level::Error, None, format!("{door}: the reduced frame cannot cross: {why}"));
+                            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("reducer"), goofi_supervisor::log::Level::Error, None, format!("{door}: the reduced frame cannot cross: {why}"));
                             continue;
                         }
                     }

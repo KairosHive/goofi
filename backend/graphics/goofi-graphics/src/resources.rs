@@ -3,7 +3,7 @@ use crate::gpu::{Gpu, Want, padded_row, target};
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 /// One texture the engine owns, with the size it was made for.
 pub(crate) struct Target {
     pub(crate) texture: wgpu::Texture,

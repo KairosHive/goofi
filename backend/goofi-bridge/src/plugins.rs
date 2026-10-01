@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 use std::time::Duration;
 
 const SDK: &str = include_str!("../../../sdk/python/goofi_plugin/__init__.py");
@@ -93,7 +93,7 @@ type Pending = Arc<Mutex<HashMap<u64, mpsc::Sender<Reply>>>>;
 
 struct Service {
     input: mpsc::Sender<Value>,
-    child: Mutex<goofi_core::child::Child>,
+    child: Mutex<goofi_supervisor::child::Child>,
     pending: Pending,
     sequence: AtomicU64,
     output: Mutex<Option<BufReader<std::process::ChildStdout>>>,
@@ -106,7 +106,7 @@ fn write(input: &mpsc::Sender<Value>, message: &Value) -> Result<(), String> {
 }
 
 fn log(id: &str, level: &str, message: &str) {
-    use goofi_core::log::{record, Level, Source};
+    use goofi_supervisor::log::{record, Level, Source};
     let level = match level {
         "error" => Level::Error,
         "warning" => Level::Warning,
@@ -136,7 +136,7 @@ impl Service {
     ) -> Result<(Arc<Self>, Contributions), String> {
         let id = config["id"].as_str().unwrap_or_default().to_string();
         // stdout is the protocol channel; what the plugin says on stderr is its log.
-        let mut child = goofi_core::child::run(
+        let mut child = goofi_supervisor::child::run(
             format!("plugin {id}"),
             Command::new(python)
                 .args(["-u", "-m", "goofi_plugin"])
@@ -148,15 +148,15 @@ impl Service {
                         .ok_or("missing package path")?,
                 ),
         )
-        .source(goofi_core::log::Source::component(&format!("plugin:{id}")))
+        .source(goofi_supervisor::log::Source::component(&format!("plugin:{id}")))
         .stdin_piped()
-        .stdout(goofi_core::child::Out::Pipe)
+        .stdout(goofi_supervisor::child::Out::Pipe)
         .spawn()
         .map_err(|e| format!("start Python: {e}"))?;
         let input = child.stdin.take().ok_or("missing Python stdin")?;
         let output = child.stdout.take().ok_or("missing Python stdout")?;
         let (tx, rx) = mpsc::channel();
-        let _ = goofi_core::worker::spawn("goofi-plugin-handshake", move || {
+        let _ = goofi_supervisor::worker::spawn("goofi-plugin-handshake", move || {
             let mut reader = BufReader::new(output);
             let mut line = String::new();
             let result = reader
@@ -188,7 +188,7 @@ impl Service {
         let (sender, messages) = mpsc::channel::<Value>();
         // Pipe writes can block. Keep them off request threads so the deadline can kill a
         // service that stopped reading, including when the first payload exceeds the pipe.
-        let _ = goofi_core::worker::spawn("goofi-plugin-stdin", move || {
+        let _ = goofi_supervisor::worker::spawn("goofi-plugin-stdin", move || {
             let mut input = input;
             for message in messages {
                 let sent = serde_json::to_writer(&mut input, &message)
@@ -233,7 +233,7 @@ impl Service {
         let pending = self.pending.clone();
         let input = self.input.clone();
         let service = self.clone();
-        let _ = goofi_core::worker::spawn("goofi-plugin-stdout", move || {
+        let _ = goofi_supervisor::worker::spawn("goofi-plugin-stdout", move || {
             for line in reader.lines() {
                 let message = match line
                     .ok()
@@ -257,7 +257,7 @@ impl Service {
                     let state = state.clone();
                     let input = input.clone();
                     let plugin_id = plugin_id.clone();
-                    let _ = goofi_core::worker::spawn("goofi-plugin-call", move || {
+                    let _ = goofi_supervisor::worker::spawn("goofi-plugin-call", move || {
                         let chain: Vec<String> =
                             serde_json::from_value(message["chain"].clone()).unwrap_or_default();
                         CHAIN.with(|held| *held.borrow_mut() = chain);
@@ -347,7 +347,7 @@ impl Drop for Service {
 /// hold a load past.
 fn run(command: &mut Command) -> Result<(), String> {
     let tool = command.get_program().to_string_lossy().into_owned();
-    let output = goofi_core::child::output(format!("plugin build: {tool}"), command, BUILD_WAIT).map_err(|e| e.to_string())?;
+    let output = goofi_supervisor::child::output(format!("plugin build: {tool}"), command, BUILD_WAIT).map_err(|e| e.to_string())?;
     if output.status.success() {
         Ok(())
     } else {
@@ -380,7 +380,7 @@ impl Plugins {
         for (name, source) in [("__init__.py", SDK), ("__main__.py", MAIN)] {
             let destination = sdk.join("goofi_plugin").join(name);
             if !destination.is_file() {
-                let temporary = destination.with_extension(format!("{}.tmp", goofi_core::session::tag()));
+                let temporary = destination.with_extension(format!("{}.tmp", goofi_supervisor::session::tag()));
                 std::fs::write(&temporary, source)
                     .and_then(|()| std::fs::rename(temporary, destination))
                     .map_err(|e| e.to_string())?;
@@ -434,7 +434,7 @@ impl Plugins {
                     continue;
                 }
             };
-            goofi_core::startup::report(format!("Preparing plugin {}", manifest.id));
+            goofi_supervisor::progress::report(format!("Preparing plugin {}", manifest.id));
             let mut package = Package {
                 manifest,
                 root: dir,
@@ -678,7 +678,7 @@ impl Package {
                 static BUILD_ID: AtomicU64 = AtomicU64::new(0);
                 let work = cache.join(format!(
                     "work-{}-{}",
-                    goofi_core::session::tag(),
+                    goofi_supervisor::session::tag(),
                     BUILD_ID.fetch_add(1, Ordering::Relaxed)
                 ));
                 let prepared = || -> Result<(), String> {

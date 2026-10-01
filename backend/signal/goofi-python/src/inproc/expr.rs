@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 
 use goofi_core::{Data, Param, Value};
 use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator, Local};

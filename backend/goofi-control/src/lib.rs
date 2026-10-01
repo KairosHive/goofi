@@ -9,7 +9,7 @@
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use goofi_core::{Data, Param};
@@ -373,7 +373,7 @@ struct Control<H: Half> {
 
 /// A control half's trouble, logged under its engine; the log groups a repeat.
 fn trouble(engine: &str, text: &str) {
-    goofi_core::log::record(goofi_core::log::Source::component("control"), goofi_core::log::Level::Error, None, format!("{engine}: {text}"));
+    goofi_supervisor::log::record(goofi_supervisor::log::Source::component("control"), goofi_supervisor::log::Level::Error, None, format!("{engine}: {text}"));
 }
 
 impl<H: Half> Control<H> {

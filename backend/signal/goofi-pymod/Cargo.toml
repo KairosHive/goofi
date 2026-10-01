@@ -12,6 +12,7 @@ name = "goofi_pymod"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+goofi-supervisor = { path = "../../goofi-supervisor" }
 goofi-core = { path = "../../goofi-core" }
 indexmap = "2"
 pyo3 = { version = "0.29", optional = true }

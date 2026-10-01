@@ -13,6 +13,7 @@ goofi-build = { path = "../goofi-build" }
 goofi-node = { path = "../goofi-node" }
 
 [dependencies]
+goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-audio = { path = "../audio/goofi-audio" }
 goofi-graphics = { path = "../graphics/goofi-graphics" }
 goofi-core = { path = "../goofi-core" }

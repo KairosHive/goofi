@@ -23,7 +23,7 @@ pub(crate) fn scan(engine: &mut AudioEngine, dir: &Path) -> Vec<ScannedType> {
         } else {
             Scanned::Unavailable("an audio node is an `.rs` file".into())
         };
-        goofi_core::startup::scanned(dir, &path);
+        goofi_supervisor::progress::scanned(dir, &path);
         out.push(ScannedType { type_name, stamp, outcome });
     }
     out.extend(crate::vst3::scan_dir(engine, dir));
@@ -34,7 +34,7 @@ impl AudioEngine {
     /// An `.rs` file: the artifact the prebuild left for these bytes, loaded — a library that will
     /// not load displaces a stale registration and greys the type out with the reason.
     fn register_rust(&mut self, path: &Path, type_name: &str) -> Scanned {
-        let base = goofi_build::base_dir(&goofi_core::home::dir());
+        let base = goofi_build::base_dir(&goofi_supervisor::home::dir());
         let loaded = goofi_build::built(&goofi_build::AUDIO, path, &base)
             .and_then(|artifact| self.load_rust(&artifact, type_name));
         match loaded {

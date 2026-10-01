@@ -14,6 +14,7 @@ default = ["embed"]
 embed = ["goofi-python/embed", "goofi-signal/embed", "goofi-graphics/embed", "dep:pyo3"]
 
 [dependencies]
+goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-bridge = { path = "../goofi-bridge" }
 goofi-client = { path = "../goofi-client" }
 goofi-core = { path = "../goofi-core" }

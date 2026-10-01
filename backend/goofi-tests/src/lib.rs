@@ -27,8 +27,8 @@ const SETTLE: Duration = Duration::from_millis(250);
 const STUCK: Duration = Duration::from_secs(600);
 
 /// Every live owner by a token of its own, the test thread that booted it and its last wait.
-fn running() -> &'static goofi_core::sync::Mutex<Vec<(u64, String, Instant)>> {
-    static RUNNING: goofi_core::sync::Mutex<Vec<(u64, String, Instant)>> = goofi_core::sync::Mutex::new(Vec::new());
+fn running() -> &'static goofi_supervisor::sync::Mutex<Vec<(u64, String, Instant)>> {
+    static RUNNING: goofi_supervisor::sync::Mutex<Vec<(u64, String, Instant)>> = goofi_supervisor::sync::Mutex::new(Vec::new());
     &RUNNING
 }
 
@@ -135,18 +135,18 @@ pub fn walled_home() {
 /// Held by a situation that holds or counts SESSIONS of its own — a second record on the
 /// machine, a killed child's — so two of them never see each other's records.
 pub fn sole_session() -> std::sync::MutexGuard<'static, ()> {
-    static SOLE: goofi_core::sync::Mutex<()> = goofi_core::sync::Mutex::new(());
+    static SOLE: goofi_supervisor::sync::Mutex<()> = goofi_supervisor::sync::Mutex::new(());
     SOLE.lock()
 }
 
 /// The one session this test process holds, and the transport built against it. A test binary
 /// that exits leaves its record for the next boot's sweep.
-pub fn session() -> &'static (goofi_core::sync::Mutex<goofi_core::session::Session>, Arc<goofi_transport::Iox>) {
-    static HELD: std::sync::OnceLock<(goofi_core::sync::Mutex<goofi_core::session::Session>, Arc<goofi_transport::Iox>)> = std::sync::OnceLock::new();
+pub fn session() -> &'static (goofi_supervisor::sync::Mutex<goofi_supervisor::session::Session>, Arc<goofi_transport::Iox>) {
+    static HELD: std::sync::OnceLock<(goofi_supervisor::sync::Mutex<goofi_supervisor::session::Session>, Arc<goofi_transport::Iox>)> = std::sync::OnceLock::new();
     HELD.get_or_init(|| {
-        let session = goofi_core::session::Session::hold().expect("the test process holds a session");
+        let session = goofi_supervisor::session::Session::hold().expect("the test process holds a session");
         let iox = Arc::new(goofi_transport::Iox::new(&session).expect("the session's transport"));
-        (goofi_core::sync::Mutex::new(session), iox)
+        (goofi_supervisor::sync::Mutex::new(session), iox)
     })
 }
 
@@ -999,7 +999,7 @@ pub fn frame(values: &[f32]) -> goofi_core::Data {
 }
 
 /// Serializes a binary's Python-tier tests: every one of them spawns an interpreter.
-static TIER: goofi_core::sync::Mutex<()> = goofi_core::sync::Mutex::new(());
+static TIER: goofi_supervisor::sync::Mutex<()> = goofi_supervisor::sync::Mutex::new(());
 
 /// The interpreter to spawn children with, plus the tier lock — held for the rest of the test.
 pub struct Tier {

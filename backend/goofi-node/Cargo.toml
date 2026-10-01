@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-core = { path = "../goofi-core" }
 # The payload-free ViewSpec algebra: what a viewer asks of a producer crosses this seam, and the
 # crate that owns that vocabulary has no dependencies of its own.

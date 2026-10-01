@@ -8,6 +8,7 @@ license.workspace = true
 embed = ["goofi-python/embed"]
 
 [dependencies]
+goofi-supervisor = { path = "../../goofi-supervisor" }
 goofi-host = { path = "../../goofi-host" }
 goofi-host-sdk = { path = "../../goofi-host-sdk", features = ["host"] }
 goofi-python = { path = "../../signal/goofi-python" }

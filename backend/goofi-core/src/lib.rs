@@ -6,10 +6,7 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-pub mod child;
-pub mod log;
 pub mod variables;
-pub mod home;
 pub mod normalize;
 pub mod path;
 pub mod png;
@@ -17,15 +14,10 @@ pub mod probe;
 pub mod reduce;
 pub mod scale;
 pub mod record;
-pub mod registry;
-pub mod session;
-pub mod startup;
 pub mod stream;
-pub mod sync;
 pub mod time;
 pub mod texture;
 pub mod turtle;
-pub mod worker;
 
 pub use indexmap;
 pub use stream::Stream;

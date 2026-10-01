@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-filedescriptor = "0.8.3"
+goofi-supervisor = { path = "../goofi-supervisor" }
 indexmap = "2"
 # A drawing widget's value is a `data:image/png;base64,…` URL and a node has to read the pixels out
 # of it; `src/png.rs` is that door, and these are the two halves it does not hand-roll.
@@ -17,25 +17,7 @@ flate2 = "1"
 dunce = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-getrandom = "0.4"
-# The config file's format.
-toml = "0.8"
 # The shared, payload-free ViewSpec algebra. goofi-core (signal payload) implements its
 # `Reducible` seam for `Data` — the allowed signal→shared dependency direction; goofi-view
 # never depends back on goofi-core.
 goofi-view = { path = "../goofi-view" }
-
-# The startup screen: one progress bar per folder the node library scan is in.
-indicatif = "0.18"
-
-# The child's process group and the liveness pipe's fd flag (unix); the log redirect (windows).
-libc = "0.2"
-
-[target.'cfg(windows)'.dependencies]
-# Marking the liveness pipe's read HANDLE inheritable, and the timed wait on a child's handle.
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_System_Threading",
-    "Win32_Security",
-    "Win32_Security_Authorization",
-] }

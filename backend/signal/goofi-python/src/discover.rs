@@ -38,7 +38,7 @@ fn probe_reason(stderr: &str) -> String {
 const PROBE_WAIT: Duration = Duration::from_secs(300);
 
 pub fn probe_introspect(path: &Path, python: &str) -> Result<probe::Introspection, String> {
-    goofi_core::startup::reading(path);
+    goofi_supervisor::progress::reading(path);
     // The payload is a dup of fd 1 taken before fd 1 is rerouted to stderr, so anything an
     // import prints to stdout — even from a C extension — cannot corrupt the JSON.
     const PROBE: &str = "\
@@ -49,7 +49,7 @@ sys.stdout = sys.stderr
 payload.write(goofi.introspect(sys.argv[1]).encode())
 payload.close()
 ";
-    let out = goofi_core::child::output(
+    let out = goofi_supervisor::child::output(
         format!("python probe {}", path.file_name().unwrap_or_default().to_string_lossy()),
         Command::new(python)
             .arg("-c")
@@ -101,7 +101,7 @@ fn introspect_memoised(path: &Path, python: &str, memo: &Path) -> Result<probe::
     }
     let answer = probe_introspect(path, python);
     if let (Ok(_), Ok(json)) = (&answer, serde_json::to_string(&answer)) {
-        let tmp = memo.join(format!("{key}.{}.tmp", goofi_core::session::tag()));
+        let tmp = memo.join(format!("{key}.{}.tmp", goofi_supervisor::session::tag()));
         let _ = std::fs::create_dir_all(memo)
             .and_then(|()| std::fs::write(&tmp, json))
             .and_then(|()| std::fs::rename(&tmp, &entry));

@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 
 use crate::stream::{StreamMeta, Timeline};
 use crate::StreamId;
@@ -42,7 +42,7 @@ enum Job {
 
 struct Lane {
     jobs: SyncSender<Job>,
-    thread: Option<goofi_core::worker::Worker>,
+    thread: Option<goofi_supervisor::worker::Worker>,
 }
 
 pub struct Writer {
@@ -92,7 +92,7 @@ impl Writer {
     fn lane(&self) -> Lane {
         let (tx, rx) = sync_channel(LANE);
         let (rec, free) = (self.rec.clone(), self.free.clone());
-        let thread = goofi_core::worker::thread("goofi-record-write")
+        let thread = goofi_supervisor::worker::thread("goofi-record-write")
             .spawn(move || run(rx, &rec, &free))
             .ok();
         Lane { jobs: tx, thread }

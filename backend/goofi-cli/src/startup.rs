@@ -1,10 +1,11 @@
 //! The startup screen: a line per step, a progress bar per folder being scanned, and a
 //! heartbeat when a step takes long. Everything is drawn on the terminal the log capture saved.
+//! It is the one sink of [`goofi_supervisor::progress`]; the libraries report, this draws.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, OnceLock};
-use crate::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle, TermLike};
@@ -14,7 +15,7 @@ static FOLDERS: Mutex<Option<HashMap<PathBuf, ProgressBar>>> = Mutex::new(None);
 
 pub struct Startup {
     stop: mpsc::Sender<()>,
-    worker: Option<crate::worker::Worker>,
+    worker: Option<goofi_supervisor::worker::Worker>,
     started: Instant,
 }
 
@@ -23,13 +24,13 @@ pub struct Startup {
 struct Terminal;
 
 impl TermLike for Terminal {
-    fn width(&self) -> u16 { crate::log::terminal_width().unwrap_or(80) }
+    fn width(&self) -> u16 { goofi_supervisor::log::terminal_width().unwrap_or(80) }
     fn move_cursor_up(&self, n: usize) -> std::io::Result<()> { if n > 0 { self.write_str(&format!("\x1b[{n}A")) } else { Ok(()) } }
     fn move_cursor_down(&self, n: usize) -> std::io::Result<()> { if n > 0 { self.write_str(&format!("\x1b[{n}B")) } else { Ok(()) } }
     fn move_cursor_right(&self, n: usize) -> std::io::Result<()> { if n > 0 { self.write_str(&format!("\x1b[{n}C")) } else { Ok(()) } }
     fn move_cursor_left(&self, n: usize) -> std::io::Result<()> { if n > 0 { self.write_str(&format!("\x1b[{n}D")) } else { Ok(()) } }
     fn write_line(&self, s: &str) -> std::io::Result<()> { self.write_str(s)?; self.write_str("\n") }
-    fn write_str(&self, s: &str) -> std::io::Result<()> { crate::log::terminal_write(s.as_bytes()) }
+    fn write_str(&self, s: &str) -> std::io::Result<()> { goofi_supervisor::log::terminal_write(s.as_bytes()) }
     fn clear_line(&self) -> std::io::Result<()> { self.write_str("\r\x1b[2K") }
     fn flush(&self) -> std::io::Result<()> { Ok(()) }
 }
@@ -37,7 +38,7 @@ impl TermLike for Terminal {
 fn screen() -> &'static MultiProgress {
     static SCREEN: OnceLock<MultiProgress> = OnceLock::new();
     SCREEN.get_or_init(|| {
-        let target = match crate::log::terminal_width() {
+        let target = match goofi_supervisor::log::terminal_width() {
             Some(_) => ProgressDrawTarget::term_like(Box::new(Terminal)),
             None => ProgressDrawTarget::hidden(),
         };
@@ -49,18 +50,27 @@ fn line(mark: &str, message: &str) {
     let text = format!("  {mark} {message}");
     let screen = screen();
     if screen.is_hidden() || screen.println(&text).is_err() {
-        let _ = crate::log::terminal_line(&text);
+        let _ = goofi_supervisor::log::terminal_line(&text);
     }
 }
 
 impl Startup {
     pub fn begin(version: &str) -> Self {
+        use goofi_supervisor::progress::Progress;
+        let _ = goofi_supervisor::progress::set_sink(|p| match p {
+            Progress::Report(m) => report(&m),
+            Progress::Note(m) => note(&m),
+            Progress::Scanning(folder, files) => scanning(&folder, files),
+            Progress::Reading(file) => reading(&file),
+            Progress::Scanned(folder, file) => scanned(&folder, &file),
+            Progress::Indexed(folder, nodes, unavailable) => indexed(&folder, nodes, unavailable),
+        });
         let started = Instant::now();
         line("goofi", &format!("{version} · starting"));
         *ACTIVE.lock() = Some(("Starting".into(), started));
         *FOLDERS.lock() = Some(HashMap::new());
         let (stop, receive) = mpsc::channel();
-        let worker = crate::worker::thread("goofi-startup").spawn(move || {
+        let worker = goofi_supervisor::worker::thread("goofi-startup").spawn(move || {
             while receive.recv_timeout(Duration::from_secs(5)) == Err(mpsc::RecvTimeoutError::Timeout) {
                 let active = ACTIVE.lock();
                 if let Some((message, since)) = active.as_ref().filter(|(_, since)| since.elapsed() >= Duration::from_secs(5)) {
@@ -89,31 +99,28 @@ impl Drop for Startup {
     }
 }
 
-/// A step begins: logged always, so a load's steps reach the console; printed, and the
-/// heartbeat's subject from now on, while the startup screen is up.
-pub fn report(message: impl Into<String>) {
-    let message = message.into();
-    crate::log::record(crate::log::Source::component("goofi"), crate::log::Level::Info, None, message.clone());
+/// A step begins: printed, and the heartbeat's subject from now on, while the screen is up.
+fn report(message: &str) {
     let mut active = ACTIVE.lock();
     if let Some(current) = active.as_mut() {
-        line(">", &message);
-        *current = (message, Instant::now());
+        line(">", message);
+        *current = (message.to_string(), Instant::now());
     }
 }
 
 /// A fact under the current step, printed during startup only.
-pub fn note(message: impl Into<String>) {
+fn note(message: &str) {
     if ACTIVE.lock().is_some() {
-        line("·", &message.into());
+        line("·", message);
     }
 }
 
 /// A folder as the screen names it: under `.goofi` by its path from there, else from `~`.
 fn shown(path: &Path) -> String {
-    if path.starts_with(crate::home::system().join("shipped")) {
+    if path.starts_with(goofi_supervisor::home::system().join("shipped")) {
         return format!("shipped/{}", path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default());
     }
-    if let Ok(rest) = path.strip_prefix(crate::home::dir()) {
+    if let Ok(rest) = path.strip_prefix(goofi_supervisor::home::dir()) {
         return format!(".goofi/{}", rest.display());
     }
     match std::env::home_dir().and_then(|h| path.strip_prefix(h).ok().map(|r| r.to_path_buf())) {
@@ -123,7 +130,7 @@ fn shown(path: &Path) -> String {
 }
 
 /// A scan of `folder` with `files` to read begins: a bar until [`indexed`] replaces it.
-pub fn scanning(folder: &Path, files: usize) {
+fn scanning(folder: &Path, files: usize) {
     let mut folders = FOLDERS.lock();
     let Some(folders) = folders.as_mut() else { return };
     let bar = screen().add(ProgressBar::new(files as u64));
@@ -135,7 +142,7 @@ pub fn scanning(folder: &Path, files: usize) {
 }
 
 /// `file` is being read: its folder's bar names it.
-pub fn reading(file: &Path) {
+fn reading(file: &Path) {
     let Some(folder) = file.parent() else { return };
     if let Some(bar) = FOLDERS.lock().as_ref().and_then(|f| f.get(folder)) {
         bar.set_message(file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
@@ -143,7 +150,7 @@ pub fn reading(file: &Path) {
 }
 
 /// One file of `folder` was read and decided.
-pub fn scanned(folder: &Path, file: &Path) {
+fn scanned(folder: &Path, file: &Path) {
     if let Some(bar) = FOLDERS.lock().as_ref().and_then(|f| f.get(folder)) {
         bar.set_message(file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
         bar.inc(1);
@@ -151,7 +158,7 @@ pub fn scanned(folder: &Path, file: &Path) {
 }
 
 /// The scan of `folder` is over: its bar becomes the count of nodes it put in the library.
-pub fn indexed(folder: &Path, nodes: usize, unavailable: usize) {
+fn indexed(folder: &Path, nodes: usize, unavailable: usize) {
     let bar = FOLDERS.lock().as_mut().and_then(|f| f.remove(folder));
     if let Some(bar) = bar {
         bar.finish_and_clear();

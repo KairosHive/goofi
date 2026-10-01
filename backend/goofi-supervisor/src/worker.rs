@@ -7,7 +7,7 @@ use crate::sync::{Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::registry::{self, Kind};
+use crate::scope::{self, Kind};
 
 /// A thread being described: its name, and the stack it gets.
 pub struct Builder {
@@ -33,7 +33,7 @@ impl Builder {
     }
 
     pub fn spawn<T: Send + 'static>(self, f: impl FnOnce() -> T + Send + 'static) -> io::Result<Worker<T>> {
-        let lease = registry::lease(Kind::Worker, self.name.clone());
+        let lease = scope::lease(Kind::Worker, self.name.clone());
         let done = Arc::new((Mutex::new(false), Condvar::new()));
         let finished = done.clone();
         let mut builder = std::thread::Builder::new().name(self.name.clone());

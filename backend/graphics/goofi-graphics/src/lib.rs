@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use goofi_control::{Desired, Handle, Shared, Sub};
@@ -96,7 +96,7 @@ pub struct GraphicsEngine {
     runtime: Arc<Mutex<Runtime>>,
     inbox: Arc<Mutex<Vec<runtime::Cmd>>>,
     stats: Arc<Stats>,
-    ticker: Option<(Arc<AtomicBool>, goofi_core::worker::Worker)>,
+    ticker: Option<(Arc<AtomicBool>, goofi_supervisor::worker::Worker)>,
     faults: goofi_control::Faults,
     ui: Option<goofi_window::Ui>,
     /// The window each window node has open, and the size it was last given.
@@ -182,14 +182,14 @@ impl GraphicsEngine {
         let ticker = (clock == Clock::Internal).then(|| {
             let stop = Arc::new(AtomicBool::new(false));
             let (rt, halt) = (runtime.clone(), stop.clone());
-            let thread = goofi_core::worker::thread("goofi-graphics-clock")
+            let thread = goofi_supervisor::worker::thread("goofi-graphics-clock")
                 .spawn(move || {
                     let mut next = Instant::now();
                     while !halt.load(Ordering::Relaxed) {
                         // A tick that panics ends no clock: the cause is logged and the next
                         // tick runs; the runtime's lock takes the poison over.
                         if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rt.lock().tick())) {
-                            goofi_core::log::record(goofi_core::log::Source::component("graphics"), goofi_core::log::Level::Error, None, format!("the tick panicked: {}", goofi_node::panic_message(p)));
+                            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Error, None, format!("the tick panicked: {}", goofi_node::panic_message(p)));
                         }
                         next += PERIOD;
                         // A tick that overran does not try to catch up: the next one is now.

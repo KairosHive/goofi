@@ -9,6 +9,7 @@ license.workspace = true
 sha2 = "0.10"
 
 [dependencies]
+goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-core = { path = "../goofi-core" }
 libloading = "0.8"
 sha2 = "0.10"

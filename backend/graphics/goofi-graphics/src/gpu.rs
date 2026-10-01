@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 
 /// Every texture in the engine.
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -122,7 +122,7 @@ pub struct Gpu {
     layouts: Mutex<HashMap<(bool, usize, usize), Arc<wgpu::PipelineLayout>>>,
     pub queue: wgpu::Queue,
     /// The device's entry in the resource index; before the device, so it leaves first.
-    _lease: goofi_core::registry::Lease,
+    _lease: goofi_supervisor::scope::Lease,
     /// LAST, here and in every struct that holds one: fields drop in declaration order, and a
     /// resource outliving its device is a driver crash rather than an error.
     pub device: wgpu::Device,
@@ -178,7 +178,7 @@ impl Gpu {
             trace: wgpu::Trace::Off,
         }))
         .map_err(|e| format!("`{}` refused a device: {e}", info.name))?;
-        device.on_uncaptured_error(Arc::new(|e| goofi_core::log::record(goofi_core::log::Source::component("graphics"), goofi_core::log::Level::Error, None, format!("graphics: {e}"))));
+        device.on_uncaptured_error(Arc::new(|e| goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Error, None, format!("graphics: {e}"))));
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("goofi-sampler"),
@@ -288,8 +288,8 @@ impl Gpu {
             blit("tap", FORMAT),
         ];
         Ok(Gpu {
-            _lease: goofi_core::registry::lease(
-                goofi_core::registry::Kind::Device,
+            _lease: goofi_supervisor::scope::lease(
+                goofi_supervisor::scope::Kind::Device,
                 format!("gpu {} ({})", info.name, info.backend),
             ),
             device,

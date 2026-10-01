@@ -528,7 +528,7 @@ fn a_busy_node_never_holds_up_the_control_plane_and_never_wedges_the_exit() {
     }
     returns(&idle, "the exit with parked nodes", |c| c.state.graph.lock().shutdown());
     idle.until("every parked node's thread to end, which a lost doorbell never lets happen", |_| {
-        goofi_core::registry::inventory().iter().all(|e| e.name != "goofi-_TestParkedExit").then_some(())
+        goofi_supervisor::scope::inventory().iter().all(|e| e.name != "goofi-_TestParkedExit").then_some(())
     });
 }
 

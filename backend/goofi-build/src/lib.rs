@@ -8,7 +8,7 @@ use std::ffi::{c_char, CStr};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{LazyLock, OnceLock};
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 
 use sha2::{Digest, Sha256};
 
@@ -151,7 +151,7 @@ fn build(sdk: &Sdk, source: &Path, base: &Path, key: &str, artifact: &Path) -> R
     if artifact.is_file() {
         return Ok(artifact.to_path_buf());
     }
-    goofi_core::startup::report(format!("Building native node {}", source.file_name().unwrap_or_default().to_string_lossy()));
+    goofi_supervisor::progress::report(format!("Building native node {}", source.file_name().unwrap_or_default().to_string_lossy()));
     let crate_dir = base.join("crates").join(key);
     let crate_name = format!("goofi_node_{}", stem_of(source).to_lowercase());
     generate(sdk, source, &sdk_root(base), &crate_dir, &crate_name)?;
@@ -171,7 +171,7 @@ fn build(sdk: &Sdk, source: &Path, base: &Path, key: &str, artifact: &Path) -> R
         }
     }
     cmd.env("CARGO_TARGET_DIR", base.join("target"));
-    let output = goofi_core::child::output(format!("cargo build {crate_name}"), &mut cmd, BUILD_WAIT)
+    let output = goofi_supervisor::child::output(format!("cargo build {crate_name}"), &mut cmd, BUILD_WAIT)
         .map_err(|e| format!("could not run cargo: {e}"))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
@@ -280,7 +280,7 @@ pub fn place(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let dir = path.parent().expect("an artifact has a directory");
     std::fs::create_dir_all(dir)?;
     // Named by the session, so the boot pass can sweep what a crash left here.
-    let part = dir.join(format!(".{}.{}", path.file_name().unwrap().to_string_lossy(), goofi_core::session::tag()));
+    let part = dir.join(format!(".{}.{}", path.file_name().unwrap().to_string_lossy(), goofi_supervisor::session::tag()));
     std::fs::write(&part, bytes)?;
     // A lost race is not a failure: another builder put the artifact there. Windows refuses to
     // rename onto a mapped DLL, which is that same case seen from the loser's side.

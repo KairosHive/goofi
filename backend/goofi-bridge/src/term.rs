@@ -13,7 +13,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde_json::{json, Value};
@@ -40,7 +40,7 @@ impl Harnesses {
     /// The roster the snapshot seeds and `harness_changed` broadcasts — one shape for both: the
     /// live instances, and the CONFIG's launchable list, `_`-test entries withheld. `config` is
     /// `home::agents()`, read by the CALLER so the disk read runs off whatever lock it holds.
-    pub fn roster(&self, config: &(Vec<goofi_core::home::Agent>, Option<String>)) -> Value {
+    pub fn roster(&self, config: &(Vec<goofi_supervisor::home::Agent>, Option<String>)) -> Value {
         let instances: Vec<Value> = self.instances.lock().iter()
             .map(|(id, i)| {
                 let exit = i.exit_code();
@@ -84,7 +84,7 @@ impl Harnesses {
         events: broadcast::Sender<String>,
         history: Arc<Mutex<goofi_graph::CommandHistory>>,
     ) -> Result<String, String> {
-        let (agents, _) = goofi_core::home::agents();
+        let (agents, _) = goofi_supervisor::home::agents();
         let command = agents
             .iter()
             .find(|a| a.name == agent)
@@ -96,7 +96,7 @@ impl Harnesses {
                 match have.is_empty() {
                     true => format!(
                         "unknown agent `{agent}` — the config lists none; add [[agents]] to {}",
-                        goofi_core::home::config_file().display()
+                        goofi_supervisor::home::config_file().display()
                     ),
                     false => format!("unknown agent `{agent}` — the config offers: {}", have.join(", ")),
                 }
@@ -110,7 +110,7 @@ impl Harnesses {
         for (k, v) in env {
             cmd.env(k, v);
         }
-        for key in goofi_core::child::EMBEDDED_ONLY {
+        for key in goofi_supervisor::child::EMBEDDED_ONLY {
             cmd.env_remove(key);
         }
         cmd.env("TERM", "xterm-256color");
@@ -145,8 +145,8 @@ impl Harnesses {
             size: watch::channel(None).0,
             seats: AtomicU64::new(0),
             tail: Mutex::default(),
-            _lease: goofi_core::registry::lease(
-                goofi_core::registry::Kind::Child,
+            _lease: goofi_supervisor::scope::lease(
+                goofi_supervisor::scope::Kind::Child,
                 format!("harness {agent} (pid {})", child.process_id().unwrap_or_default()),
             ),
         });
@@ -154,7 +154,7 @@ impl Harnesses {
         // Drained unconditionally: a child whose output nobody reads blocks on a full buffer. A
         // failed `send` only means no socket is attached, which is the normal state.
         let answering = inst.clone();
-        let _ = goofi_core::worker::spawn("goofi-term-drain", move || {
+        let _ = goofi_supervisor::worker::spawn("goofi-term-drain", move || {
             let mut buf = [0u8; 8192];
             while let Ok(n) = reader.read(&mut buf) {
                 if n == 0 {
@@ -179,7 +179,7 @@ impl Harnesses {
         self.instances.lock().push((id.clone(), inst.clone()));
         let harnesses = self.clone();
         let reaped = id.clone();
-        let _ = goofi_core::worker::spawn("goofi-term-reap", move || {
+        let _ = goofi_supervisor::worker::spawn("goofi-term-reap", move || {
             let mut child = child;
             let code = child.wait().map(|s| s.exit_code()).unwrap_or(1);
             // The exit is published FIRST — `wait` freed the pid, and the grace thread must see
@@ -189,7 +189,7 @@ impl Harnesses {
             // broadcast — so an observer of `harness_changed` sees the stack gone too.
             history.lock().drop_actor(&actor_of(&reaped));
             let _ =
-                events.send(crate::event("harness_changed", harnesses.roster(&goofi_core::home::agents())));
+                events.send(crate::event("harness_changed", harnesses.roster(&goofi_supervisor::home::agents())));
         });
         Ok(id)
     }
@@ -217,7 +217,7 @@ impl Harnesses {
         }
         for (_, inst) in &taken {
             inst.stopping.store(true, Ordering::Relaxed);
-            let _ = signal(inst, goofi_core::child::request_stop);
+            let _ = signal(inst, goofi_supervisor::child::request_stop);
         }
         Some(move || {
             let deadline = std::time::Instant::now() + GRACE;
@@ -227,7 +227,7 @@ impl Harnesses {
                 std::thread::sleep(std::time::Duration::from_millis(25));
             }
             for (_, inst) in &taken {
-                let _ = signal(inst, goofi_core::child::force_kill);
+                let _ = signal(inst, goofi_supervisor::child::force_kill);
             }
         })
     }
@@ -236,10 +236,10 @@ impl Harnesses {
 /// Ask a running instance to leave, and insist after the grace.
 fn begin_stop(inst: Arc<Instance>) -> Result<(), String> {
     inst.stopping.store(true, Ordering::Relaxed);
-    signal(&inst, goofi_core::child::request_stop)?;
-    let _ = goofi_core::worker::spawn("goofi-term-stop", move || {
+    signal(&inst, goofi_supervisor::child::request_stop)?;
+    let _ = goofi_supervisor::worker::spawn("goofi-term-stop", move || {
         std::thread::sleep(GRACE);
-        let _ = signal(&inst, goofi_core::child::force_kill);
+        let _ = signal(&inst, goofi_supervisor::child::force_kill);
     });
     Ok(())
 }
@@ -292,7 +292,7 @@ pub struct Instance {
     /// The last [`TAIL_BYTES`] the child wrote, replayed to an attach that arrived after them.
     tail: Mutex<Vec<u8>>,
     /// Its entry in the resource index, for as long as the roster holds it.
-    _lease: goofi_core::registry::Lease,
+    _lease: goofi_supervisor::scope::Lease,
 }
 
 /// What an attach hands a `/term` socket: the replayed tail, then the live channels.

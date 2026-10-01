@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::FromSample;
@@ -59,8 +59,8 @@ pub struct Ports {
 /// on every host. A device is opened at the clock's rate, so the name AND the rate gate a reopen.
 #[derive(Default)]
 struct Io {
-    stream: Option<goofi_core::registry::Leased<cpal::Stream>>,
-    midi: Option<goofi_core::registry::Leased<midir::MidiInputConnection<()>>>,
+    stream: Option<goofi_supervisor::scope::Leased<cpal::Stream>>,
+    midi: Option<goofi_supervisor::scope::Leased<midir::MidiInputConnection<()>>>,
     /// The device name, the clock's rate and the channel selection — every input the open
     /// depends on, so a move in any one of them reopens the stream.
     device: Option<(String, f64, String)>,
@@ -225,7 +225,7 @@ impl AudioHalf {
                 };
                 replan = true;
                 io.stream = stream.map(|s| {
-                    goofi_core::registry::leased(goofi_core::registry::Kind::Device, format!("audio in {}", wanted.0), s)
+                    goofi_supervisor::scope::leased(goofi_supervisor::scope::Kind::Device, format!("audio in {}", wanted.0), s)
                 });
                 io.device = Some(wanted);
                 errors.push((key_of(manifest, audio_in::P::DEVICE), error));
@@ -241,8 +241,8 @@ impl AudioHalf {
                 } else {
                     match open_port(&wanted, producer) {
                         Ok(connection) => {
-                            io.midi = Some(goofi_core::registry::leased(
-                                goofi_core::registry::Kind::Device,
+                            io.midi = Some(goofi_supervisor::scope::leased(
+                                goofi_supervisor::scope::Kind::Device,
                                 format!("midi in {wanted}"),
                                 connection,
                             ));
@@ -670,7 +670,7 @@ fn source_path(name: &str) -> PathBuf {
     if rooted(Path::new(&name)) {
         PathBuf::from(name)
     } else {
-        goofi_core::home::recordings().join(name)
+        goofi_supervisor::home::recordings().join(name)
     }
 }
 

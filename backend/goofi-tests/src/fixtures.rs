@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use goofi_core::sync::{Condvar, Mutex};
+use goofi_supervisor::sync::{Condvar, Mutex};
 
 use goofi_core::{Data, Meta, SlotType};
 use goofi_graph::Graph;

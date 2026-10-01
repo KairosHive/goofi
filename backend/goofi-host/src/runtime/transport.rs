@@ -2,7 +2,7 @@
 //! of one node's control channel. The machinery and the names are `goofi-transport`'s.
 
 use std::collections::HashMap;
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 use std::time::Duration;
 
 use iceoryx2::prelude::*;
@@ -407,9 +407,9 @@ fn send_message(publisher: &BytePublisher, bytes: &[u8]) -> Result<(), String> {
 
 /// A message that did not go out is reported, not dropped in silence: the log groups a repeat.
 fn swallowed(stream: &str, error: &str) {
-    goofi_core::log::record(
-        goofi_core::log::Source::component("transport"),
-        goofi_core::log::Level::Error,
+    goofi_supervisor::log::record(
+        goofi_supervisor::log::Source::component("transport"),
+        goofi_supervisor::log::Level::Error,
         None,
         format!("the {stream} message was not sent: {error}"),
     );

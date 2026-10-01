@@ -6,7 +6,7 @@ use goofi_host_sdk::Node;
 use goofi_node::{NodeManifest, ParamGroups, ParamKey, Status, Uid};
 use std::path::Path;
 use std::sync::Arc;
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 
 pub(crate) type Factory = Arc<dyn Fn(&ParamGroups) -> Box<dyn Node> + Send + Sync>;
 #[derive(Clone)]
@@ -29,7 +29,7 @@ impl crate::GraphicsEngine {
 
     pub(crate) fn register_host(&mut self, path: &Path, name: &str) -> Result<bool, String> {
         let (manifest, factory, isolation): (_, Factory, _) = if path.extension().is_some_and(|e| e == "rs") {
-            let base = goofi_build::base_dir(&goofi_core::home::dir());
+            let base = goofi_build::base_dir(&goofi_supervisor::home::dir());
             let artifact = goofi_build::built(&goofi_build::GRAPHICS, path, &base)?;
             let opened = goofi_build::open(&artifact)?;
             let intro = goofi_node::parse_introspection(&opened.describe)?;

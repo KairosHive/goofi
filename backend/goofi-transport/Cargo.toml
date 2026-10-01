@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-node = { path = "../goofi-node" }
 goofi-core = { path = "../goofi-core" }
 

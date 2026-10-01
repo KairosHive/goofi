@@ -4,7 +4,7 @@
 //! binary's argv-to-process path is e2e's.
 
 use goofi_client as client;
-use goofi_core::session;
+use goofi_supervisor::session;
 use goofi_tests::Goofi;
 
 fn lines(cmds: &[&str]) -> Vec<String> {
@@ -74,7 +74,7 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let rows = client::list();
     assert!(rows.iter().any(|s| s.id == id && s.url == url), "{rows:?}");
     assert!(rows.iter().all(|s| s.id != gone) && dead.exists(), "a list reads only: {rows:?}");
-    goofi_core::session::sweep_dead();
+    goofi_supervisor::session::sweep_dead();
     assert!(!dead.exists(), "the sweep removes it; the live one stays");
 
     // The listing is machine-wide, so only named rows are asserted. A second held session makes

@@ -4,7 +4,7 @@
 
 use std::ffi::c_void;
 use std::sync::Arc;
-use goofi_core::sync::{Condvar, Mutex};
+use goofi_supervisor::sync::{Condvar, Mutex};
 use std::time::Instant;
 
 use super::{Id, Pumped, Screen, Wake};

@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use goofi_core::session::{self, Record};
+use goofi_supervisor::session::{self, Record};
 use serde_json::{json, Value};
 
 /// A connect is short: a listener answers a SYN at once or not at all.

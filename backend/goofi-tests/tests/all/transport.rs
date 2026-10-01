@@ -319,7 +319,7 @@ fn crash_helper() {
     if std::env::var(CRASH_HELPER).is_err() {
         return; // the ordinary run: this test is only the child's entry point
     }
-    let session = goofi_core::session::Session::hold().expect("a session");
+    let session = goofi_supervisor::session::Session::hold().expect("a session");
     let iox = goofi_transport::Iox::new(&session).expect("its transport");
     let node = iox.node().expect("a node");
     let _out = goofi_transport::stream_service(&node, "goofi_crash_helper_out", goofi_transport::ServiceKind::Data).expect("a service");
@@ -331,7 +331,7 @@ fn crash_helper() {
 /// decides what a boot sweep removes, and a content key is never mistaken for a session.
 #[test]
 fn a_session_owns_its_directory_workspace_and_cache_parts() {
-    use goofi_core::session::{alive, sessions, sweep_system, system_dir, workspace_dir, Record, Session};
+    use goofi_supervisor::session::{alive, sessions, sweep_system, system_dir, workspace_dir, Record, Session};
     use std::fs;
     goofi_tests::walled_home();
     let _sole = goofi_tests::sole_session();
@@ -344,7 +344,7 @@ fn a_session_owns_its_directory_workspace_and_cache_parts() {
 
     // A dead session: its lock file exists beside its directory and nobody holds it. An orphan
     // directory with no lock at all. A lock a crashed hold left behind with no directory yet.
-    let base = goofi_core::session::system_base();
+    let base = goofi_supervisor::session::system_base();
     fs::create_dir_all(system_dir("gone")).unwrap();
     fs::File::create(base.join("gone.alive")).unwrap();
     fs::create_dir_all(system_dir("orphan").join("iox")).unwrap();
@@ -352,7 +352,7 @@ fn a_session_owns_its_directory_workspace_and_cache_parts() {
     assert!(!alive("gone"));
     assert!(sessions().iter().all(|s| s.id != "gone"), "the dead one is not listed");
     assert!(system_dir("gone").exists(), "…and a list removes nothing");
-    goofi_core::session::sweep_dead();
+    goofi_supervisor::session::sweep_dead();
     assert!(!system_dir("gone").exists() && !base.join("gone.alive").exists(), "the sweep removes it and its lock");
     assert!(!system_dir("orphan").exists(), "the orphan goes");
     assert!(!base.join("stale.alive").exists(), "a crashed hold's lock is swept");
@@ -364,7 +364,7 @@ fn a_session_owns_its_directory_workspace_and_cache_parts() {
     // The caches: a dead session's part and work dir go, another version's tree goes; a live
     // session's part, this version's tree and a 16-hex CONTENT key stay.
     let live = Session::hold().unwrap();
-    let system = goofi_core::home::system();
+    let system = goofi_supervisor::home::system();
     let out = system.join("build").join("out").join("k");
     fs::create_dir_all(&out).unwrap();
     fs::write(out.join(format!(".node.so.s{}", live.id())), b"").unwrap();
@@ -408,7 +408,7 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
         .env(CRASH_HELPER, "1")
         .env("GOOFI_HOME", &foreign)
         // Its OWN session, not this process's.
-        .env_remove(goofi_core::session::ENV)
+        .env_remove(goofi_supervisor::session::ENV)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         // SIGKILLed mid-test, so its parting "broken pipe" would otherwise read as this test's failure.
@@ -426,20 +426,20 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
     }
     let id = line.split_whitespace().nth(1).map(str::to_string).unwrap_or_default();
     assert!(!id.is_empty(), "the child named its session: {line:?}");
-    let system = goofi_core::session::system_dir(&id);
-    assert!(goofi_core::session::alive(&id), "the child holds its session while it lives");
+    let system = goofi_supervisor::session::system_dir(&id);
+    assert!(goofi_supervisor::session::alive(&id), "the child holds its session while it lives");
     assert!(system.join("iox").is_dir(), "its ephemeral directory is where iceoryx2 wrote");
-    assert!(goofi_core::session::sessions().iter().any(|s| s.id == id), "listed from any home");
-    let workspace = goofi_core::session::workspace_dir(&id).join("nonce");
+    assert!(goofi_supervisor::session::sessions().iter().any(|s| s.id == id), "listed from any home");
+    let workspace = goofi_supervisor::session::workspace_dir(&id).join("nonce");
     std::fs::create_dir_all(&workspace).unwrap();
-    goofi_core::session::sweep_dead();
+    goofi_supervisor::session::sweep_dead();
     goofi_bridge::autosave::sweep_dead();
     assert!(system.join("iox").is_dir() && workspace.is_dir(), "a sweep from this home left the live session alone");
 
     // Killed, because the point is a process that drops nothing: a graceful exit would clean up.
     let _ = child.kill();
     let _ = child.wait();
-    assert!(!goofi_core::session::alive(&id), "the lock went with the process");
+    assert!(!goofi_supervisor::session::alive(&id), "the lock went with the process");
     assert!(system.exists(), "…and everything else stayed");
 
     let segments = || -> usize {
@@ -451,11 +451,11 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
         assert!(segments() > 0, "the child's shared memory stayed too");
     }
 
-    goofi_core::session::sweep_dead();
+    goofi_supervisor::session::sweep_dead();
     goofi_bridge::autosave::sweep_dead();
     assert!(!system.exists(), "the ephemeral directory was swept");
     assert!(!workspace.exists(), "the workspace was swept");
     assert_eq!(segments(), 0, "the shared memory its prefix names was swept");
-    assert!(goofi_core::session::sessions().iter().all(|s| s.id != id));
+    assert!(goofi_supervisor::session::sessions().iter().all(|s| s.id != id));
     let _ = std::fs::remove_dir_all(&foreign);
 }

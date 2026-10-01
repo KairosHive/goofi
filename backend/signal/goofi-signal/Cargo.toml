@@ -9,6 +9,7 @@ license.workspace = true
 embed = ["goofi-python/embed"]
 
 [dependencies]
+goofi-supervisor = { path = "../../goofi-supervisor" }
 goofi-core = { path = "../../goofi-core" }
 # The scan's Python door: both tiers' probes and node types.
 goofi-python = { path = "../goofi-python" }

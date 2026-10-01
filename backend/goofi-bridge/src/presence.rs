@@ -1,7 +1,7 @@
 //! `/presence`: who is in the patch, and where each pointer is. A socket is a peer for exactly
 //! as long as it is open, so the roster is the set of open sockets and nothing expires.
 use std::collections::BTreeMap;
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};

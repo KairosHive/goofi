@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, StreamTrait};
@@ -112,7 +112,7 @@ struct DeviceClock {
     go: Option<mpsc::Sender<()>>,
     done: mpsc::Receiver<()>,
     /// The output stream's entry in the resource index, for as long as the clock holds it.
-    _lease: goofi_core::registry::Lease,
+    _lease: goofi_supervisor::scope::Lease,
 }
 
 impl DeviceClock {
@@ -121,7 +121,7 @@ impl DeviceClock {
         let (go, on_go) = mpsc::channel::<()>();
         let (done, on_done) = mpsc::channel::<()>();
         let device = name.to_string();
-        goofi_core::worker::thread("goofi-audio-clock")
+        goofi_supervisor::worker::thread("goofi-audio-clock")
             .spawn(move || {
                 let stream = match open_output(&device, runtime, stats.clone(), waker.clone()) {
                     Ok((stream, rate, channels)) => {
@@ -135,7 +135,7 @@ impl DeviceClock {
                 };
                 if on_go.recv().is_ok() {
                     if let Err(e) = stream.play() {
-                        goofi_core::log::record(goofi_core::log::Source::component("audio"), goofi_core::log::Level::Error, None, format!("audio: {e}"));
+                        goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("audio: {e}"));
                         stats.dead.store(true, Ordering::Release);
                         waker.notify();
                     }
@@ -152,7 +152,7 @@ impl DeviceClock {
         let (rate, channels) = on_open
             .recv_timeout(wait)
             .map_err(|_| format!("`{name}` did not open within {} s", wait.as_secs()))??;
-        let lease = goofi_core::registry::lease(goofi_core::registry::Kind::Device, format!("audio out {name}"));
+        let lease = goofi_supervisor::scope::lease(goofi_supervisor::scope::Kind::Device, format!("audio out {name}"));
         Ok((DeviceClock { name: name.to_string(), channels, go: Some(go), done: on_done, _lease: lease }, rate))
     }
 
@@ -228,7 +228,7 @@ where
                     Some(mut rt) => {
                         if let Err(p) = catch_unwind(AssertUnwindSafe(|| rt.render_into(&mut scratch))) {
                             scratch.fill(0.0);
-                            goofi_core::log::record(goofi_core::log::Source::component("audio"), goofi_core::log::Level::Error, None, format!("the render panicked: {}", goofi_node::panic_message(p)));
+                            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("the render panicked: {}", goofi_node::panic_message(p)));
                         }
                     }
                     None => {
@@ -250,7 +250,7 @@ where
                 }
                 // The stream plays on at ordinary priority, so this is the deadline lost rather
                 // than a period missed: counting it as an xrun would hide the very thing to read.
-                cpal::ErrorKind::RealtimeDenied => goofi_core::log::record(goofi_core::log::Source::component("audio"), goofi_core::log::Level::Error, None, format!("audio: {e}")),
+                cpal::ErrorKind::RealtimeDenied => goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("audio: {e}")),
                 _ => {
                     died.xruns.fetch_add(1, Ordering::Relaxed);
                 }
@@ -526,7 +526,7 @@ impl AudioEngine {
             std::fs::create_dir_all(path.parent().expect("a state file has a directory")).and_then(|()| std::fs::write(&path, bytes))
         };
         if let Err(e) = written {
-            goofi_core::log::record(goofi_core::log::Source::component("audio"), goofi_core::log::Level::Error, None, format!("audio: could not keep {}: {e}", path.display()));
+            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("audio: could not keep {}: {e}", path.display()));
         }
     }
 

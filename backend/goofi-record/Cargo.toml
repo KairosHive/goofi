@@ -6,6 +6,7 @@ license.workspace = true
 
 # The recorder owns no engine and no engine owns it: the model types and the wire codec only.
 [dependencies]
+goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-core = { path = "../goofi-core" }
 goofi-codec = { path = "../goofi-codec" }
 goofi-node = { path = "../goofi-node" }

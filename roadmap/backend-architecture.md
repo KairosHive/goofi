@@ -6,8 +6,6 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-**Phase 0**: §5.5.
-
 **Phase 1**: §5.11 and §5.7; then §3.4 and §3.5; then §4.F and §4.G1-G4; then §1.A2 and §1.A3.
 
 **Phase 2**: §2.B2-B5, §3.7-11, §4.H-I, §5.8-10 and 12-13.
@@ -145,15 +143,13 @@ Fold graphics recording (`set_recorder` from the render thread) into the executo
 
 ## 5. An ownership tree, one session type, one boot path
 
-`goofi-supervisor` holds `child`, `worker`, `scope` (absorbing `registry`), `session` and `log`
-with a progress sink; `goofi-core` keeps the vocabulary and its name; `startup` and indicatif
-move to the CLI. `Scope` owns `Child`, `Worker`, `Port`, `Path` and `Device` handles plus
+`goofi-supervisor` holds `child`, `worker`, `scope`, `session`, `log` and the progress sink;
+`goofi-core` keeps the vocabulary. `Scope` owns `Child`, `Worker`, `Port`, `Path` and `Device` handles plus
 `Finish` steps (plugin `on_stop`, recorder finalize); `close()` stops the subtree, then makes
 one pass per `Kind` over the whole tree: finish, children on one shared deadline, workers
 joined, ports, paths, devices. `boot` returns a `Manager { state, scope }` that is not `Clone`;
 dropping it is the shutdown.
 
-5. The supervisor split.
 7. `Scope` and `Manager`; every detached thread gets an owner (`term.rs`, `plugins.rs`,
     `arms.rs`, `reducer.rs`, `record.rs`); the record beat goes; `scratch()` and the mount are
     leased as `Kind::Path`. The rest of the transport file splits into names, services and

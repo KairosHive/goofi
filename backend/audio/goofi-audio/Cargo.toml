@@ -15,6 +15,7 @@ license.workspace = true
 asio = ["cpal/asio"]
 
 [dependencies]
+goofi-supervisor = { path = "../../goofi-supervisor" }
 goofi-core = { path = "../../goofi-core" }
 goofi-node = { path = "../../goofi-node" }
 goofi-codec = { path = "../../goofi-codec" }

@@ -8,13 +8,13 @@
 use std::io::{Read, Write};
 use goofi_core::record::VideoQuality;
 use std::path::{Path, PathBuf};
-use goofi_core::child::{Child, Out};
+use goofi_supervisor::child::{Child, Out};
 use std::process::{ChildStdin, Command};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// One video file being written. A frame is `width * height` tight-packed texels of four 8-bit
@@ -42,7 +42,7 @@ pub struct FfmpegEncoders;
 
 impl Encoders for FfmpegEncoders {
     fn probe(&self) -> Result<(), String> {
-        goofi_core::child::output("ffmpeg probe", Command::new("ffmpeg").arg("-version"), Duration::from_secs(10))
+        goofi_supervisor::child::output("ffmpeg probe", Command::new("ffmpeg").arg("-version"), Duration::from_secs(10))
             .map_err(|_| MISSING.to_string())
             .and_then(|out| if out.status.success() { Ok(()) } else { Err(MISSING.to_string()) })
     }
@@ -78,7 +78,7 @@ struct Ffmpeg {
     fps: f64,
     quality: VideoQuality,
     closed: bool,
-    stderr: Option<goofi_core::worker::Worker<String>>,
+    stderr: Option<goofi_supervisor::worker::Worker<String>>,
 }
 
 /// Settings shared by the trial encode and the recording.
@@ -165,7 +165,7 @@ impl Preset {
         )]);
         self.output(&mut command, fps, quality);
         // A trial that fails is the expected answer for most candidates, not something to log.
-        let mut child = goofi_core::child::run(format!("ffmpeg trial {}", self.codec), command.args(["-frames:v", "1", "-f", "null", "-"]))
+        let mut child = goofi_supervisor::child::run(format!("ffmpeg trial {}", self.codec), command.args(["-frames:v", "1", "-f", "null", "-"]))
             .stdout(Out::Null)
             .stderr(Out::Null)
             .spawn()
@@ -219,14 +219,14 @@ impl Ffmpeg {
             .args(["-i", "-"]);
         preset.output(&mut command, self.fps, self.quality);
         // stderr is read by the owner: an encoder's last words are the error the recording reports.
-        let mut child = goofi_core::child::run(format!("ffmpeg {}", self.file.display()), command.arg(&self.file))
+        let mut child = goofi_supervisor::child::run(format!("ffmpeg {}", self.file.display()), command.arg(&self.file))
             .stdin_piped()
             .stdout(Out::Null)
             .stderr(Out::Pipe)
             .spawn()
             .map_err(|e| format!("could not start FFmpeg: {e}"))?;
         let mut stderr = child.stderr.take().ok_or("FFmpeg has no error pipe")?;
-        let errors = goofi_core::worker::thread("goofi-record-errors").spawn(move || {
+        let errors = goofi_supervisor::worker::thread("goofi-record-errors").spawn(move || {
             let mut message = Vec::new();
             let mut buffer = [0u8; 1024];
             while let Ok(n) = stderr.read(&mut buffer) {
@@ -302,7 +302,7 @@ type Free = Arc<Mutex<Vec<Vec<u8>>>>;
 
 pub struct Video {
     frames: Option<SyncSender<Job>>,
-    writer: Option<goofi_core::worker::Worker>,
+    writer: Option<goofi_supervisor::worker::Worker>,
     counts: Counts,
     free: Free,
 }
@@ -325,7 +325,7 @@ impl Video {
         let free = Free::default();
         let writer = {
             let (counts, free) = (counts.clone(), free.clone());
-            goofi_core::worker::thread("goofi-record-video")
+            goofi_supervisor::worker::thread("goofi-record-video")
                 .spawn(move || encode(rx, encoder, beside, &counts, &free))
                 .map_err(|e| e.to_string())?
         };

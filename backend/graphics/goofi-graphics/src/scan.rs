@@ -54,7 +54,7 @@ pub(crate) fn scan(engine: &mut GraphicsEngine, dir: &Path) -> Vec<ScannedType> 
                 Scanned::Unavailable(reason)
             }
         };
-        goofi_core::startup::scanned(dir, &path);
+        goofi_supervisor::progress::scanned(dir, &path);
         out.push(ScannedType { type_name, stamp, outcome });
     }
     out
@@ -118,7 +118,7 @@ struct Order {
 pub struct Compiler {
     jobs: Option<mpsc::Sender<Order>>,
     halt: Arc<AtomicBool>,
-    thread: Option<goofi_core::worker::Worker>,
+    thread: Option<goofi_supervisor::worker::Worker>,
 }
 
 impl Compiler {
@@ -126,7 +126,7 @@ impl Compiler {
         let (jobs, take) = mpsc::channel::<Order>();
         let halt = Arc::new(AtomicBool::new(false));
         let stopped = halt.clone();
-        let thread = goofi_core::worker::thread("goofi-graphics-compile")
+        let thread = goofi_supervisor::worker::thread("goofi-graphics-compile")
             .spawn(move || {
                 while let Ok(order) = take.recv() {
                     if stopped.load(Ordering::Acquire) {

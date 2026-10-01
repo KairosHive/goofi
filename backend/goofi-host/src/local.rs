@@ -4,7 +4,7 @@ use goofi_core::Data;
 use goofi_node::{ParamGroups, ParamKey};
 use std::collections::HashMap;
 use std::sync::Arc;
-use goofi_core::sync::{Condvar, Mutex};
+use goofi_supervisor::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 #[derive(Default)]

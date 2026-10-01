@@ -13,6 +13,7 @@ default = []
 embed = ["dep:pyo3", "dep:goofi_pymod"]
 
 [dependencies]
+goofi-supervisor = { path = "../../goofi-supervisor" }
 goofi-build = { path = "../../goofi-build" }
 goofi-core = { path = "../../goofi-core" }
 goofi-transport = { path = "../../goofi-transport" }

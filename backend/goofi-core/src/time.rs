@@ -35,7 +35,7 @@ fn since_base() -> u64 {
 #[derive(Debug)]
 pub struct Time {
     origin: AtomicU64,
-    wall: crate::sync::Mutex<SystemTime>,
+    wall: goofi_supervisor::sync::Mutex<SystemTime>,
 }
 
 impl Default for Time {
@@ -46,7 +46,7 @@ impl Default for Time {
 
 impl Time {
     pub fn new() -> Time {
-        Time { origin: AtomicU64::new(since_base()), wall: crate::sync::Mutex::new(SystemTime::now()) }
+        Time { origin: AtomicU64::new(since_base()), wall: goofi_supervisor::sync::Mutex::new(SystemTime::now()) }
     }
 
     /// Seconds since the patch began.

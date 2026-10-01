@@ -12,6 +12,9 @@ name = "goofi"
 path = "src/main.rs"
 
 [dependencies]
+# The startup screen: one progress bar per folder the node library scan is in.
+indicatif = "0.18"
+goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-graphics = { path = "../graphics/goofi-graphics" }
 goofi-bridge = { path = "../goofi-bridge" }
 goofi-client = { path = "../goofi-client" }

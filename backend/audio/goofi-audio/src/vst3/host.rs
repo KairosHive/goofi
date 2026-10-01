@@ -2,7 +2,7 @@
 //! built, so a block on the audio thread touches them freely.
 
 use std::cell::{Cell, RefCell};
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 use std::ffi::{c_char, c_void};
 
 use vst3::Steinberg::Vst::*;

@@ -874,13 +874,13 @@ pub fn spawn(
     transport: Arc<dyn Transport>,
     env: NodeEnv,
     halt: Arc<Halt>,
-) -> std::io::Result<goofi_core::worker::Worker> {
+) -> std::io::Result<goofi_supervisor::worker::Worker> {
     goofi_transport::thread(format!("goofi-{}", manifest.type_name))
         .spawn(move || {
             struct Release(Arc<Halt>);
             impl Drop for Release { fn drop(&mut self) { self.0.release(); } }
             let _release = Release(halt.clone());
-            goofi_core::log::set_source(goofi_core::log::Source { component: env.engine.into(), node: env.node.clone() });
+            goofi_supervisor::log::set_source(goofi_supervisor::log::Source { component: env.engine.into(), node: env.node.clone() });
             // A node removed inside its own build window never runs `setup()` — which may open a
             // device — and releases at once rather than after the import it no longer needs.
             if !halt.stopped() {

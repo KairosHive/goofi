@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use goofi_tests::WAIT;
 
-use goofi_core::child;
-use goofi_core::registry::{self, Kind};
+use goofi_supervisor::child;
+use goofi_supervisor::scope::{self, Kind};
 
 /// Turns this binary into the sleeping child. Set, the test below runs and sleeps; unset — every
 /// ordinary suite run — it does nothing.
@@ -26,7 +26,7 @@ fn sleeper() {
     unsafe {
         libc::signal(libc::SIGTERM, libc::SIG_IGN);
     }
-    println!("SLEEPING {}", std::env::var(goofi_core::session::ENV).unwrap_or_default());
+    println!("SLEEPING {}", std::env::var(goofi_supervisor::session::ENV).unwrap_or_default());
     loop {
         std::thread::park();
     }
@@ -106,7 +106,7 @@ fn a_hard_killed_parent_still_stops_its_child() {
 fn a_child_is_listed_while_it_lives_and_leaves_when_stopped() {
     goofi_tests::walled_home();
     goofi_tests::session_id();
-    let listed = || registry::inventory().into_iter().filter(|e| e.kind == Kind::Child).map(|e| e.name).collect::<Vec<_>>();
+    let listed = || scope::inventory().into_iter().filter(|e| e.kind == Kind::Child).map(|e| e.name).collect::<Vec<_>>();
 
     let mut child = child::spawn("sleeper", &mut sleeper_command()).expect("spawn");
     let pid = child.id();
@@ -117,7 +117,7 @@ fn a_child_is_listed_while_it_lives_and_leaves_when_stopped() {
     // It was told the session — the same one this process runs under — and what it printed is
     // in the process log under its name, on the stream it used, without a pipe of the owner's.
     let said = || {
-        goofi_core::log::since(None).groups.into_iter()
+        goofi_supervisor::log::since(None).groups.into_iter()
             .filter_map(|g| g.message)
             .find(|m| m.source.component == "sleeper" && m.text.starts_with("SLEEPING"))
     };

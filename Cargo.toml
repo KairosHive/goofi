@@ -4,6 +4,7 @@ members = [
     # First, because it is what makes the rest buildable: `cargo run -p goofi-init` provisions the
     # interpreters pyo3 links against. It depends on nothing, so it can never trigger that build.
     "backend/goofi-init",
+    "backend/goofi-supervisor",
     "backend/goofi-core",
     "backend/goofi-host-sdk",
     "backend/goofi-host",

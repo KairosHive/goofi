@@ -19,7 +19,7 @@ use crate::loader::{find_node_class, module_from_source};
 pub fn serve(py: Python<'_>) -> PyResult<()> {
     // FIRST, before the user module is even compiled, so a child orphaned during a slow import
     // still stops instead of reaching the poll loop.
-    goofi_core::child::watch_parent()
+    goofi_supervisor::child::watch_parent()
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("parent-liveness watcher: {e}")))?;
 
     // The source comes on stdin rather than in the environment, which Windows caps as a block.

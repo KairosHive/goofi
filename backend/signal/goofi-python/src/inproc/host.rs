@@ -69,7 +69,7 @@ impl PyNode {
         }
         self.serialized = true;
         if self.tier.is_some_and(|t| t.set(Isolation::Subprocess)) {
-            goofi_core::log::record(goofi_core::log::source(), goofi_core::log::Level::Warning, None,
+            goofi_supervisor::log::record(goofi_supervisor::log::source(), goofi_supervisor::log::Level::Warning, None,
                 "This node re-enabled the GIL. Restart it to move it to a subprocess.");
         }
     }

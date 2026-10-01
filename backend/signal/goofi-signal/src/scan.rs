@@ -48,7 +48,7 @@ pub(crate) fn scan(engine: &mut SignalEngine, dir: &Path) -> Vec<ScannedType> {
                 .collect();
             handles.into_iter().zip(chunk).map(|(h, (p, _, _))| {
                 let decided = h.join().ok();
-                goofi_core::startup::scanned(dir, p);
+                goofi_supervisor::progress::scanned(dir, p);
                 decided
             }).collect()
         });
@@ -67,7 +67,7 @@ pub(crate) fn scan(engine: &mut SignalEngine, dir: &Path) -> Vec<ScannedType> {
     }
     for (path, type_name, stamp) in rust {
         let outcome = engine.register_rust(&path, &type_name);
-        goofi_core::startup::scanned(dir, &path);
+        goofi_supervisor::progress::scanned(dir, &path);
         out.push(ScannedType { type_name, stamp, outcome });
     }
     out
@@ -77,7 +77,7 @@ impl SignalEngine {
     /// An `.rs` file: the artifact the prebuild left for these bytes, loaded — a library that will
     /// not load displaces a stale registration and greys the type out with the reason.
     fn register_rust(&mut self, path: &Path, type_name: &str) -> Scanned {
-        let base = goofi_build::base_dir(&goofi_core::home::dir());
+        let base = goofi_build::base_dir(&goofi_supervisor::home::dir());
         let hosted = self.booted;
         let loaded = goofi_build::built(&goofi_build::SIGNAL, path, &base).and_then(|artifact| {
             if hosted { self.host_rust(&artifact, type_name) } else { self.load_rust(&artifact, type_name) }

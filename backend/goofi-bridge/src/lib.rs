@@ -27,7 +27,7 @@ pub mod vocab;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, MutexGuard};
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use goofi_node::{ScannedType, Stamp};
@@ -144,11 +144,11 @@ pub struct AppState {
     pub recorder: Arc<goofi_record::Recorder>,
     /// The drain thread's stop flag, and the thread [`AppState::stop_recording`] joins.
     record_drain: Arc<goofi_transport::Halt>,
-    record_worker: Arc<Mutex<Option<goofi_core::worker::Worker>>>,
+    record_worker: Arc<Mutex<Option<goofi_supervisor::worker::Worker>>>,
     /// Raised once, at shutdown: every worker of the manager's own reads it and leaves.
     stopping: Arc<goofi_transport::Halt>,
     /// The manager's own threads — the status drain, the tap follower — joined at shutdown.
-    workers: Arc<Mutex<Vec<goofi_core::worker::Worker>>>,
+    workers: Arc<Mutex<Vec<goofi_supervisor::worker::Worker>>>,
 }
 
 /// How a `/data` socket detects a dead-but-not-closed peer, which a socket with no traffic cannot
@@ -181,7 +181,7 @@ impl Default for DataLiveness {
 impl AppState {
     /// An instance named by a fresh id — a test's, several to a process.
     pub fn new(iox: Arc<goofi_transport::Iox>, mode: Mode, clock: Clock, render: Clock) -> Result<AppState, String> {
-        Self::with_instance(iox, goofi_core::session::fresh_id()?, mode, clock, render)
+        Self::with_instance(iox, goofi_supervisor::session::fresh_id()?, mode, clock, render)
     }
 
     /// An instance named by `instance` — the binary's, which names it after the session it holds,
@@ -189,7 +189,7 @@ impl AppState {
     pub fn with_instance(iox: Arc<goofi_transport::Iox>, instance: String, mode: Mode, clock: Clock, render: Clock) -> Result<AppState, String> {
         // The caches under `.goofi/system` are swept HERE, by the manager, before any engine
         // exists: a crash's part files, old versions.
-        goofi_core::session::sweep_system(goofi_build::VERSION);
+        goofi_supervisor::session::sweep_system(goofi_build::VERSION);
         autosave::sweep_dead();
         let (events, _) = broadcast::channel(256);
         // Seeded BEFORE the baseline is taken, or the patch is dirty from boot, having written
@@ -229,7 +229,7 @@ impl AppState {
             history: Arc::new(Mutex::new(goofi_graph::CommandHistory::new())),
             data_liveness: DataLiveness::DEFAULT,
             roots: materialise_shipped(),
-            custom: goofi_core::home::custom_nodes(),
+            custom: goofi_supervisor::home::custom_nodes(),
             node_index: Arc::new(Mutex::new(Default::default())),
             mount: Arc::new(Mutex::new(mount)),
             workspace_baseline: Arc::new(Mutex::new(workspace_baseline)),
@@ -271,7 +271,7 @@ impl AppState {
     /// Close the capture interval and drain its queues before the engines stop.
     pub fn stop_recording(&self) {
         if let Err(error) = self.recorder.stop() {
-            goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("Recording could not be finalized: {error}"));
+            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("Recording could not be finalized: {error}"));
         }
         self.plugins.stop(self);
         self.record_drain.stop();
@@ -368,7 +368,7 @@ impl AppState {
 /// wraps it so a load can rename an extracted tree onto `workspace` wholesale, and the autosave
 /// sits beside it; the session directory is what a clean shutdown removes and a crash leaves.
 fn new_mount(session: &str) -> Result<PathBuf, String> {
-    let dir = goofi_core::session::workspace_dir(session).join(nonce_hex()?).join("workspace");
+    let dir = goofi_supervisor::session::workspace_dir(session).join(nonce_hex()?).join("workspace");
     let _ = std::fs::create_dir_all(&dir);
     Ok(dir)
 }
@@ -380,7 +380,7 @@ fn remove_mount(mount: &std::path::Path) {
 
 /// A 128-bit random name, hex — enough to keep two concurrent goofis from colliding.
 pub(crate) fn nonce_hex() -> Result<String, String> {
-    goofi_core::session::nonce_hex(16)
+    goofi_supervisor::session::nonce_hex(16)
 }
 
 /// Open the patch `--load` named, before the first client can connect. Nothing to do where none
@@ -456,7 +456,7 @@ fn stage_load(
         (content.to_string(), None, false)
     } else {
         // Naming no source IS the source: an empty patch, so New cannot drift from Load.
-        (Graph::new(goofi_core::session::fresh_id()?).serialize(), None, false)
+        (Graph::new(goofi_supervisor::session::fresh_id()?).serialize(), None, false)
     };
     // Only a workspace goofi minted empty is seeded: an archive has just unpacked the patch's OWN
     // workspace into `mount`, and goofi does not write into someone's patch.
@@ -604,7 +604,7 @@ fn logged() -> &'static tokio::sync::watch::Sender<u64> {
     LOGGED.get_or_init(|| {
         let tx = tokio::sync::watch::channel(0).0;
         let pusher = tx.clone();
-        let _ = goofi_core::log::set_listener(move |seq| { pusher.send_replace(seq); });
+        let _ = goofi_supervisor::log::set_listener(move |seq| { pusher.send_replace(seq); });
         tx
     })
 }
@@ -618,7 +618,7 @@ pub fn spawn_workers(state: &AppState) {
     let owner = state.clone();
     let state = state.clone();
     let (graph, events) = (state.graph.clone(), state.events.clone());
-    let worker = goofi_core::worker::spawn("goofi-status-drain", move || {
+    let worker = goofi_supervisor::worker::spawn("goofi-status-drain", move || {
         let waker = graph.lock().drain_waker();
         let period = BROADCAST_PERIOD;
         let mut last_errors: HashMap<String, (u64, Option<String>)> = HashMap::new();
@@ -710,7 +710,7 @@ pub fn spawn_workers(state: &AppState) {
             for hex in changed {
                 let err = errs.iter().find(|(h, ..)| *h == hex).and_then(|(.., e)| e.clone());
                 if let Some(text) = &err {
-                    goofi_core::log::record(goofi_core::log::Source { component: "node".into(), node: Some(hex.clone()) }, goofi_core::log::Level::Error, None, text.clone());
+                    goofi_supervisor::log::record(goofi_supervisor::log::Source { component: "node".into(), node: Some(hex.clone()) }, goofi_supervisor::log::Level::Error, None, text.clone());
                 }
                 let _ = events.send(event("error", json!({ "node": hex, "error": err })));
             }
@@ -871,8 +871,8 @@ pub fn seed_skills(mount: &std::path::Path) {
 /// other; these come pre-warmed. The tree is keyed by the embed's own content, so it is written
 /// once and never edited: a file a later build moves cannot stay behind as a second claimant.
 fn materialise_shipped() -> Vec<PathBuf> {
-    let home = goofi_core::home::dir();
-    let tree = goofi_core::home::system().join("shipped").join(goofi_build::VERSION).join(SHIPPED_KEY);
+    let home = goofi_supervisor::home::dir();
+    let tree = goofi_supervisor::home::system().join("shipped").join(goofi_build::VERSION).join(SHIPPED_KEY);
     let mut roots = Vec::new();
     for (rel, bytes) in SHIPPED_SOURCES {
         goofi_build::write_if_changed(&tree.join(rel), bytes);
@@ -949,7 +949,7 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
         .into_iter()
         .filter_map(|(id, sdk)| goofi_build::sdk(sdk).map(|s| (id, s)))
         .collect();
-    let base = goofi_build::base_dir(&goofi_core::home::dir());
+    let base = goofi_build::base_dir(&goofi_supervisor::home::dir());
     let dirs = (state.node_roots().into_iter().map(|(d, _)| d))
         .chain(sdks.iter().map(|(id, _)| patch.join(goofi_node::folder_of(id))));
     for dir in dirs {
@@ -970,7 +970,7 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
 /// audio clock asks for no audio engine at all, which takes every audio node out of the catalog.
 /// The graphics engine is always ASKED for, and a machine with no adapter simply has none.
 pub fn fresh_graph(iox: Arc<goofi_transport::Iox>, clock: Option<Clock>, render: Clock) -> Result<Graph, String> {
-    let mut g = Graph::new(goofi_core::session::fresh_id()?);
+    let mut g = Graph::new(goofi_supervisor::session::fresh_id()?);
     let signal = goofi_signal::SignalEngine::new(
         iox.clone(),
         g.instance().to_string(),
@@ -983,7 +983,7 @@ pub fn fresh_graph(iox: Arc<goofi_transport::Iox>, clock: Option<Clock>, render:
     }
     match goofi_graphics::GraphicsEngine::open(iox, g.instance().to_string(), g.time(), g.drain_waker(), render) {
         Ok(engine) => g.register_engine(Box::new(engine)),
-        Err(why) => goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("graphics: {why}; this machine renders no shaders")),
+        Err(why) => goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("graphics: {why}; this machine renders no shaders")),
     }
     Ok(g)
 }
@@ -1087,7 +1087,7 @@ pub fn rescan(
             outcomes.push(t);
         }
     }
-    goofi_core::startup::report("Scanning installed plugins (cached results are reused)");
+    goofi_supervisor::progress::report("Scanning installed plugins (cached results are reused)");
     for t in g.scan_own() {
         origins.insert(t.type_name.clone(), goofi_graph::Origin::Plugin);
         found.insert(t.type_name.clone(), (None, t.stamp));
@@ -1162,7 +1162,7 @@ async fn exec_endpoint(State(state): State<AppState>, body: String) -> Response 
 fn control_seeds(state: &AppState) -> (String, String) {
     let unsaved = state.is_dirty();
     let saved_at = state.save_path();
-    let roster = state.harnesses.roster(&goofi_core::home::agents());
+    let roster = state.harnesses.roster(&goofi_supervisor::home::agents());
     let hello = {
         let g = state.graph.lock();
         event(
@@ -1192,7 +1192,7 @@ async fn handle_control(socket: WebSocket, state: AppState) {
     let mut logged = logged().subscribe();
     let mut log_cursor = None;
     let send_logs = |cursor: &mut Option<u64>| -> Option<String> {
-        let batch = goofi_core::log::since(*cursor);
+        let batch = goofi_supervisor::log::since(*cursor);
         if *cursor == Some(batch.cursor) {
             return None;
         }
@@ -1200,7 +1200,7 @@ async fn handle_control(socket: WebSocket, state: AppState) {
         match serde_json::to_value(batch) {
             Ok(payload) => Some(event("logs", payload)),
             Err(e) => {
-                goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("the log batch does not serialize: {e}"));
+                goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("the log batch does not serialize: {e}"));
                 None
             }
         }
@@ -1593,7 +1593,7 @@ fn doc_state(state: &AppState) -> String {
 /// caller, so it is no command and leaves no undo entry.
 fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Followed>) {
     let owner = state.clone();
-    let worker = goofi_core::worker::spawn("goofi-follower", move || {
+    let worker = goofi_supervisor::worker::spawn("goofi-follower", move || {
         let mut pace = reducer::Pace::new();
         loop {
             // A bounded wait, so the stop is read between batches.

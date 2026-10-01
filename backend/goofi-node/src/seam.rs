@@ -7,7 +7,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use goofi_core::sync::{Condvar, Mutex};
+use goofi_supervisor::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 use goofi_core::Param;

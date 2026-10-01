@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 
 use cpal::traits::{DeviceTrait, HostTrait};
 

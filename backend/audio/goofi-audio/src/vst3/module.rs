@@ -7,7 +7,7 @@ use std::ffi::c_void;
 use std::ffi::CStr;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 
 use vst3::Steinberg::*;
 use vst3::{ComPtr, Interface};

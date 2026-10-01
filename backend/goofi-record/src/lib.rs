@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, MutexGuard};
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
 pub use manifest::Manifest;
@@ -502,7 +502,7 @@ impl Recorder {
         }
         let (rec, mine, said) = (self.clone(), id.clone(), why.to_string());
         let (owner, closing) = (take.clone(), stream.clone());
-        let spawned = goofi_core::worker::thread("goofi-record-close").spawn(move || {
+        let spawned = goofi_supervisor::worker::thread("goofi-record-close").spawn(move || {
             rec.finish_close(&owner, &mine, &closing, &said);
         });
         if spawned.is_err() {

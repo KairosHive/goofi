@@ -324,7 +324,7 @@ fn scan_bundle(engine: &mut AudioEngine, bundle: &Path) -> Vec<ScannedType> {
 /// scanner's, since what a host reads out of a plugin is the host's answer as much as the plugin's.
 /// A bundle carried inside a patch lands on a fresh path every load, so it is scanned once again.
 fn described(scanner: &Path, bundle: &Path, binary: &Path, stamp: Stamp) -> Result<Bundle, String> {
-    let dir = goofi_build::base_dir(&goofi_core::home::dir()).join("vst3");
+    let dir = goofi_build::base_dir(&goofi_supervisor::home::dir()).join("vst3");
     let key = key_of(binary, stamp);
     let file = dir.join(format!("{key}.json"));
     let read = std::fs::read(&file).ok();
@@ -332,9 +332,9 @@ fn described(scanner: &Path, bundle: &Path, binary: &Path, stamp: Stamp) -> Resu
         return verdict;
     }
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let part = dir.join(format!("{key}.{}.part", goofi_core::session::tag()));
+    let part = dir.join(format!("{key}.{}.part", goofi_supervisor::session::tag()));
     let errors = part.with_extension("err");
-    goofi_core::startup::report(format!("Indexing VST3 plugin {}", bundle.file_name().unwrap_or_default().to_string_lossy()));
+    goofi_supervisor::progress::report(format!("Indexing VST3 plugin {}", bundle.file_name().unwrap_or_default().to_string_lossy()));
     let mut child = spawn_scanner(scanner, bundle, &part, &errors)?;
     let verdict = answered(&mut child, &errors)
         .and_then(|()| std::fs::read(&part).map_err(|e| format!("the scanner wrote nothing: {e}")))
@@ -357,21 +357,21 @@ fn key_of(binary: &Path, (len, modified): Stamp) -> String {
 /// One child, its output going to a FILE — never a pipe, which a plugin's chatter could fill while
 /// nobody is reading it. A spawn that fails is goofi's own doing rather than the plugin's, which is
 /// why it is the one refusal [`described`] never remembers.
-fn spawn_scanner(scanner: &Path, bundle: &Path, part: &Path, errors: &Path) -> Result<goofi_core::child::Child, String> {
+fn spawn_scanner(scanner: &Path, bundle: &Path, part: &Path, errors: &Path) -> Result<goofi_supervisor::child::Child, String> {
     let sink = std::fs::File::create(errors).map_err(|e| format!("{}: {e}", errors.display()))?;
     let both = sink.try_clone().map_err(|e| e.to_string())?;
-    goofi_core::child::run(
+    goofi_supervisor::child::run(
         format!("vst3 scan {}", bundle.file_name().unwrap_or_default().to_string_lossy()),
         std::process::Command::new(scanner).arg("vst3-scan").arg(bundle).arg(part),
     )
-    .stdout(goofi_core::child::Out::File(both))
-    .stderr(goofi_core::child::Out::File(sink))
+    .stdout(goofi_supervisor::child::Out::File(both))
+    .stderr(goofi_supervisor::child::Out::File(sink))
     .spawn()
     .map_err(|e| format!("could not run the scanner {}: {e}", scanner.display()))
 }
 
 /// The child's verdict, under a ceiling, in its own words where it left any.
-fn answered(child: &mut goofi_core::child::Child, errors: &Path) -> Result<(), String> {
+fn answered(child: &mut goofi_supervisor::child::Child, errors: &Path) -> Result<(), String> {
     let status = match child.wait_within(SCAN_WAIT) {
         Err(e) => Err(format!("the scanner could not be waited for: {e}")),
         Ok(Some(status)) => Ok(status),

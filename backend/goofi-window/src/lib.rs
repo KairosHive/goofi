@@ -109,7 +109,7 @@ pub struct Loop {
     jobs: mpsc::Receiver<Job>,
     host: Host,
     /// The loop's entry in the resource index, for as long as it runs.
-    _lease: goofi_core::registry::Lease,
+    _lease: goofi_supervisor::scope::Lease,
 }
 
 impl Loop {
@@ -139,7 +139,7 @@ impl Loop {
             dead: false,
             stopped: false,
         };
-        let lease = goofi_core::registry::lease(goofi_core::registry::Kind::Device, "window loop");
+        let lease = goofi_supervisor::scope::lease(goofi_supervisor::scope::Kind::Device, "window loop");
         (Loop { jobs: rx, host, _lease: lease }, ui)
     }
 
@@ -318,7 +318,7 @@ impl Host {
         let taken = find(&mut self.runloop.borrow_mut()).and_then(Option::take);
         if let Some(mut handler) = taken {
             if let Err(p) = catch_unwind(AssertUnwindSafe(&mut handler)) {
-                goofi_core::log::record(goofi_core::log::Source::component("window"), goofi_core::log::Level::Error, None, format!("a plugin's run-loop handler panicked and is retired: {}", panic_text(p)));
+                goofi_supervisor::log::record(goofi_supervisor::log::Source::component("window"), goofi_supervisor::log::Level::Error, None, format!("a plugin's run-loop handler panicked and is retired: {}", panic_text(p)));
                 return;
             }
             if let Some(slot) = find(&mut self.runloop.borrow_mut()) {

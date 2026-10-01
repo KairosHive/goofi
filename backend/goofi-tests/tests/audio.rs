@@ -377,7 +377,7 @@ fn a_patch_sounds_under_the_external_clock() {
     // Step: a WAV file plays back at the engine's rate, as wide as it is. The file changes tone
     // halfway, so WHERE playback starts is audible: it plays from the head, skips, runs out,
     // loops, and resets — and a name that is not there says so.
-    let sweep = goofi_core::home::recordings().join("sweep.wav");
+    let sweep = goofi_supervisor::home::recordings().join("sweep.wav");
     write_wav(&sweep, 48_000, &sweep_samples());
     let player = g.add("AudioPlayback");
     g.call("link remove", j!({ "from": ep(hex(gain3), "out"), "to": ep(hex(out), "input") }));

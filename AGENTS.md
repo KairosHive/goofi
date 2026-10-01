@@ -99,11 +99,11 @@ before the first production deployment.
 - `plugins/` holds the plugins goofi ships as source; `sdk/README.md` is the plugin interface.
 - Rebuild both installed Python wheels after changing the Python API. Do not canonicalize venv
   interpreter paths; use the paths provided by setup.
-- A session (`goofi_core::session`) owns every ephemeral resource; its lock is the one aliveness
+- A session (`goofi_supervisor::session`) owns every ephemeral resource; its lock is the one aliveness
   answer. iceoryx2 ports come from `goofi-transport` under the session's root and prefix. Declare
   an iceoryx2 node after its ports so the ports are dropped first.
 - Every child process, long-lived thread, iceoryx2 node, scratch path and device is minted through
-  `goofi_core::{child, worker, registry}` and `goofi_transport`, and listed by `session status`.
+  `goofi_supervisor::{child, worker, scope}` and `goofi_transport`, and listed by `session status`.
   A child's stdout and stderr go to the process log under its source unless its owner wires a
   stream as a pipe (a protocol channel) or a file.
   A part file beside a cache entry carries the session id. `AppState::shutdown` is the one

@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use goofi_core::sync::Mutex;
+use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use goofi_core::time::Time;
@@ -220,7 +220,7 @@ fn drain_epoch(graph: &Arc<Mutex<Graph>>) -> Arc<std::sync::atomic::AtomicU64> {
 }
 
 /// Start the one drain. `halt` is what stops it; the worker handed back is what a stop joins.
-pub fn spawn(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>) -> Option<goofi_core::worker::Worker> {
+pub fn spawn(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>) -> Option<goofi_supervisor::worker::Worker> {
     recorder.set_capture(Arc::new(AudioCapture(Arc::downgrade(&graph))));
     let (instance, time) = {
         let g = graph.lock();

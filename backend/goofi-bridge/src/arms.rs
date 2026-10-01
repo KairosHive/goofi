@@ -70,7 +70,7 @@ pub(crate) fn agent_list(
     _actor: &str,
     _events: &mut Vec<String>,
 ) -> Result<Value, String> {
-    Ok(state.harnesses.roster(&goofi_core::home::agents()))
+    Ok(state.harnesses.roster(&goofi_supervisor::home::agents()))
 }
 
 pub(crate) fn agent_start(
@@ -96,7 +96,7 @@ pub(crate) fn agent_start(
             state.history.clone(),
         )?
     };
-    events.push(event("harness_changed", state.harnesses.roster(&goofi_core::home::agents())));
+    events.push(event("harness_changed", state.harnesses.roster(&goofi_supervisor::home::agents())));
     Ok(json!({ "instance_id": id }))
 }
 
@@ -110,7 +110,7 @@ pub(crate) fn agent_stop(
         payload.get("instance").and_then(|v| v.as_str()).ok_or("agent stop: missing instance")?;
     // The stopped shell's undo stack is dropped by the REAPER, where the actor really dies.
     state.harnesses.stop(id)?;
-    events.push(event("harness_changed", state.harnesses.roster(&goofi_core::home::agents())));
+    events.push(event("harness_changed", state.harnesses.roster(&goofi_supervisor::home::agents())));
     Ok(json!({ "ok": true }))
 }
 
@@ -1627,7 +1627,7 @@ pub(crate) fn session_status(
         })),
         // Every resource this process holds — children, workers, ports, paths, devices — from the
         // one index a lease enters and leaves. What is held at ANY moment, not what was made.
-        "resources": goofi_core::registry::inventory(),
+        "resources": goofi_supervisor::scope::inventory(),
     }))
 }
 
@@ -1688,13 +1688,13 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         let _ = state.events.send(event("record_changed", ended));
     }
     // Read OFF the graph lock, as the hello does: the roster's config half is a disk read.
-    let agents = goofi_core::home::agents();
+    let agents = goofi_supervisor::home::agents();
     // Every source mounts FRESH, and the live mount is swapped only once the manifest has parsed,
     // so a refused load leaves the open patch untouched on both planes. Staged and built off the
     // lock: the archive's own Rust nodes may take seconds to build.
     let fresh = new_mount(state.iox.id())?;
     if let Some(name) = payload.get("path").and_then(Value::as_str).and_then(|p| p.rsplit('/').next()) {
-        goofi_core::startup::report(format!("Opening {name}"));
+        goofi_supervisor::progress::report(format!("Opening {name}"));
     }
     let (content, from_path, recovered) =
         stage_load(&fresh, &state.custom, payload).inspect_err(|_| remove_mount(&fresh))?;
@@ -1706,7 +1706,7 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         // resolves, or the unknown-type gate fires on the nodes the archive brought.
         rescan(state, &mut g, &fresh);
         // Parse BEFORE anything is announced or committed.
-        goofi_core::startup::report("Starting the patch's nodes");
+        goofi_supervisor::progress::report("Starting the patch's nodes");
         if let Err(e) = g.load_doc(&content, &fresh) {
             // Refused, so the registry the scan above swapped is re-derived from the mount that
             // is still live.
@@ -1720,7 +1720,7 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         // Off this thread wherever there IS a wait: this runs under the graph lock, and a harness
         // that will not leave takes the whole grace — five seconds no op may be held for.
         if let Some(finish) = state.reclaim(replaced) {
-            let _ = goofi_core::worker::spawn("goofi-reclaim", finish);
+            let _ = goofi_supervisor::worker::spawn("goofi-reclaim", finish);
         }
         // Projected HERE, so the snapshot names the version the loaded document is at, and a
         // client can hold its fit until its replica reaches it.
@@ -2024,7 +2024,7 @@ pub(crate) fn record_start(
     }
     let root = record_arg(&g, payload, "root")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(goofi_core::home::recordings);
+        .unwrap_or_else(goofi_supervisor::home::recordings);
     let name = record_arg(&g, payload, "name").unwrap_or_default();
     let patch = state.save_path().map(std::path::PathBuf::from);
     // Capture preparation and the stream drain need the graph to make progress.
@@ -2046,7 +2046,7 @@ const RECORD_BEAT: std::time::Duration = std::time::Duration::from_secs(1);
 /// it, so a stop and a fresh start inside one beat cannot leave two threads talking.
 fn spawn_record_beat(state: &AppState, folder: std::path::PathBuf) {
     let state = state.clone();
-    let _ = goofi_core::worker::spawn("goofi-record-beat", move || {
+    let _ = goofi_supervisor::worker::spawn("goofi-record-beat", move || {
         loop {
             std::thread::sleep(RECORD_BEAT);
             let s = state.recorder.status();
@@ -2111,11 +2111,11 @@ pub(crate) fn record_changed(state: &AppState) -> String {
 
 
 pub(crate) fn log_list(_state: &AppState, _payload: &Value, _actor: &str, _events: &mut Vec<String>) -> Result<Value, String> {
-    serde_json::to_value(goofi_core::log::since(None)).map_err(|e| e.to_string())
+    serde_json::to_value(goofi_supervisor::log::since(None)).map_err(|e| e.to_string())
 }
 
 pub(crate) fn log_write(_state: &AppState, payload: &Value, _actor: &str, _events: &mut Vec<String>) -> Result<Value, String> {
-    use goofi_core::log::{record, Level, Source};
+    use goofi_supervisor::log::{record, Level, Source};
     let level = match payload["level"].as_str().unwrap_or("info") {
         "info" => Level::Info,
         "warning" => Level::Warning,

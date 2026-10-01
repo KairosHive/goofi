@@ -6,7 +6,7 @@ use std::process::{Command, ExitStatus, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::log::Source;
-use crate::registry::{self, Kind, Lease};
+use crate::scope::{self, Kind, Lease};
 use crate::worker::Worker;
 
 /// Env var carrying the liveness pipe's read end: a unix fd number, or a Windows HANDLE.
@@ -108,7 +108,7 @@ impl Spawn<'_> {
         cmd.stdout(wire(stdout)).stderr(wire(stderr));
         let armed = arm(cmd)?;
         let mut inner = cmd.spawn()?;
-        let lease = registry::lease(Kind::Child, format!("{name} (pid {})", inner.id()));
+        let lease = scope::lease(Kind::Child, format!("{name} (pid {})", inner.id()));
         let mut drains = Vec::new();
         if log_out {
             drains.extend(inner.stdout.take().and_then(|out| drain(&name, out, source.clone(), "stdout")));

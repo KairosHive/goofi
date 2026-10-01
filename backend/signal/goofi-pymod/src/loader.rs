@@ -18,7 +18,7 @@ use crate::node::Node;
 /// later import is a lookup. A node body is where a node's imports first run, so serializing the
 /// bodies is enough — and it costs nothing after, since nothing here is on the frame path.
 fn one_at_a_time(py: Python<'_>) -> std::sync::MutexGuard<'static, ()> {
-    static BODIES: goofi_core::sync::Mutex<()> = goofi_core::sync::Mutex::new(());
+    static BODIES: goofi_supervisor::sync::Mutex<()> = goofi_supervisor::sync::Mutex::new(());
     loop {
         match BODIES.try_lock() {
             Some(held) => return held,

@@ -948,6 +948,7 @@ dependencies = [
  "goofi-control",
  "goofi-core",
  "goofi-node",
+ "goofi-supervisor",
  "goofi-transport",
  "goofi-window",
  "indexmap",
@@ -987,6 +988,7 @@ dependencies = [
  "goofi-record",
  "goofi-signal",
  "goofi-signal-sdk",
+ "goofi-supervisor",
  "goofi-transport",
  "goofi-view",
  "libc",
@@ -1004,6 +1006,7 @@ name = "goofi-build"
 version = "3.0.0"
 dependencies = [
  "goofi-core",
+ "goofi-supervisor",
  "libloading 0.8.9",
  "sha2",
 ]
@@ -1022,8 +1025,10 @@ dependencies = [
  "goofi-python",
  "goofi-record",
  "goofi-signal",
+ "goofi-supervisor",
  "goofi-transport",
  "goofi-window",
+ "indicatif",
  "serde_json",
  "shell-words",
  "tokio",
@@ -1035,6 +1040,7 @@ version = "3.0.0"
 dependencies = [
  "base64",
  "goofi-core",
+ "goofi-supervisor",
  "serde_json",
 ]
 
@@ -1057,6 +1063,7 @@ dependencies = [
  "goofi-codec",
  "goofi-core",
  "goofi-node",
+ "goofi-supervisor",
  "goofi-transport",
  "indexmap",
 ]
@@ -1067,17 +1074,12 @@ version = "3.0.0"
 dependencies = [
  "base64",
  "dunce",
- "filedescriptor",
  "flate2",
- "getrandom 0.4.3",
+ "goofi-supervisor",
  "goofi-view",
  "indexmap",
- "indicatif",
- "libc",
  "serde",
  "serde_json",
- "toml 0.8.23",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1086,6 +1088,7 @@ version = "3.0.0"
 dependencies = [
  "goofi-core",
  "goofi-node",
+ "goofi-supervisor",
  "goofi-view",
  "indexmap",
  "serde",
@@ -1108,6 +1111,7 @@ dependencies = [
  "goofi-node",
  "goofi-python",
  "goofi-record",
+ "goofi-supervisor",
  "goofi-transport",
  "goofi-view",
  "goofi-window",
@@ -1132,6 +1136,7 @@ dependencies = [
  "goofi-core",
  "goofi-host-sdk",
  "goofi-node",
+ "goofi-supervisor",
  "goofi-transport",
  "iceoryx2",
  "indexmap",
@@ -1161,6 +1166,7 @@ name = "goofi-node"
 version = "3.0.0"
 dependencies = [
  "goofi-core",
+ "goofi-supervisor",
  "goofi-view",
  "indexmap",
  "serde",
@@ -1173,6 +1179,7 @@ version = "3.0.0"
 dependencies = [
  "goofi-codec",
  "goofi-core",
+ "goofi-supervisor",
  "goofi-transport",
  "iceoryx2",
  "indexmap",
@@ -1192,6 +1199,7 @@ dependencies = [
  "goofi-init",
  "goofi-node",
  "goofi-pymod",
+ "goofi-supervisor",
  "goofi-transport",
  "iceoryx2",
  "indexmap",
@@ -1207,6 +1215,7 @@ dependencies = [
  "goofi-codec",
  "goofi-core",
  "goofi-node",
+ "goofi-supervisor",
  "serde",
  "serde_json",
 ]
@@ -1222,6 +1231,7 @@ dependencies = [
  "goofi-node",
  "goofi-python",
  "goofi-signal-sdk",
+ "goofi-supervisor",
  "goofi-transport",
  "rmp-serde",
 ]
@@ -1231,6 +1241,19 @@ name = "goofi-signal-sdk"
 version = "3.0.0"
 dependencies = [
  "goofi-host-sdk",
+]
+
+[[package]]
+name = "goofi-supervisor"
+version = "3.0.0"
+dependencies = [
+ "filedescriptor",
+ "getrandom 0.4.3",
+ "libc",
+ "serde",
+ "serde_json",
+ "toml 0.8.23",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1256,6 +1279,7 @@ dependencies = [
  "goofi-record",
  "goofi-signal",
  "goofi-signal-sdk",
+ "goofi-supervisor",
  "goofi-transport",
  "goofi-view",
  "goofi-window",
@@ -1279,6 +1303,7 @@ version = "3.0.0"
 dependencies = [
  "goofi-core",
  "goofi-node",
+ "goofi-supervisor",
  "iceoryx2",
  "libc",
  "windows-sys 0.61.2",
@@ -1297,6 +1322,7 @@ name = "goofi-window"
 version = "3.0.0"
 dependencies = [
  "goofi-core",
+ "goofi-supervisor",
  "libc",
  "objc2",
  "objc2-foundation",
