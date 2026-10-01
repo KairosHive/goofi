@@ -10,7 +10,6 @@ mod txn;
 pub use event::{Broadcaster, Event};
 pub use txn::Txn;
 pub use boot::{boot, Config, Manager};
-mod arms;
 pub mod autosave;
 pub mod phrase;
 /// The control-plane document and its deltas — shape-agnostic.
@@ -94,7 +93,7 @@ pub struct AppState {
     pub events: Broadcaster,
     pub instance_id: Arc<str>,
     /// The op rows THIS instance serves — headless leaves the layout group out.
-    ops: Arc<Vec<&'static ops::Op<'static>>>,
+    ops: Arc<Vec<ops::Row>>,
     /// The control-plane document every client replicates, re-projected from the graph after each
     /// successful op; its deltas ride the `events` channel.
     pub doc: Arc<Mutex<crate::doc::GraphDoc>>,
@@ -338,7 +337,7 @@ impl AppState {
     /// Forget one workspace file in the unsaved-changes baseline — what a MOVE out of the mount
     /// leaves behind. A `.gfi` still carries the file, from the library, so the patch's saved
     /// content did not change and the unsaved dot must not rise for it.
-    fn forget_baseline(&self, rel: &std::path::Path) {
+    pub(crate) fn forget_baseline(&self, rel: &std::path::Path) {
         self.workspace_baseline.lock().remove(rel);
     }
 
@@ -392,7 +391,7 @@ pub(crate) fn nonce_hex() -> Result<String, String> {
 /// was named.
 pub fn open_load(state: &AppState) -> Result<(), String> {
     let Some(path) = state.load.as_deref() else { return Ok(()) };
-    arms::load_file(state, path).map(|_| ())
+    ops::session::load_file(state, path).map(|_| ())
 }
 
 /// Pack the patch to `target`: `manifest` beside the live workspace `mount`. Written to a temp
@@ -428,7 +427,7 @@ pub fn save_archive(
 /// The front half of a load, against a mount that is not yet live. It stops AT the manifest,
 /// because the patch's own node types must be registered before `load_doc` resolves the graph.
 /// Answers the manifest, the home the patch takes, and the recovery it came from, if one.
-fn stage_load(
+pub(crate) fn stage_load(
     mount: &std::path::Path,
     custom: &std::path::Path,
     payload: &Value,
@@ -703,7 +702,7 @@ pub fn spawn_workers(state: &AppState) {
             // A running recording re-announces itself on this beat: its elapsed time and buffer
             // health advance with no op to ride on.
             if state.recorder.running() {
-                events.send(arms::record_changed(&state));
+                events.send(ops::record::record_changed(&state));
             }
             // Every source's values and errors, whole, in ONE message: a client that just connected
             // is current within one period, and none of this is a delta it had to have heard.
@@ -1124,7 +1123,7 @@ pub fn rescan(
 
 /// Restart every live instance of a type whose file changed, so an edit reaches the nodes already
 /// on the canvas. NOT part of [`rescan`], whose graph may be about to be replaced by a load.
-fn restart_changed(g: &mut Graph, diff: &ScanDiff) {
+pub(crate) fn restart_changed(g: &mut Graph, diff: &ScanDiff) {
     for uid in g.node_uids() {
         if g.node_type(uid).is_some_and(|t| diff.changed.contains(&t)) {
             let _ = g.restart_node(uid);
@@ -1326,7 +1325,7 @@ impl AppState {
     }
 
     /// Set the dirty flag, returning an `unsaved_changes` event only when it actually changed.
-    fn set_dirty(&self, dirty: bool) -> Option<Event> {
+    pub(crate) fn set_dirty(&self, dirty: bool) -> Option<Event> {
         let was = self.dirty.swap(dirty, std::sync::atomic::Ordering::Relaxed);
         if was == dirty {
             return None;
@@ -1339,7 +1338,7 @@ impl AppState {
 /// A per-node `state_update` event carrying a node's current params and error. `refreshed` names
 /// the params whose ⟳ refresh just completed — it must be sent on EVERY outcome, a refresh that
 /// found nothing included, or the button spins on.
-fn param_state_update(g: &Graph, peer: Uid, refreshed: &[(&str, &str)]) -> Event {
+pub(crate) fn param_state_update(g: &Graph, peer: Uid, refreshed: &[(&str, &str)]) -> Event {
     let Value::Object(mut body) = schemas::runtime_json(g, peer) else {
         unreachable!("runtime_json builds an object")
     };
@@ -1358,135 +1357,15 @@ pub(crate) fn named(g: &goofi_graph::Graph, uid: Uid) -> String {
     g.name(uid).map(str::to_string).unwrap_or_else(|| uid.to_hex())
 }
 
-fn parse_uid(g: &goofi_graph::Graph, payload: &Value, key: &str) -> Result<Uid, String> {
-    let raw = payload
-        .get(key)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| format!("missing/invalid uid `{key}`"))?;
-    g.resolve_ref(raw)
-        .ok_or_else(|| format!("`{raw}` names no node — `{key}` takes a uid or a node's name"))
-}
-
-/// An OPTIONAL node reference: absent is `None`, present must resolve.
-fn parse_uid_opt(
-    g: &goofi_graph::Graph,
-    payload: &Value,
-    key: &str,
-    op: &str,
-) -> Result<Option<Uid>, String> {
-    match payload.get(key).filter(|v| !v.is_null()) {
-        None => Ok(None),
-        Some(v) => v
-            .as_str()
-            .and_then(|s| g.resolve_ref(s))
-            .map(Some)
-            .ok_or_else(|| format!("{op}: `{key}` names no node")),
-    }
-}
-
-/// A required uid ARRAY, refused whole rather than silently short: a caller that named one bad
-/// uid asked for a batch that is not the one it would get.
-fn parse_uid_list(g: &goofi_graph::Graph, payload: &Value, key: &str) -> Result<Vec<Uid>, String> {
-    let arr = payload.get(key).and_then(|v| v.as_array()).ok_or_else(|| format!("missing {key}"))?;
-    let uids: Vec<Uid> =
-        arr.iter().filter_map(|m| m.as_str().and_then(|s| g.resolve_ref(s))).collect();
-    match uids.len() == arr.len() {
-        true => Ok(uids),
-        false => Err(format!("an entry in `{key}` names no node")),
-    }
-}
-
-/// A required string field from an RPC payload.
-fn parse_str<'a>(payload: &'a Value, key: &str) -> Result<&'a str, String> {
-    payload.get(key).and_then(|v| v.as_str()).ok_or_else(|| format!("missing {key}"))
-}
-
-fn parse_pos(v: &Value) -> Option<[f64; 2]> {
-    let a = v.as_array()?;
-    if a.len() != 2 {
-        return None;
-    }
-    Some([a[0].as_f64()?, a[1].as_f64()?])
-}
-
-/// Which side of a target a newcomer lands on. ONE argument, because an axis and a half are two
-/// halves of one answer and two arguments can disagree; absent defaults right, and a present
-/// value that is not a side word is refused rather than defaulted.
-fn parse_side(p: &Value, op: &str) -> Result<goofi_graph::layout::Side, String> {
-    match p.get("side").filter(|v| !v.is_null()) {
-        None => Ok(goofi_graph::layout::Side::Right),
-        Some(v) => v
-            .as_str()
-            .and_then(goofi_graph::layout::Side::parse)
-            .ok_or_else(|| format!("{op}: side is `left`, `right`, `top` or `bottom`, not {v}")),
-    }
-}
-
-/// An `endpoint` — `node/slot`, split on the FIRST `/`, the node half a uid or a name. The slot
-/// half may itself be a port uid (wiring a facade from outside), so it is never validated here.
-fn parse_endpoint(
-    g: &goofi_graph::Graph,
-    p: &Value,
-    op: &str,
-    key: &str,
-) -> Result<(Uid, String), String> {
-    let raw =
-        p.get(key).and_then(|v| v.as_str()).ok_or_else(|| format!("{op}: missing {key}"))?;
-    let (node, slot) =
-        raw.split_once('/').ok_or_else(|| format!("{op}: `{key}` is `node/slot`, not `{raw}`"))?;
-    let uid = g.resolve_ref(node)
-        .ok_or_else(|| format!("{op}: `{node}` in `{key}` names no node"))?;
-    Ok((uid, slot.to_string()))
-}
-
-fn parse_link(
-    g: &goofi_graph::Graph,
-    p: &Value,
-    op: &str,
-) -> Result<(Uid, String, Uid, String), String> {
-    let (node_out, slot_out) = parse_endpoint(g, p, op, "from")?;
-    let (node_in, slot_in) = parse_endpoint(g, p, op, "to")?;
-    Ok((node_out, slot_out, node_in, slot_in))
-}
-
-
-/// Resolve a link endpoint AND refuse one that names nothing wirable — the check a caller-initiated
-/// `add_link` gets and a REPLAY does not, since a replay must converge rather than wedge the stack.
-fn wirable_endpoint(g: &Graph, uid: Uid, slot: &str, which: &str) -> Result<(Uid, String), String> {
-    let (node, slot) = g.normalise(uid, slot);
-    if g.wirable(node) {
-        return Ok((node, slot));
-    }
-    // A FACADE is a node that exists and simply has no slot by that name — saying it names nothing
-    // sends a caller looking for the wrong mistake.
-    match g.is_facade(uid) {
-        true => Err(format!("link add: `{which}` names sub-patch {} — name one of its ports as the slot", uid.to_hex())),
-        false => Err(format!("link add: `{which}` names no node in this patch: {}", uid.to_hex())),
-    }
-}
-
-/// Is `node` something a panel could bind to? A UID, and only a uid: a display name stops resolving
-/// the moment somebody renames the node. A boundary port counts — it exposes a real stream.
-fn bindable_node(g: &Graph, node: &str) -> bool {
-    Uid::from_hex(node).is_some_and(|u| g.exists(u))
-}
-
-/// Route a layout planner's per-entry writes through the command history as ONE undo step, and
-/// answer with the arrangement they produced, drawn as `layout inspect` draws it.
-fn apply_layout(tx: &mut Txn, cmd: goofi_graph::Command) -> Result<Value, String> {
-    tx.apply(cmd)?;
-    Ok(json!({ "text": inspect::layout_tree(&tx.g, None) }))
-}
-
 impl AppState {
     /// The op rows this instance serves.
-    pub fn ops(&self) -> Vec<ops::Op<'_>> {
-        self.ops.iter().map(|o| **o).chain(self.plugins.operations()).collect()
+    pub fn ops(&self) -> Vec<ops::Row> {
+        self.ops.iter().copied().chain(self.plugins.operations().iter().copied()).collect()
     }
 
     /// The served row for `name` — absent rows (headless's layout group) answer `unknown op`.
-    pub fn find_op(&self, name: &str) -> Option<ops::Op<'_>> {
-        self.ops.iter().map(|op| **op).chain(self.plugins.operations()).find(|op| op.name == name)
+    pub fn find_op(&self, name: &str) -> Option<ops::Row> {
+        self.ops.iter().chain(self.plugins.operations()).find(|op| op.name == name).copied()
     }
 
     /// Run one control op — the single entry point every surface shares. `actor` scopes the undo
@@ -1508,19 +1387,17 @@ impl AppState {
         let Some(spec) = self.find_op(op) else {
             return Err(format!("unknown op `{op}`"));
         };
-        if preview && (!spec.handler.is_write() || op == "compound") {
+        if preview && !spec.handler.is_write() {
             return Err(format!("`{op}` cannot be previewed: only an undoable write can"));
         }
         let _previewing = preview.then(goofi_graph::open_preview);
         let _scope = plugins::CallScope::enter(op)?;
         let _record_start = (op == "record start").then(|| self.plugins.record_start.lock());
-        let hooked = self.plugins.has_hooks(op);
-        if hooked { spec.validate(&payload)?; }
+        // A plugin patches the JSON; deserializing into the op's `Args` is the validation after it.
         let payload = self.plugins.pre_op(self, op, payload, actor)?;
-        if hooked { spec.validate(&payload)?; }
         let result = match spec.handler {
             ops::Handler::PluginRead | ops::Handler::PluginEffect => self.plugins.call(self, op, &payload, actor),
-            ops::Handler::Read(f) | ops::Handler::Write(f) => {
+            ops::Handler::Read(f) => {
                 let mut tx = Txn::begin(self, actor, preview);
                 let result = f(&mut tx, &payload);
                 // A refusal drops the transaction, which takes back what it applied.
@@ -1528,6 +1405,14 @@ impl AppState {
                     tx.commit();
                 }
                 result
+            }
+            ops::Handler::Write(f) => {
+                let mut tx = Txn::begin(self, actor, preview);
+                f(&mut tx, &payload).map(|(result, label)| {
+                    tx.label(label);
+                    tx.commit();
+                    result
+                })
             }
             ops::Handler::Effect(f) => f(self, &payload, actor),
         };
@@ -1652,7 +1537,7 @@ fn sync_followers(state: &AppState, g: &Graph) {
 
 /// Re-project the authoritative graph into the document and broadcast the delta, after an RPC
 /// mutates the graph. The projection is built WHOLE, so a stale leaf converges too.
-fn resync_and_broadcast(state: &AppState) {
+pub(crate) fn resync_and_broadcast(state: &AppState) {
     let mut g = state.graph.lock();
     let (doc, projection) = settle_and_project(state, &mut g);
     drop(g);
@@ -2022,7 +1907,7 @@ async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: Str
 
 /// The physical `(node, slot)` a `/data` address stands for — the engine's ONE wiring resolution.
 /// `None` while nothing is behind a port yet — a wait, never an error.
-fn stream_behind(g: &Graph, uid: Uid, slot: &str) -> Option<reducer::SlotKey> {
+pub(crate) fn stream_behind(g: &Graph, uid: Uid, slot: &str) -> Option<reducer::SlotKey> {
     match g.stream(uid, slot) {
         Some(goofi_graph::Stream::At(leaf, s)) => Some((leaf, s.to_string())),
         _ => None,

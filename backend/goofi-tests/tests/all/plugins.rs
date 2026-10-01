@@ -23,7 +23,8 @@ fn a_folder_plugin_registers_ops_nodes_hooks_and_persistent_sessions() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|op| op["op"] == "plugin example subject select" && op["args"] == "subject:string!"));
+        .any(|op| op["op"] == "plugin example subject select"
+            && op["args"][0] == serde_json::json!({ "name": "subject", "type": "string", "required": true })));
     let lines = vec!["plugin example subject select --subject Alice".into()];
     assert_eq!(
         goofi_bridge::phrase::exec_lines(&goofi.state, &lines, "operator").unwrap()[0]["subject"],
@@ -93,7 +94,7 @@ fn a_folder_plugin_registers_ops_nodes_hooks_and_persistent_sessions() {
         .state
         .call("record start", j!({}), "operator")
         .unwrap_err()
-        .contains("requires string"));
+        .contains("expected a string"));
     goofi.call("plugin example mode", j!({"mode": "normal"}));
     let started = goofi.call("record start", j!({"root": home.path().join("ignored")}));
     let folder = Path::new(started["folder"].as_str().unwrap());

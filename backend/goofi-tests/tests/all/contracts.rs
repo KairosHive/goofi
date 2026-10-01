@@ -46,31 +46,37 @@ fn every_op_and_vocabulary_row_is_well_formed_documented_and_reachable() {
         }
     }
     for op in registry() {
-        // The args schema is a STRING, so a typo in it would otherwise be a fact only at read time.
-        assert_eq!(op.args().count(), op.args.split_whitespace().count(),
-                   "`{}` has an argument with no `name:type`: {:?}", op.name, op.args);
-        for (arg, ty, _) in op.args() {
-            assert!(ARG_TYPES.contains(&ty), "`{}`'s `{arg}` has unknown type `{ty}`", op.name);
+        for a in op.args().iter() {
+            assert!(ARG_TYPES.contains(&a.ty.as_str()), "`{}`'s `{}` has unknown type `{}`", op.name, a.name, a.ty);
             // `--json` is client-consumed and `--help` server-intercepted, ANYWHERE on a line —
             // an op declaring either would silently never receive it.
-            assert!(arg != "json" && arg != "help",
-                    "`{}` declares the reserved flag `--{arg}`", op.name);
+            assert!(a.name != "json" && a.name != "help",
+                    "`{}` declares the reserved flag `--{}`", op.name, a.name);
         }
         assert!(!op.doc.is_empty() && !op.result.is_empty(), "`{}` is undocumented", op.name);
-        assert!(op.positional <= op.args().count() && op.positional <= 2,
+        assert!(op.positional <= op.args().len() && op.positional <= 2,
                 "`{}` claims more positionals than it declares args", op.name);
         assert!(!op.doc().contains("{panel_types}") && !op.doc().contains("{viewer_kinds}") && !op.doc().contains("{boundary_types}"),
                 "`{}` has an unexpanded placeholder — a model would read it verbatim", op.name);
+        // Every op's arguments are a JSON Schema an MCP client can read, closed over its fields.
+        assert_eq!(op.schema()["additionalProperties"], j!(false), "`{}` admits unknown arguments", op.name);
     }
-    // The `!` has to reach the parse, or every argument is advertised as optional.
-    let add: Vec<_> = find("node add").expect("node add is registered").args().collect();
-    assert_eq!((add[0], add[1]), (("type", "string", true), ("pos", "float2", false)));
-    // A request is addressed exactly as every other param op is, and names its kind.
-    assert_eq!(find("node param request").expect("node param request is registered").args,
-               "node:uid! param:param_addr! request:string!");
+    // The declarations are READ off the `Args` type: a required field, an optional one, and the
+    // vocabulary words a newtype spells.
+    let spelled = |name: &str| -> Vec<(String, String, bool)> {
+        find(name).expect("registered").args().iter().map(|a| (a.name.clone(), a.ty.clone(), a.required)).collect()
+    };
+    let add = spelled("node add");
+    assert_eq!((&add[0], &add[1]), (&("type".into(), "string".into(), true), &("pos".into(), "float2".into(), false)));
+    assert_eq!(spelled("node param request"),
+               vec![("node".into(), "uid".into(), true), ("param".into(), "param_addr".into(), true), ("request".into(), "string".into(), true)]);
+    assert!(spelled("node add").iter().any(|(n, t, _)| n == "param" && t == "json[]"), "a list rides as `T[]`");
+    // An unknown argument is refused on every op, hooked or not: the type is the validation.
+    let g = Goofi::new();
+    let why = g.refuse("node add", j!({ "type": "signal:LFO", "colour": "red" }));
+    assert!(why.contains("colour"), "the refusal names the stray field: {why}");
 
     // A row with no dispatch arm answers `unknown op` while palette and tool list advertise it.
-    let g = Goofi::new();
     for op in registry() {
         if let Err(e) = g.try_call(op.name, j!({})) {
             assert!(!e.contains(&format!("unknown op `{}`", op.name)),

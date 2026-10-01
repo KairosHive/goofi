@@ -1,7 +1,7 @@
-// GENERATED from backend/goofi-bridge/src/ops.rs — do not edit by hand.
+// GENERATED from backend/goofi-bridge/src/ops/mod.rs — do not edit by hand.
 // The manager's op registry is the only place an op name is declared: naming one that is
 // not in it is a type error here and an `unknown op` refusal there. Regenerate by running
-// `cargo test -p goofi-bridge`, which rewrites this file when it drifts.
+// `cargo test -p goofi-tests contracts::`, which rewrites this file when it drifts.
 export type OpName =
 	| `plugin ${string}`
 	| 'plugin list'

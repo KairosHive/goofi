@@ -104,8 +104,8 @@ A call exposes `op`, `args`, and `actor`. Return `call.patch(...)` or `None`; us
 `call.reject(message)` to refuse execution. The actor identifies a command client, not an
 authenticated user or recording subject.
 
-A pre-hook can override explicitly supplied arguments. Goofi validates the argument envelope
-before and after hooks; the operation's own guards still apply. Hooks run in folder/ID order.
+A pre-hook can override explicitly supplied arguments. Goofi validates the patched arguments
+against the operation's own types; the operation's own guards still apply. Hooks run in folder/ID order.
 Two plugins that patch the same top-level argument produce an error before execution. A pre-hook
 failure prevents the operation. A post-hook receives the effective arguments plus `ok`, `result`,
 and `error`. A post-hook failure is logged and does not change the completed operation's outcome.

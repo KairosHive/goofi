@@ -98,7 +98,7 @@ fn armed(g: &Graph) -> HashMap<(Uid, String), (String, StreamId)> {
     for uid in g.all_uids() {
         for output in g.recorded(uid).unwrap_or(&[]) {
             let slot = &output.slot;
-            let id = crate::arms::stream_id(g, uid, slot);
+            let id = crate::ops::record::stream_id(g, uid, slot);
             if timeline(id.engine).is_none() {
                 continue;
             }

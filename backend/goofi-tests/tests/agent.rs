@@ -113,8 +113,8 @@ async fn the_one_tool_speaks_the_whole_op_vocabulary_in_command_lines() {
     assert_eq!(ops.len(), registry().len(), "every registry row is in the index");
     let add = ops.iter().find(|o| o["op"] == json!("node add")).unwrap();
     assert_eq!(add["kind"], json!("write"));
-    assert!(add["args"].as_str().is_some_and(|a| a.contains("type:string!")),
-            "the args schema rides the index: {add}");
+    assert!(add["args"].as_array().is_some_and(|a| a.iter().any(|d| d["name"] == "type" && d["type"] == "string" && d["required"] == true)),
+            "the args declarations ride the index: {add}");
 
     // One command executes directly: flags typed by the schema — a NEGATIVE float2 value, a
     // chosen name, and a `json` flag quoted as bash would quote it.

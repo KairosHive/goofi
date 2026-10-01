@@ -4,7 +4,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::ops::{Entry, Op, TREE};
+use crate::ops::{ArgDecl, Entry, Row, TREE};
 
 /// A command line as bash would hand it to argv — same words, same quoting.
 pub fn split(line: &str) -> Result<Vec<String>, String> {
@@ -26,13 +26,13 @@ fn walk(words: &[String]) -> Stop {
     let mut children = TREE;
     let mut prefix = String::new();
     for (i, word) in words.iter().enumerate() {
-        match children.iter().find(|e| word_of(e) == word) {
+        match children.iter().find(|e| e.word() == word) {
             Some(Entry::Group(w, _, kids)) => {
                 prefix.push_str(w);
                 prefix.push(' ');
                 children = kids;
             }
-            Some(Entry::Leaf(op)) => return Stop::Op(format!("{prefix}{}", op.name), i + 1),
+            Some(Entry::Leaf(op)) => return Stop::Op(op.name.to_string(), i + 1),
             None => return Stop::Unknown(prefix),
         }
     }
@@ -44,7 +44,7 @@ fn walk(words: &[String]) -> Stop {
 /// match — and a phrase the tree spells that no row serves is a mode withholding that group,
 /// which the refusal names rather than naming the mode: several modes withhold, and the caller
 /// wants to know WHAT is missing.
-pub fn resolve<'a>(ops: &[&'a Op<'a>], words: &[String]) -> Result<(&'a Op<'a>, usize), String> {
+pub fn resolve<'a>(ops: &'a [Row], words: &[String]) -> Result<(&'a Row, usize), String> {
     let line = words.join(" ");
     if let Some(op) = ops.iter().find(|op| {
         let name: Vec<_> = op.name.split(' ').collect();
@@ -79,7 +79,7 @@ pub fn resolve<'a>(ops: &[&'a Op<'a>], words: &[String]) -> Result<(&'a Op<'a>, 
 /// One line, parsed against the registry: the phrase, then every argument as a flag the op's own
 /// schema types. Answers the op and the payload the socket envelope would carry — one payload
 /// shape, whichever surface spelled it.
-pub fn parse<'a>(ops: &[&'a Op<'a>], line: &str) -> Result<(&'a Op<'a>, Value), String> {
+pub fn parse<'a>(ops: &'a [Row], line: &str) -> Result<(&'a Row, Value), String> {
     let words = split(line)?;
     if words.is_empty() {
         return Err("empty command".into());
@@ -91,16 +91,17 @@ pub fn parse<'a>(ops: &[&'a Op<'a>], line: &str) -> Result<(&'a Op<'a>, Value), 
 
 /// The arguments an op offers, for a refusal that teaches: leading positionals as `<name>`,
 /// then `--name <type>`, `!` marking required.
-fn usage(op: &Op) -> String {
+fn usage(op: &Row) -> String {
     let spelled: Vec<String> = op
         .args()
+        .iter()
         .enumerate()
-        .map(|(i, (name, ty, req))| match (i < op.positional, ty, req) {
-            (true, _, true) => format!("<{name}>"),
-            (true, _, false) => format!("[{name}]"),
-            (false, "bool", _) => format!("--[no-]{name}"),
-            (false, ty, true) => format!("--{name} <{ty}>!"),
-            (false, ty, false) => format!("--{name} <{ty}>"),
+        .map(|(i, a)| match (i < op.positional, a.ty.as_str(), a.required) {
+            (true, _, true) => format!("<{}>", a.name),
+            (true, _, false) => format!("[{}]", a.name),
+            (false, "bool", _) => format!("--[no-]{}", a.name),
+            (false, ty, true) => format!("--{} <{ty}>!", a.name),
+            (false, ty, false) => format!("--{} <{ty}>", a.name),
         })
         .collect();
     match spelled.is_empty() {
@@ -110,7 +111,7 @@ fn usage(op: &Op) -> String {
 }
 
 /// One raw flag value, typed by the schema. A list type `T[]` is typed by its item.
-fn typed(op: &Op, key: &str, ty: &str, raw: String) -> Result<Value, String> {
+fn typed(op: &Row, key: &str, ty: &str, raw: String) -> Result<Value, String> {
     match ty {
         "int" => raw.parse::<i64>().map(Value::from).map_err(|_| {
             format!("{}: `--{key}` takes an integer, not `{raw}`", op.name)
@@ -140,7 +141,7 @@ enum Expect<'a> {
     /// `--name` was given and its value is pending.
     Value(&'a str, &'a str),
     /// Between words: a flag, or this declared arg as a positional while they are still open.
-    Open(Option<&'a (&'a str, &'a str, bool)>),
+    Open(Option<&'a ArgDecl>),
 }
 
 /// Step through `words` against the op's args schema, emitting each `(decl name, typed value)`.
@@ -148,8 +149,8 @@ enum Expect<'a> {
 /// and the first flag closes them. Each positional stays reachable as a flag too, so the sugar
 /// never hides a spelling; a bool is `--x` / `--no-x`; any value can ride inline as `--flag=v`.
 fn scan<'a>(
-    op: &Op,
-    decls: &'a [(&'a str, &'a str, bool)],
+    op: &Row,
+    decls: &'a [ArgDecl],
     words: &[String],
     emit: &mut dyn FnMut(&'a str, Value) -> Result<(), String>,
 ) -> Result<Expect<'a>, String> {
@@ -159,12 +160,11 @@ fn scan<'a>(
         let word = &words[i];
         i += 1;
         let Some(flag) = word.strip_prefix("--") else {
-            let Some((name, ty, _)) = decls.get(pos).filter(|_| open && pos < op.positional)
-            else {
+            let Some(a) = decls.get(pos).filter(|_| open && pos < op.positional) else {
                 return Err(fail(format!("unexpected `{word}`")));
             };
-            emit(name, typed(op, name, ty.trim_end_matches("[]"), word.clone())?)?;
-            pos += usize::from(!ty.ends_with("[]"));
+            emit(&a.name, typed(op, &a.name, a.item(), word.clone())?)?;
+            pos += usize::from(!a.is_list());
             continue;
         };
         open = false;
@@ -175,35 +175,35 @@ fn scan<'a>(
         let mut negated = false;
         if let Some(bare) = key.strip_prefix("no-") {
             // `--no-x` only where `x` is a declared bool: an op's own `no-…` name stays reachable.
-            if decls.iter().any(|(n, t, _)| *n == bare && *t == "bool") {
+            if decls.iter().any(|a| a.name == bare && a.is_bool()) {
                 (key, negated) = (bare, true);
             }
         }
-        let Some((name, ty, _)) = decls.iter().find(|(n, ..)| *n == key) else {
+        let Some(a) = decls.iter().find(|a| a.name == key) else {
             return Err(fail(format!("no flag `--{key}`")));
         };
-        match (*ty, inline, words.get(i)) {
+        match (a.ty.as_str(), inline, words.get(i)) {
             ("bool", Some(_), _) => {
                 return Err(format!("{}: `--{key}` is a flag and takes no value", op.name))
             }
-            ("bool", None, _) => emit(name, Value::Bool(!negated))?,
-            (ty, Some(v), _) => emit(name, typed(op, key, ty.trim_end_matches("[]"), v)?)?,
-            (ty, None, Some(next)) => {
+            ("bool", None, _) => emit(&a.name, Value::Bool(!negated))?,
+            (_, Some(v), _) => emit(&a.name, typed(op, key, a.item(), v)?)?,
+            (_, None, Some(next)) => {
                 i += 1;
-                emit(name, typed(op, key, ty.trim_end_matches("[]"), next.clone())?)?;
+                emit(&a.name, typed(op, key, a.item(), next.clone())?)?;
             }
-            (ty, None, None) => return Ok(Expect::Value(name, ty)),
+            (ty, None, None) => return Ok(Expect::Value(&a.name, ty)),
         }
     }
     Ok(Expect::Open(decls.get(pos).filter(|_| open && pos < op.positional)))
 }
 
 /// A command line's argument words as the payload the socket envelope would carry.
-fn parse_flags(op: &Op, words: &[String]) -> Result<Value, String> {
-    let decls: Vec<(&str, &str, bool)> = op.args().collect();
+fn parse_flags(op: &Row, words: &[String]) -> Result<Value, String> {
+    let decls = op.args();
     let mut payload = Map::new();
     let mut put = |name: &str, v: Value| {
-        if decls.iter().any(|(n, t, _)| *n == name && t.ends_with("[]")) {
+        if decls.iter().any(|a| a.name == name && a.is_list()) {
             match payload.entry(name.to_string()).or_insert_with(|| json!([])) {
                 Value::Array(list) => list.push(v),
                 _ => unreachable!("a list arg only ever inserts an array"),
@@ -216,9 +216,9 @@ fn parse_flags(op: &Op, words: &[String]) -> Result<Value, String> {
     if let Expect::Value(name, _) = scan(op, &decls, words, &mut put)? {
         return Err(format!("{}: `--{name}` needs a value — {}", op.name, usage(op)));
     }
-    for (name, _, required) in &decls {
-        if *required && !payload.contains_key(*name) {
-            return Err(format!("{}: `--{name}` is required — {}", op.name, usage(op)));
+    for a in decls.iter().filter(|a| a.required) {
+        if !payload.contains_key(&a.name) {
+            return Err(format!("{}: `--{}` is required — {}", op.name, a.name, usage(op)));
         }
     }
     Ok(Value::Object(payload))
@@ -293,8 +293,7 @@ pub fn exec_lines(
     lines: &[String],
     actor: &str,
 ) -> Result<Vec<Value>, String> {
-    let rows = state.ops();
-    let table: Vec<_> = rows.iter().collect();
+    let table = state.ops();
     if lines.is_empty() {
         return Err("`commands` is a non-empty list of command lines".into());
     }
@@ -319,7 +318,7 @@ pub fn exec_lines(
 }
 
 /// The help door: `help [words…]` or `<words…> --help`. `None` when the line is not asking.
-pub fn help(ops: &[&Op], words: &[String]) -> Option<String> {
+pub fn help(ops: &[Row], words: &[String]) -> Option<String> {
     let target: Vec<String> = match words.first().map(String::as_str) {
         Some("help") => words[1..].to_vec(),
         _ if words.iter().any(|w| w == "--help") => {
@@ -351,7 +350,7 @@ pub fn help(ops: &[&Op], words: &[String]) -> Option<String> {
     }
 }
 
-fn top_help(ops: &[&Op]) -> String {
+fn top_help(ops: &[Row]) -> String {
     let mut groups: Vec<String> = Vec::new();
     let mut bare: Vec<&str> = Vec::new();
     for e in TREE {
@@ -378,12 +377,9 @@ fn top_help(ops: &[&Op]) -> String {
 
 /// Whether anything under `entry` (at the phrase position `prefix`) is in the served set — how a
 /// headless server's listings drop the layout group without a second spelling of the mode.
-fn served(ops: &[&Op], prefix: &str, entry: &Entry) -> bool {
+fn served(ops: &[Row], prefix: &str, entry: &Entry) -> bool {
     match entry {
-        Entry::Leaf(op) => {
-            let name = format!("{prefix}{}", op.name);
-            ops.iter().any(|o| o.name == name)
-        }
+        Entry::Leaf(op) => ops.iter().any(|o| o.name == op.name),
         Entry::Group(word, _, _) => {
             let below = format!("{prefix}{word} ");
             ops.iter().any(|o| o.name.starts_with(&below))
@@ -411,7 +407,7 @@ fn doc_line(entry: &Entry) -> String {
 /// partial that filters. `state` is where the LIVE candidates come from — a `uid` offers the
 /// patch's own nodes — and `None` (the offline client) still answers everything static.
 pub fn complete(
-    ops: &[&Op],
+    ops: &[Row],
     state: Option<&crate::AppState>,
     line: &str,
 ) -> Vec<(String, String)> {
@@ -426,8 +422,8 @@ pub fn complete(
     let mut candidates = std::collections::BTreeMap::new();
     if let Stop::Children(children, prefix) = walk(done) {
         for entry in children {
-            if word_of(entry).starts_with(&partial) && served(ops, &prefix, entry) {
-                candidates.insert(word_of(entry).to_string(), doc_line(entry));
+            if entry.word().starts_with(&partial) && served(ops, &prefix, entry) {
+                candidates.insert(entry.word().to_string(), doc_line(entry));
             }
         }
     }
@@ -444,12 +440,12 @@ pub fn complete(
 }
 
 fn complete_args(
-    op: &Op,
+    op: &Row,
     given: &[String],
     partial: &str,
     state: Option<&crate::AppState>,
 ) -> Vec<(String, String)> {
-    let decls: Vec<(&str, &str, bool)> = op.args().collect();
+    let decls = op.args();
     let mut spent: Vec<String> = Vec::new();
     let mut note = |name: &str, _: Value| {
         spent.push(name.to_string());
@@ -461,19 +457,19 @@ fn complete_args(
         Err(_) => return Vec::new(),
     };
     let mut out: Vec<(String, String)> =
-        positional.map(|(_, ty, _)| values_for(ty, state, partial)).unwrap_or_default();
-    for (name, ty, required) in &decls {
-        if spent.iter().any(|spent| spent == name) && *ty != "bool" && !ty.ends_with("[]") {
+        positional.map(|a| values_for(&a.ty, state, partial)).unwrap_or_default();
+    for a in decls.iter() {
+        if spent.contains(&a.name) && !a.is_bool() && !a.is_list() {
             continue;
         }
-        let doc = match (ty.strip_suffix("[]"), *ty, required) {
-            (_, "bool", _) => "flag; --no- negates".to_string(),
-            (Some(item), _, true) => format!("<{item}>, repeats, required"),
-            (Some(item), _, false) => format!("<{item}>, repeats"),
-            (None, ty, true) => format!("<{ty}>, required"),
-            (None, ty, false) => format!("<{ty}>"),
+        let doc = match (a.is_list(), a.is_bool(), a.required) {
+            (_, true, _) => "flag; --no- negates".to_string(),
+            (true, _, true) => format!("<{}>, repeats, required", a.item()),
+            (true, _, false) => format!("<{}>, repeats", a.item()),
+            (false, _, true) => format!("<{}>, required", a.ty),
+            (false, _, false) => format!("<{}>", a.ty),
         };
-        let flag = format!("--{name}");
+        let flag = format!("--{}", a.name);
         if flag.starts_with(partial) {
             out.push((flag, doc));
         }
@@ -513,10 +509,6 @@ fn values_for(ty: &str, state: Option<&crate::AppState>, partial: &str) -> Vec<(
     out
 }
 
-fn op_help(op: &Op) -> String {
+fn op_help(op: &Row) -> String {
     format!("{}\n\n{}\n\nanswers: {}", usage(op), op.doc(), op.result)
-}
-
-fn word_of(entry: &Entry) -> &'static str {
-    match entry { Entry::Group(word, _, _) => word, Entry::Leaf(op) => op.name }
 }

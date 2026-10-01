@@ -854,6 +854,8 @@ struct HistoryEntry {
     toggle: Option<Command>,
     actor: String,
     undone: bool,
+    /// What the entry says it did — the undo button's text.
+    label: String,
 }
 
 std::thread_local! {
@@ -907,11 +909,7 @@ impl CommandHistory {
         };
         // Record EVERY successful command, a forward no-op included: the client records one entry
         // per mutating RPC, so skipping one here desyncs the stacks and a later undo flips wrong.
-        self.entries.push(HistoryEntry {
-            toggle: inverse,
-            actor: actor.to_string(),
-            undone: false,
-        });
+        self.entries.push(HistoryEntry { toggle: inverse, actor: actor.to_string(), undone: false, label: String::new() });
         Ok(outcome)
     }
 
@@ -954,19 +952,23 @@ impl CommandHistory {
         self.previews.retain(|p| p.actor != actor);
     }
 
-    /// Fold everything after `mark` into ONE entry, so a transaction is a single undo step.
-    pub fn coalesce(&mut self, mark: usize) {
-        if self.entries.len() < mark + 2 {
-            return;
+    /// Fold everything after `mark` into ONE entry, so a transaction is a single undo step, and
+    /// name it.
+    pub fn coalesce(&mut self, mark: usize, label: String) {
+        if self.entries.len() >= mark + 2 {
+            let actor = self.entries[mark].actor.clone();
+            // Newest first: each toggle is an inverse, and a Compound applies its children in order.
+            let toggles: Vec<Command> = self.entries.drain(mark..).rev().filter_map(|e| e.toggle).collect();
+            self.entries.push(HistoryEntry {
+                toggle: (!toggles.is_empty()).then_some(Command::Compound(toggles)),
+                actor,
+                undone: false,
+                label: String::new(),
+            });
         }
-        let actor = self.entries[mark].actor.clone();
-        // Newest first: each toggle is an inverse, and a Compound applies its children in order.
-        let toggles: Vec<Command> = self.entries.drain(mark..).rev().filter_map(|e| e.toggle).collect();
-        self.entries.push(HistoryEntry {
-            toggle: (!toggles.is_empty()).then_some(Command::Compound(toggles)),
-            actor,
-            undone: false,
-        });
+        if let Some(entry) = self.entries.get_mut(mark) {
+            entry.label = label;
+        }
     }
 
     /// Undo and DISCARD everything after `mark` — what a transaction does when a later step is

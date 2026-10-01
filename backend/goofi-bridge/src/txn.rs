@@ -18,6 +18,8 @@ pub struct Txn<'a> {
     edited: bool,
     preview: bool,
     committed: bool,
+    /// What the history entry this transaction leaves says it did.
+    label: String,
 }
 
 impl<'a> Txn<'a> {
@@ -25,7 +27,7 @@ impl<'a> Txn<'a> {
     pub fn begin(state: &'a AppState, actor: &'a str, preview: bool) -> Txn<'a> {
         let g = state.graph.lock();
         let history = state.history.lock();
-        Txn { state, actor, g, history, outbox: Vec::new(), mark: None, edited: false, preview, committed: false }
+        Txn { state, actor, g, history, outbox: Vec::new(), mark: None, edited: false, preview, committed: false, label: String::new() }
     }
 
     /// Run `cmd` through the history. The first command clears the actor's redo run and takes
@@ -37,6 +39,11 @@ impl<'a> Txn<'a> {
         }
         self.edited = true;
         self.history.apply(&mut self.g, self.actor, cmd)
+    }
+
+    /// Name the history entry this transaction leaves — what an undo button says it takes back.
+    pub fn label(&mut self, label: String) {
+        self.label = label;
     }
 
     /// The graph moved by a path that is no command: the tail runs for this transaction.
@@ -63,7 +70,7 @@ impl<'a> Txn<'a> {
             return;
         }
         if let Some(mark) = self.mark {
-            self.history.coalesce(mark);
+            self.history.coalesce(mark, std::mem::take(&mut self.label));
         }
         if !self.preview {
             outbox.extend(state.set_dirty(true));

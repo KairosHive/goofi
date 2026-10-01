@@ -1064,7 +1064,7 @@ fn a_viewer_bag_persists_and_refuses_a_word_outside_its_vocabulary() {
                                          "viewer": [{ "slot": "out", "kind": "line" }] }));
     assert!(why.contains("no such node"), "{why}");
     let why = g.refuse("node edit", j!({ "node": hex(osc), "viewer": 7 }));
-    assert!(why.contains("list"), "an arg that is not a list says what one looks like: {why}");
+    assert!(why.contains("sequence"), "an arg that is not a list says what one looks like: {why}");
     let why = g.refuse("node edit", j!({ "node": hex(osc), "viewer": [{ "kind": "line" }] }));
     assert!(why.contains("slot"), "an entry without a slot is refused by naming it: {why}");
 

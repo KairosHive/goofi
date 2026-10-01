@@ -375,7 +375,7 @@ pub fn snapshot(
         // The document this session frame goes with; a replica behind it is still mid-load.
         "doc_version": state.doc.lock().version(),
         "runtime": runtime_overlay(g),
-        "record": crate::arms::record_state_at(state, g.time().now()),
+        "record": crate::ops::record::record_state_at(state, g.time().now()),
         // Seeded for the same reason the runtime overlay is: `harness_changed` pushes transitions.
         "harnesses": harnesses,
         "save_path": save_path,

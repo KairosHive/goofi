@@ -1,7 +1,7 @@
 //! Folder plugins: discovery, isolated Python services, and shared operation hooks.
 
 use crate::{
-    ops::{Handler, Op},
+    ops::{ArgDecl, Kind, Row},
     AppState,
 };
 use serde::Deserialize;
@@ -84,6 +84,8 @@ struct Package {
 #[derive(Default)]
 pub struct Plugins {
     packages: Vec<Package>,
+    /// The packages' op rows: leaked once, since a row is `'static` on every transport.
+    rows: Vec<Row>,
     pub(crate) record_start: Mutex<()>,
     stopped: AtomicBool,
 }
@@ -511,8 +513,20 @@ impl Plugins {
                 break;
             }
         }
+        let rows = packages
+            .iter()
+            .flat_map(|package| {
+                let leak = |s: &str| -> &'static str { Box::leak(s.to_string().into_boxed_str()) };
+                package.contributions.ops.iter().map(move |op| {
+                    let kind = if op.kind == "read" { Kind::Read } else { Kind::Effect };
+                    let args: &'static [ArgDecl] = Box::leak(ArgDecl::parse_list(&op.args).into_boxed_slice());
+                    Row::plugin(leak(&op.name), kind, args, leak(&op.doc), leak(&op.result))
+                })
+            })
+            .collect();
         state.plugins = Arc::new(Self {
             packages,
+            rows,
             record_start: Mutex::new(()),
             stopped: AtomicBool::new(false),
         });
@@ -532,21 +546,9 @@ impl Plugins {
         Ok(())
     }
 
-    pub fn operations(&self) -> impl Iterator<Item = Op<'_>> {
-        self.packages.iter().flat_map(|package| {
-            package.contributions.ops.iter().map(|op| Op {
-                name: &op.name,
-                args: &op.args,
-                positional: 0,
-                doc: &op.doc,
-                result: &op.result,
-                handler: if op.kind == "read" {
-                    Handler::PluginRead
-                } else {
-                    Handler::PluginEffect
-                },
-            })
-        })
+    /// Every plugin's op rows, built once at load.
+    pub fn operations(&self) -> &[Row] {
+        &self.rows
     }
 
     pub fn node_roots(&self) -> impl Iterator<Item = (PathBuf, goofi_graph::Origin)> + '_ {
