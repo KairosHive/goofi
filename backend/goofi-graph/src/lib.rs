@@ -15,6 +15,8 @@ use goofi_node::{
 use indexmap::IndexMap;
 
 pub mod archive;
+pub mod doc;
+pub use doc::MANIFEST_VERSION;
 
 pub mod subpatch;
 pub mod layout;
@@ -25,11 +27,6 @@ pub use command::{open_preview, Applied, Command, CommandHistory, Ctx, Outcome, 
 pub mod expr_rewrite;
 
 pub use goofi_node::Uid;
-
-/// One literal for the writer, the reader and the refusal message, so a bump cannot leave the
-/// message lying about what this build reads. It moves when a format change has to reject an
-/// archive somebody actually holds — not once per change while the format is still moving.
-const MANIFEST_VERSION: i64 = 1;
 
 use goofi_core::variables::NAME_RULE;
 
@@ -3216,120 +3213,144 @@ impl Graph {
         out
     }
 
-    /// The `{nodes, links}` fragment for `uids` — the exact shape the `.gfi` root carries, so what
-    /// a clipboard holds and what a patch holds are ONE format. A link rides only when BOTH of its
+    /// The records of `uids` and the links between them, in the document's own shape, so what a
+    /// clipboard holds and what a patch holds are ONE format. A link rides only when BOTH of its
     /// ends are in the fragment; a cable reaching out of it was never the fragment's.
-    pub fn fragment(&self, uids: &[Uid]) -> serde_json::Value {
-        use serde_json::{json, Map, Value};
-        let want: std::collections::HashSet<Uid> = uids.iter().copied().collect();
-        let mut nodes = Map::new();
+    pub fn fragment(&self, uids: &[Uid]) -> doc::PatchDoc {
+        let want: HashSet<Uid> = uids.iter().copied().collect();
+        let mut nodes = IndexMap::new();
         // ONE loop over ONE map: a leaf, a facade and a port are all node records, and membership
         // rides each record rather than a member list beside what `scope_of` owns.
         for (uid, e) in self.patch.nodes.iter().filter(|(u, _)| want.contains(u)) {
-            let mut rec = Map::new();
-            rec.insert("type".into(), json!(self.node_type(*uid).unwrap_or_default()));
-            rec.insert("name".into(), json!(e.name));
-            rec.insert("pos".into(), json!(e.pos));
-            let mut params = Map::new();
+            let mut params = IndexMap::new();
             if let Some(leaf) = e.leaf() {
-                for (group, names) in &*leaf.params.clone() {
-                    let gmap: Map<String, Value> = names.iter()
-                        .filter(|(_, p)| !matches!(p, Param::Pulse))
-                        .map(|(n, p)| (n.clone(), param_value_json(p))).collect();
-                    params.insert(group.clone(), Value::Object(gmap));
-                }
-                // Persist source records (sorted for a stable diff) — else a save/load silently
-                // freezes every live-driven param to its last evaluated literal.
-                if !leaf.sources.is_empty() {
-                    let mut binds: Vec<(&ParamKey, &ParamSource)> = leaf.sources.iter().collect();
-                    binds.sort_by(|a, b| a.0.cmp(b.0));
-                    rec.insert(
-                        "sources".into(),
-                        Value::Array(
-                            binds
-                                .iter()
-                                .map(|(k, b)| {
-                                    json!({ "group": k.group, "name": k.name, "mode": b.state.mode,
-                                            "expression": b.state.expression,
-                                            "reference": b.state.reference,
-                                            "triggers": b.state.triggers })
-                                })
-                                .collect(),
-                        ),
-                    );
+                for (group, names) in &*leaf.params {
+                    let entries: IndexMap<String, doc::ParamEntry> = names
+                        .iter()
+                        .filter_map(|(name, p)| {
+                            let entry = doc::ParamEntry { value: doc::Scalar::of(p), ..Default::default() };
+                            let entry = match leaf.sources.get(&ParamKey::new(group, name)) {
+                                Some(b) => entry.with_source(&b.state),
+                                None => entry,
+                            };
+                            // A pulse has no literal, so it is written only for the source it carries.
+                            (entry.value.is_some() || entry.mode.is_some()).then(|| (name.clone(), entry))
+                        })
+                        .collect();
+                    params.insert(group.clone(), entries);
                 }
             }
-            rec.insert("params".into(), Value::Object(params));
-            // An empty viewer blob stays out, so a fresh patch has no noise.
-            if e.viewers.as_object().is_some_and(|m| !m.is_empty()) {
-                rec.insert("viewers".into(), e.viewers.clone());
-            }
-            // Likewise: a node nobody has cleared carries no baseline key at all.
-            if e.baseline.as_object().is_some_and(|m| !m.is_empty()) {
-                rec.insert("baseline".into(), e.baseline.clone());
-            }
-            if !e.record.is_empty() {
-                rec.insert("record".into(), json!(e.record));
-            }
-            if let Some(p) = self.scope_of(*uid).filter(|p| want.contains(p)) {
-                rec.insert("scope".into(), json!(p.to_hex()));
-            }
-            nodes.insert(uid.to_hex(), Value::Object(rec));
+            let blob = |v: &serde_json::Value| v.as_object().is_some_and(|m| !m.is_empty()).then(|| v.clone());
+            nodes.insert(
+                uid.to_hex(),
+                doc::NodeRecord {
+                    type_id: self.node_type(*uid).unwrap_or_default(),
+                    name: e.name.clone(),
+                    pos: e.pos,
+                    scope: self.scope_of(*uid).filter(|p| want.contains(p)).map(|p| p.to_hex()),
+                    params,
+                    viewers: blob(&e.viewers),
+                    baseline: blob(&e.baseline),
+                    record: e.record.clone(),
+                },
+            );
         }
         // A port's inner wire is a link like any other — the same one `add_link` writes — so a
         // fragment has one relation kind as well as one entity kind.
-        let links: Vec<Value> = self
-            .patch.links
+        let links = self
+            .patch
+            .links
             .iter()
             .filter(|l| want.contains(&l.node_out) && want.contains(&l.node_in))
-            .map(|l| json!([l.node_out.to_hex(), l.slot_out, l.node_in.to_hex(), l.slot_in]))
+            .map(|l| {
+                let link = doc::Link {
+                    node_out: l.node_out.to_hex(),
+                    slot_out: l.slot_out.to_string(),
+                    node_in: l.node_in.to_hex(),
+                    slot_in: l.slot_in.to_string(),
+                };
+                (link.key(), link)
+            })
             .collect();
-        json!({ "nodes": Value::Object(nodes), "links": links })
+        doc::PatchDoc { nodes, links, ..Default::default() }
     }
 
     /// The params a record asks for, folded over the type's defaults. NON-seeding, because a
     /// restore must not re-synthesize a binding the user had unbound.
-    fn record_params(&self, ty: &str, rec: &serde_json::Value) -> Result<ParamGroups, String> {
-        let mut params = self.default_params_of(ty, None)?;
-        let Some(groups) = rec.get("params").and_then(|v| v.as_object()) else { return Ok(params) };
-        for (group, names) in groups {
-            let (Some(nm), Some(g)) = (names.as_object(), params.get_mut(group)) else { continue };
-            for (name, val) in nm {
-                if let Some(existing) = g.get_mut(name) {
-                    *existing = param_from_json(existing, val);
+    fn record_params(&self, rec: &doc::NodeRecord) -> Result<ParamGroups, String> {
+        let mut params = self.default_params_of(&rec.type_id, None)?;
+        for (group, names) in &rec.params {
+            let Some(g) = params.get_mut(group) else { continue };
+            for (name, entry) in names {
+                if let (Some(existing), Some(value)) = (g.get_mut(name), &entry.value) {
+                    *existing = param_from_json(existing, &value.to_json());
                 }
             }
         }
         Ok(params)
     }
 
-    /// Build `uid -> fresh uid` for every record of a fragment, so a link and a `scope` can be
-    /// remapped before anything is created.
-    fn remap_fragment(&mut self, nodes: &serde_json::Map<String, serde_json::Value>) -> HashMap<String, Uid> {
-        nodes.keys().map(|old| (old.clone(), self.mint())).collect()
+    /// The one gate a load and a paste pass. Every leaf's type resolves or the whole document is
+    /// refused; what cannot land is dropped and said — a value its type no longer declares, a
+    /// link with an end outside the document, a variable that is not `group.element`.
+    pub fn admit(&self, mut doc: doc::PatchDoc) -> Result<(doc::PatchDoc, Vec<String>), String> {
+        let mut warnings = Vec::new();
+        for (key, rec) in doc.nodes.iter_mut() {
+            // A facade and a boundary port are the model's own types, not the palette's: they have
+            // no module to be missing, so the availability gate is not theirs to pass.
+            if structural(&rec.type_id) {
+                rec.params.clear();
+                continue;
+            }
+            self.resolve_type(&rec.type_id)?;
+            let declared = self.default_params_of(&rec.type_id, None)?;
+            rec.params.retain(|group, names| {
+                names.retain(|name, _| {
+                    let kept = declared.get(group).is_some_and(|g| g.contains_key(name));
+                    if !kept {
+                        warnings.push(format!("{key}: `{group}/{name}` is not a param of {}, dropped", rec.type_id));
+                    }
+                    kept
+                });
+                !names.is_empty()
+            });
+        }
+        let nodes = &doc.nodes;
+        doc.links.retain(|_, l| {
+            let kept = nodes.contains_key(&l.node_out) && nodes.contains_key(&l.node_in);
+            if !kept {
+                warnings.push(format!("link {}.{} > {}.{} names a record the document does not hold, dropped", l.node_out, l.slot_out, l.node_in, l.slot_in));
+            }
+            kept
+        });
+        for name in doc.variables.keys() {
+            if !goofi_core::variables::is_valid_variable_name(name) {
+                return Err(format!(
+                    "this patch holds the variable `{name}`, which is not `group.element`: {}",
+                    goofi_core::variables::VARIABLE_NAME_RULE
+                ));
+            }
+        }
+        Ok((doc, warnings))
     }
 
-    /// Add a `{nodes, links}` fragment under `scope`, shifted by `offset`, on FRESH uids. Answers
-    /// the ONE command that does it — so a paste is one undo step — beside what each record's uid
-    /// became, which is what a caller selects afterwards.
+    /// Add an admitted fragment under `scope`, shifted by `offset`, on FRESH uids. Answers the ONE
+    /// command that does it — so a paste is one undo step — beside what each record's uid became,
+    /// which is what a caller selects afterwards.
     pub fn import_fragment(
         &mut self,
-        doc: &serde_json::Value,
+        doc: &doc::PatchDoc,
         scope: Option<Uid>,
         offset: [f64; 2],
     ) -> Result<(command::Command, HashMap<String, String>), String> {
         use command::Command;
-        let nodes = doc.get("nodes").and_then(|v| v.as_object()).ok_or("paste: missing `nodes`")?;
+        let nodes = &doc.nodes;
         if let Some(s) = scope.filter(|s| !self.is_facade(*s)) {
             return Err(format!("paste: no such scope {s}"));
         }
-        for rec in nodes.values() {
-            let ty = rec.get("type").and_then(|v| v.as_str()).ok_or("paste: a record has no `type`")?;
-            if !structural(ty) {
-                self.resolve_type(ty)?;
-            }
-        }
-        let idmap = self.remap_fragment(nodes);
+        // `uid -> fresh uid` for every record, so a link and a `scope` are remapped before
+        // anything is created.
+        let idmap: HashMap<String, Uid> = nodes.keys().map(|old| (old.clone(), self.mint())).collect();
         // The names the copy will wear, picked BEFORE anything is built, because an expression in
         // the fragment spells a NAME: a source left naming the original binds the copy to it, and
         // outlives the original's deletion as a broken reference.
@@ -3337,24 +3358,21 @@ impl Graph {
             self.patch.nodes.values().map(|e| e.name.clone()).collect();
         let mut renamed: HashMap<String, String> = HashMap::new();
         for rec in nodes.values() {
-            let base = name_base(goofi_node::bare(rec["type"].as_str().unwrap_or("")));
+            let base = name_base(goofi_node::bare(&rec.type_id));
             let fresh = (0..)
                 .map(|n| format!("{base}{n}"))
                 .find(|c| !taken.contains(c))
                 .expect("an unbounded counter finds a free name");
             taken.insert(fresh.clone());
-            renamed.insert(rec.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(), fresh);
+            renamed.insert(rec.name.clone(), fresh);
         }
         let by_old = |old: &str| renamed.get(old).cloned();
         // A copied PORT's name is also a slot label — on the copied facade that holds it, and nowhere
         // else — so a slot is renamed only there, never where a node merely shares its name.
         let port_labels: HashMap<&str, Vec<&str>> = nodes
             .values()
-            .filter(|rec| subpatch::boundary_type(rec["type"].as_str().unwrap_or("")).is_some())
-            .filter_map(|rec| {
-                let facade = nodes.get(rec.get("scope")?.as_str()?)?;
-                Some((facade.get("name")?.as_str()?, rec.get("name")?.as_str()?))
-            })
+            .filter(|rec| subpatch::boundary_type(&rec.type_id).is_some())
+            .filter_map(|rec| Some((nodes.get(rec.scope.as_deref()?)?.name.as_str(), rec.name.as_str())))
             .fold(HashMap::new(), |mut m: HashMap<&str, Vec<&str>>, (facade, port)| {
                 m.entry(facade).or_default().push(port);
                 m
@@ -3368,19 +3386,19 @@ impl Graph {
             _ => 1,
         };
         let mut order: Vec<&String> = nodes.keys().collect();
-        order.sort_by_key(|old| kind_order(nodes[*old]["type"].as_str().unwrap_or("")));
+        order.sort_by_key(|old| kind_order(&nodes[*old].type_id));
         let mut cmds: Vec<Command> = Vec::new();
         for old in &order {
             let rec = &nodes[*old];
-            let ty = rec["type"].as_str().unwrap_or("");
-            let inner = rec.get("scope").and_then(|v| v.as_str()).and_then(|s| idmap.get(s)).copied();
+            let ty = rec.type_id.as_str();
+            let inner = rec.scope.as_deref().and_then(|s| idmap.get(s)).copied();
             cmds.push(Command::AddNode {
                 type_name: ty.to_string(),
-                pos: at(read_pos(rec)),
+                pos: at(rec.pos),
                 uid: Some(idmap[*old]),
-                name: by_old(rec.get("name").and_then(|v| v.as_str()).unwrap_or("")),
-                params: (!structural(ty)).then(|| self.record_params(ty, rec)).transpose()?,
-                sources: record_sources(rec)
+                name: by_old(&rec.name),
+                params: (!structural(ty)).then(|| self.record_params(rec)).transpose()?,
+                sources: sources_of(rec)
                     .into_iter()
                     .map(|(group, name, mut s)| {
                         let remap = |named: &str, slot: Option<&str>| {
@@ -3398,141 +3416,83 @@ impl Graph {
                         (group, name, s)
                     })
                     .collect(),
-                viewers: rec.get("viewers").filter(|v| v.is_object()).map(|v| remap_slots(v, &idmap)),
+                viewers: rec.viewers.as_ref().map(|v| remap_slots(v, &idmap)),
                 // NOT slot-remapped: a baseline is keyed by `group/param`, which a paste does not
                 // renumber the way it renumbers the slot uids a viewer blob is keyed by.
-                baseline: rec.get("baseline").filter(|v| v.is_object()).cloned(),
-                record: Some(read_record(rec)),
+                baseline: rec.baseline.clone(),
+                record: Some(rec.record.clone()),
                 // A port cannot exist without a scope, so it takes the paste target when its own
                 // facade is not in the fragment — the same fallback every other kind gets below.
                 scope: subpatch::boundary_type(ty).and(inner.or(scope)),
             });
         }
         for old in &order {
-            let rec = &nodes[*old];
-            let inner = rec.get("scope").and_then(|v| v.as_str()).and_then(|s| idmap.get(s)).copied();
+            let inner = nodes[*old].scope.as_deref().and_then(|s| idmap.get(s)).copied();
             // A record naming no scope INSIDE the fragment is a root of it, so it lands where the
             // paste was aimed; one naming a scope in here keeps the shape it was copied with.
             cmds.push(Command::SetScope { uid: idmap[*old], scope: inner.or(scope) });
         }
-        for l in doc.get("links").and_then(|v| v.as_array()).into_iter().flatten() {
-            let Some(a) = l.as_array().filter(|a| a.len() == 4) else { continue };
-            let (Some(no), Some(ni)) = (
-                a[0].as_str().and_then(|s| idmap.get(s)).copied(),
-                a[2].as_str().and_then(|s| idmap.get(s)).copied(),
-            ) else {
+        for l in doc.links.values() {
+            let (Some(no), Some(ni)) = (idmap.get(&l.node_out).copied(), idmap.get(&l.node_in).copied()) else {
                 continue;
             };
             cmds.push(Command::AddLink {
                 node_out: no,
-                slot_out: a[1].as_str().unwrap_or("").to_string(),
+                slot_out: l.slot_out.clone(),
                 node_in: ni,
-                slot_in: a[3].as_str().unwrap_or("").to_string(),
+                slot_in: l.slot_in.clone(),
             });
         }
         let rename = idmap.into_iter().map(|(old, new)| (old, new.to_hex())).collect();
         Ok((Command::Compound(cmds), rename))
     }
 
+    /// The whole patch as its `.gfi` manifest.
     pub fn serialize(&self) -> String {
-        use serde_json::{json, Value};
-        let root = self.fragment(&self.all_uids());
-        // An ORDERED array, because the order is observable and a keyed map would alphabetize it
-        // away. On load, `reassert_system` back-fills — so an older patch picks up a new default.
-        let variables: Vec<Value> = self
-            .patch.variables
+        let mut patch = self.fragment(&self.all_uids());
+        // An ORDERED map, because the order is observable. On load, `reassert_system` back-fills,
+        // so an older patch picks up a new default. An ephemeral variable is goofi's own to say;
+        // writing it into a patch would carry one machine's answer onto another.
+        patch.variables = self
+            .patch
+            .variables
             .entries()
-            // An ephemeral variable is goofi's own to say; writing it into a patch would carry one
-            // machine's answer onto another.
             .filter(|(name, ..)| !self.patch.variables.is_ephemeral(name))
             .map(|(name, value, lock, control, source)| {
-                let mut e = variable_to_json(value); // {value, type}
-                if let Value::Object(ref mut m) = e {
-                    m.insert("name".to_string(), Value::String(name.to_string()));
-                    if let Some(c) = control {
-                        m.insert("control".to_string(), serde_json::to_value(c).expect("a plain record"));
-                    }
-                    if let Some(s) = source {
-                        m.insert("source".to_string(), serde_json::to_value(s).expect("a plain record"));
-                    }
-                    if !lock.is_default() {
-                        m.insert("lock".to_string(), serde_json::to_value(lock).expect("a plain record"));
-                    }
-                }
-                e
+                let variable = doc::Variable {
+                    value: value.clone(),
+                    control: control.cloned(),
+                    source: source.cloned(),
+                    lock: (!lock.is_default()).then_some(lock),
+                };
+                (name.to_string(), variable)
             })
             .collect();
         // The system group's lock is goofi's own and re-asserted on load, so a file never carries it.
-        let variable_groups: serde_json::Map<String, Value> = self
-            .patch.variables
+        patch.variable_groups = self
+            .patch
+            .variables
             .groups()
             .filter(|(g, _)| *g != goofi_core::variables::SYSTEM_GROUP)
-            .map(|(g, lock)| (g.to_string(), json!({ "lock": lock })))
+            .map(|(g, lock)| (g.to_string(), doc::Group { lock }))
             .collect();
-        let mut doc = json!({
-            "version": MANIFEST_VERSION,
-            "goofi": env!("CARGO_PKG_VERSION"),
-            "variables": Value::Array(variables),
-            "variable_groups": variable_groups,
-            "root": root,
-        });
-        if let Value::Object(ref mut m) = doc {
-            // The flat arrangement always exists (at worst the default), so it always rides.
-            m.insert("arrangement".to_string(), self.patch.arrangement.to_json());
-            if !self.viewpoint.is_null() {
-                m.insert("viewpoint".to_string(), self.viewpoint.clone());
-            }
-        }
-        serde_yaml_ng::to_string(&doc).unwrap_or_default()
+        // The flat arrangement always exists (at worst the default), so it always rides.
+        patch.arrangement = Some(self.patch.arrangement.to_json());
+        let archive = doc::Archive {
+            version: doc::MANIFEST_VERSION,
+            goofi: env!("CARGO_PKG_VERSION").to_string(),
+            patch,
+            viewpoint: (!self.viewpoint.is_null()).then(|| self.viewpoint.clone()),
+        };
+        serde_yaml_ng::to_string(&archive).unwrap_or_default()
     }
 
     /// Replace the graph from a `.gfi` manifest, `workspace` becoming what its nodes are born
-    /// into. Node types are validated before the current graph is torn down (a rejected load is
-    /// a no-op).
-    pub fn load_doc(&mut self, text: &str, workspace: &std::path::Path) -> Result<Option<String>, String> {
-        let doc: serde_json::Value = serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
-        let (nodes_v, links_v) = match doc.get("version").and_then(|v| v.as_i64()) {
-            Some(MANIFEST_VERSION) => {
-                let root = doc.get("root");
-                (root.and_then(|r| r.get("nodes")), root.and_then(|r| r.get("links")))
-            }
-            _ => {
-                // `goofi:` is read BEFORE the gate refuses, so the refusal can name the writer.
-                let writer = doc
-                    .get("goofi")
-                    .and_then(|v| v.as_str())
-                    .map(|w| format!(" — the file was written by goofi {w}"))
-                    .unwrap_or_default();
-                return Err(format!(
-                    "unsupported .gfi version (this build reads version {MANIFEST_VERSION}){writer}"
-                ));
-            }
-        };
-        let nodes = nodes_v.and_then(|v| v.as_object()).ok_or("missing `nodes`")?;
-        for rec in nodes.values() {
-            let ty = rec.get("type").and_then(|v| v.as_str()).ok_or("node missing `type`")?;
-            // A facade and a boundary port are the model's own types, not the palette's: they have
-            // no module to be missing, so the availability gate is not theirs to pass.
-            if structural(ty) {
-                continue;
-            }
-            self.resolve_type(ty)?;
-        }
-
-        // Every variable name is checked BEFORE the swap: a refusal after `clear` would leave the
-        // patch destroyed, and a load is graph and workspace or neither.
-        if let Some(serde_json::Value::Array(arr)) = doc.get("variables") {
-            for entry in arr {
-                if let Some(name) = entry.get("name").and_then(|v| v.as_str()) {
-                    if !goofi_core::variables::is_valid_variable_name(name) {
-                        return Err(format!(
-                            "this patch holds the variable `{name}`, which is not `group.element`: {}",
-                            goofi_core::variables::VARIABLE_NAME_RULE
-                        ));
-                    }
-                }
-            }
-        }
+    /// into. The document is admitted before the current graph is torn down (a rejected load is
+    /// a no-op); what was dropped on the way in is answered as warnings.
+    pub fn load_doc(&mut self, text: &str, workspace: &std::path::Path) -> Result<Vec<String>, String> {
+        let archive = doc::Archive::parse(text)?;
+        let (doc, mut warnings) = self.admit(archive.patch)?;
 
         self.clear();
         // The outgoing nodes retire NOW, into the workspace being replaced: an engine saves a
@@ -3542,32 +3502,20 @@ impl Graph {
         self.set_workspace(workspace);
         // Variables load BEFORE nodes so a node's `variables.*` default-expression resolves at
         // instantiation, IN FILE ORDER. Malformed entries are skipped (best-effort load).
-        if let Some(serde_json::Value::Array(arr)) = doc.get("variables") {
-            for entry in arr {
-                if let (Some(name), Some(value)) =
-                    (entry.get("name").and_then(|v| v.as_str()), variable_from_json(entry))
-                {
-                    let _ = self.patch.variables.apply_change(name, Some(value), None);
-                    if let Some(c) = entry.get("control") {
-                        if let Ok(c) = serde_json::from_value(c.clone()) {
-                            let _ = self.patch.variables.set_control(name, Some(c));
-                        }
-                    }
-                    if let Some(s) = entry.get("source").and_then(|s| serde_json::from_value(s.clone()).ok()) {
-                        let _ = self.patch.variables.set_source(name, Some(s));
-                    }
-                    if let Some(l) = entry.get("lock").and_then(|l| serde_json::from_value(l.clone()).ok()) {
-                        let _ = self.patch.variables.set_lock(name, l);
-                    }
-                }
+        for (name, v) in &doc.variables {
+            let _ = self.patch.variables.apply_change(name, Some(v.value.clone()), None);
+            if let Some(c) = &v.control {
+                let _ = self.patch.variables.set_control(name, Some(c.clone()));
+            }
+            if let Some(s) = &v.source {
+                let _ = self.patch.variables.set_source(name, Some(s.clone()));
+            }
+            if let Some(l) = v.lock {
+                let _ = self.patch.variables.set_lock(name, l);
             }
         }
-        if let Some(serde_json::Value::Object(groups)) = doc.get("variable_groups") {
-            for (group, rec) in groups {
-                if let Some(l) = rec.get("lock").and_then(|l| serde_json::from_value(l.clone()).ok()) {
-                    let _ = self.patch.variables.set_group_lock(group, Some(l));
-                }
-            }
+        for (group, g) in &doc.variable_groups {
+            let _ = self.patch.variables.set_group_lock(group, Some(g.lock));
         }
         // Every uid this load hands out, restored or minted — what keeps two records from landing
         // on one uid when a hand-written file spells the same number two ways.
@@ -3575,72 +3523,67 @@ impl Graph {
         let mut idmap: HashMap<String, Uid> = HashMap::new();
         // Every uid FIRST, so a record's `scope` and a link's endpoints resolve whatever the
         // iteration order — one uid space, so one pass answers for all three entity kinds.
-        for old in nodes.keys() {
+        for old in doc.nodes.keys() {
             let uid = self.restore_uid(old, &claimed);
             claimed.insert(uid);
             idmap.insert(old.clone(), uid);
         }
+        let blob = |v: &Option<serde_json::Value>| v.clone().unwrap_or_else(|| serde_json::json!({}));
         // Then the facades, before anything that can name one.
-        for (old, rec) in nodes.iter().filter(|(_, r)| r["type"] == subpatch::SCOPE_TYPE) {
+        for (old, rec) in doc.nodes.iter().filter(|(_, r)| r.type_id == subpatch::SCOPE_TYPE) {
             self.patch.nodes.insert(
                 idmap[old],
                 NodeEntry {
                     kind: Kind::Facade,
                     name: String::new(),
-                    pos: read_pos(rec),
+                    pos: rec.pos,
                     viewers: serde_json::json!({}), baseline: serde_json::json!({}),
                     record: Vec::new(),
                 },
             );
-            self.force_set_name(idmap[old], rec.get("name").and_then(|v| v.as_str()).unwrap_or(""));
-            if let Some(v) = rec.get("viewers").filter(|v| v.is_object()) {
+            self.force_set_name(idmap[old], &rec.name);
+            if let Some(v) = &rec.viewers {
                 let _ = self.set_node_viewers(idmap[old], v.clone());
             }
-            if let Some(v) = rec.get("baseline").filter(|v| v.is_object()) {
+            if let Some(v) = &rec.baseline {
                 let _ = self.set_node_baseline(idmap[old], v.clone());
             }
-            let _ = self.set_recorded(idmap[old], read_record(rec));
+            let _ = self.set_recorded(idmap[old], rec.record.clone());
         }
-        for (old, rec) in nodes.iter().filter(|(_, r)| !structural(r["type"].as_str().unwrap_or(""))) {
-            let ty = rec["type"].as_str().unwrap();
-            // Folded in BEFORE construction, since `insert_node` runs `setup()`.
-            let params = self.record_params(ty, rec)?;
-            let (engine, entry) = self.resolve_type(ty)?;
-            let params = self.default_params_of(ty, Some(params))?;
+        for (old, rec) in doc.nodes.iter().filter(|(_, r)| !structural(&r.type_id)) {
+            let params = self.record_params(rec)?;
+            let (engine, entry) = self.resolve_type(&rec.type_id)?;
+            let params = self.default_params_of(&rec.type_id, Some(params))?;
             // The record's KEY is its uid — restored, not reminted (see `restore_uid`). The name is
             // the type's fresh one only until the record's own `name` lands, just below.
             let uid = idmap[old];
-            let name = self.fresh_name(&name_base(goofi_node::bare(ty)));
+            let name = self.fresh_name(&name_base(goofi_node::bare(&rec.type_id)));
             self.insert_node_at(uid, name, engine, entry, params);
-            if let Some(name) = rec.get("name").and_then(|v| v.as_str()) {
-                self.force_set_name(uid, name);
-            }
-            let _ = self.set_node_pos(uid, read_pos(rec));
-            if let Some(v) = rec.get("viewers").filter(|v| v.is_object()) {
+            self.force_set_name(uid, &rec.name);
+            let _ = self.set_node_pos(uid, rec.pos);
+            if let Some(v) = &rec.viewers {
                 let _ = self.set_node_viewers(uid, v.clone());
             }
-            if let Some(v) = rec.get("baseline").filter(|v| v.is_object()) {
+            if let Some(v) = &rec.baseline {
                 let _ = self.set_node_baseline(uid, v.clone());
             }
-            let _ = self.set_recorded(uid, read_record(rec));
-            for (group, name, state) in record_sources(rec) {
+            let _ = self.set_recorded(uid, rec.record.clone());
+            for (group, name, state) in sources_of(rec) {
                 let _ = self.set_source(uid, &group, &name, state);
             }
         }
         // Membership, from each record's own `scope`. It is set before the ports so a port's
         // scope is already a member of whatever holds IT.
-        for (old, rec) in nodes {
-            let parent = rec.get("scope").and_then(|v| v.as_str()).and_then(|s| idmap.get(s)).copied();
+        for (old, rec) in &doc.nodes {
+            let parent = rec.scope.as_deref().and_then(|s| idmap.get(s)).copied();
             if parent.is_some() {
                 self.set_member_scope(idmap[old], parent);
             }
         }
         // The ports. Each is a member record whose type carries its direction and dtype, so nothing
         // about it is re-derived from the wire it will get below.
-        for (old, rec) in nodes {
-            let Some((dir, dtype)) = subpatch::boundary_type(rec["type"].as_str().unwrap_or("")) else {
-                continue;
-            };
+        for (old, rec) in &doc.nodes {
+            let Some((dir, dtype)) = subpatch::boundary_type(&rec.type_id) else { continue };
             let uid = idmap[old];
             // A port with no scope is not one, and the membership pass above is what gave it its.
             if self.scope_of(uid).is_none() {
@@ -3651,46 +3594,36 @@ impl Graph {
                 NodeEntry {
                     kind: Kind::Port(subpatch::Port { dir, dtype }),
                     name: String::new(),
-                    pos: read_pos(rec),
-                    viewers: rec
-                        .get("viewers")
-                        .filter(|v| v.is_object())
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::json!({})),
-                    baseline: rec
-                        .get("baseline")
-                        .filter(|v| v.is_object())
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::json!({})),
-                    record: read_record(rec),
+                    pos: rec.pos,
+                    viewers: blob(&rec.viewers),
+                    baseline: blob(&rec.baseline),
+                    record: rec.record.clone(),
                 },
             );
-            self.force_set_name(uid, rec.get("name").and_then(|v| v.as_str()).unwrap_or(""));
+            self.force_set_name(uid, &rec.name);
         }
-        if let Some(links) = links_v.and_then(|v| v.as_array()) {
-            for l in links {
-                let Some(a) = l.as_array().filter(|a| a.len() == 4) else { continue };
-                let no = a[0].as_str().and_then(|s| idmap.get(s)).copied();
-                let ni = a[2].as_str().and_then(|s| idmap.get(s)).copied();
-                let (Some(no), Some(ni)) = (no, ni) else { continue };
-                let (so, si) = (a[1].as_str().unwrap_or(""), a[3].as_str().unwrap_or(""));
-                // A link with one end on a port IS that port's inner wire — the same dispatch
-                // `add_link` makes, so the file and the op vocabulary say one thing.
-                let _ = self.add_link(no, so, ni, si);
+        for l in doc.links.values() {
+            let (Some(no), Some(ni)) = (idmap.get(&l.node_out).copied(), idmap.get(&l.node_in).copied()) else {
+                continue;
+            };
+            // A link with one end on a port IS that port's inner wire — the same dispatch
+            // `add_link` makes, so the file and the op vocabulary say one thing.
+            if let Err(e) = self.add_link(no, &l.slot_out, ni, &l.slot_in) {
+                warnings.push(format!("link {}.{} > {}.{} dropped: {e}", l.node_out, l.slot_out, l.node_in, l.slot_in));
             }
         }
-        self.viewpoint = doc.get("viewpoint").cloned().unwrap_or(serde_json::Value::Null);
+        self.viewpoint = archive.viewpoint.unwrap_or(serde_json::Value::Null);
         // A corrupt arrangement costs the CHROME, never the patch. The reason is kept for the load
         // reply; an ABSENT arrangement is not a corrupt one and warns about nothing.
-        let (arrangement, warning) = match doc.get("arrangement") {
-            None => (layout::Layout::default(), None),
-            Some(v) => match layout::Layout::from_json(v) {
-                Ok(l) => (l, None),
-                Err(e) => (layout::Layout::default(), Some(e)),
-            },
+        self.patch.arrangement = match doc.arrangement.as_ref().map(layout::Layout::from_json) {
+            None => layout::Layout::default(),
+            Some(Ok(l)) => l,
+            Some(Err(e)) => {
+                warnings.push(e);
+                layout::Layout::default()
+            }
         };
-        self.patch.arrangement = arrangement;
-        Ok(warning)
+        Ok(warnings)
     }
 }
 
@@ -3722,11 +3655,6 @@ pub fn name_base(type_name: &str) -> String {
     }
 }
 
-/// A record's armed output slots, as a `.gfi` and a copied fragment carry them.
-fn read_record(rec: &serde_json::Value) -> Vec<RecordedOutput> {
-    rec.get("record").and_then(|value| serde_json::from_value(value.clone()).ok()).unwrap_or_default()
-}
-
 /// A viewer blob under the uids a paste minted. A facade keys its blob by PORT UID, so a copy that
 /// kept the original's keys would point at slots it does not have; a leaf keys its by slot NAME,
 /// which no remap names, so it rides through unchanged.
@@ -3742,24 +3670,11 @@ fn remap_slots(viewers: &serde_json::Value, idmap: &HashMap<String, Uid>) -> ser
 }
 
 /// The source records a node record carries, in the shape [`command::Command::AddNode`] re-applies.
-fn record_sources(rec: &serde_json::Value) -> Vec<(String, String, SourceState)> {
-    let text = |ex: &serde_json::Value, k: &str| ex.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    rec.get("sources")
-        .and_then(|v| v.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|ex| {
-            Some((
-                ex.get("group")?.as_str()?.to_string(),
-                ex.get("name")?.as_str()?.to_string(),
-                SourceState {
-                    mode: ex.get("mode").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default(),
-                    expression: text(ex, "expression"),
-                    reference: text(ex, "reference"),
-                    triggers: ex.get("triggers").and_then(|v| v.as_bool()).unwrap_or(false),
-                },
-            ))
-        })
+fn sources_of(rec: &doc::NodeRecord) -> Vec<(String, String, SourceState)> {
+    rec.params
+        .iter()
+        .flat_map(|(group, names)| names.iter().map(move |(name, e)| (group, name, e)))
+        .filter_map(|(group, name, e)| Some((group.clone(), name.clone(), e.source()?)))
         .collect()
 }
 
@@ -3777,13 +3692,6 @@ fn parse_reference(reference: &str) -> Result<expr_rewrite::VarRef, String> {
         name: name.to_string(),
         slot: Some(slot.to_string()),
     })
-}
-
-fn read_pos(rec: &serde_json::Value) -> [f64; 2] {
-    rec.get("pos")
-        .and_then(|v| v.as_array())
-        .and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?]))
-        .unwrap_or([0.0, 0.0])
 }
 
 /// The health plane's one mutator: apply one report off any engine's drain. A free function so

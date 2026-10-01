@@ -58,7 +58,7 @@ fn strip(g: &Goofi) -> Vec<String> {
 /// The manager's own loader, asked to open what the manager just saved.
 fn reload_warning(g: &Goofi) -> Value {
     let yaml = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
-    g.call("session load", j!({ "content": yaml }))["layout_warning"].clone()
+    g.call("session load", j!({ "content": yaml }))["warnings"][0].clone()
 }
 
 fn split(g: &Goofi, panel: &str) -> String {

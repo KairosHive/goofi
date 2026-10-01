@@ -263,12 +263,14 @@ pub(crate) fn nodes_paste(tx: &mut Txn, payload: &Value) -> Result<Value, String
         .transpose()?
         .unwrap_or([0.0, 0.0]);
     let scope = parse_uid_opt(&tx.g, payload, "inst_id", "nodes paste")?;
-    let (cmd, rename) = tx.g.import_fragment(doc, scope, offset)?;
+    let doc = serde_json::from_value(doc.clone()).map_err(|e| format!("nodes paste: doc: {e}"))?;
+    let (doc, warnings) = tx.g.admit(doc)?;
+    let (cmd, rename) = tx.g.import_fragment(&doc, scope, offset)?;
     tx.apply(cmd)?;
     for uid in rename.values() {
         tx.emit(Event::NodeAdded { uid: uid.clone() });
     }
-    Ok(json!({ "rename": rename }))
+    Ok(json!({ "rename": rename, "warnings": warnings }))
 }
 
 pub(crate) fn node_add(tx: &mut Txn, payload: &Value) -> Result<Value, String> {
@@ -1340,8 +1342,8 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         rescan(state, &mut g, &staged);
         // Parse BEFORE anything is announced or committed.
         goofi_supervisor::progress::report("Starting the patch's nodes");
-        let layout_warning = match g.load_doc(&content, &staged) {
-            Ok(warning) => warning,
+        let warnings = match g.load_doc(&content, &staged) {
+            Ok(warnings) => warnings,
             Err(e) => {
                 // Refused, so the registry the scan above swapped is re-derived from the mount
                 // that is still live; the staged mount goes with `fresh`.
@@ -1396,9 +1398,9 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
         if let Some(path) = from_path {
             state.events.send(Event::SavePathChanged { save_path: json!(path) });
         }
-        // A stored arrangement this model admits but cannot render falls back to the default, so
-        // the reply says so rather than leaving the change unexplained.
-        json!({ "ok": true, "layout_warning": layout_warning })
+        // What the load dropped on the way in — a link it could not make, an arrangement it could
+        // not render — is said here rather than left unexplained.
+        json!({ "ok": true, "warnings": warnings })
     };
     if let Some(path) = &opened {
         fsbrowse::remember(path);

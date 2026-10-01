@@ -60,23 +60,25 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     let yaml = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
     let saved: serde_json::Value = serde_yaml_ng::from_str(&yaml).unwrap();
     assert_eq!(saved["goofi"], env!("CARGO_PKG_VERSION"), "the manifest names its writer");
-    assert!(saved["root"].get("scopes").is_none(), "no block of its own for the structure");
-    let recs = saved["root"]["nodes"].as_object().unwrap();
+    assert!(saved["patch"].get("scopes").is_none(), "no block of its own for the structure");
+    let recs = saved["patch"]["nodes"].as_object().unwrap();
     assert_eq!(recs[&outer]["type"], "SubPatch", "the facade is a node record: {:?}", recs[&outer]);
     assert_eq!(recs[&spare]["type"], "OutTable", "…and so is the port");
     assert_eq!(recs[&scope]["scope"], outer, "membership rides the record it belongs to");
-    let source = &recs[&hex(sink)]["sources"][0];
+    // A source rides INLINE on the param it drives: the literal, the mode and both retained texts.
+    let source = &recs[&hex(sink)]["params"]["buffer"]["size"];
     assert_eq!((&source["mode"], &source["expression"], &source["reference"]),
                (&j!("reference"), &j!("variables.patch.gain * 64"), &j!("level.out")), "{source}");
+    assert!(saved["patch"]["links"].as_object().is_some_and(|l| !l.is_empty()), "links are a keyed map");
 
-    let saved_gain = saved["variables"].as_array().unwrap().iter()
-        .find(|e| e["name"] == "patch.gain").cloned().expect("the element is in the file");
+    let saved_gain = saved["patch"]["variables"]["patch.gain"].clone();
+    assert!(saved_gain.is_object(), "the element is in the file: {}", saved["patch"]["variables"]);
     assert_eq!((&saved_gain["control"]["kind"], &saved_gain["control"]["x"]), (&j!("knob"), &j!(2.0)),
                "the widget and its place ride the archive: {saved_gain}");
     assert_eq!(saved_gain["lock"], j!({ "config": false, "value": true }), "{saved_gain}");
     assert_eq!(saved_gain["source"], j!({ "reference": "level.out", "index": 0 }), "{saved_gain}");
-    assert_eq!(saved["variable_groups"]["patch"]["lock"]["config"], true, "{}", saved["variable_groups"]);
-    assert!(saved["variable_groups"].get("system").is_none(), "the system group's lock is goofi's, not the file's");
+    assert_eq!(saved["patch"]["variable_groups"]["patch"]["lock"]["config"], true, "{}", saved["patch"]["variable_groups"]);
+    assert!(saved["patch"]["variable_groups"].get("system").is_none(), "the system group's lock is goofi's, not the file's");
 
     g.call("layout panel edit", j!({ "panel": panel(&g), "type": "viewer",
                                         "state": { "node": hex(osc), "slot": "out" } }));
@@ -170,7 +172,7 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     // An archive from before groups existed cannot come up half-alive: every expression reading
     // its variables would be broken, so the load stops and names the variable.
     let flat = g.call("session manifest", j!({}))["yaml"].as_str().unwrap()
-        .replace("name: patch.gain", "name: gain");
+        .replace("  patch.gain:", "  gain:");
     let why = g.refuse("session load", j!({ "content": flat }));
     assert!(why.contains("gain") && why.contains("group.element"), "the load names the variable: {why}");
 
@@ -279,7 +281,7 @@ fn only_a_file_gives_a_patch_a_home_a_refused_load_changes_nothing_and_a_broken_
     assert_ne!(broken, yaml, "the fixture actually corrupted something");
     let r = g.call("session load", j!({ "content": broken }));
     assert_eq!(r["ok"], true, "the patch still opens: {r}");
-    assert!(r["layout_warning"].as_str().is_some_and(|w| w.contains("appears twice")),
+    assert!(r["warnings"][0].as_str().is_some_and(|w| w.contains("appears twice")),
             "…and says why the arrangement was dropped: {r}");
     assert_eq!(g.nodes().len(), 1, "with the graph intact");
     // An upload carries no file, so inheriting the previous path would save a different patch over it.
@@ -572,7 +574,7 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
     g.until("a workspace edit to be autosaved", |g| manifest(g).exists().then_some(()));
     g.set_param(osc, "output", "sfreq", 3.0);
     g.until("the latest edit to be autosaved", |g| {
-        std::fs::read_to_string(manifest(g)).ok().filter(|m| m.contains("sfreq: 3.0")).map(|_| ())
+        std::fs::read_to_string(manifest(g)).ok().filter(|m| m.contains("sfreq:\n            value: 3.0")).map(|_| ())
     });
     let dir = autosave_dir(&g);
 

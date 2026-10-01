@@ -680,7 +680,7 @@ fn a_sub_patch_is_copied_whole_and_the_copy_owes_the_original_nothing() {
     // A fragment is SELF-CONTAINED: it holds the whole subtree and no cable that reaches out of it.
     let held = fragment["nodes"].as_object().expect("a nodes map").len();
     assert_eq!(held, 9, "two facades, their four ports, and the three leaves inside: {fragment}");
-    assert!(fragment["links"].as_array().is_some_and(|l| !l.is_empty()), "…and its inner wiring: {fragment}");
+    assert!(fragment["links"].as_object().is_some_and(|l| !l.is_empty()), "…and its inner wiring: {fragment}");
 
     let rename = g.call("nodes paste", j!({ "doc": fragment, "pos": [400.0, 0.0] }))["rename"].clone();
     let copy = rename[&outer].as_str().expect("the copy's facade uid").to_string();
