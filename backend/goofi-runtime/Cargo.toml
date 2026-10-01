@@ -8,7 +8,8 @@ license.workspace = true
 goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-core = { path = "../goofi-core" }
 goofi-node = { path = "../goofi-node" }
-goofi-host-sdk = { path = "../goofi-host-sdk" }
+goofi-host-sdk = { path = "../goofi-host-sdk", features = ["host"] }
+goofi-build = { path = "../goofi-build" }
 goofi-codec = { path = "../goofi-codec" }
 goofi-transport = { path = "../goofi-transport" }
 indexmap = "2"

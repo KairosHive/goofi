@@ -45,7 +45,7 @@ fn main() {
         // refusal here.
         Some("vst3-scan") => std::process::exit(goofi_audio::vst3::scan_main(&argv[1..])),
         // …and its own native node host: a node built after boot runs in a child of this binary.
-        Some("host") => std::process::exit(goofi_signal::hosted::host_main(&argv[1..])),
+        Some("host") => std::process::exit(goofi_runtime::hosted::host_main(&argv[1..])),
         Some(first) if first.starts_with('-') => argv,
         Some(_) => std::process::exit(client_main(argv)),
     };

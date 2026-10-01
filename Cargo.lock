@@ -1033,6 +1033,7 @@ dependencies = [
  "goofi-node",
  "goofi-python",
  "goofi-record",
+ "goofi-runtime",
  "goofi-signal",
  "goofi-supervisor",
  "goofi-transport",
@@ -1206,6 +1207,7 @@ dependencies = [
 name = "goofi-runtime"
 version = "3.0.0"
 dependencies = [
+ "goofi-build",
  "goofi-codec",
  "goofi-core",
  "goofi-host-sdk",

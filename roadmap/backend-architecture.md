@@ -6,7 +6,7 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-§3.11, §4.H-I, §5.8-10 and 12-13.
+§4.I, §5.8-10 and 12-13.
 
 ## 1. The patch model and the runtime are two types
 
@@ -53,29 +53,27 @@ The registry stays the explicit `TREE` in `ops.rs`, with `write::<NodeAdd>()` le
 `const fn`. The graph stays a `Mutex`. Each op dispatches on its own blocking task and the graph
 mutex orders them.
 
-11. The tail projects touched paths only: a `PatchMut` is the one writer of the patch and
-    records the paths it touched, an order-changing edit re-sends its parent map, and `GraphDoc`
-    keeps only the version in place of today's shallow record-level diff of the whole replica.
-
-Not to be done: `library get --source` off the lock (one file read under a read transaction; the
-probes and builds a scan waits on already run off it in `prebuild`); the `AppState` split and an
-actor newtype (the typed ops left no reader that branches on either; a split would add a second
-owner of the same locks), moving the `record start` plugin mutex into its op (it must also cover the
-plugin `pre_op` hook, which runs before the op); a per-socket op queue that holds an op's events
-behind its reply (a second scheduler beside the op path; a slow op parked everything behind it), and
-a rate limiter inside `useLiveValue` (the gesture design has to follow the op path; a preview's
-latest-wins slot is not a queue).
+Not to be done: a touched-path projection in place of the record-level diff (a record's projection
+derives from the catalog and from stream resolution, not from patch writes alone, so a writer's
+touched set would need runtime-side marks as well — a second bookkeeping the diff makes unnecessary;
+the diff is linear in the patch); `library get --source` off the lock (one file read under a read
+transaction; the probes and builds a scan waits on already run off it in `prebuild`); the `AppState`
+split and an actor newtype (the typed ops left no reader that branches on either; a split would add
+a second owner of the same locks), moving the `record start` plugin mutex into its op (it must also
+cover the plugin `pre_op` hook, which runs before the op); a per-socket op queue that holds an op's
+events behind its reply (a second scheduler beside the op path; a slow op parked everything behind
+it), and a rate limiter inside `useLiveValue` (the gesture design has to follow the op path; a
+preview's latest-wins slot is not a queue).
 
 ## 4. One node runtime, one protocol per boundary
 
 `goofi-runtime` holds every node's thread, desired state, bindings, ports and faults behind one
 `Executor` trait; data services keep no history, and the one-shot race stays a documented property.
 
-- **H** Graphics host `.rs` files built after boot run hosted, as signal does; audio keeps
-  loading in-process and never unloads (`audio-engine.md`).
 - **I** Native ABI stays bytes; params cross only as deltas, not the whole map per call.
 
-Fold graphics recording (`set_recorder` from the render thread) into the executor.
+Audio keeps loading `.rs` files in-process and never unloads them (`audio-engine.md`). Fold
+graphics recording (`set_recorder` from the render thread) into the executor.
 
 ## 5. An ownership tree, one session type, one boot path
 

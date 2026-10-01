@@ -87,6 +87,9 @@ pub struct GraphicsEngine {
     shared: Arc<Shared>,
     pub(crate) compiler: Compiler,
     pub(crate) python: Option<goofi_python::catalog::Python>,
+    /// The executable whose `host` mode runs a node built after boot, and whether boot is over.
+    pub(crate) host: Option<std::path::PathBuf>,
+    pub(crate) booted: bool,
     pub(crate) classes: HashMap<String, Arc<Class>>,
     /// The file and stamp each class was registered from, so a rescan skips one that did not
     /// move rather than validating and recompiling every shipped shader for one edit elsewhere.
@@ -211,6 +214,8 @@ impl GraphicsEngine {
             classes: HashMap::new(),
             stamps: HashMap::new(),
             python: None,
+            host: None,
+            booted: false,
             live: HashMap::new(),
             runtime,
             inbox,
@@ -348,6 +353,10 @@ impl Engine for GraphicsEngine {
             .values()
             .map(|c| LibraryEntry { manifest: c.manifest, isolation: c.isolation })
             .collect()
+    }
+
+    fn boot_done(&mut self) {
+        self.booted = true;
     }
 
     fn scan(&mut self, dir: &Path) -> Vec<ScannedType> {

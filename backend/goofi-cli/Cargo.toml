@@ -28,6 +28,7 @@ goofi-node = { path = "../goofi-node" }
 goofi-transport = { path = "../goofi-transport" }
 # The engine's Python door, handed the interpreters at boot.
 goofi-signal = { path = "../signal/goofi-signal" }
+goofi-runtime = { path = "../goofi-runtime" }
 goofi-audio = { path = "../audio/goofi-audio" }
 goofi-window = { path = "../goofi-window" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }

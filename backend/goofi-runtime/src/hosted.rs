@@ -1,5 +1,5 @@
-//! The hosted native tier: a Rust node built after boot runs its library in a child of goofi's
-//! own binary, spoken to over the exchange the Python subprocess tier uses. A library once loaded
+//! The hosted native tier, for every engine: a Rust node built after boot runs its library in a
+//! child of goofi's own binary, spoken to over the exchange the Python subprocess tier uses. A library once loaded
 //! is never unloaded, so this is what lets a node authored in the session run its newest build.
 
 use std::path::{Path, PathBuf};
@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use goofi_codec::rpc::{self, Entry};
 use goofi_node::NodeManifest;
-use goofi_signal_sdk::host::{in_slots, Call, CodecNode};
+use goofi_host_sdk::host::{in_slots, Call, CodecNode};
 use goofi_transport::{Exchange, Served};
 
 static HOSTED_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -115,7 +115,7 @@ fn serve(artifact: &Path, type_name: &str) -> Result<(), String> {
     let intro = goofi_node::parse_introspection(&opened.describe)?;
     let manifest = goofi_node::leak_manifest(type_name.to_string(), &intro)?;
     // SAFETY: `open` matched the library's version before handing it out.
-    let loaded = unsafe { goofi_signal_sdk::host::Loaded::open(opened.library, manifest) }?;
+    let loaded = unsafe { goofi_host_sdk::host::Loaded::open(opened.library, manifest) }?;
     let mut raw = loaded.raw();
     let mut served = Served::open_from_env()?;
     loop {

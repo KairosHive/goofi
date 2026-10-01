@@ -1346,12 +1346,22 @@ fn native_host_program_writes_the_shared_output() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("TextureHost.rs"), include_str!("../fixtures/texture_host.rs")).unwrap();
     g.call("library refresh", j!({}));
+    // Authored after boot, so it runs HOSTED, as a signal node does: its library in a child of
+    // goofi's own binary, listed while the instance lives, and never in this process.
+    let r = g.call("library get", j!({ "type": "graphics:TextureHost" }));
+    assert_eq!((&r["provenance"], &r["language"], &r["tier"]), (&j!("patch"), &j!("rust"), &j!("hosted")), "{r}");
     let source = g.add("graphics:TextureHost");
     let math = g.add("graphics:Math");
     g.ready(source);
     g.ready(math);
     g.link(source, "out", math, "input");
     g.set_param(source, "image", "mode", "render");
+    let hosts = |g: &Goofi| -> Vec<String> {
+        g.call("session status", j!({}))["resources"].as_array().into_iter().flatten()
+            .filter(|e| e["kind"] == "child")
+            .filter_map(|e| e["name"].as_str()).filter(|n| n.starts_with("native node TextureHost")).map(str::to_string).collect()
+    };
+    g.until("one host child for the one instance", |g| (hosts(g).len() == 1).then_some(()));
     let frame = drawn(&g, math, "host GPU program sampled downstream", |d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [0.25, 0.25, 0.5, 1.0]));
     assert!(close(px(&frame, 1, 1), [0.75, 0.75, 0.5, 1.0]));
     g.set_param(source, "image", "mode", "broken");

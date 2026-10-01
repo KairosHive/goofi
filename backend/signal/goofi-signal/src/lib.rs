@@ -1,7 +1,6 @@
 //! The signal engine and its shared host runtime.
 mod engine;
 pub mod scan;
-pub mod hosted;
 pub use engine::SignalEngine;
 pub use scan::Python;
 pub use goofi_runtime::{common_decls, RunPolicy, FREQ_MODE_SECONDS_PER_UPDATE, FREQ_MODE_UPDATES_PER_SECOND};

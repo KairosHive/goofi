@@ -73,7 +73,7 @@ impl SignalEngine {
     /// loads it — a re-authored node's newest build is what runs.
     fn host_rust(&mut self, artifact: &Path, type_name: &str) -> Result<bool, String> {
         let host = self.host.clone().ok_or("no host executable was named, so a node built after boot cannot run")?;
-        let intro = goofi_node::parse_introspection(&crate::hosted::describe(&host, artifact)?)?;
+        let intro = goofi_node::parse_introspection(&goofi_runtime::hosted::describe(&host, artifact)?)?;
         if let Some(reason) = goofi_node::illegal_slot(&intro).or_else(|| goofi_node::foreign_output(&intro, None)) {
             return Err(reason);
         }
@@ -81,7 +81,7 @@ impl SignalEngine {
         let artifact = artifact.to_path_buf();
         let iox = self.iox.clone();
         let factory: goofi_signal_sdk::NodeFactory =
-            Box::new(move |_| Box::new(crate::hosted::Hosted::node(iox.clone(), host.clone(), artifact.clone(), manifest)));
+            Box::new(move |_| Box::new(goofi_runtime::hosted::Hosted::node(iox.clone(), host.clone(), artifact.clone(), manifest)));
         Ok(self.register_dyn_type(manifest, factory, &goofi_node::HOSTED))
     }
 

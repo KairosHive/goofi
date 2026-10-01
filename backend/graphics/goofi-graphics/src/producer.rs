@@ -28,20 +28,41 @@ impl crate::GraphicsEngine {
         self.python = Some(python);
     }
 
+    /// Name the executable whose `host` mode runs a node built after boot.
+    pub fn set_host(&mut self, exe: std::path::PathBuf) {
+        self.host = Some(exe);
+    }
+
     pub(crate) fn register_host(&mut self, path: &Path, name: &str) -> Result<bool, String> {
         let (manifest, factory, isolation): (_, Factory, _) = if path.extension().is_some_and(|e| e == "rs") {
             let base = goofi_build::base_dir(&goofi_supervisor::home::dir());
             let artifact = goofi_build::built(&goofi_build::GRAPHICS, path, &base)?;
-            let opened = goofi_build::open(&artifact)?;
-            let intro = goofi_node::parse_introspection(&opened.describe)?;
+            // Built after boot, it runs HOSTED, as a signal node does: its library in a child of
+            // goofi's own binary, never in this process, whose loader could not unload it.
+            let host = self.booted.then(|| self.host.clone()).flatten();
+            let describe = match &host {
+                Some(host) => goofi_runtime::hosted::describe(host, &artifact)?,
+                None => goofi_build::open(&artifact)?.describe,
+            };
+            let intro = goofi_node::parse_introspection(&describe)?;
             if let Some(why) =
                 goofi_node::illegal_slot(&intro).or_else(|| goofi_node::foreign_output(&intro, Some(SlotType::Texture)))
             {
                 return Err(why);
             }
             let manifest = goofi_node::leak_manifest(name.into(), &intro)?;
-            let loaded = Arc::new(unsafe { goofi_host_sdk::host::Loaded::open(opened.library, manifest) }?);
-            (manifest, Arc::new(move |_| loaded.instantiate()), &goofi_node::NATIVE)
+            match host {
+                Some(host) => {
+                    let iox = self.iox.clone();
+                    let factory: Factory = Arc::new(move |_| Box::new(goofi_runtime::hosted::Hosted::node(iox.clone(), host.clone(), artifact.clone(), manifest)));
+                    (manifest, factory, &goofi_node::HOSTED)
+                }
+                None => {
+                    let opened = goofi_build::open(&artifact)?;
+                    let loaded = Arc::new(unsafe { goofi_host_sdk::host::Loaded::open(opened.library, manifest) }?);
+                    (manifest, Arc::new(move |_| loaded.instantiate()), &goofi_node::NATIVE)
+                }
+            }
         } else {
             use goofi_python::catalog::{Probed, probe, routed};
             match probe(path, self.python.as_ref()) {

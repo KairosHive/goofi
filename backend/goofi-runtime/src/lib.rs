@@ -27,6 +27,7 @@ use indexmap::IndexMap;
 
 mod common;
 pub mod host;
+pub mod hosted;
 
 pub use common::*;
 pub use host::{HostExecutor, NodeBuild};

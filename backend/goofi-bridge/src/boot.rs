@@ -124,6 +124,9 @@ pub fn boot(config: Config) -> Result<Manager, String> {
         }
         if let Some(host) = &host {
             crate::signal_engine(&mut g).set_host(host.clone());
+            if let Some(graphics) = crate::try_graphics_engine(&mut g) {
+                graphics.set_host(host.clone());
+            }
         }
         // A demo registers no audio engine, so there is nothing to hand it.
         if !mode.demo {
