@@ -156,9 +156,8 @@ impl EffectOp for Save {
             None => state.save_path().ok_or("session save: this patch has no home yet — give a path")?,
         };
         let mount = state.mount();
-        // Everything the archive says is taken under the guard; the zip runs off it. The workspace
-        // is sampled BEFORE the pack: baselining after would call a file written during the zip
-        // packed either way, which is the direction that LOSES an edit.
+        // Taken under the guard, zipped off it. The workspace is sampled BEFORE the pack:
+        // baselining after would call a file written during the zip packed, which LOSES an edit.
         let (manifest, extra, packed, revision) = {
             let mut g = state.graph.lock();
             g.persist();
@@ -166,14 +165,16 @@ impl EffectOp for Save {
             (g.serialize(), crate::bundled_custom(&g, &state.custom), goofi_graph::archive::fingerprint(&mount), revision)
         };
         crate::save_archive(std::path::Path::new(&path), &manifest, &mount, &extra, a.overwrite.unwrap_or(true))?;
-        // An edit that landed during the zip is not in the file: the patch stays dirty. Otherwise
-        // announced UNCONDITIONALLY, not on the flag's transition: a patch dirtied solely by a file
-        // in the mount leaves the flag already false, so no transition comes.
+        // Decided under the graph guard, which orders every commit: an edit that landed during the
+        // zip is not in the file, so the patch stays dirty. Announced unconditionally, since a
+        // patch dirtied by a workspace file alone has no flag transition to announce.
+        let _g = state.graph.lock();
         if state.doc.lock().version() == revision {
             *state.workspace_baseline.lock() = packed;
             state.set_dirty(false);
             state.events.send(Event::UnsavedChanges { unsaved_changes: false });
         }
+        drop(_g);
         // The patch's home, stored ONLY on success and announced as well as stored: an
         // already-connected peer gets no new snapshot to read it from.
         *state.save_path.lock() = Some(path.clone());

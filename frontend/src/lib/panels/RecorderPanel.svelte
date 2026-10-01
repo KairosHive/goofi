@@ -33,8 +33,8 @@
 		if (!node || slots.length === 0) return;
 		failure = null;
 		void history()
-			.transaction(`Arm ${node.name}`, async () => {
-				for (const slot of slots) await g.armSlot(uid, slot);
+			.transaction(`Arm ${node.name}`, async (step) => {
+				for (const slot of slots) await g.armSlot(uid, slot, step);
 			})
 			.catch((e: unknown) => (failure = String(e)));
 	}

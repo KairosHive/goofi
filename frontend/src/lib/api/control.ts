@@ -300,25 +300,24 @@ export interface HistoryLabels {
 	redo: string | null;
 }
 
-/** What a call carries beside its payload: where the actor is, and the step it belongs to. */
-export interface CallExtra {
-	context?: unknown;
-	label?: string;
-	group?: string;
+/** One history step several writes land in: the token the manager merges by, and its label. */
+export interface Step {
+	group: string;
+	label: string;
 }
 
 /** The two seams between the control plane and the history store, so neither imports the other:
- * every call asks `extra` for its envelope, and every reply that moved the history reports it. */
+ * every call asks for the actor's context, and every reply that moved the history reports it. */
 export const historyFeed = {
 	labels: (_: HistoryLabels): void => {},
-	extra: (): CallExtra => ({})
+	context: (): unknown => null
 };
 
 /** Minimal structural surface of the control client — the seam a test fake substitutes for. */
 export interface Control {
 	/** This client's stable ACTOR id; it scopes the manager's per-actor undo history. */
 	readonly actor: string;
-	call<T = unknown>(op: OpName, payload?: Record<string, unknown>): Promise<T>;
+	call<T = unknown>(op: OpName, payload?: Record<string, unknown>, step?: Step): Promise<T>;
 	/** One step of a drag: the op as a PREVIEW, no reply, and the newest per `key` each frame. */
 	preview(key: string, op: OpName, payload: Record<string, unknown>): void;
 	on(fn: (ev: ControlEvent) => void): () => void;
@@ -466,7 +465,7 @@ export class ControlClient implements Control {
 	}
 
 	/** Issue an RPC. Returns a promise resolving to the server's result. */
-	call<T = unknown>(op: OpName, payload: Record<string, unknown> = {}): Promise<T> {
+	call<T = unknown>(op: OpName, payload: Record<string, unknown> = {}, step?: Step): Promise<T> {
 		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
 			return Promise.reject(new Error('control socket not connected'));
 		}
@@ -477,7 +476,7 @@ export class ControlClient implements Control {
 			this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
 			// `actor` rides at the top level: the manager scopes its undo/redo history by it —
 			// whose undo, where GOOFI_SESSION names which server.
-			this.ws!.send(JSON.stringify({ id, op, payload, actor: this.actor, ...historyFeed.extra() }));
+			this.ws!.send(JSON.stringify({ id, op, payload, actor: this.actor, context: historyFeed.context(), ...step }));
 		});
 	}
 	preview(key: string, op: OpName, payload: Record<string, unknown>): void {

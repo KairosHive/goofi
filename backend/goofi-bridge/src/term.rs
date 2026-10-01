@@ -375,10 +375,10 @@ impl Instance {
         *self.exit.borrow()
     }
 
-    /// Whether the child was reaped within `within`; one with no reaper counts as reaped.
+    /// Whether the child was reaped within `within`; one whose reaper is not up yet was not.
     fn reaped_within(&self, within: std::time::Duration) -> bool {
         let reaped = self.reaped.lock().clone();
-        reaped.is_none_or(|done| done.wait_within(within))
+        reaped.is_some_and(|done| done.wait_within(within))
     }
 }
 

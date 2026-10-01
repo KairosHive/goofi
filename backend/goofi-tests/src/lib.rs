@@ -253,8 +253,8 @@ impl Goofi {
         config.python = find_python();
         config.plugins = plugins;
         config.register = Some(Box::new(fixtures::register));
-        // At most LIVE instances at once across the binary's test threads, counted per thread so
-        // a situation that boots a second one never waits on itself. What the thread count was.
+        // At most LIVE threads with a live instance at once; a thread booting a second one never
+        // waits on itself.
         gate().enter();
         let manager = goofi_bridge::boot(config).expect("the state boots");
         let state = manager.state.clone();
@@ -324,9 +324,6 @@ impl Goofi {
         Uid::from_hex(hex).unwrap_or_else(|| panic!("add_node answered a malformed uid {hex}"))
     }
 
-    /// Set one param's literal value, answering `{value, error}` — the value as STORED, coerced
-    /// to the param's declared type.
-    #[track_caller]
     /// The graph under its lock, for a situation's own look at the runtime.
     pub fn graph(&self) -> std::sync::MutexGuard<'_, goofi_graph::Graph> {
         self.state.graph()
@@ -339,6 +336,9 @@ impl Goofi {
         g.name(uid).unwrap_or_default().to_string()
     }
 
+    /// Set one param's literal value, answering `{value, error}` — the value as STORED, coerced
+    /// to the param's declared type.
+    #[track_caller]
     pub fn set_param(&self, uid: Uid, group: &str, name: &str, value: impl Into<Value>) -> Value {
         self.call(
             "node param edit",

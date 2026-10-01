@@ -186,7 +186,7 @@ pub fn typescript() -> String {
          // Panel types and viewer kinds are declared ONCE, in the manager: naming one that is not\n\
          // in the table is a type error here and a teachable refusal there. The BEHAVIOUR keyed off\n\
          // a word stays client-side — which component renders a panel type (`panels/register.ts`),\n\
-         // and whether a particular array draws (`viewers/kind.ts`). Regenerate by running\n\
+         // and whether a particular array draws (`viewers/registry.ts`). Regenerate by running\n\
          // `cargo test -p goofi-bridge`, which rewrites this file when it drifts.\n\
          import type {{ IconName }} from '$lib/ui';\n\
          \n\

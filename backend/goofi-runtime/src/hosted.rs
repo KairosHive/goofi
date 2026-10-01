@@ -1,6 +1,5 @@
 //! The hosted native tier, for every engine: a Rust node built after boot runs its library in a
-//! child of goofi's own binary, spoken to over the exchange the Python subprocess tier uses. A library once loaded
-//! is never unloaded, so this is what lets a node authored in the session run its newest build.
+//! child of goofi's own binary, over the Python subprocess tier's exchange, so its newest build runs.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

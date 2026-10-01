@@ -20,7 +20,7 @@
 
 	// Built here, its single use site, so viewBinding.ts stays rune-free.
 	const rec = $derived(g.nodeById(node));
-	// Raw (pre-resolution) snapshot of this slot's view state, for undo capture.
+	// Raw (pre-resolution) snapshot of this slot's view state, the base the next edit merges into.
 	function snap(): { kind?: ViewerKind; settings: SettingsMap } {
 		const v = slotView(rec, slot);
 		return { kind: v.kind, settings: { ...v.settings } };

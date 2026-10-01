@@ -1,7 +1,7 @@
 /** Undo/redo as the MANAGER keeps it: every write is a step in this actor's history there, and
- * this store only mirrors what the replies say is on top. A transaction puts one group token on
- * every call inside it, which the manager merges into one step under the transaction's label. */
-import { getControl, historyFeed, type Control, type HistoryLabels } from '$lib/api/control';
+ * this store only mirrors what the replies say is on top. A transaction hands its calls one
+ * step, which the manager merges into one entry under the transaction's label. */
+import { getControl, historyFeed, type Control, type HistoryLabels, type Step } from '$lib/api/control';
 import { asNavContext, captureNavContext, restoreNavContext } from './navContext';
 import { pulseRestored } from './undoFlash';
 import { graph, type GraphStore } from './graph.svelte';
@@ -22,17 +22,12 @@ export class HistoryStore {
 
 	/** Re-entrancy guard: a held Ctrl+Z must not send a second flip before the first answers. */
 	private replaying = false;
-	/** The open transaction: the token its calls carry, and the label the step takes. */
-	private group: { token: string; label: string } | null = null;
 	private control: () => Control = getControl;
 	private graph: () => GraphStore = graph;
 
 	constructor() {
 		historyFeed.labels = (h) => this.adopt(h);
-		historyFeed.extra = () => ({
-			context: captureNavContext(),
-			...(this.group ? { group: this.group.token, label: this.group.label } : {})
-		});
+		historyFeed.context = captureNavContext;
 	}
 
 	/** Test seam: flip against an injected control and the graph store that mirrors it. */
@@ -80,14 +75,10 @@ export class HistoryStore {
 	}
 
 	/** Every write inside `fn` is ONE step under `label`; a nested transaction rides the outer one. */
-	async transaction<T>(label: string, fn: () => Promise<T>): Promise<T> {
-		if (this.group) return fn();
-		this.group = { token: `${Date.now()}-${Math.random().toString(36).slice(2)}`, label };
-		try {
-			return await fn();
-		} finally {
-			this.group = null;
-		}
+	/** Run `fn` with one step every call inside hands on, so the manager merges them under
+	 * `label`. Given an enclosing `within`, the calls join that step instead. */
+	transaction<T>(label: string, fn: (step: Step) => Promise<T>, within?: Step): Promise<T> {
+		return fn(within ?? { group: `${Date.now()}-${Math.random().toString(36).slice(2)}`, label });
 	}
 
 	/** A new session or a wholesale load: the manager's history is empty, so this mirror is too. */

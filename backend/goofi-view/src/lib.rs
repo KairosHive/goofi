@@ -236,7 +236,7 @@ pub fn undeclared_axes(shape: &[usize]) -> Vec<PlannedAxis> {
 }
 
 /// What the admitted specs asked of a frame, folded: the axes, the depth they all take, and
-/// whether the caps are one box (every spec that caps a dim is an `aspect` one).
+/// whether an `aspect` spec is among the cappers, so the caps shrink as one box.
 struct Fold {
     axes: Vec<PlannedAxis>,
     depth: Depth,
@@ -253,7 +253,7 @@ fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<Fol
     let mut whole: HashSet<usize> = HashSet::new();
     let mut admitted = 0usize;
     let mut depth = Depth::U8;
-    let mut aspect = true;
+    let mut aspect = false;
     for spec in specs {
         if !spec.admits(frame) {
             continue;
@@ -268,7 +268,7 @@ fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<Fol
                 whole.insert(d);
                 continue;
             };
-            aspect &= spec.aspect;
+            aspect |= spec.aspect;
             let entry = folded.entry(d).or_insert_with(|| {
                 order.push(d);
                 0
@@ -282,18 +282,15 @@ fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<Fol
 }
 
 /// What a slot's readers want of its frames: the box to fit the readback into, and the sample
-/// width they draw. A producer that can make exactly this spends nothing downstream — no
-/// reduction, and no quantization either.
+/// width they draw. A producer that makes exactly this spends nothing downstream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ViewWant {
     pub size: (u32, u32),
     pub depth: Depth,
 }
 
-/// The box the `aspect` specs asked for on dims 0 and 1 — the size a PRODUCER could render
-/// instead, making the reduction downstream free — and the depth every admitted spec takes. This
-/// is what was ASKED, not the fit for one frame, so it does not move when the producer answers
-/// it. `None` where a spec caps those dims independently: that is no box to render into.
+/// The box asked for on dims 0 and 1 while an `aspect` spec is among the cappers — the size a
+/// PRODUCER could render instead — and the depth every admitted spec takes. `None` otherwise.
 pub fn asked_box<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<ViewWant> {
     // Nothing admits it, so nobody here is drawing it — and a frame nobody draws needs no pixels.
     let Some(fold) = fold_axes(specs, frame) else {

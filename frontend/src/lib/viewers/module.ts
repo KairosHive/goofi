@@ -1,8 +1,5 @@
-/**
- * What one viewer kind IS to the client: its ask of a frame, its settings, what it draws and how.
- * The vocabulary — the kind ids, their dtype and the dims they draw — is the manager's, in
- * `$lib/api/vocab`; a module is the behaviour keyed off one of those words.
- */
+/** What one viewer kind IS to the client: its ask of a frame, its settings, what it draws and
+ * how. The vocabulary (kind ids, dtype, drawn dims) is the manager's, in `$lib/api/vocab`. */
 import type { Surface } from 'plotluck';
 import { VIEWER_KINDS, type ViewerKind } from '$lib/api/vocab';
 import type { Drawing } from './drawing';

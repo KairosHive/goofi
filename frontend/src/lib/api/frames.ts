@@ -1,6 +1,5 @@
-/** The viewer registry: what each stream is asked for, and the frames this thread reads. The
- * worker owns the page's one paint loop: a drawing consumes its frames there, and a reader here
- * gets them in the batch each of its flushes sends. */
+/** The viewer registry: what each stream is asked for, and the frames this thread reads; a
+ * drawing consumes its frames in the worker's paint loop, a reader here gets each flush's batch. */
 import { closeStream, declareRate, listen, openStream, sendSpecs } from './data';
 import { headOf, type FrameHead } from './dataProtocol';
 import { perfStats } from './perfStats.svelte';
@@ -12,9 +11,8 @@ import { flushSync } from 'svelte';
 
 type FrameCallback = (frame: DataFrame) => void;
 
-/** One viewer bound to a stream. Null `specs` contribute nothing to the reduction; a stream
- * every viewer declares null for is served one texel, never the full frame. A null `cb` is a
- * drawing the worker feeds, which asks for no frame here. */
+/** One viewer bound to a stream. Null `specs` contribute nothing to the reduction; a null `cb`
+ * is a drawing the worker feeds, which asks for no frame here. */
 interface BoundViewer {
 	cb: FrameCallback | null;
 	specs: ViewSpec[] | null;
@@ -88,9 +86,8 @@ interface Demand {
 	frames: boolean;
 }
 
-/** What this page needs of a stream: every bound viewer's constraint, DISTINCT ones only —
- * the bridge folds richest-per-dim, so a repeat would renegotiate nothing — and whether the
- * frames are wanted here. */
+/** What this page needs of a stream: every bound viewer's DISTINCT constraint (the bridge folds
+ * richest-per-dim, so a repeat renegotiates nothing) and whether the frames are wanted here. */
 function demand(s: Slot): Demand {
 	const seen = new Set<string>();
 	const specs: ViewSpec[] = [];
@@ -175,8 +172,8 @@ export function bindViewer(
 
 listen((m) => {
 	if ('batch' in m) {
-		// One flush of the worker: every stream's news at once, and the readers' components
-		// rendered in the same turn, so the page shows one batch, not one stream after another.
+		// One flush of the worker, rendered in one turn: the page shows one batch, not one
+		// stream after another.
 		let delivered = false;
 		for (const n of m.batch) {
 			const s = slots.get(streamKey(n.node, n.slot));
@@ -230,9 +227,8 @@ export function latestFrame(node: string, slot: string): DataFrame | null {
 	return slots.get(streamKey(node, slot))?.current ?? null;
 }
 
-/** What the latest frame said of itself: where a reader on this thread takes the frames, the
- * one it was given; else what the worker told of a frame it kept for a drawing. Null when
- * nothing is subscribed or nothing has been handed over yet. */
+/** What the latest frame said of itself: the frame a reader here was given, else the head the
+ * worker told of one it kept for a drawing. Null before anything was handed over. */
 export function latestHead(node: string, slot: string): FrameHead | null {
 	const s = slots.get(streamKey(node, slot));
 	if (!s) return null;

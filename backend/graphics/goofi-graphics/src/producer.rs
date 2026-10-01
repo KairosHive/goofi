@@ -33,6 +33,17 @@ impl crate::GraphicsEngine {
         self.host = Some(exe);
     }
 
+    /// The probes a scan of `dir` would spawn, as work for off the lock.
+    pub(crate) fn prepare(&self, dir: &Path) -> Option<Box<dyn FnOnce() + Send>> {
+        let python = self.python.clone()?;
+        let files: Vec<(std::path::PathBuf, String)> = goofi_node::node_files(dir, "graphics")
+            .into_iter()
+            .filter(|(p, _, _)| p.extension().is_some_and(|e| e == "py"))
+            .map(|(p, name, _)| (p, name))
+            .collect();
+        (!files.is_empty()).then(|| Box::new(move || goofi_python::catalog::warm(&files, &python)) as Box<dyn FnOnce() + Send>)
+    }
+
     pub(crate) fn register_host(&mut self, path: &Path, name: &str) -> Result<bool, String> {
         let (manifest, factory, isolation): (_, Factory, _) = if path.extension().is_some_and(|e| e == "rs") {
             let base = goofi_build::base_dir(&goofi_supervisor::home::dir());
@@ -64,8 +75,10 @@ impl crate::GraphicsEngine {
                 }
             }
         } else {
-            use goofi_python::catalog::{Probed, probe, routed};
-            match probe(path, self.python.as_ref()) {
+            use goofi_python::catalog::{Probed, probed, routed};
+            let probed = probed(path, name, self.python.as_ref())
+                .ok_or("no Python interpreter provisioned — run `cargo run -p goofi-init`")?;
+            match probed {
                 Probed::InProcess(d) | Probed::Subprocess(d) => {
                     let subproc = self.python.as_ref().map(|p| p.subproc.as_str()).unwrap_or_default();
                     let (manifest, factory, tier) = routed(self.iox.clone(), d, subproc);

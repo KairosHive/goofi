@@ -97,11 +97,13 @@ pub fn in_slots(manifest: &NodeManifest) -> Vec<(&'static str, bool)> {
 pub struct CodecNode<C: Call> {
     call: C,
     in_slots: Vec<(&'static str, bool)>,
+    /// Whether the answerer's setup succeeded; a refused one is asked again before the next run.
+    seeded: bool,
 }
 
 impl<C: Call> CodecNode<C> {
     pub fn new(call: C, in_slots: Vec<(&'static str, bool)>) -> CodecNode<C> {
-        CodecNode { call, in_slots }
+        CodecNode { call, in_slots, seeded: false }
     }
 
     fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Response, String> {
@@ -111,11 +113,17 @@ impl<C: Call> CodecNode<C> {
     /// A child that is not running knows no params: it is seeded with the whole map before it is
     /// asked anything else, which also re-seeds one that replaced a failed child.
     fn seed(&mut self, now: f64, p: &Params<'_>) -> Result<(), NodeError> {
-        if !self.call.needs_seed() {
+        if self.seeded && !self.call.needs_seed() {
             return Ok(());
         }
+        self.setup_with(now, p)
+    }
+
+    fn setup_with(&mut self, now: f64, p: &Params<'_>) -> NodeResult {
         let request = goofi_codec::rpc::encode_setup_request(p.groups()).map_err(|e| NodeError(e.to_string()))?;
-        Self::done(self.call(Entry::Setup, now, &[&request]))
+        let done = Self::done(self.call(Entry::Setup, now, &[&request]));
+        self.seeded = done.is_ok();
+        done
     }
 
     fn done(answer: Result<Response, String>) -> NodeResult {
@@ -136,8 +144,7 @@ impl<C: Call> Drop for CodecNode<C> {
 
 impl<C: Call> Node for CodecNode<C> {
     fn setup(&mut self, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
-        let request = goofi_codec::rpc::encode_setup_request(p.groups()).map_err(|e| NodeError(e.to_string()))?;
-        Self::done(self.call(Entry::Setup, ctx.now, &[&request]))
+        self.setup_with(ctx.now, p)
     }
 
     fn process(&mut self, inp: &Inputs<'_>, out: &mut Outputs<'_>, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
@@ -152,7 +159,7 @@ impl<C: Call> Node for CodecNode<C> {
 
     /// One moved param. A child not running hears it with the whole map, at its next seed.
     fn on_param_changed(&mut self, key: &ParamKey, v: &goofi_core::Param) -> NodeResult {
-        if self.call.needs_seed() {
+        if !self.seeded || self.call.needs_seed() {
             return Ok(());
         }
         let request = goofi_codec::rpc::encode_param_request(&key.group, &key.name, v).map_err(|e| NodeError(e.to_string()))?;

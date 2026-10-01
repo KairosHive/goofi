@@ -46,9 +46,8 @@ impl Probed {
     }
 }
 
-/// What every probe so far decided, by the key that decides it: the type name the manifest is
-/// leaked under, the file's bytes and its interpreters. One per process, so a scan under the
-/// graph lock finds what a `warm` pass off it already answered.
+/// What every probe decided, by the type name, the file's bytes and its interpreters. One per
+/// process, so a scan under the graph lock finds what a `warm` pass off it already answered.
 static PROBED: LazyLock<Mutex<HashMap<String, Probed>>> = LazyLock::new(Default::default);
 
 fn key_of(path: &Path, name: &str, python: &Python) -> Option<String> {
@@ -65,13 +64,13 @@ pub fn warm(files: &[(PathBuf, String)], python: &Python) {
             let cache = PROBED.lock().unwrap_or_else(|e| e.into_inner());
             chunk.iter().zip(&keyed).filter(|(_, k)| k.as_ref().is_none_or(|k| !cache.contains_key(k))).map(|(f, _)| f).collect()
         };
-        let decided: Vec<Probed> = std::thread::scope(|s| {
+        let decided: Vec<Option<Probed>> = std::thread::scope(|s| {
             let handles: Vec<_> = missing.iter().map(|(p, _)| s.spawn(move || probe(p, Some(python)))).collect();
-            handles.into_iter().filter_map(|h| h.join().ok()).collect()
+            handles.into_iter().map(|h| h.join().ok()).collect()
         });
         let mut cache = PROBED.lock().unwrap_or_else(|e| e.into_inner());
         for ((p, name), probed) in missing.into_iter().zip(decided) {
-            if let Some(key) = key_of(p, name, python) {
+            if let (Some(key), Some(probed)) = (key_of(p, name, python), probed) {
                 cache.insert(key, probed);
             }
         }

@@ -3,7 +3,6 @@
 <script lang="ts">
 	import { bindViewer } from '$lib/api/frames';
 	import { createDrawing, type DrawingHandle } from '$lib/api/drawings';
-	import { viewSpecsForKind } from './registry';
 	import type { DataFrame } from '$lib/codec/decode';
 	import ViewerSurface from './ViewerSurface.svelte';
 	import HighDimFallback from './HighDimFallback.svelte';
@@ -14,7 +13,7 @@
 	import type { DrawnState } from './drawing';
 	import type { Hover } from './hover';
 	import { portal } from 'panelty';
-	import { drawsOnSurface, MODULES } from './registry';
+	import { drawsOnSurface, MODULES, viewSpecsForKind } from './registry';
 
 	/** `zoom` is the flow zoom the viewer is drawn under; a docked panel draws at 1. */
 	let {
@@ -160,9 +159,8 @@
 		};
 	});
 
-	// The drawing follows the stream while the body is on screen; zoomed out past legibility it
-	// lets the stream go and keeps its last picture as a thumbnail. Decided from the settled state,
-	// never in a teardown, which sees the values of the run before.
+	// On screen, the drawing follows the stream; zoomed out past legibility it lets the stream go
+	// and keeps its last picture. Decided from the settled state, never in a teardown.
 	$effect(() => {
 		const d = drawing;
 		if (!d) return;

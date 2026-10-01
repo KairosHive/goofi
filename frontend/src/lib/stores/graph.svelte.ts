@@ -14,7 +14,8 @@ import {
 	type NodeInstanceInfo,
 	type NodeTypeInfo,
 	type RecordStatus,
-	type ScanDiff
+	type ScanDiff,
+	type Step
 } from '$lib/api/control';
 import { boundaryType, feeds, type SlotDtype } from '$lib/api/vocab';
 import { wantedDtype } from '$lib/inspector/expr/refs';
@@ -443,22 +444,16 @@ export class GraphStore {
 
 	/** Arm one output slot, as `node/slot`. It works while a recording runs. The manager records
 	 * no command when the slot is already armed, so neither does the history. */
-	async armSlot(node: string, slot: string): Promise<void> {
-		const r = await this.ctl.call<{ changed?: boolean }>('record arm', {
-			output: `${node}/${slot}`
-		});
+	async armSlot(node: string, slot: string, step?: Step): Promise<void> {
+		await this.ctl.call('record arm', { output: `${node}/${slot}` }, step);
 	}
 
 	async setRecordQuality(node: string, slot: string, quality: VideoQuality): Promise<void> {
-		const r = await this.ctl.call<{ changed?: boolean }>('record quality', {
-			output: `${node}/${slot}`, quality
-		});
+		await this.ctl.call('record quality', { output: `${node}/${slot}`, quality });
 	}
 
 	async disarmSlot(node: string, slot: string): Promise<void> {
-		const r = await this.ctl.call<{ changed?: boolean }>('record disarm', {
-			output: `${node}/${slot}`
-		});
+		await this.ctl.call('record disarm', { output: `${node}/${slot}` });
 	}
 
 	/** Start a recording. Both fields fall back to the `record.*` variables in the backend. */
@@ -472,20 +467,13 @@ export class GraphStore {
 		return r?.folder ?? '';
 	}
 
-	async addNode(type: string, pos: [number, number], instId?: string): Promise<string> {
-		const born = await this.ctl.call<{ uid: string }>('node add', {
-			type,
-			pos,
-			inst_id: instId
-		});
-		const uid = born?.uid ?? '';
-		return uid;
+	async addNode(type: string, pos: [number, number], instId?: string, step?: Step): Promise<string> {
+		const born = await this.ctl.call<{ uid: string }>('node add', { type, pos, inst_id: instId }, step);
+		return born?.uid ?? '';
 	}
 
-	async removeNode(uid: string): Promise<void> {
-		// The label reads the node's name before it vanishes.
-		const label = `Delete ${this.nodeById(uid)?.name ?? uid}`;
-		await this.ctl.call('node remove', { node: uid });
+	async removeNode(uid: string, step?: Step): Promise<void> {
+		await this.ctl.call('node remove', { node: uid }, step);
 	}
 
 	/** Respawn a node in place, keeping its uid, name, params, position, scope and links. A
@@ -500,12 +488,12 @@ export class GraphStore {
 		await this.ctl.call('node editor', { node: uid });
 	}
 
-	async addLink(link: LinkInfo): Promise<void> {
-		await this.ctl.call('link add', linkEndpoints(link));
+	async addLink(link: LinkInfo, step?: Step): Promise<void> {
+		await this.ctl.call('link add', linkEndpoints(link), step);
 	}
 
-	async removeLink(link: LinkInfo): Promise<void> {
-		await this.ctl.call('link remove', linkEndpoints(link));
+	async removeLink(link: LinkInfo, step?: Step): Promise<void> {
+		await this.ctl.call('link remove', linkEndpoints(link), step);
 	}
 
 	/** One step of a drag on a param: the value moves everywhere, the history keeps nothing yet. */
@@ -814,13 +802,14 @@ export class GraphStore {
 	async pasteNodes(
 		doc: GraphFragment,
 		offset: [number, number] = [0, 0],
-		instId?: string
+		instId?: string,
+		step?: Step
 	): Promise<Record<string, string>> {
-		const r = await this.ctl.call<{ rename: Record<string, string> }>('nodes paste', {
-			doc,
-			pos: offset,
-			inst_id: instId ?? null
-		});
+		const r = await this.ctl.call<{ rename: Record<string, string> }>(
+			'nodes paste',
+			{ doc, pos: offset, inst_id: instId ?? null },
+			step
+		);
 		return r.rename ?? {};
 	}
 
@@ -830,24 +819,25 @@ export class GraphStore {
 	async cloneNodes(
 		uids: string[],
 		offset: [number, number] = [40, 40],
-		instId?: string
+		instId?: string,
+		step?: Step
 	): Promise<Record<string, string>> {
 		if (uids.length === 0) return {};
-		return this.pasteNodes(await this.copyNodes(uids), offset, instId);
+		return this.pasteNodes(await this.copyNodes(uids), offset, instId, step);
 	}
 
 
 
 	/** Delete several nodes as ONE undoable step. */
-	async removeNodes(uids: Iterable<string>): Promise<void> {
+	async removeNodes(uids: Iterable<string>, within?: Step): Promise<void> {
 		const uidList = [...uids];
 		if (uidList.length === 0) return;
 		const label = `Delete ${uidList.length} node${uidList.length > 1 ? 's' : ''}`;
 		// Each removeNode captures its OWN subtree, and a link rides with whichever endpoint owns
 		// it, so delete order is immaterial.
-		await history().transaction(label, async () => {
-			for (const uid of uidList) await this.removeNode(uid);
-		});
+		await history().transaction(label, async (step) => {
+			for (const uid of uidList) await this.removeNode(uid, step);
+		}, within);
 	}
 
 }

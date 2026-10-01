@@ -1,7 +1,7 @@
 /** Test double for `Control`: it records every `call`, and a test drives the event stream with `emit`.
  * It keeps the manager's half of the history too — one labelled entry per write, merged under a
  * group token — so a store test sees the undo and redo the real manager would answer. */
-import { historyFeed, type Control, type ControlEvent } from '$lib/api/control';
+import { historyFeed, type Control, type ControlEvent, type Step } from '$lib/api/control';
 import { OP_KINDS, type OpName } from '$lib/api/ops';
 
 interface Entry {
@@ -38,12 +38,11 @@ export class FakeControl implements Control {
 	}
 
 	/** A write lands as one entry, or merges into the entry sharing its group token. */
-	private step(op: OpName): void {
-		const extra = historyFeed.extra();
+	private step(op: OpName, step?: Step): void {
 		const top = this.undoStack.at(-1);
 		this.redoStack = [];
-		if (extra.group && top?.group === extra.group) return;
-		this.undoStack.push({ label: extra.label ?? op, group: extra.group, context: extra.context });
+		if (step && top?.group === step.group) return;
+		this.undoStack.push({ label: step?.label ?? op, group: step?.group, context: historyFeed.context() });
 	}
 
 	/** Make `call(op, …)` resolve to `value` (e.g. `add_node` → a display name). */
@@ -56,7 +55,7 @@ export class FakeControl implements Control {
 		this.failing.add(op);
 	}
 
-	call<T = unknown>(op: OpName, payload: Record<string, unknown> = {}): Promise<T> {
+	call<T = unknown>(op: OpName, payload: Record<string, unknown> = {}, step?: Step): Promise<T> {
 		this.calls.push({ op, payload });
 		if (this.failing.has(op)) {
 			this.failing.delete(op);
@@ -71,7 +70,7 @@ export class FakeControl implements Control {
 			return Promise.resolve(reply as T);
 		}
 		if (OP_KINDS[op] === 'write' || op === 'compound') {
-			this.step(op);
+			this.step(op, step);
 			historyFeed.labels(this.labels());
 		}
 		return Promise.resolve(this.results.get(op) as T);

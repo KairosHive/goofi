@@ -44,7 +44,8 @@
 	import {
 		linkKey,
 		type NodeInstanceInfo,
-		type NodeTypeInfo
+		type NodeTypeInfo,
+		type Step
 	} from '$lib/api/control';
 	import { ROOT_ID, childrenOfScope, drawEndpoint as sceneDrawEndpoint } from '$lib/editor/subpatchScene';
 	import { nodeSurfaceSize, inputUnits } from '$lib/editor/nodeMetrics';
@@ -421,14 +422,17 @@
 		const oldSi = oldEdge.targetHandle;
 		if (!c.source || !c.target || !c.sourceHandle || !c.targetHandle || !oldSo || !oldSi) return;
 		void history()
-			.transaction('Reconnect link', async () => {
-				await g.removeLink({ node_out: oldEdge.source, node_in: oldEdge.target, slot_out: oldSo, slot_in: oldSi });
-				await g.addLink({
-					node_out: c.source as string,
-					node_in: c.target as string,
-					slot_out: c.sourceHandle as string,
-					slot_in: c.targetHandle as string
-				});
+			.transaction('Reconnect link', async (step) => {
+				await g.removeLink({ node_out: oldEdge.source, node_in: oldEdge.target, slot_out: oldSo, slot_in: oldSi }, step);
+				await g.addLink(
+					{
+						node_out: c.source as string,
+						node_in: c.target as string,
+						slot_out: c.sourceHandle as string,
+						slot_in: c.targetHandle as string
+					},
+					step
+				);
 			})
 			// `transaction` re-throws, so a refused move needs this catch: the rebuild puts every
 			// cable back where `g.links` says it is.
@@ -926,14 +930,14 @@
 		const uids = await copySelection();
 		if (uids.length === 0) return;
 		await history()
-			.transaction('Cut nodes', () => g.removeNodes(uids))
+			.transaction('Cut nodes', (step) => g.removeNodes(uids, step))
 			.catch((e) => notify().failure('Cut', e));
 		sel.clear(panelId);
 	}
 
 	async function duplicateSelection(): Promise<void> {
-		const rename = await history().transaction('Duplicate nodes', () =>
-			g.cloneNodes(selectedUids(), [40, 40], entered ?? undefined)
+		const rename = await history().transaction('Duplicate nodes', (step) =>
+			g.cloneNodes(selectedUids(), [40, 40], entered ?? undefined, step)
 		);
 		const created = Object.values(rename);
 		if (created.length > 0) sel.selectNodes(panelId, created);
@@ -963,8 +967,8 @@
 			at = [c.x, c.y];
 		}
 		const from = fragmentCentre(clip.doc);
-		const rename = await history().transaction('Paste nodes', () =>
-			g.pasteNodes(clip.doc, [Math.round(at[0] - from[0]), Math.round(at[1] - from[1])], entered ?? undefined)
+		const rename = await history().transaction('Paste nodes', (step) =>
+			g.pasteNodes(clip.doc, [Math.round(at[0] - from[0]), Math.round(at[1] - from[1])], entered ?? undefined, step)
 		);
 		const created = Object.values(rename);
 		if (created.length > 0) sel.selectNodes(panelId, created);
@@ -980,21 +984,22 @@
 	async function autoLink(
 		seed: SlotClickSeed,
 		picked: NodeTypeInfo,
-		newName: string
+		newName: string,
+		step: Step
 	): Promise<void> {
 		const matchedSlot = seedSlot(seed, picked);
 		if (!matchedSlot) return;
 		// Inputs take a single source, so an existing cable is replaced; outputs fan out.
 		if (seed.side === 'target') {
 			const existing = g.links.filter((l) => l.node_in === seed.node && l.slot_in === seed.slot);
-			for (const l of existing) await g.removeLink(l).catch(() => {});
+			for (const l of existing) await g.removeLink(l, step).catch(() => {});
 		}
 		const link =
 			seed.side === 'source'
 				? { node_out: seed.node, slot_out: seed.slot, node_in: newName, slot_in: matchedSlot }
 				: { node_out: newName, slot_out: matchedSlot, node_in: seed.node, slot_in: seed.slot };
 		try {
-			await g.addLink(link);
+			await g.addLink(link, step);
 		} catch (e) {
 			console.warn('auto-link failed', e);
 		}
@@ -1009,12 +1014,12 @@
 		const label = placement.seed
 			? `Add ${bareName(placement.typeInfo.type)} + connect`
 			: `Add ${bareName(placement.typeInfo.type)}`;
-		await history().transaction(label, async () => {
+		await history().transaction(label, async (step) => {
 			try {
-				const newName = await g.addNode(placement.typeInfo.type, pos, entered ?? undefined);
+				const newName = await g.addNode(placement.typeInfo.type, pos, entered ?? undefined, step);
 				// Safe before `node_added` lands: flowNodes derives `selected` from this set.
 				if (newName) sel.selectNodes(panelId, [newName]);
-				if (placement.seed && newName) await autoLink(placement.seed, placement.typeInfo, newName);
+				if (placement.seed && newName) await autoLink(placement.seed, placement.typeInfo, newName, step);
 			} catch (e) {
 				console.warn('node add failed', e);
 			}

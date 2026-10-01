@@ -359,6 +359,10 @@ impl Engine for GraphicsEngine {
         self.booted = true;
     }
 
+    fn prepare(&self, dir: &Path) -> Option<Box<dyn FnOnce() + Send>> {
+        self.prepare(dir)
+    }
+
     fn scan(&mut self, dir: &Path) -> Vec<ScannedType> {
         scan::scan(self, dir)
     }

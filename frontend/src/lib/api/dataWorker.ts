@@ -58,8 +58,7 @@ const drawings = new Map<number, DrawingState>();
 /** The page's display rate, declared with every stream's specs; unset until it is measured. */
 let fps: number | undefined;
 
-const send = (m: ToMain, transfer: Transferable[] = []): void =>
-	(self as unknown as Worker).postMessage(m, transfer);
+const send = (m: ToMain): void => (self as unknown as Worker).postMessage(m);
 
 function sendSpecs(st: SlotState): void {
 	if (!st.ws || st.ws.readyState !== WebSocket.OPEN) return;
@@ -96,20 +95,10 @@ function openWs(st: SlotState): void {
 	});
 }
 
-function collectBuffers(frame: DataFrame, out: Set<ArrayBufferLike>): void {
-	const d = frame.data as unknown;
-	if (frame.dtype === 'ARRAY') {
-		const values = (d as { values?: ArrayLike<number> & { buffer?: ArrayBufferLike } }).values;
-		if (values?.buffer) out.add(values.buffer);
-	} else if (frame.dtype === 'TABLE' && d && typeof d === 'object') {
-		for (const v of Object.values(d as Record<string, DataFrame>)) collectBuffers(v, out);
-	}
-}
 
 // ── paints and stats ─────────────────────────────────────────────────────────────────────────
-// THE page's one paint loop. A flush renders every stale drawing from its stream's latest frame,
-// however many frames, sizes or settings reached it meanwhile, and hands the main thread what
-// its readers are owed in ONE message. A paint is a flush in which something was drawn or sent.
+// THE page's one paint loop: a flush renders every stale drawing from its stream's latest frame
+// and hands the main thread what its readers are owed in ONE message.
 const schedule =
 	typeof requestAnimationFrame === 'function'
 		? requestAnimationFrame
@@ -131,24 +120,25 @@ function flush(): void {
 	let painted = false;
 	for (const d of stale) {
 		if (!d.slot?.latest) continue;
-		render(d, d.slot.latest);
+		// One drawing that cannot draw this frame must not withhold the batch from everyone.
+		try {
+			render(d, d.slot.latest);
+		} catch (e) {
+			console.error('viewer draw failed', e);
+		}
 		painted = true;
 	}
 	stale.clear();
 	const batch: StreamNews[] = [];
-	const transfer = new Set<ArrayBufferLike>();
 	for (const st of slots.values()) {
 		st.unflushed = false;
 		if (!st.news) continue;
-		if (st.news.frame) {
-			painted = true;
-			// Its buffers move with it unless a drawing here still holds them.
-			if (st.drawings.size === 0) collectBuffers(st.news.frame, transfer);
-		}
+		if (st.news.frame) painted = true;
 		batch.push({ node: st.node, slot: st.slot, ...st.news });
 		st.news = null;
 	}
-	if (batch.length > 0) send({ batch }, Array.from(transfer) as Transferable[]);
+	// Copied, never transferred: the slot keeps the frame to replay to a drawing that attaches.
+	if (batch.length > 0) send({ batch });
 	if (painted) paints++;
 }
 let statsTimer: ReturnType<typeof setInterval> | null = null;
@@ -376,8 +366,7 @@ self.addEventListener('message', (e: MessageEvent) => {
 });
 
 /** Decode one frame and mark what it changes for the next flush: the drawings it feeds, and the
- * news the main thread is owed — the frame where a reader asked, else its head. A held frame's
- * stamps restamp whatever is pending, or go alone. */
+ * news the main thread is owed (the frame where a reader asked, else its head). */
 function arrive(st: SlotState, raw: ArrayBuffer): void {
 	let frame: DataFrame;
 	try {

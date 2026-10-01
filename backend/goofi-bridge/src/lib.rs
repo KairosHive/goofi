@@ -974,9 +974,7 @@ fn adopt_custom(mount: &std::path::Path, custom: &std::path::Path) {
 }
 
 /// Everything a scan would wait on, done BEFORE the graph lock is taken: every `.rs` node file
-/// under every root and the workspace's engine folders is built, and each engine's own
-/// preparation (a Python probe) runs. A build takes seconds, and only the caller who asked
-/// should wait for it; the scan that follows finds each answer made, or the memo of why not.
+/// is built and each engine's own preparation (a Python probe) runs, for the caller who asked.
 pub fn prebuild(state: &AppState, patch: &std::path::Path) {
     let roots: Vec<PathBuf> = state.node_roots().into_iter().map(|(d, _)| d).collect();
     let (sdks, prepared) = {
@@ -1817,6 +1815,10 @@ async fn handle_params(socket: WebSocket, state: AppState, node: String) {
     // Not resolved to a live node: a port with nothing behind it and a node still being born are
     // both real addresses with nothing to say yet, exactly as `/data` treats them.
     let mut live = state.live.subscribe(uid);
+    // A watch another socket already filled holds the pair: a joiner is owed it at once.
+    if !live.borrow().is_empty() {
+        live.mark_changed();
+    }
     loop {
         tokio::select! {
             moved = live.changed() => {

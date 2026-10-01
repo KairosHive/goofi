@@ -89,11 +89,11 @@ describe('HistoryStore — the failure surface (#9)', () => {
 describe('HistoryStore — a transaction is one step', () => {
 	beforeEach(() => history().reset());
 
-	it('every write inside rides one group token, so the manager merges them under the label', async () => {
+	it('every write handed the step rides its token, so the manager merges them under the label', async () => {
 		const { fc, g } = booted();
-		await history().transaction('Move 2 nodes', async () => {
-			await g.removeNode('a');
-			await g.removeNode('b');
+		await history().transaction('Move 2 nodes', async (step) => {
+			await g.removeNode('a', step);
+			await g.removeNode('b', step);
 		});
 		expect(fc.undoStack).toHaveLength(1);
 		expect(history().undoLabel).toBe('Move 2 nodes');
@@ -105,18 +105,18 @@ describe('HistoryStore — a transaction is one step', () => {
 
 	it('a nested transaction rides the outer one', async () => {
 		const { fc, g } = booted();
-		await history().transaction('Outer', async () => {
-			await g.removeNode('a');
-			await history().transaction('Inner', () => g.removeNode('b'));
+		await history().transaction('Outer', async (step) => {
+			await g.removeNode('a', step);
+			await history().transaction('Inner', (inner) => g.removeNode('b', inner), step);
 		});
 		expect(fc.undoStack.map((e) => e.label)).toEqual(['Outer']);
 	});
 
-	it('a thrown transaction closes its group, and what landed before the throw stays one step', async () => {
+	it('a thrown transaction leaves what landed before the throw as one step', async () => {
 		const { fc, g } = booted();
 		await expect(
-			history().transaction('Add + boom', async () => {
-				await g.removeNode('a');
+			history().transaction('Add + boom', async (step) => {
+				await g.removeNode('a', step);
 				throw new Error('boom');
 			})
 		).rejects.toThrow('boom');

@@ -2,7 +2,7 @@
 import type { LayoutHost, TabRef } from 'panelty';
 import type { Direction } from 'panelty';
 import { history } from './history.svelte';
-import { getControl, type Control } from '$lib/api/control';
+import { getControl, type Control, type Step } from '$lib/api/control';
 import type { OpName } from '$lib/api/ops';
 
 /** What a placement answers: the entry it placed, and the tab it landed on. */
@@ -23,9 +23,9 @@ const side = (d: Direction, placeBefore: boolean): string => SIDE[d][placeBefore
 
 export function goofiLayoutHost(deps: HostDeps): LayoutHost {
 	/** Send one op; the manager records its step, and a refusal answers null. */
-	async function cmd<T>(op: OpName, payload: Record<string, unknown>): Promise<T | null> {
+	async function cmd<T>(op: OpName, payload: Record<string, unknown>, step?: Step): Promise<T | null> {
 		try {
-			return await deps.control().call<T>(op, payload);
+			return await deps.control().call<T>(op, payload, step);
 		} catch (e) {
 			console.warn(`${op} refused`, e);
 			return null;
@@ -39,10 +39,10 @@ export function goofiLayoutHost(deps: HostDeps): LayoutHost {
 		// nothing here has to reserve one against a replica that lands a round trip later.
 		async addTab(opts): Promise<TabRef | null> {
 			// Grouped so a tab that arrives already showing its panel type is one ctrl-Z.
-			return await history().transaction('Add tab', async () => {
-				const born = await cmd<Placed>('layout panel add', { index: opts?.index });
+			return await history().transaction('Add tab', async (step) => {
+				const born = await cmd<Placed>('layout panel add', { index: opts?.index }, step);
 				if (born && opts?.panelType) {
-					await cmd('layout panel edit', { panel: born.id, type: opts.panelType });
+					await cmd('layout panel edit', { panel: born.id, type: opts.panelType }, step);
 				}
 				return born && { tab: born.tab, panel: born.id };
 			});

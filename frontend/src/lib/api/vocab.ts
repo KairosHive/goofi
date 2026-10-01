@@ -2,7 +2,7 @@
 // Panel types and viewer kinds are declared ONCE, in the manager: naming one that is not
 // in the table is a type error here and a teachable refusal there. The BEHAVIOUR keyed off
 // a word stays client-side — which component renders a panel type (`panels/register.ts`),
-// and whether a particular array draws (`viewers/kind.ts`). Regenerate by running
+// and whether a particular array draws (`viewers/registry.ts`). Regenerate by running
 // `cargo test -p goofi-bridge`, which rewrites this file when it drifts.
 import type { IconName } from '$lib/ui';
 
