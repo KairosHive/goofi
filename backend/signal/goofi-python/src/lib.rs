@@ -54,7 +54,7 @@ pub fn routed_node_type(iox: std::sync::Arc<goofi_transport::Iox>, d: Discovered
     let factory: goofi_host_sdk::NodeFactory = Box::new(move |_p| {
         match tier.get() {
             goofi_node::Isolation::Subprocess => {
-                Box::new(subproc::RemoteNode::new(iox.clone(), &python, &source, in_slots.clone()))
+                Box::new(subproc::RemoteNode::new(subproc::Subproc::new(iox.clone(), &python, &source), in_slots.clone()))
                     as Box<dyn goofi_host_sdk::Node>
             }
             // A native tier cannot reach here: this factory only ever backs a discovered file.

@@ -6,7 +6,7 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-**Phase 1**: §4.F and §4.G1-G4; then §1.A2 and §1.A3.
+**Phase 1**: §4.G1-G4; then §1.A2 and §1.A3.
 
 **Phase 2**: §2.B2-B5, §3.7-11, §4.H-I, §5.8-10 and 12-13.
 
@@ -114,11 +114,6 @@ pulse edge), one `FaultState` and the stamps. An `Executor` trait (`arrive`, `pa
 the signal executor in the control thread, and `Local` goes. Data services keep no history; the
 one-shot race stays a documented property.
 
-- **F** One child RPC: `trait Call` with in-process, hosted and Python implementations behind
-  one `CodecNode`; the frame is `[entry][now][payload]` for all; Python gets an eager `Setup`, a
-  `Stop` and `now` (no `on_param_changed`); both directions wake on iceoryx2 events after a
-  readiness handshake instead of polling. Wheels rebuilt. The codec's subprocess protocol splits
-  from the frame format here.
 - **G1** Shared bindings and faults (one pulse gate, one fault mechanism, one `common` group;
   bindings evaluate with the current `now`).
 - **G2** Signal on whole-state `Desired` with dedup; the ack planner is deleted, with an

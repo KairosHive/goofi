@@ -15,10 +15,17 @@ use crate::data::{any_to_core, array_to_f32, dict_to_meta, Data};
 /// its own directly and pymod needs no dependency on goofi-node.
 pub type Groups = IndexMap<String, IndexMap<String, Param>>;
 
-/// Apply the live params, then call `node.setup()`.
-pub fn run_setup(py: Python<'_>, instance: &Bound<'_, PyAny>, params: &Groups) -> PyResult<()> {
+/// Apply the live params and the clock, then call `node.setup()`.
+pub fn run_setup(py: Python<'_>, instance: &Bound<'_, PyAny>, params: &Groups, now: f64) -> PyResult<()> {
     apply_params(py, instance, params)?;
+    stamp(instance, now)?;
     instance.call_method0("setup")?;
+    Ok(())
+}
+
+/// Set `self.now` for the call about to run.
+fn stamp(instance: &Bound<'_, PyAny>, now: f64) -> PyResult<()> {
+    instance.cast::<crate::node::Node>()?.borrow_mut().now = now;
     Ok(())
 }
 
@@ -93,9 +100,14 @@ pub fn run_process(
     inputs: &[(&str, SlotIn<'_>)],
     out_slots: &[&str],
     warned: &mut HashSet<SrcDtype>,
+    now: f64,
 ) -> PyResult<Ran> {
     let node = instance.cast::<crate::node::Node>()?;
-    node.borrow_mut().clear_inputs = Some(Vec::new());
+    {
+        let mut node = node.borrow_mut();
+        node.clear_inputs = Some(Vec::new());
+        node.now = now;
+    }
     let result = process_outputs(py, instance, params, inputs, out_slots, warned);
     let clear_inputs = node.borrow_mut().clear_inputs.take().unwrap_or_default();
     let outputs = result?;

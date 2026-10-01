@@ -1,10 +1,12 @@
-//! The GOOF v2 binary frame codec: the browser data plane, and the subprocess boundary.
+//! The GOOF v2 binary frame codec: the browser data plane. The child boundary is [`rpc`].
 //!
 //! Frame: `magic "GOOF" | u8 version | u8 dtype tag | u32 meta_len | u32 body_len | meta | body`,
 //! little-endian, with the meta dict projected from the typed `Meta` plus derived shape/dtype.
 
 
 use std::borrow::Cow;
+
+pub mod rpc;
 use std::hash::{DefaultHasher, Hasher};
 use std::mem::MaybeUninit;
 use std::ops::Range;
@@ -40,15 +42,15 @@ fn u8_of(what: &'static str, n: usize) -> Result<[u8; 1], EncodeError> {
     u8::try_from(n).map(|v| [v]).map_err(|_| EncodeError::TooLong { what, len: n, max: u8::MAX as usize })
 }
 
-fn u16_of(what: &'static str, n: usize) -> Result<[u8; 2], EncodeError> {
+pub(crate) fn u16_of(what: &'static str, n: usize) -> Result<[u8; 2], EncodeError> {
     u16::try_from(n).map(u16::to_le_bytes).map_err(|_| EncodeError::TooLong { what, len: n, max: u16::MAX as usize })
 }
 
-fn u32_of(what: &'static str, n: usize) -> Result<[u8; 4], EncodeError> {
+pub(crate) fn u32_of(what: &'static str, n: usize) -> Result<[u8; 4], EncodeError> {
     u32::try_from(n).map(u32::to_le_bytes).map_err(|_| EncodeError::TooLong { what, len: n, max: u32::MAX as usize })
 }
 
-fn packed<T: serde::Serialize + ?Sized>(what: &str, value: &T) -> Result<Vec<u8>, EncodeError> {
+pub(crate) fn packed<T: serde::Serialize + ?Sized>(what: &str, value: &T) -> Result<Vec<u8>, EncodeError> {
     rmp_serde::to_vec(value).map_err(|e| EncodeError::Serialize(format!("{what}: {e}")))
 }
 
@@ -502,7 +504,7 @@ pub fn decode_owned(buf: Vec<u8>) -> std::result::Result<Data, String> {
 
 const MAX_DEPTH: usize = 64;
 
-fn decode_at(buf: &Arc<Vec<u8>>, at: Range<usize>, depth: usize) -> std::result::Result<Data, String> {
+pub(crate) fn decode_at(buf: &Arc<Vec<u8>>, at: Range<usize>, depth: usize) -> std::result::Result<Data, String> {
     if depth >= MAX_DEPTH { return Err("frame nesting exceeds 64 levels".into()); }
     let frame = &buf[at.clone()];
     let (tag, meta, body) = split_at(frame)?;
@@ -523,14 +525,14 @@ fn decode_at(buf: &Arc<Vec<u8>>, at: Range<usize>, depth: usize) -> std::result:
 
 /// A forward-only, bounds-checked reader over byte runs read as one: a hostile frame yields
 /// `Err`, never a panic. A field never straddles two runs; a whole frame may, and is gathered.
-struct Cursor<'s, 'a> {
+pub(crate) struct Cursor<'s, 'a> {
     segments: &'s [&'a [u8]],
     seg: usize,
-    off: usize,
+    pub(crate) off: usize,
 }
 
 impl<'s, 'a> Cursor<'s, 'a> {
-    fn new(segments: &'s [&'a [u8]]) -> Cursor<'s, 'a> {
+    pub(crate) fn new(segments: &'s [&'a [u8]]) -> Cursor<'s, 'a> {
         Cursor { segments, seg: 0, off: 0 }
     }
     /// Where the next byte is: its segment, and its offset within it.
@@ -542,7 +544,7 @@ impl<'s, 'a> Cursor<'s, 'a> {
         (self.seg, self.off)
     }
     /// The next `n` bytes, advancing past them; `what` names them in the error.
-    fn take(&mut self, n: usize, what: &str) -> std::result::Result<&'a [u8], String> {
+    pub(crate) fn take(&mut self, n: usize, what: &str) -> std::result::Result<&'a [u8], String> {
         let (seg, off) = self.at();
         if n == 0 {
             return Ok(&[]);
@@ -555,7 +557,7 @@ impl<'s, 'a> Cursor<'s, 'a> {
     }
     /// The next `n` bytes gathered into a buffer of their own, across runs: a frame's head and its
     /// samples are two runs, and the one copy here is the copy that owns the frame.
-    fn gather(&mut self, n: usize, what: &str) -> std::result::Result<Vec<u8>, String> {
+    pub(crate) fn gather(&mut self, n: usize, what: &str) -> std::result::Result<Vec<u8>, String> {
         let mut out = Vec::with_capacity(n);
         while out.len() < n {
             let (seg, off) = self.at();
@@ -566,19 +568,19 @@ impl<'s, 'a> Cursor<'s, 'a> {
         }
         Ok(out)
     }
-    fn u8(&mut self, what: &str) -> std::result::Result<usize, String> {
+    pub(crate) fn u8(&mut self, what: &str) -> std::result::Result<usize, String> {
         Ok(self.take(1, what)?[0] as usize)
     }
-    fn u16(&mut self, what: &str) -> std::result::Result<usize, String> {
+    pub(crate) fn u16(&mut self, what: &str) -> std::result::Result<usize, String> {
         let b = self.take(2, what)?;
         Ok(u16::from_le_bytes([b[0], b[1]]) as usize)
     }
-    fn u32(&mut self, what: &str) -> std::result::Result<usize, String> {
+    pub(crate) fn u32(&mut self, what: &str) -> std::result::Result<usize, String> {
         let b = self.take(4, what)?;
         Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
     }
     /// Everything left, which must lie in one segment.
-    fn rest(mut self) -> std::result::Result<&'a [u8], String> {
+    pub(crate) fn rest(mut self) -> std::result::Result<&'a [u8], String> {
         let (seg, off) = self.at();
         let mut segments = self.segments.iter().skip(seg);
         let rest = segments.next().map_or(&[][..], |s| &s[off..]);
@@ -587,7 +589,7 @@ impl<'s, 'a> Cursor<'s, 'a> {
             false => Ok(rest),
         }
     }
-    fn done(&mut self) -> bool {
+    pub(crate) fn done(&mut self) -> bool {
         let (seg, _) = self.at();
         seg == self.segments.len()
     }
@@ -710,232 +712,5 @@ fn mp_to_mv(v: &Mp) -> MetaValue {
                 .collect(),
         ),
         Mp::Ext(_, _) => MetaValue::Null,
-    }
-}
-
-/// `group -> name -> Param`, spelled out because the codec has no goofi-node dep.
-pub type ParamMap = indexmap::IndexMap<String, indexmap::IndexMap<String, goofi_core::Param>>;
-
-/// The slot entries of a run request: `(slot, source, frame)`, the source empty on a single slot.
-pub type SourcedSlots = Vec<(String, String, Data)>;
-
-/// The bytes a request is: runs of copied bytes around samples handed on by reference.
-pub type Runs<'a> = Vec<Cow<'a, [u8]>>;
-
-/// One named slot's head: `[u16 name_len][name][u16 src_len][src][u32 frame_len]`.
-fn slot_head(name: &str, source: &str, frame_len: usize) -> Result<Vec<u8>, EncodeError> {
-    let mut out = Vec::with_capacity(8 + name.len() + source.len());
-    for (what, text) in [("slot name", name), ("slot source", source)] {
-        out.extend_from_slice(&u16_of(what, text.len())?);
-        out.extend_from_slice(text.as_bytes());
-    }
-    out.extend_from_slice(&u32_of("slot frame", frame_len)?);
-    Ok(out)
-}
-
-/// Append a named-slot list: `[u16 n]` then n × `[u16 name_len][name][u16 src_len][src]
-/// [u32 frame_len][GOOF frame]`; `src` is the `node.slot` a multi-slot frame came from, else empty.
-pub fn encode_slots<'a>(slots: &[(&str, &str, &'a Data)], out: &mut impl Out<'a>) -> Result<(), EncodeError> {
-    let count = u16_of("slot count", slots.len())?;
-    let mut heads = Vec::with_capacity(slots.len());
-    for (name, source, d) in slots {
-        heads.push(slot_head(name, source, encoded_len(d)?)?);
-    }
-    out.put(&count);
-    for (head, (_, _, d)) in heads.iter().zip(slots) {
-        out.put(head);
-        encode_into(d, out)?;
-    }
-    Ok(())
-}
-
-fn read_slot_head<'a>(cur: &mut Cursor<'_, 'a>) -> std::result::Result<(String, String, usize), String> {
-    let nlen = cur.u16("slot name length")?;
-    let name = std::str::from_utf8(cur.take(nlen, "slot name")?).map_err(|e| e.to_string())?.to_string();
-    let slen = cur.u16("slot source length")?;
-    let source = std::str::from_utf8(cur.take(slen, "slot source")?).map_err(|e| e.to_string())?.to_string();
-    let flen = cur.u32("slot frame length")?;
-    Ok((name, source, flen))
-}
-
-/// Decode the named-slot list written by [`encode_slots`], each frame copied out of the request.
-fn decode_slots(cur: &mut Cursor<'_, '_>) -> std::result::Result<SourcedSlots, String> {
-    let n = cur.u16("slot count")?;
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
-        let (name, source, flen) = read_slot_head(cur)?;
-        let data = decode_owned(cur.gather(flen, "slot frame")?)?;
-        out.push((name, source, data));
-    }
-    Ok(out)
-}
-
-/// A decoded subprocess request, always carrying the node's live params: one tick, the ⟳ on
-/// one string param, or a pulse on one pulse param.
-pub enum Request {
-    Process { params: ParamMap, slots: SourcedSlots },
-    Refresh { params: ParamMap, group: String, name: String },
-    Pulse { params: ParamMap, group: String, name: String },
-}
-
-fn encode_params(params: &ParamMap, out: &mut Vec<u8>) -> Result<(), EncodeError> {
-    let pbytes = packed("params", params)?;
-    out.extend_from_slice(&u32_of("params", pbytes.len())?);
-    out.extend_from_slice(&pbytes);
-    Ok(())
-}
-
-/// Encode a tick request: `[0][u32 params_len][params msgpack][slots]`, each slot with its source.
-pub fn encode_request<'a>(params: &ParamMap, slots: &[(&str, &str, &'a Data)]) -> Result<Runs<'a>, EncodeError> {
-    let mut out = Segments::default();
-    let mut head = vec![0u8];
-    encode_params(params, &mut head)?;
-    out.put(&head);
-    encode_slots(slots, &mut out)?;
-    Ok(out.finish())
-}
-
-/// Encode a refresh request: `[1][u32 params_len][params msgpack][(group, name) msgpack]`.
-pub fn encode_refresh_request(params: &ParamMap, group: &str, name: &str) -> Result<Vec<u8>, EncodeError> {
-    encode_keyed_request(1, params, group, name)
-}
-
-/// Encode a pulse request: `[2][u32 params_len][params msgpack][(group, name) msgpack]`.
-pub fn encode_pulse_request(params: &ParamMap, group: &str, name: &str) -> Result<Vec<u8>, EncodeError> {
-    encode_keyed_request(2, params, group, name)
-}
-
-fn encode_keyed_request(tag: u8, params: &ParamMap, group: &str, name: &str) -> Result<Vec<u8>, EncodeError> {
-    let mut out = vec![tag];
-    encode_params(params, &mut out)?;
-    out.extend_from_slice(&packed("param key", &(group, name))?);
-    Ok(out)
-}
-
-/// Decode a request written by [`encode_request`], [`encode_refresh_request`] or
-/// [`encode_pulse_request`], from the segments it crossed as.
-pub fn decode_request(segments: &[&[u8]]) -> std::result::Result<Request, String> {
-    let mut cur = Cursor::new(segments);
-    let tag = cur.u8("request tag")? as u8;
-    let plen = cur.u32("params length")?;
-    let pbytes = cur.take(plen, "params blob")?;
-    let params: ParamMap = rmp_serde::from_slice(pbytes).map_err(|e| e.to_string())?;
-    match tag {
-        0 => {
-            let slots = decode_slots(&mut cur)?;
-            match cur.done() {
-                true => Ok(Request::Process { params, slots }),
-                false => Err("bytes after the last slot".into()),
-            }
-        }
-        1 | 2 => {
-            let (group, name): (String, String) =
-                rmp_serde::from_slice(cur.rest()?).map_err(|e| e.to_string())?;
-            Ok(if tag == 1 { Request::Refresh { params, group, name } } else { Request::Pulse { params, group, name } })
-        }
-        other => Err(format!("unknown request tag {other}")),
-    }
-}
-
-/// What a node emits on one output: a frame of its own, or one of its inputs unchanged, which
-/// crosses back as that input's NAME since the host still holds the frame it sent.
-pub enum Emitted<'a> {
-    Frame(&'a Data),
-    Input { slot: &'a str, index: usize },
-}
-
-/// [`Emitted`] as the host reads it back.
-pub enum Output {
-    Frame(Data),
-    Input { slot: String, index: usize },
-}
-
-/// Outputs and input clears from a successful process call.
-pub struct ProcessOutput {
-    pub outputs: Vec<(String, Output)>,
-    pub clear_inputs: Vec<String>,
-}
-
-pub enum Response {
-    Process(ProcessOutput),
-    NodeError(String),
-    Options(Option<Vec<String>>),
-}
-
-/// `[0][u32 clears_len][clears msgpack]`, then the slot list, where an input handed back unchanged
-/// is a slot whose `src` names it (`slot`, or `slot#index` on a multi slot) over an empty frame.
-pub fn encode_response<'a>(outputs: &[(&str, Emitted<'a>)], clear_inputs: &[String], out: &mut impl Out<'a>) -> Result<(), EncodeError> {
-    let clears = packed("input clears", clear_inputs)?;
-    let clears_len = u32_of("input clears", clears.len())?;
-    let count = u16_of("output count", outputs.len())?;
-    let mut heads = Vec::with_capacity(outputs.len());
-    for (name, emitted) in outputs {
-        heads.push(match emitted {
-            Emitted::Frame(d) => slot_head(name, "", encoded_len(d)?)?,
-            Emitted::Input { slot, index: 0 } => slot_head(name, slot, 0)?,
-            Emitted::Input { slot, index } => slot_head(name, &format!("{slot}#{index}"), 0)?,
-        });
-    }
-    out.put(&[0u8]);
-    out.put(&clears_len);
-    out.put(&clears);
-    out.put(&count);
-    for (head, (_, emitted)) in heads.iter().zip(outputs) {
-        out.put(head);
-        if let Emitted::Frame(d) = emitted {
-            encode_into(d, out)?;
-        }
-    }
-    Ok(())
-}
-
-/// Encode a node-error response: `[1][utf8 message]`.
-pub fn encode_error_response(msg: &str) -> Vec<u8> {
-    let mut out = vec![1u8];
-    out.extend_from_slice(msg.as_bytes());
-    out
-}
-
-/// Encode a refresh response: `[2][Option<Vec<String>> msgpack]`.
-pub fn encode_options_response(options: &Option<Vec<String>>) -> Result<Vec<u8>, EncodeError> {
-    let mut out = vec![2u8];
-    out.extend_from_slice(&packed("options", options)?);
-    Ok(out)
-}
-
-/// Decode a response, which the outputs then keep: each frame is a view of the reply it came in.
-/// The outer `Err` is a malformed reply, never a node-reported one.
-pub fn decode_response(reply: Vec<u8>) -> std::result::Result<Response, String> {
-    let (&tag, rest) = reply.split_first().ok_or("empty response frame")?;
-    match tag {
-        0 => {
-            let buf = Arc::new(reply);
-            let outputs = {
-                let segments = [&buf[1..]];
-                let mut cur = Cursor::new(&segments);
-                let len = cur.u32("input clears length")?;
-                let clear_inputs = rmp_serde::from_slice(cur.take(len, "input clears")?).map_err(|e| e.to_string())?;
-                let n = cur.u16("slot count")?;
-                let mut outputs = Vec::with_capacity(n);
-                for _ in 0..n {
-                    let (name, source, flen) = read_slot_head(&mut cur)?;
-                    let start = 1 + cur.off;
-                    cur.take(flen, "slot frame")?;
-                    let output = match (flen, source.split_once('#')) {
-                        (0, Some((slot, index))) => {
-                            Output::Input { slot: slot.to_string(), index: index.parse().map_err(|_| "a bad input index")? }
-                        }
-                        (0, None) if !source.is_empty() => Output::Input { slot: source, index: 0 },
-                        _ => Output::Frame(decode_at(&buf, start..start + flen, 0)?),
-                    };
-                    outputs.push((name, output));
-                }
-                ProcessOutput { outputs, clear_inputs }
-            };
-            Ok(Response::Process(outputs))
-        },
-        1 => Ok(Response::NodeError(String::from_utf8_lossy(rest).into_owned())),
-        2 => Ok(Response::Options(rmp_serde::from_slice(rest).map_err(|e| e.to_string())?)),
-        other => Err(format!("unknown response tag {other}")),
     }
 }

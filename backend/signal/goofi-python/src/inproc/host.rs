@@ -125,8 +125,8 @@ impl Drop for PyNode {
 }
 
 impl Node for PyNode {
-    fn setup(&mut self, _ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
-        let (done, flipped) = watched(|py| goofi_pymod::exec::run_setup(py, self.instance.bind(py), p.groups()));
+    fn setup(&mut self, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
+        let (done, flipped) = watched(|py| goofi_pymod::exec::run_setup(py, self.instance.bind(py), p.groups(), ctx.now));
         self.saw(flipped);
         done.map_err(|e| NodeError(e.to_string()))
     }
@@ -161,7 +161,7 @@ impl Node for PyNode {
             .collect();
 
         let (outs, flipped) = watched(|py| {
-            goofi_pymod::exec::run_process(py, self.instance.bind(py), p.groups(), &inputs, &self.out_slots, &mut self.cast_warned)
+            goofi_pymod::exec::run_process(py, self.instance.bind(py), p.groups(), &inputs, &self.out_slots, &mut self.cast_warned, ctx.now)
         });
         self.saw(flipped);
         let outs = outs.map_err(|e| e.to_string())?;

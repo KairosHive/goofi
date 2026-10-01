@@ -1,31 +1,60 @@
-//! A spawned child's request/response pair over two byte streams, the parent's end and the child's.
+//! A spawned child's request/response pair over two byte streams and one bell, the parent's end
+//! and the child's. Neither side polls: the child rings when its ports stand, and each side rings
+//! once it has written.
 
 use std::time::{Duration, Instant};
 
 use iceoryx2::prelude::*;
 
-use crate::services::{stream_service, write_parts, ServiceKind};
-use crate::{BytePublisher, ByteSubscriber, Iox, PortBundle};
+use crate::services::{event_service, stream_service, write_parts, Doorbell, ServiceKind};
+use crate::{BytePublisher, ByteSubscriber, Iox, Listener, PortBundle};
 
 /// The largest frame an exchange carries in one sample; a publisher grows to it by powers of two.
 pub const EXCHANGE_PAYLOAD: usize = 64 * 1024;
 
-/// A spawned child's request/response pair, the parent's end: `[u32 seq][frame]` each way. A
-/// request is re-published each idle millisecond, since the child's subscriber may still be
-/// connecting; the reply is the one carrying the same sequence.
+/// The bell's three rings: the child's ports stand, a request was written, a reply was written.
+const READY: u8 = 0;
+const ASKED: u8 = 1;
+const ANSWERED: u8 = 2;
+
+/// How long one wait on the bell lasts before the other side's liveness is looked at.
+const SLICE: Duration = Duration::from_millis(100);
+
+/// A spawned child's request/response pair, the parent's end: `[u32 seq][frame]` each way, and
+/// the reply is the one carrying the same sequence. The parent opens its end BEFORE the child
+/// starts, so the child's `READY` ring is never missed.
 pub struct Exchange {
     ports: PortBundle<Pair<BytePublisher, ByteSubscriber>>,
     seq: u32,
+    ready: bool,
 }
 
-/// The two ends of a request/response pair, whichever side holds them.
+/// The two ends of a request/response pair and the bell between them, whichever side holds them.
 pub struct Pair<Q, A> {
     request: Q,
     reply: A,
+    bell: Doorbell,
+    listener: Listener,
+}
+
+/// The bell of the pair under `base`, on the node the ports are built on.
+fn bell(node: &crate::IoxNode, base: &str) -> Result<(Doorbell, Listener), String> {
+    let name = format!("{base}_bell");
+    let bell = Doorbell::open(node, &name)?;
+    let listener = event_service(node, &name)?.listener_builder().create().map_err(|e| format!("listener `{name}`: {e}"))?;
+    Ok((bell, listener))
+}
+
+/// Wait on the bell for up to `within`, answering whether `id` rang.
+fn rang(listener: &Listener, id: u8, within: Duration) -> bool {
+    let mut heard = false;
+    let _ = listener.timed_wait_all(|event| heard |= event.as_value() == id as usize, within);
+    heard
 }
 
 impl Exchange {
-    /// Open the pair under `base`: `<base>_req` and `<base>_resp`, the names the child is told.
+    /// Open the pair under `base`: `<base>_req`, `<base>_resp` and `<base>_bell`, the names the
+    /// child is told.
     pub fn open(iox: &Iox, base: &str) -> Result<Exchange, String> {
         let ports = PortBundle::open(iox, |node| {
             let request = stream_service(node, &format!("{base}_req"), ServiceKind::Exchange)?
@@ -38,23 +67,31 @@ impl Exchange {
                 .subscriber_builder()
                 .create()
                 .map_err(|e| format!("reply subscriber: {e}"))?;
-            Ok(Pair { request, reply })
+            let (bell, listener) = bell(node, base)?;
+            Ok(Pair { request, reply, bell, listener })
         })?;
-        Ok(Exchange { ports, seq: 0 })
+        Ok(Exchange { ports, seq: 0, ready: false })
     }
 
     /// One request to `child` — its runs, written into the loan as one frame — answered within
     /// `timeout`; a child that exited or fell silent is the error, so the owner can start a
-    /// fresh one.
+    /// fresh one. The first request waits for the child's `READY` before it is written.
     pub fn ask(&mut self, child: &mut goofi_supervisor::child::Child, frame: &[&[u8]], timeout: Duration) -> Result<Vec<u8>, String> {
+        let deadline = Instant::now() + timeout;
+        while !self.ready {
+            self.ready = rang(&self.ports.listener, READY, SLICE);
+            if !self.ready {
+                self.check(child, deadline)?;
+            }
+        }
         self.seq = self.seq.wrapping_add(1);
         let seq = self.seq;
         while matches!(self.ports.reply.receive(), Ok(Some(_))) {}
         let seq_bytes = seq.to_le_bytes();
         let parts: Vec<&[u8]> = std::iter::once(&seq_bytes[..]).chain(frame.iter().copied()).collect();
-        let deadline = Instant::now() + timeout;
+        send_parts(&self.ports.request, &parts)?;
+        let _ = self.ports.bell.ring(ASKED);
         loop {
-            send_parts(&self.ports.request, &parts)?;
             loop {
                 match self.ports.reply.receive() {
                     Ok(Some(sample)) => {
@@ -68,14 +105,20 @@ impl Exchange {
                 }
             }
             // Checked AFTER draining, so a child that answered and then exited still gets its answer through.
-            if let Ok(Some(status)) = child.try_wait() {
-                return Err(format!("the child exited: {status}"));
-            }
-            if Instant::now() >= deadline {
-                return Err("the child did not answer in time".into());
-            }
-            std::thread::sleep(Duration::from_millis(1));
+            self.check(child, deadline)?;
+            rang(&self.ports.listener, ANSWERED, SLICE);
         }
+    }
+
+    /// Whether the child is still there to answer, and the time still is.
+    fn check(&self, child: &mut goofi_supervisor::child::Child, deadline: Instant) -> Result<(), String> {
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(format!("the child exited: {status}"));
+        }
+        if Instant::now() >= deadline {
+            return Err("the child did not answer in time".into());
+        }
+        Ok(())
     }
 }
 
@@ -86,32 +129,36 @@ pub struct Served {
 }
 
 impl Served {
-    /// The names the parent gave: `GOOFI_IOX_REQ` and `GOOFI_IOX_RESP` in the environment.
+    /// The base the parent gave as `GOOFI_IOX_BASE` in the environment.
     pub fn open_from_env() -> Result<Served, String> {
-        let name = |key: &str| std::env::var(key).map_err(|_| format!("{key} is not set: not started by goofi"));
-        Served::open(&Iox::from_env()?, &name("GOOFI_IOX_REQ")?, &name("GOOFI_IOX_RESP")?)
+        let base = std::env::var("GOOFI_IOX_BASE").map_err(|_| "GOOFI_IOX_BASE is not set: not started by goofi")?;
+        Served::open(&Iox::from_env()?, &base)
     }
 
-    pub fn open(iox: &Iox, request: &str, reply: &str) -> Result<Served, String> {
+    /// Open the child's end under `base` and ring `READY`: from here on a request reaches it.
+    pub fn open(iox: &Iox, base: &str) -> Result<Served, String> {
         let ports = PortBundle::open(iox, |node| {
-            let request = stream_service(node, request, ServiceKind::Exchange)?
+            let request = stream_service(node, &format!("{base}_req"), ServiceKind::Exchange)?
                 .subscriber_builder()
                 .create()
                 .map_err(|e| format!("request subscriber: {e}"))?;
-            let reply = stream_service(node, reply, ServiceKind::Exchange)?
+            let reply = stream_service(node, &format!("{base}_resp"), ServiceKind::Exchange)?
                 .publisher_builder()
                 .initial_max_slice_len(EXCHANGE_PAYLOAD)
                 .allocation_strategy(AllocationStrategy::PowerOfTwo)
                 .create()
                 .map_err(|e| format!("reply publisher: {e}"))?;
-            Ok(Pair { request, reply })
+            let (bell, listener) = bell(node, base)?;
+            Ok(Pair { request, reply, bell, listener })
         })?;
+        ports.bell.ring(READY)?;
         Ok(Served { ports, answered: None })
     }
 
-    /// The latest request, if a new one arrived: latest wins, and a re-publish of the one already
-    /// answered is not a request.
-    pub fn request(&mut self) -> Result<Option<(u32, Vec<u8>)>, String> {
+    /// Wait up to `within` for a request, then the latest one if a new one arrived: latest wins,
+    /// and the one already answered is not a request.
+    pub fn wait(&mut self, within: Duration) -> Result<Option<(u32, Vec<u8>)>, String> {
+        rang(&self.ports.listener, ASKED, within);
         let mut latest = None;
         loop {
             match self.ports.request.receive() {
@@ -135,11 +182,12 @@ impl Served {
     pub fn answer(&mut self, seq: u32, reply: &[u8]) -> Result<(), String> {
         send_parts(&self.ports.reply, &[&seq.to_le_bytes(), reply])?;
         self.answered = Some(seq);
+        let _ = self.ports.bell.ring(ANSWERED);
         Ok(())
     }
 }
 
-/// One message of `parts` onto a service with no bells: the exchange's two directions.
+/// One message of `parts` onto a service; the caller rings.
 fn send_parts(publisher: &BytePublisher, parts: &[&[u8]]) -> Result<(), String> {
     let len = parts.iter().map(|p| p.len()).sum();
     let mut sample = publisher.loan_slice_uninit(len).map_err(|e| format!("iox loan: {e}"))?;

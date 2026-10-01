@@ -1,36 +1,19 @@
-//! The host half of the boundary: a built node's vtable behind the same [`Node`] the engine runs
-//! everything else as, marshalled exactly as the subprocess tier is.
+//! The host half of the boundary: whatever answers a call in codec bytes — a vtable in this
+//! process, or a child that holds one — behind the same [`Node`] the engine runs everything as.
 
 use std::ffi::c_void;
 
-use goofi_codec::{Output, ProcessOutput, Response};
+use goofi_codec::rpc::{self, Entry, Output, ProcessOutput, Response};
 use goofi_core::Data;
 use goofi_node::{NodeManifest, ParamKey, Params};
 
-use crate::abi::{collect, Bytes, Call, Ctx, Segments, VTable};
+use crate::abi::{self, collect, Bytes, Ctx, Segments, VTable};
 use crate::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
 
 /// One loaded node type: its vtable and the manifest the host leaked from `goofi_describe`.
 pub struct Loaded {
     vtable: &'static VTable,
     manifest: &'static NodeManifest,
-}
-
-/// Which entry of the vtable a request is for — the byte a hosted child reads it as.
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Entry {
-    Setup = 0,
-    Process = 1,
-    ParamChanged = 2,
-    Refresh = 3,
-    Pulse = 4,
-}
-
-impl Entry {
-    pub fn from_u8(byte: u8) -> Option<Entry> {
-        [Entry::Setup, Entry::Process, Entry::ParamChanged, Entry::Refresh, Entry::Pulse].into_iter().find(|e| *e as u8 == byte)
-    }
 }
 
 impl Loaded {
@@ -46,7 +29,7 @@ impl Loaded {
     }
 
     pub fn instantiate(&self) -> Box<dyn Node> {
-        Box::new(Handle::new(self.raw(), self.manifest))
+        Box::new(CodecNode::new(self.raw(), in_slots(self.manifest)))
     }
 
     /// A fresh instance called by entry, request bytes in and reply bytes out — what a hosted
@@ -65,22 +48,25 @@ pub struct Raw {
 // The instance is used from the one thread that runs it, as every node is.
 unsafe impl Send for Raw {}
 
-/// Whoever answers an entry in codec bytes: the vtable itself, or a child that holds it.
-pub trait Ask: Send {
-    fn ask(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String>;
+/// Whoever answers an entry in codec bytes: the vtable itself, or a child that holds it. The
+/// one child RPC: every implementation takes `[entry][now]` and the request's runs.
+pub trait Call: Send {
+    fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String>;
 }
 
-impl Ask for Raw {
-    fn ask(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
+impl Call for Raw {
+    fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
         if self.node.is_null() {
             return Err("the node's constructor panicked".into());
         }
-        let call: Call = match entry {
+        let call: abi::Call = match entry {
             Entry::Setup => self.vtable.setup,
             Entry::Process => self.vtable.process,
             Entry::ParamChanged => self.vtable.on_param_changed,
             Entry::Refresh => self.vtable.on_param_refreshed,
             Entry::Pulse => self.vtable.on_pulse,
+            // The drop destroys: an in-process node has no child to tell.
+            Entry::Stop => return Ok(rpc::done()),
         };
         let runs: Vec<Bytes> = request.iter().map(|r| Bytes::of(r)).collect();
         let mut reply: Vec<u8> = Vec::new();
@@ -96,19 +82,25 @@ impl Drop for Raw {
     }
 }
 
-/// A node behind an [`Ask`]: the `Node` the engine runs, marshalled as the subprocess tier is.
-pub struct Handle<A: Ask> {
-    ask: A,
-    manifest: &'static NodeManifest,
+/// Each declared input slot with whether it is `multi`: what a call's present frames are named by.
+pub fn in_slots(manifest: &NodeManifest) -> Vec<(&'static str, bool)> {
+    manifest.inputs.iter().map(|s| (s.name, s.multi)).collect()
 }
 
-impl<A: Ask> Handle<A> {
-    pub fn new(ask: A, manifest: &'static NodeManifest) -> Handle<A> {
-        Handle { ask, manifest }
+/// A node behind a [`Call`]: the `Node` the engine runs, marshalled in codec bytes. Its drop
+/// sends `Stop`, so a child releases what it holds before it goes.
+pub struct CodecNode<C: Call> {
+    call: C,
+    in_slots: Vec<(&'static str, bool)>,
+}
+
+impl<C: Call> CodecNode<C> {
+    pub fn new(call: C, in_slots: Vec<(&'static str, bool)>) -> CodecNode<C> {
+        CodecNode { call, in_slots }
     }
 
     fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Response, String> {
-        goofi_codec::decode_response(self.ask.ask(entry, now, request)?)
+        goofi_codec::rpc::decode_response(self.call.call(entry, now, request)?)
     }
 
     fn done(answer: Result<Response, String>) -> NodeResult {
@@ -121,15 +113,21 @@ impl<A: Ask> Handle<A> {
     }
 }
 
-impl<A: Ask> Node for Handle<A> {
+impl<C: Call> Drop for CodecNode<C> {
+    fn drop(&mut self) {
+        let _ = self.call.call(Entry::Stop, 0.0, &[]);
+    }
+}
+
+impl<C: Call> Node for CodecNode<C> {
     fn setup(&mut self, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
-        let request = goofi_codec::encode_request(p.groups(), &[]).map_err(|e| NodeError(e.to_string()))?;
+        let request = goofi_codec::rpc::encode_request(p.groups(), &[]).map_err(|e| NodeError(e.to_string()))?;
         Self::done(self.call(Entry::Setup, ctx.now, &runs(&request)))
     }
 
     fn process(&mut self, inp: &Inputs<'_>, out: &mut Outputs<'_>, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
-        let present = present(self.manifest.inputs.iter().map(|s| (s.name, s.multi)), inp);
-        let request = goofi_codec::encode_request(p.groups(), &present).map_err(|e| NodeError(e.to_string()))?;
+        let present = present(self.in_slots.iter().copied(), inp);
+        let request = goofi_codec::rpc::encode_request(p.groups(), &present).map_err(|e| NodeError(e.to_string()))?;
         match self.call(Entry::Process, ctx.now, &runs(&request)) {
             Ok(Response::Process(result)) => apply(result, inp, out, ctx),
             other => Self::done(other),
@@ -142,7 +140,7 @@ impl<A: Ask> Node for Handle<A> {
     }
 
     fn on_param_refreshed(&mut self, key: &ParamKey, p: &Params<'_>) -> Option<Vec<String>> {
-        let request = goofi_codec::encode_refresh_request(p.groups(), &key.group, &key.name).ok()?;
+        let request = goofi_codec::rpc::encode_refresh_request(p.groups(), &key.group, &key.name).ok()?;
         match self.call(Entry::Refresh, 0.0, &[&request]) {
             Ok(Response::Options(options)) => options,
             _ => None,
@@ -150,13 +148,13 @@ impl<A: Ask> Node for Handle<A> {
     }
 
     fn on_pulse(&mut self, key: &ParamKey, p: &Params<'_>) -> NodeResult {
-        let request = goofi_codec::encode_pulse_request(p.groups(), &key.group, &key.name).map_err(|e| NodeError(e.to_string()))?;
+        let request = goofi_codec::rpc::encode_pulse_request(p.groups(), &key.group, &key.name).map_err(|e| NodeError(e.to_string()))?;
         Self::done(self.call(Entry::Pulse, 0.0, &[&request]))
     }
 }
 
-/// A request's runs as the slices an [`Ask`] takes.
-pub fn runs<'a>(request: &'a goofi_codec::Runs<'_>) -> Vec<&'a [u8]> {
+/// A request's runs as the slices a [`Call`] takes.
+pub fn runs<'a>(request: &'a goofi_codec::rpc::Runs<'_>) -> Vec<&'a [u8]> {
     request.iter().map(|r| &**r).collect()
 }
 

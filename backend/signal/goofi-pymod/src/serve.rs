@@ -1,12 +1,12 @@
 //! `goofi.serve()` — the subprocess child loop (wheel only; `extension-module`): read the node
-//! source and service names from the environment, run the node over the same [`crate::exec`]
-//! seam the in-process tier uses, and speak `goofi_codec` frames over iceoryx2.
+//! source and the exchange base from the environment, run the node over the same [`crate::exec`]
+//! seam the in-process tier uses, and answer `[entry][now]` calls over iceoryx2.
 
 use std::collections::HashSet;
 use std::time::Duration;
 
-use goofi_codec::{decode_request, encode_error_response, encode_options_response, encode_response, Emitted, Request};
-use goofi_core::{Data as CoreData, SrcDtype};
+use goofi_codec::rpc::{decode_request, encode_error_response, encode_options_response, encode_response, split_call, Emitted, Entry, Request};
+use goofi_core::SrcDtype;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -26,8 +26,7 @@ pub fn serve(py: Python<'_>) -> PyResult<()> {
     let mut source = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut source)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("no node source on stdin: {e}")))?;
-    let req_name = env("GOOFI_IOX_REQ")?;
-    let resp_name = env("GOOFI_IOX_RESP")?;
+    let base = env("GOOFI_IOX_BASE")?;
 
     let module = module_from_source(py, "goofi_node_main", &source)?;
     let instance = find_node_class(py, &module)?.call0()?;
@@ -36,8 +35,7 @@ pub fn serve(py: Python<'_>) -> PyResult<()> {
         crate::introspect::slots(&instance.getattr("INPUTS")?)?.into_iter().map(|s| (s.name, s.multi)).collect();
     let out_refs: Vec<&str> = out_slots.iter().map(|s| s.as_str()).collect();
 
-    run_loop(py, &instance, &in_slots, &out_refs, &req_name, &resp_name)
-        .map_err(pyo3::exceptions::PyRuntimeError::new_err)
+    run_loop(py, &instance, &in_slots, &out_refs, &base).map_err(pyo3::exceptions::PyRuntimeError::new_err)
 }
 
 /// The slot names one declaration constant holds, in declaration order.
@@ -50,43 +48,51 @@ fn env(key: &str) -> PyResult<String> {
     std::env::var(key).map_err(|_| pyo3::exceptions::PyRuntimeError::new_err(format!("{key} unset")))
 }
 
-/// Open the iceoryx2 ports (the mirror of the parent's) and run the request→process→response loop.
+/// How long one wait for a call lasts; the parent's liveness is watched by its own thread.
+const SLICE: Duration = Duration::from_millis(100);
+
+/// Open the child's end of the exchange and answer calls until the parent says stop.
 fn run_loop(
     py: Python<'_>,
     instance: &Bound<'_, PyAny>,
     in_slots: &[(String, bool)],
     out_slots: &[&str],
-    req_name: &str,
-    resp_name: &str,
+    base: &str,
 ) -> Result<(), String> {
     // The parent's session, joined through `GOOFI_SESSION`: the same root, prefix and limits.
-    let mut served = goofi_transport::Served::open(&goofi_transport::Iox::from_env()?, req_name, resp_name)?;
+    let mut served = goofi_transport::Served::open(&goofi_transport::Iox::from_env()?, base)?;
     let mut warned: HashSet<SrcDtype> = HashSet::new();
-    let mut did_setup = false;
     loop {
-        let Some((seq, body)) = served.request()? else {
-            // DETACHED: holding the GIL over the idle poll would starve a node's own Python
-            // threads, and a receiver thread started in `setup()` is this tier's canonical shape.
-            py.detach(|| std::thread::sleep(Duration::from_micros(500)));
-            continue;
-        };
-        let resp = handle(py, instance, in_slots, out_slots, &mut warned, &mut did_setup, &body)
+        // DETACHED: holding the GIL over the wait would starve a node's own Python threads, and
+        // a receiver thread started in `setup()` is this tier's canonical shape.
+        let Some((seq, body)) = py.detach(|| served.wait(SLICE))? else { continue };
+        let (entry, now, request) = split_call(&body)?;
+        let resp = handle(py, instance, in_slots, out_slots, &mut warned, entry, now, request)
             .map_err(|e| format!("node process: {e}"))?;
         served.answer(seq, &resp)?;
+        if entry == Entry::Stop {
+            return Ok(());
+        }
     }
 }
 
-/// Decode one request → run the node → encode the response. A MALFORMED request is fatal; a node
-/// raise is a per-tick error response, which the parent surfaces without respawning the child.
+/// Decode one call → run the node → encode the response. A MALFORMED request is fatal; a node
+/// raise is a per-call error response, which the parent surfaces without respawning the child.
+#[allow(clippy::too_many_arguments)]
 fn handle(
     py: Python<'_>,
     instance: &Bound<'_, PyAny>,
     in_slots: &[(String, bool)],
     out_slots: &[&str],
     warned: &mut HashSet<SrcDtype>,
-    did_setup: &mut bool,
+    entry: Entry,
+    now: f64,
     body: &[u8],
 ) -> PyResult<Vec<u8>> {
+    if entry == Entry::Stop {
+        crate::exec::run_stop(instance);
+        return Ok(response(&[], &[]));
+    }
     let (params, arrived) = match decode_request(&[body]).map_err(pyo3::exceptions::PyValueError::new_err)? {
         Request::Process { params, slots } => (params, slots),
         Request::Refresh { params, group, name } => {
@@ -100,6 +106,13 @@ fn handle(
             });
         }
     };
+    // Setup is a call of its own, with the params it seeds; a raise is the engine's to retry.
+    if entry == Entry::Setup {
+        return Ok(match crate::exec::run_setup(py, instance, &params, now) {
+            Ok(()) => response(&[], &[]),
+            Err(e) => encode_error_response(&e.to_string()),
+        });
+    }
     // The wire carries only the frames that arrived; widen it back to every declared slot — a
     // `multi` slot gathers every entry under its name in order, a single one takes the last.
     let inputs: Vec<(&str, SlotIn<'_>)> = in_slots
@@ -113,7 +126,7 @@ fn handle(
             (name.as_str(), slot)
         })
         .collect();
-    match run_node(py, instance, &params, &inputs, out_slots, warned, did_setup) {
+    match crate::exec::run_process(py, instance, &params, &inputs, out_slots, warned, now) {
         Ok(result) => {
             let slots: Vec<(&str, Emitted<'_>)> = result.outputs.iter().map(|(n, d)| (n.as_str(), Emitted::Frame(d))).collect();
             Ok(response(&slots, &result.clear_inputs))
@@ -128,22 +141,4 @@ fn response(outputs: &[(&str, Emitted<'_>)], clears: &[String]) -> Vec<u8> {
         Ok(()) => out,
         Err(e) => encode_error_response(&e.to_string()),
     }
-}
-
-/// Run `setup()` until it SUCCEEDS, then `process()`; a setup that raised is retried on the next
-/// request, and `process()` never runs after a failed one.
-fn run_node(
-    py: Python<'_>,
-    instance: &Bound<'_, PyAny>,
-    params: &crate::exec::Groups,
-    inputs: &[(&str, SlotIn<'_>)],
-    out_slots: &[&str],
-    warned: &mut HashSet<SrcDtype>,
-    did_setup: &mut bool,
-) -> PyResult<crate::exec::Ran> {
-    if !*did_setup {
-        crate::exec::run_setup(py, instance, params)?;
-        *did_setup = true;
-    }
-    crate::exec::run_process(py, instance, params, inputs, out_slots, warned)
 }

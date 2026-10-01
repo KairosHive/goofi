@@ -7,8 +7,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use goofi_codec::rpc::{self, Entry};
 use goofi_node::NodeManifest;
-use goofi_signal_sdk::host::{Ask, Entry, Handle};
+use goofi_signal_sdk::host::{in_slots, Call, CodecNode};
 use goofi_transport::{Exchange, Served};
 
 static HOSTED_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -16,6 +17,10 @@ static HOSTED_SEQ: AtomicU64 = AtomicU64::new(0);
 /// How long a request waits on a child that stopped answering; the first one also pays the load.
 const TICK_TIMEOUT: Duration = Duration::from_secs(10);
 const COLD_START_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the stop waits for the child to release what it holds before it is killed.
+const STOP_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long the child's wait for a request lasts before it looks at the parent again.
+const SLICE: Duration = Duration::from_millis(100);
 
 /// What a built library says it is, read by a child so the library never enters this process.
 pub fn describe(host: &Path, artifact: &Path) -> Result<String, String> {
@@ -30,10 +35,9 @@ pub fn describe(host: &Path, artifact: &Path) -> Result<String, String> {
 }
 
 /// A node whose library runs in a child, spawned on its first call and replaced on a failure.
-pub type HostedNode = Handle<Hosted>;
+pub type HostedNode = CodecNode<Hosted>;
 
-/// The child that holds a hosted node's library, asked over the exchange: `[entry][f64 now]`,
-/// then the codec request.
+/// The child that holds a hosted node's library, called over the exchange.
 pub struct Hosted {
     iox: Arc<goofi_transport::Iox>,
     host: PathBuf,
@@ -44,49 +48,46 @@ pub struct Hosted {
 
 impl Hosted {
     pub fn node(iox: Arc<goofi_transport::Iox>, host: PathBuf, artifact: PathBuf, manifest: &'static NodeManifest) -> HostedNode {
-        Handle::new(Hosted { iox, host, artifact, type_name: manifest.type_name, live: None }, manifest)
+        CodecNode::new(Hosted { iox, host, artifact, type_name: manifest.type_name, live: None }, in_slots(manifest))
     }
 
     fn spawn(&self) -> Result<(goofi_supervisor::child::Child, Exchange), String> {
         let base = format!("goofi_host_{}_{}", std::process::id(), HOSTED_SEQ.fetch_add(1, Ordering::Relaxed));
+        // The parent's end stands first, so the child's ready ring finds a listener.
+        let exchange = Exchange::open(&self.iox, &base)?;
         let mut cmd = std::process::Command::new(&self.host);
-        cmd.arg("host").arg("serve").arg(&self.artifact).arg(self.type_name)
-            .env("GOOFI_IOX_REQ", format!("{base}_req"))
-            .env("GOOFI_IOX_RESP", format!("{base}_resp"));
+        cmd.arg("host").arg("serve").arg(&self.artifact).arg(self.type_name).env("GOOFI_IOX_BASE", base);
         let child = goofi_supervisor::child::run(format!("native node {} (hosted)", self.type_name), &mut cmd)
             .source(goofi_supervisor::log::source())
             .spawn()
             .map_err(|e| format!("spawn the host: {e}"))?;
-        let exchange = Exchange::open(&self.iox, &base)?;
         Ok((child, exchange))
     }
 }
 
-impl Ask for Hosted {
-    /// One request to the child, spawning it first if need be; a child that failed is dropped so
-    /// the next request starts a fresh one.
-    fn ask(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
+impl Call for Hosted {
+    /// One call to the child, spawning it first if need be; a child that failed is dropped so
+    /// the next call starts a fresh one. A stop is the child's last call, then its end.
+    fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
+        if entry == Entry::Stop {
+            if let Some((mut child, mut exchange)) = self.live.take() {
+                let _ = exchange.ask(&mut child, &[&rpc::call_head(Entry::Stop, now)], STOP_TIMEOUT);
+                child.stop(Duration::ZERO);
+            }
+            return Ok(rpc::done());
+        }
         let timeout = if self.live.is_none() { COLD_START_TIMEOUT } else { TICK_TIMEOUT };
         if self.live.is_none() {
             self.live = Some(self.spawn()?);
         }
         let (child, exchange) = self.live.as_mut().expect("spawned");
-        let mut head = vec![entry as u8];
-        head.extend_from_slice(&now.to_le_bytes());
+        let head = rpc::call_head(entry, now);
         let frame: Vec<&[u8]> = std::iter::once(&head[..]).chain(request.iter().copied()).collect();
         let reply = exchange.ask(child, &frame, timeout);
         if reply.is_err() {
             self.live = None;
         }
         reply
-    }
-}
-
-impl Drop for Hosted {
-    fn drop(&mut self) {
-        if let Some((mut child, _)) = self.live.take() {
-            child.stop(Duration::ZERO);
-        }
     }
 }
 
@@ -118,17 +119,15 @@ fn serve(artifact: &Path, type_name: &str) -> Result<(), String> {
     let mut raw = loaded.raw();
     let mut served = Served::open_from_env()?;
     loop {
-        let Some((seq, body)) = served.request()? else {
-            std::thread::sleep(Duration::from_micros(500));
-            continue;
-        };
-        let reply = match body.split_first().and_then(|(e, rest)| Some((Entry::from_u8(*e)?, rest))) {
-            Some((entry, rest)) if rest.len() >= 8 => {
-                let now = f64::from_le_bytes(rest[..8].try_into().unwrap());
-                raw.ask(entry, now, &[&rest[8..]]).unwrap_or_else(|e| goofi_codec::encode_error_response(&e))
-            }
-            _ => goofi_codec::encode_error_response("a malformed request"),
+        let Some((seq, body)) = served.wait(SLICE)? else { continue };
+        let call = rpc::split_call(&body);
+        let reply = match &call {
+            Ok((entry, now, request)) => raw.call(*entry, *now, &[request]).unwrap_or_else(|e| rpc::encode_error_response(&e)),
+            Err(e) => rpc::encode_error_response(e),
         };
         served.answer(seq, &reply)?;
+        if matches!(call, Ok((Entry::Stop, ..))) {
+            return Ok(());
+        }
     }
 }

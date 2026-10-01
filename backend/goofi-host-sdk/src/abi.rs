@@ -5,7 +5,8 @@
 use std::ffi::{c_char, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use goofi_codec::{Emitted, Out, Request};
+use goofi_codec::rpc::{Emitted, Request};
+use goofi_codec::Out;
 use goofi_core::Data;
 use goofi_node::{ParamKey, Params};
 use indexmap::IndexMap;
@@ -104,7 +105,7 @@ unsafe fn call(
     let encoded = match catch_unwind(AssertUnwindSafe(|| f(inst, &request))) {
         Ok(Err(e)) => Err(e),
         Err(p) => Err(goofi_node::panic_message(p)),
-        Ok(Ok(Answer::Done)) => goofi_codec::encode_response(&[], &[], &mut out).map_err(|e| e.to_string()),
+        Ok(Ok(Answer::Done)) => goofi_codec::rpc::encode_response(&[], &[], &mut out).map_err(|e| e.to_string()),
         Ok(Ok(Answer::Process { outputs, inputs, clears })) => {
             // An output that IS an input crosses as that input's name: the host still holds it.
             let emitted: Vec<(&str, Emitted<'_>)> = outputs
@@ -115,19 +116,19 @@ unsafe fn call(
                     None => (name, Emitted::Frame(d)),
                 })
                 .collect();
-            goofi_codec::encode_response(&emitted, &clears, &mut out).map_err(|e| e.to_string())
+            goofi_codec::rpc::encode_response(&emitted, &clears, &mut out).map_err(|e| e.to_string())
         }
         Ok(Ok(Answer::Options(options))) => {
-            goofi_codec::encode_options_response(&options).map(|bytes| out.put(&bytes)).map_err(|e| e.to_string())
+            goofi_codec::rpc::encode_options_response(&options).map(|bytes| out.put(&bytes)).map_err(|e| e.to_string())
         }
     };
     if let Err(e) = encoded {
-        out.put(&goofi_codec::encode_error_response(&e));
+        out.put(&goofi_codec::rpc::encode_error_response(&e));
     }
 }
 
-fn process_request(req: &[&[u8]]) -> Result<(goofi_codec::ParamMap, goofi_codec::SourcedSlots), String> {
-    match goofi_codec::decode_request(req)? {
+fn process_request(req: &[&[u8]]) -> Result<(goofi_codec::rpc::ParamMap, goofi_codec::rpc::SourcedSlots), String> {
+    match goofi_codec::rpc::decode_request(req)? {
         Request::Process { params, slots } => Ok((params, slots)),
         Request::Refresh { .. } | Request::Pulse { .. } => Err("a refresh or a pulse where a run was expected".into()),
     }
@@ -191,7 +192,7 @@ pub unsafe extern "C" fn on_param_changed(node: *mut c_void, ctx: Ctx, request: 
 pub unsafe extern "C" fn on_param_refreshed(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
     let _ = ctx;
     call(node, None, request, sink, write, |inst, req| {
-        let Request::Refresh { params, group, name } = goofi_codec::decode_request(req)? else {
+        let Request::Refresh { params, group, name } = goofi_codec::rpc::decode_request(req)? else {
             return Err("a run where a refresh was expected".into());
         };
         Ok(Answer::Options(inst.node.on_param_refreshed(&ParamKey::new(group, name), &Params::new(&params))))
@@ -203,7 +204,7 @@ pub unsafe extern "C" fn on_param_refreshed(node: *mut c_void, ctx: Ctx, request
 pub unsafe extern "C" fn on_pulse(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
     let _ = ctx;
     call(node, None, request, sink, write, |inst, req| {
-        let Request::Pulse { params, group, name } = goofi_codec::decode_request(req)? else {
+        let Request::Pulse { params, group, name } = goofi_codec::rpc::decode_request(req)? else {
             return Err("a run where a pulse was expected".into());
         };
         inst.node.on_pulse(&ParamKey::new(group, name), &Params::new(&params)).map_err(|e| e.0)?;
