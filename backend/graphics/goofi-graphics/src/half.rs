@@ -1,11 +1,14 @@
-//! The graphics engine's half of a node's control thread: an arrival becomes texels the render
-//! thread uploads, and the frame that thread read back goes out while anyone drinks from it.
+//! The graphics engine's executor on a node's runtime: an arrival becomes texels the render
+//! thread uploads, and the frame that thread read back goes out while anyone drinks from it. A
+//! host producer runs here too, on the shared host executor, and what it renders is the source.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use goofi_supervisor::sync::Mutex;
 
-use goofi_control::{Cx, Half, Ticked};
+use goofi_runtime::{Cx, Executor, Fault, HostExecutor, Out, Ticked};
+use goofi_node::NodeStage;
 use goofi_core::Data;
 pub use crate::resources::Upload;
 
@@ -29,7 +32,7 @@ pub struct Tap {
 }
 
 pub struct GraphicsHalf {
-    producer: Option<crate::producer::Worker>,
+    producer: Option<(HostExecutor, crate::producer::Source)>,
     uploads: Vec<Arc<Mutex<Option<Upload>>>>,
     readers: Arc<AtomicBool>,
     tap: Arc<Mutex<Tap>>,
@@ -55,7 +58,7 @@ pub(crate) fn unpack(word: u64) -> Option<(u32, u32)> {
 }
 
 impl GraphicsHalf {
-    pub fn with_producer(mut self, producer: Option<crate::producer::Worker>) -> Self {
+    pub fn with_producer(mut self, producer: Option<(HostExecutor, crate::producer::Source)>) -> Self {
         self.producer = producer;
         self
     }
@@ -71,15 +74,15 @@ impl GraphicsHalf {
     }
 }
 
-impl Half for GraphicsHalf {
+impl Executor for GraphicsHalf {
     fn latest_only(&self) -> bool {
         true
     }
 
     /// An arrival replaces whatever the render thread has not taken yet: latest wins, as every
     /// crossing into a scheduled engine is.
-    fn arrive(&mut self, inbox: usize, frame: &Data) -> bool {
-        if let Some(producer) = &self.producer { producer.input(inbox, frame.clone()); return false; }
+    fn arrive(&mut self, inbox: usize, wire: usize, frame: &Data) -> bool {
+        if let Some((producer, _)) = &mut self.producer { return producer.arrive(inbox, wire, frame); }
         let Some(cell) = self.uploads.get(inbox) else { return false };
         if let Some(up) = Upload::of(frame) {
             if inbox == 0 {
@@ -90,18 +93,52 @@ impl Half for GraphicsHalf {
         false
     }
 
-    fn unwired(&mut self, inbox: usize) {
-        if let Some(producer) = &self.producer { producer.unwired(inbox); }
-        if inbox == 0 {
+    fn rewire(&mut self, inbox: usize, wires: &[(String, String)]) {
+        if let Some((producer, _)) = &mut self.producer { producer.rewire(inbox, wires); }
+        if inbox == 0 && wires.is_empty() {
             self.uploaded.store(0, Ordering::Relaxed);
         }
     }
-    fn refresh(&mut self) -> Option<Vec<String>> {
-        if let Some(producer) = &self.producer { producer.refresh(); }
-        None
+    fn params_changed(&mut self, values: &[goofi_core::Param], trigger: bool) -> Ticked {
+        match &mut self.producer {
+            Some((producer, _)) => producer.params_changed(values, trigger),
+            None => Ticked::default(),
+        }
     }
-    fn tick(&mut self, cx: &Cx<'_>, publish: &mut dyn FnMut(usize, &[u8])) -> Ticked {
-        if let Some(producer) = &mut self.producer { producer.sync(cx); }
+    fn pulse(&mut self, param: usize) -> Ticked {
+        match &mut self.producer {
+            Some((producer, _)) => producer.pulse(param),
+            None => Ticked::default(),
+        }
+    }
+    fn refresh(&mut self, param: usize) -> Option<Vec<String>> {
+        self.producer.as_mut().and_then(|(producer, _)| producer.refresh(param))
+    }
+    /// The tap's pace, and the producer's own when it is due sooner.
+    fn next_wake(&self, last_run: Instant) -> Option<Instant> {
+        let tap = last_run + goofi_runtime::TICK;
+        Some(self.producer.as_ref().and_then(|(p, _)| p.next_wake(last_run)).map_or(tap, |due| due.min(tap)))
+    }
+    fn fault(&self) -> Option<Fault> {
+        self.refused.clone().map(Fault::Process).or_else(|| self.producer.as_ref().and_then(|(p, _)| p.fault()))
+    }
+    fn stage(&self) -> NodeStage {
+        self.producer.as_ref().map_or(NodeStage::Ready, |(p, _)| p.stage())
+    }
+    fn run(&mut self, cx: &Cx<'_>, publish: &mut dyn FnMut(usize, Out<'_>)) -> Ticked {
+        let mut ticked = Ticked::default();
+        if let Some((producer, source)) = &mut self.producer {
+            let now = Instant::now();
+            if producer.next_wake(now).is_some_and(|due| due <= now) {
+                let mut moved = false;
+                ticked = producer.run(cx, &mut |_, out| {
+                    if let Out::Frame(frame) = out {
+                        moved |= crate::producer::produced(source, frame);
+                    }
+                });
+                ticked.replan |= moved;
+            }
+        }
         // What the render thread reads to decide whether this node runs at all.
         let readers = cx.readers.first().copied().unwrap_or(false);
         self.readers.store(readers, Ordering::Relaxed);
@@ -116,12 +153,13 @@ impl Half for GraphicsHalf {
         match encoded {
             Some(Ok(bytes)) => {
                 self.refused = None;
-                publish(0, &bytes);
+                publish(0, Out::Bytes(&bytes));
             }
             Some(Err(why)) => self.refused = Some(format!("the output frame cannot cross: {why}")),
             None => {}
         }
         let seen = (crate::plan::asked(cx.params, self.size), self.uploaded.load(Ordering::Relaxed));
-        Ticked { errors: Vec::new(), fault: self.refused.clone(), replan: std::mem::replace(&mut self.last, seen) != seen }
+        ticked.replan |= std::mem::replace(&mut self.last, seen) != seen;
+        ticked
     }
 }

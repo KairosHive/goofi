@@ -30,6 +30,9 @@ goofi-window = { path = "../goofi-window" }
 goofi-graphics = { path = "../graphics/goofi-graphics" }
 goofi-node = { path = "../goofi-node" }
 goofi-transport = { path = "../goofi-transport" }
+goofi-runtime = { path = "../goofi-runtime" }
+# The transport situation reads a service's creation-time limits back from iceoryx2 itself.
+iceoryx2 = "0.9.3"
 goofi-view = { path = "../goofi-view" }
 # The manager side of both Python tiers. `subproc` is unconditional — it only SPAWNS an
 # interpreter — so its suite runs in the default build.

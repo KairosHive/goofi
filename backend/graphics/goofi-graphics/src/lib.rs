@@ -10,10 +10,10 @@ use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use goofi_control::{Desired, Handle, Shared, Sub};
+use goofi_runtime::{Desired, Handle, HostExecutor, Plane, Shared};
 use goofi_core::SlotType;
 use goofi_node::{
-    DrainWaker, Engine, ExprDecl, ExprMode, GraphView, LibraryEntry, NodeManifest, NodeStage, NodeView,
+    DrainWaker, Engine, ExprDecl, ExprMode, GraphView, LibraryEntry, NodeManifest, NodeView,
     ParamDecl, ParamGroups, ParamSpec, ScannedType, Status, Touched, Uid,
 };
 
@@ -68,7 +68,6 @@ pub(crate) struct Instance {
     pub(crate) tap_box: Arc<AtomicU64>,
     control: Handle,
     pub(crate) source: Option<producer::Source>,
-    producer: Option<producer::Lifetime>,
     program: Option<(Arc<str>, scan::Built)>,
 }
 
@@ -97,7 +96,7 @@ pub struct GraphicsEngine {
     inbox: Arc<Mutex<Vec<runtime::Cmd>>>,
     stats: Arc<Stats>,
     ticker: Option<(Arc<AtomicBool>, goofi_supervisor::worker::Worker)>,
-    faults: goofi_control::Faults,
+    faults: goofi_runtime::Faults,
     ui: Option<goofi_window::Ui>,
     /// The window each window node has open, and the size it was last given.
     windows: HashMap<Uid, (goofi_window::Id, (u32, u32))>,
@@ -217,7 +216,7 @@ impl GraphicsEngine {
             inbox,
             stats,
             ticker,
-            faults: goofi_control::Faults::default(),
+            faults: goofi_runtime::Faults::default(),
             ui: None,
             windows: HashMap::new(),
             pending: Vec::new(),
@@ -273,51 +272,11 @@ impl GraphicsEngine {
         }
     }
 
-    /// Everything one node's control half holds, read off the settled view.
+    /// Everything one node's runtime holds, read off the settled view: a texture wire is a plan
+    /// edge, carried by the stage rather than subscribed, and a recording is the render thread's.
     fn desired_of(&self, view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>) -> Desired {
-        let manifest = self.live[&uid].class.manifest;
-        let decls = decls_of(manifest);
-        let consts = decls.iter().map(|d| goofi_control::param_of(nv.params, d)).collect();
-        let mut subs = Vec::new();
-        let mut inbox = 0;
-        for s in manifest.inputs {
-            if s.kind == SlotType::Texture {
-                continue;
-            }
-            let k = inbox;
-            inbox += 1;
-            if let Some(service) = view.wires_into(uid, s.name).next().and_then(|(p, slot)| goofi_transport::output_of(view, p, slot)) {
-                subs.push(Sub::Slot { inbox: k, service });
-            }
-        }
-        for (param, d) in decls.iter().enumerate() {
-            let bound = nv.bindings.iter().find(|b| b.live && b.key.group == d.group && b.key.name == d.name);
-            let Some(b) = bound else { continue };
-            let vars = b.vars.iter().map(|v| goofi_transport::var_of(view, v)).collect();
-            subs.push(Sub::Bind { param, key: b.key.clone(), source: b.rewritten.to_string(), id: b.id, vars });
-        }
-        let targets = manifest
-            .outputs
-            .iter()
-            .map(|o| {
-                let ringers = view.ringers(uid, o.name).into_iter().filter(|r| !self.rides_the_plan(r));
-                goofi_transport::targets_of(view, uid, o.name, ringers)
-            })
-            .collect();
-        // No recording door yet: a graphics frame is a texture, and what a recorder takes off one
-        // is the readback the tap already makes.
-        Desired { consts, subs, targets, record: Vec::new() }
-    }
-
-    /// Whether a ring would wake a same-engine consumer for what the plan already carries.
-    fn rides_the_plan(&self, r: &goofi_node::Ringer<'_>) -> bool {
-        let Some(consumer) = self.live.get(&r.consumer) else { return false };
-        match r.via {
-            goofi_node::Via::Slot(s) => {
-                consumer.class.manifest.inputs.iter().any(|i| i.name == s && i.kind == SlotType::Texture)
-            }
-            goofi_node::Via::Binding(_) => false,
-        }
+        let plane = Plane { kind: Some(SlotType::Texture), planned: &|_| false, records: false };
+        goofi_runtime::desired_of(view, uid, nv, &decls_of(self.live[&uid].class.manifest), &plane)
     }
 
     /// The window each window node should have, opened, resized or closed to match settled state.
@@ -417,7 +376,7 @@ impl Engine for GraphicsEngine {
         let manifest = class.manifest;
         let atomics: Arc<[AtomicU64]> = decls_of(manifest)
             .iter()
-            .map(|d| AtomicU64::new(goofi_control::scalar_of(params, d).to_bits()))
+            .map(|d| AtomicU64::new(goofi_runtime::scalar_of(params, d).to_bits()))
             .collect();
         let uploads: Vec<Arc<Mutex<Option<half::Upload>>>> =
             (0..Self::uploads_of(manifest)).map(|_| Arc::new(Mutex::new(None))).collect();
@@ -425,36 +384,38 @@ impl Engine for GraphicsEngine {
         let readers = Arc::new(AtomicBool::new(false));
         let tap = Arc::new(Mutex::new(half::Tap::default()));
         let tap_box = Arc::new(AtomicU64::new(0));
-        let spawn = goofi_control::Spawn {
+        let spawn = goofi_runtime::Spawn {
             engine: "graphics",
             uid,
             instance: self.instance.clone(),
             base: goofi_transport::service_base(&self.instance, uid, generation),
             manifest,
+            decls: decls_of(manifest),
             params: atomics.clone(),
             time: self.time.clone(),
         };
         let (cells, flag, out, seen) = (uploads.clone(), readers.clone(), tap.clone(), uploaded.clone());
         let size = manifest.params.len();
         let source = matches!(class.kind, scan::Kind::Host(_)).then(producer::Source::default);
-        let producer = match &class.kind {
+        let factory = match &class.kind {
             scan::Kind::Shader(_) => None,
-            scan::Kind::Host(factory) => Some(producer::Worker::start(
-                uid, manifest, factory.clone(), params.clone(), self, source.clone().expect("host source"),
-            )),
+            scan::Kind::Host(factory) => Some((factory.clone(), source.clone().expect("host source"), params.clone())),
         };
-        let lifetime = producer.as_ref().map(producer::Worker::lifetime);
-        let make = move || GraphicsHalf::new(cells, flag, out, seen, size).with_producer(producer);
-        let control = match goofi_control::spawn(&self.iox, spawn, self.shared.clone(), &self.bells, make) {
+        // The producer is BUILT on the runtime's thread: a Python node's construction executes
+        // its module, and this insert holds the graph mutex.
+        let make = move || {
+            let producer = factory.map(|(f, source, params)| {
+                let build: goofi_runtime::NodeBuild = Box::new(move |p| f(p));
+                (HostExecutor::new(manifest, decls_of(manifest), build, &params), source)
+            });
+            GraphicsHalf::new(cells, flag, out, seen, size).with_producer(producer)
+        };
+        let control = match goofi_runtime::spawn(&self.iox, spawn, self.shared.clone(), &self.bells, make) {
             Ok(handle) => handle,
             Err(e) => return Some(e),
         };
         self.ask(runtime::Cmd::Insert(uid, runtime::params_len(manifest)));
-        self.live.insert(uid, Instance { class: class.clone(), params: atomics, uploads, uploaded, readers, tap, tap_box, control, source, producer: lifetime, program: None });
-        // A synchronous engine is ready the moment its insert answers.
-        if matches!(class.kind, scan::Kind::Shader(_)) {
-            self.pending.push((uid, Status::Stage { stage: NodeStage::Ready }));
-        }
+        self.live.insert(uid, Instance { class: class.clone(), params: atomics, uploads, uploaded, readers, tap, tap_box, control, source, program: None });
         self.dirty = true;
         self.shared.waker.notify();
         None
@@ -462,7 +423,6 @@ impl Engine for GraphicsEngine {
 
     fn remove(&mut self, uid: Uid) {
         if let Some(inst) = self.live.remove(&uid) {
-            if let Some(producer) = &inst.producer { producer.stop(); }
             self.shared.reports.lock().retain(|(u, _)| *u != uid);
             inst.control.stop();
             self.ask(runtime::Cmd::Remove(uid));
@@ -482,7 +442,7 @@ impl Engine for GraphicsEngine {
             let desired = self.desired_of(view, uid, nv);
             self.live[&uid].control.send_if_changed(desired);
         }
-        // Workers hold CPU descriptions only. Compiled programs belong to the graphics engine.
+        // Producers hold CPU descriptions only. Compiled programs belong to the graphics engine.
         for inst in self.live.values_mut() {
             let source = inst.source.as_ref().and_then(|s| {
                 s.lock().as_ref().and_then(|frame| match &frame.content {
@@ -559,9 +519,8 @@ impl Engine for GraphicsEngine {
                 ui.post(move |host| host.close_window(id));
             }
         }
-        let halts: Vec<Arc<goofi_transport::Halt>> = self.live.values().flat_map(|i| std::iter::once(i.control.halt.clone()).chain(i.producer.as_ref().map(|p| p.halt.clone()))).collect();
+        let halts: Vec<Arc<goofi_transport::Halt>> = self.live.values().map(|i| i.control.halt.clone()).collect();
         for inst in self.live.values() {
-            if let Some(producer) = &inst.producer { producer.stop(); }
             inst.control.stop();
         }
         goofi_transport::wait_released(halts.iter().map(|h| &**h), goofi_transport::SHUTDOWN_WAIT);

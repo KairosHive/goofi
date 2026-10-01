@@ -1,45 +1,12 @@
-//! The signal engine behind the seam: hosts, the wire planner and the library of the async
-//! runtime. Its drain only COLLECTS — acks and readies mark planner state — and the settle that
-//! follows every drain is the one place messages are composed, always against the settled view.
+//! The signal engine behind the seam: one runtime per node on the shared per-node runtime, told
+//! its whole desired state at every settle, and the library of the async tiers.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use goofi_node::{BoundVar, DrainWaker, Engine, EventId, GraphView, IsolationCell, LibraryEntry, NodeManifest, ParamGroups, ParamKey, Status, Touched, Uid, Via};
-
-use crate::runtime::{
-    self,
-    plan::{same_end, Phase, Slot, SlotKey, Wire, WirePlanner},
-};
-
-
-/// One node's manager-side thread, and the graph's end of its wires. A node is *known* when
-/// `insert` answers and *addressable* only once it reports Ready.
-struct NodeHost {
-    /// A flag rather than a `Control::Terminate`, because a node removed before it was
-    /// addressable has no sink to receive one.
-    halt: Arc<runtime::Halt>,
-    /// `None` when the services could not be created: the node then exists carrying its boot
-    /// error and nothing else.
-    channel: Option<Arc<runtime::NodeChannel>>,
-}
-
-impl NodeHost {
-    /// Never joined here: the thread may be inside a long `process()`, and every caller holds the
-    /// graph mutex.
-    fn signal_stop(&self) {
-        self.halt.stop();
-        if let Some(channel) = &self.channel {
-            channel.wake();
-        }
-    }
-}
-
-impl Drop for NodeHost {
-    fn drop(&mut self) {
-        self.signal_stop();
-    }
-}
+use goofi_node::{DrainWaker, Engine, GraphView, IsolationCell, LibraryEntry, NodeManifest, ParamGroups, Status, Touched, Uid};
+use goofi_runtime::{Handle, HostExecutor, Plane, Shared};
 
 /// A [`goofi_signal_sdk::NodeFactory`] shared with the node's own thread, which is where the build happens.
 type SharedFactory = Arc<dyn Fn(&ParamGroups) -> Box<dyn goofi_signal_sdk::Node> + Send + Sync>;
@@ -56,11 +23,11 @@ pub struct SignalEngine {
     pub(crate) iox: Arc<goofi_transport::Iox>,
     /// What service names are scoped by — handed down from the graph, whose resolver inputs it is.
     instance: String,
-    evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>>,
     time: Arc<goofi_core::time::Time>,
-    waker: Arc<DrainWaker>,
-    wire: WirePlanner,
-    hosts: HashMap<Uid, NodeHost>,
+    shared: Arc<Shared>,
+    hosts: HashMap<Uid, Handle>,
+    /// A node was born since the last settle, and owes its runtime a first desired state.
+    dirty: bool,
     dyn_types: HashMap<&'static str, DynType>,
     /// The interpreters a `.py` file is probed and run with; none until the host provides them.
     pub(crate) python: Option<crate::scan::Python>,
@@ -72,13 +39,9 @@ pub struct SignalEngine {
     pub(crate) booted: bool,
     /// The executable that hosts a node built after boot — goofi's own binary, or the harness's.
     pub(crate) host: Option<std::path::PathBuf>,
-    /// Readies the drain collected; the settle that follows re-plans each from an empty base.
-    pending_ready: Vec<Uid>,
-    /// Sequences whose phase an ack completed; the settle that follows advances each.
-    pending_advance: Vec<SlotKey>,
-    /// The graph's OWN iceoryx2 node, shared by every [`runtime::NodeChannel`]. Declared LAST: it
+    /// The engine's own iceoryx2 node, which every runtime's bell is opened on. Declared LAST: it
     /// must drop after every port built from it, or it leaves its own directory behind.
-    graph_node: Option<goofi_transport::IoxNode>,
+    bells: Option<goofi_transport::IoxNode>,
 }
 
 impl SignalEngine {
@@ -91,20 +54,17 @@ impl SignalEngine {
         SignalEngine {
             iox,
             instance,
-            evaluator: None,
             time,
-            waker,
-            wire: WirePlanner::default(),
+            shared: Arc::new(Shared::new(waker)),
             hosts: HashMap::new(),
+            dirty: false,
             dyn_types: HashMap::new(),
             python: None,
             probed: HashMap::new(),
             rust_loaded: HashMap::new(),
             booted: false,
             host: None,
-            pending_ready: Vec::new(),
-            pending_advance: Vec::new(),
-            graph_node: None,
+            bells: None,
         }
     }
 
@@ -130,188 +90,9 @@ impl SignalEngine {
             .map(|dt| LibraryEntry { manifest: dt.manifest, isolation: dt.isolation })
     }
 
-    /// Every consumer subscription of this engine's whose wiring names `uid`: the planner's own
-    /// record of channels spoken on, the settled edges, and the bindings on either end.
-    fn keys_touching(&self, view: &GraphView<'_>, uid: Uid) -> Vec<SlotKey> {
-        let mut keys = self.wire.keys_for(uid);
-        for e in view.edges.iter().filter(|e| e.producer.0 == uid || e.consumer.0 == uid) {
-            let key = (e.consumer.0, Slot::In(e.consumer.1));
-            if !keys.contains(&key) {
-                keys.push(key);
-            }
-        }
-        for (consumer, node) in &view.nodes {
-            for b in &node.bindings {
-                let touches = *consumer == uid
-                    || b.vars.iter().filter_map(BoundVar::wire).any(|(p, _)| p == uid);
-                let key = (*consumer, Slot::Bind(b.key.clone()));
-                if touches && !keys.contains(&key) {
-                    keys.push(key);
-                }
-            }
-        }
-        keys
-    }
-
-    /// Tell one node which of its output slots are armed — the whole set, which the node diffs.
-    fn record_slots(&mut self, view: &GraphView<'_>, uid: Uid) {
-        let Some(node) = view.nodes.get(&uid).filter(|n| n.engine == self.id()) else { return };
-        let slots = node.recorded.iter().map(|output| (output.slot.clone(), output.serial)).collect();
-        self.wire.send(uid, runtime::Control::RecSlot { slots });
-    }
-
-    fn replan(&mut self, view: &GraphView<'_>, key: SlotKey) {
-        let Some(consumer) = view.nodes.get(&key.0) else { return };
-        let foreign = consumer.engine != self.id();
-        let desired = desired_wires(view, &key);
-        let previous = self.wire.planned(&key);
-        // An In set that did not move carries nothing — a batch that ends where it started says
-        // nothing. A Bind sequence still runs: its phase 2 IS the param delivery, wires or not.
-        if !foreign && matches!(key.1, Slot::In(_)) && desired == previous {
-            return;
-        }
-        let removed = previous.iter().filter(|w| !desired.iter().any(|d| same_end(d, (w.0, w.1)))).cloned().collect();
-        // A rebirth renames a foreign consumer's door where this planner cannot see it, so every
-        // touch re-tells its producers the whole set.
-        let added = desired.iter().filter(|w| foreign || !previous.iter().any(|p| same_end(p, (w.0, w.1)))).cloned().collect();
-        // A begin cancels the key's previous sequence — and any ack collected for it, or a stale
-        // deferred advance would step the NEW sequence past a phase nobody acked.
-        self.pending_advance.retain(|k| k != &key);
-        self.wire.begin(key.clone(), desired, removed, added);
-        self.advance(view, key);
-    }
-
-    /// Walk the phases until one has something to send. A phase with no recipients is skipped
-    /// rather than sent empty, or the sequence would park on an ack that never comes.
-    fn advance(&mut self, view: &GraphView<'_>, key: SlotKey) {
-        while let Some(phase) = self.wire.step(&key) {
-            let messages = self.compose_wire(view, &key, phase);
-            if self.wire.dispatch(&key, messages) {
-                return;
-            }
-        }
-    }
-
-    /// One phase's messages, composed from the settled view as it stands NOW; `Apply` carries the
-    /// sequence's own desired set, which must not shift under it.
-    fn compose_wire(
-        &self,
-        view: &GraphView<'_>,
-        key: &SlotKey,
-        phase: Phase,
-    ) -> Vec<(Uid, runtime::Control)> {
-        match phase {
-            // A foreign consumer subscribes at its own engine's settle; only its producers hear
-            // from this one.
-            Phase::Apply if view.nodes.get(&key.0).is_some_and(|n| n.engine != self.id()) => Vec::new(),
-            // Phase 2 is the SUBSCRIBE, whichever kind of consumer this is — an input slot's full
-            // service set, or a binding's whole re-resolved expression. Both are declarative.
-            Phase::Apply => match &key.1 {
-                Slot::In(slot) => {
-                    let wires = self
-                        .wire
-                        .desired(key)
-                        .into_iter()
-                        .filter_map(|(uid, out, source)| Some((goofi_transport::output_of(view, uid, out)?, source)))
-                        .collect();
-                    vec![(key.0, runtime::Control::InSlot { slot: slot.to_string(), wires })]
-                }
-                Slot::Bind(k) => self.compose_set_param(view, key.0, k).into_iter().collect(),
-            },
-            Phase::Shrink | Phase::Grow => self
-                .wire
-                .recipients(key, phase)
-                .into_iter()
-                .map(|(uid, slot, _)| {
-                    let targets = self.out_targets(view, uid, slot);
-                    (uid, runtime::Control::OutSlot { slot: slot.to_string(), targets })
-                })
-                .collect(),
-        }
-    }
-
-    /// The `SetParam` a binding's phase 2 carries: the rewritten source while the binding stands,
-    /// and the param's LITERAL once it does not, which is what says the binding is gone.
-    fn compose_set_param(
-        &self,
-        view: &GraphView<'_>,
-        uid: Uid,
-        key: &ParamKey,
-    ) -> Option<(Uid, runtime::Control)> {
-        let node = view.nodes.get(&uid)?;
-        let value = match node.bindings.iter().find(|b| b.key == key).filter(|b| b.live) {
-            Some(b) => runtime::ParamValue::Expr {
-                source: b.rewritten.to_string(),
-                vars: b.vars.iter().map(|v| goofi_transport::var_of(view, v)).collect(),
-                trigger: b.trigger,
-                // The graph compiled it, the node evaluates it (§2.1) — one handle, so the two
-                // ends can never be evaluating different source.
-                id: b.id,
-            },
-            None => runtime::ParamValue::Literal(
-                goofi_node::param(node.params, &key.group, &key.name)?.clone(),
-            ),
-        };
-        Some((uid, runtime::Control::SetParam { key: key.clone(), value }))
-    }
-
-    /// Every doorbell one output slot rings, with the event id that says why the far node woke —
-    /// the union of its wire consumers and its expression subscribers (§5.3).
-    fn out_targets(
-        &self,
-        view: &GraphView<'_>,
-        producer: Uid,
-        slot: &'static str,
-    ) -> Vec<(runtime::ServiceName, EventId)> {
-        // The ordering guarantee is per TARGET, not per sequence: a consumer whose own sequence
-        // has not applied this wire is not a subscriber yet, which is what the phases prevent.
-        let ringers = view.ringers(producer, slot).into_iter().filter(|r| {
-            let key = match r.via {
-                Via::Slot(s) => Slot::In(s),
-                Via::Binding(b) => Slot::Bind(b.key.clone()),
-            };
-            !self.wire.unapplied(&(r.consumer, key), (producer, slot))
-        });
-        goofi_transport::targets_of(view, producer, slot, ringers)
-    }
-
-    /// Tell a node of this engine the doors one output rings NOW: a watch moved, outside any wire
-    /// sequence, so the set is sent whole.
-    fn retarget(&mut self, view: &GraphView<'_>, uid: Uid, slot: &'static str) {
-        if !view.nodes.get(&uid).is_some_and(|n| n.engine == self.id()) {
-            return;
-        }
-        let targets = self.out_targets(view, uid, slot);
-        self.wire.send(uid, runtime::Control::OutSlot { slot: slot.to_string(), targets });
-    }
-}
-
-/// A consumer subscription's desired producers, read off the settled view, each named `node.slot`.
-fn desired_wires(view: &GraphView<'_>, key: &SlotKey) -> Vec<Wire> {
-    match &key.1 {
-        Slot::In(slot) => {
-            let Some(decl) = view
-                .nodes
-                .get(&key.0)
-                .and_then(|n| n.manifest.inputs.iter().find(|s| s.name == *slot))
-            else {
-                return Vec::new();
-            };
-            view.wires_into(key.0, slot)
-                .filter_map(|(producer, out)| {
-                    let name = &view.nodes.get(&producer)?.name;
-                    let source = if decl.multi { format!("{name}.{out}") } else { String::new() };
-                    Some((producer, out, source))
-                })
-                .collect()
-        }
-        Slot::Bind(k) => view
-            .nodes
-            .get(&key.0)
-            .and_then(|n| n.bindings.iter().find(|b| b.key == k))
-            .filter(|b| b.live)
-            .map(|b| b.vars.iter().filter_map(BoundVar::wire).map(|(uid, out)| (uid, out, String::new())).collect())
-            .unwrap_or_default(),
+    /// The params as this engine counts them: the author's, then the universal `common` group.
+    fn decls_of(manifest: &'static NodeManifest) -> Vec<goofi_node::ParamDecl> {
+        manifest.params.iter().copied().chain(crate::common_decls(manifest)).collect()
     }
 }
 
@@ -321,7 +102,7 @@ impl Engine for SignalEngine {
     }
 
     fn dirty(&self) -> bool {
-        !self.pending_ready.is_empty() || !self.pending_advance.is_empty()
+        self.dirty || self.shared.replan.load(Ordering::Acquire)
     }
 
     fn boot_done(&mut self) {
@@ -347,141 +128,79 @@ impl Engine for SignalEngine {
             .collect()
     }
 
-    fn insert(
-        &mut self,
-        uid: Uid,
-        type_name: &str,
-        generation: u64,
-        params: &ParamGroups,
-    ) -> Option<String> {
-        let build: runtime::NodeBuild = match self.dyn_types.get(type_name) {
-            Some(dt) => {
-                let f = dt.factory.clone();
-                Box::new(move |p| f(p))
-            }
-            None => return Some(format!("no node type `{type_name}` in the signal library")),
+    fn insert(&mut self, uid: Uid, type_name: &str, generation: u64, params: &ParamGroups) -> Option<String> {
+        let Some(dt) = self.dyn_types.get(type_name) else {
+            return Some(format!("no node type `{type_name}` in the signal library"));
         };
-        let manifest = self.find_entry(type_name).expect("resolved above").manifest;
-        let halt = Arc::new(runtime::Halt::default());
-        let base = goofi_transport::service_base(&self.instance, uid, generation);
-        if self.graph_node.is_none() {
+        let (manifest, factory) = (dt.manifest, dt.factory.clone());
+        if self.bells.is_none() {
             match self.iox.node() {
-                Ok(node) => self.graph_node = Some(node),
+                Ok(node) => self.bells = Some(node),
                 Err(e) => return Some(e),
             }
         }
-        let graph_node = self.graph_node.as_ref().expect("just ensured");
-        let started = runtime::IoxTransport::create(&self.iox, &self.instance, uid, generation, manifest)
-            .and_then(|transport| Ok((transport, runtime::NodeChannel::open(graph_node, &base)?)))
-            .and_then(|(transport, channel)| {
-                let env = runtime::NodeEnv {
-                    engine: "signal",
-                    node: Some(uid.to_hex()),
-                    evaluator: self.evaluator.clone(),
-                    time: self.time.clone(),
-                };
-                let transport = Arc::new(runtime::WakingTransport {
-                    inner: Arc::new(transport),
-                    waker: self.waker.clone(),
-                });
-                // The join handle is dropped on purpose: holding one would tempt a caller into
-                // joining under the graph mutex while the node is inside a long `process()`.
-                runtime::spawn(manifest, build, params.clone(), transport, env, halt.clone())
-                    .map(|_| channel)
-                    .map_err(|e| format!("could not start the node's thread: {e}"))
-            });
-        let (host, boot_error) = match started {
-            Ok(channel) => (NodeHost { halt, channel: Some(Arc::new(channel)) }, None),
-            Err(e) => (NodeHost { halt, channel: None }, Some(e)),
+        let decls = Self::decls_of(manifest);
+        let atomics: Arc<[AtomicU64]> =
+            decls.iter().map(|d| AtomicU64::new(goofi_runtime::scalar_of(params, d).to_bits())).collect();
+        let spawn = goofi_runtime::Spawn {
+            engine: "signal",
+            uid,
+            instance: self.instance.clone(),
+            base: goofi_transport::service_base(&self.instance, uid, generation),
+            manifest,
+            decls: decls.clone(),
+            params: atomics,
+            time: self.time.clone(),
         };
-        self.hosts.insert(uid, host);
-        boot_error
+        let params = params.clone();
+        let make = move || {
+            let build: goofi_runtime::NodeBuild = Box::new(move |p| factory(p));
+            HostExecutor::new(manifest, decls, build, &params)
+        };
+        match goofi_runtime::spawn(&self.iox, spawn, self.shared.clone(), self.bells.as_ref().expect("opened above"), make) {
+            Ok(handle) => {
+                self.hosts.insert(uid, handle);
+                self.dirty = true;
+                None
+            }
+            Err(e) => Some(e),
+        }
     }
 
     fn remove(&mut self, uid: Uid) {
-        // Dropping the host halts the corpse's thread without waiting; the wire state and any
-        // held request go with it, so a successor at this uid starts clean.
+        // Dropping the handle halts the thread without waiting: it may be inside a long
+        // `process()`, and every caller holds the graph mutex.
         self.hosts.remove(&uid);
-        self.wire.forget(uid);
-        self.pending_ready.retain(|u| *u != uid);
-        self.pending_advance.retain(|(u, _)| *u != uid);
+        self.shared.reports.lock().retain(|(u, _)| *u != uid);
     }
 
-    fn settle(&mut self, view: &GraphView<'_>, touched: &[Touched]) {
-        self.wire.forget_absent(|uid| view.nodes.contains_key(&uid));
-        // Readies first: an attach re-plans from an EMPTY base, and what it begins must not be
-        // clobbered by this batch's own touches.
-        for uid in std::mem::take(&mut self.pending_ready) {
-            for key in self.keys_touching(view, uid) {
-                self.wire.forget_planned(&key);
-                self.replan(view, key);
-            }
-            // A reborn node owns none of its predecessor's ports, so it is told the set again —
-            // its recordings, and the view doors its watched outputs ring.
-            self.record_slots(view, uid);
-            let watched = view.nodes.get(&uid).map(|n| n.watched.clone()).unwrap_or_default();
-            for slot in watched {
-                self.retarget(view, uid, slot);
-            }
-        }
-        for t in touched {
-            match t {
-                Touched::Slot(uid, slot) => self.replan(view, (*uid, Slot::In(slot))),
-                Touched::Param(uid, key) => self.replan(view, (*uid, Slot::Bind(key.clone()))),
-                Touched::Record(uid) => self.record_slots(view, *uid),
-                Touched::Watch(uid, slot) => self.retarget(view, *uid, slot),
-            }
-        }
-        for key in std::mem::take(&mut self.pending_advance) {
-            self.advance(view, key);
+    fn settle(&mut self, view: &GraphView<'_>, _touched: &[Touched]) {
+        self.dirty = false;
+        self.shared.replan.store(false, Ordering::Release);
+        let plane = Plane { kind: None, planned: &|_| false, records: true };
+        for (uid, handle) in &self.hosts {
+            let Some(nv) = view.nodes.get(uid) else { continue };
+            let decls = Self::decls_of(nv.manifest);
+            handle.send_if_changed(goofi_runtime::desired_of(view, *uid, nv, &decls, &plane));
         }
     }
 
     fn drain(&mut self, apply: &mut dyn FnMut(Uid, Status)) -> usize {
-        let channels: Vec<(Uid, Arc<runtime::NodeChannel>)> = self
-            .hosts
-            .iter()
-            .filter_map(|(uid, h)| h.channel.clone().map(|c| (*uid, c)))
-            .collect();
-        let mut applied = 0;
-        for (uid, channel) in channels {
-            for status in channel.drain_status() {
-                applied += 1;
-                match status {
-                    // An ack is the planner's, and it must still land after the node it came
-                    // from is gone — or a sequence parks forever on an unanswered message.
-                    runtime::WireStatus::Ack { seq, ok } => {
-                        if let Some(key) = self.wire.ack(seq, ok) {
-                            self.pending_advance.push(key);
-                        }
-                    }
-                    // The birth barrier lifting: the node is addressable, and the settle that
-                    // follows this drain re-plans everything it touches.
-                    runtime::WireStatus::Ready => {
-                        if let Some(c) = self.hosts.get(&uid).and_then(|h| h.channel.clone()) {
-                            self.wire.attach(uid, c);
-                        }
-                        self.pending_ready.push(uid);
-                    }
-                    runtime::WireStatus::Health(status) => apply(uid, status),
-                }
-            }
-        }
-        applied
+        self.shared.drain(&mut Vec::new(), apply)
     }
 
     fn request(&mut self, uid: Uid, request: goofi_node::Request) {
-        let goofi_node::Request { kind, key } = request;
-        let control = match kind {
-            goofi_node::RequestKind::Refresh => runtime::Control::RefreshParam { key },
-            goofi_node::RequestKind::Pulse => runtime::Control::PulseParam { key },
-        };
-        self.wire.send(uid, control);
+        if let Some(handle) = self.hosts.get(&uid) {
+            match request.kind {
+                goofi_node::RequestKind::Refresh => handle.refresh(request.key),
+                goofi_node::RequestKind::Pulse => handle.pulse(request.key),
+            }
+        }
     }
 
     /// Every node born after computes from the new origin.
     fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_node::ExprEvaluator>) {
-        self.evaluator = Some(evaluator);
+        *self.shared.evaluator.lock() = Some(evaluator);
     }
 
     /// The `common` scheduling group: signal semantics, added to every signal node.
@@ -497,12 +216,9 @@ impl Engine for SignalEngine {
     /// process about to EXIT has no "a moment later".
     fn shutdown(&mut self) {
         for host in self.hosts.values() {
-            host.signal_stop();
+            host.stop();
         }
         goofi_transport::wait_released(self.hosts.values().map(|h| &*h.halt), goofi_transport::SHUTDOWN_WAIT);
         self.hosts.clear();
-        self.wire.reset_channels();
-        self.pending_ready.clear();
-        self.pending_advance.clear();
     }
 }

@@ -1,51 +1,7 @@
-//! Shared host-node lifecycle, scheduling, and transport.
+//! The universal `common` scheduling group and the policy a host node reads off it.
+
 use goofi_core::Param;
-use goofi_node::{param, NodeManifest, ParamDecl, ParamGroups, ParamKey, Params, ParamSpec, ExprDecl, ExprMode};
-use goofi_host_sdk::{Node, NodeCtx, NodeError, NodeResult};
-pub mod runtime;
-
-/// How long a node waits between retries of a failed initialization — a free-running producer would
-/// otherwise retry tens of times a second. Only a WAKE is paced: a param edit is a user asking.
-const SETUP_RETRY_INTERVAL: f64 = 1.0;
-
-fn guard_lifecycle<T>(f: impl FnOnce() -> T) -> Result<T, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(goofi_node::panic_message)
-}
-
-fn fold_panic(panicked: String) -> NodeResult {
-    Err(NodeError(panicked))
-}
-
-/// Seed a fresh instance: replay every declared param, then run `setup` — a panic in either is
-/// the node's boot error, never an unwind through the caller's lock.
-pub(crate) fn seed_node(
-    node: &mut dyn Node,
-    params: &ParamGroups,
-    ctx: &mut NodeCtx,
-) -> Option<String> {
-    let mut last_error = None;
-    for (group, entries) in params {
-        if group == "common" {
-            continue;
-        }
-        for (name, value) in entries {
-            // A pulse is a request, so there is no value to replay and nothing it ever changed.
-            if matches!(value, goofi_core::Param::Pulse) {
-                continue;
-            }
-            let key = ParamKey::new(group.as_str(), name.as_str());
-            if let Err(e) = guard_lifecycle(|| node.on_param_changed(&key, value)).unwrap_or_else(fold_panic) {
-                last_error.get_or_insert(e.0);
-            }
-        }
-    }
-    let started =
-        guard_lifecycle(|| node.setup(ctx, &Params::new(params))).unwrap_or_else(fold_panic);
-    if let Err(e) = started {
-        last_error.get_or_insert(e.0);
-    }
-    last_error
-}
+use goofi_node::{param, ExprDecl, ExprMode, NodeManifest, ParamDecl, ParamGroups, ParamSpec};
 
 /// The two ways a user can author `common.max_frequency`; [`RunPolicy`] normalizes both to Hz.
 pub const FREQ_MODE_UPDATES_PER_SECOND: &str = "updates-per-second";
@@ -68,14 +24,10 @@ impl RunPolicy {
 
     /// Read the policy from a node's `common` param group, defaulting each absent field.
     pub fn from_params(p: &ParamGroups) -> RunPolicy {
-        let autotrigger = param(p, "common", "autotrigger")
-            .and_then(Param::as_bool)
-            .unwrap_or(false);
-        let raw = param(p, "common", "max_frequency")
-            .and_then(Param::as_f64)
-            .unwrap_or(0.0);
-        let seconds_per_update = param(p, "common", "frequency_mode").and_then(Param::as_str)
-            == Some(FREQ_MODE_SECONDS_PER_UPDATE);
+        let autotrigger = param(p, "common", "autotrigger").and_then(Param::as_bool).unwrap_or(false);
+        let raw = param(p, "common", "max_frequency").and_then(Param::as_f64).unwrap_or(0.0);
+        let seconds_per_update =
+            param(p, "common", "frequency_mode").and_then(Param::as_str) == Some(FREQ_MODE_SECONDS_PER_UPDATE);
         let max_frequency = if seconds_per_update && raw > 0.0 { 1.0 / raw } else { raw };
         RunPolicy { autotrigger, max_frequency }
     }
@@ -102,7 +54,7 @@ fn autotrigger(m: &NodeManifest) -> ParamDecl {
 }
 
 /// The rate cap, carried by every node as a `variables.system.default_ufreq` expression and live on a
-/// producer. `trigger: true` is inert here — a `common.*` arrival never sets `trigger_pending`.
+/// producer. `trigger: true` is inert here — a `common.*` arrival never triggers a run.
 fn max_frequency(m: &NodeManifest) -> ParamDecl {
     ParamDecl {
         group: "common",
@@ -148,21 +100,3 @@ static COMMON_DECLS: &[CommonDecl] = &[autotrigger, max_frequency, frequency_mod
 pub fn common_decls(m: &NodeManifest) -> impl Iterator<Item = ParamDecl> + '_ {
     COMMON_DECLS.iter().map(move |d| d(m))
 }
-
-/// Guarantee a node carries the universal `common` group, keeping any key it declared itself.
-pub fn with_common(params: ParamGroups, m: &NodeManifest) -> ParamGroups {
-    let mut common = params.get("common").cloned().unwrap_or_default();
-    for d in common_decls(m) {
-        common.entry(d.name.to_string()).or_insert_with(|| d.spec.to_param());
-    }
-    let mut merged = ParamGroups::new();
-    merged.insert("common".to_string(), common);
-    for (k, v) in params {
-        if k != "common" {
-            merged.insert(k, v);
-        }
-    }
-    merged
-}
-
-pub mod local;

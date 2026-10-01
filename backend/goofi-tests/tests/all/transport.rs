@@ -1,50 +1,47 @@
-//! The iceoryx2 transport, against real shared memory (spec §3).
+//! The iceoryx2 transport under the per-node runtime, against real shared memory (spec §3).
 //!
 //! Every test picks its own [`Uid`] and [`instance`] scopes the target by pid: a service name is
 //! variable to the MACHINE, and `open_or_create` means a colliding loser reads the winner's config.
 
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use goofi_core::{Param, SlotType};
-use goofi_tests::{f32s, frame, WAIT};
+use goofi_core::{Data, Param, SlotType};
 use goofi_graph::Uid;
-use goofi_signal::runtime::{
-    Control, ControlSink, Envelope, IoxTransport, NodeChannel, NodeEnv, NodeFault, NodeRuntime,
-    ParamValue, Status, Transport, WireStatus,
-};
+use goofi_node::{DrainWaker, NodeManifest, OutputDecl, ParamDecl, ParamKey, ParamSpec, SlotDecl, Status};
+use goofi_runtime::{Cx, Desired, Executor, Handle, Out, Shared, Spawn, Sub, Ticked};
+use goofi_supervisor::sync::Mutex;
+use goofi_tests::{f32s, frame, WAIT};
 use goofi_transport::{door_service, output_service, service_base, Doorbell, IoxNode};
-use goofi_node::{NodeManifest, OutputDecl, ParamKey, Params, SlotDecl};
-use goofi_signal_sdk::{Inputs, Node, NodeCtx, NodeResult, Outputs};
+use iceoryx2::prelude::PortFactory as _;
 
-/// A node with one input and one output. Nothing runs it; the manifest is what the transport reads.
-struct Passthrough;
-impl Node for Passthrough {
-    fn process(&mut self, _i: &Inputs<'_>, _o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {
-        Ok(())
-    }
-}
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",
     kind: SlotType::Array,
     trigger_process: true,
-    multi: false,
+    multi: true,
     required: false,
 }];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];
+static PARAMS: &[ParamDecl] = &[ParamDecl {
+    group: "control",
+    name: "gain",
+    spec: ParamSpec::Str { default: "a", options: &["a", "b"], refresh: true },
+    expression: None,
+    doc: None,
+    section: 0,
+    show: None,
+}];
 static MANIFEST: NodeManifest = NodeManifest {
     type_name: "_TransportTest",
     tags: &[],
     doc: "transport fixture",
     inputs: INPUTS,
     outputs: OUTPUTS,
-    params: &[],
+    params: PARAMS,
     producer: false,
 };
-
-fn manifest() -> &'static NodeManifest {
-    &MANIFEST
-}
 
 /// This run's service-name scope.
 fn instance() -> String {
@@ -53,33 +50,148 @@ fn instance() -> String {
     format!("t{:x}", std::process::id())
 }
 
-/// Status is asynchronous by design, so a test waits for it with a deadline rather than reading once.
-fn status_within(channel: &NodeChannel, timeout: Duration) -> Vec<WireStatus> {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        let got = channel.drain_status();
-        if !got.is_empty() || std::time::Instant::now() >= deadline {
-            return got;
+/// The service names of a node born at `uid` — what the other end's desired state names.
+fn base_of(uid: Uid) -> String {
+    service_base(&instance(), uid, 0)
+}
+
+/// What reached one executor, read by the test from outside its thread.
+#[derive(Default)]
+struct Log {
+    arrived: Vec<(usize, usize, Data)>,
+    wired: Vec<(usize, Vec<(String, String)>)>,
+    values: Vec<Vec<Param>>,
+    pulses: Vec<usize>,
+}
+
+/// An executor that logs what reaches it and emits, at its next run, the frame it is handed.
+struct Probe {
+    log: Arc<Mutex<Log>>,
+    emit: Arc<Mutex<Option<Data>>>,
+}
+
+impl Executor for Probe {
+    fn arrive(&mut self, inbox: usize, wire: usize, frame: &Data) -> bool {
+        self.log.lock().arrived.push((inbox, wire, frame.clone()));
+        false
+    }
+    fn rewire(&mut self, inbox: usize, wires: &[(String, String)]) {
+        self.log.lock().wired.push((inbox, wires.to_vec()));
+    }
+    fn params_changed(&mut self, values: &[Param], _: bool) -> Ticked {
+        self.log.lock().values.push(values.to_vec());
+        Ticked::default()
+    }
+    fn pulse(&mut self, param: usize) -> Ticked {
+        self.log.lock().pulses.push(param);
+        Ticked::default()
+    }
+    fn refresh(&mut self, _: usize) -> Option<Vec<String>> {
+        Some(vec!["a".into(), "b".into()])
+    }
+    fn run(&mut self, _: &Cx<'_>, publish: &mut dyn FnMut(usize, Out<'_>)) -> Ticked {
+        if let Some(frame) = self.emit.lock().take() {
+            publish(0, Out::Frame(&frame));
         }
+        Ticked::default()
+    }
+}
+
+/// One runtime with a probe on it: its handle, what the probe saw, and what it emits next.
+struct Node {
+    handle: Handle,
+    log: Arc<Mutex<Log>>,
+    emit: Arc<Mutex<Option<Data>>>,
+}
+
+/// Every runtime of one test shares a drain, as one engine's do.
+struct Fleet {
+    shared: Arc<Shared>,
+    bells: IoxNode,
+}
+
+impl Fleet {
+    fn new() -> Fleet {
+        let iox = goofi_tests::iox();
+        Fleet { shared: Arc::new(Shared::new(Arc::new(DrainWaker::default()))), bells: iox.node().unwrap() }
+    }
+
+    fn spawn(&self, uid: Uid) -> Node {
+        let (log, emit) = (Arc::new(Mutex::new(Log::default())), Arc::new(Mutex::new(None)));
+        let spawn = Spawn {
+            engine: "signal",
+            uid,
+            instance: instance(),
+            base: base_of(uid),
+            manifest: &MANIFEST,
+            decls: MANIFEST.params.to_vec(),
+            params: Arc::new([AtomicU64::new(0)]),
+            time: Arc::new(goofi_core::time::Time::new()),
+        };
+        let (probe_log, probe_emit) = (log.clone(), emit.clone());
+        let handle = goofi_runtime::spawn(&goofi_tests::iox(), spawn, self.shared.clone(), &self.bells, move || Probe {
+            log: probe_log,
+            emit: probe_emit,
+        })
+        .expect("a runtime");
+        Node { handle, log, emit }
+    }
+
+    /// Every status the runtimes reported so far, by uid.
+    fn reports(&self) -> Vec<(Uid, Status)> {
+        let mut out = Vec::new();
+        self.shared.drain(&mut Vec::new(), &mut |uid, status| out.push((uid, status)));
+        out
+    }
+}
+
+/// The desired state of a node that drinks from `producers` on its one inbox, in that order.
+fn drinking(producers: &[Uid]) -> Desired {
+    let subs = producers
+        .iter()
+        .enumerate()
+        .map(|(wire, p)| Sub::Slot { inbox: 0, wire, service: output_service(&base_of(*p), "out"), source: format!("p{}.out", p.0) })
+        .collect();
+    Desired { consts: vec![PARAMS[0].spec.to_param()], subs, targets: vec![Vec::new()], record: Vec::new() }
+}
+
+/// The desired state of a node whose output rings the doors of `consumers`.
+fn ringing(consumers: &[Uid]) -> Desired {
+    let targets = consumers.iter().map(|c| (door_service(&base_of(*c)), 1)).collect();
+    Desired { consts: vec![PARAMS[0].spec.to_param()], subs: Vec::new(), targets: vec![targets], record: Vec::new() }
+}
+
+/// Status and arrivals are asynchronous by design, so a test waits for them with a deadline
+/// rather than reading once.
+fn until<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        if let Some(v) = f() {
+            return v;
+        }
+        assert!(Instant::now() < deadline, "waited {WAIT:?} for {what}");
         std::thread::sleep(Duration::from_millis(1));
     }
 }
 
-/// The service names of a node born at `uid` — what the graph puts in the other end's slot message.
-fn base_of(uid: Uid) -> String {
-    service_base(&instance(), uid, 0)
+fn arrived(node: &Node) -> Vec<(usize, usize, Vec<f32>)> {
+    node.log.lock().arrived.iter().map(|(i, w, d)| (*i, *w, f32s(d))).collect()
 }
 
 #[test]
 fn the_services_are_created_with_limits_the_defaults_do_not_give_us() {
     // iceoryx2 fixes these at CREATION, so they are hard patch limits, and every default is wrong
-    // for this design.
-    let t = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(1), 0, manifest()).expect("services");
-    let cfg = t.event_config();
+    // for this design. The runtime creates them; this end opens them by name and reads back.
+    let fleet = Fleet::new();
+    let _node = fleet.spawn(Uid(1));
+    let base = base_of(Uid(1));
+    let door = goofi_transport::event_service(&fleet.bells, &door_service(&base)).unwrap();
+    let cfg = door.static_config();
     assert_eq!(cfg.event_id_max_value(), 255);
     assert_eq!(cfg.max_notifiers(), 256);
     assert_eq!(cfg.max_listeners(), 2);
-    let d = t.data_config("out").expect("the declared output slot has a service");
+    let data = goofi_transport::stream_service(&fleet.bells, &output_service(&base, "out"), goofi_transport::ServiceKind::Data).unwrap();
+    let d = data.static_config();
     assert_eq!(d.history_size(), 0, "a link NEVER replays a previous output");
     assert_eq!(d.max_subscribers(), 256);
     assert_eq!(d.max_publishers(), 1);
@@ -88,55 +200,28 @@ fn the_services_are_created_with_limits_the_defaults_do_not_give_us() {
 }
 
 #[test]
-fn an_undrained_control_mailbox_keeps_the_whole_burst() {
-    // Control and status are message STREAMS, not the latest-wins CELL a data wire is. The count is
-    // past any plausible drain interval: a node deep inside `process` is the burst this has to survive.
-    const BURST: u64 = 200;
-    let transport = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(30), 0, manifest()).unwrap();
-    let graph_node = goofi_tests::iox().node().unwrap();
-    let channel = NodeChannel::open(&graph_node, &base_of(Uid(30))).unwrap();
-    for seq in 1..=BURST {
-        channel.send(Envelope {
-            seq,
-            control: Control::InSlot { slot: "input".to_string(), wires: Vec::new() },
-        });
-    }
-
-    let got = transport.drain_control();
-    assert_eq!(
-        got.iter().map(|e| e.seq).collect::<Vec<_>>(),
-        (1..=BURST).collect::<Vec<_>>(),
-        "every message, in the order it was sent",
-    );
-}
-
-/// The doorbell of a node born at `uid`, opened on the ringer's own iceoryx2 node.
-fn bell_for(uid: Uid, ringer: &IoxNode) -> Doorbell {
-    Doorbell::open(ringer, &door_service(&base_of(uid))).expect("doorbell")
-}
-
-#[test]
-fn a_notify_landing_mid_drain_is_not_lost() {
-    // The notification is only a HINT; the truth is in the subscriber queues and the control mailbox.
-    let t = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(2), 0, manifest()).unwrap();
-    let ringer = goofi_tests::iox().node().unwrap();
-    let bell = bell_for(Uid(2), &ringer);
+fn a_ring_landing_mid_drain_is_not_lost_and_each_id_wakes_once() {
+    // The notification is only a HINT; the truth is in the subscriber queues. Several ids can
+    // ring between two parks, and each wakes once.
+    let iox = goofi_tests::iox();
+    let (own, ringer) = (iox.node().unwrap(), iox.node().unwrap());
+    let door = goofi_transport::event_service(&own, &door_service(&base_of(Uid(2)))).unwrap();
+    let listener = door.listener_builder().create().unwrap();
+    let bell = Doorbell::open(&ringer, &door_service(&base_of(Uid(2)))).unwrap();
+    let wait = |l: &goofi_transport::Listener| {
+        let mut ids = Vec::new();
+        let _ = l.timed_wait_all(|id| ids.push(id.as_value()), WAIT);
+        ids
+    };
     bell.ring(1).unwrap();
-    assert_eq!(t.wait(Some(WAIT)), vec![1]);
+    assert_eq!(wait(&listener), vec![1]);
     bell.ring(2).unwrap(); // lands while "draining"
-    assert_eq!(t.wait(Some(WAIT)), vec![2], "retained across the re-park");
-}
-
-#[test]
-fn a_control_and_a_data_notification_both_survive() {
-    let t = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(3), 0, manifest()).unwrap();
-    let ringer = goofi_tests::iox().node().unwrap();
-    let bell = bell_for(Uid(3), &ringer);
+    assert_eq!(wait(&listener), vec![2], "retained across the re-park");
     bell.ring(0).unwrap();
     bell.ring(3).unwrap();
     let mut got = Vec::new();
     while !(got.contains(&0) && got.contains(&3)) {
-        let woke = t.wait(Some(WAIT));
+        let woke = wait(&listener);
         assert!(!woke.is_empty(), "both ids were rung, and only {got:?} woke the node");
         got.extend(woke);
     }
@@ -145,111 +230,105 @@ fn a_control_and_a_data_notification_both_survive() {
 }
 
 #[test]
-fn a_control_message_crosses_shared_memory_and_comes_back_acked() {
-    // The ack is the only thing that orders a wire change, so a message without one stalls the sequence.
-    let transport = Arc::new(IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(4), 0, manifest()).unwrap());
-    let mut node = NodeRuntime::new(
-        manifest(),
-        Box::new(Passthrough),
-        manifest().default_params(),
-        transport.clone(),
-        NodeEnv::detached(),
-    );
-    let graph_node = goofi_tests::iox().node().unwrap();
-    let channel = NodeChannel::open(&graph_node, &base_of(Uid(4))).unwrap();
-
-    assert_eq!(node.next_wake(), None, "parked: nothing has asked this node to run");
-    channel.send(Envelope {
-        seq: 41,
-        control: Control::SetParam {
-            key: ParamKey::new("common", "autotrigger"),
-            value: ParamValue::Literal(Param::boolean(true)),
-        },
+fn a_desired_state_reaches_the_executor_and_a_request_is_answered() {
+    // The whole state crosses at once, a re-send that moved nothing says nothing, and a request
+    // — a refresh, a pulse — is answered on the node's own thread.
+    let fleet = Fleet::new();
+    let node = fleet.spawn(Uid(4));
+    let key = ParamKey::new("control", "gain");
+    let desired = Desired {
+        consts: vec![Param::Str { value: "b".into(), options: Some(vec!["a".into(), "b".into()]), refresh: true }],
+        subs: Vec::new(),
+        targets: vec![Vec::new()],
+        record: Vec::new(),
+    };
+    assert!(node.handle.send_if_changed(desired.clone()));
+    until("the values to reach the executor", || {
+        node.log.lock().values.last().filter(|v| v[0].as_str() == Some("b")).map(|_| ())
     });
-    assert_eq!(transport.wait(Some(WAIT)), vec![0], "the graph rang the control id");
-
-    node.run_once();
-    assert!(node.next_wake().is_some(), "the node applied what it was sent and re-paced");
-    assert_eq!(status_within(&channel, WAIT), vec![WireStatus::Ack { seq: 41, ok: Ok(()) }]);
-
-    // The ack carries the VERDICT, not a receipt: the graph abandons a refused sequence.
-    channel.send(Envelope {
-        seq: 42,
-        control: Control::OutSlot { slot: "nope".to_string(), targets: Vec::new() },
+    assert!(!node.handle.send_if_changed(desired), "what was last sent is not sent again");
+    until("the node to report itself ready", || {
+        fleet.reports().iter().any(|(u, s)| *u == Uid(4) && *s == Status::Stage { stage: goofi_node::NodeStage::Ready }).then_some(())
     });
-    node.run_once();
-    assert_eq!(
-        status_within(&channel, WAIT),
-        vec![WireStatus::Ack { seq: 42, ok: Err("no output slot `nope`".to_string()) }]
-    );
 
-    let fault = NodeFault::Process { msg: "boom".to_string(), since: 12.5 };
-    transport.report(WireStatus::Health(Status::Fault { fault: Some(fault.clone()) }));
-    assert_eq!(status_within(&channel, WAIT), vec![WireStatus::Health(Status::Fault { fault: Some(fault) })]);
+    node.handle.refresh(key.clone());
+    let options = until("the refresh to answer", || {
+        fleet.reports().into_iter().find_map(|(_, s)| match s {
+            Status::RefreshOptions { options, .. } => Some(options),
+            _ => None,
+        })
+    });
+    assert_eq!(options, Some(vec!["a".to_string(), "b".to_string()]));
+    node.handle.pulse(key);
+    until("the pulse to fire", || (node.log.lock().pulses == [0]).then_some(()));
 }
 
 #[test]
-fn a_frame_reaches_a_wired_consumer_and_rings_its_slot() {
-    // A wire is two declarations and nothing else: neither end knows the other's uid.
-    let producer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(5), 0, manifest()).unwrap();
-    let consumer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(6), 0, manifest()).unwrap();
-    consumer.wire_in("input", &[output_service(&base_of(Uid(5)), "out")]).unwrap();
-    producer.wire_out("out", &[(door_service(&base_of(Uid(6))), 1)]).unwrap();
+fn a_frame_reaches_a_wired_consumer_and_a_new_bell_rings_once() {
+    // A wire is two declarations and nothing else: neither end knows the other's uid. The
+    // consumer subscribes at ITS settle and the producer rings at its own, so a frame published
+    // between the two lies on the wire unannounced — until the bell just hung rings once.
+    let fleet = Fleet::new();
+    let (producer, consumer) = (fleet.spawn(Uid(5)), fleet.spawn(Uid(6)));
+    consumer.handle.send_if_changed(drinking(&[Uid(5)]));
+    until("the consumer to subscribe", || consumer.log.lock().wired.last().filter(|(_, w)| w.len() == 1).map(|_| ()));
+    producer.handle.send_if_changed(ringing(&[]));
+    *producer.emit.lock() = Some(frame(&[1.0, 2.0, 3.0]));
+    until("the producer to emit", || producer.emit.lock().is_none().then_some(()));
+    producer.handle.send_if_changed(ringing(&[Uid(6)]));
+    until("the frame to reach the consumer", || (!arrived(&consumer).is_empty()).then_some(()));
+    assert_eq!(arrived(&consumer), vec![(0, 0, vec![1.0, 2.0, 3.0])], "inbox, wire, and the frame");
 
-    producer.publish("out", &frame(&[1.0, 2.0, 3.0])).unwrap();
-    assert_eq!(consumer.wait(Some(WAIT)), vec![1], "woken by the slot's own event id");
-    let got = consumer.drain_inputs();
-    assert_eq!(got.len(), 1);
-    assert_eq!((got[0].0.as_str(), got[0].1), ("input", 0), "slot, and its position in the wire order");
-    assert_eq!(f32s(got[0].2.as_ref().expect("a frame that decodes")), vec![1.0, 2.0, 3.0]);
-    assert!(consumer.drain_inputs().is_empty(), "a drained wire is empty");
-
-    // A wire whose producer writes something that is not a frame is that wire's error, delivered
-    // in its place: the node wears it, rather than never hearing of it.
-    let node = goofi_tests::iox().node().unwrap();
-    let service = goofi_transport::stream_service(&node, &output_service(&base_of(Uid(50)), "out"), goofi_transport::ServiceKind::Data).unwrap();
-    let raw = goofi_transport::publisher(&service, "out", goofi_transport::INITIAL_SLICE).unwrap();
-    consumer.wire_in("input", &[output_service(&base_of(Uid(50)), "out")]).unwrap();
-    goofi_transport::publish(&raw, b"NOPE", Vec::<(&Doorbell, goofi_node::EventId)>::new()).unwrap();
-    let got = consumer.drain_inputs();
-    assert_eq!(got.len(), 1, "the bytes reached the wire");
-    let why = got[0].2.as_ref().expect_err("bytes that are no frame are the wire's error");
-    assert!(why.contains("too small"), "the error says what was wrong: {why}");
-}
-
-#[test]
-fn a_frame_larger_than_the_initial_slice_still_lands() {
     // `AllocationStrategy::Static`, the iceoryx2 default, refuses this: a GOOF frame is variable-size.
-    let producer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(7), 0, manifest()).unwrap();
-    let consumer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(8), 0, manifest()).unwrap();
-    consumer.wire_in("input", &[output_service(&base_of(Uid(7)), "out")]).unwrap();
-
     let big: Vec<f32> = (0..80_000).map(|i| i as f32).collect(); // 320 KB, past the 64 KiB start
-    producer.publish("out", &frame(&big)).unwrap();
-    let got = consumer.drain_inputs();
-    assert_eq!(got.len(), 1, "the oversized frame was published and received");
-    assert_eq!(f32s(got[0].2.as_ref().expect("a frame that decodes")), big);
+    *producer.emit.lock() = Some(frame(&big));
+    until("the oversized frame to land", || (arrived(&consumer).len() == 2).then_some(()));
+    assert_eq!(arrived(&consumer)[1].2, big);
+
+    // A wire whose producer writes something that is not a frame is that wire's error, worn by
+    // the consumer as its fault rather than never heard of.
+    let raw_node = goofi_tests::iox().node().unwrap();
+    let service = goofi_transport::stream_service(&raw_node, &output_service(&base_of(Uid(50)), "out"), goofi_transport::ServiceKind::Data).unwrap();
+    let raw = goofi_transport::publisher(&service, "out", goofi_transport::INITIAL_SLICE).unwrap();
+    let bell = Doorbell::open(&raw_node, &door_service(&base_of(Uid(6)))).unwrap();
+    consumer.handle.send_if_changed(drinking(&[Uid(50)]));
+    until("the consumer to re-subscribe", || consumer.log.lock().wired.last().filter(|(_, w)| w[0].0.contains("_50_") || w[0].0.contains(&format!("_{}_", Uid(50).to_hex()))).map(|_| ()));
+    goofi_transport::publish(&raw, b"NOPE", [(&bell, 1)]).unwrap();
+    let why = until("the bad wire to be worn as a fault", || {
+        fleet.reports().into_iter().find_map(|(u, s)| match s {
+            Status::Fault { fault: Some(goofi_node::NodeFault::Process { msg, .. }) } if u == Uid(6) => Some(msg),
+            _ => None,
+        })
+    });
+    assert!(why.contains("input 0 does not decode") && why.contains("too small"), "the fault says what was wrong: {why}");
 }
 
 #[test]
 fn a_re_sent_wire_set_keeps_what_it_names_and_drops_what_it_omits() {
-    // The slot set is DECLARATIVE, and the FULL set is re-sent on every change: a surviving wire
-    // must be kept rather than rebuilt, and what the set no longer names is dropped.
-    let producer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(9), 0, manifest()).unwrap();
-    let consumer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(10), 0, manifest()).unwrap();
-    let held = output_service(&base_of(Uid(9)), "out");
-    let added = output_service(&base_of(Uid(11)), "out");
-    consumer.wire_in("input", std::slice::from_ref(&held)).unwrap();
-    producer.publish("out", &frame(&[1.0])).unwrap(); // in flight, unread
+    // The wire set is DECLARATIVE, and the FULL set is re-sent on every change: a surviving wire
+    // is kept rather than rebuilt, and what the set no longer names delivers nothing.
+    let fleet = Fleet::new();
+    let (held, added, consumer) = (fleet.spawn(Uid(9)), fleet.spawn(Uid(11)), fleet.spawn(Uid(10)));
+    held.handle.send_if_changed(ringing(&[Uid(10)]));
+    added.handle.send_if_changed(ringing(&[Uid(10)]));
+    consumer.handle.send_if_changed(drinking(&[Uid(9)]));
+    until("the consumer to subscribe", || consumer.log.lock().wired.last().filter(|(_, w)| w.len() == 1).map(|_| ()));
+    *held.emit.lock() = Some(frame(&[1.0]));
+    until("the first frame", || (arrived(&consumer).len() == 1).then_some(()));
 
-    consumer.wire_in("input", &[held, added]).unwrap();
-    let got = consumer.drain_inputs();
-    assert_eq!(got.len(), 1, "the second wire has nothing yet");
-    assert_eq!(f32s(got[0].2.as_ref().expect("a frame that decodes")), vec![1.0], "and the first still holds what it was sent");
+    consumer.handle.send_if_changed(drinking(&[Uid(9), Uid(11)]));
+    until("the set to grow", || consumer.log.lock().wired.last().filter(|(_, w)| w.len() == 2).map(|_| ()));
+    *added.emit.lock() = Some(frame(&[2.0]));
+    until("the added wire's frame", || (arrived(&consumer).len() == 2).then_some(()));
+    assert_eq!(arrived(&consumer), vec![(0, 0, vec![1.0]), (0, 1, vec![2.0])], "the first wire kept its index");
 
-    consumer.wire_in("input", &[]).unwrap();
-    producer.publish("out", &frame(&[2.0])).unwrap();
-    assert!(consumer.drain_inputs().is_empty(), "the dropped wire delivers nothing");
+    consumer.handle.send_if_changed(drinking(&[Uid(11)]));
+    until("the set to shrink", || consumer.log.lock().wired.last().filter(|(_, w)| w.len() == 1).map(|_| ()));
+    *held.emit.lock() = Some(frame(&[3.0]));
+    until("the dropped producer to emit", || held.emit.lock().is_none().then_some(()));
+    *added.emit.lock() = Some(frame(&[4.0]));
+    until("the kept wire's frame", || (arrived(&consumer).len() == 3).then_some(()));
+    assert_eq!(arrived(&consumer)[2], (0, 0, vec![4.0]), "the dropped wire delivered nothing, and the kept one moved to index 0");
 }
 
 #[test]
@@ -257,19 +336,17 @@ fn a_slot_feeds_more_consumers_than_the_iceoryx2_defaults_allow() {
     // `max_subscribers` is inert on its own: a service is opened from one iceoryx2 node per graph
     // node, and `max_nodes` counts exactly those.
     const CONSUMERS: u64 = 24;
-    let producer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(20), 0, manifest()).unwrap();
-    let service = output_service(&base_of(Uid(20)), "out");
-    let consumers: Vec<IoxTransport> = (0..CONSUMERS)
-        .map(|i| {
-            let c = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(100 + i), 0, manifest()).unwrap();
-            c.wire_in("input", std::slice::from_ref(&service)).expect("subscribe");
-            c
-        })
-        .collect();
-
-    producer.publish("out", &frame(&[7.0])).unwrap();
+    let fleet = Fleet::new();
+    let producer = fleet.spawn(Uid(20));
+    let consumers: Vec<Node> = (0..CONSUMERS).map(|i| fleet.spawn(Uid(100 + i))).collect();
+    for c in &consumers {
+        c.handle.send_if_changed(drinking(&[Uid(20)]));
+    }
+    until("every consumer to subscribe", || consumers.iter().all(|c| !c.log.lock().wired.is_empty()).then_some(()));
+    producer.handle.send_if_changed(ringing(&(0..CONSUMERS).map(|i| Uid(100 + i)).collect::<Vec<_>>()));
+    *producer.emit.lock() = Some(frame(&[7.0]));
     for (i, consumer) in consumers.iter().enumerate() {
-        assert_eq!(consumer.drain_inputs().len(), 1, "consumer {i} of {CONSUMERS} got the frame");
+        until(&format!("consumer {i} of {CONSUMERS} to get the frame"), || (arrived(consumer) == vec![(0, 0, vec![7.0])]).then_some(()));
     }
 }
 
@@ -278,34 +355,25 @@ fn a_multi_input_keeps_one_cell_per_wire_in_the_order_it_was_given() {
     // A multi slot's cells are keyed by service name and ordered by the SET, never by the producers.
     // The wire count is past the event service's `max_nodes`, which counts one node per producer.
     const WIRES: u64 = 40;
-    let producers: Vec<IoxTransport> = (0..WIRES)
-        .map(|i| IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(200 + i), 0, manifest()).unwrap())
-        .collect();
-    let consumer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(21), 0, manifest()).unwrap();
+    let fleet = Fleet::new();
+    let producers: Vec<Node> = (0..WIRES).map(|i| fleet.spawn(Uid(200 + i))).collect();
+    let consumer = fleet.spawn(Uid(21));
     // Reversed, so a wire index that follows the producers rather than the set is visible.
-    let services: Vec<String> =
-        (0..WIRES).rev().map(|i| output_service(&base_of(Uid(200 + i)), "out")).collect();
-    consumer.wire_in("input", &services).expect("subscribe");
-
-    let door = door_service(&base_of(Uid(21)));
+    let set: Vec<Uid> = (0..WIRES).rev().map(|i| Uid(200 + i)).collect();
+    consumer.handle.send_if_changed(drinking(&set));
+    until("the consumer to subscribe", || consumer.log.lock().wired.last().filter(|(_, w)| w.len() == WIRES as usize).map(|_| ()));
     for (i, producer) in producers.iter().enumerate() {
-        producer.wire_out("out", &[(door.clone(), 1)]).expect("ring this consumer");
-        producer.publish("out", &frame(&[i as f32])).unwrap();
+        producer.handle.send_if_changed(ringing(&[Uid(21)]));
+        *producer.emit.lock() = Some(frame(&[i as f32]));
     }
-    // Twice on one wire before the drain: latest-wins keeps the second, per wire.
-    producers[0].publish("out", &frame(&[100.0])).unwrap();
-
-    let got = consumer.drain_inputs();
-    assert_eq!(got.len(), WIRES as usize, "one cell per wire, none merged");
+    until("every wire's frame", || (arrived(&consumer).len() == WIRES as usize).then_some(()));
+    let mut got = arrived(&consumer);
+    got.sort_by_key(|(_, wire, _)| *wire);
+    assert_eq!(got.iter().map(|(_, w, _)| *w).collect::<Vec<_>>(), (0..WIRES as usize).collect::<Vec<_>>(), "one cell per wire, none merged");
     assert_eq!(
-        got.iter().map(|(_, index, _)| *index).collect::<Vec<_>>(),
-        (0..WIRES as usize).collect::<Vec<_>>(),
-        "the cells are indexed by position in the set"
-    );
-    assert_eq!(
-        got.iter().map(|(_, _, frame)| f32s(frame.as_ref().expect("a frame that decodes"))[0]).collect::<Vec<_>>(),
-        (0..WIRES).rev().map(|i| if i == 0 { 100.0 } else { i as f32 }).collect::<Vec<f32>>(),
-        "each cell holds its own producer's newest frame"
+        got.iter().map(|(_, _, v)| v[0]).collect::<Vec<f32>>(),
+        (0..WIRES).rev().map(|i| i as f32).collect::<Vec<f32>>(),
+        "each cell holds its own producer's frame, at the set's position"
     );
 }
 
@@ -459,3 +527,5 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
     assert!(goofi_supervisor::session::sessions().iter().all(|s| s.id != id));
     let _ = std::fs::remove_dir_all(&foreign);
 }
+
+

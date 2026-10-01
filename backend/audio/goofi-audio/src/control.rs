@@ -1,5 +1,5 @@
-//! The audio engine's half of a node's control thread. The thread, the door, the desired state
-//! and the bindings are `goofi-control`'s, shared with every scheduled engine; what is here is
+//! The audio engine's executor on a node's runtime. The thread, the door, the desired state
+//! and the bindings are `goofi-runtime`'s, shared with every scheduled engine; what is here is
 //! what an ARRIVAL becomes on the audio plane, what a tap publishes, and the OS handles a node
 //! owns — a device, a MIDI port, a file — which are opened on this thread and never leave it.
 
@@ -12,7 +12,7 @@ use goofi_supervisor::sync::Mutex;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::FromSample;
 use goofi_audio_sdk::BLOCK;
-use goofi_control::{flag, text, Cx, Half, Ticked};
+use goofi_runtime::{flag, text, Cx, Executor, Out, Ticked};
 use goofi_core::{Data, Meta, Param};
 use goofi_node::{NodeManifest, ParamKey};
 
@@ -69,7 +69,7 @@ struct Io {
     dead: Arc<AtomicBool>,
 }
 
-/// What every audio control half shares, beside the generic `goofi_control::Shared`: the clock's
+/// What every audio executor shares, beside the generic `goofi_runtime::Shared`: the clock's
 /// rate, what drives it, and what a plugin's own editor wrote.
 pub struct AudioShared {
     /// The clock's rate, `f64` bits: what a crossing resamples to and a tap is stamped with.
@@ -121,6 +121,8 @@ pub struct AudioHalf {
     playback: crate::runtime::Playback,
     /// Why the last frame an oscillator was handed could not sound, shown on its `mode`.
     refused: Option<String>,
+    /// The pulse params raised since the last run, by index.
+    pulses: Vec<usize>,
     inboxes: Vec<Inbox>,
     taps: Vec<Tap>,
     ports: Ports,
@@ -160,6 +162,7 @@ impl AudioHalf {
             params: birth.params,
             playback: crate::runtime::Playback::of(birth.manifest),
             refused: None,
+            pulses: Vec::new(),
             inboxes: birth.inboxes,
             taps: birth.taps.into_iter().map(|ring| Tap { ring }).collect(),
             recs: birth.recs,
@@ -265,7 +268,7 @@ impl AudioHalf {
         let rate = self.audio.rate();
         let named = text(cx.consts, audio_playback::P::FILE);
         let position = f64::from_bits(cx.params[audio_playback::P::POSITION].load(Ordering::Relaxed));
-        let reset = cx.pulses.contains(&audio_playback::P::RESET);
+        let reset = self.pulses.contains(&audio_playback::P::RESET);
         let looping = flag(cx.consts, audio_playback::P::LOOPING);
         let Some(play) = self.play.as_mut() else { return (None, false) };
         let mut moved = false;
@@ -335,10 +338,10 @@ impl AudioHalf {
     }
 }
 
-impl Half for AudioHalf {
+impl Executor for AudioHalf {
     /// One frame into the crossing that resamples it to the clock's rate, or that enters its
     /// values as they are for an oscillator to sound.
-    fn arrive(&mut self, inbox: usize, frame: &Data) -> bool {
+    fn arrive(&mut self, inbox: usize, _wire: usize, frame: &Data) -> bool {
         let rate = self.audio.rate();
         let entry = self.playback.entry(&self.params);
         self.refused = None;
@@ -359,11 +362,18 @@ impl Half for AudioHalf {
         self.inboxes[inbox].enter(frame, rate, entry).unwrap_or(false)
     }
 
-    fn unwired(&mut self, inbox: usize) {
-        self.inboxes[inbox].pos = 0.0;
+    fn rewire(&mut self, inbox: usize, wires: &[(String, String)]) {
+        if wires.is_empty() {
+            self.inboxes[inbox].pos = 0.0;
+        }
     }
 
-    fn tick(&mut self, cx: &Cx<'_>, publish: &mut dyn FnMut(usize, &[u8])) -> Ticked {
+    fn pulse(&mut self, param: usize) -> Ticked {
+        self.pulses.push(param);
+        Ticked::default()
+    }
+
+    fn run(&mut self, cx: &Cx<'_>, publish: &mut dyn FnMut(usize, Out<'_>)) -> Ticked {
         let mut ticked = Ticked::default();
         ticked.replan |= self.open_io(cx.consts, &mut ticked.errors);
         if let Some(mode) = self.playback.mode() {
@@ -375,10 +385,11 @@ impl Half for AudioHalf {
             ticked.errors.push((key, error));
             ticked.replan |= moved;
         }
+        self.pulses.clear();
         let rate = self.audio.rate();
         let anchor = self.audio.anchor.clone();
         for (i, ring) in self.recs.iter_mut().enumerate() {
-            record_out(ring, cx, i, rate, &anchor);
+            record_out(ring, cx, i, rate, &anchor, publish);
         }
         for (i, tap) in self.taps.iter_mut().enumerate() {
             let Some((c, planar)) = drain_blocks(&mut tap.ring) else { continue };
@@ -389,7 +400,7 @@ impl Half for AudioHalf {
             let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
             let frame = Data::array_f32(vec![c, t], bytes, Meta::new().with_sfreq(Some(rate)));
             if let Some(bytes) = frame.ok().and_then(|f| goofi_codec::encode(&f).ok()) {
-                publish(i, &bytes);
+                publish(i, Out::Bytes(&bytes));
             }
         }
         // After the drains, so what the old rings still held went out before they go.
@@ -413,7 +424,7 @@ impl Half for AudioHalf {
         ticked
     }
 
-    fn refresh(&mut self) -> Option<Vec<String>> {
+    fn refresh(&mut self, _: usize) -> Option<Vec<String>> {
         self.enumerate()
     }
 }
@@ -611,7 +622,7 @@ fn take_block(ring: &mut rtrb::Consumer<f32>) -> Option<(usize, u64, u64, Vec<f3
 /// a block that never reached the ring leaves a gap the recorder counts, and the blocks around it
 /// keep the instants they were rendered at. An unarmed slot's blocks are dropped here, so the ring
 /// never fills while nobody records.
-fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64, anchor: &crate::runtime::Anchor) {
+fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64, anchor: &crate::runtime::Anchor, publish: &mut dyn FnMut(usize, Out<'_>)) {
     let drift = anchor.drift();
     while let Some((c, n, epoch, planar)) = take_block(ring) {
         if !cx.recorded[out] {
@@ -622,7 +633,7 @@ fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64
         meta.set_time(Some(anchor.seconds(n, epoch)));
         meta.set(goofi_core::META_DRIFT, goofi_core::MetaValue::Float(drift));
         if let Some(bytes) = Data::array_f32(vec![c, BLOCK], bytes, meta).ok().and_then(|f| goofi_codec::encode(&f).ok()) {
-            (cx.record)(out, &bytes);
+            publish(out, Out::Record(&bytes));
         }
     }
 }

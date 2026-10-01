@@ -1,5 +1,5 @@
 [package]
-name = "goofi-control"
+name = "goofi-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,7 @@ license.workspace = true
 goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-core = { path = "../goofi-core" }
 goofi-node = { path = "../goofi-node" }
+goofi-host-sdk = { path = "../goofi-host-sdk" }
 goofi-codec = { path = "../goofi-codec" }
 goofi-transport = { path = "../goofi-transport" }
 indexmap = "2"

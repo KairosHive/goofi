@@ -16,8 +16,8 @@ use goofi_audio_sdk::host::Loaded;
 use goofi_audio_sdk::{AudioNode, BLOCK, MAX_PORTS};
 use goofi_core::{Param, SlotType};
 use goofi_node::{
-    DrainWaker, Edit, EditorAction, Engine, GraphView, LibraryEntry, NodeManifest, NodeStage, NodeView,
-    ParamGroups, ParamKey, Ringer, Status, Touched, Uid, Via, NATIVE,
+    DrainWaker, Edit, EditorAction, Engine, GraphView, LibraryEntry, NodeManifest, NodeView,
+    ParamGroups, ParamKey, Status, Touched, Uid, NATIVE,
 };
 
 mod chanmap;
@@ -57,7 +57,7 @@ pub mod wav;
 pub mod vst3;
 
 use control::{AudioHalf, AudioShared};
-use goofi_control::{Desired, Handle, Shared, Sub};
+use goofi_runtime::{Desired, Handle, Plane, Shared};
 use nodes::{audio_in, audio_out, Class};
 use plan::Plan;
 use runtime::{Fault, Frames, Msg, Playback, Retired, Runtime, Slot, OVERRUNS};
@@ -345,7 +345,7 @@ pub struct AudioEngine {
     sweep: bool,
     /// Nodes the audio thread put out of the plan — a panic, or the watchdog — until a restart.
     disabled: HashMap<Uid, String>,
-    faults: goofi_control::Faults,
+    faults: goofi_runtime::Faults,
     pending: Vec<(Uid, Status)>,
     dirty: bool,
     last: Plan,
@@ -411,7 +411,7 @@ impl AudioEngine {
             workspace: None,
             sweep: false,
             disabled: HashMap::new(),
-            faults: goofi_control::Faults::default(),
+            faults: goofi_runtime::Faults::default(),
             pending: Vec::new(),
             dirty: false,
             last: Plan::default(),
@@ -577,34 +577,11 @@ impl AudioEngine {
         idx
     }
 
-    /// Everything one node's control half holds, read off the settled view: the constants, the
-    /// Array inputs it drains, the bindings it evaluates, and the doors each output rings.
+    /// Everything one node's runtime holds, read off the settled view: an audio-typed wire and a
+    /// bare audio reference are plan edges, carried by the block rather than subscribed.
     fn desired_of(&self, view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>) -> Desired {
-        let manifest = self.live[&uid].manifest;
-        let consts = manifest.params.iter().map(|d| goofi_control::param_of(nv.params, d)).collect();
-        let mut subs = Vec::new();
-        for (i, s) in manifest.inputs.iter().enumerate() {
-            let Some(inbox) = plan::inbox_of(manifest, i) else { continue };
-            let wired = view.wires_into(uid, s.name).next();
-            if let Some(service) = wired.and_then(|(p, slot)| goofi_transport::output_of(view, p, slot)) {
-                subs.push(Sub::Slot { inbox, service });
-            }
-        }
-        for (param, d) in manifest.params.iter().enumerate() {
-            let bound = nv.bindings.iter().find(|b| b.live && b.key.group == d.group && b.key.name == d.name);
-            let Some(b) = bound.filter(|b| !plan::is_edge(b, &self.live)) else { continue };
-            let vars = b.vars.iter().map(|v| goofi_transport::var_of(view, v)).collect();
-            subs.push(Sub::Bind { param, key: b.key.clone(), source: b.rewritten.to_string(), id: b.id, vars });
-        }
-        let targets = manifest
-            .outputs
-            .iter()
-            .map(|o| {
-                let ringers = view.ringers(uid, o.name).into_iter().filter(|r| !self.rides_the_plan(r));
-                goofi_transport::targets_of(view, uid, o.name, ringers)
-            })
-            .collect();
-        Desired { consts, subs, targets, record: nv.recorded.iter().map(|output| (output.slot.clone(), output.serial)).collect() }
+        let plane = Plane { kind: Some(SlotType::Audio), planned: &|b| plan::is_edge(b, &self.live), records: true };
+        goofi_runtime::desired_of(view, uid, nv, nv.manifest.params, &plane)
     }
 
     /// A plugin's params as its controller counts them — normalized, in the plugin's own order —
@@ -619,7 +596,7 @@ impl AudioEngine {
             .iter()
             .enumerate()
             .map(|(i, (id, kind))| {
-                let raw = goofi_control::scalar(&consts[voice + i]);
+                let raw = goofi_runtime::scalar(&consts[voice + i]);
                 let normalized = match kind {
                     vst3::Kind::Float => raw,
                     vst3::Kind::Stepped(steps) => raw / steps,
@@ -630,16 +607,6 @@ impl AudioEngine {
         Some(values)
     }
 
-    /// Whether a ring would wake a same-engine consumer for what is a plan edge: an audio-typed
-    /// input's wire, or a bare audio reference.
-    fn rides_the_plan(&self, r: &Ringer<'_>) -> bool {
-        let Some(consumer) = self.live.get(&r.consumer) else { return false };
-        match r.via {
-            Via::Slot(s) => consumer.manifest.inputs.iter().any(|i| i.name == s && i.kind == SlotType::Audio),
-            Via::Binding(b) => plan::is_edge(b, &self.live),
-        }
-    }
-
     /// Every `AudioOut` with the device it names, by uid — the first is the clock's.
     fn audio_outs(&self, view: &GraphView<'_>) -> Vec<(Uid, String)> {
         let mut outs: Vec<(Uid, String)> = self
@@ -648,7 +615,7 @@ impl AudioEngine {
             .filter(|(uid, inst)| inst.manifest.type_name == audio_out::TYPE && !self.disabled.contains_key(uid))
             .filter_map(|(uid, inst)| {
                 let nv = view.nodes.get(uid)?;
-                let Param::Str { value, .. } = goofi_control::param_of(nv.params, &inst.manifest.params[audio_out::P::DEVICE]) else { return None };
+                let Param::Str { value, .. } = goofi_runtime::param_of(nv.params, &inst.manifest.params[audio_out::P::DEVICE]) else { return None };
                 Some((*uid, value))
             })
             .collect();
@@ -666,7 +633,7 @@ impl AudioEngine {
             .filter(|(uid, inst)| inst.manifest.type_name == audio_in::TYPE && !self.disabled.contains_key(uid))
             .filter_map(|(uid, inst)| {
                 let nv = view.nodes.get(uid)?;
-                let Param::Str { value, .. } = goofi_control::param_of(nv.params, &inst.manifest.params[audio_in::P::DEVICE]) else { return None };
+                let Param::Str { value, .. } = goofi_runtime::param_of(nv.params, &inst.manifest.params[audio_in::P::DEVICE]) else { return None };
                 Some((*uid, value))
             })
             .collect();
@@ -849,7 +816,7 @@ impl Engine for AudioEngine {
             node.load(&bytes);
         }
         let atomics: Arc<[AtomicU64]> =
-            manifest.params.iter().map(|d| AtomicU64::new(goofi_control::scalar_of(params, d).to_bits())).collect();
+            manifest.params.iter().map(|d| AtomicU64::new(goofi_runtime::scalar_of(params, d).to_bits())).collect();
         let (inbox_in, inbox_out): (Vec<_>, Vec<_>) = manifest
             .inputs
             .iter()
@@ -880,16 +847,17 @@ impl Engine for AudioEngine {
             ports,
             audio: self.audio.clone(),
         };
-        let spawn = goofi_control::Spawn {
+        let spawn = goofi_runtime::Spawn {
             engine: "audio",
             uid,
             instance: self.instance.clone(),
             base: goofi_transport::service_base(&self.instance, uid, generation),
             manifest,
+            decls: manifest.params.to_vec(),
             params: atomics.clone(),
             time: self.time.clone(),
         };
-        let control = match goofi_control::spawn(&self.iox, spawn, self.shared.clone(), &self.bells, move || AudioHalf::new(birth)) {
+        let control = match goofi_runtime::spawn(&self.iox, spawn, self.shared.clone(), &self.bells, move || AudioHalf::new(birth)) {
             Ok(handle) => handle,
             Err(e) => return Some(e),
         };
@@ -912,7 +880,6 @@ impl Engine for AudioEngine {
         self.send(Msg::Insert { idx, slot });
         let twin = make(nodes::Birth { chans, ..Default::default() });
         self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans, wanted, minted });
-        self.pending.push((uid, Status::Stage { stage: NodeStage::Ready }));
         self.dirty = true;
         self.shared.waker.notify();
         None

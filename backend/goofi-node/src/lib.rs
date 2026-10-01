@@ -385,7 +385,7 @@ impl NodeStage {
 /// reported over the wire.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum NodeFault {
-    Setup { msg: String, since: f64, last_attempt: f64 },
+    Setup { msg: String, since: f64 },
     Process { msg: String, since: f64 },
 }
 

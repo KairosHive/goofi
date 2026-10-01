@@ -6,7 +6,7 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-**Phase 1**: §4.G1-G4; then §1.A2 and §1.A3.
+**Phase 1**: §1.A2 and §1.A3.
 
 **Phase 2**: §2.B2-B5, §3.7-11, §4.H-I, §5.8-10 and 12-13.
 
@@ -106,22 +106,9 @@ not a queue).
 
 ## 4. One node runtime, one protocol per boundary
 
-One per-node control runtime, `goofi-runtime`, merged from `goofi-control` and the host runtime;
-three node models stay (block DSP, shader, host node). The shared `Core` holds the mailbox
-handle, `Desired`, one `PortBundle`, `Bindings` (delivery, `evaluate_where(time.now())`, the
-pulse edge), one `FaultState` and the stamps. An `Executor` trait (`arrive`, `params_changed`,
-`pulse`, `refresh`, `next_wake`, `run`) has three implementations; graphics host producers use
-the signal executor in the control thread, and `Local` goes. Data services keep no history; the
-one-shot race stays a documented property.
+`goofi-runtime` holds every node's thread, desired state, bindings, ports and faults behind one
+`Executor` trait; data services keep no history, and the one-shot race stays a documented property.
 
-- **G1** Shared bindings and faults (one pulse gate, one fault mechanism, one `common` group;
-  bindings evaluate with the current `now`).
-- **G2** Signal on whole-state `Desired` with dedup; the ack planner is deleted, with an
-  `Applied { version, refused }` report (a refusal is a process fault and the engine re-sends)
-  and a ring once when a producer first applies a target. The `transport.rs` situation is
-  rewritten.
-- **G3** Graphics without `Local`.
-- **G4** One `desired_of`/`rides_the_plan`.
 - **H** Graphics host `.rs` files built after boot run hosted, as signal does; audio keeps
   loading in-process and never unloads (`audio-engine.md`).
 - **I** Native ABI stays bytes; params cross only as deltas, not the whole map per call.

@@ -1,9 +1,10 @@
-//! Host producers use the shared lifecycle and submit into the graphics resource owner.
+//! Host producers run on the shared host executor, inside the node's own runtime thread, and
+//! submit what they render into the graphics resource owner.
 use crate::scan::{Class, Kind};
 use goofi_core::texture::Texture;
 use goofi_core::{Data, SlotType, Value};
 use goofi_host_sdk::Node;
-use goofi_node::{NodeManifest, ParamGroups, ParamKey, Status, Uid};
+use goofi_node::{NodeManifest, ParamGroups};
 use std::path::Path;
 use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
@@ -68,7 +69,7 @@ impl crate::GraphicsEngine {
             .iter()
             .copied()
             .chain(
-                goofi_host::common_decls(manifest)
+                goofi_runtime::common_decls(manifest)
                     .filter(|d| !manifest.params.iter().any(|p| p.group == d.group && p.name == d.name)),
             )
             .collect();
@@ -98,135 +99,23 @@ impl crate::GraphicsEngine {
     }
 }
 
-#[derive(Clone)]
-pub struct Lifetime {
-    pub halt: Arc<goofi_transport::Halt>,
-    local: Arc<goofi_host::local::Local>,
-}
-impl Lifetime {
-    pub fn stop(&self) {
-        self.halt.stop();
-        self.local.wake();
-    }
-}
 
-pub struct Worker {
-    local: Arc<goofi_host::local::Local>,
-    halt: Arc<goofi_transport::Halt>,
-    manifest: &'static NodeManifest,
-    params: ParamGroups,
-}
-
-impl Worker {
-    pub fn start(
-        uid: Uid,
-        manifest: &'static NodeManifest,
-        factory: Factory,
-        params: ParamGroups,
-        engine: &crate::GraphicsEngine,
-        source: Source,
-    ) -> Self {
-        let time = engine.time.clone();
-        let shared = engine.shared.clone();
-        let report = shared.clone();
-        let halt = Arc::new(goofi_transport::Halt::default());
-        let publish_halt = halt.clone();
-        let report_halt = halt.clone();
-        let local = goofi_host::local::Local::new(
-            move |_, frame| {
-                if publish_halt.stopped() {
-                    return;
-                }
-                let Value::Texture(texture) = frame.value() else { return };
-                let content = match &**texture {
-                    Texture::Pixels(pixels) => Content::Pixels(Arc::new(crate::resources::Upload::pixels(pixels))),
-                    Texture::Render { source, .. } => Content::Render(Arc::from(source.as_str())),
-                };
-                let mut latest = source.lock();
-                let size = texture.size();
-                let changed = latest.as_ref().is_none_or(|old| old.size != size)
-                    || match (&content, latest.as_ref().map(|old| &old.content)) {
-                        (Content::Render(new), Some(Content::Render(old))) => new != old,
-                        (Content::Render(_), _) | (Content::Pixels(_), Some(Content::Render(_))) => true,
-                        _ => false,
-                    };
-                *latest = Some(Produced { size, index: frame.meta().index().unwrap_or(0), content });
-                if changed {
-                    shared.ask_settle();
-                }
-            },
-            move |status| {
-                if let goofi_host::runtime::WireStatus::Health(status) = status {
-                    // Evaluated params belong to the control half; this worker receives only values.
-                    if !matches!(status, Status::ParamValues { .. } | Status::BindingErrors { .. }) {
-                        let mut reports = report.reports.lock();
-                        if report_halt.stopped() {
-                            return;
-                        }
-                        reports.push((uid, status));
-                        report.waker.notify();
-                    }
-                }
-            },
-        );
-        let f = factory;
-        let build: goofi_host::runtime::NodeBuild = Box::new(move |p| f(p));
-        let env =
-            goofi_host::runtime::NodeEnv { engine: "graphics", node: Some(format!("{uid}")), evaluator: None, time };
-        if let Err(error) =
-            goofi_host::runtime::spawn(manifest, build, params.clone(), local.clone(), env, halt.clone())
-        {
-            use goofi_host::runtime::Transport;
-            local.report(goofi_host::runtime::WireStatus::Health(Status::Fault {
-                fault: Some(goofi_node::NodeFault::Process {
-                    msg: format!("could not start graphics producer: {error}"),
-                    since: 0.0,
-                }),
-            }));
-            halt.release();
-        }
-        Self { local, halt, manifest, params }
-    }
-    pub fn lifetime(&self) -> Lifetime {
-        Lifetime { halt: self.halt.clone(), local: self.local.clone() }
-    }
-    pub fn sync(&mut self, cx: &goofi_control::Cx<'_>) {
-        let decls = crate::decls_of(self.manifest);
-        let mut next = ParamGroups::new();
-        for (d, value) in decls.iter().zip(&cx.values) {
-            next.entry(d.group.into()).or_default().insert(d.name.into(), value.clone());
-        }
-        let pulses = cx
-            .pulses
-            .iter()
-            .filter_map(|i| decls.get(*i))
-            .map(|d| goofi_host::runtime::Control::PulseParam { key: ParamKey::new(d.group, d.name) })
-            .collect();
-        self.local.params(&self.params, &next, pulses);
-        self.params = next;
-    }
-
-    pub fn input(&self, inbox: usize, frame: Data) {
-        if let Some(slot) = self.manifest.inputs.get(inbox) {
-            self.local.input(slot.name, frame);
-        }
-    }
-    pub fn unwired(&self, inbox: usize) {
-        if let Some(slot) = self.manifest.inputs.get(inbox) {
-            self.local.control(goofi_host::runtime::Control::InSlot { slot: slot.name.into(), wires: Vec::new() });
-        }
-    }
-    pub fn refresh(&self) {
-        for d in
-            self.manifest.params.iter().filter(|d| matches!(d.spec, goofi_node::ParamSpec::Str { refresh: true, .. }))
-        {
-            self.local.control(goofi_host::runtime::Control::RefreshParam { key: ParamKey::new(d.group, d.name) });
-        }
-    }
-}
-impl Drop for Worker {
-    fn drop(&mut self) {
-        self.halt.stop();
-        self.local.wake();
-    }
+/// What a producer emitted, into the cell the engine compiles and uploads from. Answers whether
+/// the frame asks for a settle: a new size, or a render source that moved.
+pub fn produced(source: &Source, frame: &Data) -> bool {
+    let Value::Texture(texture) = frame.value() else { return false };
+    let content = match &**texture {
+        Texture::Pixels(pixels) => Content::Pixels(Arc::new(crate::resources::Upload::pixels(pixels))),
+        Texture::Render { source, .. } => Content::Render(Arc::from(source.as_str())),
+    };
+    let mut latest = source.lock();
+    let size = texture.size();
+    let changed = latest.as_ref().is_none_or(|old| old.size != size)
+        || match (&content, latest.as_ref().map(|old| &old.content)) {
+            (Content::Render(new), Some(Content::Render(old))) => new != old,
+            (Content::Render(_), _) | (Content::Pixels(_), Some(Content::Render(_))) => true,
+            _ => false,
+        };
+    *latest = Some(Produced { size, index: frame.meta().index().unwrap_or(0), content });
+    changed
 }

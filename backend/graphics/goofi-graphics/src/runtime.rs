@@ -47,7 +47,7 @@ pub struct Runtime {
     /// What an armed stage the recorder could not open a stream for wears, until it is disarmed
     /// or the recording ends. The engine folds it into the faults it settles.
     troubles: Troubles,
-    shared: Arc<goofi_control::Shared>,
+    shared: Arc<goofi_runtime::Shared>,
     /// What the graph asked for since the last tick. An op appends here and never waits on a
     /// render: a tick is long, and a lock a render holds is a lock an op cannot have.
     pub inbox: Arc<Mutex<Vec<Cmd>>>,
@@ -61,7 +61,7 @@ impl Runtime {
         time: Arc<goofi_core::time::Time>,
         stats: Arc<Stats>,
         troubles: Troubles,
-        shared: Arc<goofi_control::Shared>,
+        shared: Arc<goofi_runtime::Shared>,
     ) -> Runtime {
         Runtime {
             gpu,

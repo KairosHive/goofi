@@ -122,7 +122,7 @@ pub struct Compiler {
 }
 
 impl Compiler {
-    pub fn start(gpu: Arc<Gpu>, shared: Arc<goofi_control::Shared>) -> Compiler {
+    pub fn start(gpu: Arc<Gpu>, shared: Arc<goofi_runtime::Shared>) -> Compiler {
         let (jobs, take) = mpsc::channel::<Order>();
         let halt = Arc::new(AtomicBool::new(false));
         let stopped = halt.clone();

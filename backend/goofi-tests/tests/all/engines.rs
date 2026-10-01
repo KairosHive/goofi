@@ -488,13 +488,15 @@ fn a_scheduled_engine_beside_the_signal_one() {
     // Step: cross-engine modulation. A signal param binds to nd('SkelAudioOsc'); the skeleton
     // rings the binding's own event id, the mailbox holds the frame latest-wins, and the
     // evaluated value lands exactly once — static data cannot spam writes.
+    let audio_name = t.doc()["nodes"][hex(audio)]["name"].as_str().unwrap().to_string();
     let meter = t.add("_TestParamWrites");
     t.link(audio, "out", meter, "input");
-    t.call(
+    let bound = t.call(
         "node param edit",
         j!({ "node": hex(meter), "param": "control/value",
-             "expression": "nd('SkelAudioOsc')", "mode": "expression" }),
+             "expression": format!("nd('{audio_name}').out.out"), "mode": "expression" }),
     );
+    assert!(bound["error"].is_null(), "a signal param binds to a skeleton's output: {bound}");
     let writes = t.probe(meter, "out");
     t.until("the binding's one write landed (init replay + the bound arrival)", |_| {
         writes.latest().filter(|c| f32s(c)[0] >= 2.0)
@@ -506,7 +508,6 @@ fn a_scheduled_engine_beside_the_signal_one() {
 
     // Step: a reference obeys the same rule a cable does — a Float param may read an audio
     // output, a Str param may not — and the refusal names the kinds.
-    let audio_name = t.doc()["nodes"][hex(audio)]["name"].as_str().unwrap().to_string();
     let bound = t.call(
         "node param edit",
         j!({ "node": hex(meter), "param": "control/value", "reference": format!("{audio_name}.out"), "mode": "reference" }),
@@ -582,3 +583,4 @@ fn a_scheduled_engine_beside_the_signal_one() {
     let fresh = t.probe(audio, "out");
     t.until("the audio skeleton still runs", |_| fresh.latest());
 }
+
