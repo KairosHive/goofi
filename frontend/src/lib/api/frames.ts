@@ -234,5 +234,6 @@ export function latestFrame(node: string, slot: string): DataFrame | null {
 export function latestHead(node: string, slot: string): FrameHead | null {
 	const s = slots.get(streamKey(node, slot));
 	if (!s) return null;
-	return s.current ? headOf(s.current) : s.head;
+	if (s.current) return headOf(s.current);
+	return demand(s).frames ? null : s.head;
 }

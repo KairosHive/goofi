@@ -313,13 +313,7 @@ impl Service {
     }
 
     fn request(&self, method: &str, data: Value, actor: &str) -> Reply {
-        if self
-            .child
-            .lock()
-            .try_wait()
-            .map_err(|e| e.to_string())?
-            .is_some()
-        {
+        if !self.alive() {
             return Err("plugin service stopped".into());
         }
         let id = self.sequence.fetch_add(1, Ordering::Relaxed);
@@ -349,6 +343,11 @@ impl Service {
                 )
             }
         }
+    }
+
+    /// The one aliveness answer: a service whose stdout closed, or that was stopped, has no input.
+    fn alive(&self) -> bool {
+        self.input.lock().is_some()
     }
 
     /// Ask the service to leave and insist after a short grace, so a Python that is flushing
@@ -778,7 +777,7 @@ impl Package {
 pub(crate) fn list(tx: &mut crate::Txn) -> Reply {
     let state = tx.state;
     let packages: Vec<_> = state.plugins.packages.iter().map(|p| {
-        let dead = p.service.as_ref().is_some_and(|s| s.child.lock().try_wait().ok().flatten().is_some());
+        let dead = p.service.as_ref().is_some_and(|s| !s.alive());
         json!({"id": p.manifest.id, "version": p.manifest.version, "error": p.error.as_deref().or(dead.then_some("plugin service stopped")),
             "frontend": p.frontend.as_ref().filter(|_| !dead).map(|_| format!("/plugins/{}/index.js", p.manifest.id))})
     }).collect();
