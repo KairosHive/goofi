@@ -27,7 +27,7 @@ fn download_name(state: &AppState) -> String {
 /// Pack the open patch under the graph lock, so the manifest and the workspace describe one moment.
 fn pack(state: &AppState) -> Result<Vec<u8>, String> {
     let mount = state.mount();
-    let tmp = crate::nonce_hex().and_then(|n| goofi_transport::scratch(&format!("export-{n}.gfi")))?;
+    let tmp = crate::nonce_hex().and_then(|n| goofi_transport::scratch(state.iox.id(), &format!("export-{n}.gfi")))?;
     let packed = {
         let g = state.graph.lock();
         let extra = crate::bundled_custom(&g, &state.custom);
@@ -66,7 +66,7 @@ pub(crate) async fn download(State(state): State<AppState>) -> Response {
 /// `POST /patch.gfi` — replace the open patch with the uploaded archive, through the real `load`
 /// op. `adopt: false`, because the staged copy is deleted the moment the load returns.
 pub(crate) async fn upload(State(state): State<AppState>, body: Bytes) -> Response {
-    let tmp = match crate::nonce_hex().and_then(|n| goofi_transport::scratch(&format!("import-{n}.gfi"))) {
+    let tmp = match crate::nonce_hex().and_then(|n| goofi_transport::scratch(state.iox.id(), &format!("import-{n}.gfi"))) {
         Ok(tmp) => tmp,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     };

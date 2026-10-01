@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use goofi_core::session::{self, Session};
+use goofi_core::session::{self, Record};
 use serde_json::{json, Value};
 
 /// A connect is short: a listener answers a SYN at once or not at all.
@@ -16,13 +16,13 @@ const EXEC: Duration = Duration::from_secs(300);
 
 /// Every alive session. A session is alive while its process holds its lock — the one aliveness
 /// answer. A dead record is the server's sweep to remove; a list reads only.
-pub fn list() -> Vec<Session> {
+pub fn list() -> Vec<Record> {
     session::sessions()
 }
 
 /// The server this command drives: `GOOFI_SESSION` names one; unset, exactly one candidate is
 /// unambiguous. Anything else is refused by naming what there is.
-pub fn resolve_target() -> Result<Session, String> {
+pub fn resolve_target() -> Result<Record, String> {
     let mut rows = list();
     if let Ok(id) = std::env::var("GOOFI_SESSION") {
         return rows

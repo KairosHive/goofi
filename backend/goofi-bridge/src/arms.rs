@@ -1692,7 +1692,7 @@ fn load_patch(state: &AppState, payload: &Value) -> Result<Value, String> {
     // Every source mounts FRESH, and the live mount is swapped only once the manifest has parsed,
     // so a refused load leaves the open patch untouched on both planes. Staged and built off the
     // lock: the archive's own Rust nodes may take seconds to build.
-    let fresh = new_mount()?;
+    let fresh = new_mount(state.iox.id())?;
     if let Some(name) = payload.get("path").and_then(Value::as_str).and_then(|p| p.rsplit('/').next()) {
         goofi_core::startup::report(format!("Opening {name}"));
     }

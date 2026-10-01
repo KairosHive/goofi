@@ -4,8 +4,6 @@
 
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
-use goofi_core::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use iceoryx2::config::Config;
@@ -175,103 +173,58 @@ impl Doorbell {
     }
 }
 
-/// The session this process mints under, decided once: `GOOFI_SESSION` names a parent's to JOIN,
-/// else the process holds its own. Deciding it runs the boot pass over what dead sessions left.
-pub fn session() -> Result<&'static str, String> {
-    decided().map(|(id, _)| id.as_str())
+/// Every port of one session is built against this: its iceoryx2 root and prefix, and
+/// iceoryx2's three automatic dead-node passes OFF — the session lock is the one liveness
+/// answer, and a pass over a directory only this session writes has nothing to find.
+pub struct Iox {
+    id: String,
+    config: Config,
 }
 
-fn decided() -> Result<&'static (String, Config), String> {
-    static SESSION: OnceLock<Result<(String, Config), String>> = OnceLock::new();
-    SESSION.get_or_init(decide).as_ref().map_err(Clone::clone)
-}
-
-fn decide() -> Result<(String, Config), String> {
-    set_log_level_from_env_or(LogLevel::Error);
-    raise_fd_limit();
-    let joined = std::env::var(goofi_core::session::ENV).ok().filter(|id| goofi_core::session::alive(id));
-    let id = match joined {
-        Some(id) => id,
-        None => {
-            let held = goofi_core::session::hold(&goofi_core::session::fresh_id()?).map_err(|e| format!("hold a session: {e}"))?;
-            let id = held.id().to_string();
-            *HELD.lock() = Some(held);
-            // A process that never calls `release_session` releases at exit; an earlier
-            // release makes this a no-op. SAFETY: a plain `extern "C"` hook the CRT calls once.
-            unsafe {
-                libc::atexit(release_at_exit);
-            }
-            id
-        }
-    };
-    let config = iox_config(&id)?;
-    goofi_core::session::decide(&id);
-    let _ = std::fs::create_dir_all(iox_root(&id));
-    let _ = SWEPT.set(sweep_dead());
-    Ok((id, config))
-}
-
-/// The session this process holds, if it holds one rather than joining a parent's.
-static HELD: Mutex<Option<goofi_core::session::Held>> = Mutex::new(None);
-
-/// A clean shutdown: after every port is gone, the record goes first, then the ephemeral
-/// directory, then the shared memory the session's prefix names. The workspace is not touched.
-pub fn release_session() {
-    if let Some(held) = HELD.lock().take() {
-        let id = held.id().to_string();
-        drop(held);
-        remove_tree(&goofi_core::session::system_dir(&id));
-        sweep_shared_memory(|owner| owner == id);
+impl Iox {
+    pub fn new(session: &goofi_core::session::Session) -> Result<Iox, String> {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            set_log_level_from_env_or(LogLevel::Error);
+            raise_fd_limit();
+        });
+        let id = session.id().to_string();
+        let mut config = Config::global_config().clone();
+        let root = iox_root(&id).to_string_lossy().replace('\\', "/");
+        let path = iceoryx2::prelude::Path::new(root.as_bytes()).map_err(|e| format!("iceoryx2 refuses the root {root}: {e:?}"))?;
+        config.global.set_root_path(&path);
+        let prefix = goofi_core::session::shm_prefix(&id);
+        config.global.prefix = iceoryx2::prelude::FileName::new(prefix.as_bytes()).map_err(|e| format!("iceoryx2 refuses the prefix {prefix}: {e:?}"))?;
+        config.global.service.cleanup_dead_nodes_on_open = false;
+        config.global.node.cleanup_dead_nodes_on_creation = false;
+        config.global.node.cleanup_dead_nodes_on_destruction = false;
+        let _ = std::fs::create_dir_all(iox_root(&id));
+        Ok(Iox { id, config })
     }
-}
 
-extern "C" fn release_at_exit() {
-    release_session();
-}
-
-/// Record where this session serves, for `goofi session list` and the shell.
-pub fn record_url(url: &str) {
-    if let Some(held) = HELD.lock().as_ref() {
-        held.record_url(url);
+    /// A child's: the session its parent named in `GOOFI_SESSION`.
+    pub fn from_env() -> Result<Iox, String> {
+        Iox::new(&goofi_core::session::Session::join_from_env()?)
     }
-}
 
-/// The boot pass: every dead session's directory, and every shared memory segment whose session
-/// is not alive — each judged by the lock alone. The workspaces are the manager's to sweep.
-pub fn sweep_dead() -> Swept {
-    let mut swept = Swept::default();
-    for path in goofi_core::session::dead() {
-        swept.directories += 1;
-        remove_tree(&path);
+    pub fn id(&self) -> &str {
+        &self.id
     }
-    let mut known = std::collections::HashMap::new();
-    swept.segments = sweep_shared_memory(|id| !*known.entry(id.to_string()).or_insert_with(|| goofi_core::session::alive(id)));
-    swept
-}
 
-/// What a sweep removed: directories of dead sessions, and shared-memory segments they left.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Swept {
-    pub directories: usize,
-    pub segments: usize,
-}
-
-/// What the boot pass swept, once the session is decided.
-pub fn swept_at_boot() -> Swept {
-    SWEPT.get().copied().unwrap_or_default()
-}
-
-static SWEPT: OnceLock<Swept> = OnceLock::new();
-
-/// Every alive session; `sweep_dead` is the one deleter.
-pub fn sessions() -> Vec<goofi_core::session::Session> {
-    goofi_core::session::sessions()
+    /// One iceoryx2 node per port OWNER, never per port: each is a directory under the session's
+    /// root and each is counted by every service's `max_nodes`.
+    pub fn node(&self) -> Result<IoxNode, String> {
+        let node = NodeBuilder::new().config(&self.config).create::<Svc>().map_err(|e| format!("iox node: {e}"))?;
+        // Named by the thread that opened it, which is what a reader of the inventory can act on.
+        let owner = std::thread::current().name().unwrap_or("?").to_string();
+        Ok(IoxNode { node, _lease: goofi_core::registry::lease(goofi_core::registry::Kind::Port, owner) })
+    }
 }
 
 /// A path for a file needed for a moment — a `.gfi` packed or uploaded — under the session's
 /// ephemeral directory, so a crash's leftover is swept with the session.
-pub fn scratch(name: &str) -> Result<std::path::PathBuf, String> {
-    let dir = goofi_core::session::system_dir(session()?).join("scratch");
+pub fn scratch(session: &str, name: &str) -> Result<std::path::PathBuf, String> {
+    let dir = goofi_core::session::system_dir(session).join("scratch");
     let _ = std::fs::create_dir_all(&dir);
     Ok(dir.join(name))
 }
@@ -279,147 +232,6 @@ pub fn scratch(name: &str) -> Result<std::path::PathBuf, String> {
 /// Where iceoryx2 keeps a session's files: node directories, service configs, monitors.
 fn iox_root(id: &str) -> std::path::PathBuf {
     goofi_core::session::system_dir(id).join("iox")
-}
-
-/// The name every shared-memory segment of a session carries. Segments live in one platform
-/// directory iceoryx2 cannot be pointed away from, so the prefix is what makes them a session's.
-/// Short, because it is also part of a unix socket path capped at 108 bytes.
-fn shm_prefix(id: &str) -> String {
-    format!("g{id}_")
-}
-
-/// The directory the iceoryx2 platform layer keeps its shared memory in — a compile-time
-/// constant there, restated here because a sweep by prefix has to know where to look.
-fn shm_dir() -> std::path::PathBuf {
-    if cfg!(windows) {
-        std::path::PathBuf::from(r"C:\Temp\iceoryx2\shm")
-    } else {
-        std::path::PathBuf::from("/dev/shm")
-    }
-}
-
-/// The session id a segment name carries, when the name is one of ours.
-fn shm_owner(name: &str) -> Option<&str> {
-    let id = name.strip_prefix('g')?.split_once('_')?.0;
-    (id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit())).then_some(id)
-}
-
-/// Remove every segment of ours whose owning session `dead` says so of.
-fn sweep_shared_memory(mut dead: impl FnMut(&str) -> bool) -> usize {
-    let Ok(entries) = std::fs::read_dir(shm_dir()) else { return 0 };
-    let mut swept = 0;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if shm_owner(&name.to_string_lossy()).is_some_and(&mut dead) && std::fs::remove_file(entry.path()).is_ok() {
-            swept += 1;
-        }
-    }
-    swept
-}
-
-/// The iceoryx2 configuration every goofi port is built against: the session's own root and
-/// prefix, and iceoryx2's three automatic dead-node passes OFF — the session lock is the one
-/// liveness answer, and a pass over a directory only this session writes has nothing to find.
-fn iox_config(id: &str) -> Result<Config, String> {
-    let mut config = Config::global_config().clone();
-    let root = iox_root(id).to_string_lossy().replace('\\', "/");
-    let path = iceoryx2::prelude::Path::new(root.as_bytes()).map_err(|e| format!("iceoryx2 refuses the root {root}: {e:?}"))?;
-    config.global.set_root_path(&path);
-    let prefix = shm_prefix(id);
-    config.global.prefix = iceoryx2::prelude::FileName::new(prefix.as_bytes()).map_err(|e| format!("iceoryx2 refuses the prefix {prefix}: {e:?}"))?;
-    config.global.service.cleanup_dead_nodes_on_open = false;
-    config.global.node.cleanup_dead_nodes_on_creation = false;
-    config.global.node.cleanup_dead_nodes_on_destruction = false;
-    Ok(config)
-}
-
-/// One iceoryx2 node per port OWNER, never per port: each is a directory under the session's
-/// root and each is counted by every service's `max_nodes`.
-pub fn iox_node() -> Result<IoxNode, String> {
-    let node = NodeBuilder::new().config(&decided()?.1).create::<Svc>().map_err(|e| format!("iox node: {e}"))?;
-    // Named by the thread that opened it, which is what a reader of the inventory can act on.
-    let owner = std::thread::current().name().unwrap_or("?").to_string();
-    Ok(IoxNode { node, _lease: goofi_core::registry::lease(goofi_core::registry::Kind::Port, owner) })
-}
-
-/// Remove a tree this session owns.
-#[cfg(not(windows))]
-fn remove_tree(path: &std::path::Path) {
-    let _ = if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) };
-}
-
-/// On Windows the files iceoryx2 writes carry a protected DACL their owner cannot unlink through
-/// (eclipse-iceoryx/iceoryx2#1869), so each is taken back by name first.
-#[cfg(windows)]
-fn remove_tree(path: &std::path::Path) {
-    take_path(path);
-}
-
-/// Take one path's DACL back, then unlink it — contents first, since a directory goes empty only.
-#[cfg(windows)]
-fn take_path(path: &std::path::Path) {
-    let dir = path.is_dir();
-    if dir {
-        for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
-            take_path(&entry.path());
-        }
-    }
-    grant_owner(path);
-    let _ = if dir { std::fs::remove_dir(path) } else { std::fs::remove_file(path) };
-}
-
-/// Grant OWNER RIGHTS full control on ONE path, explicitly. Naming the file is the whole point: a
-/// protected DACL is precisely one that refuses an inherited ace, so a grant on the parent — an
-/// `icacls /T` walk, which this replaces — never reaches the file it was meant for.
-#[cfg(windows)]
-fn grant_owner(path: &std::path::Path) {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, GENERIC_ALL, LocalFree};
-    use windows_sys::Win32::Security::Authorization::{
-        ConvertStringSidToSidW, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SET_ACCESS,
-        SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
-    };
-    use windows_sys::Win32::Security::{
-        ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE, PROTECTED_DACL_SECURITY_INFORMATION,
-    };
-
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-    // `S-1-3-4` is OWNER RIGHTS: it grants the object's own owner, which is this user, and nobody else.
-    let sid_text: Vec<u16> = "S-1-3-4".encode_utf16().chain(std::iter::once(0)).collect();
-    let mut sid = std::ptr::null_mut();
-    if unsafe { ConvertStringSidToSidW(sid_text.as_ptr(), &mut sid) } == 0 {
-        return;
-    }
-    let access = EXPLICIT_ACCESS_W {
-        grfAccessPermissions: GENERIC_ALL,
-        grfAccessMode: SET_ACCESS,
-        grfInheritance: NO_INHERITANCE,
-        Trustee: TRUSTEE_W {
-            pMultipleTrustee: std::ptr::null_mut(),
-            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
-            TrusteeForm: TRUSTEE_IS_SID,
-            TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
-            ptstrName: sid.cast(),
-        },
-    };
-    let mut acl: *mut ACL = std::ptr::null_mut();
-    if unsafe { SetEntriesInAclW(1, &access, std::ptr::null(), &mut acl) } == ERROR_SUCCESS {
-        unsafe {
-            SetNamedSecurityInfoW(
-                wide.as_ptr(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                acl,
-                std::ptr::null(),
-            );
-        }
-    }
-    unsafe {
-        LocalFree(acl.cast());
-        LocalFree(sid.cast());
-    }
 }
 
 /// Raise the soft descriptor limit toward the hard one. A node costs about 45 descriptors, so the
@@ -497,8 +309,8 @@ pub struct PortBundle<P> {
 
 impl<P> PortBundle<P> {
     /// Build the ports on a fresh node of this session.
-    pub fn open(build: impl FnOnce(&IoxNode) -> Result<P, String>) -> Result<PortBundle<P>, String> {
-        PortBundle::on(iox_node()?, build)
+    pub fn open(iox: &Iox, build: impl FnOnce(&IoxNode) -> Result<P, String>) -> Result<PortBundle<P>, String> {
+        PortBundle::on(iox.node()?, build)
     }
 
     /// Build the ports on `node`, which the bundle then owns.
@@ -544,8 +356,8 @@ pub struct Pair<Q, A> {
 
 impl Exchange {
     /// Open the pair under `base`: `<base>_req` and `<base>_resp`, the names the child is told.
-    pub fn open(base: &str) -> Result<Exchange, String> {
-        let ports = PortBundle::open(|node| {
+    pub fn open(iox: &Iox, base: &str) -> Result<Exchange, String> {
+        let ports = PortBundle::open(iox, |node| {
             let request = stream_service(node, &format!("{base}_req"), ServiceKind::Exchange)?
                 .publisher_builder()
                 .initial_max_slice_len(EXCHANGE_PAYLOAD)
@@ -607,11 +419,11 @@ impl Served {
     /// The names the parent gave: `GOOFI_IOX_REQ` and `GOOFI_IOX_RESP` in the environment.
     pub fn open_from_env() -> Result<Served, String> {
         let name = |key: &str| std::env::var(key).map_err(|_| format!("{key} is not set: not started by goofi"));
-        Served::open(&name("GOOFI_IOX_REQ")?, &name("GOOFI_IOX_RESP")?)
+        Served::open(&Iox::from_env()?, &name("GOOFI_IOX_REQ")?, &name("GOOFI_IOX_RESP")?)
     }
 
-    pub fn open(request: &str, reply: &str) -> Result<Served, String> {
-        let ports = PortBundle::open(|node| {
+    pub fn open(iox: &Iox, request: &str, reply: &str) -> Result<Served, String> {
+        let ports = PortBundle::open(iox, |node| {
             let request = stream_service(node, request, ServiceKind::Exchange)?
                 .subscriber_builder()
                 .create()

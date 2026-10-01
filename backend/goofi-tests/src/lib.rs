@@ -1,6 +1,7 @@
 //! The test harness — one live goofi, driven through [`Goofi::call`], the entry `/control` and
 //! `/mcp` are transports over. Observation is [`Goofi::call`], [`Events`] and [`OutputProbe`].
 
+use std::sync::Arc;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -138,6 +139,27 @@ pub fn sole_session() -> std::sync::MutexGuard<'static, ()> {
     SOLE.lock()
 }
 
+/// The one session this test process holds, and the transport built against it. A test binary
+/// that exits leaves its record for the next boot's sweep.
+pub fn session() -> &'static (goofi_core::sync::Mutex<goofi_core::session::Session>, Arc<goofi_transport::Iox>) {
+    static HELD: std::sync::OnceLock<(goofi_core::sync::Mutex<goofi_core::session::Session>, Arc<goofi_transport::Iox>)> = std::sync::OnceLock::new();
+    HELD.get_or_init(|| {
+        let session = goofi_core::session::Session::hold().expect("the test process holds a session");
+        let iox = Arc::new(goofi_transport::Iox::new(&session).expect("the session's transport"));
+        (goofi_core::sync::Mutex::new(session), iox)
+    })
+}
+
+/// The transport every port a test opens is built against.
+pub fn iox() -> Arc<goofi_transport::Iox> {
+    session().1.clone()
+}
+
+/// The id of the session this test process holds.
+pub fn session_id() -> String {
+    session().0.lock().id().to_string()
+}
+
 impl Default for Goofi {
     fn default() -> Self {
         Self::new()
@@ -172,7 +194,7 @@ impl Goofi {
 
     fn boot(mode: goofi_bridge::Mode, render: goofi_bridge::Clock) -> Goofi {
         walled_home();
-        let state = AppState::new(mode, goofi_bridge::Clock::External, render).expect("the state boots");
+        let state = AppState::new(iox(), mode, goofi_bridge::Clock::External, render).expect("the state boots");
         let windows = (!mode.demo).then(window_thread);
         {
             let mut g = state.graph.lock();
@@ -406,7 +428,7 @@ impl Goofi {
     /// Open a subscriber on one output slot — the same door `/data` opens.
     #[track_caller]
     pub fn probe(&self, node: Uid, slot: &str) -> OutputProbe {
-        OutputProbe::open(&self.state.graph.lock(), node, slot)
+        OutputProbe::open(&self.state.iox, &self.state.graph.lock(), node, slot)
     }
 
     /// Poll `f` until it answers `Some`, or fail naming `what`.

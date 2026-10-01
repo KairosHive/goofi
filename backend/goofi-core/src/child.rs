@@ -87,7 +87,7 @@ impl Spawn<'_> {
     /// Start the child: the session, the liveness pipe and the process group are added here.
     pub fn spawn(self) -> io::Result<Child> {
         let Spawn { name, cmd, source, stdin, stdout, stderr } = self;
-        if let Some(session) = crate::session::current() {
+        if let Some(session) = crate::session::id() {
             cmd.env(crate::session::ENV, session);
         }
         // A child that needs one of them states it on `cmd`.

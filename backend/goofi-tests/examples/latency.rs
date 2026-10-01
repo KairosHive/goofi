@@ -7,13 +7,13 @@ use goofi_tests::OutputProbe;
 use goofi_graph::Graph;
 
 fn main() {
-    let mut g = goofi_bridge::fresh_graph(Some(goofi_bridge::Clock::External), goofi_bridge::Clock::External).unwrap();
+    let mut g = goofi_bridge::fresh_graph(goofi_tests::iox(), Some(goofi_bridge::Clock::External), goofi_bridge::Clock::External).unwrap();
     goofi_tests::fixtures::register(&mut g);
     let src = g.add_node("_TestConst", None).unwrap();
     g.update_param(src, "constant", "length", Param::int(256, 1, 1_000_000)).unwrap();
     let buf = g.add_node("Buffer", None).unwrap();
     g.update_param(buf, "buffer", "size", Param::int(1024, 1, 10_000_000)).unwrap();
-    let probe = OutputProbe::open(&g, buf, "out");
+    let probe = OutputProbe::open(&goofi_tests::iox(), &g, buf, "out");
     g.add_link(src, "out", buf, "input").unwrap();
 
     // The link attaches over a three-phase sequence that advances on acks, so wait for it.

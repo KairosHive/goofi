@@ -60,7 +60,7 @@ fn run_loop(
     resp_name: &str,
 ) -> Result<(), String> {
     // The parent's session, joined through `GOOFI_SESSION`: the same root, prefix and limits.
-    let mut served = goofi_transport::Served::open(req_name, resp_name)?;
+    let mut served = goofi_transport::Served::open(&goofi_transport::Iox::from_env()?, req_name, resp_name)?;
     let mut warned: HashSet<SrcDtype> = HashSet::new();
     let mut did_setup = false;
     loop {

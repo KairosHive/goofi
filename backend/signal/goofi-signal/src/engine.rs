@@ -52,6 +52,8 @@ struct DynType {
 }
 
 pub struct SignalEngine {
+    /// What every port of this engine and its nodes is built against.
+    pub(crate) iox: Arc<goofi_transport::Iox>,
     /// What service names are scoped by — handed down from the graph, whose resolver inputs it is.
     instance: String,
     evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>>,
@@ -85,8 +87,9 @@ impl SignalEngine {
         self.host = Some(exe);
     }
 
-    pub fn new(instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>) -> SignalEngine {
+    pub fn new(iox: Arc<goofi_transport::Iox>, instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>) -> SignalEngine {
         SignalEngine {
+            iox,
             instance,
             evaluator: None,
             time,
@@ -362,13 +365,13 @@ impl Engine for SignalEngine {
         let halt = Arc::new(runtime::Halt::default());
         let base = goofi_transport::service_base(&self.instance, uid, generation);
         if self.graph_node.is_none() {
-            match goofi_transport::iox_node() {
+            match self.iox.node() {
                 Ok(node) => self.graph_node = Some(node),
                 Err(e) => return Some(e),
             }
         }
         let graph_node = self.graph_node.as_ref().expect("just ensured");
-        let started = runtime::IoxTransport::create(&self.instance, uid, generation, manifest)
+        let started = runtime::IoxTransport::create(&self.iox, &self.instance, uid, generation, manifest)
             .and_then(|transport| Ok((transport, runtime::NodeChannel::open(graph_node, &base)?)))
             .and_then(|(transport, channel)| {
                 let env = runtime::NodeEnv {

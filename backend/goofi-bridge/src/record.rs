@@ -220,14 +220,14 @@ fn drain_epoch(graph: &Arc<Mutex<Graph>>) -> Arc<std::sync::atomic::AtomicU64> {
 }
 
 /// Start the one drain. `halt` is what stops it; the worker handed back is what a stop joins.
-pub fn spawn(graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>) -> Option<goofi_core::worker::Worker> {
+pub fn spawn(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>) -> Option<goofi_core::worker::Worker> {
     recorder.set_capture(Arc::new(AudioCapture(Arc::downgrade(&graph))));
     let (instance, time) = {
         let g = graph.lock();
         (g.instance().to_string(), g.time())
     };
     let started = goofi_transport::thread("goofi-record").spawn(move || {
-        let ports = goofi_transport::PortBundle::open(|node| {
+        let ports = goofi_transport::PortBundle::open(&iox, |node| {
             let door = goofi_transport::event_service(node, &goofi_transport::record_door_service(&instance))?;
             let listener = door.listener_builder().create().map_err(|e| e.to_string())?;
             Ok(Ports { feeds: HashMap::new(), listener })

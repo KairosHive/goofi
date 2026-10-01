@@ -3,6 +3,7 @@
 //! is never unloaded, so this is what lets a node authored in the session run its newest build.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -34,6 +35,7 @@ pub type HostedNode = Handle<Hosted>;
 /// The child that holds a hosted node's library, asked over the exchange: `[entry][f64 now]`,
 /// then the codec request.
 pub struct Hosted {
+    iox: Arc<goofi_transport::Iox>,
     host: PathBuf,
     artifact: PathBuf,
     type_name: &'static str,
@@ -41,8 +43,8 @@ pub struct Hosted {
 }
 
 impl Hosted {
-    pub fn node(host: PathBuf, artifact: PathBuf, manifest: &'static NodeManifest) -> HostedNode {
-        Handle::new(Hosted { host, artifact, type_name: manifest.type_name, live: None }, manifest)
+    pub fn node(iox: Arc<goofi_transport::Iox>, host: PathBuf, artifact: PathBuf, manifest: &'static NodeManifest) -> HostedNode {
+        Handle::new(Hosted { iox, host, artifact, type_name: manifest.type_name, live: None }, manifest)
     }
 
     fn spawn(&self) -> Result<(goofi_core::child::Child, Exchange), String> {
@@ -55,7 +57,7 @@ impl Hosted {
             .source(goofi_core::log::source())
             .spawn()
             .map_err(|e| format!("spawn the host: {e}"))?;
-        let exchange = Exchange::open(&base)?;
+        let exchange = Exchange::open(&self.iox, &base)?;
         Ok((child, exchange))
     }
 }

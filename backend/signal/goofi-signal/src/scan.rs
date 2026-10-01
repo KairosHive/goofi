@@ -101,8 +101,9 @@ impl SignalEngine {
         }
         let manifest = goofi_node::leak_manifest(type_name.to_string(), &intro)?;
         let artifact = artifact.to_path_buf();
+        let iox = self.iox.clone();
         let factory: goofi_signal_sdk::NodeFactory =
-            Box::new(move |_| Box::new(crate::hosted::Hosted::node(host.clone(), artifact.clone(), manifest)));
+            Box::new(move |_| Box::new(crate::hosted::Hosted::node(iox.clone(), host.clone(), artifact.clone(), manifest)));
         Ok(self.register_dyn_type(manifest, factory, &goofi_node::HOSTED))
     }
 
@@ -129,12 +130,12 @@ impl SignalEngine {
         let subproc = self.python.as_ref().map(|p| p.subproc.clone()).unwrap_or_default();
         match probed {
             Probed::InProcess(d) => {
-                let (manifest, factory, tier) = routed(d, &subproc);
+                let (manifest, factory, tier) = routed(self.iox.clone(), d, &subproc);
                 let isolation = tier.get();
                 Scanned::Registered { isolation, replaced: self.register_dyn_type(manifest, factory, tier) }
             }
             Probed::Subprocess(d) => {
-                let t = goofi_python::subproc::node_type_from(&subproc, d);
+                let t = goofi_python::subproc::node_type_from(self.iox.clone(), &subproc, d);
                 let isolation = t.isolation.get();
                 Scanned::Registered {
                     isolation,

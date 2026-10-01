@@ -89,18 +89,20 @@ fn free_threaded() -> Option<String> {
 /// build, so the runtime GIL tripwire demoting it is all a re-route takes.
 #[cfg(feature = "embed")]
 pub fn routed(
+    iox: std::sync::Arc<goofi_transport::Iox>,
     d: Discovered,
     subproc: &str,
 ) -> (&'static goofi_node::NodeManifest, goofi_host_sdk::NodeFactory, &'static goofi_node::IsolationCell) {
-    let t = crate::routed_node_type(d, subproc);
+    let t = crate::routed_node_type(iox, d, subproc);
     (t.manifest, t.factory, t.isolation)
 }
 
 #[cfg(not(feature = "embed"))]
 pub fn routed(
+    iox: std::sync::Arc<goofi_transport::Iox>,
     d: Discovered,
     subproc: &str,
 ) -> (&'static goofi_node::NodeManifest, goofi_host_sdk::NodeFactory, &'static goofi_node::IsolationCell) {
-    let t = crate::subproc::node_type_from(subproc, d);
+    let t = crate::subproc::node_type_from(iox, subproc, d);
     (t.manifest, t.factory, t.isolation)
 }

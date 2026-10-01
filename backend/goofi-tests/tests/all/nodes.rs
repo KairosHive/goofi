@@ -47,7 +47,7 @@ fn first_f32(d: &Data) -> f32 {
 /// Watch one node's `out` slot until it carries `want`. The probe is opened per call because a
 /// restart is a REBIRTH onto the next generation's service, and the frame in flight may be old.
 fn emits(g: &Goofi, uid: goofi_tests::Uid, want: f32) {
-    let probe = OutputProbe::open(&g.state.graph.lock(), uid, "out");
+    let probe = OutputProbe::open(&g.state.iox, &g.state.graph.lock(), uid, "out");
     g.until(&format!("{uid} to emit {want}"), |g| {
         let mut graph = g.state.graph.lock();
         probe.frame(&mut graph).filter(|d| first_f32(d) == want)
@@ -214,7 +214,7 @@ const PY_LEVEL: &str = "import goofi\nimport numpy as np\nclass Level(goofi.Node
 
 /// Drive the audio clock and watch one node's `out` tap until it holds `want`.
 fn holds(g: &Goofi, uid: goofi_tests::Uid, want: f32) {
-    let probe = OutputProbe::open(&g.state.graph.lock(), uid, "out");
+    let probe = OutputProbe::open(&g.state.iox, &g.state.graph.lock(), uid, "out");
     g.until(&format!("{uid} to hold {want}"), |g| {
         drive(g, 4800);
         probe.frame(&mut g.state.graph.lock()).filter(|d| first_f32(d) == want)

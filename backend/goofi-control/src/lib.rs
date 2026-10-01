@@ -18,7 +18,7 @@ use goofi_node::{
     Status, Uid, Var,
 };
 use goofi_transport::{
-    door_service, event_service, iox_node, open_output_subscriber, output_service, publisher, stream_service, ServiceKind,
+    door_service, event_service, open_output_subscriber, output_service, publisher, stream_service, Iox, ServiceKind,
     record_door_service, record_service, record_shape, take_where,
     ByteService, BytePublisher, ByteSubscriber, Doorbell, Halt, IoxNode, Listener, ServiceName, INITIAL_SLICE,
 };
@@ -247,12 +247,13 @@ pub struct Spawn {
 /// park the control half on them. `make` builds the engine's half ON that thread, so a half may
 /// hold what does not cross one — an audio stream, a MIDI connection.
 pub fn spawn<H: Half + 'static>(
+    iox: &Iox,
     spawn: Spawn,
     shared: Arc<Shared>,
     bells: &IoxNode,
     make: impl FnOnce() -> H + Send + 'static,
 ) -> Result<Handle, String> {
-    let node = iox_node()?;
+    let node = iox.node()?;
     let door = event_service(&node, &door_service(&spawn.base))?;
     let listener = door.listener_builder().create().map_err(|e| format!("listener: {e}"))?;
     let bell = Doorbell::open(bells, &door_service(&spawn.base))?;

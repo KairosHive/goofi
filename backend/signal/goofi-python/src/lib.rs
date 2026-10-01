@@ -44,7 +44,7 @@ pub(crate) use pyinit::attach;
 /// build time. That cell is the only thing that decides the tier, so demoting a type is a single
 /// write and the next `restart_node` honours it.
 #[cfg(feature = "embed")]
-pub fn routed_node_type(d: Discovered, subproc_python: &str) -> inproc::PyNodeType {
+pub fn routed_node_type(iox: std::sync::Arc<goofi_transport::Iox>, d: Discovered, subproc_python: &str) -> inproc::PyNodeType {
     let manifest = d.manifest;
     let tier = d.isolation;
     let in_slots: Vec<(&'static str, bool)> = manifest.inputs.iter().map(|s| (s.name, s.multi)).collect();
@@ -54,7 +54,7 @@ pub fn routed_node_type(d: Discovered, subproc_python: &str) -> inproc::PyNodeTy
     let factory: goofi_host_sdk::NodeFactory = Box::new(move |_p| {
         match tier.get() {
             goofi_node::Isolation::Subprocess => {
-                Box::new(subproc::RemoteNode::new(&python, &source, in_slots.clone()))
+                Box::new(subproc::RemoteNode::new(iox.clone(), &python, &source, in_slots.clone()))
                     as Box<dyn goofi_host_sdk::Node>
             }
             // A native tier cannot reach here: this factory only ever backs a discovered file.

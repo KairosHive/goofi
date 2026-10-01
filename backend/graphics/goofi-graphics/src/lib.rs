@@ -81,6 +81,7 @@ impl Instance {
 }
 
 pub struct GraphicsEngine {
+    iox: Arc<goofi_transport::Iox>,
     instance: String,
     time: Arc<goofi_core::time::Time>,
     clock: Clock,
@@ -160,6 +161,7 @@ fn decls_of(manifest: &'static NodeManifest) -> Vec<ParamDecl> {
 impl GraphicsEngine {
     /// Open the device and start the engine, or say why this machine has none.
     pub fn open(
+        iox: Arc<goofi_transport::Iox>,
         instance: String,
         time: Arc<goofi_core::time::Time>,
         waker: Arc<DrainWaker>,
@@ -221,7 +223,8 @@ impl GraphicsEngine {
             pending: Vec::new(),
             dirty: false,
             troubles,
-            bells: goofi_transport::iox_node()?,
+            bells: iox.node()?,
+            iox,
         })
     }
 
@@ -442,7 +445,7 @@ impl Engine for GraphicsEngine {
         };
         let lifetime = producer.as_ref().map(producer::Worker::lifetime);
         let make = move || GraphicsHalf::new(cells, flag, out, seen, size).with_producer(producer);
-        let control = match goofi_control::spawn(spawn, self.shared.clone(), &self.bells, make) {
+        let control = match goofi_control::spawn(&self.iox, spawn, self.shared.clone(), &self.bells, make) {
             Ok(handle) => handle,
             Err(e) => return Some(e),
         };

@@ -46,7 +46,7 @@ impl crate::GraphicsEngine {
             match probe(path, self.python.as_ref()) {
                 Probed::InProcess(d) | Probed::Subprocess(d) => {
                     let subproc = self.python.as_ref().map(|p| p.subproc.as_str()).unwrap_or_default();
-                    let (manifest, factory, tier) = routed(d, subproc);
+                    let (manifest, factory, tier) = routed(self.iox.clone(), d, subproc);
                     (manifest, Arc::from(factory), tier)
                 }
                 Probed::Unavailable(why) => return Err(why),

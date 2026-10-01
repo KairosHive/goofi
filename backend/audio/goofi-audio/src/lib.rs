@@ -313,6 +313,7 @@ struct Minted {
 }
 
 pub struct AudioEngine {
+    iox: Arc<goofi_transport::Iox>,
     instance: String,
     time: Arc<goofi_core::time::Time>,
     clock: Clock,
@@ -356,7 +357,7 @@ const SLAB: usize = 64;
 const QUEUE: usize = 4096;
 
 impl AudioEngine {
-    pub fn new(instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>, clock: Clock) -> AudioEngine {
+    pub fn new(iox: Arc<goofi_transport::Iox>, instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>, clock: Clock) -> AudioEngine {
         // Before a plugin is instantiated and before a stream exists, which is the only safe
         // moment to enumerate ASIO and the only one early enough to be useful. `host::warm` holds
         // both halves of that.
@@ -414,7 +415,8 @@ impl AudioEngine {
             pending: Vec::new(),
             dirty: false,
             last: Plan::default(),
-            bells: goofi_transport::iox_node().expect("an iceoryx2 node for the audio engine's bells"),
+            bells: iox.node().expect("an iceoryx2 node for the audio engine's bells"),
+            iox,
         }
     }
 
@@ -887,7 +889,7 @@ impl Engine for AudioEngine {
             params: atomics.clone(),
             time: self.time.clone(),
         };
-        let control = match goofi_control::spawn(spawn, self.shared.clone(), &self.bells, move || AudioHalf::new(birth)) {
+        let control = match goofi_control::spawn(&self.iox, spawn, self.shared.clone(), &self.bells, move || AudioHalf::new(birth)) {
             Ok(handle) => handle,
             Err(e) => return Some(e),
         };

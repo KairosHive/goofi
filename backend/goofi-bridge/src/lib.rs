@@ -74,6 +74,8 @@ pub struct Mode {
 
 #[derive(Clone)]
 pub struct AppState {
+    /// What every port of this manager and its engines is built against: the session's iceoryx2.
+    pub iox: Arc<goofi_transport::Iox>,
     pub plugins: Arc<plugins::Plugins>,
     pub graph: Arc<Mutex<Graph>>,
     /// What this instance serves, one owner: the op table, the routes and the engines read it.
@@ -178,29 +180,27 @@ impl Default for DataLiveness {
 
 impl AppState {
     /// An instance named by a fresh id — a test's, several to a process.
-    pub fn new(mode: Mode, clock: Clock, render: Clock) -> Result<AppState, String> {
-        Self::with_instance(goofi_core::session::fresh_id()?, mode, clock, render)
+    pub fn new(iox: Arc<goofi_transport::Iox>, mode: Mode, clock: Clock, render: Clock) -> Result<AppState, String> {
+        Self::with_instance(iox, goofi_core::session::fresh_id()?, mode, clock, render)
     }
 
     /// An instance named by `instance` — the binary's, which names it after the session it holds,
     /// so the id a shell sets `GOOFI_SESSION` to is the one `session status` answers.
-    pub fn with_instance(instance: String, mode: Mode, clock: Clock, render: Clock) -> Result<AppState, String> {
-        // The session is decided — and what dead ones left is swept — HERE, by the manager,
-        // before any engine exists: never by whoever happens to open the first port. The caches
-        // under `.goofi/system` are swept in the same breath: a crash's part files, old versions.
-        goofi_transport::session()?;
+    pub fn with_instance(iox: Arc<goofi_transport::Iox>, instance: String, mode: Mode, clock: Clock, render: Clock) -> Result<AppState, String> {
+        // The caches under `.goofi/system` are swept HERE, by the manager, before any engine
+        // exists: a crash's part files, old versions.
         goofi_core::session::sweep_system(goofi_build::VERSION);
         autosave::sweep_dead();
         let (events, _) = broadcast::channel(256);
         // Seeded BEFORE the baseline is taken, or the patch is dirty from boot, having written
         // the seed itself.
-        let mount = new_mount()?;
+        let mount = new_mount(iox.id())?;
         term::seed_orientation(&mount);
         seed_skills(&mount);
         let workspace_baseline = goofi_graph::archive::fingerprint(&mount);
         // Project the INITIAL graph — no nodes, but the seeded system variables — so a client that
         // connects to a fresh backend has the current state at once.
-        let mut graph_val = fresh_graph((!mode.demo).then_some(clock), render)?;
+        let mut graph_val = fresh_graph(iox.clone(), (!mode.demo).then_some(clock), render)?;
         graph_val.set_workspace(&mount);
         let mut doc = crate::doc::GraphDoc::new();
         doc.reconcile_root(projection::of(&graph_val));
@@ -210,8 +210,9 @@ impl AppState {
         }
         let graph = Arc::new(Mutex::new(graph_val));
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
-        let reducers = reducer::SlotReducers::new(graph.clone(), follow_tx);
+        let reducers = reducer::SlotReducers::new(iox.clone(), graph.clone(), follow_tx);
         let state = AppState {
+            iox: iox.clone(),
             plugins: Arc::new(plugins::Plugins::default()),
             graph,
             events,
@@ -245,7 +246,7 @@ impl AppState {
         };
         spawn_follower(state.clone(), follow_rx);
         autosave::spawn(state.clone());
-        *state.record_worker.lock() = record::spawn(state.graph.clone(), state.recorder.clone(), state.record_drain.clone());
+        *state.record_worker.lock() = record::spawn(iox, state.graph.clone(), state.recorder.clone(), state.record_drain.clone());
         Ok(state)
     }
 
@@ -366,8 +367,7 @@ impl AppState {
 /// A fresh, empty workspace mount: `<workspaces>/<session>/<nonce>/workspace`. The nonce directory
 /// wraps it so a load can rename an extracted tree onto `workspace` wholesale, and the autosave
 /// sits beside it; the session directory is what a clean shutdown removes and a crash leaves.
-fn new_mount() -> Result<PathBuf, String> {
-    let session = goofi_core::session::current().ok_or("no session is decided")?;
+fn new_mount(session: &str) -> Result<PathBuf, String> {
     let dir = goofi_core::session::workspace_dir(session).join(nonce_hex()?).join("workspace");
     let _ = std::fs::create_dir_all(&dir);
     Ok(dir)
@@ -969,18 +969,19 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
 /// The composed graph the app boots: the model plus the signal engine, registered first. A `None`
 /// audio clock asks for no audio engine at all, which takes every audio node out of the catalog.
 /// The graphics engine is always ASKED for, and a machine with no adapter simply has none.
-pub fn fresh_graph(clock: Option<Clock>, render: Clock) -> Result<Graph, String> {
+pub fn fresh_graph(iox: Arc<goofi_transport::Iox>, clock: Option<Clock>, render: Clock) -> Result<Graph, String> {
     let mut g = Graph::new(goofi_core::session::fresh_id()?);
     let signal = goofi_signal::SignalEngine::new(
+        iox.clone(),
         g.instance().to_string(),
         g.time(),
         g.drain_waker(),
     );
     g.register_engine(Box::new(signal));
     if let Some(clock) = clock {
-        g.register_engine(Box::new(goofi_audio::AudioEngine::new(g.instance().to_string(), g.time(), g.drain_waker(), clock)));
+        g.register_engine(Box::new(goofi_audio::AudioEngine::new(iox.clone(), g.instance().to_string(), g.time(), g.drain_waker(), clock)));
     }
-    match goofi_graphics::GraphicsEngine::open(g.instance().to_string(), g.time(), g.drain_waker(), render) {
+    match goofi_graphics::GraphicsEngine::open(iox, g.instance().to_string(), g.time(), g.drain_waker(), render) {
         Ok(engine) => g.register_engine(Box::new(engine)),
         Err(why) => goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("graphics: {why}; this machine renders no shaders")),
     }

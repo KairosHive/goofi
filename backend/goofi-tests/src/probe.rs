@@ -21,7 +21,7 @@ pub struct OutputProbe {
 impl OutputProbe {
     /// Open a probe on `(uid, slot)`. Panics for a missing node or slot, which would otherwise
     /// answer "silent" forever and read as a passing test.
-    pub fn open(g: &Graph, uid: Uid, slot: &str) -> OutputProbe {
+    pub fn open(iox: &goofi_transport::Iox, g: &Graph, uid: Uid, slot: &str) -> OutputProbe {
         let manifest = g.manifest(uid).unwrap_or_else(|| panic!("no node {uid}"));
         assert!(
             manifest.outputs.iter().any(|o| o.name == slot),
@@ -29,7 +29,7 @@ impl OutputProbe {
             manifest.type_name,
         );
         let service = goofi_bridge::output_service_of(g, uid, slot);
-        let subscriber = PortBundle::open(|node| goofi_transport::open_output_subscriber(node, &service))
+        let subscriber = PortBundle::open(iox, |node| goofi_transport::open_output_subscriber(node, &service))
             .expect("a subscriber on the producer's output service");
         OutputProbe { subscriber, latest: std::cell::RefCell::new(None), seen: std::cell::Cell::new(0) }
     }

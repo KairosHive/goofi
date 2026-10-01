@@ -154,7 +154,7 @@ pub struct SlotReducers {
 }
 
 impl SlotReducers {
-    pub fn new(graph: Arc<Mutex<Graph>>, follow: std::sync::mpsc::Sender<Followed>) -> SlotReducers {
+    pub fn new(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, follow: std::sync::mpsc::Sender<Followed>) -> SlotReducers {
         let (instance, cap) = {
             let g = graph.lock();
             (Arc::from(g.instance()), cap_of(&g))
@@ -163,7 +163,7 @@ impl SlotReducers {
             inner: Arc::new(Mutex::new(HashMap::new())),
             graph,
             next_conn: Arc::new(AtomicU64::new(1)),
-            iox: Arc::new(Mutex::new(None)),
+            iox: Arc::new((iox, Mutex::new(None))),
             follow,
             instance,
             cap: Arc::new(AtomicU64::new(cap.to_bits())),
@@ -319,7 +319,7 @@ impl SlotReducers {
     /// The iceoryx2 node every feed is built from, by id — `None` until the first feed mints it.
     /// One port owner is one node, so this never changes again (test/diagnostic).
     pub fn iox_node_id(&self) -> Option<u128> {
-        self.iox.lock().as_ref().map(|n| n.id().value())
+        self.iox.1.lock().as_ref().map(|n| n.id().value())
     }
 }
 
@@ -330,13 +330,13 @@ pub const IDLE: Duration = Duration::from_secs(1);
 const WATCH_GRACE: Duration = Duration::from_millis(250);
 
 /// The reducers' ONE iceoryx2 node, minted on first feed and shared by every later one.
-type SharedIox = Arc<Mutex<Option<Arc<goofi_transport::IoxNode>>>>;
+type SharedIox = Arc<(Arc<goofi_transport::Iox>, Mutex<Option<Arc<goofi_transport::IoxNode>>>)>;
 
 /// The shared node, minting it if this is the first feed to ask; `None` is retried by the next.
 fn shared_iox(iox: &SharedIox) -> Option<Arc<goofi_transport::IoxNode>> {
-    let mut held = iox.lock();
+    let mut held = iox.1.lock();
     if held.is_none() {
-        *held = goofi_transport::iox_node().ok().map(Arc::new);
+        *held = iox.0.node().ok().map(Arc::new);
     }
     held.clone()
 }

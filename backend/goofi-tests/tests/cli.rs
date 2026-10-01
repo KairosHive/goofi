@@ -61,8 +61,8 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let base = g.serve().await;
     let url = format!("http://{}", base.trim_start_matches("ws://"));
     let _sole = goofi_tests::sole_session();
-    let id = goofi_transport::session().unwrap().to_string();
-    goofi_transport::record_url(&url);
+    let id = goofi_tests::session_id();
+    goofi_tests::session().0.lock().record_url(&url);
 
     // A record nobody holds is DEAD: not listed, and left for the server's sweep; the held one
     // is listed. Records are named per process: another run of this suite shares the listing.
@@ -74,13 +74,13 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let rows = client::list();
     assert!(rows.iter().any(|s| s.id == id && s.url == url), "{rows:?}");
     assert!(rows.iter().all(|s| s.id != gone) && dead.exists(), "a list reads only: {rows:?}");
-    goofi_transport::sweep_dead();
+    goofi_core::session::sweep_dead();
     assert!(!dead.exists(), "the sweep removes it; the live one stays");
 
     // The listing is machine-wide, so only named rows are asserted. A second held session makes
     // the bare resolution ambiguous, and it says so by naming both.
-    let busy = format!("busy_peer_{}", std::process::id());
-    let peer = session::hold(&busy).unwrap();
+    let peer = session::Session::hold().unwrap();
+    let busy = peer.id().to_string();
     peer.record_url("http://127.0.0.1:1");
     let listed = |who: &str| client::list().iter().any(|s| s.id == who);
     assert!(listed(&busy) && listed(&id), "both alive: {:?}", client::list());

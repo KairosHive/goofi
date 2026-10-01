@@ -103,7 +103,7 @@ impl Skeleton {
         let shared = Arc::new(Mutex::new(Shared {
             feeds: HashMap::new(),
             block: goofi_codec::encode(block).expect("a frame that crosses"),
-            iox: goofi_transport::iox_node().expect("an iceoryx2 node for the skeleton"),
+            iox: goofi_tests::iox().node().expect("an iceoryx2 node for the skeleton"),
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let tick = {
@@ -286,7 +286,7 @@ impl Drop for Skeleton {
 /// Every doorbell one of this engine's output slots must ring, read off the view through the one
 /// derivation every engine uses: its consumers that wake on doorbells, and a reducer watching it.
 fn rings_for(view: &GraphView<'_>, producer: Uid, slot: &'static str) -> Rings {
-    let node_iox = goofi_transport::iox_node().expect("an iceoryx2 node for the rings");
+    let node_iox = goofi_tests::iox().node().expect("an iceoryx2 node for the rings");
     goofi_transport::targets_of(view, producer, slot, view.ringers(producer, slot))
         .into_iter()
         .filter_map(|(door, id)| Some((goofi_transport::Doorbell::open(&node_iox, &door).ok()?, id)))

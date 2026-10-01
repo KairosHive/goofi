@@ -6,7 +6,7 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-**Phase 0**: §5.5 and §5.6.
+**Phase 0**: §5.5.
 
 **Phase 1**: §5.11 and §5.7; then §3.4 and §3.5; then §4.F and §4.G1-G4; then §1.A2 and §1.A3.
 
@@ -154,13 +154,6 @@ joined, ports, paths, devices. `boot` returns a `Manager { state, scope }` that 
 dropping it is the shutdown.
 
 5. The supervisor split.
-6. One `Session` value: `hold()` locks a sibling `<id>.alive` file before the directory exists;
-   `release()` is idempotent and runs on drop. Transport takes an explicit `Iox` handle built
-   from the session; the statics and the `atexit` hook go; one read-only process
-   `session::id()` stays for part-file tags. The binary releases explicitly on the serve-panic
-   and second-Ctrl+C paths; a test binary that exits leaves its record for the next boot's
-   sweep, and the situation `a_process_that_exits_without_releasing_leaves_no_record` goes.
-   `goofi-client`'s own sweep goes.
 7. `Scope` and `Manager`; every detached thread gets an owner (`term.rs`, `plugins.rs`,
     `arms.rs`, `reducer.rs`, `record.rs`); the record beat goes; `scratch()` and the mount are
     leased as `Kind::Path`. The rest of the transport file splits into names, services and

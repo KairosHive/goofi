@@ -10,7 +10,7 @@ use iceoryx2::prelude::*;
 use goofi_core::Data;
 use goofi_node::NodeManifest;
 use goofi_transport::{
-    control_service, door_service, event_service, iox_node, stream_service, ServiceKind,
+    control_service, door_service, event_service, stream_service, Iox, ServiceKind,
     output_service, publisher, record_door_service,
     record_service, record_shape, service_base,
     status_service, ByteService, ByteSubscriber, Doorbell, EventService, IoxNode, INITIAL_SLICE,
@@ -76,6 +76,7 @@ impl IoxTransport {
     /// Create every service this node owns and open its own end of each. The control SUBSCRIBER
     /// exists before the graph is told the node is ready, which closes the attach window (§4).
     pub fn create(
+        iox: &Iox,
         instance: &str,
         uid: Uid,
         gen: u64,
@@ -83,7 +84,7 @@ impl IoxTransport {
     ) -> Result<IoxTransport, String> {
         let base = service_base(instance, uid, gen);
         let record_door = record_door_service(instance);
-        let node = iox_node()?;
+        let node = iox.node()?;
 
         let door = event_service(&node, &door_service(&base))?;
         let listener = door.listener_builder().create().map_err(|e| format!("listener: {e}"))?;

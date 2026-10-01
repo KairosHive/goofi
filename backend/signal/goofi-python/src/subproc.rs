@@ -2,6 +2,7 @@
 //! request/response over iceoryx2 shared memory.
 
 use std::io::Write;
+use std::sync::Arc;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -28,7 +29,7 @@ struct Running {
 }
 
 impl Running {
-    fn spawn(python: &str, source: &str) -> std::result::Result<Running, String> {
+    fn spawn(iox: &goofi_transport::Iox, python: &str, source: &str) -> std::result::Result<Running, String> {
         let base = format!("goofi_sub_{}_{}", std::process::id(), SUBPROC_SEQ.fetch_add(1, Ordering::Relaxed));
         // The child JOINS this session — `spawn` tells it which — so its ports live under the
         // same root and prefix and are swept with it.
@@ -51,7 +52,7 @@ impl Running {
             None => Err("the child took no stdin".to_string()),
         };
         // A failure here drops `child`, which kills and reaps it.
-        let exchange = handed.and_then(|()| Exchange::open(&base))?;
+        let exchange = handed.and_then(|()| Exchange::open(iox, &base))?;
         Ok(Running { child, exchange })
     }
 
@@ -66,6 +67,7 @@ impl Running {
 
 /// A Python node in an isolated GIL subprocess, spawned lazily on its first `process`.
 pub struct RemoteNode {
+    iox: Arc<goofi_transport::Iox>,
     python: String,
     source: String,
     /// Declared INPUT slots only, each with whether it is `multi`: the child is authoritative for
@@ -75,8 +77,9 @@ pub struct RemoteNode {
 }
 
 impl RemoteNode {
-    pub fn new(python: impl Into<String>, source: impl Into<String>, in_slots: Vec<(&'static str, bool)>) -> RemoteNode {
+    pub fn new(iox: Arc<goofi_transport::Iox>, python: impl Into<String>, source: impl Into<String>, in_slots: Vec<(&'static str, bool)>) -> RemoteNode {
         RemoteNode {
+            iox,
             python: python.into(),
             source: source.into(),
             in_slots,
@@ -86,7 +89,7 @@ impl RemoteNode {
 
     fn ensure(&mut self) -> std::result::Result<&mut Running, String> {
         if self.proc.is_none() {
-            self.proc = Some(Running::spawn(&self.python, &self.source)?);
+            self.proc = Some(Running::spawn(&self.iox, &self.python, &self.source)?);
         }
         Ok(self.proc.as_mut().unwrap())
     }
@@ -164,17 +167,17 @@ pub fn probe(path: &Path, python: &str, memo: &Path) -> Discovery {
 }
 
 /// Turn a probe-[`Discovered`] into a [`SubprocNodeType`], without a second spawn.
-pub fn node_type_from(python: &str, d: Discovered) -> SubprocNodeType {
-    subproc_type_from_discovered(python, d)
+pub fn node_type_from(iox: Arc<goofi_transport::Iox>, python: &str, d: Discovered) -> SubprocNodeType {
+    subproc_type_from_discovered(iox, python, d)
 }
 
-fn subproc_type_from_discovered(python: &str, d: Discovered) -> SubprocNodeType {
+fn subproc_type_from_discovered(iox: Arc<goofi_transport::Iox>, python: &str, d: Discovered) -> SubprocNodeType {
     let manifest = d.manifest;
     let in_slots: Vec<(&'static str, bool)> = manifest.inputs.iter().map(|s| (s.name, s.multi)).collect();
     let source = std::fs::read_to_string(&d.source).unwrap_or_default();
     let python = python.to_string();
     let factory: NodeFactory = Box::new(move |_p| {
-        Box::new(RemoteNode::new(&python, &source, in_slots.clone())) as Box<dyn Node>
+        Box::new(RemoteNode::new(iox.clone(), &python, &source, in_slots.clone())) as Box<dyn Node>
     });
     SubprocNodeType { manifest, isolation: d.isolation, factory }
 }

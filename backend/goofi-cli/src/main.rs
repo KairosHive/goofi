@@ -66,6 +66,7 @@ fn main() {
     let served = goofi_transport::thread("goofi-serve")
         .spawn(|| {
             if std::panic::catch_unwind(std::panic::AssertUnwindSafe(serve)).is_err() {
+                release_session();
                 std::process::exit(101);
             }
         })
@@ -128,21 +129,22 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     }
     let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo };
     report("Cleaning up after earlier sessions");
-    // The session is held BEFORE the engines exist: every iceoryx2 port they open is its.
-    let session = match goofi_transport::session() {
-        Ok(id) => id.to_string(),
+    // The session is held BEFORE the engines exist: every iceoryx2 port they open is its. What
+    // dead sessions left is swept once it is held, so the sweep can never take this one.
+    let (session, iox) = match hold_session() {
+        Ok(held) => held,
         Err(e) => {
             eprintln!("Could not hold a session: {e}");
             std::process::exit(1);
         }
     };
-    let swept = goofi_transport::swept_at_boot();
+    let swept = goofi_core::session::sweep_dead();
     goofi_core::startup::note(match (swept.directories, swept.segments) {
         (0, 0) => "nothing left behind".to_string(),
         (d, s) => format!("removed {d} directories and {s} shared-memory segments of dead sessions"),
     });
     report("Starting signal, audio and graphics engines");
-    let mut state = match AppState::with_instance(session, mode, goofi_bridge::Clock::Internal, goofi_bridge::Clock::Internal) {
+    let mut state = match AppState::with_instance(iox, session, mode, goofi_bridge::Clock::Internal, goofi_bridge::Clock::Internal) {
         Ok(state) => state,
         Err(e) => {
             eprintln!("Could not start: {e}");
@@ -159,7 +161,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     }
     // Last, after every port is gone: the record, then the ephemeral directory and shared memory.
     // The PROCESS releases its session, never `run` — a test runs several servers in one.
-    goofi_transport::release_session();
+    release_session();
     std::process::exit(code);
 }
 
@@ -317,7 +319,7 @@ fn client_stdin(rest: &[String]) -> i32 {
 fn print_sessions(json: bool) -> i32 {
     let rows = goofi_client::list();
     let current = std::env::var("GOOFI_SESSION").ok();
-    let current = |s: &goofi_core::session::Session| current.as_deref() == Some(&s.id);
+    let current = |s: &goofi_core::session::Record| current.as_deref() == Some(&s.id);
     if json {
         let rows: Vec<serde_json::Value> = rows
             .iter()
@@ -491,7 +493,7 @@ async fn run(
                 state.set_bound(addr);
                 // Only a real server writes into the home: its record, and the config seed.
                 goofi_core::home::seed_config();
-                goofi_transport::record_url(&state.local_url());
+                record_url(&state.local_url());
                 // The OPENABLE spelling, as the session file records it — `http://0.0.0.0` is
                 // not an address a browser can visit.
                 let url = state.local_url();
@@ -547,6 +549,31 @@ async fn run(
     code
 }
 
+/// The session this process holds, from `hold_session` to its release on every exit path.
+static SESSION: goofi_core::sync::Mutex<Option<goofi_core::session::Session>> = goofi_core::sync::Mutex::new(None);
+
+/// Hold the process's session and build the transport every port is minted against.
+fn hold_session() -> Result<(String, std::sync::Arc<goofi_transport::Iox>), String> {
+    let session = goofi_core::session::Session::hold()?;
+    let iox = std::sync::Arc::new(goofi_transport::Iox::new(&session)?);
+    let id = session.id().to_string();
+    *SESSION.lock() = Some(session);
+    Ok((id, iox))
+}
+
+/// Idempotent: the first exit path to get here releases; the rest find nothing.
+fn release_session() {
+    if let Some(mut session) = SESSION.lock().take() {
+        session.release();
+    }
+}
+
+fn record_url(url: &str) {
+    if let Some(session) = SESSION.lock().as_ref() {
+        session.record_url(url);
+    }
+}
+
 fn watch_shutdown() -> tokio::sync::oneshot::Receiver<()> {
     let (stop, stopped) = tokio::sync::oneshot::channel();
     goofi_transport::thread("goofi-signals").spawn(move || {
@@ -559,6 +586,7 @@ fn watch_shutdown() -> tokio::sync::oneshot::Receiver<()> {
                 let _ = stop.send(());
                 shutdown_signal().await;
                 // Every child goofi spawned watches its liveness pipe, which this exit closes.
+                release_session();
                 std::process::exit(130);
             });
     }).expect("the signal thread");

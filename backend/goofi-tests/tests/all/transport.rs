@@ -13,7 +13,7 @@ use goofi_signal::runtime::{
     Control, ControlSink, Envelope, IoxTransport, NodeChannel, NodeEnv, NodeFault, NodeRuntime,
     ParamValue, Status, Transport, WireStatus,
 };
-use goofi_transport::{door_service, iox_node, output_service, service_base, Doorbell, IoxNode};
+use goofi_transport::{door_service, output_service, service_base, Doorbell, IoxNode};
 use goofi_node::{NodeManifest, OutputDecl, ParamKey, Params, SlotDecl};
 use goofi_signal_sdk::{Inputs, Node, NodeCtx, NodeResult, Outputs};
 
@@ -74,7 +74,7 @@ fn base_of(uid: Uid) -> String {
 fn the_services_are_created_with_limits_the_defaults_do_not_give_us() {
     // iceoryx2 fixes these at CREATION, so they are hard patch limits, and every default is wrong
     // for this design.
-    let t = IoxTransport::create(&instance(), Uid(1), 0, manifest()).expect("services");
+    let t = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(1), 0, manifest()).expect("services");
     let cfg = t.event_config();
     assert_eq!(cfg.event_id_max_value(), 255);
     assert_eq!(cfg.max_notifiers(), 256);
@@ -92,8 +92,8 @@ fn an_undrained_control_mailbox_keeps_the_whole_burst() {
     // Control and status are message STREAMS, not the latest-wins CELL a data wire is. The count is
     // past any plausible drain interval: a node deep inside `process` is the burst this has to survive.
     const BURST: u64 = 200;
-    let transport = IoxTransport::create(&instance(), Uid(30), 0, manifest()).unwrap();
-    let graph_node = goofi_transport::iox_node().unwrap();
+    let transport = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(30), 0, manifest()).unwrap();
+    let graph_node = goofi_tests::iox().node().unwrap();
     let channel = NodeChannel::open(&graph_node, &base_of(Uid(30))).unwrap();
     for seq in 1..=BURST {
         channel.send(Envelope {
@@ -118,8 +118,8 @@ fn bell_for(uid: Uid, ringer: &IoxNode) -> Doorbell {
 #[test]
 fn a_notify_landing_mid_drain_is_not_lost() {
     // The notification is only a HINT; the truth is in the subscriber queues and the control mailbox.
-    let t = IoxTransport::create(&instance(), Uid(2), 0, manifest()).unwrap();
-    let ringer = iox_node().unwrap();
+    let t = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(2), 0, manifest()).unwrap();
+    let ringer = goofi_tests::iox().node().unwrap();
     let bell = bell_for(Uid(2), &ringer);
     bell.ring(1).unwrap();
     assert_eq!(t.wait(Some(WAIT)), vec![1]);
@@ -129,8 +129,8 @@ fn a_notify_landing_mid_drain_is_not_lost() {
 
 #[test]
 fn a_control_and_a_data_notification_both_survive() {
-    let t = IoxTransport::create(&instance(), Uid(3), 0, manifest()).unwrap();
-    let ringer = iox_node().unwrap();
+    let t = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(3), 0, manifest()).unwrap();
+    let ringer = goofi_tests::iox().node().unwrap();
     let bell = bell_for(Uid(3), &ringer);
     bell.ring(0).unwrap();
     bell.ring(3).unwrap();
@@ -147,7 +147,7 @@ fn a_control_and_a_data_notification_both_survive() {
 #[test]
 fn a_control_message_crosses_shared_memory_and_comes_back_acked() {
     // The ack is the only thing that orders a wire change, so a message without one stalls the sequence.
-    let transport = Arc::new(IoxTransport::create(&instance(), Uid(4), 0, manifest()).unwrap());
+    let transport = Arc::new(IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(4), 0, manifest()).unwrap());
     let mut node = NodeRuntime::new(
         manifest(),
         Box::new(Passthrough),
@@ -155,7 +155,7 @@ fn a_control_message_crosses_shared_memory_and_comes_back_acked() {
         transport.clone(),
         NodeEnv::detached(),
     );
-    let graph_node = goofi_transport::iox_node().unwrap();
+    let graph_node = goofi_tests::iox().node().unwrap();
     let channel = NodeChannel::open(&graph_node, &base_of(Uid(4))).unwrap();
 
     assert_eq!(node.next_wake(), None, "parked: nothing has asked this node to run");
@@ -191,8 +191,8 @@ fn a_control_message_crosses_shared_memory_and_comes_back_acked() {
 #[test]
 fn a_frame_reaches_a_wired_consumer_and_rings_its_slot() {
     // A wire is two declarations and nothing else: neither end knows the other's uid.
-    let producer = IoxTransport::create(&instance(), Uid(5), 0, manifest()).unwrap();
-    let consumer = IoxTransport::create(&instance(), Uid(6), 0, manifest()).unwrap();
+    let producer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(5), 0, manifest()).unwrap();
+    let consumer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(6), 0, manifest()).unwrap();
     consumer.wire_in("input", &[output_service(&base_of(Uid(5)), "out")]).unwrap();
     producer.wire_out("out", &[(door_service(&base_of(Uid(6))), 1)]).unwrap();
 
@@ -206,7 +206,7 @@ fn a_frame_reaches_a_wired_consumer_and_rings_its_slot() {
 
     // A wire whose producer writes something that is not a frame is that wire's error, delivered
     // in its place: the node wears it, rather than never hearing of it.
-    let node = iox_node().unwrap();
+    let node = goofi_tests::iox().node().unwrap();
     let service = goofi_transport::stream_service(&node, &output_service(&base_of(Uid(50)), "out"), goofi_transport::ServiceKind::Data).unwrap();
     let raw = goofi_transport::publisher(&service, "out", goofi_transport::INITIAL_SLICE).unwrap();
     consumer.wire_in("input", &[output_service(&base_of(Uid(50)), "out")]).unwrap();
@@ -220,8 +220,8 @@ fn a_frame_reaches_a_wired_consumer_and_rings_its_slot() {
 #[test]
 fn a_frame_larger_than_the_initial_slice_still_lands() {
     // `AllocationStrategy::Static`, the iceoryx2 default, refuses this: a GOOF frame is variable-size.
-    let producer = IoxTransport::create(&instance(), Uid(7), 0, manifest()).unwrap();
-    let consumer = IoxTransport::create(&instance(), Uid(8), 0, manifest()).unwrap();
+    let producer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(7), 0, manifest()).unwrap();
+    let consumer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(8), 0, manifest()).unwrap();
     consumer.wire_in("input", &[output_service(&base_of(Uid(7)), "out")]).unwrap();
 
     let big: Vec<f32> = (0..80_000).map(|i| i as f32).collect(); // 320 KB, past the 64 KiB start
@@ -235,8 +235,8 @@ fn a_frame_larger_than_the_initial_slice_still_lands() {
 fn a_re_sent_wire_set_keeps_what_it_names_and_drops_what_it_omits() {
     // The slot set is DECLARATIVE, and the FULL set is re-sent on every change: a surviving wire
     // must be kept rather than rebuilt, and what the set no longer names is dropped.
-    let producer = IoxTransport::create(&instance(), Uid(9), 0, manifest()).unwrap();
-    let consumer = IoxTransport::create(&instance(), Uid(10), 0, manifest()).unwrap();
+    let producer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(9), 0, manifest()).unwrap();
+    let consumer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(10), 0, manifest()).unwrap();
     let held = output_service(&base_of(Uid(9)), "out");
     let added = output_service(&base_of(Uid(11)), "out");
     consumer.wire_in("input", std::slice::from_ref(&held)).unwrap();
@@ -257,11 +257,11 @@ fn a_slot_feeds_more_consumers_than_the_iceoryx2_defaults_allow() {
     // `max_subscribers` is inert on its own: a service is opened from one iceoryx2 node per graph
     // node, and `max_nodes` counts exactly those.
     const CONSUMERS: u64 = 24;
-    let producer = IoxTransport::create(&instance(), Uid(20), 0, manifest()).unwrap();
+    let producer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(20), 0, manifest()).unwrap();
     let service = output_service(&base_of(Uid(20)), "out");
     let consumers: Vec<IoxTransport> = (0..CONSUMERS)
         .map(|i| {
-            let c = IoxTransport::create(&instance(), Uid(100 + i), 0, manifest()).unwrap();
+            let c = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(100 + i), 0, manifest()).unwrap();
             c.wire_in("input", std::slice::from_ref(&service)).expect("subscribe");
             c
         })
@@ -279,9 +279,9 @@ fn a_multi_input_keeps_one_cell_per_wire_in_the_order_it_was_given() {
     // The wire count is past the event service's `max_nodes`, which counts one node per producer.
     const WIRES: u64 = 40;
     let producers: Vec<IoxTransport> = (0..WIRES)
-        .map(|i| IoxTransport::create(&instance(), Uid(200 + i), 0, manifest()).unwrap())
+        .map(|i| IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(200 + i), 0, manifest()).unwrap())
         .collect();
-    let consumer = IoxTransport::create(&instance(), Uid(21), 0, manifest()).unwrap();
+    let consumer = IoxTransport::create(&goofi_tests::iox(), &instance(), Uid(21), 0, manifest()).unwrap();
     // Reversed, so a wire index that follows the producers rather than the set is visible.
     let services: Vec<String> =
         (0..WIRES).rev().map(|i| output_service(&base_of(Uid(200 + i)), "out")).collect();
@@ -319,14 +319,11 @@ fn crash_helper() {
     if std::env::var(CRASH_HELPER).is_err() {
         return; // the ordinary run: this test is only the child's entry point
     }
-    let node = iox_node().expect("a node");
+    let session = goofi_core::session::Session::hold().expect("a session");
+    let iox = goofi_transport::Iox::new(&session).expect("its transport");
+    let node = iox.node().expect("a node");
     let _out = goofi_transport::stream_service(&node, "goofi_crash_helper_out", goofi_transport::ServiceKind::Data).expect("a service");
-    println!("READY {}", goofi_transport::session().unwrap());
-    if std::env::var(CRASH_HELPER).as_deref() == Ok("exit") {
-        // A process that leaves through `exit`, with its ports still open and no release called:
-        // the way a test binary or a second Ctrl-C ends.
-        std::process::exit(0);
-    }
+    println!("READY {}", session.id());
     let _ = std::io::stdin().read_line(&mut String::new());
 }
 
@@ -334,41 +331,43 @@ fn crash_helper() {
 /// decides what a boot sweep removes, and a content key is never mistaken for a session.
 #[test]
 fn a_session_owns_its_directory_workspace_and_cache_parts() {
-    use goofi_core::session::{alive, hold, sessions, sweep_system, system_dir, workspace_dir, Session};
+    use goofi_core::session::{alive, sessions, sweep_system, system_dir, workspace_dir, Record, Session};
     use std::fs;
     goofi_tests::walled_home();
     let _sole = goofi_tests::sole_session();
-    let held = hold("abcabcabcabcabc1").unwrap();
+    let held = Session::hold().unwrap();
+    let id = held.id().to_string();
     held.record_url("http://127.0.0.1:9999");
-    assert!(alive("abcabcabcabcabc1"), "held from within the same process still reads alive");
-    assert!(sessions().contains(&Session { id: "abcabcabcabcabc1".into(), url: "http://127.0.0.1:9999".into() }));
-    assert!(system_dir("abcabcabcabcabc1").is_dir());
+    assert!(alive(&id), "held from within the same process still reads alive");
+    assert!(sessions().contains(&Record { id: id.clone(), url: "http://127.0.0.1:9999".into() }));
+    assert!(system_dir(&id).is_dir());
 
-    // A dead session: its lock file exists in its directory and nobody holds it. An orphan
-    // directory with no lock at all. A part a crashed hold left behind.
+    // A dead session: its lock file exists beside its directory and nobody holds it. An orphan
+    // directory with no lock at all. A lock a crashed hold left behind with no directory yet.
+    let base = goofi_core::session::system_base();
     fs::create_dir_all(system_dir("gone")).unwrap();
-    fs::File::create(system_dir("gone").join("alive.lock")).unwrap();
+    fs::File::create(base.join("gone.alive")).unwrap();
     fs::create_dir_all(system_dir("orphan").join("iox")).unwrap();
-    fs::create_dir_all(system_dir("stale.part")).unwrap();
-    fs::File::create(system_dir("stale.part").join("alive.lock")).unwrap();
+    fs::File::create(base.join("stale.alive")).unwrap();
     assert!(!alive("gone"));
     assert!(sessions().iter().all(|s| s.id != "gone"), "the dead one is not listed");
     assert!(system_dir("gone").exists(), "…and a list removes nothing");
-    goofi_transport::sweep_dead();
-    assert!(!system_dir("gone").exists() && !system_dir("orphan").exists(), "the sweep removes it");
-    assert!(!system_dir("stale.part").exists(), "a crashed hold's part is swept");
-    assert!(system_dir("abcabcabcabcabc1").join("alive.lock").exists(), "the live one is untouched");
+    goofi_core::session::sweep_dead();
+    assert!(!system_dir("gone").exists() && !base.join("gone.alive").exists(), "the sweep removes it and its lock");
+    assert!(!system_dir("orphan").exists(), "the orphan goes");
+    assert!(!base.join("stale.alive").exists(), "a crashed hold's lock is swept");
+    assert!(system_dir(&id).is_dir() && alive(&id), "the live one is untouched");
 
     // The workspace parent: the session's to remove once its last mount is gone, at its release.
-    fs::create_dir_all(workspace_dir("abcabcabcabcabc1")).unwrap();
+    fs::create_dir_all(workspace_dir(&id)).unwrap();
 
     // The caches: a dead session's part and work dir go, another version's tree goes; a live
     // session's part, this version's tree and a 16-hex CONTENT key stay.
-    let live = hold("0123456789abcdef").unwrap();
+    let live = Session::hold().unwrap();
     let system = goofi_core::home::system();
     let out = system.join("build").join("out").join("k");
     fs::create_dir_all(&out).unwrap();
-    fs::write(out.join(".node.so.s0123456789abcdef"), b"").unwrap();
+    fs::write(out.join(format!(".node.so.s{}", live.id())), b"").unwrap();
     fs::write(out.join(".node.so.sfedcba9876543210"), b"").unwrap();
     fs::write(out.join("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef.json"), b"").unwrap();
     let work = system.join("build").join("plugins").join("x").join("work-sfedcba9876543210-0");
@@ -379,7 +378,7 @@ fn a_session_owns_its_directory_workspace_and_cache_parts() {
     fs::create_dir_all(system.join("build").join("sdk").join("0.0.1")).unwrap();
     fs::create_dir_all(system.join("build").join("sdk").join(version)).unwrap();
     sweep_system(version);
-    assert!(out.join(".node.so.s0123456789abcdef").exists(), "a live session's part stays");
+    assert!(out.join(format!(".node.so.s{}", live.id())).exists(), "a live session's part stays");
     assert!(!out.join(".node.so.sfedcba9876543210").exists() && !work.exists(), "a dead session's go");
     assert!(system.join("shipped").join(version).join("fedcba9876543210").exists(), "a content key stays");
     assert!(out.join("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef.json").exists());
@@ -389,26 +388,9 @@ fn a_session_owns_its_directory_workspace_and_cache_parts() {
     drop(live);
 
     drop(held);
-    assert!(!alive("abcabcabcabcabc1"));
-    assert!(!workspace_dir("abcabcabcabcabc1").exists(), "the empty workspace parent went with it");
-    let _ = fs::remove_dir_all(system_dir("abcabcabcabcabc1"));
-}
-
-#[test]
-fn a_process_that_exits_without_releasing_leaves_no_record() {
-    goofi_tests::walled_home();
-    let _sole = goofi_tests::sole_session();
-    let out = std::process::Command::new(std::env::current_exe().expect("the test binary"))
-        .args([&format!("{}::crash_helper", crate::situation(module_path!())), "--exact", "--nocapture"])
-        .env(CRASH_HELPER, "exit")
-        .env_remove(goofi_core::session::ENV)
-        .stderr(std::process::Stdio::null())
-        .output()
-        .expect("run the child");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let id = stdout.lines().find_map(|l| l.strip_prefix("READY ")).map(str::trim).unwrap_or_default().to_string();
-    assert!(!id.is_empty(), "the child named its session: {stdout:?}");
-    assert!(!goofi_core::session::system_dir(&id).exists(), "the directory went at exit, with no release called");
+    assert!(!alive(&id));
+    assert!(!system_dir(&id).exists(), "its directory went with its release");
+    assert!(!workspace_dir(&id).exists(), "the empty workspace parent went with it");
 }
 
 #[test]
@@ -447,10 +429,10 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
     let system = goofi_core::session::system_dir(&id);
     assert!(goofi_core::session::alive(&id), "the child holds its session while it lives");
     assert!(system.join("iox").is_dir(), "its ephemeral directory is where iceoryx2 wrote");
-    assert!(goofi_transport::sessions().iter().any(|s| s.id == id), "listed from any home");
+    assert!(goofi_core::session::sessions().iter().any(|s| s.id == id), "listed from any home");
     let workspace = goofi_core::session::workspace_dir(&id).join("nonce");
     std::fs::create_dir_all(&workspace).unwrap();
-    goofi_transport::sweep_dead();
+    goofi_core::session::sweep_dead();
     goofi_bridge::autosave::sweep_dead();
     assert!(system.join("iox").is_dir() && workspace.is_dir(), "a sweep from this home left the live session alone");
 
@@ -469,11 +451,11 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
         assert!(segments() > 0, "the child's shared memory stayed too");
     }
 
-    goofi_transport::sweep_dead();
+    goofi_core::session::sweep_dead();
     goofi_bridge::autosave::sweep_dead();
     assert!(!system.exists(), "the ephemeral directory was swept");
     assert!(!workspace.exists(), "the workspace was swept");
     assert_eq!(segments(), 0, "the shared memory its prefix names was swept");
-    assert!(goofi_transport::sessions().iter().all(|s| s.id != id));
+    assert!(goofi_core::session::sessions().iter().all(|s| s.id != id));
     let _ = std::fs::remove_dir_all(&foreign);
 }
