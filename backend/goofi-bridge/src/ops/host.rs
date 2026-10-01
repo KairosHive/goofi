@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{op, EffectOp, NoArgs, ReadOp};
-use crate::{fsbrowse, term, AppState, Event, Txn};
+use crate::{fsbrowse, term, AppState, Caller, Event, Txn};
 
 // ---- plugin list (Read)
 op!(PluginList, "plugin list", 0, NoArgs, Value,
@@ -118,7 +118,7 @@ impl ReadOp for LogList {
 }
 
 impl EffectOp for LogWrite {
-    fn run(_: &AppState, a: LogWriteArgs, _: &str) -> Result<Value, String> {
+    fn run(_: &AppState, a: LogWriteArgs, _: &Caller) -> Result<Value, String> {
         use goofi_supervisor::log::{record, Level, Source};
         let level = match a.level.as_deref().unwrap_or("info") {
             "info" => Level::Info,
@@ -141,7 +141,7 @@ impl ReadOp for AgentList {
 }
 
 impl EffectOp for AgentStart {
-    fn run(state: &AppState, a: AgentStartArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, a: AgentStartArgs, _: &Caller) -> Result<Value, String> {
         // The mount lock is held ACROSS the spawn, so a concurrent load's swap-and-delete cannot
         // take the workspace out from under the child's cwd.
         let id = {
@@ -155,7 +155,7 @@ impl EffectOp for AgentStart {
 }
 
 impl EffectOp for AgentStop {
-    fn run(state: &AppState, a: AgentStopArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, a: AgentStopArgs, _: &Caller) -> Result<Value, String> {
         // The stopped shell's undo stack is dropped by the REAPER, where the actor really dies.
         state.harnesses.stop(&a.instance)?;
         state.events.send(Event::HarnessChanged(state.harnesses.roster(&goofi_supervisor::home::agents())));

@@ -465,12 +465,12 @@ describe('the manager owns the undo step', () => {
 		const ws = boot(split());
 		ws.close('panel-3');
 		await Promise.resolve();
-		expect(history().length).toBe(1);
+		expect(fc.undoStack).toHaveLength(1);
 
 		fc.failNext('layout remove');
 		ws.close('panel-2');
 		await Promise.resolve();
 		await Promise.resolve();
-		expect(history().length, 'a refused op leaves the two stacks 1:1').toBe(1);
+		expect(fc.undoStack, 'a refused op is no step').toHaveLength(1);
 	});
 });

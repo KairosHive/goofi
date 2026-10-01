@@ -74,11 +74,10 @@ describe('copy / paste / duplicate — the store carries the manager’s fragmen
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
 		seed(fc);
-		history().configureDeps(() => ({ control: fc, graph: g, workspace: workspace() }));
 		fc.setCallResult('nodes paste', { rename: { a: 'newA' } });
 
 		await g.pasteNodes({ nodes: { a: { pos: [0, 0] } } });
-		expect(history().length).toBe(1);
+		expect(fc.undoStack).toHaveLength(1);
 		expect(history().canUndo).toBe(true);
 	});
 

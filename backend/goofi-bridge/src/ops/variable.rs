@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{op, Any, EffectOp, NoArgs, ReadOp, WriteOp};
-use crate::{inspect, AppState, Event, Txn};
+use crate::{inspect, AppState, Caller, Event, Txn};
 use goofi_core::variables::{Control, ControlKind, Lock, VariableSource, VariableValue};
 use goofi_graph::{Command, Graph};
 
@@ -592,7 +592,7 @@ impl EffectOp for ControlPaint {
     /// Turtle steps as the strokes a pad makes. The op PARSES — so a refusal names the line — and
     /// the widget draws, through the very code a hand at the pad reaches: the CLI is another hand
     /// on the same canvas, never a second painter. What the widget then commits is the one write.
-    fn run(state: &AppState, a: ControlPaintArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, a: ControlPaintArgs, _: &Caller) -> Result<Value, String> {
         let name = {
             let g = state.graph.lock();
             let name = element_of(&g, "control paint", &a.group, &a.element)?;

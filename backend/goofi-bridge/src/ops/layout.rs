@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{op, EffectOp, PanelType, ReadOp, WriteOp};
-use crate::{inspect, vocab, AppState, Txn};
+use crate::{inspect, vocab, AppState, Caller, Txn};
 use goofi_graph::{Graph, Uid};
 
 // ---- layout inspect (Read)
@@ -331,7 +331,7 @@ impl WriteOp for SplitEdit {
 impl EffectOp for ViewpointEdit {
     /// Where THIS client is looking: not a doc root, so it neither drags a peer nor raises the
     /// unsaved dot, but it still rides the `.gfi` and `hello`.
-    fn run(state: &AppState, a: ViewpointEditArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, a: ViewpointEditArgs, _: &Caller) -> Result<Value, String> {
         state.graph.lock().set_viewpoint(a.value);
         // No projection: the viewpoint is the manifest's alone. The pulse is for the autosave,
         // which takes the new viewpoint on its next tick of an already dirty patch.

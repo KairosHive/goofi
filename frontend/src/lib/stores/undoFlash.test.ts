@@ -4,7 +4,7 @@ import { seed } from '$lib/test/docSeed';
 import { GraphStore } from './graph.svelte';
 import { flash } from './flash.svelte';
 import { pulseRestored } from './undoFlash';
-import type { NavContext } from './history.svelte';
+import type { NavContext } from './navContext';
 import type { NodeTypeInfo } from '$lib/api/control';
 import { nodesMap } from '$lib/crdt/graphDoc';
 import { typeInfo } from '$lib/test/typeInfo';
@@ -40,7 +40,7 @@ describe('pulseRestored', () => {
 			enteredPath: {},
 			selection: { p: { nodes: ['uf_present', 'uf_absent'], edges: [] } }
 		};
-		pulseRestored(ctx, { control: fc, graph: g });
+		pulseRestored(ctx, g);
 
 		expect(flash().active('uf_present')).toBe(true);
 		expect(flash().active('uf_absent')).toBe(false); // not in the graph — no flash, no throw

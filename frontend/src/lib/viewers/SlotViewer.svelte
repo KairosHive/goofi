@@ -2,7 +2,6 @@
 	import ViewerFeed from './ViewerFeed.svelte';
 	import ViewerControls from './ViewerControls.svelte';
 	import { slotView, isSlotExpanded } from './inlineView';
-	import { recordViewChange } from './viewExecutors';
 	import { drawsOnSurface, resolveKind, resolveSettings, type ViewerKind } from './registry';
 	import type { SettingsMap } from './module';
 	import type { ViewBinding } from './viewBinding';
@@ -34,17 +33,11 @@
 			return resolveSettings(this.kind, slotView(rec, slot).settings);
 		},
 		setKind(k) {
-			// The write round-trips through the document, so AFTER is the value asked for, not a re-read.
-			const before = snap();
-			const after = { ...before, kind: k };
-			g.setSlotView(node, slot, after);
-			recordViewChange({ kind: 'inline', node, slot }, before, after, `Viewer → ${k}`);
+			g.setSlotView(node, slot, { ...snap(), kind: k });
 		},
 		setSetting(key, value) {
 			const before = snap();
-			const after = { kind: before.kind, settings: { ...before.settings, [key]: value } };
-			g.setSlotView(node, slot, after);
-			recordViewChange({ kind: 'inline', node, slot }, before, after, `Viewer ${key}`);
+			g.setSlotView(node, slot, { kind: before.kind, settings: { ...before.settings, [key]: value } });
 		}
 	};
 

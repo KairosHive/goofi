@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{op, EffectOp, Handler, NoArgs, ReadOp};
-use crate::{AppState, Txn};
+use crate::{AppState, Caller, Txn};
 
 // ---- op list (Read)
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -33,12 +33,12 @@ op!(OpComplete, "op complete", 1, OpCompleteArgs, Value,
 // ---- undo (Effect)
 op!(Undo, "undo", 0, NoArgs, Value,
     "Undo this actor's last graph command. Each actor — a browser tab, a shell, the MCP — has its own stack.",
-    "{changed: bool, can_undo: bool, can_redo: bool}");
+    "{changed: bool, context, stale: string | null, undo: string | null, redo: string | null} — `context` is what the actor sent with the step; `stale` names an entry that no longer applied and was dropped; `undo`/`redo` are the labels now on top");
 
 // ---- redo (Effect)
 op!(Redo, "redo", 0, NoArgs, Value,
     "Redo this actor's last undone graph command.",
-    "{changed: bool, can_undo: bool, can_redo: bool}");
+    "{changed: bool, context, stale: string | null, undo: string | null, redo: string | null}");
 
 // ---- compound (Effect)
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -85,26 +85,27 @@ impl ReadOp for OpComplete {
 }
 
 impl EffectOp for Undo {
-    fn run(state: &AppState, _: NoArgs, actor: &str) -> Result<Value, String> {
-        let mut tx = Txn::begin(state, actor, false);
-        let changed = tx.history.undo(&mut tx.g, actor)?;
-        flipped(tx, changed)
+    fn run(state: &AppState, _: NoArgs, caller: &Caller) -> Result<Value, String> {
+        let mut tx = Txn::begin(state, caller, false);
+        let flip = tx.history.undo(&mut tx.g, &caller.actor);
+        flipped(tx, flip)
     }
 }
 
 impl EffectOp for Redo {
-    fn run(state: &AppState, _: NoArgs, actor: &str) -> Result<Value, String> {
-        let mut tx = Txn::begin(state, actor, false);
-        let changed = tx.history.redo(&mut tx.g, actor)?;
-        flipped(tx, changed)
+    fn run(state: &AppState, _: NoArgs, caller: &Caller) -> Result<Value, String> {
+        let mut tx = Txn::begin(state, caller, false);
+        let flip = tx.history.redo(&mut tx.g, &caller.actor);
+        flipped(tx, flip)
     }
 }
 
 /// A flip's reply and tail. Only a flip that CHANGED something raises the dot: an empty stack
-/// is not an edit.
-fn flipped(mut tx: Txn, changed: bool) -> Result<Value, String> {
-    let result = json!({ "changed": changed, "can_undo": tx.history.can_undo(tx.actor), "can_redo": tx.history.can_redo(tx.actor) });
-    if changed {
+/// is not an edit. The reply carries the flipped entry's context and the labels now on top.
+fn flipped(mut tx: Txn, flip: goofi_graph::Flip) -> Result<Value, String> {
+    let (undo, redo) = tx.history.labels(tx.actor);
+    let result = json!({ "changed": flip.changed, "context": flip.context, "stale": flip.stale, "undo": undo, "redo": redo });
+    if flip.changed {
         tx.touch();
     }
     tx.commit();
@@ -115,7 +116,7 @@ impl EffectOp for Compound {
     /// Several steps as ONE undo step, decided from SETTLED state: the handlers run directly, so
     /// no step re-mirrors or dirties on its own — the batch does each exactly once when it
     /// settles, and viewers never see an intermediate document.
-    fn run(state: &AppState, a: CompoundArgs, actor: &str) -> Result<Value, String> {
+    fn run(state: &AppState, a: CompoundArgs, caller: &Caller) -> Result<Value, String> {
         let steps = a.ops.as_array().ok_or("compound: `ops` is a list of {op, payload}")?;
         // Every row is resolved BEFORE anything lands: a Read rides for its result, a Write can be
         // taken back, and an Effect owns consequences a rollback cannot reach — refused whole.
@@ -136,7 +137,7 @@ impl EffectOp for Compound {
         }
         // One transaction for every step: the graph is held throughout, so nothing is delivered or
         // projected between two steps, and a refused step drops it, which takes the others back.
-        let mut tx = Txn::begin(state, actor, false);
+        let mut tx = Txn::begin(state, caller, false);
         let mut results = Vec::with_capacity(resolved.len());
         let mut labels = Vec::new();
         for (i, (op, arg)) in resolved.iter().enumerate() {

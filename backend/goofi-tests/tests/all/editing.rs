@@ -366,7 +366,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.add("Buffer");
     let r = g.call("redo", j!({}));
     assert_eq!(r["changed"], false, "the redo run went with the new command");
-    assert_eq!(r["can_redo"], false);
+    assert!(r["redo"].is_null(), "{r}");
     // Empty groups and the retyped entries reach the file and come back.
     let saved = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
     g.call("session load", j!({ "content": saved }));

@@ -106,8 +106,7 @@ export const query = {
 
 	canUndo: (): boolean => history().canUndo,
 	canRedo: (): boolean => history().canRedo,
-	undoLabel: (): string | null => history().undoLabel,
-	historyLength: (): number => history().length
+	undoLabel: (): string | null => history().undoLabel
 };
 
 export type Query = typeof query;

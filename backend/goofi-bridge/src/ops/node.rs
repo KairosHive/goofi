@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{op, Any, EffectOp, Endpoint, NodeRef, ParamAddr, ReadOp, WriteOp};
-use crate::{inspect, named, param_state_update, schemas, vocab, AppState, Event, Txn};
+use crate::{inspect, named, param_state_update, schemas, vocab, AppState, Caller, Event, Txn};
 use goofi_graph::{Graph, Uid};
 
 // ---- node state (Read)
@@ -425,14 +425,15 @@ impl WriteOp for Edit {
                 tx.emit(param_state_update(&tx.g, r, &[]));
             }
         }
-        Ok(json!({ "ok": true }))
+        Ok(json!({ "ok": true, "name": named(&tx.g, uid) }))
     }
 
-    fn label(a: &EditArgs, _: &Value) -> String {
-        match (&a.name, &a.pos, &a.viewer) {
-            (Some(name), _, _) => format!("Rename to {name}"),
-            (None, Some(_), _) => format!("Move {}", a.node.0),
-            _ => format!("Set view on {}", a.node.0),
+    fn label(a: &EditArgs, o: &Value) -> String {
+        let name = o["name"].as_str().unwrap_or(&a.node.0);
+        match (&a.name, &a.pos) {
+            (Some(_), _) => format!("Rename to {name}"),
+            (None, Some(_)) => format!("Move {name}"),
+            _ => format!("Set view on {name}"),
         }
     }
 }
@@ -532,7 +533,7 @@ impl EffectOp for ParamRequest {
     /// NOT a command: a request holds no state, so there is nothing to undo, and the node acts on
     /// it on its own thread, so the reply says only that it was dispatched. A refresh's options
     /// do not ride the reply either: `node state` reports them once the hook has run.
-    fn run(state: &AppState, a: ParamRequestArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, a: ParamRequestArgs, _: &Caller) -> Result<Value, String> {
         let kind: goofi_node::RequestKind = serde_json::from_value(json!(a.request))
             .map_err(|_| "node param request: `request` is `refresh` or `pulse`".to_string())?;
         {
@@ -554,12 +555,13 @@ impl WriteOp for Remove {
         // The command is idempotent, so a uid naming nothing succeeds; the reply says which of the
         // two happened.
         let existed = tx.g.exists(uid);
+        let name = named(&tx.g, uid);
         tx.apply(goofi_graph::Command::RemoveNode { uid })?;
-        Ok(json!({ "removed": existed }))
+        Ok(json!({ "removed": existed, "name": name }))
     }
 
-    fn label(a: &RemoveArgs, _: &Value) -> String {
-        format!("Delete {}", a.node.0)
+    fn label(_: &RemoveArgs, o: &Value) -> String {
+        format!("Delete {}", o["name"].as_str().unwrap_or_default())
     }
 }
 
@@ -572,17 +574,17 @@ impl WriteOp for Baseline {
         // the inverse captures the blob it replaced.
         tx.apply(goofi_graph::Command::SetBaseline { uid, baseline: None })?;
         let cleared = tx.g.baseline(uid).and_then(|b| b.as_object()).map_or(0, serde_json::Map::len);
-        Ok(json!({ "ok": true, "cleared": cleared }))
+        Ok(json!({ "ok": true, "cleared": cleared, "name": named(&tx.g, uid) }))
     }
 
-    fn label(a: &BaselineArgs, _: &Value) -> String {
-        format!("Clear non-default on {}", a.node.0)
+    fn label(_: &BaselineArgs, o: &Value) -> String {
+        format!("Clear non-default on {}", o["name"].as_str().unwrap_or_default())
     }
 }
 
 impl EffectOp for Restart {
     /// Recovery, not an edit, so it is NOT routed through the command history.
-    fn run(state: &AppState, a: RestartArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, a: RestartArgs, _: &Caller) -> Result<Value, String> {
         {
             let mut g = state.graph.lock();
             let uid = a.node.resolve(&g, "node restart")?;
@@ -597,7 +599,7 @@ impl EffectOp for Restart {
 
 impl EffectOp for Editor {
     /// Neither an edit nor recovery: a window on the machine goofi runs on, opened or closed.
-    fn run(state: &AppState, a: EditorArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, a: EditorArgs, _: &Caller) -> Result<Value, String> {
         let action = {
             let mut g = state.graph.lock();
             let uid = a.node.resolve(&g, "node editor")?;

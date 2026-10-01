@@ -5,10 +5,11 @@ use std::sync::MutexGuard;
 
 use goofi_graph::{Command, CommandHistory, Graph, Outcome};
 
-use crate::{AppState, Event};
+use crate::{AppState, Caller, Event};
 
 pub struct Txn<'a> {
     pub state: &'a AppState,
+    pub caller: &'a Caller,
     pub actor: &'a str,
     pub g: MutexGuard<'a, Graph>,
     pub history: MutexGuard<'a, CommandHistory>,
@@ -24,10 +25,10 @@ pub struct Txn<'a> {
 
 impl<'a> Txn<'a> {
     /// Hold the graph, then the history — the one lock order — until the drop.
-    pub fn begin(state: &'a AppState, actor: &'a str, preview: bool) -> Txn<'a> {
+    pub fn begin(state: &'a AppState, caller: &'a Caller, preview: bool) -> Txn<'a> {
         let g = state.graph.lock();
         let history = state.history.lock();
-        Txn { state, actor, g, history, outbox: Vec::new(), mark: None, edited: false, preview, committed: false, label: String::new() }
+        Txn { state, caller, actor: &caller.actor, g, history, outbox: Vec::new(), mark: None, edited: false, preview, committed: false, label: String::new() }
     }
 
     /// Run `cmd` through the history. The first command clears the actor's redo run and takes
@@ -70,7 +71,9 @@ impl<'a> Txn<'a> {
             return;
         }
         if let Some(mark) = self.mark {
-            self.history.coalesce(mark, std::mem::take(&mut self.label));
+            // The caller's own label, where it gave one, names the step over the op's.
+            let label = self.caller.label.clone().unwrap_or_else(|| std::mem::take(&mut self.label));
+            self.history.coalesce(mark, label, self.caller.context.clone(), self.caller.group.clone());
         }
         if !self.preview {
             outbox.extend(state.set_dirty(true));

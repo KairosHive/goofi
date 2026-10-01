@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::{op, EffectOp, NoArgs, ReadOp};
 use crate::schemas::Detail;
-use crate::{inspect, schemas, AppState, Event, Txn};
+use crate::{inspect, schemas, AppState, Caller, Event, Txn};
 
 // ---- library list (Read)
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -70,7 +70,7 @@ impl ReadOp for Get {
 impl EffectOp for Save {
     /// Move a node file out of the open patch and into the private library, where every later
     /// patch finds it. A MOVE, not a copy: the library is then the one source.
-    fn run(state: &AppState, a: SaveArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, a: SaveArgs, _: &Caller) -> Result<Value, String> {
         let overwrite = a.overwrite.unwrap_or(false);
         let mount = state.mount();
         let (engine, bare, from) = {
@@ -160,7 +160,7 @@ impl EffectOp for Save {
 
 impl EffectOp for Refresh {
     /// Explicit, never watched: an agent calls it after writing a node file.
-    fn run(state: &AppState, _: NoArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, _: NoArgs, _: &Caller) -> Result<Value, String> {
         crate::prebuild(state, &state.mount());
         let result = {
             let mut g = state.graph.lock();

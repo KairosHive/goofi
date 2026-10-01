@@ -19,7 +19,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::{AppState, Txn};
+use crate::{AppState, Caller, Txn};
 use goofi_graph::{Graph, Uid};
 
 /// What calling an op IS. The transaction, the dirty decision and the re-mirror are all READ off
@@ -76,13 +76,13 @@ pub trait WriteOp: Op {
 
 /// An effect: it holds what it needs itself and owns its consequences.
 pub trait EffectOp: Op {
-    fn run(cx: &AppState, a: Self::Args, actor: &str) -> Result<Self::Out, String>;
+    fn run(cx: &AppState, a: Self::Args, caller: &Caller) -> Result<Self::Out, String>;
 }
 
 pub type ReadFn = fn(&mut Txn, &Value) -> Result<Value, String>;
 /// A write's erased entry answers its result AND its history label.
 pub type WriteFn = fn(&mut Txn, &Value) -> Result<(Value, String), String>;
-pub type EffectFn = fn(&AppState, &Value, &str) -> Result<Value, String>;
+pub type EffectFn = fn(&AppState, &Value, &Caller) -> Result<Value, String>;
 
 /// An op's handler and its KIND in one field.
 #[derive(Clone, Copy)]
@@ -287,8 +287,8 @@ fn erased_write<T: WriteOp>(tx: &mut Txn, v: &Value) -> Result<(Value, String), 
     Ok((to_value(out)?, label))
 }
 
-fn erased_effect<T: EffectOp>(cx: &AppState, v: &Value, actor: &str) -> Result<Value, String> {
-    to_value(T::run(cx, args_of::<T>(v)?, actor)?)
+fn erased_effect<T: EffectOp>(cx: &AppState, v: &Value, caller: &Caller) -> Result<Value, String> {
+    to_value(T::run(cx, args_of::<T>(v)?, caller)?)
 }
 
 const fn row<T: Op>(handler: Handler) -> Row {
@@ -592,17 +592,23 @@ pub fn table(mode: crate::Mode) -> Vec<Row> {
         .collect()
 }
 
-/// The frontend's `OpName` union, generated from the registry and checked into the tree.
+/// The frontend's `OpName` union and each op's kind, generated from the registry and checked
+/// into the tree.
 pub fn typescript() -> String {
     let names: Vec<String> =
         registry().iter().map(|o| format!("\t| '{}'", o.name)).collect();
+    let kinds: Vec<String> =
+        registry().iter().map(|o| format!("\t'{}': '{}'", o.name, o.kind().name())).collect();
     format!(
         "// GENERATED from backend/goofi-bridge/src/ops/mod.rs — do not edit by hand.\n\
          // The manager's op registry is the only place an op name is declared: naming one that is\n\
          // not in it is a type error here and an `unknown op` refusal there. Regenerate by running\n\
          // `cargo test -p goofi-tests contracts::`, which rewrites this file when it drifts.\n\
-         export type OpName =\n\t| `plugin ${{string}}`\n{};\n",
-        names.join("\n")
+         export type OpName =\n\t| `plugin ${{string}}`\n{};\n\n\
+         /** A write is a history step; a read touches nothing; an effect owns its consequences. */\n\
+         export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {{\n{}\n}};\n",
+        names.join("\n"),
+        kinds.join(",\n")
     )
 }
 

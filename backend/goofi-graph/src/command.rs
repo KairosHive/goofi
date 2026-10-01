@@ -1,6 +1,7 @@
 //! Patch commands with exact inverses — the manager's undo/redo unit.
 
 use goofi_core::record::RecordedOutput;
+use serde_json::Value;
 use crate::{Graph, Uid};
 use goofi_core::variables::{Control, VariableValue};
 use goofi_core::Param;
@@ -856,6 +857,20 @@ struct HistoryEntry {
     undone: bool,
     /// What the entry says it did — the undo button's text.
     label: String,
+    /// Where the actor was when it did it, opaque to the manager; handed back on the flip.
+    context: Value,
+    /// A token the actor put on several calls it meant as one step; a neighbour sharing it merges.
+    group: Option<String>,
+}
+
+/// What an undo or a redo did, for the reply that carries it.
+#[derive(Debug, Default)]
+pub struct Flip {
+    pub changed: bool,
+    /// The flipped entry's navigation context, for the client to restore.
+    pub context: Value,
+    /// The label of an entry that no longer applied and was removed instead of flipped.
+    pub stale: Option<String>,
 }
 
 std::thread_local! {
@@ -909,7 +924,14 @@ impl CommandHistory {
         };
         // Record EVERY successful command, a forward no-op included: the client records one entry
         // per mutating RPC, so skipping one here desyncs the stacks and a later undo flips wrong.
-        self.entries.push(HistoryEntry { toggle: inverse, actor: actor.to_string(), undone: false, label: String::new() });
+        self.entries.push(HistoryEntry {
+            toggle: inverse,
+            actor: actor.to_string(),
+            undone: false,
+            label: String::new(),
+            context: Value::Null,
+            group: None,
+        });
         Ok(outcome)
     }
 
@@ -953,21 +975,32 @@ impl CommandHistory {
     }
 
     /// Fold everything after `mark` into ONE entry, so a transaction is a single undo step, and
-    /// name it.
-    pub fn coalesce(&mut self, mark: usize, label: String) {
-        if self.entries.len() >= mark + 2 {
-            let actor = self.entries[mark].actor.clone();
-            // Newest first: each toggle is an inverse, and a Compound applies its children in order.
-            let toggles: Vec<Command> = self.entries.drain(mark..).rev().filter_map(|e| e.toggle).collect();
-            self.entries.push(HistoryEntry {
+    /// name it. An entry sharing the actor's `group` token with the one before it merges into it:
+    /// what a client meant as one step is one step.
+    pub fn coalesce(&mut self, mark: usize, label: String, context: Value, group: Option<String>) {
+        if self.entries.len() < mark + 1 {
+            return;
+        }
+        let actor = self.entries[mark].actor.clone();
+        // Newest first: each toggle is an inverse, and a Compound applies its children in order.
+        let mut toggles: Vec<Command> = self.entries.drain(mark..).rev().filter_map(|e| e.toggle).collect();
+        let previous = self.entries[..mark].iter().rposition(|e| e.actor == actor && !e.undone);
+        match previous.filter(|&i| group.is_some() && self.entries[i].group == group) {
+            Some(i) => {
+                toggles.extend(self.entries[i].toggle.take().into_iter().flat_map(|t| match t {
+                    Command::Compound(inner) => inner,
+                    other => vec![other],
+                }));
+                self.entries[i].toggle = (!toggles.is_empty()).then_some(Command::Compound(toggles));
+            }
+            None => self.entries.push(HistoryEntry {
                 toggle: (!toggles.is_empty()).then_some(Command::Compound(toggles)),
                 actor,
                 undone: false,
-                label: String::new(),
-            });
-        }
-        if let Some(entry) = self.entries.get_mut(mark) {
-            entry.label = label;
+                label,
+                context,
+                group,
+            }),
         }
     }
 
@@ -989,41 +1022,46 @@ impl CommandHistory {
         self.previews.clear();
     }
 
-    /// Undo the actor's most-recent applied command. `Ok(false)` if it has nothing to undo.
-    pub fn undo(&mut self, g: &mut Graph, actor: &str) -> Result<bool, String> {
+    /// Undo the actor's most-recent applied command; `changed` is false with nothing to undo.
+    pub fn undo(&mut self, g: &mut Graph, actor: &str) -> Flip {
         let reverted = self.revert_previews(g, actor);
-        let Some(idx) = self.entries.iter().rposition(|e| e.actor == actor && !e.undone) else {
-            return Ok(reverted);
-        };
-        self.flip(g, idx, true)
+        match self.entries.iter().rposition(|e| e.actor == actor && !e.undone) {
+            Some(idx) => self.flip(g, idx, true),
+            None => Flip { changed: reverted, ..Flip::default() },
+        }
     }
 
-    /// Redo the actor's most-recently-undone command. `Ok(false)` if it has nothing to redo.
-    pub fn redo(&mut self, g: &mut Graph, actor: &str) -> Result<bool, String> {
+    /// Redo the actor's most-recently-undone command; `changed` is false with nothing to redo.
+    pub fn redo(&mut self, g: &mut Graph, actor: &str) -> Flip {
         let reverted = self.revert_previews(g, actor);
-        let Some(idx) = self.entries.iter().position(|e| e.actor == actor && e.undone) else {
-            return Ok(reverted);
-        };
-        self.flip(g, idx, false)
+        match self.entries.iter().position(|e| e.actor == actor && e.undone) {
+            Some(idx) => self.flip(g, idx, false),
+            None => Flip { changed: reverted, ..Flip::default() },
+        }
     }
 
-    fn flip(&mut self, g: &mut Graph, idx: usize, undone: bool) -> Result<bool, String> {
+    /// An entry whose toggle no longer applies is REMOVED and reported, never left to wedge the
+    /// stack: the next press reaches the entry under it.
+    fn flip(&mut self, g: &mut Graph, idx: usize, undone: bool) -> Flip {
         if let Some(toggle) = self.entries[idx].toggle.clone() {
-            self.entries[idx].toggle = match toggle.execute(g, Ctx::Replay)? {
-                Applied::Done(_, next) => Some(*next),
-                Applied::Skipped(_) => None,
+            self.entries[idx].toggle = match toggle.execute(g, Ctx::Replay) {
+                Ok(Applied::Done(_, next)) => Some(*next),
+                Ok(Applied::Skipped(_)) => None,
+                Err(_) => {
+                    let gone = self.entries.remove(idx);
+                    return Flip { changed: false, context: gone.context, stale: Some(gone.label) };
+                }
             };
         }
         self.entries[idx].undone = undone;
-        Ok(true)
+        Flip { changed: true, context: self.entries[idx].context.clone(), stale: None }
     }
 
-    pub fn can_undo(&self, actor: &str) -> bool {
-        self.entries.iter().any(|e| e.actor == actor && !e.undone)
-    }
-
-    pub fn can_redo(&self, actor: &str) -> bool {
-        self.entries.iter().any(|e| e.actor == actor && e.undone)
+    /// What the actor's next undo and redo would take back, by label; `None` where there is none.
+    pub fn labels(&self, actor: &str) -> (Option<String>, Option<String>) {
+        let undo = self.entries.iter().rev().find(|e| e.actor == actor && !e.undone).map(|e| e.label.clone());
+        let redo = self.entries.iter().find(|e| e.actor == actor && e.undone).map(|e| e.label.clone());
+        (undo, redo)
     }
 }
 

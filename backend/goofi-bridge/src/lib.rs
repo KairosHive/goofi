@@ -61,6 +61,26 @@ pub const DEV_ROUTE_PREFIX: &str = "/dev/";
 /// The undo actor for a caller that names none — one shared stack, isolated from every named one.
 pub const DEFAULT_ACTOR: &str = "default";
 
+/// Who is calling, and what their history entry should carry: the actor whose stack it joins,
+/// an opaque navigation `context` handed back on the flip, a `label` that overrides the op's own,
+/// and a `group` token under which several calls merge into one step.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+pub struct Caller {
+    pub actor: String,
+    #[serde(default)]
+    pub context: Value,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub group: Option<String>,
+}
+
+impl Caller {
+    pub fn new(actor: &str) -> Caller {
+        Caller { actor: actor.to_string(), ..Caller::default() }
+    }
+}
+
 /// The built SPA as it ships: a URL path and its bytes, compiled into the binary. Empty when the
 /// crate was built without a frontend, which [`HEADLESS_BUILD`] says whether anyone asked for.
 pub type Spa = &'static [(&'static str, &'static [u8])];
@@ -482,8 +502,8 @@ fn routes(state: AppState) -> Router {
     Router::new()
         .route(
             "/control",
-            any(|ws: WebSocketUpgrade, State(state): State<AppState>| async {
-                ws.on_upgrade(move |socket| handle_control(socket, state))
+            any(|ws: WebSocketUpgrade, axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>, State(state): State<AppState>| async move {
+                ws.on_upgrade(move |socket| handle_control(socket, state, q.get("actor").cloned()))
             }),
         )
         // One node's evaluated params, at a readout's pace — opened by whatever is DISPLAYING them.
@@ -1168,25 +1188,28 @@ async fn exec_endpoint(State(state): State<AppState>, body: String) -> Response 
 /// The two messages that seed (or re-seed) a control socket: the hello snapshot, then the whole
 /// document. The filesystem reads — the mount walk, the agents config — happen BEFORE the graph
 /// lock is taken, because no filesystem read may run while the status-drain worker waits on it.
-fn control_seeds(state: &AppState) -> (String, String) {
+fn control_seeds(state: &AppState, actor: &str) -> (String, String) {
     let unsaved = state.is_dirty();
     let saved_at = state.save_path();
     let roster = state.harnesses.roster(&goofi_supervisor::home::agents());
     let hello = {
         let g = state.graph.lock();
-        Event::Hello(schemas::snapshot(&g, state, true, unsaved, saved_at.as_deref(), roster)).text()
+        let mut snap = schemas::snapshot(&g, state, true, unsaved, saved_at.as_deref(), roster);
+        // The actor's stack outlives its socket: a reload finds its undo where it left it.
+        snap["history"] = state.history_labels(actor);
+        Event::Hello(snap).text()
     };
     (hello, doc_state(state))
 }
 
-async fn handle_control(socket: WebSocket, state: AppState) {
+async fn handle_control(socket: WebSocket, state: AppState, named: Option<String>) {
     let (mut tx, mut rx) = socket.split();
 
     // Subscribe BEFORE snapshotting the document: in the other order a peer's edit lands in
     // neither, and the replica desyncs silently. A re-delivery is read as stale and skipped.
     let mut events = state.events.subscribe();
 
-    let (hello, doc) = control_seeds(&state);
+    let (hello, doc) = control_seeds(&state, named.as_deref().unwrap_or(DEFAULT_ACTOR));
     if tx.send(Message::Text(hello.into())).await.is_err() {
         return;
     }
@@ -1223,7 +1246,7 @@ async fn handle_control(socket: WebSocket, state: AppState) {
     // its key, so a drag never replays the sizes it went through.
     let mut queue: std::collections::VecDeque<(Option<String>, String)> = std::collections::VecDeque::new();
     // Whose socket this is: the last actor it presented, whose drags in flight end with it.
-    let mut actor: Option<String> = None;
+    let mut actor: Option<String> = named;
     loop {
         if pending.is_none() {
             if let Some((_, text)) = queue.pop_front() {
@@ -1275,7 +1298,7 @@ async fn handle_control(socket: WebSocket, state: AppState) {
                 // Lagged past the shared ring, so both halves are re-seeded exactly as a fresh
                 // connection seeds them.
                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                    let (hello, doc) = control_seeds(&state);
+                    let (hello, doc) = control_seeds(&state, actor.as_deref().unwrap_or(DEFAULT_ACTOR));
                     if tx.send(Message::Text(hello.into())).await.is_err() {
                         break;
                     }
@@ -1374,16 +1397,28 @@ impl AppState {
     /// ONE re-mirror and one dirty decision happen here, where no write arm can forget either; a
     /// Read touches nothing; an Effect's arm owns its own consequences.
     pub fn call(&self, op: &str, payload: Value, actor: &str) -> Result<Value, String> {
-        self.call_as(op, payload, actor, false)
+        self.call_as(op, payload, &Caller::new(actor), false)
+    }
+
+    /// The same, for a caller that says more than its actor: the browser, with its context.
+    pub fn call_from(&self, op: &str, payload: Value, caller: &Caller) -> Result<Value, String> {
+        self.call_as(op, payload, caller, false)
     }
 
     /// The op run as a PREVIEW: the same arm and command, and the graph moves for real, but the
     /// history keeps no entry and the patch stays clean. The commit is the same op without the flag.
     pub fn preview(&self, op: &str, payload: Value, actor: &str) -> Result<Value, String> {
-        self.call_as(op, payload, actor, true)
+        self.call_as(op, payload, &Caller::new(actor), true)
     }
 
-    fn call_as(&self, op: &str, payload: Value, actor: &str, preview: bool) -> Result<Value, String> {
+    /// What this actor's next undo and redo would take back — what a write reply carries.
+    pub fn history_labels(&self, actor: &str) -> Value {
+        let (undo, redo) = self.history.lock().labels(actor);
+        json!({ "undo": undo, "redo": redo })
+    }
+
+    fn call_as(&self, op: &str, payload: Value, caller: &Caller, preview: bool) -> Result<Value, String> {
+        let actor = caller.actor.as_str();
         let Some(spec) = self.find_op(op) else {
             return Err(format!("unknown op `{op}`"));
         };
@@ -1398,7 +1433,7 @@ impl AppState {
         let result = match spec.handler {
             ops::Handler::PluginRead | ops::Handler::PluginEffect => self.plugins.call(self, op, &payload, actor),
             ops::Handler::Read(f) => {
-                let mut tx = Txn::begin(self, actor, preview);
+                let mut tx = Txn::begin(self, caller, preview);
                 let result = f(&mut tx, &payload);
                 // A refusal drops the transaction, which takes back what it applied.
                 if result.is_ok() {
@@ -1407,14 +1442,14 @@ impl AppState {
                 result
             }
             ops::Handler::Write(f) => {
-                let mut tx = Txn::begin(self, actor, preview);
+                let mut tx = Txn::begin(self, caller, preview);
                 f(&mut tx, &payload).map(|(result, label)| {
                     tx.label(label);
                     tx.commit();
                     result
                 })
             }
-            ops::Handler::Effect(f) => f(self, &payload, actor),
+            ops::Handler::Effect(f) => f(self, &payload, caller),
         };
         self.plugins.post_op(self, op, &payload, &result, actor);
         result
@@ -1429,8 +1464,9 @@ struct Envelope {
     preview: Option<String>,
 }
 
-/// The `/control` envelope over [`AppState::call`]: `{id, op, payload, actor, preview?}` in,
-/// `{id, result}` or `{id, error}` out. A request with no numeric `id` wants no reply.
+/// The `/control` envelope over [`AppState::call`]: `{id, op, payload, actor, preview?, context?,
+/// label?, group?}` in, `{id, result, history?}` or `{id, error}` out. A request with no numeric
+/// `id` wants no reply; a reply to a step the history took carries the actor's undo and redo.
 fn dispatch(state: &AppState, text: &str) -> Option<String> {
     let req: Value = serde_json::from_str(text).ok()?;
     let id = req.get("id").cloned().unwrap_or(Value::Null);
@@ -1438,15 +1474,20 @@ fn dispatch(state: &AppState, text: &str) -> Option<String> {
     let payload = req.get("payload").cloned().unwrap_or_else(|| json!({}));
     // The ACTOR scopes the undo history — whose undo, where `GOOFI_SESSION` says which server.
     // Absent ⇒ the one shared actor, so a caller that presents none still works.
-    let actor = req.get("actor").and_then(|v| v.as_str()).unwrap_or(DEFAULT_ACTOR).to_string();
+    let mut caller: Caller = serde_json::from_value(req.clone()).unwrap_or_default();
+    if caller.actor.is_empty() {
+        caller.actor = DEFAULT_ACTOR.to_string();
+    }
 
     let result = if req.get("preview").is_some_and(|p| !p.is_null()) {
-        state.preview(&op, payload, &actor)
+        state.preview(&op, payload, &caller.actor)
     } else {
-        state.call(&op, payload, &actor)
+        state.call_from(&op, payload, &caller)
     };
+    let steps = state.find_op(&op).is_some_and(|o| o.handler.is_write()) || matches!(op.as_str(), "compound" | "undo" | "redo");
     match id {
         Value::Number(_) => Some(match result {
+            Ok(r) if steps => json!({ "id": id, "result": r, "history": state.history_labels(&caller.actor) }).to_string(),
             Ok(r) => json!({ "id": id, "result": r }).to_string(),
             Err(e) => json!({ "id": id, "error": e }).to_string(),
         }),

@@ -8,6 +8,7 @@
 // The oracle is a RAW `/control` socket of the test's own. Asking the page's replica what the
 // backend holds would ask the accused to testify.
 
+type Link = { node_out: string; node_in: string; slot_in: string };
 import { test, expect, type Browser, type Page } from '@playwright/test';
 import { touchSession } from '../lib/touch';
 import { closeAddedTab, closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
@@ -379,7 +380,7 @@ test.describe('the control socket', () => {
 				);
 				await expect
 					.poll(async () =>
-						Object.values((await backendDoc(page)).links).some(
+						Object.values<Link>((await backendDoc(page)).links).some(
 							(l: { node_out: string; node_in: string }) => l.node_out === port && l.node_in === buf
 						)
 					)
@@ -403,7 +404,7 @@ test.describe('the control socket', () => {
 				);
 				await expect
 					.poll(async () =>
-						Object.values((await backendDoc(page)).links).some(
+						Object.values<Link>((await backendDoc(page)).links).some(
 							(l: { node_out: string; node_in: string }) => l.node_out === feeder && l.node_in === port
 						),
 						{ message: 'the manager stores the cable against the PORT' }
@@ -441,7 +442,7 @@ test.describe('the control socket', () => {
 				await expect.poll(async () => (await backendDoc(page)).nodes[port]).toBeUndefined();
 				await expect
 					.poll(async () =>
-						Object.values((await backendDoc(page)).links).some(
+						Object.values<Link>((await backendDoc(page)).links).some(
 							(l: { node_out: string }) => l.node_out === port
 						)
 					)
@@ -587,8 +588,8 @@ test.describe('the control socket', () => {
 					.filter(([, n]: [string, any]) => n.scope === scope)
 					.map(([uid]) => uid);
 				expect(
-					Object.values(doc.links as Record<string, unknown>).some(
-						(l: { node_out: string; node_in: string; slot_in: string }) =>
+					Object.values(doc.links as Record<string, Link>).some(
+						(l) =>
 							within.includes(l.node_out) && within.includes(l.node_in) && l.slot_in === 'input'
 					),
 					'the cut carried the wiring among the cut nodes'
@@ -882,7 +883,7 @@ test.describe('the control socket', () => {
 		//
 		// The socket is PROXIED to the real server, not faked — only the hello frame's version is
 		// rewritten on the way through, so everything else is the manager's own traffic.
-		await page.routeWebSocket(/\/control$/, (ws) => {
+		await page.routeWebSocket(/\/control(\?.*)?$/, (ws) => {
 			const server = ws.connectToServer();
 			server.onMessage((m) => {
 				if (typeof m !== 'string') return ws.send(m);

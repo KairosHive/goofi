@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use super::{op, EffectOp, NoArgs, ReadOp};
 use crate::schemas::Detail;
-use crate::{autosave, fsbrowse, inspect, schemas, AppState, Event, Txn};
+use crate::{autosave, fsbrowse, inspect, schemas, AppState, Caller, Event, Txn};
 
 // ---- session status (Read)
 op!(Status, "session status", 0, NoArgs, Value,
@@ -148,7 +148,7 @@ impl ReadOp for Manifest {
 }
 
 impl EffectOp for Save {
-    fn run(state: &AppState, a: SaveArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, a: SaveArgs, _: &Caller) -> Result<Value, String> {
         let mut g = state.graph.lock();
         // Expand `~` exactly as the browser does — the two must agree on what a path means. No path
         // means the patch's HOME, and a patch that never had one is refused rather than guessed at.
@@ -279,7 +279,7 @@ pub(crate) fn load_file(state: &AppState, path: &std::path::Path) -> Result<Valu
 }
 
 impl EffectOp for Load {
-    fn run(state: &AppState, a: LoadArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, a: LoadArgs, _: &Caller) -> Result<Value, String> {
         // A source is REQUIRED: no bare word may be the destructive New. `session new` is explicit.
         let has_source = a.path.as_deref().is_some_and(|p| !p.is_empty()) || a.content.is_some();
         if !has_source {
@@ -290,7 +290,7 @@ impl EffectOp for Load {
 }
 
 impl EffectOp for New {
-    fn run(state: &AppState, _: NoArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, _: NoArgs, _: &Caller) -> Result<Value, String> {
         // A demo withholds Load, so the reset is the only way back to the example it was given.
         match state.load.as_deref().filter(|_| state.mode.demo) {
             Some(example) => load_file(state, example),
@@ -307,7 +307,7 @@ impl ReadOp for Recoverable {
 }
 
 impl EffectOp for Recover {
-    fn run(state: &AppState, a: RecoverArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, a: RecoverArgs, _: &Caller) -> Result<Value, String> {
         let dir = a.workspace.filter(|p| !p.is_empty())
             .ok_or("session recover: give the `workspace` a `session recoverable` entry names")?;
         load_patch(state, &json!({ "recover": dir }))
@@ -315,7 +315,7 @@ impl EffectOp for Recover {
 }
 
 impl EffectOp for Discard {
-    fn run(_: &AppState, a: DiscardArgs, _: &str) -> Result<Value, String> {
+    fn run(_: &AppState, a: DiscardArgs, _: &Caller) -> Result<Value, String> {
         let dir = a.workspace.filter(|p| !p.is_empty())
             .ok_or("session discard: give the `workspace` a `session recoverable` entry names")?;
         autosave::discard(&autosave::recovery(&dir)?)?;

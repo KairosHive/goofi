@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{op, EffectOp, Endpoint, NoArgs, ReadOp, WriteOp};
-use crate::{vocab, AppState, Event, Txn};
+use crate::{vocab, AppState, Caller, Event, Txn};
 use goofi_graph::{Graph, Uid};
 
 // ---- record status (Read)
@@ -71,6 +71,11 @@ pub(crate) fn stream_id(g: &Graph, uid: Uid, slot: &str) -> goofi_record::Stream
     goofi_record::StreamId { uid, node: crate::named(g, uid), slot: slot.to_string(), engine }
 }
 
+/// The slot half of an endpoint, for a label: the node is where the user is looking already.
+fn slot_of(output: &Endpoint) -> &str {
+    output.0.rsplit('/').next().unwrap_or(&output.0)
+}
+
 fn set_armed(tx: &mut Txn, op: &str, output: &Endpoint, arm: bool) -> Result<Value, String> {
     let (uid, slot) = output.resolve(&tx.g, op, "output")?;
     let slot = vocab::resolve_slot(&tx.g, op, uid, &slot)?;
@@ -101,7 +106,7 @@ impl WriteOp for Arm {
     }
 
     fn label(a: &ArmArgs, _: &Value) -> String {
-        format!("Arm {}", a.output.0)
+        format!("Arm {}", slot_of(&a.output))
     }
 }
 
@@ -111,7 +116,7 @@ impl WriteOp for Disarm {
     }
 
     fn label(a: &DisarmArgs, _: &Value) -> String {
-        format!("Disarm {}", a.output.0)
+        format!("Disarm {}", slot_of(&a.output))
     }
 }
 
@@ -135,7 +140,7 @@ impl WriteOp for Quality {
     }
 
     fn label(a: &QualityArgs, _: &Value) -> String {
-        format!("Set {} recording quality", a.output.0)
+        format!("Set {} recording quality", slot_of(&a.output))
     }
 }
 
@@ -148,7 +153,7 @@ fn record_arg(g: &Graph, given: Option<&str>, key: &str) -> Option<String> {
 }
 
 impl EffectOp for Start {
-    fn run(state: &AppState, a: StartArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, a: StartArgs, _: &Caller) -> Result<Value, String> {
         let g = state.graph.lock();
         let armed: Vec<Uid> = g.all_uids().into_iter().filter(|u| !g.recorded(*u).unwrap_or(&[]).is_empty()).collect();
         if armed.is_empty() {
@@ -176,7 +181,7 @@ impl EffectOp for Start {
 }
 
 impl EffectOp for Stop {
-    fn run(state: &AppState, _: NoArgs, _: &str) -> Result<Value, String> {
+    fn run(state: &AppState, _: NoArgs, _: &Caller) -> Result<Value, String> {
         let folder = state.recorder.stop()?.ok_or("record stop: no recording runs")?;
         state.events.send(record_changed(state));
         Ok(json!({ "folder": folder.to_string_lossy() }))

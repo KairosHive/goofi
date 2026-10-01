@@ -22,7 +22,7 @@ pub mod subpatch;
 pub mod layout;
 
 pub mod command;
-pub use command::{open_preview, Applied, Command, CommandHistory, Ctx, Outcome, PreviewScope, Skip, SourceState};
+pub use command::{open_preview, Applied, Command, CommandHistory, Ctx, Flip, Outcome, PreviewScope, Skip, SourceState};
 
 pub mod expr_rewrite;
 

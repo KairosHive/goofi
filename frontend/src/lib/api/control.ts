@@ -294,6 +294,26 @@ type Pending = {
 	reject: (e: Error) => void;
 };
 
+/** What the actor's next undo and redo would take back, by label; null where there is none. */
+export interface HistoryLabels {
+	undo: string | null;
+	redo: string | null;
+}
+
+/** What a call carries beside its payload: where the actor is, and the step it belongs to. */
+export interface CallExtra {
+	context?: unknown;
+	label?: string;
+	group?: string;
+}
+
+/** The two seams between the control plane and the history store, so neither imports the other:
+ * every call asks `extra` for its envelope, and every reply that moved the history reports it. */
+export const historyFeed = {
+	labels: (_: HistoryLabels): void => {},
+	extra: (): CallExtra => ({})
+};
+
 /** Minimal structural surface of the control client — the seam a test fake substitutes for. */
 export interface Control {
 	/** This client's stable ACTOR id; it scopes the manager's per-actor undo history. */
@@ -304,6 +324,9 @@ export interface Control {
 	on(fn: (ev: ControlEvent) => void): () => void;
 	onConnect(fn: (c: boolean) => void): () => void;
 }
+
+const isLabels = (v: unknown): v is HistoryLabels =>
+	typeof v === 'object' && v !== null && 'undo' in v && 'redo' in v;
 
 /** This tab's stable actor id, minted once per tab in `sessionStorage`. */
 function readOrMintActor(): string {
@@ -340,7 +363,8 @@ export class ControlClient implements Control {
 
 	constructor(url?: string) {
 		const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-		this.url = url ?? `${proto}//${location.host}/control`;
+		// The actor rides the URL so the hello already carries this tab's undo and redo.
+		this.url = url ?? `${proto}//${location.host}/control?actor=${encodeURIComponent(this.actor)}`;
 	}
 
 	connect(): void {
@@ -376,10 +400,15 @@ export class ControlClient implements Control {
 			this.pending.delete(id);
 			if ('error' in obj) pending.reject(new Error(String(obj.error)));
 			else pending.resolve(obj.result);
+			if (isLabels(obj.history)) historyFeed.labels(obj.history);
 			return;
 		}
 		if ('event' in obj && typeof obj.event === 'string') {
-			if (obj.event === 'hello') this._checkProtocol(obj.payload);
+			if (obj.event === 'hello') {
+				this._checkProtocol(obj.payload);
+				const history = (obj.payload as { history?: unknown } | null)?.history;
+				if (isLabels(history)) historyFeed.labels(history);
+			}
 			for (const h of this.handlers) {
 				try {
 					h(msg as ControlEvent);
@@ -448,7 +477,7 @@ export class ControlClient implements Control {
 			this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
 			// `actor` rides at the top level: the manager scopes its undo/redo history by it —
 			// whose undo, where GOOFI_SESSION names which server.
-			this.ws!.send(JSON.stringify({ id, op, payload, actor: this.actor }));
+			this.ws!.send(JSON.stringify({ id, op, payload, actor: this.actor, ...historyFeed.extra() }));
 		});
 	}
 	preview(key: string, op: OpName, payload: Record<string, unknown>): void {

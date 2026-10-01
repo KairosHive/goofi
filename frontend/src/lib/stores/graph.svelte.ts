@@ -23,8 +23,7 @@ import { consoleStore } from './console.svelte';
 import { selection } from './selection.svelte';
 import { workspace } from 'panelty';
 import type { SlotView } from '$lib/viewers/inlineView';
-import { history, type Action } from './history.svelte';
-import { captureNavContext } from '$lib/stores/navContext';
+import { history } from './history.svelte';
 import { SyncClient } from '$lib/crdt/syncClient.svelte';
 import type { Op } from '$lib/crdt/ops';
 import {
@@ -301,7 +300,6 @@ export class GraphStore {
 		if (!node?.output_slots[slot]) return;
 		void this.ctl
 			.call('node edit', { node: uid, viewer: [{ slot, ...view }] })
-			.then(() => this._recordGraphCmd(`Set ${slot} view`))
 			.catch(() => {
 				/* soft view state — the next edit re-sends it */
 			});
@@ -427,16 +425,6 @@ export class GraphStore {
 		return r.workspace;
 	}
 
-	/** Push an action onto the history (unless a replay is in progress). */
-	private _record(action: Action): void {
-		if (!history().isSuspended) history().record(action);
-	}
-
-	/** Record ONE graph command. The manager owns the exact inverse, so this only marks the step. */
-	private _recordGraphCmd(label: string): void {
-		this._record({ kind: 'graph_cmd', domain: 'graph', label, context: captureNavContext() });
-	}
-
 	/** Adopt a recording report. Which streams are DROPPING is the counts that moved since the
 	 * last one: `dropped` is cumulative, so it never falls and cannot answer that on its own. */
 	private _setRecord(status: RecordStatus): void {
@@ -459,21 +447,18 @@ export class GraphStore {
 		const r = await this.ctl.call<{ changed?: boolean }>('record arm', {
 			output: `${node}/${slot}`
 		});
-		if (r?.changed) this._recordGraphCmd(`Arm ${slot}`);
 	}
 
 	async setRecordQuality(node: string, slot: string, quality: VideoQuality): Promise<void> {
 		const r = await this.ctl.call<{ changed?: boolean }>('record quality', {
 			output: `${node}/${slot}`, quality
 		});
-		if (r?.changed) this._recordGraphCmd(`Set ${slot} recording quality`);
 	}
 
 	async disarmSlot(node: string, slot: string): Promise<void> {
 		const r = await this.ctl.call<{ changed?: boolean }>('record disarm', {
 			output: `${node}/${slot}`
 		});
-		if (r?.changed) this._recordGraphCmd(`Disarm ${slot}`);
 	}
 
 	/** Start a recording. Both fields fall back to the `record.*` variables in the backend. */
@@ -494,7 +479,6 @@ export class GraphStore {
 			inst_id: instId
 		});
 		const uid = born?.uid ?? '';
-		if (uid) this._recordGraphCmd(`Add ${bareName(type)}`);
 		return uid;
 	}
 
@@ -502,7 +486,6 @@ export class GraphStore {
 		// The label reads the node's name before it vanishes.
 		const label = `Delete ${this.nodeById(uid)?.name ?? uid}`;
 		await this.ctl.call('node remove', { node: uid });
-		this._recordGraphCmd(label);
 	}
 
 	/** Respawn a node in place, keeping its uid, name, params, position, scope and links. A
@@ -519,12 +502,10 @@ export class GraphStore {
 
 	async addLink(link: LinkInfo): Promise<void> {
 		await this.ctl.call('link add', linkEndpoints(link));
-		this._recordGraphCmd('Connect');
 	}
 
 	async removeLink(link: LinkInfo): Promise<void> {
 		await this.ctl.call('link remove', linkEndpoints(link));
-		this._recordGraphCmd('Disconnect');
 	}
 
 	/** One step of a drag on a param: the value moves everywhere, the history keeps nothing yet. */
@@ -537,7 +518,6 @@ export class GraphStore {
 		const param = this.nodeById(node)?.params?.[group]?.[name];
 		if (!param) throw new Error(`node param edit: no param ${group}.${name} on node ${node}`);
 		await this.ctl.call('node param edit', { node, param: `${group}/${name}`, value });
-		this._recordGraphCmd(`Set ${name}`);
 	}
 
 	/** Add a NEW user variable; the server refuses a name the patch already holds. A `control` makes
@@ -550,7 +530,6 @@ export class GraphStore {
 	): Promise<void> {
 		if (this.variables.some((g) => g.name === name)) throw new Error(`variable ${name} already exists`);
 		await this.ctl.call('variable entry add', control ? { name, value, type, control } : { name, value, type });
-		this._recordGraphCmd(`Add variable ${name}`);
 	}
 
 	previewVariableValue(name: string, value: number | string | boolean): void {
@@ -561,75 +540,63 @@ export class GraphStore {
 	async setVariableValue(name: string, value: number | string | boolean): Promise<void> {
 		if (!this.variables.some((g) => g.name === name)) throw new Error(`no variable ${name}`);
 		await this.ctl.call('variable entry edit', { name, value });
-		this._recordGraphCmd(`Set variable ${name}`);
 	}
 
 	async setVariableType(name: string, type: VariableType): Promise<void> {
 		await this.ctl.call('variable entry edit', { name, type });
-		this._recordGraphCmd(`Change variable ${name} type`);
 	}
 
 	async addVariableEntry(group: string): Promise<string> {
 		const result = await this.ctl.call('variable entry add', { group }) as { name: string };
-		this._recordGraphCmd(`Add variable ${result.name}`);
 		return result.name;
 	}
 
 	async addVariableGroup(): Promise<string> {
 		const result = await this.ctl.call('variable group add', {}) as { group: string };
-		this._recordGraphCmd(`Add variable group ${result.group}`);
 		return result.group;
 	}
 
 	/** Remove a user variable (a system variable is refused by the server). */
 	async removeVariable(name: string): Promise<void> {
 		await this.ctl.call('variable entry remove', { name });
-		this._recordGraphCmd(`Remove variable ${name}`);
 	}
 
 	/** Rename a user variable; every expression that reads it is rewritten by the manager. */
 	async renameVariable(oldName: string, newName: string): Promise<void> {
 		if (!this.variables.some((g) => g.name === oldName)) throw new Error(`no variable ${oldName}`);
 		await this.ctl.call('variable entry rename', { name: oldName, to: newName });
-		this._recordGraphCmd(`Rename variable ${oldName} → ${newName}`);
 	}
 
 	/** Set a control element's widget, its range or its place. */
 	async setVariableControl(name: string, control: ControlView): Promise<void> {
 		await this.ctl.call('variable entry edit', { name, control });
-		this._recordGraphCmd(`Edit control ${name}`);
 	}
 
 	/** Rename a group, moving every member with it. */
 	async renameVariableGroup(from: string, to: string): Promise<void> {
 		await this.ctl.call('variable group rename', { from, to });
-		this._recordGraphCmd(`Rename variable group ${from} → ${to}`);
 	}
 
 	/** Make a variable follow `node.slot` (and `index` into a wide frame); an empty reference clears. */
 	async setVariableSource(name: string, reference: string, index?: number): Promise<void> {
 		await this.ctl.call('variable entry source', index === undefined ? { name, reference } : { name, reference, index });
-		this._recordGraphCmd(`Source variable ${name}`);
 	}
 
 	/** Bear a widget in a control panel's group through the `control` door, which lifts the
 	 * group's lock for the one command: the manager mints the name and the cell when none is given. */
 	async addControl(group: string, kind: ControlView['kind'], cell?: Cell): Promise<string> {
 		const r = await this.ctl.call('control add', { group, kind, ...(cell ?? {}) });
-		this._recordGraphCmd(`Add ${kind} to ${group}`);
 		return String((r as { name?: unknown }).name ?? '');
 	}
 
 	/** Change a widget's name, kind, range, options or place, through the `control` door. */
 	async editControl(group: string, element: string, patch: ControlPatch): Promise<void> {
 		await this.ctl.call('control edit', { group, element, ...patch });
-		this._recordGraphCmd(`Edit ${group}.${element}`);
 	}
 
 	/** Make a widget follow `node.slot` (and `index` into a wide frame); an empty reference clears. */
 	async sourceControl(group: string, element: string, reference: string, index?: number): Promise<void> {
 		await this.ctl.call('control source', index === undefined ? { group, element, reference } : { group, element, reference, index });
-		this._recordGraphCmd(`Source ${group}.${element}`);
 	}
 
 	/** The first output of node `uid` that can feed the variable named `name`, as `node.slot`. */
@@ -658,19 +625,16 @@ export class GraphStore {
 
 	async removeControl(group: string, element: string): Promise<void> {
 		await this.ctl.call('control remove', { group, element });
-		this._recordGraphCmd(`Remove ${group}.${element}`);
 	}
 
 	/** Lock or unlock one variable on its own account; an axis not named keeps what it has. */
 	async lockVariable(name: string, lock: Partial<LockView>): Promise<void> {
 		await this.ctl.call('variable entry lock', { name, ...lock });
-		this._recordGraphCmd(`Lock variable ${name}`);
 	}
 
 	/** Lock or unlock a whole group; an axis not named keeps what it has. */
 	async lockVariableGroup(group: string, lock: Partial<LockView>): Promise<void> {
 		await this.ctl.call('variable group lock', { group, ...lock });
-		this._recordGraphCmd(`Lock variable group ${group}`);
 	}
 
 	/** Ask a live node to re-evaluate a param's options. Options only, never the value, so it is
@@ -692,7 +656,6 @@ export class GraphStore {
 	 * undoable, since the zero point is document state a later reader depends on. */
 	async clearNonDefault(node: string): Promise<void> {
 		await this.ctl.call('node baseline', { node });
-		this._recordGraphCmd(`Clear non-default on ${this.nodeById(node)?.name ?? node}`);
 	}
 
 	/** Fire a pulse param: a request the node acts on, with no value and so no inverse to undo. */
@@ -727,13 +690,11 @@ export class GraphStore {
 		const d = this.nodeById(node)?.params?.[group]?.[name];
 		if (!d) throw new Error(`node param edit: no param ${group}.${name} on node ${node}`);
 		await this.ctl.call('node param edit', { node, param: `${group}/${name}`, ...source });
-		this._recordGraphCmd(`Set ${name} source`);
 	}
 
 	async setNodePos(uid: string, pos: [number, number]): Promise<void> {
 		// Committed on drag-stop only; a live drag stays local to Svelte Flow.
 		await this.ctl.call('node edit', { node: uid, pos });
-		this._recordGraphCmd(`Move ${this.nodeById(uid)?.name ?? uid}`);
 	}
 
 	/** Move several nodes as ONE command — one op, one resync, one undo step. */
@@ -742,7 +703,6 @@ export class GraphStore {
 		if (moves.length === 1) return this.setNodePos(...moves[0]);
 		const ops = moves.map(([node, pos]) => ({ op: 'node edit', payload: { node, pos } }));
 		await this.ctl.call('compound', { ops });
-		this._recordGraphCmd(`Move ${moves.length} nodes`);
 	}
 
 	/** Set a node's mutable display name (uid identity is unchanged). */
@@ -750,7 +710,6 @@ export class GraphStore {
 		const oldName = this.nodeById(uid)?.name ?? '';
 		if (oldName === name) return;
 		await this.ctl.call('node edit', { node: uid, name });
-		this._recordGraphCmd(`Rename ${oldName} → ${name}`);
 	}
 
 	/** Store where THIS client is looking. Persisted in the `.gfi`, but never converged and never
@@ -797,14 +756,12 @@ export class GraphStore {
 	/** Group the named nodes into a sub-patch. Returns its instance id. */
 	async groupNodes(members: string[], pos?: [number, number]): Promise<string> {
 		const r = await this.ctl.call<{ inst_id: string }>('nodes group', { nodes: members, pos });
-		if (r?.inst_id) this._recordGraphCmd('Group nodes');
 		return r.inst_id;
 	}
 
 	/** Dissolve a sub-patch instance back into its member nodes. */
 	async expandInstance(instId: string): Promise<void> {
 		await this.ctl.call('nodes ungroup', { subpatch: instId });
-		this._recordGraphCmd('Ungroup');
 	}
 
 	async statPath(path: string): Promise<{ path: string; kind: 'file' | 'dir' | 'missing' }> {
@@ -864,7 +821,6 @@ export class GraphStore {
 			pos: offset,
 			inst_id: instId ?? null
 		});
-		this._recordGraphCmd('Paste nodes');
 		return r.rename ?? {};
 	}
 

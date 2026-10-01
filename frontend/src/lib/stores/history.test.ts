@@ -1,15 +1,19 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { history, type Action } from './history.svelte';
+import { history } from './history.svelte';
 import { notify } from './notify.svelte';
 import { FakeControl } from '$lib/test/fakeControl';
 import { GraphStore } from './graph.svelte';
-import { workspace } from 'panelty';
 
-const ctx = { activeWorkspaceId: 'w', activePanelId: null, enteredPath: {}, selection: {} };
-// A graph history entry marks a step; its undo/redo delegate to the manager (B3).
-const mk = (label: string): Action => ({ kind: 'graph_cmd', label, domain: 'graph', context: ctx });
+// The MANAGER owns the history: every write is a step there, and this store mirrors the labels its
+// replies put on top. The fake control plays the manager's half, one entry per write.
+function booted(): { fc: FakeControl; g: GraphStore } {
+	const fc = new FakeControl();
+	const g = new GraphStore(fc);
+	history().configure(() => fc, () => g);
+	return { fc, g };
+}
 
-describe('HistoryStore — Phase 1 core', () => {
+describe('HistoryStore — a mirror of the manager', () => {
 	beforeEach(() => history().reset());
 
 	it('starts empty: canUndo/canRedo false, labels null', () => {
@@ -17,93 +21,44 @@ describe('HistoryStore — Phase 1 core', () => {
 		expect([h.canUndo, h.canRedo, h.undoLabel, h.redoLabel]).toEqual([false, false, null, null]);
 	});
 
-	it('record() pushes onto the undo stack and exposes the label', () => {
-		const h = history();
-		h.record(mk('Add Oscillator'));
-		expect(h.canUndo).toBe(true);
-		expect(h.undoLabel).toBe('Add Oscillator');
-		expect(h.canRedo).toBe(false);
+	it('a write reply carries the labels, and a later write clears the redo', async () => {
+		const { g } = booted();
+		await g.removeNode('a');
+		expect(history().canUndo).toBe(true);
+		expect(history().undoLabel).toBe('node remove');
+		await history().undo();
+		expect(history().canRedo).toBe(true);
+		await g.removeNode('b');
+		expect(history().canRedo).toBe(false);
+		expect(history().undoLabel).toBe('node remove');
 	});
 
-	it('record() clears the redo stack and updates the top label', () => {
-		const h = history();
-		h.record(mk('A'));
-		h.record(mk('B'));
-		expect(h.canRedo).toBe(false);
-		expect(h.undoLabel).toBe('B');
-	});
-
-	it('suspend() blocks recording', () => {
-		const h = history();
-		h.suspend(() => h.record(mk('A')));
-		expect(h.canUndo).toBe(false);
-	});
-
-	it('suspend() returns the fn value and is reentrant', () => {
-		const h = history();
-		const r = h.suspend(() => h.suspend(() => 42));
-		expect(r).toBe(42);
-		expect(h.isSuspended).toBe(false);
-	});
-
-	it('reset() clears both stacks', () => {
-		const h = history();
-		h.record(mk('A'));
-		h.reset();
-		expect(h.canUndo).toBe(false);
-		expect(h.canRedo).toBe(false);
-		expect(h.undoLabel).toBe(null);
+	it('reset() forgets the labels', async () => {
+		const { g } = booted();
+		await g.removeNode('a');
+		history().reset();
+		expect([history().canUndo, history().canRedo, history().undoLabel]).toEqual([false, false, null]);
 	});
 });
 
 describe('HistoryStore — re-entrancy (report B13: held Ctrl+Z)', () => {
 	beforeEach(() => history().reset());
 
-	const undoCalls = (fc: FakeControl) => fc.recordedCalls().filter((c) => c.op === 'undo');
-	const redoCalls = (fc: FakeControl) => fc.recordedCalls().filter((c) => c.op === 'redo');
+	const flips = (fc: FakeControl, op: string) => fc.recordedCalls().filter((c) => c.op === op);
 
-	it('undo() fired twice before the first settles delegates to the manager exactly once', async () => {
-		const fc = new FakeControl();
-		const g = new GraphStore(fc);
-		const h = history();
-		h.configureDeps(() => ({ control: fc, graph: g, workspace: workspace() }));
-		h.record(mk('Set freq'));
-		expect(h.canUndo).toBe(true);
-
-		// Two awaits sit between reading the top action and pop(); a held key fires undo() again
-		// before the first pops. The guard must drop the second.
-		const p1 = h.undo();
-		const p2 = h.undo();
+	it('undo() fired twice before the first settles reaches the manager exactly once', async () => {
+		const { fc, g } = booted();
+		await g.removeNode('a');
+		const p1 = history().undo();
+		const p2 = history().undo();
 		await Promise.all([p1, p2]);
-
-		// The manager undo delegate (control.call('undo')) went out exactly once.
-		expect(undoCalls(fc)).toHaveLength(1);
-		expect(h.canUndo).toBe(false);
-		expect(h.canRedo).toBe(true);
-
-		// And exactly one action round-trips: a single redo empties the redo stack.
-		await h.redo();
-		expect(redoCalls(fc)).toHaveLength(1);
-		expect(h.canRedo).toBe(false);
-		expect(h.canUndo).toBe(true);
-	});
-
-	it('redo() fired twice before the first settles delegates to the manager exactly once', async () => {
-		const fc = new FakeControl();
-		const g = new GraphStore(fc);
-		const h = history();
-		h.configureDeps(() => ({ control: fc, graph: g, workspace: workspace() }));
-		h.record(mk('Set freq'));
-		await h.undo(); // move the action onto the redo stack
-
-		const p1 = h.redo();
-		const p2 = h.redo();
-		await Promise.all([p1, p2]);
-
-		// The manager redo delegate went out exactly once — the guard dropped the second redo().
-		expect(redoCalls(fc)).toHaveLength(1);
-		expect(h.canRedo).toBe(false);
-		expect(h.canUndo).toBe(true);
+		expect(flips(fc, 'undo')).toHaveLength(1);
+		expect(history().canUndo).toBe(false);
+		expect(history().canRedo).toBe(true);
+		await history().redo();
+		expect(flips(fc, 'redo')).toHaveLength(1);
+		expect(history().canRedo).toBe(false);
+		expect(history().canUndo).toBe(true);
 	});
 });
 
@@ -113,19 +68,16 @@ describe('HistoryStore — the failure surface (#9)', () => {
 		notify().clear();
 	});
 
-	it('a rejected replay raises the failure on the shared toast channel', async () => {
-		const fc = new FakeControl();
-		const h = history();
-		h.configureDeps(() => ({ control: fc, graph: new GraphStore(fc), workspace: workspace() }));
-		h.record(mk('Add node'));
+	it('a refused flip raises the failure on the shared toast channel and keeps the step', async () => {
+		const { fc, g } = booted();
+		await g.removeNode('a');
 		fc.failNext('undo');
-		await h.undo();
+		await history().undo();
 		expect(notify().message).toBe('Undo failed: fake control: undo failed');
-		// Atomic-or-nothing: the step stays put, so the user can try again.
-		expect(h.canUndo).toBe(true);
+		expect(history().canUndo).toBe(true);
 	});
 
-	/** The reset drops the STACKS, not the alarm: the channel is shared, so a line this store never
+	/** The reset drops the LABELS, not the alarm: the channel is shared, so a line this store never
 	 * raised (a failed save, say) is not its to take down. */
 	it('reset() leaves a showing toast alone', () => {
 		notify().raise('Save failed: Permission denied');
@@ -134,53 +86,41 @@ describe('HistoryStore — the failure surface (#9)', () => {
 	});
 });
 
-describe('HistoryStore — transaction atomicity on throw', () => {
+describe('HistoryStore — a transaction is one step', () => {
 	beforeEach(() => history().reset());
 
-	it('discards the buffered children when fn throws (no orphan undo step)', async () => {
-		const h = history();
+	it('every write inside rides one group token, so the manager merges them under the label', async () => {
+		const { fc, g } = booted();
+		await history().transaction('Move 2 nodes', async () => {
+			await g.removeNode('a');
+			await g.removeNode('b');
+		});
+		expect(fc.undoStack).toHaveLength(1);
+		expect(history().undoLabel).toBe('Move 2 nodes');
+		const groups = fc.recordedCalls().length;
+		await g.removeNode('c');
+		expect(fc.undoStack, 'a write after the transaction is a step of its own').toHaveLength(2);
+		expect(fc.recordedCalls().length).toBe(groups + 1);
+	});
+
+	it('a nested transaction rides the outer one', async () => {
+		const { fc, g } = booted();
+		await history().transaction('Outer', async () => {
+			await g.removeNode('a');
+			await history().transaction('Inner', () => g.removeNode('b'));
+		});
+		expect(fc.undoStack.map((e) => e.label)).toEqual(['Outer']);
+	});
+
+	it('a thrown transaction closes its group, and what landed before the throw stays one step', async () => {
+		const { fc, g } = booted();
 		await expect(
-			h.transaction('Add + boom', async () => {
-				h.record(mk('inner add')); // a child gets buffered…
-				throw new Error('boom'); // …then the transaction fails partway
+			history().transaction('Add + boom', async () => {
+				await g.removeNode('a');
+				throw new Error('boom');
 			})
 		).rejects.toThrow('boom');
-		// A failed transaction is not atomic, so it must leave NO undo step behind.
-		expect(h.canUndo).toBe(false);
-		expect(h.undoLabel).toBe(null);
-	});
-
-	it('still commits exactly one undo step when fn succeeds', async () => {
-		const h = history();
-		await h.transaction('Add', async () => {
-			h.record(mk('a'));
-			h.record(mk('b'));
-		});
-		expect(h.canUndo).toBe(true);
-		expect(h.undoLabel).toBe('Add'); // two children → one compound under the tx label
-	});
-
-	it('folds records that land only AFTER an awaited step, and an undo issued meanwhile waits for the step', async () => {
-		// A store mutator records its graph_cmd only after its command RPC resolves; the caller
-		// (e.g. a multi-node drag transaction) MUST await each mutator so the records land in the
-		// buffer before flush. Awaited async records fold into one compound; un-awaited would leak
-		// out as separate top-level steps.
-		const fc = new FakeControl();
-		const h = history();
-		h.configureDeps(() => ({ control: fc, graph: new GraphStore(fc), workspace: workspace() }));
-		const tx = h.transaction('Move 2 nodes', async () => {
-			for (const label of ['a', 'b']) {
-				await Promise.resolve(); // stands in for the awaited command RPC
-				h.record(mk(label));
-			}
-		});
-		// The document shows the first move before the transaction closes: an undo issued now takes
-		// back the whole step once it has recorded, rather than racing the manager for its last command.
-		const undone = h.undo();
-		await tx;
-		await undone;
-		expect(fc.recordedCalls().filter((c) => c.op === 'undo'), 'one manager undo per folded child').toHaveLength(2);
-		expect(h.canUndo).toBe(false);
-		expect(h.redoLabel).toBe('Move 2 nodes'); // folded, not two separate 'Move' steps
+		await g.removeNode('b');
+		expect(fc.undoStack.map((e) => e.label)).toEqual(['Add + boom', 'node remove']);
 	});
 });
