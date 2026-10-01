@@ -47,13 +47,15 @@ pub struct Instance {
     node: Box<dyn Node>,
     manifest: &'static Manifest,
     ctx: NodeCtx,
+    /// The live params, seeded by the setup and moved one at a time: a run carries none.
+    params: goofi_codec::rpc::ParamMap,
 }
 
 /// Box a fresh node for the host; a constructor that panics answers null, which the host
 /// reports as the node's setup error rather than unwinding across the boundary.
 pub fn instance(create: impl FnOnce() -> Box<dyn Node>, manifest: &'static Manifest) -> *mut c_void {
     match catch_unwind(AssertUnwindSafe(create)) {
-        Ok(node) => Box::into_raw(Box::new(Instance { node, manifest, ctx: NodeCtx::new() })) as *mut c_void,
+        Ok(node) => Box::into_raw(Box::new(Instance { node, manifest, ctx: NodeCtx::new(), params: Default::default() })) as *mut c_void,
         Err(_) => std::ptr::null_mut(),
     }
 }
@@ -127,19 +129,15 @@ unsafe fn call(
     }
 }
 
-fn process_request(req: &[&[u8]]) -> Result<(goofi_codec::rpc::ParamMap, goofi_codec::rpc::SourcedSlots), String> {
-    match goofi_codec::rpc::decode_request(req)? {
-        Request::Process { params, slots } => Ok((params, slots)),
-        Request::Refresh { .. } | Request::Pulse { .. } => Err("a refresh or a pulse where a run was expected".into()),
-    }
-}
-
 /// # Safety
 /// `node` came from [`instance`]; `request` and `sink` are the host's for the call.
 pub unsafe extern "C" fn setup(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
     call(node, Some(ctx), request, sink, write, |inst, req| {
-        let (params, _) = process_request(req)?;
-        inst.node.setup(&mut inst.ctx, &Params::new(&params)).map_err(|e| e.0)?;
+        let Request::Setup { params } = goofi_codec::rpc::decode_request(req)? else {
+            return Err("a setup was expected".into());
+        };
+        inst.params = params;
+        inst.node.setup(&mut inst.ctx, &Params::new(&inst.params)).map_err(|e| e.0)?;
         Ok(Answer::Done)
     })
 }
@@ -148,7 +146,9 @@ pub unsafe extern "C" fn setup(node: *mut c_void, ctx: Ctx, request: Segments, s
 /// As [`setup`].
 pub unsafe extern "C" fn process(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
     call(node, Some(ctx), request, sink, write, |inst, req| {
-        let (params, slots) = process_request(req)?;
+        let Request::Process { slots } = goofi_codec::rpc::decode_request(req)? else {
+            return Err("a run was expected".into());
+        };
         let mut singles: IndexMap<&'static str, Option<Data>> =
             inst.manifest.inputs.iter().filter(|s| !s.multi).map(|s| (s.name, None)).collect();
         let mut multis: crate::MultiFrames =
@@ -165,7 +165,7 @@ pub unsafe extern "C" fn process(node: *mut c_void, ctx: Ctx, request: Segments,
         let inputs = Inputs::with_multi(&singles, &multis);
         let mut out = Outputs::new(&mut outputs);
         inst.ctx.take_cleared_inputs();
-        inst.node.process(&inputs, &mut out, &mut inst.ctx, &Params::new(&params)).map_err(|e| e.0)?;
+        inst.node.process(&inputs, &mut out, &mut inst.ctx, &Params::new(&inst.params)).map_err(|e| e.0)?;
         let inputs = singles
             .iter()
             .filter_map(|(slot, d)| d.clone().map(|d| (*slot, 0, d)))
@@ -176,12 +176,14 @@ pub unsafe extern "C" fn process(node: *mut c_void, ctx: Ctx, request: Segments,
 }
 
 /// # Safety
-/// As [`setup`]; `request` is `(group, name, Param)` as msgpack.
+/// As [`setup`]; `request` is a codec param request: the one value that moved.
 pub unsafe extern "C" fn on_param_changed(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
     let _ = ctx;
     call(node, None, request, sink, write, |inst, req| {
-        let (group, name, value): (String, String, goofi_core::Param) =
-            rmp_serde::from_slice(req.concat().as_slice()).map_err(|e| e.to_string())?;
+        let Request::Param { group, name, value } = goofi_codec::rpc::decode_request(req)? else {
+            return Err("a moved param was expected".into());
+        };
+        inst.params.entry(group.clone()).or_default().insert(name.clone(), value.clone());
         inst.node.on_param_changed(&ParamKey::new(group, name), &value).map_err(|e| e.0)?;
         Ok(Answer::Done)
     })
@@ -192,10 +194,10 @@ pub unsafe extern "C" fn on_param_changed(node: *mut c_void, ctx: Ctx, request: 
 pub unsafe extern "C" fn on_param_refreshed(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
     let _ = ctx;
     call(node, None, request, sink, write, |inst, req| {
-        let Request::Refresh { params, group, name } = goofi_codec::rpc::decode_request(req)? else {
-            return Err("a run where a refresh was expected".into());
+        let Request::Refresh { group, name } = goofi_codec::rpc::decode_request(req)? else {
+            return Err("a refresh was expected".into());
         };
-        Ok(Answer::Options(inst.node.on_param_refreshed(&ParamKey::new(group, name), &Params::new(&params))))
+        Ok(Answer::Options(inst.node.on_param_refreshed(&ParamKey::new(group, name), &Params::new(&inst.params))))
     })
 }
 
@@ -204,10 +206,10 @@ pub unsafe extern "C" fn on_param_refreshed(node: *mut c_void, ctx: Ctx, request
 pub unsafe extern "C" fn on_pulse(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
     let _ = ctx;
     call(node, None, request, sink, write, |inst, req| {
-        let Request::Pulse { params, group, name } = goofi_codec::rpc::decode_request(req)? else {
-            return Err("a run where a pulse was expected".into());
+        let Request::Pulse { group, name } = goofi_codec::rpc::decode_request(req)? else {
+            return Err("a pulse was expected".into());
         };
-        inst.node.on_pulse(&ParamKey::new(group, name), &Params::new(&params)).map_err(|e| e.0)?;
+        inst.node.on_pulse(&ParamKey::new(group, name), &Params::new(&inst.params)).map_err(|e| e.0)?;
         Ok(Answer::Done)
     })
 }

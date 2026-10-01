@@ -62,12 +62,14 @@ fn run_loop(
     // The parent's session, joined through `GOOFI_SESSION`: the same root, prefix and limits.
     let mut served = goofi_transport::Served::open(&goofi_transport::Iox::from_env()?, base)?;
     let mut warned: HashSet<SrcDtype> = HashSet::new();
+    // The live params, seeded by the setup and moved one at a time: a tick carries none.
+    let mut params = crate::exec::Groups::new();
     loop {
         // DETACHED: holding the GIL over the wait would starve a node's own Python threads, and
         // a receiver thread started in `setup()` is this tier's canonical shape.
         let Some((seq, body)) = py.detach(|| served.wait(SLICE))? else { continue };
         let (entry, now, request) = split_call(&body)?;
-        let resp = handle(py, instance, in_slots, out_slots, &mut warned, entry, now, request)
+        let resp = handle(py, instance, in_slots, out_slots, &mut warned, &mut params, entry, now, request)
             .map_err(|e| format!("node process: {e}"))?;
         served.answer(seq, &resp)?;
         if entry == Entry::Stop {
@@ -85,6 +87,7 @@ fn handle(
     in_slots: &[(String, bool)],
     out_slots: &[&str],
     warned: &mut HashSet<SrcDtype>,
+    params: &mut crate::exec::Groups,
     entry: Entry,
     now: f64,
     body: &[u8],
@@ -93,26 +96,31 @@ fn handle(
         crate::exec::run_stop(instance);
         return Ok(response(&[], &[]));
     }
-    let (params, arrived) = match decode_request(&[body]).map_err(pyo3::exceptions::PyValueError::new_err)? {
-        Request::Process { params, slots } => (params, slots),
-        Request::Refresh { params, group, name } => {
-            let options = crate::exec::run_refresh(py, instance, &params, &group, &name);
+    let arrived = match decode_request(&[body]).map_err(pyo3::exceptions::PyValueError::new_err)? {
+        // Setup is a call of its own, with the params it seeds; a raise is the engine's to retry.
+        Request::Setup { params: seeded } => {
+            *params = seeded;
+            return Ok(match crate::exec::run_setup(py, instance, params, now) {
+                Ok(()) => response(&[], &[]),
+                Err(e) => encode_error_response(&e.to_string()),
+            });
+        }
+        Request::Param { group, name, value } => {
+            params.entry(group).or_default().insert(name, value);
+            return Ok(response(&[], &[]));
+        }
+        Request::Process { slots } => slots,
+        Request::Refresh { group, name } => {
+            let options = crate::exec::run_refresh(py, instance, params, &group, &name);
             return Ok(encode_options_response(&options).unwrap_or_else(|e| encode_error_response(&e.to_string())));
         }
-        Request::Pulse { params, group, name } => {
-            return Ok(match crate::exec::run_pulse(py, instance, &params, &group, &name) {
+        Request::Pulse { group, name } => {
+            return Ok(match crate::exec::run_pulse(py, instance, params, &group, &name) {
                 None => response(&[], &[]),
                 Some(raised) => encode_error_response(&raised),
             });
         }
     };
-    // Setup is a call of its own, with the params it seeds; a raise is the engine's to retry.
-    if entry == Entry::Setup {
-        return Ok(match crate::exec::run_setup(py, instance, &params, now) {
-            Ok(()) => response(&[], &[]),
-            Err(e) => encode_error_response(&e.to_string()),
-        });
-    }
     // The wire carries only the frames that arrived; widen it back to every declared slot — a
     // `multi` slot gathers every entry under its name in order, a single one takes the last.
     let inputs: Vec<(&str, SlotIn<'_>)> = in_slots
@@ -126,7 +134,7 @@ fn handle(
             (name.as_str(), slot)
         })
         .collect();
-    match crate::exec::run_process(py, instance, &params, &inputs, out_slots, warned, now) {
+    match crate::exec::run_process(py, instance, params, &inputs, out_slots, warned, now) {
         Ok(result) => {
             let slots: Vec<(&str, Emitted<'_>)> = result.outputs.iter().map(|(n, d)| (n.as_str(), Emitted::Frame(d))).collect();
             Ok(response(&slots, &result.clear_inputs))

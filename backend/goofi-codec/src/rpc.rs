@@ -111,68 +111,75 @@ fn decode_slots(cur: &mut Cursor<'_, '_>) -> std::result::Result<SourcedSlots, S
     Ok(out)
 }
 
-/// A decoded subprocess request, always carrying the node's live params: one tick, the ⟳ on
-/// one string param, or a pulse on one pulse param.
+/// A decoded request. The params cross ONCE, on the setup, and then only as the one that moved:
+/// the child keeps the map, so a tick, a ⟳ and a pulse carry no params at all.
 pub enum Request {
-    Process { params: ParamMap, slots: SourcedSlots },
-    Refresh { params: ParamMap, group: String, name: String },
-    Pulse { params: ParamMap, group: String, name: String },
+    Setup { params: ParamMap },
+    Process { slots: SourcedSlots },
+    Param { group: String, name: String, value: goofi_core::Param },
+    Refresh { group: String, name: String },
+    Pulse { group: String, name: String },
 }
 
-fn encode_params(params: &ParamMap, out: &mut Vec<u8>) -> Result<(), EncodeError> {
-    let pbytes = packed("params", params)?;
-    out.extend_from_slice(&u32_of("params", pbytes.len())?);
-    out.extend_from_slice(&pbytes);
-    Ok(())
+/// Encode a setup request: `[3][params msgpack]` — the whole map the child seeds from.
+pub fn encode_setup_request(params: &ParamMap) -> Result<Vec<u8>, EncodeError> {
+    let mut out = vec![3u8];
+    out.extend_from_slice(&packed("params", params)?);
+    Ok(out)
 }
 
-/// Encode a tick request: `[0][u32 params_len][params msgpack][slots]`, each slot with its source.
-pub fn encode_request<'a>(params: &ParamMap, slots: &[(&str, &str, &'a Data)]) -> Result<Runs<'a>, EncodeError> {
+/// Encode a tick request: `[0][slots]`, each slot with its source.
+pub fn encode_request<'a>(slots: &[(&str, &str, &'a Data)]) -> Result<Runs<'a>, EncodeError> {
     let mut out = Segments::default();
-    let mut head = vec![0u8];
-    encode_params(params, &mut head)?;
-    out.put(&head);
+    out.put(&[0u8]);
     encode_slots(slots, &mut out)?;
     Ok(out.finish())
 }
 
-/// Encode a refresh request: `[1][u32 params_len][params msgpack][(group, name) msgpack]`.
-pub fn encode_refresh_request(params: &ParamMap, group: &str, name: &str) -> Result<Vec<u8>, EncodeError> {
-    encode_keyed_request(1, params, group, name)
+/// Encode one moved param: `[4][(group, name, Param) msgpack]`.
+pub fn encode_param_request(group: &str, name: &str, value: &goofi_core::Param) -> Result<Vec<u8>, EncodeError> {
+    let mut out = vec![4u8];
+    out.extend_from_slice(&packed("param", &(group, name, value))?);
+    Ok(out)
 }
 
-/// Encode a pulse request: `[2][u32 params_len][params msgpack][(group, name) msgpack]`.
-pub fn encode_pulse_request(params: &ParamMap, group: &str, name: &str) -> Result<Vec<u8>, EncodeError> {
-    encode_keyed_request(2, params, group, name)
+/// Encode a refresh request: `[1][(group, name) msgpack]`.
+pub fn encode_refresh_request(group: &str, name: &str) -> Result<Vec<u8>, EncodeError> {
+    encode_keyed_request(1, group, name)
 }
 
-fn encode_keyed_request(tag: u8, params: &ParamMap, group: &str, name: &str) -> Result<Vec<u8>, EncodeError> {
+/// Encode a pulse request: `[2][(group, name) msgpack]`.
+pub fn encode_pulse_request(group: &str, name: &str) -> Result<Vec<u8>, EncodeError> {
+    encode_keyed_request(2, group, name)
+}
+
+fn encode_keyed_request(tag: u8, group: &str, name: &str) -> Result<Vec<u8>, EncodeError> {
     let mut out = vec![tag];
-    encode_params(params, &mut out)?;
     out.extend_from_slice(&packed("param key", &(group, name))?);
     Ok(out)
 }
 
-/// Decode a request written by [`encode_request`], [`encode_refresh_request`] or
-/// [`encode_pulse_request`], from the segments it crossed as.
+/// Decode a request one of the `encode_*_request` functions wrote, from the segments it crossed as.
 pub fn decode_request(segments: &[&[u8]]) -> std::result::Result<Request, String> {
     let mut cur = Cursor::new(segments);
     let tag = cur.u8("request tag")? as u8;
-    let plen = cur.u32("params length")?;
-    let pbytes = cur.take(plen, "params blob")?;
-    let params: ParamMap = rmp_serde::from_slice(pbytes).map_err(|e| e.to_string())?;
     match tag {
         0 => {
             let slots = decode_slots(&mut cur)?;
             match cur.done() {
-                true => Ok(Request::Process { params, slots }),
+                true => Ok(Request::Process { slots }),
                 false => Err("bytes after the last slot".into()),
             }
         }
         1 | 2 => {
             let (group, name): (String, String) =
                 rmp_serde::from_slice(cur.rest()?).map_err(|e| e.to_string())?;
-            Ok(if tag == 1 { Request::Refresh { params, group, name } } else { Request::Pulse { params, group, name } })
+            Ok(if tag == 1 { Request::Refresh { group, name } } else { Request::Pulse { group, name } })
+        }
+        3 => Ok(Request::Setup { params: rmp_serde::from_slice(cur.rest()?).map_err(|e| e.to_string())? }),
+        4 => {
+            let (group, name, value) = rmp_serde::from_slice(cur.rest()?).map_err(|e| e.to_string())?;
+            Ok(Request::Param { group, name, value })
         }
         other => Err(format!("unknown request tag {other}")),
     }

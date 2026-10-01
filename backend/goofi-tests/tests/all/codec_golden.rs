@@ -187,8 +187,7 @@ fn a_request_carries_each_multi_frame_with_its_source_and_a_big_one_by_reference
     // it; a single slot's entry crosses with no source, and an output never has one.
     let a = &arr(&[3], le_bytes(&[1.0, 2.0, 3.0]), Meta::empty());
     let b = &arr(&[2], le_bytes(&[4.0, 5.0]), Meta::empty());
-    let params = goofi_codec::rpc::ParamMap::new();
-    let runs = goofi_codec::rpc::encode_request(&params, &[("input", "alpha.out", a), ("input", "beta.out", b), ("gate", "", a)]).expect("a request");
+    let runs = goofi_codec::rpc::encode_request(&[("input", "alpha.out", a), ("input", "beta.out", b), ("gate", "", a)]).expect("a request");
     let slices: Vec<&[u8]> = runs.iter().map(|r| &**r).collect();
     let goofi_codec::rpc::Request::Process { slots, .. } = goofi_codec::rpc::decode_request(&slices).expect("a request") else {
         panic!("a run, not a refresh");
@@ -201,7 +200,7 @@ fn a_request_carries_each_multi_frame_with_its_source_and_a_big_one_by_reference
     // A big frame's samples are a run of their own, the node's very bytes and never a copy of
     // them; what the runs say, read as one, is the same request.
     let big = &arr(&[4096], le_bytes(&[0.5; 4096]), Meta::empty());
-    let runs = goofi_codec::rpc::encode_request(&params, &[("input", "", big), ("gate", "", a)]).expect("a request");
+    let runs = goofi_codec::rpc::encode_request(&[("input", "", big), ("gate", "", a)]).expect("a request");
     let samples = big.as_array().unwrap().as_bytes();
     assert!(runs.iter().any(|r| matches!(r, std::borrow::Cow::Borrowed(s) if s.as_ptr() == samples.as_ptr())), "by reference");
     let slices: Vec<&[u8]> = runs.iter().map(|r| &**r).collect();
@@ -211,6 +210,16 @@ fn a_request_carries_each_multi_frame_with_its_source_and_a_big_one_by_reference
         let goofi_codec::rpc::Request::Process { slots, .. } = decoded else { panic!("a run") };
         assert_eq!((slots.len(), encode(&slots[0].2), encode(&slots[1].2)), (2, encode(big), encode(a)));
     }
+
+    // The params cross on the setup, whole, and after that one at a time; a run carries none.
+    let mut params = goofi_codec::rpc::ParamMap::new();
+    params.entry("gain".into()).or_default().insert("factor".into(), goofi_core::Param::Float { value: 2.0, vmin: 0.0, vmax: 4.0 });
+    let setup = goofi_codec::rpc::encode_setup_request(&params).expect("a setup");
+    let goofi_codec::rpc::Request::Setup { params: seeded } = goofi_codec::rpc::decode_request(&[&setup]).expect("a setup") else { panic!("a setup") };
+    assert_eq!(seeded, params);
+    let moved = goofi_codec::rpc::encode_param_request("gain", "factor", &goofi_core::Param::Float { value: 3.0, vmin: 0.0, vmax: 4.0 }).expect("a param");
+    let goofi_codec::rpc::Request::Param { group, name, value } = goofi_codec::rpc::decode_request(&[&moved]).expect("a param") else { panic!("a param") };
+    assert_eq!((group.as_str(), name.as_str(), value), ("gain", "factor", goofi_core::Param::Float { value: 3.0, vmin: 0.0, vmax: 4.0 }));
 
     // A reply carries a frame per output — or the NAME of the input an output is, unchanged,
     // with no bytes behind it, which the host resolves against what it sent.

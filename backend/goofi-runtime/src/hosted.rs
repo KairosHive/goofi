@@ -66,6 +66,10 @@ impl Hosted {
 }
 
 impl Call for Hosted {
+    fn needs_seed(&mut self) -> bool {
+        self.live.is_none()
+    }
+
     /// One call to the child, spawning it first if need be; a child that failed is dropped so
     /// the next call starts a fresh one. A stop is the child's last call, then its end.
     fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {

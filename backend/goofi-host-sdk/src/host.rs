@@ -52,6 +52,11 @@ unsafe impl Send for Raw {}
 /// one child RPC: every implementation takes `[entry][now]` and the request's runs.
 pub trait Call: Send {
     fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String>;
+    /// Whether the answerer holds no params yet — a child not running — so the next call must be
+    /// a setup carrying the whole map. False for the vtable, which lives as long as the node.
+    fn needs_seed(&mut self) -> bool {
+        false
+    }
 }
 
 impl Call for Raw {
@@ -103,6 +108,16 @@ impl<C: Call> CodecNode<C> {
         goofi_codec::rpc::decode_response(self.call.call(entry, now, request)?)
     }
 
+    /// A child that is not running knows no params: it is seeded with the whole map before it is
+    /// asked anything else, which also re-seeds one that replaced a failed child.
+    fn seed(&mut self, now: f64, p: &Params<'_>) -> Result<(), NodeError> {
+        if !self.call.needs_seed() {
+            return Ok(());
+        }
+        let request = goofi_codec::rpc::encode_setup_request(p.groups()).map_err(|e| NodeError(e.to_string()))?;
+        Self::done(self.call(Entry::Setup, now, &[&request]))
+    }
+
     fn done(answer: Result<Response, String>) -> NodeResult {
         match answer {
             Ok(Response::Process(_)) => Ok(()),
@@ -121,26 +136,32 @@ impl<C: Call> Drop for CodecNode<C> {
 
 impl<C: Call> Node for CodecNode<C> {
     fn setup(&mut self, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
-        let request = goofi_codec::rpc::encode_request(p.groups(), &[]).map_err(|e| NodeError(e.to_string()))?;
-        Self::done(self.call(Entry::Setup, ctx.now, &runs(&request)))
+        let request = goofi_codec::rpc::encode_setup_request(p.groups()).map_err(|e| NodeError(e.to_string()))?;
+        Self::done(self.call(Entry::Setup, ctx.now, &[&request]))
     }
 
     fn process(&mut self, inp: &Inputs<'_>, out: &mut Outputs<'_>, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
+        self.seed(ctx.now, p)?;
         let present = present(self.in_slots.iter().copied(), inp);
-        let request = goofi_codec::rpc::encode_request(p.groups(), &present).map_err(|e| NodeError(e.to_string()))?;
+        let request = goofi_codec::rpc::encode_request(&present).map_err(|e| NodeError(e.to_string()))?;
         match self.call(Entry::Process, ctx.now, &runs(&request)) {
             Ok(Response::Process(result)) => apply(result, inp, out, ctx),
             other => Self::done(other),
         }
     }
 
+    /// One moved param. A child not running hears it with the whole map, at its next seed.
     fn on_param_changed(&mut self, key: &ParamKey, v: &goofi_core::Param) -> NodeResult {
-        let request = rmp_serde::to_vec(&(&key.group, &key.name, v)).map_err(|e| NodeError(e.to_string()))?;
+        if self.call.needs_seed() {
+            return Ok(());
+        }
+        let request = goofi_codec::rpc::encode_param_request(&key.group, &key.name, v).map_err(|e| NodeError(e.to_string()))?;
         Self::done(self.call(Entry::ParamChanged, 0.0, &[&request]))
     }
 
     fn on_param_refreshed(&mut self, key: &ParamKey, p: &Params<'_>) -> Option<Vec<String>> {
-        let request = goofi_codec::rpc::encode_refresh_request(p.groups(), &key.group, &key.name).ok()?;
+        self.seed(0.0, p).ok()?;
+        let request = goofi_codec::rpc::encode_refresh_request(&key.group, &key.name).ok()?;
         match self.call(Entry::Refresh, 0.0, &[&request]) {
             Ok(Response::Options(options)) => options,
             _ => None,
@@ -148,7 +169,8 @@ impl<C: Call> Node for CodecNode<C> {
     }
 
     fn on_pulse(&mut self, key: &ParamKey, p: &Params<'_>) -> NodeResult {
-        let request = goofi_codec::rpc::encode_pulse_request(p.groups(), &key.group, &key.name).map_err(|e| NodeError(e.to_string()))?;
+        self.seed(0.0, p)?;
+        let request = goofi_codec::rpc::encode_pulse_request(&key.group, &key.name).map_err(|e| NodeError(e.to_string()))?;
         Self::done(self.call(Entry::Pulse, 0.0, &[&request]))
     }
 }

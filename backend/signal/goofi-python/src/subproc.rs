@@ -78,21 +78,20 @@ impl Subproc {
 }
 
 impl Call for Subproc {
+    fn needs_seed(&mut self) -> bool {
+        self.live.is_none()
+    }
+
     /// One call to the child, spawning it first if need be; an IO failure drops the child so the
     /// next call starts a fresh one. A node RAISE does not kill the child: its state is preserved
     /// and the error is instant.
     fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
-        match entry {
-            // Every call carries the live params, so a change has nothing of its own to say.
-            Entry::ParamChanged => return Ok(rpc::done()),
-            Entry::Stop => {
-                if let Some(mut live) = self.live.take() {
-                    let _ = live.exchange.ask(&mut live.child, &[&rpc::call_head(Entry::Stop, now)], STOP_TIMEOUT);
-                    live.child.stop(Duration::ZERO);
-                }
-                return Ok(rpc::done());
+        if entry == Entry::Stop {
+            if let Some(mut live) = self.live.take() {
+                let _ = live.exchange.ask(&mut live.child, &[&rpc::call_head(Entry::Stop, now)], STOP_TIMEOUT);
+                live.child.stop(Duration::ZERO);
             }
-            _ => {}
+            return Ok(rpc::done());
         }
         let timeout = if self.live.is_none() { COLD_START_TIMEOUT } else { TICK_TIMEOUT };
         if self.live.is_none() {
