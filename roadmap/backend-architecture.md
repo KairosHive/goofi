@@ -6,7 +6,7 @@ updates the frontend and the Python wheels in the same commit.
 
 ## Order
 
-**Phase 1**: §3.4 and §3.5; then §4.F and §4.G1-G4; then §1.A2 and §1.A3.
+**Phase 1**: §4.F and §4.G1-G4; then §1.A2 and §1.A3.
 
 **Phase 2**: §2.B2-B5, §3.7-11, §4.H-I, §5.8-10 and 12-13.
 
@@ -82,14 +82,6 @@ The registry stays the explicit `TREE` in `ops.rs`, with `write::<NodeAdd>()` le
 `const fn`. The graph stays a `Mutex`. Each op dispatches on its own blocking task and the graph
 mutex orders them.
 
-4. `Txn` holds the graph and history guards, an outbox of typed events, and `touched`/`edited`
-   flags. The tail runs once when the transaction saw a change: fold the entries into one
-   labelled entry, settle, render events from settled state, mark unsaved and bump `revision`,
-   send `[doc_patch, outbox…]` under the doc guard. `Drop` without commit rolls back, also on
-   unwind. A compound runs nested handlers on one `&mut Txn` and holds the graph for its whole
-   run, reads included; the settle counter, `OPEN_BATCH`, `BatchScope` and `HistoryEntry.batch`
-   go.
-5. One `Event` enum and one `Broadcaster`; the events vec parameter goes.
 7. **a-c** The op trait; `arms.rs` splits into `ops/<group>.rs`; `AppState` splits with it.
    Deserializing into `Args` is the validation on every path; `Op::validate` and the hook gate
    go; a plugin `pre_op` patches JSON before deserialization. The repeated pos parsing and

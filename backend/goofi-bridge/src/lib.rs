@@ -5,6 +5,10 @@
 //! the binary.
 
 pub mod boot;
+mod event;
+mod txn;
+pub use event::{Broadcaster, Event};
+pub use txn::Txn;
 pub use boot::{boot, Config, Manager};
 mod arms;
 pub mod autosave;
@@ -88,7 +92,7 @@ pub struct AppState {
     /// Where a public set's other examples answer. Unset everywhere else, which is what withholds
     /// the chooser.
     pub demo_base: Option<String>,
-    pub events: broadcast::Sender<String>,
+    pub events: Broadcaster,
     pub instance_id: Arc<str>,
     /// The op rows THIS instance serves — headless leaves the layout group out.
     ops: Arc<Vec<&'static ops::Op<'static>>>,
@@ -194,7 +198,7 @@ impl AppState {
         // exists: a crash's part files, old versions.
         goofi_supervisor::session::sweep_system(goofi_build::VERSION);
         autosave::sweep_dead();
-        let (events, _) = broadcast::channel(256);
+        let events = Broadcaster::new(256);
         // Seeded BEFORE the baseline is taken, or the patch is dirty from boot, having written
         // the seed itself.
         let mount = Mount::new(iox.id())?;
@@ -674,7 +678,7 @@ pub fn spawn_workers(state: &AppState) {
                         let tier = g.node_tier(u).map(goofi_node::Isolation::wire);
                         stages.push((hex, (generation, g.node_stage(u), err, tier)));
                     }
-                    let refreshed: Vec<String> = refreshed
+                    let refreshed: Vec<Event> = refreshed
                         .into_iter()
                         .filter(|(uid, _)| leaves.contains(uid))
                         .map(|(uid, key)| {
@@ -695,31 +699,31 @@ pub fn spawn_workers(state: &AppState) {
             // catch-up broadcasts.
             next_broadcast = Instant::now() + period;
             for ev in refreshed {
-                let _ = events.send(ev);
+                events.send(ev);
             }
             // A running recording re-announces itself on this beat: its elapsed time and buffer
             // health advance with no op to ride on.
             if state.recorder.running() {
-                let _ = events.send(arms::record_changed(&state));
+                events.send(arms::record_changed(&state));
             }
             // Every source's values and errors, whole, in ONE message: a client that just connected
             // is current within one period, and none of this is a delta it had to have heard.
             if !live.is_empty() {
                 let nodes: serde_json::Map<String, Value> = live.into_iter().collect();
-                let _ = events.send(event("param_values", json!({ "nodes": nodes })));
+                events.send(Event::ParamValues { nodes: Value::Object(nodes) });
             }
             let changed = error_transitions(&errs, &mut last_errors);
             let stats: serde_json::Map<String, Value> =
                 rates.into_iter().map(|(node, ufreq)| (node, json!({ "updates_per_second": ufreq }))).collect();
             if !stats.is_empty() {
-                let _ = events.send(event("node_stats", json!({ "stats": stats })));
+                events.send(Event::NodeStats { stats: Value::Object(stats) });
             }
             for hex in changed {
                 let err = errs.iter().find(|(h, ..)| *h == hex).and_then(|(.., e)| e.clone());
                 if let Some(text) = &err {
                     goofi_supervisor::log::record(goofi_supervisor::log::Source { component: "node".into(), node: Some(hex.clone()) }, goofi_supervisor::log::Level::Error, None, text.clone());
                 }
-                let _ = events.send(event("error", json!({ "node": hex, "error": err })));
+                events.send(Event::Error { node: hex, error: err });
             }
             last_stages.retain(|h, _| stages.iter().any(|(s, ..)| s == h));
             for (node, now) in stages {
@@ -728,7 +732,7 @@ pub fn spawn_workers(state: &AppState) {
                 }
                 let ev =
                     json!({ "node": &node, "stage": now.1, "error": &now.2, "runtime": now.3 });
-                let _ = events.send(event("node_stage", ev));
+                events.send(Event::NodeStage(ev));
                 last_stages.insert(node, now);
             }
         }
@@ -1172,10 +1176,7 @@ fn control_seeds(state: &AppState) -> (String, String) {
     let roster = state.harnesses.roster(&goofi_supervisor::home::agents());
     let hello = {
         let g = state.graph.lock();
-        event(
-            "hello",
-            schemas::snapshot(&g, state, true, unsaved, saved_at.as_deref(), roster),
-        )
+        Event::Hello(schemas::snapshot(&g, state, true, unsaved, saved_at.as_deref(), roster)).text()
     };
     (hello, doc_state(state))
 }
@@ -1205,7 +1206,7 @@ async fn handle_control(socket: WebSocket, state: AppState) {
         }
         *cursor = Some(batch.cursor);
         match serde_json::to_value(batch) {
-            Ok(payload) => Some(event("logs", payload)),
+            Ok(payload) => Some(Event::Logs(payload).text()),
             Err(e) => {
                 goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("the log batch does not serialize: {e}"));
                 None
@@ -1326,24 +1327,20 @@ impl AppState {
     }
 
     /// Set the dirty flag, returning an `unsaved_changes` event only when it actually changed.
-    fn set_dirty(&self, dirty: bool) -> Option<String> {
+    fn set_dirty(&self, dirty: bool) -> Option<Event> {
         let was = self.dirty.swap(dirty, std::sync::atomic::Ordering::Relaxed);
         if was == dirty {
             return None;
         }
         self.changed.notify();
-        Some(event("unsaved_changes", json!({ "unsaved_changes": dirty })))
+        Some(Event::UnsavedChanges { unsaved_changes: dirty })
     }
-}
-
-pub(crate) fn event(name: &str, payload: Value) -> String {
-    json!({ "event": name, "payload": payload }).to_string()
 }
 
 /// A per-node `state_update` event carrying a node's current params and error. `refreshed` names
 /// the params whose ⟳ refresh just completed — it must be sent on EVERY outcome, a refresh that
 /// found nothing included, or the button spins on.
-fn param_state_update(g: &Graph, peer: Uid, refreshed: &[(&str, &str)]) -> String {
+fn param_state_update(g: &Graph, peer: Uid, refreshed: &[(&str, &str)]) -> Event {
     let Value::Object(mut body) = schemas::runtime_json(g, peer) else {
         unreachable!("runtime_json builds an object")
     };
@@ -1353,7 +1350,7 @@ fn param_state_update(g: &Graph, peer: Uid, refreshed: &[(&str, &str)]) -> Strin
         "refreshed_params".into(),
         refreshed.iter().map(|(g, n)| json!([g, n])).collect(),
     );
-    event("state_update", Value::Object(body))
+    Event::StateUpdate(Value::Object(body))
 }
 
 /// How a read NAMES a node: the display name, which is what every op takes back. A uid is the
@@ -1477,14 +1474,9 @@ fn bindable_node(g: &Graph, node: &str) -> bool {
 
 /// Route a layout planner's per-entry writes through the command history as ONE undo step, and
 /// answer with the arrangement they produced, drawn as `layout inspect` draws it.
-fn apply_layout(
-    state: &AppState,
-    g: &mut Graph,
-    actor: &str,
-    cmd: goofi_graph::Command,
-) -> Result<Value, String> {
-    state.history.lock().apply(g, actor, cmd)?;
-    Ok(json!({ "text": inspect::layout_tree(g, None) }))
+fn apply_layout(tx: &mut Txn, cmd: goofi_graph::Command) -> Result<Value, String> {
+    tx.apply(cmd)?;
+    Ok(json!({ "text": inspect::layout_tree(&tx.g, None) }))
 }
 
 impl AppState {
@@ -1527,20 +1519,19 @@ impl AppState {
         if hooked { spec.validate(&payload)?; }
         let payload = self.plugins.pre_op(self, op, payload, actor)?;
         if hooked { spec.validate(&payload)?; }
-        let mut events: Vec<String> = Vec::new();
         let result = match spec.handler {
             ops::Handler::PluginRead | ops::Handler::PluginEffect => self.plugins.call(self, op, &payload, actor),
-            _ => spec.handler.run(self, &payload, actor, &mut events),
-        };
-        if result.is_ok() && spec.handler.is_write() {
-            resync_and_broadcast(self);
-            if !preview {
-                events.extend(self.set_dirty(true));
+            ops::Handler::Read(f) | ops::Handler::Write(f) => {
+                let mut tx = Txn::begin(self, actor, preview);
+                let result = f(&mut tx, &payload);
+                // A refusal drops the transaction, which takes back what it applied.
+                if result.is_ok() {
+                    tx.commit();
+                }
+                result
             }
-        }
-        for e in events {
-            let _ = self.events.send(e);
-        }
+            ops::Handler::Effect(f) => f(self, &payload, actor),
+        };
         self.plugins.post_op(self, op, &payload, &result, actor);
         result
     }
@@ -1579,20 +1570,33 @@ fn dispatch(state: &AppState, text: &str) -> Option<String> {
     }
 }
 
-/// Take the document to `projection` and broadcast the delta. The caller projected under the graph
-/// lock and took `doc` before releasing it, so apply→re-project is atomic and the diff runs unlocked.
-pub(crate) fn reconcile_and_broadcast(state: &AppState, mut doc: MutexGuard<crate::doc::GraphDoc>, projection: Value) {
+/// Settle the graph and project it, taking the document guard before the caller releases the
+/// graph: apply→re-project is atomic, and the diff runs off the graph lock.
+pub(crate) fn settle_and_project<'a>(state: &'a AppState, g: &mut Graph) -> (MutexGuard<'a, crate::doc::GraphDoc>, Value) {
+    g.settle();
+    state.changed.notify();
+    sync_followers(state, g);
+    state.live.fill(g);
+    let projection = projection::of(g);
+    (state.doc.lock(), projection)
+}
+
+/// Take the document to `projection` and broadcast the delta, then `outbox` behind it, under the
+/// document guard: nothing a later tail says can overtake what this one said.
+pub(crate) fn reconcile_and_broadcast(state: &AppState, mut doc: MutexGuard<crate::doc::GraphDoc>, projection: Value, outbox: Vec<Event>) {
     let from = doc.version();
-    let Some(patch) = doc.reconcile_root(projection) else { return };
-    let _ = state
-        .events
-        .send(event("doc_patch", json!({ "from": from, "v": doc.version(), "patch": patch })));
+    if let Some(patch) = doc.reconcile_root(projection) {
+        state.events.send(Event::DocPatch { from, v: doc.version(), patch });
+    }
+    for event in outbox {
+        state.events.send(event);
+    }
 }
 
 /// The whole document as an event — what seeds a fresh connection, and what recovers a lagged one.
 fn doc_state(state: &AppState) -> String {
     let doc = state.doc.lock();
-    event("doc_state", json!({ "v": doc.version(), "doc": doc.to_json() }))
+    Event::DocState { v: doc.version(), doc: doc.to_json() }.text()
 }
 
 /// The follower: every tap's pick lands here, a batch at a time, and what changed a variable is
@@ -1627,11 +1631,9 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
             let mut g = state.graph.lock();
             let changed = latest.into_iter().fold(false, |acc, (name, value)| g.follow_variable(&name, value) || acc);
             if changed {
-                g.settle();
-                let projection = projection::of(&g);
-                let doc = state.doc.lock();
+                let (doc, projection) = settle_and_project(&state, &mut g);
                 drop(g);
-                reconcile_and_broadcast(&state, doc, projection);
+                reconcile_and_broadcast(&state, doc, projection, Vec::new());
             }
         }
     });
@@ -1654,16 +1656,10 @@ fn sync_followers(state: &AppState, g: &Graph) {
 /// mutates the graph. The projection is built WHOLE, so a stale leaf converges too.
 fn resync_and_broadcast(state: &AppState) {
     let mut g = state.graph.lock();
-    // The settle point: one delivery per batch, before the projection, from settled state.
-    g.settle();
-    state.changed.notify();
-    sync_followers(state, &g);
-    state.live.fill(&g);
-    let projection = projection::of(&g);
-    let doc = state.doc.lock();
+    let (doc, projection) = settle_and_project(state, &mut g);
     drop(g);
     state.settled_now();
-    reconcile_and_broadcast(state, doc, projection);
+    reconcile_and_broadcast(state, doc, projection, Vec::new());
 }
 
 /// The inband control a `/term` client sends; resize is the only one there is.

@@ -20,7 +20,7 @@ pub mod subpatch;
 pub mod layout;
 
 pub mod command;
-pub use command::{open_batch, open_preview, Applied, BatchScope, Command, CommandHistory, Ctx, Outcome, PreviewScope, Skip, SourceState};
+pub use command::{open_preview, Applied, Command, CommandHistory, Ctx, Outcome, PreviewScope, Skip, SourceState};
 
 pub mod expr_rewrite;
 
@@ -477,9 +477,6 @@ pub struct Graph {
     /// What each watched slot's viewers asked the producer to make; offered only while no wire
     /// reads the slot, since a consumer takes the frame itself, never a viewer's preview.
     view_wants: HashMap<(Uid, String), Option<goofi_view::ViewWant>>,
-    /// Raised while a multi-step batch is mid-flight, so the drain-side settle cannot deliver its
-    /// intermediates. On the GRAPH, not a thread-local: the drain is another thread.
-    open_batches: u32,
 }
 
 impl Drop for Graph {
@@ -539,7 +536,6 @@ impl Graph {
             epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             refreshed: Vec::new(),
             touched: Vec::new(),
-            open_batches: 0,
             watched: HashSet::new(),
             view_wants: HashMap::new(),
         }
@@ -2983,22 +2979,9 @@ impl Graph {
         self.generations.get(&uid).copied().unwrap_or(0)
     }
 
-    /// A multi-step batch is opening: hold every settle until [`Self::release_settle`], so the
-    /// drain cannot deliver the batch's intermediates.
-    pub fn hold_settle(&mut self) {
-        self.open_batches += 1;
-    }
-
-    pub fn release_settle(&mut self) {
-        self.open_batches = self.open_batches.saturating_sub(1);
-    }
-
     /// Deliver what the batch changed: one decision per touched item, from settled state, each
     /// item once however often the batch touched it. Free when nothing was.
     pub fn settle(&mut self) {
-        if self.open_batches > 0 {
-            return;
-        }
         self.derive_bindings();
         let raw = std::mem::take(&mut self.touched);
         if raw.is_empty() && !self.engines().any(|e| e.dirty()) {

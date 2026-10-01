@@ -8,7 +8,7 @@
 #[derive(Clone, Copy)]
 pub struct Op<'a> {
     pub name: &'a str,
-    /// What calling the op IS — see [`Handler`]. The batch gate, the dirty decision and the
+    /// What calling the op IS — see [`Handler`]. The transaction, the dirty decision and the
     /// re-mirror are all READ off this kind, never declared beside it.
     pub handler: Handler,
     /// The params schema: space-separated `name:type`, `!` marking a required one. Types are
@@ -47,29 +47,15 @@ pub enum Handler {
     Write(OpFn),
     /// Owns its consequences itself — re-mirror, events and dirty transitions — because they are
     /// not a graph command's: a save, a process, a restart, the history ops.
-    Effect(OpFn),
+    Effect(EffectFn),
 }
 
-pub type OpFn = fn(
-    &crate::AppState,
-    &serde_json::Value,
-    &str,
-    &mut Vec<String>,
-) -> Result<serde_json::Value, String>;
+/// A read or a write: it runs on the transaction, which holds the graph and settles its changes.
+pub type OpFn = fn(&mut crate::Txn, &serde_json::Value) -> Result<serde_json::Value, String>;
+/// An effect: it holds what it needs itself and owns its consequences.
+pub type EffectFn = fn(&crate::AppState, &serde_json::Value, &str) -> Result<serde_json::Value, String>;
 
 impl Handler {
-    pub fn run(
-        &self,
-        state: &crate::AppState,
-        payload: &serde_json::Value,
-        actor: &str,
-        events: &mut Vec<String>,
-    ) -> Result<serde_json::Value, String> {
-        let (Handler::Read(f) | Handler::Write(f) | Handler::Effect(f)) = self else {
-            return Err("plugin operations cannot run inside a graph batch".into());
-        };
-        f(state, payload, actor, events)
-    }
     pub fn is_write(&self) -> bool {
         matches!(self, Handler::Write(_))
     }

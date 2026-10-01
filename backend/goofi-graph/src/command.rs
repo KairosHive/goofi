@@ -854,13 +854,9 @@ struct HistoryEntry {
     toggle: Option<Command>,
     actor: String,
     undone: bool,
-    /// The batch whose step made this entry — a compound settles by this stamp, never by a
-    /// position another thread's removal can shift.
-    batch: Option<u64>,
 }
 
 std::thread_local! {
-    static OPEN_BATCH: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     static PREVIEWING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -878,39 +874,13 @@ impl Drop for PreviewScope {
     }
 }
 
-static NEXT_BATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
-/// The batch stamp is thread-local because a compound's steps run the ordinary write arms on the
-/// compound's own thread — so a peer's entry, even under the SAME actor, can never carry it.
-pub struct BatchScope {
-    id: u64,
-}
-
-pub fn open_batch() -> BatchScope {
-    let id = NEXT_BATCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    OPEN_BATCH.set(Some(id));
-    BatchScope { id }
-}
-
-impl BatchScope {
-    pub fn id(&self) -> u64 {
-        self.id
-    }
-}
-
-impl Drop for BatchScope {
-    fn drop(&mut self) {
-        OPEN_BATCH.set(None);
-    }
-}
-
 impl CommandHistory {
     pub fn new() -> CommandHistory {
         CommandHistory::default()
     }
 
     /// Execute `cmd` against `g`, record its inverse tagged with `actor`, and return the outcome.
-    /// A new command clears THIS actor's redo run, never another actor's.
+    /// The transaction cleared this actor's redo run before its first command.
     pub fn apply(&mut self, g: &mut Graph, actor: &str, cmd: Command) -> Result<Outcome, String> {
         let key = cmd.key();
         if PREVIEWING.get() {
@@ -937,12 +907,10 @@ impl CommandHistory {
         };
         // Record EVERY successful command, a forward no-op included: the client records one entry
         // per mutating RPC, so skipping one here desyncs the stacks and a later undo flips wrong.
-        self.entries.retain(|e| !(e.actor == actor && e.undone));
         self.entries.push(HistoryEntry {
             toggle: inverse,
             actor: actor.to_string(),
             undone: false,
-            batch: OPEN_BATCH.get(),
         });
         Ok(outcome)
     }
@@ -967,10 +935,16 @@ impl CommandHistory {
         self.entries.is_empty()
     }
 
-    /// Drop this actor's redo run, as an `apply` would. A compound clears it once up front, so
-    /// no step of its own can move the mark under it.
+    /// Drop this actor's redo run: what a new command does, once, before the transaction takes
+    /// its mark, so no later removal can move the mark under it.
     pub fn clear_redo(&mut self, actor: &str) {
         self.entries.retain(|e| !(e.actor == actor && e.undone));
+    }
+
+    /// The mark a transaction takes: every entry after it is the transaction's own, because the
+    /// history is held for the transaction's whole run.
+    pub fn mark(&self) -> usize {
+        self.entries.len()
     }
 
     /// Drop an actor's WHOLE stack — a stack's lifetime follows its actor, so a stopped agent's
@@ -980,32 +954,27 @@ impl CommandHistory {
         self.previews.retain(|p| p.actor != actor);
     }
 
-    /// Fold everything `batch`'s steps added into ONE entry, so a compound RPC is a single undo
-    /// step. A peer's entry that landed in between is left exactly where it is.
-    pub fn coalesce(&mut self, actor: &str, batch: u64) {
-        let mine: Vec<usize> =
-            (0..self.entries.len()).filter(|&i| self.entries[i].batch == Some(batch)).collect();
-        if mine.len() < 2 {
+    /// Fold everything after `mark` into ONE entry, so a transaction is a single undo step.
+    pub fn coalesce(&mut self, mark: usize) {
+        if self.entries.len() < mark + 2 {
             return;
         }
+        let actor = self.entries[mark].actor.clone();
         // Newest first: each toggle is an inverse, and a Compound applies its children in order.
-        let toggles: Vec<Command> = mine.iter().rev().filter_map(|&i| self.entries.remove(i).toggle).collect();
+        let toggles: Vec<Command> = self.entries.drain(mark..).rev().filter_map(|e| e.toggle).collect();
         self.entries.push(HistoryEntry {
             toggle: (!toggles.is_empty()).then_some(Command::Compound(toggles)),
-            actor: actor.to_string(),
+            actor,
             undone: false,
-            batch: None,
         });
     }
 
-    /// Undo and DISCARD everything `batch`'s steps added — what a compound does when a later
-    /// step is refused, so a failed call leaves no redo run either.
-    pub fn rollback(&mut self, g: &mut Graph, batch: u64) {
-        let mine: Vec<usize> =
-            (0..self.entries.len()).filter(|&i| self.entries[i].batch == Some(batch)).collect();
-        for &i in mine.iter().rev() {
+    /// Undo and DISCARD everything after `mark` — what a transaction does when a later step is
+    /// refused, so a failed call leaves no redo run either.
+    pub fn rollback(&mut self, g: &mut Graph, mark: usize) {
+        while self.entries.len() > mark {
             // Best-effort by necessity, exactly as `Compound`'s own unwind is.
-            if let Some(toggle) = self.entries.remove(i).toggle {
+            if let Some(toggle) = self.entries.pop().and_then(|e| e.toggle) {
                 let _ = toggle.execute(g, Ctx::Replay);
             }
         }

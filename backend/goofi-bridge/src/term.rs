@@ -81,7 +81,7 @@ impl Harnesses {
         cwd: &Path,
         session_id: &str,
         env: &[(OsString, OsString)],
-        events: broadcast::Sender<String>,
+        events: crate::Broadcaster,
         history: Arc<Mutex<goofi_graph::CommandHistory>>,
     ) -> Result<String, String> {
         let (agents, _) = goofi_supervisor::home::agents();
@@ -191,8 +191,7 @@ impl Harnesses {
             // A stack's lifetime follows its actor: dropped where the actor DIES, before the
             // broadcast — so an observer of `harness_changed` sees the stack gone too.
             history.lock().drop_actor(&actor_of(&reaped));
-            let _ =
-                events.send(crate::event("harness_changed", harnesses.roster(&goofi_supervisor::home::agents())));
+            events.send(crate::Event::HarnessChanged(harnesses.roster(&goofi_supervisor::home::agents())));
         });
         inst.workers.lock().extend(reaper);
         Ok(id)

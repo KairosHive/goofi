@@ -804,7 +804,8 @@ impl Package {
     }
 }
 
-pub(crate) fn list(state: &AppState, _: &Value, _: &str, _: &mut Vec<String>) -> Reply {
+pub(crate) fn list(tx: &mut crate::Txn, _: &Value) -> Reply {
+    let state = tx.state;
     let packages: Vec<_> = state.plugins.packages.iter().map(|p| {
         let dead = p.service.as_ref().is_some_and(|s| s.child.lock().try_wait().ok().flatten().is_some());
         json!({"id": p.manifest.id, "version": p.manifest.version, "error": p.error.as_deref().or(dead.then_some("plugin service stopped")),
