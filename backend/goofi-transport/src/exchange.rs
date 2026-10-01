@@ -2,7 +2,7 @@
 //! and the child's. Neither side polls: the child rings when its ports stand, and each side rings
 //! once it has written.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use iceoryx2::prelude::*;
 
@@ -73,24 +73,11 @@ impl Exchange {
         Ok(Exchange { ports, seq: 0, ready: false })
     }
 
-    /// One request to `child` — its runs, written into the loan as one frame — answered within
-    /// `timeout`; a child that exited or fell silent is the error, so the owner can start a
-    /// fresh one. The first request waits for the child's `READY` before it is written.
-    pub fn ask(&mut self, child: &mut goofi_supervisor::child::Child, frame: &[&[u8]], timeout: Duration) -> Result<Vec<u8>, String> {
-        let deadline = Instant::now() + timeout;
-        while !self.ready {
-            self.ready = rang(&self.ports.listener, READY, SLICE);
-            if !self.ready {
-                self.check(child, deadline)?;
-            }
-        }
-        self.seq = self.seq.wrapping_add(1);
-        let seq = self.seq;
-        while matches!(self.ports.reply.receive(), Ok(Some(_))) {}
-        let seq_bytes = seq.to_le_bytes();
-        let parts: Vec<&[u8]> = std::iter::once(&seq_bytes[..]).chain(frame.iter().copied()).collect();
-        send_parts(&self.ports.request, &parts)?;
-        let _ = self.ports.bell.ring(ASKED);
+    /// One request to `child` — its runs, written into the loan as one frame — and its answer.
+    /// The wait ends only when the child answers, exits, or the thread's halt is raised: a slow
+    /// child is not an error. The first request waits for the child's `READY` before it is written.
+    pub fn ask(&mut self, child: &mut goofi_supervisor::child::Child, frame: &[&[u8]]) -> Result<Vec<u8>, String> {
+        let seq = self.send(child, frame)?;
         loop {
             loop {
                 match self.ports.reply.receive() {
@@ -105,21 +92,40 @@ impl Exchange {
                 }
             }
             // Checked AFTER draining, so a child that answered and then exited still gets its answer through.
-            self.check(child, deadline)?;
+            check(child)?;
             rang(&self.ports.listener, ANSWERED, SLICE);
         }
     }
 
-    /// Whether the child is still there to answer, and the time still is.
-    fn check(&self, child: &mut goofi_supervisor::child::Child, deadline: Instant) -> Result<(), String> {
-        if let Ok(Some(status)) = child.try_wait() {
-            return Err(format!("the child exited: {status}"));
+    /// Write one request and ring, without waiting for the answer: what a stop sends, since the
+    /// child's exit is the answer it waits for.
+    pub fn send(&mut self, child: &mut goofi_supervisor::child::Child, frame: &[&[u8]]) -> Result<u32, String> {
+        while !self.ready {
+            self.ready = rang(&self.ports.listener, READY, SLICE);
+            if !self.ready {
+                check(child)?;
+            }
         }
-        if Instant::now() >= deadline {
-            return Err("the child did not answer in time".into());
-        }
-        Ok(())
+        self.seq = self.seq.wrapping_add(1);
+        let seq = self.seq;
+        while matches!(self.ports.reply.receive(), Ok(Some(_))) {}
+        let seq_bytes = seq.to_le_bytes();
+        let parts: Vec<&[u8]> = std::iter::once(&seq_bytes[..]).chain(frame.iter().copied()).collect();
+        send_parts(&self.ports.request, &parts)?;
+        let _ = self.ports.bell.ring(ASKED);
+        Ok(seq)
     }
+}
+
+/// Whether the child is still there to answer, and this thread still asks.
+fn check(child: &mut goofi_supervisor::child::Child) -> Result<(), String> {
+    if let Ok(Some(status)) = child.try_wait() {
+        return Err(format!("the child exited: {status}"));
+    }
+    if crate::Halt::worn_stopped() {
+        return Err("the node is stopping".into());
+    }
+    Ok(())
 }
 
 /// The child's end of an [`Exchange`]: the newest request not yet answered, and its answer.

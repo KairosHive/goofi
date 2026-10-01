@@ -1,9 +1,9 @@
-# Backend architecture: what remains of the redesign
+# Backend architecture: the decisions of the redesign
 
-Each step lands on `main` behind the existing situations. A step that changes a wire format or
-the document shape updates the frontend and the Python wheels in the same commit.
+The redesign's steps have landed. This is the ledger of what binds the code that follows, and of
+what was weighed and left out, so neither is proposed again.
 
-## Decisions that bind the remaining work
+## Decisions that bind
 
 - The graph stays a `Mutex`. Each op runs on its own blocking task inside one `Txn`
   (`goofi-bridge/src/txn.rs`); the graph mutex orders the ops.
@@ -15,48 +15,16 @@ the document shape updates the frontend and the Python wheels in the same commit
   (`audio-engine.md`).
 - Error enums only where a caller branches or a boundary needs context. No caller branches on a
   transport, record, build or supervisor error today, so each stays a `String`. The first caller
-  that branches (the Windows handle limit as a named fault, §5) brings the enum with it.
-
-## 1. The batch bookkeeping moves into the transaction
-
-- `Graph::touched` (`goofi-graph/src/lib.rs`) is the last batch-local state outside `Txn`. Move
-  it into the transaction.
-- Arming serials are minted in `Graph::set_recorded`, at command time. Mint them at settle.
-- Events that read graph or runtime state (`param_state_update` in `ops/node.rs`) are built
-  before `Txn::commit` settles. Build them after settle.
-
-## 2. One name for one thing
-
-- Rename `goofi-bridge/src/doc.rs`'s `Patch` enum (`Applied`/`Stale`/`Gap`); the name collides
-  with `PatchDoc` and the patch field of the graph.
-
-## 3. Graphics recording goes through the executor
-
-- `Graphics::set_recorder` (`graphics/goofi-graphics/src/lib.rs`) pushes a command to the
-  render thread from the bridge. Fold it into `GraphicsHalf: Executor`.
-
-## 4. Deadlines become liveness checks
-
-Product deadlines judge speed, so a starved thread becomes an error. Make each a liveness
-check that fails only when the other side is gone:
-
-- The recorder's ceilings: `goofi-record` `SETTLE` (3 s, polled with a sleep), `Writer::flush`
-  (5 s per lane), `AudioCapture::flush` and the audio `recording_boundary` closure (3 s each);
-  each fails `record stop`.
-- `TICK_TIMEOUT`/`COLD_START_TIMEOUT` in `goofi-runtime/src/hosted.rs` and
-  `goofi-python/src/subproc.rs` drop a child that is slow but alive.
-- `Exchange::ask` (`goofi-transport/src/exchange.rs`) parks on the listener and returns only
-  on an answer, the child's exit or the deadline. Give it a halt signal so a shutdown can end a
-  wait.
-
-## 5. Windows process control
-
-Needs a Windows host; the defects are listed in `windows-cleanup.md`:
-
-- `CREATE_NEW_PROCESS_GROUP` so Ctrl+C stays with goofi.
-- A Job object per child with `KILL_ON_JOB_CLOSE`, and `CTRL_BREAK` for a graceful stop in
-  place of `taskkill` (`goofi-supervisor/src/child.rs`).
-- A blocking console-close handler bounded by the scope deadlines.
+  that branches (the Windows handle limit as a named fault, `windows-cleanup.md`) brings the
+  enum with it.
+- A wait on another thread or process ends when the other side answers or is gone, never on a
+  clock: the recorder's drains, a node runtime's flush, the audio clock's boundary and a hosted
+  child's tick are liveness waits. A deadline stays only where the other side is being ended
+  (`STOP_TIMEOUT`, the scope's close) or a one-shot probe is bounded like a build.
+- A node's runtime wears its halt (`Halt::wear`); a wait on a child process reads it, so a
+  shutdown ends the wait without a deadline.
+- Arming serials are minted at settle, one per slot however often the batch armed it; an echo
+  of a node's runtime state (`Txn::echo`) is built after the settle.
 
 ## Not to be done
 
@@ -81,8 +49,11 @@ Needs a Windows host; the defects are listed in `windows-cleanup.md`:
 - A `Scope` tree with one release pass per resource `Kind`: a `Scope` holds finishes, children
   and workers; ports, paths and devices are index leases that drop with their owners, and
   `AppState::shutdown` is the one release order.
+- `Graph::touched` and `Runtime::changed` into `Txn`: both are the graph's own log of what a
+  batch asked, consumed by `settle`, and the mutex the transaction holds scopes them to the
+  batch; a worker that writes under the graph lock with no transaction would need one.
 
-## Not in this plan
+## Deferred to entries of their own
 
 - The SPA npm build and the nested cargo builds of shipped nodes inside
   `goofi-bridge/build.rs` become an explicit step, separately.

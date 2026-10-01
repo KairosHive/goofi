@@ -107,7 +107,7 @@ impl Writer {
     }
 
     /// Wait for everything already queued, on every lane, to reach its file. Called with NO lock a
-    /// lane needs.
+    /// lane needs. A lane that died drops its ack, and a slow one is waited for.
     pub fn flush(&self) {
         let waits: Vec<Receiver<()>> = {
             let lanes = self.lanes.lock();
@@ -120,7 +120,7 @@ impl Writer {
                 .collect()
         };
         for done in waits {
-            let _ = done.recv_timeout(std::time::Duration::from_secs(5));
+            let _ = done.recv();
         }
     }
 }

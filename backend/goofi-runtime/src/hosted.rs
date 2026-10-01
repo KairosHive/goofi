@@ -13,9 +13,8 @@ use goofi_transport::{Exchange, Served};
 
 static HOSTED_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// How long a request waits on a child that stopped answering; the first one also pays the load.
-const TICK_TIMEOUT: Duration = Duration::from_secs(10);
-const COLD_START_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a describe may take: a one-shot probe, bounded like a build.
+const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the stop waits for the child to release what it holds before it is killed.
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long the child's wait for a request lasts before it looks at the parent again.
@@ -26,7 +25,7 @@ pub fn describe(host: &Path, artifact: &Path) -> Result<String, String> {
     let mut cmd = std::process::Command::new(host);
     cmd.arg("host").arg("describe").arg(artifact);
     let name = artifact.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let out = goofi_supervisor::child::output(format!("native describe {name}"), &mut cmd, COLD_START_TIMEOUT).map_err(|e| e.to_string())?;
+    let out = goofi_supervisor::child::output(format!("native describe {name}"), &mut cmd, DESCRIBE_TIMEOUT).map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
@@ -74,27 +73,20 @@ impl Call for Hosted {
     fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
         if entry == Entry::Stop {
             if let Some((mut child, mut exchange)) = self.live.take() {
-                // An answered child leaves by itself and releases its ports on the way; a signal
-                // would cut that short, so only the deadline kills it. One that did not answer is stopped.
-                match exchange.ask(&mut child, &[&rpc::call_head(Entry::Stop, now)], STOP_TIMEOUT) {
-                    Ok(_) => {
-                        let _ = child.wait_within(STOP_TIMEOUT);
-                    }
-                    Err(_) => {
-                        child.stop(Duration::ZERO);
-                    }
-                }
+                // A told child leaves by itself and releases its ports on the way; a signal would
+                // cut that short, so only the deadline kills it.
+                let _ = exchange.send(&mut child, &[&rpc::call_head(Entry::Stop, now)]);
+                let _ = child.wait_within(STOP_TIMEOUT);
             }
             return Ok(rpc::done());
         }
-        let timeout = if self.live.is_none() { COLD_START_TIMEOUT } else { TICK_TIMEOUT };
         if self.live.is_none() {
             self.live = Some(self.spawn()?);
         }
         let (child, exchange) = self.live.as_mut().expect("spawned");
         let head = rpc::call_head(entry, now);
         let frame: Vec<&[u8]> = std::iter::once(&head[..]).chain(request.iter().copied()).collect();
-        let reply = exchange.ask(child, &frame, timeout);
+        let reply = exchange.ask(child, &frame);
         if reply.is_err() {
             self.live = None;
         }

@@ -75,7 +75,7 @@ pub fn apply_ops(target: &mut Value, ops: &[Op]) {
 
 /// What a replica did with a delta.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Patch {
+pub enum Receipt {
     Applied,
     Stale,
     /// This replica is missing everything between `at` and `from`, and can only be re-seeded.
@@ -118,16 +118,16 @@ impl GraphDoc {
 
     /// Apply a delta a peer produced. A result already held is stale and skipped; one reaching
     /// forward of this replica is a gap and refused.
-    pub fn apply_patch(&mut self, from: u64, to: u64, ops: &[Op]) -> Patch {
+    pub fn apply_patch(&mut self, from: u64, to: u64, ops: &[Op]) -> Receipt {
         if to <= self.version {
-            return Patch::Stale;
+            return Receipt::Stale;
         }
         if from != self.version {
-            return Patch::Gap { from, at: self.version };
+            return Receipt::Gap { from, at: self.version };
         }
         apply_ops(&mut self.state, ops);
         self.version = to;
-        Patch::Applied
+        Receipt::Applied
     }
 
     /// Adopt a peer's whole document.

@@ -111,6 +111,8 @@ struct DeviceClock {
     channels: u16,
     go: Option<mpsc::Sender<()>>,
     done: mpsc::Receiver<()>,
+    /// Whether the stream still runs: lowered when it is dropped or its device went away.
+    playing: Arc<AtomicBool>,
     /// The output stream's entry in the resource index, for as long as the clock holds it.
     _lease: goofi_supervisor::scope::Lease,
 }
@@ -121,8 +123,11 @@ impl DeviceClock {
         let (go, on_go) = mpsc::channel::<()>();
         let (done, on_done) = mpsc::channel::<()>();
         let device = name.to_string();
+        let playing = Arc::new(AtomicBool::new(true));
+        let lowered = playing.clone();
         goofi_supervisor::worker::thread("goofi-audio-clock")
             .spawn(move || {
+                let _lowered = Lowered(lowered);
                 let stream = match open_output(&device, runtime, stats.clone(), waker.clone()) {
                     Ok((stream, rate, channels)) => {
                         let _ = opened.send(Ok((rate, channels)));
@@ -153,7 +158,7 @@ impl DeviceClock {
             .recv_timeout(wait)
             .map_err(|_| format!("`{name}` did not open within {} s", wait.as_secs()))??;
         let lease = goofi_supervisor::scope::lease(goofi_supervisor::scope::Kind::Device, format!("audio out {name}"));
-        Ok((DeviceClock { name: name.to_string(), channels, go: Some(go), done: on_done, _lease: lease }, rate))
+        Ok((DeviceClock { name: name.to_string(), channels, go: Some(go), done: on_done, playing, _lease: lease }, rate))
     }
 
     /// Start the callbacks — only once the runtime is cut to this stream's rate and width.
@@ -161,6 +166,15 @@ impl DeviceClock {
         if let Some(go) = &self.go {
             let _ = go.send(());
         }
+    }
+}
+
+/// Lowers the flag when the clock thread ends, however it ends.
+struct Lowered(Arc<AtomicBool>);
+
+impl Drop for Lowered {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
     }
 }
 
@@ -469,11 +483,12 @@ impl AudioEngine {
         if self.device.is_none() {
             self.runtime.lock().apply_pending();
         }
+        // The callback is the only reader, so the wait ends when it answered or its stream is gone.
+        let playing = self.device.as_ref().map(|d| d.playing.clone());
         move || {
-            let deadline = Instant::now() + Duration::from_secs(3);
             while !done.load(Ordering::Acquire) {
-                if Instant::now() >= deadline {
-                    return Err("audio clock did not acknowledge the recording boundary".into());
+                if !playing.as_ref().is_some_and(|p| p.load(Ordering::Acquire)) {
+                    return Err("the audio clock is gone".into());
                 }
                 std::thread::sleep(Duration::from_millis(1));
             }

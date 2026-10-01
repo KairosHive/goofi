@@ -606,7 +606,7 @@ pub fn ep(uid: impl std::fmt::Display, slot: impl std::fmt::Display) -> String {
     format!("{uid}/{slot}")
 }
 
-pub use goofi_bridge::doc::{GraphDoc, Op, Patch};
+pub use goofi_bridge::doc::{GraphDoc, Op, Receipt};
 pub use tokio_tungstenite::tungstenite::Message;
 
 pub type Ws = tokio_tungstenite::WebSocketStream<
@@ -726,7 +726,7 @@ impl Client {
                         p["v"].as_u64().expect("a version"),
                         &ops,
                     );
-                    if let Patch::Gap { from, at } = out {
+                    if let Receipt::Gap { from, at } = out {
                         panic!("a delta was lost: this replica is at v{at} and the next patch is from v{from}");
                     }
                 }

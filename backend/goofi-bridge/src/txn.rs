@@ -14,6 +14,8 @@ pub struct Txn<'a> {
     pub g: MutexGuard<'a, Graph>,
     pub history: MutexGuard<'a, CommandHistory>,
     outbox: Vec<Event>,
+    /// The nodes whose runtime state is echoed after the settle, as a `state_update` each.
+    echo: Vec<goofi_node::Uid>,
     /// The history mark this transaction's first command took; none while it has applied nothing.
     mark: Option<usize>,
     edited: bool,
@@ -28,7 +30,7 @@ impl<'a> Txn<'a> {
     pub fn begin(state: &'a AppState, caller: &'a Caller, preview: bool) -> Txn<'a> {
         let g = state.graph.lock();
         let history = state.history.lock();
-        Txn { state, caller, actor: &caller.actor, g, history, outbox: Vec::new(), mark: None, edited: false, preview, committed: false, label: String::new() }
+        Txn { state, caller, actor: &caller.actor, g, history, outbox: Vec::new(), echo: Vec::new(), mark: None, edited: false, preview, committed: false, label: String::new() }
     }
 
     /// Run `cmd` through the history. The first command clears the actor's redo run and takes
@@ -57,6 +59,14 @@ impl<'a> Txn<'a> {
         self.outbox.push(event);
     }
 
+    /// Echo a node's runtime state after the settle: what the doc does not carry — its error,
+    /// its descriptors — read from settled state, not from the step that asked.
+    pub fn echo(&mut self, uid: goofi_node::Uid) {
+        if !self.echo.contains(&uid) {
+            self.echo.push(uid);
+        }
+    }
+
     /// The tail, once: settle, project, release the graph, then the delta and the outbox under
     /// the document guard. A transaction that moved nothing sends its outbox and no delta.
     pub fn commit(mut self) {
@@ -64,6 +74,7 @@ impl<'a> Txn<'a> {
         let state = self.state;
         let mut outbox = std::mem::take(&mut self.outbox);
         if !self.edited {
+            outbox.extend(self.echoes());
             drop(self);
             for event in outbox {
                 state.events.send(event);
@@ -79,9 +90,16 @@ impl<'a> Txn<'a> {
             outbox.extend(state.set_dirty(true));
         }
         let (doc, projection) = crate::settle_and_project(state, &mut self.g);
+        outbox.extend(self.echoes());
         drop(self);
         state.settled_now();
         crate::reconcile_and_broadcast(state, doc, projection, outbox);
+    }
+
+    /// The echoes, for the nodes the batch left standing.
+    fn echoes(&mut self) -> Vec<Event> {
+        let g = &*self.g;
+        std::mem::take(&mut self.echo).into_iter().filter(|u| g.name(*u).is_some()).map(|u| crate::param_state_update(g, u, &[])).collect()
     }
 }
 

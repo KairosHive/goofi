@@ -168,6 +168,7 @@ impl GraphicsEngine {
         time: Arc<goofi_core::time::Time>,
         waker: Arc<DrainWaker>,
         clock: Clock,
+        recorder: Arc<goofi_record::Recorder>,
     ) -> Result<GraphicsEngine, String> {
         let gpu = gpu::shared()?;
         let shared = Arc::new(Shared::new(waker));
@@ -179,6 +180,7 @@ impl GraphicsEngine {
             stats.clone(),
             troubles.clone(),
             shared.clone(),
+            recorder,
         )));
         let inbox = runtime.lock().inbox.clone();
         let ticker = (clock == Clock::Internal).then(|| {
@@ -230,12 +232,6 @@ impl GraphicsEngine {
             bells: iox.node()?,
             iox,
         })
-    }
-
-    /// The one recorder an armed stage encodes into. Without it nothing records, which is what a
-    /// harness with no recorder is.
-    pub fn set_recorder(&self, recorder: Arc<goofi_record::Recorder>) {
-        self.ask(runtime::Cmd::Recorder(recorder));
     }
 
     /// The window thread, where a `Window` node's frames go. Without one there are no windows,

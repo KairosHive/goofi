@@ -277,6 +277,8 @@ struct Mail {
     refresh: Vec<ParamKey>,
     pulse: Vec<ParamKey>,
     flush: Vec<Flush>,
+    /// The thread is gone, so nothing posted here is read again.
+    closed: bool,
 }
 
 struct Flush {
@@ -295,12 +297,16 @@ pub struct Handle {
 
 impl Handle {
     /// Acknowledge settled recording ports and one complete run. The caller waits outside the
-    /// graph lock and never on the audio callback.
+    /// graph lock and never on the audio callback; a runtime that is gone drops the ack.
     pub fn flush(&self) -> std::sync::mpsc::Receiver<Result<(), String>> {
         let (ack, done) = std::sync::mpsc::sync_channel(1);
         let armed = self.last.lock().as_ref()
             .map(|d| d.record.iter().map(|(slot, _)| slot.clone()).collect()).unwrap_or_default();
-        self.mail.lock().flush.push(Flush { armed, ack });
+        let mut mail = self.mail.lock();
+        if !mail.closed {
+            mail.flush.push(Flush { armed, ack });
+        }
+        drop(mail);
         let _ = self.bell.ring(0);
         done
     }
@@ -389,6 +395,8 @@ pub fn spawn<E: Executor + 'static>(
             // The executor is BUILT in here too: a factory that panics must still release the
             // halt, or the exit waits its whole ceiling on a node that never started.
             let inner = thread_halt.clone();
+            inner.wear();
+            let posted = thread_mail.clone();
             let run = AssertUnwindSafe(move || {
                 let runtime = Runtime {
                     uid: spawn.uid,
@@ -427,6 +435,7 @@ pub fn spawn<E: Executor + 'static>(
                 runtime.run(&inner);
             });
             let _ = std::panic::catch_unwind(run);
+            *posted.lock() = Mail { closed: true, ..Mail::default() };
             thread_halt.release();
         })
         .map_err(|e| format!("could not start the node's runtime thread: {e}"))?;

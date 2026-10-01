@@ -15,13 +15,6 @@ use goofi_host_sdk::Node;
 /// Unique iceoryx2 service-name base per spawned subprocess, so concurrent nodes never collide.
 static SUBPROC_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// How long a request waits on a child that has stopped answering.
-pub const TICK_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// The deadline for the FIRST request after a spawn, which also pays interpreter boot, the node
-/// module's imports and `setup()` — seconds, not milliseconds, for a heavy import like numba.
-pub const COLD_START_TIMEOUT: Duration = Duration::from_secs(60);
-
 /// How long the stop waits for `stop()` to release what the node holds before the child is killed.
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -88,27 +81,20 @@ impl Call for Subproc {
     fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
         if entry == Entry::Stop {
             if let Some(mut live) = self.live.take() {
-                // An answered child leaves by itself and releases its ports on the way; a signal
-                // would cut that short, so only the deadline kills it. One that did not answer is stopped.
-                match live.exchange.ask(&mut live.child, &[&rpc::call_head(Entry::Stop, now)], STOP_TIMEOUT) {
-                    Ok(_) => {
-                        let _ = live.child.wait_within(STOP_TIMEOUT);
-                    }
-                    Err(_) => {
-                        live.child.stop(Duration::ZERO);
-                    }
-                }
+                // A told child leaves by itself and releases its ports on the way; a signal would
+                // cut that short, so only the deadline kills it.
+                let _ = live.exchange.send(&mut live.child, &[&rpc::call_head(Entry::Stop, now)]);
+                let _ = live.child.wait_within(STOP_TIMEOUT);
             }
             return Ok(rpc::done());
         }
-        let timeout = if self.live.is_none() { COLD_START_TIMEOUT } else { TICK_TIMEOUT };
         if self.live.is_none() {
             self.live = Some(Running::spawn(&self.iox, &self.python, &self.source)?);
         }
         let live = self.live.as_mut().expect("spawned");
         let head = rpc::call_head(entry, now);
         let frame: Vec<&[u8]> = std::iter::once(&head[..]).chain(request.iter().copied()).collect();
-        let reply = live.exchange.ask(&mut live.child, &frame, timeout).map_err(|e| format!("subprocess io: {e}"));
+        let reply = live.exchange.ask(&mut live.child, &frame).map_err(|e| format!("subprocess io: {e}"));
         if reply.is_err() {
             if let Some(mut live) = self.live.take() {
                 live.child.stop(Duration::ZERO);

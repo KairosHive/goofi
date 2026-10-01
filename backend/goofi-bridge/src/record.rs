@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use goofi_core::time::Time;
 use goofi_graph::{Graph, Uid};
@@ -61,10 +61,8 @@ impl AudioCapture {
             let mut graph = graph.lock();
             crate::try_audio_engine(&mut graph).map(|audio| audio.flush_recording()).unwrap_or_default()
         };
-        let deadline = Instant::now() + Duration::from_secs(3);
         for wait in waits {
-            wait.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .map_err(|_| "audio control did not acknowledge the recording flush")??;
+            wait.recv().map_err(|_| "an audio node's runtime is gone")??;
         }
         Ok(())
     }
@@ -226,7 +224,9 @@ pub fn spawn(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, recorder:
         let g = graph.lock();
         (g.instance().to_string(), g.time())
     };
+    let draining = recorder.draining();
     let started = goofi_transport::thread("goofi-record").spawn(move || {
+        let _draining = draining;
         let ports = goofi_transport::PortBundle::open(&iox, |node| {
             let door = goofi_transport::event_service(node, &goofi_transport::record_door_service(&instance))?;
             let listener = door.listener_builder().create().map_err(|e| e.to_string())?;

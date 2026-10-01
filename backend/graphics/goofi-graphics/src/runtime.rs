@@ -23,7 +23,6 @@ pub enum Cmd {
     Remove(Uid),
     Plan(Plan),
     Ui(Option<goofi_window::Ui>),
-    Recorder(Arc<Recorder>),
 }
 
 #[derive(Default)]
@@ -42,7 +41,7 @@ pub struct Runtime {
     pub ui: Option<goofi_window::Ui>,
     presenting: HashMap<goofi_window::Id, Arc<Present>>,
     /// The one recorder, and the video stream each armed stage has open on it.
-    recorder: Option<Arc<Recorder>>,
+    recorder: Arc<Recorder>,
     taping: HashMap<Uid, Tape>,
     /// What an armed stage the recorder could not open a stream for wears, until it is disarmed
     /// or the recording ends. The engine folds it into the faults it settles.
@@ -62,6 +61,7 @@ impl Runtime {
         stats: Arc<Stats>,
         troubles: Troubles,
         shared: Arc<goofi_runtime::Shared>,
+        recorder: Arc<Recorder>,
     ) -> Runtime {
         Runtime {
             gpu,
@@ -71,7 +71,7 @@ impl Runtime {
             stats,
             ui: None,
             presenting: HashMap::new(),
-            recorder: None,
+            recorder,
             taping: HashMap::new(),
             troubles,
             shared,
@@ -121,7 +121,6 @@ impl Runtime {
                 Cmd::Remove(uid) => self.remove(uid),
                 Cmd::Plan(plan) => self.set_plan(plan),
                 Cmd::Ui(ui) => self.ui = ui,
-                Cmd::Recorder(r) => self.recorder = Some(r),
             }
         }
     }
@@ -139,7 +138,7 @@ impl Runtime {
         self.drain_inbox();
         let began = Instant::now();
         let t = self.time.now();
-        let recording = self.recorder.as_ref().is_some_and(|r| r.running());
+        let recording = self.recorder.running();
         self.follow_record(recording, t);
         let want = self.plan.demanded(recording);
         if !want.contains(&true) {
@@ -319,7 +318,7 @@ impl Runtime {
     /// settled state and the recorder's own. A stage whose size moved is a NEW file: a container
     /// holds one size, and a seam the file system shows beats one hidden inside a video.
     fn follow_record(&mut self, recording: bool, t: f64) {
-        let Some(rec) = self.recorder.clone() else { return };
+        let rec = self.recorder.clone();
         let mut want: HashMap<Uid, (StreamId, (u32, u32), goofi_core::record::VideoQuality)> = HashMap::new();
         if recording {
             for stage in &self.plan.stages {
@@ -432,8 +431,8 @@ impl Runtime {
                     Want::Record => {
                         // Readbacks from before a resize or quality change belong to the closed file.
                         let held = self.taping.get(&uid).filter(|tape| tape.live && tape.size == size && at >= tape.started);
-                        if let Some((tape, rec)) = held.zip(self.recorder.as_ref()) {
-                            let taken = rec.write_video(&tape.id, &rows, at);
+                        if let Some(tape) = held {
+                            let taken = self.recorder.write_video(&tape.id, &rows, at);
                             self.taping.get_mut(&uid).expect("just read").missed += u64::from(!taken);
                         }
                         give_back(&spare, rows);

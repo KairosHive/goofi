@@ -1754,22 +1754,24 @@ impl Graph {
     /// command's inverse exact.
     pub fn set_recorded(&mut self, uid: Uid, mut record: Vec<RecordedOutput>) -> Result<(), String> {
         let e = self.patch.nodes.get_mut(&uid).ok_or_else(|| format!("no such node {uid}"))?;
-        // A slot still armed keeps its serial; every other arming is a new one, an undo's re-arm
-        // included: its old service name is one the recorder may already have let go of.
-        let mut next = self.runtime.arm_serial;
+        // A slot still armed keeps its serial; every other arming is a new one, minted at settle,
+        // an undo's re-arm included: its old service name is one the recorder may have let go of.
         for output in &mut record {
-            output.serial = match e.record.iter().find(|held| held.slot == output.slot) {
-                Some(held) => held.serial,
-                None => {
-                    next += 1;
-                    next
-                }
-            };
+            output.serial = e.record.iter().find(|held| held.slot == output.slot).map_or(0, |held| held.serial);
         }
-        self.runtime.arm_serial = next;
         e.record = record;
         self.touched.push(Touched::Record(uid));
         Ok(())
+    }
+
+    /// Every arming the batch left unnumbered gets the next serial: one per slot however often
+    /// the batch armed it.
+    fn mint_serials(&mut self, uid: Uid) {
+        let Some(e) = self.patch.nodes.get_mut(&uid) else { return };
+        for output in e.record.iter_mut().filter(|o| o.serial == 0) {
+            self.runtime.arm_serial += 1;
+            output.serial = self.runtime.arm_serial;
+        }
     }
 
     /// The output slots armed for recording on anything a uid can name.
@@ -3059,6 +3061,11 @@ impl Graph {
                         touched.push(t);
                     }
                 }
+            }
+        }
+        for t in &touched {
+            if let Touched::Record(uid) = t {
+                self.mint_serials(*uid);
             }
         }
         let edges = self.resolved_edges();

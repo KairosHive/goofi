@@ -2,6 +2,7 @@
 
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iceoryx2::prelude::*;
@@ -298,6 +299,10 @@ pub fn wait_released<'a>(halts: impl Iterator<Item = &'a Halt>, ceiling: Duratio
     all
 }
 
+thread_local! {
+    static WORN: std::cell::RefCell<Option<Arc<Halt>>> = const { std::cell::RefCell::new(None) };
+}
+
 /// The two flags a node's thread is born holding: told to stop, and — once every port it owned
 /// is dropped, which is what releases the shared memory — released. The only thing a teardown
 /// can usefully wait for, and it parks the waiter rather than being polled.
@@ -321,6 +326,15 @@ impl Halt {
     }
     pub fn released(&self) -> bool {
         *self.released.lock()
+    }
+    /// Wear this halt on the calling thread: a wait the thread makes on another process ends
+    /// when the halt is raised.
+    pub fn wear(self: &Arc<Halt>) {
+        WORN.with(|w| *w.borrow_mut() = Some(self.clone()));
+    }
+    /// Whether the halt the calling thread wears, if any, was raised.
+    pub fn worn_stopped() -> bool {
+        WORN.with(|w| w.borrow().as_ref().is_some_and(|h| h.stopped()))
     }
     /// Park until released or `deadline`; whether it was released.
     pub fn wait_released_until(&self, deadline: Instant) -> bool {

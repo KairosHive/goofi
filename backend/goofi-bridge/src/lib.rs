@@ -226,14 +226,10 @@ impl AppState {
         let workspace_baseline = goofi_graph::archive::fingerprint(&dir);
         // Project the INITIAL graph — no nodes, but the seeded system variables — so a client that
         // connects to a fresh backend has the current state at once.
-        let mut graph_val = fresh_graph(iox.clone(), (!mode.demo).then_some(clock), render)?;
+        let (mut graph_val, recorder) = fresh_graph(iox.clone(), (!mode.demo).then_some(clock), render)?;
         graph_val.set_workspace(&dir);
         let mut doc = crate::doc::GraphDoc::new();
         doc.reconcile_root(graph_val.replica());
-        let recorder = Arc::new(goofi_record::Recorder::new(graph_val.time()));
-        if let Some(gfx) = try_graphics_engine(&mut graph_val) {
-            gfx.set_recorder(recorder.clone());
-        }
         let graph = Arc::new(Mutex::new(graph_val));
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
         let reducers = reducer::SlotReducers::new(iox.clone(), graph.clone(), follow_tx);
@@ -1015,8 +1011,10 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
 /// The composed graph the app boots: the model plus the signal engine, registered first. A `None`
 /// audio clock asks for no audio engine at all, which takes every audio node out of the catalog.
 /// The graphics engine is always ASKED for, and a machine with no adapter simply has none.
-pub fn fresh_graph(iox: Arc<goofi_transport::Iox>, clock: Option<Clock>, render: Clock) -> Result<Graph, String> {
+/// A graph with every engine this machine has, and the one recorder its graphics engine encodes into.
+pub fn fresh_graph(iox: Arc<goofi_transport::Iox>, clock: Option<Clock>, render: Clock) -> Result<(Graph, Arc<goofi_record::Recorder>), String> {
     let mut g = Graph::new(goofi_supervisor::session::fresh_id()?);
+    let recorder = Arc::new(goofi_record::Recorder::new(g.time()));
     let signal = goofi_signal::SignalEngine::new(
         iox.clone(),
         g.instance().to_string(),
@@ -1027,11 +1025,11 @@ pub fn fresh_graph(iox: Arc<goofi_transport::Iox>, clock: Option<Clock>, render:
     if let Some(clock) = clock {
         g.register_engine(Box::new(goofi_audio::AudioEngine::new(iox.clone(), g.instance().to_string(), g.time(), g.drain_waker(), clock)));
     }
-    match goofi_graphics::GraphicsEngine::open(iox, g.instance().to_string(), g.time(), g.drain_waker(), render) {
+    match goofi_graphics::GraphicsEngine::open(iox, g.instance().to_string(), g.time(), g.drain_waker(), render, recorder.clone()) {
         Ok(engine) => g.register_engine(Box::new(engine)),
         Err(why) => goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("graphics: {why}; this machine renders no shaders")),
     }
-    Ok(g)
+    Ok((g, recorder))
 }
 
 /// The graphics engine registered in `g` — its external clock is the door a test renders through.

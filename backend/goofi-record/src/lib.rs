@@ -15,16 +15,12 @@ use goofi_core::time::{stamp, stamp_nanos, Time};
 use goofi_node::Uid;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, MutexGuard};
-use goofi_supervisor::sync::Mutex;
+use goofi_supervisor::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 pub use manifest::Manifest;
 pub use stream::{Kind, Stream, StreamMeta, Timeline, Written};
-
-/// The longest a stop waits for its drains and reapers.
-const SETTLE: Duration = Duration::from_secs(3);
 
 /// The composition root joins engine queues to the recorder's transport drain.
 /// None of these waits may run on a device callback or with the graph locked.
@@ -214,6 +210,23 @@ impl Take {
     }
 }
 
+#[derive(Default)]
+struct Sweeps {
+    asked: u64,
+    swept: u64,
+    drains: usize,
+}
+
+/// A drain's registration; dropping it lets every stop that waits on the drain go.
+pub struct Draining(Arc<Recorder>);
+
+impl Drop for Draining {
+    fn drop(&mut self) {
+        self.0.sweeps.lock().drains -= 1;
+        self.0.swept.notify_all();
+    }
+}
+
 pub struct Recorder {
     time: Arc<Time>,
     take: Mutex<Option<Arc<Mutex<Take>>>>,
@@ -224,10 +237,11 @@ pub struct Recorder {
     /// When a sweep's counts last reached the manifest. Every other writer publishes at once —
     /// an open, a close, a drop — because each is rare and each is news.
     noted: Mutex<Instant>,
-    /// The sweeps a stop has asked its drains for, and the ones they have finished. A stop waits
-    /// for the second to reach the first, so no file is closed over a frame already delivered.
-    asked: AtomicU64,
-    swept: AtomicU64,
+    /// The sweeps a stop has asked its drains for, the ones they have finished, and the drains
+    /// there are. A stop waits for the second to reach the first, so no file is closed over a
+    /// frame already delivered; it stops waiting when no drain is left to answer.
+    sweeps: Mutex<Sweeps>,
+    swept: Condvar,
     transition: Mutex<()>,
     capture: Mutex<Option<Arc<dyn Capture>>>,
 }
@@ -240,8 +254,8 @@ impl Recorder {
             writer: Mutex::new(None),
             encoders: Mutex::new(Arc::new(video::FfmpegEncoders)),
             noted: Mutex::new(Instant::now()),
-            asked: AtomicU64::new(0),
-            swept: AtomicU64::new(0),
+            sweeps: Mutex::new(Sweeps::default()),
+            swept: Condvar::new(),
             transition: Mutex::new(()),
             capture: Mutex::new(None),
         }
@@ -294,24 +308,32 @@ impl Recorder {
     /// A sweep a stop is waiting for. The drain reads this before it sweeps and reports it after,
     /// so a sweep that began before the ask never counts as the answer to it.
     pub fn sweeping(&self) -> u64 {
-        self.asked.load(Ordering::SeqCst)
+        self.sweeps.lock().asked
     }
 
     /// One sweep of every feed, to exhaustion, has finished.
     pub fn swept(&self, mark: u64) {
-        self.swept.fetch_max(mark, Ordering::SeqCst);
+        let mut sweeps = self.sweeps.lock();
+        sweeps.swept = sweeps.swept.max(mark);
+        self.swept.notify_all();
     }
 
-    /// Ask every drain for one more sweep and wait for it, to a CEILING — a wedged drain must
-    /// never wedge a stop. What it buys is the tail: the frames the last sweep did not reach.
+    /// A drain is running, for as long as the guard lives. Taken BEFORE its thread starts, so a
+    /// stop that races the boot waits for it.
+    pub fn draining(self: &Arc<Self>) -> Draining {
+        self.sweeps.lock().drains += 1;
+        Draining(self.clone())
+    }
+
+    /// Ask every drain for one more sweep and wait for it: the tail, the frames the last sweep
+    /// did not reach. The wait ends when the sweep did, or when no drain is left to make it.
     fn settle(&self) -> Result<(), String> {
-        let want = self.asked.fetch_add(1, Ordering::SeqCst) + 1;
-        let deadline = Instant::now() + SETTLE;
-        while self.swept.load(Ordering::SeqCst) < want && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        if self.swept.load(Ordering::SeqCst) < want {
-            return Err("recording streams did not acknowledge the flush".into());
+        let mut sweeps = self.sweeps.lock();
+        sweeps.asked += 1;
+        let want = sweeps.asked;
+        sweeps = self.swept.wait_while(sweeps, |s| s.swept < want && s.drains > 0);
+        if sweeps.swept < want {
+            return Err("no recording drain runs".into());
         }
         Ok(())
     }

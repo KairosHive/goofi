@@ -422,7 +422,7 @@ impl WriteOp for Edit {
         // The runtime `error` is doc-invisible, so echo every referrer a rename rewrote.
         if let goofi_graph::Outcome::Nodes(referrers) = out {
             for r in referrers {
-                tx.emit(param_state_update(&tx.g, r, &[]));
+                tx.echo(r);
             }
         }
         Ok(json!({ "ok": true, "name": named(&tx.g, uid) }))
@@ -510,7 +510,7 @@ impl WriteOp for ParamEdit {
             .ok_or("node param edit: nothing to change")?;
         tx.apply(cmd)?;
         if describes {
-            tx.emit(param_state_update(&tx.g, uid, &[]));
+            tx.echo(uid);
         }
         Ok(json!({
             "value": tx.g.params(uid)
