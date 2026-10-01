@@ -3464,29 +3464,39 @@ impl Graph {
         Ok((Command::Compound(cmds), rename))
     }
 
-    /// The whole patch as its `.gfi` manifest.
-    pub fn serialize(&self) -> String {
+    /// The whole patch as one document: every record, every variable in order, the arrangement.
+    fn document(&self) -> doc::PatchDoc {
         let mut patch = self.fragment(&self.all_uids());
-        // An ORDERED map, because the order is observable. On load, `reassert_system` back-fills,
-        // so an older patch picks up a new default. An ephemeral variable is goofi's own to say;
-        // writing it into a patch would carry one machine's answer onto another.
-        patch.variables = self
-            .patch
-            .variables
-            .entries()
-            .filter(|(name, ..)| !self.patch.variables.is_ephemeral(name))
-            .map(|(name, v)| (name.to_string(), v.clone()))
-            .collect();
-        // The system group's lock is goofi's own and re-asserted on load, so a file never carries it.
-        patch.variable_groups = self
-            .patch
-            .variables
-            .groups()
-            .filter(|(g, _)| *g != goofi_core::variables::SYSTEM_GROUP)
-            .map(|(g, lock)| (g.to_string(), doc::Group { lock }))
-            .collect();
+        patch.variables = self.patch.variables.entries().map(|(name, v)| (name.to_string(), v.clone())).collect();
+        patch.variable_groups =
+            self.patch.variables.groups().map(|(g, lock)| (g.to_string(), doc::Group { lock })).collect();
         // The flat arrangement always exists (at worst the default), so it always rides.
         patch.arrangement = Some(self.patch.arrangement.to_json());
+        patch
+    }
+
+    /// The document a browser replica holds: the patch, every root present, and beside a
+    /// variable's source why it delivers nothing — the one runtime fact the panel shows inline.
+    pub fn replica(&self) -> serde_json::Value {
+        let mut doc = serde_json::to_value(self.document()).expect("a plain record");
+        for root in ["nodes", "links", "variables", "variable_groups"] {
+            doc[root] = doc.get(root).cloned().unwrap_or_else(|| serde_json::json!({}));
+        }
+        for (name, v) in self.patch.variables.entries() {
+            if let Some(error) = v.source.as_ref().and_then(|s| self.variable_source_error(s)) {
+                doc["variables"][name]["source"]["error"] = serde_json::Value::String(error);
+            }
+        }
+        doc
+    }
+
+    /// The whole patch as its `.gfi` manifest.
+    pub fn serialize(&self) -> String {
+        let mut patch = self.document();
+        // An ephemeral variable is goofi's own to say; writing it into a patch would carry one
+        // machine's answer onto another. The system group's lock is re-asserted on load likewise.
+        patch.variables.retain(|name, _| !self.patch.variables.is_ephemeral(name));
+        patch.variable_groups.shift_remove(goofi_core::variables::SYSTEM_GROUP);
         let archive = doc::Archive {
             version: doc::MANIFEST_VERSION,
             goofi: env!("CARGO_PKG_VERSION").to_string(),

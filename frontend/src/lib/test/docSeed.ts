@@ -1,5 +1,5 @@
 /** Fill a store replica the way the manager does — by emitting `doc_state` / `doc_patch`, never by writing into it. */
-import { applyMerge } from '$lib/crdt/mergePatch';
+import { diffOps } from '$lib/crdt/ops';
 import { emptyDoc, type Doc } from '$lib/crdt/graphDoc';
 import { SCOPE_TYPE } from '$lib/api/vocab';
 import type { FakeControl } from './fakeControl';
@@ -31,12 +31,14 @@ export class DocSeed {
 		return this;
 	}
 
-	/** Send one merge patch — `null` at a key deletes it, as RFC 7386 says. */
+	/** Send one change, spelled as a merge — `null` at a key deletes it — and sent as the ops the
+	 * manager would send for it. */
 	patch(patch: Obj): this {
-		applyMerge(this.doc, patch);
+		const before = structuredClone(this.doc);
+		merge(this.doc, patch);
 		const from = this.v;
 		this.v += 1;
-		this.fc.emit({ event: 'doc_patch', payload: { from, v: this.v, patch: structuredClone(patch) } });
+		this.fc.emit({ event: 'doc_patch', payload: { from, v: this.v, ops: diffOps(before, this.doc) } });
 		return this;
 	}
 
@@ -76,4 +78,17 @@ export class DocSeed {
 
 export function seed(fc: FakeControl): DocSeed {
 	return new DocSeed(fc);
+}
+
+const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** A test spells a change as a merge: an object merges, `null` removes, anything else replaces whole. */
+function merge(target: Obj, patch: Obj): void {
+	for (const [k, pv] of Object.entries(patch)) {
+		if (pv === null) delete target[k];
+		else if (isObj(pv)) {
+			if (!isObj(target[k])) target[k] = {};
+			merge(target[k] as Obj, pv);
+		} else target[k] = pv;
+	}
 }

@@ -132,7 +132,7 @@ pub enum Node {
         #[serde(default = "whole")]
         size: f64,
         panel_type: String,
-        #[serde(with = "json_string", default)]
+        #[serde(default)]
         state: Value,
     },
 }
@@ -140,24 +140,6 @@ pub enum Node {
 /// A root's share of a tab it fills. Also what a hand-written entry that omits one means.
 fn whole() -> f64 {
     1.0
-}
-
-/// A panel's `state` rides the wire as a JSON STRING, and it must stay one: a panel clears a key
-/// with an explicit `null`, and a null LEAF would make the merge-patch delta ambiguous.
-mod json_string {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use serde_json::Value;
-
-    pub fn serialize<S: Serializer>(v: &Value, s: S) -> Result<S::Ok, S::Error> {
-        v.to_string().serialize(s)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Value, D::Error> {
-        // A `state` written any other way — the natural shape of a hand edit — is REFUSED rather
-        // than read as absent, which would load the panel with its binding silently wiped.
-        let s = String::deserialize(d)?;
-        serde_json::from_str(&s).map_err(serde::de::Error::custom)
-    }
 }
 
 impl Node {

@@ -510,13 +510,13 @@ fn every_declared_expression_reads_only_a_variable_a_fresh_patch_has() {
 }
 
 #[test]
-fn the_control_plane_document_carries_no_null_leaf() {
-    // A delta is an RFC 7386 merge patch, which spends `null` on "delete this key", so a null leaf
-    // would be ambiguous. If one is ever needed this fails and NAMES the path.
+fn the_control_plane_document_is_the_patch_and_a_delta_is_path_ops() {
+    // The replica is the archive's own shape with every root present, blobs as the JSON they are,
+    // and a delta names the record it moves. A panel's state and a node's viewers once rode as
+    // JSON strings for a merge patch's sake; a put of the record carries them whole.
     let g = Goofi::new();
     let osc = g.add("LFO");
     let buf = g.add("Buffer");
-    // A pulse holds no value, which is the one param that could reach the doc as a null leaf.
     g.add("_TestResettable");
     g.link(osc, "out", buf, "input");
     g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/frequency",
@@ -524,8 +524,6 @@ fn the_control_plane_document_carries_no_null_leaf() {
     g.call("variable entry add", j!({ "name": "patch.subject", "value": "P07", "type": "string" }));
     let inst = g.call("nodes group", j!({ "nodes": [hex(buf)], "pos": [0.0, 0.0] }))["inst_id"]
         .as_str().unwrap().to_string();
-    // Grouping a node fed from outside mints a WIRED port, which is how this reaches the two
-    // optional leaves a scope has: a record's `scope` key, and the link that is its inner wire.
     let doc = g.doc();
     let ports: Vec<String> = doc["nodes"].as_object().unwrap().iter()
         .filter(|(_, n)| n["scope"] == inst).map(|(u, _)| u.clone()).collect();
@@ -534,38 +532,22 @@ fn the_control_plane_document_carries_no_null_leaf() {
                 ports.iter().any(|p| l["node_out"] == p.as_str() || l["node_in"] == p.as_str())
             }),
             "no port is wired, so this test would not reach the inner-wire link: {}", doc["links"]);
-    g.call("layout panel add", j!({ "beside": panel_id(&g), "side": "right", "ratio": 0.5 }));
+    let panel = panel_id(&g);
+    g.call("layout panel edit", j!({ "panel": panel, "type": "viewer", "state": { "node": hex(osc), "slot": "out" } }));
+    g.call("node edit", j!({ "node": hex(osc), "viewer": [{ "slot": "out", "kind": "line" }] }));
 
     let doc = g.doc();
-    for root in ["nodes", "links", "variables", "arrangement"] {
+    for root in ["nodes", "links", "variables", "variable_groups", "arrangement"] {
         assert!(doc.get(root).is_some(), "the document is missing its `{root}` root: {doc}");
     }
-    let mut nulls = Vec::new();
-    find_nulls(&doc, &mut Vec::new(), &mut nulls);
-    assert!(nulls.is_empty(), "these leaves are null, so a merge patch cannot express them: {nulls:?}");
+    assert_eq!(doc["nodes"][hex(osc)]["viewers"]["out"]["kind"], "line", "a viewer blob is JSON: {}", doc["nodes"][hex(osc)]);
+    let state = goofi_tests::arrangement_node(&doc["arrangement"], &panel).expect("the panel")["state"].clone();
+    assert_eq!(state["node"], hex(osc), "a panel's state is JSON: {state}");
+    assert_eq!(doc["nodes"][hex(osc)]["params"]["lfo"]["frequency"]["mode"], "expression", "a source rides inline");
+    assert_eq!(doc["variables"]["patch.subject"]["value"], "P07");
 }
 
 fn panel_id(g: &Goofi) -> String {
     goofi_tests::panel_ids(&g.doc()["arrangement"]).first().cloned().expect("the default panel")
 }
 
-fn find_nulls(v: &Value, path: &mut Vec<String>, out: &mut Vec<String>) {
-    match v {
-        Value::Null => out.push(path.join(".")),
-        Value::Object(m) => {
-            for (k, x) in m {
-                path.push(k.clone());
-                find_nulls(x, path, out);
-                path.pop();
-            }
-        }
-        Value::Array(a) => {
-            for (i, x) in a.iter().enumerate() {
-                path.push(i.to_string());
-                find_nulls(x, path, out);
-                path.pop();
-            }
-        }
-        _ => {}
-    }
-}

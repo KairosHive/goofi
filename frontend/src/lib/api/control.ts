@@ -279,7 +279,7 @@ export type ControlEvent =
 	// The whole document — on connect, and again to recover a client that lagged past the ring.
 	| { event: 'doc_state'; payload: { v: number; doc: Record<string, unknown> } }
 	// `from` is the version the delta applies TO, `v` the version it produces.
-	| { event: 'doc_patch'; payload: { from: number; v: number; patch: Record<string, unknown> } };
+	| { event: 'doc_patch'; payload: { from: number; v: number; ops: import('$lib/crdt/ops').Op[] } };
 
 /** One thing a drawing pad is asked to do, in the pad's own 1000-square. `ink` is `#rrggbb`,
  *  `#rrggbbaa`, or `erase`. */

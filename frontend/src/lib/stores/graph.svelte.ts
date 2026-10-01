@@ -26,6 +26,7 @@ import type { SlotView } from '$lib/viewers/inlineView';
 import { history, type Action } from './history.svelte';
 import { captureNavContext } from '$lib/stores/navContext';
 import { SyncClient } from '$lib/crdt/syncClient.svelte';
+import type { Op } from '$lib/crdt/ops';
 import {
 	linkViews,
 	nodesMap,
@@ -197,7 +198,7 @@ export class GraphStore {
 		});
 		ctl.on((ev) => this._handle(ev));
 		this._sync = new SyncClient(ctl);
-		this._sync.onDocChange((patch) => this._syncFromDoc(patch));
+		this._sync.onDocChange((ops) => this._syncFromDoc(ops));
 		this._sync.start();
 	}
 
@@ -213,10 +214,10 @@ export class GraphStore {
 
 	/** Follow the document's membership: a view per node that entered, none for one that left.
 	 * Everything else a view shows is read live, so nothing here re-derives it. */
-	private _syncFromDoc(patch: Record<string, unknown> | null): void {
+	private _syncFromDoc(ops: Op[] | null): void {
 		const doc = this._sync.doc;
 		// The workspace store rebuilds its tree from this; the client holds no second copy.
-		if (!patch || 'arrangement' in patch) workspace().syncFromDoc(arrangementTabs(doc));
+		if (!ops || ops.some((o) => o.path[0] === 'arrangement')) workspace().syncFromDoc(arrangementTabs(doc));
 		const held = nodesMap(doc);
 		for (const uid of this._views.keys()) {
 			if (!(uid in held)) {

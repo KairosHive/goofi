@@ -277,13 +277,13 @@ describe('graphDoc variables', () => {
 							id: 'split-4',
 							axis: 'column',
 							children: [
-								{ kind: 'panel', id: 'panel-2', size: 0.6, panel_type: 'node-editor', state: 'null' },
+								{ kind: 'panel', id: 'panel-2', size: 0.6, panel_type: 'node-editor', state: null },
 								{
 									kind: 'panel',
 									id: 'panel-3',
 									size: 0.4,
 									panel_type: 'viewer',
-									state: '{"node":"a1b2","kind":"line"}'
+									state: { node: 'a1b2', kind: 'line' }
 								}
 							]
 						}
@@ -312,9 +312,9 @@ describe('graphDoc variables', () => {
 	});
 
 	it('drops what it cannot draw instead of drawing a hole', () => {
-		// A tab whose root will not parse, a split with no children, a node with no id, and a state
-		// leaf that is not the JSON STRING the wire promises — each is a shape the manager never
-		// writes, and each would otherwise reach the renderer as a gap.
+		// A tab whose root will not parse, a split with no children and a node with no id are each
+		// a shape the manager never writes, and each would otherwise reach the renderer as a gap;
+		// a panel's state is whatever bag it holds.
 		const tab = (root: unknown): unknown => ({ id: 't', name: 'T', root });
 		expect(arrangementTabs({ arrangement: {} })).toEqual([]);
 		expect(arrangementTabs({ arrangement: { tabs: 'nope' } })).toEqual([]);
@@ -325,7 +325,7 @@ describe('graphDoc variables', () => {
 		expect(
 			arrangementTabs({ arrangement: { tabs: [tab({ kind: 'panel', id: 'p', state: { node: 'x' } })] } })
 		).toEqual([
-			{ id: 't', name: 'T', root: { kind: 'panel', id: 'p', panelType: 'empty', state: undefined } }
+			{ id: 't', name: 'T', root: { kind: 'panel', id: 'p', panelType: 'empty', state: { node: 'x' } } }
 		]);
 	});
 

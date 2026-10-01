@@ -39,7 +39,8 @@ export interface FacadeFace {
 
 type Obj = Record<string, unknown>;
 
-const obj = (v: unknown): Obj => (v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : {});
+const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v);
+const obj = (v: unknown): Obj => (isObj(v) ? v : {});
 const str = (m: Obj | undefined, key: string): string => {
 	const v = m?.[key];
 	return typeof v === 'string' ? v : '';
@@ -201,23 +202,13 @@ export function setParamSource(
 /** A node's touched-filter zero points (`{"group/name": {value, mode, …}}`), or `undefined`. */
 export function baselineJson(doc: Doc, uid: string): unknown {
 	const v = nodesMap(doc)[uid]?.baseline;
-	if (typeof v !== 'string') return undefined;
-	try {
-		return JSON.parse(v);
-	} catch {
-		return undefined;
-	}
+	return isObj(v) ? v : undefined;
 }
 
 /** A node's opaque per-slot viewer blob (`{slot: {collapsed, kind, settings}}`), or `undefined`. */
 export function viewersJson(doc: Doc, uid: string): unknown {
 	const v = nodesMap(doc)[uid]?.viewers;
-	if (typeof v !== 'string') return undefined;
-	try {
-		return JSON.parse(v);
-	} catch {
-		return undefined;
-	}
+	return isObj(v) ? v : undefined;
 }
 
 /** Every armed output slot, node by node, in the order the document holds them. */
@@ -392,15 +383,9 @@ function layoutNode(raw: unknown, root: boolean): { node: LayoutNode; size: numb
 	};
 }
 
-/** A panel's opaque bag, out of its JSON string leaf — a string, because a null leaf would make the merge patch ambiguous. */
+/** A panel's opaque bag; absent and null read alike. */
 function panelState(raw: unknown): unknown {
-	if (typeof raw !== 'string') return undefined;
-	try {
-		const v: unknown = JSON.parse(raw);
-		return v === null ? undefined : v;
-	} catch {
-		return undefined;
-	}
+	return raw === null ? undefined : raw;
 }
 
 /** The tab strip as the panel system draws it; a tab whose root will not parse is dropped. */

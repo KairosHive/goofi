@@ -178,7 +178,7 @@ describe('a collapsed scope’s inline viewer, which is a node’s inline viewer
 
 		// …and the state it shows comes BACK through the doc, exactly as a leaf's does.
 		expect(slotView(g.nodeById('i9'), 'p9').kind, 'nothing until the manager answers').toBeUndefined();
-		d.patch({ nodes: { i9: { viewers: JSON.stringify({ p9: { kind: 'image', collapsed: true } }) } } });
+		d.patch({ nodes: { i9: { viewers: { p9: { kind: 'image', collapsed: true } } } } });
 		expect(slotView(g.nodeById('i9'), 'p9').kind).toBe('image');
 		expect(isSlotExpanded(g.nodeById('i9'), 'p9')).toBe(false);
 

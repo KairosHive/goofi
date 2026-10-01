@@ -1,8 +1,8 @@
 /** The document driver: follows `doc_state` / `doc_patch` so the replica equals the manager's document.
- * The replica is reactive state, so a merge patch writes exactly the leaves it names and a reader
- * of a leaf re-runs for that leaf alone. */
+ * The replica is reactive state, so a delta writes exactly the records it names and a reader of a
+ * record re-runs for that record alone. */
 import type { Control } from '$lib/api/control';
-import { applyMerge } from './mergePatch';
+import { applyOps, type Op } from './ops';
 import { emptyDoc, type Doc } from './graphDoc';
 
 export class SyncClient {
@@ -12,8 +12,8 @@ export class SyncClient {
 	}
 	private control: Control;
 	private unsub: (() => void) | null = null;
-	/** Told what moved: the applied merge patch, or `null` when the whole document was replaced. */
-	private docObserver: ((patch: Record<string, unknown> | null) => void) | null = null;
+	/** Told what moved: the applied ops, or `null` when the whole document was replaced. */
+	private docObserver: ((ops: Op[] | null) => void) | null = null;
 	/** The version `_doc` is at, or `-1` before the first `doc_state`. */
 	private _version = $state(-1);
 	get version(): number {
@@ -28,7 +28,7 @@ export class SyncClient {
 		this.control = control;
 	}
 
-	onDocChange(fn: (patch: Record<string, unknown> | null) => void): void {
+	onDocChange(fn: (ops: Op[] | null) => void): void {
 		this.docObserver = fn;
 	}
 
@@ -48,7 +48,7 @@ export class SyncClient {
 				this._version = ev.payload.v;
 				this.docObserver?.(null);
 			} else if (ev.event === 'doc_patch') {
-				this.applyPatch(ev.payload.from, ev.payload.v, ev.payload.patch);
+				this.applyPatch(ev.payload.from, ev.payload.v, ev.payload.ops);
 			}
 		});
 	}
@@ -59,8 +59,8 @@ export class SyncClient {
 		this.unsub = null;
 	}
 
-	/** Apply one delta: a patch already held is skipped, one reaching past this version is refused. */
-	applyPatch(from: number, to: number, patch: Record<string, unknown>): void {
+	/** Apply one delta: one already held is skipped, one reaching past this version is refused. */
+	applyPatch(from: number, to: number, ops: Op[]): void {
 		if (to <= this._version) return; // stale: the seed already carries it
 		if (from !== this._version) {
 			console.warn(
@@ -68,8 +68,8 @@ export class SyncClient {
 			);
 			return;
 		}
-		applyMerge(this._doc, patch);
+		applyOps(this._doc, ops);
 		this._version = to;
-		this.docObserver?.(patch);
+		this.docObserver?.(ops);
 	}
 }

@@ -592,7 +592,7 @@ fn a_port_wears_a_viewer_on_the_stream_it_exposes() {
     // An IN port wears an output slot, so it takes a viewer exactly as a node does.
     g.call("node edit", j!({ "node": inp, "viewer": [{ "slot": "value", "kind": "line" }] }));
     let doc = g.doc();
-    let stored = doc["nodes"][&inp]["viewers"].as_str().expect("a viewer blob rides as a string");
+    let stored = doc["nodes"][&inp]["viewers"].to_string();
     assert!(stored.contains("line"), "the port kept the view state: {stored}");
 
     // …and it is refused on a slot the port does not have, rather than stored and never drawn.
@@ -602,7 +602,7 @@ fn a_port_wears_a_viewer_on_the_stream_it_exposes() {
     // `value` slot an IN port wears — a port is a pass-through, never a sink, whichever way it faces.
     let outp = boundary(&g, &inst, "out");
     g.call("node edit", j!({ "node": outp, "viewer": [{ "slot": "value", "kind": "line" }] }));
-    let drained = g.doc()["nodes"][&outp]["viewers"].as_str().unwrap_or("").to_string();
+    let drained = g.doc()["nodes"][&outp]["viewers"].to_string();
     assert!(drained.contains("line"), "the out port kept its view state: {drained}");
 
     // The raw read resolves a port exactly as a viewer does: with nothing behind it, the answer
@@ -624,7 +624,7 @@ fn a_port_wears_a_viewer_on_the_stream_it_exposes() {
     assert!(g.call("node snapshot", j!({ "output": ep(&outp, "value"), "raw": true }))["npy_b64"].is_string(),
             "the port's own address answers the same stream");
     g.call("node edit", j!({ "node": inst, "viewer": [{ "slot": &outp, "kind": "line" }] }));
-    let facade = g.doc()["nodes"][&inst]["viewers"].as_str().expect("a blob, as a node's").to_string();
+    let facade = g.doc()["nodes"][&inst]["viewers"].to_string();
     assert!(facade.contains("line"), "the facade kept the view state: {facade}");
     g.refuse("node edit", j!({ "node": inst, "viewer": [{ "slot": "nope", "kind": "line" }] }));
 

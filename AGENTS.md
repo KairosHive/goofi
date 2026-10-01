@@ -63,7 +63,7 @@ before the first production deployment.
 - One binary serves the app and acts as its CLI. It prints the URL without opening a browser;
   `--headless` serves only the API. `goofi help` lists commands.
 - The manager owns the graph and document. Browser documents are read-only replicas, updated
-  with versioned JSON merge patches. Document leaves cannot be null.
+  with versioned path operations (`put` a value at a path, `del` a path).
 - Mutations are commands with inverses and session-specific undo. Fresh calls are strict;
   replay tolerates stale targets. Layout inverses use forward planners.
 - Signal nodes schedule themselves; audio and graphics have their own clocks. Node processing

@@ -365,7 +365,7 @@ test('the cog opens a card\'s settings, a click elsewhere closes them, and the h
 		await expect(menu).toBeVisible();
 		await menu.getByLabel('Auto range').click();
 		await expect
-			.poll(async () => JSON.parse((await backendDoc(page)).nodes[osc]?.viewers ?? '{}').out?.settings?.yAuto)
+			.poll(async () => (await backendDoc(page)).nodes[osc]?.viewers?.out?.settings?.yAuto)
 			.toBe(false);
 
 		await page.mouse.click(900, 600);

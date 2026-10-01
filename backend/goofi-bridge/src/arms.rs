@@ -617,7 +617,7 @@ pub(crate) fn node_edit(tx: &mut Txn, payload: &Value) -> Result<Value, String> 
             let patch = viewer_entries_patch(entries)?;
             vocab::check_viewers(&tx.g, uid, &patch)?;
             let mut whole = tx.g.viewers(uid).cloned().ok_or("node edit: no such node")?;
-            crate::doc::apply_merge(&mut whole, &Value::Object(patch));
+            merge_into(&mut whole, &Value::Object(patch));
             Some(whole)
         }
         None => None,
@@ -634,6 +634,26 @@ pub(crate) fn node_edit(tx: &mut Txn, payload: &Value) -> Result<Value, String> 
         }
     }
     Ok(json!({ "ok": true }))
+}
+
+/// Merge `patch` into `target`: an object merges into an object, `null` removes a key, anything
+/// else replaces — how a viewer edit folds into the blob a node wears.
+fn merge_into(target: &mut Value, patch: &Value) {
+    let Value::Object(p) = patch else {
+        *target = patch.clone();
+        return;
+    };
+    if !target.is_object() {
+        *target = Value::Object(serde_json::Map::new());
+    }
+    let t = target.as_object_mut().expect("just made it an object");
+    for (k, pv) in p {
+        if pv.is_null() {
+            t.shift_remove(k);
+        } else {
+            merge_into(t.entry(k.clone()).or_insert(Value::Null), pv);
+        }
+    }
 }
 
 /// `--viewer` entries `{slot, …view}` — or `{slot, clear: true}` — as the merge patch the stored

@@ -304,7 +304,7 @@ describe('catalog-in-hello — the palette rides on the snapshot, no async list_
 
 describe('inline viewer state — the document is the one holder, so it follows the document', () => {
 	/** The blob as the projection writes it: a JSON STRING leaf under the node. */
-	const blob = (v: Record<string, unknown>) => ({ viewers: JSON.stringify(v) });
+	const blob = (v: Record<string, unknown>) => ({ viewers: v });
 
 	it('a peer’s collapse and kind land in this tab too', () => {
 		const fc = new FakeControl();

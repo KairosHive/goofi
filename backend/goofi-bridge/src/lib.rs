@@ -15,7 +15,6 @@ pub mod autosave;
 pub mod phrase;
 /// The control-plane document and its deltas — shape-agnostic.
 pub mod doc;
-mod projection;
 mod fsbrowse;
 mod inspect;
 mod mcp;
@@ -211,7 +210,7 @@ impl AppState {
         let mut graph_val = fresh_graph(iox.clone(), (!mode.demo).then_some(clock), render)?;
         graph_val.set_workspace(&dir);
         let mut doc = crate::doc::GraphDoc::new();
-        doc.reconcile_root(projection::of(&graph_val));
+        doc.reconcile_root(graph_val.replica());
         let recorder = Arc::new(goofi_record::Recorder::new(graph_val.time()));
         if let Some(gfx) = try_graphics_engine(&mut graph_val) {
             gfx.set_recorder(recorder.clone());
@@ -1577,16 +1576,15 @@ pub(crate) fn settle_and_project<'a>(state: &'a AppState, g: &mut Graph) -> (Mut
     state.changed.notify();
     sync_followers(state, g);
     state.live.fill(g);
-    let projection = projection::of(g);
-    (state.doc.lock(), projection)
+    (state.doc.lock(), g.replica())
 }
 
 /// Take the document to `projection` and broadcast the delta, then `outbox` behind it, under the
 /// document guard: nothing a later tail says can overtake what this one said.
 pub(crate) fn reconcile_and_broadcast(state: &AppState, mut doc: MutexGuard<crate::doc::GraphDoc>, projection: Value, outbox: Vec<Event>) {
     let from = doc.version();
-    if let Some(patch) = doc.reconcile_root(projection) {
-        state.events.send(Event::DocPatch { from, v: doc.version(), patch });
+    if let Some(ops) = doc.reconcile_root(projection) {
+        state.events.send(Event::DocPatch { from, v: doc.version(), ops });
     }
     for event in outbox {
         state.events.send(event);

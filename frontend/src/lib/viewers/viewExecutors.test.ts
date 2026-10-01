@@ -38,7 +38,7 @@ function fixture() {
 				for (const { slot, ...v } of c.payload.viewer as Array<{ slot: string }>)
 					whole[slot] = { ...whole[slot], ...v };
 			const node = sent[sent.length - 1]!.payload.node as string;
-			d.patch({ nodes: { [node]: { viewers: JSON.stringify(whole) } } });
+			d.patch({ nodes: { [node]: { viewers: whole } } });
 		}
 	};
 }

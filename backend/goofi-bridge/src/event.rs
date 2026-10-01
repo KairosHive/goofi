@@ -11,7 +11,7 @@ pub enum Event {
     Hello(Value),
     GraphReplaced(Value),
     DocState { v: u64, doc: Value },
-    DocPatch { from: u64, v: u64, patch: Value },
+    DocPatch { from: u64, v: u64, ops: Vec<crate::doc::Op> },
     UnsavedChanges { unsaved_changes: bool },
     SavePathChanged { save_path: Value },
     NodeAdded { uid: String },

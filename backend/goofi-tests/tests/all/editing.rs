@@ -109,11 +109,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // A control panel names its group the way an expression does, so the ONE rename moves both.
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "control",
                                      "state": { "group": "desk" } }));
-    // A panel's state rides the document as a JSON string, so the reader parses it.
-    let group_of = |g: &Goofi| {
-        let raw = entries(g)[&first_panel(g)]["state"].as_str().unwrap_or("null").to_string();
-        serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null)["group"].clone()
-    };
+    let group_of = |g: &Goofi| entries(g)[&first_panel(g)]["state"]["group"].clone();
     g.call("variable group rename", j!({ "from": "desk", "to": "board" }));
     assert_eq!(group_of(&g), j!("board"), "the panel followed its group");
     g.call("variable group rename", j!({ "from": "board", "to": "desk" }));
@@ -561,22 +557,22 @@ fn a_deleted_sub_patch_comes_back_whole_with_the_panels_that_named_it() {
     g.call("layout panel edit", j!({ "panel": second, "type": "viewer",
                                      "state": { "node": port, "slot": "value" } }));
     g.call("node remove", j!({ "node": port }));
-    let unbound = |p: &str| entries(&g)[p]["state"].as_str().unwrap_or("").contains("\"node\":null");
+    let unbound = |p: &str| entries(&g)[p]["state"]["node"].is_null();
     assert!(unbound(&second), "the port took its panel binding: {}", entries(&g)[&second]["state"]);
     g.call("undo", j!({}));
-    assert!(entries(&g)[&second]["state"].as_str().is_some_and(|s| s.contains(&port)),
-            "and one undo gives the port and the binding back together");
+    assert_eq!(entries(&g)[&second]["state"]["node"], port,
+               "and one undo gives the port and the binding back together");
 
     g.call("node remove", j!({ "node": inst }));
     assert!(g.nodes().is_empty() && g.instances().is_empty(), "the subtree went with the scope");
-    assert_eq!(entries(&g)[&panel]["state"], "{\"node\":null}", "and the binding with it");
+    assert_eq!(entries(&g)[&panel]["state"], j!({ "node": null }), "and the binding with it");
     assert!(unbound(&second),
             "…including a panel that named one of its PORTS, which the subtree sweep must reach");
 
     g.call("undo", j!({}));
     assert_eq!(g.instances(), vec![inst], "the scope is back at the same uid");
     assert_eq!(g.nodes().len(), 2, "with both members");
-    assert_eq!(entries(&g)[&panel]["state"], format!("{{\"node\":\"{}\"}}", hex(a)),
+    assert_eq!(entries(&g)[&panel]["state"], j!({ "node": hex(a) }),
                "and the panel names its node again");
 }
 
@@ -1079,7 +1075,7 @@ fn a_viewer_bag_persists_and_refuses_a_word_outside_its_vocabulary() {
     // Entries MERGE, slot by slot: naming one setting leaves the kind and the others where they were.
     g.call("node edit", j!({ "node": hex(osc),
                              "viewer": [{ "slot": "out", "settings": { "xScale": 3 } }] }));
-    let view = |g: &Goofi| g.doc()["nodes"][hex(osc)]["viewers"].as_str().unwrap_or("").to_string();
+    let view = |g: &Goofi| g.doc()["nodes"][hex(osc)]["viewers"].to_string();
     let merged = view(&g);
     for kept in ["\"kind\":\"line\"", "\"yScale\":2", "\"xScale\":3"] {
         assert!(merged.contains(kept), "the patch merged rather than replaced: {merged}");
@@ -1146,13 +1142,7 @@ fn clearing_the_touched_baseline_moves_the_zero_point_and_breaks_no_binding() {
     let osc = g.add("LFO");
 
     // Nothing cleared yet: no baseline key at all, so the zero is each type's declared default.
-    // The blob rides as a json STRING, as every merge-patch-safe blob does.
-    let baseline = |g: &Goofi| -> Value {
-        match g.doc()["nodes"][hex(osc)]["baseline"].as_str() {
-            Some(s) => serde_json::from_str(s).expect("the baseline is json"),
-            None => Value::Null,
-        }
-    };
+    let baseline = |g: &Goofi| -> Value { g.doc()["nodes"][hex(osc)]["baseline"].clone() };
     assert!(baseline(&g).is_null(), "a node nobody has cleared carries no baseline: {}", baseline(&g));
 
     // Move one param off its default and bind another — the two kinds of change the filter counts.

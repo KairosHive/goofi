@@ -557,7 +557,7 @@ pub fn ep(uid: impl std::fmt::Display, slot: impl std::fmt::Display) -> String {
     format!("{uid}/{slot}")
 }
 
-pub use goofi_bridge::doc::{GraphDoc, Patch};
+pub use goofi_bridge::doc::{GraphDoc, Op, Patch};
 pub use tokio_tungstenite::tungstenite::Message;
 
 pub type Ws = tokio_tungstenite::WebSocketStream<
@@ -671,10 +671,11 @@ impl Client {
                 }
                 Some("doc_patch") => {
                     let p = &v["payload"];
+                    let ops: Vec<Op> = serde_json::from_value(p["ops"].clone()).expect("a delta is a list of ops");
                     let out = self.doc.apply_patch(
                         p["from"].as_u64().expect("a base version"),
                         p["v"].as_u64().expect("a version"),
-                        &p["patch"],
+                        &ops,
                     );
                     if let Patch::Gap { from, at } = out {
                         panic!("a delta was lost: this replica is at v{at} and the next patch is from v{from}");
