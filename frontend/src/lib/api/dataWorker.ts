@@ -104,19 +104,28 @@ const schedule =
 		? requestAnimationFrame
 		: (fn: () => void): number => setTimeout(fn, 16) as unknown as number;
 const stale = new Set<DrawingState>();
-let flushScheduled = false;
+let painting = false;
 let paints = 0;
+/** Keep the loop armed while a stream is open: a frame asked for after an idle gap is answered at
+ * once, which split one tick's streams into two paints, so the loop never lets go between ticks. */
 function requestFlush(): void {
-	if (flushScheduled) return;
-	flushScheduled = true;
-	schedule(flush);
+	if (painting) return;
+	painting = true;
+	schedule(paint);
+}
+function paint(): void {
+	flush();
+	if (slots.size === 0 && stale.size === 0) {
+		painting = false;
+		return;
+	}
+	schedule(paint);
 }
 function invalidate(d: DrawingState): void {
 	stale.add(d);
 	requestFlush();
 }
 function flush(): void {
-	flushScheduled = false;
 	let painted = false;
 	for (const d of stale) {
 		if (!d.slot?.latest) continue;
@@ -257,6 +266,7 @@ self.addEventListener('message', (e: MessageEvent) => {
 			st.frames = m.frames;
 			statsTimer ??= setInterval(report, 250);
 			openWs(st);
+			requestFlush();
 			break;
 		}
 		case 'spec': {

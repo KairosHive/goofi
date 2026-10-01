@@ -245,12 +245,15 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 });
 
 test('streams served at the cap paint together, so the page paints at the cap', async ({ page }) => {
-	// Each slot served on a phase of its own made the page paint once per stream; the counter read
-	// twice `system.viewer_fps`. An upper bound: a busy machine can only paint less.
+	// Each slot served on a phase of its own made the page paint once per stream, and a paint
+	// loop re-armed per tick split one tick's streams in two: the counter read twice
+	// `system.viewer_fps`. A cap the display outpaces by far shows the second; an upper bound,
+	// since a busy machine can only paint less.
 	await page.setViewportSize({ width: 1280, height: 800 });
 	await page.goto('/');
 	await waitForApp(page);
 	try {
+		await rawCall(page, 'variable entry edit', { name: 'system.viewer_fps', value: 15 });
 		const lfos: string[] = [];
 		for (const x of [40, 340, 640]) {
 			const n = await addNode(page, 'LFO', [x, 80]);
@@ -265,7 +268,7 @@ test('streams served at the cap paint together, so the page paints at the cap', 
 			.poll(async () => (await emitted()).every((i, k) => i > from[k] + 400), { message: 'all three stream' })
 			.toBe(true);
 		const fps = async () => Number((await page.getByText(/^\d+ fps$/).first().textContent())?.split(' ')[0]);
-		expect(await fps(), 'paints a second, with three streams at a 30 fps cap').toBeLessThanOrEqual(36);
+		expect(await fps(), 'paints a second, with three streams at a 15 fps cap').toBeLessThanOrEqual(18);
 
 		// Producers slower than the cap emit at phases of their own; the reducer still serves each
 		// frame on the next tick of the grid, so they arrive together and the page paints no more.
@@ -275,7 +278,7 @@ test('streams served at the cap paint together, so the page paints at the cap', 
 		await expect
 			.poll(async () => (await emitted()).every((i, k) => i > again[k] + 20), { message: 'all three stream below the cap' })
 			.toBe(true);
-		expect(await fps(), 'paints a second, with three streams below the cap').toBeLessThanOrEqual(36);
+		expect(await fps(), 'paints a second, with three streams below the cap').toBeLessThanOrEqual(18);
 	} finally {
 		await resetPatch(page);
 	}
