@@ -229,7 +229,7 @@
 				<span class="title">{title}</span>
 			{/snippet}
 			{#snippet end()}
-				<IconButton variant="ghost" size="sm" label="Close" onclick={onClose}
+				<IconButton variant="ghost" size="sm" label="Close" disabled={busy} onclick={onClose}
 					><Icon name="x" /></IconButton
 				>
 			{/snippet}

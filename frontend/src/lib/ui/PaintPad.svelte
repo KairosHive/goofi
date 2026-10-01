@@ -39,13 +39,15 @@
 	let erasing = $state(false);
 	let drawing = false;
 	let last: { x: number; y: number } | null = null;
-	let mine: string | null = null;
+	/** Commits not echoed yet, oldest first: an earlier echo must not paint over a newer stroke. */
+	let mine: string[] = [];
 
 	$effect(() => {
 		const url = value;
 		const el = canvas;
-		const echo = url === mine;
-		mine = null;
+		const i = mine.indexOf(url);
+		const echo = i >= 0;
+		mine = echo ? mine.slice(i + 1) : [];
 		if (!el || echo) return;
 		const ctx = el.getContext('2d');
 		if (!ctx) return;
@@ -119,8 +121,9 @@
 
 	function commit(): void {
 		if (!canvas) return;
-		mine = canvas.toDataURL('image/png');
-		onChange(mine);
+		const url = canvas.toDataURL('image/png');
+		mine.push(url);
+		onChange(url);
 	}
 
 	function down(e: PointerEvent): void {

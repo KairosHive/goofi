@@ -36,6 +36,13 @@ function assign(target: Obj, key: string, value: unknown): void {
 	if (isObj(held) && isObj(value)) {
 		for (const k of Object.keys(held)) if (!(k in value)) delete held[k];
 		for (const [k, v] of Object.entries(value)) assign(held, k, v);
+		// The manager's key order is the order a list shows: a reorder re-inserts every key.
+		const order = Object.keys(value);
+		if (Object.keys(held).join('\0') !== order.join('\0')) {
+			const kept = { ...held };
+			for (const k of order) delete held[k];
+			for (const k of order) held[k] = kept[k];
+		}
 		return;
 	}
 	// An array or a scalar lands whole, and only when it moved: an equal one left alone keeps
@@ -50,7 +57,9 @@ export function diffOps(before: Obj, after: Obj): Op[] {
 	const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 	for (const [root, av] of Object.entries(after)) {
 		const bv = before[root];
-		if (isObj(bv) && isObj(av)) {
+		if (isObj(bv) && isObj(av) && !keepsOrder(bv, av)) {
+			ops.push({ op: 'put', path: [root], value: av });
+		} else if (isObj(bv) && isObj(av)) {
 			for (const [key, v] of Object.entries(av)) {
 				if (!(key in bv) || !same(bv[key], v)) ops.push({ op: 'put', path: [root, key], value: v });
 			}
@@ -65,4 +74,11 @@ export function diffOps(before: Obj, after: Obj): Op[] {
 		if (!(root in after)) ops.push({ op: 'del', path: [root] });
 	}
 	return ops;
+}
+
+/** Whether per-key ops on `before` leave its keys in `after`'s order. */
+function keepsOrder(before: Obj, after: Obj): boolean {
+	const kept = Object.keys(before).filter((k) => k in after);
+	const added = Object.keys(after).filter((k) => !(k in before));
+	return [...kept, ...added].join('\0') === Object.keys(after).join('\0');
 }

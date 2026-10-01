@@ -222,6 +222,12 @@ async fn a_tab_mirrors_the_graph_off_the_document_events_and_follows_a_peer_edit
     assert_eq!(c.doc().read_at(&["variables", "patch.subject", "value"]), Some(j!("P07")));
     assert_eq!(c.doc().read_at(&["variables", "patch.subject", "lock"]), None,
                "a user variable carries no lock until one is set");
+    // A rename keeps its place, and a list shows the replica's key order: it must be the manager's.
+    peer.call("variable entry add", j!({ "name": "patch.tail", "value": 1.0, "type": "float" })).await;
+    peer.call("variable entry rename", j!({ "name": "patch.subject", "to": "patch.zed" })).await;
+    c.until_doc(|d| d.read_at(&["variables", "patch.zed"]).is_some()).await;
+    let order = |v: &Value| v["variables"].as_object().map(|m| m.keys().cloned().collect::<Vec<_>>());
+    assert_eq!(order(&c.doc().to_json()), order(&g.call("session state", j!({}))), "the replica's variable order");
 
     // A value rides the doc patch alone; the descriptor echo is a source edit's. The first
     // `state_update` this node sends is the expression's.

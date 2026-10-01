@@ -28,6 +28,8 @@ export function useLiveValue<T>(
 	let edit = $state<T>(getSource());
 	// A commit the source has not answered yet: shown in its place until the source next moves.
 	let pending = $state(false);
+	// A preview moved the source, so a commit at that value is still an edit to record.
+	let previewed = false;
 	$effect(() => {
 		getSource();
 		untrack(() => (pending = false));
@@ -48,10 +50,16 @@ export function useLiveValue<T>(
 		},
 		input(v: T) {
 			edit = v;
-			onInput?.(v);
+			if (onInput) {
+				previewed = true;
+				onInput(v);
+			}
 		},
 		commit(v: T) {
 			edit = v;
+			// A focus and blur with nothing typed is no edit: it must not dirty the patch.
+			if (!previewed && Object.is(v, untrack(getSource))) return;
+			previewed = false;
 			pending = true;
 			onChange(v);
 		},

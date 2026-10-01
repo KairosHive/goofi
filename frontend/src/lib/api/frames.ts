@@ -184,6 +184,8 @@ listen((m) => {
 				deliver(s, n.frame);
 				delivered = true;
 			} else if (n.head) {
+				// Head news comes only while no reader here takes frames, so a held frame is stale.
+				s.current = null;
 				s.head = n.head;
 			} else if (n.stamps) {
 				// A held frame's fresh stamps land as a new object a poll sees; nothing on screen changed.
@@ -232,6 +234,5 @@ export function latestFrame(node: string, slot: string): DataFrame | null {
 export function latestHead(node: string, slot: string): FrameHead | null {
 	const s = slots.get(streamKey(node, slot));
 	if (!s) return null;
-	if (s.current) return headOf(s.current);
-	return demand(s).frames ? null : s.head;
+	return s.current ? headOf(s.current) : s.head;
 }

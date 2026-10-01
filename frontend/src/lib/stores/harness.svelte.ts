@@ -128,7 +128,13 @@ export class HarnessStore {
 	/** Launch a harness and bind it to the panel that asked, so that panel shows what it asked for. */
 	async launch(panelId: string, harness: string): Promise<void> {
 		const born = await this.ctl.call<{ instance_id: string }>('agent start', { name: harness });
-		if (born?.instance_id) this.show(panelId, born.instance_id);
+		const id = born?.instance_id;
+		if (!id) return;
+		// The roster event can land first and let another idle panel claim the new instance.
+		const others = Object.keys(this.panels).filter((p) => p !== panelId && this.panels[p] === id);
+		for (const p of others) this.panels[p] = undefined;
+		this.show(panelId, id);
+		for (const p of others) this.claim(p);
 	}
 
 	/** The Kill half — the manager's full stop path. */

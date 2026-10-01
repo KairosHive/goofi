@@ -116,12 +116,15 @@
 	function commitRename(): void {
 		// Escape/cancel nulls editingUid first, so the blur the unmounting input fires is a no-op here.
 		const uid = editingUid;
-		editingUid = null;
-		if (!uid || !node || node.uid !== uid) return;
+		if (!uid || !node || node.uid !== uid) {
+			editingUid = null;
+			return;
+		}
 		const base = nameDraft.trim();
-		// The manager refuses a name an expression could not read as an attribute; saying so here
-		// is what keeps the draft rather than throwing the user's typing away on a blur.
+		// The manager refuses a name an expression could not read as an attribute; the field stays
+		// open with the draft, marked bad, rather than throwing the user's typing away on a blur.
 		if (!isValidName(base)) return;
+		editingUid = null;
 		void g.renameNode(uid, base).catch((e) => console.warn('rename failed', e));
 	}
 	function cancelRename(): void {
@@ -371,6 +374,7 @@
 			filters = SHOW_ALL;
 			activeParam = null;
 			nonDefault = new Map();
+			menu = null; // its items act on the node it opened on
 		}
 	});
 	$effect(() => {

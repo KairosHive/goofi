@@ -2,6 +2,7 @@
  * the feed draws the answer. Positions are in the body's layout px. */
 import type { ArrayData } from '$lib/codec/decode';
 import type { LineData, Range } from 'plotluck';
+import { isU8, sampleRange, toUnit } from './depth';
 import { formatTick } from './format';
 
 export interface Hover {
@@ -158,6 +159,9 @@ export function imageProbe(arr: ArrayData, stretch: boolean, meta: Record<string
 	const channels = arr.shape.length === 3 ? arr.shape[2] : 1;
 	const rowNames = axisNames(meta, 0);
 	const colNames = axisNames(meta, 1);
+	// 8-bit texels read back in the node's own units, as the drawing maps them.
+	const range = isU8(arr.dtype) ? (sampleRange(meta) ?? [0, 1]) : null;
+	const value = (t: number): number => (range ? toUnit(t, range) : t);
 	return (px, py, box) => {
 		if (iw <= 0 || ih <= 0) return null;
 		// Centred at the image's own aspect unless stretched, as the surface fits it.
@@ -177,7 +181,7 @@ export function imageProbe(arr: ArrayData, stretch: boolean, meta: Record<string
 		if (col < 0 || col >= iw || row < 0 || row >= ih) return null;
 		const at = (row * iw + col) * channels;
 		const values: string[] = [];
-		for (let c = 0; c < channels; c++) values.push(formatTick(Number(arr.values[at + c])));
+		for (let c = 0; c < channels; c++) values.push(formatTick(value(Number(arr.values[at + c]))));
 		return { mark: null, lines: [values, [`x ${coord(col, colNames)}`, `y ${coord(row, rowNames)}`]] };
 	};
 }

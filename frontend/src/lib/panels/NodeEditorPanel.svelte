@@ -114,9 +114,21 @@
 			e.stopPropagation();
 			swallowMenuClick = false;
 		};
+		// A lift that sends no click (a slide past the slop) must not leave the next tap eaten.
+		let timer = 0;
+		const lifted = (): void => {
+			timer = window.setTimeout(() => (swallowMenuClick = false), 400);
+		};
 		const opts = { capture: true, once: true } as const;
 		window.addEventListener('click', eat, opts);
-		return () => window.removeEventListener('click', eat, opts);
+		window.addEventListener('pointerup', lifted, opts);
+		window.addEventListener('pointercancel', lifted, opts);
+		return () => {
+			clearTimeout(timer);
+			window.removeEventListener('click', eat, opts);
+			window.removeEventListener('pointerup', lifted, opts);
+			window.removeEventListener('pointercancel', lifted, opts);
+		};
 	});
 
 	/** Open the add-node menu at a viewport point — the one placement path for all four entry
@@ -877,17 +889,16 @@
 	async function deleteElements({ nodes, edges }: { nodes: Node[]; edges: Edge[] }): Promise<void> {
 		const nodeIds = nodes.map((n) => n.id);
 		const deleted = new Set(nodeIds);
-		await g.removeNodes(nodeIds).catch(() => {});
-		for (const e of edges) {
-			// A link touching a batch-deleted node went with it; don't double-record its removal.
-			if (deleted.has(e.source) || deleted.has(e.target)) continue;
-			const so = e.sourceHandle;
-			const si = e.targetHandle;
-			if (so && si)
-				await g
-					.removeLink({ node_out: e.source, node_in: e.target, slot_out: so, slot_in: si })
-					.catch(() => {});
-		}
+		const links = edges.filter((e) => !deleted.has(e.source) && !deleted.has(e.target));
+		// One undo step for the whole selection; a link touching a deleted node went with it.
+		await history()
+			.transaction('Delete selection', async (step) => {
+				if (nodeIds.length) await g.removeNodes(nodeIds, step);
+				for (const e of links)
+					if (e.sourceHandle && e.targetHandle)
+						await g.removeLink({ node_out: e.source, node_in: e.target, slot_out: e.sourceHandle, slot_in: e.targetHandle }, step);
+			})
+			.catch((err) => notify().failure('Delete', err));
 		sel.clear(panelId);
 	}
 
@@ -1128,7 +1139,8 @@
 			document.removeEventListener('keydown', onKeydown);
 			window.removeEventListener('paste', onPaste);
 			window.removeEventListener('mousemove', trackMouse);
-			// A drag in flight must not leave drop outlines lit on the other panels.
+			// A drag in flight must not leave drop outlines lit on the other panels, nor its listener.
+			document.removeEventListener('scroll', measureTargets, { capture: true });
 			if (uiStore.nodeDrag !== null) {
 				uiStore.nodeDrag = null;
 				uiStore.nodeDragTarget = null;

@@ -22,6 +22,10 @@ pub fn diff_ops(before: &Value, after: &Value) -> Vec<Op> {
     let mut ops = Vec::new();
     for (root, av) in a {
         match (b.get(root), av) {
+            // Per-key ops keep old keys in place and append new ones; any other order goes whole.
+            (Some(Value::Object(bm)), Value::Object(am)) if !keeps_order(bm, am) => {
+                ops.push(Op::Put { path: vec![root.clone()], value: av.clone() });
+            }
             (Some(Value::Object(bm)), Value::Object(am)) => {
                 for (key, v) in am {
                     if bm.get(key) != Some(v) {
@@ -40,6 +44,13 @@ pub fn diff_ops(before: &Value, after: &Value) -> Vec<Op> {
         ops.push(Op::Del { path: vec![root.clone()] });
     }
     ops
+}
+
+/// Whether per-key ops on `before` leave its keys in `after`'s order.
+fn keeps_order(before: &Map<String, Value>, after: &Map<String, Value>) -> bool {
+    let kept = before.keys().filter(|k| after.contains_key(*k));
+    let added = after.keys().filter(|k| !before.contains_key(*k));
+    kept.chain(added).eq(after.keys())
 }
 
 /// Apply ops in place. A `put` makes the maps on its way; a `del` of what is absent is nothing.

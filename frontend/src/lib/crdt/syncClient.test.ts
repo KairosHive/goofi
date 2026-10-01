@@ -54,6 +54,16 @@ describe('SyncClient', () => {
 		expect(nodeView(client.doc, '1')).toBeNull();
 	});
 
+	it('a whole-map put takes the manager key order, which a list shows', () => {
+		const { ctl, client } = started();
+		const vars = (names: string[]) => Object.fromEntries(names.map((n) => [n, { value: 1 }]));
+		ctl.emit({ event: 'doc_state', payload: { v: 1, doc: { ...stateWith({}), variables: vars(['p.a', 'p.b']) } } });
+		// A rename keeps its place: the manager sends the reordered map whole.
+		const put = { op: 'put' as const, path: ['variables'], value: vars(['p.z', 'p.b']) };
+		ctl.emit({ event: 'doc_patch', payload: { from: 1, v: 2, ops: [put] } });
+		expect(Object.keys(client.doc.variables as object)).toEqual(['p.z', 'p.b']);
+	});
+
 	it('skips a stale delta in silence — the seed already carried it', () => {
 		// The manager subscribes a socket BEFORE it snapshots the document, so a peer's edit landing
 		// in that window is broadcast and then included in the snapshot too. Re-delivery is the
