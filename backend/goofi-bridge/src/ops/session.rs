@@ -149,7 +149,6 @@ impl ReadOp for Manifest {
 
 impl EffectOp for Save {
     fn run(state: &AppState, a: SaveArgs, _: &Caller) -> Result<Value, String> {
-        let mut g = state.graph.lock();
         // Expand `~` exactly as the browser does — the two must agree on what a path means. No path
         // means the patch's HOME, and a patch that never had one is refused rather than guessed at.
         let path = match a.path.as_deref() {
@@ -157,21 +156,28 @@ impl EffectOp for Save {
             None => state.save_path().ok_or("session save: this patch has no home yet — give a path")?,
         };
         let mount = state.mount();
-        // Sampled BEFORE the pack: baselining after would call a file written during the zip packed
-        // either way, which is the direction that LOSES an edit.
-        g.persist();
-        let packed = goofi_graph::archive::fingerprint(&mount);
-        crate::save_archive(std::path::Path::new(&path), &g.serialize(), &mount, &crate::bundled_custom(&g, &state.custom), a.overwrite.unwrap_or(true))?;
-        // Announced UNCONDITIONALLY, not on the flag's transition: a patch dirtied solely by a file
+        // Everything the archive says is taken under the guard; the zip runs off it. The workspace
+        // is sampled BEFORE the pack: baselining after would call a file written during the zip
+        // packed either way, which is the direction that LOSES an edit.
+        let (manifest, extra, packed, revision) = {
+            let mut g = state.graph.lock();
+            g.persist();
+            let revision = state.doc.lock().version();
+            (g.serialize(), crate::bundled_custom(&g, &state.custom), goofi_graph::archive::fingerprint(&mount), revision)
+        };
+        crate::save_archive(std::path::Path::new(&path), &manifest, &mount, &extra, a.overwrite.unwrap_or(true))?;
+        // An edit that landed during the zip is not in the file: the patch stays dirty. Otherwise
+        // announced UNCONDITIONALLY, not on the flag's transition: a patch dirtied solely by a file
         // in the mount leaves the flag already false, so no transition comes.
-        *state.workspace_baseline.lock() = packed;
-        state.set_dirty(false);
-        state.events.send(Event::UnsavedChanges { unsaved_changes: false });
+        if state.doc.lock().version() == revision {
+            *state.workspace_baseline.lock() = packed;
+            state.set_dirty(false);
+            state.events.send(Event::UnsavedChanges { unsaved_changes: false });
+        }
         // The patch's home, stored ONLY on success and announced as well as stored: an
         // already-connected peer gets no new snapshot to read it from.
         *state.save_path.lock() = Some(path.clone());
         state.events.send(Event::SavePathChanged { save_path: json!(&path) });
-        drop(g);
         fsbrowse::remember(&path);
         Ok(json!({ "path": path }))
     }

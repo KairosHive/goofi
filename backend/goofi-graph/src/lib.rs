@@ -1013,6 +1013,11 @@ impl Graph {
         out
     }
 
+    /// Every engine's off-lock work for a scan of `dir` (see `Engine::prepare`).
+    pub fn prepare(&self, dir: &std::path::Path) -> Vec<Box<dyn FnOnce() + Send>> {
+        self.runtime.engines.iter().filter_map(|e| e.prepare(dir)).collect()
+    }
+
     pub fn engine_ids(&self) -> Vec<&'static str> {
         self.runtime.engines.iter().map(|e| e.id()).collect()
     }

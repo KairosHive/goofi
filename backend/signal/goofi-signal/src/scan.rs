@@ -11,56 +11,34 @@ use goofi_signal_sdk::host::Loaded;
 use crate::SignalEngine;
 
 pub use goofi_python::catalog::Python;
-use goofi_python::catalog::{Probed, probe, routed};
+use goofi_python::catalog::{Probed, probed, routed, warm};
 
 impl SignalEngine {
     pub fn set_python(&mut self, python: Python) {
         self.python = Some(python);
+    }
+
+    /// The probes a scan of `dir` would spawn, as work for off the lock.
+    pub(crate) fn prepare(&self, dir: &Path) -> Option<Box<dyn FnOnce() + Send>> {
+        let python = self.python.clone()?;
+        let files: Vec<(std::path::PathBuf, String)> = goofi_node::node_files(dir, goofi_node::Engine::id(self))
+            .into_iter()
+            .filter(|(p, _, _)| p.extension().is_none_or(|e| e != "rs"))
+            .map(|(p, name, _)| (p, name))
+            .collect();
+        (!files.is_empty()).then(|| Box::new(move || warm(&files, &python)) as Box<dyn FnOnce() + Send>)
     }
 }
 
 pub(crate) fn scan(engine: &mut SignalEngine, dir: &Path) -> Vec<ScannedType> {
     let (rust, paths): (Vec<_>, Vec<_>) =
         goofi_node::node_files(dir, goofi_node::Engine::id(engine)).into_iter().partition(|(p, _, _)| p.extension().is_some_and(|e| e == "rs"));
-    // Probes spawn an interpreter each, so a folder is probed a few files at a time; a file whose
-    // key — its type name, bytes and interpreter environment — is already decided is not probed again.
-    let width = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 8);
-    let mut probes: Vec<Option<Probed>> = Vec::with_capacity(paths.len());
-    for chunk in paths.chunks(width) {
-        let python = engine.python.clone();
-        let keyed: Vec<Option<String>> = chunk
-            .iter()
-            .map(|(p, name, _)| {
-                python.as_ref().and_then(|py| goofi_python::probe_key(p, &py.interpreters()))
-                    .map(|key| format!("{name}:{key}"))
-            })
-            .collect();
-        let cached: Vec<Option<Probed>> =
-            keyed.iter().map(|k| k.as_ref().and_then(|k| engine.probed.get(k).cloned())).collect();
-        let decided: Vec<Option<Probed>> = std::thread::scope(|s| {
-            let handles: Vec<_> = chunk
-                .iter()
-                .zip(&cached)
-                .map(|((p, _, _), hit)| {
-                    let python = python.as_ref();
-                    s.spawn(move || hit.clone().unwrap_or_else(|| probe(p, python)).at(p))
-                })
-                .collect();
-            handles.into_iter().zip(chunk).map(|(h, (p, _, _))| {
-                let decided = h.join().ok();
-                goofi_supervisor::progress::scanned(dir, p);
-                decided
-            }).collect()
-        });
-        for (key, probed) in keyed.into_iter().zip(decided) {
-            if let (Some(key), Some(probed)) = (key, &probed) {
-                engine.probed.insert(key, probed.clone());
-            }
-            probes.push(probed);
-        }
-    }
+    // A probe spawns an interpreter, so `prepare` ran them off the lock; here each is a lookup,
+    // and only a file that pass never saw is probed now.
     let mut out = Vec::new();
-    for ((_, type_name, stamp), probed) in paths.into_iter().zip(probes) {
+    for (path, type_name, stamp) in paths {
+        let probed = probed(&path, &type_name, engine.python.as_ref());
+        goofi_supervisor::progress::scanned(dir, &path);
         let Some(probed) = probed else { continue };
         let outcome = engine.register(&type_name, probed);
         out.push(ScannedType { type_name, stamp, outcome });

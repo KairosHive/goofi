@@ -31,8 +31,6 @@ pub struct SignalEngine {
     dyn_types: HashMap<&'static str, DynType>,
     /// The interpreters a `.py` file is probed and run with; none until the host provides them.
     pub(crate) python: Option<crate::scan::Python>,
-    /// What the probe decided, by the key that decides it: the file's bytes and its interpreters.
-    pub(crate) probed: HashMap<String, goofi_python::catalog::Probed>,
     /// Every built artifact loaded so far, by path: a library is opened once and never closed.
     pub(crate) rust_loaded: HashMap<std::path::PathBuf, Arc<goofi_signal_sdk::host::Loaded>>,
     /// Set once the boot scan is over: a Rust node registered after that runs hosted.
@@ -60,7 +58,6 @@ impl SignalEngine {
             dirty: false,
             dyn_types: HashMap::new(),
             python: None,
-            probed: HashMap::new(),
             rust_loaded: HashMap::new(),
             booted: false,
             host: None,
@@ -107,6 +104,10 @@ impl Engine for SignalEngine {
 
     fn boot_done(&mut self) {
         self.booted = true;
+    }
+
+    fn prepare(&self, dir: &std::path::Path) -> Option<Box<dyn FnOnce() + Send>> {
+        self.prepare(dir)
     }
 
     fn scan(&mut self, dir: &std::path::Path) -> Vec<goofi_node::ScannedType> {

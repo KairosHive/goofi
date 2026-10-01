@@ -29,11 +29,11 @@ fn pack(state: &AppState) -> Result<Vec<u8>, String> {
     let mount = state.mount();
     let tmp = crate::nonce_hex().and_then(|n| goofi_transport::scratch(state.iox.id(), &format!("export-{n}.gfi")))?;
     let tmp = goofi_supervisor::scope::PathLease::new(tmp);
-    let packed = {
+    let (manifest, extra) = {
         let g = state.graph.lock();
-        let extra = crate::bundled_custom(&g, &state.custom);
-        goofi_graph::archive::write_gfi(tmp.path(), &g.serialize(), &mount, &extra)
+        (g.serialize(), crate::bundled_custom(&g, &state.custom))
     };
+    let packed = goofi_graph::archive::write_gfi(tmp.path(), &manifest, &mount, &extra);
     packed.and_then(|()| std::fs::read(tmp.path()).map_err(|e| format!("{}: {e}", tmp.path().display())))
 }
 

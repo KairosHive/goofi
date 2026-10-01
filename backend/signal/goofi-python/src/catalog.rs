@@ -1,6 +1,8 @@
 //! Shared discovery and isolation routing for host nodes in every engine.
 use crate::{Discovered, Discovery};
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 /// The interpreters the scan probes and runs with. The subprocess one is the caller's; the
 /// free-threaded one is the one this build links, if any, and it is what routes a file in-process.
 #[derive(Clone, Debug)]
@@ -42,6 +44,52 @@ impl Probed {
             Probed::Unavailable(reason) => Probed::Unavailable(reason),
         }
     }
+}
+
+/// What every probe so far decided, by the key that decides it: the type name the manifest is
+/// leaked under, the file's bytes and its interpreters. One per process, so a scan under the
+/// graph lock finds what a `warm` pass off it already answered.
+static PROBED: LazyLock<Mutex<HashMap<String, Probed>>> = LazyLock::new(Default::default);
+
+fn key_of(path: &Path, name: &str, python: &Python) -> Option<String> {
+    crate::probe_key(path, &python.interpreters()).map(|key| format!("{name}:{key}"))
+}
+
+/// Probe every file of `files` (its path and type name) not decided yet, a few at a time:
+/// each probe spawns an interpreter. Safe to run off every lock, and idempotent.
+pub fn warm(files: &[(PathBuf, String)], python: &Python) {
+    let width = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 8);
+    for chunk in files.chunks(width) {
+        let keyed: Vec<Option<String>> = chunk.iter().map(|(p, name)| key_of(p, name, python)).collect();
+        let missing: Vec<&(PathBuf, String)> = {
+            let cache = PROBED.lock().unwrap_or_else(|e| e.into_inner());
+            chunk.iter().zip(&keyed).filter(|(_, k)| k.as_ref().is_none_or(|k| !cache.contains_key(k))).map(|(f, _)| f).collect()
+        };
+        let decided: Vec<Probed> = std::thread::scope(|s| {
+            let handles: Vec<_> = missing.iter().map(|(p, _)| s.spawn(move || probe(p, Some(python)))).collect();
+            handles.into_iter().filter_map(|h| h.join().ok()).collect()
+        });
+        let mut cache = PROBED.lock().unwrap_or_else(|e| e.into_inner());
+        for ((p, name), probed) in missing.into_iter().zip(decided) {
+            if let Some(key) = key_of(p, name, python) {
+                cache.insert(key, probed);
+            }
+        }
+    }
+}
+
+/// What the probe of `path` decided, against that path. None where no interpreter is provisioned
+/// or the file cannot be read; a file `warm` did not reach is probed here, on the caller's thread.
+pub fn probed(path: &Path, name: &str, python: Option<&Python>) -> Option<Probed> {
+    let python = python?;
+    let key = key_of(path, name, python)?;
+    let hit = PROBED.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
+    let probed = hit.unwrap_or_else(|| {
+        let fresh = probe(path, Some(python));
+        PROBED.lock().unwrap_or_else(|e| e.into_inner()).insert(key, fresh.clone());
+        fresh
+    });
+    Some(probed.at(path))
 }
 
 /// The GIL-gate router: a file whose imports keep the GIL disabled runs in-process, any other in

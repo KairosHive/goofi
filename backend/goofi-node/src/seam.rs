@@ -210,6 +210,11 @@ pub trait Engine: Send {
     fn dirty(&self) -> bool;
     /// Every node class this engine can build, advertised on request.
     fn library(&self) -> Vec<LibraryEntry>;
+    /// What a scan of `dir` would wait on that needs no engine — a probe, a build — as work the
+    /// host runs off the graph lock first. None where the scan has nothing to wait on.
+    fn prepare(&self, _dir: &Path) -> Option<Box<dyn FnOnce() + Send>> {
+        None
+    }
     /// Scan ONE folder of this engine's node files and register what loads, a later file taking
     /// a name an earlier one held. A file that cannot load answers why instead.
     fn scan(&mut self, _dir: &Path) -> Vec<ScannedType> {

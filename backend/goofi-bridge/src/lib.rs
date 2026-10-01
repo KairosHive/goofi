@@ -967,20 +967,22 @@ fn adopt_custom(mount: &std::path::Path, custom: &std::path::Path) {
     }
 }
 
-/// Build every `.rs` node file under every root and the workspace's engine folders BEFORE the
-/// graph lock is taken: a build takes seconds, and only the caller who asked should wait for it.
-/// The scan that follows finds each artifact made, or the memo of why it was not.
+/// Everything a scan would wait on, done BEFORE the graph lock is taken: every `.rs` node file
+/// under every root and the workspace's engine folders is built, and each engine's own
+/// preparation (a Python probe) runs. A build takes seconds, and only the caller who asked
+/// should wait for it; the scan that follows finds each answer made, or the memo of why not.
 pub fn prebuild(state: &AppState, patch: &std::path::Path) {
-    let sdks: Vec<(&'static str, &'static goofi_build::Sdk)> = state
-        .graph
-        .lock()
-        .rust_sdks()
-        .into_iter()
-        .filter_map(|(id, sdk)| goofi_build::sdk(sdk).map(|s| (id, s)))
-        .collect();
+    let roots: Vec<PathBuf> = state.node_roots().into_iter().map(|(d, _)| d).collect();
+    let (sdks, prepared) = {
+        let g = state.graph.lock();
+        let sdks: Vec<(&'static str, &'static goofi_build::Sdk)> =
+            g.rust_sdks().into_iter().filter_map(|(id, sdk)| goofi_build::sdk(sdk).map(|s| (id, s))).collect();
+        let dirs = roots.iter().cloned().chain(g.engine_ids().into_iter().map(|id| patch.join(goofi_node::folder_of(id))));
+        let prepared: Vec<_> = dirs.flat_map(|d| g.prepare(&d)).collect();
+        (sdks, prepared)
+    };
     let base = goofi_build::base_dir(&goofi_supervisor::home::dir());
-    let dirs = (state.node_roots().into_iter().map(|(d, _)| d))
-        .chain(sdks.iter().map(|(id, _)| patch.join(goofi_node::folder_of(id))));
+    let dirs = roots.into_iter().chain(sdks.iter().map(|(id, _)| patch.join(goofi_node::folder_of(id))));
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(dir) else { continue };
         for path in entries.filter_map(Result::ok).map(|e| e.path()) {
@@ -992,6 +994,9 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
                 let _ = goofi_build::ensure(sdk, &path, &base);
             }
         }
+    }
+    for work in prepared {
+        work();
     }
 }
 
