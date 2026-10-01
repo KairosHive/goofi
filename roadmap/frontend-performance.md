@@ -3,7 +3,7 @@
 ## Remaining
 
 - The one measurement that settles the idle frame-rate drop, which did not reproduce headless:
-  on the owner's display, Chrome's Performance panel over 5 s on `thought-sphere` fitted to the
+  on the owner's display, Chrome's Performance panel over 5 s on `examples/harmonic-observatory.gfi` fitted to the
   screen, once idle, once with the inspector open, once during a knob drag; read Commit /
   ProduceCanvasResource, FunctionCall, Layout and long tasks, note the DPR and whether a native
   graphics window was open. A GPU shared with the engine is the one cost the audit could not see.

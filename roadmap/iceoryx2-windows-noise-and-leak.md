@@ -2,8 +2,9 @@
 
 ## Remaining
 
-- Verify the session sweep on Windows (`take_path` in `goofi-transport/src/lib.rs`). CI does
-  not prove it: the Windows job runs no situation.
+- Verify the session sweep on Windows (`remove_tree`/`take_path` in
+  `goofi-supervisor/src/session.rs`, run from `Session::release`). CI does not prove it: the
+  Windows job runs no situation.
 
 ## Not to be done
 

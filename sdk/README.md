@@ -230,7 +230,7 @@ operation, a corpus panel, an editable header item, recording hooks, and Rust an
 It is a fixture and authoring example, not a remote database adapter.
 
 ```sh
-cargo test -p goofi-tests --test plugins
+cargo test -p goofi-tests plugins::
 cd tests/e2e
 npx playwright test --config playwright.plugins.config.ts
 ```

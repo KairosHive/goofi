@@ -13,7 +13,8 @@ lets the author group the result into bundles anyone can install.
 2. **The static scanner** in `goofi-node`, beside `scan_nd_calls`: parse a repo for `goofi.Node`
    subclasses and their declared `INPUTS`, `OUTPUTS`, `PARAMS` and docstring without importing.
    Then `library source` against a local folder.
-3. **The panel**, inside goofi, against the local half, registered through `registerPanel`.
+3. **The panel**, inside goofi, against the local half, registered through the plugin
+   runtime's `register_panel`.
 4. **The service and the remote half**: accounts, sources, bundles, publish, search. Then the panel
    exports to `../goofi-website/`.
 5. **The bundles move out**: each `node-bundles/<name>` that is not builtin becomes a folder of a

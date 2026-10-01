@@ -64,7 +64,7 @@ before the first production deployment.
   `--headless` serves only the API. `goofi help` lists commands.
 - The manager owns the graph and document. Browser documents are read-only replicas, updated
   with versioned path operations (`put` a value at a path, `del` a path).
-- Mutations are commands with inverses and session-specific undo. Fresh calls are strict;
+- Mutations are commands with inverses and per-actor undo. Fresh calls are strict;
   replay tolerates stale targets. Layout inverses use forward planners.
 - Signal nodes schedule themselves; audio and graphics have their own clocks. Node processing
   does not run under the graph lock. Cross-engine transport is latest-wins shared memory.
@@ -72,8 +72,9 @@ before the first production deployment.
   scales come from `goofi_core::scale`, which both quantizers share.
 - Rust nodes are `.rs` files built against an engine SDK. Every dynamic library — a built node,
   a host program, a VST3 module — is opened and its entry symbols read through `goofi_build`.
-  A signal node file built after the boot scan runs HOSTED: in a child of goofi's own binary
-  (`goofi host`), over the same exchange the Python subprocess tier uses, so its newest build runs. Graphics supports `.wgsl` shaders and
+  A signal or graphics node file built after the boot scan runs HOSTED: in a child of goofi's own
+  binary (`goofi host`), over the same exchange the Python subprocess tier uses, so its newest
+  build runs. Audio loads its built library in-process. Graphics supports `.wgsl` shaders and
   Rust/Python host sources on shared GPU resources; Python graphics uses `# goofi: graphics`.
   Python nodes use the shared marshalling interface in both automatic execution tiers.
 - Each frame counts in full, including a Buffer window. Never infer sample overlap. Resample
@@ -84,7 +85,7 @@ before the first production deployment.
 - A `.gfi` patch is an archive of its document and workspace. Recordings use native data files
   with metadata sidecars. Shared-memory and wire-format changes require matching consumers.
 - The app targets a single user on localhost or a trusted LAN. WebSocket endpoints have no auth;
-  retain Origin/Host checks. `/dev/*` requires debug mode.
+  retain the `origin` guard (Sec-Fetch allowlist and Host check). `/dev/*` requires debug mode.
 - Support touch, tablet, and desktop in both orientations. Navigation must not dirty the patch.
   Preserve workspace layout and cable-drag behavior unless a redesign is requested.
 - `panelty` owns panel mechanics; change that dependency upstream. Shared UI tokens live in
@@ -106,8 +107,8 @@ before the first production deployment.
   `goofi_supervisor::{child, worker, scope}` and `goofi_transport`, and listed by `session status`.
   A child's stdout and stderr go to the process log under its source unless its owner wires a
   stream as a pipe (a protocol channel) or a file.
-  A part file beside a cache entry carries the session id. `AppState::shutdown` is the one
-  release order; the process releases the session last.
+  A part file beside a cache entry carries the session id. `AppState::shutdown`, run by
+  `Manager`'s drop, is the one release order; the process releases the session last.
 
 ## Run and test
 

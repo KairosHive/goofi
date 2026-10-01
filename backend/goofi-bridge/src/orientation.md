@@ -16,7 +16,7 @@ JSON for `jq`. Read the one op you need with `--help`, not `op list --doc`, whic
 manual. Several ops become ONE undo step through stdin:
 
     goofi - <<'EOF'
-    node add Oscillator --name osc
+    node add LFO --name osc
     node add Buffer --name buf
     link add osc/out buf/data
     EOF
@@ -33,7 +33,7 @@ lands whole or not at all. (An MCP-connected agent runs the same lines through t
 
     ```mermaid
     flowchart LR
-      osc["osc: Oscillator"]
+      osc["osc: LFO"]
       buf["buf: Buffer"]
       osc -- out→data --> buf
     ```
@@ -46,7 +46,7 @@ drop a section, `--slot` narrows to one output.
     buf: Buffer (uid 000000000002, native, stage ready)
 
     params:
-      buffer.size = 1000 (int 1..10000000)
+      buffer.size = 2 (float 0.001..60)
 
     outputs:
       out: ARRAY — emitting at 29.9 Hz
@@ -70,13 +70,13 @@ panel, so mind the one the human watches you through.
 
 ## Building
 
-    goofi node add Oscillator --pos 0,0
-    → {"name": "oscillator0", "uid": "000000000001", "input_slots": {},
+    goofi node add LFO --pos 0,0
+    → {"name": "lfo0", "uid": "000000000001", "input_slots": {},
        "output_slots": {"out": "ARRAY"}, "params": {…}}
 
-    goofi link add oscillator0/out buffer0/data   → {"from": …, "to": …, "dtype": "ARRAY"}
+    goofi link add lfo0/out buffer0/data   → {"from": …, "to": …, "dtype": "ARRAY"}
 
-    goofi node param edit oscillator0 oscillator/frequency --value 7.5
+    goofi node param edit lfo0 lfo/frequency --value 7.5
     → {"value": 7.5, "error": null}
 
 A NAME is what every op takes and what `nd()` addresses — unique across the patch, minted if you
@@ -133,7 +133,8 @@ Edit the file and refresh again: it returns under `changed`, and every live inst
 A node whose imports are missing registers as unavailable and names the module; a node that
 raises inside `process()` becomes that node's error, not a crash.
 `goofi library get <type> --source` gives you a shipped node to copy from, in any of the three
-languages: a `.rs` file beside it is a Rust node, built on refresh where `cargo` exists, and a
+languages: a `.rs` file beside it is a Rust node, built on refresh where `cargo` exists and run in a child
+of goofi's own binary, and a
 `.wgsl` in `nodes_graphics/` is a shader node on the GPU — read `graphics:Life` for one that
 keeps state between ticks. Graphics sources can also use Rust (`goofi_graphics_sdk`) or Python.
 A Python graphics file starts with `# goofi: graphics`, declares one `goofi.DataType.TEXTURE`

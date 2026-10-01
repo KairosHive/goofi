@@ -17,12 +17,13 @@ The audio node contract is `sdk/README.md` and the code.
   default costs 2 s of buffer on pipewire-pulse. `Fixed(1024)` would make it ~43 ms end to end.
   Provable only from outside the process, by recording the sink back: `session status` reports
   what goofi did, not what was heard, and this host never surfaces the server's underflow.
-- **A device switch, a rate change and a stream loss run only under `Clock::Device`**, which only
-  `goofi-cli` constructs; every test uses `Clock::External`. A rate change and a stream loss
+- **A device switch, a rate change and a stream loss run only under `Clock::Internal`**, which only
+  `goofi-cli` constructs for audio; every test boots audio under `Clock::External`. A rate change and a stream loss
   (`DeviceNotAvailable` in the error callback) are unexercised. Windows and macOS callbacks are
   unmeasured, as is RT priority against the control thread's graph lock under a knob drag.
 - **A machine with no output device** faults every `AudioOut` and renders nothing. A real-time
-  self-clock for a device-less machine is open; graphics' `RenderClock::Timer` is the precedent.
+  self-clock for a device-less machine is open; the graphics ticker thread under `Clock::Internal`
+  (`goofi-graphics/src/lib.rs`) is the precedent.
 - **The `codes` mutex** (`goofi-python/src/inproc/expr.rs`, `Mutex<HashMap>`) is taken on every
   evaluation from every node thread. It wants to be read-mostly (written only on compile and
   release). Settle it with a threaded measurement before promising a high expression rate; a
@@ -52,18 +53,19 @@ The audio node contract is `sdk/README.md` and the code.
   beside an ASIO output is allowed): measure before any correction is built.
 - **A canvas affordance for references**: nothing draws a reference on the canvas.
 - **Watchdog tuning.** `OVERRUNS = 8` blocks over `BUDGET` (`runtime.rs`); a node that runs at
-  exactly the budget flaps in and out; neither number has been tuned on a device.
-- **The shipped set, the owner's to settle.** Shipped today: `AudioIn`, `AudioOut`,
-  `AudioPlayback`, `MidiIn`, `SignalIn`, plus VST3. Candidates: `LFO` (or `Osc` at a low pitch?),
-  `Clock` (or `Osc` square?), `Seq`, `HzToOct`, `MidiCC` (one CC number per node, one output;
-  decided, deferred), `Sampler` (needs the resource door). `Mix` and `Offset`/`Scale` look
-  redundant while the jack sums and a reference replaces a literal. Whether `Limiter` belongs at
-  the jack, since `Filter` at a high `q` peaks at `q` times its input. The rule is orthogonality:
-  each node proves a seam or closes a gap nothing else composes to.
+  exactly the budget flaps in and out; `BUDGET` rests on one plugin measurement; `OVERRUNS` is untuned.
+- **The shipped set, the owner's to settle.** Builtins: `AudioIn`, `AudioOut`, `AudioPlayback`,
+  `MidiIn`, plus VST3; `node-bundles/audio` adds `Osc`, `Noise`, `Env`, `Filter`, `BandFilter`,
+  `BandFollow`, `FreqShift`, `Delay`, `Feedback`, `Reverb`, `Gain`, `Slew`, `Limiter`, `Mixdown`,
+  `Quantize`, `SignalIn`, `GraphicsIn`. Candidates: `Clock` (or `Osc` square?), `Seq`, `HzToOct`,
+  `MidiCC` (one CC number per node, one output; decided, deferred), `Sampler` (needs the resource
+  door). An LFO is `Osc` below 0 V. `Offset`/`Scale` look redundant while the jack sums and a
+  reference replaces a literal. The rule is orthogonality: each node proves a seam or closes a gap
+  nothing else composes to.
 - **VST3 residuals**: bus arrangements are the plugin's defaults (`vst3/node.rs` `arrange`), never
   the patch's choice; output parameter changes and output events are not read
   (`outputParameterChanges`, `outputEvents` are null). A bundle replaced in place keeps its old
-  code until goofi restarts (`dlopen` answers one handle per path; `vst3/module.rs`); the scan
+  code until goofi restarts (`goofi_build::library` and `vst3/module.rs` keep one handle per path); the scan
   cache is never pruned; a class the host cannot describe is dropped without a row, and a bundle
   that yields none greys under its file name. Not yet proven on a real JUCE editor on Windows or
   macOS.

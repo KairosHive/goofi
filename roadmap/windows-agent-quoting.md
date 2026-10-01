@@ -1,7 +1,7 @@
 # A quoted `[[agents]]` command line on Windows
 
 An agent command that contains a double quote reaches the child mangled on Windows.
-`term::shell_command` launches `cmd /C <command>`, and portable-pty escapes the argument by
+`term::shell_command` (`goofi-bridge/src/term.rs`) launches `cmd /C <command>`, and portable-pty escapes the argument by
 `CommandLineToArgvW` rules, which `cmd.exe` does not parse.
 
 ## Not to be done

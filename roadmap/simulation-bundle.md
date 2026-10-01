@@ -18,10 +18,10 @@ with it.
 
 ## Open
 
-- **Nothing draws points.** `Swarm` and every particle model answer `[N, D]` positions; the
-  graphics engine is a fragment chain with no way to splat them, and `Physarum` rasterizes its own
-  field into `graphics:SignalIn` at a copy per frame. Decide between a point-splatting graphics
-  node and a compute stage before more particle models arrive.
+- **No shared way to draw points.** `Swarm.wgsl` and `Physarum.wgsl` each walk their own `[N, D]`
+  position array in a fragment shader under a small cap (512 agents in Physarum's overlay); every
+  new particle model would repeat that. Decide between a point-splatting graphics node and a
+  compute stage before more particle models arrive.
 - **The graphics tick has no per-stage budget** and no way to run a stage at a lower rate; the
   tick saturates, not one node. Re-measure before designing for it.
 - **Sub-stepping in the graphics plan.** One tick is one pass; an automaton that wants ten steps a

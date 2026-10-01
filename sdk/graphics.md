@@ -46,7 +46,9 @@ out.set("out", Data::texture(Texture::Pixels(pixels), Meta::new())?);
 
 Import `Pixels`, `PixelFormat`, and `Texture` from `goofi_graphics_sdk`, and `Data`
 and `Meta` from `goofi_core`. Rust pixels support RGB/RGBA U8 and F32. The stride
-includes padding; the byte count must equal stride times height.
+includes padding; the byte count must equal stride times height. A `.rs` built after the
+boot scan runs hosted: its library loads in a child of goofi's own binary and the texture
+crosses the exchange, so the newest build runs without a restart.
 
 A native producer can submit GPU work with
 `Texture::Render { width, height, source }`. The source defines

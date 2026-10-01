@@ -51,7 +51,7 @@ export default defineConfig({
 		headless: true,
 		trace: 'on-first-retry'
 	},
-	// The suite is four situations, and the projects are the geometries they are asked in. Only the
+	// The projects are the geometries the specs are asked in. Only the
 	// integrity sweep is asked more than once: it is the responsive test, and re-asking it is what
 	// makes it one.
 	projects: [

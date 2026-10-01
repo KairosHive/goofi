@@ -1,6 +1,7 @@
 # Windows cleanup
 
-Defects found in a Windows audit on 2026-09-24. The fix for each is still to be decided. Related:
+Defects found in a Windows audit on 2026-09-24 and checked against the tree again on 2026-10-01.
+The fix for each is still to be decided. Related:
 `iceoryx2-windows-noise-and-leak.md`, `windows-agent-quoting.md`.
 
 ## Stability
@@ -13,34 +14,34 @@ Defects found in a Windows audit on 2026-09-24. The fix for each is still to be 
   wrong on Windows.
 - iceoryx2 `open_with_mode` (`fcntl.rs`) leaks the `CreateFileA` handle when the table is full;
   every later open of that service fails with `HangsInCreation` until the session ends.
-- Ctrl+C reaches every child: `goofi-core/src/child.rs` gives Windows children no process group.
+- Ctrl+C reaches every child: `goofi-supervisor/src/child.rs` sets a process group on unix only;
+  Windows children get no group and no job object.
   Hosted nodes restart, plugin services stop without `on_stop`, Python nodes raise
   `KeyboardInterrupt`.
-- `std::process::exit` (`exit(130)`, `exit(101)`, test binaries) does not run the `atexit`
-  release `goofi-transport` registers; the session directory stays until the next boot.
-  `transport::a_process_that_exits_without_releasing_leaves_no_record` fails.
-- Closing the console window does not run `AppState::shutdown`: the `ctrl_close` handler returns
-  at once and Windows ends the process.
-- `session::hold` takes `alive.lock` only after the rename (Windows refuses to move a folder
-  with an open file); a sweep in that window removes the directory and `hold` panics. The
-  rename also fails while another process holds a file in the directory open.
-- The session base `C:\Temp\goofi-system` and iceoryx2's `C:\Temp\iceoryx2` are fixed paths;
+- Closing the console window races the shutdown: `managed_stop` (`goofi-cli/src/main.rs`) selects
+  on `ctrl_close`/`ctrl_shutdown`, but tokio's handler returns at once, so the `Manager` drop that
+  is the shutdown runs only within the console's own grace.
+- The session base `C:\Temp\goofi-system` and iceoryx2's `C:\Temp\iceoryx2\shm` are fixed paths
+  (`goofi-supervisor/src/session.rs` `system_base`, `shm_dir`);
   boot panics without a writable drive C.
-- The listener socket path uses 106 of iceoryx2's 108 bytes; a longer base, prefix or root
-  breaks every node.
+- The listener socket path (`iox_root` + `shm_prefix` + service name) uses about 106 of iceoryx2's
+  108 bytes and nothing checks the length; a longer base, prefix or root breaks every node.
 - No process sets `SetErrorMode`, so a VST3 plugin that crashes in the scan opens an error dialog
-  and the scan waits `SCAN_WAIT`; `answered()` does not report the crash, because the exit is an
-  NTSTATUS code, not a signal.
-- The audio device-list refresh (`goofi-audio/src/host.rs`) enumerates every host, so each
-  refresh opens all ASIO drivers on the node's control thread.
+  and the scan waits `SCAN_WAIT`; `answered()` (`goofi-audio/src/vst3/mod.rs`) reports an NTSTATUS
+  exit as "exited with {code}", never as a crash.
+- The audio device-list refresh (`named` in `goofi-audio/src/host.rs`) walks `available_hosts()`;
+  a refresh that does not narrow with `only` loads every ASIO driver on the node's control thread.
 
 ## Process control
 
-- `request_stop` runs `taskkill /T` without `/F`, which never stops a console process; each
-  stop waits the full grace.
-- Each child stop starts `taskkill.exe` twice, serially, on the engine or shutdown thread.
-- The liveness pipe stops direct children only; their own children keep running after goofi
-  is killed.
+- `request_stop` (`goofi-supervisor/src/child.rs`) runs `taskkill /T` without `/F`, which a console
+  process refuses, so a Windows child never gets a graceful ask and each stop waits the full grace
+  before `force_kill`.
+- `Child::stop` starts `taskkill.exe` twice, serially and synchronously, on the engine or shutdown
+  thread.
+- The liveness pipe is armed per `child::spawn`; a process a child starts by other means (a Python
+  node's subprocess, an agent's shell) keeps running after goofi is killed, and `taskkill /T` is
+  the only tree stop.
 
 ## Text encoding
 
@@ -49,29 +50,31 @@ Defects found in a Windows audit on 2026-09-24. The fix for each is still to be 
   for a user name with non-ASCII characters.
 - `terminal_line` writes UTF-8 to a console that is not set to UTF-8; the banner's `·`, `→`,
   `✓`, `…` show as `Â·` or similar.
-- After `capture_stdio`, `stdout().is_terminal()` is false, so the startup progress bars never
-  show.
+- After `capture_stdio`, `terminal_width` (`goofi-supervisor/src/log.rs`) asks
+  `stdout().is_terminal()` on Windows where unix asks the saved terminal fd, so the startup
+  progress bars never show.
 - iceoryx2's `win32call!` prints each unignored Win32 error with its full 1024-byte buffer;
   each boot adds NUL-filled error records to the process log.
 
 ## Performance
 
-- The hosted and Python subprocess tiers poll (`sleep(500 µs)` in `hosted.rs` and
-  `goofi-pymod/src/serve.rs`; `sleep(1 ms)` in `goofi-transport/src/lib.rs`).
-- Timed waits round up to the 15.6 ms timer tick: the control `TICK` runs at about 64 Hz, and
-  viewer pacing and recording waits get up to 16 ms of jitter.
+- Timed waits round up to the 15.6 ms timer tick: the executor's `goofi_runtime::TICK` (10 ms)
+  runs at about 64 Hz, and viewer pacing and recording waits get up to 16 ms of jitter.
 - Each iceoryx2 wait is a UDP socket whose option changes scan the handle table under one
-  process-wide lock; the cost grows with nodes times rate, and a `signal:Clock` misses its
-  target rate above about 200 Hz.
+  process-wide lock; the cost grows with nodes times rate, and a `Clock` misses its target
+  rate above about 200 Hz.
 
 ## Python
 
-- The embedded interpreter gets its site-packages through `PYTHONPATH`, so `.pth` files
+- The embedded interpreter gets its site-packages through `PYTHONPATH`
+  (`point_embedded_python_at_its_venv` in `goofi-cli/src/main.rs`), so `.pth` files
   (`pywin32`, editable installs) are not processed.
 
 ## Tests
 
 - The e2e agent specs need a POSIX shell (`tests/e2e/globalSetup.ts` pins `sh`).
-- The child-stops-when-goofi-dies test (`goofi-tests` `children.rs`) is unix-only; the Windows
-  liveness pipe has no test.
-- Windows CI only boots (`GOOFI_BOOT_ONLY=1 goofi --headless`); it runs no situation.
+- `children::a_hard_killed_parent_still_stops_its_child` (`goofi-tests/tests/all/children.rs`) is
+  unix-only; the Windows liveness pipe has no test.
+- Windows CI only boots (the setup action's `GOOFI_BOOT_ONLY=1` run); the `platform` job's
+  situations are `if: runner.os != 'Windows'` because iceoryx2 cannot create a listener under the
+  session's root there.

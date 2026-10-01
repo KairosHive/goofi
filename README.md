@@ -65,12 +65,11 @@ which is what a CI job runs to prove the build; it has no flag.
 | `--bind HOST` | `127.0.0.1` | The address to serve on. Anything beyond this machine warns: there is no auth, and `/term` is a real shell. |
 | `--extra-nodes ROOT` | — | A folder of node files, scanned after the shipped bundles and before the open patch's own workspace. Repeatable; a later root wins a type name it shares with an earlier one. |
 | `--headless` | — | Serve the API alone — `/control`, `/data`, `/term`, `/mcp`. The app's routes are never mounted. |
-| `--demo` | — | Withhold the doors a public instance cannot offer: `dir`, `agent`, session save/load and `library save` leave the op table, and `/exec`, `/mcp`, `/term` and `/patch.gfi` are never mounted. `GOOFI_DEMO=1` is the same switch. Not a sandbox. |
+| `--demo` | — | Withhold the doors a public instance cannot offer: `dir`, `agent`, session save/load/recover and `library save` leave the op table; `/exec`, `/mcp`, `/term`, `/patch.gfi` and plugin assets are never mounted, no audio engine runs and no plugin loads. `GOOFI_DEMO=1` is the same switch. Not a sandbox. |
 | `--debug` | — | Open `/dev/*`: the UI primitive gallery at `/dev/ui`, and the other development surfaces. Shut otherwise. |
 
-**When the backend is not on your machine,** the Save and Open dialogs each carry a second door —
-*Download a copy* and *Open from this computer…* — which pass the `.gfi` through the browser rather
-than the backend. This is a copy out and a copy in: it leaves the patch's remembered file alone, so
+The Save and Open dialogs each carry a second door — *Download a copy* and *Upload…* — which pass
+the `.gfi` through the browser rather than the backend. This is a copy out and a copy in: it leaves the patch's remembered file alone, so
 Ctrl+S never silently retargets to a download.
 
 ## Three engines, and your plugins
@@ -91,7 +90,8 @@ machine the patch is open on, so goofi supports VST3 and ships none.
 The nodes goofi does ship live in `node-bundles/`, one directory per bundle: `signal` and `audio`
 (the Rust built-ins), `graphics` (the shaders), plus `eeg` (playback, LSL, band power, FOOOF),
 `complexity` (the antropy measures), `biotuner` (harmonicity, microtonal keys, rhythm),
-`simulation` (attractors, Kuramoto, Hopfield, neural mass) and `ml`. Every bundle is built at
+`simulation` (attractors, Kuramoto, Hopfield, neural mass), `ml`, `image`, `image-generation`,
+`computer-vision`, `harmonic-geometry` and `inception`. Every bundle is built at
 goofi's build time and embedded, so `cargo run` carries them all; `--extra-nodes` adds a root
 outside the repo the same way. A bundle with Python nodes names the packages they import in a
 `requirements.txt`; `goofi-init` installs every bundle's, and at startup goofi checks every scanned
@@ -170,7 +170,7 @@ beside the canvas.
 ```bash
 goofi agent start --name claude
 goofi node add signal:Psd
-goofi link add lslin.out psd.data
+goofi link add lslin/out psd/data
 ```
 
 Over `/mcp` an agent reaches the same ops the editor does, so there is nothing you can do that it
@@ -183,7 +183,6 @@ test are transports over one entry point, never four surfaces with four sets of 
 
 ```bash
 cargo test --workspace --no-fail-fast         # backend
-cargo test -p goofi-tests --features embed -- python::   # …plus the in-process Python tier
 cargo clippy --workspace --all-targets        # prints nothing
 cd frontend && npm run check && npm run test  # svelte-check, then vitest
 cd tests/e2e && npm install && npm run e2e    # Playwright against the real binary
