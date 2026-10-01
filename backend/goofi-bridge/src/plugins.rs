@@ -100,14 +100,14 @@ struct Service {
     sequence: AtomicU64,
     output: Mutex<Option<BufReader<std::process::ChildStdout>>>,
     /// Its stdin writer, its stdout reader and every call thread: joined once the child is stopped.
-    workers: Mutex<Vec<goofi_supervisor::worker::Worker>>,
+    scope: goofi_supervisor::scope::Scope,
 }
 
 impl Service {
     fn adopt(&self, worker: std::io::Result<goofi_supervisor::worker::Worker>) {
-        let mut workers = self.workers.lock();
-        workers.retain(|w| !w.is_done());
-        workers.extend(worker);
+        if let Ok(worker) = worker {
+            self.scope.adopt(worker);
+        }
     }
 }
 
@@ -231,7 +231,7 @@ impl Service {
             pending,
             sequence: AtomicU64::new(1),
             output: Mutex::new(Some(reader)),
-            workers: Mutex::default(),
+            scope: goofi_supervisor::scope::Scope::default(),
         });
         service.adopt(stdin_worker);
         Ok((service, contributions))
@@ -352,10 +352,7 @@ impl Service {
         self.child
             .lock()
             .stop(Duration::from_secs(2));
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        for worker in std::mem::take(&mut *self.workers.lock()) {
-            let _ = worker.join_within(deadline.saturating_duration_since(std::time::Instant::now()));
-        }
+        self.scope.close(Duration::from_secs(2));
     }
 }
 impl Drop for Service {
