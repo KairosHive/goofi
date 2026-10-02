@@ -1,6 +1,5 @@
 # Audio engine
 
-The structural redesign is `backend-architecture.md`.
 The audio node contract is `sdk/README.md` and the code.
 
 ## Remaining
