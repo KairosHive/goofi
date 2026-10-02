@@ -24,6 +24,8 @@ pub enum Event {
     RecordChanged(Value),
     HarnessChanged(Value),
     Logs(Value),
+    /// `update start` was called: the app shell downloads the release and restarts into it.
+    UpdateRequested,
 }
 
 impl Event {

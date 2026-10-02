@@ -1,0 +1,37 @@
+{
+	"name": "goofi",
+	"productName": "goofi",
+	"version": "0.0.0",
+	"description": "A real-time node-based platform for biosignals, audio and graphics",
+	"homepage": "https://goofi.kairos-hive.org",
+	"license": "AGPL-3.0-only",
+	"author": "Kairos Hive",
+	"private": true,
+	"main": "main.js",
+	"scripts": {
+		"start": "electron .",
+		"dist": "electron-builder --publish never"
+	},
+	"dependencies": {
+		"electron-updater": "^6.8.9",
+		"ws": "^8.22.0"
+	},
+	"devDependencies": {
+		"electron": "^44.5.1",
+		"electron-builder": "^26.15.3"
+	},
+	"build": {
+		"appId": "org.kairos-hive.goofi",
+		"artifactName": "goofi-${version}-${os}-${arch}.${ext}",
+		"files": ["main.js"],
+		"extraResources": [
+			{ "from": "../../dist/bin", "to": "bin" },
+			{ "from": "../../dist/lib", "to": "lib" }
+		],
+		"publish": { "provider": "github", "owner": "KairosHive", "repo": "goofi" },
+		"mac": { "target": ["dmg"], "category": "public.app-category.music" },
+		"win": { "target": ["nsis"] },
+		"nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": false },
+		"linux": { "target": ["AppImage", "deb", "rpm"], "category": "Audio", "desktopName": "goofi", "syncDesktopName": true }
+	}
+}

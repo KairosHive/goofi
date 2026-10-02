@@ -213,12 +213,17 @@ impl Goofi {
 
     /// Boot a HEADLESS one — the layout rows are not registered.
     pub fn headless() -> Goofi {
-        Goofi::with_mode(goofi_bridge::Mode { headless: true, demo: false })
+        Goofi::with_mode(goofi_bridge::Mode { headless: true, ..Default::default() })
     }
 
     /// Boot a PUBLIC one — no host-facing ops, and no audio engine behind the catalog.
     pub fn demo() -> Goofi {
-        Goofi::with_mode(goofi_bridge::Mode { headless: false, demo: true })
+        Goofi::with_mode(goofi_bridge::Mode { demo: true, ..Default::default() })
+    }
+
+    /// Boot one the app SHELL started, which performs an update on request.
+    pub fn shelled() -> Goofi {
+        Goofi::with_mode(goofi_bridge::Mode { shell: true, ..Default::default() })
     }
 
     /// One whose graphics engine runs on its OWN timer clock, as the binary does — nothing to

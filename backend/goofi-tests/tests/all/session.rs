@@ -637,3 +637,21 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
     drop(g);
     assert!(!nonce.exists(), "a clean shutdown releases the mount, autosave and all");
 }
+
+#[test]
+fn an_update_is_the_app_shells_to_perform_and_refused_where_none_runs_goofi() {
+    // Started by the shell: the op is a request the shell hears on the event stream.
+    let shelled = Goofi::shelled();
+    let mut ev = shelled.events();
+    assert_eq!(shelled.call("update start", j!({}))["ok"], true);
+    ev.next("update_requested");
+
+    // A bare goofi has nobody to install anything: refused, naming where the release is.
+    let bare = Goofi::new();
+    let why = bare.refuse("update start", j!({}));
+    assert!(why.contains("no app shell") && why.contains("github.com"), "{why}");
+
+    // A public demo offers no update door at all.
+    let demo = Goofi::demo();
+    assert!(demo.refuse("update start", j!({})).contains("unknown op"), "a demo drops the group");
+}

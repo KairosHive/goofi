@@ -320,6 +320,48 @@ fn ensure_vendor(runtime: &Runtime) -> Result<(), String> {
     Ok(())
 }
 
+/// Where releases are published: what the start-up notice and `goofi update` point at.
+pub const RELEASES: &str = "https://github.com/KairosHive/goofi/releases";
+
+/// This goofi's version.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The newest released version, asked of GitHub at most once a day: the stamp under `state/`
+/// keeps the last answer and when it was given.
+pub fn latest_release(runtime: &Runtime) -> Result<String, String> {
+    let stamp = runtime.state().join("update-check");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Some((at, version)) = std::fs::read_to_string(&stamp).ok().and_then(|s| {
+        let (at, version) = s.trim().split_once(' ')?;
+        Some((at.parse::<u64>().ok()?, version.to_string()))
+    }) {
+        if now.saturating_sub(at) < 86_400 {
+            return Ok(version);
+        }
+    }
+    let config = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(10))).build();
+    let agent: ureq::Agent = config.into();
+    let mut response = agent
+        .get("https://api.github.com/repos/KairosHive/goofi/releases/latest")
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", &format!("goofi/{VERSION}"))
+        .call()
+        .map_err(|e| format!("could not reach GitHub: {e}"))?;
+    let text = response.body_mut().read_to_string().map_err(|e| format!("GitHub's answer: {e}"))?;
+    let body: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("GitHub's answer: {e}"))?;
+    let tag = body["tag_name"].as_str().ok_or("GitHub's answer names no release")?;
+    let version = tag.strip_prefix('v').unwrap_or(tag).to_string();
+    let _ = std::fs::create_dir_all(runtime.state());
+    let _ = std::fs::write(&stamp, format!("{now} {version}"));
+    Ok(version)
+}
+
+/// Whether `latest` is a newer version than this one: the dotted numbers compared in order.
+pub fn is_newer(latest: &str) -> bool {
+    let parts = |v: &str| v.split('.').map(|p| p.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    parts(latest) > parts(VERSION)
+}
+
 /// A distribution build's start: every bundled tool, the vendored sources, both interpreters and
 /// the embedded wheels, each step skipped when it is already there. The bundles' packages follow
 /// at the scan.

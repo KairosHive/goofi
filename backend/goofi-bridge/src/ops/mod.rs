@@ -399,6 +399,10 @@ pub static TREE: &[Entry] = &[
         Leaf(effect::<session::Recover>()),
         Leaf(effect::<session::Discard>()),
     ]),
+    Group("update", "a newer goofi: whether one is out, and installing it", &[
+        Leaf(effect::<session::UpdateCheck>()),
+        Leaf(effect::<session::UpdateStart>()),
+    ]),
     Group("node", "one node instance — read it, build it, tune it, remove it", &[
         Leaf(read::<node::State>()),
         Leaf(read::<node::Snapshot>()),
@@ -541,9 +545,9 @@ pub fn find(name: &str) -> Option<&'static Row> {
 pub fn table(mode: crate::Mode) -> Vec<Row> {
     // What a demo drops: what reaches the host's files or spawns on it, since every visitor
     // shares one process. `session new` stays: it is the visitor's reset.
-    const DEMO_DROPS: [&str; 8] =
+    const DEMO_DROPS: [&str; 9] =
         ["dir", "agent", "session save", "session load", "library save",
-         "session recoverable", "session recover", "session discard"];
+         "session recoverable", "session recover", "session discard", "update"];
     let dropped = |name: &str, group: &str| {
         name == group || name.strip_prefix(group).is_some_and(|rest| rest.starts_with(' '))
     };

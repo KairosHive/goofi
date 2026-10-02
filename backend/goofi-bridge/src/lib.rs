@@ -91,6 +91,8 @@ pub struct Mode {
     /// A PUBLIC goofi: no terminal, no agents, no filesystem, no save or load, no audio. It is NOT
     /// a sandbox — a param expression is still Python.
     pub demo: bool,
+    /// Started by the app shell, which performs an update when `update start` asks for one.
+    pub shell: bool,
 }
 
 #[derive(Clone)]

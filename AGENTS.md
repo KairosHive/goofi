@@ -61,7 +61,9 @@ before the first production deployment.
 - Rust uses four spaces; frontend code uses tabs and single quotes. Do not run Prettier.
 - The version is `[workspace.package].version`; the toolchain is in `rust-toolchain.toml`.
 - One binary serves the app and acts as its CLI. It prints the URL without opening a browser;
-  `--headless` serves only the API. `goofi help` lists commands.
+  `--headless` serves only the API. `goofi help` lists commands. The app shell in
+  `frontend/electron` runs the binary with `--shell`, holds its stdin, shows the app it serves
+  and performs `update start`; `goofi update` is that op from the CLI.
 - The manager owns the graph and document. Browser documents are read-only replicas, updated
   with versioned path operations (`put` a value at a path, `del` a path).
 - Mutations are commands with inverses and per-actor undo. Fresh calls are strict;

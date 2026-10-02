@@ -17,6 +17,9 @@ pub struct Cli {
     /// A PUBLIC goofi: no terminal, no agents, no filesystem, no save or load, no audio. Also set
     /// by `GOOFI_DEMO` in the environment. Not a sandbox.
     pub demo: bool,
+    /// Started by the app shell, which holds stdin open for as long as it lives and performs
+    /// `update start`. Not a door a user takes.
+    pub shell: bool,
     /// A patch to open before the first client connects. Also `GOOFI_LOAD` in the environment.
     pub load: Option<String>,
     pub help: bool,
@@ -32,6 +35,7 @@ impl Default for Cli {
             headless: false,
             debug: false,
             demo: false,
+            shell: false,
             load: None,
             help: false,
         }
@@ -60,6 +64,7 @@ pub fn parse_args<I: Iterator<Item = String>>(mut args: I) -> Result<Cli, String
             "--headless" => cli.headless = true,
             "--debug" => cli.debug = true,
             "--demo" => cli.demo = true,
+            "--shell" => cli.shell = true,
             "--load" => cli.load = Some(need(args.next())?),
             "-h" | "--help" => cli.help = true,
             other => return Err(format!("unknown argument `{other}` (try --help)")),

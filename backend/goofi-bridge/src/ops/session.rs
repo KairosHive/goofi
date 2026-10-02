@@ -296,3 +296,33 @@ impl EffectOp for Discard {
         Ok(json!({ "ok": true }))
     }
 }
+
+op!(UpdateCheck, "update check", 0, NoArgs,
+    "Whether a newer goofi is released: this version, the newest one, and where releases are. GitHub is asked at most once a day; the answer in between is the last one given.",
+    "{current: string, latest: string, available: bool, releases: string}");
+
+op!(UpdateStart, "update start", 0, NoArgs,
+    "Install the newest release: the app shell downloads it and restarts goofi into it. Refused where no app shell runs goofi — a development checkout, or a bare `goofi` — which updates the way it was installed.",
+    "{ok: true}");
+
+impl EffectOp for UpdateCheck {
+    fn run(_: &AppState, _: NoArgs, _: &Caller) -> Result<Value, String> {
+        let latest = goofi_provision::latest_release(&goofi_supervisor::layout::runtime())?;
+        Ok(json!({
+            "current": goofi_provision::VERSION,
+            "available": goofi_provision::is_newer(&latest),
+            "latest": latest,
+            "releases": goofi_provision::RELEASES,
+        }))
+    }
+}
+
+impl EffectOp for UpdateStart {
+    fn run(state: &AppState, _: NoArgs, _: &Caller) -> Result<Value, String> {
+        if !state.mode.shell {
+            return Err(format!("no app shell runs this goofi: update it the way it was installed, or get the release at {}", goofi_provision::RELEASES));
+        }
+        state.events.send(Event::UpdateRequested);
+        Ok(json!({ "ok": true }))
+    }
+}

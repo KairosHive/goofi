@@ -14,6 +14,8 @@ export type OpName =
 	| 'session recoverable'
 	| 'session recover'
 	| 'session discard'
+	| 'update check'
+	| 'update start'
 	| 'node state'
 	| 'node snapshot'
 	| 'node add'
@@ -91,6 +93,8 @@ export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'session recoverable': 'read',
 	'session recover': 'effect',
 	'session discard': 'effect',
+	'update check': 'effect',
+	'update start': 'effect',
 	'node state': 'read',
 	'node snapshot': 'read',
 	'node add': 'write',

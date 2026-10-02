@@ -97,7 +97,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
         );
         return;
     }
-    let shutdown = watch_shutdown();
+    let shutdown = watch_shutdown(cli.shell);
     let startup = Startup::begin(env!("CARGO_PKG_VERSION"));
     if goofi_provision::DIST {
         report("Preparing goofi's runtime");
@@ -120,7 +120,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
             std::process::exit(1);
         }
     }
-    let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo };
+    let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo, shell: cli.shell };
     report("Cleaning up after earlier sessions");
     // The session is held BEFORE the engines exist: every iceoryx2 port they open is its. What
     // dead sessions left is swept once it is held, so the sweep can never take this one.
@@ -149,6 +149,18 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     // Last, after every port is gone: the record, then the ephemeral directory and shared memory.
     release_session();
     std::process::exit(code);
+}
+
+/// One line when a newer release is out, from a thread of its own: the check may wait on the
+/// network, and the server does not.
+fn notice_newer_release() {
+    let _ = goofi_transport::thread("goofi-update-check").spawn(|| {
+        if let Ok(latest) = goofi_provision::latest_release(&layout::runtime()) {
+            if goofi_provision::is_newer(&latest) {
+                let _ = goofi_supervisor::log::terminal_line(&format!("  goofi {latest} is out — `goofi update` installs it"));
+            }
+        }
+    });
 }
 
 /// Send lines to the resolved server and print each entry — decoded NPY bytes when the result
@@ -200,6 +212,8 @@ fn client_main(mut words: Vec<String>) -> i32 {
     let json = take_json(&mut words);
     match (words.first().map(String::as_str), words.get(1).map(String::as_str)) {
         (Some("session"), Some("list")) => return print_sessions(json),
+        // `goofi update` is `update start`: the one word a user types to get the newest release.
+        (Some("update"), None) => return forward(&["update start".to_string()], json),
         (Some("completions"), shell) => return print_completions(shell),
         (Some("op"), Some("complete")) => return complete_line(&words[2..]),
         (Some("agent"), Some("term")) => {
@@ -378,7 +392,7 @@ async fn run(
     // Before ANY use of the embedded interpreter.
     configure_embedded();
 
-    let Cli { port, bind, extra_nodes, boot_only, headless, debug, demo, load: _, help: _ } = cli;
+    let Cli { port, bind, extra_nodes, boot_only, headless, debug, demo, load: _, help: _, shell: _ } = cli;
     let port = port.unwrap_or(DEFAULT_PORT);
 
     config.plugins = Some(layout::home());
@@ -467,6 +481,9 @@ async fn run(
                 if !demo {
                     println!("  MCP endpoint → {url}/mcp");
                 }
+                if goofi_provision::DIST {
+                    notice_newer_release();
+                }
                 let spa = if headless { &[][..] } else { SPA };
                 if headless {
                     println!("  headless: the API only, no app served");
@@ -537,15 +554,32 @@ fn record_url(url: &str) {
     }
 }
 
-fn watch_shutdown() -> tokio::sync::oneshot::Receiver<()> {
+/// The first request to stop — a signal, or under the app shell the end of stdin, which the
+/// shell holds open for as long as it lives — stops the server the orderly way; a second forces.
+fn watch_shutdown(shell: bool) -> tokio::sync::oneshot::Receiver<()> {
     let (stop, stopped) = tokio::sync::oneshot::channel();
+    let (closed, stdin_closed) = tokio::sync::oneshot::channel::<()>();
+    if shell {
+        goofi_transport::thread("goofi-shell-watch")
+            .spawn(move || {
+                let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+                let _ = closed.send(());
+            })
+            .expect("the shell thread");
+    } else {
+        // Kept, never used: a dropped sender would resolve the receiver at once.
+        std::mem::forget(closed);
+    }
     goofi_transport::thread("goofi-signals").spawn(move || {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("the signal runtime")
             .block_on(async {
-                shutdown_signal().await;
+                tokio::select! {
+                    _ = shutdown_signal() => {}
+                    _ = stdin_closed => {}
+                }
                 let _ = stop.send(());
                 shutdown_signal().await;
                 // Every child goofi spawned watches its liveness pipe, which this exit closes.

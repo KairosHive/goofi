@@ -85,8 +85,10 @@ Rust nodes written at run time. Laid out 2026-10-02.
 2. Shipped bundle requirements must resolve from PyPI: a git requirement (biotuner today) makes
    uv call `git`, which an installed machine need not have, and it re-fetches on every
    requirements check. Settle this when the bundles move out.
-3. Electron shell under `frontend/electron` with electron-builder config and the updater; the
-   CLI's `goofi update`; the start-up check.
+3. The app shell (`frontend/electron`) is packaged but was never opened here (no display to
+   spare): the CI smoke test opens it once. Its icon is the favicon scaled to 512 px; a drawn
+   one replaces `frontend/electron/build/icon.png`. npm 11 withholds `electron-winstaller`'s
+   install script; CI approves it (`npm install-scripts approve`) before packaging on Windows.
 4. CI: build the two wheels and `vendor.tar.xz` (`vendor_sdk` example, `vendor/` at the
    archive root) into the `GOOFI_DIST` directory for the release binary, Electron build, the
    smoke test (`fetch_tools` example into a clean runtime, hide the host toolchains, boot,
