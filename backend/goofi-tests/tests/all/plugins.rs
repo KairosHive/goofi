@@ -194,8 +194,9 @@ fn a_virtual_cable_is_a_device_the_audio_nodes_can_name() {
     assert!(status["unsupported"].is_null(), "{status}");
     let cable = format!("goofi test {}", std::process::id());
     let made = goofi.call("plugin virtual-cables create", j!({"name": cable, "channels": 4}));
-    let device = format!("PipeWire: {cable}");
-    assert_eq!(made["device"], j!(device));
+    // Reached through PipeWire's PulseAudio server: the sink is the output, its monitor the input.
+    let (output, input) = (format!("PulseAudio: {cable}"), format!("PulseAudio: Monitor of {cable}"));
+    assert_eq!((&made["output"], &made["input"]), (&j!(output), &j!(input)));
     assert!(goofi.refuse("plugin virtual-cables create", j!({"name": cable})).contains("exists"));
 
     // A node's own picker offers the cable, spelled as the plugin said it would be.
@@ -207,7 +208,7 @@ fn a_virtual_cable_is_a_device_the_audio_nodes_can_name() {
         (p["node"] == hex(inn) && p["refreshed_params"] == j!([["audio", "device"]])).then_some(p)
     });
     let options = echo["params"]["audio"]["device"]["options"].as_array().cloned().unwrap_or_default();
-    assert!(options.contains(&j!(device)), "the cable is an input device: {options:?}");
+    assert!(options.contains(&j!(input)), "the cable's monitor is an input device: {options:?}");
 
     // An AudioIn drop points that node at the cable; an AudioOut drop moves EVERY AudioOut,
     // because the engine's clock is one device.
@@ -222,15 +223,16 @@ fn a_virtual_cable_is_a_device_the_audio_nodes_can_name() {
     both.sort();
     assert_eq!(moved, both);
     let doc = goofi.doc();
-    for uid in [inn, out_a, out_b] {
-        assert_eq!(doc["nodes"][hex(uid)]["params"]["audio"]["device"]["value"], j!(device), "{uid:?}");
+    assert_eq!(doc["nodes"][hex(inn)]["params"]["audio"]["device"]["value"], j!(input));
+    for uid in [out_a, out_b] {
+        assert_eq!(doc["nodes"][hex(uid)]["params"]["audio"]["device"]["value"], j!(output), "{uid:?}");
     }
     // One undo step takes the AudioOut move back whole.
     goofi.call("undo", j!({}));
     let doc = goofi.doc();
     assert_eq!(doc["nodes"][hex(out_a)]["params"]["audio"]["device"]["value"], j!("default"));
     assert_eq!(doc["nodes"][hex(out_b)]["params"]["audio"]["device"]["value"], j!("default"));
-    assert_eq!(doc["nodes"][hex(inn)]["params"]["audio"]["device"]["value"], j!(device));
+    assert_eq!(doc["nodes"][hex(inn)]["params"]["audio"]["device"]["value"], j!(input));
     let signal = goofi.add("signal:Constant");
     assert!(goofi.refuse("plugin virtual-cables route", j!({"node": hex(signal), "cable": cable})).contains("not an AudioIn"));
 

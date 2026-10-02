@@ -37,10 +37,11 @@ Rust nodes written at run time. Laid out 2026-10-02.
    (`install_name_tool -id @rpath/...` on macOS, the DLL beside the exe on Windows): it is a
    build artifact of the binary, like the app, so the runtime holds no `lib/`. goofi sets
    `PYTHONHOME` for its own process at start from the venv.
-7. **Linux audio.** Only ALSA is linked. JACK is opened at run time (already so), PulseAudio is
-   pure Rust over a socket, the native PipeWire host is dropped (its binding cannot load at run
-   time; PipeWire machines use the PulseAudio and JACK paths). `realtime-dbus` goes too, so the
-   binary needs no system library beyond ALSA, glibc 2.28 and the GPU driver.
+7. **Linux audio.** Only ALSA is linked. JACK is opened at run time, PulseAudio is pure Rust
+   over a socket, the native PipeWire host is dropped (its binding cannot load at run time;
+   PipeWire machines use the PulseAudio and JACK paths, and a virtual cable is its PulseAudio
+   sink and monitor). `realtime-dbus` went too, so the binary needs no system library beyond
+   ALSA, glibc 2.28 and the GPU driver.
 8. **ffmpeg.** An LGPL build per platform, no GPL parts: H.264 through OpenH264 and the
    hardware encoders (NVENC, VideoToolbox, Media Foundation, AMF, QuickSync). goofi is AGPL
    with commercial licences on request, and a GPL x264 build could not ship in the commercial
@@ -84,10 +85,9 @@ Rust nodes written at run time. Laid out 2026-10-02.
 2. Shipped bundle requirements must resolve from PyPI: a git requirement (biotuner today) makes
    uv call `git`, which an installed machine need not have, and it re-fetches on every
    requirements check. Settle this when the bundles move out.
-3. Audio: drop the pipewire and realtime-dbus features; confirm JACK loads at run time.
-4. Electron shell under `frontend/electron` with electron-builder config and the updater; the
+3. Electron shell under `frontend/electron` with electron-builder config and the updater; the
    CLI's `goofi update`; the start-up check.
-5. CI: build the two wheels and `vendor.tar.xz` (`vendor_sdk` example, `vendor/` at the
+4. CI: build the two wheels and `vendor.tar.xz` (`vendor_sdk` example, `vendor/` at the
    archive root) into the `GOOFI_DIST` directory for the release binary, Electron build, the
    smoke test (`fetch_tools` example into a clean runtime, hide the host toolchains, boot,
    build one node per engine), release job. The zig link is proven on Linux (glibc 2.28 floor,

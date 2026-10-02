@@ -21,10 +21,11 @@ goofi-audio-sdk = { path = "../goofi-audio-sdk", features = ["host"] }
 goofi-build = { path = "../../goofi-build" }
 indexmap = "2"
 rtrb = "0.3"
-# Every host cpal can build, so `available_hosts()` answers what the machine actually runs and the
-# choice between them is the user's. cpal target-gates each one, so a feature named here that the
-# platform has no host for costs nothing.
-cpal = { version = "0.18", features = ["pipewire", "pulseaudio", "jack", "realtime", "realtime-dbus"] }
+# Every host the binary can carry without linking a system library beyond ALSA: PulseAudio is
+# pure Rust over a socket, JACK is opened at run time, and PipeWire machines are reached through
+# both. The native PipeWire host links libpipewire and is left out; so is rtkit over libdbus.
+# cpal target-gates each one, so a feature named here that the platform has no host for costs nothing.
+cpal = { version = "0.18", features = ["pulseaudio", "jack", "realtime"] }
 midir = "0.11"
 vst3 = "0.3.0"
 libloading = "0.8"

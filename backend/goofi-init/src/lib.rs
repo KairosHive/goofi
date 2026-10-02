@@ -132,12 +132,7 @@ fn require_npm(runtime: &layout::Runtime) -> Result<(), String> {
 /// The system libraries cpal's Linux hosts link, each with the Debian package that carries it.
 /// Linux only: `jack` dlopens on Windows and macOS, and cpal target-gates the rest.
 #[cfg(target_os = "linux")]
-const AUDIO_LIBS: &[(&str, &str)] = &[
-    ("alsa", "libasound2-dev"),
-    ("libpipewire-0.3", "libpipewire-0.3-dev"),
-    ("jack", "libjack-jackd2-dev"),
-    ("dbus-1", "libdbus-1-dev"),
-];
+const AUDIO_LIBS: &[(&str, &str)] = &[("alsa", "libasound2-dev"), ("jack", "libjack-jackd2-dev")];
 
 #[cfg(target_os = "linux")]
 fn pkg_config(args: &[&str]) -> bool {

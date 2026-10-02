@@ -8,7 +8,7 @@ runs:
       shell: bash
       run: >
         sudo apt-get update -q && sudo apt-get install -y --no-install-recommends
-        libasound2-dev libpipewire-0.3-dev libjack-jackd2-dev libdbus-1-dev mesa-vulkan-drivers ffmpeg
+        libasound2-dev libjack-jackd2-dev mesa-vulkan-drivers ffmpeg
 
     - uses: actions/setup-node@v7
       with:
