@@ -23,11 +23,16 @@ indexmap = "2"
 rtrb = "0.3"
 # Every host the binary can carry without linking a system library beyond ALSA: PulseAudio is
 # pure Rust over a socket, JACK is opened at run time, and PipeWire machines are reached through
-# both. The native PipeWire host links libpipewire and is left out; so is rtkit over libdbus.
-# cpal target-gates each one, so a feature named here that the platform has no host for costs nothing.
-cpal = { version = "0.18", features = ["pulseaudio", "jack", "realtime"] }
+# both. The native PipeWire host links libpipewire and is left out. cpal target-gates each one,
+# so a feature named here that the platform has no host for costs nothing.
+cpal = { version = "0.18", features = ["pulseaudio", "jack", "realtime", "realtime-dbus"] }
 midir = "0.11"
 vst3 = "0.3.0"
 libloading = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# rtkit, the real-time door a user outside the audio group has, speaks D-Bus: libdbus is built
+# from its bundled sources (AFL-2.1) into the binary, so no system library is asked for.
+[target.'cfg(target_os = "linux")'.dependencies]
+libdbus-sys = { version = "0.2", features = ["vendored"] }

@@ -40,8 +40,8 @@ Rust nodes written at run time. Laid out 2026-10-02.
 7. **Linux audio.** Only ALSA is linked. JACK is opened at run time, PulseAudio is pure Rust
    over a socket, the native PipeWire host is dropped (its binding cannot load at run time;
    PipeWire machines use the PulseAudio and JACK paths, and a virtual cable is its PulseAudio
-   sink and monitor). `realtime-dbus` went too, so the binary needs no system library beyond
-   ALSA, glibc 2.28 and the GPU driver.
+   sink and monitor). rtkit's libdbus is built in from its bundled sources, so the binary
+   needs no system library beyond ALSA, glibc 2.28 and the GPU driver.
 8. **ffmpeg.** An LGPL build per platform, no GPL parts: H.264 through OpenH264 and the
    hardware encoders (NVENC, VideoToolbox, Media Foundation, AMF, QuickSync). goofi is AGPL
    with commercial licences on request, and a GPL x264 build could not ship in the commercial
