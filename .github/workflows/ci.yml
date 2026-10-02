@@ -73,7 +73,9 @@ jobs:
       - uses: actions/cache/save@v4
         if: always()
         with:
-          path: target/goofi-runtime/*/build
+          path: |
+            target/goofi-runtime/*/build
+            target/goofi-runtime/cache/cargo
           key: goofi-runtime-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
 
   # Only what a platform can answer differently: processes, paths, dynamic libraries, PTYs, audio
@@ -101,5 +103,7 @@ jobs:
       - uses: actions/cache/save@v4
         if: always()
         with:
-          path: target/goofi-runtime/*/build
+          path: |
+            target/goofi-runtime/*/build
+            target/goofi-runtime/cache/cargo
           key: goofi-runtime-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}

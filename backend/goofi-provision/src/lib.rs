@@ -37,6 +37,8 @@ struct Archive {
     url: String,
     sha256: String,
     strip: usize,
+    #[serde(default)]
+    skip: Vec<String>,
 }
 
 pub fn manifest() -> &'static Manifest {
@@ -188,7 +190,7 @@ pub fn ensure_tool(runtime: &Runtime, tool: Tool) -> Result<bool, String> {
     for archive in archives {
         let file = fetch(runtime, archive)?;
         progress::report(format!("Unpacking {}", archive.file_name()));
-        unpack(&file, archive.strip, &work).map_err(|e| format!("unpack {}: {e}", archive.file_name()))?;
+        unpack(&file, archive.strip, &archive.skip, &work).map_err(|e| format!("unpack {}: {e}", archive.file_name()))?;
     }
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::rename(&work, &dir).map_err(|e| format!("place {}: {e}", dir.display()))?;
@@ -243,12 +245,12 @@ fn digest_of(file: &Path) -> std::io::Result<String> {
 }
 
 /// Unpack `file` under `dest`, each entry's first `strip` segments dropped; an entry with no more
-/// than that many is skipped.
-fn unpack(file: &Path, strip: usize, dest: &Path) -> std::io::Result<()> {
+/// than that many, or one under a `skip` path, is not written.
+fn unpack(file: &Path, strip: usize, skip: &[String], dest: &Path) -> std::io::Result<()> {
     let name = file.to_string_lossy();
     let reader = std::fs::File::open(file)?;
     if name.ends_with(".zip") {
-        return unzip(reader, strip, dest);
+        return unzip(reader, strip, skip, dest);
     }
     let decoded: Box<dyn Read> = if name.ends_with(".tar.xz") {
         Box::new(liblzma::read::XzDecoder::new_multi_decoder(reader))
@@ -258,7 +260,7 @@ fn unpack(file: &Path, strip: usize, dest: &Path) -> std::io::Result<()> {
     let mut archive = tar::Archive::new(decoded);
     for entry in archive.entries()? {
         let mut entry = entry?;
-        let Some(rest) = stripped(&entry.path()?, strip) else { continue };
+        let Some(rest) = stripped(&entry.path()?, strip, skip) else { continue };
         let at = dest.join(rest);
         if let Some(parent) = at.parent() {
             std::fs::create_dir_all(parent)?;
@@ -268,12 +270,12 @@ fn unpack(file: &Path, strip: usize, dest: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn unzip(reader: std::fs::File, strip: usize, dest: &Path) -> std::io::Result<()> {
+fn unzip(reader: std::fs::File, strip: usize, skip: &[String], dest: &Path) -> std::io::Result<()> {
     let mut archive = zip::ZipArchive::new(reader)?;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         let Some(path) = entry.enclosed_name() else { continue };
-        let Some(rest) = stripped(&path, strip) else { continue };
+        let Some(rest) = stripped(&path, strip, skip) else { continue };
         let at = dest.join(rest);
         if entry.is_dir() {
             std::fs::create_dir_all(&at)?;
@@ -293,18 +295,39 @@ fn unzip(reader: std::fs::File, strip: usize, dest: &Path) -> std::io::Result<()
     Ok(())
 }
 
-/// `path` without its first `strip` components, or `None` when nothing is left.
-fn stripped(path: &Path, strip: usize) -> Option<PathBuf> {
+/// `path` without its first `strip` components, or `None` when nothing is left or it is skipped.
+fn stripped(path: &Path, strip: usize, skip: &[String]) -> Option<PathBuf> {
     let rest: PathBuf = path.components().skip(strip).collect();
-    (!rest.as_os_str().is_empty()).then_some(rest)
+    let kept = !rest.as_os_str().is_empty() && !skip.iter().any(|s| rest.starts_with(s));
+    kept.then_some(rest)
 }
 
-/// A distribution build's start: every bundled tool, both interpreters and the embedded wheels,
-/// each step skipped when it is already there. The bundles' packages follow at the scan.
+/// The embedded vendored sources, unpacked into `vendor/` once, so a node build needs no network.
+fn ensure_vendor(runtime: &Runtime) -> Result<(), String> {
+    let vendor = runtime.vendor();
+    if VENDOR.is_empty() || vendor.is_dir() {
+        return Ok(());
+    }
+    let archive = runtime.versioned().join("vendor.tar.xz");
+    std::fs::create_dir_all(runtime.versioned()).map_err(|e| format!("{}: {e}", runtime.versioned().display()))?;
+    std::fs::write(&archive, VENDOR).map_err(|e| format!("{}: {e}", archive.display()))?;
+    progress::report("Unpacking the node build's sources");
+    let work = vendor.with_extension(goofi_supervisor::session::tag());
+    let _ = std::fs::remove_dir_all(&work);
+    unpack(&archive, 1, &[], &work).map_err(|e| format!("unpack {}: {e}", archive.display()))?;
+    std::fs::rename(&work, &vendor).map_err(|e| format!("place {}: {e}", vendor.display()))?;
+    let _ = std::fs::remove_file(&archive);
+    Ok(())
+}
+
+/// A distribution build's start: every bundled tool, the vendored sources, both interpreters and
+/// the embedded wheels, each step skipped when it is already there. The bundles' packages follow
+/// at the scan.
 pub fn ensure_runtime(runtime: &Runtime) -> Result<(), String> {
     for tool in [Tool::Uv, Tool::Cargo, Tool::Zig, Tool::Npm, Tool::Ffmpeg] {
         ensure_tool(runtime, tool)?;
     }
+    ensure_vendor(runtime)?;
     let pins = &manifest().python;
     let ft = ensure_venv(runtime, &runtime.python_ft(), &pins.ft)?;
     let gil = ensure_venv(runtime, &runtime.python_gil(), &pins.gil)?;

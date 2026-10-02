@@ -222,6 +222,11 @@ impl Runtime {
         self.versioned().join("shipped")
     }
 
+    /// The sources of every crate a node build resolves, so it builds with no network.
+    pub fn vendor(&self) -> PathBuf {
+        self.versioned().join("vendor")
+    }
+
     /// What every version shares: the uv cache, the Python installs, the cargo registry.
     pub fn cache(&self) -> PathBuf {
         self.root.join("cache")

@@ -36,7 +36,9 @@ runs:
     # Restored here, saved by the job's last step under this run's id, so each run's is the newest.
     - uses: actions/cache/restore@v4
       with:
-        path: target/goofi-runtime/*/build
+        path: |
+          target/goofi-runtime/*/build
+          target/goofi-runtime/cache/cargo
         key: goofi-runtime-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
         restore-keys: |
           goofi-runtime-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-

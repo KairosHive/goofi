@@ -33,9 +33,10 @@ Rust nodes written at run time. Laid out 2026-10-02.
    node loads into the msvc-built host.
 6. **Python.** The bundled uv installs the pinned CPython 3.14t and 3.12 builds. The binary is
    linked on CI against the same python-build-standalone release with a relative rpath
-   (`$ORIGIN/../lib`, `@executable_path/../lib`); provisioning places libpython there
-   (`install_name_tool -id @rpath/...` on macOS, the DLL beside the exe on Windows) and goofi
-   sets `PYTHONHOME` for its own process at start.
+   (`$ORIGIN/../lib`, `@executable_path/../lib`), and the installer carries libpython there
+   (`install_name_tool -id @rpath/...` on macOS, the DLL beside the exe on Windows): it is a
+   build artifact of the binary, like the app, so the runtime holds no `lib/`. goofi sets
+   `PYTHONHOME` for its own process at start from the venv.
 7. **Linux audio.** Only ALSA is linked. JACK is opened at run time (already so), PulseAudio is
    pure Rust over a socket, the native PipeWire host is dropped (its binding cannot load at run
    time; PipeWire machines use the PulseAudio and JACK paths). `realtime-dbus` goes too, so the
@@ -78,16 +79,17 @@ Rust nodes written at run time. Laid out 2026-10-02.
 
 ## Remaining work
 
-1. `goofi-build`: toolchain, linker, vendor source and `--offline` from the layout. The bundled
-   cargo finds rustc through the PATH `Runtime::command` leads with; the linker is still the
-   system's. `lib/` (libpython) and `vendor/` (the SDK crates) are added here. The rust and
-   node downloads unpack docs, headers and corepack nobody runs (about 800 MB on disk): prune
-   at unpack by path.
-2. ffmpeg archives for the manifest: BtbN's LGPL builds cover Linux and Windows; macOS needs an
+1. ffmpeg archives for the manifest: BtbN's LGPL builds cover Linux and Windows; macOS needs an
    LGPL build from somewhere, or one built on CI. Until then `Tool::Ffmpeg` is PATH's.
+2. Shipped bundle requirements must resolve from PyPI: a git requirement (biotuner today) makes
+   uv call `git`, which an installed machine need not have, and it re-fetches on every
+   requirements check. Settle this when the bundles move out.
 3. Audio: drop the pipewire and realtime-dbus features; confirm JACK loads at run time.
 4. Electron shell under `frontend/electron` with electron-builder config and the updater; the
    CLI's `goofi update`; the start-up check.
-5. CI: build the two wheels and point `GOOFI_DIST` at them for the release binary, vendoring,
-   Electron build, the smoke test (`fetch_tools` example into a clean runtime, hide the host
-   toolchains, boot, build one node per engine), release job.
+5. CI: build the two wheels and `vendor.tar.xz` (`vendor_sdk` example, `vendor/` at the
+   archive root) into the `GOOFI_DIST` directory for the release binary, Electron build, the
+   smoke test (`fetch_tools` example into a clean runtime, hide the host toolchains, boot,
+   build one node per engine), release job. The zig link is proven on Linux (glibc 2.28 floor,
+   no compiler on PATH); macOS zig and the self-contained windows-gnu link are proven by that
+   smoke test, and cargo-zigbuild's macOS flag rewrites are the reference if it fails.
