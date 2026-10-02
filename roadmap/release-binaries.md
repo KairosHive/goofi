@@ -82,16 +82,17 @@ Rust nodes written at run time. Laid out 2026-10-02.
 
 1. ffmpeg archives for the manifest: BtbN's LGPL builds cover Linux and Windows; macOS needs an
    LGPL build from somewhere, or one built on CI. Until then `Tool::Ffmpeg` is PATH's.
-2. Shipped bundle requirements must resolve from PyPI: a git requirement (biotuner today) makes
-   uv call `git`, which an installed machine need not have, and it re-fetches on every
-   requirements check. Settle this when the bundles move out.
+2. Shipped bundle requirements must resolve to wheels for 3.14t and 3.12 on every platform: a
+   git requirement (biotuner today) makes uv call `git`, which an installed machine need not
+   have, and re-fetches on every requirements check; a source-only one (python-rtmidi 1.5.8
+   on 3.14t) needs a C++ compiler the machine does not have. The first launch stops on either.
+   Settle this when the bundles move out.
 3. The app shell (`frontend/electron`) is packaged but was never opened here (no display to
    spare): the CI smoke test opens it once. Its icon is the favicon scaled to 512 px; a drawn
    one replaces `frontend/electron/build/icon.png`. npm 11 withholds `electron-winstaller`'s
    install script; CI approves it (`npm install-scripts approve`) before packaging on Windows.
-4. CI: build the two wheels and `vendor.tar.xz` (`vendor_sdk` example, `vendor/` at the
-   archive root) into the `GOOFI_DIST` directory for the release binary, Electron build, the
-   smoke test (`fetch_tools` example into a clean runtime, hide the host toolchains, boot,
-   build one node per engine), release job. The zig link is proven on Linux (glibc 2.28 floor,
-   no compiler on PATH); macOS zig and the self-contained windows-gnu link are proven by that
-   smoke test, and cargo-zigbuild's macOS flag rewrites are the reference if it fails.
+4. `release.yml` has never run: push a `v3.0.0` tag once the bundles have moved out and read
+   the three smoke tests. The zig link is proven on Linux (glibc 2.28 floor, no compiler on
+   PATH); macOS zig and the self-contained windows-gnu link are proven there, and
+   cargo-zigbuild's macOS flag rewrites are the reference if the macOS link fails. The smoke
+   test installs every shipped bundle's packages, which is what a user's first launch does.

@@ -1,0 +1,188 @@
+name: Release
+
+# A `v*` tag equal to `[workspace.package].version` builds the installers for the three
+# platforms, proves each one on a machine with no toolchain, and publishes the release.
+on:
+  push:
+    tags: ['v*']
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  GOOFI_RUNTIME: ${{ github.workspace }}/target/goofi-runtime
+  # What the release binary embeds: the two wheels and the vendored node build sources.
+  GOOFI_DIST: ${{ github.workspace }}/dist-src
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            rpath: -C link-arg=-Wl,-rpath,$ORIGIN/../lib
+          - os: windows-latest
+            rpath: ''
+          - os: macos-15
+            rpath: -C link-arg=-Wl,-rpath,@executable_path/../lib
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    env:
+      # The binary finds libpython beside the installer's `lib/`, wherever the app is installed.
+      RUSTFLAGS: ${{ matrix.rpath }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: The tag is the version
+        run: |
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          test "v$version" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} is not v$version"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - if: runner.os == 'Linux'
+        run: >
+          sudo apt-get update -q && sudo apt-get install -y --no-install-recommends
+          pkg-config libasound2-dev libjack-jackd2-dev mesa-vulkan-drivers
+      - if: runner.os == 'Windows'
+        run: echo 'LIBCLANG_PATH=C:\Program Files\LLVM\bin' >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - uses: astral-sh/setup-uv@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+
+      # The interpreters pyo3 links against, and the two wheels, built from source as a checkout has them.
+      - name: Provision
+        run: cargo run -p goofi-init
+
+      - name: Stage what the binary embeds
+        run: |
+          mkdir -p "$GOOFI_DIST"
+          cp target/wheels/ft/*.whl target/wheels/gil/*.whl "$GOOFI_DIST"/
+          cargo run -p goofi-build --example vendor_sdk -- vendor-src/vendor
+          python3 -c "import tarfile; t = tarfile.open('$GOOFI_DIST/vendor.tar.xz', 'w:xz'); t.add('vendor-src/vendor', arcname='vendor'); t.close()"
+          ls -la "$GOOFI_DIST"
+
+      - name: Build the release binary
+        run: cargo build --release -p goofi-cli
+
+      # The installer carries the binary and libpython: `bin/` and `lib/` beside each other.
+      - name: Stage the installer's resources
+        run: |
+          mkdir -p dist/bin dist/lib
+          ft="$GOOFI_RUNTIME/$VERSION/python/ft"
+          py=$(ls "$ft"/bin/python "$ft"/Scripts/python.exe 2>/dev/null | head -1)
+          case "$RUNNER_OS" in
+            Windows)
+              cp target/release/goofi.exe dist/bin/
+              cp target/release/python3*.dll dist/bin/
+              ;;
+            macOS)
+              cp target/release/goofi dist/bin/
+              libdir=$("$py" -c "import sysconfig;print(sysconfig.get_config_var('LIBDIR'))")
+              lib=$(ls "$libdir"/libpython3.*.dylib | head -1)
+              cp "$lib" dist/lib/
+              name=$(basename "$lib")
+              install_name_tool -id "@rpath/$name" "dist/lib/$name"
+              # The binary names libpython by the path it was linked from; rename that to the rpath.
+              for ref in $(otool -L dist/bin/goofi | awk '/libpython/ {print $1}'); do
+                install_name_tool -change "$ref" "@rpath/$name" dist/bin/goofi
+              done
+              otool -L dist/bin/goofi | grep python
+              ;;
+            Linux)
+              cp target/release/goofi dist/bin/
+              libdir=$("$py" -c "import sysconfig;print(sysconfig.get_config_var('LIBDIR'))")
+              soname=$("$py" -c "import sysconfig;print(sysconfig.get_config_var('INSTSONAME'))")
+              cp "$libdir/$soname" dist/lib/
+              objdump -p dist/bin/goofi | grep NEEDED
+              ;;
+          esac
+          ls -la dist/bin dist/lib
+
+      # A machine with nothing: a fresh runtime and home, the host's compilers and toolchains off
+      # PATH. The binary provisions itself, boots, and builds one authored node per native engine.
+      - name: Smoke test
+        run: |
+          smoke=$RUNNER_TEMP/smoke
+          mkdir -p "$smoke/bin" "$smoke/nodes"
+          for f in node-bundles/signal/AudioIn.rs node-bundles/audio/BandFilter.rs; do
+            { cat "$f"; echo "// built by the smoke test"; } > "$smoke/nodes/$(basename "$f")"
+          done
+          case "$RUNNER_OS" in
+            Windows)
+              path="/c/Windows/System32:/c/Program Files/Git/cmd:/c/Program Files/Git/usr/bin"
+              bin=dist/bin/goofi.exe
+              ;;
+            *)
+              for d in /usr/bin /bin /usr/local/bin /opt/homebrew/bin; do
+                for f in "$d"/*; do
+                  n=$(basename "$f")
+                  case "$n" in cc|gcc*|g++*|c++|clang*|ld|ld.*|lld*|x86_64-linux-gnu-*|cargo|rustc|rustup|zig|uv|npm|node|python*) ;; *) ln -sf "$f" "$smoke/bin/$n" 2>/dev/null ;; esac
+                done
+              done
+              path="$smoke/bin"
+              bin=dist/bin/goofi
+              ;;
+          esac
+          env -i HOME="$HOME" PATH="$path" TMP="$RUNNER_TEMP" TEMP="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" \
+            LOCALAPPDATA="$smoke/appdata" XDG_DATA_HOME="$smoke/data" GOOFI_HOME="$smoke/home" GOOFI_BOOT_ONLY=1 \
+            "$bin" --headless --extra-nodes "$smoke/nodes" 2>&1 | tee smoke.log
+          grep -q "nodes · 2 nodes" smoke.log
+
+      - name: Package the app
+        working-directory: frontend/electron
+        env:
+          # Signing: present when the secrets are, skipped otherwise.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm version "$VERSION" --no-git-tag-version
+          npm install-scripts approve electron-winstaller 2>/dev/null || true
+          npm install --no-audit --no-fund
+          npx electron-builder --publish never
+          ls -la dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installers-${{ runner.os }}
+          path: |
+            frontend/electron/dist/*.AppImage
+            frontend/electron/dist/*.deb
+            frontend/electron/dist/*.rpm
+            frontend/electron/dist/*.dmg
+            frontend/electron/dist/*.exe
+            frontend/electron/dist/*.blockmap
+            frontend/electron/dist/latest*.yml
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: installers
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd installers
+          sha256sum *.AppImage *.deb *.rpm *.dmg *.exe > SHA256SUMS
+          cat SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: installers/*
+          body: |
+            Unsigned builds: macOS asks for a right-click Open the first time, and Windows'
+            SmartScreen for "Run anyway". The app provisions its runtime on first launch.
