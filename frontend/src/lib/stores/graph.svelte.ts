@@ -521,12 +521,13 @@ export class GraphStore {
 	}
 
 	/** The `node.slot` a param or a variable of `type` may follow on node `uid`, or null for none. A
-	 * facade keys its slots by port uid and a reference names the port, so the LABEL is the half. */
-	referenceFor(uid: string, type: string): string | null {
+	 * facade keys its slots by port uid and a reference names the port, so the LABEL is the half.
+	 * With `slot`, only that slot may answer. */
+	referenceFor(uid: string, type: string, slot?: string): string | null {
 		const node = this.nodeById(uid);
 		if (!node) return null;
 		const want = wantedDtype(type);
-		const key = Object.entries(node.output_slots).find(([, d]) => feeds(d as SlotDtype, want))?.[0];
+		const key = Object.entries(node.output_slots).find(([k, d]) => (slot === undefined || k === slot) && feeds(d as SlotDtype, want))?.[0];
 		return key ? slotReference(node, key) : null;
 	}
 

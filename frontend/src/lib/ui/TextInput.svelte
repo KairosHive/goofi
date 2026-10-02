@@ -12,6 +12,7 @@
 		inputmode = 'text',
 		multiline = false,
 		class: klass = '',
+		onkeydown,
 		...rest
 	}: Omit<HTMLInputAttributes, 'value' | 'type' | 'inputmode' | 'oninput' | 'onchange'> & {
 		value: string;
@@ -46,6 +47,7 @@
 		onfocus={() => live.begin()}
 		onblur={blur}
 		onkeydown={(e) => {
+			onkeydown?.(e as never);
 			if (e.key === 'Escape') e.currentTarget.blur();
 			else e.stopPropagation();
 		}}
@@ -62,6 +64,7 @@
 		onfocus={() => live.begin()}
 		onblur={blur}
 		onkeydown={(e) => {
+			onkeydown?.(e);
 			if (e.key === 'Enter') e.currentTarget.blur();
 		}}
 		oninput={typed}

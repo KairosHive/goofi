@@ -22,6 +22,16 @@ export function inputUnits(slots: string[], isMulti: (slot: string) => boolean):
 	);
 }
 
+/** The centre (px) of each output connector, below the header, with each slot open or closed. */
+export function outputTops(slots: string[], open: (slot: string) => boolean): { slot: string; top: number }[] {
+	let y = NODE.border + NODE.header;
+	return slots.map((slot) => {
+		const top = y + NODE.unit / 2;
+		y += slotHeight(open(slot));
+		return { slot, top };
+	});
+}
+
 /** Vertical placement of each input connector; `top` is the centre (px) of the slot's block. */
 export function inputPorts(
 	slots: string[],

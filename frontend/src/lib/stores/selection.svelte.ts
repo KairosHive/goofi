@@ -2,6 +2,11 @@
 import { graph } from './graph.svelte';
 import type { NodeInstanceInfo } from '$lib/api/control';
 import { sameKeys } from '$lib/editor/slotProximity';
+import type { MenuItem } from 'panelty';
+import { copyText } from '$lib/clipboard';
+
+/** What a param may take as its source: a control element, or one node's output slot. */
+export type ReferencePick = { variable: string } | { node: string; slot: string };
 
 interface PanelSel {
 	nodes: Set<string>;
@@ -28,6 +33,16 @@ class SelectionStore {
 	/** While on, a plain click adds to the selection — the coarse-pointer stand-in for
 	 * shift/ctrl/meta. Session-wide, so `forgetAll` leaves it. */
 	multiSelect = $state(false);
+	/** The one app-wide pick a param's "reference selection" reads; null is none. */
+	reference = $state<ReferencePick | null>(null);
+
+	/** The two items a control element and an output slot both offer; `name` is what a copy gives. */
+	referenceItems(pick: ReferencePick, name: string): MenuItem[] {
+		return [
+			{ label: 'Copy name', icon: 'copy', action: () => void copyText(name) },
+			{ label: 'Select for reference', icon: 'circle-dot', action: () => (this.reference = pick) }
+		];
+	}
 
 	toggleMultiSelect(): void {
 		this.multiSelect = !this.multiSelect;

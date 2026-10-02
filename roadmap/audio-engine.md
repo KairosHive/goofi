@@ -51,7 +51,6 @@ The audio node contract is `sdk/README.md` and the code.
   exists until a node needs one.
 - **Drift between two devices** for `AudioIn`, and between hosts in one patch (a WASAPI capture
   beside an ASIO output is allowed): measure before any correction is built.
-- **A canvas affordance for references**: nothing draws a reference on the canvas.
 - **Watchdog tuning.** `OVERRUNS = 8` blocks over `BUDGET` (`runtime.rs`); a node that runs at
   exactly the budget flaps in and out; `BUDGET` rests on one plugin measurement; `OVERRUNS` is untuned.
 - **The shipped set, the owner's to settle.** Builtins: `AudioIn`, `AudioOut`, `AudioPlayback`,

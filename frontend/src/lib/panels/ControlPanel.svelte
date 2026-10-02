@@ -3,7 +3,8 @@
 <script lang="ts">
 	import { onDestroy, tick } from 'svelte';
 	import type { PanelProps } from 'panelty';
-	import { asStateObject } from 'panelty';
+	import { asStateObject, ContextMenu, createLongPress, type MenuItem } from 'panelty';
+	import { selection } from '$lib/stores/selection.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import type { ControlView, VariableView, LockView } from '$lib/crdt/graphDoc';
 	import { effectiveLock, isValidIdentifier } from '$lib/crdt/graphDoc';
@@ -179,14 +180,30 @@
 
 	let variableGrab: { name: string; x: number; y: number; pointer: number } | null = $state(null);
 
+	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+	function elementMenu(x: number, y: number, name: string): void {
+		menu = { x, y, items: selection().referenceItems({ variable: name }, `variables.${name}`) };
+	}
+	// The touch door onto the right-click menu: a held label, before it moves into a drag.
+	let pressName = '';
+	const press = createLongPress((at) => {
+		cancelVariable();
+		elementMenu(at.clientX, at.clientY, pressName);
+	});
+
 	function grabVariable(e: PointerEvent, gv: VariableView): void {
 		if (e.button !== 0) return;
+		if (e.pointerType !== 'mouse') {
+			pressName = gv.name;
+			press.start(e);
+		}
 		variableGrab = { name: gv.name, x: e.clientX, y: e.clientY, pointer: e.pointerId };
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 		e.stopPropagation();
 	}
 
 	function moveVariable(e: PointerEvent): void {
+		press.move(e);
 		if (!variableGrab || variableGrab.pointer !== e.pointerId) return;
 		if (!uiStore.variableDrag && Math.hypot(e.clientX - variableGrab.x, e.clientY - variableGrab.y) < 4) return;
 		uiStore.variableDrag = {
@@ -196,6 +213,7 @@
 	}
 
 	function cancelVariable(): void {
+		press.cancel();
 		variableGrab = null;
 		uiStore.variableDrag = null;
 	}
@@ -361,6 +379,10 @@
 	{/if}
 {/snippet}
 
+{#if menu}
+	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
+{/if}
+
 <div class="wrap" data-testid="control-panel" data-group={group} data-edit={edit}>
 	<Bar style="--bar-bg: transparent; --bar-border: 1px solid var(--border)">
 		{#snippet start()}<span class="title">{group}</span>{/snippet}
@@ -444,6 +466,10 @@
 						tabindex={edit ? 0 : undefined}
 						use:grab={(e) => down(e, gv, false)}
 						onkeydown={(e) => zap(e, gv)}
+						oncontextmenu={(e) => {
+							e.preventDefault();
+							elementMenu(e.clientX, e.clientY, gv.name);
+						}}
 					>
 						<div
 							class="widget"

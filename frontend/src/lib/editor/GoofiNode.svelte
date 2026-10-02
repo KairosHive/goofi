@@ -6,7 +6,10 @@
 	import { isSlotExpanded } from '$lib/viewers/inlineView';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { flash } from '$lib/stores/flash.svelte';
-	import { NODE, inputPorts, inputUnits, slotHeight } from './nodeMetrics';
+	import { inputPorts, inputUnits, outputTops } from './nodeMetrics';
+	import { ContextMenu, createLongPress, type MenuItem } from 'panelty';
+	import { selection } from '$lib/stores/selection.svelte';
+	import { graph, slotReference } from '$lib/stores/graph.svelte';
 	import { nodeHealth } from './nodeHealth';
 	import { StatusDot } from '$lib/ui';
 	import { formatUpdateRate } from './nodeStats';
@@ -44,8 +47,24 @@
 		uiStore.pendingSlotClick = { node: node.uid, slot, dtype, side: 'target', clientX: e.clientX, clientY: e.clientY };
 	}
 
+	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+	function slotMenu(x: number, y: number, slot: string): void {
+		menu = { x, y, items: selection().referenceItems({ node: node.uid, slot }, slotReference(node, slot)) };
+	}
+	// The touch door onto the right-click menu; the click its release fires is the menu's, not the add menu's.
+	let pressSlot = '';
+	let held = false;
+	const press = createLongPress((at) => {
+		held = true;
+		slotMenu(at.clientX, at.clientY, pressSlot);
+	});
+
 	function onOutputClick(e: MouseEvent, slot: string, dtype: string): void {
 		e.stopPropagation();
+		if (held) {
+			held = false;
+			return;
+		}
 		uiStore.pendingSlotClick = { node: node.uid, slot, dtype, side: 'source', clientX: e.clientX, clientY: e.clientY };
 	}
 
@@ -67,13 +86,19 @@
 	const minBody = $derived(inputUnits(inputs, isMulti));
 
 	// The overlay is unclipped, so it walks the slot stack itself to place each output pill.
-	const outPorts = $derived.by(() => {
-		let y = NODE.border + NODE.header;
-		return outputs.map((slot) => {
-			const top = y + NODE.unit / 2;
-			y += slotHeight(isSlotExpanded(node, slot));
-			return { slot, dtype: node.output_slots[slot], top };
-		});
+	const outPorts = $derived(
+		outputTops(outputs, (slot) => isSlotExpanded(node, slot)).map((p) => ({ ...p, dtype: node.output_slots[p.slot] }))
+	);
+
+	// The control elements this node's params read: light and always shown, as a cable would be.
+	const g = graph();
+	const driving = $derived.by(() => {
+		const names = new Set<string>();
+		for (const group of Object.values(node?.params ?? {}))
+			for (const d of Object.values(group))
+				for (const m of (d.mode === 'expression' && d.expression?.matchAll(/variables\.(\w+\.\w+)/g)) || [])
+					if (g.variables.some((v) => v.name === m[1] && v.control)) names.add(m[1]);
+		return [...names];
 	});
 </script>
 
@@ -115,6 +140,12 @@
 		{/if}
 	</div>
 
+	{#if driving.length}
+		<div class="driving" data-testid="node-control-chips">
+			{#each driving as name (name)}<span class="chip" title="A param reads variables.{name}">{name}</span>{/each}
+		</div>
+	{/if}
+
 	<!-- Connector overlay: outside the clip, so the pills can overhang the edges. -->
 	<div class="ports">
 		{#each inPorts as port (port.slot)}
@@ -144,6 +175,20 @@
 				class="conn out"
 				style="top: {port.top}px; --dtype: {dtypeColor(port.dtype)};"
 				onclick={(e) => onOutputClick(e, port.slot, port.dtype)}
+				oncontextmenu={(e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					slotMenu(e.clientX, e.clientY, port.slot);
+				}}
+				onpointerdown={(e) => {
+					held = false;
+					if (e.pointerType === 'mouse') return;
+					pressSlot = port.slot;
+					press.start(e);
+				}}
+				onpointermove={press.move}
+				onpointerup={press.cancel}
+				onpointercancel={press.cancel}
 				role="button"
 				tabindex="0"
 				data-testid="slot-output-pin"
@@ -155,7 +200,29 @@
 	</div>
 </div>
 
+{#if menu}
+	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
+{/if}
+
 <style>
+	.driving {
+		position: absolute;
+		bottom: 100%;
+		left: 6px;
+		display: flex;
+		gap: 3px;
+		margin-bottom: 3px;
+		pointer-events: none;
+	}
+	.chip {
+		font-size: 9px;
+		line-height: 1;
+		padding: 2px 5px;
+		border-radius: 3px;
+		border: 1px dashed var(--border);
+		color: var(--text-muted);
+		background: var(--surface-1);
+	}
 	.goofi-node {
 		position: relative;
 		display: flex;

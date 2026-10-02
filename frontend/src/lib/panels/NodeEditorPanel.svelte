@@ -22,6 +22,7 @@
 	import type { SurfaceHandle } from '$lib/api/drawings';
 	import SubpatchZoomExit from '$lib/editor/SubpatchZoomExit.svelte';
 	import SnapGuides from '$lib/editor/SnapGuides.svelte';
+	import ReferenceEdges from '$lib/editor/ReferenceEdges.svelte';
 	import { computeSnapDelta, makeBounds, type Bounds, type Guide } from '$lib/editor/snap';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
@@ -1110,6 +1111,9 @@
 					}}
 				/>
 			{/if}
+			<ViewportPortal target="back">
+				<ReferenceEdges nodes={flowNodes} selected={selectedNode?.uid ?? null} />
+			</ViewportPortal>
 			{#if snapGuides.length > 0}
 				<ViewportPortal target="front">
 					<SnapGuides guides={snapGuides} testid="snap-guides" />

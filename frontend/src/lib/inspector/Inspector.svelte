@@ -7,6 +7,7 @@
 	import { ContextMenu, createLongPress } from 'panelty';
 	import { graph, paramLive } from '$lib/stores/graph.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
+	import { selection } from '$lib/stores/selection.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { isValidName } from '$lib/crdt/graphDoc';
 	import { formatName } from '$lib/editor/categoryColor';
@@ -182,16 +183,36 @@
 		setSource(group, name, { expression: `${kind}(freq=${freq})` });
 	}
 
-	/** The LFO and Noise menu on a numeric row, from a right click or a held touch. */
-	function modulationMenu(x: number, y: number, { group, name }: ParamHit): void {
-		menu = {
-			x,
-			y,
-			items: [
-				{ label: 'LFO', action: () => modulate(group, name, 'lfo') },
-				{ label: 'Noise', action: () => modulate(group, name, 'noi') }
-			]
-		};
+	/** The source the app's reference pick gives this param, or null where the param may not take it. */
+	function pickedSource(d: ParamDescriptor): SourcePatch | null {
+		const pick = selection().reference;
+		if (!pick) return null;
+		if ('variable' in pick) {
+			return g.variables.some((v) => v.name === pick.variable) ? { expression: `variables.${pick.variable}` } : null;
+		}
+		const reference = pick.node === node?.uid ? null : g.referenceFor(pick.node, d.type, pick.slot);
+		return reference ? { reference } : null;
+	}
+
+	/** A row's menu, from a right click or a held touch: LFO and Noise on a numeric row, and the pick. */
+	function rowItems({ group, name, descriptor }: ParamHit): MenuItem[] {
+		const items: MenuItem[] = isNumeric(descriptor)
+			? [
+					{ label: 'LFO', action: () => modulate(group, name, 'lfo') },
+					{ label: 'Noise', action: () => modulate(group, name, 'noi') }
+				]
+			: [];
+		const source = pickedSource(descriptor);
+		if (source) {
+			const label = `Reference selection: ${source.expression ?? source.reference}`;
+			items.push({ label, icon: 'circle-dot', action: () => setSource(group, name, source) });
+		}
+		return items;
+	}
+	function rowMenu(x: number, y: number, hit: ParamHit): boolean {
+		const items = rowItems(hit);
+		if (items.length) menu = { x, y, items };
+		return items.length > 0;
 	}
 
 	// One hold for the form: movement cancels it, and the click its release fires is swallowed.
@@ -199,7 +220,7 @@
 	let pressHit: ParamHit | undefined;
 	const press = createLongPress((at) => {
 		pressed = true;
-		if (pressHit) modulationMenu(at.clientX, at.clientY, pressHit);
+		if (pressHit) rowMenu(at.clientX, at.clientY, pressHit);
 	});
 	function release(): void {
 		activeParam = null;
@@ -343,7 +364,7 @@
 		activeParam = row?.dataset.paramNode === node?.uid ? row?.dataset.paramKey ?? null : null;
 		pressed = false;
 		const hit = row?.dataset.paramForm === formId ? rows.find((r) => paramKey(r.group, r.name) === row.dataset.paramKey) : undefined;
-		if (e.pointerType !== 'mouse' && hit && isNumeric(hit.descriptor)) {
+		if (e.pointerType !== 'mouse' && hit && rowItems(hit).length) {
 			pressHit = hit;
 			press.start(e);
 		}
@@ -558,10 +579,9 @@
 								data-param-node={node.uid}
 								data-param-key={paramKey(group, paramName)}
 								oncontextmenu={(e) => {
-									if (!isNumeric(descriptor)) return;
+									if (!rowMenu(e.clientX, e.clientY, { group, name: paramName, descriptor })) return;
 									e.preventDefault();
 									e.stopPropagation();
-									modulationMenu(e.clientX, e.clientY, { group, name: paramName, descriptor });
 								}}
 							>
 								{#if searching}

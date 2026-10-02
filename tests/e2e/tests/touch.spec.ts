@@ -425,3 +425,112 @@ test('a finger held on a viewer reads it, and follows as it moves, without movin
 		await tearDown(page);
 	}
 });
+
+test('a held slot or control element is picked for reference, and a held param takes it', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	const param = (u: string, name: string, key: 'mode' | 'expression' | 'reference'): Promise<unknown> =>
+		page.evaluate(
+			([uid, n, k]) =>
+				(window as any).goofi.query.graph().nodes.find((x: { uid: string }) => x.uid === uid)?.params.lfo[n][k],
+			[u, name, key] as const
+		);
+	const centre = async (l: Locator) => {
+		const b = (await l.boundingBox())!;
+		return { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2) };
+	};
+	const corner = async (l: Locator) => {
+		const b = (await l.boundingBox())!;
+		return { x: Math.round(b.x + 2), y: Math.round(b.y + 2) };
+	};
+	try {
+		const osc = await addNode(page, 'LFO', [40, 40]);
+		const lfo = await addNode(page, 'LFO', [40, 260]);
+		await waitForNode(page, osc);
+		await waitForNode(page, lfo);
+
+		await test.step('a double tap on the inspector\'s name field renames the node', async () => {
+			await tapNode(page, lfo);
+			const name = pane(page).getByTestId('node-name');
+			// A trial waits for the sheet to come to rest under the name.
+			await name.tap({ trial: true });
+			const at = await centre(name);
+			const touch = await touchSession(page);
+			for (let i = 0; i < 2; i++) {
+				await touch.down(at);
+				await touch.up();
+			}
+			const input = pane(page).getByTestId('node-name-input');
+			await expect(input, 'the taps opened the field and kept it').toBeFocused();
+			await input.fill('carrier');
+			await input.press('Enter');
+			await expect
+				.poll(() => page.evaluate((u) => (window as any).goofi.query.graph().nodes.find((n: { uid: string }) => n.uid === u)?.name, lfo))
+				.toBe('carrier');
+		});
+
+		await test.step('a held output slot is picked, and a held param follows it', async () => {
+			const pin = page.locator(`.svelte-flow__node[data-id="${lfo}"] [data-testid="slot-output-pin"]`);
+			const pick = page.getByRole('menuitem', { name: 'Select for reference' });
+			// The sheet covers the canvas; its ✕ clears the way to the slot.
+			await pane(page).getByTestId('inspector-close').tap();
+			await expect(pane(page)).not.toHaveClass(/open/);
+			await longPress(page, await centre(pin), pick);
+			await pick.tap();
+			await tapNode(page, osc);
+			const field = pane(page).getByTestId('param-field-frequency');
+			await field.scrollIntoViewIfNeeded();
+			const take = page.getByRole('menuitem', { name: 'Reference selection: carrier.out' });
+			await longPress(page, await corner(field), take);
+			await take.tap();
+			await expect.poll(() => param(osc, 'frequency', 'mode')).toBe('reference');
+			expect(await param(osc, 'frequency', 'reference')).toBe('carrier.out');
+			await expect(page.getByTestId('reference-edge'), 'the selected node draws what it follows').toHaveCount(1);
+		});
+
+		await test.step('a held control element is picked, and a held param reads it', async () => {
+			await page.evaluate(async () => {
+				const g = (window as any).goofi;
+				await g.commands.addVariable('desk.level', 0.5, 'float', {
+					kind: 'knob', min: 0, max: 1, step: 0.01, x: 0, y: 0, w: 3, h: 3
+				});
+				const panel = g.query.panels()[0];
+				g.commands.setPanelType(panel.panelId, 'control');
+				g.commands.setPanelState(panel.panelId, { group: 'desk' });
+			});
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-edit', 'true');
+			await page.getByTestId('control-edit-toggle').tap();
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-edit', 'false');
+			const label = page.getByTestId('control-desk-level').locator('.label');
+			await label.dblclick();
+			const rename = page.getByTestId('control-rename');
+			await rename.fill('other');
+			await rename.press('Escape');
+			await expect(rename, 'Escape closes the rename field').toHaveCount(0);
+			await expect(label, 'and keeps the old name').toHaveText('level');
+			const pick = page.getByRole('menuitem', { name: 'Select for reference' });
+			await longPress(page, await centre(label), pick);
+			await pick.tap();
+			await restorePanelType(page);
+			await tapNode(page, osc);
+			const field = pane(page).getByTestId('param-field-amplitude');
+			await field.scrollIntoViewIfNeeded();
+			const take = page.getByRole('menuitem', { name: 'Reference selection: variables.desk.level' });
+			await longPress(page, await corner(field), take);
+			await take.tap();
+			await expect.poll(() => param(osc, 'amplitude', 'expression')).toBe('variables.desk.level');
+			await expect(
+				page.locator(`.svelte-flow__node[data-id="${osc}"]`).getByTestId('node-control-chips'),
+				'the node names the element that drives it'
+			).toHaveText('desk.level');
+		});
+	} finally {
+		await restorePanelType(page);
+		await page.evaluate(async () => {
+			const g = (window as any).goofi;
+			for (const v of g.query.variables().filter((v: { name: string }) => v.name.startsWith('desk.')))
+				await g.commands.removeVariable(v.name);
+		});
+		await tearDown(page);
+	}
+});
