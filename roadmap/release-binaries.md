@@ -77,13 +77,37 @@ Rust nodes written at run time. Laid out 2026-10-02; nothing below is built yet.
 - Whether provisioning downloads the tools or the installer carries them (download keeps the
   installers small; carrying them makes the first launch work offline).
 
+## Layout (agreed 2026-10-02)
+
+`goofi_supervisor::layout` replaces the `home` module. Three roots, each an OS convention with
+one scoping override read per call:
+
+| root | default | override | holds |
+|---|---|---|---|
+| home | `~/.goofi` | `GOOFI_HOME` (parent of `.goofi`) | custom nodes, recordings, plugins, plugin data, config, recovery |
+| runtime | `%LOCALAPPDATA%\goofi`, `~/Library/Application Support/goofi`, `$XDG_DATA_HOME/goofi` | `GOOFI_RUNTIME` (replaces `GOOFI_BUILD_DIR`) | below |
+| session | `/tmp/goofi-system`, `C:\Temp\goofi-system` | none | unchanged |
+
+`runtime/<version>/` is bound to one goofi version and removed whole after an update: `tools/`
+(rust, zig, uv, node, ffmpeg), `python/` (the ft and gil venvs), `lib/` (libpython), `vendor/`,
+`build/` (crates, target, out, probes, vst3, plugin caches), `shipped/`. `runtime/cache/` is
+shared across versions: uv cache, Python installs, cargo registry. `runtime/state/` survives an
+update: recent folders, the update-check stamp. `~/.goofi/system` disappears.
+
+`layout.tool(Tool::Cargo)` returns the bundled path under `tools/` when present, else the PATH
+lookup. That rule is the whole difference between the source checkout and an installed goofi:
+the checkout's tools come from PATH and `goofi-init` fills its runtime from the developer's uv,
+exactly as the provisioner will. The venvs leave the repo root; `PYO3_PYTHON` serves the link
+step only, and goofi sets the interpreter and `PYTHONHOME` for its own process from the layout.
+Shipped content stays embedded, so the program directory is not a root the core needs.
+
 ## Remaining work
 
-1. Layout: one `goofi_supervisor::layout` that resolves the program and runtime directories
-   from the executable, replacing `repo_root`, `PYO3_PYTHON` and the generated cargo `[env]`;
-   the source checkout is the development layout.
-2. Provisioning: move venv, wheel and requirements logic from `goofi-init` into the binary,
-   driven by a pinned manifest; `goofi-init` keeps the development-only parts.
+1. Layout: the module above; move the venvs, build base and shipped tree into the runtime;
+   Python self-configuration; tool lookup; the `GOOFI_RUNTIME` rename in tests, CI and e2e.
+2. Provisioning: move venv, wheel and requirements logic from `goofi-init` into a
+   `goofi-provision` crate the binary uses, driven by a pinned manifest; `goofi-init` keeps the
+   development-only parts (system package checks, cargo config, target cleanup).
 3. `goofi-build`: toolchain, linker, vendor source and `--offline` from the layout.
 4. Audio: drop the pipewire and realtime-dbus features; confirm JACK loads at run time.
 5. Electron shell under `frontend/electron` with electron-builder config and the updater; the
