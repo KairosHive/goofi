@@ -79,6 +79,7 @@ test('save dialogs and axis presets keep the user in control', async ({ page }) 
 		});
 		await expect(browser.getByTestId('fs-failure')).toBeVisible();
 		await expect(browser.getByTestId('fs-failure')).not.toHaveText('');
+		await expect(browser.getByTestId('fs-upload'), 'the browser stage left with the list').toHaveCount(0);
 		await expect(page.getByTestId('toast')).toHaveCount(0);
 		await browser.getByTestId('fs-back').click();
 		await expect(rows.first()).toContainText('big.txt');

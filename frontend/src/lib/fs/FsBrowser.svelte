@@ -230,8 +230,10 @@
 
 		{#if working !== null}
 			<div class="body progress" data-testid="fs-progress" aria-live="polite">
-				<!-- Three dots in turn, no ring: the frame's own accent, drawn small and quiet. -->
-				<span class="spinner" class:done={failure !== null} aria-hidden="true"><i></i><i></i><i></i></span>
+				<!-- A wave runs the length of the strip: beside the log it travels down, above it across. -->
+				<span class="spinner" class:done={failure !== null} aria-hidden="true">
+					{#each { length: 12 } as _, i (i)}<i style="--i: {i}"></i>{/each}
+				</span>
 				<ul class="log" bind:this={logEl}>
 					{#each progress as row (row.uid)}
 						<li class={row.level}>{row.text}</li>
@@ -326,7 +328,8 @@
 
 		<Bar class="fs-footer" style="--bar-wrap: wrap; --bar-pad-y: var(--space-2)">
 			{#snippet start()}
-				{#if mode === 'save'}
+				<!-- The name field and the upload belong to the browser stage, not to a running pick. -->
+				{#if working !== null}{:else if mode === 'save'}
 					<TextInput
 						style="width: 14rem; flex: 0 1 auto; min-width: 0"
 						value={filename}
@@ -413,39 +416,41 @@
 		gap: var(--space-6);
 		padding: var(--space-6);
 	}
+	/* A column of dots that sways side to side with a phase per dot, so a wave travels along it. */
 	.spinner {
 		flex: 0 0 auto;
+		align-self: center;
 		display: flex;
+		flex-direction: column;
 		gap: var(--space-2);
-		padding: var(--space-4);
+		align-items: center;
+		width: 2rem;
+		--sway: 0.5rem 0;
+		--sway-back: -0.5rem 0;
 	}
 	.spinner i {
 		width: 0.5rem;
 		height: 0.5rem;
 		border-radius: 50%;
 		background: var(--accent);
-		animation: fs-pulse 1.2s ease-in-out infinite;
-	}
-	.spinner i:nth-child(2) {
-		animation-delay: 0.2s;
-	}
-	.spinner i:nth-child(3) {
-		animation-delay: 0.4s;
+		animation: fs-wave 1.6s ease-in-out infinite;
+		animation-delay: calc(var(--i) * -0.25s);
 	}
 	.spinner.done i {
 		animation: none;
 		background: var(--danger);
 	}
-	@keyframes fs-pulse {
+	@keyframes fs-wave {
 		0%,
-		60%,
 		100% {
-			opacity: 0.25;
-			transform: scale(0.8);
+			translate: var(--sway);
+			scale: 0.7;
+			opacity: 0.3;
 		}
-		30% {
+		50% {
+			translate: var(--sway-back);
+			scale: 1;
 			opacity: 1;
-			transform: scale(1);
 		}
 	}
 	.log {
@@ -601,6 +606,13 @@
 		.body,
 		.progress {
 			flex-direction: column;
+		}
+		.spinner {
+			flex-direction: row;
+			width: auto;
+			height: 2rem;
+			--sway: 0 0.5rem;
+			--sway-back: 0 -0.5rem;
 		}
 		.roots {
 			flex: 0 0 auto;
