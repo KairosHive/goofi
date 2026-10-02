@@ -344,12 +344,20 @@ pub const META_SFREQ: &str = "sfreq";
 pub const META_UFREQ: &str = "ufreq";
 pub const META_TIME: &str = "time";
 pub const META_INDEX: &str = "index";
+/// Patch seconds when the frame left its node: the tick's `time` plus what the run took.
+pub const META_EMIT: &str = "emit";
+/// The frames this frame was made from, as one flat list: entry 0 is the frame itself, and an
+/// entry's `inputs` maps a slot to the positions of the entries the node held there as it ran.
+/// Each entry says `node`, `slot`, `index`, `time` and `emit`. A frame two branches both hold is
+/// one entry, and a chain is cut where it would reach a node's own earlier run.
+pub const META_SOURCE: &str = "source";
 pub const META_CHANNELS: &str = "channels";
 /// How far a DERIVED timeline stands ahead of patch time, in seconds, as the engine last measured
 /// it. Only an engine that counts rather than reads sets it.
 pub const META_DRIFT: &str = "drift";
 pub const META_REDUCED: &str = "reduced";
-const BUILTIN_KEYS: [&str; 6] = [META_SFREQ, META_UFREQ, META_TIME, META_INDEX, META_CHANNELS, META_REDUCED];
+const BUILTIN_KEYS: [&str; 8] =
+    [META_SFREQ, META_UFREQ, META_TIME, META_INDEX, META_EMIT, META_SOURCE, META_CHANNELS, META_REDUCED];
 
 static EMPTY_AXES: Axes = Axes(Vec::new());
 
@@ -371,6 +379,8 @@ impl Meta {
         m.insert(META_UFREQ.to_string(), MetaValue::Null);
         m.insert(META_TIME.to_string(), MetaValue::Null);
         m.insert(META_INDEX.to_string(), MetaValue::Null);
+        m.insert(META_EMIT.to_string(), MetaValue::Null);
+        m.insert(META_SOURCE.to_string(), MetaValue::Null);
         m.insert(META_CHANNELS.to_string(), MetaValue::Axes(Axes::new()));
         m.insert(META_REDUCED.to_string(), MetaValue::Null);
         Meta(m)
@@ -414,6 +424,17 @@ impl Meta {
         match self.0.get(META_INDEX) {
             Some(MetaValue::Uint(u)) => Some(*u),
             Some(MetaValue::Int(i)) if *i >= 0 => Some(*i as u64),
+            _ => None,
+        }
+    }
+    /// Patch seconds when the frame left its node.
+    pub fn emit(&self) -> Option<f64> {
+        as_f64(self.0.get(META_EMIT))
+    }
+    /// The frames this frame was made from; see [`META_SOURCE`].
+    pub fn source(&self) -> Option<&[MetaValue]> {
+        match self.0.get(META_SOURCE) {
+            Some(MetaValue::List(l)) => Some(l),
             _ => None,
         }
     }
@@ -571,12 +592,15 @@ impl Data {
         }))
     }
 
-    /// A copy with the engine-owned `index` and `ufreq` stamped on — overwritten, never inherited.
-    pub fn with_stamps(&self, time: f64, index: u64, ufreq: Option<f64>) -> Data {
+    /// A copy with the engine-owned stamps on — overwritten, never inherited: the tick's `time`,
+    /// the node's `index` and `ufreq`, the instant it left as `emit`, and its `source`.
+    pub fn with_stamps(&self, time: f64, index: u64, ufreq: Option<f64>, emit: f64, source: Vec<MetaValue>) -> Data {
         let mut meta = self.0.meta.clone();
         meta.set_time(Some(time));
         meta.set_index(Some(index));
         meta.set_ufreq(ufreq);
+        meta.set(META_EMIT, MetaValue::Float(emit));
+        meta.set(META_SOURCE, MetaValue::List(source));
         Data(Arc::new(DataInner {
             value: self.0.value.clone(),
             meta,

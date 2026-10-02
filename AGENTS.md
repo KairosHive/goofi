@@ -79,6 +79,9 @@ before the first production deployment.
   build runs. Audio loads its built library in-process. Graphics supports `.wgsl` shaders and
   Rust/Python host sources on shared GPU resources; Python graphics uses `# goofi: graphics`.
   Python nodes use the shared marshalling interface in both automatic execution tiers.
+- The engine stamps every frame it emits: the tick's `time`, the node's `index` and `ufreq`, the
+  `emit` instant it left at, and its `source`, the frames it was made from with their own sources
+  behind them, cut where a chain meets a node's earlier run. Stamps are never inherited.
 - Each frame counts in full, including a Buffer window. Never infer sample overlap. Resample
   handles independent windows; Epoch captures supplied windows. Input clearing takes effect
   after a successful process call and before the next input drain.

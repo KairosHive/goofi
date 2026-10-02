@@ -12,7 +12,7 @@ use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::sync::Arc;
 
-use goofi_core::{Coord, Data, MetaValue, Value, META_CHANNELS, META_INDEX, META_TIME, META_UFREQ};
+use goofi_core::{Coord, Data, MetaValue, Value, META_CHANNELS, META_EMIT, META_INDEX, META_SOURCE, META_TIME, META_UFREQ};
 use rmpv::Value as Mp;
 
 pub const MAGIC: &[u8; 4] = b"GOOF";
@@ -260,7 +260,7 @@ pub fn encode_f16(d: &Data) -> Result<Option<Vec<u8>>, EncodeError> {
 /// the frame they belong to already reached the viewers, and merged into it there.
 pub const STAMPS_TAG: u8 = 4;
 /// What the engine writes afresh on every emit, and what [`content_hash`] leaves out.
-const STAMP_KEYS: [&str; 3] = [META_TIME, META_INDEX, META_UFREQ];
+const STAMP_KEYS: [&str; 5] = [META_TIME, META_INDEX, META_UFREQ, META_EMIT, META_SOURCE];
 
 /// A 64-bit hash of what a frame SAYS: its kind, its body, and its meta without the engine's
 /// per-emit stamps — so a held value emitted again hashes as the frame before it.

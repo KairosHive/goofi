@@ -283,17 +283,23 @@ fn the_latency_plugin_times_every_tick_from_one_node_to_the_next() {
     assert!(ticks >= 5, "{stopped}");
     let csv = std::fs::read_to_string(stopped["csv"].as_str().unwrap()).unwrap();
     let lines: Vec<&str> = csv.lines().collect();
-    assert_eq!(lines[0], "target_time,target_index,source_time,source_index,latency_ms");
+    // One hop on this path, so the total is that hop's own column.
+    let echo_name = goofi.doc()["nodes"][&echo]["name"].as_str().unwrap().to_string();
+    assert_eq!(lines[0], format!("target_time,target_index,source_time,source_index,latency_ms,{echo_name}_ms"));
     assert_eq!(lines.len() as u64 - 1, ticks);
+    assert_eq!(stopped["unpaired"], 0, "{stopped}");
+    assert_eq!(stopped["path"], j!([goofi.doc()["nodes"][&number]["name"], echo_name]));
     let mut last_index = -1i64;
     for line in &lines[1..] {
         let cols: Vec<&str> = line.split(',').collect();
-        assert_eq!(cols.len(), 5, "{line}");
+        assert_eq!(cols.len(), 6, "{line}");
         let target: f64 = cols[0].parse().unwrap();
         let index: i64 = cols[1].parse().unwrap();
         let source: f64 = cols[2].parse().unwrap();
         let ms: f64 = cols[4].parse().unwrap();
-        assert!(source <= target && ms >= 0.0, "a target tick follows its source tick: {line}");
+        let hop: f64 = cols[5].parse().unwrap();
+        assert!(source <= target && ms > 0.0, "a target tick follows its source tick, and it took time: {line}");
+        assert!((ms - hop).abs() < 1e-9, "the total is the sum of its hops: {line}");
         assert!(index > last_index, "target ticks in order: {line}");
         last_index = index;
     }

@@ -244,6 +244,10 @@ pub struct Cx<'a> {
     pub recorded: &'a [bool],
     /// The patch's time at this run.
     pub now: f64,
+    /// The patch's clock, read again as a frame leaves, for its `emit` stamp.
+    pub time: &'a goofi_core::time::Time,
+    /// The node this run is, as its frames' `source` names it.
+    pub uid: Uid,
 }
 
 /// What an executor puts on one output.
@@ -1037,6 +1041,8 @@ impl<E: Executor> Runtime<E> {
             readers: &readers,
             recorded: &recorded,
             now: self.time.now(),
+            time: &self.time,
+            uid: self.uid,
         };
         let (outs, engine, trouble_) = (&mut self.outs, self.engine, &mut self.trouble);
         // A retired port is dropped HERE rather than at the disarm, so the release follows the

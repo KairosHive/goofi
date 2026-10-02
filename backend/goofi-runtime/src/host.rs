@@ -2,9 +2,10 @@
 //! schedule ask and held to its rate cap. Its params are the runtime's values, its faults are the
 //! node's own, and what it emits is a frame the runtime puts on the wire.
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use goofi_core::{Data, Param};
+use goofi_core::{Data, MetaValue, Param};
 use goofi_host_sdk::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
 use goofi_node::{NodeManifest, NodeStage, ParamDecl, ParamGroups, ParamKey, Params};
 use indexmap::IndexMap;
@@ -198,6 +199,32 @@ impl HostExecutor {
             .collect()
     }
 
+    /// The frames this run was made from, as [`goofi_core::META_SOURCE`] lists them: entry 0 is
+    /// this run's own, its `inputs` the frames held on each slot, each with its own lineage behind
+    /// it. A frame two slots both hold is copied once; a chain stops where it would reach this
+    /// node's own earlier run, or a node it already passed — the last cycle of that node.
+    fn source(&self, cx: &Cx<'_>, index: u64, emit: f64) -> Vec<MetaValue> {
+        let me = cx.uid.to_hex();
+        let mut entries = vec![entry(&me, "", index, cx.now, emit)];
+        let mut seen = HashMap::new();
+        let singles = self.inputs.iter().map(|(slot, cell)| (*slot, cell.iter().collect::<Vec<_>>()));
+        let multis = self.multi_wires.iter().map(|(slot, cells)| (*slot, cells.iter().filter_map(|(_, _, f)| f.as_ref()).collect()));
+        let mut inputs = BTreeMap::new();
+        for (slot, frames) in singles.chain(multis) {
+            let held: Vec<MetaValue> = frames
+                .into_iter()
+                .filter_map(|f| f.meta().source())
+                .filter_map(|list| copy(list, 0, &me, &mut entries, &mut seen, &mut HashSet::new()))
+                .map(|p| MetaValue::Uint(p as u64))
+                .collect();
+            if !held.is_empty() {
+                inputs.insert(slot.to_string(), MetaValue::List(held));
+            }
+        }
+        entries[0].insert("inputs".into(), MetaValue::Map(inputs));
+        entries.into_iter().map(MetaValue::Map).collect()
+    }
+
     fn process(&mut self, cx: &Cx<'_>, publish: &mut dyn FnMut(usize, Out<'_>)) -> Option<f64> {
         if let Some(slot) = self.missing_required() {
             self.fault = Some(Fault::Process(format!("required input slot `{slot}` has no data")));
@@ -244,7 +271,10 @@ impl HostExecutor {
             Ok(()) => {
                 // The engine's own meta goes on before anything leaves the node — there is no
                 // second stamping site.
-                let ufreq = stamp_meta(&mut outputs, cx.now, &mut self.emits, &mut self.meter);
+                // Read once the run is over, so a chain run in one sweep still tells its hops apart.
+                let emit = cx.time.now();
+                let source = self.source(cx, self.emits, emit);
+                let ufreq = stamp_meta(&mut outputs, cx.now, emit, source, &mut self.emits, &mut self.meter);
                 for (i, (_, frame)) in outputs.iter().enumerate() {
                     if let Some(frame) = frame {
                         publish(i, Out::Frame(frame));
@@ -401,6 +431,8 @@ impl Executor for HostExecutor {
 fn stamp_meta(
     outputs: &mut IndexMap<&'static str, Option<Data>>,
     now: f64,
+    emit: f64,
+    source: Vec<MetaValue>,
     emits: &mut u64,
     meter: &mut UfreqMeter,
 ) -> Option<f64> {
@@ -429,9 +461,82 @@ fn stamp_meta(
     };
     let index = *emits;
     *emits += 1;
-    for slot_opt in outputs.values_mut() {
+    for (slot, slot_opt) in outputs.iter_mut() {
         let Some(d) = slot_opt else { continue };
-        *d = d.with_stamps(now, index, node_ufreq);
+        let mut own = source.clone();
+        if let Some(MetaValue::Map(e)) = own.first_mut() {
+            e.insert("slot".into(), MetaValue::Str(slot.to_string()));
+        }
+        *d = d.with_stamps(now, index, node_ufreq, emit, own);
     }
     node_ufreq
+}
+
+/// A count as the wire hands it back: msgpack gives a small one back signed.
+fn uint(v: &MetaValue) -> Option<u64> {
+    match v {
+        MetaValue::Uint(u) => Some(*u),
+        MetaValue::Int(i) if *i >= 0 => Some(*i as u64),
+        _ => None,
+    }
+}
+
+/// One `source` entry: a frame named by its node, output, index and the two instants of its run.
+fn entry(node: &str, slot: &str, index: u64, time: f64, emit: f64) -> BTreeMap<String, MetaValue> {
+    BTreeMap::from([
+        ("node".to_string(), MetaValue::Str(node.to_string())),
+        ("slot".to_string(), MetaValue::Str(slot.to_string())),
+        ("index".to_string(), MetaValue::Uint(index)),
+        ("time".to_string(), MetaValue::Float(time)),
+        ("emit".to_string(), MetaValue::Float(emit)),
+    ])
+}
+
+/// Copy entry `pos` of an input frame's `list` and what it was made from into `entries`, and
+/// answer where it landed; `None` where the chain is cut. `seen` shares a frame already copied,
+/// and `chain` holds the nodes above this entry, so a node met again ends the chain there.
+fn copy(
+    list: &[MetaValue],
+    pos: usize,
+    me: &str,
+    entries: &mut Vec<BTreeMap<String, MetaValue>>,
+    seen: &mut HashMap<(String, String, u64), usize>,
+    chain: &mut HashSet<String>,
+) -> Option<usize> {
+    let MetaValue::Map(e) = list.get(pos)? else { return None };
+    let (Some(MetaValue::Str(node)), Some(MetaValue::Str(slot)), Some(index)) =
+        (e.get("node"), e.get("slot"), e.get("index").and_then(uint))
+    else {
+        return None;
+    };
+    if node == me || chain.contains(node) {
+        return None;
+    }
+    let key = (node.clone(), slot.clone(), index);
+    if let Some(&at) = seen.get(&key) {
+        return Some(at);
+    }
+    let at = entries.len();
+    let mut copied = e.clone();
+    copied.remove("inputs");
+    entries.push(copied);
+    seen.insert(key, at);
+    chain.insert(node.clone());
+    let mut inputs = BTreeMap::new();
+    if let Some(MetaValue::Map(held)) = e.get("inputs") {
+        for (slot_in, positions) in held {
+            let MetaValue::List(positions) = positions else { continue };
+            let moved: Vec<MetaValue> = positions
+                .iter()
+                .filter_map(|q| copy(list, uint(q)? as usize, me, entries, seen, chain))
+                .map(|p| MetaValue::Uint(p as u64))
+                .collect();
+            if !moved.is_empty() {
+                inputs.insert(slot_in.clone(), MetaValue::List(moved));
+            }
+        }
+    }
+    chain.remove(node);
+    entries[at].insert("inputs".into(), MetaValue::Map(inputs));
+    Some(at)
 }
