@@ -34,7 +34,10 @@
 </script>
 
 <span bind:this={el} {...rest} class={`ui-wave${halted ? ' halted' : ''} ${klass}`.trim()} aria-hidden="true">
-	{#each { length: count } as _, i (i)}<i style={`--i: ${i}; --k: ${0.3 + (0.7 * Math.min(i, count - 1 - i, 3)) / 3}`}></i>{/each}
+	<!-- A dot's phase is its distance in from the ends, so the crest leaves the centre both ways. -->
+	{#each { length: count } as _, i (i)}<i
+			style={`--i: ${Math.min(i, count - 1 - i)}; --k: ${0.3 + (0.7 * Math.min(i, count - 1 - i, 3)) / 3}`}
+		></i>{/each}
 </span>
 
 <style>
@@ -57,8 +60,8 @@
 		border-radius: 50%;
 		background: var(--accent);
 		animation: ui-wave 1.6s ease-in-out infinite;
-		/* A quarter cycle per dot: one full wave spans four of them. */
-		animation-delay: calc(var(--i) * -0.25s);
+		/* A quarter cycle per dot, the centre last in phase: one wave spans four, moving outward. */
+		animation-delay: calc(var(--i) * 0.25s - 4s);
 		/* `--k` tapers the outer three dots at each end, so the run fades out rather than stops. */
 		--k: 1;
 	}
