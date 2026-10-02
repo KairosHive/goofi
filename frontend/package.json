@@ -38,6 +38,6 @@
     "@xyflow/svelte": "^1.0.0",
     "marked": "^18.0.5",
     "panelty": "0.1.4",
-    "plotluck": "github:dav0dea/plotluck#4886a24"
+    "plotluck": "0.3.0"
   }
 }
