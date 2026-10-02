@@ -1,7 +1,7 @@
 /** Data-plane Web Worker: one WebSocket per (node, slot), each frame decoded on arrival and drawn
  * here; a frame goes to the main thread only where a reader there asked for it. */
 import { decodeData, decodeStamps, isArrayFrame, type DataFrame } from '$lib/codec/decode';
-import { createSurface, type Surface } from 'plotluck';
+import { createRenderer, type Renderer, type Surface } from 'plotluck';
 import type { DrawBox, Drawing, DrawnState } from '$lib/viewers/drawing';
 import type { ProbeBox } from '$lib/viewers/hover';
 import { isRenderable, makeDrawing, type ViewerKind } from '$lib/viewers/registry';
@@ -52,6 +52,8 @@ interface DrawingState {
 
 const slots = new Map<string, SlotState>();
 const surfaces = new Map<number, Surface>();
+/** The one WebGL context, made with the first surface; a worker is allowed few. */
+let renderer: Renderer | null = null;
 const drawings = new Map<number, DrawingState>();
 /** The page's display rate, declared with every stream's specs; unset until it is measured. */
 let fps: number | undefined;
@@ -280,7 +282,8 @@ self.addEventListener('message', (e: MessageEvent) => {
 		}
 		case 'surface':
 			try {
-				surfaces.set(m.id, createSurface(m.canvas));
+				renderer ??= createRenderer();
+				surfaces.set(m.id, renderer.surface(m.canvas));
 			} catch (err) {
 				console.warn(err);
 				send({ surface: { id: m.id, ok: false } });

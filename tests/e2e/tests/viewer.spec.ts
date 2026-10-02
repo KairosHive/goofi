@@ -136,6 +136,43 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			expect((await inspect(page, right)).contrast, 'nothing painted beside the card').toBeLessThan(10);
 		});
 
+		await test.step('four docked viewers beside the editor leave the card its plot, and it still pans', async () => {
+			// A worker may hold four WebGL contexts, and the editor with four panels is five surfaces:
+			// one shared context draws them all, or the editor's, the oldest, is the one lost.
+			const editor = await page.evaluate(() => (window as any).goofi.query.panels()[0].panelId as string);
+			const docked: string[] = [];
+			for (let i = 0; i < 4; i++) {
+				const born = await rawCall(page, 'layout panel add', { beside: editor, side: 'left', ratio: 0.12 });
+				expect(born.error).toBeUndefined();
+				docked.push(born.result.id);
+				const state = { node: osc, slot: 'out', kind: 'line' };
+				const edited = await rawCall(page, 'layout panel edit', { panel: born.result.id, type: 'viewer', state });
+				expect(edited.error).toBeUndefined();
+			}
+			const bodies = page.locator('.vp-body');
+			await expect(bodies).toHaveCount(4);
+			for (const vp of await bodies.all())
+				await expect.poll(async () => (await inspect(page, (await vp.boundingBox())!)).tint).toBeGreaterThan(40);
+			await expect
+				.poll(async () => (await inspect(page, (await body.boundingBox())!)).tint, { message: 'the card keeps its plot' })
+				.toBeGreaterThan(40);
+			const pane = (await page.locator('.svelte-flow__pane').boundingBox())!;
+			const before = (await card.boundingBox())!;
+			const from = { x: pane.x + pane.width - 80, y: pane.y + pane.height - 80 };
+			await page.mouse.move(from.x, from.y);
+			await page.mouse.down();
+			await page.mouse.move(from.x - 60, from.y - 40, { steps: 4 });
+			await page.mouse.move(from.x - 120, from.y - 80, { steps: 4 });
+			await page.mouse.up();
+			await expect.poll(async () => before.x - (await card.boundingBox())!.x, { message: 'the card moved with the pan' })
+				.toBeGreaterThan(100);
+			await expect
+				.poll(async () => (await inspect(page, (await body.boundingBox())!)).tint, { message: 'the plot moved with the card' })
+				.toBeGreaterThan(40);
+			for (const id of docked) expect((await rawCall(page, 'layout remove', { entry: id })).error).toBeUndefined();
+			await expect(bodies).toHaveCount(0);
+		});
+
 		await test.step('a raised card covers the plot beneath it', async () => {
 			// A flat line over the sine: the overlap shows the flat card's plot, not the one under it.
 			const box = (await body.boundingBox())!;
