@@ -1120,6 +1120,9 @@ async fn seed(tx: &mut futures_util::stream::SplitSink<WebSocket, Message>, stat
     tx.send(Message::Text(hello.into())).await.is_ok() && tx.send(Message::Text(doc.into())).await.is_ok()
 }
 
+/// The least time between two log batches on one control socket.
+const LOG_PACE: std::time::Duration = std::time::Duration::from_millis(100);
+
 async fn handle_control(socket: WebSocket, state: AppState, named: Option<String>) {
     let (mut tx, mut rx) = socket.split();
 
@@ -1153,6 +1156,8 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
             return;
         }
     }
+    // A line that repeats every process call pushes thousands of times a second; send one batch per pace.
+    let (mut log_owed, mut log_due) = (false, tokio::time::Instant::now());
     // The op in flight, run off this task: a load builds nodes for seconds, and the log lines
     // and events it raises meanwhile must reach the client that asked. One at a time, in order.
     let mut pending: Option<tokio::task::JoinHandle<Option<String>>> = None;
@@ -1169,10 +1174,15 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
             }
         }
         tokio::select! {
-            pushed = logged.changed() => {
+            pushed = logged.changed(), if !log_owed => {
                 if pushed.is_err() {
                     break;
                 }
+                log_owed = true;
+            },
+            _ = tokio::time::sleep_until(log_due), if log_owed => {
+                log_owed = false;
+                log_due = tokio::time::Instant::now() + LOG_PACE;
                 if let Some(logs) = send_logs(&mut log_cursor) {
                     if tx.send(Message::Text(logs.into())).await.is_err() {
                         break;

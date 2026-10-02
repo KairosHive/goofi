@@ -2,11 +2,8 @@
 
 ## Remaining
 
-1. Re-take the desktop baseline (headless Chromium, debug backend: frames/s and bytes/s per
-   path on `/data` and `/control`) on the current build; the 2026-09-16 row predates half floats
-   and frame silence.
-2. Repeat it against the tablet over LAN, with the tablet's own frame rate. What is done next is
-   chosen against that number.
+- Measure frames/s and bytes/s per path on `/data` and `/control` from the tablet over the LAN,
+  together with the tablet's own frame rate. Choose the next step from that number.
 
 ## Not to be done
 
