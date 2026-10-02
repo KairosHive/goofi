@@ -28,5 +28,6 @@ export { default as Chip } from './Chip.svelte';
 export { default as Segmented, type Segment } from './Segmented.svelte';
 export { default as StatusDot, type StatusTone, type StatusDotSize } from './StatusDot.svelte';
 export { default as EmptyState } from './EmptyState.svelte';
+export { default as Wave } from './Wave.svelte';
 export { default as ChoiceGrid, type Choice } from './ChoiceGrid.svelte';
 export { default as PaintPad } from './PaintPad.svelte';

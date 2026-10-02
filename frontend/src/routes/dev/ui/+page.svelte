@@ -25,6 +25,7 @@
 		Segmented,
 		StatusDot,
 		EmptyState,
+		Wave,
 		ChoiceGrid,
 		type IconName,
 		type ButtonVariant,
@@ -370,6 +371,15 @@
 			{#each statusTones as tone (tone)}
 				<StatusDot {tone} />
 			{/each}
+		</div>
+	</section>
+
+	<section>
+		<h2>Wave (a run of dots a wave travels along)</h2>
+		<div class="grid">
+			<Wave />
+			<Wave style="--wave-flow: column; --wave-dx: 1; --wave-dy: 0" />
+			<Wave halted />
 		</div>
 	</section>
 

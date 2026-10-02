@@ -1,4 +1,4 @@
-//! A scheduled engine beside the signal one (roadmap/multi-engine-graph.md): two skeletons — one
+//! A scheduled engine beside the signal one: two skeletons — one
 //! audio-shaped, one graphics-shaped — each publishing static data at its own fixed tick over
 //! the shared transport, registered through the one seam and driven through the one op surface.
 

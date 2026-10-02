@@ -9,7 +9,7 @@ export const NODE = {
 } as const;
 
 /** An output slot's height in px, with its inline viewer open or closed. */
-export const slotHeight = (open: boolean): number => (open ? NODE.unit + NODE.viewer : NODE.unit);
+const slotHeight = (open: boolean): number => (open ? NODE.unit + NODE.viewer : NODE.unit);
 
 /** A slot's height in units: a multi (list) slot is 2× tall. */
 const slotUnits = (multi: boolean): number => (multi ? 2 : 1);

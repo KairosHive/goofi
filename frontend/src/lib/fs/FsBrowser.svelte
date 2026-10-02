@@ -4,7 +4,7 @@
 	import { FS_SORTS, getControl, type DirListing, type FsEntry, type FsRoot, type FsSort } from '$lib/api/control';
 	import { downloadPatch, patchStem } from '$lib/api/patchFile';
 	import { errorText } from '$lib/stores/notify.svelte';
-	import { Bar, Button, ConfirmDialog, Dialog, EmptyState, Icon, IconButton, ScrollArea, TextInput } from '$lib/ui';
+	import { Bar, Button, ConfirmDialog, Dialog, EmptyState, Icon, IconButton, ScrollArea, TextInput, Wave } from '$lib/ui';
 	import { onMount, untrack } from 'svelte';
 
 	type Props = {
@@ -38,7 +38,7 @@
 	let pathBarEl = $state<HTMLDivElement | null>(null);
 	let fileInput = $state<HTMLInputElement | null>(null);
 
-	// While a pick runs, the dialog is its progress: a spinner over what the backend has logged
+	// While a pick runs, the dialog is its progress: a wave beside what the backend has logged
 	// since the pick, read off the one console store.
 	const cs = consoleStore();
 	let working = $state<number | null>(null);
@@ -230,10 +230,8 @@
 
 		{#if working !== null}
 			<div class="body progress" data-testid="fs-progress" aria-live="polite">
-				<!-- A wave runs the length of the strip: beside the log it travels down, above it across. -->
-				<span class="spinner" class:done={failure !== null} aria-hidden="true">
-					{#each { length: 12 } as _, i (i)}<i style="--i: {i}"></i>{/each}
-				</span>
+				<!-- Beside the log the wave travels down; above it, in a narrow dialog, across. -->
+				<Wave class="wave" halted={failure !== null} />
 				<ul class="log" bind:this={logEl}>
 					{#each progress as row (row.uid)}
 						<li class={row.level}>{row.text}</li>
@@ -409,49 +407,17 @@
 		/* `dvh`, not `vh`: on a phone `vh` is the largest viewport, so the modal would overflow. */
 		height: min(42rem, 70dvh);
 	}
-	/* The spinner beside the log; a narrow dialog, taller than it is wide, stacks them instead. */
+	/* The wave beside the log; a narrow dialog, taller than it is wide, stacks them instead. */
 	.progress {
 		flex-direction: row;
 		align-items: center;
 		gap: var(--space-6);
 		padding: var(--space-6);
 	}
-	/* A column of dots that sways side to side with a phase per dot, so a wave travels along it. */
-	.spinner {
-		flex: 0 0 auto;
-		align-self: center;
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-2);
-		align-items: center;
-		width: 2rem;
-		--sway: 0.5rem 0;
-		--sway-back: -0.5rem 0;
-	}
-	.spinner i {
-		width: 0.5rem;
-		height: 0.5rem;
-		border-radius: 50%;
-		background: var(--accent);
-		animation: fs-wave 1.6s ease-in-out infinite;
-		animation-delay: calc(var(--i) * -0.25s);
-	}
-	.spinner.done i {
-		animation: none;
-		background: var(--danger);
-	}
-	@keyframes fs-wave {
-		0%,
-		100% {
-			translate: var(--sway);
-			scale: 0.7;
-			opacity: 0.3;
-		}
-		50% {
-			translate: var(--sway-back);
-			scale: 1;
-			opacity: 1;
-		}
+	.progress :global(.wave) {
+		--wave-flow: column;
+		--wave-dx: 1;
+		--wave-dy: 0;
 	}
 	.log {
 		flex: 1 1 auto;
@@ -607,12 +573,10 @@
 		.progress {
 			flex-direction: column;
 		}
-		.spinner {
-			flex-direction: row;
-			width: auto;
-			height: 2rem;
-			--sway: 0 0.5rem;
-			--sway-back: 0 -0.5rem;
+		.progress :global(.wave) {
+			--wave-flow: row;
+			--wave-dx: 0;
+			--wave-dy: 1;
 		}
 		.roots {
 			flex: 0 0 auto;
