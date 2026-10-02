@@ -604,30 +604,44 @@ test.describe('the control socket', () => {
 				await expect(canvas).toBeVisible();
 				// A panel opens in edit mode, where a widget takes no pointer: leave it to draw.
 				await page.getByTestId('control-edit-toggle').click();
-				const empty = await canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL());
+				const pixels = () => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL());
+				const code = async () => String((await backendDoc(page)).variables['review.picture']?.value ?? '');
+				const empty = await pixels();
 				const box = (await canvas.boundingBox())!;
 				await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
 				await page.mouse.down();
 				await page.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.7, { steps: 8 });
 				await page.mouse.up();
-				const picture = await canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL());
-				expect(picture).not.toBe(empty);
-				await expect.poll(async () => (await backendDoc(page)).variables['review.picture']?.value).toBe(picture);
+				// The hand stroke lands in the variable as byte code, and reads back as one stroke op.
+				await expect.poll(code).not.toBe('');
+				const drawn = (await rawCall(page, 'control drawing', { group: 'review', element: 'picture' })).result;
+				expect(drawn.ops).toBe(1);
+				expect(drawn.text).toMatch(/^stroke #4aa3ff width 24 soft 0 cap round dash solid : M 3\d\d(\.\d)? 3\d\d(\.\d)? (\+\d+ )?L/);
+				const stroke = await code();
+				await expect.poll(pixels).not.toBe(empty);
+				const picture = await pixels();
 				await undo(page);
-				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(empty);
+				await expect.poll(pixels).toBe(empty);
 				await redo(page);
-				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(picture);
+				await expect.poll(pixels).toBe(picture);
 				await page.getByTestId('paint-clear').click();
-				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(empty);
+				await expect.poll(pixels).toBe(empty);
 				await undo(page);
-				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(picture);
-				await rawCall(page, 'variable entry edit', { name: 'review.picture', value: empty });
-				await rawCall(page, 'variable entry edit', { name: 'review.picture', value: picture });
-				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(picture);
+				await expect.poll(pixels).toBe(picture);
+				await rawCall(page, 'variable entry edit', { name: 'review.picture', value: '' });
+				await expect.poll(pixels).toBe(empty);
+				await rawCall(page, 'variable entry edit', { name: 'review.picture', value: stroke });
+				await expect.poll(pixels).toBe(picture);
+				// A CLI stroke appends through the same op and shows on the pad.
 				await rawCall(page, 'control paint', {
-					group: 'review', element: 'picture', steps: 'clear\npen #ff0000\nwidth 40\ngoto 100 100\nforward 200'
+					group: 'review', element: 'picture', ops: 'stroke #ff0000 width 40 : M 100 800 L 300 800'
 				});
-				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).not.toBe(picture);
+				await expect.poll(pixels).not.toBe(picture);
+				const red = await canvas.evaluate((el: HTMLCanvasElement) =>
+					Array.from(el.getContext('2d')!.getImageData(Math.round(el.width * 0.2), Math.round(el.height * 0.8), 1, 1).data)
+				);
+				expect(red).toEqual([255, 0, 0, 255]);
+				expect((await rawCall(page, 'control drawing', { group: 'review', element: 'picture' })).result.ops).toBe(2);
 				await page.evaluate(async () => {
 					const g = (window as any).goofi;
 					await g.commands.removeVariable('review.picture');

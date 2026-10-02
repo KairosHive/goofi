@@ -100,7 +100,7 @@ impl ControlKind {
         match self {
             ControlKind::Knob | ControlKind::Slider | ControlKind::Number => VariableValue::Float(0.0),
             ControlKind::Toggle => VariableValue::Bool(false),
-            // A drawing is a `data:image/png;base64,…` URL, which is a STRING like any other: the
+            // A drawing is base64 byte code (`goofi_core::drawing`), a STRING like any other: the
             // widget draws it, an expression reads it, and nothing new crosses the wire for it.
             ControlKind::Text | ControlKind::Dropdown | ControlKind::Paint => VariableValue::Str(String::new()),
         }

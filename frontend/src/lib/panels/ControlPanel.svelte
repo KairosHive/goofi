@@ -8,7 +8,6 @@
 	import type { ControlView, VariableView, LockView } from '$lib/crdt/graphDoc';
 	import { effectiveLock, isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { ui } from '$lib/stores/ui.svelte';
-	import { getControl, type Mark } from '$lib/api/control';
 	import MidiLearn from '$lib/inspector/MidiLearn.svelte';
 	import { midiLearn } from '$lib/stores/midiLearn.svelte';
 	import RefPicker from '$lib/inspector/RefPicker.svelte';
@@ -340,16 +339,6 @@
 	}
 
 
-	/** `control paint` reaches the pad that holds that variable, and nothing else: the op parses a
-	    turtle script and the WIDGET makes the strokes, so a script and a hand paint by one code. */
-	let painting = $state<{ id: number; name: string; marks: Mark[] } | null>(null);
-	let batch = 0;
-	const stopPainting = getControl().on((ev) => {
-		if (ev.event === 'control_paint') {
-			painting = { id: ++batch, name: ev.payload.name, marks: ev.payload.marks };
-		}
-	});
-	onDestroy(stopPainting);
 </script>
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape' && variableGrab) { drag = null; cancelVariable(); } }} />
@@ -366,7 +355,7 @@
 	{:else if c.kind === 'dropdown'}
 		<Select value={String(value)} options={c.options ?? []} {onChange} />
 	{:else if c.kind === 'paint'}
-		<PaintPad value={String(value)} {onChange} pending={painting?.name === name ? painting : null} />
+		<PaintPad value={String(value)} onStroke={(ops) => name && g.paintControl(group, name.slice(group.length + 1), ops)} />
 	{:else}
 		<TextInput multiline value={String(value)} aria-label={label} {onChange} />
 	{/if}

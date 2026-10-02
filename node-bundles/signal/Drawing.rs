@@ -1,17 +1,16 @@
 //! Drawing — a drawing widget's picture, as a frame. Point `image` at the pad the way a knob's
-//! value is pointed at a variable — an expression of `variables.<panel>.<pad>` — and every stroke it
-//! holds arrives here as RGBA. `graphics:SignalIn` is what puts it on the GPU.
+//! value is pointed at a variable — an expression of `variables.<panel>.<pad>` — and every op it
+//! holds arrives here rasterized as RGBA. `graphics:SignalIn` is what puts it on the GPU.
 
-use goofi_core::{png, Data, Meta, SlotType};
+use goofi_core::{drawing, Data, Meta, SlotType};
 use goofi_signal_sdk::{
     Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Tag,
 };
 
 #[derive(Default)]
 struct Drawing {
-    /// The URL last read, and the frame it decoded to. A picture nobody has drawn on is published
-    /// again rather than decoded again — the decode is the cost, not the publish.
-    last: String,
+    /// The byte code and size last read, and the frame they rasterized to.
+    last: (String, i64),
     drawn: Option<Data>,
 }
 
@@ -24,15 +23,16 @@ impl Node for Drawing {
         p: &Params<'_>,
     ) -> NodeResult {
         let image = p.str("drawing", "image").unwrap_or_default();
-        if image != self.last {
-            self.last = image.to_string();
+        let size = p.i64("drawing", "size").unwrap_or(512).clamp(1, 4096);
+        if (image, size) != (self.last.0.as_str(), self.last.1) {
+            self.last = (image.to_string(), size);
             self.drawn = None;
             if !image.trim().is_empty() {
-                let picture = png::decode(image).map_err(|e| e.to_string())?;
+                let ops = drawing::from_value(image)?;
+                let rgba = drawing::raster(&ops, size as u32, size as u32)?;
                 // A colour frame spans 0..1, which is the range every viewer and the GPU read.
-                let texels: Vec<u8> =
-                    picture.rgba.iter().flat_map(|b| (*b as f32 / 255.0).to_le_bytes()).collect();
-                let shape = vec![picture.height as usize, picture.width as usize, 4];
+                let texels: Vec<u8> = rgba.iter().flat_map(|b| (*b as f32 / 255.0).to_le_bytes()).collect();
+                let shape = vec![size as usize, size as usize, 4];
                 self.drawn = Some(Data::array_f32(shape, texels, Meta::new()).map_err(|e| e.to_string())?);
             }
         }
@@ -45,25 +45,37 @@ impl Node for Drawing {
     }
 }
 
-static PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "drawing",
-    name: "image",
-    spec: ParamSpec::Str { default: "", options: &[], refresh: false },
-    expression: None,
-    doc: Some(
-        "The pad to read, as an expression of `variables.<panel>.<pad>` — the same way a knob's \
-         value is pointed at a variable. It holds the drawing as a PNG data URL.",
-    ),
-    section: 0,
-    show: None,
-}];
+static PARAMS: &[ParamDecl] = &[
+    ParamDecl {
+        group: "drawing",
+        name: "image",
+        spec: ParamSpec::Str { default: "", options: &[], refresh: false },
+        expression: None,
+        doc: Some(
+            "The pad to read, as an expression of `variables.<panel>.<pad>` — the same way a knob's \
+             value is pointed at a variable. It holds the drawing as base64 byte code.",
+        ),
+        section: 0,
+        show: None,
+    },
+    ParamDecl {
+        group: "drawing",
+        name: "size",
+        spec: ParamSpec::Int { default: 512, min: 1, max: 4096, options: &[] },
+        expression: None,
+        doc: Some("The frame's width and height in pixels."),
+        section: 0,
+        show: None,
+    },
+];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];
 
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Image, Tag::Input],
     doc: "A drawing widget's picture, as a frame.\n\
-          Every stroke a `paint` widget holds — a hand's or `control paint`'s — as an [H, W, 4] \
-          RGBA frame spanning 0..1. Feed `graphics:SignalIn` with it to put the drawing on the GPU.",
+          Every op a `paint` widget holds — a hand's or `control paint`'s — rasterized as a \
+          [size, size, 4] RGBA frame spanning 0..1. Feed `graphics:SignalIn` with it to put the \
+          drawing on the GPU.",
     inputs: &[],
     outputs: OUTPUTS,
     params: PARAMS,

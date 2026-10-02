@@ -510,6 +510,11 @@ export class GraphStore {
 		await this.ctl.call('control edit', { group, element, ...patch });
 	}
 
+	/** Append drawing ops, in their text form, to a `paint` widget: one undoable edit. */
+	async paintControl(group: string, element: string, ops: string): Promise<void> {
+		await this.ctl.call('control paint', { group, element, ops });
+	}
+
 	/** Make a widget follow `node.slot` (and `index` into a wide frame); an empty reference clears. */
 	async sourceControl(group: string, element: string, reference: string, index?: number): Promise<void> {
 		await this.ctl.call('control source', index === undefined ? { group, element, reference } : { group, element, reference, index });

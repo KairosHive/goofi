@@ -21,7 +21,6 @@ pub enum Event {
     NodeStats { stats: Value },
     Error { node: String, error: Option<String> },
     NodeStage(Value),
-    ControlPaint { name: String, marks: Value },
     RecordChanged(Value),
     HarnessChanged(Value),
     Logs(Value),
@@ -47,10 +46,6 @@ impl Broadcaster {
         if let Some(event) = event.into() {
             let _ = self.0.send(event.text());
         }
-    }
-
-    pub fn listeners(&self) -> usize {
-        self.0.receiver_count()
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<String> {

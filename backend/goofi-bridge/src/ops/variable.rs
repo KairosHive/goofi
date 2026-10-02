@@ -2,8 +2,8 @@
 
 use serde_json::{json, Value};
 
-use super::{op, Any, EffectOp, NoArgs, ReadOp, WriteOp};
-use crate::{inspect, AppState, Caller, Event, Txn};
+use super::{op, Any, NoArgs, ReadOp, WriteOp};
+use crate::{inspect, Txn};
 use goofi_core::variables::{Control, ControlKind, Lock, VariableSource, VariableValue};
 use goofi_graph::{Command, Graph};
 
@@ -136,10 +136,17 @@ op!(ControlRemove, "control remove", 2, ControlRemoveArgs {
 op!(ControlPaint, "control paint", 2, ControlPaintArgs {
     pub group: String,
     pub element: String,
-    pub steps: String,
+    pub ops: String,
 },
-    "Draw on a `paint` widget with turtle steps — another hand on the pad, not a second painter: the op parses the script and the WIDGET makes the strokes, by the code a mouse reaches. So a pad nobody has open draws nothing, and the reply says how many clients heard it. `steps` is one step per line and the whole block is one submission; `//` to end of line is a comment, and `#` cannot be one because it opens every colour. Coordinates span a 1000 square whatever pixel size the pad is, the origin is the TOP-left with y running down, heading 0 faces +x and `right` turns clockwise. The steps: `forward <d>`, `back <d>`, `left <deg>`, `right <deg>`, `heading <deg>`, `goto <x> <y>`, `home` (the middle, facing +x), `up`, `down`, `curve <c1x> <c1y> <c2x> <c2y> <x> <y>` — a cubic bezier in the turtle's OWN frame, +x along the heading and +y to its right, which it leaves along the curve's exit tangent — `pen <#rgb|#rrggbb|#rrggbbaa|erase>`, `width <w>`, `soft <s>` and `clear`. `pen`, `width` and `soft` are the widget's own colour, size and softness, so a script says what a hand would set.",
-    "{steps, marks, clients} — the steps read, the strokes they make, and how many clients were listening");
+    "Append drawing ops to a `paint` widget, as ONE undoable edit of its variable — the pad sends each finished hand stroke through this same op. The variable holds the drawing as base64 byte code of timed atomic ops; `control drawing` reads it back as text. `ops` is one op per line or `;`, `//` to end of line a comment: `stroke [ink] [width w] [soft s] [cap round|butt|square] [dash solid|dash|dot] : <path>`, `fill [ink] : <path>` and `clear`, which drops what came before. A path is `M x y` (move), `L x y` (line), `C x1 y1 x2 y2 x y` (cubic bezier) and `Z` (close), and must start with `M`. Ink is `#rgb`, `#rrggbb`, `#rrggbbaa` or `erase`; the stroke defaults are black, width 10, soft 0, cap round, dash solid. Coordinates, width and soft span 0..1000 whatever pixel size the pad is, the origin is the TOP-left with y running down. A `+ms` before an op or a segment is its time since the previous one, so a drawing replays.",
+    "{ops, bytes} — the ops appended, and the size of the stored byte code");
+
+op!(ControlDrawing, "control drawing", 2, ControlDrawingArgs {
+    pub group: String,
+    pub element: String,
+},
+    "Read a `paint` widget's drawing as the text form `control paint` takes, one op per line.",
+    "{text, ops, bytes} — the drawing as text, its op count and its byte code size");
 
 op!(ControlSource, "control source", 2, ControlSourceArgs {
     pub group: String,
@@ -482,27 +489,43 @@ impl WriteOp for ControlRemove {
     }
 }
 
-impl EffectOp for ControlPaint {
-    /// The op PARSES, so a refusal names the line, and the widget draws: what the widget then
-    /// commits is the one write.
-    fn run(state: &AppState, a: ControlPaintArgs, _: &Caller) -> Result<Value, String> {
-        let name = {
-            let g = state.graph.lock();
-            let name = element_of(&g, &a.group, &a.element)?;
-            match g.variables().control(&name).map(|c| c.kind) {
-                Some(ControlKind::Paint) => name,
-                other => {
-                    let kind = other.map_or("", ControlKind::as_str);
-                    return Err(format!("`{name}` is a {kind} widget; only a `paint` one takes steps"));
-                }
-            }
-        };
-        let steps = goofi_core::turtle::parse(&a.steps)?;
-        let marks = goofi_core::turtle::marks(&steps);
-        state.events.send(Event::ControlPaint { name, marks: json!(marks) });
-        // A pad is drawn on by whoever has it OPEN, so what the caller needs to know is whether
-        // anyone was listening. Zero clients is a script that went nowhere.
-        Ok(json!({ "steps": steps.len(), "marks": marks.len(), "clients": state.events.listeners() }))
+/// The `paint` widget `group.element`, and the drawing it holds.
+fn drawing_of(g: &Graph, group: &str, element: &str) -> Result<(String, String), String> {
+    let name = element_of(g, group, element)?;
+    match (g.variables().control(&name).map(|c| c.kind), g.variables().get(&name)) {
+        (Some(ControlKind::Paint), Some(VariableValue::Str(code))) => Ok((name, code.clone())),
+        (kind, _) => {
+            let kind = kind.map_or("", ControlKind::as_str);
+            Err(format!("`{name}` is a {kind} widget; only a `paint` one holds a drawing"))
+        }
+    }
+}
+
+impl WriteOp for ControlPaint {
+    fn run(tx: &mut Txn, a: ControlPaintArgs) -> Result<Value, String> {
+        let (name, code) = drawing_of(&tx.g, &a.group, &a.element)?;
+        let ops = goofi_core::drawing::parse(&a.ops)?;
+        if ops.is_empty() {
+            return Err("no ops to append".into());
+        }
+        let count = ops.len();
+        let code = goofi_core::drawing::append(&code, ops)?;
+        let bytes = code.len() / 4 * 3 - code.bytes().rev().take_while(|b| *b == b'=').count();
+        tx.apply(Command::EditVariable { name, value: Some(VariableValue::Str(code)), at: None, control: None })?;
+        Ok(json!({ "ops": count, "bytes": bytes }))
+    }
+
+    fn label(a: &ControlPaintArgs, _: &Value) -> String {
+        format!("Paint {}.{}", a.group, a.element)
+    }
+}
+
+impl ReadOp for ControlDrawing {
+    fn run(tx: &mut Txn, a: ControlDrawingArgs) -> Result<Value, String> {
+        let (_, code) = drawing_of(&tx.g, &a.group, &a.element)?;
+        let ops = goofi_core::drawing::from_value(&code)?;
+        let bytes = goofi_core::drawing::encode(&ops).len();
+        Ok(json!({ "text": goofi_core::drawing::print(&ops), "ops": ops.len(), "bytes": bytes }))
     }
 }
 

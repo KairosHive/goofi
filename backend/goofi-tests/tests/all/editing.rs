@@ -188,19 +188,42 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("control edit", j!({ "group": "control0", "element": "level", "x": 0.0, "y": 3.0 }));
     assert_eq!(g.doc()["variables"]["control0.level"]["control"]["y"], 3.0, "the followed widget moved");
     g.call("variable entry lock", j!({ "name": "control0.level", "value": false }));
-    // A `paint` widget takes turtle steps from the CLI. The op PARSES — so a refusal names the line
-    // — and answers the strokes it made of them; the WIDGET paints those, by the code a hand
-    // reaches, so a script and a mouse are one painter and never two.
+    // A `paint` widget holds a script of timed drawing ops as byte code. `control paint` APPENDS
+    // ops to it as one undoable edit, and `control drawing` reads the same ops back as text.
     g.call("control add", j!({ "group": "control0", "kind": "paint", "element": "pad" }));
-    let drew = g.call("control paint", j!({ "group": "control0", "element": "pad",
-        "steps": "pen #f0a\nwidth 40\ngoto 100 100\ncurve 100 0 200 100 200 200\nclear" }));
-    assert_eq!(drew["steps"], j!(5), "{drew}");
-    assert!(drew["marks"].as_u64().is_some_and(|m| m > 5), "a curve is many strokes: {drew}");
+    let script = "stroke #ff00aa width 40 soft 2.5 cap butt dash dot : M 100 100 +16 L 200 200 +8 C 250 100 300 300 400 200\n\
+                  +120 fill #00ff0080 : M 500 500 L 900 500 L 700 900 Z\n\
+                  stroke erase : M 600 600 L 700 700";
+    let drew = g.call("control paint", j!({ "group": "control0", "element": "pad", "ops": script }));
+    assert_eq!(drew["ops"], j!(3), "{drew}");
+    let read = g.call("control drawing", j!({ "group": "control0", "element": "pad" }));
+    let text = read["text"].as_str().unwrap().to_string();
+    assert!(text.contains("+16 L 200 200") && text.contains("+120 fill #00ff0080"), "{text}");
+    assert_eq!(read["bytes"], drew["bytes"], "{read}");
+    // The text form round-trips through the byte code: printed and parsed again, it stores the same.
+    g.call("control add", j!({ "group": "control0", "kind": "paint", "element": "copy" }));
+    g.call("control paint", j!({ "group": "control0", "element": "copy", "ops": text }));
+    let doc = g.doc();
+    assert_eq!(doc["variables"]["control0.copy"]["value"], doc["variables"]["control0.pad"]["value"]);
+    // A second call appends, and undo takes back that one stroke only.
+    let before = doc["variables"]["control0.pad"]["value"].clone();
+    g.call("control paint", j!({ "group": "control0", "element": "pad", "ops": "stroke : M 0 0 L 1000 1000" }));
+    assert_eq!(g.call("control drawing", j!({ "group": "control0", "element": "pad" }))["ops"], j!(4));
+    g.call("undo", j!({}));
+    assert_eq!(g.doc()["variables"]["control0.pad"]["value"], before, "undo removes the appended stroke");
+    // A clear drops every op before it, so the drawing restarts.
+    g.call("control paint", j!({ "group": "control0", "element": "pad", "ops": "clear; stroke : M 1 1 L 2 2" }));
+    let read = g.call("control drawing", j!({ "group": "control0", "element": "pad" }));
+    assert_eq!(read["text"], "clear\nstroke #000000 width 10 soft 0 cap round dash solid : M 1 1 L 2 2", "{read}");
     let why = g.refuse("control paint", j!({ "group": "control0", "element": "pad",
-                                            "steps": "forward 10\nfrward 20" }));
-    assert!(why.contains("line 2") && why.contains("frward"), "a refusal names the line: {why}");
-    let why = g.refuse("control paint", j!({ "group": "control0", "element": "knob0", "steps": "forward 10" }));
-    assert!(why.contains("knob"), "only a `paint` widget takes steps: {why}");
+                                            "ops": "stroke : M 1 1\nstrok : M 2 2" }));
+    assert!(why.contains("line 2") && why.contains("strok"), "a refusal names the line: {why}");
+    let why = g.refuse("control paint", j!({ "group": "control0", "element": "pad", "ops": "stroke : L 1 1" }));
+    assert!(why.contains("starts with `M"), "{why}");
+    let why = g.refuse("control paint", j!({ "group": "control0", "element": "knob0", "ops": "clear" }));
+    assert!(why.contains("knob"), "only a `paint` widget holds a drawing: {why}");
+    g.call("control remove", j!({ "group": "control0", "element": "copy" }));
+    g.call("control remove", j!({ "group": "control0", "element": "pad" }));
 
     for kind in goofi_core::variables::ControlKind::ALL {
         let born = g.call("control add", j!({ "group": "kinds", "kind": kind.as_str() }));
@@ -341,7 +364,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let built = g.doc();
 
     // A compound is ONE step though it is an add plus a remove composed.
-    let expected_steps = 61 + 2 * goofi_core::variables::ControlKind::ALL.len();
+    let expected_steps = 67 + 2 * goofi_core::variables::ControlKind::ALL.len();
     let mut steps = 0;
     while g.call("undo", j!({}))["changed"] == true {
         steps += 1;

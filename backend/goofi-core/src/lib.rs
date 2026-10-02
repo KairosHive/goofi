@@ -7,9 +7,9 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 pub mod variables;
+pub mod drawing;
 pub mod normalize;
 pub mod path;
-pub mod png;
 pub mod probe;
 pub mod reduce;
 pub mod scale;
@@ -17,7 +17,6 @@ pub mod record;
 pub mod stream;
 pub mod time;
 pub mod texture;
-pub mod turtle;
 
 pub use indexmap;
 pub use stream::Stream;

@@ -1,146 +1,94 @@
-<!-- PaintPad — a canvas whose value is a PNG data URL, a plain string. A stroke commits on pointer
-     UP, never per move, because one data URL per pointer event would flood the document. -->
+<!-- PaintPad — a canvas that paints a drawing's byte code. A hand stroke paints locally while the
+     pointer is down; on pointer up it goes out as ONE `control paint` op, the CLI's own door. -->
 <script lang="ts">
 	import { Button } from 'panelty';
-	import type { Mark } from '$lib/api/control';
+	import { SPAN, decode, paint, strokeText } from '$lib/api/drawing';
 
 	let {
 		value,
-		onChange,
-		pending = null,
+		onStroke,
 		disabled = false
 	}: {
 		value: string;
-		onChange: (v: string) => void;
-		/** Strokes a turtle script asked for, newest batch last. */
-		pending?: { id: number; marks: Mark[] } | null;
+		/** Append ops, in the text form `control paint` takes. */
+		onStroke: (ops: string) => void;
 		disabled?: boolean;
 	} = $props();
 
 	/** The bitmap's own size: resizing the widget rescales the picture rather than cropping it. */
 	const SIZE = 512;
-	/** The units of pointer positions, brush widths and turtle steps, so CLI and slider agree. */
-	const SPAN = 1000;
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
 	let hex = $state('#4aa3ff');
 	let size = $state(24);
 	let soft = $state(0);
 	let erasing = $state(false);
-	let drawing = false;
-	let last: { x: number; y: number } | null = null;
-	/** Commits not echoed yet, oldest first: an earlier echo must not paint over a newer stroke. */
-	let mine: string[] = [];
+	/** The stroke under the pointer: `[x, y, ms since the last point]`, and when its last point came. */
+	let points: [number, number, number][] = [];
+	let lastAt = 0;
+	/** When the previous stroke ended, so the next one's time counts from it. */
+	let endedAt = 0;
+	let startAt = 0;
 
 	$effect(() => {
-		const url = value;
-		const el = canvas;
-		const i = mine.indexOf(url);
-		const echo = i >= 0;
-		mine = echo ? mine.slice(i + 1) : [];
-		if (!el || echo) return;
-		const ctx = el.getContext('2d');
-		if (!ctx) return;
-		if (!url) {
-			ctx.clearRect(0, 0, SIZE, SIZE);
-			return;
-		}
-		const img = new Image();
-		img.onload = () => {
-			ctx.clearRect(0, 0, SIZE, SIZE);
-			ctx.drawImage(img, 0, 0, SIZE, SIZE);
-		};
-		img.src = url;
-		return () => { img.onload = null; };
+		const ctx = canvas?.getContext('2d');
+		if (ctx) paint(ctx, decode(value), SIZE);
 	});
 
-	function at(e: PointerEvent): { x: number; y: number } | null {
+	function at(e: PointerEvent): [number, number] | null {
 		if (!canvas) return null;
 		const box = canvas.getBoundingClientRect();
-		return {
-			x: ((e.clientX - box.left) / box.width) * SPAN,
-			y: ((e.clientY - box.top) / box.height) * SPAN
-		};
+		return [((e.clientX - box.left) / box.width) * SPAN, ((e.clientY - box.top) / box.height) * SPAN];
 	}
 
-	/** ONE stroke painter, for a hand at the pad and a turtle step from the CLI alike. */
-	function paint(
-		from: { x: number; y: number },
-		to: { x: number; y: number },
-		ink: string,
-		width: number,
-		softness: number
-	): void {
+	const ink = () => (erasing ? 'erase' : hex);
+
+	/** The newest piece of the stroke under the pointer, painted locally until the drawing echoes. */
+	function local(from: [number, number], to: [number, number]): void {
 		const ctx = canvas?.getContext('2d');
 		if (!ctx) return;
 		const k = SIZE / SPAN;
 		ctx.save();
-		ctx.globalCompositeOperation = ink === 'erase' ? 'destination-out' : 'source-over';
-		ctx.strokeStyle = ink === 'erase' ? '#000' : ink;
-		ctx.lineWidth = Math.max(width * k, 0.5);
+		ctx.globalCompositeOperation = erasing ? 'destination-out' : 'source-over';
+		ctx.strokeStyle = erasing ? '#000' : hex;
+		ctx.lineWidth = Math.max(size * k, 0.5);
 		ctx.lineCap = 'round';
 		ctx.lineJoin = 'round';
-		// `filter` is what makes a soft brush soft. Where it is unsupported the stroke is simply
-		// hard-edged, which is a lesser brush and never a broken one.
-		if (softness > 0) ctx.filter = `blur(${softness * k}px)`;
+		if (soft * k >= 0.5) ctx.filter = `blur(${soft * k}px)`;
 		ctx.beginPath();
-		ctx.moveTo(from.x * k, from.y * k);
-		ctx.lineTo(to.x * k, to.y * k);
+		ctx.moveTo(from[0] * k, from[1] * k);
+		ctx.lineTo(to[0] * k, to[1] * k);
 		ctx.stroke();
 		ctx.restore();
-	}
-
-	/** A turtle script's strokes, committed as ONE change, as a pointer gesture is. */
-	let done = 0;
-	$effect(() => {
-		const batch = pending;
-		if (!batch || batch.id === done || !canvas) return;
-		done = batch.id;
-		for (const m of batch.marks) {
-			if (m.mark === 'clear') wipe();
-			else paint({ x: m.from[0], y: m.from[1] }, { x: m.to[0], y: m.to[1] }, m.ink, m.width, m.soft);
-		}
-		commit();
-	});
-
-	function commit(): void {
-		if (!canvas) return;
-		const url = canvas.toDataURL('image/png');
-		mine.push(url);
-		onChange(url);
 	}
 
 	function down(e: PointerEvent): void {
 		if (disabled) return;
 		const p = at(e);
 		if (!p) return;
-		drawing = true;
-		last = p;
+		startAt = lastAt = performance.now();
+		points = [[p[0], p[1], 0]];
 		(e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
-		// A tap is a dot, so the shortest stroke still leaves a mark.
-		paint(p, { x: p.x + 0.01, y: p.y }, erasing ? 'erase' : hex, size, soft);
+		local(p, p);
 		e.preventDefault();
 	}
 	function move(e: PointerEvent): void {
-		if (!drawing || !last) return;
+		const last = points.at(-1);
 		const p = at(e);
-		if (!p) return;
-		paint(last, p, erasing ? 'erase' : hex, size, soft);
-		last = p;
+		if (!last || !p) return;
+		const now = performance.now();
+		points.push([p[0], p[1], now - lastAt]);
+		lastAt = now;
+		local([last[0], last[1]], p);
 	}
 	function up(): void {
-		if (!drawing) return;
-		drawing = false;
-		last = null;
-		commit();
-	}
-	function wipe(): void {
-		canvas?.getContext('2d')?.clearRect(0, 0, SIZE, SIZE);
+		if (!points.length) return;
+		onStroke(strokeText(ink(), size, soft, points, endedAt ? startAt - endedAt : 0));
+		points = [];
+		endedAt = lastAt;
 	}
 	function clear(): void {
-		if (disabled) return;
-		wipe();
-		commit();
+		if (!disabled) onStroke('clear');
 	}
 </script>
 
