@@ -25,7 +25,7 @@
 		flex-direction: var(--wave-flow, row);
 		align-items: center;
 		justify-content: center;
-		gap: var(--space-2);
+		gap: var(--space-3);
 		flex: 0 0 auto;
 		/* The strip is wide enough for a dot to sway without leaving it. */
 		min-width: 2rem;
