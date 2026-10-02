@@ -5,17 +5,37 @@
 
 	let {
 		halted = false,
-		count = 12,
 		class: klass = '',
 		...rest
 	}: HTMLAttributes<HTMLSpanElement> & {
 		/** Stop the wave and paint it as a failure. */
 		halted?: boolean;
-		count?: number;
 	} = $props();
+
+	/** The share of the strip's length the run takes, so it never reaches the edges. */
+	const FILL = 0.75;
+	let el = $state<HTMLSpanElement | null>(null);
+	let count = $state(4);
+
+	// As many dots as fit in three quarters of the strip, re-counted whenever the strip resizes.
+	$effect(() => {
+		if (!el) return;
+		const host = el;
+		const fit = () => {
+			const cs = getComputedStyle(host);
+			const column = cs.flexDirection === 'column';
+			const length = column ? host.clientHeight : host.clientWidth;
+			const gap = parseFloat(column ? cs.rowGap : cs.columnGap) || 0;
+			const dot = host.firstElementChild?.clientWidth || 8;
+			count = Math.max(1, Math.floor((length * FILL + gap) / (dot + gap)));
+		};
+		const ro = new ResizeObserver(fit);
+		ro.observe(host);
+		return () => ro.disconnect();
+	});
 </script>
 
-<span {...rest} class={`ui-wave${halted ? ' halted' : ''} ${klass}`.trim()} aria-hidden="true">
+<span bind:this={el} {...rest} class={`ui-wave${halted ? ' halted' : ''} ${klass}`.trim()} aria-hidden="true">
 	{#each { length: count } as _, i (i)}<i style="--i: {i}"></i>{/each}
 </span>
 
@@ -25,13 +45,15 @@
 		flex-direction: var(--wave-flow, row);
 		align-items: center;
 		justify-content: center;
-		gap: var(--space-6);
+		gap: var(--space-8);
 		flex: 0 0 auto;
+		align-self: stretch;
 		/* The strip is wide enough for a dot to sway without leaving it. */
 		min-width: 2rem;
 		min-height: 2rem;
 	}
 	.ui-wave i {
+		flex: none;
 		width: 0.5rem;
 		height: 0.5rem;
 		border-radius: 50%;

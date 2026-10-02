@@ -377,9 +377,9 @@
 	<section>
 		<h2>Wave (a run of dots a wave travels along)</h2>
 		<div class="grid">
-			<Wave />
-			<Wave style="--wave-flow: column; --wave-dx: 1; --wave-dy: 0" />
-			<Wave halted />
+			<Wave style="width: 24rem" />
+			<Wave style="height: 12rem; --wave-flow: column; --wave-dx: 1; --wave-dy: 0" />
+			<Wave style="width: 12rem" halted />
 		</div>
 	</section>
 
