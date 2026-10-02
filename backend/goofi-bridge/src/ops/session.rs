@@ -152,7 +152,7 @@ pub(crate) enum Source {
 /// sources.
 fn load_patch(state: &AppState, source: &Source) -> Result<Value, String> {
     // Read OFF the graph lock, as the hello does: the roster's config half is a disk read.
-    let agents = goofi_supervisor::home::agents();
+    let agents = goofi_supervisor::layout::agents();
     // Every source mounts FRESH and swaps in only once the manifest parsed, so a refused load
     // leaves the open patch untouched. Staged off the lock: its Rust nodes may take seconds.
     let fresh = crate::Mount::new(state.iox.id())?;

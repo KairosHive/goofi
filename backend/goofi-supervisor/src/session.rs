@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::home;
+use crate::layout;
 
 /// The env var a spawned process reads to JOIN its parent's session rather than hold its own.
 pub const ENV: &str = "GOOFI_SESSION";
@@ -40,14 +40,9 @@ pub fn system_dir(id: &str) -> PathBuf {
 }
 
 /// Where every live session's workspace lives: ephemeral, so the OS temp directory. What a crash
-/// leaves here is moved to [`recovery_base`] by the next boot, so it outlives a reboot.
+/// leaves here is moved to `layout::recovery` by the next boot, so it outlives a reboot.
 pub fn workspaces_base() -> PathBuf {
     std::env::temp_dir().join("goofi-workspaces")
-}
-
-/// Where a dead session's autosaved workspace is kept for the user to recover or discard.
-pub fn recovery_base() -> PathBuf {
-    home::system().join("recovery")
 }
 
 /// The workspace directory of session `id`.
@@ -81,19 +76,16 @@ pub fn tag() -> String {
     id().map(|id| format!("s{id}")).unwrap_or_else(|| format!("p{}", std::process::id()))
 }
 
-/// Sweep the caches under `.goofi/system`: every part named by a dead session, and every
-/// versioned tree that is not `version`'s. Cargo's own `target`, `crates` and `sdk` are not walked.
-pub fn sweep_system(version: &str) {
-    let system = home::system();
-    for (dir, skip) in [("build", &["target", "crates", "sdk"][..]), ("shipped", &[][..])] {
-        sweep_dead_parts(&system.join(dir), skip, 5);
-    }
-    for versioned in [system.join("shipped"), system.join("build").join("sdk")] {
-        let Ok(entries) = fs::read_dir(versioned) else { continue };
-        for entry in entries.flatten() {
-            if entry.file_name() != *version {
-                let _ = fs::remove_dir_all(entry.path());
-            }
+/// Sweep the runtime: every part named by a dead session under the build and shipped trees, and
+/// every other version's tree whole. Cargo's own `target`, `crates` and `sdk` are not walked.
+pub fn sweep_runtime() {
+    let runtime = layout::runtime();
+    sweep_dead_parts(&runtime.build(), &["target", "crates", "sdk"], 5);
+    sweep_dead_parts(&runtime.shipped(), &[], 5);
+    let Ok(entries) = fs::read_dir(runtime.root()) else { return };
+    for entry in entries.flatten() {
+        if entry.path().is_dir() && runtime.is_other_version(&entry.file_name()) {
+            let _ = fs::remove_dir_all(entry.path());
         }
     }
 }

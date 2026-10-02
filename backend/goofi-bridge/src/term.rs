@@ -32,7 +32,7 @@ pub struct Harnesses {
 impl Harnesses {
     /// The roster the snapshot seeds and `harness_changed` broadcasts: the live instances and the
     /// CONFIG's launchable list, `_`-test entries withheld. The CALLER reads `config` off its locks.
-    pub fn roster(&self, config: &(Vec<goofi_supervisor::home::Agent>, Option<String>)) -> Value {
+    pub fn roster(&self, config: &(Vec<goofi_supervisor::layout::Agent>, Option<String>)) -> Value {
         let instances: Vec<Value> = self.instances.lock().iter()
             .map(|(id, i)| {
                 let exit = i.exit_code();
@@ -74,7 +74,7 @@ impl Harnesses {
         events: crate::Broadcaster,
         history: Arc<Mutex<goofi_graph::CommandHistory>>,
     ) -> Result<String, String> {
-        let (agents, _) = goofi_supervisor::home::agents();
+        let (agents, _) = goofi_supervisor::layout::agents();
         let command = agents
             .iter()
             .find(|a| a.name == agent)
@@ -86,7 +86,7 @@ impl Harnesses {
                 match have.is_empty() {
                     true => format!(
                         "unknown agent `{agent}` — the config lists none; add [[agents]] to {}",
-                        goofi_supervisor::home::config_file().display()
+                        goofi_supervisor::layout::config_file().display()
                     ),
                     false => format!("unknown agent `{agent}` — the config offers: {}", have.join(", ")),
                 }
@@ -182,7 +182,7 @@ impl Harnesses {
             // A stack's lifetime follows its actor: dropped where the actor DIES, before the
             // broadcast — so an observer of `harness_changed` sees the stack gone too.
             history.lock().drop_actor(&actor_of(&reaped));
-            events.send(crate::Event::HarnessChanged(harnesses.roster(&goofi_supervisor::home::agents())));
+            events.send(crate::Event::HarnessChanged(harnesses.roster(&goofi_supervisor::layout::agents())));
         });
         if let Ok(reaper) = reaper {
             *inst.reaped.lock() = Some(reaper.done());

@@ -7,7 +7,7 @@ license.workspace = true
 # The manager side of BOTH Python node tiers. `subproc` is unconditional — it only ever SPAWNS an
 # interpreter, so a python-free binary still runs Python nodes out-of-process. `inproc` LINKS
 # libpython, so it is behind `embed` and the default workspace build needs no interpreter:
-#   PYO3_PYTHON=<python3.14t> cargo test -p goofi-python --features embed
+#   cargo test -p goofi-python --features embed   (after `cargo run -p goofi-init`)
 [features]
 default = []
 embed = ["dep:pyo3", "dep:goofi_pymod"]
@@ -24,8 +24,6 @@ goofi-runtime = { path = "../../goofi-runtime" }
 # The probe's introspection JSON, and the memo it is kept in.
 serde_json = "1"
 sha2 = "0.10"
-# The venv layout, for the site-packages a probe's memo is keyed on.
-goofi-init = { path = "../../goofi-init" }
 # The dual-built goofi pyclass crate, linked (rlib, `host`) into the embedded FT interpreter.
 goofi_pymod = { path = "../goofi-pymod", package = "goofi-pymod", features = ["host"], optional = true }
 pyo3 = { version = "0.29", features = ["auto-initialize"], optional = true }

@@ -2,7 +2,7 @@
 //! resource index, its log and the progress a binary shows beside it. Below the vocabulary.
 
 pub mod child;
-pub mod home;
+pub mod layout;
 pub mod log;
 pub mod progress;
 pub mod scope;

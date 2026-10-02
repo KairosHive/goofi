@@ -1147,6 +1147,9 @@ dependencies = [
 [[package]]
 name = "goofi-init"
 version = "3.0.0"
+dependencies = [
+ "goofi-supervisor",
+]
 
 [[package]]
 name = "goofi-node"
@@ -1181,7 +1184,6 @@ dependencies = [
  "goofi-build",
  "goofi-core",
  "goofi-host-sdk",
- "goofi-init",
  "goofi-node",
  "goofi-pymod",
  "goofi-runtime",

@@ -395,8 +395,8 @@ impl Plugins {
         if !state.plugins.packages.is_empty() {
             return Err("plugins are already loaded; restart to change packages".into());
         }
-        let sdk = std::path::absolute(goofi_build::base_dir(home))
-            .map_err(|e| e.to_string())?
+        let sdk = goofi_supervisor::layout::runtime()
+            .build()
             .join("plugin-sdk")
             .join(goofi_build::digest([SDK.as_bytes(), MAIN.as_bytes()]));
         std::fs::create_dir_all(sdk.join("goofi_plugin")).map_err(|e| e.to_string())?;
@@ -652,8 +652,8 @@ impl Package {
         state: &AppState,
     ) -> Result<(), String> {
         let data = home.join("plugin-data").join(&self.manifest.id);
-        let cache = std::path::absolute(goofi_build::base_dir(home))
-            .map_err(|e| e.to_string())?
+        let cache = goofi_supervisor::layout::runtime()
+            .build()
             .join("plugins")
             .join(&self.manifest.id);
         std::fs::create_dir_all(&data)
@@ -680,15 +680,15 @@ impl Package {
                     }
                     let frontend = work.join("frontend");
                     let out = work.join("output");
-                    let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
-                    run(Command::new(npm).args(["ci"]).current_dir(&frontend))?;
+                    let npm = goofi_supervisor::layout::runtime().tool(goofi_supervisor::layout::Tool::Npm);
+                    run(Command::new(&npm).args(["ci"]).current_dir(&frontend))?;
                     let frontend_sdk = frontend.join("node_modules/@goofi/plugin");
                     std::fs::create_dir_all(&frontend_sdk).map_err(|e| e.to_string())?;
                     std::fs::write(frontend_sdk.join("index.ts"), FRONTEND_SDK)
                         .map_err(|e| e.to_string())?;
                     std::fs::write(frontend_sdk.join("package.json"), FRONTEND_PACKAGE)
                         .map_err(|e| e.to_string())?;
-                    run(Command::new(npm)
+                    run(Command::new(&npm)
                         .args(["run", "build"])
                         .env("GOOFI_PLUGIN_OUT_DIR", &out)
                         .current_dir(&frontend))?;
@@ -729,7 +729,7 @@ impl Package {
                 lock.as_slice(),
                 identity.as_bytes(),
             ]));
-            run(Command::new("uv")
+            run(Command::new(goofi_supervisor::layout::runtime().tool(goofi_supervisor::layout::Tool::Uv))
                 .args(["sync", "--locked", "--no-install-project", "--python"])
                 .arg(python)
                 .env("UV_PROJECT_ENVIRONMENT", &env)

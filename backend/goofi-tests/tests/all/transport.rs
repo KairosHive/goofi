@@ -403,7 +403,7 @@ fn crash_helper() {
 /// decides what a boot sweep removes, and a content key is never mistaken for a session.
 #[test]
 fn a_session_owns_its_directory_workspace_and_cache_parts() {
-    use goofi_supervisor::session::{alive, sessions, sweep_system, system_dir, workspace_dir, Record, Session};
+    use goofi_supervisor::session::{alive, sessions, sweep_runtime, system_dir, workspace_dir, Record, Session};
     use std::fs;
     goofi_tests::walled_home();
     let _sole = goofi_tests::sole_session();
@@ -433,30 +433,29 @@ fn a_session_owns_its_directory_workspace_and_cache_parts() {
     // The workspace parent: the session's to remove once its last mount is gone, at its release.
     fs::create_dir_all(workspace_dir(&id)).unwrap();
 
-    // The caches: a dead session's part and work dir go, another version's tree goes; a live
-    // session's part, this version's tree and a 16-hex CONTENT key stay.
+    // The runtime: a dead session's part and work dir go, another version's tree goes; a live
+    // session's part, this version's tree, the shared dirs and a 16-hex CONTENT key stay.
     let live = Session::hold().unwrap();
-    let system = goofi_supervisor::home::system();
-    let out = system.join("build").join("out").join("k");
+    let runtime = goofi_supervisor::layout::runtime();
+    let out = runtime.build().join("out").join("k");
     fs::create_dir_all(&out).unwrap();
     fs::write(out.join(format!(".node.so.s{}", live.id())), b"").unwrap();
     fs::write(out.join(".node.so.sfedcba9876543210"), b"").unwrap();
     fs::write(out.join("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef.json"), b"").unwrap();
-    let work = system.join("build").join("plugins").join("x").join("work-sfedcba9876543210-0");
+    let work = runtime.build().join("plugins").join("x").join("work-sfedcba9876543210-0");
     fs::create_dir_all(&work).unwrap();
-    // The RUNNING version, since every other situation in this process reads that shipped tree.
-    let version = env!("CARGO_PKG_VERSION");
-    fs::create_dir_all(system.join("shipped").join(version).join("fedcba9876543210")).unwrap();
-    fs::create_dir_all(system.join("build").join("sdk").join("0.0.1")).unwrap();
-    fs::create_dir_all(system.join("build").join("sdk").join(version)).unwrap();
-    sweep_system(version);
+    fs::create_dir_all(runtime.shipped().join("fedcba9876543210")).unwrap();
+    fs::create_dir_all(runtime.root().join("0.0.1")).unwrap();
+    fs::create_dir_all(runtime.cache()).unwrap();
+    fs::create_dir_all(runtime.state()).unwrap();
+    sweep_runtime();
     assert!(out.join(format!(".node.so.s{}", live.id())).exists(), "a live session's part stays");
     assert!(!out.join(".node.so.sfedcba9876543210").exists() && !work.exists(), "a dead session's go");
-    assert!(system.join("shipped").join(version).join("fedcba9876543210").exists(), "a content key stays");
+    assert!(runtime.shipped().join("fedcba9876543210").exists(), "a content key stays");
     assert!(out.join("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef.json").exists());
-    assert!(!system.join("build").join("sdk").join("0.0.1").exists(), "another version's tree goes");
-    assert!(system.join("build").join("sdk").join(version).exists());
-    let _ = fs::remove_dir_all(system.join("shipped").join(version).join("fedcba9876543210"));
+    assert!(!runtime.root().join("0.0.1").exists(), "another version's tree goes");
+    assert!(runtime.versioned().is_dir() && runtime.cache().is_dir() && runtime.state().is_dir(), "this version's and the shared ones stay");
+    let _ = fs::remove_dir_all(runtime.shipped().join("fedcba9876543210"));
     drop(live);
 
     drop(held);

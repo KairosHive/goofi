@@ -11,6 +11,8 @@ goofi-init = { path = "../goofi-init" }
 # The node pipeline, run here over the shipped folders so the artifacts ship inside the binary.
 goofi-build = { path = "../goofi-build" }
 goofi-node = { path = "../goofi-node" }
+# Where the pipeline's output goes: the same runtime a goofi from this build reads.
+goofi-supervisor = { path = "../goofi-supervisor" }
 
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }

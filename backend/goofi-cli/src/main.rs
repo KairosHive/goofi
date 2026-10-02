@@ -2,10 +2,11 @@
 //! holds zero op knowledge: it resolves WHICH server, sends the line, prints the answer.
 
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use goofi_bridge::{serve_app, Config, HEADLESS_BUILD, SPA};
 use goofi_cli::{exposure_warning, parse_args, Cli, DEFAULT_PORT, USAGE};
+use goofi_supervisor::layout;
 use goofi_supervisor::progress::report;
 use startup::Startup;
 
@@ -86,14 +87,13 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
              Scans every --extra-nodes ROOT — a folder of node files, `.py` and `.rs` — and then the \
              open patch's own workspace, which wins a shared type name. \
              Each node is routed in-process if free-threading-safe, else to a subprocess on \
-             `{}`, which `cargo run -p goofi-init` provisions.\n  \
+             the GIL interpreter `cargo run -p goofi-init` provisions in goofi's runtime.\n  \
              GOOFI_HEADLESS=1 in the environment is --headless; setting it for the BUILD leaves \
              the app out of the binary entirely. GOOFI_DEBUG=1 is --debug, which opens `/dev/*` \
              — the UI primitive gallery and the other development surfaces. GOOFI_LOAD is --load, \
              the patch to open at start; on a demo it is what `session new` returns to, and \
              GOOFI_DEMO_BASE names where that set's other examples answer. GOOFI_BOOT_ONLY=1 \
              boots the node library and exits, serving nothing.",
-            goofi_init::GIL_VENV
         );
         return;
     }
@@ -352,9 +352,10 @@ fn help_main(rest: &[String]) -> i32 {
 
 /// The interpreter the subprocess tier runs on: the venv `goofi-init` made, and only that one.
 fn default_subproc_python() -> Result<String, String> {
-    goofi_init::venv_python(&goofi_init::repo_root().join(goofi_init::GIL_VENV))
+    let venv = layout::runtime().python_gil();
+    layout::venv_python(&venv)
         .map(|p| p.display().to_string())
-        .ok_or_else(|| format!("no {} — {}", goofi_init::GIL_VENV, goofi_init::RUN_ME))
+        .ok_or_else(|| format!("no interpreter in {} — {}", venv.display(), goofi_init::RUN_ME))
 }
 
 /// Everything the process does once it holds a session, returning its exit code:
@@ -368,12 +369,12 @@ async fn run(
     mut startup: Option<Startup>,
 ) -> i32 {
     // Before ANY use of the embedded interpreter.
-    point_embedded_python_at_its_venv();
+    configure_embedded();
 
     let Cli { port, bind, extra_nodes, boot_only, headless, debug, demo, load: _, help: _ } = cli;
     let port = port.unwrap_or(DEFAULT_PORT);
 
-    config.plugins = Some(goofi_supervisor::home::dir());
+    config.plugins = Some(layout::home());
     config.roots = extra_nodes.iter().map(PathBuf::from).collect();
     // This binary is its own node host and its own plugin scanner.
     config.host = std::env::current_exe().ok();
@@ -447,7 +448,7 @@ async fn run(
                 // nowhere else.
                 state.set_bound(addr);
                 // Only a real server writes into the home: its record, and the config seed.
-                goofi_supervisor::home::seed_config();
+                layout::seed_config();
                 record_url(&state.local_url());
                 // The OPENABLE spelling, as the session file records it — `http://0.0.0.0` is
                 // not an address a browser can visit.
@@ -602,23 +603,13 @@ fn evaluator() -> Result<Option<std::sync::Arc<dyn goofi_node::ExprEvaluator>>, 
     Ok(Some(std::sync::Arc::new(ev)))
 }
 
-/// Hand the EMBEDDED interpreter the venv pyo3 was linked against: pyo3 links `libpython` from
-/// that venv's BASE install, so the venv's own site-packages is on no search path.
 #[cfg(feature = "python")]
-fn point_embedded_python_at_its_venv() {
-    // An existing value is the documented override.
-    if std::env::var_os("PYTHONPATH").is_some() {
-        return;
-    }
-    let Some(python) = goofi_python::inproc::interpreter_path() else { return };
-    let Some(venv) = Path::new(&python).parent().and_then(Path::parent) else { return };
-    if let Some(dir) = goofi_init::site_packages(venv) {
-        std::env::set_var("PYTHONPATH", dir);
-    }
+fn configure_embedded() {
+    goofi_python::inproc::configure_embedded();
 }
 
 #[cfg(not(feature = "python"))]
-fn point_embedded_python_at_its_venv() {}
+fn configure_embedded() {}
 
 /// Every node directory's requirements, checked against their interpreters before the scan imports
 /// anything. A terminal can approve installation; a failed or declined one stops startup.
@@ -629,9 +620,9 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) -> Result<(), String>
     if gil_only.is_empty() {
         return Ok(());
     }
-    let root = goofi_init::repo_root();
+    let runtime = layout::runtime();
     let interpreters = [
-        (goofi_init::venv_python(&root.join(goofi_init::FT_VENV)), &shared),
+        (layout::venv_python(&runtime.python_ft()), &shared),
         (Some(PathBuf::from(subproc_python)), &gil_only),
     ];
     let mut lacking = Vec::new();
@@ -640,7 +631,7 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) -> Result<(), String>
             continue;
         }
         let py = py.ok_or_else(|| format!("missing Python environment; {}", goofi_init::RUN_ME))?;
-        let shown = py.strip_prefix(&root).unwrap_or(&py).display().to_string();
+        let shown = py.strip_prefix(runtime.root()).unwrap_or(&py).display().to_string();
         match goofi_init::missing_packages(&py, reqs) {
             Ok(missing) if missing.is_empty() => {}
             Ok(missing) => {

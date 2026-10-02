@@ -196,9 +196,9 @@ impl AppState {
     /// An instance named by `instance` — the binary's, which names it after the session it holds,
     /// so the id a shell sets `GOOFI_SESSION` to is the one `session status` answers.
     pub fn with_instance(iox: Arc<goofi_transport::Iox>, instance: String, mode: Mode, clock: Clock, render: Clock) -> Result<AppState, String> {
-        // The caches under `.goofi/system` are swept HERE, by the manager, before any engine
+        // The runtime's caches are swept HERE, by the manager, before any engine
         // exists: a crash's part files, old versions.
-        goofi_supervisor::session::sweep_system(goofi_build::VERSION);
+        goofi_supervisor::session::sweep_runtime();
         autosave::sweep_dead();
         let events = Broadcaster::new(256);
         // Seeded BEFORE the baseline is taken, or the patch is dirty from boot, having written
@@ -235,7 +235,7 @@ impl AppState {
             history: Arc::new(Mutex::new(goofi_graph::CommandHistory::new())),
             data_liveness: DataLiveness::DEFAULT,
             roots: materialise_shipped(),
-            custom: goofi_supervisor::home::custom_nodes(),
+            custom: goofi_supervisor::layout::custom_nodes(),
             node_index: Arc::new(Mutex::new(Default::default())),
             mount: Arc::new(Mutex::new(Some(mount))),
             workspace_baseline: Arc::new(Mutex::new(workspace_baseline)),
@@ -812,11 +812,11 @@ pub fn seed_skills(mount: &std::path::Path) {
     }
 }
 
-/// The shipped bundles, written once under the home, keyed by the embed's content, beside the
+/// The shipped bundles, written once into the runtime, keyed by the embed's content, beside the
 /// artifacts goofi's build made, so a shipped node loads with no toolchain.
 fn materialise_shipped() -> Vec<PathBuf> {
-    let home = goofi_supervisor::home::dir();
-    let tree = goofi_supervisor::home::system().join("shipped").join(goofi_build::VERSION).join(SHIPPED_KEY);
+    let runtime = goofi_supervisor::layout::runtime();
+    let tree = runtime.shipped().join(SHIPPED_KEY);
     let mut roots = Vec::new();
     for (rel, bytes) in SHIPPED_SOURCES {
         goofi_build::write_if_changed(&tree.join(rel), bytes);
@@ -825,7 +825,7 @@ fn materialise_shipped() -> Vec<PathBuf> {
             roots.push(bundle);
         }
     }
-    let base = goofi_build::base_dir(&home);
+    let base = runtime.build();
     for (key, file, bytes) in SHIPPED_ARTIFACTS {
         let _ = goofi_build::place(&base.join("out").join(key).join(file), bytes);
     }
@@ -895,7 +895,7 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
         let prepared: Vec<_> = dirs.filter(|d| d.is_dir()).flat_map(|d| g.prepare(&d)).collect();
         (sdks, prepared)
     };
-    let base = goofi_build::base_dir(&goofi_supervisor::home::dir());
+    let base = goofi_supervisor::layout::runtime().build();
     let dirs = roots.into_iter().chain(sdks.iter().map(|(id, _)| patch.join(goofi_node::folder_of(id))));
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(dir) else { continue };
@@ -1105,7 +1105,7 @@ pub(crate) async fn blocking<T: Send + 'static>(state: &AppState, work: impl FnO
 async fn seed(tx: &mut futures_util::stream::SplitSink<WebSocket, Message>, state: &AppState, actor: &str) -> bool {
     let unsaved = state.is_dirty();
     let saved_at = state.save_path();
-    let roster = state.harnesses.roster(&goofi_supervisor::home::agents());
+    let roster = state.harnesses.roster(&goofi_supervisor::layout::agents());
     let hello = {
         let g = state.graph.lock();
         let mut snap = schemas::snapshot(&g, state, true, unsaved, saved_at.as_deref(), roster);

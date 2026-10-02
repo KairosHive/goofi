@@ -104,7 +104,7 @@ impl EffectOp for LogWrite {
 
 impl ReadOp for AgentList {
     fn run(tx: &mut Txn, _: NoArgs) -> Result<Value, String> {
-        Ok(tx.state.harnesses.roster(&goofi_supervisor::home::agents()))
+        Ok(tx.state.harnesses.roster(&goofi_supervisor::layout::agents()))
     }
 }
 
@@ -117,7 +117,7 @@ impl EffectOp for AgentStart {
             let dir = mount.as_ref().map(crate::Mount::path).unwrap_or_default();
             state.harnesses.spawn(&a.name, &dir, &state.instance_id, &term::parent_env(), state.events.clone(), state.history.clone())?
         };
-        state.events.send(Event::HarnessChanged(state.harnesses.roster(&goofi_supervisor::home::agents())));
+        state.events.send(Event::HarnessChanged(state.harnesses.roster(&goofi_supervisor::layout::agents())));
         Ok(json!({ "instance_id": id }))
     }
 }
@@ -126,7 +126,7 @@ impl EffectOp for AgentStop {
     fn run(state: &AppState, a: AgentStopArgs, _: &Caller) -> Result<Value, String> {
         // The stopped shell's undo stack is dropped by the REAPER, where the actor really dies.
         state.harnesses.stop(&a.instance)?;
-        state.events.send(Event::HarnessChanged(state.harnesses.roster(&goofi_supervisor::home::agents())));
+        state.events.send(Event::HarnessChanged(state.harnesses.roster(&goofi_supervisor::layout::agents())));
         Ok(json!({ "ok": true }))
     }
 }

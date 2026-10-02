@@ -18,9 +18,17 @@ fn answers(py: &str, code: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// A repo venv's interpreter, where goofi-init made it.
-fn venv(name: &str) -> Option<String> {
-    goofi_init::venv_python(&goofi_init::repo_root().join(name)).map(|p| p.to_string_lossy().into_owned())
+/// A runtime venv's interpreter, where goofi-init made it.
+fn venv(dir: std::path::PathBuf) -> Option<String> {
+    goofi_supervisor::layout::venv_python(&dir).map(|p| p.to_string_lossy().into_owned())
+}
+
+fn ft_venv() -> Option<String> {
+    venv(goofi_supervisor::layout::runtime().python_ft())
+}
+
+fn gil_venv() -> Option<String> {
+    venv(goofi_supervisor::layout::runtime().python_gil())
 }
 
 /// A set, non-empty override.
@@ -28,11 +36,11 @@ fn named(var: &str) -> Option<String> {
     std::env::var(var).ok().filter(|p| !p.is_empty())
 }
 
-/// The first interpreter that can `import goofi`: an override, the repo's venvs, then the system one.
+/// The first interpreter that can `import goofi`: an override, the runtime's venvs, then the system one.
 fn test_python() -> String {
     let cands: Vec<String> = named("GOOFI_PYMOD_TEST_PYTHON").into_iter()
-        .chain(venv(goofi_init::FT_VENV))
-        .chain(venv(goofi_init::GIL_VENV))
+        .chain(ft_venv())
+        .chain(gil_venv())
         .chain(["python3".to_string()])
         .collect();
     cands.iter().find(|c| answers(c, "import goofi")).cloned().unwrap_or_else(|| panic!(
@@ -44,7 +52,7 @@ fn test_python() -> String {
 
 /// The FREE-THREADED interpreter (the in-process tier's host), for the routing gate's SAFE half.
 fn ft_python() -> String {
-    let cands: Vec<String> = named("GOOFI_FT_PYTHON").into_iter().chain(venv(goofi_init::FT_VENV)).collect();
+    let cands: Vec<String> = named("GOOFI_FT_PYTHON").into_iter().chain(ft_venv()).collect();
     // Free-threaded builds are exactly the ones where sys._is_gil_enabled() is False.
     let ft = "import sys; sys.exit(0 if not sys._is_gil_enabled() else 1)";
     cands.iter().find(|c| answers(c, ft)).cloned().unwrap_or_else(|| panic!(
@@ -53,10 +61,10 @@ fn ft_python() -> String {
     ))
 }
 
-/// The GIL interpreter (the subprocess tier's host) — the repo's `.gfivenv`.
+/// The GIL interpreter (the subprocess tier's host) — the runtime's `gil` venv.
 fn gil_python() -> String {
-    venv(goofi_init::GIL_VENV).filter(|p| answers(p, "import goofi")).unwrap_or_else(|| panic!(
-        "no `.gfivenv` python with goofi importable. Run goofi once (it provisions both venvs at startup)"
+    gil_venv().filter(|p| answers(p, "import goofi")).unwrap_or_else(|| panic!(
+        "no GIL python with goofi importable. Run `cargo run -p goofi-init`, which provisions both venvs"
     ))
 }
 

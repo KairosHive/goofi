@@ -291,7 +291,7 @@ pub static SYSTEM_VARIABLES: &[VariableDef] = &[
     },
     VariableDef {
         name: "system.goofi_home",
-        value: || VariableValue::Str(crate::path::to_slash(&goofi_supervisor::home::dir())),
+        value: || VariableValue::Str(crate::path::to_slash(&goofi_supervisor::layout::home())),
         doc: "The .goofi folder, where goofi keeps its own files. The machine says where it is.",
         ephemeral: true,
     },

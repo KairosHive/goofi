@@ -256,11 +256,11 @@ fn a_node_missing_a_dependency_is_listed_greyed_rather_than_vanishing() {
     let made = std::process::Command::new(&py.py).args(["-m", "venv", "--without-pip"]).arg(&venv)
         .env_remove("PYTHONPATH").env_remove("PYTHONHOME").status().unwrap();
     assert!(made.success(), "a venv of the test's own");
-    let site = goofi_init::site_packages(&venv).expect("the new venv's site-packages");
+    let site = goofi_supervisor::layout::site_packages(&venv).expect("the new venv's site-packages");
     let shared = std::path::Path::new(&py.py).parent().unwrap().parent().unwrap();
-    let shared = goofi_init::site_packages(shared).expect("the test interpreter is a venv");
+    let shared = goofi_supervisor::layout::site_packages(shared).expect("the test interpreter is a venv");
     std::fs::write(site.join("goofi_shared.pth"), shared.to_string_lossy().as_bytes()).unwrap();
-    let own_py = goofi_init::venv_python(&venv).expect("the new venv's python").to_string_lossy().into_owned();
+    let own_py = goofi_supervisor::layout::venv_python(&venv).expect("the new venv's python").to_string_lossy().into_owned();
     let dir = g.state.mount().join("nodes_signal");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("needs_scipy.py");
@@ -518,7 +518,7 @@ mod inproc {
     /// The interpreter the subprocess half of a parity test spawns.
     fn subproc_python() -> String {
         let ft = goofi_python::inproc::interpreter_path()
-            .expect("no FT interpreter (PYO3_PYTHON) — run `cargo run -p goofi-init`");
+            .expect("no FT interpreter in the runtime — run `cargo run -p goofi-init`");
         std::env::var("GOOFI_SUBPROC_TEST_PYTHON").unwrap_or(ft)
     }
 

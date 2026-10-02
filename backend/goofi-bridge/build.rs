@@ -19,15 +19,16 @@ fn main() {
 }
 
 /// Build every `node-bundles/<bundle>/*.rs` through the one pipeline a scan runs,
-/// into a build dir the test harness shares, and emit `$OUT_DIR/shipped.rs`: every file of every
+/// into the runtime's build dir, and emit `$OUT_DIR/shipped.rs`: every file of every
 /// bundle, every artifact under the cache key a scan will look it up by, and a key over the
 /// files themselves. A shipped node that does not compile fails THIS build, so a binary never
 /// ships a node it cannot load.
 fn prebuild_nodes() {
     let bundles = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../node-bundles");
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
-    // OUT_DIR is `<target>/<profile>/build/<pkg>-<hash>/out`; four levels up is `<target>`.
-    let base = out.ancestors().nth(4).expect("a cargo OUT_DIR").join("goofi-build");
+    // The runtime a goofi from this build loads from, so a boot finds what this step built.
+    println!("cargo:rerun-if-env-changed={}", goofi_supervisor::layout::RUNTIME_ENV);
+    let base = goofi_supervisor::layout::runtime().build();
     println!("cargo:rerun-if-changed={}", bundles.display());
     let (mut sources, mut artifacts) = (String::new(), String::new());
     let mut key: Vec<Vec<u8>> = Vec::new();

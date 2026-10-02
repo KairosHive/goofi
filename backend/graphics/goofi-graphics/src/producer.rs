@@ -35,7 +35,7 @@ impl crate::GraphicsEngine {
 
     pub(crate) fn register_host(&mut self, path: &Path, name: &str) -> Result<Arc<Class>, String> {
         let (manifest, factory, isolation): (_, Factory, _) = if path.extension().is_some_and(|e| e == "rs") {
-            let base = goofi_build::base_dir(&goofi_supervisor::home::dir());
+            let base = goofi_supervisor::layout::runtime().build();
             let artifact = goofi_build::built(&goofi_build::GRAPHICS, path, &base)?;
             // Built after boot, it runs HOSTED, as a signal node does: its library in a child of
             // goofi's own binary, never in this process, whose loader could not unload it.

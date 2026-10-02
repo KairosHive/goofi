@@ -4,10 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# Deliberately depends on NOTHING: no goofi crate, no pyo3, no python. This is the crate that
-# makes a Python build possible, so it must be buildable before one is — `cargo run -p goofi-init`
-# on a fresh clone compiles this and only this.
+# No pyo3, no python: this is the crate that makes a Python build possible, so it must be
+# buildable before one is. The layout is where it puts what it provisions.
 [dependencies]
+goofi-supervisor = { path = "../goofi-supervisor" }
 
 [[bin]]
 name = "goofi-init"

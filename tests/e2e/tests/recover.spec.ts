@@ -10,7 +10,7 @@ import { backendDoc, rawCall } from '../lib/raw';
  * folder: `patch.yaml` beside `workspace/` in a nonce directory of a session nobody holds. */
 function crashed(manifest: string, home: string | null): string {
 	const dir = path.join(
-		E2E_HOME, '.goofi', 'system', 'recovery',
+		E2E_HOME, '.goofi', 'recovery',
 		crypto.randomBytes(8).toString('hex'), crypto.randomBytes(16).toString('hex')
 	);
 	fs.mkdirSync(path.join(dir, 'workspace'), { recursive: true });

@@ -1,17 +1,17 @@
 //! Setting up the Python goofi runs its nodes on, and the frontend's dependencies — the ONE place
-//! that does it. It must depend on no goofi crate and no pyo3, or it triggers the build it configures.
+//! that does it. It must not depend on pyo3, or it triggers the build it configures.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::process::Command;
 
-/// The GIL venv the subprocess tier runs on. Pinned *non*-free-threaded on purpose: that tier
-/// exists precisely for packages that are not free-threading-safe.
-pub const GIL_VENV: &str = ".gfivenv";
+use goofi_supervisor::layout::{self, Tool};
+
+/// The subprocess tier's interpreter. Pinned *non*-free-threaded on purpose: that tier exists
+/// precisely for packages that are not free-threading-safe.
 const GIL_PYTHON: &str = "3.12";
 
-/// The free-threaded venv pyo3 LINKS against, and which the introspection probe runs on.
-pub const FT_VENV: &str = ".gfivenv-ft";
+/// The free-threaded interpreter pyo3 LINKS against, and which the introspection probe runs on.
 const FT_PYTHON: &str = "3.14t";
 
 /// The repo root. Nothing is resolved, so a checkout reached through a symlink stays spelled the
@@ -19,40 +19,6 @@ const FT_PYTHON: &str = "3.14t";
 pub fn repo_root() -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     manifest.ancestors().nth(2).unwrap_or(manifest).to_path_buf()
-}
-
-/// Where a venv keeps its interpreter, asked by presence rather than by platform.
-fn python_in(venv: &Path) -> Option<&'static str> {
-    ["bin/python", "Scripts/python.exe"].into_iter().find(|rel| venv.join(rel).is_file())
-}
-
-/// A venv's interpreter as an absolute path, or `None` when the venv is not there.
-pub fn venv_python(venv: &Path) -> Option<PathBuf> {
-    python_in(venv).map(|rel| venv.join(rel))
-}
-
-/// A venv's `site-packages`, which the embedded interpreter must be handed. The Python version is
-/// *found*, never named, so it cannot go stale when [`FT_PYTHON`] moves.
-pub fn site_packages(venv: &Path) -> Option<PathBuf> {
-    let flat = venv.join("Lib").join("site-packages");
-    if flat.is_dir() {
-        return Some(flat);
-    }
-    let mut found: Vec<PathBuf> = std::fs::read_dir(venv.join("lib"))
-        .ok()?
-        .flatten()
-        .map(|e| e.path().join("site-packages"))
-        .filter(|p| p.is_dir())
-        .collect();
-    // Sorted so a venv that somehow holds two answers gives a stable one.
-    found.sort();
-    found.pop()
-}
-
-/// The interpreter of `venv`, RELATIVE to the repo root and above all UNRESOLVED: on unix that
-/// symlink points at the base install, which has no `goofi` wheel.
-fn interpreter_rel(root: &Path, venv: &str) -> Option<String> {
-    python_in(&root.join(venv)).map(|rel| format!("{venv}/{rel}"))
 }
 
 /// The generated cargo config. Machine-specific and gitignored.
@@ -68,7 +34,7 @@ pub fn interpreter() -> Option<PathBuf> {
 
 /// The instruction printed wherever readiness is demanded, so the wording exists once.
 pub const RUN_ME: &str = "run `cargo run -p goofi-init` first — it provisions the Python \
-                          interpreters goofi links against and the frontend's dependencies \
+                          interpreters in goofi's runtime and the frontend's dependencies \
                           (needs `uv` and `npm` on PATH)";
 
 /// Provision everything, from nothing, idempotently.
@@ -83,8 +49,9 @@ pub fn init(root: &Path) -> Result<(), String> {
     }
     require_audio_libs()?;
 
-    let ft = ensure_venv(root, FT_VENV, FT_PYTHON)?;
-    let gil = ensure_venv(root, GIL_VENV, GIL_PYTHON)?;
+    let runtime = layout::runtime();
+    let ft = ensure_venv(&runtime.python_ft(), FT_PYTHON)?;
+    let gil = ensure_venv(&runtime.python_gil(), GIL_PYTHON)?;
 
     // The config BEFORE the wheels, so a failed wheel build still leaves a config a re-run can use.
     write_config(root, &ft)?;
@@ -93,7 +60,7 @@ pub fn init(root: &Path) -> Result<(), String> {
     // run names new ones, and uv answers a satisfied list in milliseconds.
     let dirs = bundle_dirs(root);
     let (shared, gil_only) = requirement_sets(&dirs);
-    for (venv, py, reqs) in [(FT_VENV, &ft, &shared), (GIL_VENV, &gil, &gil_only)] {
+    for (venv, py, reqs) in [("ft", &ft, &shared), ("gil", &gil, &gil_only)] {
         install_wheel(root, venv, py)?;
         if !reqs.is_empty() {
             println!("  installing the bundles' packages into {venv}");
@@ -155,9 +122,8 @@ fn size_of(path: &Path) -> u64 {
     }
 }
 
-/// `npm`, spelled the way this platform spells it: Windows needs the `.cmd` shim by name.
 fn npm<'a>(args: impl IntoIterator<Item = &'a str>) -> Command {
-    let mut cmd = Command::new(if cfg!(windows) { "npm.cmd" } else { "npm" });
+    let mut cmd = Command::new(layout::runtime().tool(Tool::Npm));
     cmd.args(args);
     cmd
 }
@@ -245,14 +211,13 @@ fn require_uv() -> Result<(), String> {
     })
 }
 
-fn ensure_venv(root: &Path, name: &str, python: &str) -> Result<PathBuf, String> {
-    let venv = root.join(name);
-    if let Some(py) = venv_python(&venv) {
+fn ensure_venv(venv: &Path, python: &str) -> Result<PathBuf, String> {
+    if let Some(py) = layout::venv_python(venv) {
         return Ok(py);
     }
-    println!("  creating {name} (python {python})");
-    run(uv(["venv", "--python", python]).arg(&venv), &format!("create {name}"))?;
-    venv_python(&venv).ok_or_else(|| format!("`uv venv` left no interpreter in {}", venv.display()))
+    println!("  creating {} (python {python})", venv.display());
+    run(uv(["venv", "--python", python]).arg(venv), &format!("create {}", venv.display()))?;
+    layout::venv_python(venv).ok_or_else(|| format!("`uv venv` left no interpreter in {}", venv.display()))
 }
 
 /// Build the wheel for THIS interpreter and install it, unless a matching one is already there.
@@ -366,20 +331,9 @@ fn has_goofi(py: &Path) -> bool {
     answers(Command::new(py).args(["-c", &probe]).env_remove("PYTHONPATH").env_remove("PYTHONHOME"))
 }
 
-/// Point pyo3 at the free-threaded venv, for every cargo command from here on. The repo-local
-/// values are `relative = true` so moving the checkout does not strand them.
+/// Point pyo3 at the free-threaded venv, for every cargo command from here on. The link step is
+/// all this serves: goofi finds its interpreter and its home from the layout at run time.
 fn write_config(root: &Path, ft: &Path) -> Result<(), String> {
-    let py = interpreter_rel(root, FT_VENV)
-        .ok_or_else(|| format!("{FT_VENV} holds no interpreter to point cargo at"))?;
-    // Spelled with `/`: Win32 takes either separator, and it keeps the value clear of backslashes
-    // TOML would need escaped. `{root:?}` quotes the path into a Python string literal.
-    let purelib = query(
-        ft,
-        &format!(
-            "import os,sysconfig;print(os.path.relpath(sysconfig.get_path('purelib'), {root:?}).replace(os.sep,'/'))"
-        ),
-    )
-    .ok_or("could not ask the interpreter where its site-packages are")?;
     // `-Wl,-rpath` is a GNU/Clang flag `link.exe` rejects, so this is keyed on the TARGET's linker
     // rather than on the reported libdir: a Windows CPython reports one and cannot use it.
     let host = host_triple()?;
@@ -391,22 +345,13 @@ fn write_config(root: &Path, ft: &Path) -> Result<(), String> {
             format!("\n[target.{host}]\nrustflags = [\"-C\", {flag:?}]\n")
         })
         .unwrap_or_default();
-    // Stated on every platform: a Windows interpreter loaded from beside the executable cannot
-    // infer its own home, and unix is unaffected by being told what it would have worked out.
-    let home = base_prefix(ft)
-        .map(|h| format!("PYTHONHOME = {h:?}\n"))
-        .unwrap_or_default();
-
     let contents = format!(
         "# Generated by `cargo run -p goofi-init` — machine-specific, gitignored, never committed.\n\
-         # Points pyo3 at the repo-local free-threaded venv so cargo needs no env vars. The two\n\
-         # repo-local paths are relative to this checkout, so moving or renaming it keeps them\n\
-         # true; cargo expands both to absolute paths. Delete this file (and {FT_VENV}) and re-run\n\
-         # goofi-init to reprovision.\n\
+         # Points pyo3 at the free-threaded interpreter in goofi's runtime so cargo needs no env\n\
+         # vars. Delete this file and re-run goofi-init to reprovision.\n\
          [env]\n\
-         PYO3_PYTHON = {{ value = {py:?}, relative = true }}\n\
-         PYTHONPATH = {{ value = {purelib:?}, relative = true }}\n\
-         {home}{rpath}",
+         PYO3_PYTHON = {ft:?}\n\
+         {rpath}",
     );
     let config = config_path(root);
     if let Some(parent) = config.parent() {
@@ -424,18 +369,13 @@ fn host_triple() -> Result<String, String> {
         .ok_or_else(|| "`rustc -vV` reported no host triple".to_string())
 }
 
-/// The base install a venv's interpreter runs from.
-pub fn base_prefix(py: &Path) -> Option<String> {
-    query(py, "import sys;print(sys.base_prefix)")
-}
-
 fn query(py: &Path, code: &str) -> Option<String> {
     let out = Command::new(py).args(["-c", code]).env_remove("PYTHONPATH").env_remove("PYTHONHOME").output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 fn uv<'a>(args: impl IntoIterator<Item = &'a str>) -> Command {
-    let mut cmd = Command::new("uv");
+    let mut cmd = Command::new(layout::runtime().tool(Tool::Uv));
     // Before the subcommand, and before the caller's own arguments: a terminal that forces colour
     // wraps uv's listing in escapes, and the dry-run parser reads that listing.
     cmd.arg("--color").arg("never");

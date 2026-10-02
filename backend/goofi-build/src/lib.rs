@@ -61,18 +61,6 @@ pub fn sdk(name: &str) -> Option<&'static Sdk> {
 /// minutes on a slow machine; a build past this is stuck, not slow.
 const BUILD_WAIT: std::time::Duration = std::time::Duration::from_secs(1800);
 
-/// Where the extracted SDK, the generated crates, one shared cargo target and every artifact
-/// live: `$GOOFI_BUILD_DIR`, else `<home>/system/build`.
-pub fn base_dir(home: &Path) -> PathBuf {
-    let dir = std::env::var_os("GOOFI_BUILD_DIR")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join("system").join("build"));
-    // A generated crate names the SDK by path, and cargo resolves that against the crate's own
-    // directory: only an absolute base survives the trip.
-    std::path::absolute(&dir).unwrap_or(dir)
-}
-
 /// What one source builds to, keyed by everything that decides it: the goofi version, the SDK
 /// sources, the crates the SDK lets a node reach, and the file's own bytes.
 fn cache_key(sdk: &Sdk, source: &[u8]) -> String {
@@ -190,14 +178,14 @@ fn build(sdk: &Sdk, source: &Path, base: &Path, key: &str, artifact: &Path) -> R
 }
 
 fn cargo() -> Option<PathBuf> {
-    let cargo = std::env::var_os("CARGO").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("cargo"));
+    let cargo = goofi_supervisor::layout::runtime().tool(goofi_supervisor::layout::Tool::Cargo);
     Command::new(&cargo).arg("--version").output().ok().filter(|o| o.status.success()).map(|_| cargo)
 }
 
-/// The embedded SDK, written out under `base` for this goofi version — each file only when its
-/// bytes differ, so an unchanged tree never re-dirties cargo's view of it.
+/// The embedded SDK, written out under `base` — each file only when its bytes differ, so an
+/// unchanged tree never re-dirties cargo's view of it. The base is one version's already.
 pub fn sdk_root(base: &Path) -> PathBuf {
-    let root = base.join("sdk").join(VERSION);
+    let root = base.join("sdk");
     for (rel, bytes) in SOURCES {
         write_if_changed(&root.join(rel), bytes);
     }

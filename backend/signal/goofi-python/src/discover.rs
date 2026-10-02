@@ -75,7 +75,7 @@ pub fn probe_key(path: &Path, pythons: &[&str]) -> Option<String> {
     for python in pythons {
         hash.update(python.as_bytes());
         hash.update(mtime(Path::new(python)));
-        let site = Path::new(python).parent().and_then(Path::parent).and_then(goofi_init::site_packages);
+        let site = Path::new(python).parent().and_then(Path::parent).and_then(goofi_supervisor::layout::site_packages);
         hash.update(site.as_deref().map(mtime).unwrap_or_default());
     }
     Some(format!("{:x}", hash.finalize())[..32].to_string())

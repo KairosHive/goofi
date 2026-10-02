@@ -135,8 +135,8 @@ See [graphics node authoring](sdk/graphics.md) for Rust and Python texture sourc
 The same Python file runs on either tier, and the file does not choose: a discovery probe imports
 it in a real interpreter and routes it in-process when its imports keep the GIL disabled, else to a
 subprocess. The palette shows the tags a node declares, never the tier it runs on. The two
-interpreters are `.gfivenv-ft` (free-threaded 3.14t) and `.gfivenv` (a GIL Python), both made by
-`goofi-init`, and goofi uses no others. Re-run it after a version bump; it is idempotent.
+interpreters (free-threaded 3.14t and a GIL Python) live in goofi's runtime directory, both made
+by `goofi-init`, and goofi uses no others. Re-run it after a version bump; it is idempotent.
 
 Nothing fails silently. A node whose dependencies are missing everywhere is listed as
 `unavailable`, greyed out and naming the missing module; an exception inside `process()` surfaces

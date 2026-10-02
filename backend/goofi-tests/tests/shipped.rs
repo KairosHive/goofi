@@ -5,14 +5,14 @@ use goofi_tests::{drive, f32s, j, Goofi, OutputProbe};
 
 #[test]
 fn a_shipped_node_runs_with_no_cargo_and_an_authored_one_says_what_it_needs() {
-    // Before the first boot: a build dir nothing pre-warmed, a cargo that does not exist, and a
-    // home an EARLIER build left its tree in, whose files are not this build's and must not scan.
+    // Before the first boot: a runtime nothing pre-warmed, a cargo that does not exist, and a
+    // tree an EARLIER build left in it, whose files are not this build's and must not scan.
     let fresh = tempfile::tempdir().unwrap();
-    std::env::set_var("GOOFI_BUILD_DIR", fresh.path());
+    std::env::set_var(goofi_supervisor::layout::RUNTIME_ENV, fresh.path());
     std::env::set_var("CARGO", fresh.path().join("no-cargo"));
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("GOOFI_HOME", home.path());
-    let shipped = goofi_supervisor::home::system().join("shipped").join(env!("CARGO_PKG_VERSION"));
+    let shipped = goofi_supervisor::layout::runtime().shipped();
     let stale = shipped.join("stale").join("signal");
     std::fs::create_dir_all(&stale).unwrap();
     std::fs::write(stale.join("Stale.rs"), "").unwrap();

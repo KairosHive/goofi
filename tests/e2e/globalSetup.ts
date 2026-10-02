@@ -98,10 +98,9 @@ function makeHome(slot: number): void {
 }
 
 /**
- * A backend's environment: its slot's home and TEMP, and the node build cache pinned OUTSIDE the
- * wiped home and shared with `goofi-tests`, so a run never rebuilds every shipped node. SHELL is
- * one known POSIX shell: the `_sh` command is POSIX text, and the product runs it under the
- * user's own login shell.
+ * A backend's environment: its slot's home and TEMP. The runtime is inherited, so a run shares
+ * the build caches with `goofi-tests` and never rebuilds a shipped node. SHELL is one known POSIX
+ * shell: the `_sh` command is POSIX text, and the product runs it under the user's own login shell.
  */
 function envOf(slot: number): NodeJS.ProcessEnv {
 	const home = homeOf(slot);
@@ -112,7 +111,6 @@ function envOf(slot: number): NodeJS.ProcessEnv {
 		TMPDIR: tmp,
 		TMP: tmp,
 		TEMP: tmp,
-		GOOFI_BUILD_DIR: process.env.GOOFI_BUILD_DIR ?? path.join(REPO_ROOT, 'target', 'goofi-build'),
 		SHELL: '/bin/sh'
 	};
 }

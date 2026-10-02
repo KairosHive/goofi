@@ -22,8 +22,8 @@ env:
   CARGO_PROFILE_DEV_INCREMENTAL: 'false'
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: 'true'
-  # Where the bridge's build script puts the shipped nodes, so the harness and the fleet share it.
-  GOOFI_BUILD_DIR: ${{ github.workspace }}/target/goofi-build
+  # goofi's runtime, under the workspace so its build caches can be kept across runs.
+  GOOFI_RUNTIME: ${{ github.workspace }}/target/goofi-runtime
 
 jobs:
   # One job, one build: every gate in the order a fresh clone meets them. The runner has four
@@ -73,8 +73,8 @@ jobs:
       - uses: actions/cache/save@v4
         if: always()
         with:
-          path: target/goofi-build
-          key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
+          path: target/goofi-runtime/*/build
+          key: goofi-runtime-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
 
   # Only what a platform can answer differently: processes, paths, dynamic libraries, PTYs, audio
   # hosts. The rest was proven on Linux above.
@@ -101,5 +101,5 @@ jobs:
       - uses: actions/cache/save@v4
         if: always()
         with:
-          path: target/goofi-build
-          key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
+          path: target/goofi-runtime/*/build
+          key: goofi-runtime-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}

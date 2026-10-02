@@ -142,7 +142,7 @@ impl EffectOp for Start {
         }
         let root = record_arg(&g, a.root.as_deref(), "root")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(goofi_supervisor::home::recordings);
+            .unwrap_or_else(goofi_supervisor::layout::recordings);
         let name = record_arg(&g, a.name.as_deref(), "name").unwrap_or_default();
         let patch = state.save_path().map(std::path::PathBuf::from);
         // Capture preparation and the stream drain need the graph to make progress.

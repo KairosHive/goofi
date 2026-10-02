@@ -54,7 +54,7 @@ impl SignalEngine {
     /// An `.rs` file: the artifact the prebuild left for these bytes, loaded — a library that will
     /// not load displaces a stale registration and greys the type out with the reason.
     fn register_rust(&mut self, path: &Path, type_name: &str) -> Scanned {
-        let base = goofi_build::base_dir(&goofi_supervisor::home::dir());
+        let base = goofi_supervisor::layout::runtime().build();
         let hosted = self.booted;
         let loaded = goofi_build::built(&goofi_build::SIGNAL, path, &base).and_then(|artifact| self.load_rust(artifact, type_name));
         match loaded {

@@ -149,7 +149,8 @@ impl Drop for Goofi {
 }
 
 /// Wall this test process off from the real `~/.goofi` and the shell's own cargo target: a
-/// developer's config, session records or build dir must not reach an assertion. Once per process.
+/// developer's config or session records must not reach an assertion. The runtime is shared, as
+/// the binary shares it: its caches are keyed by content. Once per process.
 pub fn walled_home() {
     static HOME: std::sync::Once = std::sync::Once::new();
     HOME.call_once(|| {
@@ -161,13 +162,10 @@ pub fn walled_home() {
         // The suite spawns agents under one known POSIX shell, so a loud profile cannot fail a test.
         #[cfg(unix)]
         std::env::set_var("SHELL", "/bin/sh");
-        // Both under THIS binary's target dir, which goofi's own build pre-warmed.
+        #[cfg(feature = "embed")]
+        goofi_python::inproc::configure_embedded();
+        // Under THIS binary's target dir.
         let target = std::env::current_exe().ok().and_then(|e| e.ancestors().nth(3).map(Path::to_path_buf));
-        if std::env::var_os("GOOFI_BUILD_DIR").is_none() {
-            if let Some(target) = &target {
-                std::env::set_var("GOOFI_BUILD_DIR", target.join("goofi-build"));
-            }
-        }
         let nested = target.unwrap_or_else(std::env::temp_dir).join("goofi-test-cargo-target");
         std::env::set_var("CARGO_TARGET_DIR", nested);
     });
@@ -1053,10 +1051,10 @@ pub fn require_python() -> Tier {
         return Tier { py, _lock };
     }
     panic!(
-        "no python with goofi + numpy found (checked $GOOFI_SUBPROC_TEST_PYTHON, ./{}, python3, \
+        "no python with goofi + numpy found (checked $GOOFI_SUBPROC_TEST_PYTHON, {}, python3, \
          python). Run `cargo run -p goofi-init`, which creates the venvs and installs the goofi \
          wheel into them.",
-        goofi_init::GIL_VENV
+        goofi_supervisor::layout::runtime().python_gil().display()
     );
 }
 
@@ -1066,10 +1064,10 @@ fn find_python() -> Option<String> {
     static FOUND: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     FOUND
         .get_or_init(|| {
-            let venv = goofi_init::repo_root().join(goofi_init::GIL_VENV);
+            let venv = goofi_supervisor::layout::runtime().python_gil();
             let cands = std::env::var("GOOFI_SUBPROC_TEST_PYTHON")
                 .into_iter()
-                .chain(goofi_init::venv_python(&venv).map(|p| p.to_string_lossy().into_owned()))
+                .chain(goofi_supervisor::layout::venv_python(&venv).map(|p| p.to_string_lossy().into_owned()))
                 .chain(["python3".to_string(), "python".to_string()]);
             cands.into_iter().find(|py| {
                 std::process::Command::new(py)

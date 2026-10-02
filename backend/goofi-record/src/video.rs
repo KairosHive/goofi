@@ -43,7 +43,7 @@ pub struct FfmpegEncoders;
 
 impl Encoders for FfmpegEncoders {
     fn probe(&self) -> Result<(), String> {
-        goofi_supervisor::child::output("ffmpeg probe", Command::new("ffmpeg").arg("-version"), Duration::from_secs(10))
+        goofi_supervisor::child::output("ffmpeg probe", ffmpeg_bare().arg("-version"), Duration::from_secs(10))
             .map_err(|_| MISSING.to_string())
             .and_then(|out| if out.status.success() { Ok(()) } else { Err(MISSING.to_string()) })
     }
@@ -175,8 +175,13 @@ impl Preset {
     }
 }
 
+/// The `ffmpeg` the layout names, with no arguments yet.
+fn ffmpeg_bare() -> Command {
+    Command::new(goofi_supervisor::layout::runtime().tool(goofi_supervisor::layout::Tool::Ffmpeg))
+}
+
 fn ffmpeg() -> Command {
-    let mut command = Command::new("ffmpeg");
+    let mut command = ffmpeg_bare();
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

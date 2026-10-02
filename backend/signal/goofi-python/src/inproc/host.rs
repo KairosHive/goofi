@@ -1,3 +1,4 @@
+use goofi_supervisor::layout;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -104,17 +105,27 @@ fn watched<R>(f: impl FnOnce(Python<'_>) -> R) -> (R, bool) {
     })
 }
 
-/// Path to the free-threaded interpreter. `PYO3_PYTHON` comes first because, embedded,
-/// `sys.executable` is the host binary rather than a python.
+/// The free-threaded interpreter in the layout's runtime, the one this binary was linked against.
+/// Never `sys.executable`: embedded, that is the host binary rather than a python.
 pub fn interpreter_path() -> Option<String> {
-    if let Some(p) = option_env!("PYO3_PYTHON") {
-        if !p.is_empty() {
-            return Some(p.to_string());
+    layout::venv_python(&layout::runtime().python_ft()).map(|p| p.display().to_string())
+}
+
+/// Hand the EMBEDDED interpreter its venv, before any use of it: pyo3 links `libpython` from
+/// that venv's BASE install, which is told by `PYTHONHOME`, and the venv's own site-packages is
+/// on no search path. An existing value of either is the documented override.
+pub fn configure_embedded() {
+    let venv = layout::runtime().python_ft();
+    if std::env::var_os("PYTHONHOME").is_none() {
+        if let Some(home) = layout::venv_prefix(&venv) {
+            std::env::set_var("PYTHONHOME", home);
         }
     }
-    attach(|py| {
-        PyModule::import(py, "sys").ok()?.getattr("executable").ok()?.extract::<String>().ok()
-    })
+    if std::env::var_os("PYTHONPATH").is_none() {
+        if let Some(site) = layout::site_packages(&venv) {
+            std::env::set_var("PYTHONPATH", site);
+        }
+    }
 }
 
 impl Drop for PyNode {

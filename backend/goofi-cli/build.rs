@@ -25,7 +25,8 @@ fn require_python_env() {
 /// Stage the interpreter's `python*.dll` beside the executable: Windows' loader searches there and
 /// never a uv-managed venv. A no-op on unix, which has no such DLL.
 fn copy_interpreter_dlls(py: &Path) {
-    let (Some(base), Some(out)) = (goofi_init::base_prefix(py), std::env::var_os("OUT_DIR")) else { return };
+    let venv = py.parent().and_then(Path::parent);
+    let (Some(base), Some(out)) = (venv.and_then(goofi_supervisor::layout::venv_prefix), std::env::var_os("OUT_DIR")) else { return };
     // OUT_DIR is `<target>/<profile>/build/<pkg>-<hash>/out`; three levels up is `<target>/<profile>`.
     let Some(profile_dir) = Path::new(&out).ancestors().nth(3) else { return };
     let Ok(entries) = std::fs::read_dir(&base) else { return };

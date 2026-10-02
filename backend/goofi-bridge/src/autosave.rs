@@ -155,9 +155,9 @@ fn tick(state: &AppState, last: &mut Option<Stamp>) {
         return;
     }
     let at = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
-    // `system` names the GOOFI_HOME this session ran under: a crash is recovered by THAT home's
+    // `goofi_home` names the `.goofi` this session ran under: a crash is recovered by THAT home's
     // next boot, and a boot under another leaves it be.
-    let sidecar = json!({ "home": state.save_path(), "at": at, "system": system() });
+    let sidecar = json!({ "home": state.save_path(), "at": at, "goofi_home": goofi_home() });
     let written = archive::write_manifest(&dir, &manifest)
         .and_then(|()| std::fs::write(dir.join(SIDECAR), sidecar.to_string()).map_err(|e| e.to_string()));
     if let Err(e) = written {
@@ -213,9 +213,9 @@ fn move_tree(from: &Path, to: &Path) -> Result<(), String> {
     std::fs::remove_dir_all(from).map_err(|e| format!("{}: {e}", from.display()))
 }
 
-/// This process's `GOOFI_HOME` system directory, as the sidecar spells it.
-fn system() -> String {
-    goofi_core::path::to_slash(&goofi_supervisor::home::system())
+/// This process's `.goofi`, as the sidecar spells it.
+fn goofi_home() -> String {
+    goofi_core::path::to_slash(&goofi_supervisor::layout::home())
 }
 
 /// The boot pass over the workspaces: a dead session's directory that carries an autosave is
@@ -224,14 +224,14 @@ fn system() -> String {
 /// is left for that home's boot. Answers how many went either way.
 pub fn sweep_dead() -> usize {
     let mut swept = 0;
-    let own = system();
+    let own = goofi_home();
     for (id, dir) in nonces(&goofi_supervisor::session::workspaces_base(), |id| !goofi_supervisor::session::alive(id)) {
         let Some(nonce) = dir.file_name() else { continue };
         let done = if archive::has_manifest(&dir) {
-            if sidecar(&dir)["system"] != own {
+            if sidecar(&dir)["goofi_home"] != own {
                 continue;
             }
-            move_tree(&dir, &goofi_supervisor::session::recovery_base().join(&id).join(nonce)).is_ok()
+            move_tree(&dir, &goofi_supervisor::layout::recovery().join(&id).join(nonce)).is_ok()
         } else {
             std::fs::remove_dir_all(&dir).is_ok()
         };
@@ -243,7 +243,7 @@ pub fn sweep_dead() -> usize {
 
 /// Every recovery on this machine, oldest session first.
 pub fn recoverable() -> Vec<Value> {
-    nonces(&goofi_supervisor::session::recovery_base(), |_| true)
+    nonces(&goofi_supervisor::layout::recovery(), |_| true)
         .into_iter()
         .filter(|(_, dir)| archive::has_manifest(dir))
         .map(|(_, dir)| entry(&dir))
@@ -254,7 +254,7 @@ pub fn recoverable() -> Vec<Value> {
 /// autosave in it. Anything else is refused — this is the one path an op removes wholesale.
 pub fn recovery(workspace: &str) -> Result<PathBuf, String> {
     let dir = PathBuf::from(crate::fsbrowse::resolve(workspace));
-    let base = goofi_core::path::canonical(&goofi_supervisor::session::recovery_base()).map_err(|e| e.to_string())?;
+    let base = goofi_core::path::canonical(&goofi_supervisor::layout::recovery()).map_err(|e| e.to_string())?;
     let under = dir.parent().and_then(Path::parent) == Some(base.as_path());
     if !under {
         return Err(format!("{workspace}: not a recovery goofi keeps"));

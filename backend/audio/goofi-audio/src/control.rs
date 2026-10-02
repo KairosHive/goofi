@@ -672,7 +672,7 @@ fn source_path(name: &str) -> PathBuf {
     if rooted(Path::new(&name)) {
         PathBuf::from(name)
     } else {
-        goofi_supervisor::home::recordings().join(name)
+        goofi_supervisor::layout::recordings().join(name)
     }
 }
 

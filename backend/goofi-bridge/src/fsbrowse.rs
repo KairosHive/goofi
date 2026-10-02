@@ -44,16 +44,17 @@ pub fn remember(patch: &str) {
     let Some(dir) = Path::new(patch).parent().map(display) else { return };
     let mut kept = vec![dir.clone()];
     kept.extend(recent().into_iter().filter(|d| *d != dir).take(RECENT - 1));
-    let at = goofi_supervisor::home::recent_folders();
+    let runtime = goofi_supervisor::layout::runtime();
+    let at = runtime.recent_folders();
     let part = at.with_extension(format!("{}.part", goofi_supervisor::session::tag()));
-    let _ = std::fs::create_dir_all(goofi_supervisor::home::system())
+    let _ = std::fs::create_dir_all(runtime.state())
         .and_then(|()| std::fs::write(&part, kept.join("\n")))
         .and_then(|()| std::fs::rename(&part, &at));
 }
 
 /// The recent folders, newest first, as stored; one gone from disk stays until pushed out.
 fn recent() -> Vec<String> {
-    let text = std::fs::read_to_string(goofi_supervisor::home::recent_folders()).unwrap_or_default();
+    let text = std::fs::read_to_string(goofi_supervisor::layout::runtime().recent_folders()).unwrap_or_default();
     text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect()
 }
 

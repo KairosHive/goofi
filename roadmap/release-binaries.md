@@ -2,7 +2,7 @@
 
 Native installers for Linux x86_64, Windows x86_64 and macOS arm64, built by GitHub Actions on
 a version tag. An installed goofi runs with no prerequisite on the machine and still compiles
-Rust nodes written at run time. Laid out 2026-10-02; nothing below is built yet.
+Rust nodes written at run time. Laid out 2026-10-02.
 
 ## Decisions
 
@@ -12,8 +12,7 @@ Rust nodes written at run time. Laid out 2026-10-02; nothing below is built yet.
    beside the shell as the backend and as the CLI. No headless release.
 2. **Two directories, never the install directory.** The program directory (per-user Programs
    on Windows, `/Applications/goofi.app`, `/opt/goofi`) is immutable; only the installer and the
-   updater write it. The runtime directory (`%LOCALAPPDATA%\goofi\runtime`,
-   `~/Library/Application Support/goofi/runtime`, `~/.local/share/goofi/runtime`) is curated by
+   updater write it. The runtime directory (`goofi_supervisor::layout::runtime`) is curated by
    goofi, one `<version>/` at a time: Rust toolchain, zig, uv, node, ffmpeg, the Python
    installs and venvs, libpython, the vendored SDK crates, the node build target. `~/.goofi`
    keeps only user files: patches, recordings, custom nodes, plugins, config.
@@ -77,39 +76,20 @@ Rust nodes written at run time. Laid out 2026-10-02; nothing below is built yet.
 - Whether provisioning downloads the tools or the installer carries them (download keeps the
   installers small; carrying them makes the first launch work offline).
 
-## Layout (agreed 2026-10-02)
+## Layout still to fill
 
-`goofi_supervisor::layout` replaces the `home` module. Three roots, each an OS convention with
-one scoping override read per call:
-
-| root | default | override | holds |
-|---|---|---|---|
-| home | `~/.goofi` | `GOOFI_HOME` (parent of `.goofi`) | custom nodes, recordings, plugins, plugin data, config, recovery |
-| runtime | `%LOCALAPPDATA%\goofi`, `~/Library/Application Support/goofi`, `$XDG_DATA_HOME/goofi` | `GOOFI_RUNTIME` (replaces `GOOFI_BUILD_DIR`) | below |
-| session | `/tmp/goofi-system`, `C:\Temp\goofi-system` | none | unchanged |
-
-`runtime/<version>/` is bound to one goofi version and removed whole after an update: `tools/`
-(rust, zig, uv, node, ffmpeg), `python/` (the ft and gil venvs), `lib/` (libpython), `vendor/`,
-`build/` (crates, target, out, probes, vst3, plugin caches), `shipped/`. `runtime/cache/` is
-shared across versions: uv cache, Python installs, cargo registry. `runtime/state/` survives an
-update: recent folders, the update-check stamp. `~/.goofi/system` disappears.
-
-`layout.tool(Tool::Cargo)` returns the bundled path under `tools/` when present, else the PATH
-lookup. That rule is the whole difference between the source checkout and an installed goofi:
-the checkout's tools come from PATH and `goofi-init` fills its runtime from the developer's uv,
-exactly as the provisioner will. The venvs leave the repo root; `PYO3_PYTHON` serves the link
-step only, and goofi sets the interpreter and `PYTHONHOME` for its own process from the layout.
-Shipped content stays embedded, so the program directory is not a root the core needs.
+`layout::Runtime` names `tools/` (one directory per bundled program; `Runtime::tool` falls back
+to PATH while it is empty) and `cache/` (uv cache, Python installs, cargo registry), but nothing
+writes either yet; `lib/` (libpython) and `vendor/` (the SDK crates) are added with the step
+that fills them. The venvs are made by the developer's uv from PATH until the provisioner exists.
 
 ## Remaining work
 
-1. Layout: the module above; move the venvs, build base and shipped tree into the runtime;
-   Python self-configuration; tool lookup; the `GOOFI_RUNTIME` rename in tests, CI and e2e.
-2. Provisioning: move venv, wheel and requirements logic from `goofi-init` into a
+1. Provisioning: move venv, wheel and requirements logic from `goofi-init` into a
    `goofi-provision` crate the binary uses, driven by a pinned manifest; `goofi-init` keeps the
    development-only parts (system package checks, cargo config, target cleanup).
-3. `goofi-build`: toolchain, linker, vendor source and `--offline` from the layout.
-4. Audio: drop the pipewire and realtime-dbus features; confirm JACK loads at run time.
-5. Electron shell under `frontend/electron` with electron-builder config and the updater; the
+2. `goofi-build`: toolchain, linker, vendor source and `--offline` from the layout.
+3. Audio: drop the pipewire and realtime-dbus features; confirm JACK loads at run time.
+4. Electron shell under `frontend/electron` with electron-builder config and the updater; the
    CLI's `goofi update`; the start-up check.
-6. CI: wheel build, vendoring, tool manifest, Electron build, smoke test, release job.
+5. CI: wheel build, vendoring, tool manifest, Electron build, smoke test, release job.

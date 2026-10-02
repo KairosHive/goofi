@@ -837,7 +837,7 @@ fn a_refusal_names_what_the_caller_could_try_instead() {
     let home = g.call("variable list", j!({}))["variables"].as_array().unwrap().iter()
         .find(|e| e["name"] == "system.goofi_home").cloned().expect("goofi_home is seeded");
     assert_eq!((&home["lock"]["value"], &home["type"]), (&j!(true), &j!("string")), "{home}");
-    assert_eq!(home["value"], j!(goofi_core::path::to_slash(&goofi_supervisor::home::dir())));
+    assert_eq!(home["value"], j!(goofi_core::path::to_slash(&goofi_supervisor::layout::home())));
     let why = g.refuse("variable entry edit", j!({ "name": "system.goofi_home", "value": "/tmp/elsewhere" }));
     assert!(why.contains("read-only"), "{why}");
     let why = g.refuse("variable entry remove", j!({ "name": "system.goofi_home" }));

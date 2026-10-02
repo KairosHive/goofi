@@ -277,7 +277,7 @@ fn scan_bundle(engine: &mut AudioEngine, bundle: &Path) -> Vec<ScannedType> {
 /// The scanner's verdict for this binary, from the cache keyed by its stamp and the scanner's, or
 /// from a child. A refusal is cached too, so a plugin that crashes the scanner costs one child.
 fn described(scanner: &Path, bundle: &Path, binary: &Path, stamp: Stamp) -> Result<Bundle, String> {
-    let dir = goofi_build::base_dir(&goofi_supervisor::home::dir()).join("vst3");
+    let dir = goofi_supervisor::layout::runtime().build().join("vst3");
     let key = key_of(binary, stamp);
     let file = dir.join(format!("{key}.json"));
     let read = std::fs::read(&file).ok();

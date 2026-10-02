@@ -184,7 +184,7 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     assert_eq!(reborn["source"]["reference"], "level.out", "…and what it follows: {reborn}");
     let held = g.call("variable list", j!({}))["variables"].as_array().unwrap().iter()
         .find(|e| e["name"] == "system.goofi_home").cloned().unwrap();
-    assert_eq!(held["value"], j!(goofi_core::path::to_slash(&goofi_supervisor::home::dir())));
+    assert_eq!(held["value"], j!(goofi_core::path::to_slash(&goofi_supervisor::layout::home())));
 
     let snap = ev.next("graph_replaced");
     assert_eq!(snap["runtime"][hex(late)]["stage"], "creating",
@@ -544,7 +544,7 @@ fn crashed_copy(dir: &std::path::Path) -> (String, String) {
         }
     }
     copy(dir, &dead);
-    let kept = goofi_supervisor::session::recovery_base().join(&id).join(dir.file_name().unwrap());
+    let kept = goofi_supervisor::layout::recovery().join(&id).join(dir.file_name().unwrap());
     (goofi_core::path::to_slash(&dead), goofi_core::path::to_slash(&kept))
 }
 
@@ -586,7 +586,7 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
     let (foreign, elsewhere) = crashed_copy(&dir);
     let sidecar = std::path::Path::new(&foreign).join("autosave.json");
     std::fs::write(&sidecar, std::fs::read_to_string(&sidecar).unwrap().replace(
-        &goofi_core::path::to_slash(&goofi_supervisor::home::system()), "/somewhere/else/.goofi/system")).unwrap();
+        &goofi_core::path::to_slash(&goofi_supervisor::layout::home()), "/somewhere/else/.goofi")).unwrap();
     assert!(g.call("session recoverable", j!({}))["recoveries"].as_array().unwrap().is_empty());
     let opened = Goofi::new();
     assert!(!std::path::Path::new(&left).exists(), "the boot moved it out of temp");

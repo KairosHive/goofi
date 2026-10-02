@@ -95,6 +95,9 @@ before the first production deployment.
 - Tests must not open audio hardware or native windows. Use the test clocks and hosts.
 - A test asserts the state reached, never how fast: no rate floors, duration ratios, latency
   ceilings or sleeps as synchronization. Poll against the harness `WAIT`. No test simulates load.
+- `goofi_supervisor::layout` is the one owner of where files live: the home (`~/.goofi`, what the
+  user keeps), the runtime (what goofi curates for itself, bound to one version, with the tools it
+  runs) and the session (ephemeral). Nothing else reads a path or tool from the environment.
 - `goofi-init` also removes build artifacts under `target/` untouched for three days, so a moved
   hash does not leave its output behind for good.
 - `plugins/` holds the plugins goofi ships as source; `sdk/README.md` is the plugin interface.

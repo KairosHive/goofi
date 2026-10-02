@@ -117,10 +117,10 @@ fn note(message: &str) {
 
 /// A folder as the screen names it: under `.goofi` by its path from there, else from `~`.
 fn shown(path: &Path) -> String {
-    if path.starts_with(goofi_supervisor::home::system().join("shipped")) {
+    if path.starts_with(goofi_supervisor::layout::runtime().shipped()) {
         return format!("shipped/{}", path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default());
     }
-    if let Ok(rest) = path.strip_prefix(goofi_supervisor::home::dir()) {
+    if let Ok(rest) = path.strip_prefix(goofi_supervisor::layout::home()) {
         return format!(".goofi/{}", rest.display());
     }
     match std::env::home_dir().and_then(|h| path.strip_prefix(h).ok().map(|r| r.to_path_buf())) {

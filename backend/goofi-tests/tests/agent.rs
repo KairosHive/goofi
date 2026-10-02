@@ -35,7 +35,7 @@ async fn start_server() -> (Goofi, String, AppState) {
     // fixture minted — never advertised, exactly as a user's own test entry would be.
     static CONFIG: std::sync::Once = std::sync::Once::new();
     CONFIG.call_once(|| {
-        let at = goofi_supervisor::home::config_file();
+        let at = goofi_supervisor::layout::config_file();
         let _ = std::fs::create_dir_all(at.parent().unwrap());
         let config = concat!(
             // An entry needing shell SYNTAX states `sh -c` itself, because the launcher shell is
