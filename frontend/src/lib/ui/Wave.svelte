@@ -12,12 +12,10 @@
 		halted?: boolean;
 	} = $props();
 
-	/** The share of the strip's length the run takes, so it never reaches the edges. */
-	const FILL = 0.9;
 	let el = $state<HTMLSpanElement | null>(null);
 	let count = $state(4);
 
-	// As many dots as fit in nine tenths of the strip, re-counted whenever the strip resizes.
+	// As many dots as fit in the strip, re-counted whenever the strip resizes.
 	$effect(() => {
 		if (!el) return;
 		const host = el;
@@ -27,7 +25,7 @@
 			const length = column ? host.clientHeight : host.clientWidth;
 			const gap = parseFloat(column ? cs.rowGap : cs.columnGap) || 0;
 			const dot = host.firstElementChild?.clientWidth || 8;
-			count = Math.max(1, Math.floor((length * FILL + gap) / (dot + gap)));
+			count = Math.max(1, Math.floor((length + gap) / (dot + gap)));
 		};
 		const ro = new ResizeObserver(fit);
 		ro.observe(host);
@@ -67,6 +65,8 @@
 	.ui-wave.halted i {
 		animation: none;
 		background: var(--danger);
+		scale: var(--k);
+		opacity: var(--k);
 	}
 	@keyframes ui-wave {
 		0%,
