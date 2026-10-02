@@ -43,7 +43,7 @@ test('a node dropped on a cable row names that cable as its device', async ({ pa
 		await expect(row).toHaveClass(/target/);
 		await page.mouse.up();
 		await expect.poll(async () => (await backendDoc(page)).nodes[out].params.audio.device.value)
-			.toBe(`PipeWire: ${cable}`);
+			.toBe(`PulseAudio: ${cable}`);
 		// The drop landed on the row, so the node never moved on the canvas.
 		expect((await header.boundingBox())!.x).toBeCloseTo(from.x, 0);
 

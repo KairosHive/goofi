@@ -221,7 +221,9 @@ recording IDs or portable paths in saved node parameters. No resource-provider A
 
 `plugins/` at the repository root holds plugins goofi ships as source. Install one by copying or
 linking its folder into `.goofi/plugins/`. `plugins/virtual-cables` creates PipeWire virtual audio
-devices on Linux and points AudioIn and AudioOut nodes at them by drag and drop.
+devices on Linux and points AudioIn and AudioOut nodes at them by drag and drop. `plugins/latency`
+times two nodes dropped on its panel: a recording of both outputs, with a CSV beside it that holds
+the milliseconds from the latest source tick to each target tick.
 
 ## Validation
 

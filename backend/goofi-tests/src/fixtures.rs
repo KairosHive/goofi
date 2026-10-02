@@ -600,6 +600,11 @@ pub fn virtual_cables(home: &std::path::Path) {
     install_plugin(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/virtual-cables"), home, "virtual-cables");
 }
 
+/// The shipped latency plugin, from `plugins/` at the repository root, into `home`.
+pub fn latency(home: &std::path::Path) {
+    install_plugin(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/latency"), home, "latency");
+}
+
 fn install_plugin(from: &std::path::Path, home: &std::path::Path, id: &str) {
     fn copy(from: &std::path::Path, to: &std::path::Path) {
         std::fs::create_dir_all(to).unwrap();

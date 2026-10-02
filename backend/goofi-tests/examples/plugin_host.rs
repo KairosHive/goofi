@@ -7,6 +7,7 @@ async fn main() {
     let home = tempfile::tempdir().unwrap();
     goofi_tests::fixtures::plugin_package(home.path());
     goofi_tests::fixtures::virtual_cables(home.path());
+    goofi_tests::fixtures::latency(home.path());
     let goofi = Goofi::with_plugins(home.path());
     let port = std::env::var("GOOFI_PLUGIN_TEST_PORT").unwrap_or_else(|_| "8599".into());
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))

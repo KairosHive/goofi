@@ -5,7 +5,7 @@ import { WAIT } from './playwright.config';
 const port = Number(process.env.GOOFI_PLUGIN_TEST_PORT ?? 8599);
 export default defineConfig({
 	testDir: './plugin-tests',
-	testMatch: ['session.spec.ts', 'cables.spec.ts'],
+	testMatch: ['session.spec.ts', 'cables.spec.ts', 'latency.spec.ts'],
 	workers: 1,
 	timeout: 5 * WAIT,
 	expect: { timeout: WAIT, toPass: { timeout: WAIT } },

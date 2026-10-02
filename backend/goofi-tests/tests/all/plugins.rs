@@ -240,3 +240,68 @@ fn a_virtual_cable_is_a_device_the_audio_nodes_can_name() {
     assert_eq!(goofi.call("plugin virtual-cables list", j!({}))["cables"], j!([]));
     assert!(goofi.refuse("plugin virtual-cables route", j!({"node": hex(inn), "cable": cable})).contains("no cable"));
 }
+
+#[test]
+fn the_latency_plugin_times_every_tick_from_one_node_to_the_next() {
+    let _python = require_python();
+    let home = tempfile::tempdir().unwrap();
+    goofi_tests::fixtures::plugin_package(home.path());
+    goofi_tests::fixtures::latency(home.path());
+    let goofi = Goofi::with_plugins(home.path());
+    let listing = goofi.call("plugin list", j!({}));
+    assert!(
+        listing["plugins"].as_array().unwrap().iter().all(|p| p["error"].is_null()),
+        "{listing}; {:?}",
+        goofi.call("log list", j!({}))
+    );
+    goofi.call("library refresh", j!({}));
+    let number = goofi.call("node add", j!({"type": "signal:PluginNumber"}))["uid"].as_str().unwrap().to_string();
+    let echo = goofi.call("node add", j!({"type": "signal:PluginEcho"}))["uid"].as_str().unwrap().to_string();
+    goofi.call("link add", j!({"from": format!("{number}/out"), "to": format!("{echo}/input")}));
+    let output = goofi.probe(goofi_tests::Uid::from_hex(&echo).unwrap(), "out");
+    goofi.until("the echo runs", |_| output.latest());
+    assert_eq!(goofi.call("plugin latency status", j!({}))["running"], false);
+
+    // A run arms both outputs and records them; the first output is the one timed.
+    let started = goofi.call("plugin latency start", j!({"source": number, "target": echo}));
+    assert_eq!(started["running"], true, "{started}");
+    assert_eq!(started["source"]["slot"], "out");
+    assert_eq!(started["target"]["slot"], "out");
+    assert!(goofi.refuse("plugin latency start", j!({"source": number, "target": echo})).contains("in progress"));
+    assert_eq!(goofi.call("record status", j!({}))["running"], true);
+    goofi.until("five ticks paired", |g| {
+        let s = g.call("plugin latency status", j!({}));
+        assert!(s["error"].is_null(), "{s}");
+        (s["ticks"].as_u64().unwrap_or(0) >= 5).then_some(())
+    });
+
+    // The stop pairs the last ticks, and the CSV holds one line per target tick.
+    let stopped = goofi.call("plugin latency stop", j!({}));
+    assert_eq!(stopped["running"], false);
+    assert!(stopped["error"].is_null(), "{stopped}");
+    let ticks = stopped["ticks"].as_u64().unwrap();
+    assert!(ticks >= 5, "{stopped}");
+    let csv = std::fs::read_to_string(stopped["csv"].as_str().unwrap()).unwrap();
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines[0], "target_time,target_index,source_time,source_index,latency_ms");
+    assert_eq!(lines.len() as u64 - 1, ticks);
+    let mut last_index = -1i64;
+    for line in &lines[1..] {
+        let cols: Vec<&str> = line.split(',').collect();
+        assert_eq!(cols.len(), 5, "{line}");
+        let target: f64 = cols[0].parse().unwrap();
+        let index: i64 = cols[1].parse().unwrap();
+        let source: f64 = cols[2].parse().unwrap();
+        let ms: f64 = cols[4].parse().unwrap();
+        assert!(source <= target && ms >= 0.0, "a target tick follows its source tick: {line}");
+        assert!(index > last_index, "target ticks in order: {line}");
+        last_index = index;
+    }
+    assert_eq!(goofi.call("plugin latency status", j!({}))["ticks"], ticks, "the summary stays readable");
+    assert_eq!(goofi.call("record status", j!({}))["running"], false);
+    let doc = goofi.doc();
+    for uid in [&number, &echo] {
+        assert!(doc["nodes"][uid].get("record").is_none(), "the run's arms are gone: {}", doc["nodes"][uid]);
+    }
+    assert!(goofi.refuse("plugin latency stop", j!({})).contains("no latency run"));
+}
