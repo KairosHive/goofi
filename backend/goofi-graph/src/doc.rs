@@ -13,7 +13,7 @@ use ts_rs::TS;
 use crate::{Mode, SourceState};
 
 /// The `.gfi` version this build writes and reads.
-pub const MANIFEST_VERSION: i64 = 2;
+pub const MANIFEST_VERSION: i64 = 1;
 
 /// One patch's worth of nodes, links, variables and chrome. A fragment is one with no variables
 /// and no arrangement; the archive body is one with both.
