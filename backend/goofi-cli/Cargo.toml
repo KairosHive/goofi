@@ -38,8 +38,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 # cannot provision, because cargo reads that config once, at startup. Build a pure-native binary
 # (no Python, no interpreter needed) with `--no-default-features`.
 goofi-python = { path = "../signal/goofi-python", optional = true }
-# The requirements check, shared with `cargo run -p goofi-init` so the binary and that command
-# agree on what a bundle needs.
+# The runtime's provisioning: a distribution build fills it at start, and every build checks
+# the bundles' requirements with it.
+goofi-provision = { path = "../goofi-provision" }
+# The one line that says how a development build is provisioned.
 goofi-init = { path = "../goofi-init" }
 
 # The build script asks goofi-init which interpreter cargo resolved, so the build demands exactly

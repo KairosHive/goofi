@@ -1,18 +1,13 @@
-//! Setting up the Python goofi runs its nodes on, and the frontend's dependencies — the ONE place
-//! that does it. It must not depend on pyo3, or it triggers the build it configures.
+//! `cargo run -p goofi-init`: what a development checkout needs beyond the runtime the provisioner
+//! fills — the system libraries, the goofi wheel built from source, the cargo config pointing
+//! pyo3 at the interpreter, the frontend's dependencies. It must not depend on pyo3.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::process::Command;
 
+use goofi_provision::{answers, query, run, uv};
 use goofi_supervisor::layout::{self, Tool};
-
-/// The subprocess tier's interpreter. Pinned *non*-free-threaded on purpose: that tier exists
-/// precisely for packages that are not free-threading-safe.
-const GIL_PYTHON: &str = "3.12";
-
-/// The free-threaded interpreter pyo3 LINKS against, and which the introspection probe runs on.
-const FT_PYTHON: &str = "3.14t";
 
 /// The repo root. Nothing is resolved, so a checkout reached through a symlink stays spelled the
 /// way the caller reached it.
@@ -39,19 +34,20 @@ pub const RUN_ME: &str = "run `cargo run -p goofi-init` first — it provisions 
 
 /// Provision everything, from nothing, idempotently.
 pub fn init(root: &Path) -> Result<(), String> {
-    require_uv()?;
+    let runtime = layout::runtime();
+    require_uv(&runtime)?;
 
     // Both tools asked for BEFORE either is used, so a long provision cannot stop for want of npm.
     let frontend = root.join("frontend");
     let needs_npm = frontend.join("package.json").is_file();
     if needs_npm {
-        require_npm()?;
+        require_npm(&runtime)?;
     }
     require_audio_libs()?;
 
-    let runtime = layout::runtime();
-    let ft = ensure_venv(&runtime.python_ft(), FT_PYTHON)?;
-    let gil = ensure_venv(&runtime.python_gil(), GIL_PYTHON)?;
+    let pins = &goofi_provision::manifest().python;
+    let ft = goofi_provision::ensure_venv(&runtime, &runtime.python_ft(), &pins.ft)?;
+    let gil = goofi_provision::ensure_venv(&runtime, &runtime.python_gil(), &pins.gil)?;
 
     // The config BEFORE the wheels, so a failed wheel build still leaves a config a re-run can use.
     write_config(root, &ft)?;
@@ -59,12 +55,15 @@ pub fn init(root: &Path) -> Result<(), String> {
     // The bundles' packages every time, never gated on presence: a bundle added since the last
     // run names new ones, and uv answers a satisfied list in milliseconds.
     let dirs = bundle_dirs(root);
-    let (shared, gil_only) = requirement_sets(&dirs);
-    for (venv, py, reqs) in [("ft", &ft, &shared), ("gil", &gil, &gil_only)] {
-        install_wheel(root, venv, py)?;
+    let (shared, gil_only) = goofi_provision::requirement_sets(&dirs);
+    for (label, py, reqs) in [("ft", &ft, &shared), ("gil", &gil, &gil_only)] {
+        if !goofi_provision::has_goofi(py) {
+            let wheels = build_wheel(root, &runtime, label, py)?;
+            goofi_provision::ensure_wheels(&runtime, py, &wheels)?;
+        }
         if !reqs.is_empty() {
-            println!("  installing the bundles' packages into {venv}");
-            install_packages(py, reqs)?;
+            println!("  installing the bundles' packages into {label}");
+            goofi_provision::install_packages(&runtime, py, reqs)?;
         }
     }
 
@@ -72,7 +71,7 @@ pub fn init(root: &Path) -> Result<(), String> {
     // resolve step and a presence check would sail past a new dependency.
     if needs_npm {
         println!("  installing the frontend's dependencies");
-        run(npm(["install"]).current_dir(&frontend), "install the frontend's dependencies")?;
+        run(runtime.command(Tool::Npm).arg("install").current_dir(&frontend), "install the frontend's dependencies")?;
     }
     let (entries, bytes) = sweep_target(&root.join("target"), STALE_AFTER);
     if entries > 0 {
@@ -122,19 +121,8 @@ fn size_of(path: &Path) -> u64 {
     }
 }
 
-fn npm<'a>(args: impl IntoIterator<Item = &'a str>) -> Command {
-    let mut cmd = Command::new(layout::runtime().tool(Tool::Npm));
-    cmd.args(args);
-    cmd
-}
-
-/// Whether `cmd` runs and succeeds, with its output discarded.
-fn answers(cmd: &mut Command) -> bool {
-    cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
-}
-
-fn require_npm() -> Result<(), String> {
-    answers(&mut npm(["--version"])).then_some(()).ok_or_else(|| {
+fn require_npm(runtime: &layout::Runtime) -> Result<(), String> {
+    answers(runtime.command(Tool::Npm).arg("--version")).then_some(()).ok_or_else(|| {
         "goofi needs a working `npm` on PATH — the app is compiled into the binary, so building it \
          is part of building goofi. Install Node.js from https://nodejs.org and re-run."
             .to_string()
@@ -203,36 +191,23 @@ fn require_audio_libs() -> Result<(), String> {
     Ok(())
 }
 
-fn require_uv() -> Result<(), String> {
-    answers(&mut uv(["--version"])).then_some(()).ok_or_else(|| {
+fn require_uv(runtime: &layout::Runtime) -> Result<(), String> {
+    answers(&mut uv(runtime, ["--version"])).then_some(()).ok_or_else(|| {
         "goofi needs a working `uv` on PATH — it owns the Python interpreters the node tiers run \
          on. Install it from https://docs.astral.sh/uv/ and re-run."
             .to_string()
     })
 }
 
-fn ensure_venv(venv: &Path, python: &str) -> Result<PathBuf, String> {
-    if let Some(py) = layout::venv_python(venv) {
-        return Ok(py);
-    }
-    println!("  creating {} (python {python})", venv.display());
-    run(uv(["venv", "--python", python]).arg(venv), &format!("create {}", venv.display()))?;
-    layout::venv_python(venv).ok_or_else(|| format!("`uv venv` left no interpreter in {}", venv.display()))
-}
-
-/// Build the wheel for THIS interpreter and install it, unless a matching one is already there.
-fn install_wheel(root: &Path, venv: &str, py: &Path) -> Result<(), String> {
-    if has_goofi(py) {
-        return Ok(());
-    }
-    println!("  building the goofi wheel for {venv}");
-    // One output directory per venv, emptied first, so the wheel just built is the only file in it.
-    let out = root.join("target").join("wheels").join(venv);
+/// Build the wheel for THIS interpreter into a directory of its own, emptied first, so the wheel
+/// just built is the only file in it. Answers that directory.
+fn build_wheel(root: &Path, runtime: &layout::Runtime, label: &str, py: &Path) -> Result<PathBuf, String> {
+    println!("  building the goofi wheel for {label}");
+    let out = root.join("target").join("wheels").join(label);
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out).map_err(|e| format!("wheel output directory: {e}"))?;
-
     run(
-        uv(["tool", "run", "maturin", "build", "--release", "-i"])
+        uv(runtime, ["tool", "run", "maturin", "build", "--release", "-i"])
             .arg(py)
             .arg("-o")
             .arg(&out)
@@ -243,18 +218,7 @@ fn install_wheel(root: &Path, venv: &str, py: &Path) -> Result<(), String> {
             .current_dir(std::env::temp_dir()),
         "build the goofi wheel",
     )?;
-
-    let wheel = std::fs::read_dir(&out)
-        .map_err(|e| format!("read {}: {e}", out.display()))?
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| p.extension().is_some_and(|x| x == "whl"))
-        .ok_or_else(|| format!("maturin wrote no wheel into {}", out.display()))?;
-
-    run(
-        uv(["pip", "install", "--python"]).arg(py).arg("--force-reinstall").arg(&wheel),
-        "install the goofi wheel",
-    )
+    Ok(out)
 }
 
 /// The bundles this repo ships: every directory under `node-bundles/`, sorted.
@@ -268,67 +232,6 @@ pub fn bundle_dirs(root: &Path) -> Vec<PathBuf> {
         .collect();
     dirs.sort();
     dirs
-}
-
-/// The `requirements.txt` files of `dirs`, asked of both interpreters, and those plus every
-/// `requirements-gil.txt` (no free-threaded wheel), asked of the subprocess interpreter alone.
-pub fn requirement_sets(dirs: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let shared = named_in(dirs, "requirements.txt");
-    let gil = shared.iter().cloned().chain(named_in(dirs, "requirements-gil.txt")).collect();
-    (shared, gil)
-}
-
-fn named_in(dirs: &[PathBuf], file: &str) -> Vec<PathBuf> {
-    dirs.iter().map(|d| d.join(file)).filter(|p| p.is_file()).collect()
-}
-
-fn pip_install(py: &Path, reqs: &[PathBuf], dry_run: bool) -> Result<Command, String> {
-    let mut cmd = uv(["pip", "install", "--python"]);
-    cmd.arg(py);
-    if dry_run {
-        cmd.arg("--dry-run");
-    }
-    for r in reqs {
-        std::fs::read_to_string(r)
-            .map_err(|e| format!("cannot read requirements file {} as UTF-8: {e}", r.display()))?;
-        cmd.arg("-r").arg(r);
-    }
-    Ok(cmd)
-}
-
-fn names(reqs: &[PathBuf]) -> String {
-    reqs.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ")
-}
-
-/// What `py` lacks to satisfy `reqs`, as uv would install it. uv audits site-packages before it
-/// resolves anything, so a satisfied set answers in milliseconds and without the network.
-pub fn missing_packages(py: &Path, reqs: &[PathBuf]) -> Result<Vec<String>, String> {
-    if reqs.is_empty() {
-        return Ok(Vec::new());
-    }
-    let out = pip_install(py, reqs, true)?.output().map_err(|e| format!("could not run uv: {e}"))?;
-    let text = String::from_utf8_lossy(&out.stderr);
-    if !out.status.success() {
-        return Err(format!("uv could not resolve {}: {}", names(reqs), text.trim()));
-    }
-    // ponytail: reads uv's dry-run listing; a `--format json` on `uv pip install` replaces this.
-    Ok(text.lines().filter_map(|l| l.strip_prefix(" + ")).map(str::to_string).collect())
-}
-
-/// Install `reqs` into `py`.
-pub fn install_packages(py: &Path, reqs: &[PathBuf]) -> Result<(), String> {
-    run(&mut pip_install(py, reqs, false)?, &format!("install {}", names(reqs)))
-}
-
-/// Does this interpreter hold THIS goofi? `introspect` separates the Rust wheel from the old Python
-/// package, and the version makes a bump re-provision — an edit that keeps it needs the venv deleted.
-fn has_goofi(py: &Path) -> bool {
-    let probe = format!(
-        "import goofi, importlib.metadata as m; goofi.introspect; \
-         raise SystemExit(0 if m.version('goofi') == '{}' else 1)",
-        env!("CARGO_PKG_VERSION")
-    );
-    answers(Command::new(py).args(["-c", &probe]).env_remove("PYTHONPATH").env_remove("PYTHONHOME"))
 }
 
 /// Point pyo3 at the free-threaded venv, for every cargo command from here on. The link step is
@@ -362,32 +265,9 @@ fn write_config(root: &Path, ft: &Path) -> Result<(), String> {
 
 /// The triple cargo will build for, asked of `rustc` rather than assumed.
 fn host_triple() -> Result<String, String> {
-    let out = Command::new("rustc").arg("-vV").output().map_err(|e| format!("run rustc: {e}"))?;
+    let out = layout::runtime().command(Tool::Rustc).arg("-vV").output().map_err(|e| format!("run rustc: {e}"))?;
     String::from_utf8_lossy(&out.stdout)
         .lines()
         .find_map(|l| l.strip_prefix("host: ").map(str::to_string))
         .ok_or_else(|| "`rustc -vV` reported no host triple".to_string())
-}
-
-fn query(py: &Path, code: &str) -> Option<String> {
-    let out = Command::new(py).args(["-c", code]).env_remove("PYTHONPATH").env_remove("PYTHONHOME").output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-fn uv<'a>(args: impl IntoIterator<Item = &'a str>) -> Command {
-    let mut cmd = Command::new(layout::runtime().tool(Tool::Uv));
-    // Before the subcommand, and before the caller's own arguments: a terminal that forces colour
-    // wraps uv's listing in escapes, and the dry-run parser reads that listing.
-    cmd.arg("--color").arg("never");
-    // uv drives a DIFFERENT interpreter: the caller's stdlib kills it with "SRE module mismatch".
-    cmd.args(args).env_remove("PYTHONHOME").env_remove("PYTHONPATH");
-    cmd
-}
-
-fn run(cmd: &mut Command, what: &str) -> Result<(), String> {
-    match cmd.status() {
-        Ok(s) if s.success() => Ok(()),
-        Ok(s) => Err(format!("could not {what} ({s})")),
-        Err(e) => Err(format!("could not {what}: {e}")),
-    }
 }

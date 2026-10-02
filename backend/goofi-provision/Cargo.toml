@@ -1,0 +1,20 @@
+[package]
+name = "goofi-provision"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# No pyo3, no python: this fills the runtime a Python build links against, so it is built before one.
+[dependencies]
+goofi-supervisor = { path = "../goofi-supervisor" }
+serde = { version = "1", features = ["derive"] }
+# The manifest's format.
+toml = "0.8"
+sha2 = "0.10"
+# The downloads: pure-Rust TLS, so the release binary links no system library for them.
+ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
+# The three archive shapes the tools ship as.
+tar = "0.4"
+flate2 = "1"
+liblzma = { version = "0.4", features = ["static"] }
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }

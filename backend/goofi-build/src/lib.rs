@@ -8,6 +8,7 @@ use std::ffi::{c_char, CStr};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{LazyLock, OnceLock};
+use goofi_supervisor::layout::Tool;
 use goofi_supervisor::sync::Mutex;
 
 use sha2::{Digest, Sha256};
@@ -131,7 +132,7 @@ pub fn ensure(sdk: &Sdk, source: &Path, base: &Path) -> Result<PathBuf, String> 
 }
 
 fn build(sdk: &Sdk, source: &Path, base: &Path, key: &str, artifact: &Path) -> Result<PathBuf, String> {
-    let Some(cargo) = cargo() else {
+    let Some(mut cmd) = cargo() else {
         return Err("needs `cargo` to build — install a Rust toolchain, or use a shipped node".into());
     };
     static BUILDING: Mutex<()> = Mutex::new(());
@@ -145,7 +146,6 @@ fn build(sdk: &Sdk, source: &Path, base: &Path, key: &str, artifact: &Path) -> R
     // target, so a build never reads back what a concurrent process placed there.
     let crate_name = format!("goofi_node_{}_{}", stem_of(source).to_lowercase(), &key[..12]);
     generate(sdk, source, &sdk_root(base), &crate_dir, &crate_name)?;
-    let mut cmd = Command::new(cargo);
     cmd.args(["build", "--release", "--message-format", "short", "--color", "never"]).current_dir(&crate_dir);
     // A nested cargo must not inherit the outer build's own knobs — `OUT_DIR`, encoded rustflags,
     // a target triple — only the jobserver, the home, and the machine's own fetch settings.
@@ -177,9 +177,11 @@ fn build(sdk: &Sdk, source: &Path, base: &Path, key: &str, artifact: &Path) -> R
     Ok(artifact.to_path_buf())
 }
 
-fn cargo() -> Option<PathBuf> {
-    let cargo = goofi_supervisor::layout::runtime().tool(goofi_supervisor::layout::Tool::Cargo);
-    Command::new(&cargo).arg("--version").output().ok().filter(|o| o.status.success()).map(|_| cargo)
+/// The runtime's cargo, when it answers.
+fn cargo() -> Option<Command> {
+    let runtime = goofi_supervisor::layout::runtime();
+    let answers = runtime.command(Tool::Cargo).arg("--version").output().ok().filter(|o| o.status.success());
+    answers.map(|_| runtime.command(Tool::Cargo))
 }
 
 /// The embedded SDK, written out under `base` — each file only when its bytes differ, so an

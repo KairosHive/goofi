@@ -99,6 +99,13 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     }
     let shutdown = watch_shutdown();
     let startup = Startup::begin(env!("CARGO_PKG_VERSION"));
+    if goofi_provision::DIST {
+        report("Preparing goofi's runtime");
+        if let Err(e) = goofi_provision::ensure_runtime(&layout::runtime()) {
+            eprintln!("Could not prepare the runtime: {e}");
+            std::process::exit(1);
+        }
+    }
     report("Checking the Python environment");
     let python = match default_subproc_python() {
         Ok(p) => p,
@@ -612,11 +619,12 @@ fn configure_embedded() {
 fn configure_embedded() {}
 
 /// Every node directory's requirements, checked against their interpreters before the scan imports
-/// anything. A terminal can approve installation; a failed or declined one stops startup.
+/// anything. A distribution installs what its bundles need; a development build asks the terminal,
+/// and a failed or declined install stops startup.
 #[cfg(feature = "python")]
 fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) -> Result<(), String> {
     use std::io::IsTerminal;
-    let (shared, gil_only) = goofi_init::requirement_sets(dirs);
+    let (shared, gil_only) = goofi_provision::requirement_sets(dirs);
     if gil_only.is_empty() {
         return Ok(());
     }
@@ -632,7 +640,7 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) -> Result<(), String>
         }
         let py = py.ok_or_else(|| format!("missing Python environment; {}", goofi_init::RUN_ME))?;
         let shown = py.strip_prefix(runtime.root()).unwrap_or(&py).display().to_string();
-        match goofi_init::missing_packages(&py, reqs) {
+        match goofi_provision::missing_packages(&runtime, &py, reqs) {
             Ok(missing) if missing.is_empty() => {}
             Ok(missing) => {
                 let _ = goofi_supervisor::log::terminal_line(&format!("  {shown} lacks {}", missing.join(", ")));
@@ -648,17 +656,19 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) -> Result<(), String>
     for path in &gil_only {
         let _ = goofi_supervisor::log::terminal_line(&format!("    {}", path.display()));
     }
-    if !std::io::stdin().is_terminal() {
-        return Err(format!("required Python packages are missing and no terminal can approve installation; {}", goofi_init::RUN_ME));
-    }
-    let _ = goofi_supervisor::log::terminal_line("  Install missing packages now? [y/N]");
-    let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer).map_err(|e| format!("could not read installation approval: {e}"))?;
-    if !answer.trim().eq_ignore_ascii_case("y") {
-        return Err(format!("required Python packages were not installed; {}", goofi_init::RUN_ME));
+    if !goofi_provision::DIST {
+        if !std::io::stdin().is_terminal() {
+            return Err(format!("required Python packages are missing and no terminal can approve installation; {}", goofi_init::RUN_ME));
+        }
+        let _ = goofi_supervisor::log::terminal_line("  Install missing packages now? [y/N]");
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer).map_err(|e| format!("could not read installation approval: {e}"))?;
+        if !answer.trim().eq_ignore_ascii_case("y") {
+            return Err(format!("required Python packages were not installed; {}", goofi_init::RUN_ME));
+        }
     }
     for (py, reqs) in lacking {
-        goofi_init::install_packages(&py, &reqs)?;
+        goofi_provision::install_packages(&runtime, &py, &reqs)?;
     }
     Ok(())
 }

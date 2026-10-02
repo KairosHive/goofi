@@ -8,6 +8,7 @@ license.workspace = true
 # buildable before one is. The layout is where it puts what it provisions.
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }
+goofi-provision = { path = "../goofi-provision" }
 
 [[bin]]
 name = "goofi-init"

@@ -76,20 +76,18 @@ Rust nodes written at run time. Laid out 2026-10-02.
 - Whether provisioning downloads the tools or the installer carries them (download keeps the
   installers small; carrying them makes the first launch work offline).
 
-## Layout still to fill
-
-`layout::Runtime` names `tools/` (one directory per bundled program; `Runtime::tool` falls back
-to PATH while it is empty) and `cache/` (uv cache, Python installs, cargo registry), but nothing
-writes either yet; `lib/` (libpython) and `vendor/` (the SDK crates) are added with the step
-that fills them. The venvs are made by the developer's uv from PATH until the provisioner exists.
-
 ## Remaining work
 
-1. Provisioning: move venv, wheel and requirements logic from `goofi-init` into a
-   `goofi-provision` crate the binary uses, driven by a pinned manifest; `goofi-init` keeps the
-   development-only parts (system package checks, cargo config, target cleanup).
-2. `goofi-build`: toolchain, linker, vendor source and `--offline` from the layout.
+1. `goofi-build`: toolchain, linker, vendor source and `--offline` from the layout. The bundled
+   cargo finds rustc through the PATH `Runtime::command` leads with; the linker is still the
+   system's. `lib/` (libpython) and `vendor/` (the SDK crates) are added here. The rust and
+   node downloads unpack docs, headers and corepack nobody runs (about 800 MB on disk): prune
+   at unpack by path.
+2. ffmpeg archives for the manifest: BtbN's LGPL builds cover Linux and Windows; macOS needs an
+   LGPL build from somewhere, or one built on CI. Until then `Tool::Ffmpeg` is PATH's.
 3. Audio: drop the pipewire and realtime-dbus features; confirm JACK loads at run time.
 4. Electron shell under `frontend/electron` with electron-builder config and the updater; the
    CLI's `goofi update`; the start-up check.
-5. CI: wheel build, vendoring, tool manifest, Electron build, smoke test, release job.
+5. CI: build the two wheels and point `GOOFI_DIST` at them for the release binary, vendoring,
+   Electron build, the smoke test (`fetch_tools` example into a clean runtime, hide the host
+   toolchains, boot, build one node per engine), release job.

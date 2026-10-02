@@ -122,22 +122,38 @@ pub fn runtime() -> Runtime {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
     Cargo,
+    Rustc,
+    Zig,
     Uv,
     Npm,
     Ffmpeg,
 }
 
 impl Tool {
-    /// Where the bundled copy sits under `tools/`.
+    /// The directory under `tools/` the program is unpacked into: one per bundled download.
+    pub fn name(self) -> &'static str {
+        match self {
+            Tool::Cargo | Tool::Rustc => "rust",
+            Tool::Zig => "zig",
+            Tool::Uv => "uv",
+            Tool::Npm => "node",
+            Tool::Ffmpeg => "ffmpeg",
+        }
+    }
+
+    /// Where the bundled copy sits under its directory.
     fn bundled(self) -> PathBuf {
         let exe = std::env::consts::EXE_SUFFIX;
-        match self {
-            Tool::Cargo => PathBuf::from("rust").join("bin").join(format!("cargo{exe}")),
-            Tool::Uv => PathBuf::from("uv").join(format!("uv{exe}")),
-            Tool::Npm if cfg!(windows) => PathBuf::from("node").join("npm.cmd"),
-            Tool::Npm => PathBuf::from("node").join("bin").join("npm"),
-            Tool::Ffmpeg => PathBuf::from("ffmpeg").join("bin").join(format!("ffmpeg{exe}")),
-        }
+        let (dir, file) = match self {
+            Tool::Cargo => ("bin", format!("cargo{exe}")),
+            Tool::Rustc => ("bin", format!("rustc{exe}")),
+            Tool::Zig => ("", format!("zig{exe}")),
+            Tool::Uv => ("", format!("uv{exe}")),
+            Tool::Npm if cfg!(windows) => ("", "npm.cmd".into()),
+            Tool::Npm => ("bin", "npm".into()),
+            Tool::Ffmpeg => ("bin", format!("ffmpeg{exe}")),
+        };
+        PathBuf::from(self.name()).join(dir).join(file)
     }
 
     /// The name PATH is asked for: Windows needs npm's `.cmd` shim by name.
@@ -146,6 +162,8 @@ impl Tool {
             // `CARGO` is what `cargo run` hands a goofi it started: the toolchain's own cargo,
             // which a bare name on PATH may not resolve to.
             Tool::Cargo => std::env::var_os("CARGO").map(PathBuf::from).unwrap_or_else(|| "cargo".into()),
+            Tool::Rustc => "rustc".into(),
+            Tool::Zig => "zig".into(),
             Tool::Uv => "uv".into(),
             Tool::Npm if cfg!(windows) => "npm.cmd".into(),
             Tool::Npm => "npm".into(),
@@ -223,6 +241,21 @@ impl Runtime {
     pub fn tool(&self, tool: Tool) -> PathBuf {
         let bundled = self.tools().join(tool.bundled());
         if bundled.is_file() { bundled } else { tool.on_path() }
+    }
+
+    /// A command running `tool`. A bundled program's own directory leads the child's PATH: cargo
+    /// asks PATH for rustc, and npm's shim asks it for node.
+    pub fn command(&self, tool: Tool) -> std::process::Command {
+        let program = self.tool(tool);
+        let mut cmd = std::process::Command::new(&program);
+        if let Some(dir) = program.parent().filter(|_| program.starts_with(self.tools())) {
+            let mut path = vec![dir.to_path_buf()];
+            path.extend(std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default());
+            if let Ok(joined) = std::env::join_paths(path) {
+                cmd.env("PATH", joined);
+            }
+        }
+        cmd
     }
 
     /// Whether an entry of the root is another version's tree: not this version's, and not

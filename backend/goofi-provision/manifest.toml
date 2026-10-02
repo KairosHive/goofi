@@ -1,0 +1,137 @@
+# What a goofi runtime is made of, pinned by hand: a bump edits this file and nothing else.
+# The interpreters are uv's spelling; each archive unpacks into `tools/<tool>/` with its first
+# `strip` path segments dropped, so several archives can fill one tool.
+
+[python]
+ft = "3.14.6t"
+gil = "3.12.13"
+
+# Rust 1.97.1: rustc, cargo and the host's standard library; windows-gnu adds its own linker.
+[[archive]]
+tool = "rust"
+target = "x86_64-unknown-linux-gnu"
+url = "https://static.rust-lang.org/dist/rustc-1.97.1-x86_64-unknown-linux-gnu.tar.xz"
+sha256 = "9819d0a32d56bd339585319c80260e332779f5541fd66838ab7e016d6c814819"
+strip = 2
+
+[[archive]]
+tool = "rust"
+target = "x86_64-unknown-linux-gnu"
+url = "https://static.rust-lang.org/dist/cargo-1.97.1-x86_64-unknown-linux-gnu.tar.xz"
+sha256 = "e1be5f5ff7f7f80ca506fb65770b759edbdc6d303781ed71c5de8ec8a8394779"
+strip = 2
+
+[[archive]]
+tool = "rust"
+target = "x86_64-unknown-linux-gnu"
+url = "https://static.rust-lang.org/dist/rust-std-1.97.1-x86_64-unknown-linux-gnu.tar.xz"
+sha256 = "1c1e704ae80126b7de34f72ea2825f7fd01736dec20732faed47374b95282fba"
+strip = 2
+
+[[archive]]
+tool = "rust"
+target = "aarch64-apple-darwin"
+url = "https://static.rust-lang.org/dist/rustc-1.97.1-aarch64-apple-darwin.tar.xz"
+sha256 = "6076cad38ccabaa24325f26a74080a363a2633a9cd34c473a8977255d8a593cb"
+strip = 2
+
+[[archive]]
+tool = "rust"
+target = "aarch64-apple-darwin"
+url = "https://static.rust-lang.org/dist/cargo-1.97.1-aarch64-apple-darwin.tar.xz"
+sha256 = "2d84a74e9558192a7de674aca6aa3ab7464bed2df97e0377156ddb7e09a0fd7a"
+strip = 2
+
+[[archive]]
+tool = "rust"
+target = "aarch64-apple-darwin"
+url = "https://static.rust-lang.org/dist/rust-std-1.97.1-aarch64-apple-darwin.tar.xz"
+sha256 = "a4895f5c6995e83cab8687e46b14324592398049def71ce75ca308c981cf200d"
+strip = 2
+
+[[archive]]
+tool = "rust"
+target = "x86_64-pc-windows-msvc"
+url = "https://static.rust-lang.org/dist/rustc-1.97.1-x86_64-pc-windows-gnu.tar.xz"
+sha256 = "11de14fa7ee410e9baaa070ce0cda44e155c0e9e32329db0b5f20efc0f2fa5e4"
+strip = 2
+
+[[archive]]
+tool = "rust"
+target = "x86_64-pc-windows-msvc"
+url = "https://static.rust-lang.org/dist/cargo-1.97.1-x86_64-pc-windows-gnu.tar.xz"
+sha256 = "7809b05eabda3205167a8bde739e93a76ded00d65fe8984666130b1034c18b4c"
+strip = 2
+
+[[archive]]
+tool = "rust"
+target = "x86_64-pc-windows-msvc"
+url = "https://static.rust-lang.org/dist/rust-std-1.97.1-x86_64-pc-windows-gnu.tar.xz"
+sha256 = "513ed4875d5a3726d02c5872034f0673593ae343ea62a70939213e894c274be3"
+strip = 2
+
+[[archive]]
+tool = "rust"
+target = "x86_64-pc-windows-msvc"
+url = "https://static.rust-lang.org/dist/rust-mingw-1.97.1-x86_64-pc-windows-gnu.tar.xz"
+sha256 = "aa257e5f8354bd1bc1cacbcbcdede3ebb89a100bef504d72da56db8527807ad2"
+strip = 2
+
+# zig 0.15.2: the linker on Linux and macOS.
+[[archive]]
+tool = "zig"
+target = "x86_64-unknown-linux-gnu"
+url = "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz"
+sha256 = "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239"
+strip = 1
+
+[[archive]]
+tool = "zig"
+target = "aarch64-apple-darwin"
+url = "https://ziglang.org/download/0.15.2/zig-aarch64-macos-0.15.2.tar.xz"
+sha256 = "3cc2bab367e185cdfb27501c4b30b1b0653c28d9f73df8dc91488e66ece5fa6b"
+strip = 1
+
+# uv 0.12.22
+[[archive]]
+tool = "uv"
+target = "x86_64-unknown-linux-gnu"
+url = "https://github.com/astral-sh/uv/releases/download/0.12.22/uv-x86_64-unknown-linux-gnu.tar.gz"
+sha256 = "b9980552309f09c15172b8be828555e375097f16deb459795ce7bfd200380f0b"
+strip = 1
+
+[[archive]]
+tool = "uv"
+target = "aarch64-apple-darwin"
+url = "https://github.com/astral-sh/uv/releases/download/0.12.22/uv-aarch64-apple-darwin.tar.gz"
+sha256 = "5d714de09501a59393ceca78f4bc232a50478729640d251907160299b2a93ddd"
+strip = 1
+
+[[archive]]
+tool = "uv"
+target = "x86_64-pc-windows-msvc"
+url = "https://github.com/astral-sh/uv/releases/download/0.12.22/uv-x86_64-pc-windows-msvc.zip"
+sha256 = "ea1397797a0ca15f63516dd0f49c2dde9776db9be5861cab152ebe8ad199894d"
+strip = 0
+
+# node 24.21.0: npm for plugin frontends.
+[[archive]]
+tool = "node"
+target = "x86_64-unknown-linux-gnu"
+url = "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.xz"
+sha256 = "fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6"
+strip = 1
+
+[[archive]]
+tool = "node"
+target = "aarch64-apple-darwin"
+url = "https://nodejs.org/dist/v24.21.0/node-v24.21.0-darwin-arm64.tar.gz"
+sha256 = "bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057"
+strip = 1
+
+[[archive]]
+tool = "node"
+target = "x86_64-pc-windows-msvc"
+url = "https://nodejs.org/dist/v24.21.0/node-v24.21.0-win-x64.zip"
+sha256 = "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541"
+strip = 1

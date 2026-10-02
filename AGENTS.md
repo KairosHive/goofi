@@ -98,6 +98,8 @@ before the first production deployment.
 - `goofi_supervisor::layout` is the one owner of where files live: the home (`~/.goofi`, what the
   user keeps), the runtime (what goofi curates for itself, bound to one version, with the tools it
   runs) and the session (ephemeral). Nothing else reads a path or tool from the environment.
+  `goofi-provision` fills the runtime from its pinned manifest; a binary built with `GOOFI_DIST`
+  provisions at start, a development build is provisioned by `goofi-init`.
 - `goofi-init` also removes build artifacts under `target/` untouched for three days, so a moved
   hash does not leave its output behind for good.
 - `plugins/` holds the plugins goofi ships as source; `sdk/README.md` is the plugin interface.
