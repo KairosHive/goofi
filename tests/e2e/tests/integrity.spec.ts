@@ -511,6 +511,8 @@ test('a colour param is picked, and its alpha slid', async ({ page }) => {
 		await expect.poll(text).not.toMatch(/above\[1\] = expr:/);
 		// An element left driven makes the whole colour driven: the picker is disabled rather than
 		// writing a literal the driven channel would snap away from.
+		await expect(above.getByTestId('param-mode'), 'the element rows stand in for the whole foot').toHaveCount(0);
+		await expect(above.getByTestId('param-element-learn-0')).toBeVisible();
 		await above.getByTestId('param-element-mode-expression-0').click();
 		await expect.poll(text).toMatch(/above\[0\] = expr: 1/);
 		await above.getByTestId('param-view-color').click();

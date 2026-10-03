@@ -90,6 +90,7 @@
 	// A colour with ANY element driven is driven as a whole: the picker would write a literal the
 	// driven channel ignores, and snap to what came back. The vector rows show which one it is.
 	const anyElementDriven = $derived(elements.some((_, i) => elementDriven(i)));
+
 	const elementName = (i: number): string => (kind === 'color' ? ['R', 'G', 'B', 'A'][i] : `[${i}]`);
 	// The element a reference is being picked for, before one is retained.
 	let pickingElement = $state<number | null>(null);
@@ -128,6 +129,11 @@
 	// The MODE, not the kind: a pulse is a button in every mode, so its kind cannot name its source.
 	const showPicker = $derived(descriptor.mode === 'reference' || picking);
 	const showSource = $derived(showPicker || descriptor.mode === 'expression');
+	/** The open row shows one row per element, each with its own source and learn. */
+	const vectorRows = $derived(num != null && dims > 1 && (asVector || kind === 'vector'));
+	// Those rows stand in for the whole param's source foot, unless a whole source is set and
+	// must stay reachable to be released.
+	const wholeFoot = $derived(!vectorRows || driven);
 	// The error and preview belong to a source that IS live: a picker over a retained expression
 	// shows neither.
 	const shown = $derived(descriptor.mode === 'reference' || (descriptor.mode === 'expression' && !picking));
@@ -296,7 +302,7 @@
 
 	{#if open}
 		<div class="pf-more" data-testid="param-more">
-			{#if num && dims > 1 && (asVector || kind === 'vector')}
+			{#if num && vectorRows}
 				<!-- One row per element: its number, and a source of its own that drives that dimension. -->
 				<div class="pf-elements" data-testid="param-elements">
 					{#each numValues(num) as held, i (i)}
@@ -327,6 +333,12 @@
 									}))}
 									onChange={(m) => chooseElement(i, m as ParamMode)}
 									aria-label={`${paramName} ${elementName(i)} source`}
+								/>
+								<MidiLearn
+									label={`${paramName} ${elementName(i)}`}
+									target={`param:${learnId}:${i}`}
+									onLearn={(reference, index) => onSetElementSource?.(i, { reference: `${reference}[${index}]` })}
+									testid={`param-element-learn-${i}`}
 								/>
 							</div>
 							{#if picking || el?.mode === 'reference'}
@@ -375,7 +387,7 @@
 					data-testid="param-list"
 				/>
 			{/if}
-			{#if showSource}
+			{#if showSource && wholeFoot}
 				<div class="src-region">
 					{#if showPicker}
 						<RefPicker
@@ -397,7 +409,7 @@
 					{/if}
 				</div>
 			{/if}
-			{#if driven}
+			{#if driven && wholeFoot}
 				<Segmented
 					value={descriptor.triggers ? 'trig' : null}
 					segments={[
@@ -412,6 +424,7 @@
 					onChange={() => onSetSource({ triggers: !descriptor.triggers })}
 				/>
 			{/if}
+			{#if wholeFoot}
 			<Segmented
 				value={picking ? 'reference' : descriptor.mode}
 				bad={!!descriptor.error}
@@ -428,6 +441,7 @@
 			{#if num}
 				<MidiLearn label={paramName} target={`param:${learnId}`}
 					onLearn={(reference, index) => onSetSource({ reference: `${reference}[${index}]` })} />
+			{/if}
 			{/if}
 		</div>
 	{/if}
