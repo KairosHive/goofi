@@ -576,8 +576,11 @@
 		font-size: var(--fs-small);
 		color: var(--text-muted);
 	}
+	/* The list shares its row with the source foot, and takes its own line only when the pane is
+	   too narrow for both. */
 	.pf-more :global(.pf-list) {
-		flex: 1 1 100%;
+		flex: 1 1 10rem;
+		min-width: 0;
 		font-family: var(--font-mono);
 	}
 	.unknown {
