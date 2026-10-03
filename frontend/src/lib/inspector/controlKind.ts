@@ -22,3 +22,48 @@ export function controlKind(descriptor: ParamDescriptor): ControlKind {
 			return 'unknown';
 	}
 }
+
+/** The parts of one param row, declared in one place from the descriptor and the reader's view.
+ *  The markup renders what the plan names and decides nothing of its own. */
+export type RowPlan = {
+	/** The control on the row's face. A colour opened as entries wears a vector's numbers. */
+	face: ControlKind;
+	/** The L/I switch after the face: a list of entries can be read either way. */
+	viewSwitch: boolean;
+	/** The face cannot be edited: a source drives the whole, or an entry while the whole is shown. */
+	disabled: boolean;
+	/** Open: the whole list typed as one. Only a constant whole has a list to type. */
+	list: boolean;
+	/** Open: one row per entry, each with a source of its own. */
+	elements: boolean;
+	/** Open: the editor of the source that drives the whole. */
+	source: 'expression' | 'reference' | null;
+	/** Open: the whole's C/E/R, trigger and MIDI learn. Entry rows stand in for it, unless a whole
+	 *  source is set and must stay reachable to be released. */
+	foot: boolean;
+};
+
+export type RowView = {
+	/** The reader opened the list as individual entries. */
+	individual: boolean;
+	/** A reference was chosen for the whole before one is retained. */
+	picking: boolean;
+};
+
+export function rowPlan(d: ParamDescriptor, view: RowView): RowPlan {
+	const kind = controlKind(d);
+	const entries = kind === 'color' || kind === 'vector';
+	const individual = entries && view.individual;
+	const driven = d.mode !== 'constant';
+	const anyEntryDriven = (d.elements ?? []).some((e) => e.mode !== 'constant');
+	const source = view.picking || d.mode === 'reference' ? 'reference' : d.mode === 'expression' ? 'expression' : null;
+	return {
+		face: kind === 'color' && individual ? 'vector' : kind,
+		viewSwitch: entries,
+		disabled: driven || (entries && !individual && anyEntryDriven),
+		list: entries && !individual && source === null,
+		elements: individual,
+		source,
+		foot: !individual || driven
+	};
+}

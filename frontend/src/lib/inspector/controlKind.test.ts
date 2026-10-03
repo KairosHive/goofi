@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { controlKind } from './controlKind';
+import { controlKind, rowPlan } from './controlKind';
 import type {
+	ParamDescriptor,
 	ParamBase,
 	NumParam,
 	BoolParam,
@@ -123,5 +124,46 @@ describe('controlKind', () => {
 	it('maps an unknown param to unknown', () => {
 		expect(controlKind(unknownParam())).toBe('unknown');
 	});
+});
 
+// The row's parts come from one plan, so a change to what a vector or a colour shows is a change
+// here, not a condition scattered through the markup.
+describe('rowPlan', () => {
+	const list = { individual: false, picking: false };
+	const entries = { individual: true, picking: false };
+	const colour = (over: Partial<NumParam> = {}): NumParam =>
+		floatParam({ value: [1, 0, 0, 1], color: true, ...over });
+
+	it('shows a scalar as its control, with no switch and the whole foot', () => {
+		const p = rowPlan(floatParam(), list);
+		expect(p).toMatchObject({ face: 'numeric', viewSwitch: false, list: false, elements: false, source: null, foot: true });
+	});
+
+	it('shows a constant colour as the picker over its list, with the foot beside the list', () => {
+		expect(rowPlan(colour(), list)).toMatchObject({ face: 'color', viewSwitch: true, list: true, elements: false, source: null, foot: true, disabled: false });
+	});
+
+	it('shows a driven colour as the source editor in place of the list', () => {
+		const p = rowPlan(colour({ mode: 'expression', expression: '[1, 0, 0, 1]' }), list);
+		expect(p).toMatchObject({ list: false, source: 'expression', foot: true, disabled: true });
+		expect(rowPlan(colour(), { ...list, picking: true })).toMatchObject({ list: false, source: 'reference' });
+	});
+
+	it('opens a colour as entries: a vector face, entry rows, and no whole foot', () => {
+		const p = rowPlan(colour(), entries);
+		expect(p).toMatchObject({ face: 'vector', elements: true, list: false, foot: false, disabled: false });
+	});
+
+	it('keeps the whole foot reachable in the entry view while a whole source is set', () => {
+		expect(rowPlan(colour({ mode: 'reference', reference: 'a.out' }), entries)).toMatchObject({ foot: true, source: 'reference' });
+	});
+
+	it('disables the list face while an entry has a source of its own', () => {
+		const d: ParamDescriptor = {
+			...colour(),
+			elements: [{ mode: 'expression', expression: '0', reference: null, triggers: false, error: null, value: 0 }]
+		};
+		expect(rowPlan(d, list).disabled).toBe(true);
+		expect(rowPlan(d, entries).disabled).toBe(false);
+	});
 });

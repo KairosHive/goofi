@@ -1094,6 +1094,8 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 	await summary.focus();
 	await page.keyboard.press('Enter');
 	await expect(summary).toHaveAttribute('aria-expanded', 'true');
+	// A press hands the focus to the control the row names, so the summary is focused again.
+	await summary.focus();
 	await page.keyboard.press('Space');
 	await expect(summary).toHaveAttribute('aria-expanded', 'false');
 	const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;

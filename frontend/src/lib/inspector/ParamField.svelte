@@ -1,5 +1,5 @@
-<!-- One param row: the control controlKind chooses, disabled when a source drives it; the expander
-     holds the source switch and editor. -->
+<!-- One param row, every part of it named by `rowPlan`: the face control, disabled when a source
+     drives it, and the open region with the list or the entries, the source editor and the foot. -->
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { PARAM_MODES, type ParamDescriptor, type ParamMode, type SourcePatch } from '$lib/api/types';
@@ -17,7 +17,7 @@
 	} from '$lib/ui';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { stepOf } from '$lib/ui/knob';
-	import { controlKind, isNumeric } from './controlKind';
+	import { isNumeric, rowPlan } from './controlKind';
 	import { numValue, numValues } from '$lib/api/types';
 	import { MODE_FACE, sourceForMode } from './paramSeed';
 	import ExprEditor from './expr/ExprEditor.svelte';
@@ -80,19 +80,16 @@
 		return { destroy: () => el.removeEventListener('variable-expression-drop', drop) };
 	}
 
-	const kind = $derived(controlKind(descriptor));
-	/** A colour opened as a vector shows and expands as one; the value under both is the same list. */
-	/** A vector shown as individual entries, each with a source of its own, rather than one list. */
-	const individual = $derived(uiStore.paramView[viewKey] === 'individual');
+	// A reference chosen before one is retained shows the picker without a record to show yet.
+	let picking = $state(false);
+	/** Every part the row shows, from the descriptor and the reader's view; see `rowPlan`. */
+	const plan = $derived(rowPlan(descriptor, { individual: uiStore.paramView[viewKey] === 'individual', picking }));
 	const dims = $derived(isNumeric(descriptor) ? numValues(descriptor).length : 1);
-	/** Each element's own source, which a vector row shows beside its number. */
+	/** Each element's own source, which an entry row shows beside its number. */
 	const elements = $derived(descriptor.elements ?? []);
-	const elementDriven = (i: number): boolean => (elements[i]?.mode ?? 'constant') !== 'constant';
-	// A colour with ANY element driven is driven as a whole: the picker would write a literal the
-	// driven channel ignores, and snap to what came back. The vector rows show which one it is.
-	const anyElementDriven = $derived(elements.some((_, i) => elementDriven(i)));
+	const elementDisabled = (i: number): boolean => driven || (elements[i]?.mode ?? 'constant') !== 'constant';
 
-	const elementName = (i: number): string => (kind === 'color' ? ['R', 'G', 'B', 'A'][i] : `[${i}]`);
+	const elementName = (i: number): string => (isNumeric(descriptor) && descriptor.color ? ['R', 'G', 'B', 'A'][i] : `[${i}]`);
 	// The element a reference is being picked for, before one is retained.
 	let pickingElement = $state<number | null>(null);
 	function chooseElement(i: number, mode: ParamMode): void {
@@ -125,16 +122,6 @@
 	const options = $derived(descriptor.type === 'string' ? (descriptor.options ?? []) : []);
 
 	const driven = $derived(descriptor.mode !== 'constant');
-	// A reference chosen before one is retained shows the picker without a record to show yet.
-	let picking = $state(false);
-	// The MODE, not the kind: a pulse is a button in every mode, so its kind cannot name its source.
-	const showPicker = $derived(descriptor.mode === 'reference' || picking);
-	const showSource = $derived(showPicker || descriptor.mode === 'expression');
-	/** The open row shows one row per element, each with its own source and learn. */
-	const vectorRows = $derived(num != null && dims > 1 && individual);
-	// Those rows stand in for the whole param's source foot, unless a whole source is set and
-	// must stay reachable to be released.
-	const wholeFoot = $derived(!vectorRows || driven);
 	// The error and preview belong to a source that IS live: a picker over a retained expression
 	// shows neither.
 	const shown = $derived(descriptor.mode === 'reference' || (descriptor.mode === 'expression' && !picking));
@@ -175,7 +162,7 @@
 	{#snippet viewSwitch()}
 		<Segmented
 			class="pf-view"
-			value={individual ? 'individual' : 'list'}
+			value={plan.elements ? 'individual' : 'list'}
 			segments={[
 				{ id: 'list', label: 'L', name: 'List', title: 'List — the values as one list, with one source for all', testid: 'param-view-list' },
 				{ id: 'individual', label: 'I', name: 'Individual', title: 'Individual — one row per entry, each with a source of its own', testid: 'param-view-individual' }
@@ -199,18 +186,18 @@
 		<!-- `display: contents` so the face inherits WITHOUT laying out: Field requires paired controls to
 		     be its direct children, and a real box would take them out of the @container column-flip. -->
 		<div class="pf-value">
-			{#if num && kind === 'color' && !individual}
+			{#if num && plan.face === 'color'}
 				<ColorPicker
 					value={numValues(num)}
 					onChange={onCommit}
 					onInput={onPreview}
-					disabled={driven || anyElementDriven}
-					title={anyElementDriven ? 'An element has a source of its own; see the vector view' : undefined}
+					disabled={plan.disabled}
+					title={plan.disabled && !driven ? 'An entry has a source of its own; see the individual view' : undefined}
 					data-param-edit
 					data-testid="param-color"
 				/>
 				{@render viewSwitch()}
-			{:else if num && (kind === 'vector' || individual)}
+			{:else if num && plan.face === 'vector'}
 				<!-- One number per dimension, sharing the row's width as the picker would; each commits
 				     the whole vector. -->
 				<div class="pf-vector" data-testid="param-vector">
@@ -221,13 +208,13 @@
 							onChange={(v) => onCommit(withDim(i, v))}
 							{step}
 							scrub
-							disabled={driven || elementDriven(i)}
+							disabled={elementDisabled(i)}
 							data-param-edit
 							data-testid={`param-number-${i}`}
 						/>
 					{/each}
 				</div>
-				{#if dims > 1}{@render viewSwitch()}{/if}
+				{#if plan.viewSwitch}{@render viewSwitch()}{/if}
 			{:else if num}
 				<!-- SOFT bounds → Slider only; the NumberInput is UNBOUNDED (the engine does not clamp on set). -->
 				{#if num.int && num.options?.length}
@@ -261,7 +248,7 @@
 					data-param-edit
 					data-testid="param-number"
 				/>
-			{:else if kind === 'toggle'}
+			{:else if plan.face === 'toggle'}
 				<Toggle
 					value={Boolean(descriptor.value)}
 					onChange={onCommit}
@@ -269,7 +256,7 @@
 					data-param-edit
 					data-testid="param-toggle"
 				/>
-			{:else if kind === 'select'}
+			{:else if plan.face === 'select'}
 				<Select
 					{options}
 					value={String(descriptor.value)}
@@ -281,7 +268,7 @@
 					data-param-edit
 					data-testid="param-select"
 				/>
-			{:else if kind === 'text'}
+			{:else if plan.face === 'text'}
 				<TextInput
 					value={String(descriptor.value)}
 					onChange={onCommit}
@@ -289,13 +276,13 @@
 					data-param-edit
 					data-testid="param-text"
 				/>
-			{:else if kind === 'pulse'}
+			{:else if plan.face === 'pulse'}
 				<!-- A pulse holds no value to read out, so a driven one keeps its button: firing one by
 				     hand is a request, and the source fires on its own edges. -->
 				<Button class="pf-pulse" title="Fire one pulse" onclick={onPulse} data-param-edit data-testid="param-pulse">
 					pulse
 				</Button>
-			{:else if kind === 'unknown'}
+			{:else if plan.face === 'unknown'}
 				<code class="unknown" data-testid="param-unknown">{JSON.stringify(descriptor.value)}</code>
 			{/if}
 		</div>
@@ -303,12 +290,11 @@
 
 	{#if open}
 		<div class="pf-more" data-testid="param-more">
-			{#if num && vectorRows}
+			{#if num && plan.elements}
 				<!-- One row per element: its number, and a source of its own that drives that dimension. -->
 				<div class="pf-elements" data-testid="param-elements">
 					{#each numValues(num) as held, i (i)}
 						{@const el = elements[i]}
-						{@const driving = el != null && el.mode !== 'constant'}
 						{@const picking = pickingElement === i}
 						<div class="pf-element" data-testid={`param-element-${i}`}>
 							<div class="pf-element-row">
@@ -319,7 +305,7 @@
 									onChange={(v) => onCommitElement?.(i, v)}
 									{step}
 									scrub
-									disabled={driven || driving}
+									disabled={elementDisabled(i)}
 									data-param-edit
 									data-testid={`param-element-number-${i}`}
 								/>
@@ -373,8 +359,8 @@
 					{/each}
 				</div>
 			{/if}
-			{#if num && dims > 1 && !individual}
-				<!-- The whole list, typed as one: what an expression or a reference hands the param. -->
+			{#if num && plan.list}
+				<!-- The whole list, typed as one: what an expression or a reference would hand the param. -->
 				<TextInput
 					class="pf-list"
 					value={`[${numValues(num).map((v) => Number(v.toFixed(4))).join(', ')}]`}
@@ -382,15 +368,15 @@
 						const list = parseList(text);
 						if (list) onCommit(list);
 					}}
-					disabled={driven || anyElementDriven}
+					disabled={plan.disabled}
 					spellcheck={false}
 					aria-label={`${paramName} as a list`}
 					data-testid="param-list"
 				/>
 			{/if}
-			{#if showSource && wholeFoot}
+			{#if plan.source}
 				<div class="src-region">
-					{#if showPicker}
+					{#if plan.source === 'reference'}
 						<RefPicker
 							value={descriptor.reference}
 							paramType={descriptor.type}
@@ -410,7 +396,7 @@
 					{/if}
 				</div>
 			{/if}
-			{#if driven && wholeFoot}
+			{#if driven && plan.foot}
 				<Segmented
 					value={descriptor.triggers ? 'trig' : null}
 					segments={[
@@ -425,7 +411,7 @@
 					onChange={() => onSetSource({ triggers: !descriptor.triggers })}
 				/>
 			{/if}
-			{#if wholeFoot}
+			{#if plan.foot}
 			<Segmented
 				value={picking ? 'reference' : descriptor.mode}
 				bad={!!descriptor.error}
