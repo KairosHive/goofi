@@ -325,6 +325,32 @@ fn shaders_render_on_the_gpu() {
     drawn(&g, disc, "a half-clear orange disc", |d| close(px(d, 32, 32), [1.0, 0.5, 0.0, 0.5]) && px(d, 0, 0)[3] < 0.01);
     g.call("node remove", j!({ "node": hex(disc) }));
 
+    // Step: Threshold takes two RGBA colours, and EACH carries its alpha onto the texel: the
+    // constant's luminance is 0.48, so the level picks the side.
+    let th = g.add("graphics:Threshold");
+    g.ready(th);
+    g.link(c, "out", th, "input");
+    g.set_param(th, "threshold", "below", j!([1.0, 0.0, 0.0, 0.5]));
+    g.set_param(th, "threshold", "above", j!([0.0, 0.0, 1.0, 0.25]));
+    g.set_param(th, "threshold", "level", 0.3);
+    drawn(&g, th, "above: quarter-clear blue", |d| close(px(d, 0, 0), [0.0, 0.0, 1.0, 0.25]));
+    g.set_param(th, "threshold", "level", 0.6);
+    drawn(&g, th, "below: half-clear red", |d| close(px(d, 0, 0), [1.0, 0.0, 0.0, 0.5]));
+    g.call("node remove", j!({ "node": hex(th) }));
+
+    // Step: ColorMap runs one key of the texel through colour stops; the alpha key reads 1 here,
+    // the red key 0.25, and the stop's alpha rides on the texel's own.
+    let map = g.add("graphics:ColorMap");
+    g.ready(map);
+    g.link(c, "out", map, "input");
+    g.set_param(map, "map", "colour_0", j!([0.0, 1.0, 0.0, 1.0]));
+    g.set_param(map, "map", "colour_1", j!([1.0, 0.0, 1.0, 0.5]));
+    g.set_param(map, "map", "key", "alpha");
+    drawn(&g, map, "alpha 1 lands on the last stop", |d| close(px(d, 0, 0), [1.0, 0.0, 1.0, 0.5]));
+    g.set_param(map, "map", "key", "red");
+    drawn(&g, map, "red 0.25 is a quarter of the way", |d| close(px(d, 0, 0), [0.25, 0.75, 0.25, 0.875]));
+    g.call("node remove", j!({ "node": hex(map) }));
+
     let level = g.add("graphics:Level");
     g.ready(level);
     g.link(c, "out", level, "input");
@@ -492,7 +518,7 @@ fn shaders_render_on_the_gpu() {
     // …and the other way: `audio:GraphicsIn` reads a texture's texels in scan order, so the
     // PICTURE's size is the crossing's length. A gradient across the frame arrives as a sweep,
     // and its channels arrive as channels — alpha among them, since a texture is RGBA.
-    let field = g.add("graphics:Ramp");
+    let field = g.add("graphics:Gradient");
     g.ready(field);
     g.set_param(field, "common", "width", 64);
     g.set_param(field, "common", "height", 64);
@@ -526,7 +552,7 @@ fn shaders_render_on_the_gpu() {
 
     // Step: a texture chain does not flip either. A gradient down the frame, copied by a Level,
     // still runs the same way — the half of the orientation rule an upload cannot see.
-    let vert = g.add("graphics:Ramp");
+    let vert = g.add("graphics:Gradient");
     g.ready(vert);
     g.set_param(vert, "ramp", "angle", 90.0);
     g.set_param(vert, "common", "width", 8);
@@ -606,7 +632,7 @@ fn shaders_render_on_the_gpu() {
     }
 
     // Step: two shaders compose.
-    let ramp = g.add("graphics:Ramp");
+    let ramp = g.add("graphics:Gradient");
     g.ready(ramp);
     let comp = g.add("graphics:Composite");
     g.ready(comp);
@@ -683,12 +709,12 @@ fn shaders_render_on_the_gpu() {
     // Step: a LIST section is one param per slot, counted by an int named after the section, and
     // the shader reads it as an array. A default given as a list is each slot's own, the last
     // carrying on; a third stop opened in the middle of a ramp shows at its centre.
-    let ramp = &g.call("library get", j!({ "type": "graphics:Ramp" }))["params"]["ramp"];
+    let ramp = &g.call("library get", j!({ "type": "graphics:Gradient" }))["params"]["ramp"];
     assert_eq!(ramp["stops"]["role"], j!({ "as": "count", "section": "stops" }));
     assert_eq!(ramp["at_2"]["role"], j!({ "as": "member", "section": "stops", "base": "at", "slot": 2 }));
     assert_eq!((&ramp["at_0"]["default"], &ramp["at_1"]["default"], &ramp["at_15"]["default"]), (&j!(0.0), &j!(1.0), &j!(1.0)));
     assert!(ramp.get("at_16").is_none(), "no slot past the list's max");
-    let stops = g.add("graphics:Ramp");
+    let stops = g.add("graphics:Gradient");
     g.ready(stops);
     g.set_param(stops, "common", "width", 64);
     g.set_param(stops, "common", "height", 4);
@@ -803,7 +829,7 @@ fn shaders_render_on_the_gpu() {
     // Step: the crossing OUT. A texture output wires straight into any ARRAY input, so the
     // crossing itself needs no node; `signal:GraphicsIn` is what makes it a size the rest of the
     // patch can carry, and the readings a picture is usually wanted for.
-    let field = g.add("graphics:Ramp");
+    let field = g.add("graphics:Gradient");
     g.ready(field);
     g.set_param(field, "common", "width", 128);
     g.set_param(field, "common", "height", 64);
@@ -1021,7 +1047,7 @@ fn the_engine_draws_on_its_own_clock() {
 async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
     let g = Goofi::timed();
     let base = g.serve().await;
-    let big = g.add("graphics:Ramp");
+    let big = g.add("graphics:Gradient");
     g.ready(big);
     g.set_param(big, "common", "width", 1024);
     g.set_param(big, "common", "height", 512);
@@ -1155,7 +1181,7 @@ fn a_tessellation_holds_its_symmetry() {
     const CELL: usize = 120;
 
     let g = Goofi::new();
-    let ground = g.add("graphics:Ramp");
+    let ground = g.add("graphics:Gradient");
     g.ready(ground);
     g.set_param(ground, "ramp", "angle", 35.0);
     g.set_param(ground, "ramp", "colour_0", j!([0.15, 0.1, 0.6, 1.0]));
@@ -1357,7 +1383,7 @@ const QUARTER: &str = "/* goofi\n{ \"doc\": \"a quarter of the input\", \"inputs
 #[test]
 fn an_oversized_readback_reports_an_error_and_recovers_after_resize() {
     let g = Goofi::new();
-    let node = g.add("graphics:Ramp");
+    let node = g.add("graphics:Gradient");
     g.ready(node);
     g.set_param(node, "common", "width", 8192);
     g.set_param(node, "common", "height", 8192);

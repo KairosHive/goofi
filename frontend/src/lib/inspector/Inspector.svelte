@@ -254,7 +254,11 @@
 		) return;
 		const key = event.key;
 		if (!['l', 'n', 'r', 'c', 'e'].includes(key)) return;
-		const row = document.querySelector<HTMLElement>(`[data-param-form="${formId}"]:hover`);
+		// The row under the pointer, or failing that the one holding the focus.
+		const row =
+			document.querySelector<HTMLElement>(`[data-param-form="${formId}"]:hover`) ??
+			(event.target as HTMLElement | null)?.closest<HTMLElement>(`[data-param-form="${formId}"]`) ??
+			null;
 		const hit = rows.find((r) => paramKey(r.group, r.name) === row?.dataset.paramKey);
 		if (!hit) return;
 		const { group, name, descriptor: d } = hit;
@@ -365,7 +369,7 @@
 	function dragSlot(e: PointerEvent): void {
 		if (!drag) return;
 		// The slot whose middle the pointer has crossed is the one it lands on.
-		const slots = document.querySelectorAll<HTMLElement>(`[data-param-form="${formId}"][data-slot-section="${drag.section}"]`);
+		const slots = document.querySelectorAll<HTMLElement>(`[data-slot-form="${formId}"][data-slot-section="${drag.section}"]`);
 		let to = drag.from;
 		for (const el of slots) {
 			const box = el.getBoundingClientRect();
@@ -702,7 +706,7 @@
 									class:lifted={drag?.section === slot.section && drag.from === slot.index}
 									class:before={drag?.section === slot.section && drag.to === slot.index && drag.to < drag.from}
 									class:after={drag?.section === slot.section && drag.to === slot.index && drag.to > drag.from}
-									data-param-form={formId}
+									data-slot-form={formId}
 									data-slot-section={slot.section}
 									data-slot-index={slot.index}
 									data-testid={`param-slot-${slot.section}-${slot.index}`}

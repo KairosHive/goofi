@@ -398,9 +398,9 @@ test('a list section opens one slot per count, and its + button opens another', 
 	await page.goto('/');
 	await waitForApp(page);
 	try {
-		// Ramp's stops are a list: a count row heads it, and each open slot shows its members under
+		// Gradient's stops are a list: a count row heads it, and each open slot shows its members under
 		// its own number. A slot past the count keeps its value but draws nothing.
-		const uid = await addNode(page, 'graphics:Ramp', [300, 60]);
+		const uid = await addNode(page, 'graphics:Gradient', [300, 60]);
 		await waitForNode(page, uid);
 		await selectNode(page, uid);
 		const row = (key: string) => page.locator(`[data-param-key="${key}"]`);
@@ -435,6 +435,18 @@ test('a list section opens one slot per count, and its + button opens another', 
 		await expect(slot(0), 'the drop line shows above the first slot').toHaveClass(/before/);
 		await page.mouse.up();
 		await expect.poll(state).toMatch(/ramp\.at_0 = 0\.9[\s\S]*ramp\.at_1 = 0 [\s\S]*ramp\.at_2 = 0\.7/);
+
+		// The row shortcuts reach a slot's member: `e` over it binds an expression, `c` a constant.
+		const text = async () => (await rawCall(page, 'node state', { node: uid })).result.text as string;
+		await row('ramp/at_1').hover();
+		await page.keyboard.press('e');
+		await expect.poll(text).toMatch(/at_1 = expr:/);
+		// `e` left the focus in the expression editor, where a letter is text; a press on the slot's
+		// number lets it go, and `c` over the row is the shortcut again.
+		await slot(1).getByTestId('param-slot-number').click();
+		await row('ramp/at_1').hover();
+		await page.keyboard.press('c');
+		await expect.poll(text).not.toMatch(/at_1 = expr:/);
 
 		// A slot's X closes THAT slot: the ones after it move up, and the list is one shorter.
 		await slot(1).getByTestId('param-slot-remove').click();

@@ -36,7 +36,7 @@ with it.
 | Image | Load a still image from the patch workspace onto the graphics plane, preserve alpha, report decode failures. `image:ImageFile` loads one onto the signal plane today. | Movie File In |
 | Text | Render a string with font, size, alignment, wrapping, foreground, background. Needs a font/raster upload path. | Text |
 | Remap | Sample an image at absolute UV coordinates from another texture; explicit outside-frame behavior. Could be a Displace mode. | Remap |
-| Pattern | Checker, grid, stripes, radial/angular coordinates. Extend Ramp/Shape where appropriate; Wave is a simulation, not this. | Ramp, Circle, Rectangle |
+| Pattern | Checker, grid, stripes, radial/angular coordinates. Extend Gradient/Shape where appropriate; Wave is a simulation, not this. | Gradient, Circle, Rectangle |
 
 ## After the foundations
 

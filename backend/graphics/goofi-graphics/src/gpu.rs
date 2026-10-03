@@ -99,9 +99,10 @@ fn boxed(at: vec2f) -> vec4f {
     return clamp(boxed(at.xy), vec4f(0.0), vec4f(1.0));
 }
 @fragment fn screen(@builtin(position) at: vec4f) -> @location(0) vec4f {
-    // A screen is OPAQUE: two platforms of three drop the fourth byte and the third composites
-    // it, so a shader's own alpha would show through on one of them.
-    return vec4f(boxed(at.xy).rgb, 1.0);
+    // A screen is OPAQUE, and a shader's alpha is composited over black here: two platforms of
+    // three would drop the fourth byte and the third would let the desktop show through it.
+    let c = boxed(at.xy);
+    return vec4f(c.rgb * clamp(c.a, 0.0, 1.0), 1.0);
 }
 ";
 

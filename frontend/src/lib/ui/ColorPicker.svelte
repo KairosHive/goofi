@@ -183,9 +183,11 @@
 </Popover>
 
 <style>
+	/* The swatch is the row's whole value: a bar of the colour across the width, not a chip. */
 	.ui-color {
 		display: flex;
-		flex: 0 0 auto;
+		flex: 1 1 auto;
+		min-width: 0;
 	}
 	/* A checkerboard under the ink, so the alpha shows on the swatch and the strip alike. */
 	.ui-color-swatch,
@@ -193,7 +195,8 @@
 		--check: repeating-conic-gradient(var(--surface-3) 0 25%, var(--surface-1) 0 50%) 0 0 / 10px 10px;
 	}
 	.ui-color-swatch {
-		width: var(--chrome-control-h);
+		flex: 1 1 auto;
+		min-width: var(--chrome-control-h);
 		height: var(--chrome-control-h);
 		padding: 0;
 		border-radius: var(--radius-sm);

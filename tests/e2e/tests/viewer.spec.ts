@@ -209,7 +209,7 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 
 		await test.step('an image draws after a line plot has gone, with no GL error', async () => {
 			await page.evaluate((u) => (window as any).goofi.commands.removeNode(u), flat);
-			ramp = await addNode(page, 'graphics:Ramp', [520, 80]);
+			ramp = await addNode(page, 'graphics:Gradient', [520, 80]);
 			await waitForNode(page, ramp);
 			const image = page.locator(`.svelte-flow__node[data-id="${ramp}"] .slot-viewer .body`);
 			await expect

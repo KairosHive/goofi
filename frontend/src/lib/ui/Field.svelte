@@ -39,7 +39,19 @@
 
 <div {...rest} class={`ui-field ${klass}`.trim()} class:row title={doc ?? rest.title}>
 	{#if onExpand}
-		<button type="button" class="ui-field-label ui-field-summary" class:stretched={stretchSummary} aria-expanded={expanded} onclick={onExpand}>
+		<!-- Out of the tab order and never the focus: a press opens the row and hands the focus to the
+		     control it names, as a label does, so the row's shortcuts act on that control. -->
+		<button
+			type="button"
+			class="ui-field-label ui-field-summary"
+			class:stretched={stretchSummary}
+			aria-expanded={expanded}
+			tabindex="-1"
+			onclick={() => {
+				onExpand?.();
+				if (controlId) document.getElementById(controlId)?.focus();
+			}}
+		>
 			{label}
 		</button>
 	{:else}
