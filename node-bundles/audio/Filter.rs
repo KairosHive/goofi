@@ -14,6 +14,7 @@ goofi_audio_sdk::params! {
         doc: Some("which part of the spectrum survives: below the cutoff, around it, or above it"),
         section: 0,
         show: None,
+        role: None,
     },
     CUTOFF = ParamDecl {
         group: "filter",
@@ -23,6 +24,7 @@ goofi_audio_sdk::params! {
         doc: Some("volts per octave, 0 at C4 — the same units as `Osc.pitch`, so a reference tracks"),
         section: 0,
         show: None,
+        role: None,
     },
     Q = ParamDecl {
         group: "filter",
@@ -32,6 +34,7 @@ goofi_audio_sdk::params! {
         doc: Some("resonance: it rings longer as it climbs, and peaks at `q` times full scale"),
         section: 0,
         show: None,
+        role: None,
     },
 }
 

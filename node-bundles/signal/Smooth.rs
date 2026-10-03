@@ -111,6 +111,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "smooth",
@@ -120,6 +121,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How much of the past to smooth over, in the unit below."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "smooth",
@@ -132,6 +134,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "smooth",
@@ -141,6 +144,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Which axis to smooth along. -1 is time."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "smooth",
@@ -150,6 +154,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Forget the past, so the node starts again from the next frame."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

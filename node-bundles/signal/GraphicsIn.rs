@@ -103,6 +103,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "graphics",
@@ -115,6 +116,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] =

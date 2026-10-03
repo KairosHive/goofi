@@ -55,6 +55,7 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
     ),
     section: 0,
     show: None,
+    role: None,
 }];
 static INPUTS: &[SlotDecl] = &[
     SlotDecl { name: "arrays", kind: SlotType::Array, trigger_process: true, multi: true, required: false },

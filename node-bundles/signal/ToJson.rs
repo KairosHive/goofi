@@ -136,6 +136,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Spaces of indent per level. 0 writes the whole table on one line."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "json",
@@ -145,6 +146,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Digits after the point on every number. -1 writes each one in full."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

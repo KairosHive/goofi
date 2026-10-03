@@ -79,6 +79,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("What size counts for each member. Seconds uses the member's sfreq or ufreq; seconds (ufreq) uses the table's update rate."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "normalize",
@@ -91,6 +92,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "window",
@@ -103,6 +105,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "window",
@@ -112,6 +115,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Stop taking in new values and keep scaling by what is already known."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "window",
@@ -121,6 +125,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Forget every member's statistics and start again."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 

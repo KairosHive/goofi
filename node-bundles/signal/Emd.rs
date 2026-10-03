@@ -130,6 +130,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many oscillations to pull out, fastest first. What is left over is dropped."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "emd",
@@ -139,6 +140,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many passes each oscillation is refined by. More is cleaner and slower."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "emd",
@@ -148,6 +150,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Which axis holds the samples. -1 is time."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

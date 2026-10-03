@@ -103,9 +103,16 @@ export function admits(f: Filters, d: ParamDescriptor, list: NonDefault, group =
 }
 
 /** Whether the inspector shows a param: its `show` holds for its controller's value, and the
- *  controller is shown too. A hidden param keeps its value and its source. */
+ *  controller is shown too; a slot of a list is one its count has opened. A hidden param keeps its
+ *  value and its source. */
 export function shown(groups: ParamGroups | undefined, group: string, name: string): boolean {
-	const show = groups?.[group]?.[name]?.show;
+	const d = groups?.[group]?.[name];
+	const role = d?.role;
+	if (role?.as === 'member' && role.slot != null) {
+		const count = groups?.[group]?.[role.section];
+		if (!count || typeof count.value !== 'number' || role.slot >= count.value) return false;
+	}
+	const show = d?.show;
 	const controller = show && groups?.[show.group]?.[show.name];
 	return !controller || (show.any_of.includes(String(controller.value)) && shown(groups, show.group, show.name));
 }

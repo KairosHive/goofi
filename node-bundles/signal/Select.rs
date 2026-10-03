@@ -187,6 +187,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "select",
@@ -199,6 +200,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "select",
@@ -208,6 +210,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("What to drop, written the same way; an index is deleted as `np.delete` does. Empty drops nothing."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "select",
@@ -217,6 +220,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Which axis to cut, negative from the end. 0 is channels on a `[channels, time]` frame."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "select",
@@ -226,6 +230,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("When one entry is left, remove the axis instead of leaving it one long."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

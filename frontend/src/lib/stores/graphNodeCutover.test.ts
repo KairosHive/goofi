@@ -45,7 +45,8 @@ function catalog(): NodeTypeInfo[] {
 						triggers: false,
 						error: null,
 						section: 0,
-						show: null
+						show: null,
+						role: null
 					}
 				}
 			}

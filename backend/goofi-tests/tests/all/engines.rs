@@ -306,6 +306,7 @@ goofi_audio_sdk::params! {
         expression: None,
         section: 0,
         show: None,
+        role: None,
     },
 }
 

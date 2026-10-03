@@ -114,6 +114,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("`concat` joins the wires in order; `template` places each one where it is named."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "format",
@@ -123,6 +124,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("What goes between two wires in `concat` mode."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "format",
@@ -135,6 +137,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

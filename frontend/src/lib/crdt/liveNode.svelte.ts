@@ -50,7 +50,8 @@ const UNKNOWN: ParamDescriptor = {
 	triggers: false,
 	error: null,
 	section: 0,
-	show: null
+	show: null,
+	role: null
 };
 
 /** One param: the catalog's static fields, and the document's and the runtime's live ones. */

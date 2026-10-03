@@ -73,6 +73,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The scale whose notes a pitch may land on."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "quantize",
@@ -82,6 +83,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The note the scale starts on."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "quantize",
@@ -91,6 +93,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("What a value is: a frequency in Hz, or volts per octave with C4 at 0 V."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "quantize",
@@ -100,6 +103,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How far towards the note each pitch is pulled. Zero passes the signal through."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] =

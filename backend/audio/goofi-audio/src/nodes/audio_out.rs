@@ -14,6 +14,7 @@ goofi_audio_sdk::params! {
         doc: None,
         section: 0,
         show: None,
+        role: None,
     },
 }
 

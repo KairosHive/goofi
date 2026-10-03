@@ -50,6 +50,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The number every entry carries; in reference mode it follows another node's output."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "constant",
@@ -59,6 +60,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The shape to fill, as lengths separated by commas: `1` is one number, `4,64` a grid."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];

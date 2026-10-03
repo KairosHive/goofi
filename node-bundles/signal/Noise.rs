@@ -153,6 +153,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "noise",
@@ -162,6 +163,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Scales every sample, so the noise spans minus this to plus this."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "noise",
@@ -171,6 +173,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Added to every sample, so the noise sits around a value other than zero."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "noise",
@@ -180,6 +183,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Fixes the stream so a patch replays the same noise; -1 takes a fresh one."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -192,6 +196,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -201,6 +206,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Sample rate within an emitted block, in Hz. `value` mode ignores it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -210,6 +216,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many independent noise streams to emit, one per channel."),
         section: 0,
         show: None,
+        role: None,
     },
     // A manifest's own `common.*` is never overwritten by the universal declaration, and the
     // universal default is uncapped — which makes a block one sample long.
@@ -224,6 +231,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];

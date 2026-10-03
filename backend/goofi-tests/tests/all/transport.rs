@@ -32,6 +32,7 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
     doc: None,
     section: 0,
     show: None,
+    role: None,
 }];
 static MANIFEST: NodeManifest = NodeManifest {
     type_name: "_TransportTest",

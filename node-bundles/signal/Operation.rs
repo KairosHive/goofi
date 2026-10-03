@@ -310,6 +310,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "operation",
@@ -319,6 +320,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Which axis the correlations run along; the other modes ignore it. -1 is time."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "operation",
@@ -328,6 +330,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How far either way a lagged correlation reaches, in samples; 0 reaches as far as it can."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

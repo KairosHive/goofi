@@ -11,6 +11,7 @@ goofi_audio_sdk::params! {
         doc: Some("a named scale, or `custom` to build one from the params below"),
         section: 0,
         show: None,
+        role: None,
     },
     ROOT = ParamDecl {
         group: "scale",
@@ -20,6 +21,7 @@ goofi_audio_sdk::params! {
         doc: Some("the note the scale starts on"),
         section: 0,
         show: None,
+        role: None,
     },
     METHOD = ParamDecl {
         group: "scale",
@@ -29,6 +31,7 @@ goofi_audio_sdk::params! {
         doc: Some("a custom scale stacked from a generator, read off the harmonic series, or picked from an equal division"),
         section: 0,
         show: None,
+        role: None,
     },
     GENERATOR = ParamDecl {
         group: "scale",
@@ -38,6 +41,7 @@ goofi_audio_sdk::params! {
         doc: Some("the interval stacked, in cents: 700 is a tempered fifth, 701.955 a pure one"),
         section: 0,
         show: None,
+        role: None,
     },
     STEPS = ParamDecl {
         group: "scale",
@@ -47,6 +51,7 @@ goofi_audio_sdk::params! {
         doc: Some("notes in the octave: generators stacked, harmonics read (partials steps to 2 steps - 1), or equal parts"),
         section: 0,
         show: None,
+        role: None,
     },
     MASK = ParamDecl {
         group: "scale",
@@ -56,6 +61,7 @@ goofi_audio_sdk::params! {
         doc: Some("which of a division's first 24 parts are admitted, bit k for part k; zero admits every part"),
         section: 0,
         show: None,
+        role: None,
     },
     MODE = ParamDecl {
         group: "scale",
@@ -65,6 +71,7 @@ goofi_audio_sdk::params! {
         doc: Some("the degree the scale is read from: seven fifths read from 4 are major, from 0 lydian, from 2 minor"),
         section: 0,
         show: None,
+        role: None,
     },
 }
 

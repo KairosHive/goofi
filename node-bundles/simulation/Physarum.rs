@@ -220,6 +220,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many agents crawl the field."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "physarum",
@@ -229,6 +230,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Width and height of the scent field in cells. The cost of spreading it grows with the square."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "physarum",
@@ -238,6 +240,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Cells an agent moves each step."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "physarum",
@@ -247,6 +250,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How far ahead an agent smells. Larger makes coarser, straighter veins."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "physarum",
@@ -256,6 +260,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How wide apart the left and right senses are, in radians."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "physarum",
@@ -265,6 +270,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How sharply an agent turns towards the stronger side, in radians per step."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "physarum",
@@ -274,6 +280,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How much scent an agent leaves where it lands."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "physarum",
@@ -283,6 +290,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How much of the field fades each step. This is what stops the network filling in."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "physarum",
@@ -292,6 +300,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How much the scent spreads to its neighbours each step."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "physarum",
@@ -301,6 +310,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Random turn added every step, which is what breaks a symmetric field."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -310,6 +320,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Seeds where the agents start and how they wander. Negative takes a fresh one from the clock."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -319,6 +330,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Clear the field and scatter the agents again."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -328,6 +340,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Steps per second of real time. The field is a picture, so there is no block mode."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 

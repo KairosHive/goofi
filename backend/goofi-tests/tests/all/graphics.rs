@@ -660,18 +660,49 @@ fn shaders_render_on_the_gpu() {
     assert_eq!(row["available"], false, "{row}");
     assert!(row["doc"].as_str().unwrap_or_default().contains("TEXTURE, ARRAY or AUDIO"), "{row}");
 
-    // Step: a header param sits in a section of its page and shows by another param; one that
-    // shows by a param the header does not declare is greyed, with the reason.
+    // Step: a header declares a SECTION in place of a param: its members sit in a section of their
+    // own, named, and show by another param; one that shows by a param the header does not
+    // declare is greyed, with the reason, and so is a list that repeats past what a shader keeps.
     std::fs::write(dir.join("Tinted.wgsl"), TINTED).unwrap();
     std::fs::write(dir.join("Untinted.wgsl"), TINTED.replace("\"tint\", \"any_of\"", "\"tone\", \"any_of\"")).unwrap();
+    std::fs::write(dir.join("Overlong.wgsl"), OVERLONG).unwrap();
     g.call("library refresh", j!({}));
     let hue = &g.call("library get", j!({ "type": "graphics:Tinted" }))["params"]["look"]["hue"];
     assert_eq!((&hue["section"], &hue["show"]), (&j!(1), &j!({ "group": "look", "name": "tint", "any_of": ["true"] })));
+    assert_eq!(hue["role"], j!({ "as": "member", "section": "colour", "base": "hue", "slot": null }));
     let listed = g.call("library list", j!({ "full": true }));
     let row = listed["types"].as_array().unwrap().iter().find(|r| r["type"] == "graphics:Untinted").cloned();
     let row = row.expect("a shader whose param shows by nothing is still a row");
     assert_eq!(row["available"], false, "{row}");
     assert!(row["doc"].as_str().unwrap_or_default().contains("`tone`, which this node does not declare"), "{row}");
+    let row = listed["types"].as_array().unwrap().iter().find(|r| r["type"] == "graphics:Overlong").cloned();
+    let row = row.expect("a shader whose list is too long is still a row");
+    assert_eq!(row["available"], false, "{row}");
+    assert!(row["doc"].as_str().unwrap_or_default().contains("section `many` repeats 1 to 100 times"), "{row}");
+
+    // Step: a LIST section is one param per slot, counted by an int named after the section, and
+    // the shader reads it as an array. A default given as a list is each slot's own, the last
+    // carrying on; a third stop opened in the middle of a ramp shows at its centre.
+    let ramp = &g.call("library get", j!({ "type": "graphics:Ramp" }))["params"]["ramp"];
+    assert_eq!(ramp["stops"]["role"], j!({ "as": "count", "section": "stops" }));
+    assert_eq!(ramp["at_2"]["role"], j!({ "as": "member", "section": "stops", "base": "at", "slot": 2 }));
+    assert_eq!((&ramp["at_0"]["default"], &ramp["at_1"]["default"], &ramp["at_15"]["default"]), (&j!(0.0), &j!(1.0), &j!(1.0)));
+    assert!(ramp.get("at_16").is_none(), "no slot past the list's max");
+    let stops = g.add("graphics:Ramp");
+    g.ready(stops);
+    g.set_param(stops, "common", "width", 64);
+    g.set_param(stops, "common", "height", 4);
+    g.set_param(stops, "ramp", "stops", 3);
+    for (name, value) in [("at_1", 0.5), ("r_1", 1.0), ("g_1", 0.0), ("b_1", 0.0), ("at_2", 1.0), ("r_2", 1.0), ("g_2", 1.0), ("b_2", 1.0)] {
+        g.set_param(stops, "ramp", name, value);
+    }
+    drawn(&g, stops, "red at the middle stop, white past it", |d| {
+        let (mid, end) = (px(d, 0, 32), px(d, 0, 63));
+        mid[0] > 0.95 && mid[1] < 0.1 && end[1] > 0.9
+    });
+    g.set_param(stops, "ramp", "stops", 2);
+    drawn(&g, stops, "two stops read only the first two slots", |d| px(d, 0, 63)[1] < 0.05);
+    g.call("node remove", j!({ "node": hex(stops) }));
 
     // Step: a node holds its own state between two ticks. A state buffer starts empty, so a body
     // seeds itself on `frame == 0` and reads what the last tick wrote from then on.
@@ -1109,7 +1140,7 @@ fn a_tessellation_holds_its_symmetry() {
     let ground = g.add("graphics:Ramp");
     g.ready(ground);
     g.set_param(ground, "ramp", "angle", 35.0);
-    for (name, value) in [("r0", 0.15), ("g0", 0.1), ("b0", 0.6), ("r1", 1.0), ("g1", 0.85), ("b1", 0.2)] {
+    for (name, value) in [("r_0", 0.15), ("g_0", 0.1), ("b_0", 0.6), ("r_1", 1.0), ("g_1", 0.85), ("b_1", 0.2)] {
         g.set_param(ground, "ramp", name, value);
     }
     let t = g.add("graphics:Tessellate");
@@ -1296,7 +1327,9 @@ fn the_mosaic_walks_its_cells_onto_the_picture() {
 }
 
 const TEXTY: &str = "/* goofi\n{ \"doc\": \"claims a string slot\", \"inputs\": [{\"name\": \"input\", \"kind\": \"STRING\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
-const TINTED: &str = "/* goofi\n{ \"doc\": \"a tint that shows its hue\", \"params\": [{\"group\": \"look\", \"name\": \"tint\", \"kind\": \"bool\", \"default\": false}, {\"group\": \"look\", \"name\": \"hue\", \"kind\": \"float\", \"default\": 0.5, \"min\": 0.0, \"max\": 1.0, \"section\": 1, \"show\": {\"param\": \"tint\", \"any_of\": [\"true\"]}}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
+const TINTED: &str = "/* goofi\n{ \"doc\": \"a tint that shows its hue\", \"params\": [{\"group\": \"look\", \"name\": \"tint\", \"kind\": \"bool\", \"default\": false}, {\"group\": \"look\", \"section\": \"colour\", \"params\": [{\"name\": \"hue\", \"kind\": \"float\", \"default\": 0.5, \"min\": 0.0, \"max\": 1.0, \"show\": {\"param\": \"tint\", \"any_of\": [\"true\"]}}]}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
+/// A list section whose `max` is past what a shader keeps.
+const OVERLONG: &str = "/* goofi\n{ \"doc\": \"too many\", \"params\": [{\"group\": \"look\", \"section\": \"many\", \"repeat\": {\"min\": 1, \"max\": 100, \"default\": 1}, \"params\": [{\"name\": \"v\", \"kind\": \"float\", \"default\": 0.0, \"min\": 0.0, \"max\": 1.0}]}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
 const BROKEN: &str = "/* goofi\n{ \"doc\": \"does not compile\" }\n*/\nfn shade(uv: vec2f) -> vec4f { return nothing(uv); }\n";
 const COUNT: &str = "/* goofi\n{ \"doc\": \"counts a tenth a tick in a buffer of its own\", \"state\": [\"acc\"] }\n*/\nfn at(uv: vec2f) -> vec2i { return vec2i(floor(uv * resolution)); }\nfn next_acc(uv: vec2f) -> vec4f {\n    if frame == 0u { return vec4f(0.1, 0.75, 0.0, 1.0); }\n    let held = textureLoad(acc, at(uv), 0);\n    return vec4f(held.r + 0.1, held.g, 0.0, 1.0);\n}\nfn shade(uv: vec2f) -> vec4f { return vec4f(textureLoad(acc, at(uv), 0).rgb, 1.0); }\n";
 const HALF: &str = "/* goofi\n{ \"doc\": \"half of the input\", \"inputs\": [{\"name\": \"input\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let c = textureSample(input, samp, uv); return vec4f(c.rgb * 0.5, c.a); }\n";

@@ -10,6 +10,7 @@ goofi_audio_sdk::params! {
         doc: Some("hertz to move every partial by, up or down; it is an addition, so harmony does not survive it"),
         section: 0,
         show: None,
+        role: None,
     },
     MODE = ParamDecl {
         group: "freq_shift",
@@ -19,6 +20,7 @@ goofi_audio_sdk::params! {
         doc: Some("`single` moves the spectrum one way; `ring` keeps both sides and is the harsher of the two"),
         section: 0,
         show: None,
+        role: None,
     },
 }
 

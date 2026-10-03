@@ -130,6 +130,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Shape of one cycle."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "lfo",
@@ -139,6 +140,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Cycles per second."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "lfo",
@@ -148,6 +150,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Peak value: the wave swings between minus this and plus this, before `offset`."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "lfo",
@@ -157,6 +160,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Added to every sample, so the wave can swing around a value other than zero."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "lfo",
@@ -166,6 +170,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Where in the cycle the wave reads, in cycles; 0.25 is a quarter turn ahead."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "lfo",
@@ -175,6 +180,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Fraction of the cycle a square wave spends high; the other waveforms ignore it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "lfo",
@@ -184,6 +190,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Put the phase back to the start of the cycle."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -196,6 +203,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -205,6 +213,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Sample rate within an emitted block, in Hz. `value` mode ignores it."),
         section: 0,
         show: None,
+        role: None,
     },
     // A manifest's own `common.*` is never overwritten by the universal declaration, and the
     // universal default is uncapped — which makes a block one sample long.
@@ -219,6 +228,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];

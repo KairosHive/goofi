@@ -266,6 +266,7 @@ static SINK_PARAMS: &[ParamDecl] = &[ParamDecl {
     doc: None,
     section: 0,
     show: None,
+    role: None,
 }];
 
 struct Sink;
@@ -293,6 +294,7 @@ static IMAGE_PARAMS: &[ParamDecl] = &[ParamDecl {
     doc: Some("Emit one bipolar channel instead of three colour ones."),
     section: 0,
     show: None,
+    role: None,
 }];
 
 /// What an image viewer is handed: a 4x4 frame whose texels span the whole range, so a
@@ -367,8 +369,8 @@ impl Node for Senders {
 }
 
 static COMMON_FIRST_PARAMS: &[ParamDecl] = &[
-    ParamDecl { group: "common", name: "max_frequency", spec: ParamSpec::Float { default: 5.0, min: 1.0, max: 100.0 }, expression: None, doc: None, section: 0, show: None },
-    ParamDecl { group: "own", name: "level", spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 }, expression: None, doc: None, section: 0, show: None },
+    ParamDecl { group: "common", name: "max_frequency", spec: ParamSpec::Float { default: 5.0, min: 1.0, max: 100.0 }, expression: None, doc: None, section: 0, show: None, role: None },
+    ParamDecl { group: "own", name: "level", spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 }, expression: None, doc: None, section: 0, show: None, role: None },
 ];
 
 static RESETTABLE_PARAMS: &[ParamDecl] = &[ParamDecl {
@@ -379,6 +381,7 @@ static RESETTABLE_PARAMS: &[ParamDecl] = &[ParamDecl {
     doc: Some("Start the count over."),
     section: 0,
     show: None,
+    role: None,
 }];
 
 /// The same count, with a pulse behind it: the request a rising edge and the op both make.
@@ -471,6 +474,7 @@ static PICKER_PARAMS: &[ParamDecl] = &[ParamDecl {
     doc: None,
     section: 0,
     show: None,
+    role: None,
 }];
 
 struct Picker;
@@ -520,6 +524,7 @@ static CONST_PARAMS: &[ParamDecl] = &[
         doc: Some("The value every element of the emitted array carries."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "constant",
@@ -529,6 +534,7 @@ static CONST_PARAMS: &[ParamDecl] = &[
         doc: Some("How many elements the emitted array has."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "constant",
@@ -538,6 +544,7 @@ static CONST_PARAMS: &[ParamDecl] = &[
         doc: Some("Emit NaN in place of the value."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 
@@ -569,6 +576,7 @@ static RAMP_PARAMS: &[ParamDecl] = &[
         doc: None,
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "ramp",
@@ -578,6 +586,7 @@ static RAMP_PARAMS: &[ParamDecl] = &[
         doc: None,
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "ramp",
@@ -587,6 +596,7 @@ static RAMP_PARAMS: &[ParamDecl] = &[
         doc: None,
         section: 0,
         show: None,
+        role: None,
     },
 ];
 

@@ -10,6 +10,7 @@ pub mod describe;
 pub mod expr;
 pub mod mailbox;
 pub mod seam;
+pub mod sections;
 pub mod tags;
 pub mod type_id;
 pub use describe::{describe, digest_of, engine_of, folder_of, illegal_param, interned, leak_manifest, manifest_of, node_file_count, node_files, parse_introspection, type_name_of};
@@ -108,6 +109,16 @@ pub struct ParamDecl {
     pub section: u8,
     /// Presentation only: the inspector hides the param unless this holds.
     pub show: Option<Show>,
+    /// The part the param plays in a declared section; `None` for a row of its own.
+    pub role: Option<Role>,
+}
+
+/// A param's place in a section of its group: the count a list section is repeated by, or a
+/// member of a section — of one `slot` of a list, where `base` is its name inside the section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Count { section: &'static str },
+    Member { section: &'static str, base: &'static str, slot: Option<u32> },
 }
 
 /// The inspector shows a param only while `param` (`name` in the same group, or `group.name`)

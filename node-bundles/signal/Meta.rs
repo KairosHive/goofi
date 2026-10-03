@@ -48,6 +48,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The sample rate to write onto the frame, in Hz. 0 keeps whatever it arrived with."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "meta",
@@ -60,6 +61,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "meta",
@@ -69,6 +71,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Which axis the labels name, negative from the end."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

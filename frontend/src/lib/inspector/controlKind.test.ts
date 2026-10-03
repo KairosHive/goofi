@@ -26,7 +26,8 @@ const base: ParamBase = {
 	triggers: false,
 	error: null,
 	section: 0,
-	show: null
+	show: null,
+	role: null
 };
 
 const floatParam = (over: Partial<FloatParam> = {}): FloatParam => ({

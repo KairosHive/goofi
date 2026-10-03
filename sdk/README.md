@@ -200,6 +200,20 @@ as before. A group can have sections, and the inspector draws a line between two
 Discovery refuses an unknown controller, a controller without a fixed set of values, a value that
 is not an option, a chain that returns to its param, and a name used twice in one group.
 
+A WGSL header lists a SECTION in place of a param: it names its group and itself, and lists its
+params without a group. With `repeat` it is a list: the inspector heads it with a count, shown
+with a − and a + button, and opens that many numbered slots of its params. The count is an int
+param named after the section, and each slot's param is `name_<slot>`, so an expression, a
+reference or a preset addresses one slot like any param. A `default` given as a list is each
+slot's own, and the last carries on. The shader reads a list as `p.name[i]` and the count as
+`p.section`; a slot past the count keeps its value and is not shown. `max` is at most 64.
+
+```json
+{"group": "ramp", "section": "stops", "doc": "how many colour stops",
+ "repeat": {"min": 2, "max": 16, "default": 2},
+ "params": [{"name": "at", "kind": "float", "default": [0.0, 1.0], "min": 0.0, "max": 1.0}]}
+```
+
 ```python
 PARAMS = {"filter": [
     {"mode": goofi.StringParam("fir", options=["fir", "iir"])},
@@ -210,8 +224,8 @@ PARAMS = {"filter": [
 
 A group that is a list of dicts has one section for each dict. In Rust, a `ParamDecl` sets
 `section: 1` and `show: Some(Show { param: "mode", any_of: &["iir"] })`, or `section: 0` and
-`show: None`. A WGSL header param adds `"section": 1` and
-`"show": {"param": "mode", "any_of": ["iir"]}`.
+`show: None`. A WGSL header param adds `"show": {"param": "mode", "any_of": ["iir"]}`, and sits in
+a section through a section entry.
 
 A plugin can provide its own playback node and configure it through `ctx.call`. Downloads and
 database access must stay outside audio callbacks and other time-critical processing. Prefer stable

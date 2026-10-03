@@ -210,6 +210,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "hopfield",
@@ -219,6 +220,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How wide a memory is, when none is wired. A wired `patterns` matrix decides instead."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "hopfield",
@@ -228,6 +230,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many memories to draw, when none is wired."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "hopfield",
@@ -237,6 +240,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How sharply the network commits. High makes it snap to one memory; low leaves it between them."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "hopfield",
@@ -246,6 +250,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How hard the `cue` holds the state. 1 pins it to the cue; 0 lets the network run free."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "hopfield",
@@ -255,6 +260,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Jitter on the state, which shakes it out of a shallow memory."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -264,6 +270,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Seeds the drawn memories and the starting state. Negative takes a fresh one from the clock."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -273,6 +280,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Draw the memories again and start over."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -282,6 +290,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Updates per second of real time."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 

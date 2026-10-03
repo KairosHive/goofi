@@ -124,6 +124,7 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
         ),
         section: 0,
         show: None,
+        role: None,
     }
 }
 

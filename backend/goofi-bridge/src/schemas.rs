@@ -45,6 +45,8 @@ pub struct ParamBase {
     pub section: u8,
     /// The inspector shows the param only while this holds; `None` shows it always.
     pub show: Option<ParamShow>,
+    /// The part the param plays in a declared section; `None` for a row of its own.
+    pub role: Option<ParamRole>,
     /// True when the node declared a refresh method for this param.
     pub refreshable: bool,
     pub mode: Mode,
@@ -62,6 +64,15 @@ pub struct ParamShow {
     pub group: String,
     pub name: String,
     pub any_of: Vec<String>,
+}
+
+/// The count a list section repeats by, or a member of a section — of one `slot` of a list,
+/// where `base` is its name inside the section.
+#[derive(Serialize, TS)]
+#[serde(tag = "as", rename_all = "lowercase")]
+pub enum ParamRole {
+    Count { section: String },
+    Member { section: String, base: String, slot: Option<u32> },
 }
 
 /// A descriptor's typed half: the value with the bounds or options its type carries.
@@ -95,6 +106,10 @@ pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi
         show: decl.and_then(|d| Some((d.group, d.show?))).map(|(group, s)| {
             let (group, name) = s.controller(group);
             ParamShow { group: group.into(), name: name.into(), any_of: s.any_of.iter().map(|a| a.to_string()).collect() }
+        }),
+        role: decl.and_then(|d| d.role).map(|r| match r {
+            goofi_node::Role::Count { section } => ParamRole::Count { section: section.into() },
+            goofi_node::Role::Member { section, base, slot } => ParamRole::Member { section: section.into(), base: base.into(), slot },
         }),
         refreshable: matches!(p, Param::Str { refresh: true, .. }),
         mode: source.map(|s| s.state.mode).unwrap_or_default(),
@@ -375,6 +390,7 @@ pub fn typescript() -> String {
         Archive::decl(&cfg),
         crate::doc::Op::decl(&cfg),
         ParamShow::decl(&cfg),
+        ParamRole::decl(&cfg),
         ParamBase::decl(&cfg),
         ParamKind::decl(&cfg),
     ];

@@ -103,9 +103,15 @@ fn camel(stem: &str) -> String {
         .collect()
 }
 
-/// Parse the introspection JSON.
+/// Parse the introspection JSON. A `params` entry may be a SECTION rather than a param: it names
+/// its members' group, and with `repeat` it is a list, declared once and stored per slot.
 pub fn parse_introspection(json: &str) -> Result<probe::Introspection, String> {
-    serde_json::from_str(json).map_err(|e| e.to_string())
+    let mut value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if let Some(entries) = value.get_mut("params").and_then(|p| p.as_array_mut()) {
+        let flat = crate::sections::expand(std::mem::take(entries))?;
+        *entries = flat;
+    }
+    serde_json::from_value(value).map_err(|e| e.to_string())
 }
 
 /// A manifest as the probe schema — the one description every out-of-crate node answers, as JSON.
@@ -150,6 +156,12 @@ pub fn describe(
                 show: p.show.map(|s| probe::Show {
                     param: s.param.to_string(),
                     any_of: s.any_of.iter().map(|v| v.to_string()).collect(),
+                }),
+                role: p.role.map(|r| match r {
+                    crate::Role::Count { section } => probe::Role::Count { section: section.to_string() },
+                    crate::Role::Member { section, base, slot } => {
+                        probe::Role::Member { section: section.to_string(), base: base.to_string(), slot }
+                    }
                 }),
                 spec: match p.spec {
                     ParamSpec::Int { default, min, max, options } => probe::ParamSpec::Int { default, min, max, options: options.to_vec() },
@@ -351,6 +363,12 @@ fn param_decl(p: &probe::Param) -> ParamDecl {
         show: p.show.as_ref().map(|s| crate::Show {
             param: leak_str(&s.param),
             any_of: Box::leak(s.any_of.iter().map(|v| leak_str(v)).collect::<Vec<_>>().into_boxed_slice()),
+        }),
+        role: p.role.as_ref().map(|r| match r {
+            probe::Role::Count { section } => crate::Role::Count { section: leak_str(section) },
+            probe::Role::Member { section, base, slot } => {
+                crate::Role::Member { section: leak_str(section), base: leak_str(base), slot: *slot }
+            }
         }),
     }
 }

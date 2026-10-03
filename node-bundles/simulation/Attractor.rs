@@ -241,6 +241,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Which system. The first six are flows integrated at `dt`; the last four are maps, which ignore it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "attractor",
@@ -250,6 +251,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Scales the system's first canonical constant. 1 is the textbook figure."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "attractor",
@@ -259,6 +261,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Scales the second canonical constant; a system with only one ignores it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "attractor",
@@ -268,6 +271,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Scales the third canonical constant; a system with fewer ignores it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -277,6 +281,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Model seconds per step, for the flows. Too large and the integration leaves the attractor."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -286,6 +291,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Nudges the starting point. Negative takes a fresh one from the clock."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -295,6 +301,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Start over from the seed."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -304,6 +311,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("`value` emits the point now; `block` emits every step since the last frame, which is a signal."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -313,6 +321,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -322,6 +331,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Divide by the system's own size, so every system reads roughly within -1 to 1 and modulates a param directly."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 

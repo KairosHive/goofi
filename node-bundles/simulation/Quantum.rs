@@ -199,6 +199,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many qubits. The statevector is two to this power, so 12 is four thousand amplitudes."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "quantum",
@@ -208,6 +209,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many rounds of rotations. More layers reach further into the space."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "quantum",
@@ -217,6 +219,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Scales every rotation. At 0 the circuit does nothing and the state stays at the ground."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "quantum",
@@ -226,6 +229,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Put a ring of controlled-nots between the layers. Without it every qubit stays its own, and `entropy` stays 0."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -235,6 +239,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Seeds the per-gate offsets, which is what makes one circuit differ from another."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -244,6 +249,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Draw the circuit again."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 

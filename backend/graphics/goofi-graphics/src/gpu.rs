@@ -226,9 +226,21 @@ impl Gpu {
         let layout = |entries: &[wgpu::BindGroupLayoutEntry]| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries })
         };
+        // The params are a read-only STORAGE buffer: a list is an array of scalars, which a
+        // uniform cannot hold without a 16-byte stride.
+        let params = wgpu::BindGroupLayoutEntry {
+            binding: 3,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
         let group0 = [
             layout(&[uniform(0), uniform(1), sampler_entry, uniform(4)]),
-            layout(&[uniform(0), uniform(1), sampler_entry, uniform(3), uniform(4)]),
+            layout(&[uniform(0), uniform(1), sampler_entry, params, uniform(4)]),
         ];
         let blit_group = layout(&[
             wgpu::BindGroupLayoutEntry {

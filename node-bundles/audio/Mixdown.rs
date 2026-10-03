@@ -10,6 +10,7 @@ goofi_audio_sdk::params! {
         doc: Some("how many channels leave; 2 is the pair a speaker takes"),
         section: 0,
         show: None,
+        role: None,
     },
     SPREAD = ParamDecl {
         group: "mixdown",
@@ -19,6 +20,7 @@ goofi_audio_sdk::params! {
         doc: Some("how far apart the voices sit; at 0 every one of them is in the middle"),
         section: 0,
         show: None,
+        role: None,
     },
 }
 

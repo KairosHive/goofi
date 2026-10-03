@@ -24,6 +24,7 @@
 
 	let {
 		paramName,
+		label = paramName,
 		descriptor,
 		onCommit,
 		onPreview,
@@ -36,6 +37,8 @@
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
 		paramName: string;
+		/** What the row is called; a slot of a list wears its name inside the section. */
+		label?: string;
 		descriptor: ParamDescriptor;
 		onCommit: (value: unknown) => unknown;
 		/** A step of a drag on the value, ahead of its commit. */
@@ -120,7 +123,7 @@
 	{...rest}
 >
 	<Field
-		label={paramName}
+		{label}
 		doc={descriptor.doc ?? undefined}
 		expanded={open}
 		stretchSummary

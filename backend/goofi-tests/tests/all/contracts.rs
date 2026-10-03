@@ -190,6 +190,7 @@ static DOCUMENTED_PARAMS: &[ParamDecl] = &[ParamDecl {
     doc: Some("Samples per Welch segment: longer means finer frequency resolution."),
     section: 0,
     show: None,
+    role: None,
 }];
 static DOCUMENTED: NodeManifest = manifest("DocumentedThing", &[], DOCUMENTED_PARAMS, true);
 static OVERRIDE_PARAMS: &[ParamDecl] = &[ParamDecl {
@@ -197,6 +198,7 @@ static OVERRIDE_PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None, doc: Some("On by default: this node is a source."),
     section: 0,
     show: None,
+    role: None,
 }];
 static OVERRIDES_COMMON: NodeManifest = manifest("OverridesCommon", &[], OVERRIDE_PARAMS, false);
 static PULSE_PARAMS: &[ParamDecl] = &[ParamDecl {
@@ -204,10 +206,11 @@ static PULSE_PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None, doc: Some("Start the count over."),
     section: 0,
     show: None,
+    role: None,
 }];
 static PULSING: NodeManifest = manifest("PulsingThing", &[], PULSE_PARAMS, true);
 const fn decl(group: &'static str, name: &'static str, spec: ParamSpec, section: u8, show: Option<Show>) -> ParamDecl {
-    ParamDecl { group, name, spec, expression: None, doc: None, section, show }
+    ParamDecl { group, name, spec, expression: None, doc: None, section, show, role: None }
 }
 const fn when(param: &'static str, any_of: &'static [&'static str]) -> Option<Show> {
     Some(Show { param, any_of })

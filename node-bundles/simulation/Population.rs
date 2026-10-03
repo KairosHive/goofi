@@ -168,6 +168,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Predator and prey, the same with a carrying capacity, two epidemics, or one population as a map."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "population",
@@ -177,6 +178,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How fast the prey or the population grows. `ricker` folds into chaos above about 2.7."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "population",
@@ -186,6 +188,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How much the environment holds. `rosenzweig` and `ricker` read it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "population",
@@ -195,6 +198,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Attack rate for the predator models, and the infection rate for the epidemics."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "population",
@@ -204,6 +208,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How much of what is eaten becomes predator. The epidemics ignore it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "population",
@@ -213,6 +218,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Predator death rate, and the recovery rate for the epidemics."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "population",
@@ -222,6 +228,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How long a predator spends on each catch, which is what saturates it. `rosenzweig` alone reads it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "population",
@@ -231,6 +238,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How fast the exposed become infectious. `seir` alone reads it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -240,6 +248,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Model seconds per step. `ricker` is a map and ignores it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -249,6 +258,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Start the model over."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -258,6 +268,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("`value` emits the state now; `block` emits every step since the last frame, which is a signal."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -267,6 +278,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 

@@ -12,6 +12,7 @@ goofi_audio_sdk::params! {
         doc: Some("the WAV file to play; a bare name is looked for in the recordings folder"),
         section: 0,
         show: None,
+        role: None,
     },
     POSITION = ParamDecl {
         group: "play",
@@ -21,6 +22,7 @@ goofi_audio_sdk::params! {
         doc: Some("where in the file to play from; playback runs on its own, and a MOVE of this skips"),
         section: 0,
         show: None,
+        role: None,
     },
     RESET = ParamDecl {
         group: "play",
@@ -30,6 +32,7 @@ goofi_audio_sdk::params! {
         doc: Some("play from the start again"),
         section: 0,
         show: None,
+        role: None,
     },
     LOOPING = ParamDecl {
         group: "play",
@@ -39,6 +42,7 @@ goofi_audio_sdk::params! {
         doc: Some("start again at the end, instead of falling silent"),
         section: 0,
         show: None,
+        role: None,
     },
 }
 

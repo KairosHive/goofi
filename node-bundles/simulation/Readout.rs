@@ -139,6 +139,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Keep training. Turn it off to freeze what it learned and watch the prediction run on alone."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "readout",
@@ -148,6 +149,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How cautious the first steps are. Larger learns slower and is steadier on a state with few directions."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "readout",
@@ -157,6 +159,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Forget the weights and start training again."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 

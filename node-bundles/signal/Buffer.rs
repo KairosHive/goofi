@@ -86,6 +86,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Seconds uses sfreq, or ufreq if no sample rate is set, along the selected axis. Updates and seconds (ufreq) stack whole frames on a new trailing axis."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "buffer",
@@ -95,6 +96,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How much recent data to keep, in the selected unit."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "buffer",
@@ -108,6 +110,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

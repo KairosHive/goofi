@@ -76,6 +76,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Added to every value before the multiply, which is how you centre a signal."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "math",
@@ -85,6 +86,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Scales every value; a negative number turns the signal upside down."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "math",
@@ -94,6 +96,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Added to every value after the multiply, which is how you set a baseline."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "range",
@@ -103,6 +106,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The bottom of the range the values are expected to arrive in."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "range",
@@ -112,6 +116,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The top of the range the values are expected to arrive in."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "range",
@@ -121,6 +126,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The bottom of the range they are mapped onto."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "range",
@@ -130,6 +136,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The top of the range they are mapped onto."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "range",
@@ -144,6 +151,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

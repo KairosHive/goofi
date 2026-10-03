@@ -98,6 +98,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "join",
@@ -107,6 +108,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Which axis to join along, or where the new axis goes when stacking."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

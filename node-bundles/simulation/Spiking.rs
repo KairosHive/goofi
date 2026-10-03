@@ -322,6 +322,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "neuron",
@@ -331,6 +332,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Background current every neuron gets. Around 1 is enough to fire; below it the network needs its input."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "neuron",
@@ -340,6 +342,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Scales the firing threshold. Lower makes the network twitchier."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "neuron",
@@ -349,6 +352,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Membrane time constant in milliseconds. `izhikevich` sets its own."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "neuron",
@@ -358,6 +362,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Milliseconds a neuron stays silent after it fires, which caps its rate."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "neuron",
@@ -367,6 +372,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How much each spike tires the neuron. `lif` has no adaptation and ignores it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "neuron",
@@ -376,6 +382,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Jitter on the current, which is what keeps a quiet network from being exactly still."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "network",
@@ -385,6 +392,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many neurons. Cost grows with this times `fan_in`."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "network",
@@ -394,6 +402,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many neurons each one listens to."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "network",
@@ -403,6 +412,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many dimensions the neurons are laid out in, which is what distance and delay are measured in."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "network",
@@ -412,6 +422,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How strongly a neuron prefers its neighbours. 0 wires the network at random."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "network",
@@ -421,6 +432,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Fraction of neurons whose every synapse subtracts instead of adds."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "network",
@@ -430,6 +442,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Gain on every synapse. This is the knob between a silent network and a seizing one."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "network",
@@ -439,6 +452,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Milliseconds a spike takes to cross the whole layout. Distance sets each synapse's share of it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -448,6 +462,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Model seconds per step. Half a millisecond suits all three models."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -457,6 +472,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Seeds the layout, the wiring and the noise. Negative takes a fresh one from the clock."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -466,6 +482,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Wire the network again from the seed."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -475,6 +492,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("`value` emits the state now; `block` emits every step since the last frame, which is a spike raster."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -484,6 +502,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Steps per second of real time. At the default `sim.dt` this runs the network in real time."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 

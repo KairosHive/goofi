@@ -73,8 +73,25 @@ pub struct Param {
     pub section: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show: Option<Show>,
+    /// The part the param plays in a declared section; `None` for a row of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<Role>,
     #[serde(flatten)]
     pub spec: ParamSpec,
+}
+
+/// A param's place in a section of its group: the count a list section is repeated by, or a
+/// member of a section — of one `slot` of a list, where `base` is its name inside the section.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "as", rename_all = "lowercase")]
+pub enum Role {
+    Count { section: String },
+    Member {
+        section: String,
+        base: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slot: Option<u32>,
+    },
 }
 
 /// The inspector shows a param only while `param` (`name` in the same group, or `group.name`)

@@ -178,6 +178,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("`forward` turns samples into bins; `inverse` turns the same bins back into samples."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "fft",
@@ -190,6 +191,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "fft",
@@ -202,6 +204,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "fft",
@@ -211,6 +214,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Which axis holds the samples going forward, or the bins coming back. -1 is time."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

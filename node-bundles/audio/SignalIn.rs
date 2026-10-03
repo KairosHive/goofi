@@ -13,6 +13,7 @@ goofi_audio_sdk::params! {
         doc: Some("the frame's samples looped until the next frame, or each column a sine: [n] Hz, or [2, n] Hz over phase"),
         section: 0,
         show: None,
+        role: None,
     },
     PITCH = ParamDecl {
         group: "signal",
@@ -22,6 +23,7 @@ goofi_audio_sdk::params! {
         doc: Some("what a column's pitch is: cycles a second, or volts per octave with 0 V at C4"),
         section: 0,
         show: OSCILLATOR,
+        role: None,
     },
     MIX = ParamDecl {
         group: "signal",
@@ -31,6 +33,7 @@ goofi_audio_sdk::params! {
         doc: Some("the rows of a [C, T] frame played together as one channel, their mean, rather than one channel each"),
         section: 0,
         show: WAVEFORM,
+        role: None,
     },
     LOW = ParamDecl {
         group: "signal",
@@ -40,6 +43,7 @@ goofi_audio_sdk::params! {
         doc: Some("the input value that is full scale low, -1 on the audio plane"),
         section: 0,
         show: WAVEFORM,
+        role: None,
     },
     HIGH = ParamDecl {
         group: "signal",
@@ -49,6 +53,7 @@ goofi_audio_sdk::params! {
         doc: Some("the input value that is full scale high, 1 on the audio plane"),
         section: 0,
         show: WAVEFORM,
+        role: None,
     },
     SMOOTHING = ParamDecl {
         group: "signal",
@@ -58,6 +63,7 @@ goofi_audio_sdk::params! {
         doc: Some("seconds a new frame crossfades in over"),
         section: 0,
         show: WAVEFORM,
+        role: None,
     },
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ParamDescriptor } from '$lib/api/types';
 import {
 	admits,
+	shown,
 	isModified,
 	narrowing,
 	settleNonDefault,
@@ -220,5 +221,20 @@ describe('settleNonDefault', () => {
 		const list = listOf(groups);
 		const ticked = { ...groups, common: { ...groups.common, frequency: float(0.72, 0.5) } };
 		expect([...settleNonDefault(list, ticked).keys()].sort()).toEqual([...list.keys()].sort());
+	});
+});
+
+describe('shown', () => {
+	const count = (value: number): ParamDescriptor =>
+		({ ...base, type: 'int', value, default: 2, vmin: 1, vmax: 4, options: [], section: 0, show: null, role: { as: 'count', section: 'stops' } }) as ParamDescriptor;
+	const slot = (n: number): ParamDescriptor =>
+		({ ...float(0, 0), section: 0, show: null, role: { as: 'member', section: 'stops', base: 'at', slot: n } }) as ParamDescriptor;
+	const groups = { ramp: { stops: count(2), at_0: slot(0), at_1: slot(1), at_2: slot(2) } };
+
+	it('shows the slots the count has opened and hides the rest', () => {
+		expect(shown(groups, 'ramp', 'stops')).toBe(true);
+		expect(shown(groups, 'ramp', 'at_1')).toBe(true);
+		expect(shown(groups, 'ramp', 'at_2')).toBe(false);
+		expect(shown({ ramp: { ...groups.ramp, stops: count(3) } }, 'ramp', 'at_2')).toBe(true);
 	});
 });

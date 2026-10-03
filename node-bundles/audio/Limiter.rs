@@ -10,6 +10,7 @@ goofi_audio_sdk::params! {
         doc: Some("the level nothing leaving this node may pass"),
         section: 0,
         show: None,
+        role: None,
     },
     ATTACK = ParamDecl {
         group: "limiter",
@@ -19,6 +20,7 @@ goofi_audio_sdk::params! {
         doc: Some("seconds to take hold of a peak; shorter is tighter and harder"),
         section: 0,
         show: None,
+        role: None,
     },
     RELEASE = ParamDecl {
         group: "limiter",
@@ -28,6 +30,7 @@ goofi_audio_sdk::params! {
         doc: Some("seconds to let go once the peak has passed"),
         section: 0,
         show: None,
+        role: None,
     },
 }
 

@@ -10,6 +10,7 @@ goofi_audio_sdk::params! {
         doc: Some("what every sample is multiplied by; 1 leaves the signal as it is"),
         section: 0,
         show: None,
+        role: None,
     },
 }
 

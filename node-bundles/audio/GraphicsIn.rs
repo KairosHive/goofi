@@ -10,6 +10,7 @@ goofi_audio_sdk::params! {
         doc: Some("the texels themselves, or `min`..`max` mapped onto [-1, 1] or [0, 1]"),
         section: 0,
         show: None,
+        role: None,
     },
     MIN = ParamDecl {
         group: "graphics",
@@ -19,6 +20,7 @@ goofi_audio_sdk::params! {
         doc: Some("the value a mapped range starts at; a texture's own window is 0 to 1"),
         section: 0,
         show: None,
+        role: None,
     },
     MAX = ParamDecl {
         group: "graphics",
@@ -28,6 +30,7 @@ goofi_audio_sdk::params! {
         doc: Some("the value it ends at"),
         section: 0,
         show: None,
+        role: None,
     },
     CHANNELS = ParamDecl {
         group: "graphics",
@@ -37,6 +40,7 @@ goofi_audio_sdk::params! {
         doc: Some("the picture's brightness on one channel, or its colour channels each on their own"),
         section: 0,
         show: None,
+        role: None,
     },
 }
 

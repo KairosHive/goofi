@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use goofi_core::probe::Introspection;
 use goofi_core::SlotType;
-use goofi_node::{NodeManifest, ParamDecl, ParamSpec};
+use goofi_node::{NodeManifest, ParamDecl, ParamSpec, Role};
 
 /// The names the prelude declares. A header that takes one is refused, rather than shadowing it.
 const RESERVED: &[&str] =
@@ -109,12 +109,19 @@ pub fn prelude(manifest: &NodeManifest, state: &[String]) -> String {
     if !manifest.params.is_empty() || !ranges.is_empty() {
         s.push_str("struct Params {\n");
         for d in manifest.params {
-            s.push_str(&format!("    {}: {},\n", d.name, wgsl_type(&d.spec)));
+            // A list is one array field, declared where its first slot stands.
+            match d.role {
+                Some(Role::Member { section, base, slot: Some(0) }) => {
+                    s.push_str(&format!("    {base}: array<{}, {}>,\n", wgsl_type(&d.spec), slots(manifest.params, section, base)));
+                }
+                Some(Role::Member { slot: Some(_), .. }) => {}
+                _ => s.push_str(&format!("    {}: {},\n", d.name, wgsl_type(&d.spec))),
+            }
         }
         for field in &ranges {
             s.push_str(&format!("    {field}: f32,\n"));
         }
-        s.push_str("}\n@group(0) @binding(3) var<uniform> p: Params;\n");
+        s.push_str("}\n@group(0) @binding(3) var<storage, read> p: Params;\n");
     }
     s.push_str("@group(0) @binding(4) var<uniform> frame: u32;\n");
     for (i, input) in manifest.inputs.iter().enumerate() {
@@ -160,18 +167,39 @@ pub fn validate(full: &str) -> Result<(), String> {
         .map_err(|e| e.emit_to_string(full))
 }
 
-/// One stage's `Params` buffer: a 4-byte scalar per declared param, then the range and channel
-/// count of each ARRAY input's last frame, padded to 16. Every field is a scalar, so the layout
-/// needs no layouter.
+/// How many slots the list `section.base` keeps: the length of its array field.
+fn slots(decls: &[ParamDecl], section: &str, base: &str) -> usize {
+    decls.iter().filter(|d| matches!(d.role, Some(Role::Member { section: s, base: b, slot: Some(_) }) if s == section && b == base)).count()
+}
+
+/// One stage's `Params` buffer in WGSL's storage layout: a 4-byte scalar per declared param, a
+/// list as an array of them where its first slot stands, then the range and channel count of
+/// each ARRAY input's last frame, padded to 16.
 pub fn uniform_bytes(decls: &[ParamDecl], atomics: &[AtomicU64], ranges: &[[f32; 3]]) -> Vec<u8> {
     let mut out = Vec::with_capacity((decls.len() + ranges.len() * 3) * 4 + 16);
+    let mut arrays: std::collections::HashMap<(&str, &str), usize> = std::collections::HashMap::new();
     for (d, a) in decls.iter().zip(atomics) {
         let v = f64::from_bits(a.load(Ordering::Relaxed));
-        match d.spec {
-            ParamSpec::Float { .. } => out.extend_from_slice(&(v as f32).to_le_bytes()),
-            ParamSpec::Int { .. } => out.extend_from_slice(&(v.round() as i32).to_le_bytes()),
-            _ => out.extend_from_slice(&(v.round().max(0.0) as u32).to_le_bytes()),
-        }
+        let bytes = match d.spec {
+            ParamSpec::Float { .. } => (v as f32).to_le_bytes(),
+            ParamSpec::Int { .. } => (v.round() as i32).to_le_bytes(),
+            _ => (v.round().max(0.0) as u32).to_le_bytes(),
+        };
+        let at = match d.role {
+            Some(Role::Member { section, base, slot: Some(slot) }) => {
+                let start = *arrays.entry((section, base)).or_insert_with(|| {
+                    let start = out.len();
+                    out.resize(start + 4 * slots(decls, section, base), 0);
+                    start
+                });
+                start + 4 * slot as usize
+            }
+            _ => {
+                out.resize(out.len() + 4, 0);
+                out.len() - 4
+            }
+        };
+        out[at..at + 4].copy_from_slice(&bytes);
     }
     for field in ranges.iter().flatten() {
         out.extend_from_slice(&field.to_le_bytes());

@@ -38,7 +38,7 @@ impl RunPolicy {
 /// The universal `common` scheduling group; a fourth param is added here and nowhere else. It may
 /// read the manifest's static shape, but never `m.params` for a `common` key.
 pub fn common_decls(m: &NodeManifest) -> [ParamDecl; 3] {
-    let decl = |name, spec, expression, doc| ParamDecl { group: COMMON, name, spec, expression, doc: Some(doc), section: 0, show: None };
+    let decl = |name, spec, expression, doc| ParamDecl { group: COMMON, name, spec, expression, doc: Some(doc), section: 0, show: None, role: None };
     [
         decl(
             "autotrigger",

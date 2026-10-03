@@ -19,6 +19,7 @@ goofi_audio_sdk::params! {
         doc: None,
         section: 0,
         show: None,
+        role: None,
     },
     BEND = ParamDecl {
         group: "midi",
@@ -28,6 +29,7 @@ goofi_audio_sdk::params! {
         doc: Some("how many semitones a full pitch wheel reaches, up and down"),
         section: 0,
         show: None,
+        role: None,
     },
     VOICES = ParamDecl {
         group: "midi",
@@ -39,6 +41,7 @@ goofi_audio_sdk::params! {
         ),
         section: 0,
         show: None,
+        role: None,
     },
 }
 

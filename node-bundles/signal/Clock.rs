@@ -80,6 +80,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How fast, read in whatever `unit` says."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "clock",
@@ -89,6 +90,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("What `rate` means: beats a minute, ticks a second, or seconds between ticks."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "clock",
@@ -98,6 +100,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many ticks to cut each one into. At 120 bpm, 4 is sixteenth notes."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "clock",
@@ -107,6 +110,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Off holds the place it had reached, so starting again resumes rather than restarts."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "clock",
@@ -116,6 +120,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Put the phase and the count back to zero."),
         section: 0,
         show: None,
+        role: None,
     },
     // A manifest's own `common.*` is never overwritten by the universal declaration, and a clock
     // can tick no finer than the rate it is asked at.
@@ -130,6 +135,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static OUTPUTS: &[OutputDecl] = &[

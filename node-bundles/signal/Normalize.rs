@@ -93,6 +93,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "window",
@@ -105,6 +106,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "window",
@@ -114,6 +116,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("What `size` counts."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "window",
@@ -123,6 +126,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Which axis the statistics are taken along. -1 is time."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "window",
@@ -132,6 +136,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Freeze the statistics where they are, so later data is measured against them."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "window",
@@ -141,6 +146,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Forget the past and any frozen statistics."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

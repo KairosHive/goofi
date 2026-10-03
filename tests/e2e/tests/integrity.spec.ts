@@ -393,3 +393,34 @@ test('a dropdown shows and hides the params, sections and group that depend on i
 		await tearDown(page);
 	}
 });
+
+test('a list section opens one slot per count, and its + button opens another', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		// Ramp's stops are a list: a count row heads it, and each open slot shows its members under
+		// its own number. A slot past the count keeps its value but draws nothing.
+		const uid = await addNode(page, 'graphics:Ramp', [300, 60]);
+		await waitForNode(page, uid);
+		await selectNode(page, uid);
+		const row = (key: string) => page.locator(`[data-param-key="${key}"]`);
+		const count = page.getByTestId('param-count-stops');
+		await expect(count).toHaveText('2');
+		await expect(row('ramp/at_1')).toBeVisible();
+		await expect(row('ramp/at_2')).toHaveCount(0);
+		await expect(page.getByTestId('param-slot-stops-1')).toHaveText('2');
+		await expect(row('ramp/at_1').getByText('at', { exact: true }), 'a slot wears its name inside the section').toBeVisible();
+
+		await page.getByTestId('param-count-more-stops').click();
+		await expect(count).toHaveText('3');
+		await expect(row('ramp/at_2')).toBeVisible();
+		await expect(page.getByTestId('param-slot-stops-2')).toHaveText('3');
+		await expectIntact(page, 'a list section with three slots');
+
+		await page.getByTestId('param-count-less-stops').click();
+		await expect(row('ramp/at_2')).toHaveCount(0);
+		await expect(page.getByTestId('param-count-less-stops'), 'the floor of the list').toBeDisabled();
+	} finally {
+		await tearDown(page);
+	}
+});

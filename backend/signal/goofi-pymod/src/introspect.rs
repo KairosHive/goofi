@@ -96,7 +96,7 @@ fn params(d: &Bound<'_, PyAny>) -> PyResult<Vec<Param>> {
             for (name, descr) in names.cast::<PyDict>()?.iter() {
                 let (spec, doc, expression, show) = param_spec(&descr)?;
                 let show = show.map(|(param, any_of)| Show { param, any_of });
-                out.push(Param { group: group.clone(), name: name.extract()?, doc, expression, section, show, spec });
+                out.push(Param { group: group.clone(), name: name.extract()?, doc, expression, section, show, role: None, spec });
             }
         }
     }

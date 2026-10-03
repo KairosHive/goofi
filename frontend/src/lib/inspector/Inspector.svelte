@@ -349,6 +349,12 @@
 			: activeGroup ? Object.entries(n.params[activeGroup]).map(([name, descriptor]) => ({ group: activeGroup, name, descriptor })) : [];
 		return all.filter((r) => admits(filters, r.descriptor, nonDefault, r.group, r.name) && shown(n.params, r.group, r.name));
 	});
+	/** The section a row sits in, and the slot of a list it is, so a heading opens each once. */
+	const sectionOf = (r: ParamHit | undefined): string | null => r?.descriptor.role?.section ?? null;
+	const slotOf = (r: ParamHit | undefined): string | null => {
+		const role = r?.descriptor.role;
+		return role?.as === 'member' && role.slot != null ? `${role.section}/${role.slot}` : null;
+	};
 
 	const FILTER_TITLE: Record<ParamMode, string> = {
 		constant: 'the params holding a value set by hand',
@@ -567,12 +573,20 @@
 						</div>
 					{:else}
 						{#each rows as { group, name: paramName, descriptor }, i (node.uid + '/' + group + '/' + paramName)}
+							{@const role = descriptor.role}
 							<!-- A line only between two shown rows, so a hidden section draws nothing. -->
 							{#if !searching && i > 0 && rows[i - 1].descriptor.section !== descriptor.section}
 								<hr class="pf-section" data-testid="param-section-break" />
 							{/if}
+							{#if !searching && role?.as === 'member' && role.slot == null && sectionOf(rows[i - 1]) !== role.section}
+								<div class="pf-section-name" data-testid={`param-section-${role.section}`}>{role.section}</div>
+							{/if}
+							{#if !searching && role?.as === 'member' && role.slot != null && slotOf(rows[i - 1]) !== `${role.section}/${role.slot}`}
+								<div class="pf-slot" data-testid={`param-slot-${role.section}-${role.slot}`}>{role.slot + 1}</div>
+							{/if}
 							<div
 								class="pf-row"
+								class:pf-count={role?.as === 'count'}
 								role="group"
 								aria-label={paramName}
 								data-param-form={formId}
@@ -587,8 +601,34 @@
 								{#if searching}
 									<span class="pf-row-group" data-testid={`param-hit-group-${paramName}`}>{group}</span>
 								{/if}
+								{#if role?.as === 'count' && descriptor.type === 'int'}
+									<!-- A list's count is its heading: the name, how many, and a step either way. -->
+									<span class="pf-count-name" title={descriptor.doc ?? undefined}>{paramName}</span>
+									<IconButton
+										label={`One ${paramName} fewer`}
+										variant="ghost"
+										size="sm"
+										disabled={descriptor.value <= descriptor.vmin || descriptor.mode !== 'constant'}
+										onclick={() => setValue(group, paramName, descriptor.value - 1)}
+										data-testid={`param-count-less-${paramName}`}
+									>
+										<Icon name="minus" />
+									</IconButton>
+									<span class="pf-count-value" data-testid={`param-count-${paramName}`}>{descriptor.value}</span>
+									<IconButton
+										label={`One ${paramName} more`}
+										variant="ghost"
+										size="sm"
+										disabled={descriptor.value >= descriptor.vmax || descriptor.mode !== 'constant'}
+										onclick={() => setValue(group, paramName, descriptor.value + 1)}
+										data-testid={`param-count-more-${paramName}`}
+									>
+										<Icon name="plus" />
+									</IconButton>
+								{:else}
 								<ParamField
 									{paramName}
+									label={role?.as === 'member' ? role.base : paramName}
 									selfName={node?.name}
 									{descriptor}
 									dropZone={dropZone(group, paramName, descriptor)}
@@ -600,6 +640,7 @@
 									onRefresh={() => send('refresh', (uid) => g.refreshParam(uid, group, paramName))}
 									onPulse={() => send('pulse', (uid) => g.pulse(uid, group, paramName))}
 								/>
+								{/if}
 							</div>
 						{/each}
 					{/if}
@@ -818,6 +859,30 @@
 		margin: 0;
 		border: none;
 		border-top: 1px solid var(--border);
+	}
+	/* A heading hangs close to the rows it opens, under the list's own gap. */
+	.pf-section-name,
+	.pf-slot {
+		color: var(--text-muted);
+		font-size: var(--fs-small);
+		margin-bottom: calc(var(--space-2) - var(--space-5));
+	}
+	.pf-slot {
+		padding-left: var(--space-3);
+	}
+	.pf-count {
+		flex-direction: row;
+		align-items: center;
+		gap: var(--space-2);
+	}
+	.pf-count-name {
+		flex: 1 1 auto;
+		font-size: var(--fs-small);
+	}
+	.pf-count-value {
+		min-width: 2ch;
+		text-align: center;
+		font-variant-numeric: tabular-nums;
 	}
 	.pf-row {
 		display: flex;

@@ -139,6 +139,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "psd",
@@ -155,6 +156,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "psd",
@@ -164,6 +166,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Which axis holds the samples. -1 is time."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "welch",
@@ -177,6 +180,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("What `segment` and `overlap` count in. `fraction` is a share of the frame."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "welch",
@@ -186,6 +190,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How long one segment is. A longer segment tells frequencies apart better."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "welch",
@@ -198,6 +203,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "range",
@@ -207,6 +213,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The lowest frequency to keep, in Hz."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "range",
@@ -216,6 +223,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The highest frequency to keep, in Hz. 0 keeps every bin above `low`."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "range",
@@ -225,6 +233,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Whether the power comes out as it is, or as its logarithm."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

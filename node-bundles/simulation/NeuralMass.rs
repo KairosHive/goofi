@@ -262,6 +262,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "mass",
@@ -271,6 +272,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many populations, when nothing is wired. A `connectivity` matrix decides instead."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "mass",
@@ -280,6 +282,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How hard the network drives each population. With one population it does nothing."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "mass",
@@ -289,6 +292,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Background input every population gets, added to whatever the `input` slot carries."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "mass",
@@ -298,6 +302,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How steep the model's firing-rate curve is. Steeper swings harder for the same input."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "mass",
@@ -310,6 +315,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -319,6 +325,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Model seconds per step. Jansen-Rit needs a millisecond or less."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -328,6 +335,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Seeds the starting state and the noise. Negative takes a fresh one from the clock."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -337,6 +345,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Start the network over from the seed."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -346,6 +355,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("`value` emits the state now; `block` emits every step since the last frame, which is a signal."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -355,6 +365,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 

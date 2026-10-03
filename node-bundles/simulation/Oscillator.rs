@@ -189,6 +189,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "oscillator",
@@ -198,6 +199,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Roughly how many cycles a second. It scales the whole model's time, not one term."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "oscillator",
@@ -211,6 +213,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "oscillator",
@@ -220,6 +223,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Friction. `duffing` and `pendulum` read it; the others set their own."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "oscillator",
@@ -229,6 +233,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Amplitude of a periodic forcing, added to whatever the `drive` input carries."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "oscillator",
@@ -238,6 +243,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Frequency of that forcing, relative to the oscillator's own."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "oscillator",
@@ -247,6 +253,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Jitter on both state variables, which is what makes an excitable model fire on its own."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -256,6 +263,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Model seconds per step. Too large and the integration leaves the cycle."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -265,6 +273,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Nudges the start and seeds the noise. Negative takes a fresh one from the clock."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -274,6 +283,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Start over from the seed."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -283,6 +293,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("`value` emits the state now; `block` emits every step since the last frame, which is a signal."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -292,6 +303,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 

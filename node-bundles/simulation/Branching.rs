@@ -195,6 +195,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "branching",
@@ -204,6 +205,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many units. A larger network shows the power law over more decades."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "branching",
@@ -213,6 +215,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many units one can wake. `branching` is shared out between them."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "branching",
@@ -222,6 +225,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Chance a silent unit wakes on its own, which is what starts each avalanche. The `drive` input adds to it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "branching",
@@ -231,6 +235,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Steps a unit stays silent after it fires. Zero lets one unit sustain itself for ever."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -240,6 +245,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Seeds the wiring and the draws. Negative takes a fresh one from the clock."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -249,6 +255,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Wire the network again and silence it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -258,6 +265,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("`value` emits the step now; `block` emits every step since the last frame, which is a signal."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "output",
@@ -267,6 +275,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 

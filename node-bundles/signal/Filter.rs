@@ -252,6 +252,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "filter",
@@ -269,6 +270,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "filter",
@@ -278,6 +280,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The bottom edge of the band, in Hz. `lowpass` ignores it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "filter",
@@ -287,6 +290,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The top edge of the band, in Hz. `highpass` ignores it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "filter",
@@ -296,6 +300,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How sharply the edge cuts. A higher order is steeper and rings for longer."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "filter",
@@ -305,6 +310,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Which axis to filter along. -1 is time."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "filter",
@@ -314,6 +320,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Forget the past, so the node starts again from the next frame."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

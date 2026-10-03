@@ -74,4 +74,5 @@ stereo endpoints, so a selection past `1-2` usually means naming the card's `ASI
     ),
     section: 0,
     show: None,
+    role: None,
 };

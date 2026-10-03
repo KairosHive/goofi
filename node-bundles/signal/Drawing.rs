@@ -57,6 +57,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "drawing",
@@ -66,6 +67,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The frame's width and height in pixels."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];

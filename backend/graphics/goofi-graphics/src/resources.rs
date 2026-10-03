@@ -106,7 +106,16 @@ impl State {
             frame: uniform("frame", 4),
             resolution: uniform("resolution", 8),
             ranges: Vec::new(),
-            params: (params > 0).then(|| uniform("params", params as u64)),
+            // Storage, not uniform: a list is an array of scalars, which a uniform cannot hold
+            // without a 16-byte stride.
+            params: (params > 0).then(|| {
+                gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("params"),
+                    size: params as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            }),
         }
     }
 }

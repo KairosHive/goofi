@@ -90,6 +90,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Seconds uses the incoming audio sample rate."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "audio",
@@ -102,6 +103,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "audio",
@@ -111,6 +113,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Window length, or length behind each level, in the selected unit."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] =

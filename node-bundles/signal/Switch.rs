@@ -39,6 +39,7 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
     ),
     section: 0,
     show: None,
+    role: None,
 }];
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",

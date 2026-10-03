@@ -83,6 +83,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many lags to answer, from zero up. 0 is every lag the axis has."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "autocorrelation",
@@ -95,6 +96,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "autocorrelation",
@@ -104,6 +106,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Take the mean out first, so an offset does not read as resemblance."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "autocorrelation",
@@ -113,6 +116,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Which axis to correlate along. -1 is time."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

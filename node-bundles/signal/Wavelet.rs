@@ -119,6 +119,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "wavelet",
@@ -131,6 +132,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "wavelet",
@@ -140,6 +142,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Which axis holds the samples. -1 is time."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "range",
@@ -149,6 +152,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The lowest frequency to look for, in Hz."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "range",
@@ -158,6 +162,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The highest frequency to look for, in Hz."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "range",
@@ -167,6 +172,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How many frequencies to look at, spaced evenly by ratio between the two above."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "range",
@@ -176,6 +182,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Whether the strength comes out as it is, or as its logarithm."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

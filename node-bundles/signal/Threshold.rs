@@ -76,6 +76,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Whether the decision is true above the level or below it."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "threshold",
@@ -85,6 +86,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("The value the signal is compared against."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "threshold",
@@ -97,6 +99,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "threshold",
@@ -106,6 +109,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Emit one only on the update where the decision turns true, rather than while it holds."),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "threshold",
@@ -119,6 +123,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "threshold",
@@ -128,6 +133,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How long in seconds a decision stays before it is allowed to switch again."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

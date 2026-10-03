@@ -105,6 +105,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "freq_shift",
@@ -117,6 +118,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "freq_shift",
@@ -126,6 +128,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("Forget the past and start the shift's own phase again."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

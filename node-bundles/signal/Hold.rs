@@ -86,6 +86,7 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 0,
         show: None,
+        role: None,
     },
     ParamDecl {
         group: "hold",
@@ -95,6 +96,7 @@ static PARAMS: &[ParamDecl] = &[
         doc: Some("How long in seconds to glide to a newly caught value. Zero steps to it."),
         section: 0,
         show: None,
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

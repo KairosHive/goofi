@@ -13,6 +13,7 @@ goofi_audio_sdk::params! {
         doc: Some("in `harmonic`, what the bands stand on, in volts per octave; an audio reference is one voice per channel"),
         section: 0,
         show: None,
+        role: None,
     },
     GATE = ParamDecl {
         group: "band",
@@ -22,6 +23,7 @@ goofi_audio_sdk::params! {
         doc: Some("in `harmonic`, what one voice's partials are worth — a released note keeps its pitch, so this is what lets it go; `MidiIn.gate` drops it at once and an `Env` fades it"),
         section: 0,
         show: None,
+        role: None,
     },
     BANDS = ParamDecl {
         group: "band",
@@ -31,6 +33,7 @@ goofi_audio_sdk::params! {
         doc: Some("how many bands leave, one per channel; `BandFilter` needs the same count"),
         section: 0,
         show: None,
+        role: None,
     },
     LOW = ParamDecl {
         group: "band",
@@ -40,6 +43,7 @@ goofi_audio_sdk::params! {
         doc: Some("in `spread`, the lowest band's centre in volts per octave, 0 at C4 — the same units as `Osc.pitch`"),
         section: 0,
         show: None,
+        role: None,
     },
     HIGH = ParamDecl {
         group: "band",
@@ -49,6 +53,7 @@ goofi_audio_sdk::params! {
         doc: Some("in `spread`, the highest band's centre; the rest sit evenly between, so a band is a fixed interval"),
         section: 0,
         show: None,
+        role: None,
     },
     Q = ParamDecl {
         group: "band",
@@ -58,6 +63,7 @@ goofi_audio_sdk::params! {
         doc: Some("how narrow one band is; near 4 the default sixteen meet without a gap"),
         section: 0,
         show: None,
+        role: None,
     },
     ATTACK = ParamDecl {
         group: "band",
@@ -67,6 +73,7 @@ goofi_audio_sdk::params! {
         doc: Some("seconds to follow a band that gets louder; short keeps the consonants"),
         section: 0,
         show: None,
+        role: None,
     },
     RELEASE = ParamDecl {
         group: "band",
@@ -76,6 +83,7 @@ goofi_audio_sdk::params! {
         doc: Some("seconds to follow a band that gets quieter; long smears one word into the next"),
         section: 0,
         show: None,
+        role: None,
     },
     LAYOUT = ParamDecl {
         group: "band",
@@ -85,6 +93,7 @@ goofi_audio_sdk::params! {
         doc: Some("where the bands sit: `spread` evenly from `low` to `high`, or `harmonic` on the partials of `pitch`"),
         section: 0,
         show: None,
+        role: None,
     },
 }
 
