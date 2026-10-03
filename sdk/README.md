@@ -201,7 +201,8 @@ Discovery refuses an unknown controller, a controller without a fixed set of val
 is not an option, a chain that returns to its param, and a name used twice in one group.
 
 A WGSL header lists a SECTION in place of a param: it names its group and itself, and lists its
-params without a group. With `repeat` it is a list: the inspector heads it with a count, shown
+params without a group. A member is stored as `section_name`, so two sections can share names,
+and the inspector shows it under the section's heading by its own. With `repeat` it is a list: the inspector heads it with a count, shown
 with a − and a + button, and opens that many numbered slots of its params. The count is an int
 param named after the section, and each slot's param is `name_<slot>`, so an expression, a
 reference or a preset addresses one slot like any param. A `default` given as a list is each

@@ -1,5 +1,6 @@
-//! A SECTION in a header's `params`: a run of params drawn apart from the rest of their group, or
-//! with `repeat` a LIST of them, repeated by a count param and stored as one param per slot.
+//! A SECTION in a header's `params`: a run of params drawn apart from the rest of their group and
+//! stored as `section_name`, or with `repeat` a LIST of them, repeated by a count param and
+//! stored as one param per slot, `name_<slot>`.
 
 use std::collections::HashMap;
 
@@ -42,6 +43,7 @@ pub fn expand(entries: Vec<Value>) -> Result<Vec<Value>, String> {
                     return Err(format!("`{base}` in section `{name}` defaults to a list, which only a repeated section may"));
                 }
                 m["group"] = json!(group);
+                m["name"] = json!(format!("{name}_{base}"));
                 m["section"] = json!(index);
                 m["role"] = json!({ "as": "member", "section": name, "base": base });
                 out.push(m);

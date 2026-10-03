@@ -667,7 +667,7 @@ fn shaders_render_on_the_gpu() {
     std::fs::write(dir.join("Untinted.wgsl"), TINTED.replace("\"tint\", \"any_of\"", "\"tone\", \"any_of\"")).unwrap();
     std::fs::write(dir.join("Overlong.wgsl"), OVERLONG).unwrap();
     g.call("library refresh", j!({}));
-    let hue = &g.call("library get", j!({ "type": "graphics:Tinted" }))["params"]["look"]["hue"];
+    let hue = &g.call("library get", j!({ "type": "graphics:Tinted" }))["params"]["look"]["colour_hue"];
     assert_eq!((&hue["section"], &hue["show"]), (&j!(1), &j!({ "group": "look", "name": "tint", "any_of": ["true"] })));
     assert_eq!(hue["role"], j!({ "as": "member", "section": "colour", "base": "hue", "slot": null }));
     let listed = g.call("library list", j!({ "full": true }));
