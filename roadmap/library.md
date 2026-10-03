@@ -2,8 +2,9 @@
 
 Find, inspect, filter and install node bundles in goofi. The library includes builtin nodes,
 installed external nodes, saved local nodes and nodes available from registered GitHub sources.
-Updated 2026-10-03 after the second planning round. This entry owns node distribution; the plugin
-interface remains in `sdk/README.md`. Implementation and bundle moves have not started.
+Implementation plan agreed 2026-10-03. This entry owns node distribution; the plugin interface
+remains in `sdk/README.md`. All implementation stages below are pending. This planning session
+changed documentation only; no nodes have moved and no implementation builds have run.
 
 ## Decisions
 
@@ -191,48 +192,307 @@ See [Git clone](https://git-scm.com/docs/git-clone) and
 Partial clone supports filtered fetches and downloads missing objects as needed; checkout can
 fetch required file contents in a batch. See [Git partial clone](https://git-scm.com/docs/partial-clone).
 
-## Order of work
+## Implementation rules
 
-1. Settle the remaining behavior defaults below. No implementation before this plan
-   is agreed. Distribution provisioning and website work remain deferred.
-2. Add repo hierarchy discovery, `_local` and structured bundle identity to the layout/scan/save/
-   inspect/archive callers. Define builtin, patch and plugin bundle identities with the same model.
-3. Add a persistent library owner and shared operations usable directly from the CLI without
-   booting a server, engines, audio hardware or windows. Hold a short-lived supervisor session
-   for builds/probes. Serialize goofi's library writes; manual Git edits remain user-controlled.
-4. Add source registration, static indexing and refresh using installed authenticated Git. Source
-   registration must not install a checkout. Preserve cached catalogue inspection when offline.
-5. Add whole-bundle install/remove, repo update check/pull and preparation. Keep one checkout per
-   repo and a settled installed state. Reuse uv, Cargo, probe, resource and error handling owners.
-   After an app operation, refresh its catalogue where possible; explicit refresh/restart covers
-   external CLI changes or code that cannot be replaced live. No watcher is required initially.
-6. Move the ten external bundle folders with requirements, helpers, assets and licences into
-   `../goofi-nodes`. Delete dependent existing goofi test cases. Keep the remaining checks focused
-   on builtin nodes and core behavior. Remove obsolete boot/setup/CI dependencies. Define external
-   test tooling separately; it is not required to retain the deleted goofi tests in this session.
-7. Add the library panel with source registration, bundle/node details, filters, plus/remove
-   actions, repo update status/pull and preparation errors. No favourites or hiding. Keep patch
-   dirty state and undo independent of library navigation/management; support touch and tablets.
-8. Verify standalone CLI and app operations using controlled repo fixtures, shared dependency
-   preparation, `_local` save/load and restart recovery. Add relevant browser sessions for panel
-   behavior and socket updates. Do not build or run these checks during this planning round.
+Follow `AGENTS.md` throughout this change:
 
-## Remaining proposed defaults
+- Work on `main`. Read the current diff before each stage; the shared checkout contains other
+  active work, including files this feature will touch. Preserve that work. Commit only this
+  feature's changes at tested checkpoints, with the required model `Co-Authored-By` trailer.
+- Add only the owners needed by this feature. One library owner supplies all management paths;
+  the manager still owns the live graph and patch. Do not create a separate CLI registry, frontend
+  business rules, plugin distribution layer, database or general-purpose package manager.
+- Use shared types for repo, bundle and node identity. Parse and validate them once at boundaries.
+  Derive display names, source paths and sparse selections from these types; do not duplicate
+  string parsing across engines, the bridge and frontend.
+- Store registered sources and installed selections once. Git owns branch/revision/local edits.
+  The node files own their declarations. The remote index and compiled artifacts are derived
+  caches, not independent installation state. Publish events from settled operation results.
+- Remove obsolete code in the stage that replaces it. No old-ID aliases, dual custom-node scans,
+  duplicate installers, old/new catalogue stores, backfills or retained compatibility formats.
+  Development patches and test data can be recreated if their type format changes.
+- Share scan, build, probe and failure rules across engines. Preparation happens outside the
+  graph lock. Keep the existing supervised resource ownership and shutdown order.
+- Use ASD-STE100 Simplified Technical English. Match Rust/frontend style and shared UI tokens;
+  do not reformat unrelated files or run Prettier. Keep panel mechanics in `panelty`.
+- Verify observable behavior through public library, CLI and app interfaces. Rust tests belong
+  in `goofi-tests`. Use controlled Git bundle fixtures, test clocks and hosts; no audio hardware,
+  native windows, load simulation, timing assertions or sleeps for synchronization.
+- Review each stage against real callers and upstream guards after its checks pass. Fix the cause
+  of substantive findings, remove the obsolete paths and review again. Do not suppress warnings.
 
-1. **Static parser limits.** Recommended: index declarations that can be read without evaluation;
-   mark computed ports/params/tags unknown until a local probe succeeds. Installation remains
-   possible. Do not demand an additional authored catalogue manifest for arbitrary code.
-2. **Repo pull behavior.** Recommended: track the repo's current branch/upstream, check on explicit
-   refresh or panel entry, and pull only on user action. Use fast-forward-only pulls; report local
-   conflicts/divergence and leave them for manual Git resolution. No automatic reset, stash,
-   merge or background pull. A pull prepares all installed bundles in that repo. Record actual
-   revision and local modification status for inspection, without an independent version counter.
-3. **Removal and defaults.** Recommended: uninstall stops future loading of that bundle and reduces
-   the sparse selection where files can be removed without losing user work. Keep the shared Git
-   checkout, downloaded Git objects and shared Python packages. Source removal unregisters the
-   source and is separate from uninstall. Offer explicit repo deletion separately.
-   Register `KairosHive/goofi-nodes` by default, but install no external bundle automatically.
-4. **Patch source semantics.** Recommended: keep `_local`/patch-authored source inside `.gfi` as
-   today; external nodes name their bundle/type and show missing dependencies on load. Describe
-   the revision used but load the current installed checkout. Do not silently pull or install on
-   patch load. Assign a patch-owned bundle identity without moving its workspace into the home.
+## State ownership
+
+| State | Owner and storage | Derived consumers |
+| --- | --- | --- |
+| Registered repo URLs and installed bundle IDs | One library state file in the home, written by the library owner | CLI, app, sparse selection |
+| Repo source, branch, commit and local edits | Git checkout under `nodes/<uname>/<repo>/` | Update status, source inspection |
+| Authored local node source | `nodes/_local/`, managed through the library | Saved patches and node preparation |
+| Patch-authored source and graph | Existing patch workspace and manager | Patch bundle and live node catalogue |
+| Remote descriptions, scanned commit and index timestamp | Disposable index cache in the runtime | Available bundle/node browsing |
+| Dependency preparation and compiled artifacts | Existing provision/build owners in the runtime | Availability and preparation errors |
+| Live instances and their health | Existing engines and manager | Add menu, viewers and runtime status |
+
+Keep one typed operation contract and one phrase registry. Handlers that manage the library need
+library context; handlers that save patch source or act on live instances need patch context.
+CLI library management must select the library path before server resolution or engine startup.
+The app adapter projects settled library results into the existing graph/catalogue path.
+
+## Implementation stages
+
+Complete these stages in order. A stage is done only when its listed result and relevant checks
+pass, its obsolete paths are removed, and its tested changes are committed. Keep the stage status
+and remaining work in this file current. Do not start implementation in this planning turn.
+
+### Stage 1 — Bundle identity and local storage
+
+Status: pending.
+
+- Introduce typed repo, bundle and node identities. Use `<uname>/<repo>/<bundle>` for external
+  bundles and include bundle identity in runtime node type IDs. Give builtin, `_local`, patch
+  and plugin nodes explicit bundle identities under the same model.
+- Add the managed nodes root and `_local` through `goofi_supervisor::layout`. Replace
+  `custom_nodes`, `AppState::custom` and their scan/save/inspect/archive callers together.
+- Update engine registration, graph resolution, schemas, generated frontend types, node editing,
+  copy/paste, undo and `.gfi` serialization where they consume node type IDs. Keep file stems as
+  declaration names; do not confuse a node's full ID with its source file name.
+- Remove last-root-wins selection between different bundles. Equal engine/name pairs can coexist
+  in separate bundles; a duplicate declaration within one bundle must report an error.
+- Normalize scan roots to explicit bundle identity. Remove duplicated folder-name/provenance
+  guessing; do not leave engine callers to derive their own identities.
+- Delete existing test cases that depend on the ten external product bundles when first affected.
+  Do not rewrite those cases for the new type IDs only to delete them at the bundle move stage.
+
+Checkpoint: two bundles with equal node names resolve independently. `_local` save, rename,
+inspect and `.gfi` save/load use the new path; builtin and patch nodes retain correct provenance.
+Existing instances, expressions, undo and source editing use the same type model. Extend the
+owning node/contract/patch sessions, and check frontend consumers changed by the new schema.
+
+### Stage 2 — Standalone library owner and shared operations
+
+Status: pending.
+
+- Add the smallest coherent library module/crate for persistent source registration, installed
+  selections, catalogue access and management effects. It must be usable without a live graph.
+- Use one home state file for sources/selections, with typed validation, serialized writes and
+  whole-file replacement. Use the same state lock from app and CLI processes. Keep index/build
+  caches in the runtime; do not introduce a database or migration chain.
+- Reuse the existing typed argument schemas, phrase parsing, help, completion, operation list and
+  dispatch rules. Refactor their context boundary only as needed; do not make a second op table.
+- Route standalone library commands before the CLI resolves a server or starts a window/engine.
+  Create a short-lived supervisor session only when commands need children or scratch resources.
+- Declare operations as their handlers become usable: source list/add/remove/refresh, bundle
+  list/get/install/remove, repo check/pull, node list/get, and installed-library refresh. Keep
+  `library save` tied to its required patch context. Settle exact phrases in the shared registry.
+- Remove bridge-only management implementations as shared handlers replace them. Retain the
+  manager adapter for live catalogue projection; it must not own a second persistent library.
+
+Checkpoint: public CLI library reads and implemented effects work with no server, without opening
+engines or windows. CLI and app resolve the same operation schema and state. Extend the CLI and
+operation contract sessions; verify resource release through session status where resources exist.
+
+### Stage 3 — Static catalogue scanner
+
+Status: pending.
+
+- Add one scanner for repo trees and local bundle sources. Parse Python declarations/docstrings,
+  Rust source and Cargo metadata, and WGSL data headers. Reuse existing declaration validation.
+- Detect top-level bundle folders, reject node declarations at a repo root and distinguish helper
+  directories from bundles. Read metadata statically; never run Python, `build.rs` or node code.
+- Follow declared node source paths and statically identifiable helper files. Read only the files
+  needed for the catalogue, not model weights or unrelated binary assets.
+- Represent computed declarations as unknown fields until local preparation obtains them. Do not
+  invent empty ports, params or tags as if they were known. An incomplete index can still offer
+  installation; malformed declarations report their real source/bundle/file boundary.
+- Keep one description schema for builtin, installed and available nodes. Runtime preparation can
+  supply known availability/details; uninstalled index entries do not enter an engine registry.
+
+Checkpoint: a controlled mixed-language repo indexes without executing its deliberately failing
+import/build code. Root nodes are rejected, helpers do not appear as bundles, partial declarations
+stay inspectable and equal node names preserve their bundle IDs. Test through public library APIs
+in `goofi-tests`; retain real local probes for preparation rather than a second execution scanner.
+
+### Stage 4 — Cargo and shared Python preparation
+
+Status: pending.
+
+- Support the accepted bundle-local Cargo package/workspace convention and per-node author
+  crates. Define the small Cargo identity/source metadata schema. Authors use ordinary dependency
+  tables, features and helper crates; goofi supplies runtime SDK bindings and generated ABI wrappers.
+- Keep one build owner for standalone builtin/patch/`_local` source and external author crates.
+  Preserve SDK version/hash validation and the existing dynamic-library loading boundary.
+- Permit Cargo to resolve dependencies outside the builtin vendor set. Do not apply the current
+  blanket offline/source replacement to external dependencies. Keep artifacts out of checkouts.
+- Make build validity account for Cargo manifests, lock resolution, node/helper source and SDK
+  inputs. A helper edit or dependency change must rebuild the affected node; unchanged input
+  must reuse a valid artifact. Remove the source-file-only assumption for author crates.
+- Resolve installed bundles' `requirements.txt` and `requirements-gil.txt` with uv into the
+  existing shared environments. Resolve relative paths from the correct bundle context. Report
+  conflicts and failures; do not add bundle venvs or manually maintained dependency counters.
+- Share preparation results and diagnostics between install, refresh and boot. Keep unusable
+  nodes visible and keep compilation/probes outside the graph lock.
+
+Checkpoint: one controlled Rust bundle with an external dependency and a path helper builds and
+loads through the public interface; changing the helper changes observable output. A Python bundle
+prepares in the shared environments. Dependency/build failures remain inspectable. Extend hosted,
+node and preparation sessions using fixture nodes, not the product bundles that will move out.
+Use controlled dependency sources for these checks; do not require live registry access in tests.
+
+### Stage 5 — Authenticated Git indexing and sparse installation
+
+Status: pending.
+
+- Add Git resolution/checks through `layout::Tool` for the local version and update development
+  prerequisites. Use the user's installed authenticated Git. Do not build a GitHub login flow.
+- Implement source registration/refresh using temporary filtered Git object stores, with no
+  working checkout. Keep only index data, commit ID and index timestamp after cleanup. Reuse
+  an unchanged committed index; use existing repo objects when a persistent checkout exists.
+- Implement first installation as a persistent filtered clone with cone-mode sparse checkout at
+  `nodes/<uname>/<repo>`. Subsequent installs expand that checkout. Include required helper
+  folders derived from static dependency metadata; do not load helpers as installed bundles.
+- Keep the installed bundle selection as the one installation answer. Publish it after the
+  checkout succeeds. If preparation fails, retain visible source and error state rather than
+  claiming that all nodes are usable or silently omitting them.
+- Implement repo check/pull using the existing clone. Show upstream/local status, use explicit
+  fast-forward-only pulls and prepare the installed bundles together after the repo changes.
+- Implement bundle removal separately from source unregistration and explicit repo deletion.
+  Preserve user edits, downloaded Git objects and shared Python packages. Contract sparse paths
+  only where doing so preserves user work.
+- Supervise Git, uv, Cargo, probes and temporary paths. Report real failures and leave a settled,
+  recoverable state after interruption. Do not make resource decisions from intermediate writes.
+
+Checkpoint: a public CLI session registers a fixture source without an installed checkout, installs
+one of two bundles, expands the same clone for the other, detects/pulls a fixture commit and removes
+one selection. Verify installed types, remaining bundle files, retained index metadata, errors and
+resource cleanup. Use a controlled Git remote with filtering enabled; no live credentials or
+GitHub account is required for tests. Existing Git authentication remains the transport's concern.
+
+### Stage 6 — App, boot and patch integration
+
+Status: pending.
+
+- Discover only selected installed repo bundles plus builtin, `_local`, patch and plugin bundles.
+  Use the library owner and current files as the source of the scan; do not mirror install state
+  in `AppState`, engines or frontend stores.
+- Remove the superseded `--extra-nodes` route and its configuration when shared bundle loading
+  is available. Do not retain a second unmanaged external-node path beside library operations.
+- On boot, index/load/prepare changed installed bundles, including manual repo edits. Share the
+  same preparation path with library operations. Do not require remote access to load unchanged,
+  already prepared installed nodes.
+- After app library effects settle, project the resulting catalogue once and broadcast through
+  the existing node-type event path. Keep effects out of patch history and dirty-state changes.
+- Permit effects while nodes are active. Use existing refresh/restart behavior where it applies;
+  a goofi restart is accepted recovery for unreplaced code/shared dependencies. Do not add a
+  watcher, hot-swap framework or active-patch operation lockout.
+- Record external bundle/type requirements and observed revision in `.gfi`. Load the current
+  installed checkout, keep missing nodes visible with their bundle named, and never silently
+  install or pull on patch load. Keep `_local` and patch-authored source in archives as before.
+- Remove duplicate custom/root/provenance assumptions and old graph-dependent library state
+  paths when their shared replacements are in use.
+
+Checkpoint: app effects update its catalogue; a CLI effect followed by refresh/restart is loaded;
+manual source changes take effect after preparation. Verify `_local` portability, missing external
+bundle visibility, current-checkout loading and clean patch state through public sessions. Extend
+relevant socket sessions when the catalogue payload or event behavior changes.
+
+### Stage 7 — Move the ten external bundles and delete their core tests
+
+Status: pending.
+
+- Inspect both checkouts and preserve other work. Move the ten decided bundle folders into
+  `../goofi-nodes`, including helpers, requirements, assets, documentation and licences.
+  Convert their Rust nodes to the agreed Cargo convention. Do not change the website.
+- Embed and prebuild only `signal`, `audio` and `graphics`. Restrict development setup, shipped
+  requirements, boot checks, CI caches and release smoke tests to that builtin set. Remove
+  obsolete in-repo references and assumptions rather than adding source-path fallbacks.
+- Delete every existing goofi test case that depends on the moved product nodes, including
+  browser cases, that was not already removed in an earlier stage. Preserve unrelated work in
+  mixed test files. Do not keep those cases alive
+  with automatic external installs, copied product code or replacement fixtures.
+- Keep new library contract tests based on their small controlled repos; these test the library,
+  not the removed external product behavior. No external product test project or cross-repo
+  CI service is required in this feature.
+- Register `KairosHive/goofi-nodes` as the default available source. Install no external bundle
+  automatically. Verify that the external checkout fits the scanner/build convention before
+  considering the move complete. Local verification can use the checkout before it is published.
+- Update bundle roadmap references, setup instructions and plugin/library documentation. Keep
+  bundled Git/authentication work in `release-binaries.md` and website instructions deferred.
+
+Checkpoint: a fresh goofi contains only builtin nodes and runs without the moved bundles' packages.
+The separate repo indexes correctly; individual bundle installs use the standard library path.
+Run the remaining core suite and the focused library sessions. Commit tested changes in each repo
+without including unrelated files. Publication or a push is a separate action, not required here.
+
+### Stage 8 — Frontend library panel
+
+Status: pending.
+
+- Register a library app panel through the existing shared panel vocabulary. Keep `panelty` in
+  charge of panel layout/mechanics and use existing UI primitives and root tokens.
+- Show builtin, `_local`, installed and available bundle/node records with inspection and useful
+  search/filter controls. Display external bundles as `<uname>/<repo>/<bundle>`.
+- Add source register/unregister, whole-bundle plus/remove, repo update check/pull and preparation
+  status/errors. A node detail offers its bundle's install action. No node-only installation,
+  favourites, hiding, publishing service or second dependency management UI.
+- Use shared operation results for installed/update/availability state. Local filter text and
+  selection are presentation state; do not copy library rules into stores or components.
+- Keep available uninstalled nodes out of the runtime add menu until installed/prepared. Keep
+  library navigation and management out of patch undo/dirty state. Preserve cable dragging and
+  workspace layout, and use container queries for panel sizing.
+
+Checkpoint: typecheck and frontend tests pass. A relevant Playwright session browses/filters a
+fixture source, inspects nodes, installs a bundle, sees it in the add menu, observes preparation
+failure/update state and removes it. Verify touch/desktop layouts and socket catalogue updates
+through existing layout/gesture sessions. Do not test throughput or add timing thresholds.
+
+### Stage 9 — Final audit and completion
+
+Status: pending.
+
+- Audit from real CLI/app/MCP callers through the common operation path. Check ownership,
+  batching, source selection, graph projection, errors, resource release and patch behavior.
+- Search for old custom paths, flat unmanaged roots, bare-name collision selection, duplicate
+  op declarations, external product test dependencies and shipped external requirements. Delete
+  obsolete code/schemas/configuration and ensure each shared rule has one owner.
+- Run final workspace and frontend checks, plus the relevant browser suite. Fix warnings and
+  substantive failures, then review the fixes again. Report failed/skipped checks explicitly.
+- Verify ordinary authenticated Git use locally. Do not implement deferred distribution login,
+  hosted services, website author guides or external product test infrastructure.
+- Update documentation and stage status. Remove this roadmap entry only when the local feature
+  is complete; leave deferred release work in the release roadmap. Commit the final tested state.
+
+Final required checks from `AGENTS.md`:
+
+```sh
+cargo build --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --no-fail-fast
+npm --prefix frontend run check
+npm --prefix frontend run test
+```
+
+Run the relevant Playwright sessions from `tests/e2e` with the real backend. During development,
+run checks scoped to the stage and affected public sessions; run the full set at completion.
+Do not repeat broad checks after they pass unless a change or failure gives a reason.
+
+## Accepted behavior defaults
+
+- Static fields that require evaluation stay unknown until a local probe supplies them.
+- Check upstream on explicit refresh or panel entry. Pull only on user action, with fast-forward
+  behavior. Leave conflicts/divergence to manual Git; no automatic stash, reset or merge.
+- Uninstall removes the selection and reduces sparse paths when safe. Keep the shared checkout,
+  Git objects and Python packages. Source unregistration does not uninstall its bundles.
+- The first-party repo is available by default; no external bundles install by default.
+- Patch load uses current installed source, reports missing bundles and does not automatically
+  install/pull. `_local` and patch-authored source remain portable inside the archive.
+
+## Continuation after context compaction
+
+- Read this file and `AGENTS.md`, then inspect the current diffs in goofi and `../goofi-nodes`.
+- All stages are pending. The approved architecture is the decisions/convention/lifecycle above;
+  no additional product approval is needed to implement it when the user resumes the build.
+- This turn creates the staged plan only. Do not interpret the pending statuses as permission
+  to start implementation before that resume instruction.
+- Work through the stage checkpoints on `main`, preserve shared changes, and commit tested work
+  with the required model trailer. Resolve routine implementation choices from the agreed design;
+  ask only if evidence requires a material change to the product contract.
