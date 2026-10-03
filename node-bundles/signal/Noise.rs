@@ -158,7 +158,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "noise",
         name: "amplitude",
-        spec: ParamSpec::Float { default: 1.0, min: -1.0e6, max: 1.0e6 },
+        spec: ParamSpec::Num { default: &[1.0], min: -1.0e6, max: 1.0e6, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Scales every sample, so the noise spans minus this to plus this."),
         section: 0,
@@ -168,7 +168,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "noise",
         name: "offset",
-        spec: ParamSpec::Float { default: 0.0, min: -1.0e6, max: 1.0e6 },
+        spec: ParamSpec::Num { default: &[0.0], min: -1.0e6, max: 1.0e6, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Added to every sample, so the noise sits around a value other than zero."),
         section: 0,
@@ -178,7 +178,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "noise",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: i32::MAX as i64, options: &[] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: i32::MAX as f64, int: true, options: &[], color: false },
         expression: None,
         doc: Some("Fixes the stream so a patch replays the same noise; -1 takes a fresh one."),
         section: 0,
@@ -201,7 +201,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "output",
         name: "sfreq",
-        spec: ParamSpec::Float { default: 250.0, min: 1.0, max: 10_000.0 },
+        spec: ParamSpec::Num { default: &[250.0], min: 1.0, max: 10_000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Sample rate within an emitted block, in Hz. `value` mode ignores it."),
         section: 0,
@@ -211,7 +211,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "output",
         name: "channels",
-        spec: ParamSpec::Int { default: 1, min: 1, max: 64, options: &[] },
+        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 64.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("How many independent noise streams to emit, one per channel."),
         section: 0,
@@ -223,7 +223,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "common",
         name: "max_frequency",
-        spec: ParamSpec::Float { default: 30.0, min: 0.0, max: 1000.0 },
+        spec: ParamSpec::Num { default: &[30.0], min: 0.0, max: 1000.0, int: false, options: &[], color: false },
         expression: Some(ExprDecl { source: "variables.system.default_ufreq", mode: ExprMode::On, trigger: true }),
         doc: Some(
             "How many frames a second to emit. Bound to the patch's `default_ufreq` variable, so \

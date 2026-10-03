@@ -17,9 +17,9 @@ class PermutationEntropy(goofi.Node):
     OUTPUTS = {"entropy": goofi.DataType.ARRAY}
     PARAMS = {
         "permutation": {
-            "order": goofi.IntParam(3, 2, 7, doc="How many samples make one ordering pattern."),
-            "delay": goofi.IntParam(
-                1, 1, 100, doc="Samples between the members of a pattern; raise it for a slower rhythm."
+            "order": goofi.NumParam(3, 2, 7, int=True, doc="How many samples make one ordering pattern."),
+            "delay": goofi.NumParam(
+                1, 1, 100, int=True, doc="Samples between the members of a pattern; raise it for a slower rhythm."
             ),
             "normalize": goofi.BoolParam(True, doc="Scale to 0..1 against the most disordered signal."),
         }

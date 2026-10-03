@@ -144,7 +144,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "readout",
         name: "regularization",
-        spec: ParamSpec::Float { default: 1.0, min: 1.0e-6, max: 1000.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 1.0e-6, max: 1000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("How cautious the first steps are. Larger learns slower and is steadier on a state with few directions."),
         section: 0,

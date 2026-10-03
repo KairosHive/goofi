@@ -15,7 +15,7 @@ import goofi
 class Affine(goofi.Node):
     INPUTS = {"data": goofi.DataType.ARRAY}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
-    PARAMS = {"gain": {"factor": goofi.IntParam(1, 0, 100)}}
+    PARAMS = {"gain": {"factor": goofi.NumParam(1, 0, 100, int=True)}}
     def setup(self):
         self._base = 10
     def process(self, data):
@@ -94,7 +94,7 @@ import numpy as np
 class Once(goofi.Node):
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     PRODUCER = True
-    PARAMS = {"send": {"value": goofi.IntParam(0, 0, 100)}}
+    PARAMS = {"send": {"value": goofi.NumParam(0, 0, 100, int=True)}}
     def setup(self):
         self.last = 0
     def process(self):
@@ -110,7 +110,7 @@ import numpy as np
 class Consume(goofi.Node):
     INPUTS = {"data": goofi.InputSlot(goofi.DataType.ARRAY, multi=True)}
     OUTPUTS = {"out": goofi.DataType.ARRAY, "ran": goofi.DataType.ARRAY}
-    PARAMS = {"consume": {"mode": goofi.IntParam(0, 0, 4)}}
+    PARAMS = {"consume": {"mode": goofi.NumParam(0, 0, 4, int=True)}}
     def process(self, data):
         mode = self.params.consume.mode
         ran = np.array([mode], dtype=np.float32)
@@ -530,7 +530,7 @@ import numpy as np
 class Parity(goofi.Node):
     INPUTS = {"data": goofi.DataType.ARRAY}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
-    PARAMS = {"gain": {"factor": goofi.IntParam(1, 0, 100)}}
+    PARAMS = {"gain": {"factor": goofi.NumParam(1, 0, 100, int=True)}}
     def setup(self):
         self._base = 10
     def process(self, data):

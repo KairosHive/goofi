@@ -190,8 +190,13 @@ fn apply_params(py: Python<'_>, instance: &Bound<'_, PyAny>, params: &Groups) ->
 /// A `Param` as a native Python scalar.
 pub fn param_to_py<'py>(py: Python<'py>, p: &Param) -> PyResult<Bound<'py, PyAny>> {
     Ok(match p {
-        Param::Float { value, .. } => value.into_bound_py_any(py)?,
-        Param::Int { value, .. } => value.into_bound_py_any(py)?,
+        // A one-dimensional number is a bare `float` or `int`; a vector is a list of them.
+        Param::Num { value, int, .. } => match (value.as_slice(), int) {
+            ([v], true) => (v.round() as i64).into_bound_py_any(py)?,
+            ([v], false) => v.into_bound_py_any(py)?,
+            (vs, true) => vs.iter().map(|v| v.round() as i64).collect::<Vec<i64>>().into_bound_py_any(py)?,
+            (vs, false) => vs.to_vec().into_bound_py_any(py)?,
+        },
         Param::Bool { value } => value.into_bound_py_any(py)?,
         Param::Str { value, .. } => value.into_bound_py_any(py)?,
         Param::Pulse => py.None().into_bound(py),

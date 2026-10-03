@@ -6,6 +6,7 @@ export function literalFor(d: ParamDescriptor): string {
 	if (d.type === 'pulse') return 'False';
 	const v = d.value;
 	if (typeof v === 'number') return String(v);
+	if (Array.isArray(v)) return `[${v.join(', ')}]`;
 	if (typeof v === 'boolean') return v ? 'True' : 'False';
 	return JSON.stringify(v);
 }

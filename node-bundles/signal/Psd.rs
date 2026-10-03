@@ -161,7 +161,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "psd",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
         expression: None,
         doc: Some("Which axis holds the samples. -1 is time."),
         section: 0,
@@ -185,7 +185,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "welch",
         name: "segment",
-        spec: ParamSpec::Float { default: 0.4, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[0.4], min: 0.0, max: 1.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("How long one segment is. A longer segment tells frequencies apart better."),
         section: 0,
@@ -195,7 +195,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "welch",
         name: "overlap",
-        spec: ParamSpec::Float { default: 0.3, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[0.3], min: 0.0, max: 1.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some(
             "How much of a segment the next one repeats, in `unit`. More overlap is steadier and \
@@ -208,7 +208,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "range",
         name: "low",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 10_000.0 },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 10_000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("The lowest frequency to keep, in Hz."),
         section: 0,
@@ -218,7 +218,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "range",
         name: "high",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 10_000.0 },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 10_000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("The highest frequency to keep, in Hz. 0 keeps every bin above `low`."),
         section: 0,

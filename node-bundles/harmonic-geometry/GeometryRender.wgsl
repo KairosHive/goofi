@@ -3,12 +3,12 @@
   "tags": ["image", "transform"],
   "inputs": [{"name": "geometry", "kind": "ARRAY"}],
   "params": [
-    {"group": "view", "name": "radius", "kind": "float", "default": 2.0, "min": 0.01, "max": 1000.0, "doc": "Fixed coordinate half-width. No automatic fit or camera animation."},
-    {"group": "ink", "name": "thickness", "kind": "float", "default": 1.5, "min": 0.5, "max": 8.0},
+    {"group": "view", "name": "radius", "kind": "num", "default": 2.0, "min": 0.01, "max": 1000.0, "doc": "Fixed coordinate half-width. No automatic fit or camera animation."},
+    {"group": "ink", "name": "thickness", "kind": "num", "default": 1.5, "min": 0.5, "max": 8.0},
     {"group": "ink", "name": "style", "kind": "str", "default": "surface", "options": ["surface", "wireframe"], "doc": "Filled matte triangles or triangle edges."},
-    {"group": "ink", "name": "warmth", "kind": "float", "default": 0.5, "min": 0.0, "max": 1.0},
-    {"group": "common", "name": "width", "kind": "int", "default": 256, "min": 0, "max": 4096},
-    {"group": "common", "name": "height", "kind": "int", "default": 256, "min": 0, "max": 4096}
+    {"group": "ink", "name": "warmth", "kind": "num", "default": 0.5, "min": 0.0, "max": 1.0},
+    {"group": "common", "name": "width", "kind": "num", "int": true, "default": 256, "min": 0, "max": 4096},
+    {"group": "common", "name": "height", "kind": "num", "int": true, "default": 256, "min": 0, "max": 4096}
   ] }
 */
 

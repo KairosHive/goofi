@@ -776,8 +776,7 @@ impl Engine for AudioEngine {
         if let Some(bytes) = self.state_path(uid, type_name).and_then(|p| std::fs::read(p).ok()) {
             node.load(&bytes);
         }
-        let atomics: Arc<[AtomicU64]> =
-            manifest.params.iter().map(|d| AtomicU64::new(goofi_runtime::scalar_of(params, d).to_bits())).collect();
+        let atomics: Arc<[AtomicU64]> = goofi_runtime::cells_of(params, manifest.params).into();
         let (inbox_in, inbox_out): (Vec<_>, Vec<_>) = manifest
             .inputs
             .iter()
@@ -979,8 +978,7 @@ impl Engine for AudioEngine {
             let steps = derived.params[i].1;
             let mut value = decl.spec.to_param();
             match &mut value {
-                Param::Float { value, .. } => *value = v.clamp(0.0, 1.0),
-                Param::Int { value, .. } => *value = (v.clamp(0.0, 1.0) * steps).round() as i64,
+                Param::Num { value, int, .. } => value[0] = if *int { (v.clamp(0.0, 1.0) * steps).round() } else { v.clamp(0.0, 1.0) },
                 Param::Str { value, options: Some(options), .. } => {
                     *value = options[((v.clamp(0.0, 1.0) * steps).round() as usize).min(options.len() - 1)].clone()
                 }

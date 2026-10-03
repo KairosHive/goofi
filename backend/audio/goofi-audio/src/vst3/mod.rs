@@ -396,7 +396,7 @@ const AUTOMATABLE: i32 = ParameterInfo_::ParameterFlags_::kCanAutomate;
 /// its params reaches the plugin.
 fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<(ParamID, f64)>) {
     let audio = goofi_core::SlotType::Audio.name().to_string();
-    let float = |default: f64, min: f64, max: f64| probe::ParamSpec::Float { default, min, max };
+    let float = |default: f64, min: f64, max: f64| probe::ParamSpec::Num { default: vec![default], min, max, int: false, options: vec![], color: false };
     let voice = |name: &str, doc: &str, spec: probe::ParamSpec| probe::Param {
         group: "voice".into(),
         name: name.into(),
@@ -441,7 +441,7 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
                 (probe::ParamSpec::Str { default, options, refresh: false }, p.steps as f64, p.title.clone())
             } else {
                 let default = (p.default * p.steps as f64).round() as i64;
-                (probe::ParamSpec::Int { default, min: 0, max: p.steps as i64, options: vec![] }, p.steps as f64, p.title.clone())
+                (probe::ParamSpec::Num { default: vec![default as f64], min: 0.0, max: p.steps as f64, int: true, options: vec![], color: false }, p.steps as f64, p.title.clone())
             };
             (p.id, steps, probe::Param { group, name, doc: Some(doc), expression: None, section: 0, show: None, role: None, spec })
         })

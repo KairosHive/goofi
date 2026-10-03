@@ -18,8 +18,8 @@ class Resample(goofi.Node):
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     PARAMS = {
         "resample": {
-            "sfreq": goofi.FloatParam(250.0, 1.0, 100000.0, doc="Target rate in Hz. The output carries the actual rate."),
-            "axis": goofi.IntParam(-1, -8, 7, options=[-2, -1, 0, 1, 2], doc="Which axis holds the samples. -1 is time."),
+            "sfreq": goofi.NumParam(250.0, 1.0, 100000.0, doc="Target rate in Hz. The output carries the actual rate."),
+            "axis": goofi.NumParam(-1, -8, 7, int=True, options=[-2, -1, 0, 1, 2], doc="Which axis holds the samples. -1 is time."),
         }
     }
 

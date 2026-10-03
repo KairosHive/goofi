@@ -42,8 +42,8 @@ class HarmonicModes(goofi.Node):
         "interpolation": goofi.StringParam("coordinates", ["coordinates", "fields"], doc="Coordinates change wavenumbers about the grid origin. Fields blend fixed endpoint modes without spatial scaling; recommended for Chladni state walks."),
         "pairs": goofi.StringParam("auto", ["auto", "all", "root", "adjacent"], doc="Biotuner pair subset for chord pairs. Auto uses all pairs for up to three ratios, root pairs for larger chords."),
         "strategy": goofi.StringParam("best_simple", ["stern_brocot", "continued_fraction", "rounded", "best_simple"], doc="Biotuner's ratio-to-mode mapping."),
-        "max_mode": goofi.IntParam(12, 1, 24, doc="Largest mode index on either axis."),
-        "mix": goofi.FloatParam(0.0, 0.0, 1.0, doc="Interpolation from input modes to target modes; wire mix or set here."),
+        "max_mode": goofi.NumParam(12, 1, 24, int=True, doc="Largest mode index on either axis."),
+        "mix": goofi.NumParam(0.0, 0.0, 1.0, doc="Interpolation from input modes to target modes; wire mix or set here."),
     }}
 
     def _modes(self, data):

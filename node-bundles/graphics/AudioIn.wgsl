@@ -7,9 +7,9 @@
     {"group": "audio", "name": "mode", "kind": "str", "default": "scroll",
      "options": ["scroll", "waterfall", "phase"]},
     {"group": "audio", "name": "autoscale", "kind": "bool", "default": true},
-    {"group": "audio", "name": "range", "kind": "float", "default": 1.0, "min": 0.000001, "max": 1000000.0},
-    {"group": "audio", "name": "decay", "kind": "float", "default": 0.94, "min": 0.0, "max": 1.0},
-    {"group": "audio", "name": "thickness", "kind": "float", "default": 1.5, "min": 0.5, "max": 8.0} ] }
+    {"group": "audio", "name": "range", "kind": "num", "default": 1.0, "min": 0.000001, "max": 1000000.0},
+    {"group": "audio", "name": "decay", "kind": "num", "default": 0.94, "min": 0.0, "max": 1.0},
+    {"group": "audio", "name": "thickness", "kind": "num", "default": 1.5, "min": 0.5, "max": 8.0} ] }
 */
 
 // A column folds at most this many samples, and a trace walks at most this many points: what

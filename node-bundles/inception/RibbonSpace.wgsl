@@ -13,7 +13,7 @@
     {
       "group": "inception",
       "name": "speed",
-      "kind": "float",
+      "kind": "num",
       "default": 0.24,
       "min": 0,
       "max": 2
@@ -21,7 +21,7 @@
     {
       "group": "inception",
       "name": "morph",
-      "kind": "float",
+      "kind": "num",
       "default": 0.5,
       "min": 0,
       "max": 4
@@ -29,7 +29,7 @@
     {
       "group": "inception",
       "name": "intricacy",
-      "kind": "float",
+      "kind": "num",
       "default": 0.65,
       "min": 0,
       "max": 1
@@ -37,7 +37,7 @@
     {
       "group": "inception",
       "name": "iridescence",
-      "kind": "float",
+      "kind": "num",
       "default": 0.8,
       "min": 0,
       "max": 1
@@ -45,7 +45,7 @@
     {
       "group": "inception",
       "name": "bloom",
-      "kind": "float",
+      "kind": "num",
       "default": 1.1,
       "min": 0.1,
       "max": 3
@@ -53,7 +53,7 @@
     {
       "group": "inception",
       "name": "zoom",
-      "kind": "float",
+      "kind": "num",
       "default": 1,
       "min": 0.4,
       "max": 2.5
@@ -61,7 +61,7 @@
     {
       "group": "form",
       "name": "petals",
-      "kind": "float",
+      "kind": "num",
       "default": 0.5,
       "min": 0,
       "max": 1
@@ -69,7 +69,7 @@
     {
       "group": "form",
       "name": "fold",
-      "kind": "float",
+      "kind": "num",
       "default": 0.115,
       "min": 0,
       "max": 0.3
@@ -77,7 +77,7 @@
     {
       "group": "form",
       "name": "warp",
-      "kind": "float",
+      "kind": "num",
       "default": 0.035,
       "min": 0,
       "max": 0.16
@@ -85,7 +85,7 @@
     {
       "group": "form",
       "name": "elongation",
-      "kind": "float",
+      "kind": "num",
       "default": 1,
       "min": 0.55,
       "max": 1.65
@@ -93,7 +93,7 @@
     {
       "group": "form",
       "name": "twist",
-      "kind": "float",
+      "kind": "num",
       "default": 0.055,
       "min": -0.2,
       "max": 0.2
@@ -101,7 +101,7 @@
     {
       "group": "form",
       "name": "spacing",
-      "kind": "float",
+      "kind": "num",
       "default": 1,
       "min": 0.4,
       "max": 2.4
@@ -109,7 +109,7 @@
     {
       "group": "form",
       "name": "rotation",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": -3.14,
       "max": 3.14
@@ -117,7 +117,7 @@
     {
       "group": "surface",
       "name": "membrane",
-      "kind": "float",
+      "kind": "num",
       "default": 0.065,
       "min": 0.015,
       "max": 0.16
@@ -125,7 +125,7 @@
     {
       "group": "surface",
       "name": "halo",
-      "kind": "float",
+      "kind": "num",
       "default": 0.025,
       "min": 0.005,
       "max": 0.09
@@ -133,7 +133,7 @@
     {
       "group": "surface",
       "name": "lace",
-      "kind": "float",
+      "kind": "num",
       "default": 0.65,
       "min": 0,
       "max": 1
@@ -141,7 +141,7 @@
     {
       "group": "surface",
       "name": "rib_density",
-      "kind": "float",
+      "kind": "num",
       "default": 1,
       "min": 0.3,
       "max": 2
@@ -149,7 +149,7 @@
     {
       "group": "surface",
       "name": "transparency",
-      "kind": "float",
+      "kind": "num",
       "default": 0.895,
       "min": 0.5,
       "max": 1
@@ -157,7 +157,7 @@
     {
       "group": "color",
       "name": "hue",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": -1,
       "max": 1
@@ -165,7 +165,7 @@
     {
       "group": "color",
       "name": "dispersion",
-      "kind": "float",
+      "kind": "num",
       "default": 0.073,
       "min": 0,
       "max": 0.2
@@ -173,7 +173,7 @@
     {
       "group": "color",
       "name": "core",
-      "kind": "float",
+      "kind": "num",
       "default": 1,
       "min": 0,
       "max": 2
@@ -181,7 +181,7 @@
     {
       "group": "color",
       "name": "aura",
-      "kind": "float",
+      "kind": "num",
       "default": 1,
       "min": 0,
       "max": 3
@@ -189,7 +189,7 @@
     {
       "group": "life",
       "name": "feed",
-      "kind": "float",
+      "kind": "num",
       "default": 0.035,
       "min": 0.025,
       "max": 0.045
@@ -197,7 +197,7 @@
     {
       "group": "life",
       "name": "kill",
-      "kind": "float",
+      "kind": "num",
       "default": 0.06,
       "min": 0.054,
       "max": 0.066
@@ -205,7 +205,7 @@
     {
       "group": "life",
       "name": "metabolism",
-      "kind": "float",
+      "kind": "num",
       "default": 0.8,
       "min": 0.3,
       "max": 1
@@ -213,7 +213,7 @@
     {
       "group": "life",
       "name": "emergence",
-      "kind": "float",
+      "kind": "num",
       "default": 0.6,
       "min": 0,
       "max": 1
@@ -221,7 +221,7 @@
     {
       "group": "motion",
       "name": "flow",
-      "kind": "float",
+      "kind": "num",
       "default": 0.18,
       "min": 0,
       "max": 0.5
@@ -229,7 +229,7 @@
     {
       "group": "motion",
       "name": "turbulence",
-      "kind": "float",
+      "kind": "num",
       "default": 0.4,
       "min": 0,
       "max": 1
@@ -237,7 +237,7 @@
     {
       "group": "motion",
       "name": "orbit",
-      "kind": "float",
+      "kind": "num",
       "default": 0.08,
       "min": 0,
       "max": 0.2
@@ -245,7 +245,7 @@
     {
       "group": "motion",
       "name": "peristalsis",
-      "kind": "float",
+      "kind": "num",
       "default": 0.35,
       "min": 0,
       "max": 1
@@ -253,7 +253,7 @@
     {
       "group": "lfo_rates",
       "name": "speed_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0031,
       "min": 0.0001,
       "max": 0.1
@@ -261,7 +261,7 @@
     {
       "group": "lfo_depths",
       "name": "speed_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.09,
       "min": 0,
       "max": 1
@@ -269,7 +269,7 @@
     {
       "group": "lfo_rates",
       "name": "morph_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0037,
       "min": 0.0001,
       "max": 0.1
@@ -277,7 +277,7 @@
     {
       "group": "lfo_depths",
       "name": "morph_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 1.5,
       "min": 0,
       "max": 2
@@ -285,7 +285,7 @@
     {
       "group": "lfo_rates",
       "name": "intricacy_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0071,
       "min": 0.0001,
       "max": 0.1
@@ -293,7 +293,7 @@
     {
       "group": "lfo_depths",
       "name": "intricacy_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.3,
       "min": 0,
       "max": 0.5
@@ -301,7 +301,7 @@
     {
       "group": "lfo_rates",
       "name": "iridescence_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0043,
       "min": 0.0001,
       "max": 0.1
@@ -309,7 +309,7 @@
     {
       "group": "lfo_depths",
       "name": "iridescence_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.26,
       "min": 0,
       "max": 0.5
@@ -317,7 +317,7 @@
     {
       "group": "lfo_rates",
       "name": "bloom_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0053,
       "min": 0.0001,
       "max": 0.1
@@ -325,7 +325,7 @@
     {
       "group": "lfo_depths",
       "name": "bloom_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.4,
       "min": 0,
       "max": 1.45
@@ -333,7 +333,7 @@
     {
       "group": "lfo_rates",
       "name": "zoom_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0047,
       "min": 0.0001,
       "max": 0.1
@@ -341,7 +341,7 @@
     {
       "group": "lfo_depths",
       "name": "zoom_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.16,
       "min": 0,
       "max": 1.05
@@ -349,7 +349,7 @@
     {
       "group": "lfo_rates",
       "name": "petals_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0061,
       "min": 0.0001,
       "max": 0.1
@@ -357,7 +357,7 @@
     {
       "group": "lfo_depths",
       "name": "petals_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.47,
       "min": 0,
       "max": 0.5
@@ -365,7 +365,7 @@
     {
       "group": "lfo_rates",
       "name": "fold_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0083,
       "min": 0.0001,
       "max": 0.1
@@ -373,7 +373,7 @@
     {
       "group": "lfo_depths",
       "name": "fold_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.11,
       "min": 0,
       "max": 0.15
@@ -381,7 +381,7 @@
     {
       "group": "lfo_rates",
       "name": "warp_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0097,
       "min": 0.0001,
       "max": 0.1
@@ -389,7 +389,7 @@
     {
       "group": "lfo_depths",
       "name": "warp_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.06,
       "min": 0,
       "max": 0.08
@@ -397,7 +397,7 @@
     {
       "group": "lfo_rates",
       "name": "elongation_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0059,
       "min": 0.0001,
       "max": 0.1
@@ -405,7 +405,7 @@
     {
       "group": "lfo_depths",
       "name": "elongation_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.3,
       "min": 0,
       "max": 0.5499999999999999
@@ -413,7 +413,7 @@
     {
       "group": "lfo_rates",
       "name": "twist_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0041,
       "min": 0.0001,
       "max": 0.1
@@ -421,7 +421,7 @@
     {
       "group": "lfo_depths",
       "name": "twist_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.15,
       "min": 0,
       "max": 0.2
@@ -429,7 +429,7 @@
     {
       "group": "lfo_rates",
       "name": "spacing_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0033,
       "min": 0.0001,
       "max": 0.1
@@ -437,7 +437,7 @@
     {
       "group": "lfo_depths",
       "name": "spacing_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.65,
       "min": 0,
       "max": 1
@@ -445,7 +445,7 @@
     {
       "group": "lfo_rates",
       "name": "rotation_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0029,
       "min": 0.0001,
       "max": 0.1
@@ -453,7 +453,7 @@
     {
       "group": "lfo_depths",
       "name": "rotation_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 1.4,
       "min": 0,
       "max": 3.14
@@ -461,7 +461,7 @@
     {
       "group": "lfo_rates",
       "name": "membrane_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0067,
       "min": 0.0001,
       "max": 0.1
@@ -469,7 +469,7 @@
     {
       "group": "lfo_depths",
       "name": "membrane_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.045,
       "min": 0,
       "max": 0.07250000000000001
@@ -477,7 +477,7 @@
     {
       "group": "lfo_rates",
       "name": "halo_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0079,
       "min": 0.0001,
       "max": 0.1
@@ -485,7 +485,7 @@
     {
       "group": "lfo_depths",
       "name": "halo_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.022,
       "min": 0,
       "max": 0.042499999999999996
@@ -493,7 +493,7 @@
     {
       "group": "lfo_rates",
       "name": "lace_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0103,
       "min": 0.0001,
       "max": 0.1
@@ -501,7 +501,7 @@
     {
       "group": "lfo_depths",
       "name": "lace_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.4,
       "min": 0,
       "max": 0.5
@@ -509,7 +509,7 @@
     {
       "group": "lfo_rates",
       "name": "rib_density_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0051,
       "min": 0.0001,
       "max": 0.1
@@ -517,7 +517,7 @@
     {
       "group": "lfo_depths",
       "name": "rib_density_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.6,
       "min": 0,
       "max": 0.85
@@ -525,7 +525,7 @@
     {
       "group": "lfo_rates",
       "name": "transparency_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0089,
       "min": 0.0001,
       "max": 0.1
@@ -533,7 +533,7 @@
     {
       "group": "lfo_depths",
       "name": "transparency_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.12,
       "min": 0,
       "max": 0.25
@@ -541,7 +541,7 @@
     {
       "group": "lfo_rates",
       "name": "hue_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0039,
       "min": 0.0001,
       "max": 0.1
@@ -549,7 +549,7 @@
     {
       "group": "lfo_depths",
       "name": "hue_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.7,
       "min": 0,
       "max": 1
@@ -557,7 +557,7 @@
     {
       "group": "lfo_rates",
       "name": "dispersion_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0057,
       "min": 0.0001,
       "max": 0.1
@@ -565,7 +565,7 @@
     {
       "group": "lfo_depths",
       "name": "dispersion_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.07,
       "min": 0,
       "max": 0.1
@@ -573,7 +573,7 @@
     {
       "group": "lfo_rates",
       "name": "core_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0127,
       "min": 0.0001,
       "max": 0.1
@@ -581,7 +581,7 @@
     {
       "group": "lfo_depths",
       "name": "core_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.8,
       "min": 0,
       "max": 1
@@ -589,7 +589,7 @@
     {
       "group": "lfo_rates",
       "name": "aura_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0113,
       "min": 0.0001,
       "max": 0.1
@@ -597,7 +597,7 @@
     {
       "group": "lfo_depths",
       "name": "aura_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 1,
       "min": 0,
       "max": 1.5
@@ -605,7 +605,7 @@
     {
       "group": "lfo_rates",
       "name": "feed_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0023,
       "min": 0.0001,
       "max": 0.1
@@ -613,7 +613,7 @@
     {
       "group": "lfo_depths",
       "name": "feed_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.003,
       "min": 0,
       "max": 0.009999999999999998
@@ -621,7 +621,7 @@
     {
       "group": "lfo_rates",
       "name": "kill_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0019,
       "min": 0.0001,
       "max": 0.1
@@ -629,7 +629,7 @@
     {
       "group": "lfo_depths",
       "name": "kill_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.002,
       "min": 0,
       "max": 0.006000000000000002
@@ -637,7 +637,7 @@
     {
       "group": "lfo_rates",
       "name": "metabolism_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0063,
       "min": 0.0001,
       "max": 0.1
@@ -645,7 +645,7 @@
     {
       "group": "lfo_depths",
       "name": "metabolism_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.15,
       "min": 0,
       "max": 0.35
@@ -653,7 +653,7 @@
     {
       "group": "lfo_rates",
       "name": "emergence_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0049,
       "min": 0.0001,
       "max": 0.1
@@ -661,7 +661,7 @@
     {
       "group": "lfo_depths",
       "name": "emergence_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.25,
       "min": 0,
       "max": 0.5
@@ -669,7 +669,7 @@
     {
       "group": "lfo_rates",
       "name": "flow_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0073,
       "min": 0.0001,
       "max": 0.1
@@ -677,7 +677,7 @@
     {
       "group": "lfo_depths",
       "name": "flow_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.14,
       "min": 0,
       "max": 0.25
@@ -685,7 +685,7 @@
     {
       "group": "lfo_rates",
       "name": "turbulence_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0081,
       "min": 0.0001,
       "max": 0.1
@@ -693,7 +693,7 @@
     {
       "group": "lfo_depths",
       "name": "turbulence_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.3,
       "min": 0,
       "max": 0.5
@@ -701,7 +701,7 @@
     {
       "group": "lfo_rates",
       "name": "orbit_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0036,
       "min": 0.0001,
       "max": 0.1
@@ -709,7 +709,7 @@
     {
       "group": "lfo_depths",
       "name": "orbit_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.065,
       "min": 0,
       "max": 0.1
@@ -717,7 +717,7 @@
     {
       "group": "lfo_rates",
       "name": "peristalsis_hz",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0091,
       "min": 0.0001,
       "max": 0.1
@@ -725,7 +725,7 @@
     {
       "group": "lfo_depths",
       "name": "peristalsis_depth",
-      "kind": "float",
+      "kind": "num",
       "default": 0.3,
       "min": 0,
       "max": 0.5

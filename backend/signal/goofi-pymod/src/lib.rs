@@ -31,8 +31,8 @@ pub fn goofi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<params::DataType>()?;
     m.add_class::<texture::Texture>()?;
     m.add_class::<params::InputSlot>()?;
-    m.add_class::<params::IntParam>()?;
-    m.add_class::<params::FloatParam>()?;
+    m.add_class::<params::NumParam>()?;
+    m.add_class::<params::ColorParam>()?;
     m.add_class::<params::BoolParam>()?;
     m.add_class::<params::StringParam>()?;
     m.add_class::<params::PulseParam>()?;

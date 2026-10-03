@@ -63,9 +63,9 @@ class VitalPreset(goofi.Node):
             "kind": goofi.StringParam("spectral", list(KINDS), doc="spectral: pad; bell: percussive; wavetableMorph: moving spectrum; ensemble: several presets."),
             "name": goofi.StringParam("biotuner", doc="Preset name and file stem, without a path or extension."),
             "folder": goofi.StringParam("", doc="Export folder. Empty uses presets in the patch workspace."),
-            "row": goofi.IntParam(0, 0, 65535, doc="Tuning or partial row to export, counting from zero."),
-            "signalRow": goofi.IntParam(0, 0, 65535, doc="Raw signal row used by ensemble."),
-            "base_freq": goofi.FloatParam(220.0, 20.0, 2000.0, doc="Tuning reference in Hz; explicit partials use their base_freq metadata when present."),
+            "row": goofi.NumParam(0, 0, 65535, int=True, doc="Tuning or partial row to export, counting from zero."),
+            "signalRow": goofi.NumParam(0, 0, 65535, int=True, doc="Raw signal row used by ensemble."),
+            "base_freq": goofi.NumParam(220.0, 20.0, 2000.0, doc="Tuning reference in Hz; explicit partials use their base_freq metadata when present."),
             "matching": goofi.StringParam(
                 "consonance_weighted",
                 ["consonance_weighted", "direct", "sethares", "harmonic_entropy", "hybrid"],

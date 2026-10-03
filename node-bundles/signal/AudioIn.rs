@@ -108,7 +108,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "audio",
         name: "size",
-        spec: ParamSpec::Float { default: 1024.0, min: 0.001, max: 1_000_000.0 },
+        spec: ParamSpec::Num { default: &[1024.0], min: 0.001, max: 1_000_000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Window length, or length behind each level, in the selected unit."),
         section: 0,

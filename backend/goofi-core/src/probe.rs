@@ -106,8 +106,19 @@ pub struct Show {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ParamSpec {
-    Int { default: i64, min: i64, max: i64, #[serde(default)] options: Vec<i64> },
-    Float { default: f64, min: f64, max: f64 },
+    /// A number, or a vector of them: `default` is one value or one per dimension.
+    Num {
+        #[serde(deserialize_with = "one_or_many")]
+        default: Vec<f64>,
+        min: f64,
+        max: f64,
+        #[serde(default)]
+        int: bool,
+        #[serde(default)]
+        options: Vec<i64>,
+        #[serde(default)]
+        color: bool,
+    },
     Bool { default: bool },
     Str {
         default: String,
@@ -117,4 +128,18 @@ pub enum ParamSpec {
         refresh: bool,
     },
     Pulse {},
+}
+
+/// A number on its own or a list of them, both read as the list.
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<f64>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(f64),
+        Many(Vec<f64>),
+    }
+    Ok(match OneOrMany::deserialize(d)? {
+        OneOrMany::One(v) => vec![v],
+        OneOrMany::Many(v) => v,
+    })
 }

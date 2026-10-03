@@ -40,10 +40,10 @@ class EuclidRhythm(goofi.Node):
             "mode": goofi.StringParam(
                 "normal", ["normal", "full", "consonant"], doc="Which rhythms a ratio yields. `consonant` filters instead."
             ),
-            "maxDenom": goofi.IntParam(10, 2, 64, doc="Largest denominator a ratio may be approximated by."),
-            "descend": goofi.IntParam(2, 1, 8, doc="consonant: octaves the scale is walked down before pairing."),
-            "tolerance": goofi.FloatParam(0.1, 0.001, 1.0, doc="consonant: how far from consonant a pair may sit."),
-            "finalDenom": goofi.IntParam(16, 2, 64, doc="consonant: largest denominator a kept rhythm may have."),
+            "maxDenom": goofi.NumParam(10, 2, 64, int=True, doc="Largest denominator a ratio may be approximated by."),
+            "descend": goofi.NumParam(2, 1, 8, int=True, doc="consonant: octaves the scale is walked down before pairing."),
+            "tolerance": goofi.NumParam(0.1, 0.001, 1.0, doc="consonant: how far from consonant a pair may sit."),
+            "finalDenom": goofi.NumParam(16, 2, 64, int=True, doc="consonant: largest denominator a kept rhythm may have."),
         }
     }
 

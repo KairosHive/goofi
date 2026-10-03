@@ -36,10 +36,10 @@ class Peaks(goofi.Node):
     OUTPUTS = {"peaks": goofi.DataType.ARRAY, "amps": goofi.DataType.ARRAY}
     PARAMS = {
         "peaks": {
-            "n_peaks": goofi.IntParam(5, 1, 10, doc="Peaks to look for, and the width of both outputs."),
-            "f_min": goofi.FloatParam(2.0, 0.1, 50.0, doc="Lowest frequency a peak may sit at, in Hz."),
-            "f_max": goofi.FloatParam(30.0, 1.0, 100.0, doc="Highest frequency a peak may sit at, in Hz."),
-            "precision": goofi.FloatParam(0.5, 0.01, 10.0, doc="Resolution of the search, in Hz. Finer costs more."),
+            "n_peaks": goofi.NumParam(5, 1, 10, int=True, doc="Peaks to look for, and the width of both outputs."),
+            "f_min": goofi.NumParam(2.0, 0.1, 50.0, doc="Lowest frequency a peak may sit at, in Hz."),
+            "f_max": goofi.NumParam(30.0, 1.0, 100.0, doc="Highest frequency a peak may sit at, in Hz."),
+            "precision": goofi.NumParam(0.5, 0.01, 10.0, doc="Resolution of the search, in Hz. Finer costs more."),
             "method": goofi.StringParam(
                 "fixed",
                 ["fixed", "EMD", "harmonic_recurrence", "EIMC"],

@@ -97,7 +97,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "window",
         name: "size",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 100_000.0 },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some(
             "How many past values each member is measured against. 0 keeps running statistics \

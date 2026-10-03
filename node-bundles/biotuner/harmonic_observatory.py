@@ -30,9 +30,9 @@ class HarmonicObservatory(goofi.Node):
     OUTPUTS = {"dashboard": goofi.DataType.ARRAY}
     PARAMS = {"display": {"channel": goofi.StringParam("First channel", ["First channel"], refresh=True,
                         doc="Channel to display. Refresh the list after connecting; unlabeled channels use row numbers."),
-                        "matrix_ceiling": goofi.FloatParam(0.0, 0.0, 100.0,
+                        "matrix_ceiling": goofi.NumParam(0.0, 0.0, 100.0,
                         doc="0 tracks a slowly decaying peak; positive fixes the color ceiling.")},
-              "common": {"max_frequency": goofi.FloatParam(6.0, 0.0, 30.0)}}
+              "common": {"max_frequency": goofi.NumParam(6.0, 0.0, 30.0)}}
 
     def setup(self):
         def font(size):

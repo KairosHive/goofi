@@ -209,7 +209,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "fft",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
         expression: None,
         doc: Some("Which axis holds the samples going forward, or the bins coming back. -1 is time."),
         section: 0,

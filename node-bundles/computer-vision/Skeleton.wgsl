@@ -11,23 +11,23 @@
     {"group": "rig", "name": "fit", "kind": "bool", "default": false,
      "doc": "Stretch the coordinates onto the frame using the range they themselves span. Off keeps the unit box a landmark already uses."},
 
-    {"group": "draw", "name": "bone", "kind": "float", "default": 10.0, "min": 0.0, "max": 80.0,
+    {"group": "draw", "name": "bone", "kind": "num", "default": 10.0, "min": 0.0, "max": 80.0,
      "doc": "How thick a link between two landmarks is drawn, in thousandths of the frame's height, so it keeps its weight at any size. Zero draws none."},
-    {"group": "draw", "name": "joint", "kind": "float", "default": 16.0, "min": 0.0, "max": 120.0,
+    {"group": "draw", "name": "joint", "kind": "num", "default": 16.0, "min": 0.0, "max": 120.0,
      "doc": "How big a landmark itself is drawn, in thousandths of the frame's height. Zero draws none."},
-    {"group": "draw", "name": "streak", "kind": "float", "default": 0.0, "min": 0.0, "max": 1.0,
+    {"group": "draw", "name": "streak", "kind": "num", "default": 0.0, "min": 0.0, "max": 1.0,
      "doc": "How many seconds of travel to show as a tail behind each landmark. A velocity is per SECOND, so a tenth already draws a long one."},
-    {"group": "draw", "name": "depth", "kind": "float", "default": 0.6, "min": 0.0, "max": 2.0,
+    {"group": "draw", "name": "depth", "kind": "num", "default": 0.6, "min": 0.0, "max": 2.0,
      "doc": "How much the third column shrinks and dims what is further away."},
 
     {"group": "tone", "name": "colour", "kind": "str", "default": "part",
      "options": ["part", "speed", "depth", "plain"],
      "doc": "What decides a landmark's colour: which part of the figure it is, how fast it moves, how far away it is, or nothing."},
-    {"group": "tone", "name": "hue", "kind": "float", "default": 0.55, "min": 0.0, "max": 1.0,
+    {"group": "tone", "name": "hue", "kind": "num", "default": 0.55, "min": 0.0, "max": 1.0,
      "doc": "Where the colouring starts."},
-    {"group": "tone", "name": "spread", "kind": "float", "default": 0.35, "min": 0.0, "max": 1.0,
+    {"group": "tone", "name": "spread", "kind": "num", "default": 0.35, "min": 0.0, "max": 1.0,
      "doc": "How far it wanders from there."},
-    {"group": "tone", "name": "glow", "kind": "float", "default": 1.0, "min": 0.0, "max": 4.0,
+    {"group": "tone", "name": "glow", "kind": "num", "default": 1.0, "min": 0.0, "max": 4.0,
      "doc": "How brightly it is drawn. Past 1 it blooms in whatever it is composited into."} ] }
 */
 

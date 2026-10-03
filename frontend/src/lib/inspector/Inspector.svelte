@@ -1,7 +1,7 @@
 <!-- The node inspector of the editor side pane and the Inspector panel: identity, group tabs, one
      ParamField per shown param, metadata and the node's error. -->
 <script lang="ts">
-	import { PARAM_MODES, type ParamDescriptor, type ParamMode, type SourcePatch } from '$lib/api/types';
+	import { numValue, PARAM_MODES, type ParamDescriptor, type ParamMode, type SourcePatch } from '$lib/api/types';
 	import { getControl, type NodeInstanceInfo } from '$lib/api/control';
 	import type { MenuItem } from 'panelty';
 	import { ContextMenu, createLongPress } from 'panelty';
@@ -266,15 +266,15 @@
 		}
 		if (!isNumeric(d)) return;
 		if (key === 'r') {
-			const min = d.type === 'int' ? Math.ceil(d.vmin) : d.vmin;
-			const max = d.type === 'int' ? Math.floor(d.vmax) : d.vmax;
+			const min = d.int ? Math.ceil(d.vmin) : d.vmin;
+			const max = d.int ? Math.floor(d.vmax) : d.vmax;
 			if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return;
 			event.preventDefault();
-			const fraction = Math.random();
-			const value = d.type === 'int'
-				? Math.min(max, min + Math.floor(fraction * (max - min + 1)))
-				: min * (1 - fraction) + max * fraction;
-			setValue(group, name, value);
+			const draw = (): number => {
+				const fraction = Math.random();
+				return d.int ? Math.min(max, min + Math.floor(fraction * (max - min + 1))) : min * (1 - fraction) + max * fraction;
+			};
+			setValue(group, name, Array.isArray(d.value) ? d.value.map(draw) : draw());
 		} else {
 			event.preventDefault();
 			modulate(group, name, key === 'l' ? 'lfo' : 'noi');
@@ -614,26 +614,27 @@
 								{#if searching}
 									<span class="pf-row-group" data-testid={`param-hit-group-${paramName}`}>{group}</span>
 								{/if}
-								{#if role?.as === 'count' && descriptor.type === 'int'}
+								{#if role?.as === 'count' && descriptor.type === 'num'}
+									{@const held = numValue(descriptor)}
 									<!-- A list's count is its heading: the name, how many, and a step either way. -->
 									<span class="pf-count-name" title={descriptor.doc ?? undefined}>{paramName}</span>
 									<IconButton
 										label={`One ${paramName} fewer`}
 										variant="ghost"
 										size="sm"
-										disabled={descriptor.value <= descriptor.vmin || descriptor.mode !== 'constant'}
-										onclick={() => setValue(group, paramName, descriptor.value - 1)}
+										disabled={held <= descriptor.vmin || descriptor.mode !== 'constant'}
+										onclick={() => setValue(group, paramName, held - 1)}
 										data-testid={`param-count-less-${paramName}`}
 									>
 										<Icon name="minus" />
 									</IconButton>
-									<span class="pf-count-value" data-testid={`param-count-${paramName}`}>{descriptor.value}</span>
+									<span class="pf-count-value" data-testid={`param-count-${paramName}`}>{held}</span>
 									<IconButton
 										label={`One ${paramName} more`}
 										variant="ghost"
 										size="sm"
-										disabled={descriptor.value >= descriptor.vmax || descriptor.mode !== 'constant'}
-										onclick={() => setValue(group, paramName, descriptor.value + 1)}
+										disabled={held >= descriptor.vmax || descriptor.mode !== 'constant'}
+										onclick={() => setValue(group, paramName, held + 1)}
 										data-testid={`param-count-more-${paramName}`}
 									>
 										<Icon name="plus" />

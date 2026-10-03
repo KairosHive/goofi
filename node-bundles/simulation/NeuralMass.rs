@@ -267,7 +267,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "mass",
         name: "size",
-        spec: ParamSpec::Int { default: 1, min: 1, max: 512, options: &[] },
+        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 512.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("How many populations, when nothing is wired. A `connectivity` matrix decides instead."),
         section: 0,
@@ -277,7 +277,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "mass",
         name: "coupling",
-        spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 50.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 50.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("How hard the network drives each population. With one population it does nothing."),
         section: 0,
@@ -287,7 +287,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "mass",
         name: "drive",
-        spec: ParamSpec::Float { default: 1.5, min: 0.0, max: 5.0 },
+        spec: ParamSpec::Num { default: &[1.5], min: 0.0, max: 5.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Background input every population gets, added to whatever the `input` slot carries."),
         section: 0,
@@ -297,7 +297,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "mass",
         name: "gain",
-        spec: ParamSpec::Float { default: 1.0, min: 0.1, max: 3.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 3.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("How steep the model's firing-rate curve is. Steeper swings harder for the same input."),
         section: 0,
@@ -307,7 +307,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "mass",
         name: "noise",
-        spec: ParamSpec::Float { default: 0.7, min: 0.0, max: 2.0 },
+        spec: ParamSpec::Num { default: &[0.7], min: 0.0, max: 2.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some(
             "Jitter on the input, as a fraction of `drive`. These rhythms are a resonance driven \
@@ -320,7 +320,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "dt",
-        spec: ParamSpec::Float { default: 0.001, min: 1.0e-6, max: 0.01 },
+        spec: ParamSpec::Num { default: &[0.001], min: 1.0e-6, max: 0.01, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Model seconds per step. Jansen-Rit needs a millisecond or less."),
         section: 0,
@@ -330,7 +330,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("Seeds the starting state and the noise. Negative takes a fresh one from the clock."),
         section: 0,
@@ -360,7 +360,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "output",
         name: "sfreq",
-        spec: ParamSpec::Float { default: 1000.0, min: 1.0, max: 20_000.0 },
+        spec: ParamSpec::Num { default: &[1000.0], min: 1.0, max: 20_000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
         section: 0,

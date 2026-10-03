@@ -24,11 +24,11 @@ class Fooof(goofi.Node):
             "mode": goofi.StringParam(
                 "fixed", ["fixed", "knee"], doc="`knee` adds a bend where the 1/f slope flattens at low frequency."
             ),
-            "max_peaks": goofi.IntParam(6, 1, 20, doc="Peaks to fit at most, and the width of `peaks`."),
-            "peak_width_min": goofi.FloatParam(0.5, 0.0, 100.0, doc="Narrowest peak fitted, in Hz."),
-            "peak_width_max": goofi.FloatParam(12.0, 0.0, 512.0, doc="Widest peak fitted, in Hz."),
-            "freq_min": goofi.FloatParam(0.0, 0.0, 1000.0, doc="Lowest frequency fitted; 0 takes the spectrum's own edge."),
-            "freq_max": goofi.FloatParam(0.0, 0.0, 1000.0, doc="Highest frequency fitted; 0 takes the spectrum's own edge."),
+            "max_peaks": goofi.NumParam(6, 1, 20, int=True, doc="Peaks to fit at most, and the width of `peaks`."),
+            "peak_width_min": goofi.NumParam(0.5, 0.0, 100.0, doc="Narrowest peak fitted, in Hz."),
+            "peak_width_max": goofi.NumParam(12.0, 0.0, 512.0, doc="Widest peak fitted, in Hz."),
+            "freq_min": goofi.NumParam(0.0, 0.0, 1000.0, doc="Lowest frequency fitted; 0 takes the spectrum's own edge."),
+            "freq_max": goofi.NumParam(0.0, 0.0, 1000.0, doc="Highest frequency fitted; 0 takes the spectrum's own edge."),
         }
     }
 

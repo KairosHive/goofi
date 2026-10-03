@@ -42,10 +42,10 @@ class Segment(goofi.Node):
             "subject": goofi.StringParam(
                 "selfie", SUBJECTS, doc="`selfie` is the person in front of the camera; `scene` tells twenty-one things apart."
             ),
-            "category": goofi.IntParam(
-                0, 0, 20, doc="Which of `scene`'s classes the mask is of, counting from the background. `selfie` has only its one."
+            "category": goofi.NumParam(
+                0, 0, 20, int=True, doc="Which of `scene`'s classes the mask is of, counting from the background. `selfie` has only its one."
             ),
-            "soften": goofi.FloatParam(0.0, 0.0, 32.0, doc="Blur the mask's edge by this many texels, so a cut does not read as a cut."),
+            "soften": goofi.NumParam(0.0, 0.0, 32.0, doc="Blur the mask's edge by this many texels, so a cut does not read as a cut."),
         }
     }
 

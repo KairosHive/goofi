@@ -4,11 +4,11 @@
   "inputs": [{"name": "input", "kind": "TEXTURE"}],
   "params": [
     {"group": "blur", "name": "mode", "kind": "str", "default": "gaussian", "options": ["gaussian", "box", "disk", "directional", "radial", "zoom"]},
-    {"group": "blur", "name": "radius", "kind": "float", "default": 0.005, "min": 0.0, "max": 0.25},
+    {"group": "blur", "name": "radius", "kind": "num", "default": 0.005, "min": 0.0, "max": 0.25},
     {"group": "blur", "name": "quality", "kind": "str", "default": "medium", "options": ["low", "medium", "high"]},
-    {"group": "blur", "name": "angle", "kind": "float", "default": 0.0, "min": -180.0, "max": 180.0},
-    {"group": "blur", "name": "center_x", "kind": "float", "default": 0.5, "min": 0.0, "max": 1.0},
-    {"group": "blur", "name": "center_y", "kind": "float", "default": 0.5, "min": 0.0, "max": 1.0} ] }
+    {"group": "blur", "name": "angle", "kind": "num", "default": 0.0, "min": -180.0, "max": 180.0},
+    {"group": "blur", "name": "center_x", "kind": "num", "default": 0.5, "min": 0.0, "max": 1.0},
+    {"group": "blur", "name": "center_y", "kind": "num", "default": 0.5, "min": 0.0, "max": 1.0} ] }
 */
 fn blur_texel(at: vec2i, size: vec2i) -> vec4f {
     let color = textureLoad(input, clamp(at, vec2i(0), size - vec2i(1)), 0);

@@ -50,7 +50,7 @@ pub fn common_decls(m: &NodeManifest) -> [ParamDecl; 3] {
         // Live on a producer; `trigger: true` is inert, as a `common.*` arrival never triggers a run.
         decl(
             "max_frequency",
-            ParamSpec::Float { default: 0.0, min: 0.0, max: 100.0 },
+            ParamSpec::Num { default: &[0.0], min: 0.0, max: 100.0, int: false, options: &[], color: false },
             Some(ExprDecl {
                 source: "variables.system.default_ufreq",
                 mode: if m.producer { ExprMode::On } else { ExprMode::Off },

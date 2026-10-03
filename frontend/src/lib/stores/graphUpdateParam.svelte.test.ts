@@ -24,11 +24,14 @@ function catalog(): NodeTypeInfo[] {
 			params: {
 				common: {
 					frequency: {
-						type: 'float',
+						type: 'num',
 						value: 1,
 						default: 1,
 						vmin: 0,
 						vmax: 1000,
+						int: false,
+						options: [],
+						color: false,
 						doc: null,
 						refreshable: false,
 						expression: null,

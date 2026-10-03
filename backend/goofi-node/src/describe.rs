@@ -104,11 +104,21 @@ fn camel(stem: &str) -> String {
 }
 
 /// Parse the introspection JSON. A `params` entry may be a SECTION rather than a param: it names
-/// its members' group, and with `repeat` it is a list, declared once and stored per slot.
+/// its members' group, and with `repeat` it is a list, declared once and stored per slot. A
+/// param of kind `color` is a four-dimensional `num` from 0 to 1, white unless it says.
 pub fn parse_introspection(json: &str) -> Result<probe::Introspection, String> {
     let mut value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
     if let Some(entries) = value.get_mut("params").and_then(|p| p.as_array_mut()) {
-        let flat = crate::sections::expand(std::mem::take(entries))?;
+        let mut flat = crate::sections::expand(std::mem::take(entries))?;
+        for p in flat.iter_mut().filter(|p| p.get("kind").and_then(|k| k.as_str()) == Some("color")) {
+            p["kind"] = serde_json::json!("num");
+            p["color"] = serde_json::json!(true);
+            p["min"] = serde_json::json!(0.0);
+            p["max"] = serde_json::json!(1.0);
+            if p.get("default").is_none() {
+                p["default"] = serde_json::json!([1.0, 1.0, 1.0, 1.0]);
+            }
+        }
         *entries = flat;
     }
     serde_json::from_value(value).map_err(|e| e.to_string())
@@ -164,8 +174,9 @@ pub fn describe(
                     }
                 }),
                 spec: match p.spec {
-                    ParamSpec::Int { default, min, max, options } => probe::ParamSpec::Int { default, min, max, options: options.to_vec() },
-                    ParamSpec::Float { default, min, max } => probe::ParamSpec::Float { default, min, max },
+                    ParamSpec::Num { default, min, max, int, options, color } => {
+                        probe::ParamSpec::Num { default: default.to_vec(), min, max, int, options: options.to_vec(), color }
+                    }
                     ParamSpec::Bool { default } => probe::ParamSpec::Bool { default },
                     ParamSpec::Str { default, options, refresh } => probe::ParamSpec::Str {
                         default: default.to_string(),
@@ -254,7 +265,7 @@ fn choices(spec: ParamSpec) -> Option<Vec<String>> {
         ParamSpec::Str { options, refresh: false, .. } if !options.is_empty() => {
             Some(options.iter().map(|o| o.to_string()).collect())
         }
-        ParamSpec::Int { options, .. } if !options.is_empty() => Some(options.iter().map(i64::to_string).collect()),
+        ParamSpec::Num { int: true, options, .. } if !options.is_empty() => Some(options.iter().map(i64::to_string).collect()),
         ParamSpec::Bool { .. } => Some(vec!["true".into(), "false".into()]),
         _ => None,
     }
@@ -332,12 +343,14 @@ pub fn leak_manifest(
 
 fn param_decl(p: &probe::Param) -> ParamDecl {
     let spec = match &p.spec {
-        probe::ParamSpec::Int { default, min, max, options } => {
-            ParamSpec::Int { default: *default, min: *min, max: *max, options: Box::leak(options.clone().into_boxed_slice()) }
-        }
-        probe::ParamSpec::Float { default, min, max } => {
-            ParamSpec::Float { default: *default, min: *min, max: *max }
-        }
+        probe::ParamSpec::Num { default, min, max, int, options, color } => ParamSpec::Num {
+            default: Box::leak(default.clone().into_boxed_slice()),
+            min: *min,
+            max: *max,
+            int: *int,
+            options: Box::leak(options.clone().into_boxed_slice()),
+            color: *color,
+        },
         probe::ParamSpec::Bool { default } => ParamSpec::Bool { default: *default },
         probe::ParamSpec::Str { default, options, refresh } => {
             let opts: Vec<&'static str> = options.iter().map(|s| leak_str(s)).collect();

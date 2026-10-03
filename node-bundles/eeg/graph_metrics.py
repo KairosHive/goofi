@@ -31,7 +31,7 @@ class GraphMetrics(goofi.Node):
     }
     PARAMS = {
         "graph": {
-            "density": goofi.FloatParam(
+            "density": goofi.NumParam(
                 0.2, 0.0, 1.0, doc="Fraction of the strongest edges to keep. 0 keeps the matrix as it is."
             ),
             "weighted": goofi.BoolParam(True, doc="Keep the surviving weights, or make every edge a 1."),

@@ -45,7 +45,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "constant",
         name: "value",
-        spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
+        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
         expression: None,
         doc: Some("The number every entry carries; in reference mode it follows another node's output."),
         section: 0,

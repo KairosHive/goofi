@@ -31,7 +31,7 @@ class Reference(goofi.Node):
         "reference": {
             "mode": goofi.StringParam("average", options=MODES, doc="What to subtract from every channel."),
             "channel": goofi.StringParam("", doc="For `channel`: the name, or a number counting from 0."),
-            "neighbours": goofi.IntParam(4, 1, 16, doc="For `laplacian`: how many nearest electrodes to average."),
+            "neighbours": goofi.NumParam(4, 1, 16, int=True, doc="For `laplacian`: how many nearest electrodes to average."),
             "exclude": goofi.StringParam("", doc="Channels to leave out of the reference, comma separated."),
         }
     }

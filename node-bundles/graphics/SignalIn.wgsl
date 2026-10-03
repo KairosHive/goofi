@@ -9,17 +9,17 @@
      "options": ["viridis", "magma", "plasma", "gray", "jet", "coolwarm"],
      "show": {"param": "mode", "any_of": ["texture"]}},
     {"group": "signal", "name": "autoscale", "kind": "bool", "default": true},
-    {"group": "signal", "name": "min", "kind": "float", "default": -1.0, "min": -10.0, "max": 10.0,
+    {"group": "signal", "name": "min", "kind": "num", "default": -1.0, "min": -10.0, "max": 10.0,
      "show": {"param": "autoscale", "any_of": ["false"]}},
-    {"group": "signal", "name": "max", "kind": "float", "default": 1.0, "min": -10.0, "max": 10.0,
+    {"group": "signal", "name": "max", "kind": "num", "default": 1.0, "min": -10.0, "max": 10.0,
      "show": {"param": "autoscale", "any_of": ["false"]}},
     {"group": "signal", "name": "log_x", "kind": "bool", "default": false,
      "show": {"param": "mode", "any_of": ["line"]}},
     {"group": "signal", "name": "log_y", "kind": "bool", "default": false,
      "show": {"param": "mode", "any_of": ["line", "trajectory"]}},
-    {"group": "signal", "name": "points", "kind": "float", "default": 0.0, "min": 0.0, "max": 12.0,
+    {"group": "signal", "name": "points", "kind": "num", "default": 0.0, "min": 0.0, "max": 12.0,
      "show": {"param": "mode", "any_of": ["line", "trajectory"]}},
-    {"group": "signal", "name": "thickness", "kind": "float", "default": 1.5, "min": 0.5, "max": 8.0,
+    {"group": "signal", "name": "thickness", "kind": "num", "default": 1.5, "min": 0.5, "max": 8.0,
      "show": {"param": "mode", "any_of": ["line", "trajectory"]}} ] }
 */
 

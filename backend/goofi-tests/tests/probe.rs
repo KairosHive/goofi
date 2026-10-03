@@ -245,7 +245,7 @@ fn every_param_kind_carries_its_doc_section_and_show_across_the_probe() {
     };
     assert_eq!(doc("count"), Some("how many"));
     let count = d.manifest.params.iter().find(|p| p.name == "count").unwrap();
-    assert!(matches!(count.spec, goofi_node::ParamSpec::Int { options: &[1, 2, 4, 8], .. }));
+    assert!(matches!(count.spec, goofi_node::ParamSpec::Num { int: true, options: &[1, 2, 4, 8], .. }));
     assert_eq!(doc("gain"), Some("how loud"));
     assert_eq!(doc("enabled"), Some("whether to run"));
     assert_eq!(doc("mode"), Some("which mode"));

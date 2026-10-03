@@ -49,7 +49,7 @@ class EegPlayback(goofi.Node):
                 expression='variables.system.goofi_home + "/data/samples/" + me.params.playback.sample',
             ),
             "loop": goofi.BoolParam(True, doc="Start over at the end, or stop there."),
-            "scale": goofi.FloatParam(1e6, 0.0, 1e9, doc="Multiplier on mne's volts; 1e6 reads as microvolts."),
+            "scale": goofi.NumParam(1e6, 0.0, 1e9, doc="Multiplier on mne's volts; 1e6 reads as microvolts."),
         }
     }
 

@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use crate::loader::{find_node_class, module_from_path};
-use crate::params::{BoolParam, DataType, FloatParam, InputSlot, IntParam, PulseParam, StringParam};
+use crate::params::{BoolParam, ColorParam, DataType, InputSlot, NumParam, PulseParam, StringParam};
 
 #[pyfunction]
 pub fn introspect(py: Python<'_>, path: &str) -> PyResult<String> {
@@ -106,8 +106,8 @@ fn params(d: &Bound<'_, PyAny>) -> PyResult<Vec<Param>> {
 /// A param descriptor is exactly one of our pyclasses, extracted typed.
 #[derive(FromPyObject)]
 enum ParamDescr<'py> {
-    Int(Bound<'py, IntParam>),
-    Float(Bound<'py, FloatParam>),
+    Num(Bound<'py, NumParam>),
+    Color(Bound<'py, ColorParam>),
     Bool(Bound<'py, BoolParam>),
     Str(Bound<'py, StringParam>),
     Pulse(Bound<'py, PulseParam>),
@@ -116,13 +116,23 @@ enum ParamDescr<'py> {
 /// The kind-specific spec plus the kind-independent `doc=`, `expression=` and `show=`.
 fn param_spec(descr: &Bound<'_, PyAny>) -> PyResult<(ParamSpec, Option<String>, Option<String>, crate::params::Show)> {
     Ok(match descr.extract::<ParamDescr>()? {
-        ParamDescr::Int(p) => {
+        ParamDescr::Num(p) => {
             let p = p.borrow();
-            (ParamSpec::Int { default: p.default, min: p.min, max: p.max, options: p.options.clone() }, p.doc.clone(), p.expression.clone(), p.show.clone())
+            (
+                ParamSpec::Num { default: p.default.clone(), min: p.min, max: p.max, int: p.int, options: p.options.clone(), color: p.color },
+                p.doc.clone(),
+                p.expression.clone(),
+                p.show.clone(),
+            )
         }
-        ParamDescr::Float(p) => {
+        ParamDescr::Color(p) => {
             let p = p.borrow();
-            (ParamSpec::Float { default: p.default, min: p.min, max: p.max }, p.doc.clone(), p.expression.clone(), p.show.clone())
+            (
+                ParamSpec::Num { default: p.default.clone(), min: 0.0, max: 1.0, int: false, options: Vec::new(), color: true },
+                p.doc.clone(),
+                p.expression.clone(),
+                p.show.clone(),
+            )
         }
         ParamDescr::Bool(p) => {
             let p = p.borrow();

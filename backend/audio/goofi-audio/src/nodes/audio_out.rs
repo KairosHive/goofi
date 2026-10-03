@@ -9,7 +9,7 @@ goofi_audio_sdk::params! {
     GAIN = ParamDecl {
         group: "audio",
         name: "gain",
-        spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 10.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 10.0, int: false, options: &[], color: false },
         expression: None,
         doc: None,
         section: 0,

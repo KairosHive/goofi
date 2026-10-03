@@ -79,8 +79,8 @@ pub enum ParamRole {
 #[derive(Serialize, TS)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ParamKind {
-    Float { value: f64, vmin: f64, vmax: f64 },
-    Int { value: i64, vmin: i64, vmax: i64, options: Vec<i64> },
+    /// A number, or a vector of them: `value` is bare for one dimension and a list for more.
+    Num { value: Scalar, vmin: f64, vmax: f64, int: bool, options: Vec<i64>, color: bool },
     Bool { value: bool },
     #[serde(rename = "string")]
     Str { value: String, options: Option<Vec<String>> },
@@ -119,10 +119,14 @@ pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi
         error: source.and_then(|s| s.error.clone()),
     };
     let kind = match p {
-        Param::Float { value, vmin, vmax } => ParamKind::Float { value: *value, vmin: *vmin, vmax: *vmax },
-        Param::Int { value, vmin, vmax, options } => {
-            ParamKind::Int { value: *value, vmin: *vmin, vmax: *vmax, options: options.clone() }
-        }
+        Param::Num { vmin, vmax, int, options, color, .. } => ParamKind::Num {
+            value: Scalar::of(p).expect("a number"),
+            vmin: *vmin,
+            vmax: *vmax,
+            int: *int,
+            options: options.clone(),
+            color: *color,
+        },
         Param::Bool { value } => ParamKind::Bool { value: *value },
         Param::Str { value, options, .. } => ParamKind::Str { value: value.clone(), options: options.clone() },
         Param::Pulse => ParamKind::Pulse { value: () },

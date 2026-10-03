@@ -71,7 +71,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "math",
         name: "pre_add",
-        spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
+        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Added to every value before the multiply, which is how you centre a signal."),
         section: 0,
@@ -81,7 +81,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "math",
         name: "multiply",
-        spec: ParamSpec::Float { default: 1.0, min: -1.0e9, max: 1.0e9 },
+        spec: ParamSpec::Num { default: &[1.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Scales every value; a negative number turns the signal upside down."),
         section: 0,
@@ -91,7 +91,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "math",
         name: "post_add",
-        spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
+        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Added to every value after the multiply, which is how you set a baseline."),
         section: 0,
@@ -101,7 +101,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "range",
         name: "from_low",
-        spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
+        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
         expression: None,
         doc: Some("The bottom of the range the values are expected to arrive in."),
         section: 0,
@@ -111,7 +111,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "range",
         name: "from_high",
-        spec: ParamSpec::Float { default: 1.0, min: -1.0e9, max: 1.0e9 },
+        spec: ParamSpec::Num { default: &[1.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
         expression: None,
         doc: Some("The top of the range the values are expected to arrive in."),
         section: 0,
@@ -121,7 +121,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "range",
         name: "to_low",
-        spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
+        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
         expression: None,
         doc: Some("The bottom of the range they are mapped onto."),
         section: 0,
@@ -131,7 +131,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "range",
         name: "to_high",
-        spec: ParamSpec::Float { default: 1.0, min: -1.0e9, max: 1.0e9 },
+        spec: ParamSpec::Num { default: &[1.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
         expression: None,
         doc: Some("The top of the range they are mapped onto."),
         section: 0,

@@ -138,8 +138,7 @@ impl Engine for SignalEngine {
             }
         }
         let decls = Self::decls_of(manifest);
-        let atomics: Arc<[AtomicU64]> =
-            decls.iter().map(|d| AtomicU64::new(goofi_runtime::scalar_of(params, d).to_bits())).collect();
+        let atomics: Arc<[AtomicU64]> = goofi_runtime::cells_of(params, &decls).into();
         let spawn = goofi_runtime::Spawn {
             engine: "signal",
             uid,

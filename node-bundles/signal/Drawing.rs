@@ -62,7 +62,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "drawing",
         name: "size",
-        spec: ParamSpec::Int { default: 512, min: 1, max: 4096, options: &[] },
+        spec: ParamSpec::Num { default: &[512.0], min: 1.0, max: 4096.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("The frame's width and height in pixels."),
         section: 0,

@@ -42,9 +42,9 @@ class EegPreprocess(goofi.Node):
     INPUTS = {"input": goofi.InputSlot(goofi.DataType.ARRAY, required=True)}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     PARAMS = {"eeg": {
-        "low": goofi.FloatParam(1.0, 0.1, 10.0),
-        "high": goofi.FloatParam(40.0, 10.0, 100.0),
-        "mains": goofi.FloatParam(60.0, 0.0, 100.0),
+        "low": goofi.NumParam(1.0, 0.1, 10.0),
+        "high": goofi.NumParam(40.0, 10.0, 100.0),
+        "mains": goofi.NumParam(60.0, 0.0, 100.0),
     }}
 
     def setup(self):

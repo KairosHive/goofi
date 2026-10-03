@@ -3,11 +3,11 @@
   "tags": ["image", "generator"],
   "params": [
     {"group": "shape", "name": "kind", "kind": "str", "default": "circle", "options": ["circle", "square", "ring"]},
-    {"group": "shape", "name": "size", "kind": "float", "default": 0.5, "min": 0.0, "max": 1.0},
-    {"group": "shape", "name": "soft", "kind": "float", "default": 0.01, "min": 0.0, "max": 0.5},
-    {"group": "shape", "name": "r", "kind": "float", "default": 1.0, "min": 0.0, "max": 1.0},
-    {"group": "shape", "name": "g", "kind": "float", "default": 1.0, "min": 0.0, "max": 1.0},
-    {"group": "shape", "name": "b", "kind": "float", "default": 1.0, "min": 0.0, "max": 1.0} ] }
+    {"group": "shape", "name": "size", "kind": "num", "default": 0.5, "min": 0.0, "max": 1.0},
+    {"group": "shape", "name": "soft", "kind": "num", "default": 0.01, "min": 0.0, "max": 0.5},
+    {"group": "shape", "name": "r", "kind": "num", "default": 1.0, "min": 0.0, "max": 1.0},
+    {"group": "shape", "name": "g", "kind": "num", "default": 1.0, "min": 0.0, "max": 1.0},
+    {"group": "shape", "name": "b", "kind": "num", "default": 1.0, "min": 0.0, "max": 1.0} ] }
 */
 fn shade(uv: vec2f) -> vec4f {
     let q = uv - vec2f(0.5);

@@ -24,7 +24,7 @@ const base = {
 } as const;
 
 const float = (value: number, dflt: number): ParamDescriptor =>
-	({ ...base, type: 'float', value, default: dflt, vmin: 0, vmax: 1 }) as ParamDescriptor;
+	({ ...base, type: 'num', value, default: dflt, vmin: 0, vmax: 1, int: false, options: [], color: false, section: 0, show: null, role: null }) as ParamDescriptor;
 
 const expr = (text: string, value = 0.5, dflt = 0.5): ParamDescriptor =>
 	({ ...float(value, dflt), mode: 'expression', expression: text }) as ParamDescriptor;
@@ -226,7 +226,7 @@ describe('settleNonDefault', () => {
 
 describe('shown', () => {
 	const count = (value: number): ParamDescriptor =>
-		({ ...base, type: 'int', value, default: 2, vmin: 1, vmax: 4, options: [], section: 0, show: null, role: { as: 'count', section: 'stops' } }) as ParamDescriptor;
+		({ ...base, type: 'num', value, default: 2, vmin: 1, vmax: 4, int: true, options: [], color: false, section: 0, show: null, role: { as: 'count', section: 'stops' } }) as ParamDescriptor;
 	const slot = (n: number): ParamDescriptor =>
 		({ ...float(0, 0), section: 0, show: null, role: { as: 'member', section: 'stops', base: 'at', slot: n } }) as ParamDescriptor;
 	const groups = { ramp: { stops: count(2), at_0: slot(0), at_1: slot(1), at_2: slot(2) } };

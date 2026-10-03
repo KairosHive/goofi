@@ -1147,9 +1147,7 @@ impl goofi_node::ExprEvaluator for FirstVar {
             })
             .ok_or_else(|| goofi_node::ExprError("no local arrived".into()))?;
         match ctx.target {
-            goofi_core::Param::Float { vmin, vmax, .. } => {
-                Ok(goofi_core::Param::float(value, *vmin, *vmax))
-            }
+            goofi_core::Param::Num { int: false, .. } => Ok(ctx.target.with_values(&[value]).expect("a number")),
             goofi_core::Param::Bool { .. } | goofi_core::Param::Pulse => {
                 Ok(goofi_core::Param::boolean(goofi_node::mailbox::gate(value)))
             }

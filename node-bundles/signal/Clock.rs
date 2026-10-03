@@ -75,7 +75,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "clock",
         name: "rate",
-        spec: ParamSpec::Float { default: 120.0, min: 0.0, max: 1.0e6 },
+        spec: ParamSpec::Num { default: &[120.0], min: 0.0, max: 1.0e6, int: false, options: &[], color: false },
         expression: None,
         doc: Some("How fast, read in whatever `unit` says."),
         section: 0,
@@ -95,7 +95,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "clock",
         name: "division",
-        spec: ParamSpec::Float { default: 1.0, min: 0.001, max: 1000.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.001, max: 1000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("How many ticks to cut each one into. At 120 bpm, 4 is sixteenth notes."),
         section: 0,
@@ -127,7 +127,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "common",
         name: "max_frequency",
-        spec: ParamSpec::Float { default: 30.0, min: 0.0, max: 1000.0 },
+        spec: ParamSpec::Num { default: &[30.0], min: 0.0, max: 1000.0, int: false, options: &[], color: false },
         expression: Some(ExprDecl { source: "variables.system.default_ufreq", mode: ExprMode::On, trigger: true }),
         doc: Some(
             "How many frames a second to emit. Bound to the patch's `default_ufreq` variable, so \

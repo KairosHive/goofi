@@ -20,7 +20,7 @@ class Weights(goofi.Node):
             "key": goofi.StringParam("", doc="Which array in an `.npz`; the first one when empty."),
         },
         "common": {
-            "max_frequency": goofi.FloatParam(2.0, 0.1, 100.0, doc="Rate cap: a static file needs no more."),
+            "max_frequency": goofi.NumParam(2.0, 0.1, 100.0, doc="Rate cap: a static file needs no more."),
         },
     }
 

@@ -2,8 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { controlKind } from './controlKind';
 import type {
 	ParamBase,
-	FloatParam,
-	IntParam,
+	NumParam,
 	BoolParam,
 	StringParam,
 	PulseParam,
@@ -30,23 +29,22 @@ const base: ParamBase = {
 	role: null
 };
 
-const floatParam = (over: Partial<FloatParam> = {}): FloatParam => ({
+const floatParam = (over: Partial<NumParam> = {}): NumParam => ({
 	...base,
-	type: 'float',
+	type: 'num',
 	value: 0,
 	default: 0,
 	vmin: 0,
 	vmax: 1,
+	int: false,
+	options: [],
+	color: false,
 	...over
 });
-const intParam = (over: Partial<IntParam> = {}): IntParam => ({
-	...base,
-	type: 'int',
-	value: 0,
-	default: 0,
-	vmin: 0,
+const intParam = (over: Partial<NumParam> = {}): NumParam => ({
+	...floatParam(),
+	int: true,
 	vmax: 10,
-	options: [],
 	...over
 });
 const boolParam = (over: Partial<BoolParam> = {}): BoolParam => ({

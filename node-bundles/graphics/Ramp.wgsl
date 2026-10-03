@@ -2,14 +2,14 @@
 { "doc": "a gradient through any number of colour stops\nThe angle turns the gradient: 0 runs left to right, 90 top to bottom. Each stop sits at a position along it, and the colour runs from one stop to the next; before the first and past the last stop the colour holds.",
   "tags": ["image", "generator"],
   "params": [
-    {"group": "ramp", "name": "angle", "kind": "float", "default": 0.0, "min": 0.0, "max": 360.0},
+    {"group": "ramp", "name": "angle", "kind": "num", "default": 0.0, "min": 0.0, "max": 360.0},
     {"group": "ramp", "section": "stops", "doc": "how many colour stops the gradient runs through",
      "repeat": {"min": 2, "max": 16, "default": 2},
      "params": [
-       {"name": "at", "kind": "float", "default": [0.0, 1.0], "min": 0.0, "max": 1.0},
-       {"name": "r", "kind": "float", "default": [0.0, 1.0], "min": 0.0, "max": 1.0},
-       {"name": "g", "kind": "float", "default": [0.0, 1.0], "min": 0.0, "max": 1.0},
-       {"name": "b", "kind": "float", "default": [0.0, 1.0], "min": 0.0, "max": 1.0} ]} ] }
+       {"name": "at", "kind": "num", "defaults": [0.0, 1.0], "min": 0.0, "max": 1.0},
+       {"name": "r", "kind": "num", "defaults": [0.0, 1.0], "min": 0.0, "max": 1.0},
+       {"name": "g", "kind": "num", "defaults": [0.0, 1.0], "min": 0.0, "max": 1.0},
+       {"name": "b", "kind": "num", "defaults": [0.0, 1.0], "min": 0.0, "max": 1.0} ]} ] }
 */
 fn colour(i: u32) -> vec3f {
     return vec3f(p.r[i], p.g[i], p.b[i]);

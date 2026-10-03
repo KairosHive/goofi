@@ -65,8 +65,7 @@ fn value_as(value: &Param, target: &Param) -> Result<Param, String> {
 /// A number in `target`'s shape; `None` for a string. A pulse is a GATE: it fires on the rise.
 fn number_as(x: f64, target: &Param) -> Option<Param> {
     match target {
-        Param::Float { vmin, vmax, .. } => Some(Param::Float { value: x, vmin: *vmin, vmax: *vmax }),
-        Param::Int { vmin, vmax, options, .. } => Some(Param::Int { value: x.round() as i64, vmin: *vmin, vmax: *vmax, options: options.clone() }),
+        Param::Num { .. } => target.with_values(&[x]),
         Param::Bool { .. } | Param::Pulse => Some(Param::Bool { value: gate(x) }),
         Param::Str { .. } => None,
     }

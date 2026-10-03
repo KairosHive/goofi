@@ -75,42 +75,39 @@ fn show_text(show: ShowArg) -> Show {
     show.map(|(param, values)| (param, values.into_iter().map(text).collect()))
 }
 
-#[pyclass]
-pub struct IntParam {
-    #[pyo3(get)]
-    pub default: i64,
-    #[pyo3(get)]
-    pub options: Vec<i64>,
-    #[pyo3(get)]
-    pub min: i64,
-    #[pyo3(get)]
-    pub max: i64,
-    #[pyo3(get)]
-    pub doc: Option<String>,
-    #[pyo3(get)]
-    pub expression: Option<String>,
-    #[pyo3(get)]
-    pub show: Show,
+/// A number as Python writes it: one, or one per dimension.
+#[derive(FromPyObject)]
+pub enum NumDefault {
+    One(f64),
+    Many(Vec<f64>),
 }
 
-#[pymethods]
-impl IntParam {
-    #[new]
-    #[pyo3(signature = (default, min, max, doc=None, expression=None, options=Vec::new(), show=None))]
-    fn new(default: i64, min: i64, max: i64, doc: Option<String>, expression: Option<String>, options: Vec<i64>, show: ShowArg) -> IntParam {
-        IntParam { default, min, max, doc, expression, options, show: show_text(show) }
+impl NumDefault {
+    fn values(self) -> Vec<f64> {
+        match self {
+            NumDefault::One(v) => vec![v],
+            NumDefault::Many(v) => v,
+        }
     }
 }
 
+/// `goofi.NumParam(default, min, max, int=False, options=None, …)` — a number, or with a sequence
+/// as `default` a vector of them, inside bounds they all share. `int=True` rounds every value.
 #[pyclass]
-pub struct FloatParam {
+pub struct NumParam {
     #[pyo3(get)]
-    pub default: f64,
+    pub default: Vec<f64>,
     #[pyo3(get)]
     pub min: f64,
     #[pyo3(get)]
     pub max: f64,
     #[pyo3(get)]
+    pub int: bool,
+    #[pyo3(get)]
+    pub options: Vec<i64>,
+    #[pyo3(get)]
+    pub color: bool,
+    #[pyo3(get)]
     pub doc: Option<String>,
     #[pyo3(get)]
     pub expression: Option<String>,
@@ -119,11 +116,43 @@ pub struct FloatParam {
 }
 
 #[pymethods]
-impl FloatParam {
+impl NumParam {
     #[new]
-    #[pyo3(signature = (default, min, max, doc=None, expression=None, show=None))]
-    fn new(default: f64, min: f64, max: f64, doc: Option<String>, expression: Option<String>, show: ShowArg) -> FloatParam {
-        FloatParam { default, min, max, doc, expression, show: show_text(show) }
+    #[pyo3(signature = (default, min, max, int=false, options=Vec::new(), doc=None, expression=None, show=None))]
+    // The arguments ARE the Python signature, each a keyword an author writes.
+    #[allow(clippy::too_many_arguments)]
+    fn new(default: NumDefault, min: f64, max: f64, int: bool, options: Vec<i64>, doc: Option<String>, expression: Option<String>, show: ShowArg) -> PyResult<NumParam> {
+        let default = default.values();
+        if default.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err("a NumParam default is a number or a sequence of them"));
+        }
+        Ok(NumParam { default, min, max, int, options, color: false, doc, expression, show: show_text(show) })
+    }
+}
+
+/// `goofi.ColorParam(default=(1, 1, 1, 1), …)` — an RGBA colour: a four-dimensional number from
+/// 0 to 1 that the inspector picks.
+#[pyclass]
+pub struct ColorParam {
+    #[pyo3(get)]
+    pub default: Vec<f64>,
+    #[pyo3(get)]
+    pub doc: Option<String>,
+    #[pyo3(get)]
+    pub expression: Option<String>,
+    #[pyo3(get)]
+    pub show: Show,
+}
+
+#[pymethods]
+impl ColorParam {
+    #[new]
+    #[pyo3(signature = (default=vec![1.0, 1.0, 1.0, 1.0], doc=None, expression=None, show=None))]
+    fn new(default: Vec<f64>, doc: Option<String>, expression: Option<String>, show: ShowArg) -> PyResult<ColorParam> {
+        if default.len() != 4 {
+            return Err(pyo3::exceptions::PyValueError::new_err("a ColorParam default is four numbers, RGBA"));
+        }
+        Ok(ColorParam { default, doc, expression, show: show_text(show) })
     }
 }
 

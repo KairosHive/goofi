@@ -185,7 +185,7 @@ static MULTI_IN: &[SlotDecl] = &[
 ];
 static TRANSFORM: NodeManifest = manifest("MultiThing", MULTI_IN, &[], false);
 static DOCUMENTED_PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "welch", name: "nperseg", spec: ParamSpec::Int { default: 256, min: 16, max: 4096, options: &[] },
+    group: "welch", name: "nperseg", spec: ParamSpec::Num { default: &[256.0], min: 16.0, max: 4096.0, int: true, options: &[], color: false },
     expression: None,
     doc: Some("Samples per Welch segment: longer means finer frequency resolution."),
     section: 0,
@@ -216,12 +216,12 @@ const fn when(param: &'static str, any_of: &'static [&'static str]) -> Option<Sh
     Some(Show { param, any_of })
 }
 const MODE: ParamSpec = ParamSpec::Str { default: "fir", options: &["fir", "iir"], refresh: false };
-const LEVEL: ParamSpec = ParamSpec::Float { default: 0.5, min: 0.0, max: 1.0 };
+const LEVEL: ParamSpec = ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], color: false };
 /// Three sections of `filter`, each shown for its own mode, and a page shown only for `iir`.
 static SECTIONED_PARAMS: &[ParamDecl] = &[
     decl("filter", "mode", MODE, 0, None),
-    decl("filter", "taps", ParamSpec::Int { default: 64, min: 1, max: 512, options: &[] }, 1, when("mode", &["fir"])),
-    decl("filter", "order", ParamSpec::Int { default: 4, min: 2, max: 8, options: &[2, 4, 8] }, 2, when("mode", &["iir"])),
+    decl("filter", "taps", ParamSpec::Num { default: &[64.0], min: 1.0, max: 512.0, int: true, options: &[], color: false }, 1, when("mode", &["fir"])),
+    decl("filter", "order", ParamSpec::Num { default: &[4.0], min: 2.0, max: 8.0, int: true, options: &[2, 4, 8], color: false }, 2, when("mode", &["iir"])),
     decl("filter", "ripple", LEVEL, 2, when("order", &["4", "8"])),
     decl("shape", "gate", ParamSpec::Bool { default: false }, 0, when("filter.mode", &["iir"])),
 ];
@@ -331,7 +331,7 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
                "a transform is driven by its input");
     let common = &row("signal:MyPyThing")["params"]["common"];
     assert_eq!((&common["max_frequency"]["type"], &common["autotrigger"]["type"],
-                &common["frequency_mode"]["type"]), (&j!("float"), &j!("bool"), &j!("string")));
+                &common["frequency_mode"]["type"]), (&j!("num"), &j!("bool"), &j!("string")));
     assert_eq!(row("signal:MultiThing")["input_multi"], j!(["many"]));
     assert_eq!(row("signal:MyPyThing")["input_multi"], j!([]));
 

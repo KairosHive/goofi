@@ -704,6 +704,23 @@ fn shaders_render_on_the_gpu() {
     drawn(&g, stops, "two stops read only the first two slots", |d| px(d, 0, 63)[1] < 0.05);
     g.call("node remove", j!({ "node": hex(stops) }));
 
+    // Step: a colour is a four-dimensional number: the shader reads a `vec4f`, the palette says
+    // `num` with `color`, a list sets every dimension and one number fills them all.
+    std::fs::write(dir.join("Inked.wgsl"), INKED).unwrap();
+    assert_eq!(g.call("library refresh", j!({}))["added"], j!(["graphics:Inked"]));
+    let ink = &g.call("library get", j!({ "type": "graphics:Inked" }))["params"]["look"]["ink"];
+    assert_eq!((&ink["type"], &ink["color"], &ink["value"]), (&j!("num"), &j!(true), &j!([1.0, 0.0, 0.0, 1.0])));
+    let inked = g.add("graphics:Inked");
+    g.ready(inked);
+    g.set_param(inked, "common", "width", 8);
+    g.set_param(inked, "common", "height", 8);
+    drawn(&g, inked, "the default ink", |d| close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]));
+    g.set_param(inked, "look", "ink", j!([0.0, 0.0, 1.0, 0.5]));
+    drawn(&g, inked, "an ink set as a list", |d| close(px(d, 0, 0), [0.0, 0.0, 1.0, 0.5]));
+    g.set_param(inked, "look", "ink", 0.25);
+    drawn(&g, inked, "one number fills every dimension", |d| close(px(d, 0, 0), [0.25, 0.25, 0.25, 0.25]));
+    g.call("node remove", j!({ "node": hex(inked) }));
+
     // Step: a node holds its own state between two ticks. A state buffer starts empty, so a body
     // seeds itself on `frame == 0` and reads what the last tick wrote from then on.
     std::fs::write(dir.join("Count.wgsl"), COUNT).unwrap();
@@ -1327,9 +1344,11 @@ fn the_mosaic_walks_its_cells_onto_the_picture() {
 }
 
 const TEXTY: &str = "/* goofi\n{ \"doc\": \"claims a string slot\", \"inputs\": [{\"name\": \"input\", \"kind\": \"STRING\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
-const TINTED: &str = "/* goofi\n{ \"doc\": \"a tint that shows its hue\", \"params\": [{\"group\": \"look\", \"name\": \"tint\", \"kind\": \"bool\", \"default\": false}, {\"group\": \"look\", \"section\": \"colour\", \"params\": [{\"name\": \"hue\", \"kind\": \"float\", \"default\": 0.5, \"min\": 0.0, \"max\": 1.0, \"show\": {\"param\": \"tint\", \"any_of\": [\"true\"]}}]}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
+const TINTED: &str = "/* goofi\n{ \"doc\": \"a tint that shows its hue\", \"params\": [{\"group\": \"look\", \"name\": \"tint\", \"kind\": \"bool\", \"default\": false}, {\"group\": \"look\", \"section\": \"colour\", \"params\": [{\"name\": \"hue\", \"kind\": \"num\", \"default\": 0.5, \"min\": 0.0, \"max\": 1.0, \"show\": {\"param\": \"tint\", \"any_of\": [\"true\"]}}]}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
+/// A colour param, read whole by the shader.
+const INKED: &str = "/* goofi\n{ \"doc\": \"one ink\", \"params\": [{\"group\": \"look\", \"name\": \"ink\", \"kind\": \"color\", \"default\": [1.0, 0.0, 0.0, 1.0]}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return p.ink; }\n";
 /// A list section whose `max` is past what a shader keeps.
-const OVERLONG: &str = "/* goofi\n{ \"doc\": \"too many\", \"params\": [{\"group\": \"look\", \"section\": \"many\", \"repeat\": {\"min\": 1, \"max\": 100, \"default\": 1}, \"params\": [{\"name\": \"v\", \"kind\": \"float\", \"default\": 0.0, \"min\": 0.0, \"max\": 1.0}]}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
+const OVERLONG: &str = "/* goofi\n{ \"doc\": \"too many\", \"params\": [{\"group\": \"look\", \"section\": \"many\", \"repeat\": {\"min\": 1, \"max\": 100, \"default\": 1}, \"params\": [{\"name\": \"v\", \"kind\": \"num\", \"default\": 0.0, \"min\": 0.0, \"max\": 1.0}]}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
 const BROKEN: &str = "/* goofi\n{ \"doc\": \"does not compile\" }\n*/\nfn shade(uv: vec2f) -> vec4f { return nothing(uv); }\n";
 const COUNT: &str = "/* goofi\n{ \"doc\": \"counts a tenth a tick in a buffer of its own\", \"state\": [\"acc\"] }\n*/\nfn at(uv: vec2f) -> vec2i { return vec2i(floor(uv * resolution)); }\nfn next_acc(uv: vec2f) -> vec4f {\n    if frame == 0u { return vec4f(0.1, 0.75, 0.0, 1.0); }\n    let held = textureLoad(acc, at(uv), 0);\n    return vec4f(held.r + 0.1, held.g, 0.0, 1.0);\n}\nfn shade(uv: vec2f) -> vec4f { return vec4f(textureLoad(acc, at(uv), 0).rgb, 1.0); }\n";
 const HALF: &str = "/* goofi\n{ \"doc\": \"half of the input\", \"inputs\": [{\"name\": \"input\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let c = textureSample(input, samp, uv); return vec4f(c.rgb * 0.5, c.a); }\n";

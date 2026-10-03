@@ -131,7 +131,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "json",
         name: "indent",
-        spec: ParamSpec::Int { default: 0, min: 0, max: 8, options: &[0, 2, 4] },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 8.0, int: true, options: &[0, 2, 4], color: false },
         expression: None,
         doc: Some("Spaces of indent per level. 0 writes the whole table on one line."),
         section: 0,
@@ -141,7 +141,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "json",
         name: "decimals",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 17, options: &[] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 17.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("Digits after the point on every number. -1 writes each one in full."),
         section: 0,

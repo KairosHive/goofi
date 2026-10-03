@@ -13,7 +13,7 @@
     {
       "group": "thought",
       "name": "pace",
-      "kind": "float",
+      "kind": "num",
       "default": 0.65,
       "min": 0.0,
       "max": 2.0
@@ -21,7 +21,7 @@
     {
       "group": "thought",
       "name": "flow",
-      "kind": "float",
+      "kind": "num",
       "default": 1.2,
       "min": 0.0,
       "max": 3.0
@@ -29,7 +29,7 @@
     {
       "group": "thought",
       "name": "memory",
-      "kind": "float",
+      "kind": "num",
       "default": 0.975,
       "min": 0.8,
       "max": 0.999
@@ -37,7 +37,7 @@
     {
       "group": "thought",
       "name": "seed",
-      "kind": "float",
+      "kind": "num",
       "default": 17.0,
       "min": 0.0,
       "max": 1000.0
@@ -45,7 +45,7 @@
     {
       "group": "structure",
       "name": "size",
-      "kind": "float",
+      "kind": "num",
       "default": 1.0,
       "min": 1.0,
       "max": 8.0,
@@ -54,7 +54,7 @@
     {
       "group": "structure",
       "name": "scales",
-      "kind": "int",
+      "kind": "num", "int": true,
       "default": 6,
       "min": 1,
       "max": 8,
@@ -63,7 +63,7 @@
     {
       "group": "structure",
       "name": "spacing",
-      "kind": "float",
+      "kind": "num",
       "default": 2.0,
       "min": 1.2,
       "max": 3.0,
@@ -72,7 +72,7 @@
     {
       "group": "structure",
       "name": "inhibition",
-      "kind": "float",
+      "kind": "num",
       "default": 2.0,
       "min": 1.1,
       "max": 4.0,
@@ -81,7 +81,7 @@
     {
       "group": "structure",
       "name": "reinforcement",
-      "kind": "float",
+      "kind": "num",
       "default": 0.022,
       "min": 0.0,
       "max": 0.08,
@@ -90,7 +90,7 @@
     {
       "group": "structure",
       "name": "sensitivity",
-      "kind": "float",
+      "kind": "num",
       "default": 0.025,
       "min": 0.001,
       "max": 0.15,
@@ -99,7 +99,7 @@
     {
       "group": "structure",
       "name": "persistence",
-      "kind": "float",
+      "kind": "num",
       "default": 0.006,
       "min": -0.03,
       "max": 0.03,
@@ -108,7 +108,7 @@
     {
       "group": "structure",
       "name": "balance",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0015,
       "min": 0.0,
       "max": 0.03,
@@ -117,7 +117,7 @@
     {
       "group": "motion",
       "name": "curl",
-      "kind": "float",
+      "kind": "num",
       "default": 18.0,
       "min": 0.0,
       "max": 60.0,
@@ -126,7 +126,7 @@
     {
       "group": "motion",
       "name": "drift",
-      "kind": "float",
+      "kind": "num",
       "default": 1.0,
       "min": 0.0,
       "max": 4.0,
@@ -135,7 +135,7 @@
     {
       "group": "motion",
       "name": "driftSize",
-      "kind": "float",
+      "kind": "num",
       "default": 1.0,
       "min": 0.25,
       "max": 4.0,
@@ -144,7 +144,7 @@
     {
       "group": "motion",
       "name": "direction",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0,
       "min": -180.0,
       "max": 180.0,
@@ -153,7 +153,7 @@
     {
       "group": "motion",
       "name": "novelty",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0,
       "min": 0.0,
       "max": 0.02,
@@ -162,7 +162,7 @@
     {
       "group": "ink",
       "name": "exposure",
-      "kind": "float",
+      "kind": "num",
       "default": 1.2,
       "min": 0.2,
       "max": 3.0
@@ -170,7 +170,7 @@
     {
       "group": "ink",
       "name": "contours",
-      "kind": "float",
+      "kind": "num",
       "default": 0.32,
       "min": 0.0,
       "max": 1.0
@@ -178,7 +178,7 @@
     {
       "group": "tone",
       "name": "contrast",
-      "kind": "float",
+      "kind": "num",
       "default": 1.0,
       "min": 0.2,
       "max": 3.0,
@@ -187,7 +187,7 @@
     {
       "group": "tone",
       "name": "midpoint",
-      "kind": "float",
+      "kind": "num",
       "default": 0.5,
       "min": 0.0,
       "max": 1.0,
@@ -196,7 +196,7 @@
     {
       "group": "tone",
       "name": "gamma",
-      "kind": "float",
+      "kind": "num",
       "default": 1.0,
       "min": 0.3,
       "max": 3.0,
@@ -205,7 +205,7 @@
     {
       "group": "palette",
       "name": "hue",
-      "kind": "float",
+      "kind": "num",
       "default": 0.0,
       "min": -180.0,
       "max": 180.0,
@@ -214,7 +214,7 @@
     {
       "group": "palette",
       "name": "saturation",
-      "kind": "float",
+      "kind": "num",
       "default": 1.0,
       "min": 0.0,
       "max": 2.0,
@@ -223,7 +223,7 @@
     {
       "group": "palette",
       "name": "warmth",
-      "kind": "float",
+      "kind": "num",
       "default": 1.0,
       "min": 0.0,
       "max": 2.0,
@@ -232,7 +232,7 @@
     {
       "group": "palette",
       "name": "highlights",
-      "kind": "float",
+      "kind": "num",
       "default": 0.8,
       "min": 0.0,
       "max": 1.0,
@@ -241,7 +241,7 @@
     {
       "group": "texture",
       "name": "edgeGain",
-      "kind": "float",
+      "kind": "num",
       "default": 0.7,
       "min": 0.0,
       "max": 2.0,
@@ -250,7 +250,7 @@
     {
       "group": "texture",
       "name": "edgeWidth",
-      "kind": "float",
+      "kind": "num",
       "default": 1.0,
       "min": 0.5,
       "max": 5.0,
@@ -259,7 +259,7 @@
     {
       "group": "texture",
       "name": "changeGain",
-      "kind": "float",
+      "kind": "num",
       "default": 8.0,
       "min": 0.0,
       "max": 30.0,
@@ -268,7 +268,7 @@
     {
       "group": "texture",
       "name": "contourCount",
-      "kind": "float",
+      "kind": "num",
       "default": 12.0,
       "min": 1.0,
       "max": 60.0,
@@ -277,7 +277,7 @@
     {
       "group": "texture",
       "name": "contourSharpness",
-      "kind": "float",
+      "kind": "num",
       "default": 18.0,
       "min": 1.0,
       "max": 80.0,
@@ -286,7 +286,7 @@
     {
       "group": "texture",
       "name": "scaleGlow",
-      "kind": "float",
+      "kind": "num",
       "default": 1.0,
       "min": 0.0,
       "max": 4.0,

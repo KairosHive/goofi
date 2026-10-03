@@ -327,7 +327,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "neuron",
         name: "drive",
-        spec: ParamSpec::Float { default: 1.0, min: -2.0, max: 10.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: -2.0, max: 10.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Background current every neuron gets. Around 1 is enough to fire; below it the network needs its input."),
         section: 0,
@@ -337,7 +337,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "neuron",
         name: "threshold",
-        spec: ParamSpec::Float { default: 1.0, min: 0.05, max: 3.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.05, max: 3.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Scales the firing threshold. Lower makes the network twitchier."),
         section: 0,
@@ -347,7 +347,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "neuron",
         name: "tau",
-        spec: ParamSpec::Float { default: 20.0, min: 0.1, max: 200.0 },
+        spec: ParamSpec::Num { default: &[20.0], min: 0.1, max: 200.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Membrane time constant in milliseconds. `izhikevich` sets its own."),
         section: 0,
@@ -357,7 +357,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "neuron",
         name: "refractory",
-        spec: ParamSpec::Float { default: 2.0, min: 0.0, max: 50.0 },
+        spec: ParamSpec::Num { default: &[2.0], min: 0.0, max: 50.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Milliseconds a neuron stays silent after it fires, which caps its rate."),
         section: 0,
@@ -367,7 +367,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "neuron",
         name: "adaptation",
-        spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 5.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 5.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("How much each spike tires the neuron. `lif` has no adaptation and ignores it."),
         section: 0,
@@ -377,7 +377,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "neuron",
         name: "noise",
-        spec: ParamSpec::Float { default: 0.05, min: 0.0, max: 2.0 },
+        spec: ParamSpec::Num { default: &[0.05], min: 0.0, max: 2.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Jitter on the current, which is what keeps a quiet network from being exactly still."),
         section: 0,
@@ -387,7 +387,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "network",
         name: "size",
-        spec: ParamSpec::Int { default: 200, min: 2, max: 20_000, options: &[] },
+        spec: ParamSpec::Num { default: &[200.0], min: 2.0, max: 20_000.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("How many neurons. Cost grows with this times `fan_in`."),
         section: 0,
@@ -397,7 +397,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "network",
         name: "fan_in",
-        spec: ParamSpec::Int { default: 12, min: 1, max: 64, options: &[] },
+        spec: ParamSpec::Num { default: &[12.0], min: 1.0, max: 64.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("How many neurons each one listens to."),
         section: 0,
@@ -407,7 +407,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "network",
         name: "dims",
-        spec: ParamSpec::Int { default: 2, min: 1, max: 3, options: &[] },
+        spec: ParamSpec::Num { default: &[2.0], min: 1.0, max: 3.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("How many dimensions the neurons are laid out in, which is what distance and delay are measured in."),
         section: 0,
@@ -417,7 +417,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "network",
         name: "locality",
-        spec: ParamSpec::Float { default: 4.0, min: 0.0, max: 30.0 },
+        spec: ParamSpec::Num { default: &[4.0], min: 0.0, max: 30.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("How strongly a neuron prefers its neighbours. 0 wires the network at random."),
         section: 0,
@@ -427,7 +427,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "network",
         name: "inhibitory",
-        spec: ParamSpec::Float { default: 0.2, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[0.2], min: 0.0, max: 1.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Fraction of neurons whose every synapse subtracts instead of adds."),
         section: 0,
@@ -437,7 +437,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "network",
         name: "weight",
-        spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 10.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 10.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Gain on every synapse. This is the knob between a silent network and a seizing one."),
         section: 0,
@@ -447,7 +447,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "network",
         name: "delay",
-        spec: ParamSpec::Float { default: 5.0, min: 0.0, max: 100.0 },
+        spec: ParamSpec::Num { default: &[5.0], min: 0.0, max: 100.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Milliseconds a spike takes to cross the whole layout. Distance sets each synapse's share of it."),
         section: 0,
@@ -457,7 +457,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "dt",
-        spec: ParamSpec::Float { default: 0.0005, min: 1.0e-6, max: 0.01 },
+        spec: ParamSpec::Num { default: &[0.0005], min: 1.0e-6, max: 0.01, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Model seconds per step. Half a millisecond suits all three models."),
         section: 0,
@@ -467,7 +467,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("Seeds the layout, the wiring and the noise. Negative takes a fresh one from the clock."),
         section: 0,
@@ -497,7 +497,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "output",
         name: "sfreq",
-        spec: ParamSpec::Float { default: 2000.0, min: 1.0, max: 20_000.0 },
+        spec: ParamSpec::Num { default: &[2000.0], min: 1.0, max: 20_000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Steps per second of real time. At the default `sim.dt` this runs the network in real time."),
         section: 0,

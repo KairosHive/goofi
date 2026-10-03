@@ -23,7 +23,7 @@ class OscOut(goofi.Node):
     PARAMS = {
         "osc": {
             "host": goofi.StringParam("127.0.0.1", doc="Where to send to."),
-            "port": goofi.IntParam(8000, 1, 65535, doc="The port to send to."),
+            "port": goofi.NumParam(8000, 1, 65535, int=True, doc="The port to send to."),
             "prefix": goofi.StringParam("/goofi", doc="The address every key hangs under."),
             "bundle": goofi.BoolParam(False, doc="Send the whole table at once, under one timestamp."),
         }

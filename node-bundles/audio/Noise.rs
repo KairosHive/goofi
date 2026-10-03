@@ -15,7 +15,7 @@ goofi_audio_sdk::params! {
     CHANNELS = ParamDecl {
         group: "noise",
         name: "channels",
-        spec: ParamSpec::Int { default: 1, min: 1, max: 256, options: &[] },
+        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 256.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("how many channels to make; no two of them are alike"),
         section: 0,

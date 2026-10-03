@@ -5,7 +5,7 @@
   "params": [
     {"group": "composite", "name": "mode", "kind": "str", "default": "over",
      "options": ["over", "under", "add", "subtract", "multiply", "divide", "minimum", "maximum", "screen", "overlay", "hard light", "soft light", "color dodge", "color burn", "difference", "exclusion", "in", "out", "atop", "xor"]},
-    {"group": "composite", "name": "blend", "kind": "float", "default": 1.0, "min": 0.0, "max": 1.0} ] }
+    {"group": "composite", "name": "blend", "kind": "num", "default": 1.0, "min": 0.0, "max": 1.0} ] }
 */
 fn blend_channel(source: f32, backdrop: f32) -> f32 {
     switch p.mode {

@@ -38,11 +38,11 @@ class Flow(goofi.Node):
                 "dis", METHODS, doc="`dis` is fast and reads large movement well; `farneback` is slower and smoother."
             ),
             "grade": goofi.StringParam("fast", GRADES, doc="How hard `dis` looks. Each step up costs, and `farneback` ignores it."),
-            "scale": goofi.FloatParam(
+            "scale": goofi.NumParam(
                 0.5, 0.1, 1.0, doc="How far the picture is shrunk before the search. This also sets the size of the field that comes out."
             ),
-            "smooth": goofi.FloatParam(0.4, 0.0, 0.99, doc="How much of the last field to keep, so the flow walks rather than flickers."),
-            "floor": goofi.FloatParam(0.0, 0.0, 1.0, doc="Motion slower than this is reported as none, which quiets a grainy picture."),
+            "smooth": goofi.NumParam(0.4, 0.0, 0.99, doc="How much of the last field to keep, so the flow walks rather than flickers."),
+            "floor": goofi.NumParam(0.0, 0.0, 1.0, doc="Motion slower than this is reported as none, which quiets a grainy picture."),
         }
     }
 

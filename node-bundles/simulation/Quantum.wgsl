@@ -7,8 +7,8 @@
   "params": [
     {"group": "quantum", "name": "view", "kind": "str", "default": "both",
      "options": ["both", "bloch", "probabilities"]},
-    {"group": "quantum", "name": "bars", "kind": "float", "default": 0.32, "min": 0.05, "max": 0.9},
-    {"group": "quantum", "name": "sphere", "kind": "float", "default": 0.8, "min": 0.1, "max": 1.0},
+    {"group": "quantum", "name": "bars", "kind": "num", "default": 0.32, "min": 0.05, "max": 0.9},
+    {"group": "quantum", "name": "sphere", "kind": "num", "default": 0.8, "min": 0.1, "max": 1.0},
     {"group": "quantum", "name": "guides", "kind": "bool", "default": true} ] }
 */
 

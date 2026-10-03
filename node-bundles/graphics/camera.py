@@ -22,15 +22,15 @@ class Camera(goofi.Node):
     PARAMS = {
         "camera": {
             "source": goofi.StringParam("camera", SOURCES, doc="A live device, or a file on disk."),
-            "device": goofi.IntParam(0, 0, 15, doc="Which capture device, counting from the first one."),
+            "device": goofi.NumParam(0, 0, 15, int=True, doc="Which capture device, counting from the first one."),
             "file": goofi.StringParam("", doc="The video file to read, when `source` is `file`."),
-            "width": goofi.IntParam(640, 0, 4096, doc="Width to ask the device for; 0 takes what it offers."),
-            "height": goofi.IntParam(480, 0, 4096, doc="Height to ask the device for; 0 takes what it offers."),
+            "width": goofi.NumParam(640, 0, 4096, int=True, doc="Width to ask the device for; 0 takes what it offers."),
+            "height": goofi.NumParam(480, 0, 4096, int=True, doc="Height to ask the device for; 0 takes what it offers."),
             "mirror": goofi.BoolParam(True, doc="Flip left for right, so the picture moves the way you do."),
             "loop": goofi.BoolParam(True, doc="Start a file again when it ends."),
         },
         "common": {
-            "max_frequency": goofi.FloatParam(30.0, 0.1, 240.0, doc="Rate cap: the frames a second the node asks for."),
+            "max_frequency": goofi.NumParam(30.0, 0.1, 240.0, doc="Rate cap: the frames a second the node asks for."),
         },
     }
 

@@ -105,14 +105,19 @@ pub enum Scalar {
     Int(i64),
     Float(f64),
     Str(String),
+    /// A number of more than one dimension.
+    Vec(Vec<f64>),
 }
 
 impl Scalar {
-    /// A param's literal; a pulse has none.
+    /// A param's literal; a pulse has none. A one-dimensional number is a bare number.
     pub fn of(p: &Param) -> Option<Scalar> {
         match p {
-            Param::Float { value, .. } => Some(Scalar::Float(*value)),
-            Param::Int { value, .. } => Some(Scalar::Int(*value)),
+            Param::Num { value, int, .. } => Some(match value.as_slice() {
+                [v] if *int => Scalar::Int(v.round() as i64),
+                [v] => Scalar::Float(*v),
+                _ => Scalar::Vec(value.clone()),
+            }),
             Param::Bool { value } => Some(Scalar::Bool(*value)),
             Param::Str { value, .. } => Some(Scalar::Str(value.clone())),
             Param::Pulse => None,

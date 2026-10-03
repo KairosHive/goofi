@@ -17,10 +17,10 @@ class FmSignal(goofi.Node):
     TAGS = ['generator']
     PRODUCER = True
     OUTPUTS = {'out': goofi.DataType.ARRAY}
-    PARAMS = {'fm': {'carrier': goofi.FloatParam(18., 1., 100., doc='Carrier frequency in Hz.'),
-                     'modulator': goofi.FloatParam(5., .1, 100., doc='Modulator frequency in Hz; sets sideband spacing.'),
-                     'index': goofi.FloatParam(1.2, 0., 5., doc='Phase deviation in radians. Zero disables modulation.')},
-              'output': {'sfreq': goofi.FloatParam(256., 256., 4096., doc='Output sample rate in Hz. Raise this to avoid aliasing at higher frequencies.')}}
+    PARAMS = {'fm': {'carrier': goofi.NumParam(18., 1., 100., doc='Carrier frequency in Hz.'),
+                     'modulator': goofi.NumParam(5., .1, 100., doc='Modulator frequency in Hz; sets sideband spacing.'),
+                     'index': goofi.NumParam(1.2, 0., 5., doc='Phase deviation in radians. Zero disables modulation.')},
+              'output': {'sfreq': goofi.NumParam(256., 256., 4096., doc='Output sample rate in Hz. Raise this to avoid aliasing at higher frequencies.')}}
 
     def setup(self):
         self.last = time.monotonic()

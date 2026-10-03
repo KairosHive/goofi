@@ -261,7 +261,7 @@ impl Node for Busy {
 static SINK_PARAMS: &[ParamDecl] = &[ParamDecl {
     group: "control",
     name: "value",
-    spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
+    spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
     expression: None,
     doc: None,
     section: 0,
@@ -369,8 +369,8 @@ impl Node for Senders {
 }
 
 static COMMON_FIRST_PARAMS: &[ParamDecl] = &[
-    ParamDecl { group: "common", name: "max_frequency", spec: ParamSpec::Float { default: 5.0, min: 1.0, max: 100.0 }, expression: None, doc: None, section: 0, show: None, role: None },
-    ParamDecl { group: "own", name: "level", spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 }, expression: None, doc: None, section: 0, show: None, role: None },
+    ParamDecl { group: "common", name: "max_frequency", spec: ParamSpec::Num { default: &[5.0], min: 1.0, max: 100.0, int: false, options: &[], color: false }, expression: None, doc: None, section: 0, show: None, role: None },
+    ParamDecl { group: "own", name: "level", spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false }, expression: None, doc: None, section: 0, show: None, role: None },
 ];
 
 static RESETTABLE_PARAMS: &[ParamDecl] = &[ParamDecl {
@@ -519,7 +519,7 @@ static CONST_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "constant",
         name: "value",
-        spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
+        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
         expression: None,
         doc: Some("The value every element of the emitted array carries."),
         section: 0,
@@ -529,7 +529,7 @@ static CONST_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "constant",
         name: "length",
-        spec: ParamSpec::Int { default: 1, min: 1, max: 1_000_000, options: &[] },
+        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 1_000_000.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("How many elements the emitted array has."),
         section: 0,
@@ -571,7 +571,7 @@ static RAMP_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "ramp",
         name: "sfreq",
-        spec: ParamSpec::Float { default: 256.0, min: 1.0, max: 100_000.0 },
+        spec: ParamSpec::Num { default: &[256.0], min: 1.0, max: 100_000.0, int: false, options: &[], color: false },
         expression: None,
         doc: None,
         section: 0,
@@ -581,7 +581,7 @@ static RAMP_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "ramp",
         name: "length",
-        spec: ParamSpec::Int { default: 512, min: 1, max: 1_000_000, options: &[] },
+        spec: ParamSpec::Num { default: &[512.0], min: 1.0, max: 1_000_000.0, int: true, options: &[], color: false },
         expression: None,
         doc: None,
         section: 0,
@@ -591,7 +591,7 @@ static RAMP_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "ramp",
         name: "channels",
-        spec: ParamSpec::Int { default: 1, min: 1, max: 64, options: &[] },
+        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 64.0, int: true, options: &[], color: false },
         expression: None,
         doc: None,
         section: 0,

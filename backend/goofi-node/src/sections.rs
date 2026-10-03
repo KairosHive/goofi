@@ -39,8 +39,8 @@ pub fn expand(entries: Vec<Value>) -> Result<Vec<Value>, String> {
         let Some(repeat) = repeat else {
             for mut m in members {
                 let base = text(&m, "name").ok_or_else(|| format!("a param of section `{name}` has a name"))?.to_string();
-                if m.get("default").is_some_and(Value::is_array) {
-                    return Err(format!("`{base}` in section `{name}` defaults to a list, which only a repeated section may"));
+                if m.get("defaults").is_some() {
+                    return Err(format!("`{base}` in section `{name}` has defaults per slot, which only a repeated section has"));
                 }
                 m["group"] = json!(group);
                 m["name"] = json!(format!("{name}_{base}"));
@@ -51,7 +51,7 @@ pub fn expand(entries: Vec<Value>) -> Result<Vec<Value>, String> {
             continue;
         };
         let mut count = json!({
-            "group": group, "name": name, "kind": "int", "section": index,
+            "group": group, "name": name, "kind": "num", "int": true, "section": index,
             "default": repeat.default, "min": repeat.min, "max": repeat.max,
             "role": { "as": "count", "section": name },
         });
@@ -68,11 +68,12 @@ pub fn expand(entries: Vec<Value>) -> Result<Vec<Value>, String> {
                 m["name"] = json!(format!("{base}_{slot}"));
                 m["section"] = json!(index);
                 m["role"] = json!({ "as": "member", "section": name, "base": base, "slot": slot });
-                // A list default gives each slot its own; past its end the last one carries on.
-                if let Some(list) = m.get("default").and_then(Value::as_array) {
+                // `defaults` gives each slot its own; past its end the last one carries on.
+                if let Some(list) = m.get("defaults").and_then(Value::as_array).cloned() {
                     let at = (slot as usize).min(list.len().saturating_sub(1));
-                    let one = list.get(at).cloned().ok_or_else(|| format!("`{base}` in section `{name}` defaults to an empty list"))?;
+                    let one = list.get(at).cloned().ok_or_else(|| format!("`{base}` in section `{name}` has an empty `defaults`"))?;
                     m["default"] = one;
+                    m.as_object_mut().expect("a param object").remove("defaults");
                 }
                 // A member shown by another member of the list is shown by the one in ITS slot.
                 if let Some(controller) = m.get("show").and_then(|s| text(s, "param")).map(str::to_string) {

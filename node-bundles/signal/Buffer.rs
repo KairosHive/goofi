@@ -91,7 +91,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "buffer",
         name: "size",
-        spec: ParamSpec::Float { default: 2.0, min: 0.001, max: 60.0 },
+        spec: ParamSpec::Num { default: &[2.0], min: 0.001, max: 60.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("How much recent data to keep, in the selected unit."),
         section: 0,
@@ -101,7 +101,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "buffer",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
         expression: None,
         doc: Some(
             "Which axis to roll along, negative from the end. -1 is time, the default and the \

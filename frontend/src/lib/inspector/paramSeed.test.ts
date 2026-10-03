@@ -17,8 +17,9 @@ const param = (over: Partial<ParamDescriptor>): ParamDescriptor =>
 
 describe('the expression seed', () => {
 	it('writes each value as the Python literal for it', () => {
-		expect(literalFor(param({ type: 'float', value: 2.5 }))).toBe('2.5');
-		expect(literalFor(param({ type: 'int', value: 3 }))).toBe('3');
+		expect(literalFor(param({ type: 'num', value: 2.5 }))).toBe('2.5');
+		expect(literalFor(param({ type: 'num', value: 3, int: true }))).toBe('3');
+		expect(literalFor(param({ type: 'num', value: [0.5, 1] }))).toBe('[0.5, 1]');
 		expect(literalFor(param({ type: 'bool', value: true }))).toBe('True');
 		expect(literalFor(param({ type: 'bool', value: false }))).toBe('False');
 		expect(literalFor(param({ type: 'string', value: 'sine' }))).toBe('"sine"');

@@ -5,7 +5,7 @@ goofi_audio_sdk::params! {
     FREQUENCY = ParamDecl {
         group: "freq_shift",
         name: "frequency",
-        spec: ParamSpec::Float { default: 0.0, min: -5000.0, max: 5000.0 },
+        spec: ParamSpec::Num { default: &[0.0], min: -5000.0, max: 5000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("hertz to move every partial by, up or down; it is an addition, so harmony does not survive it"),
         section: 0,

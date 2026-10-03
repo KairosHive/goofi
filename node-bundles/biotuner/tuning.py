@@ -54,13 +54,13 @@ class Tuning(goofi.Node):
                 ["peaks_ratios", "diss_curve", "euler_fokker", "harmonic_tuning", "generator_interval"],
                 doc="How the scale is built. `diss_curve` needs `amps` wired.",
             ),
-            "octave": goofi.FloatParam(2.0, 1.1, 8.0, doc="The interval the scale folds into; 2 is the octave."),
+            "octave": goofi.NumParam(2.0, 1.1, 8.0, doc="The interval the scale folds into; 2 is the octave."),
             "rebound": goofi.BoolParam(True, doc="peaks_ratios: bring every ratio inside one octave."),
             "sub": goofi.BoolParam(False, doc="peaks_ratios: fold by subharmonics — divide down — rather than up."),
-            "denom": goofi.IntParam(1000, 10, 5000, doc="diss_curve: largest denominator a minimum may name."),
-            "span": goofi.FloatParam(2.0, 2.0, 8.0, doc="diss_curve: the ratio the curve runs to. 2 is one octave."),
-            "interval": goofi.FloatParam(1.5, 1.01, 4.0, doc="generator_interval: the interval stacked. 1.5 is a fifth."),
-            "steps": goofi.IntParam(7, 2, 53, doc="generator_interval: how many times it is stacked."),
+            "denom": goofi.NumParam(1000, 10, 5000, int=True, doc="diss_curve: largest denominator a minimum may name."),
+            "span": goofi.NumParam(2.0, 2.0, 8.0, doc="diss_curve: the ratio the curve runs to. 2 is one octave."),
+            "interval": goofi.NumParam(1.5, 1.01, 4.0, doc="generator_interval: the interval stacked. 1.5 is a fifth."),
+            "steps": goofi.NumParam(7, 2, 53, int=True, doc="generator_interval: how many times it is stacked."),
         }
     }
 

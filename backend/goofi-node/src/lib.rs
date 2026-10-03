@@ -156,18 +156,24 @@ pub enum ExprMode {
 /// The kind + defaults of a declared param.
 #[derive(Clone, Copy)]
 pub enum ParamSpec {
-    Float { default: f64, min: f64, max: f64 },
-    Int { default: i64, min: i64, max: i64, options: &'static [i64] },
+    /// A number, or a vector of them: `default` holds one value per dimension.
+    Num { default: &'static [f64], min: f64, max: f64, int: bool, options: &'static [i64], color: bool },
     Bool { default: bool },
     Str { default: &'static str, options: &'static [&'static str], refresh: bool },
     Pulse,
 }
 
 impl ParamSpec {
+    /// An RGBA colour.
+    pub const fn color(default: &'static [f64; 4]) -> ParamSpec {
+        ParamSpec::Num { default, min: 0.0, max: 1.0, int: false, options: &[], color: true }
+    }
+
     pub fn to_param(self) -> Param {
         match self {
-            ParamSpec::Float { default, min, max } => Param::float(default, min, max),
-            ParamSpec::Int { default, min, max, options } => Param::Int { value: default, vmin: min, vmax: max, options: options.to_vec() },
+            ParamSpec::Num { default, min, max, int, options, color } => {
+                Param::Num { value: default.to_vec(), vmin: min, vmax: max, int, options: options.to_vec(), color }
+            }
             ParamSpec::Bool { default } => Param::boolean(default),
             ParamSpec::Str { default, options, refresh } => Param::Str {
                 value: default.to_string(),
@@ -207,6 +213,10 @@ impl<'a> Params<'a> {
     }
     pub fn bool(&self, group: &str, name: &str) -> Option<bool> {
         param(self.0, group, name).and_then(Param::as_bool)
+    }
+    /// Every dimension of a number.
+    pub fn vec(&self, group: &str, name: &str) -> Option<&[f64]> {
+        param(self.0, group, name).and_then(Param::as_vec)
     }
     pub fn str(&self, group: &str, name: &str) -> Option<&str> {
         param(self.0, group, name).and_then(Param::as_str)

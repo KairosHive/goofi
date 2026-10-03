@@ -125,7 +125,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "emd",
         name: "count",
-        spec: ParamSpec::Int { default: 5, min: 1, max: 10, options: &[] },
+        spec: ParamSpec::Num { default: &[5.0], min: 1.0, max: 10.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("How many oscillations to pull out, fastest first. What is left over is dropped."),
         section: 0,
@@ -135,7 +135,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "emd",
         name: "siftings",
-        spec: ParamSpec::Int { default: 10, min: 1, max: 100, options: &[] },
+        spec: ParamSpec::Num { default: &[10.0], min: 1.0, max: 100.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("How many passes each oscillation is refined by. More is cleaner and slower."),
         section: 0,
@@ -145,7 +145,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "emd",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
         expression: None,
         doc: Some("Which axis holds the samples. -1 is time."),
         section: 0,

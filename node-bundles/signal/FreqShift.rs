@@ -97,7 +97,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "freq_shift",
         name: "frequency",
-        spec: ParamSpec::Float { default: 0.0, min: -5000.0, max: 5000.0 },
+        spec: ParamSpec::Num { default: &[0.0], min: -5000.0, max: 5000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some(
             "How far to move the signal, in Hz, up for a positive number and down for a negative \

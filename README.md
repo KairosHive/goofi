@@ -117,7 +117,7 @@ class Smooth(goofi.Node):
 
     INPUTS = {"data": goofi.InputSlot(goofi.DataType.ARRAY, required=True)}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
-    PARAMS = {"smoothing": {"window": goofi.IntParam(8, 1, 512, doc="Samples in the mean.")}}
+    PARAMS = {"smoothing": {"window": goofi.NumParam(8, 1, 512, int=True, doc="Samples in the mean.")}}
 
     def process(self, data):
         w = self.params.smoothing.window

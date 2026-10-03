@@ -177,13 +177,13 @@ pub fn param_value_json(p: &Param) -> serde_json::Value {
 /// Coerce a JSON scalar into a `Param` of `existing`'s type, keeping its bounds.
 pub fn param_from_json(existing: &Param, v: &serde_json::Value) -> Param {
     match existing {
-        Param::Float { vmin, vmax, .. } => Param::Float { value: v.as_f64().unwrap_or(0.0), vmin: *vmin, vmax: *vmax },
-        Param::Int { vmin, vmax, options, .. } => Param::Int {
-            value: v.as_i64().or_else(|| v.as_f64().map(|f| f.round() as i64)).unwrap_or(0),
-            vmin: *vmin,
-            vmax: *vmax,
-            options: options.clone(),
-        },
+        Param::Num { .. } => {
+            let values: Vec<f64> = match v {
+                serde_json::Value::Array(items) => items.iter().filter_map(serde_json::Value::as_f64).collect(),
+                _ => vec![v.as_f64().unwrap_or(0.0)],
+            };
+            existing.with_values(&values).expect("a number")
+        }
         Param::Bool { .. } => Param::Bool { value: v.as_bool().unwrap_or(false) },
         Param::Str { options, refresh, .. } => Param::Str {
             value: v.as_str().unwrap_or("").to_string(),

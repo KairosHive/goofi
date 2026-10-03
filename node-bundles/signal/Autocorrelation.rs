@@ -78,7 +78,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "autocorrelation",
         name: "lags",
-        spec: ParamSpec::Int { default: 0, min: 0, max: 100_000, options: &[] },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("How many lags to answer, from zero up. 0 is every lag the axis has."),
         section: 0,
@@ -111,7 +111,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "autocorrelation",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
         expression: None,
         doc: Some("Which axis to correlate along. -1 is time."),
         section: 0,

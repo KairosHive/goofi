@@ -35,7 +35,7 @@ class TuningReduction(goofi.Node):
     OUTPUTS = {"reduced": goofi.DataType.ARRAY}
     PARAMS = {
         "mode": {
-            "n_steps": goofi.IntParam(5, 2, 20, doc="Degrees the mode keeps, and the width of the output."),
+            "n_steps": goofi.NumParam(5, 2, 20, int=True, doc="Degrees the mode keeps, and the width of the output."),
             "function": goofi.StringParam(
                 "harmsim",
                 list(FUNCTIONS),

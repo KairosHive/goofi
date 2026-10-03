@@ -15,8 +15,8 @@ export const VIDEO_QUALITIES = keys<VideoQuality>({ small: 0, high: 0, very_high
 export type SourcePatch = Omit<ParamEntry, 'value'>;
 
 type Kind<T extends ParamKind['type']> = ParamBase & Extract<ParamKind, { type: T }>;
-export type FloatParam = Kind<'float'>;
-export type IntParam = Kind<'int'>;
+/** A number, or a vector of them: `value` is bare for one dimension and a list for more. */
+export type NumParam = Kind<'num'>;
 export type BoolParam = Kind<'bool'>;
 export type StringParam = Kind<'string'>;
 export type PulseParam = Kind<'pulse'>;
@@ -25,3 +25,13 @@ export type PulseParam = Kind<'pulse'>;
 export type UnknownParam = ParamBase & { type: 'unknown'; value: unknown };
 
 export type ParamDescriptor = (ParamBase & ParamKind) | UnknownParam;
+
+/** A number's dimensions, bare or listed, as a list. */
+export function numValues(d: NumParam): number[] {
+	return Array.isArray(d.value) ? d.value : [typeof d.value === 'number' ? d.value : 0];
+}
+
+/** The first dimension of a number. */
+export function numValue(d: NumParam): number {
+	return numValues(d)[0] ?? 0;
+}

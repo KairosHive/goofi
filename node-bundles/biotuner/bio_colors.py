@@ -65,7 +65,7 @@ class BioColors(goofi.Node):
                 "peaks", ["peaks", "tuning"], doc="Whether the input is frequencies in Hz or ratios."
             ),
             "method": goofi.StringParam("anchored", METHODS, doc="What the hue is a picture of."),
-            "fund": goofi.FloatParam(1.0, 0.001, 1000.0, doc="tuning: the frequency ratio 1 stands for."),
+            "fund": goofi.NumParam(1.0, 0.001, 1000.0, doc="tuning: the frequency ratio 1 stands for."),
             "calibration": goofi.StringParam(
                 "none", ["none", "tuning_v1", "eeg_sleep_v1"], doc="A fitted calibration, which this install may not carry."
             ),

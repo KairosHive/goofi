@@ -17,7 +17,7 @@ goofi_audio_sdk::params! {
     POSITION = ParamDecl {
         group: "play",
         name: "position",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("where in the file to play from; playback runs on its own, and a MOVE of this skips"),
         section: 0,

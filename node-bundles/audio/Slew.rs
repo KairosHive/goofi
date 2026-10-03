@@ -5,7 +5,7 @@ goofi_audio_sdk::params! {
     RISE = ParamDecl {
         group: "slew",
         name: "rise",
-        spec: ParamSpec::Float { default: 0.01, min: 0.0, max: 10.0 },
+        spec: ParamSpec::Num { default: &[0.01], min: 0.0, max: 10.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("seconds to climb one unit"),
         section: 0,
@@ -15,7 +15,7 @@ goofi_audio_sdk::params! {
     FALL = ParamDecl {
         group: "slew",
         name: "fall",
-        spec: ParamSpec::Float { default: 0.01, min: 0.0, max: 10.0 },
+        spec: ParamSpec::Num { default: &[0.01], min: 0.0, max: 10.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("seconds to fall one unit"),
         section: 0,

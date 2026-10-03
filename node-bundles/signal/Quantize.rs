@@ -98,7 +98,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "quantize",
         name: "strength",
-        spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("How far towards the note each pitch is pulled. Zero passes the signal through."),
         section: 0,

@@ -15,7 +15,7 @@ class GeometryMetrics(goofi.Node):
     TAGS = ["analysis"]
     INPUTS = {"input": goofi.InputSlot(goofi.DataType.ARRAY, required=True)}
     OUTPUTS = {"values": goofi.DataType.ARRAY}
-    PARAMS = {"common": {"max_frequency": goofi.FloatParam(5.0, 0.0, 30.0)}}
+    PARAMS = {"common": {"max_frequency": goofi.NumParam(5.0, 0.0, 30.0)}}
 
     def process(self, input):
         table = decode(input.data, input.meta)

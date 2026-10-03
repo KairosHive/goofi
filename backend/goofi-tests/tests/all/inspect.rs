@@ -174,7 +174,7 @@ fn inspect_node_reports_params_whether_each_slot_is_emitting_and_the_error() {
     assert!(out.starts_with(&format!("lfo0: signal:LFO (uid {}, native, stage ready)", hex(osc))),
             "{out}");
     // The goldened inline param format, round-trippable into `node param edit`…
-    assert!(out.contains("  lfo.frequency = 1 (float 0..1000)"), "{out}");
+    assert!(out.contains("  lfo.frequency = 1 (num 0..1000)"), "{out}");
     assert!(out.contains("  common.frequency_mode = \"updates-per-second\" (string one of [updates-per-second, "),
             "{out}");
     // …and into its expression half. This binding cannot compile (no evaluator here), shown inline.

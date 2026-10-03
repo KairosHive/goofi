@@ -43,7 +43,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "meta",
         name: "sfreq",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 100_000.0 },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("The sample rate to write onto the frame, in Hz. 0 keeps whatever it arrived with."),
         section: 0,
@@ -66,7 +66,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "meta",
         name: "axis",
-        spec: ParamSpec::Int { default: 0, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        spec: ParamSpec::Num { default: &[0.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
         expression: None,
         doc: Some("Which axis the labels name, negative from the end."),
         section: 0,

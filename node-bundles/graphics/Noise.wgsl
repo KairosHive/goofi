@@ -6,18 +6,18 @@
      "options": ["simplex", "perlin", "worley", "random"]},
     {"group": "noise", "name": "fractal", "kind": "str", "default": "fbm",
      "options": ["fbm", "ridged", "billow", "warped", "multifractal", "multifractional"]},
-    {"group": "noise", "name": "amount", "kind": "float", "default": 1.0, "min": 0.0, "max": 3.0,
+    {"group": "noise", "name": "amount", "kind": "num", "default": 1.0, "min": 0.0, "max": 3.0,
      "show": {"param": "fractal", "any_of": ["warped", "multifractal", "multifractional"]}},
-    {"group": "noise", "name": "period", "kind": "float", "default": 0.25, "min": 0.002, "max": 4.0},
-    {"group": "noise", "name": "harmonics", "kind": "int", "default": 3, "min": 0, "max": 8},
-    {"group": "noise", "name": "spread", "kind": "float", "default": 2.0, "min": 1.0, "max": 8.0},
-    {"group": "noise", "name": "rough", "kind": "float", "default": 0.5, "min": 0.0, "max": 1.0},
-    {"group": "noise", "name": "exponent", "kind": "float", "default": 1.0, "min": 0.1, "max": 8.0},
+    {"group": "noise", "name": "period", "kind": "num", "default": 0.25, "min": 0.002, "max": 4.0},
+    {"group": "noise", "name": "harmonics", "kind": "num", "int": true, "default": 3, "min": 0, "max": 8},
+    {"group": "noise", "name": "spread", "kind": "num", "default": 2.0, "min": 1.0, "max": 8.0},
+    {"group": "noise", "name": "rough", "kind": "num", "default": 0.5, "min": 0.0, "max": 1.0},
+    {"group": "noise", "name": "exponent", "kind": "num", "default": 1.0, "min": 0.1, "max": 8.0},
     {"group": "noise", "name": "mono", "kind": "bool", "default": true},
-    {"group": "noise", "name": "seed", "kind": "float", "default": 0.0, "min": 0.0, "max": 1000.0},
-    {"group": "move", "name": "x", "kind": "float", "default": 0.0, "min": -8.0, "max": 8.0},
-    {"group": "move", "name": "y", "kind": "float", "default": 0.0, "min": -8.0, "max": 8.0},
-    {"group": "move", "name": "speed", "kind": "float", "default": 0.2, "min": -10.0, "max": 10.0} ] }
+    {"group": "noise", "name": "seed", "kind": "num", "default": 0.0, "min": 0.0, "max": 1000.0},
+    {"group": "move", "name": "x", "kind": "num", "default": 0.0, "min": -8.0, "max": 8.0},
+    {"group": "move", "name": "y", "kind": "num", "default": 0.0, "min": -8.0, "max": 8.0},
+    {"group": "move", "name": "speed", "kind": "num", "default": 0.2, "min": -10.0, "max": 10.0} ] }
 */
 // Integer bit-mixing, not `fract(sin(dot(..)) * 43758)`: that hash turns a one-ulp difference in
 // its argument into a wholly different value, so every lattice boundary showed as a hard seam.

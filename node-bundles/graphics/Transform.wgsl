@@ -3,10 +3,10 @@
   "tags": ["image", "transform"],
   "inputs": [{"name": "input", "kind": "TEXTURE"}],
   "params": [
-    {"group": "transform", "name": "x", "kind": "float", "default": 0.0, "min": -2.0, "max": 2.0},
-    {"group": "transform", "name": "y", "kind": "float", "default": 0.0, "min": -2.0, "max": 2.0},
-    {"group": "transform", "name": "rotate", "kind": "float", "default": 0.0, "min": -360.0, "max": 360.0},
-    {"group": "transform", "name": "scale", "kind": "float", "default": 1.0, "min": 0.01, "max": 10.0},
+    {"group": "transform", "name": "x", "kind": "num", "default": 0.0, "min": -2.0, "max": 2.0},
+    {"group": "transform", "name": "y", "kind": "num", "default": 0.0, "min": -2.0, "max": 2.0},
+    {"group": "transform", "name": "rotate", "kind": "num", "default": 0.0, "min": -360.0, "max": 360.0},
+    {"group": "transform", "name": "scale", "kind": "num", "default": 1.0, "min": 0.01, "max": 10.0},
     {"group": "transform", "name": "tile", "kind": "bool", "default": false} ] }
 */
 fn shade(uv: vec2f) -> vec4f {

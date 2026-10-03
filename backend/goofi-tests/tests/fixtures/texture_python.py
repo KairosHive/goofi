@@ -5,8 +5,8 @@ import numpy as np
 class TexturePython(goofi.Node):
     OUTPUTS = {'out': goofi.DataType.TEXTURE}
     PRODUCER = True
-    PARAMS = {'image': {'width': goofi.IntParam(3, 1, 32),
-                        'red': goofi.FloatParam(0.25, 0.0, 1.0),
+    PARAMS = {'image': {'width': goofi.NumParam(3, 1, 32, int=True),
+                        'red': goofi.NumParam(0.25, 0.0, 1.0),
                         'invalid': goofi.BoolParam(False),
                         'flip': goofi.PulseParam()}}
 

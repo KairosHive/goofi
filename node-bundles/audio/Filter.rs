@@ -19,7 +19,7 @@ goofi_audio_sdk::params! {
     CUTOFF = ParamDecl {
         group: "filter",
         name: "cutoff",
-        spec: ParamSpec::Float { default: 2.0, min: -5.0, max: 6.0 },
+        spec: ParamSpec::Num { default: &[2.0], min: -5.0, max: 6.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("volts per octave, 0 at C4 — the same units as `Osc.pitch`, so a reference tracks"),
         section: 0,
@@ -29,7 +29,7 @@ goofi_audio_sdk::params! {
     Q = ParamDecl {
         group: "filter",
         name: "q",
-        spec: ParamSpec::Float { default: 0.7, min: 0.5, max: 20.0 },
+        spec: ParamSpec::Num { default: &[0.7], min: 0.5, max: 20.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("resonance: it rings longer as it climbs, and peaks at `q` times full scale"),
         section: 0,

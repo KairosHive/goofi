@@ -690,7 +690,7 @@ impl<E: Executor> Runtime<E> {
             let bound = self.binds.iter().any(|b| b.param == i);
             let raised = self.pulsed.iter().any(|(p, _)| *p == i);
             if !bound && !raised {
-                self.params[i].store(scalar(c).to_bits(), Ordering::Relaxed);
+                store(&self.params, &self.decls, i, c);
             }
         }
         let mut pass = Pass::default();
@@ -1119,7 +1119,7 @@ impl<E: Executor> Runtime<E> {
             self.record_error(key, error, pass);
             return;
         }
-        self.params[param].store(scalar(value.as_ref().unwrap_or(target)).to_bits(), Ordering::Relaxed);
+        store(&self.params, &self.decls, param, value.as_ref().unwrap_or(target));
         pass.values |= match value {
             Some(v) => self.evaluated.insert(key.clone(), v.clone()).as_ref() != Some(&v),
             None => self.evaluated.shift_remove(&key).is_some(),
@@ -1154,6 +1154,51 @@ pub fn param_of(params: &ParamGroups, d: &ParamDecl) -> Param {
 
 pub fn scalar_of(params: &ParamGroups, d: &ParamDecl) -> f64 {
     scalar(&param_of(params, d))
+}
+
+/// How many dimensions a declared param has.
+pub fn dims_of(d: &ParamDecl) -> usize {
+    match d.spec {
+        goofi_node::ParamSpec::Num { default, .. } => default.len().max(1),
+        _ => 1,
+    }
+}
+
+/// A node's param cells: one per param, then every dimension past the first of each vector in
+/// order — so a param's index is its cell, and a vector's tail is where [`tail_of`] says.
+pub fn cells_of(params: &ParamGroups, decls: &[ParamDecl]) -> Vec<AtomicU64> {
+    let mut cells: Vec<AtomicU64> = decls.iter().map(|d| AtomicU64::new(scalar_of(params, d).to_bits())).collect();
+    for d in decls {
+        let p = param_of(params, d);
+        let value = p.as_vec().unwrap_or(&[]);
+        cells.extend((1..dims_of(d)).map(|k| AtomicU64::new(value.get(k).copied().unwrap_or(0.0).to_bits())));
+    }
+    cells
+}
+
+/// The cell of param `i`'s second dimension; the rest follow it. The tails sit at the END of the
+/// cells, so a reader holding only a prefix of the decls — an engine's own params without the
+/// universal ones behind them, which are scalars — finds them all the same.
+pub fn tail_of(cells: usize, decls: &[ParamDecl], i: usize) -> usize {
+    let tails: usize = decls.iter().map(|d| dims_of(d) - 1).sum();
+    cells - tails + decls[..i].iter().map(|d| dims_of(d) - 1).sum::<usize>()
+}
+
+/// Every dimension of param `i` as the cells hold it.
+pub fn dims(cells: &[AtomicU64], decls: &[ParamDecl], i: usize) -> Vec<f64> {
+    let tail = tail_of(cells.len(), decls, i);
+    let at = |cell: usize| cells.get(cell).map_or(0.0, |a| f64::from_bits(a.load(Ordering::Relaxed)));
+    std::iter::once(at(i)).chain((1..dims_of(&decls[i])).map(|k| at(tail + k - 1))).collect()
+}
+
+/// Param `i` into its cells, every dimension.
+pub fn store(cells: &[AtomicU64], decls: &[ParamDecl], i: usize, p: &Param) {
+    cells[i].store(scalar(p).to_bits(), Ordering::Relaxed);
+    let tail = tail_of(cells.len(), decls, i);
+    let value = p.as_vec().unwrap_or(&[]);
+    for k in 1..dims_of(&decls[i]) {
+        cells[tail + k - 1].store(value.get(k).copied().unwrap_or(0.0).to_bits(), Ordering::Relaxed);
+    }
 }
 
 /// A `Str` param's text; any other kind has none, and nor has a param whose first desired state

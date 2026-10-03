@@ -116,7 +116,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "smooth",
         name: "size",
-        spec: ParamSpec::Float { default: 10.0, min: 0.0, max: 100.0 },
+        spec: ParamSpec::Num { default: &[10.0], min: 0.0, max: 100.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("How much of the past to smooth over, in the unit below."),
         section: 0,
@@ -139,7 +139,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "smooth",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
         expression: None,
         doc: Some("Which axis to smooth along. -1 is time."),
         section: 0,

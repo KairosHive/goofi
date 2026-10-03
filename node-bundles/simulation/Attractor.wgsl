@@ -4,11 +4,11 @@
   "inputs": [{"name": "out", "kind": "ARRAY"}],
   "state": ["trace"],
   "params": [
-    {"group": "orbit", "name": "spin", "kind": "float", "default": 12.0, "min": -180.0, "max": 180.0},
-    {"group": "orbit", "name": "tilt", "kind": "float", "default": 18.0, "min": -90.0, "max": 90.0},
-    {"group": "orbit", "name": "zoom", "kind": "float", "default": 0.55, "min": 0.02, "max": 4.0},
-    {"group": "orbit", "name": "fade", "kind": "float", "default": 0.04, "min": 0.0, "max": 1.0},
-    {"group": "orbit", "name": "thickness", "kind": "float", "default": 1.5, "min": 0.5, "max": 8.0},
+    {"group": "orbit", "name": "spin", "kind": "num", "default": 12.0, "min": -180.0, "max": 180.0},
+    {"group": "orbit", "name": "tilt", "kind": "num", "default": 18.0, "min": -90.0, "max": 90.0},
+    {"group": "orbit", "name": "zoom", "kind": "num", "default": 0.55, "min": 0.02, "max": 4.0},
+    {"group": "orbit", "name": "fade", "kind": "num", "default": 0.04, "min": 0.0, "max": 1.0},
+    {"group": "orbit", "name": "thickness", "kind": "num", "default": 1.5, "min": 0.5, "max": 8.0},
     {"group": "orbit", "name": "autoscale", "kind": "bool", "default": true} ] }
 */
 

@@ -3,14 +3,14 @@
   "tags": ["image", "generator", "simulation"],
   "state": ["field"],
   "params": [
-    {"group": "lenia", "name": "radius", "kind": "float", "default": 0.2, "min": 0.06, "max": 0.5},
-    {"group": "lenia", "name": "rings", "kind": "int", "default": 3, "min": 1, "max": 4},
-    {"group": "lenia", "name": "falloff", "kind": "float", "default": 1.0, "min": 0.1, "max": 2.0},
-    {"group": "lenia", "name": "mu", "kind": "float", "default": 0.2, "min": 0.0, "max": 1.0},
-    {"group": "lenia", "name": "sigma", "kind": "float", "default": 0.017, "min": 0.001, "max": 0.3},
-    {"group": "lenia", "name": "rate", "kind": "float", "default": 0.05, "min": 0.001, "max": 0.5},
-    {"group": "lenia", "name": "density", "kind": "float", "default": 1.0, "min": 0.0, "max": 1.0},
-    {"group": "lenia", "name": "seed", "kind": "float", "default": 0.0, "min": 0.0, "max": 1000.0} ] }
+    {"group": "lenia", "name": "radius", "kind": "num", "default": 0.2, "min": 0.06, "max": 0.5},
+    {"group": "lenia", "name": "rings", "kind": "num", "int": true, "default": 3, "min": 1, "max": 4},
+    {"group": "lenia", "name": "falloff", "kind": "num", "default": 1.0, "min": 0.1, "max": 2.0},
+    {"group": "lenia", "name": "mu", "kind": "num", "default": 0.2, "min": 0.0, "max": 1.0},
+    {"group": "lenia", "name": "sigma", "kind": "num", "default": 0.017, "min": 0.001, "max": 0.3},
+    {"group": "lenia", "name": "rate", "kind": "num", "default": 0.05, "min": 0.001, "max": 0.5},
+    {"group": "lenia", "name": "density", "kind": "num", "default": 1.0, "min": 0.0, "max": 1.0},
+    {"group": "lenia", "name": "seed", "kind": "num", "default": 0.0, "min": 0.0, "max": 1000.0} ] }
 */
 // The ring is this many cells wide whatever the frame is, which is what makes `radius` a zoom
 // rather than a cost; the span ceiling is what holds that cost down at the smallest radius.

@@ -38,11 +38,11 @@ class GeometryBlend(goofi.Node):
               "mix": goofi.InputSlot(goofi.DataType.ARRAY, required=False)}
     OUTPUTS = {"geometry": goofi.DataType.ARRAY}
     PARAMS = {"blend": {
-        "mix": goofi.FloatParam(0.0, 0.0, 1.0, doc="0 is A, 1 is B; wired mix overrides this value."),
+        "mix": goofi.NumParam(0.0, 0.0, 1.0, doc="0 is A, 1 is B; wired mix overrides this value."),
         "space": goofi.StringParam("domain", ["domain", "image"], doc="Fields: domain checks physical grids; image blends normalized pictures."),
-        "points": goofi.IntParam(512, 32, 4096, doc="Samples along each curve before interpolation."),
+        "points": goofi.NumParam(512, 32, 4096, int=True, doc="Samples along each curve before interpolation."),
         "align": goofi.BoolParam(False, doc="Curves: center each endpoint and scale its largest span to 2 before blending."),
-    }, "common": {"max_frequency": goofi.FloatParam(12.0, 0.0, 60.0)}}
+    }, "common": {"max_frequency": goofi.NumParam(12.0, 0.0, 60.0)}}
 
     def process(self, a, b, mix=None):
         p = self.params.blend

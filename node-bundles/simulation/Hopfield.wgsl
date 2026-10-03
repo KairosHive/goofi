@@ -5,10 +5,10 @@
     {"name": "state", "kind": "ARRAY"},
     {"name": "overlap", "kind": "ARRAY"} ],
   "params": [
-    {"group": "pattern", "name": "columns", "kind": "int", "default": 0, "min": 0, "max": 256},
-    {"group": "pattern", "name": "gap", "kind": "float", "default": 0.10, "min": 0.0, "max": 0.6},
-    {"group": "pattern", "name": "bars", "kind": "float", "default": 0.16, "min": 0.0, "max": 0.6},
-    {"group": "pattern", "name": "gain", "kind": "float", "default": 1.0, "min": 0.05, "max": 8.0} ] }
+    {"group": "pattern", "name": "columns", "kind": "num", "int": true, "default": 0, "min": 0, "max": 256},
+    {"group": "pattern", "name": "gap", "kind": "num", "default": 0.10, "min": 0.0, "max": 0.6},
+    {"group": "pattern", "name": "bars", "kind": "num", "default": 0.16, "min": 0.0, "max": 0.6},
+    {"group": "pattern", "name": "gain", "kind": "num", "default": 1.0, "min": 0.05, "max": 8.0} ] }
 */
 
 const GROUND: vec3f = vec3f(0.05, 0.06, 0.09);

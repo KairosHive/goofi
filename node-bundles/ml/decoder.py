@@ -39,13 +39,13 @@ class Decoder(goofi.Node):
                 doc="`drawn`: each wired number takes a random direction from `seed`. `direct`: wired "
                 "number i IS latent i, which is what a model whose axes already mean something wants.",
             ),
-            "spread": goofi.FloatParam(1.0, 0.0, 4.0, doc="How far from the mean latent to sit. Below 1 is safer, and duller."),
-            "reach": goofi.FloatParam(1.0, 0.0, 8.0, doc="How hard a wired number pushes its own axis."),
-            "smooth": goofi.FloatParam(0.8, 0.0, 0.999, doc="How much of the last drive to keep, so a jumpy signal walks."),
-            "seed": goofi.IntParam(0, 0, 1000000, doc="Which mean latent, and which direction each wired number takes."),
+            "spread": goofi.NumParam(1.0, 0.0, 4.0, doc="How far from the mean latent to sit. Below 1 is safer, and duller."),
+            "reach": goofi.NumParam(1.0, 0.0, 8.0, doc="How hard a wired number pushes its own axis."),
+            "smooth": goofi.NumParam(0.8, 0.0, 0.999, doc="How much of the last drive to keep, so a jumpy signal walks."),
+            "seed": goofi.NumParam(0, 0, 1000000, int=True, doc="Which mean latent, and which direction each wired number takes."),
         },
         "common": {
-            "max_frequency": goofi.FloatParam(30.0, 0.1, 240.0, doc="Rate cap: a generator is asked for no more frames than a viewer draws."),
+            "max_frequency": goofi.NumParam(30.0, 0.1, 240.0, doc="Rate cap: a generator is asked for no more frames than a viewer draws."),
         },
     }
 

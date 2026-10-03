@@ -213,13 +213,13 @@ fn a_request_carries_each_multi_frame_with_its_source_and_a_big_one_by_reference
 
     // The params cross on the setup, whole, and after that one at a time; a run carries none.
     let mut params = goofi_codec::rpc::ParamMap::new();
-    params.entry("gain".into()).or_default().insert("factor".into(), goofi_core::Param::Float { value: 2.0, vmin: 0.0, vmax: 4.0 });
+    params.entry("gain".into()).or_default().insert("factor".into(), goofi_core::Param::float(2.0, 0.0, 4.0));
     let setup = goofi_codec::rpc::encode_setup_request(&params).expect("a setup");
     let goofi_codec::rpc::Request::Setup { params: seeded } = goofi_codec::rpc::decode_request(&[&setup]).expect("a setup") else { panic!("a setup") };
     assert_eq!(seeded, params);
-    let moved = goofi_codec::rpc::encode_param_request("gain", "factor", &goofi_core::Param::Float { value: 3.0, vmin: 0.0, vmax: 4.0 }).expect("a param");
+    let moved = goofi_codec::rpc::encode_param_request("gain", "factor", &goofi_core::Param::float(3.0, 0.0, 4.0)).expect("a param");
     let goofi_codec::rpc::Request::Param { group, name, value } = goofi_codec::rpc::decode_request(&[&moved]).expect("a param") else { panic!("a param") };
-    assert_eq!((group.as_str(), name.as_str(), value), ("gain", "factor", goofi_core::Param::Float { value: 3.0, vmin: 0.0, vmax: 4.0 }));
+    assert_eq!((group.as_str(), name.as_str(), value), ("gain", "factor", goofi_core::Param::float(3.0, 0.0, 4.0)));
 
     // A reply carries a frame per output — or the NAME of the input an output is, unchanged,
     // with no bytes behind it, which the host resolves against what it sent.

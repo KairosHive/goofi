@@ -111,7 +111,7 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
     ParamDecl {
         group: "common",
         name,
-        spec: ParamSpec::Int { default: 0, min: 0, max: plan::MAX_SIZE as i64, options: &[] },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: plan::MAX_SIZE as f64, int: true, options: &[], color: false },
         expression: Some(ExprDecl {
             source,
             mode: if m.producer { ExprMode::On } else { ExprMode::Off },
@@ -363,7 +363,7 @@ impl Engine for GraphicsEngine {
         };
         let manifest = class.manifest;
         let cells = Arc::new(half::Cells {
-            params: decls_of(manifest).iter().map(|d| AtomicU64::new(goofi_runtime::scalar_of(params, d).to_bits())).collect(),
+            params: goofi_runtime::cells_of(params, &decls_of(manifest)).into(),
             uploads: shader::array_inputs(manifest).map(|_| Mutex::new(None)).collect(),
             uploaded: AtomicU64::new(0),
             readers: AtomicBool::new(false),

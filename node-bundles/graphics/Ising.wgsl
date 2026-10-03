@@ -3,11 +3,11 @@
   "tags": ["image", "generator", "simulation"],
   "state": ["spins"],
   "params": [
-    {"group": "ising", "name": "temperature", "kind": "float", "default": 2.27, "min": 0.05, "max": 8.0},
-    {"group": "ising", "name": "coupling", "kind": "float", "default": 1.0, "min": -2.0, "max": 2.0},
-    {"group": "ising", "name": "field", "kind": "float", "default": 0.0, "min": -2.0, "max": 2.0},
-    {"group": "ising", "name": "density", "kind": "float", "default": 0.5, "min": 0.0, "max": 1.0},
-    {"group": "ising", "name": "seed", "kind": "float", "default": 0.0, "min": 0.0, "max": 1000.0} ] }
+    {"group": "ising", "name": "temperature", "kind": "num", "default": 2.27, "min": 0.05, "max": 8.0},
+    {"group": "ising", "name": "coupling", "kind": "num", "default": 1.0, "min": -2.0, "max": 2.0},
+    {"group": "ising", "name": "field", "kind": "num", "default": 0.0, "min": -2.0, "max": 2.0},
+    {"group": "ising", "name": "density", "kind": "num", "default": 0.5, "min": 0.0, "max": 1.0},
+    {"group": "ising", "name": "seed", "kind": "num", "default": 0.0, "min": 0.0, "max": 1000.0} ] }
 */
 fn hash3(v: vec3f) -> f32 {
     let q = vec3u(vec3i(v) + 65536);

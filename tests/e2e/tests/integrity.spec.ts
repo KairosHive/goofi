@@ -285,7 +285,7 @@ test('parameter groups keep readable widths and scroll to the last group', async
 		const status = (await rawCall(page, 'session status')).result;
 		const source = path.join(status.workspace, 'nodes_signal', 'many_groups.py');
 		fs.mkdirSync(path.dirname(source), { recursive: true });
-		const params = groups.map((g) => `"${g}": {"amount": goofi.FloatParam(0.5, 0.0, 1.0)}`).join(', ');
+		const params = groups.map((g) => `"${g}": {"amount": goofi.NumParam(0.5, 0.0, 1.0)}`).join(', ');
 		fs.writeFileSync(source, `import goofi\nclass ManyGroups(goofi.Node):\n    OUTPUTS = {"out": goofi.DataType.ARRAY}\n    PARAMS = {${params}}\n`);
 		expect((await rawCall(page, 'library refresh')).error).toBeUndefined();
 		const uid = await addNode(page, 'ManyGroups');
@@ -345,11 +345,11 @@ test('a dropdown shows and hides the params, sections and group that depend on i
 			'    OUTPUTS = {"out": goofi.DataType.ARRAY}',
 			'    PARAMS = {',
 			'        "filter": [',
-			'            {"mode": goofi.StringParam("fir", options=["fir", "iir"]), "taps": goofi.IntParam(64, 1, 512, show=("mode", ["fir"]))},',
-			'            {"order": goofi.IntParam(4, 2, 8, options=[2, 4, 8], show=("mode", ["iir"])), "ripple": goofi.FloatParam(0.5, 0.0, 1.0, show=("order", [4, 8]))},',
-			'            {"gain": goofi.FloatParam(1.0, 0.0, 2.0)},',
+			'            {"mode": goofi.StringParam("fir", options=["fir", "iir"]), "taps": goofi.NumParam(64, 1, 512, int=True, show=("mode", ["fir"]))},',
+			'            {"order": goofi.NumParam(4, 2, 8, int=True, options=[2, 4, 8], show=("mode", ["iir"])), "ripple": goofi.NumParam(0.5, 0.0, 1.0, show=("order", [4, 8]))},',
+			'            {"gain": goofi.NumParam(1.0, 0.0, 2.0)},',
 			'        ],',
-			'        "iir": {"q": goofi.FloatParam(0.7, 0.1, 10.0, show=("filter.mode", ["iir"]))},',
+			'        "iir": {"q": goofi.NumParam(0.7, 0.1, 10.0, show=("filter.mode", ["iir"]))},',
 			'    }',
 			''
 		].join('\n'));
@@ -423,6 +423,25 @@ test('a list section opens one slot per count, and its + button opens another', 
 		await page.getByTestId('param-count-less-stops').click();
 		await expect(row('ramp/at_2')).toHaveCount(0);
 		await expect(page.getByTestId('param-count-less-stops'), 'the floor of the list').toBeDisabled();
+	} finally {
+		await tearDown(page);
+	}
+});
+
+test('a colour param is picked, and its alpha slid', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const uid = await addNode(page, 'graphics:Threshold', [300, 60]);
+		await waitForNode(page, uid);
+		await selectNode(page, uid);
+		const above = page.locator('[data-param-key="threshold/above"]');
+		const picker = above.getByTestId('param-color');
+		await expect(picker).toHaveValue('#ffffff');
+		await picker.fill('#ff0000');
+		await expect.poll(async () => JSON.stringify((await rawCall(page, 'node state', { node: uid })).result)).toContain('threshold.above = [1, 0, 0, 1] (4d color 0..1)');
+		await expect(above.getByTestId('param-alpha')).toBeVisible();
+		await expectIntact(page, 'a colour row');
 	} finally {
 		await tearDown(page);
 	}

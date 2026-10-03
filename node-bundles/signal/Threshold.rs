@@ -81,7 +81,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "threshold",
         name: "level",
-        spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
+        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
         expression: None,
         doc: Some("The value the signal is compared against."),
         section: 0,
@@ -91,7 +91,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "threshold",
         name: "hysteresis",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 1.0e9 },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0e9, int: false, options: &[], color: false },
         expression: None,
         doc: Some(
             "How far past the level the signal must go to switch back, so noise sitting on the \
@@ -114,7 +114,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "threshold",
         name: "dwell",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 3600.0 },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 3600.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some(
             "How long in seconds the comparison must keep saying the same thing before the \
@@ -128,7 +128,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "threshold",
         name: "hold",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 3600.0 },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 3600.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("How long in seconds a decision stays before it is allowed to switch again."),
         section: 0,

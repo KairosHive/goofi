@@ -5,7 +5,7 @@ goofi_audio_sdk::params! {
     PITCH = ParamDecl {
         group: "osc",
         name: "pitch",
-        spec: ParamSpec::Float { default: 0.75, min: -10.0, max: 10.0 },
+        spec: ParamSpec::Num { default: &[0.75], min: -10.0, max: 10.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("volts per octave, 0 at C4 (0.75 is A4); an audio reference is one voice per channel"),
         section: 0,

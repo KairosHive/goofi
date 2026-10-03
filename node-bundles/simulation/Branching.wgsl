@@ -7,10 +7,10 @@
     {"name": "avalanche", "kind": "ARRAY"} ],
   "state": ["history"],
   "params": [
-    {"group": "cascade", "name": "speed", "kind": "int", "default": 1, "min": 1, "max": 16},
-    {"group": "cascade", "name": "largest", "kind": "int", "default": 1000, "min": 2, "max": 1000000},
-    {"group": "cascade", "name": "profile", "kind": "float", "default": 0.2, "min": 0.0, "max": 0.6},
-    {"group": "cascade", "name": "gain", "kind": "float", "default": 1.0, "min": 0.1, "max": 100.0} ] }
+    {"group": "cascade", "name": "speed", "kind": "num", "int": true, "default": 1, "min": 1, "max": 16},
+    {"group": "cascade", "name": "largest", "kind": "num", "int": true, "default": 1000, "min": 2, "max": 1000000},
+    {"group": "cascade", "name": "profile", "kind": "num", "default": 0.2, "min": 0.0, "max": 0.6},
+    {"group": "cascade", "name": "gain", "kind": "num", "default": 1.0, "min": 0.1, "max": 100.0} ] }
 */
 
 // A band may cover a hundred thousand units, so it walks at most this many of them.

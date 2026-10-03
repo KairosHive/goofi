@@ -3,10 +3,10 @@
   "tags": ["image", "simulation"],
   "inputs": [{"name": "phases", "kind": "ARRAY"}],
   "params": [
-    {"group": "circle", "name": "radius", "kind": "float", "default": 0.78, "min": 0.05, "max": 1.0},
-    {"group": "circle", "name": "dot", "kind": "float", "default": 4.0, "min": 0.5, "max": 32.0},
-    {"group": "circle", "name": "ring", "kind": "float", "default": 1.0, "min": 0.0, "max": 8.0},
-    {"group": "circle", "name": "order", "kind": "float", "default": 2.0, "min": 0.0, "max": 12.0} ] }
+    {"group": "circle", "name": "radius", "kind": "num", "default": 0.78, "min": 0.05, "max": 1.0},
+    {"group": "circle", "name": "dot", "kind": "num", "default": 4.0, "min": 0.5, "max": 32.0},
+    {"group": "circle", "name": "ring", "kind": "num", "default": 1.0, "min": 0.0, "max": 8.0},
+    {"group": "circle", "name": "order", "kind": "num", "default": 2.0, "min": 0.0, "max": 12.0} ] }
 */
 
 // A ring of a thousand oscillators is a thousand texture reads at every texel, so the picture

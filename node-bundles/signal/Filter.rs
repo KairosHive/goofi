@@ -275,7 +275,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "filter",
         name: "low",
-        spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 10_000.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 10_000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("The bottom edge of the band, in Hz. `lowpass` ignores it."),
         section: 0,
@@ -285,7 +285,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "filter",
         name: "high",
-        spec: ParamSpec::Float { default: 40.0, min: 0.0, max: 10_000.0 },
+        spec: ParamSpec::Num { default: &[40.0], min: 0.0, max: 10_000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("The top edge of the band, in Hz. `highpass` ignores it."),
         section: 0,
@@ -295,7 +295,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "filter",
         name: "order",
-        spec: ParamSpec::Int { default: 4, min: 2, max: 16, options: &[2, 4, 6, 8] },
+        spec: ParamSpec::Num { default: &[4.0], min: 2.0, max: 16.0, int: true, options: &[2, 4, 6, 8], color: false },
         expression: None,
         doc: Some("How sharply the edge cuts. A higher order is steeper and rings for longer."),
         section: 0,
@@ -305,7 +305,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "filter",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
         expression: None,
         doc: Some("Which axis to filter along. -1 is time."),
         section: 0,

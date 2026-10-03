@@ -30,8 +30,8 @@ class Objects(goofi.Node):
     OUTPUTS = {"boxes": goofi.DataType.ARRAY}
     PARAMS = {
         "objects": {
-            "detections": goofi.IntParam(8, 1, 64, doc="The most things to report at once, best score first."),
-            "confidence": goofi.FloatParam(0.4, 0.0, 1.0, doc="How sure the model must be before a thing is reported at all."),
+            "detections": goofi.NumParam(8, 1, 64, int=True, doc="The most things to report at once, best score first."),
+            "confidence": goofi.NumParam(0.4, 0.0, 1.0, doc="How sure the model must be before a thing is reported at all."),
             "only": goofi.StringParam(
                 "", doc="Report only these classes, by name, separated by commas — `person, cup`. Empty reports every one."
             ),

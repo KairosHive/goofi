@@ -15,7 +15,7 @@ goofi_audio_sdk::params! {
     ATTACK = ParamDecl {
         group: "env",
         name: "attack",
-        spec: ParamSpec::Float { default: 0.01, min: 0.0, max: 10.0 },
+        spec: ParamSpec::Num { default: &[0.01], min: 0.0, max: 10.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("seconds to full"),
         section: 0,
@@ -25,7 +25,7 @@ goofi_audio_sdk::params! {
     DECAY = ParamDecl {
         group: "env",
         name: "decay",
-        spec: ParamSpec::Float { default: 0.1, min: 0.0, max: 10.0 },
+        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 10.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("seconds from full to `sustain`"),
         section: 0,
@@ -35,7 +35,7 @@ goofi_audio_sdk::params! {
     SUSTAIN = ParamDecl {
         group: "env",
         name: "sustain",
-        spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("the level held while the gate stays HIGH"),
         section: 0,
@@ -45,7 +45,7 @@ goofi_audio_sdk::params! {
     RELEASE = ParamDecl {
         group: "env",
         name: "release",
-        spec: ParamSpec::Float { default: 0.1, min: 0.0, max: 10.0 },
+        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 10.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("seconds from full to silence once the gate drops"),
         section: 0,

@@ -4,8 +4,8 @@
   "state": ["cells"],
   "params": [
     {"group": "life", "name": "rule", "kind": "str", "default": "conway", "options": ["conway", "highlife", "seeds", "daynight"]},
-    {"group": "life", "name": "density", "kind": "float", "default": 0.35, "min": 0.0, "max": 1.0},
-    {"group": "life", "name": "seed", "kind": "float", "default": 0.0, "min": 0.0, "max": 1000.0} ] }
+    {"group": "life", "name": "density", "kind": "num", "default": 0.35, "min": 0.0, "max": 1.0},
+    {"group": "life", "name": "seed", "kind": "num", "default": 0.0, "min": 0.0, "max": 1000.0} ] }
 */
 fn hash2(v: vec2f) -> f32 {
     let q = vec2u(vec2i(v) + 65536);

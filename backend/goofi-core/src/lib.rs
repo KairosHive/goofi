@@ -788,16 +788,15 @@ impl SlotType {
 /// A typed parameter descriptor; the `common` scheduling group is a RunPolicy, not a `Param`.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Param {
-    Float {
-        value: f64,
+    /// A number, or a vector of them: one value per dimension, inside bounds they all share.
+    /// `int` rounds every value; `color` says the four are RGBA, which the inspector picks.
+    Num {
+        value: Vec<f64>,
         vmin: f64,
         vmax: f64,
-    },
-    Int {
-        value: i64,
-        vmin: i64,
-        vmax: i64,
+        int: bool,
         options: Vec<i64>,
+        color: bool,
     },
     Bool {
         value: bool,
@@ -815,10 +814,16 @@ pub enum Param {
 
 impl Param {
     pub fn float(value: f64, vmin: f64, vmax: f64) -> Param {
-        Param::Float { value, vmin, vmax }
+        Param::Num { value: vec![value], vmin, vmax, int: false, options: Vec::new(), color: false }
     }
     pub fn int(value: i64, vmin: i64, vmax: i64) -> Param {
-        Param::Int { value, vmin, vmax, options: Vec::new() }
+        Param::Num { value: vec![value as f64], vmin: vmin as f64, vmax: vmax as f64, int: true, options: Vec::new(), color: false }
+    }
+    pub fn vec(value: Vec<f64>, vmin: f64, vmax: f64) -> Param {
+        Param::Num { value, vmin, vmax, int: false, options: Vec::new(), color: false }
+    }
+    pub fn color(rgba: [f64; 4]) -> Param {
+        Param::Num { value: rgba.to_vec(), vmin: 0.0, vmax: 1.0, int: false, options: Vec::new(), color: true }
     }
     pub fn boolean(value: bool) -> Param {
         Param::Bool { value }
@@ -831,19 +836,25 @@ impl Param {
         }
     }
 
+    /// The first dimension of a number; a bool as 0 or 1.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
-            Param::Float { value, .. } => Some(*value),
-            Param::Int { value, .. } => Some(*value as f64),
+            Param::Num { value, .. } => value.first().copied(),
             Param::Bool { value } => Some(if *value { 1.0 } else { 0.0 }),
             _ => None,
         }
     }
     pub fn as_i64(&self) -> Option<i64> {
         match self {
-            Param::Int { value, .. } => Some(*value),
-            Param::Float { value, .. } => Some(*value as i64),
+            Param::Num { value, .. } => value.first().map(|v| v.round() as i64),
             Param::Bool { value } => Some(*value as i64),
+            _ => None,
+        }
+    }
+    /// Every dimension of a number.
+    pub fn as_vec(&self) -> Option<&[f64]> {
+        match self {
+            Param::Num { value, .. } => Some(value),
             _ => None,
         }
     }
@@ -858,6 +869,28 @@ impl Param {
             Param::Str { value, .. } => Some(value),
             _ => None,
         }
+    }
+    /// How many dimensions a number has; one for everything else.
+    pub fn dims(&self) -> usize {
+        match self {
+            Param::Num { value, .. } => value.len().max(1),
+            _ => 1,
+        }
+    }
+    /// Whether a number rounds to whole values.
+    pub fn is_int(&self) -> bool {
+        matches!(self, Param::Num { int: true, .. })
+    }
+    /// This number holding `values` in its own shape: rounded where it is an int, and cut or
+    /// carried to its dimensions — one value fills them all. `None` for a param that is no number.
+    pub fn with_values(&self, values: &[f64]) -> Option<Param> {
+        let Param::Num { value, vmin, vmax, int, options, color } = self else { return None };
+        let fill = values.last().copied().unwrap_or(0.0);
+        let value: Vec<f64> = (0..value.len().max(1))
+            .map(|i| if values.len() == 1 { fill } else { values.get(i).copied().unwrap_or(fill) })
+            .map(|v| if *int { v.round() } else { v })
+            .collect();
+        Some(Param::Num { value, vmin: *vmin, vmax: *vmax, int: *int, options: options.clone(), color: *color })
     }
 }
 

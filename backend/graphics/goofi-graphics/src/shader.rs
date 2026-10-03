@@ -1,7 +1,7 @@
 //! A `.wgsl` node file: the header block that IS its manifest, the prelude the engine appends,
 //! and naga's verdict on the two together.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 use goofi_core::probe::Introspection;
 use goofi_core::SlotType;
@@ -88,12 +88,25 @@ pub fn writer(buffer: &str) -> String {
     format!("next_{buffer}")
 }
 
-fn wgsl_type(spec: &ParamSpec) -> &'static str {
+fn wgsl_type(spec: &ParamSpec) -> String {
     match spec {
-        ParamSpec::Float { .. } => "f32",
-        ParamSpec::Int { .. } => "i32",
-        ParamSpec::Bool { .. } | ParamSpec::Str { .. } | ParamSpec::Pulse => "u32",
+        ParamSpec::Num { default, int, .. } => match (default.len(), int) {
+            (0 | 1, false) => "f32".into(),
+            (0 | 1, true) => "i32".into(),
+            (n, false) => format!("vec{n}f"),
+            (n, true) => format!("vec{n}i"),
+        },
+        ParamSpec::Bool { .. } | ParamSpec::Str { .. } | ParamSpec::Pulse => "u32".into(),
     }
+}
+
+/// A param's size and alignment in the storage layout: a scalar 4, a vec2 8, a vec3 or vec4 16.
+fn layout(spec: &ParamSpec) -> (usize, usize) {
+    let n = match spec {
+        ParamSpec::Num { default, .. } => default.len().max(1),
+        _ => 1,
+    };
+    (n * 4, match n { 1 => 4, 2 => 8, _ => 16 })
 }
 
 /// What the engine appends after the file: the bindings a body reads, and the stages that call it.
@@ -172,34 +185,38 @@ fn slots(decls: &[ParamDecl], section: &str, base: &str) -> usize {
     decls.iter().filter(|d| matches!(d.role, Some(Role::Member { section: s, base: b, slot: Some(_) }) if s == section && b == base)).count()
 }
 
-/// One stage's `Params` buffer in WGSL's storage layout: a 4-byte scalar per declared param, a
-/// list as an array of them where its first slot stands, then the range and channel count of
-/// each ARRAY input's last frame, padded to 16.
+/// One stage's `Params` buffer in WGSL's storage layout: each declared param at its alignment,
+/// a vector's dimensions in a row, a list as an array of them where its first slot stands, then
+/// the range and channel count of each ARRAY input's last frame, padded to 16.
 pub fn uniform_bytes(decls: &[ParamDecl], atomics: &[AtomicU64], ranges: &[[f32; 3]]) -> Vec<u8> {
     let mut out = Vec::with_capacity((decls.len() + ranges.len() * 3) * 4 + 16);
     let mut arrays: std::collections::HashMap<(&str, &str), usize> = std::collections::HashMap::new();
-    for (d, a) in decls.iter().zip(atomics) {
-        let v = f64::from_bits(a.load(Ordering::Relaxed));
-        let bytes = match d.spec {
-            ParamSpec::Float { .. } => (v as f32).to_le_bytes(),
-            ParamSpec::Int { .. } => (v.round() as i32).to_le_bytes(),
-            _ => (v.round().max(0.0) as u32).to_le_bytes(),
-        };
+    for (i, d) in decls.iter().enumerate() {
+        let (size, align) = layout(&d.spec);
+        let stride = size.next_multiple_of(align);
         let at = match d.role {
             Some(Role::Member { section, base, slot: Some(slot) }) => {
                 let start = *arrays.entry((section, base)).or_insert_with(|| {
-                    let start = out.len();
-                    out.resize(start + 4 * slots(decls, section, base), 0);
+                    let start = out.len().next_multiple_of(align);
+                    out.resize(start + stride * slots(decls, section, base), 0);
                     start
                 });
-                start + 4 * slot as usize
+                start + stride * slot as usize
             }
             _ => {
-                out.resize(out.len() + 4, 0);
-                out.len() - 4
+                let start = out.len().next_multiple_of(align);
+                out.resize(start + size, 0);
+                start
             }
         };
-        out[at..at + 4].copy_from_slice(&bytes);
+        for (k, v) in goofi_runtime::dims(atomics, decls, i).into_iter().enumerate() {
+            let bytes = match d.spec {
+                ParamSpec::Num { int: false, .. } => (v as f32).to_le_bytes(),
+                ParamSpec::Num { int: true, .. } => (v.round() as i32).to_le_bytes(),
+                _ => (v.round().max(0.0) as u32).to_le_bytes(),
+            };
+            out[at + 4 * k..at + 4 * k + 4].copy_from_slice(&bytes);
+        }
     }
     for field in ranges.iter().flatten() {
         out.extend_from_slice(&field.to_le_bytes());

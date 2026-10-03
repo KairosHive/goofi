@@ -22,10 +22,10 @@ class Epoch(goofi.Node):
             "baseline": goofi.StringParam(
                 "none", options=["none", "whole"], doc="Subtract each channel's window mean."
             ),
-            "reject": goofi.FloatParam(
+            "reject": goofi.NumParam(
                 0.0, 0.0, 1.0e6, doc="Drop a window whose peak-to-peak passes this. 0 keeps every window."
             ),
-            "level": goofi.FloatParam(0.5, -1.0e6, 1.0e6, doc="Capture if any trigger sample reaches this level."),
+            "level": goofi.NumParam(0.5, -1.0e6, 1.0e6, doc="Capture if any trigger sample reaches this level."),
             "reset": goofi.PulseParam(doc="Forget the average and start again."),
         }
     }

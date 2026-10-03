@@ -8,9 +8,9 @@
   "params": [
     {"group": "swarm", "name": "colour", "kind": "str", "default": "species",
      "options": ["species", "phase", "speed", "plain"]},
-    {"group": "swarm", "name": "species", "kind": "int", "default": 4, "min": 1, "max": 16},
-    {"group": "swarm", "name": "size", "kind": "float", "default": 3.0, "min": 0.5, "max": 32.0},
-    {"group": "swarm", "name": "streak", "kind": "float", "default": 0.25, "min": 0.0, "max": 4.0},
+    {"group": "swarm", "name": "species", "kind": "num", "int": true, "default": 4, "min": 1, "max": 16},
+    {"group": "swarm", "name": "size", "kind": "num", "default": 3.0, "min": 0.5, "max": 32.0},
+    {"group": "swarm", "name": "streak", "kind": "num", "default": 0.25, "min": 0.0, "max": 4.0},
     {"group": "swarm", "name": "depth", "kind": "bool", "default": true} ] }
 */
 

@@ -4,7 +4,7 @@
 // `cargo test -p goofi-tests contracts::`, which rewrites this file when it drifts.
 
 export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in string]: JsonValue } | null;
-export type Scalar = boolean | number | number | string;
+export type Scalar = boolean | number | number | string | Array<number>;
 export type Mode = "constant" | "expression" | "reference";
 export type ParamEntry = { value?: Scalar, mode?: Mode, expression?: string, reference?: string, triggers?: boolean, };
 export type VideoQuality = "small" | "high" | "very_high";
@@ -68,4 +68,4 @@ triggers: boolean,
  * The active source's bind, compile or arrival error.
  */
 error: string | null, };
-export type ParamKind = { "type": "float", value: number, vmin: number, vmax: number, } | { "type": "int", value: number, vmin: number, vmax: number, options: Array<number>, } | { "type": "bool", value: boolean, } | { "type": "string", value: string, options: Array<string> | null, } | { "type": "pulse", value: null, };
+export type ParamKind = { "type": "num", value: Scalar, vmin: number, vmax: number, int: boolean, options: Array<number>, color: boolean, } | { "type": "bool", value: boolean, } | { "type": "string", value: string, options: Array<string> | null, } | { "type": "pulse", value: null, };

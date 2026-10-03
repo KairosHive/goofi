@@ -315,7 +315,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "operation",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
         expression: None,
         doc: Some("Which axis the correlations run along; the other modes ignore it. -1 is time."),
         section: 0,
@@ -325,7 +325,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "operation",
         name: "lags",
-        spec: ParamSpec::Int { default: 0, min: 0, max: 100_000, options: &[] },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("How far either way a lagged correlation reaches, in samples; 0 reaches as far as it can."),
         section: 0,

@@ -72,10 +72,10 @@ class RealESRGAN(goofi.Node):
         'model': {'weights': goofi.StringParam('', doc='Absolute path to realesr-general-x4v3.pth. Stop before changing.'),
                   'precision': goofi.StringParam('fp16', options=['fp16', 'fp32'],
                     doc='FP16 is faster and uses less memory. Changes apply to the next new frame.')},
-        'upscale': {'scale': goofi.IntParam(4, 2, 4, options=[2, 4],
+        'upscale': {'scale': goofi.NumParam(4, 2, 4, int=True, options=[2, 4],
                     doc='The network computes 4x. 2x averages the 4x output on the GPU before transfer.')},
         'common': {'autotrigger': goofi.BoolParam(True),
-                   'max_frequency': goofi.FloatParam(60.0, 1.0, 120.0)},
+                   'max_frequency': goofi.NumParam(60.0, 1.0, 120.0)},
     }
 
     def setup(self):

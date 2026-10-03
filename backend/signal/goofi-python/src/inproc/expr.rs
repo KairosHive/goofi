@@ -104,19 +104,31 @@ where
     a.call_method0("item").and_then(|it| it.extract::<T>()).map_err(|_| not_a())
 }
 
+/// A result as `dims` numbers: a sequence or array of that many, or one number for them all.
+fn to_vector(result: &Bound<'_, PyAny>, dims: usize) -> Result<Vec<f64>, String> {
+    if let Ok(v) = to_scalar::<f64>(result, "number") {
+        return Ok(vec![v]);
+    }
+    let values: Vec<f64> = result
+        .extract::<Vec<f64>>()
+        .or_else(|_| result.call_method0("tolist").and_then(|l| l.extract::<Vec<f64>>()))
+        .map_err(|_| format!("expression result is not a number or a sequence of {dims}"))?;
+    if values.len() != dims {
+        return Err(format!("expression result has {} numbers, not {dims}", values.len()));
+    }
+    Ok(values)
+}
+
 /// Coerce the Python result to the target param's type.
 fn coerce(result: &Bound<'_, PyAny>, target: &Param) -> Result<Param, String> {
     match target {
-        Param::Float { vmin, vmax, .. } => {
-            Ok(Param::Float { value: to_scalar::<f64>(result, "number")?, vmin: *vmin, vmax: *vmax })
-        }
-        Param::Int { vmin, vmax, options, .. } => {
-            let v = to_scalar::<f64>(result, "number")?;
+        Param::Num { value, int, .. } => {
+            let values = if value.len() > 1 { to_vector(result, value.len())? } else { vec![to_scalar::<f64>(result, "number")?] };
             // `as i64` silently saturates NaN and ±inf; error instead.
-            if !v.is_finite() {
+            if *int && values.iter().any(|v| !v.is_finite()) {
                 return Err("expression result is not a finite number".to_string());
             }
-            Ok(Param::Int { value: v.round() as i64, vmin: *vmin, vmax: *vmax, options: options.clone() })
+            Ok(target.with_values(&values).expect("a number"))
         }
         // A pulse is a GATE to an expression: the runtime fires on the rise of this bool.
         Param::Bool { .. } | Param::Pulse => {
@@ -162,8 +174,7 @@ impl ExprEvaluator for PyExprEvaluator {
                 locals.set_item(name.as_str(), val).map_err(|e| ExprError(e.to_string()))?;
             }
             let (lo, hi) = match ctx.target {
-                Param::Float { vmin, vmax, .. } => (*vmin, *vmax),
-                Param::Int { vmin, vmax, .. } => (*vmin as f64, *vmax as f64),
+                Param::Num { vmin, vmax, .. } => (*vmin, *vmax),
                 _ => (0.0, 1.0),
             };
             let result = self

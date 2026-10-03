@@ -4,11 +4,11 @@
   "inputs": [{"name": "input", "kind": "TEXTURE"}, {"name": "geometry", "kind": "ARRAY"}, {"name": "palette", "kind": "ARRAY"}],
   "params": [
     {"group": "ink", "name": "style", "kind": "str", "default": "nodal", "options": ["nodal", "signed", "magnitude", "contours", "density"], "doc": "Zero lines, signed field, absolute value, contours, or an already computed nodal density."},
-    {"group": "ink", "name": "range", "kind": "float", "default": 1.0, "min": 0.001, "max": 100.0, "doc": "Absolute field value that fills the color range."},
-    {"group": "ink", "name": "width", "kind": "float", "default": 0.045, "min": 0.001, "max": 0.4, "doc": "Nodal width relative to field range."},
-    {"group": "ink", "name": "contours", "kind": "float", "default": 8.0, "min": 1.0, "max": 40.0},
-    {"group": "tone", "name": "warmth", "kind": "float", "default": 0.45, "min": 0.0, "max": 1.0},
-    {"group": "tone", "name": "exposure", "kind": "float", "default": 1.6, "min": 0.1, "max": 6.0}
+    {"group": "ink", "name": "range", "kind": "num", "default": 1.0, "min": 0.001, "max": 100.0, "doc": "Absolute field value that fills the color range."},
+    {"group": "ink", "name": "width", "kind": "num", "default": 0.045, "min": 0.001, "max": 0.4, "doc": "Nodal width relative to field range."},
+    {"group": "ink", "name": "contours", "kind": "num", "default": 8.0, "min": 1.0, "max": 40.0},
+    {"group": "tone", "name": "warmth", "kind": "num", "default": 0.45, "min": 0.0, "max": 1.0},
+    {"group": "tone", "name": "exposure", "kind": "num", "default": 1.6, "min": 0.1, "max": 6.0}
   ] }
 */
 

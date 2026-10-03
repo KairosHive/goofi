@@ -32,11 +32,14 @@ function catalog(): NodeTypeInfo[] {
 			params: {
 				common: {
 					max_frequency: {
-						type: 'float',
+						type: 'num',
 						value: 30,
 						default: 30,
 						vmin: 0,
 						vmax: 1000,
+						int: false,
+						options: [],
+						color: false,
 						doc: null,
 						refreshable: false,
 						expression: null,
@@ -69,7 +72,7 @@ describe('node-identity read cutover — nodes built from the doc when the catal
 		// Descriptors come from the catalog by type.
 		expect(n!.doc).toBe('A generator');
 		expect(n!.output_slots).toEqual({ out: 'ARRAY' });
-		expect(n!.params.common.max_frequency.type).toBe('float');
+		expect(n!.params.common.max_frequency.type).toBe('num');
 		// No doc value written → the catalog default.
 		expect(n!.params.common.max_frequency.value).toBe(30);
 	});

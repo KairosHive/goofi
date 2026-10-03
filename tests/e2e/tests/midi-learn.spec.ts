@@ -36,7 +36,7 @@ class LearnMidi(goofi.Node):
     TAGS = ["midi"]
     PRODUCER = True
     OUTPUTS = {"cc": goofi.DataType.ARRAY, "notes": goofi.DataType.ARRAY}
-    PARAMS = {"test": {"cc": goofi.FloatParam(0.0, 0.0, 1.0), "note": goofi.FloatParam(0.0, 0.0, 1.0)}}
+    PARAMS = {"test": {"cc": goofi.NumParam(0.0, 0.0, 1.0), "note": goofi.NumParam(0.0, 0.0, 1.0)}}
     def process(self):
         cc = np.zeros(128, dtype=np.float32)
         notes = np.zeros(128, dtype=np.float32)

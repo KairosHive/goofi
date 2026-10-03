@@ -301,7 +301,7 @@ goofi_audio_sdk::params! {
     LEVEL = ParamDecl {
         group: "tone",
         name: "level",
-        spec: ParamSpec::Float { default: 0.5, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], color: false },
         doc: Some("the block's level"),
         expression: None,
         section: 0,

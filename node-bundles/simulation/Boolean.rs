@@ -176,7 +176,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "boolean",
         name: "size",
-        spec: ParamSpec::Int { default: 64, min: 2, max: 4096, options: &[] },
+        spec: ParamSpec::Num { default: &[64.0], min: 2.0, max: 4096.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("How many units."),
         section: 0,
@@ -186,7 +186,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "boolean",
         name: "connections",
-        spec: ParamSpec::Int { default: 2, min: 1, max: 6, options: &[] },
+        spec: ParamSpec::Num { default: &[2.0], min: 1.0, max: 6.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("How many units each one reads. 1 freezes, 3 and up is chaos, and 2 is the edge between them."),
         section: 0,
@@ -196,7 +196,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "boolean",
         name: "bias",
-        spec: ParamSpec::Float { default: 0.5, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("How often a drawn rule answers on. Away from 0.5 the network freezes even at high `connections`."),
         section: 0,
@@ -206,7 +206,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "boolean",
         name: "noise",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 0.5 },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 0.5, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Chance a unit flips against its rule, which is what shakes a frozen network."),
         section: 0,
@@ -216,7 +216,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some("Seeds the wiring, the rules and the starting state. Negative takes a fresh one from the clock."),
         section: 0,
@@ -246,7 +246,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "output",
         name: "sfreq",
-        spec: ParamSpec::Float { default: 20.0, min: 1.0, max: 1000.0 },
+        spec: ParamSpec::Num { default: &[20.0], min: 1.0, max: 1000.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("Updates per second of real time, and the sample rate of an emitted block."),
         section: 0,

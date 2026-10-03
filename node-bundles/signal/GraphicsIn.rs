@@ -108,7 +108,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "graphics",
         name: "size",
-        spec: ParamSpec::Int { default: 256, min: 0, max: 16384, options: &[] },
+        spec: ParamSpec::Num { default: &[256.0], min: 0.0, max: 16384.0, int: true, options: &[], color: false },
         expression: None,
         doc: Some(
             "The most texels either picture axis keeps, averaged into blocks. Zero takes the \

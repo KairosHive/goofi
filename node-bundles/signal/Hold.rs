@@ -91,7 +91,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "hold",
         name: "ramp",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 600.0 },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 600.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("How long in seconds to glide to a newly caught value. Zero steps to it."),
         section: 0,

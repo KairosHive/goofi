@@ -24,7 +24,7 @@ goofi_audio_sdk::params! {
     BEND = ParamDecl {
         group: "midi",
         name: "bend_range",
-        spec: ParamSpec::Float { default: 2.0, min: 0.0, max: 24.0 },
+        spec: ParamSpec::Num { default: &[2.0], min: 0.0, max: 24.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("how many semitones a full pitch wheel reaches, up and down"),
         section: 0,
@@ -34,7 +34,7 @@ goofi_audio_sdk::params! {
     VOICES = ParamDecl {
         group: "midi",
         name: "voices",
-        spec: ParamSpec::Int { default: 4, min: 1, max: VOICES as i64, options: &[] },
+        spec: ParamSpec::Num { default: &[4.0], min: 1.0, max: VOICES as f64, int: true, options: &[], color: false },
         expression: None,
         doc: Some(
             "one channel per voice on every output; notes take voices round-robin. The bundled              `voices` output needs two channels per voice, so it carries the first 8 — past that,              wire gate, pitch and velocity separately",

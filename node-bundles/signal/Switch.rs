@@ -31,7 +31,7 @@ impl Node for Switch {
 static PARAMS: &[ParamDecl] = &[ParamDecl {
     group: "switch",
     name: "index",
-    spec: ParamSpec::Int { default: 0, min: 0, max: 63, options: &[] },
+    spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 63.0, int: true, options: &[], color: false },
     expression: None,
     doc: Some(
         "Which wire passes, counted in the order they were connected. In reference mode another \

@@ -3,17 +3,17 @@
   "tags": ["image", "generator"],
   "inputs": [{"name": "harmonics", "kind": "ARRAY"}],
   "params": [
-    {"group": "trace", "name": "duration", "kind": "float", "default": 4.0, "min": 0.1, "max": 16.0, "doc": "Exposure in relative-frequency seconds."},
-    {"group": "trace", "name": "samples", "kind": "int", "default": 160, "min": 32, "max": 384, "doc": "Segments per pixel; increase only when curves need more detail."},
-    {"group": "trace", "name": "first", "kind": "int", "default": 0, "min": 0, "max": 29, "doc": "First of three harmonic components, counting from zero."},
-    {"group": "trace", "name": "decay", "kind": "float", "default": 0.0, "min": 0.0, "max": 1.0, "doc": "Extra damping along the trace."},
-    {"group": "camera", "name": "yaw", "kind": "float", "default": 0.55, "min": -1000.0, "max": 1000.0, "doc": "Horizontal camera angle, radians."},
-    {"group": "camera", "name": "pitch", "kind": "float", "default": 0.35, "min": -3.14, "max": 3.14, "doc": "Vertical camera angle, radians."},
-    {"group": "camera", "name": "zoom", "kind": "float", "default": 0.66, "min": 0.1, "max": 2.0},
-    {"group": "ink", "name": "thickness", "kind": "float", "default": 1.5, "min": 0.5, "max": 6.0, "doc": "Core line radius in pixels."},
-    {"group": "ink", "name": "glow", "kind": "float", "default": 4.0, "min": 0.0, "max": 12.0},
-    {"group": "common", "name": "width", "kind": "int", "default": 256, "min": 0, "max": 4096},
-    {"group": "common", "name": "height", "kind": "int", "default": 256, "min": 0, "max": 4096}
+    {"group": "trace", "name": "duration", "kind": "num", "default": 4.0, "min": 0.1, "max": 16.0, "doc": "Exposure in relative-frequency seconds."},
+    {"group": "trace", "name": "samples", "kind": "num", "int": true, "default": 160, "min": 32, "max": 384, "doc": "Segments per pixel; increase only when curves need more detail."},
+    {"group": "trace", "name": "first", "kind": "num", "int": true, "default": 0, "min": 0, "max": 29, "doc": "First of three harmonic components, counting from zero."},
+    {"group": "trace", "name": "decay", "kind": "num", "default": 0.0, "min": 0.0, "max": 1.0, "doc": "Extra damping along the trace."},
+    {"group": "camera", "name": "yaw", "kind": "num", "default": 0.55, "min": -1000.0, "max": 1000.0, "doc": "Horizontal camera angle, radians."},
+    {"group": "camera", "name": "pitch", "kind": "num", "default": 0.35, "min": -3.14, "max": 3.14, "doc": "Vertical camera angle, radians."},
+    {"group": "camera", "name": "zoom", "kind": "num", "default": 0.66, "min": 0.1, "max": 2.0},
+    {"group": "ink", "name": "thickness", "kind": "num", "default": 1.5, "min": 0.5, "max": 6.0, "doc": "Core line radius in pixels."},
+    {"group": "ink", "name": "glow", "kind": "num", "default": 4.0, "min": 0.0, "max": 12.0},
+    {"group": "common", "name": "width", "kind": "num", "int": true, "default": 256, "min": 0, "max": 4096},
+    {"group": "common", "name": "height", "kind": "num", "int": true, "default": 256, "min": 0, "max": 4096}
   ] }
 */
 

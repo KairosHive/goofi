@@ -56,18 +56,18 @@ class HarmonicSpectrum(goofi.Node):
     OUTPUTS["analysis"] = goofi.DataType.TABLE
     PARAMS = {
         "spectrum": {
-            "f_min": goofi.FloatParam(2.0, 0.1, 1000.0, doc="Lowest analysis frequency, in Hz."),
-            "f_max": goofi.FloatParam(30.0, 1.0, 1000.0, doc="Highest analysis frequency, at most half of sfreq."),
-            "precision": goofi.FloatParam(0.5, 0.01, 10.0, doc="Frequency resolution in Hz. Supply at least sfreq / precision samples."),
-            "n_peaks": goofi.IntParam(5, 1, 10, doc="Number of peaks to return, with NaN padding."),
-            "smoothness": goofi.FloatParam(1.0, 0.0, 10.0, doc="Gaussian smoothing of H(f), in bins. Zero disables it."),
+            "f_min": goofi.NumParam(2.0, 0.1, 1000.0, doc="Lowest analysis frequency, in Hz."),
+            "f_max": goofi.NumParam(30.0, 1.0, 1000.0, doc="Highest analysis frequency, at most half of sfreq."),
+            "precision": goofi.NumParam(0.5, 0.01, 10.0, doc="Frequency resolution in Hz. Supply at least sfreq / precision samples."),
+            "n_peaks": goofi.NumParam(5, 1, 10, int=True, doc="Number of peaks to return, with NaN padding."),
+            "smoothness": goofi.NumParam(1.0, 0.0, 10.0, doc="Gaussian smoothing of H(f), in bins. Zero disables it."),
             "power_law_remove": goofi.BoolParam(False, doc="Subtract a fitted power law from the PSD before analysis."),
             "kernel": goofi.StringParam("harmsim", ["harmsim", "subharm_tension"],
                                        doc="Pair similarity: harmonic ratios or one minus subharmonic tension."),
         },
         "subharmonic": {
-            "n_harm": goofi.IntParam(10, 1, 20, doc="Harmonics compared by the subharm_tension kernel."),
-            "delta_lim": goofi.FloatParam(20.0, 1.0, 300.0, doc="Largest subharmonic time difference counted, in ms."),
+            "n_harm": goofi.NumParam(10, 1, 20, int=True, doc="Harmonics compared by the subharm_tension kernel."),
+            "delta_lim": goofi.NumParam(20.0, 1.0, 300.0, doc="Largest subharmonic time difference counted, in ms."),
         },
     }
 

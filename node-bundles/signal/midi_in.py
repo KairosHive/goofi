@@ -32,7 +32,7 @@ class MidiIn(goofi.Node):
     PARAMS = {
         "midi": {
             "port": goofi.StringParam("", options=[""], refresh=True, doc="Which port to listen on."),
-            "channel": goofi.IntParam(0, 0, 16, doc="Which channel to listen to. 0 is every channel."),
+            "channel": goofi.NumParam(0, 0, 16, int=True, doc="Which channel to listen to. 0 is every channel."),
         }
     }
 
