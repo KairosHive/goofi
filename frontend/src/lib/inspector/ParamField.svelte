@@ -204,18 +204,22 @@
 				/>
 				{@render viewSwitch()}
 			{:else if num && (kind === 'vector' || asVector)}
-				<!-- One number per dimension; each commits the whole vector. -->
-				{#each numValues(num) as held, i (i)}
-					<NumberInput
-						value={held}
-						onChange={(v) => onCommit(withDim(i, v))}
-						{step}
-						scrub
-						disabled={driven || elementDriven(i)}
-						data-param-edit
-						data-testid={`param-number-${i}`}
-					/>
-				{/each}
+				<!-- One number per dimension, sharing the row's width as the picker would; each commits
+				     the whole vector. -->
+				<div class="pf-vector" data-testid="param-vector">
+					{#each numValues(num) as held, i (i)}
+						<NumberInput
+							class="pf-fill"
+							value={held}
+							onChange={(v) => onCommit(withDim(i, v))}
+							{step}
+							scrub
+							disabled={driven || elementDriven(i)}
+							data-param-edit
+							data-testid={`param-number-${i}`}
+						/>
+					{/each}
+				</div>
 				{#if kind === 'color'}{@render viewSwitch()}{/if}
 			{:else if num}
 				<!-- SOFT bounds → Slider only; the NumberInput is UNBOUNDED (the engine does not clamp on set). -->
@@ -303,6 +307,7 @@
 							<div class="pf-element-row">
 								<span class="pf-element-name">{elementName(i)}</span>
 								<NumberInput
+									class="pf-fill"
 									value={el?.value ?? held}
 									onChange={(v) => onCommitElement?.(i, v)}
 									{step}
@@ -520,6 +525,19 @@
 	.pf-value :global(.pf-view) {
 		flex: 0 0 auto;
 	}
+	.pf-vector {
+		flex: 1 1 auto;
+		min-width: 0;
+		display: flex;
+		gap: var(--space-2);
+		--number-width: 100%;
+	}
+	/* A number that shares its row: the picker's bar fills the row, so its numbers do too. */
+	.pf-vector :global(.pf-fill),
+	.pf-element-row :global(.pf-fill) {
+		flex: 1 1 0;
+		min-width: 0;
+	}
 	.pf-elements {
 		flex: 1 1 100%;
 		display: flex;
@@ -535,7 +553,7 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-3);
-		--number-width: 5rem;
+		--number-width: 100%;
 	}
 	.pf-element-name {
 		flex: 0 0 1.5rem;
