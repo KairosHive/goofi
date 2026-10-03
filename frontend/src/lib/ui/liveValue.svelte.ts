@@ -14,6 +14,10 @@ export function useLiveValue<T>(getSource: () => T, onChange: (v: T) => void, on
 	let pending = $derived((getSource(), false));
 	// A preview moved the source, so a commit at that value is still an edit to record.
 	let previewed = false;
+	// An input the control has not committed: a release keeps showing it until the commit
+	// arrives, because a range's change event follows its pointer-up.
+	let dirty = false;
+	let released = false;
 
 	const value = $derived(displayValue(editing || pending, getSource(), edit));
 
@@ -27,9 +31,11 @@ export function useLiveValue<T>(getSource: () => T, onChange: (v: T) => void, on
 		begin() {
 			edit = value; // seed from what is shown so there's no flash to a stale edit
 			editing = true;
+			released = false;
 		},
 		input(v: T) {
 			edit = v;
+			dirty = true;
 			if (onInput) {
 				previewed = true;
 				onInput(v);
@@ -37,6 +43,8 @@ export function useLiveValue<T>(getSource: () => T, onChange: (v: T) => void, on
 		},
 		commit(v: T) {
 			edit = v;
+			dirty = false;
+			if (released) editing = false;
 			// A focus and blur with nothing typed is no edit: it must not dirty the patch.
 			if (!previewed && Object.is(v, untrack(getSource))) return;
 			previewed = false;
@@ -44,7 +52,8 @@ export function useLiveValue<T>(getSource: () => T, onChange: (v: T) => void, on
 			onChange(v);
 		},
 		end() {
-			editing = false;
+			released = true;
+			if (!dirty) editing = false;
 		}
 	};
 }

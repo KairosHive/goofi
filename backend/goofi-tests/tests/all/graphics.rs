@@ -235,10 +235,8 @@ fn composite_modes_blend_colors_and_transparency() {
         g.set_param(node, "common", "width", 8);
         g.set_param(node, "common", "height", 8);
     }
-    for channel in ["r", "g", "b"] {
-        g.set_param(a, "colour", channel, 0.25);
-        g.set_param(b, "colour", channel, 0.75);
-    }
+    g.set_param(a, "constant", "colour", j!([0.25, 0.25, 0.25, 1.0]));
+    g.set_param(b, "constant", "colour", j!([0.75, 0.75, 0.75, 1.0]));
     g.link(a, "out", composite, "a");
     g.link(b, "out", composite, "b");
     let expect = |mode: &str, expected: [f32; 4]| {
@@ -258,8 +256,8 @@ fn composite_modes_blend_colors_and_transparency() {
     expect("xor", [0.0; 4]);
 
     // Unequal alpha exposes straight/premultiplied color errors and mask direction.
-    g.set_param(a, "colour", "a", 0.5);
-    g.set_param(b, "colour", "a", 0.25);
+    g.set_param(a, "constant", "colour", j!([0.25, 0.25, 0.25, 0.5]));
+    g.set_param(b, "constant", "colour", j!([0.75, 0.75, 0.75, 0.25]));
     expect("over", [0.35, 0.35, 0.35, 0.625]);
     expect("under", [0.45, 0.45, 0.45, 0.625]);
     expect("multiply", [0.3375, 0.3375, 0.3375, 0.625]);
@@ -274,21 +272,15 @@ fn composite_modes_blend_colors_and_transparency() {
     g.set_param(composite, "composite", "blend", 1.0);
 
     // Hidden RGB must not enter the result, even for arithmetic modes.
-    g.set_param(a, "colour", "a", 0.0);
+    g.set_param(a, "constant", "colour", j!([0.25, 0.25, 0.25, 0.0]));
     expect("add", [0.75, 0.75, 0.75, 0.25]);
-    g.set_param(b, "colour", "a", 0.0);
+    g.set_param(b, "constant", "colour", j!([0.75, 0.75, 0.75, 0.0]));
     expect("over", [0.0; 4]);
-    for node in [a, b] {
-        g.set_param(node, "colour", "a", 1.0);
-    }
-    for channel in ["r", "g", "b"] {
-        g.set_param(a, "colour", channel, 0.0);
-    }
+    g.set_param(a, "constant", "colour", j!([0.0, 0.0, 0.0, 1.0]));
+    g.set_param(b, "constant", "colour", j!([0.75, 0.75, 0.75, 1.0]));
     expect("divide", [0.0, 0.0, 0.0, 1.0]);
     expect("color burn", [0.0, 0.0, 0.0, 1.0]);
-    for channel in ["r", "g", "b"] {
-        g.set_param(a, "colour", channel, 1.0);
-    }
+    g.set_param(a, "constant", "colour", j!([1.0, 1.0, 1.0, 1.0]));
     expect("color dodge", [1.0; 4]);
     expect("add", [1.75, 1.75, 1.75, 1.0]);
     expect("subtract", [-0.25, -0.25, -0.25, 1.0]);
@@ -313,9 +305,7 @@ fn shaders_render_on_the_gpu() {
     // Step: a Constant reads back the colour it was given, at the generator's own size.
     let c = g.add("graphics:Constant");
     g.ready(c);
-    g.set_param(c, "colour", "r", 0.25);
-    g.set_param(c, "colour", "g", 0.5);
-    g.set_param(c, "colour", "b", 1.0);
+    g.set_param(c, "constant", "colour", j!([0.25, 0.5, 1.0, 1.0]));
     let frame = drawn(&g, c, "the constant's colour", |d| close(px(d, 0, 0), [0.25, 0.5, 1.0, 1.0]));
     assert_eq!(shape(&frame), vec![1024, 1024, 4], "a node with nothing behind it is 1024 square");
     assert!(close(px(&frame, 511, 511), [0.25, 0.5, 1.0, 1.0]), "the same colour to the far corner");
@@ -325,6 +315,16 @@ fn shaders_render_on_the_gpu() {
     g.set_param(c, "common", "height", 32);
     let frame = drawn(&g, c, "the resized frame", |d| shape(d) == vec![32, 64, 4]);
     assert!(close(px(&frame, 31, 63), [0.25, 0.5, 1.0, 1.0]));
+    // Step: a Shape's colour is RGBA with STRAIGHT alpha: its tint is untouched inside, and the
+    // coverage scales the colour's own alpha, which is nothing outside.
+    let disc = g.add("graphics:Shape");
+    g.ready(disc);
+    g.set_param(disc, "common", "width", 64);
+    g.set_param(disc, "common", "height", 64);
+    g.set_param(disc, "shape", "colour", j!([1.0, 0.5, 0.0, 0.5]));
+    drawn(&g, disc, "a half-clear orange disc", |d| close(px(d, 32, 32), [1.0, 0.5, 0.0, 0.5]) && px(d, 0, 0)[3] < 0.01);
+    g.call("node remove", j!({ "node": hex(disc) }));
+
     let level = g.add("graphics:Level");
     g.ready(level);
     g.link(c, "out", level, "input");
@@ -693,12 +693,13 @@ fn shaders_render_on_the_gpu() {
     g.set_param(stops, "common", "width", 64);
     g.set_param(stops, "common", "height", 4);
     g.set_param(stops, "ramp", "stops", 3);
-    for (name, value) in [("at_1", 0.5), ("r_1", 1.0), ("g_1", 0.0), ("b_1", 0.0), ("at_2", 1.0), ("r_2", 1.0), ("g_2", 1.0), ("b_2", 1.0)] {
-        g.set_param(stops, "ramp", name, value);
-    }
-    drawn(&g, stops, "red at the middle stop, white past it", |d| {
+    g.set_param(stops, "ramp", "at_1", 0.5);
+    g.set_param(stops, "ramp", "colour_1", j!([1.0, 0.0, 0.0, 1.0]));
+    g.set_param(stops, "ramp", "at_2", 1.0);
+    g.set_param(stops, "ramp", "colour_2", j!([1.0, 1.0, 1.0, 0.5]));
+    drawn(&g, stops, "red at the middle stop, half-clear white past it", |d| {
         let (mid, end) = (px(d, 0, 32), px(d, 0, 63));
-        mid[0] > 0.95 && mid[1] < 0.1 && end[1] > 0.9
+        mid[0] > 0.95 && mid[1] < 0.1 && mid[3] > 0.95 && end[1] > 0.9 && (end[3] - 0.5).abs() < 0.05
     });
     g.set_param(stops, "ramp", "stops", 2);
     drawn(&g, stops, "two stops read only the first two slots", |d| px(d, 0, 63)[1] < 0.05);
@@ -993,7 +994,7 @@ fn the_engine_draws_on_its_own_clock() {
     let g = Goofi::timed();
     let c = g.add("graphics:Constant");
     g.ready(c);
-    g.set_param(c, "colour", "r", 0.75);
+    g.set_param(c, "constant", "colour", j!([0.75, 1.0, 1.0, 1.0]));
 
     // Step: with no reader the clock turns and nothing is drawn — the demand rule holds here too.
     let idle = |g: &Goofi| g.call("session status", j!({}))["graphics"].clone();
@@ -1157,9 +1158,8 @@ fn a_tessellation_holds_its_symmetry() {
     let ground = g.add("graphics:Ramp");
     g.ready(ground);
     g.set_param(ground, "ramp", "angle", 35.0);
-    for (name, value) in [("r_0", 0.15), ("g_0", 0.1), ("b_0", 0.6), ("r_1", 1.0), ("g_1", 0.85), ("b_1", 0.2)] {
-        g.set_param(ground, "ramp", name, value);
-    }
+    g.set_param(ground, "ramp", "colour_0", j!([0.15, 0.1, 0.6, 1.0]));
+    g.set_param(ground, "ramp", "colour_1", j!([1.0, 0.85, 0.2, 1.0]));
     let t = g.add("graphics:Tessellate");
     g.ready(t);
     g.link(ground, "out", t, "input");

@@ -73,7 +73,10 @@ function liveParam(uid: string, group: string, name: string, catalog: ParamDescr
 		// falls back to the committed leaf, and neither leaves the declared default standing.
 		value: () => {
 			const committed = leaf().value;
-			const held = typeof committed === 'number' || typeof committed === 'string' || typeof committed === 'boolean' ? committed : undefined;
+			const held =
+				Array.isArray(committed) || typeof committed === 'number' || typeof committed === 'string' || typeof committed === 'boolean'
+					? committed
+					: undefined;
 			const driven = base.type !== 'pulse' && mode() !== 'constant';
 			const live = driven ? cx.runtime(uid)?.values?.[group]?.[name] : undefined;
 			const v = live !== undefined ? live : held;

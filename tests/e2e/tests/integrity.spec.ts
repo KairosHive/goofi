@@ -440,7 +440,16 @@ test('a colour param is picked, and its alpha slid', async ({ page }) => {
 		await expect(picker).toHaveValue('#ffffff');
 		await picker.fill('#ff0000');
 		await expect.poll(async () => JSON.stringify((await rawCall(page, 'node state', { node: uid })).result)).toContain('threshold.above = [1, 0, 0, 1] (4d color 0..1)');
-		await expect(above.getByTestId('param-alpha')).toBeVisible();
+		// The alpha slides by pointer, as a hand does it: it must commit and HOLD, not spring back.
+		const track = above.getByTestId('param-alpha').locator('input');
+		const box = (await track.boundingBox())!;
+		await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 6 });
+		await page.mouse.up();
+		await expect.poll(async () => JSON.stringify((await rawCall(page, 'node state', { node: uid })).result)).toMatch(/threshold\.above = \[1, 0, 0, 0\.[3-7]\d*\]/);
+		await expect.poll(async () => Number(await track.inputValue())).toBeLessThan(0.8);
+		await expect(picker).toHaveValue('#ff0000');
 		await expectIntact(page, 'a colour row');
 	} finally {
 		await tearDown(page);

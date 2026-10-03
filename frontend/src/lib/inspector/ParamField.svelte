@@ -43,7 +43,7 @@
 		descriptor: ParamDescriptor;
 		onCommit: (value: unknown) => unknown;
 		/** A step of a drag on the value, ahead of its commit. */
-		onPreview?: (value: number) => unknown;
+		onPreview?: (value: number | number[]) => unknown;
 		onSetSource: (source: SourcePatch) => void;
 		onRefresh?: () => void;
 		onPulse?: () => void;
@@ -154,6 +154,7 @@
 				<Slider
 					value={numValues(num)[3] ?? 1}
 					onChange={(v) => onCommit(withDim(3, v))}
+					onInput={(v) => onPreview?.(withDim(3, v))}
 					min={0}
 					max={1}
 					step={0.01}

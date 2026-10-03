@@ -62,7 +62,11 @@
 		value={live.value}
 		onpointerdown={() => live.begin()}
 		onpointerup={() => live.end()}
-		onpointercancel={() => live.end()}
+		onpointercancel={(e) => {
+			// A cancelled pan sends no change event: what the thumb reached is the edit.
+			live.commit(Number(e.currentTarget.value));
+			live.end();
+		}}
 		oninput={(e) => live.input(Number((e.currentTarget as HTMLInputElement).value))}
 		onchange={(e) => live.commit(Number((e.currentTarget as HTMLInputElement).value))}
 	/>

@@ -401,7 +401,7 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     g.ready(shader);
     g.set_param(shader, "common", "width", 32);
     g.set_param(shader, "common", "height", 16);
-    g.set_param(shader, "colour", "r", 0.5);
+    g.set_param(shader, "constant", "colour", j!([0.5, 1.0, 1.0, 1.0]));
     let shader_name = g.doc()["nodes"][&shader_hex]["name"].as_str().expect("a name").to_string();
     let stages = |g: &goofi_tests::Goofi| {
         g.call("session status", j!({}))["graphics"]["stages"].as_u64().expect("a stage count")
