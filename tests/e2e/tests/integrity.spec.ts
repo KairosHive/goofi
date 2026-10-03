@@ -495,6 +495,7 @@ test('a colour param is picked, and its alpha slid', async ({ page }) => {
 
 		// Opened, a colour shows its list as one row; as a VECTOR it shows one row per element, and
 		// each element takes a source of its own that drives that dimension alone.
+		await expect(above.getByTestId('param-view-vector'), 'the C/V switch sits on the row itself').toBeVisible();
 		await above.getByRole('button', { name: 'above', exact: true }).click();
 		await expect(above.getByTestId('param-list')).toHaveValue('[1, 0, 0, 0.4]');
 		await above.getByTestId('param-view-vector').click();

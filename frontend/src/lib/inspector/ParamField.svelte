@@ -159,6 +159,25 @@
 	data-node-drop={dropZone}
 	{...rest}
 >
+	<!-- Which face a colour wears, C or V: the picker over its list, or one number and one source
+	     per element. It sits at the row's end in both, so the switch back is where the switch was. -->
+	{#snippet viewSwitch()}
+		<Segmented
+			class="pf-view"
+			value={asVector ? 'vector' : 'color'}
+			segments={[
+				{ id: 'color', label: 'C', name: 'Colour', title: 'Colour — the picker, over the four values as one list', testid: 'param-view-color' },
+				{ id: 'vector', label: 'V', name: 'Vector', title: 'Vector — one row per element, each with a source of its own', testid: 'param-view-vector' }
+			]}
+			onChange={(v) => {
+				if (v === 'vector') uiStore.paramView[viewKey] = 'vector';
+				else delete uiStore.paramView[viewKey];
+			}}
+			aria-label={`${paramName} view`}
+			data-testid="param-view"
+		/>
+	{/snippet}
+
 	<Field
 		{label}
 		doc={descriptor.doc ?? undefined}
@@ -178,6 +197,7 @@
 					data-param-edit
 					data-testid="param-color"
 				/>
+				{@render viewSwitch()}
 			{:else if num && (kind === 'vector' || asVector)}
 				<!-- One number per dimension; each commits the whole vector. -->
 				{#each numValues(num) as held, i (i)}
@@ -191,6 +211,7 @@
 						data-testid={`param-number-${i}`}
 					/>
 				{/each}
+				{#if kind === 'color'}{@render viewSwitch()}{/if}
 			{:else if num}
 				<!-- SOFT bounds → Slider only; the NumberInput is UNBOUNDED (the engine does not clamp on set). -->
 				{#if num.int && num.options?.length}
@@ -266,22 +287,6 @@
 
 	{#if open}
 		<div class="pf-more" data-testid="param-more">
-			{#if num && kind === 'color'}
-				<!-- Which face a colour wears: the picker over its list, or one row per element. -->
-				<Segmented
-					value={asVector ? 'vector' : 'color'}
-					segments={[
-						{ id: 'color', label: 'colour', title: 'Colour — the picker, over the four values as one list', testid: 'param-view-color' },
-						{ id: 'vector', label: 'vector', title: 'Vector — one row per element, each with a source of its own', testid: 'param-view-vector' }
-					]}
-					onChange={(v) => {
-						if (v === 'vector') uiStore.paramView[viewKey] = 'vector';
-						else delete uiStore.paramView[viewKey];
-					}}
-					aria-label={`${paramName} view`}
-					data-testid="param-view"
-				/>
-			{/if}
 			{#if num && dims > 1 && (asVector || kind === 'vector')}
 				<!-- One row per element: its number, and a source of its own that drives that dimension. -->
 				<div class="pf-elements" data-testid="param-elements">
@@ -506,6 +511,9 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		min-width: 0;
+	}
+	.pf-value :global(.pf-view) {
+		flex: 0 0 auto;
 	}
 	.pf-elements {
 		flex: 1 1 100%;
