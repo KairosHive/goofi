@@ -1,6 +1,6 @@
 /** Central reactive graph state, backed by the control WS. The store owns the only writes, so a
  * component just reads its `$state` fields. */
-import type { VideoQuality } from '$lib/api/types';
+import type { ParamDescriptor, VideoQuality } from '$lib/api/types';
 import {
 	getControl,
 	type Control,
@@ -437,6 +437,72 @@ export class GraphStore {
 
 	async updateParam(node: string, group: string, name: string, value: unknown): Promise<void> {
 		await this._paramCall('node param edit', node, group, name, { value });
+	}
+
+	/** The slots of a list section as they are stored: each member's whole source, by base and slot. */
+	private _listSlots(node: string, group: string, section: string): { count: string; bases: Map<string, ParamDescriptor[]> } | null {
+		const params = this.nodeById(node)?.params?.[group];
+		if (!params) return null;
+		let count: string | null = null;
+		const bases = new Map<string, ParamDescriptor[]>();
+		for (const [name, d] of Object.entries(params)) {
+			const role = d.role;
+			if (role?.as === 'count' && role.section === section) count = name;
+			if (role?.as === 'member' && role.section === section && role.slot != null) {
+				const held = bases.get(role.base) ?? [];
+				held[role.slot] = d;
+				bases.set(role.base, held);
+			}
+		}
+		return count ? { count, bases } : null;
+	}
+
+	/** Re-store a list so slot `k` holds what slot `order[k]` held, as ONE undo step; `count` sets
+	 * how many are open. A slot past the order keeps what it has. */
+	private async _restoreSlots(node: string, group: string, section: string, order: number[], count?: number): Promise<void> {
+		const list = this._listSlots(node, group, section);
+		if (!list) throw new Error(`no list ${group}/${section} on node ${node}`);
+		const ops: { op: string; payload: Record<string, unknown> }[] = [];
+		for (const [base, slots] of list.bases) {
+			order.forEach((from, to) => {
+				const d = slots[from];
+				if (from === to || !d) return;
+				ops.push({
+					op: 'node param edit',
+					payload: {
+						node,
+						param: `${group}/${base}_${to}`,
+						value: d.value,
+						expression: d.expression ?? '',
+						reference: d.reference ?? '',
+						mode: d.mode ?? 'constant',
+						triggers: d.triggers ?? false
+					}
+				});
+			});
+		}
+		if (count !== undefined) ops.push({ op: 'node param edit', payload: { node, param: `${group}/${list.count}`, value: count } });
+		if (ops.length === 0) return;
+		await this.ctl.call('compound', { ops });
+	}
+
+	/** Move the slot at `from` so it sits at `to`, the slots between shifting one step. */
+	async moveListSlot(node: string, group: string, section: string, from: number, to: number): Promise<void> {
+		if (from === to) return;
+		const n = Math.max(from, to) + 1;
+		const order = Array.from({ length: n }, (_, i) => i);
+		order.splice(to, 0, ...order.splice(from, 1));
+		await this._restoreSlots(node, group, section, order);
+	}
+
+	/** Close the slot at `index`: the slots after it move up one, and the list is one shorter. */
+	async removeListSlot(node: string, group: string, section: string, index: number): Promise<void> {
+		const list = this._listSlots(node, group, section);
+		const held = list && this.nodeById(node)?.params?.[group]?.[list.count];
+		const count = held && typeof held.value === 'number' ? held.value : 0;
+		if (!list || index >= count) return;
+		const order = Array.from({ length: count }, (_, i) => (i < index ? i : i + 1));
+		await this._restoreSlots(node, group, section, order, count - 1);
 	}
 
 	/** Add a NEW user variable; the server refuses a name the patch already holds. A `control` makes

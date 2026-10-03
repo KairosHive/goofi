@@ -355,6 +355,40 @@
 		const role = r.descriptor.role;
 		return role?.as === 'member' && role.slot != null ? { section: role.section, index: role.slot } : null;
 	};
+	/** A slot under the hand: where it came from, and the slot it is over now. */
+	let drag = $state<{ group: string; section: string; from: number; to: number } | null>(null);
+	function liftSlot(e: PointerEvent, group: string, section: string, from: number): void {
+		if (!canCloseSlot(group, section)) return;
+		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+		drag = { group, section, from, to: from };
+	}
+	function dragSlot(e: PointerEvent): void {
+		if (!drag) return;
+		// The slot whose middle the pointer has crossed is the one it lands on.
+		const slots = document.querySelectorAll<HTMLElement>(`[data-param-form="${formId}"][data-slot-section="${drag.section}"]`);
+		let to = drag.from;
+		for (const el of slots) {
+			const box = el.getBoundingClientRect();
+			const index = Number(el.dataset.slotIndex);
+			if (index < drag.from && e.clientY < box.top + box.height / 2) {
+				to = Math.min(to, index);
+			} else if (index > drag.from && e.clientY > box.top + box.height / 2) {
+				to = Math.max(to, index);
+			}
+		}
+		drag.to = to;
+	}
+	function dropSlot(): void {
+		const d = drag;
+		drag = null;
+		if (d && d.to !== d.from) send('move slot', (uid) => g.moveListSlot(uid, d.group, d.section, d.from, d.to));
+	}
+	/** Whether a slot of the list may go: its count is a hand-set value above its floor. */
+	function canCloseSlot(group: string, section: string): boolean {
+		const params = node?.params?.[group] ?? {};
+		const count = Object.values(params).find((d) => d.role?.as === 'count' && d.role.section === section);
+		return count?.type === 'num' && count.mode === 'constant' && numValue(count) > count.vmin;
+	}
 	type Block = { key: string; slot: { section: string; index: number } | null; rows: (ParamHit & { index: number })[] };
 	// The rows in blocks: a slot of a list is one block holding its members, every other row its own.
 	const blocks = $derived.by<Block[]>(() => {
@@ -660,8 +694,45 @@
 						{#each blocks as block (block.key)}
 							{#if block.slot}
 								<!-- One slot of a list: its number and its members on a tone of their own, alternating. -->
-								<div class="pf-slot" class:alt={block.slot.index % 2 === 1} data-testid={`param-slot-${block.slot.section}-${block.slot.index}`}>
-									<div class="pf-slot-number" data-testid="param-slot-number">{block.slot.index + 1}</div>
+								{@const slot = block.slot}
+								{@const group = block.rows[0].group}
+								<div
+									class="pf-slot"
+									class:alt={slot.index % 2 === 1}
+									class:lifted={drag?.section === slot.section && drag.from === slot.index}
+									class:before={drag?.section === slot.section && drag.to === slot.index && drag.to < drag.from}
+									class:after={drag?.section === slot.section && drag.to === slot.index && drag.to > drag.from}
+									data-param-form={formId}
+									data-slot-section={slot.section}
+									data-slot-index={slot.index}
+									data-testid={`param-slot-${slot.section}-${slot.index}`}
+								>
+									<!-- The slot's own row: a handle that drags it into another place, its number, and its close. -->
+									<div class="pf-slot-head">
+										<!-- svelte-ignore a11y_no_static_element_interactions -->
+										<span
+											class="pf-slot-grip"
+											title="Drag to reorder"
+											data-testid="param-slot-grip"
+											onpointerdown={(e) => liftSlot(e, group, slot.section, slot.index)}
+											onpointermove={dragSlot}
+											onpointerup={dropSlot}
+											onpointercancel={() => (drag = null)}
+										>
+											<Icon name="grip-vertical" />
+										</span>
+										<span class="pf-slot-number" data-testid="param-slot-number">{slot.index + 1}</span>
+										<IconButton
+											label={`Remove ${slot.section} ${slot.index + 1}`}
+											variant="ghost"
+											size="sm"
+											disabled={!canCloseSlot(group, slot.section)}
+											onclick={() => send('remove slot', (uid) => g.removeListSlot(uid, group, slot.section, slot.index))}
+											data-testid="param-slot-remove"
+										>
+											<Icon name="x" />
+										</IconButton>
+									</div>
 									{#each block.rows as { group, name: paramName, descriptor, index } (group + '/' + paramName)}
 										{@render paramRow(group, paramName, descriptor, index)}
 									{/each}
@@ -841,7 +912,6 @@
 	.pf-rows {
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-5);
 		padding: var(--space-6);
 		background: var(--surface-1);
 	}
@@ -887,28 +957,52 @@
 		border: none;
 		border-top: 1px solid var(--border);
 	}
-	/* A heading hangs close to the rows it opens, under the list's own gap. */
+	/* A heading hangs close to the rows it opens. */
 	.pf-section-name {
 		color: var(--text-muted);
 		font-size: var(--fs-small);
-		margin-bottom: calc(var(--space-2) - var(--space-5));
+		margin-bottom: var(--space-2);
 	}
 	/* Slots alternate between the two surface steps above the form's own, so each reads as one. */
 	.pf-slot {
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-5);
-		padding: var(--space-3) var(--space-4);
+		padding: var(--space-2) var(--space-4) var(--space-3);
 		border-radius: var(--radius-sm);
 		background: var(--surface-2);
+		/* The drop line draws in the border, so a target never moves the slots around it. */
+		border-top: 2px solid transparent;
+		border-bottom: 2px solid transparent;
 	}
 	.pf-slot.alt {
 		background: var(--surface-3);
 	}
-	.pf-slot-number {
+	.pf-slot.lifted {
+		opacity: 0.5;
+	}
+	.pf-slot.before {
+		border-top-color: var(--accent);
+	}
+	.pf-slot.after {
+		border-bottom-color: var(--accent);
+	}
+	.pf-slot-head {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
 		color: var(--text-muted);
 		font-size: var(--fs-small);
-		margin-bottom: calc(var(--space-2) - var(--space-5));
+	}
+	.pf-slot-grip {
+		display: inline-flex;
+		cursor: grab;
+		touch-action: none;
+	}
+	.pf-slot.lifted .pf-slot-grip {
+		cursor: grabbing;
+	}
+	.pf-slot-number {
+		flex: 1 1 auto;
 	}
 	.pf-row.pf-count {
 		flex-direction: row;

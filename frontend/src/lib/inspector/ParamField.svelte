@@ -6,6 +6,7 @@
 	import {
 		Field,
 		Slider,
+		ColorPicker,
 		NumberInput,
 		Toggle,
 		Select,
@@ -81,10 +82,6 @@
 	const step = $derived(num ? (num.int ? 1 : stepOf(num.vmin, num.vmax)) : 1);
 	/** The vector with one dimension replaced, which is what a dimension's control commits. */
 	const withDim = (i: number, v: number): number[] => numValues(num!).map((held, k) => (k === i ? v : held));
-	/** An RGBA colour as the picker's `#rrggbb`, and back; the alpha rides a slider of its own. */
-	const hexOf = (rgba: number[]): string =>
-		'#' + rgba.slice(0, 3).map((c) => Math.round(Math.min(1, Math.max(0, c)) * 255).toString(16).padStart(2, '0')).join('');
-	const rgbOf = (hex: string): number[] => [1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16) / 255);
 
 	const options = $derived(descriptor.type === 'string' ? (descriptor.options ?? []) : []);
 
@@ -140,26 +137,13 @@
 		     be its direct children, and a real box would take them out of the @container column-flip. -->
 		<div class="pf-value">
 			{#if num && kind === 'color'}
-				<!-- The picker holds the three colour channels; the alpha has a slider beside it. -->
-				<label class="pf-swatch" style={`--ink: ${hexOf(numValues(num))}`} title="Pick the colour">
-					<input
-						type="color"
-						value={hexOf(numValues(num))}
-						disabled={driven}
-						data-param-edit
-						data-testid="param-color"
-						oninput={(e) => onCommit([...rgbOf((e.currentTarget as HTMLInputElement).value), numValues(num)[3] ?? 1])}
-					/>
-				</label>
-				<Slider
-					value={numValues(num)[3] ?? 1}
-					onChange={(v) => onCommit(withDim(3, v))}
-					onInput={(v) => onPreview?.(withDim(3, v))}
-					min={0}
-					max={1}
-					step={0.01}
+				<ColorPicker
+					value={numValues(num)}
+					onChange={onCommit}
+					onInput={onPreview}
 					disabled={driven}
-					data-testid="param-alpha"
+					data-param-edit
+					data-testid="param-color"
 				/>
 			{:else if num && kind === 'vector'}
 				<!-- One number per dimension; each commits the whole vector. -->
@@ -399,22 +383,5 @@
 	.unknown {
 		font-size: var(--fs-micro);
 		color: var(--text-muted);
-	}
-	/* The swatch IS the picker: the native input hides behind the colour it holds. */
-	.pf-swatch {
-		display: block;
-		flex: 0 0 auto;
-		width: var(--chrome-control-h);
-		height: var(--chrome-control-h);
-		border-radius: var(--radius-sm);
-		border: 1px solid var(--border);
-		background: var(--ink);
-		overflow: hidden;
-	}
-	.pf-swatch input {
-		opacity: 0;
-		width: 100%;
-		height: 100%;
-		cursor: pointer;
 	}
 </style>

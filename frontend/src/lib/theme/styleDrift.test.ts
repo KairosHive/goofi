@@ -675,9 +675,11 @@ describe('style vocabulary', () => {
 
 	// F stripped every gradient: the surface ladder carries elevation now, and a gradient reads as
 	// a different material sitting on the flat palette. Nothing but this stops one coming back.
+	// The colour picker is the one exception: its square and strips ARE the colour space, drawn as
+	// gradients because that is what a hand reads a colour off; they are not a surface.
 	it('paints surfaces flat — no gradients anywhere (C4)', () => {
 		const offenders = sources()
-			.filter((s) => /gradient\(/.test(s.css))
+			.filter((s) => s.rel !== 'ui/ColorPicker.svelte' && /gradient\(/.test(s.css))
 			.map((s) => s.rel);
 		expect(offenders).toEqual([]);
 	});

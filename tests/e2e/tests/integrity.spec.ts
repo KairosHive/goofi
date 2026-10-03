@@ -420,9 +420,30 @@ test('a list section opens one slot per count, and its + button opens another', 
 		await expect(page.getByTestId('param-count-stops').locator('..'), 'the count is one row').toHaveCSS('flex-direction', 'row');
 		await expectIntact(page, 'a list section with three slots');
 
-		await page.getByTestId('param-count-less-stops').click();
+		// A slot drags by its grip into another place, and the values follow: the third goes first.
+		for (const [name, value] of [['at_1', 0.7], ['at_2', 0.9]] as const) {
+			await rawCall(page, 'node param edit', { node: uid, param: `ramp/${name}`, value });
+		}
+		const state = async () => JSON.stringify((await rawCall(page, 'node state', { node: uid })).result);
+		await expect.poll(state).toContain('ramp.at_2 = 0.9');
+		const grip = slot(2).getByTestId('param-slot-grip');
+		const from = (await grip.boundingBox())!;
+		const target = (await slot(0).boundingBox())!;
+		await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(target.x + 20, target.y + 2, { steps: 8 });
+		await expect(slot(0), 'the drop line shows above the first slot').toHaveClass(/before/);
+		await page.mouse.up();
+		await expect.poll(state).toMatch(/ramp\.at_0 = 0\.9[\s\S]*ramp\.at_1 = 0 [\s\S]*ramp\.at_2 = 0\.7/);
+
+		// A slot's X closes THAT slot: the ones after it move up, and the list is one shorter.
+		await slot(1).getByTestId('param-slot-remove').click();
+		await expect(count).toHaveText('2');
 		await expect(row('ramp/at_2')).toHaveCount(0);
+		await expect.poll(state).toMatch(/ramp\.at_0 = 0\.9[\s\S]*ramp\.at_1 = 0\.7/);
 		await expect(page.getByTestId('param-count-less-stops'), 'the floor of the list').toBeDisabled();
+		await expect(slot(0).getByTestId('param-slot-remove'), 'the floor closes no slot').toBeDisabled();
+		await expect(page.locator('.pf-rows'), 'no gap between params').toHaveCSS('row-gap', 'normal');
 	} finally {
 		await tearDown(page);
 	}
@@ -437,19 +458,21 @@ test('a colour param is picked, and its alpha slid', async ({ page }) => {
 		await selectNode(page, uid);
 		const above = page.locator('[data-param-key="threshold/above"]');
 		const picker = above.getByTestId('param-color');
-		await expect(picker).toHaveValue('#ffffff');
-		await picker.fill('#ff0000');
-		await expect.poll(async () => JSON.stringify((await rawCall(page, 'node state', { node: uid })).result)).toContain('threshold.above = [1, 0, 0, 1] (4d color 0..1)');
-		// The alpha slides by pointer, as a hand does it: it must commit and HOLD, not spring back.
-		const track = above.getByTestId('param-alpha').locator('input');
-		const box = (await track.boundingBox())!;
-		await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2);
-		await page.mouse.down();
-		await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 6 });
-		await page.mouse.up();
-		await expect.poll(async () => JSON.stringify((await rawCall(page, 'node state', { node: uid })).result)).toMatch(/threshold\.above = \[1, 0, 0, 0\.[3-7]\d*\]/);
-		await expect.poll(async () => Number(await track.inputValue())).toBeLessThan(0.8);
-		await expect(picker).toHaveValue('#ff0000');
+		await expect(picker.getByRole('button')).toHaveAttribute('title', 'rgba(255, 255, 255, 1)');
+		await picker.getByRole('button').click();
+		const state = async () => JSON.stringify((await rawCall(page, 'node state', { node: uid })).result);
+		// Hue 0 and the square's top-right corner is pure red; the alpha strip is in the same picker.
+		await page.getByTestId('color-hue').fill('0');
+		const square = page.getByTestId('color-square');
+		const box = (await square.boundingBox())!;
+		await square.click({ position: { x: box.width - 1, y: 1 } });
+		// A hand lands within a pixel of the corner, so the colour is red to the nearest hundredth.
+		const red = (alpha: string) => new RegExp(`threshold\\.above = \\[(1|0\\.99\\d*), 0(\\.00\\d*)?, 0(\\.00\\d*)?, ${alpha}\\] \\(4d color 0\\.\\.1\\)`);
+		await expect.poll(state).toMatch(red('1'));
+		await page.getByTestId('color-alpha').fill('0.5');
+		await expect.poll(state).toMatch(red('0\\.5'));
+		await expect(picker.getByRole('button'), 'the swatch shows what was picked').toHaveAttribute('title', /rgba\(25[0-5], 0, 0, 0\.5\)/);
+		await expect(above.locator('input[type=range]'), 'no slider beside the picker').toHaveCount(0);
 		await expectIntact(page, 'a colour row');
 	} finally {
 		await tearDown(page);

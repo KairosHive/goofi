@@ -31,3 +31,4 @@ export { default as EmptyState } from './EmptyState.svelte';
 export { default as Wave } from './Wave.svelte';
 export { default as ChoiceGrid, type Choice } from './ChoiceGrid.svelte';
 export { default as PaintPad } from './PaintPad.svelte';
+export { default as ColorPicker } from './ColorPicker.svelte';

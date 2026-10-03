@@ -3,7 +3,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
-	import { Icon } from 'panelty';
 	import { provideFieldControlId } from './field';
 
 	let {
@@ -23,7 +22,7 @@
 		doc?: string;
 		/** Trailing control affordance. */
 		adornment?: Snippet;
-		/** Whether what this row reveals is open; drawn on the caret, and announced. */
+		/** Whether what this row reveals is open; announced, and the hover is the one affordance. */
 		expanded?: boolean;
 		/** Extend the disclosure target to its positioned parent with isolated stacking. */
 		stretchSummary?: boolean;
@@ -41,7 +40,7 @@
 <div {...rest} class={`ui-field ${klass}`.trim()} class:row title={doc ?? rest.title}>
 	{#if onExpand}
 		<button type="button" class="ui-field-label ui-field-summary" class:stretched={stretchSummary} aria-expanded={expanded} onclick={onExpand}>
-			<span class="disclosure-caret" class:open={expanded}><Icon name="chevron-right" /></span>{label}
+			{label}
 		</button>
 	{:else}
 		<label class="ui-field-label" for={controlId}>{label}</label>
