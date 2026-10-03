@@ -148,9 +148,7 @@
 			(state) => (drawn = state),
 			(h) => (hover = h)
 		);
-		// An image draws on NO background: the atlas stays clear under it, and the checkerboard the
-		// container wears shows through wherever the picture is translucent.
-		d.setBackground(kind === 'image' ? '#00000000' : getComputedStyle(el).getPropertyValue('--bg').trim());
+		d.setBackground(getComputedStyle(el).getPropertyValue('--bg').trim());
 		drawing = d;
 		return () => {
 			d.remove();
@@ -253,7 +251,6 @@
 <div
 	class="viewer-feed"
 	class:nodrag={drawn.drag}
-	class:checker={kind === 'image'}
 	bind:this={container}
 	onpointerdown={onPointerDown}
 	onpointermove={onPointerMove}
@@ -341,10 +338,6 @@
 		user-select: none;
 		-webkit-user-select: none;
 		-webkit-touch-callout: none;
-	}
-	/* The classic grey checkerboard under an image, so its alpha reads as what it is. */
-	.viewer-feed.checker {
-		background: repeating-conic-gradient(#808080 0 25%, #c0c0c0 0 50%) 0 0 / 16px 16px;
 	}
 	.viewer-feed > :global(*) {
 		flex: 1;

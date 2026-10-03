@@ -773,6 +773,16 @@ fn shaders_render_on_the_gpu() {
     assert!(g.refuse("node param edit", j!({ "node": hex(inked), "param": "look/ink[4]", "value": 1.0 })).contains("no param"));
     g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink[3]", "reference": "" }));
     drawn(&g, inked, "the element let go", |d| close(px(d, 0, 0), [1.0, 1.0, 1.0, 1.0]));
+    // A vector's literal may come as bare numbers, and a LIST of expressions is one per element.
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "mode": "constant" }));
+    g.set_param(inked, "look", "ink", "0.5 0.25 1 1");
+    drawn(&g, inked, "bare numbers, one per element", |d| close(px(d, 0, 0), [0.5, 0.25, 1.0, 1.0]));
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": format!("[{dial_name}.out, 0.25, (1, 2)[0], 'a,b']") }));
+    let text = g.call("node state", j!({ "node": hex(inked) }))["text"].as_str().expect("text").to_string();
+    for line in ["look.ink[1] = expr: 0.25", "look.ink[2] = expr: (1, 2)[0]", "look.ink[3] = expr: 'a,b'"] {
+        assert!(text.contains(line), "{line} in {text}");
+    }
+    assert!(text.contains("look.ink = [0.5, 0.25, 1, 1]"), "the whole param is back on its literal: {text}");
     for node in [dial, full] {
         g.call("node remove", j!({ "node": hex(node) }));
     }

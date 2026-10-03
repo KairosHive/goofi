@@ -55,7 +55,7 @@ op!(ParamEdit, "node param edit", 2, ParamEditArgs {
     pub mode: Option<String>,
     pub triggers: Option<bool>,
 },
-    "Set ONE param, addressed `group/param` — or ONE element of a vector param, `group/param[2]`, whose literal is that dimension and whose source drives that dimension alone, over whatever the whole param's source gives the others. `value` is coerced to the param's declared type — a fraction into an int rounds, a value of the wrong kind falls back to that type's zero; the declared min/max are the editor's range, NOT a clamp. A param has ONE active source, named by `mode`: `constant` (the value), `expression` (Python over nd(), variables and me, at control rate), or `reference` (one producer output spelled `node.slot`, no Python, at the producer's rate). Giving an `expression` or a `reference` implies its mode, so binding one is a single flag; the other two are RETAINED across a mode switch, an empty text clears that text (and the mode, if it was the active one), and a mode or trigger given alone edits what is already there. A `value` on a driven param switches it to `constant`. A reference's producer slot must match the param: a number or bool references any output that may feed an ARRAY input and that holds one element, or selects one flat element with `node.slot[index]`. A string references a STRING output.\n\n\
+    "Set ONE param, addressed `group/param` — or ONE element of a vector param, `group/param[2]`, whose literal is that dimension and whose source drives that dimension alone, over whatever the whole param's source gives the others. A vector's `value` is a list, as JSON or as bare numbers `1 0 0 1`; one number fills every element. A vector's `expression` given as a Python LIST of its length, `[t, 0, 0, 1]`, is one expression per element, each on its own; any other expression drives the whole param and gives a list. `value` is coerced to the param's declared type — a fraction into an int rounds, a value of the wrong kind falls back to that type's zero; the declared min/max are the editor's range, NOT a clamp. A param has ONE active source, named by `mode`: `constant` (the value), `expression` (Python over nd(), variables and me, at control rate), or `reference` (one producer output spelled `node.slot`, no Python, at the producer's rate). Giving an `expression` or a `reference` implies its mode, so binding one is a single flag; the other two are RETAINED across a mode switch, an empty text clears that text (and the mode, if it was the active one), and a mode or trigger given alone edits what is already there. A `value` on a driven param switches it to `constant`. A reference's producer slot must match the param: a number or bool references any output that may feed an ARRAY input and that holds one element, or selects one flat element with `node.slot[index]`. A string references a STRING output.\n\n\
                        `triggers` defaults false, and that is almost always right: a binding re-evaluates on its own — when a referenced node emits, when a referenced param (`nd('x').params.<group>.<param>`, `me.params.…`) is edited, or on each of the node's own runs for a ref-less one — and the node reads the fresh value on its next normal run. `triggers: true` ALSO wakes the node's process() on every evaluation, making the reference its clock. Reach for it only when the node would otherwise not run (a trigger input with no wire into it) and you want the referenced node to drive it. Never on a ref-less expression (`t`, `variables.x`): that free-runs the node at its common.max_frequency.",
     "{value, error} — the value as STORED, with its bind error: a compile failure, an unknown producer, or a slot of the wrong kind.");
 
@@ -411,11 +411,14 @@ impl WriteOp for ParamEdit {
         // descriptor, which only the echo carries.
         let describes = entry.keys().any(|k| k != "value");
         let bag = json!({ &group: { &name: entry } });
-        let cmd = goofi_graph::param_commands(&tx.g, uid, &bag)
-            ?
-            .pop()
-            .ok_or("nothing to change")?;
-        tx.apply(cmd)?;
+        // One address may be several commands: a list of expressions lands one per element.
+        let cmds = goofi_graph::param_commands(&tx.g, uid, &bag)?;
+        if cmds.is_empty() {
+            return Err("nothing to change".into());
+        }
+        for cmd in cmds {
+            tx.apply(cmd)?;
+        }
         if describes {
             tx.echo(uid);
         }

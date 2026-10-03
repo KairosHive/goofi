@@ -212,6 +212,22 @@ pub fn param_commands(
                 .params(uid)
                 .and_then(|p| goofi_node::param_dim(&p, group, name))
                 .ok_or_else(|| format!("no param {group}.{name}"))?;
+            // A LIST of expressions on a vector is one expression per element: each element takes
+            // its own, and the whole param steps back to its literal with the list retained.
+            if let Some(items) = element_expressions(&existing, name, spec) {
+                for (k, item) in items.iter().enumerate() {
+                    let element = format!("{name}[{k}]");
+                    let cur = g.param_source(uid, group, &element).map(|s| s.state);
+                    let (_, source) = param_change(&existing.dim(k), cur, &serde_json::json!({ "expression": item }))
+                        .map_err(|e| format!("params.{group}.{element}: {e}"))?;
+                    cmds.push(Command::EditParam { uid, group: group.clone(), name: element, value: None, source });
+                }
+                let cur = g.param_source(uid, group, name).map(|s| s.state).unwrap_or_default();
+                let text = spec["expression"].as_str().unwrap_or_default().to_string();
+                let whole = SourceState { mode: Mode::Constant, expression: text, ..cur };
+                cmds.push(Command::EditParam { uid, group: group.clone(), name: name.clone(), value: None, source: Some(whole) });
+                continue;
+            }
             let cur = g.param_source(uid, group, name).map(|s| s.state);
             let (value, source) = param_change(&existing, cur, spec)
                 .map_err(|e| format!("params.{group}.{name}: {e}"))?;
@@ -230,13 +246,58 @@ pub fn param_commands(
     Ok(cmds)
 }
 
-/// A CLI `--value` arrives as its raw string; the DECLARED type says what it meant.
+/// A CLI `--value` arrives as its raw string; the DECLARED type says what it meant. A vector
+/// takes its numbers as JSON or as bare text, `1 0 0 1` or `1, 0, 0, 1`, one per element.
 fn coerced_value(existing: &Param, v: &serde_json::Value) -> Param {
     let parsed = match (existing, v.as_str()) {
         (Param::Str { .. }, _) | (_, None) => None,
-        (_, Some(s)) => serde_json::from_str::<serde_json::Value>(s).ok(),
+        (_, Some(s)) => serde_json::from_str::<serde_json::Value>(s).ok().or_else(|| {
+            let numbers: Option<Vec<f64>> =
+                s.trim().trim_matches(|c| c == '[' || c == ']' || c == '(' || c == ')').split([',', ' ']).filter(|t| !t.is_empty()).map(|t| t.trim().parse::<f64>().ok()).collect();
+            numbers.filter(|n| n.len() > 1 && existing.dims() > 1).map(|n| serde_json::json!(n))
+        }),
     };
     param_from_json(existing, parsed.as_ref().unwrap_or(v))
+}
+
+/// The expression a whole VECTOR param is given as a Python list of exactly its dimensions, one
+/// item per element; anything else — a scalar, an element, a list of another length or an
+/// expression that merely evaluates to a list — is none of this.
+fn element_expressions(existing: &Param, name: &str, spec: &serde_json::Value) -> Option<Vec<String>> {
+    if goofi_node::element(name).1.is_some() || existing.dims() < 2 {
+        return None;
+    }
+    let text = spec.get("expression")?.as_str()?.trim();
+    let inner = text.strip_prefix('[')?.strip_suffix(']')?;
+    let items = split_top_level(inner);
+    (items.len() == existing.dims()).then_some(items)
+}
+
+/// `text` split on the commas outside every bracket, parenthesis, brace and string.
+fn split_top_level(text: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    let mut start = 0;
+    for (i, c) in text.char_indices() {
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '\'' | '"') => quote = Some(c),
+            (None, '[' | '(' | '{') => depth += 1,
+            (None, ']' | ')' | '}') => depth -= 1,
+            (None, ',') if depth == 0 => {
+                items.push(text[start..i].trim().to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = text[start..].trim();
+    if !last.is_empty() || !items.is_empty() {
+        items.push(last.to_string());
+    }
+    items
 }
 
 /// What every writer hears when it offers a pulse a value, whichever shape it came in.

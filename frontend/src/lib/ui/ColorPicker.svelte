@@ -174,8 +174,11 @@
 	>
 		<span class="ui-color-dot" style={`left: ${sat * 100}%; top: ${(1 - val) * 100}%; background: ${css([...held.slice(0, 3), 1])}`}></span>
 	</div>
+	<!-- Each strip is a track the thumb overhangs: the input runs a thumb's width past both ends, so
+	     the thumb's centre reaches the track's edges rather than stopping a half-thumb short. -->
+	<div class="ui-color-track ui-color-hue">
 	<input
-		class="ui-color-strip ui-color-hue"
+		class="ui-color-strip"
 		type="range"
 		min="0"
 		max="360"
@@ -194,8 +197,10 @@
 			commit();
 		}}
 	/>
+	</div>
+	<div class="ui-color-track ui-color-alpha" style={`--ink: ${css([...held.slice(0, 3), 1])}`}>
 	<input
-		class="ui-color-strip ui-color-alpha"
+		class="ui-color-strip"
 		type="range"
 		min="0"
 		max="1"
@@ -203,7 +208,6 @@
 		{disabled}
 		aria-label="alpha"
 		data-testid="color-alpha"
-		style={`--ink: ${css([...held.slice(0, 3), 1])}`}
 		value={alpha}
 		onpointerdown={() => (dragging = true)}
 		oninput={(e) => {
@@ -215,6 +219,7 @@
 			commit();
 		}}
 	/>
+	</div>
 	<div class="ui-color-text">
 		{#if eyedropper}
 			<IconButton label="Pick a colour off the screen" variant="ghost" size="sm" onclick={pickFromScreen} data-testid="color-eyedropper">
@@ -258,7 +263,7 @@
 	}
 	/* A checkerboard under the ink, so the alpha shows on the swatch and the strip alike. */
 	.ui-color-swatch,
-	:global(.ui-color-alpha) {
+	:global(.ui-color-track.ui-color-alpha) {
 		--check: repeating-conic-gradient(var(--surface-3) 0 25%, var(--surface-1) 0 50%) 0 0 / 10px 10px;
 	}
 	.ui-color-swatch {
@@ -308,19 +313,28 @@
 		transform: translate(-50%, -50%);
 		pointer-events: none;
 	}
-	:global(.ui-color-strip) {
-		appearance: none;
-		width: 100%;
+	:global(.ui-color-track) {
+		--thumb: 14px;
+		position: relative;
 		height: 12px;
-		margin: 0;
 		border-radius: var(--radius-sm);
 		border: 1px solid var(--border);
+	}
+	:global(.ui-color-strip) {
+		appearance: none;
+		position: absolute;
+		top: 0;
+		left: calc(var(--thumb) / -2);
+		width: calc(100% + var(--thumb));
+		height: 100%;
+		margin: 0;
+		background: none;
 		cursor: pointer;
 	}
 	:global(.ui-color-strip::-webkit-slider-thumb) {
 		appearance: none;
-		width: 14px;
-		height: 14px;
+		width: var(--thumb);
+		height: var(--thumb);
 		border-radius: 50%;
 		border: 2px solid #fff;
 		box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
