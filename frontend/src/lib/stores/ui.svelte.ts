@@ -55,8 +55,8 @@ export class UIStore {
 	/** What the dragged node is over: a linkable panel's id or a zone's `data-node-drop`, or null. */
 	nodeDragOver = $state<string | null>(null);
 
-	/** Colour params a reader opened as vectors, by `uid/group/name`; absent is the colour picker. */
-	paramView = $state<Record<string, 'vector'>>({});
+	/** Vector params a reader opened as individual entries, by `uid/group/name`; absent is the list. */
+	paramView = $state<Record<string, 'individual'>>({});
 
 	/** Variable being dragged from a widget label to a parameter. */
 	variableDrag = $state.raw<{ name: string; x: number; y: number; target: Element | null } | null>(null);

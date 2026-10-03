@@ -495,10 +495,10 @@ test('a colour param is picked, and its alpha slid', async ({ page }) => {
 
 		// Opened, a colour shows its list as one row; as a VECTOR it shows one row per element, and
 		// each element takes a source of its own that drives that dimension alone.
-		await expect(above.getByTestId('param-view-vector'), 'the C/V switch sits on the row itself').toBeVisible();
+		await expect(above.getByTestId('param-view-individual'), 'the L/I switch sits on the row itself').toBeVisible();
 		await above.getByRole('button', { name: 'above', exact: true }).click();
 		await expect(above.getByTestId('param-list')).toHaveValue('[1, 0, 0, 0.4]');
-		await above.getByTestId('param-view-vector').click();
+		await above.getByTestId('param-view-individual').click();
 		await expect(above.getByTestId('param-elements').locator('.pf-element')).toHaveCount(4);
 		await expect(above.getByTestId('param-list')).toHaveCount(0);
 		await above.getByTestId('param-element-mode-expression-1').click();
@@ -515,12 +515,12 @@ test('a colour param is picked, and its alpha slid', async ({ page }) => {
 		await expect(above.getByTestId('param-element-learn-0')).toBeVisible();
 		await above.getByTestId('param-element-mode-expression-0').click();
 		await expect.poll(text).toMatch(/above\[0\] = expr: 1/);
-		await above.getByTestId('param-view-color').click();
+		await above.getByTestId('param-view-list').click();
 		await expect(picker.getByRole('button')).toBeDisabled();
-		await above.getByTestId('param-view-vector').click();
+		await above.getByTestId('param-view-individual').click();
 		await above.getByTestId('param-element-mode-constant-0').click();
 		await expect.poll(text).not.toMatch(/above\[0\] = expr:/);
-		await above.getByTestId('param-view-color').click();
+		await above.getByTestId('param-view-list').click();
 		await expect(above.getByTestId('param-list')).toHaveValue('[1, 0, 0.25, 0.4]');
 		// Back in colour view the picker drives the same list: a drag on the alpha strip holds.
 		await picker.getByRole('button').click();
@@ -533,8 +533,8 @@ test('a colour param is picked, and its alpha slid', async ({ page }) => {
 		await expect.poll(text).toMatch(/threshold\.above = \[1, 0, 0\.25, 0\.[89]\d*\]/);
 		// The square and the hue strip hold too, with the row open and after a second switch.
 		await page.keyboard.press('Escape');
-		await above.getByTestId('param-view-vector').click();
-		await above.getByTestId('param-view-color').click();
+		await above.getByTestId('param-view-individual').click();
+		await above.getByTestId('param-view-list').click();
 		await picker.getByRole('button').click();
 		const hbox = (await page.getByTestId('color-hue').boundingBox())!;
 		await page.mouse.move(hbox.x + hbox.width * 0.1, hbox.y + hbox.height / 2);

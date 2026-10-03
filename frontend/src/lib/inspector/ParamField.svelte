@@ -82,7 +82,8 @@
 
 	const kind = $derived(controlKind(descriptor));
 	/** A colour opened as a vector shows and expands as one; the value under both is the same list. */
-	const asVector = $derived(kind === 'color' && uiStore.paramView[viewKey] === 'vector');
+	/** A vector shown as individual entries, each with a source of its own, rather than one list. */
+	const individual = $derived(uiStore.paramView[viewKey] === 'individual');
 	const dims = $derived(isNumeric(descriptor) ? numValues(descriptor).length : 1);
 	/** Each element's own source, which a vector row shows beside its number. */
 	const elements = $derived(descriptor.elements ?? []);
@@ -130,7 +131,7 @@
 	const showPicker = $derived(descriptor.mode === 'reference' || picking);
 	const showSource = $derived(showPicker || descriptor.mode === 'expression');
 	/** The open row shows one row per element, each with its own source and learn. */
-	const vectorRows = $derived(num != null && dims > 1 && (asVector || kind === 'vector'));
+	const vectorRows = $derived(num != null && dims > 1 && individual);
 	// Those rows stand in for the whole param's source foot, unless a whole source is set and
 	// must stay reachable to be released.
 	const wholeFoot = $derived(!vectorRows || driven);
@@ -169,18 +170,18 @@
 	data-node-drop={dropZone}
 	{...rest}
 >
-	<!-- Which face a colour wears, C or V: the picker over its list, or one number and one source
-	     per element. It sits at the row's end in both, so the switch back is where the switch was. -->
+	<!-- Which face a vector wears, L or I: one list with one source (a colour's picker over it), or
+	     one row per entry with a source each. It sits at the row's end in both, so it stays put. -->
 	{#snippet viewSwitch()}
 		<Segmented
 			class="pf-view"
-			value={asVector ? 'vector' : 'color'}
+			value={individual ? 'individual' : 'list'}
 			segments={[
-				{ id: 'color', label: 'C', name: 'Colour', title: 'Colour — the picker, over the four values as one list', testid: 'param-view-color' },
-				{ id: 'vector', label: 'V', name: 'Vector', title: 'Vector — one row per element, each with a source of its own', testid: 'param-view-vector' }
+				{ id: 'list', label: 'L', name: 'List', title: 'List — the values as one list, with one source for all', testid: 'param-view-list' },
+				{ id: 'individual', label: 'I', name: 'Individual', title: 'Individual — one row per entry, each with a source of its own', testid: 'param-view-individual' }
 			]}
 			onChange={(v) => {
-				if (v === 'vector') uiStore.paramView[viewKey] = 'vector';
+				if (v === 'individual') uiStore.paramView[viewKey] = 'individual';
 				else delete uiStore.paramView[viewKey];
 			}}
 			aria-label={`${paramName} view`}
@@ -198,7 +199,7 @@
 		<!-- `display: contents` so the face inherits WITHOUT laying out: Field requires paired controls to
 		     be its direct children, and a real box would take them out of the @container column-flip. -->
 		<div class="pf-value">
-			{#if num && kind === 'color' && !asVector}
+			{#if num && kind === 'color' && !individual}
 				<ColorPicker
 					value={numValues(num)}
 					onChange={onCommit}
@@ -209,7 +210,7 @@
 					data-testid="param-color"
 				/>
 				{@render viewSwitch()}
-			{:else if num && (kind === 'vector' || asVector)}
+			{:else if num && (kind === 'vector' || individual)}
 				<!-- One number per dimension, sharing the row's width as the picker would; each commits
 				     the whole vector. -->
 				<div class="pf-vector" data-testid="param-vector">
@@ -226,7 +227,7 @@
 						/>
 					{/each}
 				</div>
-				{#if kind === 'color'}{@render viewSwitch()}{/if}
+				{#if dims > 1}{@render viewSwitch()}{/if}
 			{:else if num}
 				<!-- SOFT bounds → Slider only; the NumberInput is UNBOUNDED (the engine does not clamp on set). -->
 				{#if num.int && num.options?.length}
@@ -372,7 +373,7 @@
 					{/each}
 				</div>
 			{/if}
-			{#if num && dims > 1 && !asVector && kind !== 'vector'}
+			{#if num && dims > 1 && !individual}
 				<!-- The whole list, typed as one: what an expression or a reference hands the param. -->
 				<TextInput
 					class="pf-list"
