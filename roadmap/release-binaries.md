@@ -13,9 +13,10 @@ Rust nodes written at run time. Laid out 2026-10-02.
 2. **Two directories, never the install directory.** The program directory (per-user Programs
    on Windows, `/Applications/goofi.app`, `/opt/goofi`) is immutable; only the installer and the
    updater write it. The runtime directory (`goofi_supervisor::layout::runtime`) is curated by
-   goofi, one `<version>/` at a time: Rust toolchain, zig, uv, node, ffmpeg, the Python
+   goofi, one `<version>/` at a time: Rust toolchain, zig, uv, node, ffmpeg, Git, the Python
    installs and venvs, libpython, the vendored SDK crates, the node build target. `~/.goofi`
-   keeps only user files: patches, recordings, custom nodes, plugins, config.
+   keeps user files and node repo checkouts: patches, recordings, `nodes/<uname>/<repo>/<bundle>`,
+   the managed `nodes/_local` bundle, plugins and config.
 3. **Provisioning on first launch, not in the installer.** The installer places the program
    directory. On first launch goofi downloads the pinned tools and Python builds, creates the
    venvs, installs the shipped wheels and the bundle requirements, all into
@@ -31,6 +32,8 @@ Rust nodes written at run time. Laid out 2026-10-02.
    workspace ships in the runtime, and `goofi-build` writes the source replacement, the linker
    and `--offline` into each generated crate. The node boundary is `extern "C"`, so a gnu-built
    node loads into the msvc-built host.
+   External bundles supply Cargo files for dependencies outside the SDK vendor set. Their builds
+   must retain the runtime SDK binding and allow Cargo to fetch those dependencies; see `library.md`.
 6. **Python.** The bundled uv installs the pinned CPython 3.14t and 3.12 builds. The binary is
    linked on CI against the same python-build-standalone release with a relative rpath
    (`$ORIGIN/../lib`, `@executable_path/../lib`), and the installer carries libpython there
@@ -77,6 +80,10 @@ Rust nodes written at run time. Laid out 2026-10-02.
 - Linux arm64 and macOS x86_64 builds (runners exist for both).
 - Whether provisioning downloads the tools or the installer carries them (download keeps the
   installers small; carrying them makes the first launch work offline).
+- Git authentication for private node repos: choose HTTPS credential helpers/browser login,
+  SSH keys/agents, credential storage and helper/SSH tools for each platform. Indexing and
+  cloning must use the same authenticated access. The local version assumes an installed,
+  authenticated Git; distribution authentication is deferred from the current library work.
 
 ## Remaining work
 
@@ -96,3 +103,9 @@ Rust nodes written at run time. Laid out 2026-10-02.
    PATH); macOS zig and the self-contained windows-gnu link are proven there, and
    cargo-zigbuild's macOS flag rewrites are the reference if the macOS link fails. The smoke
    test installs every shipped bundle's packages, which is what a user's first launch does.
+5. Bundle Git for Linux, Windows and macOS through the pinned tool manifest and `layout::Tool`.
+   Include transport and credential helpers required by the chosen authentication paths. Git
+   must also be available to uv/Cargo when they resolve Git dependencies. Library CLI operations
+   must provision the tools they need without starting a goofi server. Verify private repo access,
+   static indexing, clone and pull with host Git/tools unavailable. This is release work, not part
+   of the current local-library implementation scope.

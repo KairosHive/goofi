@@ -1,160 +1,193 @@
 # The node library
 
-Find, inspect, filter, curate and install node bundles in goofi. The library includes builtin
-nodes, installed external nodes, saved local nodes and nodes available from registered sources.
-Updated 2026-10-03. This entry owns node distribution. The plugin interface remains in
-`sdk/README.md`; a node bundle does not require a plugin manifest, backend or frontend.
+Find, inspect, filter and install node bundles in goofi. The library includes builtin nodes,
+installed external nodes, saved local nodes and nodes available from registered GitHub sources.
+Updated 2026-10-03 after the second planning round. This entry owns node distribution; the plugin
+interface remains in `sdk/README.md`. Implementation and bundle moves have not started.
 
 ## Decisions
 
-- Every node belongs to a bundle. A bundle is a folder of node sources and the files they need.
-  A bundle can contain nodes for different engines; its name is not an engine selection.
-- Core bundles stay builtin. All other shipped bundles move to the separate `goofi-nodes` repo,
-  whose checkout is `../goofi-nodes` and whose remote is `KairosHive/goofi-nodes` on GitHub.
-- Installed external bundles live in `~/.goofi/nodes/<bundle>/`. goofi manages this tree.
-  `goofi_supervisor::layout` remains the one owner of these paths and their home override.
-  Compiled artifacts and tools remain in the runtime, outside the node source tree.
-- `~/.goofi/nodes/_local/` is a reserved bundle managed by goofi. Nodes authored in a patch and
-  saved to the library go here. This replaces the flat `~/.goofi/custom/` location. `_local` is
-  always available without a repo and cannot be replaced by a repo bundle.
-- A bundle source is a GitHub repo with one folder per bundle. Node files at the repo root are
-  invalid. Repo-level files such as a README and licence can remain at the root.
-- Source registration indexes a repo and offers its bundles and nodes for installation. It does
-  not clone the repo, install its nodes or register executable node types in an engine.
-  Indexing must not import or execute source code.
-- An installed repo bundle records its source repo, commit and folder. Installation uses that
-  commit; an update selects a new pin. Keep this rule from the earlier roadmap.
-- A plus button on a node or bundle starts installation. goofi fetches the source, installs
-  required dependencies, compiles where required and registers the installed nodes automatically.
-  The caller must not run a separate clone, build or refresh command.
-- Library management works as a pure CLI without an active goofi server. The CLI, frontend,
-  MCP and scripts use the same operations and implementation. A running app uses the installed
-  result; a later app start discovers nodes installed while no server was active.
-- Private GitHub repos are supported. A development build uses the user's installed Git and
-  existing authentication. An installed distribution supplies Git and standard Git authentication
-  paths. The library must not require a public repo or a library service account.
-- Add Git to the development prerequisites with uv, npm and rustup. Provision the distribution's
-  Git through the pinned tool manifest and resolve it through `layout::Runtime`, like other tools.
-- A hosted catalogue, publishing service and website integration are not prerequisites for this
-  work. Registering a repo must be sufficient to use it as a source.
+- Only `signal`, `audio` and `graphics` stay builtin. The ten bundles that move to
+  `../goofi-nodes` are `biotuner`, `complexity`, `computer-vision`, `eeg`, `harmonic-geometry`,
+  `image`, `image-generation`, `inception`, `ml` and `simulation`. Its GitHub repo is
+  `KairosHive/goofi-nodes`. Bundle-specific nodes stay with their bundle, regardless of engine.
+- Every node belongs to a bundle. A bundle is a folder of node sources and required files; it
+  can contain nodes for more than one engine. It does not require a plugin package.
+- External repo checkouts live in `~/.goofi/nodes/<uname>/<repo>/`, with one folder per bundle.
+  The installed bundle path and displayed identity are `<uname>/<repo>/<bundle>`. Node files
+  at a repo root are invalid; repo-level README, licence, Cargo files and helper files are allowed.
+- `~/.goofi/nodes/_local/` is the reserved local bundle, outside the repo hierarchy. goofi saves
+  patch-authored nodes here. Replace `.goofi/custom/` directly, without a compatibility path.
+  No repo can replace `_local`.
+- `goofi_supervisor::layout` owns node paths and their home override. Sources and checkouts live
+  in the home; compiled artifacts, index caches and tools live in the runtime. Ephemeral build
+  and scan resources remain supervised.
+- A source registration indexes a repo without creating an installed checkout or loading its
+  nodes. Index Rust, Python and WGSL by static parsing, without executing code. The exact Git
+  object-fetch boundary for private indexing remains open below.
+- Only whole bundles can be installed. A node inspection can offer its containing bundle's
+  install action, but there is no node-only selection or node-install operation.
+- A bundle's plus button automatically obtains the repo, installs its Python requirements,
+  compiles its Rust nodes and prepares/registers its node types. No separate user clone, build
+  or refresh command is required. Installing another bundle reuses the same repo checkout.
+- Repo updates apply to the whole checkout. Users can update or edit it directly, or use library
+  operations and the panel. Show when the upstream has changes and offer to pull the repo.
+  The checkout's current files are the source of truth; remove the earlier immutable-install-pin
+  requirement. Git revisions describe state, but do not prevent manual updates or local edits.
+- All library management operations work without an active goofi server. CLI, frontend, MCP and
+  scripts share one operation vocabulary and implementation. A later app start indexes and
+  loads/prepares modified installed bundles.
+- This session targets the local, self-compiled version. Assume Git is installed and authenticated,
+  including access to private repos. Add Git to development prerequisites beside uv, npm and
+  rustup. Bundled Git, helper tools and distribution authentication belong to
+  `release-binaries.md` and are outside this session's implementation scope.
+- All nodes use the existing shared Python environments. Resolve external requirements through
+  uv into those environments; do not create bundle-specific environments. External Rust bundles
+  supply Cargo files for their dependencies, which Cargo resolves during compilation.
+- Library install, update and removal are allowed during active use. Do not block them because
+  a patch uses a bundle. Live refresh is useful, but restarting goofi is an accepted recovery
+  path if changed code or dependencies break an active session.
+- Keep the library functional: source registration, browsing, inspection, filtering, install,
+  removal, update checks, pulls and preparation status. No favourites or hiding features.
+- Delete all existing goofi test cases that depend on nodes moved to the external repo. Do not
+  preserve those cases by installing the external bundles or replacing their nodes with fixtures.
+  New library behavior tests can use small controlled bundle repos instead of product bundles.
+- Website author instructions will go in `../goofi-website` later. This session defines the
+  convention but does not change the website. A hosted library service is not required.
 
-These decisions replace the earlier plugin-package installation unit, the ban on per-node
-installation, the public-repo trust rule and the service-first distribution plan. The exact
-effect of a node-level install is still open below.
+## Current implementation and required changes
 
-## Current implementation
+- `backend/goofi-bridge/build.rs` embeds all 13 bundle folders and prebuilds their Rust files.
+  `materialise_shipped`, development setup and boot requirements treat all of them as shipped.
+  Restrict these paths and CI to the three builtin bundles.
+- `AppState::node_roots` scans shipped/extra roots, plugin node folders and the custom folder;
+  `rescan` adds patch `nodes_<engine>` folders last. A later file wins `engine:Name`. Root folder
+  names supply labels and all roots appear builtin. Nested repo discovery and full bundle
+  identity are missing. Folder identity alone does not solve runtime node type collisions.
+- `goofi_node::describe` scans one flat folder for `.py`, `.rs` and `.wgsl`. Python discovery
+  executes code; WGSL has a data header. Add static source parsing for catalogue indexing and
+  retain real local probes for preparation. Unknown static fields must be reported as unknown.
+- `goofi-build` generates one crate per Rust file using fixed SDK dependency lists. Its cache key
+  does not include separate helper files. When the runtime has vendored crates, it replaces the
+  whole crates.io source and forces offline builds. External Cargo dependencies need a build
+  path that keeps SDK binding but permits dependency resolution and tracks all build inputs.
+- `library list/get/save/refresh` currently depend on `AppState` and the graph; the CLI forwards
+  them to a server. Separate persistent library management from live graph projection. Saving
+  a node from an active patch still requires that patch's context.
+- `layout::custom_nodes`, save, source inspection and `.gfi` packing/adoption use `.goofi/custom`.
+  Move them together to `_local`. Retain saved-local-node inclusion in patch archives.
+- There is no source registry, static remote index, installed bundle selection, repo update
+  status, standalone installer or library panel. Some engine-owned builtin and patch nodes have
+  no bundle identity. Include these in the new type/provenance model.
+- Panels register in `frontend/src/lib/panels/register.ts` from the bridge's shared vocabulary.
+  The add menu receives the live catalogue. Add the library panel through the app panel system
+  and use the same operations for all controls.
+- `../goofi-nodes` currently contains only a README and licence. Test dependencies include
+  cross-engine cases: the audio catalogue expects `BioFilter` from `biotuner`.
 
-- There are 13 folders under `node-bundles/`. `backend/goofi-bridge/build.rs` embeds every folder
-  and prebuilds every Rust node. `materialise_shipped` in the bridge writes them into the runtime.
-  There is no builtin/external split today.
-- `AppState::node_roots` scans shipped and extra roots, plugin node folders, then the flat custom
-  library. `rescan` adds the patch's `nodes_<engine>` folders last. A later file wins the same
-  `engine:Name` type. Root folder names supply bundle labels; they do not provide repo identity.
-- `goofi_node::describe` discovers files in a single folder, using `.py`, `.rs` and `.wgsl`.
-  `goofi-build` compiles Rust against the embedded engine SDKs and their dependency allowlists.
-  Its cache key includes the node file and SDK inputs, but not separate bundle helper files.
-  Python discovery loads code. WGSL already has a data header. There is no repo catalogue scanner
-  that can describe all three source formats without executing code.
-- `library list`, `get`, `save` and `refresh` are bridge operations tied to `AppState` and its
-  graph. CLI library commands currently forward to a running server. There are no source,
-  install, update, remove or Git authentication operations.
-- `layout::custom_nodes`, `AppState::custom`, `library save` and patch archive handling use
-  `.goofi/custom`. Saved local nodes travel with a `.gfi`; an equal local copy can become the
-  source again on load. Preserve this behavior when the location becomes `_local`.
-- Provenance currently uses patch, custom, root and plugin origins. Root nodes are presented as
-  builtin. Patch nodes and some engine-owned builtin nodes have no bundle label. The new model
-  must assign bundle identity to every node and distinguish external roots from builtin roots.
-- `goofi-init` installs requirements from every checked-in bundle. `goofi-provision` supplies
-  Python environments and pinned runtime tools, but `Tool` and the tool manifest have no Git.
-  Package installs currently run at setup or boot, rather than as a library install transaction.
-- The frontend's add menu uses the live node catalogue. App panels register in
-  `frontend/src/lib/panels/register.ts` from the bridge's shared panel vocabulary; plugin panels
-  use the plugin runtime. There is no library panel or external-source catalogue.
-- `../goofi-nodes` currently contains only a README and licence. No bundles have moved.
+## Proposed bundle convention
+
+This is the concrete proposal for review, not a second package system:
+
+```text
+<uname>/<repo>/                 # Git checkout, one upstream/revision for its bundles
+    README.md
+    LICENSE
+    <bundle>/
+        README.md              # optional bundle description
+        example.py             # Python node source
+        Example.wgsl           # shader source with its existing data header
+        requirements.txt       # optional, both shared Python environments
+        requirements-gil.txt   # optional additions for the subprocess environment
+        Cargo.toml             # if Rust is present: ordinary package/workspace
+        Cargo.lock             # dependency resolution for this bundle
+        rust/
+            <node>/
+                Cargo.toml     # ordinary library crate with node identity metadata
+                src/lib.rs     # SDK export declaration and node code
+            <helper>/          # optional shared library crate
+        assets/                # optional assets and helper files
+```
+
+- Keep Python and WGSL node sources at bundle level, as now. Helper directories are not bundles.
+  Rust node crates belong to the containing bundle and declare engine/source identity through
+  Cargo metadata. Static parsing follows that declaration and reads source; it never runs
+  `build.rs`, imports Python or expands executable code to index a source.
+- Use ordinary Cargo dependency tables, features, path dependencies and workspaces. Shared repo
+  helpers can be outside a bundle if referenced explicitly. Do not translate dependencies into
+  another goofi-specific dependency list. Cargo has standard workspace and metadata facilities:
+  [Cargo workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html).
+- goofi binds engine SDK dependencies to the SDK sources of the running version and generates
+  the small cdylib wrapper around each author crate's export. Authors need no absolute path to
+  a goofi checkout and do not maintain SDK hash or loader symbols. Builtin and `_local` standalone
+  Rust files continue through the same build owner with their existing generated manifests.
+- Put outputs in the runtime. Keep author Cargo sources intact. Resolve external crates online
+  when needed; the builtin SDK vendor cache must not block dependencies it does not contain.
+  Include Cargo files, lock resolution, source/helpers and SDK identity in build validity.
+- Run uv with the bundle as the requirements context so local paths resolve there. Install the
+  installed set's requirements into the shared environments. Report conflicts as preparation
+  failures; no extra environments or dependency isolation are added.
+- Preparation errors remain visible per bundle/node. Whole-bundle installation does not make
+  an unbuildable node disappear from the library. Read the checkout again on app start or an
+  explicit refresh, including manual edits and changes to dependency files.
 
 ## Order of work
 
-1. **Storage and bundle identity.** Add the managed nodes root and `_local` to `layout`. Discover
-   installed bundle folders and give every node a bundle identity. Update save, inspect, archive,
-   source provenance and scan callers together. Remove the old custom path directly; no dual
-   scan or compatibility path. Define how patch and plugin node folders count as bundles.
-2. **One library owner and offline operations.** Separate library storage and operations from
-   the active graph. Reuse the operation schema, parsing, help and dispatch rules from both CLI
-   and server entry points. Catalogue operations must not start engines, audio hardware, a native
-   window or a server. Builds and probes can use supervised child processes without a server.
-   Define the shared lock and notification boundary before supporting concurrent CLI and app use.
-3. **Git and authentication.** Add development Git checks, pinned distribution tools, credential
-   interaction and the tools required by the supported transports. A library command must prepare
-   the tools it needs even when it is the first command run after installation. Verify Linux,
-   macOS and Windows; a server startup must not be required to provision library tools.
-4. **Sources and indexing.** Persist registered repo sources. Read a repo's bundle folders and
-   node descriptions without cloning or execution. Reject root-level nodes. Support private
-   sources, refresh, removal, unavailable sources and cached browsing. Show repo and revision.
-5. **Installation.** Implement node and bundle installation, update and removal. Reuse the
-   existing build and probe paths. Stage work, report progress and errors, then publish a settled
-   installed result. A failed install must not damage an existing bundle. Refresh running apps
-   automatically, including when a separate CLI process changed the library.
-6. **Move external bundles.** Move source, helper files, requirements, assets, licences and
-   bundle-specific tests to `../goofi-nodes`. Keep core engine and transport contract tests here;
-   replace external dependencies in those tests with controlled fixtures where needed. Restrict
-   embedding, setup, boot checks and CI to the builtin set. Establish builds and tests in the
-   external repo. Update `plugins.md`, `release-binaries.md` and bundle roadmap entries to match.
-7. **Library panel.** Add a panel for source registration, browsing, node and bundle inspection,
-   filters, curation and installed state. Use the shared library operations. Show install progress,
-   errors and updates, and supply plus buttons for nodes and bundles. Keep library navigation and
-   management outside patch undo and dirty state. Support touch, tablet and desktop layouts.
-8. **Patch dependencies and verification.** Record external bundle requirements in `.gfi` files.
-   Resolve missing bundles explicitly and keep unavailable nodes visible with their bundle named.
-   Extend public CLI and app sessions for install, save/load, refresh and failures. Add browser
-   sessions for the panel, socket updates, layout and gestures. Test private sources without live
-   account secrets and bundled installs with host tools unavailable.
+1. Settle the open behavior below and the Cargo convention. No implementation before this plan
+   is agreed. Distribution provisioning and website work remain deferred.
+2. Add repo hierarchy discovery, `_local` and structured bundle identity to the layout/scan/save/
+   inspect/archive callers. Define builtin, patch and plugin bundle identities with the same model.
+3. Add a persistent library owner and shared operations usable directly from the CLI without
+   booting a server, engines, audio hardware or windows. Hold a short-lived supervisor session
+   for builds/probes. Serialize goofi's library writes; manual Git edits remain user-controlled.
+4. Add source registration, static indexing and refresh using installed authenticated Git. Source
+   registration must not install a checkout. Preserve cached catalogue inspection when offline.
+5. Add whole-bundle install/remove, repo update check/pull and preparation. Keep one checkout per
+   repo and a settled installed state. Reuse uv, Cargo, probe, resource and error handling owners.
+   After an app operation, refresh its catalogue where possible; explicit refresh/restart covers
+   external CLI changes or code that cannot be replaced live. No watcher is required initially.
+6. Move the ten external bundle folders with requirements, helpers, assets and licences into
+   `../goofi-nodes`. Delete dependent existing goofi test cases. Keep the remaining checks focused
+   on builtin nodes and core behavior. Remove obsolete boot/setup/CI dependencies. Define external
+   test tooling separately; it is not required to retain the deleted goofi tests in this session.
+7. Add the library panel with source registration, bundle/node details, filters, plus/remove
+   actions, repo update status/pull and preparation errors. No favourites or hiding. Keep patch
+   dirty state and undo independent of library navigation/management; support touch and tablets.
+8. Verify standalone CLI and app operations using controlled repo fixtures, shared dependency
+   preparation, `_local` save/load and restart recovery. Add relevant browser sessions for panel
+   behavior and socket updates. Do not build or run these checks during this planning round.
 
-## Open decisions
+## Second-round questions and proposed defaults
 
-- **Exact builtin set.** The proposed core set is `signal`, `audio` and `graphics`. This leaves
-  ten external bundles: `biotuner`, `complexity`, `computer-vision`, `eeg`, `harmonic-geometry`,
-  `image`, `image-generation`, `inception`, `ml` and `simulation`. Confirm this boundary and whether
-  any individual nodes need to move between folders first. Engine-owned nodes also need builtin
-  bundle labels. An external bundle can contain audio or graphics nodes.
-- **Bundle and type identity.** Two repos can use the same folder name, but installed bundles
-  share one `nodes/` parent. Choose the installed folder naming rule and stable source-qualified
-  bundle ID. Node types currently use `engine:Name`; choose how to handle collisions across
-  bundles, including builtin and `_local` collisions. Avoid accidental scan-order selection.
-- **Node-level installation.** Does a node's plus button install its whole bundle, or only that
-  node and its required files into the bundle folder? If partial installation is supported, define
-  dependency closure, installed selections and later bundle update/removal behavior.
-- **Index format and private source access.** Choose repo metadata versus static source parsing
-  for descriptions, tags, ports, params, compatibility and bundle files. Parsing must cover Rust,
-  Python and WGSL and report fields it cannot determine. Choose the remote index reader: GitHub's
-  [tree API](https://docs.github.com/en/rest/git/trees) can list files without cloning, but private
-  access requires API credentials. An SSH-authenticated Git alone does not settle that API path.
-  Keep registration free of clone and execution; define refresh and offline cache behavior.
-- **Git authentication in distributions.** Select the supported HTTPS credential helper/browser
-  flow and SSH key/agent flow, credential storage, and required helper/SSH tools on each platform.
-  [GitHub's credential guide](https://docs.github.com/en/get-started/git-basics/caching-your-github-credentials-in-git)
-  describes HTTPS helpers and SSH keys. Define terminal and panel interaction, including private
-  indexing, without putting credentials in source records or logs.
-- **Checkout layout and revisions.** A repo can supply several bundles, but installed bundles
-  must be direct children of `nodes/`. Choose where shared Git checkouts live and how selected
-  folders become installed bundles. Define default branch/tag selection, commit pins, updates,
-  local edits and whether bundles from one source can use different revisions. Commit pins are
-  required, but their storage and update workflow are not implemented.
-- **Bundle files and dependencies.** Define how helper modules, assets, repo-level shared files
-  and requirements are included, especially for a node-only install. Decide whether the current
-  shared Python environments are sufficient for conflicting requirements. Moving bundles does
-  not solve missing platform wheels or native dependency tools. Define goofi/SDK compatibility
-  and include required helper files in build cache inputs.
-- **State, refresh and active use.** Choose source/install state storage, cross-process locking,
-  recovery after interruption and app change notification. Define update/removal behavior for
-  active nodes and open patches. Local library installation must not require an active session;
-  saving an authored node or restarting a live instance still needs its patch/session context.
-- **Patch representation.** Decide how all patch-authored and plugin-provided nodes get bundle
-  identity, and how `.gfi` represents external requirements versus included `_local` source.
-  Choose behavior for missing sources, private sources and a different installed revision.
-- **Curation and initial catalogue.** Define whether curation means favourites, hidden bundles,
-  source folder selection or another rule, and where these choices persist. Decide whether
-  `KairosHive/goofi-nodes` is registered by default and whether any external bundle installs by
-  default. No first-party privilege or automatic installation rule is set.
-- **External repo checks.** Decide how bundle tests run against the matching goofi SDK/runtime
-  and how the two repos verify changes together. Some core tests currently assume the full shipped
-  node set; for example, the audio catalogue includes `BioFilter` from `biotuner`.
+1. **Clone versus installed selection.** A clone contains every bundle folder. Recommended:
+   only bundles explicitly installed with plus are prepared and loaded; the others are available
+   in the catalogue. Store selected bundle IDs once. Removing one bundle keeps the checkout for
+   its siblings; source removal unregisters the source and is separate from uninstall.
+2. **Runtime type identity.** Recommended: include bundle identity in the node type ID so two
+   bundles can contain the same engine/name. For example, `signal:KairosHive/goofi-nodes/eeg/Foo`.
+   Folder identity alone cannot provide this. Define short builtin IDs and `_local`, patch and
+   plugin IDs consistently; remove old internal spellings directly, without aliases.
+3. **Private static indexing.** Existing Git authentication can fetch repo objects, but cannot
+   supply a remote file tree through `ls-remote`. Recommended: fetch into a supervised temporary
+   object store, statically read trees/source blobs, then retain only the index cache. No installed
+   checkout is created. [Git fetch](https://git-scm.com/docs/git-fetch.html) supports shallow and
+   filtered object transfers. If registration must also forbid object fetches, private indexing
+   needs a separate GitHub API authentication path, outside the stated Git-only assumption.
+4. **Rust author layout.** Confirm ordinary author crates/workspaces plus goofi's generated ABI
+   wrapper, as proposed above, rather than flattening an author's Cargo dependencies into every
+   generated single-file node crate. Define exact metadata keys and SDK binding during design.
+5. **Static parser limits.** Recommended: index declarations that can be read without evaluation;
+   mark computed ports/params/tags unknown until a local probe succeeds. Installation remains
+   possible. Do not demand an additional authored catalogue manifest for arbitrary code.
+6. **Repo pull behavior.** Recommended: track the repo's current branch/upstream, check on explicit
+   refresh or panel entry, and pull only on user action. Use fast-forward-only pulls; report local
+   conflicts/divergence and leave them for manual Git resolution. No automatic reset, stash,
+   merge or background pull. A pull prepares all installed bundles in that repo. Record actual
+   revision and local modification status for inspection, without an independent version counter.
+7. **Removal and defaults.** Recommended: uninstall stops future loading of that bundle; keep the
+   user-editable checkout and shared Python packages. Offer explicit repo deletion separately.
+   Register `KairosHive/goofi-nodes` by default, but install no external bundle automatically.
+8. **Patch source semantics.** Recommended: keep `_local`/patch-authored source inside `.gfi` as
+   today; external nodes name their bundle/type and show missing dependencies on load. Describe
+   the revision used but load the current installed checkout. Do not silently pull or install on
+   patch load. Assign a patch-owned bundle identity without moving its workspace into the home.
