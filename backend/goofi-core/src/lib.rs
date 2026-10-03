@@ -883,6 +883,22 @@ impl Param {
     }
     /// This number holding `values` in its own shape: rounded where it is an int, and cut or
     /// carried to its dimensions — one value fills them all. `None` for a param that is no number.
+    /// Dimension `k` as a scalar of this param's kind and bounds — what an element binding is
+    /// evaluated against. A scalar is its own one dimension; a colour's element is no colour.
+    pub fn dim(&self, k: usize) -> Param {
+        match self {
+            Param::Num { value, vmin, vmax, int, options, .. } => Param::Num {
+                value: vec![value.get(k).copied().unwrap_or(0.0)],
+                vmin: *vmin,
+                vmax: *vmax,
+                int: *int,
+                options: options.clone(),
+                color: false,
+            },
+            other => other.clone(),
+        }
+    }
+
     pub fn with_values(&self, values: &[f64]) -> Option<Param> {
         let Param::Num { value, vmin, vmax, int, options, color } = self else { return None };
         let fill = values.last().copied().unwrap_or(0.0);

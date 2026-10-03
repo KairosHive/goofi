@@ -430,7 +430,8 @@ export class GraphStore {
 
 	/** Send a param op on `group/name`; a guarded call refuses a param the node does not hold. */
 	private _paramCall(op: OpName, node: string, group: string, name: string, extra: Record<string, unknown>, guard = true): Promise<unknown> {
-		if (guard && !this.nodeById(node)?.params?.[group]?.[name])
+		// `name[i]` addresses one element of a vector param; the param it belongs to must exist.
+		if (guard && !this.nodeById(node)?.params?.[group]?.[name.replace(/\[\d+\]$/, '')])
 			return Promise.reject(new Error(`${op}: no param ${group}.${name} on node ${node}`));
 		return this.ctl.call(op, { node, param: `${group}/${name}`, ...extra });
 	}

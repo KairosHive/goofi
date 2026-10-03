@@ -207,9 +207,10 @@ pub fn param_commands(
         let entries =
             entries.as_object().ok_or_else(|| format!("params.{group} is {{param: …}}"))?;
         for (name, spec) in entries {
+            // `name[i]` is one dimension of a vector: it edits that element's literal or source.
             let existing = g
                 .params(uid)
-                .and_then(|p| goofi_node::param(&p, group, name).cloned())
+                .and_then(|p| goofi_node::param_dim(&p, group, name))
                 .ok_or_else(|| format!("no param {group}.{name}"))?;
             let cur = g.param_source(uid, group, name).map(|s| s.state);
             let (value, source) = param_change(&existing, cur, spec)
@@ -2259,13 +2260,25 @@ impl Graph {
     ) -> Result<(), String> {
         let leaf = self.leaf(uid).ok_or_else(|| format!("no such node {uid}"))?;
         let declared = self.typed(leaf);
-        let Some(existing) = goofi_node::param(&declared, group, name) else {
+        let (base, element) = goofi_node::element(name);
+        let Some(existing) = goofi_node::param_dim(&declared, group, name) else {
             return Err(format!("no such param `{group}/{name}`"));
         };
-        // Coerced to the DECLARED type: a literal is only ever a value of the class's param.
-        if let Some(v) = doc::Scalar::of(&param_from_json(existing, &param_value_json(&value))) {
+        // Coerced to the DECLARED type: a literal is only ever a value of the class's param. An
+        // element's literal lands in its dimension of the whole param's list.
+        let coerced = param_from_json(&existing, &param_value_json(&value));
+        let whole = match element {
+            Some(k) => {
+                let whole = goofi_node::param(&declared, group, base).expect("the element's param");
+                let mut values = whole.as_vec().unwrap_or_default().to_vec();
+                values[k] = coerced.as_f64().unwrap_or(0.0);
+                whole.with_values(&values).expect("a number")
+            }
+            None => coerced,
+        };
+        if let Some(v) = doc::Scalar::of(&whole) {
             let leaf = self.leaf_mut(uid).expect("looked up above");
-            leaf.values.entry(group.to_string()).or_default().insert(name.to_string(), v);
+            leaf.values.entry(group.to_string()).or_default().insert(base.to_string(), v);
         }
         // A LITERAL on a driven param switches it to constant, which is what the node does with
         // this write's `SetParam`; what the record retained stays retained.
@@ -2324,7 +2337,7 @@ impl Graph {
         }
         // A record binds a real param: a dangling one is invisible in the descriptor and
         // unclearable from the UI.
-        if goofi_node::param(&self.typed(leaf), group, name).is_none() {
+        if goofi_node::param_dim(&self.typed(leaf), group, name).is_none() {
             return Err(format!("no such param `{group}/{name}`"));
         }
         if let Some(e) = self.leaf_mut(uid) {
@@ -2346,7 +2359,7 @@ impl Graph {
     /// What a source's active text derives to against the graph: the rewrite, its variables
     /// resolved, and why it cannot bind.
     fn derive(&self, uid: Uid, key: &ParamKey, state: &SourceState) -> Derived {
-        let param = self.leaf(uid).and_then(|e| goofi_node::param(&self.typed(e), &key.group, &key.name).cloned());
+        let param = self.leaf(uid).and_then(|e| goofi_node::param_dim(&self.typed(e), &key.group, &key.name));
         let scanned = (!state.expression.is_empty()).then(|| expr_rewrite::rewrite(&state.expression));
         let reference = (!state.reference.is_empty()).then(|| goofi_node::mailbox::split_index(&state.reference)
             .and_then(|(base, index)| parse_reference(base).map(|r| (r, index))));
@@ -2910,6 +2923,7 @@ impl Graph {
                             // A pulse has no literal, so it is written only for the source it carries.
                             (entry.value.is_some() || entry.mode.is_some()).then(|| (name.clone(), entry))
                         })
+                        .chain(element_sources(leaf, group, names))
                         .collect();
                     params.insert(group.clone(), entries);
                 }
@@ -3290,6 +3304,22 @@ fn remap_slots(viewers: &serde_json::Value, idmap: &HashMap<String, Uid>) -> ser
 }
 
 /// The source records a node record carries, in the shape [`command::Command::AddNode`] re-applies.
+/// A group's ELEMENT sources as entries of their own, `name[i]` with no literal (the literal is
+/// the whole param's list), in name order so a written patch is the same patch twice.
+fn element_sources(leaf: &Leaf, group: &str, names: &IndexMap<String, Param>) -> Vec<(String, doc::ParamEntry)> {
+    let mut out: Vec<(String, doc::ParamEntry)> = leaf
+        .sources
+        .iter()
+        .filter(|(key, _)| {
+            let (base, element) = goofi_node::element(&key.name);
+            key.group == group && element.is_some() && names.contains_key(base)
+        })
+        .map(|(key, b)| (key.name.clone(), doc::ParamEntry::default().with_source(&b.state)))
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 fn sources_of(rec: &doc::NodeRecord) -> Vec<(String, String, SourceState)> {
     rec.params
         .iter()

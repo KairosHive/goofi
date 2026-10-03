@@ -91,6 +91,24 @@ impl ParamKey {
     }
 }
 
+/// A param name split from the ELEMENT it may address: `colour[2]` is dimension 2 of `colour`,
+/// and a name with no such suffix is the whole param.
+pub fn element(name: &str) -> (&str, Option<usize>) {
+    match mailbox::split_index(name) {
+        Ok((base, index)) => (base, index),
+        Err(_) => (name, None),
+    }
+}
+
+/// The param `name` addresses, as a value of its own: the whole param, or ONE dimension of a
+/// vector as a scalar of the same kind and bounds. `None` for a name or an element out of range.
+pub fn param_dim(p: &ParamGroups, group: &str, name: &str) -> Option<Param> {
+    let (base, index) = element(name);
+    let whole = param(p, group, base)?;
+    let Some(k) = index else { return Some(whole.clone()) };
+    (k < whole.dims() && whole.dims() > 1).then(|| whole.dim(k))
+}
+
 pub fn param<'a>(p: &'a ParamGroups, group: &str, name: &str) -> Option<&'a Param> {
     p.get(group)?.get(name)
 }

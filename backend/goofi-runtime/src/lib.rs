@@ -56,8 +56,9 @@ pub enum Sub {
     /// One wire into an Array input: the producer service, the inbox its frames enter, its
     /// position among the inbox's wires, and the `node.slot` it comes from.
     Slot { inbox: usize, wire: usize, service: String, source: String },
-    /// A binding this runtime evaluates: everything the engine's own plan does not carry.
-    Bind { param: usize, key: ParamKey, source: String, id: Option<BindingId>, vars: Vec<(String, Var)>, trigger: bool },
+    /// A binding this runtime evaluates: everything the engine's own plan does not carry. `elem`
+    /// names ONE dimension of a vector param, which is all that binding writes.
+    Bind { param: usize, elem: Option<usize>, key: ParamKey, source: String, id: Option<BindingId>, vars: Vec<(String, Var)>, trigger: bool },
 }
 
 /// What an engine's own plan carries, so the runtime subscribes to the rest: the input kind whose
@@ -90,10 +91,15 @@ pub fn desired_of(view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>, decls: &[Pa
         inbox += 1;
     }
     for (param, d) in decls.iter().enumerate() {
-        let bound = nv.bindings.iter().find(|b| b.live && b.key.group == d.group && b.key.name == d.name);
-        let Some(b) = bound.filter(|b| !(plane.planned)(b)) else { continue };
-        let vars = b.vars.iter().map(|v| goofi_transport::var_of(view, v)).collect();
-        subs.push(Sub::Bind { param, key: b.key.clone(), source: b.rewritten.to_string(), id: b.id, vars, trigger: b.trigger });
+        // A param may carry a binding of its own AND one per element; each is subscribed alone.
+        for b in nv.bindings.iter().filter(|b| b.live && !(plane.planned)(b) && b.key.group == d.group) {
+            let (base, elem) = goofi_node::element(&b.key.name);
+            if base != d.name {
+                continue;
+            }
+            let vars = b.vars.iter().map(|v| goofi_transport::var_of(view, v)).collect();
+            subs.push(Sub::Bind { param, elem, key: b.key.clone(), source: b.rewritten.to_string(), id: b.id, vars, trigger: b.trigger });
+        }
     }
     // A ring would wake a same-engine consumer for what its plan already carries; a consumer on
     // another engine subscribes to the wire whatever its slot's kind.
@@ -524,6 +530,8 @@ fn wiring(slots: &[SlotSub]) -> BTreeMap<usize, Vec<(ServiceName, String)>> {
 
 struct Bind {
     param: usize,
+    /// The one dimension this binding writes; `None` writes the whole param.
+    elem: Option<usize>,
     key: ParamKey,
     expr: Expression,
     /// What the engine sent, so a re-send that moved nothing is told from one that did.
@@ -686,10 +694,11 @@ impl<E: Executor> Runtime<E> {
         self.reopen = (!opened).then_some(wanted);
         let trigger = self.apply_binds(binds);
         self.apply_records(&d.record);
+        // Every literal goes in first, then each binding writes what it owns over it: a whole
+        // param, or one dimension of it, which leaves the literal in the dimensions nobody drives.
         for (i, c) in self.consts.iter().enumerate() {
-            let bound = self.binds.iter().any(|b| b.param == i);
             let raised = self.pulsed.iter().any(|(p, _)| *p == i);
-            if !bound && !raised {
+            if !raised {
                 store(&self.params, &self.decls, i, c);
             }
         }
@@ -734,7 +743,7 @@ impl<E: Executor> Runtime<E> {
         let mut old = std::mem::take(&mut self.binds);
         let mut triggering = false;
         for sub in subs {
-            let Sub::Bind { param, key, source, id, vars, trigger } = sub else { continue };
+            let Sub::Bind { param, elem, key, source, id, vars, trigger } = sub else { continue };
             let mut previous = take_where(&mut old, |b| b.key == key);
             let moved = previous.as_ref().is_none_or(|p| p.sent.0 != source || p.sent.1 != vars);
             if moved && trigger && key.group != COMMON && vars.iter().any(|(_, v)| matches!(v, Var::Value(_))) {
@@ -769,7 +778,8 @@ impl<E: Executor> Runtime<E> {
             if let Some(p) = &previous {
                 expr.carry(&p.expr, |name| kept_names.iter().any(|n| n == name));
             }
-            self.binds.push(Bind { param, key, expr, sent, trigger, streams });
+            self.binds.push(Bind { param,
+                elem, key, expr, sent, trigger, streams });
         }
         let mut pass = Pass::default();
         for dropped in old {
@@ -909,7 +919,14 @@ impl<E: Executor> Runtime<E> {
     /// The live values, and the executor told when they moved — or when an arrival asks for a run.
     fn sync(&mut self, trigger: bool) {
         let values: Vec<Param> = self.consts.iter().enumerate().map(|(i, value)| {
-            self.binds.iter().find(|b| b.param == i).and_then(|b| self.evaluated.get(&b.key)).unwrap_or(value).clone()
+            let whole = self.binds.iter().find(|b| b.param == i && b.elem.is_none()).and_then(|b| self.evaluated.get(&b.key));
+            let held = whole.unwrap_or(value).clone();
+            // An element binding leaves its value in the cells, so a driven vector reads off them.
+            if self.binds.iter().any(|b| b.param == i && b.elem.is_some()) {
+                held.with_values(&dims(&self.params, &self.decls, i)).unwrap_or(held)
+            } else {
+                held
+            }
         }).collect();
         if values != self.values || trigger {
             self.values = values;
@@ -1098,7 +1115,12 @@ impl<E: Executor> Runtime<E> {
     fn evaluate(&mut self, i: usize, pass: &mut Pass) {
         let b = &self.binds[i];
         let param = b.param;
-        let target = &self.consts[param];
+        let elem = b.elem;
+        // An element binding is evaluated against that one dimension as a scalar of the param's kind.
+        let target = &match elem {
+            Some(k) => self.consts[param].dim(k),
+            None => self.consts[param].clone(),
+        };
         let evaluator = self.shared.evaluator.lock().clone();
         let t = self.time.now();
         let (value, error) = match b.expr.evaluate(evaluator.as_deref(), t, target) {
@@ -1119,7 +1141,25 @@ impl<E: Executor> Runtime<E> {
             self.record_error(key, error, pass);
             return;
         }
-        store(&self.params, &self.decls, param, value.as_ref().unwrap_or(target));
+        let held = value.as_ref().unwrap_or(target);
+        match elem {
+            Some(k) => store_dim(&self.params, &self.decls, param, k, scalar(held)),
+            None => {
+                // A whole write spares the dimensions an element binding of its own drives.
+                let owned: Vec<usize> = self.binds.iter().filter(|o| o.param == param).filter_map(|o| o.elem).collect();
+                let mut merged = held.clone();
+                if !owned.is_empty() {
+                    let mut dims = dims(&self.params, &self.decls, param);
+                    for (k, v) in held.as_vec().unwrap_or_default().iter().enumerate() {
+                        if !owned.contains(&k) && k < dims.len() {
+                            dims[k] = *v;
+                        }
+                    }
+                    merged = held.with_values(&dims).unwrap_or(merged);
+                }
+                store(&self.params, &self.decls, param, &merged);
+            }
+        }
         pass.values |= match value {
             Some(v) => self.evaluated.insert(key.clone(), v.clone()).as_ref() != Some(&v),
             None => self.evaluated.shift_remove(&key).is_some(),
@@ -1198,6 +1238,17 @@ pub fn store(cells: &[AtomicU64], decls: &[ParamDecl], i: usize, p: &Param) {
     let value = p.as_vec().unwrap_or(&[]);
     for k in 1..dims_of(&decls[i]) {
         cells[tail + k - 1].store(value.get(k).copied().unwrap_or(0.0).to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// One dimension of param `i` into its cell, the rest left as they are.
+pub fn store_dim(cells: &[AtomicU64], decls: &[ParamDecl], i: usize, k: usize, v: f64) {
+    if k >= dims_of(&decls[i]) {
+        return;
+    }
+    let cell = if k == 0 { i } else { tail_of(cells.len(), decls, i) + k - 1 };
+    if let Some(c) = cells.get(cell) {
+        c.store(v.to_bits(), Ordering::Relaxed);
     }
 }
 

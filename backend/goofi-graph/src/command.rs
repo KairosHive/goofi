@@ -8,7 +8,6 @@ use goofi_core::Param;
 
 use crate::subpatch::Dir;
 use crate::Mode;
-use goofi_node::param;
 
 /// What a command produced, for the caller. Kept serde-free so the engine needs no JSON dep.
 #[derive(Clone, Debug, PartialEq)]
@@ -507,7 +506,7 @@ impl Command {
                 let old_value = match &value {
                     Some(_) => Some(
                         g.params(uid)
-                            .and_then(|p| param(&p, &group, &name).cloned())
+                            .and_then(|p| goofi_node::param_dim(&p, &group, &name))
                             .ok_or_else(|| format!("edit_param: no param {group}.{name} on {}", uid.to_hex()))?,
                     ),
                     None => None,

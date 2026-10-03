@@ -682,6 +682,7 @@
 										{paramName}
 										label={role?.as === 'member' ? role.base : paramName}
 										selfName={node?.name}
+										viewKey={`${node?.uid}/${group}/${paramName}`}
 										{descriptor}
 										dropZone={dropZone(group, paramName, descriptor)}
 										data-testid={`param-field-${paramName}`}
@@ -689,6 +690,8 @@
 										onCommit={(v) => setValue(group, paramName, v)}
 										onPreview={(v) => node && g.previewParam(node.uid, group, paramName, v)}
 										onSetSource={(source) => setSource(group, paramName, source)}
+										onCommitElement={(i, v) => setValue(group, `${paramName}[${i}]`, v)}
+										onSetElementSource={(i, source) => setSource(group, `${paramName}[${i}]`, source)}
 										onRefresh={() => send('refresh', (uid) => g.refreshParam(uid, group, paramName))}
 										onPulse={() => send('pulse', (uid) => g.pulse(uid, group, paramName))}
 									/>

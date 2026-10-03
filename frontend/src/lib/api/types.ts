@@ -24,7 +24,21 @@ export type PulseParam = Kind<'pulse'>;
 /** A descriptor for a param whose node type is absent from the catalog: no bounds, no options. */
 export type UnknownParam = ParamBase & { type: 'unknown'; value: unknown };
 
-export type ParamDescriptor = (ParamBase & ParamKind) | UnknownParam;
+/** One element of a vector param as its own source: `name[i]` in the document, driving that
+ * dimension alone. `value` is what it evaluates to while driven. */
+export interface ElementSource {
+	mode: ParamMode;
+	expression: string | null;
+	reference: string | null;
+	triggers: boolean;
+	error: string | null;
+	value: number | undefined;
+}
+
+export type ParamDescriptor = ((ParamBase & ParamKind) | UnknownParam) & {
+	/** A vector's elements, each with a source of its own; absent on a scalar. */
+	elements?: ElementSource[];
+};
 
 /** A number's dimensions, bare or listed, as a list. */
 export function numValues(d: NumParam): number[] {

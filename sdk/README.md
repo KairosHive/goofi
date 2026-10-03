@@ -198,6 +198,9 @@ the node reads a list, a shader a `vec2f`, `vec3f` or `vec4f` (`vec…i` for an 
 one field per dimension, and an expression gives a sequence of that length or one number for
 every dimension. `goofi.ColorParam(default=(1, 1, 1, 1))`, `ParamSpec::color(&[…])` and
 `"kind": "color"` are the four-dimensional RGBA number from 0 to 1 that the inspector picks.
+One ELEMENT of a vector is addressed `name[i]`: its literal is that dimension of the list, and a
+source on it — an expression or a reference — drives that dimension alone, over whatever the whole
+param's source gives the others. The inspector's vector view shows one row per element.
 
 A param can show only while one other param of the same node has one of a list of values. That
 param must have a fixed set of values: a string or int param with options, or a bool. Name it

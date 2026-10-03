@@ -201,11 +201,35 @@ pub fn node(
 
     if want_params {
         out.push_str("\nparams:\n");
+        // A driven param reads as what its source last evaluated to, the literal standing in.
+        let live: std::collections::HashMap<(String, String), goofi_core::Param> =
+            g.driven_values(uid).into_iter().map(|(gr, n, p)| ((gr.to_string(), n.to_string()), p.clone())).collect();
         for (group, names) in g.params(uid).iter().flat_map(|p| p.iter()) {
             for (name, p) in names {
                 let source = g.param_source(uid, group, name);
-                let shown = g.shown_param(uid, group, name, p);
+                let mut shown = g.shown_param(uid, group, name, p);
+                if let Some(v) = live.get(&(group.clone(), name.clone())) {
+                    shown = v.clone();
+                }
+                // An element with a source of its own gets a line under its param, and its value
+                // reads in the param's line too.
+                let mut elements = Vec::new();
+                for k in 0..shown.dims() {
+                    let element = format!("{name}[{k}]");
+                    if let Some(source) = g.param_source(uid, group, &element) {
+                        let dim = live.get(&(group.clone(), element.clone())).cloned().unwrap_or_else(|| shown.dim(k));
+                        if let Some(v) = dim.as_f64() {
+                            let mut values = shown.as_vec().unwrap_or_default().to_vec();
+                            values[k] = v;
+                            shown = shown.with_values(&values).unwrap_or(shown);
+                        }
+                        elements.push(format!("    {group}.{element} = {}\n", param_line(&dim, Some(&source))));
+                    }
+                }
                 out.push_str(&format!("  {group}.{name} = {}\n", param_line(&shown, source.as_ref())));
+                for line in elements {
+                    out.push_str(&line);
+                }
             }
         }
     }

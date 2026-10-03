@@ -1,7 +1,7 @@
 /** A node as the editor reads it: ONE stable object per uid, whose fields read the replica, the
  * catalog and the runtime overlay on each access, so a reader re-runs for its own leaf alone. */
 import type { NodeInstanceInfo, NodeTypeInfo, NodeStage, NodeStats, NodeRuntime } from '$lib/api/control';
-import { PARAM_MODES, type ParamDescriptor, type ParamMode } from '$lib/api/types';
+import { PARAM_MODES, type ElementSource, type ParamDescriptor, type ParamMode } from '$lib/api/types';
 import { boundaryType } from '$lib/api/vocab';
 import { nodesMap, nodeView, viewersJson, baselineJson, type Doc, type FacadeFace } from './graphDoc';
 import { obj, type Obj } from './ops';
@@ -63,8 +63,26 @@ function liveParam(uid: string, group: string, name: string, catalog: ParamDescr
 		return typeof m === 'string' && (PARAM_MODES as readonly string[]).includes(m) ? (m as ParamMode) : 'constant';
 	};
 	const p = { ...base } as ParamDescriptor;
+	const dims = base.type === 'num' && Array.isArray(base.value) ? base.value.length : 1;
+	// One element's source record: the leaf `name[i]` beside the param, and its live value.
+	const element = (i: number): ElementSource => {
+		const key = `${name}[${i}]`;
+		const el = obj(obj(obj(obj(nodesMap(cx.doc())[uid]).params)[group])[key]);
+		const m = el.mode;
+		const mode = typeof m === 'string' && (PARAM_MODES as readonly string[]).includes(m) ? (m as ParamMode) : 'constant';
+		const live = mode !== 'constant' ? cx.runtime(uid)?.values?.[group]?.[key] : undefined;
+		return {
+			mode,
+			expression: typeof el.expression === 'string' ? el.expression : null,
+			reference: typeof el.reference === 'string' ? el.reference : null,
+			triggers: el.triggers === true,
+			error: cx.runtime(uid)?.errors?.[group]?.[key] ?? null,
+			value: typeof live === 'number' ? live : undefined
+		};
+	};
 	return accessors(p, {
 		mode,
+		...(dims > 1 ? { elements: () => Array.from({ length: dims }, (_, i) => element(i)) } : {}),
 		expression: () => (typeof leaf().expression === 'string' ? leaf().expression : null),
 		reference: () => (typeof leaf().reference === 'string' ? leaf().reference : null),
 		triggers: () => leaf().triggers === true,
@@ -80,7 +98,17 @@ function liveParam(uid: string, group: string, name: string, catalog: ParamDescr
 			const driven = base.type !== 'pulse' && mode() !== 'constant';
 			const live = driven ? cx.runtime(uid)?.values?.[group]?.[name] : undefined;
 			const v = live !== undefined ? live : held;
-			return v !== undefined ? v : base.value;
+			const whole = v !== undefined ? v : base.value;
+			// An element driven on its own shows what IT evaluated to, in its dimension.
+			if (dims > 1 && Array.isArray(whole)) {
+				const merged = [...whole];
+				for (let i = 0; i < dims; i++) {
+					const e = element(i).value;
+					if (e !== undefined) merged[i] = e;
+				}
+				return merged;
+			}
+			return whole;
 		},
 		...(base.type === 'string'
 			? {

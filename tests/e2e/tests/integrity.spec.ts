@@ -483,8 +483,33 @@ test('a colour param is picked, and its alpha slid', async ({ page }) => {
 		await expect.poll(state).toMatch(red('1'));
 		await page.getByTestId('color-alpha').fill('0.5');
 		await expect.poll(state).toMatch(red('0\\.5'));
-		await expect(picker.getByRole('button'), 'the swatch shows what was picked').toHaveAttribute('title', /rgba\(25[0-5], 0, 0, 0\.5\)/);
+		// The hex field names the colour exactly, alpha byte included.
+		await page.getByTestId('color-hex').fill('#ff000080');
+		await page.getByTestId('color-hex').press('Enter');
+		await expect.poll(state).toContain('threshold.above = [1, 0, 0, 0.5019607843137255]');
+		await page.getByTestId('color-channel-3').fill('40');
+		await page.getByTestId('color-channel-3').press('Enter');
+		await expect.poll(state).toContain('threshold.above = [1, 0, 0, 0.4] (4d color 0..1)');
+		await expect(picker.getByRole('button'), 'the swatch shows what was picked').toHaveAttribute('title', 'rgba(255, 0, 0, 0.4)');
 		await expect(above.locator('input[type=range]'), 'no slider beside the picker').toHaveCount(0);
+
+		// Opened, a colour shows its list as one row; as a VECTOR it shows one row per element, and
+		// each element takes a source of its own that drives that dimension alone.
+		await above.getByRole('button', { name: 'above', exact: true }).click();
+		await expect(above.getByTestId('param-list')).toHaveValue('[1, 0, 0, 0.4]');
+		await above.getByTestId('param-view-vector').click();
+		await expect(above.getByTestId('param-elements').locator('.pf-element')).toHaveCount(4);
+		await expect(above.getByTestId('param-list')).toHaveCount(0);
+		await above.getByTestId('param-element-mode-expression-1').click();
+		const text = async () => (await rawCall(page, 'node state', { node: uid })).result.text as string;
+		await expect.poll(text).toMatch(/threshold\.above\[1\] = expr: 0/);
+		await above.getByTestId('param-element-number-2').fill('0.25');
+		await above.getByTestId('param-element-number-2').press('Enter');
+		await expect.poll(text).toMatch(/threshold\.above = \[1, 0, 0\.25, 0\.4\]/);
+		await above.getByTestId('param-element-mode-constant-1').click();
+		await expect.poll(text).not.toMatch(/above\[1\] = expr:/);
+		await above.getByTestId('param-view-color').click();
+		await expect(above.getByTestId('param-list')).toHaveValue('[1, 0, 0.25, 0.4]');
 		await expectIntact(page, 'a colour row');
 	} finally {
 		await tearDown(page);

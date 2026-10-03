@@ -746,6 +746,36 @@ fn shaders_render_on_the_gpu() {
     drawn(&g, inked, "an ink set as a list", |d| close(px(d, 0, 0), [0.0, 0.0, 1.0, 0.5]));
     g.set_param(inked, "look", "ink", 0.25);
     drawn(&g, inked, "one number fills every dimension", |d| close(px(d, 0, 0), [0.25, 0.25, 0.25, 0.25]));
+
+    // Step: ONE element of a vector takes a source of its own, addressed `ink[3]`: it drives that
+    // dimension alone, a literal on an element lands in its dimension of the list, and a source on
+    // the whole param gives the dimensions no element drives. The state and a copy both carry it.
+    let dial = g.add("_TestScalar");
+    g.ready(dial);
+    g.set_param(dial, "control", "value", 0.5);
+    let dial_name = g.name(&hex(dial));
+    g.set_param(inked, "look", "ink", j!([0.0, 0.0, 1.0, 1.0]));
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink[3]", "reference": format!("{dial_name}.out") }));
+    drawn(&g, inked, "an element reference", |d| close(px(d, 0, 0), [0.0, 0.0, 1.0, 0.5]));
+    g.set_param(inked, "look", "ink[1]", 0.75);
+    drawn(&g, inked, "an element literal", |d| close(px(d, 0, 0), [0.0, 0.75, 1.0, 0.5]));
+    let full = g.add("_TestScalar");
+    g.ready(full);
+    g.set_param(full, "control", "value", 1.0);
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "reference": format!("{}.out", g.name(&hex(full))) }));
+    drawn(&g, inked, "the element over the whole", |d| close(px(d, 0, 0), [1.0, 1.0, 1.0, 0.5]));
+    let text = g.call("node state", j!({ "node": hex(inked) }))["text"].as_str().expect("text").to_string();
+    assert!(text.contains(&format!("look.ink = ref: {}.out → [1, 1, 1, 0.5]", g.name(&hex(full)))), "{text}");
+    assert!(text.contains(&format!("look.ink[3] = ref: {dial_name}.out → 0.5")), "{text}");
+    let copied = g.call("nodes copy", j!({ "nodes": [hex(inked)] }));
+    assert_eq!(copied["doc"]["nodes"][hex(inked)]["params"]["look"]["ink[3]"]["reference"], j!(format!("{dial_name}.out")));
+    assert_eq!(copied["doc"]["nodes"][hex(inked)]["params"]["look"]["ink"]["value"], j!([0.0, 0.75, 1.0, 1.0]));
+    assert!(g.refuse("node param edit", j!({ "node": hex(inked), "param": "look/ink[4]", "value": 1.0 })).contains("no param"));
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink[3]", "reference": "" }));
+    drawn(&g, inked, "the element let go", |d| close(px(d, 0, 0), [1.0, 1.0, 1.0, 1.0]));
+    for node in [dial, full] {
+        g.call("node remove", j!({ "node": hex(node) }));
+    }
     g.call("node remove", j!({ "node": hex(inked) }));
 
     // Step: a node holds its own state between two ticks. A state buffer starts empty, so a body

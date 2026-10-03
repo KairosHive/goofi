@@ -1,8 +1,12 @@
-<!-- ColorPicker — a swatch that opens an RGBA picker: a saturation/value square, a hue strip and an
-     alpha strip. A drag previews through `onInput`; its release commits through `onChange`. -->
+<!-- ColorPicker — a swatch that opens an RGBA picker laid out as the browser's own, with the alpha it
+     lacks: a saturation/value square, hue and alpha strips, an eyedropper, and the colour as hex and
+     as four channels. A drag previews through `onInput`; its release commits through `onChange`. -->
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
 	import Popover from './Popover.svelte';
+	import NumberInput from './NumberInput.svelte';
+	import TextInput from './TextInput.svelte';
+	import { IconButton, Icon } from 'panelty';
 	import { claimFieldControlId } from './field';
 
 	let {
@@ -49,6 +53,37 @@
 	}
 	const css = ([r, g, b, a]: number[]): string =>
 		`rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`;
+	const byte = (x: number): string => Math.round(unit(x) * 255).toString(16).padStart(2, '0');
+	/** `#rrggbbaa`, the alpha left off when it is full. */
+	const hexOf = (c: number[]): string => '#' + byte(c[0]) + byte(c[1]) + byte(c[2]) + (c[3] < 1 ? byte(c[3]) : '');
+	/** A typed `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`; anything else is no colour. */
+	function parseHex(text: string): number[] | null {
+		let h = text.trim().replace(/^#/, '');
+		if (h.length === 3 || h.length === 4) h = [...h].map((c) => c + c).join('');
+		if (!/^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(h)) return null;
+		const n = parseInt(h.padEnd(8, 'f'), 16);
+		return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].map((b) => b / 255);
+	}
+	/** The page's own eyedropper, where the browser has one. */
+	const eyedropper = typeof window !== 'undefined' && 'EyeDropper' in window;
+	async function pickFromScreen(): Promise<void> {
+		try {
+			const dropper = new (window as unknown as { EyeDropper: new () => { open(): Promise<{ sRGBHex: string }> } }).EyeDropper();
+			const picked = parseHex((await dropper.open()).sRGBHex);
+			if (picked) take([...picked.slice(0, 3), alpha]);
+		} catch {
+			// The pick was cancelled, which is no colour.
+		}
+	}
+	/** One whole colour, typed rather than dragged: it commits at once. */
+	function take(c: number[]): void {
+		const [h, s, v] = toHsv(c);
+		if (s > 0 && v > 0) hue = h;
+		if (v > 0) sat = s;
+		val = v;
+		alpha = unit(c[3] ?? 1);
+		commit();
+	}
 
 	let open = $state(false);
 	let swatch = $state<HTMLButtonElement | null>(null);
@@ -180,6 +215,38 @@
 			commit();
 		}}
 	/>
+	<div class="ui-color-text">
+		{#if eyedropper}
+			<IconButton label="Pick a colour off the screen" variant="ghost" size="sm" onclick={pickFromScreen} data-testid="color-eyedropper">
+				<Icon name="pipette" />
+			</IconButton>
+		{/if}
+		<TextInput
+			class="ui-color-hex"
+			value={hexOf(held)}
+			onChange={(text) => {
+				const c = parseHex(text);
+				if (c) take(c);
+			}}
+			spellcheck={false}
+			aria-label="hex"
+			data-testid="color-hex"
+		/>
+	</div>
+	<div class="ui-color-channels">
+		{#each ['R', 'G', 'B', 'A'] as name, i (name)}
+			<label class="ui-color-channel">
+				<span>{name}</span>
+				<NumberInput
+					value={Math.round(held[i] * (i < 3 ? 255 : 100))}
+					onChange={(v) => take(held.map((c, k) => (k === i ? unit(v / (i < 3 ? 255 : 100)) : c)))}
+					step={1}
+					scrub
+					data-testid={`color-channel-${i}`}
+				/>
+			</label>
+		{/each}
+	</div>
 </Popover>
 
 <style>
@@ -219,7 +286,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-3);
-		width: 12rem;
+		width: 14rem;
 	}
 	/* Square-cornered: the purest colour sits in the top-right pixel, which a radius would cut off. */
 	:global(.ui-color-square) {
@@ -266,6 +333,31 @@
 		border: 2px solid #fff;
 		box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
 		background: transparent;
+	}
+	:global(.ui-color-text) {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+	:global(.ui-color-text .ui-color-hex) {
+		flex: 1 1 auto;
+		min-width: 0;
+		font-family: var(--font-mono);
+	}
+	:global(.ui-color-channels) {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: var(--space-2);
+		--number-width: 100%;
+	}
+	:global(.ui-color-channel) {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+		min-width: 0;
+		color: var(--text-muted);
+		font-size: var(--fs-micro);
+		text-align: center;
 	}
 	:global(.ui-color-hue) {
 		background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);

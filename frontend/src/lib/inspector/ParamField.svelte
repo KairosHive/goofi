@@ -31,11 +31,14 @@
 		onCommit,
 		onPreview,
 		onSetSource,
+		onCommitElement,
+		onSetElementSource,
 		onRefresh,
 		onPulse,
 		refreshing = false,
 		selfName,
 		dropZone = null,
+		viewKey = '',
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
 		paramName: string;
@@ -46,6 +49,9 @@
 		/** A step of a drag on the value, ahead of its commit. */
 		onPreview?: (value: number | number[]) => unknown;
 		onSetSource: (source: SourcePatch) => void;
+		/** One element of a vector: its literal into its dimension, and its own source. */
+		onCommitElement?: (index: number, value: number) => unknown;
+		onSetElementSource?: (index: number, source: SourcePatch) => void;
 		onRefresh?: () => void;
 		onPulse?: () => void;
 		refreshing?: boolean;
@@ -53,6 +59,8 @@
 		selfName?: string;
 		/** This row's key as a node-drop target; null while it is not one. */
 		dropZone?: string | null;
+		/** `uid/group/name`, under which a colour's view (picker or vector) is remembered. */
+		viewKey?: string;
 	} = $props();
 
 	const learnId = $props.id();
@@ -73,6 +81,31 @@
 	}
 
 	const kind = $derived(controlKind(descriptor));
+	/** A colour opened as a vector shows and expands as one; the value under both is the same list. */
+	const asVector = $derived(kind === 'color' && uiStore.paramView[viewKey] === 'vector');
+	const dims = $derived(isNumeric(descriptor) ? numValues(descriptor).length : 1);
+	/** Each element's own source, which a vector row shows beside its number. */
+	const elements = $derived(descriptor.elements ?? []);
+	const elementName = (i: number): string => (kind === 'color' ? ['R', 'G', 'B', 'A'][i] : `[${i}]`);
+	// The element a reference is being picked for, before one is retained.
+	let pickingElement = $state<number | null>(null);
+	function chooseElement(i: number, mode: ParamMode): void {
+		pickingElement = null;
+		const el = elements[i];
+		if (!el || mode === el.mode) return;
+		if (mode === 'reference' && !el.reference) {
+			pickingElement = i;
+			return;
+		}
+		const seed = { ...descriptor, value: numValues(num!)[i], expression: el.expression } as ParamDescriptor;
+		onSetElementSource?.(i, sourceForMode(seed, mode));
+	}
+	/** A typed `[a, b, c, d]`, or bare numbers apart; short lists fill with zero, long ones are cut. */
+	function parseList(text: string): number[] | null {
+		const parts = text.replace(/[[\]]/g, '').split(/[,\s]+/).filter(Boolean).map(Number);
+		if (parts.length === 0 || parts.some((n) => !Number.isFinite(n))) return null;
+		return Array.from({ length: dims }, (_, i) => parts[i] ?? 0);
+	}
 
 	let open = $state(false);
 
@@ -136,7 +169,7 @@
 		<!-- `display: contents` so the face inherits WITHOUT laying out: Field requires paired controls to
 		     be its direct children, and a real box would take them out of the @container column-flip. -->
 		<div class="pf-value">
-			{#if num && kind === 'color'}
+			{#if num && kind === 'color' && !asVector}
 				<ColorPicker
 					value={numValues(num)}
 					onChange={onCommit}
@@ -145,7 +178,7 @@
 					data-param-edit
 					data-testid="param-color"
 				/>
-			{:else if num && kind === 'vector'}
+			{:else if num && (kind === 'vector' || asVector)}
 				<!-- One number per dimension; each commits the whole vector. -->
 				{#each numValues(num) as held, i (i)}
 					<NumberInput
@@ -233,6 +266,100 @@
 
 	{#if open}
 		<div class="pf-more" data-testid="param-more">
+			{#if num && kind === 'color'}
+				<!-- Which face a colour wears: the picker over its list, or one row per element. -->
+				<Segmented
+					value={asVector ? 'vector' : 'color'}
+					segments={[
+						{ id: 'color', label: 'colour', title: 'Colour — the picker, over the four values as one list', testid: 'param-view-color' },
+						{ id: 'vector', label: 'vector', title: 'Vector — one row per element, each with a source of its own', testid: 'param-view-vector' }
+					]}
+					onChange={(v) => {
+						if (v === 'vector') uiStore.paramView[viewKey] = 'vector';
+						else delete uiStore.paramView[viewKey];
+					}}
+					aria-label={`${paramName} view`}
+					data-testid="param-view"
+				/>
+			{/if}
+			{#if num && dims > 1 && (asVector || kind === 'vector')}
+				<!-- One row per element: its number, and a source of its own that drives that dimension. -->
+				<div class="pf-elements" data-testid="param-elements">
+					{#each numValues(num) as held, i (i)}
+						{@const el = elements[i]}
+						{@const driving = el != null && el.mode !== 'constant'}
+						{@const picking = pickingElement === i}
+						<div class="pf-element" data-testid={`param-element-${i}`}>
+							<div class="pf-element-row">
+								<span class="pf-element-name">{elementName(i)}</span>
+								<NumberInput
+									value={el?.value ?? held}
+									onChange={(v) => onCommitElement?.(i, v)}
+									{step}
+									scrub
+									disabled={driven || driving}
+									data-param-edit
+									data-testid={`param-element-number-${i}`}
+								/>
+								<Segmented
+									value={picking ? 'reference' : (el?.mode ?? 'constant')}
+									bad={!!el?.error}
+									segments={PARAM_MODES.map((id) => ({
+										id,
+										...MODE_FACE[id],
+										title: `${MODE_FACE[id].name} — ${MODE_TITLE[id]}`,
+										testid: `param-element-mode-${id}-${i}`
+									}))}
+									onChange={(m) => chooseElement(i, m as ParamMode)}
+									aria-label={`${paramName} ${elementName(i)} source`}
+								/>
+							</div>
+							{#if picking || el?.mode === 'reference'}
+								<RefPicker
+									value={el?.reference ?? null}
+									paramType="num"
+									onCommit={(reference) => {
+										pickingElement = null;
+										onSetElementSource?.(i, { reference });
+									}}
+									testid={`param-element-ref-${i}`}
+								/>
+							{:else if el?.mode === 'expression'}
+								<ExprEditor
+									{selfName}
+									value={el.expression ?? ''}
+									error={el.error}
+									onCommit={(expression) => onSetElementSource?.(i, { expression })}
+									label={`${paramName} ${elementName(i)} expression`}
+									placeholder="nd('oscillator0').out.data.mean()"
+									testid={`param-element-expr-${i}`}
+								/>
+							{/if}
+							{#if el?.error && !picking}
+								<div class="src-error" title={el.error}>
+									<span class="prefix"><Icon name="triangle-alert" /></span>
+									<span class="msg">{el.error}</span>
+								</div>
+							{/if}
+						</div>
+					{/each}
+				</div>
+			{/if}
+			{#if num && dims > 1 && !asVector && kind !== 'vector'}
+				<!-- The whole list, typed as one: what an expression or a reference hands the param. -->
+				<TextInput
+					class="pf-list"
+					value={`[${numValues(num).map((v) => Number(v.toFixed(4))).join(', ')}]`}
+					onChange={(text) => {
+						const list = parseList(text);
+						if (list) onCommit(list);
+					}}
+					disabled={driven}
+					spellcheck={false}
+					aria-label={`${paramName} as a list`}
+					data-testid="param-list"
+				/>
+			{/if}
 			{#if showSource}
 				<div class="src-region">
 					{#if showPicker}
@@ -379,6 +506,33 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		min-width: 0;
+	}
+	.pf-elements {
+		flex: 1 1 100%;
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+	}
+	.pf-element {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+	}
+	.pf-element-row {
+		display: flex;
+		align-items: center;
+		gap: var(--space-3);
+		--number-width: 5rem;
+	}
+	.pf-element-name {
+		flex: 0 0 1.5rem;
+		font-family: var(--font-mono);
+		font-size: var(--fs-small);
+		color: var(--text-muted);
+	}
+	.pf-more :global(.pf-list) {
+		flex: 1 1 100%;
+		font-family: var(--font-mono);
 	}
 	.unknown {
 		font-size: var(--fs-micro);
