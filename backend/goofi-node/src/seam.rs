@@ -122,6 +122,7 @@ pub struct GraphView<'a> {
     pub instance: &'a str,
     pub edges: &'a [Edge],
     pub nodes: HashMap<Uid, NodeView<'a>>,
+    pub variables: &'a goofi_core::variables::VariableStore,
 }
 
 impl GraphView<'_> {

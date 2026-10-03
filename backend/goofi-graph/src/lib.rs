@@ -2735,7 +2735,7 @@ impl Graph {
         let typed: HashMap<Uid, ParamGroups> = self.leaves().map(|(u, l)| (u, self.typed(l))).collect();
         let published = {
             let Runtime { generations, instance, engines, watched, .. } = &mut self.runtime;
-            let view = build_view(&self.patch.nodes, &typed, generations, instance, &edges, watched);
+            let view = build_view(&self.patch.nodes, &typed, generations, instance, &edges, watched, &self.patch.variables);
             for e in engines.iter_mut() {
                 e.settle(&view, &touched);
             }
@@ -3402,6 +3402,7 @@ fn build_view<'a>(
     instance: &'a str,
     edges: &'a [Edge],
     watched: &HashSet<(Uid, String)>,
+    variables: &'a goofi_core::variables::VariableStore,
 ) -> GraphView<'a> {
     let nodes = nodes
         .iter()
@@ -3434,7 +3435,7 @@ fn build_view<'a>(
             ))
         })
         .collect();
-    GraphView { instance, edges, nodes }
+    GraphView { instance, edges, nodes, variables }
 }
 
 /// One param's error: the bind the graph refused, or the node's own last evaluation failure. The

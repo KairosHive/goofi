@@ -267,7 +267,7 @@ impl GraphicsEngine {
             .live
             .iter()
             .filter(|(_, inst)| inst.class.window)
-            .map(|(uid, _)| (*uid, sizes.get(uid).copied().unwrap_or((plan::GENERATOR, plan::GENERATOR))))
+            .map(|(uid, _)| (*uid, sizes.get(uid).copied().unwrap_or_else(|| plan::generator(view))))
             .collect();
         for uid in self.windows.keys().copied().collect::<Vec<_>>() {
             if !want.contains_key(&uid) {

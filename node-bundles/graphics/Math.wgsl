@@ -4,13 +4,13 @@
   "inputs": [{"name": "input", "kind": "TEXTURE"}],
   "params": [
     {"group": "math", "name": "channels", "kind": "str", "default": "rgb", "options": ["rgb", "rgba", "alpha"]},
-    {"group": "math", "name": "pre_add", "kind": "float", "default": 0.0, "min": -1000000000.0, "max": 1000000000.0},
-    {"group": "math", "name": "multiply", "kind": "float", "default": 1.0, "min": -1000000000.0, "max": 1000000000.0},
-    {"group": "math", "name": "post_add", "kind": "float", "default": 0.0, "min": -1000000000.0, "max": 1000000000.0},
-    {"group": "range", "name": "from_low", "kind": "float", "default": 0.0, "min": -1000000000.0, "max": 1000000000.0},
-    {"group": "range", "name": "from_high", "kind": "float", "default": 1.0, "min": -1000000000.0, "max": 1000000000.0},
-    {"group": "range", "name": "to_low", "kind": "float", "default": 0.0, "min": -1000000000.0, "max": 1000000000.0},
-    {"group": "range", "name": "to_high", "kind": "float", "default": 1.0, "min": -1000000000.0, "max": 1000000000.0},
+    {"group": "math", "name": "pre_add", "kind": "float", "default": 0.0, "min": -10.0, "max": 10.0},
+    {"group": "math", "name": "multiply", "kind": "float", "default": 1.0, "min": 0.0, "max": 10.0},
+    {"group": "math", "name": "post_add", "kind": "float", "default": 0.0, "min": -10.0, "max": 10.0},
+    {"group": "range", "name": "from_low", "kind": "float", "default": 0.0, "min": -10.0, "max": 10.0},
+    {"group": "range", "name": "from_high", "kind": "float", "default": 1.0, "min": -10.0, "max": 10.0},
+    {"group": "range", "name": "to_low", "kind": "float", "default": 0.0, "min": -10.0, "max": 10.0},
+    {"group": "range", "name": "to_high", "kind": "float", "default": 1.0, "min": -10.0, "max": 10.0},
     {"group": "range", "name": "bound", "kind": "str", "default": "none", "options": ["none", "clamp", "wrap", "fold"]} ] }
 */
 fn map_channel(value: f32) -> f32 {

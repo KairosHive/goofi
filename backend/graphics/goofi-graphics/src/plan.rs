@@ -33,9 +33,14 @@ fn unpack(cell: u64) -> Option<goofi_view::ViewWant> {
     })
 }
 
-/// What a chain that can follow nothing falls back to. It is what the two default-size variables
-/// start at, so the floor and the patch's own default cannot drift apart.
-pub const GENERATOR: u32 = goofi_core::variables::DEFAULT_SIZE;
+/// What a chain that can follow nothing falls back to: the patch's two default-size variables.
+pub fn generator(view: &GraphView<'_>) -> (u32, u32) {
+    let axis = |name: &str| match view.variables.get(name) {
+        Some(goofi_core::variables::VariableValue::Int(v)) => (*v).clamp(1, MAX_SIZE as i64) as u32,
+        _ => goofi_core::variables::DEFAULT_SIZE,
+    };
+    (axis("system.default_width"), axis("system.default_height"))
+}
 /// The widest a node may ask for on either axis.
 pub const MAX_SIZE: u32 = goofi_core::texture::MAX_SIZE;
 
@@ -242,9 +247,10 @@ fn texture_wires<'v>(view: &GraphView<'v>, live: &HashMap<Uid, Instance>) -> Has
 /// window, and the plan to size a target.
 pub fn sizes(view: &GraphView<'_>, live: &HashMap<Uid, Instance>) -> HashMap<Uid, (u32, u32)> {
     let wires = texture_wires(view, live);
+    let fallback = generator(view);
     let mut sizes = HashMap::new();
     for uid in live.keys() {
-        size_of(*uid, live, &wires, &mut sizes, &mut Vec::new());
+        size_of(*uid, live, &wires, fallback, &mut sizes, &mut Vec::new());
     }
     sizes
 }
@@ -252,11 +258,12 @@ pub fn sizes(view: &GraphView<'_>, live: &HashMap<Uid, Instance>) -> HashMap<Uid
 /// A node's size: what `common/width` and `common/height` hold, and for a zero on an axis the
 /// first wired texture input's size on that axis — or, with no texture behind it, the frame its
 /// host made or its first array input uploaded. A chain that follows itself, or one that follows
-/// nothing, is a generator.
+/// nothing, takes the patch's default.
 fn size_of(
     uid: Uid,
     live: &HashMap<Uid, Instance>,
     wires: &HashMap<(Uid, &str), Uid>,
+    fallback: (u32, u32),
     sizes: &mut HashMap<Uid, (u32, u32)>,
     visiting: &mut Vec<Uid>,
 ) -> (u32, u32) {
@@ -267,7 +274,7 @@ fn size_of(
     let mut answer = (w, h);
     // A chain that follows ITSELF cannot answer; what it asked for on either axis still stands.
     if visiting.contains(&uid) {
-        return (if w == 0 { GENERATOR } else { w }, if h == 0 { GENERATOR } else { h });
+        return (if w == 0 { fallback.0 } else { w }, if h == 0 { fallback.1 } else { h });
     }
     visiting.push(uid);
     if w == 0 || h == 0 {
@@ -280,11 +287,11 @@ fn size_of(
                 .find_map(|s| wires.get(&(uid, s.name)).copied())
         });
         let (fw, fh) = match behind {
-            Some(p) => size_of(p, live, wires, sizes, visiting),
+            Some(p) => size_of(p, live, wires, fallback, sizes, visiting),
             None => live.get(&uid).and_then(|i| {
                 i.source.as_ref().and_then(|s| s.lock().as_ref().map(|f| f.size))
                     .or_else(|| crate::half::unpack(i.cells.uploaded.load(Ordering::Relaxed)))
-            }).unwrap_or((GENERATOR, GENERATOR)),
+            }).unwrap_or(fallback),
         };
         answer = (if w == 0 { fw } else { w }, if h == 0 { fh } else { h });
     }

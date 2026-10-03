@@ -872,6 +872,19 @@ fn shaders_render_on_the_gpu() {
     g.call("variable entry edit", j!({ "name": "system.default_width", "value": 96 }));
     g.call("variable entry edit", j!({ "name": "system.default_height", "value": 48 }));
     drawn(&g, gen, "every producer follows the variable", |d| shape(d) == vec![48, 96, 4]);
+    // A loop that follows itself at 0,0 can follow nothing: it takes the patch's default too, not
+    // the number the variables were born with.
+    let (fb, comp) = (g.add("graphics:Feedback"), g.add("graphics:Composite"));
+    for node in [fb, comp] {
+        g.ready(node);
+        g.set_param(node, "common", "width", 0);
+        g.set_param(node, "common", "height", 0);
+    }
+    g.link(fb, "out", comp, "a");
+    g.link(comp, "out", fb, "input");
+    drawn(&g, comp, "a loop at 0,0 follows the variable", |d| shape(d) == vec![48, 96, 4]);
+    g.call("node remove", j!({ "node": hex(fb) }));
+    g.call("node remove", j!({ "node": hex(comp) }));
 
     // Step: the noise itself, walked one param at a time on the small frame the variable just made.
     // Speed 0 stops the drift, which is the only thing that lets one frame be compared with the
