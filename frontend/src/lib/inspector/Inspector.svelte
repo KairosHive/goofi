@@ -349,12 +349,28 @@
 			: activeGroup ? Object.entries(n.params[activeGroup]).map(([name, descriptor]) => ({ group: activeGroup, name, descriptor })) : [];
 		return all.filter((r) => admits(filters, r.descriptor, nonDefault, r.group, r.name) && shown(n.params, r.group, r.name));
 	});
-	/** The section a row sits in, and the slot of a list it is, so a heading opens each once. */
+	/** The section a row sits in, so a named section's heading opens once. */
 	const sectionOf = (r: ParamHit | undefined): string | null => r?.descriptor.role?.section ?? null;
-	const slotOf = (r: ParamHit | undefined): string | null => {
-		const role = r?.descriptor.role;
-		return role?.as === 'member' && role.slot != null ? `${role.section}/${role.slot}` : null;
+	const slotOf = (r: ParamHit): { section: string; index: number } | null => {
+		const role = r.descriptor.role;
+		return role?.as === 'member' && role.slot != null ? { section: role.section, index: role.slot } : null;
 	};
+	type Block = { key: string; slot: { section: string; index: number } | null; rows: (ParamHit & { index: number })[] };
+	// The rows in blocks: a slot of a list is one block holding its members, every other row its own.
+	const blocks = $derived.by<Block[]>(() => {
+		const out: Block[] = [];
+		rows.forEach((r, index) => {
+			const slot = searching ? null : slotOf(r);
+			const last = out[out.length - 1];
+			if (slot && last?.slot && last.slot.section === slot.section && last.slot.index === slot.index) {
+				last.rows.push({ ...r, index });
+			} else {
+				const key = slot ? `${node?.uid}/${r.group}/${slot.section}/${slot.index}` : `${node?.uid}/${r.group}/${r.name}`;
+				out.push({ key, slot, rows: [{ ...r, index }] });
+			}
+		});
+		return out;
+	});
 
 	const FILTER_TITLE: Record<ParamMode, string> = {
 		constant: 'the params holding a value set by hand',
@@ -572,7 +588,7 @@
 							{#if searching}{narrowed ? 'No filtered parameters match.' : 'No parameters match.'}{:else if narrowed}Nothing in this group matches these filters — another group may still hold one.{:else}No parameters in this group.{/if}
 						</div>
 					{:else}
-						{#each rows as { group, name: paramName, descriptor }, i (node.uid + '/' + group + '/' + paramName)}
+						{#snippet paramRow(group: string, paramName: string, descriptor: ParamDescriptor, i: number)}
 							{@const role = descriptor.role}
 							<!-- A line only between two shown rows, so a hidden section draws nothing. -->
 							{#if !searching && i > 0 && rows[i - 1].descriptor.section !== descriptor.section}
@@ -581,16 +597,13 @@
 							{#if !searching && role?.as === 'member' && role.slot == null && sectionOf(rows[i - 1]) !== role.section}
 								<div class="pf-section-name" data-testid={`param-section-${role.section}`}>{role.section}</div>
 							{/if}
-							{#if !searching && role?.as === 'member' && role.slot != null && slotOf(rows[i - 1]) !== `${role.section}/${role.slot}`}
-								<div class="pf-slot" data-testid={`param-slot-${role.section}-${role.slot}`}>{role.slot + 1}</div>
-							{/if}
 							<div
 								class="pf-row"
 								class:pf-count={role?.as === 'count'}
 								role="group"
 								aria-label={paramName}
 								data-param-form={formId}
-								data-param-node={node.uid}
+								data-param-node={node?.uid}
 								data-param-key={paramKey(group, paramName)}
 								oncontextmenu={(e) => {
 									if (!rowMenu(e.clientX, e.clientY, { group, name: paramName, descriptor })) return;
@@ -626,22 +639,35 @@
 										<Icon name="plus" />
 									</IconButton>
 								{:else}
-								<ParamField
-									{paramName}
-									label={role?.as === 'member' ? role.base : paramName}
-									selfName={node?.name}
-									{descriptor}
-									dropZone={dropZone(group, paramName, descriptor)}
-									data-testid={`param-field-${paramName}`}
-									refreshing={node != null && g.isRefreshing(node.uid, group, paramName)}
-									onCommit={(v) => setValue(group, paramName, v)}
-									onPreview={(v) => node && g.previewParam(node.uid, group, paramName, v)}
-									onSetSource={(source) => setSource(group, paramName, source)}
-									onRefresh={() => send('refresh', (uid) => g.refreshParam(uid, group, paramName))}
-									onPulse={() => send('pulse', (uid) => g.pulse(uid, group, paramName))}
-								/>
+									<ParamField
+										{paramName}
+										label={role?.as === 'member' ? role.base : paramName}
+										selfName={node?.name}
+										{descriptor}
+										dropZone={dropZone(group, paramName, descriptor)}
+										data-testid={`param-field-${paramName}`}
+										refreshing={node != null && g.isRefreshing(node.uid, group, paramName)}
+										onCommit={(v) => setValue(group, paramName, v)}
+										onPreview={(v) => node && g.previewParam(node.uid, group, paramName, v)}
+										onSetSource={(source) => setSource(group, paramName, source)}
+										onRefresh={() => send('refresh', (uid) => g.refreshParam(uid, group, paramName))}
+										onPulse={() => send('pulse', (uid) => g.pulse(uid, group, paramName))}
+									/>
 								{/if}
 							</div>
+						{/snippet}
+						{#each blocks as block (block.key)}
+							{#if block.slot}
+								<!-- One slot of a list: its number and its members on a tone of their own, alternating. -->
+								<div class="pf-slot" class:alt={block.slot.index % 2 === 1} data-testid={`param-slot-${block.slot.section}-${block.slot.index}`}>
+									<div class="pf-slot-number" data-testid="param-slot-number">{block.slot.index + 1}</div>
+									{#each block.rows as { group, name: paramName, descriptor, index } (group + '/' + paramName)}
+										{@render paramRow(group, paramName, descriptor, index)}
+									{/each}
+								</div>
+							{:else}
+								{@render paramRow(block.rows[0].group, block.rows[0].name, block.rows[0].descriptor, block.rows[0].index)}
+							{/if}
 						{/each}
 					{/if}
 				</div>
@@ -861,16 +887,29 @@
 		border-top: 1px solid var(--border);
 	}
 	/* A heading hangs close to the rows it opens, under the list's own gap. */
-	.pf-section-name,
-	.pf-slot {
+	.pf-section-name {
 		color: var(--text-muted);
 		font-size: var(--fs-small);
 		margin-bottom: calc(var(--space-2) - var(--space-5));
 	}
+	/* Slots alternate between the two surface steps above the form's own, so each reads as one. */
 	.pf-slot {
-		padding-left: var(--space-3);
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-5);
+		padding: var(--space-3) var(--space-4);
+		border-radius: var(--radius-sm);
+		background: var(--surface-2);
 	}
-	.pf-count {
+	.pf-slot.alt {
+		background: var(--surface-3);
+	}
+	.pf-slot-number {
+		color: var(--text-muted);
+		font-size: var(--fs-small);
+		margin-bottom: calc(var(--space-2) - var(--space-5));
+	}
+	.pf-row.pf-count {
 		flex-direction: row;
 		align-items: center;
 		gap: var(--space-2);

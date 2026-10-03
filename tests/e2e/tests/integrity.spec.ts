@@ -408,13 +408,16 @@ test('a list section opens one slot per count, and its + button opens another', 
 		await expect(count).toHaveText('2');
 		await expect(row('ramp/at_1')).toBeVisible();
 		await expect(row('ramp/at_2')).toHaveCount(0);
-		await expect(page.getByTestId('param-slot-stops-1')).toHaveText('2');
+		const slot = (n: number) => page.getByTestId(`param-slot-stops-${n}`);
+		await expect(slot(1).getByTestId('param-slot-number')).toHaveText('2');
+		await expect(slot(1), 'a slot holds its members').toContainText('at');
 		await expect(row('ramp/at_1').getByText('at', { exact: true }), 'a slot wears its name inside the section').toBeVisible();
 
 		await page.getByTestId('param-count-more-stops').click();
 		await expect(count).toHaveText('3');
 		await expect(row('ramp/at_2')).toBeVisible();
-		await expect(page.getByTestId('param-slot-stops-2')).toHaveText('3');
+		await expect(slot(2).getByTestId('param-slot-number')).toHaveText('3');
+		await expect(page.getByTestId('param-count-stops').locator('..'), 'the count is one row').toHaveCSS('flex-direction', 'row');
 		await expectIntact(page, 'a list section with three slots');
 
 		await page.getByTestId('param-count-less-stops').click();
