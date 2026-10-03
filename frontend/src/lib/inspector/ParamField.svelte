@@ -86,6 +86,10 @@
 	const dims = $derived(isNumeric(descriptor) ? numValues(descriptor).length : 1);
 	/** Each element's own source, which a vector row shows beside its number. */
 	const elements = $derived(descriptor.elements ?? []);
+	const elementDriven = (i: number): boolean => (elements[i]?.mode ?? 'constant') !== 'constant';
+	// A colour with ANY element driven is driven as a whole: the picker would write a literal the
+	// driven channel ignores, and snap to what came back. The vector rows show which one it is.
+	const anyElementDriven = $derived(elements.some((_, i) => elementDriven(i)));
 	const elementName = (i: number): string => (kind === 'color' ? ['R', 'G', 'B', 'A'][i] : `[${i}]`);
 	// The element a reference is being picked for, before one is retained.
 	let pickingElement = $state<number | null>(null);
@@ -193,7 +197,8 @@
 					value={numValues(num)}
 					onChange={onCommit}
 					onInput={onPreview}
-					disabled={driven}
+					disabled={driven || anyElementDriven}
+					title={anyElementDriven ? 'An element has a source of its own; see the vector view' : undefined}
 					data-param-edit
 					data-testid="param-color"
 				/>
@@ -206,7 +211,7 @@
 						onChange={(v) => onCommit(withDim(i, v))}
 						{step}
 						scrub
-						disabled={driven}
+						disabled={driven || elementDriven(i)}
 						data-param-edit
 						data-testid={`param-number-${i}`}
 					/>
@@ -359,7 +364,7 @@
 						const list = parseList(text);
 						if (list) onCommit(list);
 					}}
-					disabled={driven}
+					disabled={driven || anyElementDriven}
 					spellcheck={false}
 					aria-label={`${paramName} as a list`}
 					data-testid="param-list"

@@ -509,8 +509,43 @@ test('a colour param is picked, and its alpha slid', async ({ page }) => {
 		await expect.poll(text).toMatch(/threshold\.above = \[1, 0, 0\.25, 0\.4\]/);
 		await above.getByTestId('param-element-mode-constant-1').click();
 		await expect.poll(text).not.toMatch(/above\[1\] = expr:/);
+		// An element left driven makes the whole colour driven: the picker is disabled rather than
+		// writing a literal the driven channel would snap away from.
+		await above.getByTestId('param-element-mode-expression-0').click();
+		await expect.poll(text).toMatch(/above\[0\] = expr: 1/);
+		await above.getByTestId('param-view-color').click();
+		await expect(picker.getByRole('button')).toBeDisabled();
+		await above.getByTestId('param-view-vector').click();
+		await above.getByTestId('param-element-mode-constant-0').click();
+		await expect.poll(text).not.toMatch(/above\[0\] = expr:/);
 		await above.getByTestId('param-view-color').click();
 		await expect(above.getByTestId('param-list')).toHaveValue('[1, 0, 0.25, 0.4]');
+		// Back in colour view the picker drives the same list: a drag on the alpha strip holds.
+		await picker.getByRole('button').click();
+		const strip = page.getByTestId('color-alpha');
+		const sbox = (await strip.boundingBox())!;
+		await page.mouse.move(sbox.x + sbox.width * 0.4, sbox.y + sbox.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(sbox.x + sbox.width * 0.9, sbox.y + sbox.height / 2, { steps: 5 });
+		await page.mouse.up();
+		await expect.poll(text).toMatch(/threshold\.above = \[1, 0, 0\.25, 0\.[89]\d*\]/);
+		// The square and the hue strip hold too, with the row open and after a second switch.
+		await page.keyboard.press('Escape');
+		await above.getByTestId('param-view-vector').click();
+		await above.getByTestId('param-view-color').click();
+		await picker.getByRole('button').click();
+		const hbox = (await page.getByTestId('color-hue').boundingBox())!;
+		await page.mouse.move(hbox.x + hbox.width * 0.1, hbox.y + hbox.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(hbox.x + hbox.width * 0.5, hbox.y + hbox.height / 2, { steps: 6 });
+		await page.mouse.up();
+		const qbox = (await page.getByTestId('color-square').boundingBox())!;
+		await page.mouse.move(qbox.x + qbox.width * 0.9, qbox.y + qbox.height * 0.9);
+		await page.mouse.down();
+		await page.mouse.move(qbox.x + qbox.width * 0.95, qbox.y + qbox.height * 0.1, { steps: 6 });
+		await page.mouse.up();
+		await expect.poll(text).toMatch(/threshold\.above = \[0\.[01]\d*, 0\.[89]\d*, 0\.[89]\d*, 0\.[89]\d*\]/);
+		await page.keyboard.press('Escape');
 		await expectIntact(page, 'a colour row');
 	} finally {
 		await tearDown(page);
