@@ -27,6 +27,14 @@ interface remains in `sdk/README.md`. Implementation and bundle moves have not s
   object-fetch boundary for private indexing remains open below.
 - Only whole bundles can be installed. A node inspection can offer its containing bundle's
   install action, but there is no node-only selection or node-install operation.
+- Bundles can be installed individually from a repo. Use Git's partial clone
+  (`--filter=blob:none`) with cone-mode sparse checkout to obtain selected bundle folders,
+  repo-root files and explicitly required shared helper folders. GitHub supports this combination:
+  [GitHub sparse checkout and partial clones](https://github.blog/open-source/git/bring-your-monorepo-down-to-size-with-sparse-checkout/).
+  Keep one Git checkout per repo. Installing another bundle expands that checkout; it does not
+  make a second clone or install the repo's other bundles. Git metadata is still repo-wide.
+  Store installed bundle IDs once; derive goofi's sparse selection from them and their required
+  helper folders. A checked-out helper folder does not itself become an installed bundle.
 - A bundle's plus button automatically obtains the repo, installs its Python requirements,
   compiles its Rust nodes and prepares/registers its node types. No separate user clone, build
   or refresh command is required. Installing another bundle reuses the same repo checkout.
@@ -117,6 +125,10 @@ This is the concrete proposal for review, not a second package system:
   helpers can be outside a bundle if referenced explicitly. Do not translate dependencies into
   another goofi-specific dependency list. Cargo has standard workspace and metadata facilities:
   [Cargo workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html).
+- Each bundle's Cargo workspace must be usable without the other bundles being checked out.
+  Do not put all bundle crates in one repo-root workspace whose members must all be present.
+  Required shared helper directories must be identifiable without executing build code so goofi
+  can include them in the sparse checkout. Unrelated bundles remain uninstalled.
 - goofi binds engine SDK dependencies to the SDK sources of the running version and generates
   the small cdylib wrapper around each author crate's export. Authors need no absolute path to
   a goofi checkout and do not maintain SDK hash or loader symbols. Builtin and `_local` standalone
@@ -130,6 +142,21 @@ This is the concrete proposal for review, not a second package system:
 - Preparation errors remain visible per bundle/node. Whole-bundle installation does not make
   an unbuildable node disappear from the library. Read the checkout again on app start or an
   explicit refresh, including manual edits and changes to dependency files.
+
+The Git selection uses the standard commands below; these are examples, not actions taken in
+this planning session:
+
+```sh
+git clone --filter=blob:none --sparse <url> <repo-path>
+git -C <repo-path> sparse-checkout set --cone <bundle>
+git -C <repo-path> sparse-checkout add <another-bundle>
+```
+
+Partial clone defers file-content downloads until needed; sparse checkout selects the working
+folders. Sparse checkout alone does not reduce the initial clone's file-content transfer.
+Pulls still update the shared repo branch, so all installed bundles in it share one revision.
+See [Git clone](https://git-scm.com/docs/git-clone) and
+[Git sparse checkout](https://git-scm.com/docs/git-sparse-checkout).
 
 ## Order of work
 
@@ -159,35 +186,33 @@ This is the concrete proposal for review, not a second package system:
 
 ## Second-round questions and proposed defaults
 
-1. **Clone versus installed selection.** A clone contains every bundle folder. Recommended:
-   only bundles explicitly installed with plus are prepared and loaded; the others are available
-   in the catalogue. Store selected bundle IDs once. Removing one bundle keeps the checkout for
-   its siblings; source removal unregisters the source and is separate from uninstall.
-2. **Runtime type identity.** Recommended: include bundle identity in the node type ID so two
+1. **Runtime type identity.** Recommended: include bundle identity in the node type ID so two
    bundles can contain the same engine/name. For example, `signal:KairosHive/goofi-nodes/eeg/Foo`.
    Folder identity alone cannot provide this. Define short builtin IDs and `_local`, patch and
    plugin IDs consistently; remove old internal spellings directly, without aliases.
-3. **Private static indexing.** Existing Git authentication can fetch repo objects, but cannot
+2. **Private static indexing.** Existing Git authentication can fetch repo objects, but cannot
    supply a remote file tree through `ls-remote`. Recommended: fetch into a supervised temporary
    object store, statically read trees/source blobs, then retain only the index cache. No installed
    checkout is created. [Git fetch](https://git-scm.com/docs/git-fetch.html) supports shallow and
    filtered object transfers. If registration must also forbid object fetches, private indexing
    needs a separate GitHub API authentication path, outside the stated Git-only assumption.
-4. **Rust author layout.** Confirm ordinary author crates/workspaces plus goofi's generated ABI
+3. **Rust author layout.** Confirm ordinary author crates/workspaces plus goofi's generated ABI
    wrapper, as proposed above, rather than flattening an author's Cargo dependencies into every
    generated single-file node crate. Define exact metadata keys and SDK binding during design.
-5. **Static parser limits.** Recommended: index declarations that can be read without evaluation;
+4. **Static parser limits.** Recommended: index declarations that can be read without evaluation;
    mark computed ports/params/tags unknown until a local probe succeeds. Installation remains
    possible. Do not demand an additional authored catalogue manifest for arbitrary code.
-6. **Repo pull behavior.** Recommended: track the repo's current branch/upstream, check on explicit
+5. **Repo pull behavior.** Recommended: track the repo's current branch/upstream, check on explicit
    refresh or panel entry, and pull only on user action. Use fast-forward-only pulls; report local
    conflicts/divergence and leave them for manual Git resolution. No automatic reset, stash,
    merge or background pull. A pull prepares all installed bundles in that repo. Record actual
    revision and local modification status for inspection, without an independent version counter.
-7. **Removal and defaults.** Recommended: uninstall stops future loading of that bundle; keep the
-   user-editable checkout and shared Python packages. Offer explicit repo deletion separately.
+6. **Removal and defaults.** Recommended: uninstall stops future loading of that bundle and reduces
+   the sparse selection where files can be removed without losing user work. Keep the shared Git
+   checkout, downloaded Git objects and shared Python packages. Source removal unregisters the
+   source and is separate from uninstall. Offer explicit repo deletion separately.
    Register `KairosHive/goofi-nodes` by default, but install no external bundle automatically.
-8. **Patch source semantics.** Recommended: keep `_local`/patch-authored source inside `.gfi` as
+7. **Patch source semantics.** Recommended: keep `_local`/patch-authored source inside `.gfi` as
    today; external nodes name their bundle/type and show missing dependencies on load. Describe
    the revision used but load the current installed checkout. Do not silently pull or install on
    patch load. Assign a patch-owned bundle identity without moving its workspace into the home.
