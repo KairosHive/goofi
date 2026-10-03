@@ -36,10 +36,9 @@ export type RowPlan = {
 	list: boolean;
 	/** Open: one row per entry, each with a source of its own. */
 	elements: boolean;
-	/** Open: the editor of the source that drives the whole. */
+	/** Open: the editor of the source that drives the whole. The entry view shows the entries only. */
 	source: 'expression' | 'reference' | null;
-	/** Open: the whole's C/E/R, trigger and MIDI learn. Entry rows stand in for it, unless a whole
-	 *  source is set and must stay reachable to be released. */
+	/** Open: the whole's C/E/R, trigger and MIDI learn. Entry rows stand in for it. */
 	foot: boolean;
 };
 
@@ -56,7 +55,8 @@ export function rowPlan(d: ParamDescriptor, view: RowView): RowPlan {
 	const individual = entries && view.individual;
 	const driven = d.mode !== 'constant';
 	const anyEntryDriven = (d.elements ?? []).some((e) => e.mode !== 'constant');
-	const source = view.picking || d.mode === 'reference' ? 'reference' : d.mode === 'expression' ? 'expression' : null;
+	const whole = view.picking || d.mode === 'reference' ? 'reference' : d.mode === 'expression' ? 'expression' : null;
+	const source = individual ? null : whole;
 	return {
 		face: kind === 'color' && individual ? 'vector' : kind,
 		viewSwitch: entries,
@@ -64,6 +64,6 @@ export function rowPlan(d: ParamDescriptor, view: RowView): RowPlan {
 		list: entries && !individual && source === null,
 		elements: individual,
 		source,
-		foot: !individual || driven
+		foot: !individual
 	};
 }

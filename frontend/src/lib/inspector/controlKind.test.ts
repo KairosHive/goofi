@@ -154,8 +154,8 @@ describe('rowPlan', () => {
 		expect(p).toMatchObject({ face: 'vector', elements: true, list: false, foot: false, disabled: false });
 	});
 
-	it('keeps the whole foot reachable in the entry view while a whole source is set', () => {
-		expect(rowPlan(colour({ mode: 'reference', reference: 'a.out' }), entries)).toMatchObject({ foot: true, source: 'reference' });
+	it('shows the entries alone while a whole source is set; the list view releases it', () => {
+		expect(rowPlan(colour({ mode: 'reference', reference: 'a.out' }), entries)).toMatchObject({ foot: false, source: null, elements: true });
 	});
 
 	it('disables the list face while an entry has a source of its own', () => {

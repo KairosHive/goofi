@@ -306,6 +306,7 @@
 									{step}
 									scrub
 									disabled={elementDisabled(i)}
+									title={driven ? 'A source drives the whole list; see the list view' : undefined}
 									data-param-edit
 									data-testid={`param-element-number-${i}`}
 								/>
