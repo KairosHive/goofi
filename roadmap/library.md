@@ -1,8 +1,8 @@
 # The node library
 
 Find, inspect, filter and install node bundles in goofi. The library includes builtin nodes,
-installed external nodes, saved local nodes and nodes available from registered GitHub sources.
-Implementation plan agreed 2026-10-03. This entry owns node distribution and the remaining
+installed external nodes, saved local nodes and nodes available from registered Git sources.
+Implementation plan agreed 2026-10-03, decisions refined 2026-10-04. This entry owns node distribution and the remaining
 node-content work for graphics, fractal textures, simulation and timbre. The plugin interface
 remains in `sdk/README.md`. All local-library stages are pending; no nodes have moved and no
 implementation builds have run. Deferred release and node-content work follows the local plan
@@ -10,19 +10,40 @@ and is not part of the current build scope.
 
 ## Decisions
 
-- Only `signal`, `audio` and `graphics` stay builtin. The ten bundles that move to
-  `../goofi-nodes` are `biotuner`, `complexity`, `computer-vision`, `eeg`, `harmonic-geometry`,
-  `image`, `image-generation`, `inception`, `ml` and `simulation`. Its GitHub repo is
-  `KairosHive/goofi-nodes`. Bundle-specific nodes stay with their bundle, regardless of engine.
+- `signal`, `audio`, `graphics` and `eeg` stay builtin (decided 2026-10-04). The nine bundles
+  that move to `../goofi-nodes` are `biotuner`, `complexity`, `computer-vision`,
+  `harmonic-geometry`, `image`, `image-generation`, `inception`, `ml` and `simulation`. Its
+  GitHub repo is `KairosHive/goofi-nodes`. Bundle-specific nodes stay with their bundle,
+  regardless of engine.
 - Every node belongs to a bundle. A bundle is a folder of node sources and required files; it
   can contain nodes for more than one engine. It does not require a plugin package.
-- Node type IDs include the engine, bundle identity and node name, so equal names in different
-  bundles can coexist. An external example is `signal:KairosHive/goofi-nodes/eeg/Foo`. Use the
-  same structured model for builtin, `_local`, patch and plugin bundles. Update internal callers
-  and archives directly; do not add old-ID aliases.
-- External repo checkouts live in `~/.goofi/nodes/<uname>/<repo>/`, with one folder per bundle.
-  The installed bundle path and displayed identity are `<uname>/<repo>/<bundle>`. Node files
-  at a repo root are invalid; repo-level README, licence, Cargo files and helper files are allowed.
+- A node type ID is `<engine>:<source>/<Name>`, where `<source>` names the kind of node source
+  and its identity. Builtin nodes have no source segment, because names are unique within an
+  engine: `signal:Psd`. The other kinds are `local/<Name>` for `_local`, `patch/<Name>` for
+  patch-authored nodes, `plugin/<plugin>/<Name>` for a plugin's `nodes/` folder and
+  `repo/<host>/<uname>/<repo>/<bundle>/<Name>` for an installed bundle, for example
+  `signal:repo/github.com/KairosHive/goofi-nodes/biotuner/Peaks`. Equal names in different
+  sources coexist. Update internal callers and archives directly; do not add old-ID aliases.
+- The ID grammar is for sourcing and identification only. The frontend never shows a full ID:
+  it categorizes nodes by their source and shows the node name, with the bundle name when the
+  node comes from a bundle. Ops accept a short name when it is unique across the loaded
+  catalogue; an ambiguous short name is an error that lists the matching nodes with full IDs.
+- A source is any repo that Git can clone with `--filter=blob:none` and sparse checkout,
+  given as a clone URL or a `<uname>/<repo>` GitHub shorthand, with an optional `@<ref>` for a
+  branch or tag. GitHub, GitLab and self-hosted Git are the same path; a host that Git cannot
+  clone is not supported. One registration per repo; registering the same repo with another
+  ref replaces the ref, and the checkout follows that ref.
+- The repo identity is `<host>/<uname>/<repo>`, derived from the clone URL once at the boundary.
+  External repo checkouts live in `~/.goofi/nodes/<host>/<uname>/<repo>/`, with one folder per
+  bundle; the panel shows `<uname>/<repo>/<bundle>` and adds the host only when it is not
+  `github.com`. Node files at a repo root are invalid; repo-level README, licence, Cargo files
+  and helper files are allowed.
+- A bundle can declare example patches: `.gfi` files in `<bundle>/examples/`, for builtin and
+  external bundles alike. The library lists a bundle's examples with it, and the public demo
+  offers the examples of the loaded bundles. The repo-root `examples/` folder goes away: the
+  four EEG examples move to `node-bundles/eeg/examples/`, `musical-features` moves with
+  `biotuner` and `harmonic-observatory` is deleted (decided 2026-10-04; it also depended on a
+  node that no bundle declares).
 - `~/.goofi/nodes/_local/` is the reserved local bundle, outside the repo hierarchy. goofi saves
   patch-authored nodes here. Replace `.goofi/custom/` directly, without a compatibility path.
   No repo can replace `_local`.
@@ -61,7 +82,8 @@ and is not part of the current build scope.
   behavior. Leave conflicts/divergence to manual Git; no automatic stash, reset or merge.
 - Uninstall removes the selection and reduces sparse paths when safe. Keep the shared checkout,
   Git objects and Python packages. Source unregistration does not uninstall its bundles.
-- The first-party repo is available by default; no external bundles install by default.
+- No source is registered by default, `KairosHive/goofi-nodes` included. The user adds it like
+  any other source; setup documentation names it. A fresh home contacts no remote.
 - Patch load uses current installed source, reports missing bundles and does not automatically
   install/pull. Record external requirements and observed revision. `_local` and patch-authored
   source remain portable inside the archive.
@@ -92,7 +114,16 @@ and is not part of the current build scope.
 
 - `backend/goofi-bridge/build.rs` embeds all 13 bundle folders and prebuilds their Rust files.
   `materialise_shipped`, development setup and boot requirements treat all of them as shipped.
-  Restrict these paths and CI to the three builtin bundles.
+  Restrict these paths and CI to the four builtin bundles.
+- `goofi-build` makes every generated crate its own `[workspace]` root, so an author bundle's
+  `Cargo.lock` and `[patch]` tables would be ignored if the wrapper were the root. Stage 4 must
+  settle how the wrapper joins the author's resolution (build inside the author workspace with
+  the SDK bound through `--config` patches, or adopt the author lock into the wrapper).
+- `examples/*.gfi` and the demo's example listing read the repo-root folder; the Dockerfile on
+  `demo` fetches the EDF sample for `eeg_playback.py`, which stays builtin.
+- The website generator reads node declarations from a goofi checkout daily. After the move it
+  must also read `../goofi-nodes`, or the moved bundles vanish from the site. Transfer this to
+  the website backlog in Stage 7; do not change the website here.
 - `AppState::node_roots` scans shipped/extra roots, plugin node folders and the custom folder;
   `rescan` adds patch `nodes_<engine>` folders last. A later file wins `engine:Name`. Root folder
   names supply labels and all roots appear builtin. Nested repo discovery and full bundle
@@ -116,7 +147,9 @@ and is not part of the current build scope.
   The add menu receives the live catalogue. Add the library panel through the app panel system
   and use the same operations for all controls.
 - `../goofi-nodes` currently contains only a README and licence. Test dependencies include
-  cross-engine cases: the audio catalogue expects `BioFilter` from `biotuner`.
+  cross-engine cases: the audio catalogue expects `BioFilter` from `biotuner`. Nineteen test
+  files reference `eeg` nodes, which stay; `biotuner`, `computer-vision`, `ml` and `simulation`
+  are referenced by three to six test files each.
 
 ## Bundle convention
 
@@ -128,6 +161,7 @@ Use ordinary source folders, Python requirements and Cargo files:
     LICENSE
     <bundle>/
         README.md              # optional bundle description
+        examples/              # optional example patches (.gfi)
         example.py             # Python node source
         Example.wgsl           # shader source with its existing data header
         requirements.txt       # optional, both shared Python environments
@@ -143,6 +177,8 @@ Use ordinary source folders, Python requirements and Cargo files:
 ```
 
 - Keep Python and WGSL node sources at bundle level, as now. Helper directories are not bundles.
+  Python helper modules live inside their bundle; only Rust helper crates can be outside it,
+  because a Cargo path dependency names them statically.
   Rust node crates belong to the containing bundle and declare engine/source identity through
   Cargo metadata. Static parsing follows that declaration and reads source; it never runs
   `build.rs`, imports Python or expands executable code to index a source.
@@ -235,7 +271,7 @@ Follow `AGENTS.md` throughout this change:
 
 | State | Owner and storage | Derived consumers |
 | --- | --- | --- |
-| Registered repo URLs and installed bundle IDs | One library state file in the home, written by the library owner | CLI, app, sparse selection |
+| Registered sources (URL, optional ref) and installed bundle IDs | One library state file in the home, written by the library owner | CLI, app, sparse selection |
 | Repo source, branch, commit and local edits | Git checkout under `nodes/<uname>/<repo>/` | Update status, source inspection |
 | Authored local node source | `nodes/_local/`, managed through the library | Saved patches and node preparation |
 | Patch-authored source and graph | Existing patch workspace and manager | Patch bundle and live node catalogue |
@@ -258,9 +294,10 @@ its tested changes are committed. Keep the stage status and remaining work in th
 
 Status: pending.
 
-- Introduce typed repo, bundle and node identities. Use `<uname>/<repo>/<bundle>` for external
-  bundles and include bundle identity in runtime node type IDs. Give builtin, `_local`, patch
-  and plugin nodes explicit bundle identities under the same model.
+- Introduce typed source, repo, bundle and node identities with the `<engine>:<source>/<Name>`
+  grammar above. Builtin IDs stay `<engine>:<Name>`; `_local`, patch, plugin and repo nodes carry
+  their source segment. Parse and print the grammar in one place.
+- Resolve short names in ops: unique names resolve, ambiguous names fail with the candidate IDs.
 - Add the managed nodes root and `_local` through `goofi_supervisor::layout`. Replace
   `custom_nodes`, `AppState::custom` and their scan/save/inspect/archive callers together.
 - Update engine registration, graph resolution, schemas, generated frontend types, node editing,
@@ -270,7 +307,7 @@ Status: pending.
   in separate bundles; a duplicate declaration within one bundle must report an error.
 - Normalize scan roots to explicit bundle identity. Remove duplicated folder-name/provenance
   guessing; do not leave engine callers to derive their own identities.
-- Delete existing test cases that depend on the ten external product bundles when first affected.
+- Delete existing test cases that depend on the nine external product bundles when first affected.
   Do not rewrite those cases for the new type IDs only to delete them at the bundle move stage.
 
 Checkpoint: two bundles with equal node names resolve independently. `_local` save, rename,
@@ -307,6 +344,9 @@ Status: pending.
 
 - Add one scanner for repo trees and local bundle sources. Parse Python declarations/docstrings,
   Rust source and Cargo metadata, and WGSL data headers. Reuse existing declaration validation.
+  Define the Cargo metadata schema here (engine, node name, export), since the index reads it;
+  Stage 4 consumes it.
+- List `<bundle>/examples/*.gfi` in the bundle record without opening the archives.
 - Detect top-level bundle folders, reject node declarations at a repo root and distinguish helper
   directories from bundles. Read metadata statically; never run Python, `build.rs` or node code.
 - Follow declared node source paths and statically identifiable helper files. Read only the files
@@ -327,8 +367,9 @@ in `goofi-tests`; retain real local probes for preparation rather than a second 
 Status: pending.
 
 - Support the accepted bundle-local Cargo package/workspace convention and per-node author
-  crates. Define the small Cargo identity/source metadata schema. Authors use ordinary dependency
-  tables, features and helper crates; goofi supplies runtime SDK bindings and generated ABI wrappers.
+  crates using the Stage 3 metadata schema. Authors use ordinary dependency tables, features and
+  helper crates; goofi supplies runtime SDK bindings and generated ABI wrappers. Prototype how
+  the wrapper honours the author's `Cargo.lock` before building on it.
 - Keep one build owner for standalone builtin/patch/`_local` source and external author crates.
   Preserve SDK version/hash validation and the existing dynamic-library loading boundary.
 - Permit Cargo to resolve dependencies outside the builtin vendor set. Do not apply the current
@@ -354,6 +395,8 @@ Status: pending.
 
 - Add Git resolution/checks through `layout::Tool` for the local version and update development
   prerequisites. Use the user's installed authenticated Git. Do not build a GitHub login flow.
+- Parse source specs once: clone URL or GitHub shorthand, optional `@<ref>`, repo identity
+  `<host>/<uname>/<repo>`. Tests use a local filtered remote, which is an ordinary host.
 - Implement source registration/refresh using temporary filtered Git object stores, with no
   working checkout. Keep only index data, commit ID and index timestamp after cleanup. Reuse
   an unchanged committed index; use existing repo objects when a persistent checkout exists.
@@ -394,6 +437,8 @@ Status: pending.
 - Permit effects while nodes are active. Use existing refresh/restart behavior where it applies;
   a goofi restart is accepted recovery for unreplaced code/shared dependencies. Do not add a
   watcher, hot-swap framework or active-patch operation lockout.
+- Serve example patches from `<bundle>/examples/` of the loaded bundles; remove the repo-root
+  `examples/` route when the eeg examples have moved.
 - Record external bundle/type requirements and observed revision in `.gfi`. Load the current
   installed checkout, keep missing nodes visible with their bundle named, and never silently
   install or pull on patch load. Keep `_local` and patch-authored source in archives as before.
@@ -405,14 +450,15 @@ manual source changes take effect after preparation. Verify `_local` portability
 bundle visibility, current-checkout loading and clean patch state through public sessions. Extend
 relevant socket sessions when the catalogue payload or event behavior changes.
 
-### Stage 7 — Move the ten external bundles and delete their core tests
+### Stage 7 — Move the nine external bundles and delete their core tests
 
 Status: pending.
 
-- Inspect both checkouts and preserve other work. Move the ten decided bundle folders into
-  `../goofi-nodes`, including helpers, requirements, assets, documentation and licences.
+- Inspect both checkouts and preserve other work. Move the nine decided bundle folders into
+  `../goofi-nodes`, including helpers, requirements, assets, documentation and licences, with
+  `musical-features.gfi` under `biotuner/examples/`. Delete `harmonic-observatory.gfi`.
   Convert their Rust nodes to the agreed Cargo convention. Do not change the website.
-- Embed and prebuild only `signal`, `audio` and `graphics`. Restrict development setup, shipped
+- Embed and prebuild only `signal`, `audio`, `graphics` and `eeg`. Restrict development setup, shipped
   requirements, boot checks, CI caches and release smoke tests to that builtin set. Remove
   obsolete in-repo references and assumptions rather than adding source-path fallbacks.
 - Delete every existing goofi test case that depends on the moved product nodes, including
@@ -422,13 +468,13 @@ Status: pending.
 - Keep new library contract tests based on their small controlled repos; these test the library,
   not the removed external product behavior. No external product test project or cross-repo
   CI service is required in this feature.
-- Register `KairosHive/goofi-nodes` as the default available source. Install no external bundle
-  automatically. Verify that the external checkout fits the scanner/build convention before
+- Register no default source. Name `KairosHive/goofi-nodes` in the setup documentation as the
+  source to add. Verify that the external checkout fits the scanner/build convention before
   considering the move complete. Local verification can use the checkout before it is published.
 - Update setup instructions and plugin/library documentation. Transfer the external bundles'
-  deferred node-content backlog below to `../goofi-nodes` with their sources. Keep graphics
-  work here because graphics stays builtin. Keep distribution work and website instructions
-  deferred.
+  deferred node-content backlog below to `../goofi-nodes` with their sources, and the website
+  generator's second source root to the website backlog. Keep graphics work here because
+  graphics stays builtin. Keep distribution work and website instructions deferred.
 
 Checkpoint: a fresh goofi contains only builtin nodes and runs without the moved bundles' packages.
 The separate repo indexes correctly; individual bundle installs use the standard library path.
@@ -442,7 +488,9 @@ Status: pending.
 - Register a library app panel through the existing shared panel vocabulary. Keep `panelty` in
   charge of panel layout/mechanics and use existing UI primitives and root tokens.
 - Show builtin, `_local`, installed and available bundle/node records with inspection and useful
-  search/filter controls. Display external bundles as `<uname>/<repo>/<bundle>`.
+  search/filter controls. Group by source kind; show node and bundle names, never full type IDs.
+  Display external bundles as `<uname>/<repo>/<bundle>`, with the host when it is not GitHub.
+  List a bundle's example patches with it.
 - Add source register/unregister, whole-bundle plus/remove, repo update check/pull and preparation
   status/errors. A node detail offers its bundle's install action. No node-only installation,
   favourites, hiding, publishing service or second dependency management UI.
@@ -684,7 +732,8 @@ Existing nodes and host dependencies:
 ## Continuation after context compaction
 
 - Read this file and `AGENTS.md`, then inspect the current diffs in goofi and `../goofi-nodes`.
-- All stages are pending. The approved architecture is the decisions/convention/lifecycle above;
+- All stages are pending. The approved architecture is the decisions/convention/lifecycle above,
+  with the 2026-10-04 decisions on the builtin set, ID grammar, sources and examples;
   no additional product approval is needed to implement it when the user resumes the build.
 - Roadmap maintenance does not start implementation. Wait for the user's resume instruction.
 - Work through the stage checkpoints on `main`, preserve shared changes, and commit tested work
