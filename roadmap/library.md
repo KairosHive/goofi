@@ -21,8 +21,8 @@ and is not part of the current build scope.
   and its identity. Builtin nodes have no source segment, because names are unique within an
   engine: `signal:Psd`. The other kinds are `local/<Name>` for `_local`, `patch/<Name>` for
   patch-authored nodes, `plugin/<plugin>/<Name>` for a plugin's `nodes/` folder and
-  `repo/<host>/<uname>/<repo>/<bundle>/<Name>` for an installed bundle, for example
-  `signal:repo/github.com/KairosHive/goofi-nodes/biotuner/Peaks`. Equal names in different
+  `repo/<uname>/<repo>/<bundle>/<Name>` for an installed bundle, for example
+  `signal:repo/KairosHive/goofi-nodes/biotuner/Peaks`. Equal names in different
   sources coexist. Update internal callers and archives directly; do not add old-ID aliases.
 - The ID grammar is for sourcing and identification only. The frontend never shows a full ID:
   it categorizes nodes by their source and shows the node name, with the bundle name when the
@@ -33,11 +33,12 @@ and is not part of the current build scope.
   branch or tag. GitHub, GitLab and self-hosted Git are the same path; a host that Git cannot
   clone is not supported. One registration per repo; registering the same repo with another
   ref replaces the ref, and the checkout follows that ref.
-- The repo identity is `<host>/<uname>/<repo>`, derived from the clone URL once at the boundary.
-  External repo checkouts live in `~/.goofi/nodes/<host>/<uname>/<repo>/`, with one folder per
-  bundle; the panel shows `<uname>/<repo>/<bundle>` and adds the host only when it is not
-  `github.com`. Node files at a repo root are invalid; repo-level README, licence, Cargo files
-  and helper files are allowed.
+- The repo identity is `<uname>/<repo>`, derived from the clone URL once at the boundary. The
+  host is not part of it; two hosts with the same `<uname>/<repo>` cannot both be registered,
+  which is accepted. External repo checkouts live in `~/.goofi/nodes/<uname>/<repo>/`, with one
+  folder per bundle; the installed bundle path and displayed identity are `<uname>/<repo>/<bundle>`.
+  Node files at a repo root are invalid; repo-level README, licence, Cargo files and helper
+  files are allowed.
 - A bundle can declare example patches: `.gfi` files in `<bundle>/examples/`, for builtin and
   external bundles alike. The library lists a bundle's examples with it, and the public demo
   offers the examples of the loaded bundles. The repo-root `examples/` folder goes away: the
@@ -396,7 +397,7 @@ Status: pending.
 - Add Git resolution/checks through `layout::Tool` for the local version and update development
   prerequisites. Use the user's installed authenticated Git. Do not build a GitHub login flow.
 - Parse source specs once: clone URL or GitHub shorthand, optional `@<ref>`, repo identity
-  `<host>/<uname>/<repo>`. Tests use a local filtered remote, which is an ordinary host.
+  `<uname>/<repo>`. Tests use a local filtered remote, which is an ordinary host.
 - Implement source registration/refresh using temporary filtered Git object stores, with no
   working checkout. Keep only index data, commit ID and index timestamp after cleanup. Reuse
   an unchanged committed index; use existing repo objects when a persistent checkout exists.
@@ -489,7 +490,7 @@ Status: pending.
   charge of panel layout/mechanics and use existing UI primitives and root tokens.
 - Show builtin, `_local`, installed and available bundle/node records with inspection and useful
   search/filter controls. Group by source kind; show node and bundle names, never full type IDs.
-  Display external bundles as `<uname>/<repo>/<bundle>`, with the host when it is not GitHub.
+  Display external bundles as `<uname>/<repo>/<bundle>`.
   List a bundle's example patches with it.
 - Add source register/unregister, whole-bundle plus/remove, repo update check/pull and preparation
   status/errors. A node detail offers its bundle's install action. No node-only installation,
