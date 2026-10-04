@@ -271,3 +271,24 @@ Under the `machine` phrase, all commands with inverses unless marked:
   slot.
 - Audio-rate easing in the machine.
 - Hierarchical or nested machines. Several machines in one patch compose through variables.
+
+## Stages and continuation after context compaction
+
+Build in this order. Each stage ends at a tested commit, with the full local checks green, and
+is a point to compact the context. Read this file and `AGENTS.md` first; inspect the diff since
+the last stage's commit; keep this file current by deleting what has shipped.
+
+1. **Control data.** `Data` as the one value, arrays and strings only; `control::read` as the
+   one conversion; `VariableValue` and `Scalar` removed; the document literal and the archive
+   file for a wide array. Report the line delta.
+2. **Variables as producers.** The `variables` base, services with a history of one, the
+   reducer and data worker generalized, values off the document and off the graph lock, the
+   frontend on `/data/variables/<name>`, the paint pad over an array. Report the line delta.
+3. **Expressions, one way.** The reference mode removed, the bare predicate, the expression
+   worker in `goofi-runtime` for all three engines with latest-wins handover, the evaluator's
+   bytes path, variable expressions. Report the line delta; stages 1 to 3 together must not
+   add net lines.
+4. **Machines.** The model, the ops, the `goofi-machines` thread, the situation.
+5. **The panel.** The canvas, the cards, the dot, the side pane, the Playwright sessions.
+
+Roadmap maintenance does not start implementation. Wait for the user's build instruction.
