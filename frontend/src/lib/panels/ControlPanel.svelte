@@ -240,7 +240,8 @@
 	onDestroy(() => { if (variableGrab) cancelVariable(); });
 
 	function down(e: PointerEvent, gv: VariableView, resize: boolean): void {
-		if (!edit || !board) return;
+		// The cell hears its press directly, before any delegated handler on a corner could stop it.
+		if (!edit || !board || (e.target as Element).closest('.zap, .learn, .rename')) return;
 		picked = gv.name;
 		if (!resize) grabVariable(e, gv);
 		drag = { name: gv.name, from: cellOf(gv), x: e.clientX, y: e.clientY, units: unitsOf(board), resize, to: null };
@@ -370,7 +371,7 @@
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape' && variableGrab) { drag = null; cancelVariable(); } }} />
 
-{#snippet widget(c: ControlView, value: Value, label: string, onChange: (v: Value) => unknown, name = '', onInput?: (v: number) => unknown)}
+{#snippet widget(c: ControlView, value: Value, label: string, onChange: (v: Value) => unknown, name = '', onInput?: (v: Value) => unknown)}
 	{#if c.kind === 'knob'}
 		<Knob {label} value={num(value)} min={c.min ?? 0} max={c.max ?? 1} step={c.step ?? 0} {onChange} {onInput} />
 	{:else if c.kind === 'slider'}
@@ -384,7 +385,7 @@
 	{:else if c.kind === 'paint'}
 		<PaintPad value={variableImage(name)} onStroke={(ops) => name && g.paintControl(group, name.slice(group.length + 1), ops)} />
 	{:else}
-		<TextInput multiline value={String(value ?? '')} aria-label={label} {onChange} />
+		<TextInput multiline value={String(value ?? '')} aria-label={label} {onChange} {onInput} />
 	{/if}
 {/snippet}
 
@@ -486,7 +487,7 @@
 							class:broken={gv.source?.error !== undefined}
 							title={gv.source ? gv.source.error ?? `Follows ${gv.source.reference}` : held.value ? 'Value-locked' : undefined}
 						>
-							{@render widget(c, c.kind === 'paint' ? null : variableValue(gv.name), gv.element, (v) => commitValue(gv, v), gv.name, (v) => g.previewVariableValue(gv.name, v))}
+							{@render widget(c, c.kind === 'paint' ? null : variableValue(gv.name), gv.element, (v) => commitValue(gv, v), gv.name, (v) => v !== null && g.previewVariableValue(gv.name, v))}
 						</div>
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<span
@@ -501,8 +502,7 @@
 							>{gv.element}</span
 						>
 						{#if renaming === gv.name}
-							<!-- svelte-ignore a11y_no_static_element_interactions -->
-							<div class="rename" onpointerdown={(e) => e.stopPropagation()}>
+							<div class="rename">
 								<TextInput
 									inputmode="search"
 									data-testid="control-rename"
@@ -523,14 +523,12 @@
 									<MidiLearn label={gv.element} target={`control:${gv.name}`} testid="control-learn" onLearn={learn(gv)} />
 								</div>
 							{/if}
-							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<button
 								type="button"
 								class="zap"
 								data-testid="control-delete"
 								title="Delete {gv.element}"
 								aria-label="Delete {gv.element}"
-								onpointerdown={(e) => e.stopPropagation()}
 								onclick={() => void g.removeControl(group, gv.element)}><Icon name="x" /></button
 							>
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -726,7 +724,7 @@
 		/* Three numbers share one field's row, so each takes its share rather than a fixed width. */
 		--number-width: 100%;
 	}
-	/* A bare red cross over the widget's corner, no box of its own; its press must not start a drag. */
+	/* A bare red cross over the widget's corner, no box of its own. */
 	.zap {
 		position: absolute;
 		top: 0;

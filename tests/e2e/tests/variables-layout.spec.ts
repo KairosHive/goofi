@@ -123,6 +123,22 @@ test('variables group markers stay at the right edge on desktop and touch', asyn
 		await panel.locator('[data-group="group0"]').getByTestId('variable-group-name').press('Escape');
 		await panel.getByTestId('variable-add-group-btn').tap();
 		await expect(panel.locator('[data-group="group1"]').getByTestId('variable-group-name')).toBeFocused();
+		// A list taller than the panel scrolls inside it: the panel keeps its height and the last
+		// row comes into view.
+		await page.setViewportSize({ width: 390, height: 500 });
+		await page.evaluate(async () => {
+			const g = (window as any).goofi;
+			for (let i = 0; i < 24; i += 1) await g.commands.addVariable(`renamed.row${i}`, i);
+		});
+		await expect(group.getByTestId('variable-row')).toHaveCount(26);
+		const panelBox = (await panel.boundingBox())!;
+		expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(500);
+		const scroller = panel.locator('.ui-scrollarea');
+		expect(await scroller.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+		const last = group.locator('[data-name="renamed.row23"]');
+		await last.scrollIntoViewIfNeeded();
+		await expect(last).toBeInViewport();
+		expect(await scroller.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
 
 	} finally {
 		await restorePanelType(page);

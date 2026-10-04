@@ -9,6 +9,7 @@
 	let {
 		value,
 		onChange,
+		onInput,
 		inputmode = 'text',
 		multiline = false,
 		class: klass = '',
@@ -17,6 +18,8 @@
 	}: Omit<HTMLInputAttributes, 'value' | 'type' | 'inputmode' | 'oninput' | 'onchange'> & {
 		value: string;
 		onChange: (v: string) => void;
+		/** Each key, before the blur commits it. */
+		onInput?: (v: string) => void;
 		inputmode?: InputModeVariant;
 		/** A `<textarea>`, where Enter is a newline and never a commit. */
 		multiline?: boolean;
@@ -26,7 +29,8 @@
 	const fieldId = claimFieldControlId(ownId);
 	const live = useLiveValue<string>(
 		() => value,
-		(v) => onChange(v)
+		(v) => onChange(v),
+		(v) => onInput?.(v)
 	);
 	const modeAttrs = $derived(MODE_ATTRS[inputmode]);
 	const blur = () => {

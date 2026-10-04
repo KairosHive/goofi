@@ -645,6 +645,22 @@ test.describe('the control socket', () => {
 					await g.commands.removeVariable('review.picture');
 				});
 			});
+			await test.step('a text widget writes each key, and its cross removes it', async () => {
+				await rawCall(page, 'control add', { group: 'review', kind: 'text', element: 'note', x: 0, y: 0, w: 6, h: 3 });
+				const widget = page.getByTestId('control-review-note');
+				const held = () =>
+					page.evaluate(() => (window as any).goofi.query.variables().find((e: any) => e.name === 'review.note')?.value);
+				const box = widget.locator('textarea');
+				await box.click();
+				await box.pressSequentially('hi');
+				// The value lands while the box still has the focus: no blur between a key and the write.
+				await expect.poll(held).toBe('hi');
+				await expect(box).toBeFocused();
+				await page.getByTestId('control-edit-toggle').click();
+				await widget.getByTestId('control-delete').click();
+				await expect(widget).toHaveCount(0);
+				await expect.poll(held).toBeUndefined();
+			});
 
 		} finally {
 			await restorePanelType(page);
