@@ -397,8 +397,9 @@
 		left: -11px;
 		width: 22px;
 	}
+	/* A list input is the outline alone; its hollow is the canvas, so the border passes behind it. */
 	.conn.in.multi :global(.svelte-flow__handle)::before {
-		background: transparent;
+		background: var(--bg);
 		border: 2px solid var(--dtype, var(--border-strong));
 	}
 	/* An output's hit area runs from its label to 11px past the border. The box is padded so the
