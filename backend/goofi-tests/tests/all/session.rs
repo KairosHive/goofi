@@ -25,14 +25,14 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     g.link(osc, "out", buf, "input");
     g.link(buf, "out", sink, "input");
 
-    g.call("variable entry add", j!({ "name": "patch.gain", "value": 2.0, "type": "float" }));
+    g.call("variable entry add", j!({ "name": "patch.gain", "value": 2.0 }));
     g.call("node param edit", j!({ "node": hex(sink), "param": "buffer/size",
                                    "expression": "variables.patch.gain * 64" }));
     // A control element is a variable that carries a widget, and the archive carries the record.
     g.call("variable entry edit", j!({ "name": "patch.gain", "control":
         { "kind": "knob", "min": 0.0, "max": 4.0, "step": 0.01, "x": 2.0, "y": 1.0, "w": 2.0, "h": 2.0 } }));
-    let why = g.refuse("variable entry edit", j!({ "name": "patch.gain", "control": { "kind": "toggle" } }));
-    assert!(why.contains("toggle") && why.contains("float"), "a widget that cannot draw the type: {why}");
+    let why = g.refuse("variable entry edit", j!({ "name": "patch.gain", "control": { "kind": "text" } }));
+    assert!(why.contains("text") && why.contains("array"), "a widget that cannot draw the value: {why}");
     // A lock rides the archive too, the entry's own and its group's, and so does what it follows.
     g.call("variable entry lock", j!({ "name": "patch.gain", "value": true }));
     g.call("variable entry source", j!({ "name": "patch.gain", "reference": "level.out", "index": 0 }));
@@ -574,7 +574,7 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
     g.until("a workspace edit to be autosaved", |g| manifest(g).exists().then_some(()));
     g.set_param(osc, "output", "sfreq", 3.0);
     g.until("the latest edit to be autosaved", |g| {
-        std::fs::read_to_string(manifest(g)).ok().filter(|m| m.contains("sfreq:\n            value: 3.0")).map(|_| ())
+        std::fs::read_to_string(manifest(g)).ok().filter(|m| m.contains("sfreq:\n            value: 3\n")).map(|_| ())
     });
     let dir = autosave_dir(&g);
 

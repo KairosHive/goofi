@@ -231,7 +231,7 @@ export function entriesFor(ctx: ExprContext, cat: ExprCatalogue): Completion[] {
 		case 'variableGroup':
 			return cat.variables
 				.filter((g) => g.group === ctx.group)
-				.map((g) => ({ label: g.element, detail: g.type, type: 'variable' }));
+				.map((g) => ({ label: g.element, detail: typeof g.value === 'string' ? 'text' : 'number', type: 'variable' }));
 		case 'numpy':
 			return NUMPY;
 		case 'scope':

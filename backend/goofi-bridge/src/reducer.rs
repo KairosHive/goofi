@@ -23,7 +23,7 @@ pub struct Tap {
     pub index: Option<usize>,
 }
 /// What a tap delivers: the variable, and the value its frame held.
-pub type Followed = (String, goofi_core::variables::VariableValue);
+pub type Followed = (String, goofi_core::Data);
 
 /// What one connection declares for a slot: the viewers' specs and the rate its display paints at.
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -49,11 +49,7 @@ fn serve_interval(by_conn: &HashMap<ConnId, Declared>, cap: f64) -> Duration {
 
 /// The viewer cap `system.viewer_fps` holds, as frames a second no slower than one.
 fn cap_of(g: &Graph) -> f64 {
-    let fps = match g.variables().get("system.viewer_fps") {
-        Some(goofi_core::variables::VariableValue::Float(f)) => *f,
-        Some(goofi_core::variables::VariableValue::Int(i)) => *i as f64,
-        _ => 0.0,
-    };
+    let fps = g.variables().get("system.viewer_fps").map_or(0.0, goofi_core::control::number_of);
     if fps.is_finite() { fps.max(1.0) } else { 1.0 }
 }
 
@@ -696,23 +692,14 @@ impl Peek {
     }
 }
 
-/// The one number a tap reads out of a frame: the indexed element of an array, the only element
-/// of a one-element array, or a string whole. A wider array with no index answers nothing.
-fn pick(d: &goofi_core::Data, index: Option<usize>) -> Option<goofi_core::variables::VariableValue> {
-    use goofi_core::variables::VariableValue;
-    match d.value() {
-        goofi_core::Value::Str(s) => Some(VariableValue::Str(s.to_string())),
-        goofi_core::Value::Array(a) => {
-            let bytes = a.as_bytes();
-            let i = match index {
-                Some(i) => i,
-                None if bytes.len() == 4 => 0,
-                None => return None,
-            };
-            let start = i.checked_mul(4)?;
-            let chunk: [u8; 4] = bytes.get(start..start.checked_add(4)?)?.try_into().ok()?;
-            Some(VariableValue::Float(f32::from_le_bytes(chunk) as f64))
-        }
+/// What a tap reads out of a frame: the indexed element of an array, or the frame whole, with
+/// the stamps off — a variable holds a value, not the tick it came from.
+fn pick(d: &goofi_core::Data, index: Option<usize>) -> Option<goofi_core::Data> {
+    use goofi_core::{Data, Meta, Value};
+    match (d.value(), index) {
+        (Value::Str(s), None) => Some(Data::text(s.clone())),
+        (Value::Array(a), None) => Some(Data::array(a.clone(), Meta::default())),
+        (Value::Array(a), Some(i)) => a.values().nth(i).map(|x| Data::number(f64::from(x))),
         _ => None,
     }
 }

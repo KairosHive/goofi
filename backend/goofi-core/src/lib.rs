@@ -7,6 +7,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 pub mod variables;
+pub mod control;
 pub mod drawing;
 pub mod normalize;
 pub mod path;
@@ -525,6 +526,19 @@ pub enum Value {
     Table(Arc<IndexMap<String, Data>>),
 }
 
+/// Two values are equal when they say the same thing; a texture or a table only when it is one.
+impl PartialEq for Value {
+    fn eq(&self, other: &Value) -> bool {
+        match (self, other) {
+            (Value::Array(a), Value::Array(b)) => a.shape() == b.shape() && a.as_bytes() == b.as_bytes(),
+            (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::Table(a), Value::Table(b)) => Arc::ptr_eq(a, b),
+            (Value::Texture(a), Value::Texture(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
 /// The GOOF dtype tag bytes by name: a frame's sixth byte indexes this table.
 pub const DTYPE_NAMES: [&str; 4] = ["ARRAY", "STRING", "TABLE", "TEXTURE"];
 
@@ -549,6 +563,13 @@ pub struct DataInner {
 /// The immutable, cheaply-cloneable unit of dataflow.
 #[derive(Clone, Debug)]
 pub struct Data(Arc<DataInner>);
+
+/// Equal by VALUE, the stamps aside: what a variable asks when a write arrives.
+impl PartialEq for Data {
+    fn eq(&self, other: &Data) -> bool {
+        self.same(other) || self.0.value == other.0.value
+    }
+}
 
 /// Non-array frames report an empty shape.
 impl goofi_view::Reducible for Data {
@@ -877,8 +898,6 @@ impl Param {
             _ => 1,
         }
     }
-    /// This number holding `values` in its own shape: rounded where it is an int, and cut or
-    /// carried to its dimensions — one value fills them all. `None` for a param that is no number.
     /// Dimension `k` as a scalar of this param's kind and bounds — what an element binding is
     /// evaluated against. A scalar is its own one dimension; a colour's element is no colour.
     pub fn dim(&self, k: usize) -> Param {
@@ -893,16 +912,6 @@ impl Param {
             },
             other => other.clone(),
         }
-    }
-
-    pub fn with_values(&self, values: &[f64]) -> Option<Param> {
-        let Param::Num { value, vmin, vmax, int, options, color } = self else { return None };
-        let fill = values.last().copied().unwrap_or(0.0);
-        let value: Vec<f64> = (0..value.len().max(1))
-            .map(|i| if values.len() == 1 { fill } else { values.get(i).copied().unwrap_or(fill) })
-            .map(|v| if *int { v.round() } else { v })
-            .collect();
-        Some(Param::Num { value, vmin: *vmin, vmax: *vmax, int: *int, options: options.clone(), color: *color })
     }
 }
 

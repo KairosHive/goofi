@@ -1440,7 +1440,7 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
             };
             // One write per viewer interval: a followed slot at its full rate re-projects the
             // document once, with each variable's newest pick.
-            let mut latest: HashMap<String, goofi_core::variables::VariableValue> = HashMap::new();
+            let mut latest: HashMap<String, goofi_core::Data> = HashMap::new();
             latest.insert(first.0, first.1);
             let interval = state.reducers.cap_interval();
             let due = pace.due(interval, Instant::now());

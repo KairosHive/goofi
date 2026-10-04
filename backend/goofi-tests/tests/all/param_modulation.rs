@@ -26,7 +26,8 @@ fn modulation_uses_the_current_target_range_and_coordinate() {
         assert!((2.0..=6.0).contains(&value));
         assert_eq!(value, evaluate(&format!("noi(src={t})"), 999.0, 2.0, 6.0).unwrap());
         let unit = evaluate("noi(vmin=0, vmax=1)", t, 2.0, 6.0).unwrap();
-        assert!((value - (2.0 + 4.0 * unit)).abs() < 1e-10);
+        // The result crosses the f32 carrier, so the two readings agree to f32 precision.
+        assert!((value - (2.0 + 4.0 * unit)).abs() < 1e-5);
     }
     assert_ne!(evaluate("noi()", 0.0, 0.0, 1.0).unwrap(), evaluate("noi()", 1.0, 0.0, 1.0).unwrap());
     let left = evaluate("noi()", 1.0 - 1e-6, 0.0, 1.0).unwrap();

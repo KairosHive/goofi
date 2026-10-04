@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use goofi_core::Param;
+use goofi_core::{control, Data, Param};
 use goofi_node::{
     Edit, EditorAction,
     BindingView, BoundVar, DrainWaker, Edge, Engine, EventId, ExprMode, GraphView, Isolation,
@@ -171,26 +171,15 @@ impl Link {
 
 /// A param's value as JSON, and the one definition of it — the inverse of [`param_from_json`].
 pub fn param_value_json(p: &Param) -> serde_json::Value {
-    doc::Scalar::of(p).map_or(serde_json::Value::Null, |s| s.to_json())
+    serde_json::to_value(control::data_of(p)).unwrap_or_default()
 }
 
-/// Coerce a JSON scalar into a `Param` of `existing`'s type, keeping its bounds.
+/// A JSON literal as a `Param` of `existing`'s kind, keeping its bounds; what is no literal
+/// leaves `existing` as it is.
 pub fn param_from_json(existing: &Param, v: &serde_json::Value) -> Param {
-    match existing {
-        Param::Num { .. } => {
-            let values: Vec<f64> = match v {
-                serde_json::Value::Array(items) => items.iter().filter_map(serde_json::Value::as_f64).collect(),
-                _ => vec![v.as_f64().unwrap_or(0.0)],
-            };
-            existing.with_values(&values).expect("a number")
-        }
-        Param::Bool { .. } => Param::Bool { value: v.as_bool().unwrap_or(false) },
-        Param::Str { options, refresh, .. } => Param::Str {
-            value: v.as_str().unwrap_or("").to_string(),
-            options: options.clone(),
-            refresh: *refresh,
-        },
-        Param::Pulse => Param::Pulse,
+    match serde_json::from_value::<Data>(v.clone()) {
+        Ok(d) => control::read(&d, existing),
+        Err(_) => existing.clone(),
     }
 }
 
@@ -248,16 +237,12 @@ pub fn param_commands(
     Ok(cmds)
 }
 
-/// A CLI `--value` arrives as its raw string; the DECLARED type says what it meant. A vector
-/// takes its numbers as JSON or as bare text, `1 0 0 1` or `1, 0, 0, 1`, one per element.
+/// A CLI `--value` arrives as its raw string; for a param that is no string it is read as JSON
+/// first, so `true` and `[1, 0]` mean what they say, and bare `1 0 0 1` reads as its numbers.
 fn coerced_value(existing: &Param, v: &serde_json::Value) -> Param {
     let parsed = match (existing, v.as_str()) {
         (Param::Str { .. }, _) | (_, None) => None,
-        (_, Some(s)) => serde_json::from_str::<serde_json::Value>(s).ok().or_else(|| {
-            let numbers: Option<Vec<f64>> =
-                s.trim().trim_matches(|c| c == '[' || c == ']' || c == '(' || c == ')').split([',', ' ']).filter(|t| !t.is_empty()).map(|t| t.trim().parse::<f64>().ok()).collect();
-            numbers.filter(|n| n.len() > 1 && existing.dims() > 1).map(|n| serde_json::json!(n))
-        }),
+        (_, Some(s)) => serde_json::from_str::<serde_json::Value>(s).ok(),
     };
     param_from_json(existing, parsed.as_ref().unwrap_or(v))
 }
@@ -380,21 +365,6 @@ fn param_change(
         _ => {}
     }
     Ok((value, Some(state)))
-}
-
-/// A variable as `{value, type}` — the shape in the `.gfi` and the doc.
-pub fn variable_to_json(v: &goofi_core::variables::VariableValue) -> serde_json::Value {
-    serde_json::to_value(v).expect("a scalar enum serializes")
-}
-
-/// The inverse of [`variable_to_json`]; `None` if malformed. Type-directed on purpose: a fraction
-/// offered to an `int` variable rounds instead of failing.
-pub fn variable_from_json(entry: &serde_json::Value) -> Option<goofi_core::variables::VariableValue> {
-    use goofi_core::variables::VariableValue;
-    serde_json::from_value(entry.clone()).ok().or_else(|| match entry.get("type")?.as_str()? {
-        "int" => Some(VariableValue::Int(entry.get("value")?.as_f64()?.round() as i64)),
-        _ => None,
-    })
 }
 
 /// The active source of a param's value.
@@ -565,13 +535,10 @@ impl Drop for Graph {
 
 /// A variable as the [`Param`] an expression variable carries. The bounds are a carrier's, not a
 /// control's: the evaluator coerces the RESULT to the target param's own type and range.
-fn variable_as_param(value: &goofi_core::variables::VariableValue) -> Param {
-    use goofi_core::variables::VariableValue as G;
-    match value {
-        G::Float(v) => Param::float(*v, f64::NEG_INFINITY, f64::INFINITY),
-        G::Int(v) => Param::int(*v, i64::MIN, i64::MAX),
-        G::Bool(v) => Param::boolean(*v),
-        G::Str(v) => Param::str_free(v.clone()),
+fn variable_as_param(value: &Data) -> Param {
+    match value.value() {
+        goofi_core::Value::Str(s) => Param::str_free(s.to_string()),
+        _ => Param::vec(control::numbers(value).collect(), f64::NEG_INFINITY, f64::INFINITY),
     }
 }
 
@@ -637,7 +604,7 @@ impl Graph {
     pub fn apply_variable_change(
         &mut self,
         name: &str,
-        value: Option<goofi_core::variables::VariableValue>,
+        value: Option<Data>,
         at: Option<usize>,
         control: Option<Option<goofi_core::variables::Control>>,
     ) -> Result<(), String> {
@@ -664,7 +631,7 @@ impl Graph {
 
     /// The follower's write: what a variable's source delivered. Answers whether anything changed;
     /// the settle that follows re-sends every binding that reads it.
-    pub fn follow_variable(&mut self, name: &str, value: goofi_core::variables::VariableValue) -> bool {
+    pub fn follow_variable(&mut self, name: &str, value: Data) -> bool {
         self.patch.variables.follow(name, value)
     }
 
@@ -1540,7 +1507,7 @@ impl Graph {
             let Some(g) = params.get_mut(group) else { continue };
             for (name, value) in names {
                 if let Some(existing) = g.get_mut(name) {
-                    *existing = param_from_json(existing, &value.to_json());
+                    *existing = control::read(value, existing);
                 }
             }
         }
@@ -2265,7 +2232,7 @@ impl Graph {
         for (group, names) in &declared {
             let held = entry.values.entry(group.clone()).or_default();
             for (name, p) in names {
-                if let (false, Some(v)) = (held.contains_key(name), doc::Scalar::of(p)) {
+                if let (false, Some(v)) = (held.contains_key(name), control::data_of(p)) {
                     held.insert(name.clone(), v);
                 }
             }
@@ -2313,19 +2280,19 @@ impl Graph {
         let Some(existing) = goofi_node::param_dim(&declared, group, name) else {
             return Err(format!("no such param `{group}/{name}`"));
         };
-        // Coerced to the DECLARED type: a literal is only ever a value of the class's param. An
+        // Read into the DECLARED kind: a literal is only ever a value of the class's param. An
         // element's literal lands in its dimension of the whole param's list.
-        let coerced = param_from_json(&existing, &param_value_json(&value));
+        let coerced = control::data_of(&value).map_or(existing.clone(), |d| control::read(&d, &existing));
         let whole = match element {
             Some(k) => {
                 let whole = goofi_node::param(&declared, group, base).expect("the element's param");
                 let mut values = whole.as_vec().unwrap_or_default().to_vec();
                 values[k] = coerced.as_f64().unwrap_or(0.0);
-                whole.with_values(&values).expect("a number")
+                control::read(&Data::numbers(values), whole)
             }
             None => coerced,
         };
-        if let Some(v) = doc::Scalar::of(&whole) {
+        if let Some(v) = control::data_of(&whole) {
             let leaf = self.leaf_mut(uid).expect("looked up above");
             leaf.values.entry(group.to_string()).or_default().insert(base.to_string(), v);
         }
@@ -2968,7 +2935,7 @@ impl Graph {
                     let entries: IndexMap<String, doc::ParamEntry> = names
                         .iter()
                         .filter_map(|(name, p)| {
-                            let entry = doc::ParamEntry { value: doc::Scalar::of(p), ..Default::default() };
+                            let entry = doc::ParamEntry { value: control::data_of(p), ..Default::default() };
                             let entry = match leaf.sources.get(&ParamKey::new(group, name)) {
                                 Some(b) => entry.with_source(&b.state),
                                 None => entry,
@@ -3310,7 +3277,7 @@ fn qualified(engine: &'static str, scanned: Vec<goofi_node::ScannedType>) -> Vec
 fn values_of(params: &ParamGroups) -> doc::Values {
     params
         .iter()
-        .map(|(group, names)| (group.clone(), names.iter().filter_map(|(n, p)| Some((n.clone(), doc::Scalar::of(p)?))).collect()))
+        .map(|(group, names)| (group.clone(), names.iter().filter_map(|(n, p)| Some((n.clone(), control::data_of(p)?))).collect()))
         .collect()
 }
 

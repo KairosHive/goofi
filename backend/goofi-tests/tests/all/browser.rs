@@ -228,13 +228,13 @@ async fn a_tab_mirrors_the_graph_off_the_document_events_and_follows_a_peer_edit
 
     assert_eq!(c.doc().read_at(&["variable_groups", "system", "lock", "config"]), Some(j!(true)),
                "the system group's lock rides the replica");
-    peer.call("variable entry add", j!({ "name": "patch.subject", "value": "P07", "type": "string" })).await;
+    peer.call("variable entry add", j!({ "name": "patch.subject", "value": "P07" })).await;
     c.until_doc(|d| d.read_at(&["variables", "patch.subject", "value"]).is_some()).await;
     assert_eq!(c.doc().read_at(&["variables", "patch.subject", "value"]), Some(j!("P07")));
     assert_eq!(c.doc().read_at(&["variables", "patch.subject", "lock"]), None,
                "a user variable carries no lock until one is set");
     // A rename keeps its place, and a list shows the replica's key order: it must be the manager's.
-    peer.call("variable entry add", j!({ "name": "patch.tail", "value": 1.0, "type": "float" })).await;
+    peer.call("variable entry add", j!({ "name": "patch.tail", "value": 1.0 })).await;
     peer.call("variable entry rename", j!({ "name": "patch.subject", "to": "patch.zed" })).await;
     c.until_doc(|d| d.read_at(&["variables", "patch.zed"]).is_some()).await;
     let order = |v: &Value| v["variables"].as_object().map(|m| m.keys().cloned().collect::<Vec<_>>());
@@ -574,7 +574,7 @@ async fn three_devices_edit_one_patch_at_once_and_end_on_the_same_document() {
     });
     let tb = tokio::spawn(async move {
         for i in 0..BURST {
-            b.call("variable entry add", j!({ "name": format!("patch.g{i}"), "value": i as f64, "type": "float" })).await;
+            b.call("variable entry add", j!({ "name": format!("patch.g{i}"), "value": i as f64 })).await;
         }
         b
     });
@@ -598,9 +598,10 @@ async fn three_devices_edit_one_patch_at_once_and_end_on_the_same_document() {
         let uid = d.to_json()["nodes"].as_object().unwrap().iter()
             .find(|(_, n)| n["name"] == j!(format!("osc{i}"))).map(|(u, _)| u.clone())
             .unwrap_or_else(|| panic!("osc{i} is missing from the replica"));
-        assert_eq!(d.read_at(&["nodes", uid.as_str(), "params", "lfo", "amplitude", "value"]),
-                   Some(j!(0.1 * i as f64)), "A's rename and its param edit both landed on osc{i}");
-        assert_eq!(d.read_at(&["variables", &format!("patch.g{i}"), "value"]), Some(j!(i as f64)),
+        let amplitude = d.read_at(&["nodes", uid.as_str(), "params", "lfo", "amplitude", "value"]).and_then(|v| v.as_f64());
+        assert!((amplitude.unwrap_or(f64::NAN) - 0.1 * i as f64).abs() < 1e-6,
+                "A's rename and its param edit both landed on osc{i}: {amplitude:?}");
+        assert_eq!(d.read_at(&["variables", &format!("patch.g{i}"), "value"]), Some(j!(i)),
                    "device B's variable g{i}");
     }
 }

@@ -36,8 +36,8 @@ fn unpack(cell: u64) -> Option<goofi_view::ViewWant> {
 /// What a chain that can follow nothing falls back to: the patch's two default-size variables.
 pub fn generator(view: &GraphView<'_>) -> (u32, u32) {
     let axis = |name: &str| match view.variables.get(name) {
-        Some(goofi_core::variables::VariableValue::Int(v)) => (*v).clamp(1, MAX_SIZE as i64) as u32,
-        _ => goofi_core::variables::DEFAULT_SIZE,
+        Some(d) => (goofi_core::control::number_of(d) as i64).clamp(1, MAX_SIZE as i64) as u32,
+        None => goofi_core::variables::DEFAULT_SIZE,
     };
     (axis("system.default_width"), axis("system.default_height"))
 }

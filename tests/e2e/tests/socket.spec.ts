@@ -267,7 +267,7 @@ test.describe('the control socket', () => {
 			});
 
 			await test.step('a variable is patch state, and lands the same way', async () => {
-				await page.evaluate(() => (window as any).goofi.commands.addVariable('patch.seam_probe', 7, 'float'));
+				await page.evaluate(() => (window as any).goofi.commands.addVariable('patch.seam_probe', 7));
 				await expect
 					.poll(async () => (await backendDoc(page)).variables['patch.seam_probe']?.value)
 					.toBe(7);
@@ -595,7 +595,7 @@ test.describe('the control socket', () => {
 			await test.step('a drawing restores its pixels through undo, redo and replacement', async () => {
 				await page.evaluate(async () => {
 					const g = (window as any).goofi;
-					await g.commands.addVariable('review.picture', '', 'string', { kind: 'paint', x: 0, y: 0, w: 5, h: 5 });
+					await g.commands.addVariable('review.picture', '', { kind: 'paint', x: 0, y: 0, w: 5, h: 5 });
 					const panel = g.query.panels()[0];
 					g.commands.setPanelType(panel.panelId, 'control');
 					g.commands.setPanelState(panel.panelId, { group: 'review' });
@@ -1000,7 +1000,7 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 	try {
 		await page.evaluate(async () => {
 			const g = (window as any).goofi;
-			await g.commands.addVariable('desk.level', 0.5, 'float', {
+			await g.commands.addVariable('desk.level', 0.5, {
 				kind: 'knob', min: 0, max: 1, x: 0, y: 0, w: 3, h: 3
 			});
 			const panel = g.query.panels()[1];

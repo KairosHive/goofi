@@ -122,8 +122,8 @@ impl WriteOp for Quality {
 
 /// A `record start` argument, given or otherwise read from `variables.record.<key>`.
 fn record_arg(g: &Graph, given: Option<&str>, key: &str) -> Option<String> {
-    given.filter(|s| !s.is_empty()).map(str::to_string).or_else(|| match g.variables().get(&format!("record.{key}")) {
-        Some(goofi_core::variables::VariableValue::Str(s)) if !s.is_empty() => Some(s.clone()),
+    given.filter(|s| !s.is_empty()).map(str::to_string).or_else(|| match g.variables().get(&format!("record.{key}"))?.value() {
+        goofi_core::Value::Str(s) if !s.is_empty() => Some(s.to_string()),
         _ => None,
     })
 }

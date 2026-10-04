@@ -322,7 +322,7 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
     assert_eq!(pages, ["own", "common"], "{got}");
     let common: Vec<&str> = got["params"]["common"].as_object().unwrap().keys().map(String::as_str).collect();
     assert_eq!(common, ["autotrigger", "max_frequency", "frequency_mode"], "the engine's order: {common:?}");
-    assert_eq!(got["params"]["common"]["max_frequency"]["value"], j!(5.0), "the author's default: {got}");
+    assert_eq!(got["params"]["common"]["max_frequency"]["value"], j!(5), "the author's default: {got}");
 
     // The two fixtures differ only in the `producer` flag, and it decides who paces the node.
     assert_eq!(row("signal:MyPyThing")["params"]["common"]["autotrigger"]["value"], true,
@@ -532,7 +532,7 @@ fn the_control_plane_document_is_the_patch_and_a_delta_is_path_ops() {
     g.link(osc, "out", buf, "input");
     g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/frequency",
                                    "expression": "variables.system.default_ufreq" }));
-    g.call("variable entry add", j!({ "name": "patch.subject", "value": "P07", "type": "string" }));
+    g.call("variable entry add", j!({ "name": "patch.subject", "value": "P07" }));
     let inst = g.call("nodes group", j!({ "nodes": [hex(buf)], "pos": [0.0, 0.0] }))["inst_id"]
         .as_str().unwrap().to_string();
     let doc = g.doc();

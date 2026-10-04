@@ -4,7 +4,7 @@
  */
 import { EMPTY_PANEL_TYPE, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
 import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
-import type { Link, Lock, VariableSource, VariableValue } from '$lib/api/generated';
+import type { Link, Literal, Lock, VariableSource } from '$lib/api/generated';
 import type { LayoutNode, Workspace } from 'panelty';
 import { obj, type Obj } from './ops';
 
@@ -84,9 +84,6 @@ export function linkViews(doc: Doc): Link[] {
 	}));
 }
 
-/** A variable's declared scalar type — it disambiguates float↔int after JS's number normalization. */
-export type VariableType = VariableValue['type'];
-
 /** A control element's widget, its range and its place in the panel's grid. */
 export interface ControlView {
 	/** The generated union, never a restatement of it: a kind added in `vocab.rs` reaches this
@@ -113,8 +110,8 @@ export interface VariableView {
 	name: string;
 	group: string;
 	element: string;
-	value: number | string | boolean;
-	type: VariableType;
+	/** A number, a list (nested for a wider array) or a string — the literal of its frame. */
+	value: Literal;
 	/** Present when this variable is a control-panel element. */
 	control?: ControlView;
 	/** Present when the manager writes this variable from a producer; nobody else may set it. */
@@ -155,19 +152,13 @@ export function variableViews(doc: Doc): VariableView[] {
 	for (const [name, raw] of Object.entries(obj(doc.variables))) {
 		const g = obj(raw);
 		const value = g.value;
-		const type = g.type;
 		const dot = name.indexOf('.');
-		if (
-			dot > 0 &&
-			(typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') &&
-			(type === 'float' || type === 'int' || type === 'bool' || type === 'string')
-		) {
+		if (dot > 0 && (typeof value === 'number' || typeof value === 'string' || Array.isArray(value))) {
 			out.push({
 				name,
 				group: name.slice(0, dot),
 				element: name.slice(dot + 1),
-				value,
-				type,
+				value: value as Literal,
 				control: (g.control as ControlView | undefined) ?? undefined,
 				source: sourceOf(g.source),
 				lock: lockOf(g.lock)

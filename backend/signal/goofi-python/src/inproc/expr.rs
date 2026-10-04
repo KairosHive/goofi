@@ -104,42 +104,27 @@ where
     a.call_method0("item").and_then(|it| it.extract::<T>()).map_err(|_| not_a())
 }
 
-/// A result as `dims` numbers: a sequence or array of that many, or one number for them all.
-fn to_vector(result: &Bound<'_, PyAny>, dims: usize) -> Result<Vec<f64>, String> {
-    if let Ok(v) = to_scalar::<f64>(result, "number") {
-        return Ok(vec![v]);
-    }
-    let values: Vec<f64> = result
-        .extract::<Vec<f64>>()
-        .or_else(|_| result.call_method0("tolist").and_then(|l| l.extract::<Vec<f64>>()))
-        .map_err(|_| format!("expression result is not a number or a sequence of {dims}"))?;
-    if values.len() != dims {
-        return Err(format!("expression result has {} numbers, not {dims}", values.len()));
-    }
-    Ok(values)
-}
-
-/// Coerce the Python result to the target param's type.
+/// The Python result as the frame it is, read into the target param's kind: a string target
+/// takes the result printed, any other its numbers, one or a sequence.
 fn coerce(result: &Bound<'_, PyAny>, target: &Param) -> Result<Param, String> {
-    match target {
-        Param::Num { value, int, .. } => {
-            let values = if value.len() > 1 { to_vector(result, value.len())? } else { vec![to_scalar::<f64>(result, "number")?] };
+    let frame = match target {
+        Param::Str { .. } => Data::text(result.str().map_err(|e| e.to_string())?.to_string()),
+        _ => {
+            let values: Vec<f64> = match to_scalar::<f64>(result, "number") {
+                Ok(v) => vec![v],
+                Err(_) => result
+                    .extract::<Vec<f64>>()
+                    .or_else(|_| result.call_method0("tolist").and_then(|l| l.extract::<Vec<f64>>()))
+                    .map_err(|_| "expression result is not a number or a sequence of numbers".to_string())?,
+            };
             // `as i64` silently saturates NaN and ±inf; error instead.
-            if *int && values.iter().any(|v| !v.is_finite()) {
+            if matches!(target, Param::Num { int: true, .. }) && values.iter().any(|v| !v.is_finite()) {
                 return Err("expression result is not a finite number".to_string());
             }
-            Ok(target.with_values(&values).expect("a number"))
+            Data::numbers(values)
         }
-        // A pulse is a GATE to an expression: the runtime fires on the rise of this bool.
-        Param::Bool { .. } | Param::Pulse => {
-            let value = to_scalar::<bool>(result, "bool").or_else(|_| to_scalar::<f64>(result, "bool or number").map(goofi_node::mailbox::gate))?;
-            Ok(Param::Bool { value })
-        }
-        Param::Str { options, refresh, .. } => {
-            let v: String = result.extract().map_err(|_| "expression result is not a string".to_string())?;
-            Ok(Param::Str { value: v, options: options.clone(), refresh: *refresh })
-        }
-    }
+    };
+    Ok(goofi_core::control::read(&frame, target))
 }
 
 impl ExprEvaluator for PyExprEvaluator {

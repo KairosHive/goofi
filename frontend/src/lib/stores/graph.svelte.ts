@@ -35,9 +35,9 @@ import {
 	type Doc,
 	type VariableView,
 	type ControlView,
-	type VariableType,
 	type LockView
 } from '$lib/crdt/graphDoc';
+import type { Literal } from '$lib/api/generated';
 import type { Cell } from '$lib/panels/controlLayout';
 import { liveNode, type RuntimeOverlay, type ViewSources } from '$lib/crdt/liveNode.svelte';
 import { ParamLive, type LiveSource } from '$lib/api/paramLive';
@@ -508,27 +508,18 @@ export class GraphStore {
 
 	/** Add a NEW user variable; the server refuses a name the patch already holds. A `control` makes
 	 * it a control-panel element. */
-	async addVariable(
-		name: string,
-		value: number | string | boolean,
-		type: VariableType,
-		control?: ControlView
-	): Promise<void> {
+	async addVariable(name: string, value: Literal, control?: ControlView): Promise<void> {
 		if (this.variables.some((g) => g.name === name)) throw new Error(`variable ${name} already exists`);
-		await this.ctl.call('variable entry add', control ? { name, value, type, control } : { name, value, type });
+		await this.ctl.call('variable entry add', control ? { name, value, control } : { name, value });
 	}
 
-	previewVariableValue(name: string, value: number | string | boolean): void {
+	previewVariableValue(name: string, value: Literal): void {
 		this.ctl.preview(`variable ${name}`, 'variable entry edit', { name, value });
 	}
 
-	async setVariableValue(name: string, value: number | string | boolean): Promise<void> {
+	async setVariableValue(name: string, value: Literal): Promise<void> {
 		if (!this.variables.some((g) => g.name === name)) throw new Error(`no variable ${name}`);
 		await this.ctl.call('variable entry edit', { name, value });
-	}
-
-	async setVariableType(name: string, type: VariableType): Promise<void> {
-		await this.ctl.call('variable entry edit', { name, type });
 	}
 
 	async addVariableEntry(group: string): Promise<string> {
@@ -591,7 +582,7 @@ export class GraphStore {
 	/** Make the widget named `name` follow the first output of node `uid` that can feed it. */
 	async linkControl(name: string, uid: string): Promise<string | null> {
 		const gv = this.variables.find((v) => v.name === name);
-		const reference = gv ? this.referenceFor(uid, gv.type) : null;
+		const reference = gv ? this.referenceFor(uid, typeof gv.value === 'string' ? 'string' : 'float') : null;
 		if (gv && reference) await this.sourceControl(gv.group, gv.element, reference);
 		return reference;
 	}

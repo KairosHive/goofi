@@ -173,7 +173,7 @@ pub fn typescript() -> String {
         .iter()
         .map(|k| {
             let (w, h) = k.born_box();
-            format!("\t{{ id: '{}', type: '{}', w: {w}, h: {h} }},\n", k.as_str(), k.born_value().type_name())
+            format!("\t{{ id: '{}', draws: '{}', w: {w}, h: {h} }},\n", k.as_str(), k.draws())
         })
         .collect::<String>();
     let columns = goofi_core::variables::CONTROL_COLUMNS;
@@ -237,8 +237,8 @@ pub fn typescript() -> String {
          \n\
          export interface ControlKindInfo {{\n\
          \treadonly id: ControlKindId;\n\
-         \t/** The value type a widget of this kind draws, which is the variable's type at birth. */\n\
-         \treadonly type: 'float' | 'int' | 'bool' | 'string';\n\
+         \t/** What a widget of this kind draws: one number, a text, or any frame's truth. */\n\
+         \treadonly draws: 'number' | 'text' | 'any';\n\
          \t/** The box it is born in, in grid units. */\n\
          \treadonly w: number;\n\
          \treadonly h: number;\n\

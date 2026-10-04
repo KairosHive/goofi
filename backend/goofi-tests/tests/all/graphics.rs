@@ -710,7 +710,7 @@ fn shaders_render_on_the_gpu() {
     let ramp = &g.call("library get", j!({ "type": "graphics:Gradient" }))["params"]["ramp"];
     assert_eq!(ramp["stops"]["role"], j!({ "as": "count", "section": "stops" }));
     assert_eq!(ramp["at_2"]["role"], j!({ "as": "member", "section": "stops", "base": "at", "slot": 2 }));
-    assert_eq!((&ramp["at_0"]["default"], &ramp["at_1"]["default"], &ramp["at_15"]["default"]), (&j!(0.0), &j!(1.0), &j!(1.0)));
+    assert_eq!((&ramp["at_0"]["default"], &ramp["at_1"]["default"], &ramp["at_15"]["default"]), (&j!(0), &j!(1), &j!(1)));
     assert!(ramp.get("at_16").is_none(), "no slot past the list's max");
     let stops = g.add("graphics:Gradient");
     g.ready(stops);
@@ -734,7 +734,7 @@ fn shaders_render_on_the_gpu() {
     std::fs::write(dir.join("Inked.wgsl"), INKED).unwrap();
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["graphics:Inked"]));
     let ink = &g.call("library get", j!({ "type": "graphics:Inked" }))["params"]["look"]["ink"];
-    assert_eq!((&ink["type"], &ink["color"], &ink["value"]), (&j!("num"), &j!(true), &j!([1.0, 0.0, 0.0, 1.0])));
+    assert_eq!((&ink["type"], &ink["color"], &ink["value"]), (&j!("num"), &j!(true), &j!([1, 0, 0, 1])));
     let inked = g.add("graphics:Inked");
     g.ready(inked);
     g.set_param(inked, "common", "width", 8);
@@ -767,7 +767,7 @@ fn shaders_render_on_the_gpu() {
     assert!(text.contains(&format!("look.ink[3] = ref: {dial_name}.out → 0.5")), "{text}");
     let copied = g.call("nodes copy", j!({ "nodes": [hex(inked)] }));
     assert_eq!(copied["doc"]["nodes"][hex(inked)]["params"]["look"]["ink[3]"]["reference"], j!(format!("{dial_name}.out")));
-    assert_eq!(copied["doc"]["nodes"][hex(inked)]["params"]["look"]["ink"]["value"], j!([0.0, 0.75, 1.0, 1.0]));
+    assert_eq!(copied["doc"]["nodes"][hex(inked)]["params"]["look"]["ink"]["value"], j!([0, 0.75, 1, 1]));
     assert!(g.refuse("node param edit", j!({ "node": hex(inked), "param": "look/ink[4]", "value": 1.0 })).contains("no param"));
     g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink[3]", "reference": "" }));
     drawn(&g, inked, "the element let go", |d| close(px(d, 0, 0), [1.0, 1.0, 1.0, 1.0]));
@@ -785,7 +785,7 @@ fn shaders_render_on_the_gpu() {
     g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": "[0, 0, 0, 1]",
                                    "value": [0.25, 0.5, 0.75, 1.0], "mode": "constant", "triggers": true }));
     let params = g.doc()["nodes"][hex(inked)]["params"]["look"].clone();
-    assert_eq!(params["ink"]["value"], j!([0.25, 0.5, 0.75, 1.0]), "the whole literal lands beside the list");
+    assert_eq!(params["ink"]["value"], j!([0.25, 0.5, 0.75, 1]), "the whole literal lands beside the list");
     for k in 0..4 {
         let element = &params[format!("ink[{k}]")];
         assert_eq!((&element["mode"], &element["triggers"]), (&j!("constant"), &j!(true)), "the list keeps each supplied source field: {element}");

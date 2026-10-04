@@ -5,7 +5,8 @@ import { selection } from '$lib/stores/selection.svelte';
 import { workspace } from 'panelty';
 import { history } from '$lib/stores/history.svelte';
 import type { LinkInfo } from '$lib/api/control';
-import type { ControlView, VariableType } from '$lib/crdt/graphDoc';
+import type { Literal } from '$lib/api/generated';
+import type { ControlView } from '$lib/crdt/graphDoc';
 
 /** The editor panel that viewport/selection verbs default to. */
 function activeEditor(): string | null {
@@ -29,12 +30,8 @@ export const commands = {
 		graph().groupNodes(names, pos),
 	expandInstance: (instId: string): Promise<void> => graph().expandInstance(instId),
 
-	addVariable: (
-		name: string,
-		value: number | string | boolean,
-		type: VariableType,
-		control?: ControlView
-	): Promise<void> => graph().addVariable(name, value, type, control),
+	addVariable: (name: string, value: Literal, control?: ControlView): Promise<void> =>
+		graph().addVariable(name, value, control),
 	removeVariable: (name: string): Promise<void> => graph().removeVariable(name),
 
 	armSlot: (node: string, slot: string): Promise<void> => graph().armSlot(node, slot),

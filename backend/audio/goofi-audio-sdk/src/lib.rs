@@ -184,9 +184,9 @@ pub trait AudioNode: Send {
 /// so transposition is an addition.
 pub const C4_HZ: f32 = 261.63;
 
-/// Whether a gate is HIGH, by goofi's one rule for it — the same one the signal plane reads.
+/// Whether a gate is HIGH, by goofi's one rule for it — the same one `control::truth` reads.
 pub fn high(v: f32) -> bool {
-    goofi_node::mailbox::gate(v as f64)
+    v > 0.0
 }
 
 pub fn hz_of(pitch: f32) -> f32 {

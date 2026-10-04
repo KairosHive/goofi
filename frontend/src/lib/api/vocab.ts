@@ -88,8 +88,8 @@ export type ControlKindId =
 
 export interface ControlKindInfo {
 	readonly id: ControlKindId;
-	/** The value type a widget of this kind draws, which is the variable's type at birth. */
-	readonly type: 'float' | 'int' | 'bool' | 'string';
+	/** What a widget of this kind draws: one number, a text, or any frame's truth. */
+	readonly draws: 'number' | 'text' | 'any';
 	/** The box it is born in, in grid units. */
 	readonly w: number;
 	readonly h: number;
@@ -97,13 +97,13 @@ export interface ControlKindInfo {
 
 /** The widget kinds a control panel offers, in palette order. */
 export const CONTROL_KINDS: readonly ControlKindInfo[] = [
-	{ id: 'knob', type: 'float', w: 4, h: 4 },
-	{ id: 'slider', type: 'float', w: 8, h: 2 },
-	{ id: 'number', type: 'float', w: 4, h: 2 },
-	{ id: 'text', type: 'string', w: 6, h: 3 },
-	{ id: 'toggle', type: 'bool', w: 2, h: 2 },
-	{ id: 'dropdown', type: 'string', w: 6, h: 2 },
-	{ id: 'paint', type: 'string', w: 8, h: 8 },
+	{ id: 'knob', draws: 'number', w: 4, h: 4 },
+	{ id: 'slider', draws: 'number', w: 8, h: 2 },
+	{ id: 'number', draws: 'number', w: 4, h: 2 },
+	{ id: 'text', draws: 'text', w: 6, h: 3 },
+	{ id: 'toggle', draws: 'any', w: 2, h: 2 },
+	{ id: 'dropdown', draws: 'text', w: 6, h: 2 },
+	{ id: 'paint', draws: 'text', w: 8, h: 8 },
 ];
 
 /** How many columns a control panel's grid is, whatever its pixel width. */

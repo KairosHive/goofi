@@ -38,9 +38,9 @@ const CAT: ExprCatalogue = {
 	],
 	self: 'buffer0',
 	variables: [
-		{ name: 'system.default_ufreq', group: 'system', element: 'default_ufreq', type: 'float' },
-		{ name: 'mixer.gain', group: 'mixer', element: 'gain', type: 'float' },
-		{ name: 'mixer.pan', group: 'mixer', element: 'pan', type: 'float' }
+		{ name: 'system.default_ufreq', group: 'system', element: 'default_ufreq', value: 30 },
+		{ name: 'mixer.gain', group: 'mixer', element: 'gain', value: 1 },
+		{ name: 'mixer.pan', group: 'mixer', element: 'pan', value: 0 }
 	]
 };
 
@@ -213,8 +213,8 @@ describe('variables. and np.', () => {
 		expect(labels('variables.mixer.ga'), 'partially typed').toEqual(['gain', 'pan']);
 	});
 
-	it('carries the element’s declared type as the detail', () => {
-		expect(entriesFor(at('variables.mixer.')!, CAT)[0].detail).toBe('float');
+	it('carries the element’s form as the detail', () => {
+		expect(entriesFor(at('variables.mixer.')!, CAT)[0].detail).toBe('number');
 	});
 
 	it('offers the curated numpy surface after np.', () => {

@@ -228,8 +228,7 @@ fn list_variables_names_the_system_variables_an_expression_can_read() {
     let g = Goofi::new();
     let first = g.call("variable list", j!({}))["variables"][0].clone();
     assert_eq!(first["name"], "system.default_ufreq");
-    assert_eq!(first["type"], "float");
-    assert_eq!(first["value"], 30.0);
+    assert_eq!(first["value"], 30);
     // What holds it is the system group's lock, answered on the entry as the lock in force.
     assert_eq!(first["lock"], j!({ "config": true, "value": false }));
 }

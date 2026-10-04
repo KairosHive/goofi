@@ -10,10 +10,10 @@ test('variables group markers stay at the right edge on desktop and touch', asyn
 	try {
 		await page.evaluate(async () => {
 			const g = (window as any).goofi;
-			await g.commands.addVariable('desk.level', 0.5, 'float', {
+			await g.commands.addVariable('desk.level', 0.5, {
 				kind: 'knob', min: 0, max: 1, x: 0, y: 0, w: 3, h: 3
 			});
-			await g.commands.addVariable('other.value', 1, 'float');
+			await g.commands.addVariable('other.value', 1);
 			await g.commands.setPanelType(g.query.panels()[0].panelId, 'variables');
 		});
 		const panel = page.getByTestId('variables-panel');
@@ -89,11 +89,11 @@ test('variables group markers stay at the right edge on desktop and touch', asyn
 		await row.getByTestId('variable-name').fill('message');
 		await row.getByTestId('variable-name').press('Enter');
 		row = group.locator('[data-name="fresh.message"]');
-		await row.getByTestId('variable-type').locator('select').selectOption('string');
+		await row.getByTestId('variable-type').locator('select').selectOption('text');
 		await row.locator('input.ui-text[data-testid="variable-value"]').fill('hello');
 		await row.getByTestId('variable-value').press('Enter');
 		await expect.poll(() => page.evaluate(() => (window as any).goofi.query.variables()
-			.find((entry: { name: string }) => entry.name === 'fresh.message'))).toMatchObject({ type: 'string', value: 'hello' });
+			.find((entry: { name: string }) => entry.name === 'fresh.message'))).toMatchObject({ value: 'hello' });
 		await expect(panel.locator('[data-testid^="variable-lock"], [data-testid^="variable-group-lock"]')).toHaveCount(0);
 		await group.getByTestId('variable-group-edit').tap();
 		input = group.getByTestId('variable-group-name');

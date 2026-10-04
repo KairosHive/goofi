@@ -10,30 +10,19 @@ standing and the transport an output slot has. It also removes the reference mod
 a constant or an expression, and one expression worker in the shared runtime serves every
 engine. The control data and expression work must not add net lines; the machine may.
 
-Status: specification. This records the product decisions agreed through 2026-10-04. No
-implementation has started. Build on `AGENTS.md` and the code; this file carries only what the
-code cannot say.
+Status: in progress. This records the product decisions agreed through 2026-10-04. Build on
+`AGENTS.md` and the code; this file carries only what the code cannot say.
 
 ## Decisions
 
 ### Control data is an array or a string
 
-- The one value carrier is `goofi_core::Data`, the frame an output slot emits, in two of its
-  forms: `Array` and `Str`. A variable, a state value, a widget's value and a param's held
-  value are nothing else. `VariableValue`, `goofi_graph::doc::Scalar` and the typed `Param`
-  variants as value holders are removed. `Param` keeps a node's declaration (number, bool,
-  string, pulse, with range, `int`, `options` and `color`) as the TARGET a reader converts to,
-  not as a form the data takes.
-- Conversion is one rule, on read, from the source form: a number is the first element of an
-  array, or a string parsed; a vector is the array, filled or cut to the target's dims; an int
-  is rounded; a bool is a non-empty string or an array with any element above zero; a colour
-  is a `[4]` array; a string is the string, or an array printed; a pulse fires on the rising
-  edge of the bool reading. `goofi_core::control::read(&Data, &Param) -> Param` is the one
-  owner; `Param::with_values`, `VariableValue::coerced_like`, `mailbox::value_as` and the
-  evaluator's result coercion fold into it.
-- A document literal of a value is an untagged number, list, string or bool, read into an
-  array or a string; a `.gfi` writes a small array back as a number or a list and a wide one
-  as a native data file (the recorder's format) at `variables/<name>`.
+- `Data` is the one value and `control::read` the one conversion. The array carrier is f32,
+  so a literal holds seven significant digits and a whole number up to 16,777,216 exactly;
+  every read of an f32 yields the f64 its shortest decimal denotes, so `0.97` reads as `0.97`.
+- A `.gfi` writes a wide array as a native data file (the recorder's format) at
+  `variables/<name>`. It lands with the paint pad's array: until values leave the document, a
+  wide array in the archive would be a second copy of what the replica already carries.
 
 ### Variables are producers
 
@@ -278,17 +267,15 @@ Build in this order. Each stage ends at a tested commit, with the full local che
 is a point to compact the context. Read this file and `AGENTS.md` first; inspect the diff since
 the last stage's commit; keep this file current by deleting what has shipped.
 
-1. **Control data.** `Data` as the one value, arrays and strings only; `control::read` as the
-   one conversion; `VariableValue` and `Scalar` removed; the document literal and the archive
-   file for a wide array. Report the line delta.
-2. **Variables as producers.** The `variables` base, services with a history of one, the
+1. **Variables as producers.** The `variables` base, services with a history of one, the
    reducer and data worker generalized, values off the document and off the graph lock, the
-   frontend on `/data/variables/<name>`, the paint pad over an array. Report the line delta.
-3. **Expressions, one way.** The reference mode removed, the bare predicate, the expression
+   frontend on `/data/variables/<name>`, the paint pad over an array and its archive file.
+   Report the line delta.
+2. **Expressions, one way.** The reference mode removed, the bare predicate, the expression
    worker in `goofi-runtime` for all three engines with latest-wins handover, the evaluator's
-   bytes path, variable expressions. Report the line delta; stages 1 to 3 together must not
-   add net lines.
-4. **Machines.** The model, the ops, the `goofi-machines` thread, the situation.
-5. **The panel.** The canvas, the cards, the dot, the side pane, the Playwright sessions.
+   bytes path, variable expressions. Report the line delta; the control data stage shipped at
+   a net loss, and the three stages together must not add net lines.
+3. **Machines.** The model, the ops, the `goofi-machines` thread, the situation.
+4. **The panel.** The canvas, the cards, the dot, the side pane, the Playwright sessions.
 
 Roadmap maintenance does not start implementation. Wait for the user's build instruction.

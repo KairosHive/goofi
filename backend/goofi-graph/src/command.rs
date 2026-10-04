@@ -3,7 +3,7 @@
 use goofi_core::record::RecordedOutput;
 use serde_json::Value;
 use crate::{Graph, Uid};
-use goofi_core::variables::{Control, VariableValue};
+use goofi_core::variables::Control;
 use goofi_core::Param;
 
 use crate::subpatch::Dir;
@@ -145,7 +145,7 @@ pub enum Command {
     /// slot a delete's inverse re-adds at, since order is observable.
     EditVariable {
         name: String,
-        value: Option<VariableValue>,
+        value: Option<goofi_core::Data>,
         at: Option<usize>,
         /// The control record: outer `None` leaves it alone, inner `None` clears it.
         control: Option<Option<Control>>,

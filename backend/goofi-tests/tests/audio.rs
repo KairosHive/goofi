@@ -420,8 +420,8 @@ fn a_patch_sounds_under_the_external_clock() {
     // no door of its own. It is goofi's to say: a hand edit is refused, and no patch carries it.
     let listed = g.call("variable list", j!({}))["variables"].as_array().unwrap().clone();
     let variable = |name: &str| listed.iter().find(|e| e["name"] == name).unwrap_or_else(|| panic!("{name} is seeded")).clone();
-    assert_eq!(variable("system.audio_rate")["value"], status["audio"]["rate"], "the rate the engine published");
-    assert_eq!(variable("system.audio_channels")["value"], status["audio"]["channels"], "the channels it published");
+    assert_eq!(variable("system.audio_rate")["value"].as_f64(), status["audio"]["rate"].as_f64(), "the rate the engine published");
+    assert_eq!(variable("system.audio_channels")["value"].as_f64(), status["audio"]["channels"].as_f64(), "the channels it published");
     assert_eq!(variable("system.audio_device")["value"], j!(""), "no device under the external clock");
     assert_eq!(variable("system.audio_driver")["value"], j!(""), "and no ASIO driver holds this process");
     // The APIs this build carries are published too, and every device a refresh offers is prefixed
@@ -565,19 +565,17 @@ fn a_patch_sounds_under_the_external_clock() {
     g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "value": 1.0, "mode": "constant" }));
     g.until("the error to clear", |g| g.error(gain3).is_none().then_some(()));
 
-    // Step: a reference the control half cannot copy is a binding error on the node; back on a
-    // constant, the literal lands and the error clears.
+    // Step: a reference to a frame wider than one reads its first element, no error; back on a
+    // constant, the literal lands.
     g.set_param(source, "constant", "length", 4);
     let bound = g.call(
         "node param edit",
         j!({ "node": hex(gain3), "param": "gain/gain", "reference": format!("{source_name}.out"), "mode": "reference" }),
     );
     assert!(bound["error"].is_null(), "{bound}");
-    let why = g.until("the binding error to reach the node", |g| g.error(gain3));
-    assert!(why.contains("one element"), "{why}");
+    assert!(g.stays(|g| g.error(gain3).is_none()), "a wide frame reads whole");
     g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "value": 0.5, "mode": "constant" }));
     sounds(&g, "the literal to land", |x| (peak(x) - 0.5).abs() < 0.01);
-    g.until("the error to clear", |g| g.error(gain3).is_none().then_some(()));
 
     // Step: a plan swap keeps every instance — the oscillator's phase runs on across it.
     let (a, _) = drive(&g, TENTH);

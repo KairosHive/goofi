@@ -279,7 +279,7 @@ pub trait Engine: Send {
     fn drain(&mut self, apply: &mut dyn FnMut(Uid, Status)) -> usize;
     /// The facts this engine ALONE decides, such as a rate or a driver, for the graph to write into
     /// `system.*`. Every name must be an ephemeral variable, which no patch carries.
-    fn published(&self) -> Vec<(&'static str, goofi_core::variables::VariableValue)> {
+    fn published(&self) -> Vec<(&'static str, goofi_core::Data)> {
         Vec::new()
     }
     /// One imperative to a node's own thread — what settled state cannot express. The answer, if

@@ -6,7 +6,6 @@
 
 use std::time::{Duration, Instant};
 
-use goofi_core::variables::VariableValue;
 use goofi_core::{Data, Param, Value};
 use goofi_tests::OutputProbe;
 use goofi_graph::Graph;
@@ -85,7 +84,7 @@ fn bench(manifest: &'static NodeManifest, factory: Factory, len: i64, n: usize, 
     let (mut g, _) = goofi_bridge::fresh_graph(goofi_tests::iox(), Some(goofi_bridge::Clock::External), goofi_bridge::Clock::External).unwrap();
     goofi_tests::fixtures::register(&mut g);
     // Every producer's rate cap is `variables.system.default_ufreq`; the patch default measures 30 Hz.
-    g.apply_variable_change("system.default_ufreq", Some(VariableValue::Float(1e6)), None, None).unwrap();
+    g.apply_variable_change("system.default_ufreq", Some(goofi_core::Data::number(1e6)), None, None).unwrap();
     goofi_bridge::register_dyn_type(&mut g, manifest, factory, &BENCH_TIER);
     let src = g.add_node("_TestConst", None).unwrap();
     g.update_param(src, "constant", "value", Param::float(0.5, -1e9, 1e9)).unwrap();

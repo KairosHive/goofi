@@ -4,9 +4,9 @@
 // `cargo test -p goofi-tests contracts::`, which rewrites this file when it drifts.
 
 export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in string]: JsonValue } | null;
-export type Scalar = boolean | number | number | string | Array<number>;
+export type Literal = number | string | boolean | Literal[];
 export type Mode = "constant" | "expression" | "reference";
-export type ParamEntry = { value?: Scalar, mode?: Mode, expression?: string, reference?: string, triggers?: boolean, };
+export type ParamEntry = { value?: Literal, mode?: Mode, expression?: string, reference?: string, triggers?: boolean, };
 export type VideoQuality = "small" | "high" | "very_high";
 export type RecordedOutput = { slot: string, quality: VideoQuality, };
 export type NodeRecord = { type: string, name: string, pos: [number, number], 
@@ -15,16 +15,15 @@ export type NodeRecord = { type: string, name: string, pos: [number, number],
  */
 scope?: string, params: { [key in string]: { [key in string]: ParamEntry } }, viewers?: JsonValue, baseline?: JsonValue, record: Array<RecordedOutput>, };
 export type Link = { node_out: string, slot_out: string, node_in: string, slot_in: string, };
-export type VariableValue = { "type": "float", "value": number } | { "type": "int", "value": number } | { "type": "bool", "value": boolean } | { "type": "string", "value": string };
 export type ControlKind = "knob" | "slider" | "number" | "text" | "toggle" | "dropdown" | "paint";
 export type Control = { kind: ControlKind, min?: number, max?: number, step?: number, options: Array<string>, x: number, y: number, w: number, h: number, };
 export type Lock = { config: boolean, value: boolean, };
 export type VariableSource = { reference: string, index?: number, };
-export type Variable = { control?: Control, source?: VariableSource, 
+export type Variable = { value: Literal, control?: Control, source?: VariableSource, 
 /**
  * The variable's OWN lock, apart from its group's; absent is the default.
  */
-lock?: Lock, } & ({ "type": "float", "value": number } | { "type": "int", "value": number } | { "type": "bool", "value": boolean } | { "type": "string", "value": string });
+lock?: Lock, };
 export type Group = { lock: Lock, };
 export type PatchDoc = { 
 /**
@@ -43,7 +42,7 @@ export type ParamBase = { doc: string | null,
 /**
  * What the declaration says this param is worth untouched; `None` for a pulse.
  */
-default: Scalar | null, 
+default: Literal | null, 
 /**
  * The index of the param's section inside its group; the inspector draws a line between two.
  */
@@ -68,4 +67,4 @@ triggers: boolean,
  * The active source's bind, compile or arrival error.
  */
 error: string | null, };
-export type ParamKind = { "type": "num", value: Scalar, vmin: number, vmax: number, int: boolean, options: Array<number>, color: boolean, } | { "type": "bool", value: boolean, } | { "type": "string", value: string, options: Array<string> | null, } | { "type": "pulse", value: null, };
+export type ParamKind = { "type": "num", value: number | number[], vmin: number, vmax: number, int: boolean, options: Array<number>, color: boolean, } | { "type": "bool", value: boolean, } | { "type": "string", value: string, options: Array<string> | null, } | { "type": "pulse", value: null, };

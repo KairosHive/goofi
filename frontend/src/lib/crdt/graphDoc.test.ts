@@ -149,29 +149,28 @@ describe('graphDoc readers', () => {
 });
 
 describe('graphDoc variables', () => {
-	it('reads variable views (system-first, typed, with the lock each carries)', () => {
+	it('reads variable views (system-first, with the lock each carries)', () => {
 		const doc: Doc = {
 			...seedDoc(),
 			variables: {
-				'system.default_ufreq': { value: 30, type: 'float' },
-				'system.goofi_home': { value: '/home/u/.goofi', type: 'string', lock: { value: true } },
-				'patch.subject': { value: 'P07', type: 'string' },
+				'system.default_ufreq': { value: 30 },
+				'system.goofi_home': { value: '/home/u/.goofi', lock: { value: true } },
+				'patch.subject': { value: 'P07' },
 				'mixer.gain': {
 					value: 0.5,
-					type: 'float',
 					control: { kind: 'knob', min: 0, max: 1, x: 2, y: 1, w: 2, h: 2 }
 				},
 				// Every variable is `group.element`; one without a group is malformed and is skipped,
-				// exactly as one with an unreadable type is.
-				loose: { value: 1, type: 'float' }
+				// exactly as one whose value is no literal is.
+				loose: { value: 1 }
 			}
 		};
 		const free = { config: false, value: false };
 		expect(variableViews(doc)).toEqual([
-			{ name: 'system.default_ufreq', group: 'system', element: 'default_ufreq', value: 30, type: 'float', control: undefined, lock: free },
-			{ name: 'system.goofi_home', group: 'system', element: 'goofi_home', value: '/home/u/.goofi', type: 'string', control: undefined, lock: { config: false, value: true } },
-			{ name: 'patch.subject', group: 'patch', element: 'subject', value: 'P07', type: 'string', control: undefined, lock: free },
-			{ name: 'mixer.gain', group: 'mixer', element: 'gain', value: 0.5, type: 'float', control: { kind: 'knob', min: 0, max: 1, x: 2, y: 1, w: 2, h: 2 }, lock: free }
+			{ name: 'system.default_ufreq', group: 'system', element: 'default_ufreq', value: 30, control: undefined, lock: free },
+			{ name: 'system.goofi_home', group: 'system', element: 'goofi_home', value: '/home/u/.goofi', control: undefined, lock: { config: false, value: true } },
+			{ name: 'patch.subject', group: 'patch', element: 'subject', value: 'P07', control: undefined, lock: free },
+			{ name: 'mixer.gain', group: 'mixer', element: 'gain', value: 0.5, control: { kind: 'knob', min: 0, max: 1, x: 2, y: 1, w: 2, h: 2 }, lock: free }
 		]);
 	});
 
@@ -179,9 +178,9 @@ describe('graphDoc variables', () => {
 		const doc: Doc = {
 			...seedDoc(),
 			variables: {
-				'mixer.gain': { value: 1, type: 'float' },
-				'patch.subject': { value: 'P07', type: 'string' },
-				'mixer.pan': { value: 0, type: 'float', lock: { value: true } }
+				'mixer.gain': { value: 1 },
+				'patch.subject': { value: 'P07' },
+				'mixer.pan': { value: 0, lock: { value: true } }
 			},
 			variable_groups: { system: { lock: { config: true } }, mixer: { lock: { config: true } } }
 		};

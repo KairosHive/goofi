@@ -1,8 +1,7 @@
 //! JSON projections of the engine graph into the shapes the frontend mirrors (`control.ts`).
 //! These are the wire contract: co-edit the frontend when a field or shape changes.
 
-use goofi_core::Param;
-use goofi_graph::doc::Scalar;
+use goofi_core::{control, Data, Param};
 use goofi_graph::{Graph, Mode, Origin, SourceInfo, Uid};
 use serde::Serialize;
 use ts_rs::TS;
@@ -40,7 +39,8 @@ pub(crate) fn examples(base: &str, current: Option<&str>) -> Value {
 pub struct ParamBase {
     pub doc: Option<String>,
     /// What the declaration says this param is worth untouched; `None` for a pulse.
-    pub default: Option<Scalar>,
+    #[ts(type = "Literal | null")]
+    pub default: Option<Data>,
     /// The index of the param's section inside its group; the inspector draws a line between two.
     pub section: u8,
     /// The inspector shows the param only while this holds; `None` shows it always.
@@ -80,7 +80,15 @@ pub enum ParamRole {
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ParamKind {
     /// A number, or a vector of them: `value` is bare for one dimension and a list for more.
-    Num { value: Scalar, vmin: f64, vmax: f64, int: bool, options: Vec<i64>, color: bool },
+    Num {
+        #[ts(type = "number | number[]")]
+        value: Data,
+        vmin: f64,
+        vmax: f64,
+        int: bool,
+        options: Vec<i64>,
+        color: bool,
+    },
     Bool { value: bool },
     #[serde(rename = "string")]
     Str { value: String, options: Option<Vec<String>> },
@@ -101,7 +109,7 @@ pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi
     let text = |t: &str| (!t.is_empty()).then(|| t.to_string());
     let base = ParamBase {
         doc: decl.and_then(|d| d.doc).map(str::to_string),
-        default: decl.and_then(|d| Scalar::of(&d.spec.to_param())),
+        default: decl.and_then(|d| control::data_of(&d.spec.to_param())),
         section: decl.map_or(0, |d| d.section),
         show: decl.and_then(|d| Some((d.group, d.show?))).map(|(group, s)| {
             let (group, name) = s.controller(group);
@@ -120,7 +128,7 @@ pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi
     };
     let kind = match p {
         Param::Num { vmin, vmax, int, options, color, .. } => ParamKind::Num {
-            value: Scalar::of(p).expect("a number"),
+            value: control::data_of(p).expect("a number"),
             vmin: *vmin,
             vmax: *vmax,
             int: *int,
@@ -371,19 +379,19 @@ pub fn snapshot(
 /// variable records, each declared once in Rust and checked into the tree.
 pub fn typescript() -> String {
     use goofi_core::record::{RecordedOutput, VideoQuality};
-    use goofi_core::variables::{Control, ControlKind, Lock, Variable, VariableSource, VariableValue};
+    use goofi_core::variables::{Control, ControlKind, Lock, Variable, VariableSource};
     use goofi_graph::doc::{Archive, Group, Link, NodeRecord, ParamEntry, PatchDoc};
     let cfg = ts_rs::Config::new().with_large_int("number");
     let decls = [
         serde_json::Value::decl(&cfg),
-        Scalar::decl(&cfg),
+        // The literal of a frame: a number, a string, a bool or a list, nested for a wider array.
+        "type Literal = number | string | boolean | Literal[];".to_string(),
         Mode::decl(&cfg),
         ParamEntry::decl(&cfg),
         VideoQuality::decl(&cfg),
         RecordedOutput::decl(&cfg),
         NodeRecord::decl(&cfg),
         Link::decl(&cfg),
-        VariableValue::decl(&cfg),
         ControlKind::decl(&cfg),
         Control::decl(&cfg),
         Lock::decl(&cfg),

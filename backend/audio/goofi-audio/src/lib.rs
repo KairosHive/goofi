@@ -920,17 +920,17 @@ impl Engine for AudioEngine {
 
     /// What the audio plane alone decides, off the same `status()` the report reads, so the
     /// variables and `session status` cannot drift.
-    fn published(&self) -> Vec<(&'static str, goofi_core::variables::VariableValue)> {
-        use goofi_core::variables::VariableValue;
+    fn published(&self) -> Vec<(&'static str, goofi_core::Data)> {
+        use goofi_core::Data;
         let s = self.status();
         let device = s.device.unwrap_or_default();
         let driver = host::asio_driver(&device).unwrap_or_default().to_string();
         vec![
-            ("system.audio_rate", VariableValue::Float(s.rate)),
-            ("system.audio_channels", VariableValue::Int(i64::from(s.channels))),
-            ("system.audio_driver", VariableValue::Str(driver)),
-            ("system.audio_device", VariableValue::Str(device)),
-            ("system.audio_hosts", VariableValue::Str(host::hosts())),
+            ("system.audio_rate", Data::number(s.rate)),
+            ("system.audio_channels", Data::number(f64::from(s.channels))),
+            ("system.audio_driver", Data::text(driver)),
+            ("system.audio_device", Data::text(device)),
+            ("system.audio_hosts", Data::text(host::hosts())),
         ]
     }
 

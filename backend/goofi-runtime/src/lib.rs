@@ -923,7 +923,7 @@ impl<E: Executor> Runtime<E> {
             let held = whole.unwrap_or(value).clone();
             // An element binding leaves its value in the cells, so a driven vector reads off them.
             if self.binds.iter().any(|b| b.param == i && b.elem.is_some()) {
-                held.with_values(&dims(&self.params, &self.decls, i)).unwrap_or(held)
+                goofi_core::control::read(&goofi_core::Data::numbers(dims(&self.params, &self.decls, i)), &held)
             } else {
                 held
             }
@@ -1155,7 +1155,7 @@ impl<E: Executor> Runtime<E> {
                             dims[k] = *v;
                         }
                     }
-                    merged = held.with_values(&dims).unwrap_or(merged);
+                    merged = goofi_core::control::read(&goofi_core::Data::numbers(dims), held);
                 }
                 store(&self.params, &self.decls, param, &merged);
             }

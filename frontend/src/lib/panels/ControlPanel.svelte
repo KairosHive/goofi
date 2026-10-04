@@ -31,6 +31,7 @@
 		Toggle,
 		isTextEditingTarget
 	} from '$lib/ui';
+	import type { Literal } from '$lib/api/generated';
 	import { CONTROL_COLUMNS, CONTROL_KINDS } from '$lib/api/vocab';
 	import { KIND, cellAt, movedBy, resizedBy, sameCell, type Cell, type Kind, type Units } from './controlLayout';
 
@@ -38,7 +39,7 @@
 		group?: string;
 	}
 
-	type Value = number | string | boolean;
+	type Value = Literal;
 
 	let props: PanelProps = $props();
 	const g = graph();
@@ -159,7 +160,11 @@
 	}
 
 	function num(v: Value): number {
-		return typeof v === 'number' ? v : 0;
+		return typeof v === 'number' ? v : Array.isArray(v) && typeof v[0] === 'number' ? v[0] : 0;
+	}
+	/** The one truth rule, as `control::truth` reads it: a non-empty text, or any number above zero. */
+	function truth(v: Value): boolean {
+		return typeof v === 'string' ? v !== '' : typeof v === 'number' ? v > 0 : Array.isArray(v) ? v.some(truth) : v === true;
 	}
 
 	// Listened to DIRECTLY, not delegated: a finger's touch is snapped to the nearest element that
@@ -369,7 +374,7 @@
 	{:else if c.kind === 'number'}
 		<NumberInput value={num(value)} min={c.min} max={c.max} step={c.step ?? 1} {onChange} />
 	{:else if c.kind === 'toggle'}
-		<Toggle value={value === true} {onChange} />
+		<Toggle value={truth(value)} {onChange} />
 	{:else if c.kind === 'dropdown'}
 		<Select value={String(value)} options={c.options ?? []} {onChange} />
 	{:else if c.kind === 'paint'}
@@ -509,7 +514,7 @@
 							</div>
 						{/if}
 						{#if edit}
-							{#if gv.type === 'float' || gv.type === 'int'}
+							{#if typeof gv.value === 'number'}
 								<div class="learn">
 									<MidiLearn label={gv.element} target={`control:${gv.name}`} testid="control-learn" onLearn={learn(gv)} />
 								</div>
@@ -579,7 +584,7 @@
 							<Select
 								data-testid="control-props-kind"
 								value={pc.kind}
-								options={CONTROL_KINDS.filter((k) => k.type === pv.type).map((k) => k.id)}
+								options={CONTROL_KINDS.filter((k) => k.draws === 'any' || k.draws === (typeof pv.value === 'string' ? 'text' : 'number')).map((k) => k.id)}
 								onChange={(v) => setControl(pv, { kind: v as Kind })}
 							/>
 						</Field>
@@ -604,7 +609,7 @@
 							<Field label="link" doc="The node output the widget follows; a node dropped onto the widget lands here">
 								<RefPicker
 									value={pv.source?.reference ?? null}
-									paramType={pv.type}
+									paramType={typeof pv.value === 'string' ? 'string' : 'float'}
 									onCommit={(r) => setSource(pv, r)}
 									testid="control-props-link"
 								/>
@@ -618,7 +623,7 @@
 								<NumberInput value={pv.source.index ?? 0} min={0} step={1} onChange={(v) => setIndex(pv, v)} />
 							</Field>
 						{/if}
-						{#if pv.type === 'float' || pv.type === 'int'}
+						{#if typeof pv.value === 'number'}
 							<Field label="range" doc="min, max and step">
 								<NumberInput value={pc.min ?? 0} title="min" onChange={(v) => setControl(pv, { min: v })} />
 								<NumberInput value={pc.max ?? 1} title="max" onChange={(v) => setControl(pv, { max: v })} />
@@ -637,7 +642,7 @@
 						{/if}
 						<!-- The corner buttons' door for a finger: a cell is narrower than two finger-sized targets. -->
 						<div class="touch-actions">
-							{#if pv.type === 'float' || pv.type === 'int'}
+							{#if typeof pv.value === 'number'}
 								<MidiLearn label={pv.element} target={`control:${pv.name}`} testid="control-learn" onLearn={learn(pv)} />
 							{/if}
 							<Chip tone="danger" data-testid="control-delete" onclick={() => void g.removeControl(group, pv.element)}>delete</Chip>
@@ -658,7 +663,7 @@
 				<div class="widget">
 					{@render widget(
 						{ kind: lift.kind, min: 0, max: 1, step: 0.01, x: 0, y: 0, w: 0, h: 0 },
-						({ float: 0.5, int: 0, bool: false, string: '' } as const)[KIND[lift.kind].type],
+						({ number: 0.5, any: 0, text: '' } as const)[KIND[lift.kind].draws],
 						lift.kind,
 						() => {}
 					)}

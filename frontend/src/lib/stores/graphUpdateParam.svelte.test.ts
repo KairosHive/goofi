@@ -252,7 +252,7 @@ describe('GraphStore doc sync — a reader re-runs for the leaves it read', () =
 		flushSync();
 		expect([list, names, frequency, reset]).toEqual([1, 1, 1, 1]);
 
-		d.variable('patch.gain', { value: 1, type: 'float' });
+		d.variable('patch.gain', { value: 1 });
 		d.patch({ variable_groups: { patch: { lock: { config: true, value: false } } } });
 		flushSync();
 		expect(g.variables.map((v) => v.name)).toContain('patch.gain');

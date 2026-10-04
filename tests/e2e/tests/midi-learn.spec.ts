@@ -94,8 +94,8 @@ class LearnMidi(goofi.Node):
 
 		await page.evaluate(async () => {
 			const g = (window as any).goofi;
-			await g.commands.addVariable('desk.level', 0.25, 'float', { kind: 'knob', x: 0, y: 0, w: 3, h: 3 });
-			await g.commands.addVariable('desk.text', '', 'string', { kind: 'text', x: 3, y: 0, w: 3, h: 3 });
+			await g.commands.addVariable('desk.level', 0.25, { kind: 'knob', x: 0, y: 0, w: 3, h: 3 });
+			await g.commands.addVariable('desk.text', '', { kind: 'text', x: 3, y: 0, w: 3, h: 3 });
 			const panel = g.query.panels()[0];
 			g.commands.setPanelType(panel.panelId, 'control');
 			g.commands.setPanelState(panel.panelId, { group: 'desk' });

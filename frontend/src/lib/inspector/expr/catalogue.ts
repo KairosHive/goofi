@@ -24,7 +24,7 @@ export interface CatalogueNode {
 	params: CatalogueGroup[];
 }
 
-export type CatalogueVariable = Pick<VariableView, 'name' | 'group' | 'element' | 'type'>;
+export type CatalogueVariable = Pick<VariableView, 'name' | 'group' | 'element' | 'value'>;
 
 export interface ExprCatalogue {
 	nodes: CatalogueNode[];

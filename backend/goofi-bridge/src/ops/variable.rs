@@ -4,39 +4,36 @@ use serde_json::{json, Value};
 
 use super::{op, Any, NoArgs, ReadOp, WriteOp};
 use crate::{inspect, Txn};
-use goofi_core::variables::{Control, ControlKind, Lock, VariableSource, VariableValue};
+use goofi_core::variables::{Control, ControlKind, Lock, VariableSource};
+use goofi_core::Data;
 use goofi_graph::{Command, Graph};
 
 op!(List, "variable list", 0, NoArgs,
-    "Every patch variable — what an expression can read and the variable writes can set — each with the lock that holds it (its own and its group's together), and every group that carries a lock. The `system` group is goofi's own: config-locked for life, and its EPHEMERAL members — `system.goofi_home` and the `system.audio_*` facts the audio engine publishes — are goofi's own value, never saved into a patch.",
-    "{variables: [{name, type, value, lock: {config, value}, control?, source?}], groups: {group: {lock}}}");
+    "Every patch variable — what an expression can read and the variable writes can set — each with the lock that holds it (its own and its group's together), and every group that carries a lock. A value is an array or a string: a number, a list (nested for a wider array) or text. The `system` group is goofi's own: config-locked for life, and its EPHEMERAL members — `system.goofi_home` and the `system.audio_*` facts the audio engine publishes — are goofi's own value, never saved into a patch.",
+    "{variables: [{name, value, lock: {config, value}, control?, source?}], groups: {group: {lock}}}");
 
 op!(EntryAdd, "variable entry add", 1, EntryAddArgs {
     pub name: Option<String>,
     pub group: Option<String>,
-    #[serde(rename = "type")]
-    pub ty: Option<String>,
     pub value: Option<Any>,
     /// Absent leaves the widget alone, `null` clears it, an object sets it.
     #[serde(default, deserialize_with = "super::nullable")]
     #[schemars(with = "Option<Value>")]
     pub control: Option<Option<Control>>,
 },
-    "Create a patch variable. Give `group` alone to add a float entry with value 0 and the first free entry0/entry1/... name. Otherwise `name`, `type` and `value` are required. `name` is `group.element` — every variable is in a group. `type` is one of float/int/bool/string; a name the patch already holds is refused — `variable entry edit` changes one. `control` makes it a control-panel element: {kind, min, max, step, options, x, y, w, h}, where kind is knob/slider/number/text/toggle/dropdown/paint and must be able to draw the type.",
+    "Create a patch variable. Give `group` alone to add an entry holding 0 under the first free entry0/entry1/... name. Otherwise `name` and `value` are required. `name` is `group.element` — every variable is in a group. `value` is a number, a list of numbers (nested for a wider array), a bool or a string; a bool is stored as 1 or 0, and a param reading a variable converts it to its own kind. A name the patch already holds is refused — `variable entry edit` changes one. `control` makes it a control-panel element: {kind, min, max, step, options, x, y, w, h}, where kind is knob/slider/number/text/toggle/dropdown/paint and must be able to draw the value.",
     "{name, value} — the name and value as stored");
 
 op!(EntryEdit, "variable entry edit", 1, EntryEditArgs {
     pub name: String,
     pub value: Option<Any>,
-    #[serde(rename = "type")]
-    pub ty: Option<String>,
     /// Absent leaves the widget alone, `null` clears it, an object sets it.
     #[serde(default, deserialize_with = "super::nullable")]
     #[schemars(with = "Option<Value>")]
     pub control: Option<Option<Control>>,
 },
-    "Change an existing variable's value, type-coerced to the type it holds. An explicit `type` changes the type, converting the current value when no value is supplied (an unsupported conversion uses an empty value); config-locked entries refuse type changes. A control widget must support the new type. A value-locked variable refuses the edit, and so does an ephemeral one (system.goofi_home, system.audio_*). `control` sets the control-panel widget and its place, `null` clears it, and giving one makes `value` optional — which is what a panel sends when it moves a widget; a config-locked variable refuses it.",
-    "{value} — the value as stored, type-coerced");
+    "Change an existing variable's value: a number, a list of numbers (nested for a wider array), a bool or a string, as `variable entry add` takes it. A control widget must be able to draw the new value. A value-locked variable refuses the edit, and so does an ephemeral one (system.goofi_home, system.audio_*). `control` sets the control-panel widget and its place, `null` clears it, and giving one makes `value` optional — which is what a panel sends when it moves a widget; a config-locked variable refuses it.",
+    "{value} — the value as stored");
 
 op!(EntryRemove, "variable entry remove", 1, EntryRemoveArgs {
     pub name: String,
@@ -90,7 +87,7 @@ op!(GroupLock, "variable group lock", 1, GroupLockArgs {
 
 op!(ControlList, "control list", 0, NoArgs,
     "Every control panel and the group it draws, and every group holding a widget: each element with its value, its widget (`control`), its lock and what it follows (`source`).",
-    "{panels: [{panel, group}], groups: {group: {lock, elements: [{name, element, type, value, control, lock, source?}]}}}");
+    "{panels: [{panel, group}], groups: {group: {lock, elements: [{name, element, value, control, lock, source?}]}}}");
 
 op!(ControlAdd, "control add", 2, ControlAddArgs {
     pub group: String,
@@ -106,7 +103,7 @@ op!(ControlAdd, "control add", 2, ControlAddArgs {
     pub step: Option<f64>,
     pub options: Option<Value>,
 },
-    "Bear a widget in a control panel's group: a variable of the kind's own type, carrying the widget. `kind` is knob/slider/number/text/toggle/dropdown/paint. `element` is minted `knob0`, `knob1`, … when not given, and the cell is the first free one when `x`/`y` are not. A config-locked group refuses it, as it refuses every other edit to what it holds.",
+    "Bear a widget in a control panel's group: a variable holding what the kind draws, carrying the widget. `kind` is knob/slider/number/text/toggle/dropdown/paint. `element` is minted `knob0`, `knob1`, … when not given, and the cell is the first free one when `x`/`y` are not. A config-locked group refuses it, as it refuses every other edit to what it holds.",
     "{name, control} — the variable's full name and the widget as stored");
 
 op!(ControlEdit, "control edit", 2, ControlEditArgs {
@@ -163,9 +160,9 @@ impl ReadOp for List {
     }
 }
 
-/// `v` as a variable value of type `ty`, refused when it is not one.
-fn typed(ty: &str, v: Value) -> Result<VariableValue, String> {
-    goofi_graph::variable_from_json(&json!({ "value": v, "type": ty })).ok_or_else(|| format!("`{v}` is not a {ty}"))
+/// `v` as a variable's value: a number, a list, a bool or a string.
+fn literal(v: Value) -> Result<Data, String> {
+    serde_json::from_value(v.clone()).map_err(|e| format!("`{v}` is not a number, a list, a bool or a string: {e}"))
 }
 
 impl WriteOp for EntryAdd {
@@ -184,17 +181,12 @@ impl WriteOp for EntryAdd {
         if tx.g.variables().get(&name).is_some() {
             return Err(format!("`{name}` already exists — `variable entry edit` changes it"));
         }
-        let value = match (a.group.is_some(), a.ty, a.value) {
-            (true, None, None) => VariableValue::Float(0.0),
-            (_, ty, val) => {
-                let ty = ty.ok_or("missing field `type`")?;
-                let val = val.map(|v| v.0).filter(|v| !v.is_null()).ok_or("missing value")?;
-                typed(&ty, val)?
-            }
+        let value = match (a.group.is_some(), a.value.map(|v| v.0).filter(|v| !v.is_null())) {
+            (true, None) => Data::number(0.0),
+            (_, val) => literal(val.ok_or("missing value")?)?,
         };
         tx.apply(Command::EditVariable { name: name.clone(), value: Some(value.clone()), at: None, control: a.control })?;
-        // As STORED: the conversion is type-directed, so a fraction into an int rounds.
-        Ok(json!({ "name": name, "value": goofi_graph::variable_to_json(&value)["value"] }))
+        Ok(json!({ "name": name, "value": value }))
     }
 
     fn label(_: &EntryAddArgs, o: &Value) -> String {
@@ -205,34 +197,24 @@ impl WriteOp for EntryAdd {
 impl WriteOp for EntryEdit {
     fn run(tx: &mut Txn, a: EntryEditArgs) -> Result<Value, String> {
         let name = a.name;
-        let held = tx.g.variables().get(&name).map(goofi_graph::variable_to_json);
-        let Some(held) = held else {
+        let Some(held) = tx.g.variables().get(&name).cloned() else {
             return Err(format!("no variable `{name}` — `variable entry add` creates one"));
         };
-        let ty = a.ty.clone().unwrap_or_else(|| held["type"].as_str().unwrap_or_default().to_string());
         // A control-only edit is what the panel sends when it moves a widget, so the value is optional
         // once a `control` is given — and the entry keeps the one it holds, followed or locked as it may be.
         let value = match a.value.map(|v| v.0).filter(|v| !v.is_null()) {
-            Some(val) => Some(typed(&ty, val)?),
-            None if a.ty.is_some() => Some(
-                tx.g.variables().get(&name).and_then(|value| value.converted_to(&ty))
-                    .ok_or_else(|| format!("unknown type `{ty}`"))?,
-            ),
+            Some(val) => Some(literal(val)?),
             None if a.control.is_some() => None,
             None => return Err("missing value".to_string()),
         };
-        let stored = match &value {
-            Some(v) => goofi_graph::variable_to_json(v)["value"].clone(),
-            None => held["value"].clone(),
-        };
+        let stored = value.clone().unwrap_or(held);
         tx.apply(Command::EditVariable { name, value, at: None, control: a.control })?;
         Ok(json!({ "value": stored }))
     }
 
     fn label(a: &EntryEditArgs, _: &Value) -> String {
-        match (&a.ty, &a.value) {
-            (Some(_), None) => format!("Change variable {} type", a.name),
-            (_, None) => format!("Edit control {}", a.name),
+        match &a.value {
+            None => format!("Edit control {}", a.name),
             _ => format!("Set variable {}", a.name),
         }
     }
@@ -395,10 +377,9 @@ impl WriteOp for ControlAdd {
         if tx.g.variables().get(&name).is_some() {
             return Err(format!("`{name}` already exists — `control edit` changes it"));
         }
-        let born = kind.born_value();
         let value = match a.value.map(|v| v.0).filter(|v| !v.is_null()) {
-            Some(v) => typed(born.type_name(), v)?,
-            None => born,
+            Some(v) => literal(v)?,
+            None => kind.born_value(),
         };
         let (bw, bh) = kind.born_box();
         let (w, h) = (a.w.unwrap_or(bw), a.h.unwrap_or(bh));
@@ -420,7 +401,7 @@ impl WriteOp for ControlAdd {
                 record[key] = v;
             }
         }
-        if matches!(value, VariableValue::Float(_)) {
+        if matches!(kind, ControlKind::Knob | ControlKind::Slider | ControlKind::Number) {
             for (key, or) in [("min", json!(0.0)), ("max", json!(1.0)), ("step", json!(0.01))] {
                 record.as_object_mut().unwrap().entry(key).or_insert(or);
             }
@@ -492,8 +473,8 @@ impl WriteOp for ControlRemove {
 /// The `paint` widget `group.element`, and the drawing it holds.
 fn drawing_of(g: &Graph, group: &str, element: &str) -> Result<(String, String), String> {
     let name = element_of(g, group, element)?;
-    match (g.variables().control(&name).map(|c| c.kind), g.variables().get(&name)) {
-        (Some(ControlKind::Paint), Some(VariableValue::Str(code))) => Ok((name, code.clone())),
+    match (g.variables().control(&name).map(|c| c.kind), g.variables().get(&name).map(Data::value)) {
+        (Some(ControlKind::Paint), Some(goofi_core::Value::Str(code))) => Ok((name, code.to_string())),
         (kind, _) => {
             let kind = kind.map_or("", ControlKind::as_str);
             Err(format!("`{name}` is a {kind} widget; only a `paint` one holds a drawing"))
@@ -511,7 +492,7 @@ impl WriteOp for ControlPaint {
         let count = ops.len();
         let code = goofi_core::drawing::append(&code, ops)?;
         let bytes = code.len() / 4 * 3 - code.bytes().rev().take_while(|b| *b == b'=').count();
-        tx.apply(Command::EditVariable { name, value: Some(VariableValue::Str(code)), at: None, control: None })?;
+        tx.apply(Command::EditVariable { name, value: Some(Data::text(code)), at: None, control: None })?;
         Ok(json!({ "ops": count, "bytes": bytes }))
     }
 

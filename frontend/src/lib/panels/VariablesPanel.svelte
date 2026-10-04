@@ -2,8 +2,9 @@
 	import { tick } from 'svelte';
 	import type { PanelProps } from 'panelty';
 	import { graph } from '$lib/stores/graph.svelte';
-	import { effectiveLock, groupedVariables, isValidIdentifier, type VariableType, type VariableView } from '$lib/crdt/graphDoc';
-	import { Button, Icon, IconButton, MODE_ATTRS, NumberInput, ScrollArea, Select, TextInput, Toggle } from '$lib/ui';
+	import type { Literal } from '$lib/api/generated';
+	import { effectiveLock, groupedVariables, isValidIdentifier, type VariableView } from '$lib/crdt/graphDoc';
+	import { Button, Icon, IconButton, MODE_ATTRS, NumberInput, ScrollArea, Select, TextInput } from '$lib/ui';
 
 	let {}: PanelProps = $props();
 	const g = graph();
@@ -77,16 +78,31 @@
 		}
 	}
 
-	function commitValue(entry: VariableView, raw: string | number | boolean): void {
-		let value: number | string | boolean;
-		if (entry.type === 'bool') value = raw === true;
-		else if (entry.type === 'string') value = String(raw);
-		else {
-			const number = Number(raw);
-			if (!Number.isFinite(number)) return;
-			value = entry.type === 'int' ? Math.round(number) : number;
-		}
+	/** The form a value holds: a `number`, a `text`, or a `list` for an array of more than one. */
+	type Form = 'number' | 'text' | 'list';
+	function formOf(value: Literal): Form {
+		return typeof value === 'string' ? 'text' : Array.isArray(value) ? 'list' : 'number';
+	}
+	function shown(value: Literal): string {
+		return typeof value === 'string' ? value : JSON.stringify(value);
+	}
+	function commitValue(entry: VariableView, raw: string | number): void {
+		let value: Literal = Number(raw);
+		if (formOf(entry.value) === 'text') value = String(raw);
+		else if (formOf(entry.value) === 'list') {
+			try {
+				value = JSON.parse(String(raw));
+			} catch {
+				return;
+			}
+			if (!Array.isArray(value)) return;
+		} else if (!Number.isFinite(value)) return;
 		void g.setVariableValue(entry.name, value).catch(report);
+	}
+	/** Switching the form starts the value over: 0, an empty text, or a list of one. */
+	function setForm(entry: VariableView, form: Form): void {
+		if (form === formOf(entry.value)) return;
+		void g.setVariableValue(entry.name, form === 'text' ? '' : form === 'list' ? [0] : 0).catch(report);
 	}
 
 	function commitName(entry: VariableView, raw: string): void {
@@ -150,21 +166,19 @@
 									</div>
 									<div class="entry-value">
 										{#if held.value || entry.source}
-											<span class="ro-value" data-testid="variable-value">{String(entry.value)}</span>
-										{:else if entry.type === 'bool'}
-											<Toggle data-testid="variable-value" value={entry.value === true} onChange={(value) => commitValue(entry, value)} />
-										{:else if entry.type === 'string'}
-											<TextInput inputmode="search" data-testid="variable-value" aria-label="Entry value"
-												value={String(entry.value)} autocomplete="off" onChange={(value) => commitValue(entry, value)} />
-										{:else}
-											<NumberInput data-testid="variable-value" aria-label="Entry value" value={Number(entry.value)}
+											<span class="ro-value" data-testid="variable-value">{shown(entry.value)}</span>
+										{:else if typeof entry.value === 'number'}
+											<NumberInput data-testid="variable-value" aria-label="Entry value" value={entry.value}
 												onChange={(value) => commitValue(entry, value)} />
+										{:else}
+											<TextInput inputmode="search" data-testid="variable-value" aria-label="Entry value"
+												value={shown(entry.value)} autocomplete="off" onChange={(value) => commitValue(entry, value)} />
 										{/if}
 									</div>
-									<Select data-testid="variable-type" aria-label="Entry type" value={entry.type}
+									<Select data-testid="variable-type" aria-label="Entry form" value={formOf(entry.value)}
 										disabled={held.config || held.value || !!entry.source}
-										options={['float', 'int', 'bool', 'string']}
-										onChange={(value) => void g.setVariableType(entry.name, value as VariableType).catch(report)} />
+										options={formOf(entry.value) === 'list' ? ['number', 'text', 'list'] : ['number', 'text']}
+										onChange={(value) => setForm(entry, value as Form)} />
 									{#if !held.config}
 										<IconButton variant="ghost" size="sm" data-testid="variable-delete" title="Delete entry"
 											label={`Delete ${entry.name}`} onclick={() => void g.removeVariable(entry.name).catch(report)}><Icon name="x" /></IconButton>

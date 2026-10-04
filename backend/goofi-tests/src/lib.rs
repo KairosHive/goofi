@@ -1147,11 +1147,8 @@ impl goofi_node::ExprEvaluator for FirstVar {
             })
             .ok_or_else(|| goofi_node::ExprError("no local arrived".into()))?;
         match ctx.target {
-            goofi_core::Param::Num { int: false, .. } => Ok(ctx.target.with_values(&[value]).expect("a number")),
-            goofi_core::Param::Bool { .. } | goofi_core::Param::Pulse => {
-                Ok(goofi_core::Param::boolean(goofi_node::mailbox::gate(value)))
-            }
-            other => Ok(other.clone()),
+            goofi_core::Param::Num { int: true, .. } | goofi_core::Param::Str { .. } => Ok(ctx.target.clone()),
+            target => Ok(goofi_core::control::read(&goofi_core::Data::number(value), target)),
         }
     }
     fn release(&self, _id: goofi_node::BindingId) {}

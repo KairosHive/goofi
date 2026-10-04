@@ -679,7 +679,7 @@ fn a_pulse_fires_from_the_op_and_from_a_rising_edge_and_holds_no_value() {
     g.set_param(n, "common", "max_frequency", 25.0);
     g.call("node param request", j!({ "node": hex(n), "param": "count/reset", "request": "pulse" }));
     assert_eq!(g.call("undo", j!({}))["changed"], j!(true));
-    assert_eq!(g.doc()["nodes"][hex(n)]["params"]["common"]["max_frequency"]["value"], j!(50.0),
+    assert_eq!(g.doc()["nodes"][hex(n)]["params"]["common"]["max_frequency"]["value"], j!(50),
                "the undo took back the param edit, so the pulse left nothing on the stack");
 }
 

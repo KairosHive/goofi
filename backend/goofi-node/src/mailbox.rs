@@ -49,26 +49,10 @@ pub enum Var {
     Missing(String),
 }
 
-/// The one threshold a number crosses to read as true — for a `Bool` and for a pulse's gate.
-pub fn gate(x: f64) -> bool {
-    x > 0.0
-}
-
 /// A variable's value read into `target`'s shape, so a bare variable is coerced like any other source.
 fn value_as(value: &Param, target: &Param) -> Result<Param, String> {
-    if let (Param::Str { value, .. }, Param::Str { options, refresh, .. }) = (value, target) {
-        return Ok(Param::Str { value: value.clone(), options: options.clone(), refresh: *refresh });
-    }
-    value.as_f64().and_then(|x| number_as(x, target)).ok_or_else(|| format!("`{value:?}` does not fit `{target:?}`"))
-}
-
-/// A number in `target`'s shape; `None` for a string. A pulse is a GATE: it fires on the rise.
-fn number_as(x: f64, target: &Param) -> Option<Param> {
-    match target {
-        Param::Num { .. } => target.with_values(&[x]),
-        Param::Bool { .. } | Param::Pulse => Some(Param::Bool { value: gate(x) }),
-        Param::Str { .. } => None,
-    }
+    let held = goofi_core::control::data_of(value).ok_or_else(|| format!("`{value:?}` holds nothing"))?;
+    Ok(goofi_core::control::read(&held, target))
 }
 
 /// Split an optional flat array index from a reference or a resolved variable.
@@ -83,23 +67,18 @@ pub fn split_index(source: &str) -> Result<(&str, Option<usize>), String> {
     Ok((base, Some(index)))
 }
 
-/// One frame as a scalar param of `target`'s type — what a reference copies on arrival.
+/// One frame as a param of `target`'s kind — what a bare source copies on arrival: the element
+/// `index` names, or the frame whole.
 fn scalar_of(frame: &Data, target: &Param, index: Option<usize>) -> Result<Param, String> {
-    match (frame.value(), target) {
+    match (frame.value(), index) {
         (goofi_core::Value::Texture(_), _) => Err("a reference cannot read an unrendered texture submission".into()),
-        (goofi_core::Value::Str(s), Param::Str { options, refresh, .. }) if index.is_none() => {
-            Ok(Param::Str { value: s.to_string(), options: options.clone(), refresh: *refresh })
+        (goofi_core::Value::Table(_), _) => Err("a reference cannot follow a TABLE output".into()),
+        (goofi_core::Value::Array(a), Some(at)) => {
+            let x = a.values().nth(at).ok_or_else(|| format!("reference index {at} is outside frame {:?}", a.shape()))?;
+            Ok(goofi_core::control::read(&Data::number(f64::from(x)), target))
         }
-        (goofi_core::Value::Array(a), _) if index.is_some() || a.shape().iter().product::<usize>() == 1 => {
-            let at = index.unwrap_or(0);
-            let x = a.values().nth(at).ok_or_else(|| format!("reference index {at} is outside frame {:?}", a.shape()))? as f64;
-            number_as(x, target).ok_or_else(|| "a string param references a STRING output".to_string())
-        }
-        (goofi_core::Value::Array(a), _) => {
-            Err(format!("a reference needs one element, and this frame is {:?}", a.shape()))
-        }
-        (goofi_core::Value::Str(_), _) => Err("a STRING output references a string param".to_string()),
-        (goofi_core::Value::Table(_), _) => Err("a reference cannot follow a TABLE output".to_string()),
+        (goofi_core::Value::Str(_), Some(_)) => Err("a STRING output has no element to index".into()),
+        (_, None) => Ok(goofi_core::control::read(frame, target)),
     }
 }
 

@@ -221,7 +221,7 @@ pub fn node(
                         if let Some(v) = dim.as_f64() {
                             let mut values = shown.as_vec().unwrap_or_default().to_vec();
                             values[k] = v;
-                            shown = shown.with_values(&values).unwrap_or(shown);
+                            shown = goofi_core::control::read(&goofi_core::Data::numbers(values), &shown);
                         }
                         elements.push(format!("    {group}.{element} = {}\n", param_line(&dim, Some(&source))));
                     }
@@ -259,8 +259,7 @@ pub fn node(
 
 /// One variable as `variable list` and `control list` answer it.
 pub(crate) fn variable_json(g: &Graph, name: &str, v: &goofi_core::variables::Variable) -> Value {
-    let mut e = goofi_graph::variable_to_json(&v.value);
-    e["name"] = json!(name);
+    let mut e = json!({ "name": name, "value": v.value });
     // What holds it, its own lock and its group's together — the answer a writer needs.
     e["lock"] = json!(g.variables().lock_of(name));
     if let Some(c) = &v.control {

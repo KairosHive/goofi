@@ -296,7 +296,7 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			// still has its canvas.
 			await page.evaluate(async () => {
 				const g = (window as any).goofi;
-				await g.commands.addVariable('desk.level', 0.5, 'float', {
+				await g.commands.addVariable('desk.level', 0.5, {
 					kind: 'knob', min: 0, max: 1, step: 0.01, x: 0, y: 0, w: 3, h: 3
 				});
 				const panel = g.query.panels()[0];
@@ -491,7 +491,7 @@ test('a held slot or control element is picked for reference, and a held param t
 		await test.step('a held control element is picked, and a held param reads it', async () => {
 			await page.evaluate(async () => {
 				const g = (window as any).goofi;
-				await g.commands.addVariable('desk.level', 0.5, 'float', {
+				await g.commands.addVariable('desk.level', 0.5, {
 					kind: 'knob', min: 0, max: 1, step: 0.01, x: 0, y: 0, w: 3, h: 3
 				});
 				const panel = g.query.panels()[0];

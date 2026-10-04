@@ -84,13 +84,13 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("node edit", j!({ "node": hex(osc), "name": "carrier", "pos": [40.0, 60.0],
                              "viewer": [{ "slot": "out", "kind": "line" }] }));
     g.set_param(osc, "output", "sfreq", 128.0);
-    g.call("variable entry add", j!({ "name": "patch.subj", "value": "P01", "type": "string" }));
+    g.call("variable entry add", j!({ "name": "patch.subj", "value": "P01" }));
     // Every variable is in a group, so a bare name names nothing and is refused.
-    let why = g.refuse("variable entry add", j!({ "name": "loose", "value": 1.0, "type": "float" }));
+    let why = g.refuse("variable entry add", j!({ "name": "loose", "value": 1.0 }));
     assert!(why.contains("group"), "an ungrouped variable names the rule: {why}");
     // A rename is a compound: set the new name, delete the old, ONE undo step.
     g.call("compound", j!({ "ops": [
-        { "op": "variable entry add", "payload": { "name": "patch.participant", "value": "P01", "type": "string" } },
+        { "op": "variable entry add", "payload": { "name": "patch.participant", "value": "P01" } },
         { "op": "variable entry remove", "payload": { "name": "patch.subj" } },
     ] }));
     // A rename of an element or of its group follows into every expression that reads it, and
@@ -122,7 +122,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     assert!(why.contains("no variable group"), "{why}");
     // A variable can FOLLOW a producer: the manager writes it on every frame that changes it, and
     // nobody else may set it until the source is cleared. The reference follows a node rename.
-    g.call("variable entry add", j!({ "name": "desk.level", "value": 0.0, "type": "float" }));
+    g.call("variable entry add", j!({ "name": "desk.level", "value": 0.0 }));
     g.call("variable entry source", j!({ "name": "desk.level", "reference": "carrier.out" }));
     g.until("the followed variable to take the LFO's value", |g| {
         g.doc()["variables"]["desk.level"]["value"].as_f64().filter(|v| *v != 0.0)
@@ -254,7 +254,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // entry's `value` freezes its value — and each lock is ONE undoable command.
     g.call("variable group lock", j!({ "group": "desk", "config": true }));
     for (op, payload) in [
-        ("variable entry add", j!({ "name": "desk.more", "value": 1.0, "type": "float" })),
+        ("variable entry add", j!({ "name": "desk.more", "value": 1.0 })),
         ("variable entry rename", j!({ "name": "desk.handle", "to": "desk.grip" })),
         ("variable entry remove", j!({ "name": "desk.handle" })),
         ("variable group rename", j!({ "from": "desk", "to": "bench" })),
@@ -275,7 +275,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let why = g.refuse("variable group lock", j!({ "group": "system", "config": false }));
     assert!(why.contains("goofi's own"), "the system group's lock is nobody's to set: {why}");
     // A group can be EMPTY, minted at the first free `groupN`, and an entry born with no value
-    // is a float until retyped; each is ONE step, and a retype carries the value across.
+    // holds 0 until edited; each is ONE step, and an edit may change its form.
     assert_eq!(g.call("variable group add", j!({}))["group"], "group0");
     assert!(g.doc()["variable_groups"]["group0"].is_object());
     g.call("undo", j!({}));
@@ -288,29 +288,34 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.refuse("variable group add", j!({ "group": "bad name" }));
     assert_eq!(g.call("variable entry add", j!({ "group": "bench" }))["name"], "bench.entry0");
     assert_eq!(g.call("variable entry add", j!({ "group": "bench" }))["name"], "bench.entry1");
-    g.call("variable entry edit", j!({ "name": "bench.entry0", "type": "string", "value": "hello" }));
-    assert_eq!(g.doc()["variables"]["bench.entry0"]["type"], "string");
+    // A value is an array or a string, and an edit may switch between the two forms: a number, a
+    // bool and a list are arrays, nested for a wider one; text is a string. Undo walks it back.
+    g.call("variable entry edit", j!({ "name": "bench.entry0", "value": "hello" }));
     assert_eq!(g.doc()["variables"]["bench.entry0"]["value"], "hello");
     g.call("undo", j!({}));
-    assert_eq!(g.doc()["variables"]["bench.entry0"]["type"], "float");
+    assert_eq!(g.doc()["variables"]["bench.entry0"]["value"], 0);
     g.call("redo", j!({}));
-    g.call("variable entry edit", j!({ "name": "bench.entry1", "type": "bool", "value": true }));
-    assert_eq!(g.doc()["variables"]["bench.entry1"]["value"], true);
-    g.call("variable entry edit", j!({ "name": "bench.entry1", "type": "int" }));
-    assert_eq!(g.doc()["variables"]["bench.entry1"]["value"], 1, "a retype carries the value across");
+    assert_eq!(g.call("variable entry edit", j!({ "name": "bench.entry1", "value": true }))["value"], 1,
+               "a bool is stored as the number it reads as");
+    assert_eq!(g.call("variable entry edit", j!({ "name": "bench.entry1", "value": [[1, 2], [3, 4.5]] }))["value"],
+               j!([[1, 2], [3, 4.5]]), "a nested list is an array of that shape, printed back as it was typed");
+    assert_eq!(g.doc()["variables"]["bench.entry1"]["value"], j!([[1, 2], [3, 4.5]]));
+    g.refuse("variable entry edit", j!({ "name": "bench.entry1", "value": [[1, 2], [3]] }));
+    g.refuse("variable entry edit", j!({ "name": "bench.entry1", "value": { "no": "object" } }));
     g.call("undo", j!({}));
-    assert_eq!(g.doc()["variables"]["bench.entry1"]["type"], "bool");
-    g.refuse("variable entry edit", j!({ "name": "system.default_ufreq", "type": "string", "value": "no" }));
-    g.call("variable entry add", j!({ "name": "bench.knob", "type": "float", "value": 1.0,
+    assert_eq!(g.doc()["variables"]["bench.entry1"]["value"], 1);
+    g.refuse("variable entry edit", j!({ "name": "system.default_ufreq", "value": "no" }));
+    g.call("variable entry add", j!({ "name": "bench.knob", "value": 1.0,
         "control": { "kind": "knob", "x": 0, "y": 0, "w": 3, "h": 3 } }));
     let before = g.doc()["variables"]["bench.knob"].clone();
-    g.refuse("variable entry edit", j!({ "name": "bench.knob", "type": "string", "value": "no" }));
-    assert_eq!(g.doc()["variables"]["bench.knob"], before, "a widget's entry keeps its type");
+    let why = g.refuse("variable entry edit", j!({ "name": "bench.knob", "value": "no" }));
+    assert!(why.contains("knob") && why.contains("string"), "a widget draws what it can: {why}");
+    assert_eq!(g.doc()["variables"]["bench.knob"], before, "a widget's entry keeps its form");
 
     // …and a compound is a UNIT: a refused step takes back the one that landed, and records nothing,
     // which is what the step count below would catch.
     let why = g.refuse("compound", j!({ "ops": [
-        { "op": "variable entry add", "payload": { "name": "patch.tmp", "value": 1.0, "type": "float" } },
+        { "op": "variable entry add", "payload": { "name": "patch.tmp", "value": 1.0 } },
         { "op": "node edit", "payload": { "node": GHOST, "name": "renamed" } },
     ] }));
     assert!(why.contains("step 1"), "the refusal names the step that failed: {why}");
@@ -356,7 +361,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
         let n = f32s(&mprobe.latest()?)[0];
         (n >= base + 1.0).then(|| {
             assert_eq!(n, base + 1.0, "two edits in one batch settled as one write");
-            assert_eq!(g.doc()["nodes"][hex(meter)]["params"]["control"]["value"]["value"], j!(2.0));
+            assert_eq!(g.doc()["nodes"][hex(meter)]["params"]["control"]["value"]["value"], j!(2));
         })
     });
     let scope = g.call("nodes group", j!({ "nodes": [hex(osc), hex(buf)], "pos": [0.0, 0.0] }))["inst_id"]
@@ -391,7 +396,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.refuse("node add", j!({ "type": "MissingNodeType" }));
     assert_eq!(g.state.history_labels("test"), labels, "a refused write keeps the redo run");
     g.refuse("compound", j!({ "ops": [
-        { "op": "variable entry add", "payload": { "name": "patch.tmp", "value": 1.0, "type": "float" } },
+        { "op": "variable entry add", "payload": { "name": "patch.tmp", "value": 1.0 } },
         { "op": "node edit", "payload": { "node": GHOST, "name": "renamed" } },
     ] }));
     assert_eq!(g.doc(), before, "the refused batch leaves the graph unchanged");
@@ -402,12 +407,12 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let r = g.call("redo", j!({}));
     assert_eq!(r["changed"], false, "the redo run went with the new command");
     assert!(r["redo"].is_null(), "{r}");
-    // Empty groups and the retyped entries reach the file and come back.
+    // Empty groups and the edited entries reach the file and come back.
     let saved = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
     g.call("session load", j!({ "content": saved }));
     assert!(g.doc()["variable_groups"]["group0"].is_object() && g.doc()["variable_groups"]["group1"].is_object());
     assert_eq!(g.doc()["variables"]["bench.entry0"]["value"], "hello");
-    assert_eq!(g.doc()["variables"]["bench.entry1"]["type"], "bool");
+    assert_eq!(g.doc()["variables"]["bench.entry1"]["value"], 1);
 
     // The NAME is the arrangement's to mint: a caller that asks for none gets the first free
     // `Tab n`, so nobody has to reserve one against a strip they cannot see settle.
@@ -464,14 +469,14 @@ async fn a_drag_previews_and_commits_as_one_step_and_a_cut_socket_takes_it_back(
     g.call("node param edit", edit(0.7));
     assert!(dirty(&g), "the commit is");
     assert_eq!(g.call("undo", j!({}))["changed"], true);
-    assert_eq!(amp(&g), j!(1.0), "ONE undo returns to before the drag, not to its last preview");
+    assert_eq!(amp(&g), j!(1), "ONE undo returns to before the drag, not to its last preview");
     assert_eq!(g.call("redo", j!({}))["changed"], true);
     assert_eq!(amp(&g), j!(0.7));
 
     // An undo with a drag in flight takes the drag back first, then flips.
     g.preview("node param edit", edit(0.3));
     assert_eq!(g.call("undo", j!({}))["changed"], true);
-    assert_eq!(amp(&g), j!(1.0));
+    assert_eq!(amp(&g), j!(1));
     assert_eq!(g.call("redo", j!({}))["changed"], true);
     assert_eq!(amp(&g), j!(0.7));
 
@@ -522,12 +527,12 @@ fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
     assert_eq!(one.call("redo", j!({}))["changed"], true);
 
     let before = one.doc();
-    let bad_control = j!({ "kind": "toggle", "x": 0, "y": 0, "w": 2, "h": 2 });
-    one.refuse("variable entry add", j!({ "name": "audit.bad", "type": "float", "value": 1.0, "control": bad_control }));
+    let bad_control = j!({ "kind": "text", "x": 0, "y": 0, "w": 2, "h": 2 });
+    one.refuse("variable entry add", j!({ "name": "audit.bad", "value": 1.0, "control": bad_control }));
     assert_eq!(one.doc(), before);
-    one.call("variable entry add", j!({ "name": "audit.bad", "type": "float", "value": 1.0 }));
+    one.call("variable entry add", j!({ "name": "audit.bad", "value": 1.0 }));
     one.refuse("variable entry edit", j!({ "name": "audit.bad", "value": 2.0, "control": bad_control }));
-    one.call("variable entry add", j!({ "name": "audit.after", "type": "float", "value": 3.0 }));
+    one.call("variable entry add", j!({ "name": "audit.after", "value": 3.0 }));
     assert_eq!(one.doc()["variables"]["audit.bad"]["value"], 1.0);
     one.refuse("compound", j!({ "ops": [
         { "op": "variable entry edit", "payload": { "name": "audit.after", "value": 4.0 } },
@@ -541,8 +546,8 @@ fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
     one.call("redo", j!({}));
     assert!(one.doc()["variables"].get("audit.bad").is_none());
 
-    one.call("variable entry add", j!({ "name": "first.one", "type": "float", "value": 1.0 }));
-    two.call("variable entry add", j!({ "name": "second.two", "type": "float", "value": 2.0 }));
+    one.call("variable entry add", j!({ "name": "first.one", "value": 1.0 }));
+    two.call("variable entry add", j!({ "name": "second.two", "value": 2.0 }));
     let before = one.doc();
     one.refuse("variable group rename", j!({ "from": "first", "to": "second" }));
     assert_eq!(one.doc(), before);
@@ -554,7 +559,7 @@ fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
     one.call("undo", j!({}));
     assert_eq!(one.doc()["variables"]["first.one"]["value"], 1.0);
     one.call("redo", j!({}));
-    two.call("variable entry add", j!({ "name": "renamed.peer", "type": "float", "value": 2.0 }));
+    two.call("variable entry add", j!({ "name": "renamed.peer", "value": 2.0 }));
     one.call("undo", j!({}));
     assert_eq!(one.doc()["variables"]["renamed.peer"]["value"], 2.0);
     assert_eq!(one.doc()["variables"]["renamed.one"]["value"], 1.0);
@@ -836,11 +841,11 @@ fn a_refusal_names_what_the_caller_could_try_instead() {
     let g = Goofi::new();
     let osc = g.add("LFO");
 
-    // A variable's TYPE is what every expression reading it depends on, so it is immutable: an
-    // edit coerces to the type held, and a value the type cannot read is refused by naming it.
+    // A variable's FORM is what every expression reading it depends on, so under a config lock it
+    // is immutable: a string offered to a config-locked array is refused by naming both.
     let why = g.refuse("variable entry edit", j!({ "name": "system.default_ufreq", "value": "fast" }));
-    assert!(why.contains("float") && why.contains("fast"), "{why}");
-    let why = g.refuse("variable entry add", j!({ "name": "system.default_ufreq", "value": 9.0, "type": "float" }));
+    assert!(why.contains("array") && why.contains("fast"), "{why}");
+    let why = g.refuse("variable entry add", j!({ "name": "system.default_ufreq", "value": 9.0 }));
     assert!(why.contains("already exists") && why.contains("variable entry edit"), "{why}");
     assert_eq!(g.call("variable entry edit", j!({ "name": "system.default_ufreq", "value": 12.5 }))["value"], 12.5);
 
@@ -848,7 +853,7 @@ fn a_refusal_names_what_the_caller_could_try_instead() {
     // remove, and what it holds is this machine's .goofi folder, not anything a patch said.
     let home = g.call("variable list", j!({}))["variables"].as_array().unwrap().iter()
         .find(|e| e["name"] == "system.goofi_home").cloned().expect("goofi_home is seeded");
-    assert_eq!((&home["lock"]["value"], &home["type"]), (&j!(true), &j!("string")), "{home}");
+    assert_eq!(home["lock"]["value"], j!(true), "{home}");
     assert_eq!(home["value"], j!(goofi_core::path::to_slash(&goofi_supervisor::layout::home())));
     let why = g.refuse("variable entry edit", j!({ "name": "system.goofi_home", "value": "/tmp/elsewhere" }));
     assert!(why.contains("read-only"), "{why}");
@@ -997,24 +1002,30 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     for bad in ["bank.out[-1]", "bank.out[1.5]", "bank.out[1][0]"] {
         assert!(param(&g, j!({ "reference": bad }))["error"].as_str().is_some());
     }
-    // A frame with more than one element is a shape error on ARRIVAL, and the literal stands.
+    // A frame with more than one element reads whole: its first element, no error.
     param(&g, j!({ "reference": "signal.out" }));
-    g.until("the shape error", |g| line(g).contains("one element").then_some(()));
+    g.until("the wide frame to read", |g| {
+        let l = line(g);
+        (l.contains("ref: signal.out") && !l.contains("[error")).then_some(())
+    });
     // A literal on a driven param switches it to constant; both texts stay retained, and a mode
     // alone brings the reference back.
     // A value edit echoes no descriptor: the document carries the mode it switched.
     param(&g, j!({ "value": 7 }));
     let d = g.doc()["nodes"][hex(consumer)]["params"]["common"]["max_frequency"].clone();
     assert_eq!((&d["value"], &d["mode"], &d["reference"], &d["expression"]),
-               (&j!(7.0), &j!("constant"), &j!("signal.out"), &j!("nd('signal')")), "{d}");
-    // A mode alone switches among what is retained: the reference is still `signal.out`, so its
-    // shape error comes back. An empty reference clears that text and nothing else. The echoes
-    // of the reference edits above are still queued, so the subscription is taken afresh.
+               (&j!(7), &j!("constant"), &j!("signal.out"), &j!("nd('signal')")), "{d}");
+    // A mode alone switches among what is retained: the reference is still `signal.out`, and
+    // it reads again. An empty reference clears that text and nothing else. The echoes of the
+    // reference edits above are still queued, so the subscription is taken afresh.
     ev = g.events();
     param(&g, j!({ "mode": "reference" }));
     let d = field(&mut ev, "the retained reference is live", &|d| d["mode"] == j!("reference"));
     assert_eq!(d["reference"], j!("signal.out"), "{d}");
-    g.until("the shape error is back", |g| line(g).contains("one element").then_some(()));
+    g.until("the reference reads again", |g| {
+        let l = line(g);
+        (l.contains("ref: signal.out") && !l.contains("[error")).then_some(())
+    });
     param(&g, j!({ "reference": "" }));
     let d = field(&mut ev, "an empty reference clears it", &|d| d["mode"] == j!("constant"));
     assert_eq!((&d["reference"], &d["expression"]), (&j!(null), &j!("nd('signal')")), "{d}");
@@ -1029,10 +1040,10 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
        the previous source's failure under an expression that was working. */
     let mut live = g.events();
     let errors_of = |p: &serde_json::Value| p["errors"]["common"].get("max_frequency").cloned();
-    param(&g, j!({ "reference": "signal.out" }));
-    g.until("the shape error reaches the live plane", |_| {
+    param(&g, j!({ "reference": "signal.out[999]" }));
+    g.until("the index error reaches the live plane", |_| {
         let p = live.next("param_values")["nodes"][hex(consumer)].take();
-        errors_of(&p).is_some_and(|e| e.as_str().is_some_and(|m| m.contains("one element"))).then_some(())
+        errors_of(&p).is_some_and(|e| e.as_str().is_some_and(|m| m.contains("outside frame"))).then_some(())
     });
     param(&g, j!({ "reference": "gain.out" }));
     g.until("…and the clear does too", |_| {
@@ -1130,7 +1141,7 @@ fn a_viewer_bag_persists_and_refuses_a_word_outside_its_vocabulary() {
     g.call("node edit", j!({ "node": hex(osc), "viewer": [{ "slot": "out", "clear": true }] }));
     assert!(!view(&g).contains("yScale"), "the clear dropped the stored view: {}", view(&g));
 
-    g.call("variable entry add", j!({ "name": "patch.subject", "value": "P01", "type": "string" }));
+    g.call("variable entry add", j!({ "name": "patch.subject", "value": "P01" }));
     // The doc carries a lock only where one is held: the system group's, the machine value's.
     assert_eq!(g.doc()["variable_groups"]["system"]["lock"]["config"], true);
     assert_eq!(g.doc()["variables"]["system.goofi_home"]["lock"]["value"], true);

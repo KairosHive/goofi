@@ -4,7 +4,7 @@
 use goofi_core::record::RecordedOutput;
 use goofi_core::variables::Lock;
 pub use goofi_core::variables::Variable;
-use goofi_core::Param;
+use goofi_core::Data;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -62,7 +62,8 @@ pub struct NodeRecord {
 #[ts(optional_fields)]
 pub struct ParamEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<Scalar>,
+    #[ts(type = "Literal")]
+    pub value: Option<Data>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<Mode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,39 +96,7 @@ impl ParamEntry {
 
 /// Every param's literal, by group and name: what the patch holds of a node's params. Bounds,
 /// options and types are the class's, derived from the catalog on every read.
-pub type Values = IndexMap<String, IndexMap<String, Scalar>>;
-
-/// A param value as the document spells it. The declared type coerces it on the way in.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
-#[serde(untagged)]
-pub enum Scalar {
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    Str(String),
-    /// A number of more than one dimension.
-    Vec(Vec<f64>),
-}
-
-impl Scalar {
-    /// A param's literal; a pulse has none. A one-dimensional number is a bare number.
-    pub fn of(p: &Param) -> Option<Scalar> {
-        match p {
-            Param::Num { value, int, .. } => Some(match value.as_slice() {
-                [v] if *int => Scalar::Int(v.round() as i64),
-                [v] => Scalar::Float(*v),
-                _ => Scalar::Vec(value.clone()),
-            }),
-            Param::Bool { value } => Some(Scalar::Bool(*value)),
-            Param::Str { value, .. } => Some(Scalar::Str(value.clone())),
-            Param::Pulse => None,
-        }
-    }
-
-    pub fn to_json(&self) -> Value {
-        serde_json::to_value(self).expect("a scalar serializes")
-    }
-}
+pub type Values = IndexMap<String, IndexMap<String, Data>>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Link {

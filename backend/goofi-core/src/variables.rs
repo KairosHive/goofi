@@ -1,62 +1,10 @@
-//! Patch-scoped variables — named typed scalars shared across a patch.
+//! Patch-scoped variables — named frames, an array or a string each, shared across a patch.
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// A patch variable's value — a typed scalar. The serde shape is the `{type, value}` of the `.gfi`
-/// and the doc: the tag is what preserves float-vs-int through JSON's whole-float normalization.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
-#[serde(tag = "type", content = "value", rename_all = "lowercase")]
-pub enum VariableValue {
-    Float(f64),
-    Int(i64),
-    Bool(bool),
-    #[serde(rename = "string")]
-    Str(String),
-}
-
-impl VariableValue {
-    /// The type's name, as the doc and every op spell it.
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            VariableValue::Float(_) => "float",
-            VariableValue::Int(_) => "int",
-            VariableValue::Bool(_) => "bool",
-            VariableValue::Str(_) => "string",
-        }
-    }
-
-    /// Convert to a named type, using an empty value when conversion is not possible.
-    pub fn converted_to(&self, ty: &str) -> Option<VariableValue> {
-        let template = match ty {
-            "float" => VariableValue::Float(0.0),
-            "int" => VariableValue::Int(0),
-            "bool" => VariableValue::Bool(false),
-            "string" => VariableValue::Str(String::new()),
-            _ => return None,
-        };
-        Some(self.clone().coerced_like(&template))
-    }
-
-    /// Coerce to `template`'s variant, so an existing variable's declared type stays stable on set.
-    fn coerced_like(self, template: &VariableValue) -> VariableValue {
-        use VariableValue as G;
-        match (template, self) {
-            (G::Float(_), G::Int(v)) => G::Float(v as f64),
-            (G::Float(_), G::Bool(v)) => G::Float(if v { 1.0 } else { 0.0 }),
-            (G::Float(_), G::Str(_)) => G::Float(0.0),
-            (G::Int(_), G::Float(v)) => G::Int(v.round() as i64),
-            (G::Int(_), G::Bool(v)) => G::Int(v.into()),
-            (G::Int(_), G::Str(_)) => G::Int(0),
-            (G::Bool(_), G::Float(_) | G::Int(_) | G::Str(_)) => G::Bool(false),
-            (G::Str(_), G::Float(v)) => G::Str(v.to_string()),
-            (G::Str(_), G::Int(v)) => G::Str(v.to_string()),
-            (G::Str(_), G::Bool(v)) => G::Str(v.to_string()),
-            (_, same) => same,
-        }
-    }
-}
+use crate::{control, Data, Value};
 
 /// What a control element is drawn as.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -95,14 +43,22 @@ impl ControlKind {
         }
     }
 
-    /// The value a widget of this kind is born holding — which is also its type.
-    pub fn born_value(self) -> VariableValue {
+    /// What a widget of this kind draws: one `number`, a `text`, or `any` frame's truth.
+    pub fn draws(self) -> &'static str {
         match self {
-            ControlKind::Knob | ControlKind::Slider | ControlKind::Number => VariableValue::Float(0.0),
-            ControlKind::Toggle => VariableValue::Bool(false),
+            ControlKind::Knob | ControlKind::Slider | ControlKind::Number => "number",
+            ControlKind::Toggle => "any",
+            ControlKind::Text | ControlKind::Dropdown | ControlKind::Paint => "text",
+        }
+    }
+
+    /// The value a widget of this kind is born holding.
+    pub fn born_value(self) -> Data {
+        match self {
             // A drawing is base64 byte code (`goofi_core::drawing`), a STRING like any other: the
             // widget draws it, an expression reads it, and nothing new crosses the wire for it.
-            ControlKind::Text | ControlKind::Dropdown | ControlKind::Paint => VariableValue::Str(String::new()),
+            ControlKind::Text | ControlKind::Dropdown | ControlKind::Paint => Data::text(""),
+            _ => Data::number(0.0),
         }
     }
 
@@ -171,24 +127,22 @@ pub struct Control {
 }
 
 impl Control {
-    /// Whether this widget can draw `value`'s type.
-    pub fn fits(&self, value: &VariableValue) -> bool {
-        use ControlKind as K;
-        use VariableValue as G;
-        match self.kind {
-            K::Knob | K::Slider | K::Number => matches!(value, G::Float(_) | G::Int(_)),
-            K::Toggle => matches!(value, G::Bool(_)),
-            K::Text | K::Dropdown | K::Paint => matches!(value, G::Str(_)),
+    /// Whether this widget can draw `value`, by what its kind draws.
+    pub fn fits(&self, value: &Data) -> bool {
+        match (self.kind.draws(), value.value()) {
+            ("number", Value::Array(a)) => a.shape() == [1],
+            ("any", _) | ("text", Value::Str(_)) => true,
+            _ => false,
         }
     }
 
     /// Why this widget cannot draw `value`, in the words a refusal uses.
-    pub fn mismatch(&self, value: &VariableValue) -> String {
-        format!("a `{}` cannot draw a {}", self.kind.as_str(), value.type_name())
+    pub fn mismatch(&self, value: &Data) -> String {
+        format!("a `{}` cannot draw {}", self.kind.as_str(), control::form(value))
     }
 }
 
-/// A lock on a variable or a whole group: `config` freezes the name, the type, the widget and
+/// A lock on a variable or a whole group: `config` freezes the name, the widget and
 /// membership; `value` freezes the value alone. A group's lock reaches every member.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct Lock {
@@ -224,7 +178,7 @@ pub struct VariableSource {
 /// never carries it.
 pub struct VariableDef {
     pub name: &'static str,
-    pub value: fn() -> VariableValue,
+    pub value: fn() -> Data,
     pub doc: &'static str,
     /// Whether goofi owns the value outright: nobody may set it, and no patch carries it.
     pub ephemeral: bool,
@@ -237,61 +191,61 @@ pub const DEFAULT_SIZE: u32 = 1024;
 pub static SYSTEM_VARIABLES: &[VariableDef] = &[
     VariableDef {
         name: "system.default_ufreq",
-        value: || VariableValue::Float(30.0),
+        value: || Data::number(30.0),
         doc: "Default update rate (Hz) for producer nodes that have not overridden it.",
         ephemeral: false,
     },
     VariableDef {
         name: "system.viewer_fps",
-        value: || VariableValue::Float(30.0),
+        value: || Data::number(30.0),
         doc: "The fastest a viewer is served (frames a second), whatever rate its display declares.",
         ephemeral: false,
     },
     VariableDef {
         name: "system.default_width",
-        value: || VariableValue::Int(DEFAULT_SIZE as i64),
+        value: || Data::number(f64::from(DEFAULT_SIZE)),
         doc: "Default texture width (pixels) for graphics nodes that make their own frames.",
         ephemeral: false,
     },
     VariableDef {
         name: "system.default_height",
-        value: || VariableValue::Int(DEFAULT_SIZE as i64),
+        value: || Data::number(f64::from(DEFAULT_SIZE)),
         doc: "Default texture height (pixels) for graphics nodes that make their own frames.",
         ephemeral: false,
     },
     VariableDef {
         name: "system.audio_rate",
-        value: || VariableValue::Float(0.0),
+        value: || Data::number(0.0),
         doc: "The audio clock's sample rate. The audio engine says it; 0 where no engine runs.",
         ephemeral: true,
     },
     VariableDef {
         name: "system.audio_channels",
-        value: || VariableValue::Int(0),
+        value: || Data::number(0.0),
         doc: "How many channels the audio clock carries. The audio engine says it; 0 where no engine runs.",
         ephemeral: true,
     },
     VariableDef {
         name: "system.audio_device",
-        value: || VariableValue::Str(String::new()),
+        value: || Data::text(""),
         doc: "The device driving the audio clock, empty under the external clock or where none is open.",
         ephemeral: true,
     },
     VariableDef {
         name: "system.audio_driver",
-        value: || VariableValue::Str(String::new()),
+        value: || Data::text(""),
         doc: "The ASIO driver holding the process, empty where none does — one loads at a time, so it is the patch's.",
         ephemeral: true,
     },
     VariableDef {
         name: "system.audio_hosts",
-        value: || VariableValue::Str(String::new()),
+        value: || Data::text(""),
         doc: "The audio APIs this build carries, comma separated. Every device name begins with one of them, so this is the whole of what a device can be chosen from.",
         ephemeral: true,
     },
     VariableDef {
         name: "system.goofi_home",
-        value: || VariableValue::Str(crate::path::to_slash(&goofi_supervisor::layout::home())),
+        value: || Data::text(crate::path::to_slash(&goofi_supervisor::layout::home())),
         doc: "The .goofi folder, where goofi keeps its own files. The machine says where it is.",
         ephemeral: true,
     },
@@ -369,13 +323,13 @@ fn group_of(name: &str) -> &str {
     split_variable(name).map(|(g, _)| g).unwrap_or(name)
 }
 
-/// One variable: its typed value beside the widget, source and lock it carries. The serde
-/// shape is the `.gfi`'s and the doc's: `{type, value, control?, source?, lock?}`.
+/// One variable: its value beside the widget, source and lock it carries. The serde shape is
+/// the `.gfi`'s and the doc's: `{value, control?, source?, lock?}`, the value a literal.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[ts(optional_fields)]
 pub struct Variable {
-    #[serde(flatten)]
-    pub value: VariableValue,
+    #[ts(type = "Literal")]
+    pub value: Data,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control: Option<Control>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -386,7 +340,7 @@ pub struct Variable {
 }
 
 impl Variable {
-    pub fn of(value: VariableValue) -> Variable {
+    pub fn of(value: Data) -> Variable {
         Variable { value, control: None, source: None, lock: None }
     }
 
@@ -432,7 +386,7 @@ impl VariableStore {
         self.groups.insert(SYSTEM_GROUP.to_string(), Lock { config: true, value: false });
     }
 
-    pub fn get(&self, name: &str) -> Option<&VariableValue> {
+    pub fn get(&self, name: &str) -> Option<&Data> {
         self.entries.get(name).map(|v| &v.value)
     }
     pub fn contains(&self, name: &str) -> bool {
@@ -457,9 +411,9 @@ impl VariableStore {
         Ok(std::mem::replace(&mut self.entries[name].source, source))
     }
 
-    /// The follower's own write: what the source delivered, coerced to the type held. It answers
-    /// whether the value CHANGED, and a value-locked variable takes nothing, silently.
-    pub fn follow(&mut self, name: &str, value: VariableValue) -> bool {
+    /// The follower's own write: what the source delivered. It answers whether the value
+    /// CHANGED, and a value-locked variable takes nothing, silently.
+    pub fn follow(&mut self, name: &str, value: Data) -> bool {
         // A variable with no source has no follower: a pick already in flight when one is cleared
         // would otherwise land after, and overwrite the value the clearing author then typed.
         if is_ephemeral(name) || self.lock_of(name).value || self.source(name).is_none() {
@@ -471,17 +425,16 @@ impl VariableStore {
     /// An ENGINE's own published fact, which is why it passes the value lock: the lock exists to
     /// keep every other writer out, and the engine is the one it is held for. Only an ephemeral
     /// name takes one. Answers whether the value MOVED, which is what a rebind is worth doing for.
-    pub fn publish(&mut self, name: &str, value: VariableValue) -> bool {
+    pub fn publish(&mut self, name: &str, value: Data) -> bool {
         is_ephemeral(name) && self.move_value(name, value)
     }
 
-    fn move_value(&mut self, name: &str, value: VariableValue) -> bool {
+    fn move_value(&mut self, name: &str, value: Data) -> bool {
         let Some(existing) = self.entries.get_mut(name) else { return false };
-        let coerced = value.coerced_like(&existing.value);
-        if existing.value == coerced {
+        if existing.value == value {
             return false;
         }
-        existing.value = coerced;
+        existing.value = value;
         true
     }
 
@@ -577,8 +530,9 @@ impl VariableStore {
         self.entries.get(name)?.control.as_ref()
     }
 
-    /// Set an existing variable. A type change also requires an unlocked configuration.
-    pub fn set(&mut self, name: &str, value: VariableValue) -> Result<(), String> {
+    /// Set an existing variable. A change of FORM, an array for a string or back, is what every
+    /// expression reading it depends on, so it also needs an unlocked configuration.
+    pub fn set(&mut self, name: &str, value: Data) -> Result<(), String> {
         if is_ephemeral(name) {
             return Err(format!("variable `{name}` is read-only: it is ephemeral, and goofi says what it holds"));
         }
@@ -588,21 +542,19 @@ impl VariableStore {
         if let Some(s) = self.source(name) {
             return Err(format!("variable `{name}` follows `{}`; clear its source to set it", s.reference));
         }
-        match self.get(name) {
-            Some(existing) => {
-                if existing.type_name() != value.type_name() {
-                    self.config_locked(name)?;
-                }
-                self.entries[name].value = value;
-                Ok(())
-            }
-            None => Err(format!("no such variable `{name}`")),
+        let Some(existing) = self.get(name) else { return Err(format!("no such variable `{name}`")) };
+        if existing.dtype_tag() != value.dtype_tag() {
+            self.config_locked(name).map_err(|why| {
+                format!("{why}, and it holds {}: {} is {}", control::form(existing), control::text(&value), control::form(&value))
+            })?;
         }
+        self.entries[name].value = value;
+        Ok(())
     }
 
     /// Add a NEW user variable, at ordered position `at` (clamped) when given — the re-add a
     /// delete/rename undo needs. Errors on an invalid name or a collision.
-    pub fn add(&mut self, name: &str, value: VariableValue, at: Option<usize>) -> Result<(), String> {
+    pub fn add(&mut self, name: &str, value: Data, at: Option<usize>) -> Result<(), String> {
         if !is_valid_variable_name(name) {
             return Err(format!("invalid variable name `{name}`: {VARIABLE_NAME_RULE}"));
         }
@@ -700,7 +652,7 @@ impl VariableStore {
     pub fn apply_change(
         &mut self,
         name: &str,
-        value: Option<VariableValue>,
+        value: Option<Data>,
         at: Option<usize>,
         control: Option<Option<Control>>,
     ) -> Result<(), String> {
