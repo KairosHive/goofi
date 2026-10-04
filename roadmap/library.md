@@ -2,9 +2,11 @@
 
 Find, inspect, filter and install node bundles in goofi. The library includes builtin nodes,
 installed external nodes, saved local nodes and nodes available from registered GitHub sources.
-Implementation plan agreed 2026-10-03. This entry owns node distribution; the plugin interface
-remains in `sdk/README.md`. All implementation stages below are pending. This planning session
-changed documentation only; no nodes have moved and no implementation builds have run.
+Implementation plan agreed 2026-10-03. This entry owns node distribution and the remaining
+node-content work for graphics, fractal textures, simulation and timbre. The plugin interface
+remains in `sdk/README.md`. All local-library stages are pending; no nodes have moved and no
+implementation builds have run. Deferred release and node-content work follows the local plan
+and is not part of the current build scope.
 
 ## Decisions
 
@@ -32,7 +34,9 @@ changed documentation only; no nodes have moved and no implementation builds hav
   without an installed checkout, use authenticated Git to fetch filtered objects into a
   supervised temporary object store, without a working-tree checkout. Read the file tree and
   required source blobs, then delete the temporary store. Retain only the parsed index with
-  its source commit ID and index timestamp. No separate GitHub API login is required.
+  its source commit ID and index timestamp. Reuse an unchanged index and existing installed
+  repo objects where possible. Static fields that require evaluation stay unknown until a
+  local probe supplies them. No separate GitHub API login is required.
 - Only whole bundles can be installed. A node inspection can offer its containing bundle's
   install action, but there is no node-only selection or node-install operation.
 - Bundles can be installed individually from a repo. Use Git's partial clone
@@ -43,6 +47,9 @@ changed documentation only; no nodes have moved and no implementation builds hav
   make a second clone or install the repo's other bundles. Git metadata is still repo-wide.
   Store installed bundle IDs once; derive goofi's sparse selection from them and their required
   helper folders. A checked-out helper folder does not itself become an installed bundle.
+  The first install creates the persistent partial clone; later installs and pulls reuse it.
+  Installation can fetch objects already read during temporary indexing because that store
+  was discarded, but it does not require a full repo download.
 - A bundle's plus button automatically obtains the repo, installs its Python requirements,
   compiles its Rust nodes and prepares/registers its node types. No separate user clone, build
   or refresh command is required. Installing another bundle reuses the same repo checkout.
@@ -50,18 +57,21 @@ changed documentation only; no nodes have moved and no implementation builds hav
   operations and the panel. Show when the upstream has changes and offer to pull the repo.
   The checkout's current files are the source of truth; remove the earlier immutable-install-pin
   requirement. Git revisions describe state, but do not prevent manual updates or local edits.
-- The first bundle install creates the persistent partial clone. Later installs and pulls reuse
-  it; a pull fetches changes and populates the selected folders without cloning again or obtaining
-  all unrelated file contents. Initial installation can fetch objects already read by a temporary
-  index scan because that temporary store was discarded. This is limited repeated transfer, not
-  a requirement for a full repo clone. Use existing repo objects when indexing an installed repo.
+  Check upstream on explicit refresh or panel entry. Pull only on user action, with fast-forward
+  behavior. Leave conflicts/divergence to manual Git; no automatic stash, reset or merge.
+- Uninstall removes the selection and reduces sparse paths when safe. Keep the shared checkout,
+  Git objects and Python packages. Source unregistration does not uninstall its bundles.
+- The first-party repo is available by default; no external bundles install by default.
+- Patch load uses current installed source, reports missing bundles and does not automatically
+  install/pull. Record external requirements and observed revision. `_local` and patch-authored
+  source remain portable inside the archive.
 - All library management operations work without an active goofi server. CLI, frontend, MCP and
   scripts share one operation vocabulary and implementation. A later app start indexes and
   loads/prepares modified installed bundles.
 - This session targets the local, self-compiled version. Assume Git is installed and authenticated,
   including access to private repos. Add Git to development prerequisites beside uv, npm and
-  rustup. Bundled Git, helper tools and distribution authentication belong to
-  `release-binaries.md` and are outside this session's implementation scope.
+  rustup. Bundled Git, helper tools and distribution authentication are deferred below and
+  are outside this session's implementation scope.
 - All nodes use the existing shared Python environments. Resolve external requirements through
   uv into those environments; do not create bundle-specific environments. External Rust bundles
   supply Cargo files for their dependencies, which Cargo resolves during compilation.
@@ -240,9 +250,9 @@ The app adapter projects settled library results into the existing graph/catalog
 
 ## Implementation stages
 
-Complete these stages in order. A stage is done only when its listed result and relevant checks
-pass, its obsolete paths are removed, and its tested changes are committed. Keep the stage status
-and remaining work in this file current. Do not start implementation in this planning turn.
+Complete these local-library stages in order after the user resumes implementation. A stage is
+done only when its listed result and relevant checks pass, its obsolete paths are removed, and
+its tested changes are committed. Keep the stage status and remaining work in this file current.
 
 ### Stage 1 — Bundle identity and local storage
 
@@ -415,8 +425,10 @@ Status: pending.
 - Register `KairosHive/goofi-nodes` as the default available source. Install no external bundle
   automatically. Verify that the external checkout fits the scanner/build convention before
   considering the move complete. Local verification can use the checkout before it is published.
-- Update bundle roadmap references, setup instructions and plugin/library documentation. Keep
-  bundled Git/authentication work in `release-binaries.md` and website instructions deferred.
+- Update setup instructions and plugin/library documentation. Transfer the external bundles'
+  deferred node-content backlog below to `../goofi-nodes` with their sources. Keep graphics
+  work here because graphics stays builtin. Keep distribution work and website instructions
+  deferred.
 
 Checkpoint: a fresh goofi contains only builtin nodes and runs without the moved bundles' packages.
 The separate repo indexes correctly; individual bundle installs use the standard library path.
@@ -458,8 +470,9 @@ Status: pending.
   substantive failures, then review the fixes again. Report failed/skipped checks explicitly.
 - Verify ordinary authenticated Git use locally. Do not implement deferred distribution login,
   hosted services, website author guides or external product test infrastructure.
-- Update documentation and stage status. Remove this roadmap entry only when the local feature
-  is complete; leave deferred release work in the release roadmap. Commit the final tested state.
+- Update documentation and stage status. Remove completed sections; retain this entry while
+  library distribution or builtin node-content work remains. Remove the entry only when all its
+  work is complete or transferred to its owning repo. Commit the final tested state.
 
 Final required checks from `AGENTS.md`:
 
@@ -475,24 +488,205 @@ Run the relevant Playwright sessions from `tests/e2e` with the real backend. Dur
 run checks scoped to the stage and affected public sessions; run the full set at completion.
 Do not repeat broad checks after they pass unless a change or failure gives a reason.
 
-## Accepted behavior defaults
+## Deferred library distribution
 
-- Static fields that require evaluation stay unknown until a local probe supplies them.
-- Check upstream on explicit refresh or panel entry. Pull only on user action, with fast-forward
-  behavior. Leave conflicts/divergence to manual Git; no automatic stash, reset or merge.
-- Uninstall removes the selection and reduces sparse paths when safe. Keep the shared checkout,
-  Git objects and Python packages. Source unregistration does not uninstall its bundles.
-- The first-party repo is available by default; no external bundles install by default.
-- Patch load uses current installed source, reports missing bundles and does not automatically
-  install/pull. `_local` and patch-authored source remain portable inside the archive.
+Status: pending. This work is required for release binaries, after the local-library feature.
+`release-binaries.md` owns installer, provisioning and release delivery work; this section owns
+the library's additional tool and authentication requirements.
+
+- Bundle Git for Linux, Windows and macOS through the pinned tool manifest and `layout::Tool`.
+  Make Git available to library operations and to uv/Cargo for Git dependencies. Standalone
+  library CLI operations must provision required tools without starting a goofi server.
+- Choose supported private-repo authentication paths: HTTPS credential helpers/browser login,
+  SSH keys/agents, credential storage and the helper/SSH tools needed on each platform. Indexing,
+  cloning and pulling must use the same authenticated access. The local version continues to
+  use the user's installed, authenticated Git.
+- Resolve dependency preparation on machines without host build tools. The earlier shipped
+  biotuner Git requirement moves with its bundle; installation still needs Git. Source-only
+  Python packages such as python-rtmidi 1.5.8 on 3.14t need a C++ compiler. Decide how those
+  external requirements are supported and avoid repeated Git dependency downloads where possible.
+  Builtin wheel availability remains part of release provisioning.
+- Verify private source indexing, individual sparse bundle install, pull, Python preparation
+  and external Cargo builds with host Git/tools unavailable. Keep SDK binding and permit
+  dependencies outside the SDK vendor set, as specified in the bundle convention.
+
+## Deferred node-content work
+
+Status: pending. These proposals are separate from the nine local-library stages. Keep external
+simulation and biotuner work with their bundles when they move to `../goofi-nodes`. Graphics and
+its engine support remain in goofi. Implement shared engine features only for a concrete consumer.
+
+### Shared graphics decisions and engine support
+
+- Audit alpha conventions across generators, filters, viewers and recording. Shape scales RGB
+  by coverage; Constant supplies independent RGB and alpha. Agree on one policy for new nodes
+  and share it between Math and Composite.
+- Decide texture color space, channel selection, border modes, units and invalid numeric results
+  once. Preserve HDR values where the operation permits them.
+- One graphics tick is one pass. Decide how to support bounded internal passes/sub-steps for a
+  concrete consumer such as Bloom, wide Gaussian Blur, Optical Flow or Fluid. Fragment shaders
+  cannot loop over a texture they write; do not hide unbounded per-pixel loops.
+- The graphics tick has no per-stage budget or lower-rate stage execution. Measure the current
+  behavior before adding scheduling controls; saturation applies to the tick.
+- Decide between a shared point-splatting node and a compute stage before adding more particle
+  models. `Swarm.wgsl` and `Physarum.wgsl` each walk an `[N, D]` position array in a fragment
+  shader with a small cap; Physarum's overlay is capped at 512 agents.
+- Image and Text use the shared [Rust/Python graphics producer](../sdk/graphics.md).
+  Verify graphics changes in real GPU sessions with opaque/transparent images, unequal sizes,
+  boundary values and mode changes. Measure sampling cost at useful frame sizes outside
+  correctness tests; do not add timing thresholds to tests.
+
+### Builtin graphics nodes
+
+This build order follows TouchDesigner's [TOP catalog](https://docs.derivative.ca/TOP).
+Names are proposals for capabilities the existing nodes do not provide. Graphics stays builtin.
+
+First batch:
+
+| Capability | Smallest useful scope | TOP reference |
+| --- | --- | --- |
+| Reorder | Build RGBA from input channels, luminance, zero or one; second input for alpha and channel packing. | Reorder |
+| Color | Hue shift, saturation, value and monochrome in the agreed color space. Level keeps gain/offset/gamma/invert. | HSV Adjust, Monochrome |
+| Fit / Crop | Contain, cover, stretch, crop and pad to the common output size; alignment and border color. Extend Transform with independent X/Y scale, pivot and flip. | Fit, Crop, Transform, Flip |
+| Switch | Select one of two textures. Composite's `blend` provides a crossfade; many-input selection needs shared engine support. | Switch |
+| Mask | Replace or multiply alpha from a selected channel of another image; invert and remap the mask; keep foreground RGB. | Matte |
+
+Second batch:
+
+| Capability | Smallest useful scope | TOP reference |
+| --- | --- | --- |
+| Function | Per-channel abs, sign, power, root, log, exp, sin/cos, floor, ceil, round and fract; define invalid-domain results. Math keeps scale/range behavior. | Function |
+| Operation | Scalar operands use Math; texture operands use Composite's add/subtract/multiply/divide/minimum/maximum, with the shared alpha policy above. | Math, Function |
+| Edge / Convolve | Shared neighborhood sampling; Sobel magnitude/direction, Laplacian, sharpen, emboss and a small custom kernel. Presets share one node. | Edge, Convolve, Emboss |
+| Image | Load a still image from the patch workspace onto the graphics plane, preserve alpha and report decode failures. ImageFile in the external image bundle currently loads onto the signal plane. | Movie File In |
+| Text | Render a string with font, size, alignment, wrapping, foreground and background. Needs a font/raster upload path. | Text |
+| Remap | Sample an image at absolute UV coordinates from another texture with explicit outside-frame behavior. Could be a Displace mode. | Remap |
+| Pattern | Checker, grid, stripes and radial/angular coordinates. Extend Gradient/Shape where appropriate; Wave belongs to simulation. | Gradient, Circle, Rectangle |
+
+After the foundations:
+
+| Capability | Proposed scope |
+| --- | --- |
+| Key | Luma and chroma keys, soft selection and spill suppression. |
+| Morphology | Dilate and erode masks; opening/closing as compositions. |
+| Channel Mix | A channel matrix only after Reorder proves insufficient. |
+| Color space / Tone map | RGB↔HSV, linear↔sRGB and HDR-to-display after the color contract is agreed. |
+| Bloom | Bright-region extraction and multi-scale blur/add; use a patch first. A node needs internal passes. |
+| Normal / Slope | Height-to-gradient and height-to-normal; share derivative kernels with Edge. |
+| Corner Pin | Four-corner projective warp. |
+| Lens / Polar | Lens distortion and cartesian↔polar; prefer Remap presets where sufficient. |
+| Layout | Arrange images in a row, column or grid inside a texture. |
+| Resample | Nearest, linear and a proper downsample filter with explicit border modes. Upscale provides enlargement with linear, FSR1 and NIS; add a node only for a distinct resize stage. |
+| Blur extensions | Bilateral blur and mask-driven radius inside Blur. |
+| Composite extensions | Hue, saturation, color and luminosity blend modes inside Composite. |
+
+Additional engine support:
+
+| Capability | Required support |
+| --- | --- |
+| Cache / Delay / Hold | Bounded GPU frame history with capture, freeze, reset and indexed delay; one allocation/advancement owner; no viewer-driven clock. |
+| Analyze / Histogram | GPU reduction for min/max/mean and distributions, with a defined result format. |
+| Sample / Texture-to-signal | Read pixels, rows or regions through transport; specify readback rate and cost; never viewer snapshots. |
+| Media playback | Camera plays a video file. Add seek, pause, speed, timestamps and image sequences through the existing source owner. |
+| Optical Flow | Motion vectors from successive frames need history and a pyramid or internal passes; after Cache. |
+| External texture I/O | Screen capture and Spout/Syphon/NDI; optional for the basic bundle. |
+
+Do not add separate Add, Multiply, Over, Under, Invert, Limit, Circle, Rectangle, Movie File Out
+or texture In/Out nodes merely to match TOP names; existing nodes cover those roles. General 3D
+rendering (cameras, lights, materials) and vendor camera integrations are outside the core 2D work.
+
+### Fractal textures
+
+Port selected capabilities from `AntoineBellemare/fractal_visuals`, branch `mfractal-toolbox`.
+
+Remaining steps:
+
+1. Add a `curl` output mode to graphics Noise: a divergence-free RGB flow field for Displace and
+   Feedback. Compose `curl_weave`, `rheoscopic` and `dye_diffusion` from those nodes.
+2. Add `Fluid.wgsl` with state buffers and pressure projection after the shared sub-step decision.
+   Resolve how projection passes advance across ticks or within them. Fluid stays with graphics.
+
+Open:
+
+- Re-measure c2 after a cascade change by running WaveletLeaders on `node snapshot --raw` frames;
+  the existing `textures.rs` test checks kurtosis only.
+- `amount` controls cascade sigma, warp distance and local-dimension spread; `fbm`, `ridged` and
+  `billow` ignore it. Separate these meanings when changing controls.
+- `ridged` and `billow` cannot combine with `multifractal` because they share `fractal`. Splitting
+  them needs a third knob; `kind` remains the basis and `fractal` the combination rule.
+- Add the exact NumPy generators as a Python node emitting `[H, W]` to graphics SignalIn.
+  Keep shader approximations for motion and the exact signal implementation for stimuli.
+- Determine whether `universal_multifractal`'s Levy-stable cascade has a shader form; its
+  variates are costly to obtain from a hash.
+
+Do not add one node per rock/cloud texture: compose `marble`, `agate`, `veined` and related
+textures from Noise, Displace, Lookup and Threshold. Do not port `eddies`, `vorticity` and
+`plume` as written; their iterative projection depends on the shared graphics sub-step decision.
+
+### External simulation bundle
+
+Open node work, after the shared graphics decisions above:
+
+- `Swarm` is O(N squared) and capped at 2000 particles. A uniform grid could lift the cap by an
+  order of magnitude, but no current use requires it.
+- Add long-range delays to `NeuralMass` using the ring-buffer design in `Spiking`.
+- Flow-Lenia's mass-conserving transport fits a gather shader; measure total mass across ticks
+  before it ships.
+- A Swift-Hohenberg mode in `Reaction` needs a biharmonic and a stable, sufficiently small step.
+- A Manna mode in `Sandpile` can use gather only if both sides choose the same random neighbors.
+- Decide whether this bundle should contain audio-engine nodes.
+
+Do not add:
+
+- A simulation Fluid node: Feedback with Displace supplies advection and Feedback with Blur
+  supplies diffusion. Pressure projection belongs to graphics Fluid above.
+- A second noise node: add Ornstein-Uhlenbeck, fractional Brownian motion and 1/f^beta as signal
+  Noise modes; it currently has `uniform`, `normal` and `pink`.
+- A generic ODE node: param-source Python plus Function and state already provides it.
+- An active-inference agent while its input/output contract remains a research question.
+- A self-organizing map: it belongs with analysis nodes.
+- A digital waveguide: physical audio modelling is a separate audio-engine question.
+- Diffusion-limited aggregation or L-systems before goofi can draw their geometry.
+
+### External biotuner timbre integration
+
+A bank of plugin notes and an oscillator's partials are different sound constructions. Keep this
+clear in later UI documentation. Proposed nodes, in priority order:
+
+1. **TimbreRender.** Accept aligned partial frequencies and linear amplitudes, with optional
+   phases and decay times. Render on a pulse using biotuner's synthesis functions. Emit a
+   waveform with sfreq metadata and an optional WAV path for SignalIn or AudioPlayback, so
+   samplers and other VSTs can play an exact inharmonic timbre without a Vital-specific preset.
+   Define duration/envelope controls, bound render size, validate alignment and test frequency,
+   decay and file playback through a test audio host in the owning repo. Do not render on every
+   analysis frame.
+2. **TimbreMorph.** Accept two frequency/amplitude spectra and a mix control. Emit one spectrum
+   with stable partial identities. Interpolate positive frequencies in log space and fade missing
+   partials through zero amplitude. Define/test matching and retain identity through changing
+   counts; sorting each frame is not voice tracking. Verify that interpolation does not exchange
+   voices or introduce discontinuities. Share the partial/amplitude interface with VitalPreset
+   and TimbreRender.
+
+Existing nodes and host dependencies:
+
+- Move RhythmPlayer timing from `time.monotonic` to the audio clock. Accept EuclidRhythm's
+  per-row `steps` and emit every onset, including adjacent steps and narrow gates.
+- Preserve source-degree identity in rhythm construction to assign each rhythm voice a pitch;
+  a rhythm row is not necessarily a tuning index.
+- Add pulse-driven TimbreMatch for expensive matching if native synthesis needs those spectra.
+  At that point move matching controls out of VitalPreset so it remains an exporter.
+- Settle VST bend range and per-channel tuning in `vst3-per-note-tuning.md` before claiming
+  exact microtonal playback on arbitrary plugins. A generic normalized parameter mapper is
+  insufficient.
+- A held VST note currently ignores pitch/velocity changes: `vst3/node.rs` acts only on gate
+  edges. Release gates before changing a held pitch, or add host retuning.
 
 ## Continuation after context compaction
 
 - Read this file and `AGENTS.md`, then inspect the current diffs in goofi and `../goofi-nodes`.
 - All stages are pending. The approved architecture is the decisions/convention/lifecycle above;
   no additional product approval is needed to implement it when the user resumes the build.
-- This turn creates the staged plan only. Do not interpret the pending statuses as permission
-  to start implementation before that resume instruction.
+- Roadmap maintenance does not start implementation. Wait for the user's resume instruction.
 - Work through the stage checkpoints on `main`, preserve shared changes, and commit tested work
   with the required model trailer. Resolve routine implementation choices from the agreed design;
   ask only if evidence requires a material change to the product contract.

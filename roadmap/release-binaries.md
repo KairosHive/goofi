@@ -32,8 +32,8 @@ Rust nodes written at run time. Laid out 2026-10-02.
    workspace ships in the runtime, and `goofi-build` writes the source replacement, the linker
    and `--offline` into each generated crate. The node boundary is `extern "C"`, so a gnu-built
    node loads into the msvc-built host.
-   External bundles supply Cargo files for dependencies outside the SDK vendor set. Their builds
-   must retain the runtime SDK binding and allow Cargo to fetch those dependencies; see `library.md`.
+   External bundle build requirements and deferred Git packaging are owned by
+   [the library roadmap](library.md#deferred-library-distribution).
 6. **Python.** The bundled uv installs the pinned CPython 3.14t and 3.12 builds. The binary is
    linked on CI against the same python-build-standalone release with a relative rpath
    (`$ORIGIN/../lib`, `@executable_path/../lib`), and the installer carries libpython there
@@ -80,20 +80,14 @@ Rust nodes written at run time. Laid out 2026-10-02.
 - Linux arm64 and macOS x86_64 builds (runners exist for both).
 - Whether provisioning downloads the tools or the installer carries them (download keeps the
   installers small; carrying them makes the first launch work offline).
-- Git authentication for private node repos: choose HTTPS credential helpers/browser login,
-  SSH keys/agents, credential storage and helper/SSH tools for each platform. Indexing and
-  cloning must use the same authenticated access. The local version assumes an installed,
-  authenticated Git; distribution authentication is deferred from the current library work.
 
 ## Remaining work
 
 1. ffmpeg archives for the manifest: BtbN's LGPL builds cover Linux and Windows; macOS needs an
    LGPL build from somewhere, or one built on CI. Until then `Tool::Ffmpeg` is PATH's.
-2. Shipped bundle requirements must resolve to wheels for 3.14t and 3.12 on every platform: a
-   git requirement (biotuner today) makes uv call `git`, which an installed machine need not
-   have, and re-fetches on every requirements check; a source-only one (python-rtmidi 1.5.8
-   on 3.14t) needs a C++ compiler the machine does not have. The first launch stops on either.
-   Settle this when the bundles move out.
+2. Builtin bundle requirements must resolve to wheels for 3.14t and 3.12 on every platform.
+   External Git/source-only dependency support and private-repo authentication are tracked in
+   [the library roadmap](library.md#deferred-library-distribution).
 3. The app shell (`frontend/electron`) is packaged but was never opened here (no display to
    spare): the CI smoke test opens it once. Its icon is the favicon scaled to 512 px; a drawn
    one replaces `frontend/electron/build/icon.png`. npm 11 withholds `electron-winstaller`'s
@@ -103,9 +97,3 @@ Rust nodes written at run time. Laid out 2026-10-02.
    PATH); macOS zig and the self-contained windows-gnu link are proven there, and
    cargo-zigbuild's macOS flag rewrites are the reference if the macOS link fails. The smoke
    test installs every shipped bundle's packages, which is what a user's first launch does.
-5. Bundle Git for Linux, Windows and macOS through the pinned tool manifest and `layout::Tool`.
-   Include transport and credential helpers required by the chosen authentication paths. Git
-   must also be available to uv/Cargo when they resolve Git dependencies. Library CLI operations
-   must provision the tools they need without starting a goofi server. Verify private repo access,
-   static indexing, clone and pull with host Git/tools unavailable. This is release work, not part
-   of the current local-library implementation scope.
