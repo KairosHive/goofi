@@ -26,10 +26,9 @@ Status: in progress. This records the product decisions agreed through 2026-10-0
 - A variable with an expression is a computed variable: bare, it copies the element or the
   frame on the producer's thread, as the tap does today; computed, the manager's expression
   worker evaluates it like an engine's, latest-wins.
-- A pad's sheet reaches the GPU through a graphics node that reads `variables.<pad>` whole.
-  A param holds a number or a text, so this needs the array-bearing param of the expression
-  stage, or a cable from the variables producer. Until then a pad is drawn, saved and read by
-  an expression, and not rendered.
+- A pad's sheet reaches the GPU through the graphics `Variable` node of `midi.md`, which puts
+  a variable's frame on a cable. Until it ships a pad is drawn, saved and read by an
+  expression, and not rendered.
 - Every reader of a variable subscribes to its wire, the default `variables.system.*`
   expressions of every node included: a service takes 256 subscribers, so a patch of more
   nodes than that reading one variable is refused by the transport. Raise the ceiling, or

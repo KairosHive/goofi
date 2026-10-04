@@ -25,6 +25,13 @@ producer shipped (`667b3983`); builds on `state-machine.md`.
   binds the target to `variables.<device>.cc[<index>]` as the expression it is. It no longer
   scans nodes for a `midi` tag, so the node picker, the `Add a MIDI node` refusal and the
   per-node baseline go. A target is a widget's variable or a param, as today.
+- **A Variable node in every engine.** Some VST3 plugins take MIDI through an input slot, and
+  a cable is the only way into one. Each engine ships a `Variable` node with one param, the
+  variable's name, and one output slot that carries the variable's frame whole: the node
+  subscribes to the variable's wire as any consumer does and re-emits each frame on its own
+  plane, on the audio plane once per block. It is the one bridge from the variable layer onto
+  a cable, so a pad's sheet reaches a graphics node the same way. The reverse, a cable into a
+  variable, stays the follow source.
 - **The MIDI nodes go.** `node-bundles/signal/midi_in.py` and its `midi` tag are removed with
   the `mido` requirement; a patch that read `nd('keys').cc` reads `variables.keys.cc`. The
   device enumeration and reading move to the manager (one Rust owner under
@@ -36,6 +43,8 @@ producer shipped (`667b3983`); builds on `state-machine.md`.
 - The device owner in the manager: enumeration, grab, release, the reading thread writing the
   store, hot-plug (gone and back), shutdown through `AppState::shutdown`.
 - The ops, the vocabulary row, the schema, and the generated TS.
+- The `Variable` node for signal, audio and graphics, with a situation that cables a `notes`
+  array into a VST3 fixture and a pad into a graphics node.
 - The MIDI panel; MIDI learn over the bus; delete the node scan.
 - Remove `midi_in.py`, the tag, and the requirement. Rewrite `tests/e2e/tests/midi-learn.spec.ts`
   over a test device (a fixture that feeds the store, never a hardware port) and extend the
@@ -46,4 +55,5 @@ producer shipped (`667b3983`); builds on `state-machine.md`.
 - `midi_out.py`: a MIDI sink has no place on an input bus. Keep it as a node, or make a group
   flagged as a sink whose writes go to the port.
 - The audio engine's own voice driver reads MIDI notes to drive voices. Whether it reads the
-  bus (`notes` as a `[128]` array variable, one block behind) or keeps a port of its own.
+  bus through the `Variable` node (`notes` as a `[128]` array, one block behind) or keeps a
+  port of its own.
