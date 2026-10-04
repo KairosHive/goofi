@@ -5,6 +5,11 @@ patches in a browser. The backend is Rust; the frontend is SvelteKit.
 
 Use ASD-STE100 Simplified Technical English. Read the code for implementation details.
 
+If a message is sent to you with explicit directions, there are only three allowed actions:
+1. Explain why the directions are incorrect or cannot be followed. Sometimes, the instructions may simply be wrong.
+2. Request further clarification if the directions are ambiguous.
+3. Execute the directions.
+
 ## Guiding principles
 
 1. **One capability interface.** UI, CLI, MCP, scripts, and tests use the same op vocabulary.
