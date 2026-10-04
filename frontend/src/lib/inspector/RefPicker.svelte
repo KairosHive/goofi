@@ -9,13 +9,16 @@
 		value,
 		paramType,
 		onCommit,
-		testid
+		testid,
+		reader
 	}: {
 		/** The committed `node.slot`, or null. */
 		value: string | null;
 		paramType: string;
 		onCommit: (reference: string) => void;
 		testid: string;
+		/** The display name of the node whose param this is; absent for a control panel variable. */
+		reader?: string;
 	} = $props();
 
 	const want = $derived(wantedDtype(paramType));
@@ -29,7 +32,7 @@
 
 	function pickNode(n: string): void {
 		node = n;
-		const slots = refSlots(liveCatalogue(), n, want);
+		const slots = refSlots(liveCatalogue(), n, want, reader);
 		slot = slots.length === 1 ? slots[0].label : '';
 		if (node && slot) onCommit(`${node}.${slot}`);
 	}
@@ -42,7 +45,7 @@
 <div class="ref-picker" data-testid={testid}>
 	<Combobox
 		value={node}
-		options={() => refNodes(liveCatalogue(), want)}
+		options={() => refNodes(liveCatalogue(), want, reader)}
 		onCommit={pickNode}
 		placeholder="node"
 		testid={`${testid}-node`}
@@ -50,7 +53,7 @@
 	<span class="dot" aria-hidden="true">.</span>
 	<Combobox
 		value={slot}
-		options={() => refSlots(liveCatalogue(), node, want)}
+		options={() => refSlots(liveCatalogue(), node, want, reader)}
 		onCommit={pickSlot}
 		placeholder="slot"
 		testid={`${testid}-slot`}

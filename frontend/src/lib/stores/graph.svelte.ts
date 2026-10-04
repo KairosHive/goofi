@@ -663,6 +663,16 @@ export class GraphStore {
 		await this._paramCall('node param edit', node, group, name, { ...source });
 	}
 
+	/** One command puts a param back on its zero point: source and value together. */
+	async resetParam(node: string, group: string, name: string, zero: NonNullable<NodeInstanceInfo['baseline']>[string]): Promise<void> {
+		await this._paramCall('node param edit', node, group, name, {
+			mode: zero.mode ?? 'constant',
+			value: zero.value,
+			expression: zero.expression ?? '',
+			reference: zero.reference ?? ''
+		});
+	}
+
 	async setNodePos(uid: string, pos: [number, number]): Promise<void> {
 		// Committed on drag-stop only; a live drag stays local to Svelte Flow.
 		await this.ctl.call('node edit', { node: uid, pos });

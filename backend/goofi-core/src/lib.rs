@@ -763,10 +763,10 @@ impl SlotType {
             SlotType::Texture => "TEXTURE",
         }
     }
-    /// Whether an output of this kind may feed an input of `into`: the same kind, or an
-    /// engine-local kind into an array, which that engine's tap turns into frames.
+    /// Whether an output of this kind may feed an input of `into`: the same kind only. A plane
+    /// is crossed by a node that declares the foreign kind on an input, never by a bare cable.
     pub fn feeds(self, into: SlotType) -> bool {
-        self == into || (self.engine_local().is_some() && into == SlotType::Array)
+        self == into
     }
 
     /// How a node carrying this kind is written — and, by having an answer at all, that the kind

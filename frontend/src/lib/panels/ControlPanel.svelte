@@ -367,7 +367,7 @@
 	{:else if c.kind === 'slider'}
 		<Slider value={num(value)} min={c.min ?? 0} max={c.max ?? 1} step={c.step} {onChange} {onInput} />
 	{:else if c.kind === 'number'}
-		<NumberInput value={num(value)} min={c.min} max={c.max} step={c.step ?? 1} scrub {onChange} {onInput} />
+		<NumberInput value={num(value)} min={c.min} max={c.max} step={c.step ?? 1} {onChange} />
 	{:else if c.kind === 'toggle'}
 		<Toggle value={value === true} {onChange} />
 	{:else if c.kind === 'dropdown'}

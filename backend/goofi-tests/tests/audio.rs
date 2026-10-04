@@ -597,8 +597,14 @@ fn a_patch_sounds_under_the_external_clock() {
     assert!(shape(&block)[1] >= 64 && shape(&block)[1].is_multiple_of(64), "whole blocks: {:?}", shape(&block));
     assert_eq!(block.meta().sfreq(), Some(48_000.0));
     assert!(crossings(&f32s(&block)) > 0 && peak(&f32s(&block)) <= 1.0, "the sine, as it sounds");
+    // A signal Buffer fills from the tap through `signal:AudioIn`; the bare cable across the
+    // plane is refused, since a crossing is a node that declares the foreign kind, never a wire.
     let buffer = g.add("Buffer");
-    g.link(osc3, "out", buffer, "input");
+    let bare = g.try_call("link add", j!({ "from": ep(hex(osc3), "out"), "to": ep(hex(buffer), "input") }));
+    assert!(bare.as_ref().is_err_and(|e| e.contains("different data types")), "{bare:?}");
+    let framed = g.add("signal:AudioIn");
+    g.link(osc3, "out", framed, "input");
+    g.link(framed, "out", buffer, "input");
     let buffered = g.probe(buffer, "out");
     let filled = g.until("the buffer to fill from the tap", |g| {
         drive(g, TENTH);
@@ -614,10 +620,8 @@ fn a_patch_sounds_under_the_external_clock() {
 
     // …and `signal:AudioIn` is what gives that stream a framing the clock does not decide: a tap
     // hands over whatever the last blocks held, and a window is the length the analysis asked for.
-    let framed = g.add("signal:AudioIn");
     g.set_param(framed, "audio", "mode", "window");
     g.set_param(framed, "audio", "size", 512);
-    g.link(osc3, "out", framed, "input");
     let framing = g.probe(framed, "out");
     let window = g.until("a fixed-length window off the tap", |g| {
         drive(g, TENTH);

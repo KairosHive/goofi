@@ -86,7 +86,6 @@ describe('inputAnchors', () => {
 		x: 10,
 		y: 20,
 		slots: ['in', 'other'],
-		multi: new Set<string>(),
 		...over
 	});
 
@@ -94,18 +93,11 @@ describe('inputAnchors', () => {
 	   position) at the `top` nodeMetrics already computes for the cable anchors — so this reveal and
 	   the cable it reveals for are measured from the same point. */
 	it('puts each input on the node’s left edge, at nodeMetrics’ own pitch', () => {
-		const ports = inputPorts(['in', 'other'], () => false);
+		const ports = inputPorts(['in', 'other']);
 		expect(inputAnchors([node()], key)).toEqual([
 			{ key: 'n1|in', x: 10, y: 20 + ports[0].top },
 			{ key: 'n1|other', x: 10, y: 20 + ports[1].top }
 		]);
-	});
-
-	it('centres a MULTI slot on its two-unit block', () => {
-		const [first] = inputAnchors([node({ slots: ['list'], multi: new Set(['list']) })], key);
-		expect(first.y, 'a 2-unit slot’s centre is a unit below a 1-unit slot’s').toBe(
-			20 + NODE.border + NODE.header + NODE.unit
-		);
 	});
 
 	it('skips a node with no inputs, and keys every anchor through the caller', () => {

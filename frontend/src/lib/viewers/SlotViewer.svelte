@@ -4,40 +4,33 @@
 	import { slotView, isSlotExpanded } from './inlineView';
 	import { drawsOnSurface } from './registry';
 	import { viewBinding } from './viewBinding';
-	import { ui } from '$lib/stores/ui.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { dtypeColor } from '$lib/editor/categoryColor';
 	import { useViewport } from '@xyflow/svelte';
+	import type { NodeInstanceInfo } from '$lib/api/control';
 
 	// `label` overrides the displayed slot name for a sub-patch portal; the handle id stays `slot`.
-	type Props = { node: string; slot: string; dtype: string; label?: string };
-	const { node, slot, dtype, label }: Props = $props();
+	type Props = { node: NodeInstanceInfo; slot: string; dtype: string; label?: string };
+	const { node: rec, slot, dtype, label }: Props = $props();
 
 	const g = graph();
 	// Inside the flow, so the viewer can size its demand to the zoom it is drawn under.
 	const vp = useViewport();
 
-	const rec = $derived(g.nodeById(node));
 	const binding = $derived(
 		viewBinding(
 			dtype,
 			() => slotView(rec, slot),
-			(v) => g.setSlotView(node, slot, v)
+			(v) => g.setSlotView(rec.uid, slot, v)
 		)
 	);
-
-	function onSlotClick(e: MouseEvent): void {
-		// Opens the add-node menu seeded to wire onto this output; outputs fan out, so nothing disconnects.
-		e.stopPropagation();
-		ui().pendingSlotClick = { node, slot, dtype, side: 'source', clientX: e.clientX, clientY: e.clientY };
-	}
 
 	const expanded = $derived(isSlotExpanded(rec, slot));
 
 	function toggleExpanded(e?: Event): void {
 		// Keep the toggle off SvelteFlow's node handlers, so a collapse never selects the node.
 		e?.stopPropagation();
-		g.setSlotView(node, slot, { collapsed: expanded });
+		g.setSlotView(rec.uid, slot, { collapsed: expanded });
 	}
 	function stopSelect(e: PointerEvent): void {
 		// Keeps the press off the window-level bubble listeners (`Popover`'s outside-press dismiss).
@@ -51,7 +44,7 @@
 	class="slot-viewer"
 	class:collapsed={!expanded}
 	style="--dtype: {dtypeColor(dtype)};"
-	data-node={node}
+	data-node={rec.uid}
 	data-slot={slot}
 >
 	<!-- The header bar is the pointer target for collapse/expand; keyboard uses the ► button. -->
@@ -70,24 +63,14 @@
 		{#if expanded}
 			<ViewerControls {dtype} {binding} />
 		{/if}
-		<!-- Pointer convenience: opens the add-node menu at the cursor. -->
-		<!-- svelte-ignore a11y_click_events_have_key_events -->
-		<span
-			class="slot-name"
-			onclick={onSlotClick}
-			role="button"
-			tabindex="0"
-			data-testid="slot-output"
-			title={dtype.toLowerCase()}
-		>
-			{label ?? slot}
-		</span>
+		<!-- Reserves the room GoofiNode's connector overlay draws the slot name in. -->
+		<span class="slot-name" aria-hidden="true">{label ?? slot}</span>
 	</header>
 
 	{#if expanded}
 		<!-- An array body is transparent: the editor's plot surface paints it from beneath. -->
 		<div class="body" class:plot={drawsOnSurface(binding.kind)}>
-			<ViewerFeed {node} {slot} {binding} zoom={vp.current.zoom} />
+			<ViewerFeed node={rec.uid} {slot} {binding} zoom={vp.current.zoom} />
 		</div>
 	{/if}
 </div>
@@ -126,9 +109,6 @@
 		.tri:hover svg {
 			fill: var(--text);
 		}
-		.slot-name:hover {
-			background: color-mix(in srgb, var(--dtype, var(--accent)) 22%, transparent);
-		}
 	}
 
 	/* `color: inherit` because the UA colours a bare <button> `buttontext`, invisible under a fill-ed SVG. */
@@ -161,13 +141,9 @@
 		flex: 1 1 auto;
 	}
 	.slot-name {
-		/* Sits right against the output connector so the label reads as its name. */
 		font-family: var(--font-mono);
-		color: var(--dtype, var(--text-dim));
-		cursor: pointer;
-		border-radius: 3px;
 		padding: 0 2px;
-		transition: background var(--dur-fast) var(--ease);
+		visibility: hidden;
 	}
 	.body {
 		height: var(--node-viewer);

@@ -2449,7 +2449,7 @@ impl Graph {
                 Some(Ok((r, index))) => {
                     let refs = vec![r];
                     let vars = self.resolve_vars(uid, key, &refs);
-                    let error = missing(&vars).or_else(|| self.reference_kind_error(&refs[0], &param));
+                    let error = missing(&vars).or_else(|| self.reference_kind_error(uid, &refs[0], &param));
                     let rewritten = index.map_or_else(|| REF_VAR.to_string(), |i| format!("{REF_VAR}[{i}]"));
                     Derived { rewritten, vars, refs, error }
                 }
@@ -2459,9 +2459,11 @@ impl Graph {
         }
     }
 
-    /// Why a resolved reference cannot feed this param: the producer's slot kind against the
-    /// param's type. `None` when they agree, or when the producer was not found (already reported).
-    fn reference_kind_error(&self, r: &expr_rewrite::VarRef, param: &Param) -> Option<String> {
+    /// Why a resolved reference cannot feed the param on `reader`: the producer's slot kind
+    /// against the param's type. An engine-local kind drives a param on its own plane as a plan
+    /// edge (audio rate), so that pairing passes too. `None` when they agree, or when the
+    /// producer was not found (already reported).
+    fn reference_kind_error(&self, reader: Uid, r: &expr_rewrite::VarRef, param: &Param) -> Option<String> {
         let Target::Node { name, slot: Some(slot) } = &r.target else { return None };
         let uid = self.uid_by_name(name)?;
         let kind = self.slots(uid, Dir::Out).into_iter().find(|(_, label, _)| label == slot)?.2;
@@ -2469,7 +2471,9 @@ impl Graph {
             Param::Str { .. } => goofi_core::SlotType::String,
             _ => goofi_core::SlotType::Array,
         };
-        (!kind.feeds(wants)).then(|| {
+        let same_plane = self.leaf(reader).map(|e| e.engine) == self.leaf(uid).map(|e| e.engine);
+        let plan_edge = kind.engine_local().is_some() && wants == goofi_core::SlotType::Array && same_plane;
+        (!kind.feeds(wants) && !plan_edge).then(|| {
             format!("`{name}.{slot}` is a {} output; this param references a {} one", kind.name(), wants.name())
         })
     }

@@ -8,14 +8,14 @@ const seed = (side: 'source' | 'target', dtype: string) =>
 	({ node: 'n', slot: 's', side, dtype }) as Parameters<typeof seedSlot>[0];
 
 describe('the seed rule is the manager\'s link rule', () => {
-	it('an audio output seeds an audio input, or an array one through the tap', () => {
+	it('an audio output seeds an audio input alone: the tap is a node, not a cable', () => {
 		expect(seedSlot(seed('source', 'AUDIO'), type({ a: 'AUDIO' }, {}))).toBe('a');
-		expect(seedSlot(seed('source', 'AUDIO'), type({ x: 'ARRAY' }, {}))).toBe('x');
-		expect(seedSlot(seed('source', 'AUDIO'), type({ s: 'STRING' }, {}))).toBeUndefined();
+		expect(seedSlot(seed('source', 'AUDIO'), type({ x: 'ARRAY' }, {}))).toBeUndefined();
+		expect(seedSlot(seed('source', 'TEXTURE'), type({ x: 'ARRAY', t: 'TEXTURE' }, {}))).toBe('t');
 	});
-	it('nothing but audio feeds an audio input, and an array input takes an audio source', () => {
+	it('an input takes its own kind only', () => {
 		expect(seedSlot(seed('target', 'AUDIO'), type({}, { out: 'ARRAY' }))).toBeUndefined();
-		expect(seedSlot(seed('target', 'ARRAY'), type({}, { out: 'AUDIO' }))).toBe('out');
-		expect(seedSlot(seed('target', 'STRING'), type({}, { out: 'AUDIO' }))).toBeUndefined();
+		expect(seedSlot(seed('target', 'ARRAY'), type({}, { out: 'AUDIO' }))).toBeUndefined();
+		expect(seedSlot(seed('target', 'ARRAY'), type({}, { out: 'ARRAY' }))).toBe('out');
 	});
 });

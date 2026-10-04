@@ -11,7 +11,8 @@ export type ParamBaseline = NonNullable<Baseline>[string];
 /** How a param is addressed in a baseline, and in the non-default list beside it. */
 export const paramKey = (group: string, name: string): string => `${group}/${name}`;
 
-function zero(d: ParamDescriptor, base: Baseline, group: string, name: string): ParamBaseline {
+/** A param's zero point: its baseline entry, else its factory default on a constant. */
+export function zero(d: ParamDescriptor, base: Baseline, group: string, name: string): ParamBaseline {
 	return base?.[paramKey(group, name)] ?? { value: d.default, mode: 'constant', expression: '', reference: '' };
 }
 

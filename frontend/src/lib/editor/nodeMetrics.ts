@@ -11,15 +11,9 @@ export const NODE = {
 /** An output slot's height in px, with its inline viewer open or closed. */
 const slotHeight = (open: boolean): number => (open ? NODE.unit + NODE.viewer : NODE.unit);
 
-/** A slot's height in units: a multi (list) slot is 2× tall. */
-const slotUnits = (multi: boolean): number => (multi ? 2 : 1);
-
 /** Total input-block height in units, floored at 1 so a node with no inputs still has a body. */
-export function inputUnits(slots: string[], isMulti: (slot: string) => boolean): number {
-	return Math.max(
-		slots.reduce((n, s) => n + slotUnits(isMulti(s)), 0),
-		1
-	);
+export function inputUnits(slots: string[]): number {
+	return Math.max(slots.length, 1);
 }
 
 /** The centre (px) of each output connector, below the header, with each slot open or closed. */
@@ -32,18 +26,9 @@ export function outputTops(slots: string[], open: (slot: string) => boolean): { 
 	});
 }
 
-/** Vertical placement of each input connector; `top` is the centre (px) of the slot's block. */
-export function inputPorts(
-	slots: string[],
-	isMulti: (slot: string) => boolean
-): { slot: string; units: number; top: number }[] {
-	let y = NODE.border + NODE.header;
-	return slots.map((slot) => {
-		const units = slotUnits(isMulti(slot));
-		const top = y + (units * NODE.unit) / 2; // centre of the slot's block
-		y += units * NODE.unit;
-		return { slot, units, top };
-	});
+/** Vertical placement of each input connector: `top` is the centre (px) of its one-unit slot. */
+export function inputPorts(slots: string[]): { slot: string; top: number }[] {
+	return slots.map((slot, i) => ({ slot, top: NODE.border + NODE.header + (i + 0.5) * NODE.unit }));
 }
 
 /** The rendered size of a node's surface box, the snap geometry's fallback until Svelte Flow

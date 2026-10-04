@@ -1,6 +1,7 @@
 /** What the expression completion source knows about the patch: node names, output slots, variables. */
 import { graph, type GraphStore } from '$lib/stores/graph.svelte';
 import type { VariableView } from '$lib/crdt/graphDoc';
+import { engineOf } from '$lib/editor/typeId';
 
 export interface CatalogueSlot {
 	name: string;
@@ -15,6 +16,8 @@ export interface CatalogueGroup {
 export interface CatalogueNode {
 	/** The DISPLAY name, which is what `nd()` takes. */
 	name: string;
+	/** The engine the node runs on; null for a port. */
+	engine: string | null;
 	/** Output slots; the LENGTH is load-bearing — a multi-output node raises unless a slot is named. */
 	slots: CatalogueSlot[];
 	/** Param groups, what `.params.<group>.<param>` reads. Empty on a port or a facade. */
@@ -38,6 +41,7 @@ export function liveCatalogue(g: GraphStore = graph()): ExprCatalogue {
 		// `nd()` takes the port's name, so the label is offered.
 		nodes: g.nodes.map((n) => ({
 			name: n.name,
+			engine: engineOf(n.type),
 			slots: Object.entries(n.output_slots).map(([key, dtype]) => ({
 				name: n.slot_labels?.[key] ?? key,
 				dtype

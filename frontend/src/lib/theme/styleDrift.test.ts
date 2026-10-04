@@ -624,7 +624,10 @@ describe('style vocabulary', () => {
 		expect(found.length, 'the ring is still declared somewhere').toBeGreaterThan(0);
 		// Either spelling of the pair: the app's own tokens, or the panel system's contract, which
 		// `app.css` maps onto exactly those two.
+		// A ring switched OFF names no width or ink, so it cannot disagree with anything: the add
+		// menu's search field holds the focus for the menu's whole life, and the menu is its frame.
 		const offenders = found
+			.filter((o) => o.value !== 'none')
 			.filter(
 				(o) =>
 					!/var\(--(panelty-)?focus-width[,)]/.test(o.value) ||

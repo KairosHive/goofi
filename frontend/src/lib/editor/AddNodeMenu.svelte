@@ -235,6 +235,11 @@
 		border-radius: 0;
 		font-size: var(--fs-body);
 	}
+	/* The field holds the focus for as long as the menu is open, so the menu's own frame is its
+	   focus ring; a second ring inside it would only shout. */
+	input:focus-visible {
+		outline: none;
+	}
 	.list {
 		/* Viewport-relative as well as fixed: the soft keyboard is rising as this menu lands. */
 		max-height: min(360px, 45dvh);

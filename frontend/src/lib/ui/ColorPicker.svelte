@@ -246,7 +246,6 @@
 					value={Math.round(held[i] * (i < 3 ? 255 : 100))}
 					onChange={(v) => take(held.map((c, k) => (k === i ? unit(v / (i < 3 ? 255 : 100)) : c)))}
 					step={1}
-					scrub
 					data-testid={`color-channel-${i}`}
 				/>
 			</label>

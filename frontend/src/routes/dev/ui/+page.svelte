@@ -151,7 +151,7 @@
 		<div class="form">
 			<Field label="cutoff">
 				<Slider value={cutoff} onChange={(v) => (cutoff = v)} min={0} max={1} step={0.01} />
-				<NumberInput value={cutoff} onChange={(v) => (cutoff = v)} min={0} max={1} step={0.01} scrub />
+				<NumberInput value={cutoff} onChange={(v) => (cutoff = v)} min={0} max={1} step={0.01} />
 			</Field>
 		</div>
 	</section>

@@ -18,15 +18,17 @@ const CAT: ExprCatalogue = {
 	nodes: [
 		{
 			name: 'oscillator0',
+			engine: 'signal',
 			slots: [{ name: 'out', dtype: 'array' }],
 			params: [
 				{ group: 'oscillator', names: ['frequency', 'amplitude'] },
 				{ group: 'common', names: ['autotrigger', 'max_frequency'] }
 			]
 		},
-		{ name: 'buffer0', slots: [{ name: 'out', dtype: 'array' }], params: [{ group: 'buffer', names: ['size', 'axis'] }] },
+		{ name: 'buffer0', engine: 'signal', slots: [{ name: 'out', dtype: 'array' }], params: [{ group: 'buffer', names: ['size', 'axis'] }] },
 		{
 			name: 'spectrum0',
+			engine: 'signal',
 			slots: [
 				{ name: 'psd', dtype: 'array' },
 				{ name: 'freqs', dtype: 'array' }

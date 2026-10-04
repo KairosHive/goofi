@@ -81,6 +81,10 @@
 		min-width: 0;
 		flex: 1 1 auto;
 	}
+	/* The thumb and track are the whole state; a ring after a hover key would only say "focused". */
+	.ui-slider-range:focus-visible {
+		outline: none;
+	}
 	.ui-slider-range {
 		flex: 1 1 auto;
 		min-width: 0;

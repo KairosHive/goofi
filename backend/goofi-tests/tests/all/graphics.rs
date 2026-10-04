@@ -866,9 +866,9 @@ fn shaders_render_on_the_gpu() {
     let source = g.call("library get", j!({ "type": "graphics:Half", "source": true }));
     assert!(source["text"].as_str().is_some_and(|t| t.contains("textureSample")), "{source}");
 
-    // Step: the crossing OUT. A texture output wires straight into any ARRAY input, so the
-    // crossing itself needs no node; `signal:GraphicsIn` is what makes it a size the rest of the
-    // patch can carry, and the readings a picture is usually wanted for.
+    // Step: the crossing OUT. A texture output feeds a TEXTURE input only, and on the signal plane
+    // `signal:GraphicsIn` is that door: it makes the picture a size the rest of the patch can
+    // carry, and the readings a picture is usually wanted for.
     let field = g.add("graphics:Gradient");
     g.ready(field);
     g.set_param(field, "common", "width", 128);

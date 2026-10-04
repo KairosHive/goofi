@@ -125,6 +125,12 @@ pub fn typescript() -> String {
         .flat_map(|out| SlotType::ALL.iter().filter(|into| out.feeds(**into)).map(move |into| format!("'{}>{}'", out.name(), into.name())))
         .collect::<Vec<_>>()
         .join(", ");
+    let local = SlotType::ALL
+        .iter()
+        .filter(|t| t.engine_local().is_some())
+        .map(|t| format!("'{}'", t.name()))
+        .collect::<Vec<_>>()
+        .join(", ");
     let defaults = SlotType::ALL
         .iter()
         .map(|t| format!("\t{}: '{}',\n", t.name(), default_kind(*t)))
@@ -267,6 +273,8 @@ pub fn typescript() -> String {
          /** Which output kind may feed which input kind — the manager's one link rule, projected. */\n\
          export const FEEDS: ReadonlySet<string> = new Set([{feeds}]);\n\
          export const feeds = (out: SlotDtype, into: SlotDtype): boolean => FEEDS.has(`${{out}}>${{into}}`);\n\
+         /** The kinds that live inside one engine: a node of that engine reads one as a plan edge. */\n\
+         export const ENGINE_LOCAL: ReadonlySet<SlotDtype> = new Set([{local}]);\n\
          \n\
          /** The kind a slot of each dtype opens with, before a viewer has stored one of its own. */\n\
          export const DEFAULT_KIND: Record<SlotDtype, ViewerKind> = {{\n{defaults}}};\n",

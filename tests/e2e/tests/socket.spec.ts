@@ -1140,12 +1140,17 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 	await expect.poll(async () => (await source()).mode).toBe('constant');
 	await page.keyboard.press('e');
 	await expect.poll(async () => (await source()).mode).toBe('expression');
-	await page.keyboard.press('r');
+	await page.keyboard.press('x');
 	await expect.poll(async () => (await source()).mode).toBe('constant');
 	const randomized = await source();
 	const bounds = (await nodeParams(page, osc)).lfo.frequency;
 	expect(randomized.value).toBeGreaterThanOrEqual(bounds.vmin);
 	expect(randomized.value).toBeLessThanOrEqual(bounds.vmax);
+	// R puts the param back on its default, source and value in one undo step.
+	await page.keyboard.press('r');
+	await expect.poll(async () => { const s = await source(); return [s.mode ?? 'constant', s.value]; }).toEqual(['constant', bounds.default]);
+	await undo(page);
+	await expect.poll(source).toEqual(randomized);
 	await undo(page);
 	await expect.poll(async () => (await source()).mode).toBe('expression');
 	await undo(page);
@@ -1155,8 +1160,8 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 	const search = page.getByTestId('param-search');
 	await search.focus();
 	await row.hover();
-	await page.keyboard.type('lnrce');
-	await expect(search).toHaveValue('lnrce');
+	await page.keyboard.type('lnxrce');
+	await expect(search).toHaveValue('lnxrce');
 	expect(await source()).toEqual(original);
 	await search.fill('');
 	await search.blur();

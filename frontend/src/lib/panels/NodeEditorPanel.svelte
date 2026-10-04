@@ -15,6 +15,7 @@
 	import GoofiNode from '$lib/editor/GoofiNode.svelte';
 	import AddNodeMenu from '$lib/editor/AddNodeMenu.svelte';
 	import PlacementPreview from '$lib/editor/PlacementPreview.svelte';
+	import { GHOST_UID, ghostNode } from '$lib/editor/placementGhost';
 	import { camera } from '$lib/editor/camera';
 	import FlowApi from '$lib/editor/FlowApi.svelte';
 	import FlowSurface from '$lib/editor/FlowSurface.svelte';
@@ -255,6 +256,9 @@
 	// The stack of instance ids this editor has descended into; empty = top level.
 	const enteredPath = $derived(pathToArray(asStateObject(panelState).subpatchPath));
 	const entered = $derived(enteredPath.length ? enteredPath[enteredPath.length - 1] : null);
+	// The ghost's record and where the pointer holds it; the rebuild below draws it as a flow node.
+	const ghost = $derived(pendingPlacement ? ghostNode(pendingPlacement.typeInfo, entered ?? ROOT_ID) : null);
+	let ghostPos = $state<[number, number] | null>(null);
 
 	/** Write the path into the panel's state as NAVIGATION: descending into a sub-patch is looking,
 	 * not editing, so it must not mark the patch unsaved. */
@@ -332,6 +336,21 @@
 				// A live marquee's flags are Flow's, on these very objects: re-deriving them from
 				// the store mid-drag hands the release an empty selection.
 				selected: boxSelecting ? (was?.selected ?? false) : sel.nodes(panelId).has(uid),
+				measured: was?.data.handles === handles ? was.measured : undefined
+			});
+		}
+		if (ghost && ghostPos) {
+			const was = previous.get(GHOST_UID);
+			const handles = handlesOf(ghost);
+			next.push({
+				id: GHOST_UID,
+				type: 'goofi',
+				class: 'ghost',
+				position: { x: ghostPos[0], y: ghostPos[1] },
+				data: { node: ghost, label: ghost.name, handles, ghost: true },
+				draggable: false,
+				selectable: false,
+				connectable: false,
 				measured: was?.data.handles === handles ? was.measured : undefined
 			});
 		}
@@ -446,8 +465,7 @@
 		cableAnchors = inputAnchors(
 			flowNodes.map((f) => {
 				const n = f.data.node as NodeInstanceInfo;
-				const multi = new Set(n.input_multi ?? []);
-				return { uid: f.id, x: f.position.x, y: f.position.y, slots: Object.keys(n.input_slots ?? {}), multi };
+				return { uid: f.id, x: f.position.x, y: f.position.y, slots: Object.keys(n.input_slots ?? {}) };
 			}),
 			slotKey
 		);
@@ -464,9 +482,8 @@
 
 	/** A node's snap footprint when Svelte Flow has not measured it yet. */
 	function nodeFallbackSize(node: NodeInstanceInfo): { width: number; height: number } {
-		const multi = new Set(node.input_multi ?? []);
 		return nodeSurfaceSize(
-			inputUnits(Object.keys(node.input_slots ?? {}), (s) => multi.has(s)),
+			inputUnits(Object.keys(node.input_slots ?? {})),
 			Object.keys(node.output_slots ?? {}).map((s) => isSlotExpanded(node, s))
 		);
 	}
@@ -927,6 +944,7 @@
 		const placement = pendingPlacement;
 		if (!placement) return;
 		pendingPlacement = null;
+		ghostPos = null;
 		// A boundary type takes this same path: `add_node` with `inst_id` is what makes a PORT of the
 		// entered sub-patch, and the catalog gives it the slots `autoLink` matches against.
 		const label = placement.seed
@@ -1100,14 +1118,16 @@
 			<FlowApi bind:screenToFlowPosition={screenToFlow} bind:getViewport bind:setViewport bind:fitView={flowFit} />
 			<FlowSurface bind:surface={plotSurface} />
 			<SubpatchZoomExit {entered} options={FIT_OPTIONS} minZoom={MIN_ZOOM} onExit={() => exitToDepth(enteredPath.length - 1)} />
-			{#if pendingPlacement}
+			{#if pendingPlacement && ghost}
 				<PlacementPreview
-					typeInfo={pendingPlacement.typeInfo}
 					initialClient={pendingPlacement.initialClient}
-					targets={snapTargetBounds(new Set())}
+					size={nodeFallbackSize(ghost)}
+					targets={snapTargetBounds(new Set([GHOST_UID]))}
+					onMove={(pos) => (ghostPos = pos)}
 					onCommit={(pos) => void commitPlacement(pos)}
 					onCancel={() => {
 						pendingPlacement = null;
+						ghostPos = null;
 					}}
 				/>
 			{/if}
@@ -1145,6 +1165,7 @@
 					seed={menuSeed}
 					boundary={entered !== null}
 					onPick={(typeInfo) => {
+						ghostPos = null;
 						pendingPlacement = { typeInfo, seed: menuSeed, initialClient: { x: mouseX, y: mouseY } };
 						closeMenu();
 					}}
@@ -1295,5 +1316,9 @@
 	}
 	.breadcrumb .sep {
 		color: var(--text-muted);
+	}
+	/* The placement ghost is drawn, never touched: the pointer under it is the placement's. */
+	:global(.svelte-flow__node.ghost) {
+		pointer-events: none;
 	}
 </style>

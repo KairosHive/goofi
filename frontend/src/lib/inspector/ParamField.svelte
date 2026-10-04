@@ -112,8 +112,7 @@
 
 	let open = $state(false);
 
-	// `step` uses the declared bounds; a native `'any'` would
-	// NaN the NumberInput's scrub arithmetic.
+	// `step` uses the declared bounds, so the arrow keys move in rungs that fit the range.
 	const num = $derived(isNumeric(descriptor) ? descriptor : null);
 	const step = $derived(num ? (num.int ? 1 : stepOf(num.vmin, num.vmax)) : 1);
 	/** The vector with one dimension replaced, which is what a dimension's control commits. */
@@ -207,7 +206,6 @@
 							value={held}
 							onChange={(v) => onCommit(withDim(i, v))}
 							{step}
-							scrub
 							disabled={elementDisabled(i)}
 							data-param-edit
 							data-testid={`param-number-${i}`}
@@ -241,9 +239,7 @@
 				<NumberInput
 					value={numValue(num)}
 					onChange={onCommit}
-					onInput={onPreview}
 					{step}
-					scrub
 					disabled={driven}
 					data-param-edit
 					data-testid="param-number"
@@ -304,7 +300,6 @@
 									value={el?.value ?? held}
 									onChange={(v) => onCommitElement?.(i, v)}
 									{step}
-									scrub
 									disabled={elementDisabled(i)}
 									title={driven ? 'A source drives the whole list; see the list view' : undefined}
 									data-param-edit
@@ -333,6 +328,7 @@
 								<RefPicker
 									value={el?.reference ?? null}
 									paramType="num"
+									reader={selfName}
 									onCommit={(reference) => {
 										pickingElement = null;
 										onSetElementSource?.(i, { reference });
@@ -381,6 +377,7 @@
 						<RefPicker
 							value={descriptor.reference}
 							paramType={descriptor.type}
+							reader={selfName}
 							onCommit={(reference) => onSetSource({ reference })}
 							testid="param-ref"
 						/>

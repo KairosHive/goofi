@@ -4,17 +4,19 @@ import type { ExprCatalogue } from './catalogue';
 
 const cat: ExprCatalogue = {
 	nodes: [
-		{ name: 'osc', slots: [{ name: 'out', dtype: 'ARRAY' }], params: [] },
+		{ name: 'osc', engine: 'signal', slots: [{ name: 'out', dtype: 'ARRAY' }], params: [] },
 		{
 			name: 'tagger',
+			engine: 'signal',
 			slots: [
 				{ name: 'label', dtype: 'STRING' },
 				{ name: 'count', dtype: 'ARRAY' }
 			],
 			params: []
 		},
-		{ name: 'sink', slots: [], params: [] },
-		{ name: 'synth', slots: [{ name: 'out', dtype: 'AUDIO' }], params: [] }
+		{ name: 'sink', engine: null, slots: [], params: [] },
+		{ name: 'synth', engine: 'audio', slots: [{ name: 'out', dtype: 'AUDIO' }], params: [] },
+		{ name: 'gain', engine: 'audio', slots: [{ name: 'out', dtype: 'AUDIO' }], params: [] }
 	],
 	variables: []
 };
@@ -26,11 +28,15 @@ describe('the reference picker offers only what the param may reference', () => 
 	});
 
 	it('lists the nodes with at least one output of the kind, naming those outputs', () => {
+		// An audio output is not an array: a param reads one through `signal:AudioIn`, never directly.
 		expect(refNodes(cat, 'ARRAY')).toEqual([
 			{ label: 'osc', detail: 'out' },
-			{ label: 'tagger', detail: 'count' },
-			{ label: 'synth', detail: 'out' }
+			{ label: 'tagger', detail: 'count' }
 		]);
+		// …except on the audio plane itself, where a param reading an audio output is a plan edge.
+		expect(refNodes(cat, 'ARRAY', 'gain').map((o) => o.label)).toEqual(['osc', 'tagger', 'synth', 'gain']);
+		expect(refSlots(cat, 'synth', 'ARRAY', 'gain')).toEqual([{ label: 'out', detail: 'AUDIO' }]);
+		expect(refSlots(cat, 'synth', 'ARRAY', 'osc')).toEqual([]);
 		expect(refNodes(cat, 'STRING')).toEqual([{ label: 'tagger', detail: 'label' }]);
 	});
 

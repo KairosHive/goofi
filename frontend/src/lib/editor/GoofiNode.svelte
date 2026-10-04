@@ -75,15 +75,10 @@
 	const rateLabel = $derived(formatUpdateRate(node?.stats));
 
 	const multiInputs = $derived(new Set(node?.input_multi ?? []));
-	const isMulti = (slot: string) => multiInputs.has(slot);
 	const inPorts = $derived(
-		inputPorts(inputs, isMulti).map((p) => ({
-			...p,
-			dtype: node.input_slots[p.slot],
-			multi: p.units === 2
-		}))
+		inputPorts(inputs).map((p) => ({ ...p, dtype: node.input_slots[p.slot], multi: multiInputs.has(p.slot) }))
 	);
-	const minBody = $derived(inputUnits(inputs, isMulti));
+	const minBody = $derived(inputUnits(inputs));
 
 	// The overlay is unclipped, so it walks the slot stack itself to place each output pill.
 	const outPorts = $derived(
@@ -109,8 +104,9 @@
 	class:has-error={isError}
 	class:booting={isBooting}
 	class:undo-flash={flashing}
+	class:ghost={data.ghost}
 	style="min-height: calc(var(--node-header) + {minBody} * var(--node-u)); --engine: {engineColor(node?.type ?? '')};"
-	data-testid={node?.subpatch ? 'subpatch-node' : undefined}
+	data-testid={data.ghost ? 'placement-ghost' : node?.subpatch ? 'subpatch-node' : undefined}
 >
 	<!-- Clipped to the rounded node shape, so nothing inside it needs to round itself. -->
 	<div class="surface">
@@ -134,7 +130,7 @@
 		{#if outputs.length > 0}
 			<div class="viewers">
 				{#each outputs as slot (slot)}
-					<SlotViewer node={node.uid} {slot} dtype={node.output_slots[slot]} label={node.slot_labels?.[slot]} />
+					<SlotViewer {node} {slot} dtype={node.output_slots[slot]} label={node.slot_labels?.[slot]} />
 				{/each}
 			</div>
 		{/if}
@@ -154,9 +150,7 @@
 				class="conn in"
 				class:multi={port.multi}
 				class:cable-near={uiStore.isCableNear(node.uid, port.slot)}
-				style="top: {port.top}px; height: calc(var(--node-u) * {port.units}); --dtype: {dtypeColor(
-					port.dtype
-				)};"
+				style="top: {port.top}px; --dtype: {dtypeColor(port.dtype)};"
 				onclick={(e) => onInputClick(e, port.slot, port.dtype)}
 				role="button"
 				tabindex="0"
@@ -194,6 +188,7 @@
 				data-testid="slot-output-pin"
 				title={port.dtype.toLowerCase()}
 			>
+				<span class="out-label" data-testid="slot-output">{node.slot_labels?.[port.slot] ?? port.slot}</span>
 				<Handle id={port.slot} type="source" position={Position.Right} />
 			</div>
 		{/each}
@@ -255,6 +250,24 @@
 	}
 	.goofi-node.has-error .surface {
 		border-color: var(--danger);
+	}
+	/* A placement's ghost: the same card, dashed and translucent until it is born. */
+	.goofi-node.ghost {
+		opacity: 0.9;
+	}
+	.goofi-node.ghost .surface {
+		border: 1.5px dashed var(--accent);
+		box-shadow: var(--shadow-1);
+	}
+	/* A finger has no cursor to say "not placed yet", so a coarse pointer states it in the drawing. */
+	@media (hover: none) and (pointer: coarse) {
+		.goofi-node.ghost {
+			opacity: 0.6;
+		}
+		.goofi-node.ghost .surface {
+			border-width: 2px;
+			box-shadow: none;
+		}
 	}
 	.goofi-node.booting .surface {
 		opacity: 0.75;
@@ -343,26 +356,56 @@
 		pointer-events: auto;
 		cursor: pointer;
 	}
+	/* The box is the hit area, and the handle is the box. Svelte Flow anchors a cable on the
+	   handle's outer EDGE, so each box ends 4px past the node border and the pill straddles that
+	   border from there: the cable lands under the pill. One slot tall, so neighbours never overlap. */
+	.conn :global(.svelte-flow__handle) {
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		min-width: 0;
+		min-height: 0;
+		transform: none;
+		background: transparent;
+		border: 0;
+		border-radius: 0;
+	}
 	.conn.in {
-		left: 0;
+		left: -4px;
 		width: 22px;
+		transform: translateY(-50%);
+	}
+	.conn.in :global(.svelte-flow__handle)::before {
+		left: 4px;
 		transform: translate(-50%, -50%);
 	}
+	.conn.in.multi :global(.svelte-flow__handle)::before {
+		background: transparent;
+		border: 2px solid var(--dtype, var(--border-strong));
+	}
+	/* An output's box runs from its label to 4px past the border, the pill's zone 22px wide. */
 	.conn.out {
-		right: 0;
-		width: 16px;
+		right: -4px;
+		padding: 0 22px 0 4px;
+		transform: translateY(-50%);
+		font-family: var(--font-mono);
+		font-size: 10px;
+	}
+	.conn.out :global(.svelte-flow__handle)::before {
+		right: 4px;
 		transform: translate(50%, -50%);
 	}
-	/* Centre the handle in its box, so the cable anchor SvelteFlow measures lands on the edge. */
-	.conn.in :global(.svelte-flow__handle-left) {
-		left: 50%;
-	}
-	.conn.in.multi :global(.svelte-flow__handle-left) {
-		height: calc(var(--node-u) * 1.15);
+	.out-label {
+		color: var(--dtype, var(--text-dim));
 		border-radius: 3px;
+		padding: 0 2px;
+		pointer-events: none;
+		transition: background var(--dur-fast) var(--ease);
 	}
-	.conn.out :global(.svelte-flow__handle-right) {
-		right: 50%;
+	@media (hover: hover) {
+		.conn.out:hover .out-label {
+			background: color-mix(in srgb, var(--dtype, var(--accent)) 22%, transparent);
+		}
 	}
 	.conn-label {
 		position: absolute;

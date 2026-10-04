@@ -25,6 +25,7 @@
 		narrowing,
 		paramKey,
 		settleNonDefault,
+		zero,
 		shown,
 		SHOW_ALL,
 		toggleSource,
@@ -253,7 +254,7 @@
 			event.altKey || event.shiftKey || event.isComposing || menu || isTextEditingTarget(event.target)
 		) return;
 		const key = event.key;
-		if (!['l', 'n', 'r', 'c', 'e'].includes(key)) return;
+		if (!['l', 'n', 'r', 'x', 'c', 'e'].includes(key)) return;
 		// The row under the pointer, or failing that the one holding the focus.
 		const row =
 			document.querySelector<HTMLElement>(`[data-param-form="${formId}"]:hover`) ??
@@ -268,8 +269,14 @@
 			if (d.mode !== mode) setSource(group, name, sourceForMode(d, mode));
 			return;
 		}
-		if (!isNumeric(d)) return;
 		if (key === 'r') {
+			if (d.type === 'pulse') return;
+			event.preventDefault();
+			send('reset', (uid) => g.resetParam(uid, group, name, zero(d, node?.baseline, group, name)));
+			return;
+		}
+		if (!isNumeric(d)) return;
+		if (key === 'x') {
 			const min = d.int ? Math.ceil(d.vmin) : d.vmin;
 			const max = d.int ? Math.floor(d.vmax) : d.vmax;
 			if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return;

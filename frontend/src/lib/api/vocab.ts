@@ -141,8 +141,10 @@ export const boundaryType = (type: string): BoundaryTypeInfo | undefined =>
 	BOUNDARY_TYPES.find((b) => b.type === type);
 
 /** Which output kind may feed which input kind — the manager's one link rule, projected. */
-export const FEEDS: ReadonlySet<string> = new Set(['ARRAY>ARRAY', 'STRING>STRING', 'TABLE>TABLE', 'AUDIO>ARRAY', 'AUDIO>AUDIO', 'TEXTURE>ARRAY', 'TEXTURE>TEXTURE']);
+export const FEEDS: ReadonlySet<string> = new Set(['ARRAY>ARRAY', 'STRING>STRING', 'TABLE>TABLE', 'AUDIO>AUDIO', 'TEXTURE>TEXTURE']);
 export const feeds = (out: SlotDtype, into: SlotDtype): boolean => FEEDS.has(`${out}>${into}`);
+/** The kinds that live inside one engine: a node of that engine reads one as a plan edge. */
+export const ENGINE_LOCAL: ReadonlySet<SlotDtype> = new Set(['AUDIO', 'TEXTURE']);
 
 /** The kind a slot of each dtype opens with, before a viewer has stored one of its own. */
 export const DEFAULT_KIND: Record<SlotDtype, ViewerKind> = {
