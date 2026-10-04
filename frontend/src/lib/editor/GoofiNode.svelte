@@ -421,17 +421,11 @@
 		right: -11px;
 		width: 100vw;
 	}
+	/* Part of the hit area, never of the hover: the pill alone answers the pointer. */
 	.out-label {
 		color: var(--dtype, var(--text-dim));
-		border-radius: 3px;
 		padding: 0 2px;
 		pointer-events: none;
-		transition: background var(--dur-fast) var(--ease);
-	}
-	@media (hover: hover) {
-		.conn.out:hover .out-label {
-			background: color-mix(in srgb, var(--dtype, var(--accent)) 22%, transparent);
-		}
 	}
 	.conn-label {
 		position: absolute;
