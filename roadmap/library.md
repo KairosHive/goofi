@@ -17,17 +17,35 @@ and is not part of the current build scope.
   regardless of engine.
 - Every node belongs to a bundle. A bundle is a folder of node sources and required files; it
   can contain nodes for more than one engine. It does not require a plugin package.
-- A node type ID is `<engine>:<source>/<Name>`, where `<source>` names the kind of node source
-  and its identity. Builtin nodes have no source segment, because names are unique within an
-  engine: `signal:Psd`. The other kinds are `local/<Name>` for `_local`, `patch/<Name>` for
-  patch-authored nodes, `plugin/<plugin>/<Name>` for a plugin's `nodes/` folder and
-  `repo/<uname>/<repo>/<bundle>/<Name>` for an installed bundle, for example
-  `signal:repo/KairosHive/goofi-nodes/biotuner/Peaks`. Equal names in different
-  sources coexist. Update internal callers and archives directly; do not add old-ID aliases.
-- The ID grammar is for sourcing and identification only. The frontend never shows a full ID:
-  it categorizes nodes by their source and shows the node name, with the bundle name when the
-  node comes from a bundle. Ops accept a short name when it is unique across the loaded
-  catalogue; an ambiguous short name is an error that lists the matching nodes with full IDs.
+- Each node has a structured catalogue entry: declaration name, engine, bundle, bundle source
+  and author (decided 2026-10-04). The source describes `builtin`, `local`, `patch`, `plugin`
+  or Git. A Git source contains the repo URL and its selected branch or tag when known; a
+  plugin source names the plugin. `_local` is the local bundle; patch-authored nodes belong to
+  the patch bundle. Equal names in different engines, bundles or sources coexist. Use shared
+  typed records throughout; do not encode these fields in colon/slash-separated node IDs.
+  Update internal callers and archives directly, without old-ID aliases.
+- For a Git source, author means the repo owner or namespace: the GitHub org/uname, for example
+  `KairosHive`. Derive it once from the registered source, rather than guessing in each caller.
+  Other sources can supply an author when known; absent author remains unknown. Keep repo location, ref,
+  observed commit, source file, language, description and tags available for inspection where
+  known. Bundle/source metadata comes from its owner, not copied declarations in every file.
+- Ops select a node by its declaration name. Optional `--bundle`, `--engine`, `--author`,
+  `--source` and `--ref` fields narrow the selection; plugin identity is available when needed.
+  The source selector accepts a source kind or repo URL. Apply all supplied fields together,
+  in any order. Exactly one match succeeds; no match reports the supplied selector; multiple
+  matches report candidate records and the fields needed to distinguish them. Never select
+  the first match or prefer a source implicitly. CLI, frontend, MCP and scripts use the same
+  typed selector and resolver. The existing `node add --name` remains the instance name;
+  its positional argument selects the node declaration.
+- Resolve an operation's selector once and retain the complete structured reference in graph
+  records, copy/paste, undo and `.gfi` archives. These consumers do not resolve a short name
+  again. Node identity uses name, engine, bundle and source location/kind. Author, branch/tag
+  and observed commit describe that source; repo updates do not mint a different node type or
+  make a saved reference missing. Stored references resolve through the identity fields;
+  an explicit `--ref` selector filters the current source metadata. Patch load still uses the
+  current installed source.
+  The frontend shows the node name and bundle, with author/source/engine when needed to
+  distinguish equal names. It groups entries by source kind and offers the metadata in details.
 - A source is any repo that Git can clone with `--filter=blob:none` and sparse checkout,
   given as a clone URL or a `<uname>/<repo>` GitHub shorthand, with an optional `@<ref>` for a
   branch or tag. GitHub, GitLab and self-hosted Git are the same path; a host that Git cannot
@@ -111,6 +129,37 @@ and is not part of the current build scope.
 - Website author instructions will go in `../goofi-website` later. This session defines the
   convention but does not change the website. A hosted library service is not required.
 
+## Structured node selection
+
+An external node entry contains these fields, for example. The ref is illustrative:
+
+```json
+{
+  "name": "Peaks",
+  "engine": "signal",
+  "bundle": "biotuner",
+  "author": "KairosHive",
+  "source": {
+    "kind": "git",
+    "url": "https://github.com/KairosHive/goofi-nodes",
+    "ref": "main"
+  }
+}
+```
+
+Start with the declaration name. Add fields only when necessary, or to select explicitly:
+
+```sh
+goofi node add Peaks
+goofi node add Peaks --bundle biotuner
+goofi node add Peaks --bundle biotuner --author KairosHive --engine signal
+goofi node add Peaks --bundle biotuner --source https://github.com/KairosHive/goofi-nodes
+```
+
+These are planned operations, not implementation completed in this planning session.
+The app submits the same selector fields from the selected entry. The existing `--name`
+option supplies an instance label independently of the declaration name.
+
 ## Current implementation and required changes
 
 - `backend/goofi-bridge/build.rs` embeds all 13 bundle folders and prebuilds their Rust files.
@@ -143,7 +192,7 @@ and is not part of the current build scope.
   Move them together to `_local`. Retain saved-local-node inclusion in patch archives.
 - There is no source registry, static remote index, installed bundle selection, repo update
   status, standalone installer or library panel. Some engine-owned builtin and patch nodes have
-  no bundle identity. Include these in the new type/provenance model.
+  no bundle identity. Include these in the structured node/bundle/source model.
 - Panels register in `frontend/src/lib/panels/register.ts` from the bridge's shared vocabulary.
   The add menu receives the live catalogue. Add the library panel through the app panel system
   and use the same operations for all controls.
@@ -180,8 +229,9 @@ Use ordinary source folders, Python requirements and Cargo files:
 - Keep Python and WGSL node sources at bundle level, as now. Helper directories are not bundles.
   Python helper modules live inside their bundle; only Rust helper crates can be outside it,
   because a Cargo path dependency names them statically.
-  Rust node crates belong to the containing bundle and declare engine/source identity through
-  Cargo metadata. Static parsing follows that declaration and reads source; it never runs
+  Rust node crates belong to the containing bundle and declare engine, node name and export
+  through Cargo metadata. The containing bundle supplies its source and author. Static parsing
+  follows that declaration and reads source; it never runs
   `build.rs`, imports Python or expands executable code to index a source.
 - Use ordinary Cargo dependency tables, features, path dependencies and workspaces. Shared repo
   helpers can be outside a bundle if referenced explicitly. Do not translate dependencies into
@@ -249,9 +299,10 @@ Follow `AGENTS.md` throughout this change:
 - Add only the owners needed by this feature. One library owner supplies all management paths;
   the manager still owns the live graph and patch. Do not create a separate CLI registry, frontend
   business rules, plugin distribution layer, database or general-purpose package manager.
-- Use shared types for repo, bundle and node identity. Parse and validate them once at boundaries.
-  Derive display names, source paths and sparse selections from these types; do not duplicate
-  string parsing across engines, the bridge and frontend.
+- Use shared records for node entries, selectors, resolved references, bundles and sources.
+  Validate them once at boundaries. Derive display names, source paths and sparse selections
+  from these types; do not encode node identity in strings or duplicate resolution rules across
+  engines, the bridge and frontend.
 - Store registered sources and installed selections once. Git owns branch/revision/local edits.
   The node files own their declarations. The remote index and compiled artifacts are derived
   caches, not independent installation state. Publish events from settled operation results.
@@ -295,24 +346,30 @@ its tested changes are committed. Keep the stage status and remaining work in th
 
 Status: pending.
 
-- Introduce typed source, repo, bundle and node identities with the `<engine>:<source>/<Name>`
-  grammar above. Builtin IDs stay `<engine>:<Name>`; `_local`, patch, plugin and repo nodes carry
-  their source segment. Parse and print the grammar in one place.
-- Resolve short names in ops: unique names resolve, ambiguous names fail with the candidate IDs.
+- Introduce shared node entries, source/bundle records, partial selectors and resolved references
+  as specified above. Include author and Git URL/ref metadata. Replace string node type IDs;
+  do not introduce another concatenated ID grammar or an independent metadata registry.
+- Resolve declaration names with optional bundle, engine, author, source and ref selectors in
+  one place. All supplied fields constrain the match. Ambiguity errors list candidate records
+  and useful selector fields; the same rules serve every client.
 - Add the managed nodes root and `_local` through `goofi_supervisor::layout`. Replace
   `custom_nodes`, `AppState::custom` and their scan/save/inspect/archive callers together.
 - Update engine registration, graph resolution, schemas, generated frontend types, node editing,
-  copy/paste, undo and `.gfi` serialization where they consume node type IDs. Keep file stems as
-  declaration names; do not confuse a node's full ID with its source file name.
+  copy/paste, undo and `.gfi` serialization to use structured node references. Keep file stems as
+  declaration names. Source inspection gets the file from the resolved entry, not an ID parser.
+  Saving a patch node to `_local` updates its resolved references through the same owner.
 - Remove last-root-wins selection between different bundles. Equal engine/name pairs can coexist
-  in separate bundles; a duplicate declaration within one bundle must report an error.
+  in separate bundles; duplicate engine/name declarations within one bundle must report an error.
 - Normalize scan roots to explicit bundle identity. Remove duplicated folder-name/provenance
   guessing; do not leave engine callers to derive their own identities.
 - Delete existing test cases that depend on the nine external product bundles when first affected.
-  Do not rewrite those cases for the new type IDs only to delete them at the bundle move stage.
+  Do not rewrite those cases for structured references only to delete them at the bundle move stage.
 
-Checkpoint: two bundles with equal node names resolve independently. `_local` save, rename,
-inspect and `.gfi` save/load use the new path; builtin and patch nodes retain correct provenance.
+Checkpoint: equal node names resolve independently with bundle selectors; equal bundle/name pairs
+from different sources need further selectors. Candidate records show engine, bundle, author and
+source. A later catalogue collision does not change an existing instance, saved patch or undo.
+`_local` save, rename, inspect and `.gfi` save/load use the new path; builtin and patch nodes
+retain correct provenance.
 Existing instances, expressions, undo and source editing use the same type model. Extend the
 owning node/contract/patch sessions, and check frontend consumers changed by the new schema.
 
@@ -360,8 +417,9 @@ Status: pending.
 
 Checkpoint: a controlled mixed-language repo indexes without executing its deliberately failing
 import/build code. Root nodes are rejected, helpers do not appear as bundles, partial declarations
-stay inspectable and equal node names preserve their bundle IDs. Test through public library APIs
-in `goofi-tests`; retain real local probes for preparation rather than a second execution scanner.
+stay inspectable and equal node names retain their distinct structured references. Test through
+public library APIs in `goofi-tests`; retain real local probes for preparation rather than a
+second execution scanner.
 
 ### Stage 4 — Cargo and shared Python preparation
 
@@ -440,8 +498,8 @@ Status: pending.
   watcher, hot-swap framework or active-patch operation lockout.
 - Serve example patches from `<bundle>/examples/` of the loaded bundles; remove the repo-root
   `examples/` route when the eeg examples have moved.
-- Record external bundle/type requirements and observed revision in `.gfi`. Load the current
-  installed checkout, keep missing nodes visible with their bundle named, and never silently
+- Record structured node references, external bundle requirements and observed revision in `.gfi`.
+  Load the current installed checkout, keep missing nodes visible with their bundle named, and never silently
   install or pull on patch load. Keep `_local` and patch-authored source in archives as before.
 - Remove duplicate custom/root/provenance assumptions and old graph-dependent library state
   paths when their shared replacements are in use.
@@ -489,7 +547,8 @@ Status: pending.
 - Register a library app panel through the existing shared panel vocabulary. Keep `panelty` in
   charge of panel layout/mechanics and use existing UI primitives and root tokens.
 - Show builtin, `_local`, installed and available bundle/node records with inspection and useful
-  search/filter controls. Group by source kind; show node and bundle names, never full type IDs.
+  search/filter controls, including engine, author and source. Group by source kind; show node
+  and bundle names, with author/source/engine where equal names need to be distinguished.
   Display external bundles as `<uname>/<repo>/<bundle>`.
   List a bundle's example patches with it.
 - Add source register/unregister, whole-bundle plus/remove, repo update check/pull and preparation
@@ -512,8 +571,8 @@ Status: pending.
 
 - Audit from real CLI/app/MCP callers through the common operation path. Check ownership,
   batching, source selection, graph projection, errors, resource release and patch behavior.
-- Search for old custom paths, flat unmanaged roots, bare-name collision selection, duplicate
-  op declarations, external product test dependencies and shipped external requirements. Delete
+- Search for old custom paths, flat unmanaged roots, string node type IDs, implicit collision
+  selection, duplicate op declarations, external product test dependencies and shipped external requirements. Delete
   obsolete code/schemas/configuration and ensure each shared rule has one owner.
 - Run final workspace and frontend checks, plus the relevant browser suite. Fix warnings and
   substantive failures, then review the fixes again. Report failed/skipped checks explicitly.
@@ -734,7 +793,8 @@ Existing nodes and host dependencies:
 
 - Read this file and `AGENTS.md`, then inspect the current diffs in goofi and `../goofi-nodes`.
 - All stages are pending. The approved architecture is the decisions/convention/lifecycle above,
-  with the 2026-10-04 decisions on the builtin set, ID grammar, sources and examples;
+  with the 2026-10-04 decisions on the builtin set, structured node entries/selectors, sources
+  and examples; the structured model replaces the earlier node ID grammar;
   no additional product approval is needed to implement it when the user resumes the build.
 - Roadmap maintenance does not start implementation. Wait for the user's resume instruction.
 - Work through the stage checkpoints on `main`, preserve shared changes, and commit tested work
