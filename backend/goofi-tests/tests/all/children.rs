@@ -19,7 +19,9 @@ fn sleeper() {
         return;
     }
     // As every goofi child does: end when the parent dies.
-    child::watch_parent().expect("watch the parent");
+    if std::env::var_os(OUTPUT_HOLDER).is_none() {
+        child::watch_parent().expect("watch the parent");
+    }
     // Deaf to a polite stop, as an agent saving its state is, so the insist meets a LIVE child.
     #[cfg(unix)]
     // SAFETY: installing a signal disposition in a single-threaded test child.
@@ -50,6 +52,23 @@ fn alive(pid: u32) -> bool {
 /// Turns this binary into the intermediate parent: it spawns a sleeper through the child type,
 /// names the grandchild's pid, and holds it until killed or its stdin closes.
 const INTERMEDIATE: &str = "GOOFI_TEST_INTERMEDIATE";
+
+/// A completed tool whose child retains its output pipes and does not watch the liveness pipe.
+const OUTPUT_HOLDER: &str = "GOOFI_TEST_OUTPUT_HOLDER";
+
+#[test]
+#[cfg(unix)]
+fn output_holder() {
+    let Some(path) = std::env::var_os(OUTPUT_HOLDER) else { return };
+    let grandchild = sleeper_command()
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn the output holder");
+    std::fs::write(path, grandchild.id().to_string()).expect("record the output holder");
+    // This fixture exits without waiting; the tool owner's deadline must stop the inherited group.
+    std::mem::forget(grandchild);
+}
 
 #[test]
 fn intermediate() {
@@ -155,6 +174,25 @@ fn a_tool_past_its_deadline_is_killed_and_reported() {
     let refused = child::output("sleeper", &mut sleeper_command(), Duration::from_millis(500));
     let err = refused.expect_err("a tool that never finishes is refused");
     assert_eq!(err.kind(), std::io::ErrorKind::TimedOut, "{err}");
+
+    // A tool's exit does not close a pipe another process holds. The deadline also bounds those
+    // readers and kills the group, including a descendant that watches no liveness pipe.
+    #[cfg(unix)]
+    {
+        let record = tempfile::NamedTempFile::new().expect("the holder's pid file");
+        let mut held = Command::new(std::env::current_exe().expect("this test binary"));
+        held.args([&format!("{}::output_holder", crate::situation(module_path!())), "--exact", "--nocapture"])
+            .env(OUTPUT_HOLDER, record.path());
+        let err = child::output("held output", &mut held, Duration::from_millis(500))
+            .expect_err("an output pipe past the deadline is refused");
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut, "{err}");
+        let pid: u32 = std::fs::read_to_string(record.path()).expect("the holder's pid").parse().expect("a pid");
+        let deadline = Instant::now() + WAIT;
+        while alive(pid) && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(!alive(pid), "the output holder left with its owner");
+    }
 
     // One that finishes answers with its output, status and all.
     let mut quick = Command::new(std::env::current_exe().expect("this test binary"));

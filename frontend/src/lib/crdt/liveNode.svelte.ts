@@ -3,8 +3,9 @@
 import type { NodeInstanceInfo, NodeTypeInfo, NodeStage, NodeStats, NodeRuntime } from '$lib/api/control';
 import { PARAM_MODES, type ElementSource, type ParamDescriptor, type ParamMode } from '$lib/api/types';
 import { boundaryType } from '$lib/api/vocab';
-import { nodesMap, nodeView, viewersJson, baselineJson, type Doc, type FacadeFace } from './graphDoc';
-import { obj, type Obj } from './ops';
+import { nodesMap, type Doc, type FacadeFace } from './graphDoc';
+import { ROOT_ID } from '$lib/editor/subpatchScene';
+import { isObj, obj, type Obj } from './ops';
 
 /** What the runtime planes report about one node — never in the document. */
 export interface RuntimeOverlay {
@@ -125,7 +126,11 @@ function liveParam(uid: string, group: string, name: string, catalog: ParamDescr
  * document's own groups for a type the catalog lacks); every leaf inside it is a live read. */
 export function liveNode(uid: string, cx: ViewSources): NodeInstanceInfo {
 	const rec = (): Obj => obj(nodesMap(cx.doc())[uid]);
-	const type = (): string => (typeof rec().type === 'string' ? (rec().type as string) : '');
+	const text = (key: string): string | undefined => {
+		const value = rec()[key];
+		return typeof value === 'string' ? value : undefined;
+	};
+	const type = (): string => text('type') ?? '';
 	const catalog = () => cx.catalog(type());
 	const params = $derived.by(() => {
 		const cat = catalog();
@@ -138,14 +143,17 @@ export function liveNode(uid: string, cx: ViewSources): NodeInstanceInfo {
 		}
 		return out;
 	});
-	const viewers = $derived((viewersJson(cx.doc(), uid) ?? {}) as NodeInstanceInfo['viewers']);
-	const baseline = $derived(baselineJson(cx.doc(), uid) as NodeInstanceInfo['baseline']);
+	const viewers = $derived(obj(rec().viewers) as NodeInstanceInfo['viewers']);
+	const baseline = $derived(isObj(rec().baseline) ? rec().baseline as NodeInstanceInfo['baseline'] : undefined);
 	const virtual = (): boolean => !!boundaryType(type()) || cx.face(uid) !== undefined;
 	return accessors({ uid } as NodeInstanceInfo, {
-		name: () => nodeView(cx.doc(), uid)?.name ?? '',
+		name: () => text('name') ?? '',
 		type,
-		pos: () => nodeView(cx.doc(), uid)?.pos ?? [0, 0],
-		scope: () => nodeView(cx.doc(), uid)?.scope ?? '',
+		pos: () => {
+			const p = rec().pos;
+			return [0, 1].map((i) => Array.isArray(p) && typeof p[i] === 'number' ? p[i] : 0);
+		},
+		scope: () => text('scope') ?? ROOT_ID,
 		doc: () => catalog()?.doc ?? '',
 		editor: () => catalog()?.editor,
 		input_slots: () => cx.face(uid)?.input_slots ?? catalog()?.input_slots ?? {},

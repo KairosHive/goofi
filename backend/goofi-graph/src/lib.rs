@@ -202,35 +202,37 @@ pub fn param_commands(
     params: &serde_json::Value,
 ) -> Result<Vec<Command>, String> {
     let groups = params.as_object().ok_or("params is {group: {param: …}}")?;
+    let declared = g.params(uid);
     let mut cmds = Vec::new();
     for (group, entries) in groups {
         let entries =
             entries.as_object().ok_or_else(|| format!("params.{group} is {{param: …}}"))?;
         for (name, spec) in entries {
             // `name[i]` is one dimension of a vector: it edits that element's literal or source.
-            let existing = g
-                .params(uid)
-                .and_then(|p| goofi_node::param_dim(&p, group, name))
+            let existing = declared
+                .as_ref()
+                .and_then(|p| goofi_node::param_dim(p, group, name))
                 .ok_or_else(|| format!("no param {group}.{name}"))?;
-            // A LIST of expressions on a vector is one expression per element: each element takes
-            // its own, and the whole param steps back to its literal with the list retained.
-            if let Some(items) = element_expressions(&existing, name, spec) {
-                for (k, item) in items.iter().enumerate() {
-                    let element = format!("{name}[{k}]");
-                    let cur = g.param_source(uid, group, &element).map(|s| s.state);
-                    let (_, source) = param_change(&existing.dim(k), cur, &serde_json::json!({ "expression": item }))
-                        .map_err(|e| format!("params.{group}.{element}: {e}"))?;
-                    cmds.push(Command::EditParam { uid, group: group.clone(), name: element, value: None, source });
-                }
-                let cur = g.param_source(uid, group, name).map(|s| s.state).unwrap_or_default();
-                let text = spec["expression"].as_str().unwrap_or_default().to_string();
-                let whole = SourceState { mode: Mode::Constant, expression: text, ..cur };
-                cmds.push(Command::EditParam { uid, group: group.clone(), name: name.clone(), value: None, source: Some(whole) });
-                continue;
-            }
             let cur = g.param_source(uid, group, name).map(|s| s.state);
             let (value, source) = param_change(&existing, cur, spec)
                 .map_err(|e| format!("params.{group}.{name}: {e}"))?;
+            // A LIST of expressions on a vector is one expression per element: each element takes
+            // its own, and the whole param steps back to its literal with the list retained.
+            if let Some(items) = element_expressions(&existing, name, spec) {
+                let mut element_spec = spec.clone();
+                element_spec.as_object_mut().expect("a list expression spec").shift_remove("value");
+                for (k, item) in items.iter().enumerate() {
+                    let element = format!("{name}[{k}]");
+                    let cur = g.param_source(uid, group, &element).map(|s| s.state);
+                    element_spec["expression"] = serde_json::json!(item);
+                    let (_, source) = param_change(&existing.dim(k), cur, &element_spec)
+                        .map_err(|e| format!("params.{group}.{element}: {e}"))?;
+                    cmds.push(Command::EditParam { uid, group: group.clone(), name: element, value: None, source });
+                }
+                let whole = SourceState { mode: Mode::Constant, ..source.expect("a list expression source") };
+                cmds.push(Command::EditParam { uid, group: group.clone(), name: name.clone(), value, source: Some(whole) });
+                continue;
+            }
             if value.is_none() && source.is_none() {
                 return Err(format!("params.{group}.{name} sets neither a value nor a source"));
             }
@@ -275,20 +277,17 @@ fn element_expressions(existing: &Param, name: &str, spec: &serde_json::Value) -
 
 /// `text` split on the commas outside every bracket, parenthesis, brace and string.
 fn split_top_level(text: &str) -> Vec<String> {
+    use goofi_node::expr::{tokens, Kind};
     let mut items = Vec::new();
     let mut depth = 0i32;
-    let mut quote: Option<char> = None;
     let mut start = 0;
-    for (i, c) in text.char_indices() {
-        match (quote, c) {
-            (Some(q), _) if c == q => quote = None,
-            (Some(_), _) => {}
-            (None, '\'' | '"') => quote = Some(c),
-            (None, '[' | '(' | '{') => depth += 1,
-            (None, ']' | ')' | '}') => depth -= 1,
-            (None, ',') if depth == 0 => {
-                items.push(text[start..i].trim().to_string());
-                start = i + 1;
+    for token in tokens(text) {
+        match token.kind {
+            Kind::Punct(b'[' | b'(' | b'{') => depth += 1,
+            Kind::Punct(b']' | b')' | b'}') => depth -= 1,
+            Kind::Punct(b',') if depth == 0 => {
+                items.push(text[start..token.start].trim().to_string());
+                start = token.end;
             }
             _ => {}
         }
@@ -1396,7 +1395,7 @@ impl Graph {
     /// where a rename refuses: a hand-edited archive must cost one name, not the patch.
     fn pick_name(&self, want: &str, base: &str, except: Option<Uid>) -> String {
         match self.name_taken(want, except) || !goofi_core::variables::is_valid_name(want) {
-            true => self.fresh_name(base),
+            true => goofi_core::fresh_name(base, 0, |name| self.name_taken(name, None)),
             false => want.to_string(),
         }
     }
@@ -1476,25 +1475,10 @@ impl Graph {
             .map(|(u, e)| (*u, e.name.as_str()))
     }
 
-    fn name_in_use(&self, name: &str) -> bool {
-        self.named().any(|(_, n)| n == name)
-    }
-
     /// Is `name` already worn by something other than `except`? The commands tolerate a collision
     /// as a no-op, so the user-facing error is raised at the RPC boundary.
     pub fn name_taken(&self, name: &str, except: Option<Uid>) -> bool {
         self.named().any(|(u, n)| Some(u) != except && n == name)
-    }
-
-    /// Lowest `{base}{N}` display name not already in use (globally unique).
-    fn fresh_name(&self, base: &str) -> String {
-        for n in 0.. {
-            let cand = format!("{base}{n}");
-            if !self.name_in_use(&cand) {
-                return cand;
-            }
-        }
-        unreachable!()
     }
 
     /// Display name of anything a uid can name — one map, so one lookup for all three kinds.
@@ -1580,14 +1564,14 @@ impl Graph {
         if !goofi_core::variables::is_valid_name(name) {
             return Err(format!("`{name}` is not a legal name: {NAME_RULE}"));
         }
-        if self.name_in_use(name) {
+        if self.name_taken(name, None) {
             return Err(format!("display name `{name}` already in use"));
         }
         // A facade, a boundary port and a leaf all wear a name in the ONE namespace `nd()` reads,
         // and now in one map — so the rename is one write and the rewrite below is shared.
         let e = self.patch.nodes.get_mut(&uid).ok_or_else(|| format!("no such node {uid}"))?;
         let old_name = std::mem::replace(&mut e.name, name.to_string());
-        // `name_in_use` guarantees `name != old_name`, so the rename genuinely moved the
+        // `name_taken` guarantees `name != old_name`, so the rename moved the
         // display name — propagate it into every expression that referenced it.
         let touched = self.rewrite_nd_refs_for_rename(uid, &old_name, name);
         // A multi slot names its senders, so the new name must reach every leaf this node feeds —
@@ -2017,7 +2001,7 @@ impl Graph {
         let scope_uid = self.mint();
         // Registered BEFORE its ports are minted, so each port's fresh name sees the ones before it
         // and `nd()` can tell two ports apart.
-        let disp = self.fresh_name("subpatch");
+        let disp = goofi_core::fresh_name("subpatch", 0, |name| self.name_taken(name, None));
         self.patch.nodes.insert(scope_uid, NodeEntry::new(Kind::Facade, disp, pos));
         self.set_member_scope(scope_uid, parent);
 
@@ -2287,7 +2271,11 @@ impl Graph {
             }
         }
         // The rebirth renamed the node's door, so every subscription onto it is re-planned.
-        let keys: Vec<ParamKey> = entry.sources.keys().cloned().collect();
+        let (keys, retired): (Vec<ParamKey>, Vec<ParamKey>) = entry.sources.keys().cloned()
+            .partition(|key| goofi_node::param_dim(&declared, &key.group, &key.name).is_some());
+        for key in retired {
+            self.unbind(uid, &key);
+        }
         for slot in lib.manifest.inputs {
             self.touched.push(Touched::Slot(uid, slot.name));
         }
@@ -3560,4 +3548,3 @@ fn entry_error<'a>(e: &'a Leaf, health: Option<&'a Health>) -> Option<&'a str> {
         .min_by(|a, b| a.0.cmp(b.0))
         .map(|(_, s)| s)
 }
-

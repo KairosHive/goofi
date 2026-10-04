@@ -163,6 +163,39 @@
      "channels": {}
     }
    }
+  },
+  {
+   "name": "table_special_keys",
+   "hex": "474f4f4602020d0000009900000081a56474797065a57461626c650300000009005f5f70726f746f5f5f22000000474f4f4602010b0000000900000081a56474797065a37374725f5f70726f746f5f5f0b00636f6e7374727563746f7224000000474f4f4602010b0000000b00000081a56474797065a3737472636f6e7374727563746f720800746f537472696e6721000000474f4f4602010b0000000800000081a56474797065a3737472746f537472696e67",
+   "decoded": {
+    "dtype": "TABLE",
+    "entries": {
+     "__proto__": {
+      "dtype": "STRING",
+      "value": "__proto__",
+      "meta": {
+       "dtype": "str"
+      }
+     },
+     "constructor": {
+      "dtype": "STRING",
+      "value": "constructor",
+      "meta": {
+       "dtype": "str"
+      }
+     },
+     "toString": {
+      "dtype": "STRING",
+      "value": "toString",
+      "meta": {
+       "dtype": "str"
+      }
+     }
+    },
+    "meta": {
+     "dtype": "table"
+    }
+   }
   }
  ]
 }

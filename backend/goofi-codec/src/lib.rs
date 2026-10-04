@@ -263,10 +263,10 @@ pub const STAMPS_TAG: u8 = 4;
 const STAMP_KEYS: [&str; 5] = [META_TIME, META_INDEX, META_UFREQ, META_EMIT, META_SOURCE];
 
 /// A 64-bit hash of what a frame SAYS: its kind, its body, and its meta without the engine's
-/// per-emit stamps — so a held value emitted again hashes as the frame before it.
+/// per-emit stamps. A table's child stamps are part of its body and stay in the hash.
 pub fn content_hash(d: &Data) -> Result<u64, EncodeError> {
     let mut h = DefaultHasher::new();
-    hash_into(d, &mut h)?;
+    hash_into(d, &mut h, true)?;
     Ok(h.finish())
 }
 
@@ -291,11 +291,11 @@ fn stamps(meta: &goofi_core::Meta) -> Vec<(Mp, Mp)> {
     carried(meta).into_iter().filter(|(k, _)| k.as_str().is_some_and(|k| STAMP_KEYS.contains(&k))).collect()
 }
 
-fn hash_into(d: &Data, h: &mut DefaultHasher) -> Result<(), EncodeError> {
+fn hash_into(d: &Data, h: &mut DefaultHasher, root: bool) -> Result<(), EncodeError> {
     h.write_u8(d.dtype_tag());
     let mut said: Vec<(Mp, Mp)> = carried(d.meta())
         .into_iter()
-        .filter(|(k, _)| !k.as_str().is_some_and(|k| STAMP_KEYS.contains(&k)))
+        .filter(|(k, _)| !root || !k.as_str().is_some_and(|k| STAMP_KEYS.contains(&k)))
         .collect();
     // By key, so a frame that sets the same keys in another order says the same thing.
     said.sort_by(|(a, _), (b, _)| a.as_str().cmp(&b.as_str()));
@@ -315,7 +315,7 @@ fn hash_into(d: &Data, h: &mut DefaultHasher) -> Result<(), EncodeError> {
             h.write_usize(map.len());
             for (key, value) in map.iter() {
                 h.write(key.as_bytes());
-                hash_into(value, h)?;
+                hash_into(value, h, false)?;
             }
         }
     }

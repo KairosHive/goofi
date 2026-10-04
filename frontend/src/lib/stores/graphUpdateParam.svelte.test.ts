@@ -5,7 +5,7 @@ import { seed, type DocSeed } from '$lib/test/docSeed';
 import { GraphStore } from './graph.svelte';
 import { history } from './history.svelte';
 import { nodesMap } from '$lib/crdt/graphDoc';
-import type { NodeInstanceInfo, NodeTypeInfo } from '$lib/api/control';
+import type { NodeTypeInfo } from '$lib/api/control';
 import { typeInfo } from '$lib/test/typeInfo';
 
 /** Seed a node — a param leaf-write targets the replica's node, so it no-ops unless it is there. */
@@ -67,23 +67,6 @@ function catalog(): NodeTypeInfo[] {
 }
 
 
-function nodeWithParam(uid: string, value: unknown): NodeInstanceInfo {
-	return {
-		uid,
-		name: 'osc0',
-		type: 'Oscillator',
-		doc: '',
-		input_slots: { in: 'ARRAY' },
-		output_slots: { out: 'ARRAY' },
-		// One param group with a single param carrying `value`.
-		params: { common: { frequency: { value } } } as unknown as NodeInstanceInfo['params'],
-		pos: [0, 0],
-		viewers: {},
-		scope: '__root__',
-		error: null
-	};
-}
-
 describe('GraphStore.updateParam — guards a non-existent param', () => {
 	beforeEach(() => history().reset());
 
@@ -91,7 +74,7 @@ describe('GraphStore.updateParam — guards a non-existent param', () => {
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
 		const d = seed(fc);
-		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
+		docAddNode(d, 'uidA');
 
 		// A missing group/name (agent typo, or a pre-hydration race) must not record a
 		// poisoned undo entry whose inverse would send value:undefined → backend KeyError.
@@ -124,7 +107,6 @@ describe('GraphStore.setSource — guards a non-existent param', () => {
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
 		const d = seed(fc);
-		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
 		docAddNode(d, 'uidA'); // the node exists in the doc; the PARAM does not
 
 		// A missing group/name (agent typo, or a call racing hydration) must not leaf-write an
@@ -172,7 +154,6 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
 		const d = seed(fc);
-		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
 
 		expect(g.isRefreshing('uidA', 'audio', 'device')).toBe(false);
 
@@ -197,7 +178,6 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
 		const d = seed(fc);
-		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
 
 		await g.refreshParam('uidA', 'audio', 'device');
 		await g.refreshParam('uidA', 'lsl', 'source_name');
@@ -230,7 +210,6 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 		fc.failNext('node param request');
 		const g = new GraphStore(fc);
 		const d = seed(fc);
-		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
 
 		await expect(g.refreshParam('uidA', 'audio', 'device')).rejects.toThrow();
 		expect(g.isRefreshing('uidA', 'audio', 'device')).toBe(false);
@@ -289,6 +268,10 @@ describe('GraphStore doc sync — a reader re-runs for the leaves it read', () =
 		flushSync();
 		expect(node.name).toBe('osc1');
 		expect([list, names, frequency, reset]).toEqual([1, 2, 2, 1]);
+		d.patch({ nodes: { uidA: { pos: [20, 30], scope: 'sub' } } });
+		flushSync();
+		expect([node.pos, node.scope]).toEqual([[20, 30], 'sub']);
+		expect([list, names, frequency, reset], 'position and scope leave name and param readers asleep').toEqual([1, 2, 2, 1]);
 		d.node('uidB', 'Oscillator', 'osc2');
 		flushSync();
 		expect([list, names, frequency, reset], 'membership wakes the list alone').toEqual([2, 2, 2, 1]);

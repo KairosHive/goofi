@@ -197,6 +197,29 @@ describe('per-stream drop accounting', () => {
  * invisible to the backend unless they actually change what it should serve.
  */
 describe('what the registry tells the backend', () => {
+	it('drops a viewer removed before its stream opens', async () => {
+		const off = bind('osc', 'out');
+		off();
+		await settle();
+		expect(MockWorker.instances).toEqual([]);
+		expect(dropRate('osc', 'out')).toBeNull();
+	});
+
+	it('keeps the current binding when an old binding releases the same callback', async () => {
+		for (const cb of [null, () => {}]) {
+			const off = bindViewer('osc', 'out', 'a', [line(150)], cb);
+			const current = bindViewer('osc', 'out', 'a', [line(320)], cb);
+			off();
+			await settle();
+			const w = MockWorker.instances[0];
+			expect((opsOf(w, 'spec').at(-1) as { specs: unknown[] }).specs).toEqual([line(320)]);
+			expect(dropRate('osc', 'out')).toBe(0);
+			current();
+			await settle();
+			expect(dropRate('osc', 'out')).toBeNull();
+		}
+	});
+
 	it('opens once for a slot, whatever the viewer count, and closes when the last one goes', async () => {
 		const offA = bind('osc', 'out');
 		const offB = bind('osc', 'out');

@@ -1,10 +1,5 @@
 import { untrack } from 'svelte';
 
-/** The echo-suppression decision: which value a live control should display. */
-export function displayValue<T>(editing: boolean, source: T, local: T): T {
-	return editing ? local : source;
-}
-
 /** Wire a control's edit buffer to a live source: `input` previews through `onInput`, `commit` sends
  * through `onChange`, and the source is hidden between `begin` and `end` and until it echoes. */
 export function useLiveValue<T>(getSource: () => T, onChange: (v: T) => void, onInput?: (v: T) => void) {
@@ -19,7 +14,7 @@ export function useLiveValue<T>(getSource: () => T, onChange: (v: T) => void, on
 	let dirty = false;
 	let released = false;
 
-	const value = $derived(displayValue(editing || pending, getSource(), edit));
+	const value = $derived(editing || pending ? edit : getSource());
 
 	return {
 		get value() {

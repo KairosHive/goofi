@@ -19,17 +19,20 @@ fn a_folder_plugin_registers_ops_nodes_hooks_and_persistent_sessions() {
         .unwrap()
         .ends_with("index.js"));
     let ops = goofi.call("op list", j!({"doc": true}));
-    assert!(ops["ops"]
+    let select = ops["ops"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|op| op["op"] == "plugin example subject select"
-            && op["args"][0] == serde_json::json!({ "name": "subject", "type": "string", "required": true })));
-    let lines = vec!["plugin example subject select --subject Alice".into()];
+        .find(|op| op["op"] == "plugin example subject select").expect("the plugin registered its op");
+    assert_eq!(select["args"][0], j!({ "name": "subject", "type": "string", "required": true }));
+    assert!(select["schema"]["properties"]["tags"].get("type").is_none(), "JSON args permit lists: {select}");
+    let lines = vec!["plugin example subject select --subject Alice --tags '[\"fixture\"]'".into()];
+    let selected = goofi_bridge::phrase::exec_lines(&goofi.state, &lines, "operator").unwrap();
     assert_eq!(
-        goofi_bridge::phrase::exec_lines(&goofi.state, &lines, "operator").unwrap()[0]["subject"],
+        selected[0]["subject"],
         "Alice"
     );
+    assert_eq!(selected[0]["tags"], j!(["fixture"]), "the plugin receives the advertised JSON argument");
     assert_eq!(
         goofi.call("plugin example subject select", j!({"subject": " Alice "}))["subject"],
         "Alice"

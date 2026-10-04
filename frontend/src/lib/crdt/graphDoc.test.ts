@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
 	nodesMap,
-	nodeView,
 	linkViews,
 	facadeFaces,
 	variableViews,
@@ -38,29 +37,28 @@ function seedDoc(): Doc {
 	};
 }
 
-/** The production reader of a node's params, over `doc` alone: no catalog, face or runtime. */
+/** The production node reader, over `doc` alone: no catalog, face or runtime. */
 const live = (doc: Doc, uid: string) => {
 	const cx: ViewSources = { doc: () => doc, catalog: () => undefined, face: () => undefined, runtime: () => undefined };
-	return liveNode(uid, cx).params;
+	return liveNode(uid, cx);
 };
 
 describe('graphDoc readers', () => {
 	it('reads node identity views', () => {
 		const doc = seedDoc();
-		expect(nodeView(doc, 'a')).toEqual({
+		expect(live(doc, 'a')).toMatchObject({
 			uid: 'a', type: 'Oscillator', name: 'osc0', pos: [10, 20], scope: '__root__'
 		});
 		// A node with no pos defaults to [0,0], and one naming no scope is at the top level.
-		expect(nodeView(doc, 'b')).toEqual({
+		expect(live(doc, 'b')).toMatchObject({
 			uid: 'b', type: 'Buffer', name: 'buf0', pos: [0, 0], scope: '__root__'
 		});
-		expect(nodeView(doc, 'missing')).toBeNull();
 		expect(Object.keys(nodesMap(doc))).toEqual(['a', 'b']);
 	});
 
 	it('reads param values and expression sources', () => {
 		const doc = seedDoc();
-		const p = live(doc, 'a');
+		const p = live(doc, 'a').params;
 		expect(p.common?.max_frequency?.value).toBe(30);
 		expect(p.oscillator?.waveform?.value).toBe('sine');
 		expect(p.common?.nope?.value).toBeUndefined();
@@ -69,7 +67,7 @@ describe('graphDoc readers', () => {
 		expect(p.common?.max_frequency?.mode).toBe('constant');
 		expect(p.common?.max_frequency?.expression).toBeNull();
 		// A node with no params → empty.
-		expect(live(doc, 'b')).toEqual({});
+		expect(live(doc, 'b').params).toEqual({});
 	});
 
 	it('reads links', () => {
@@ -99,7 +97,7 @@ describe('graphDoc readers', () => {
 
 		// ONE list, because the document is one map: leaf, facade and port alike, each carrying the
 		// scope it is drawn in.
-		expect(Object.keys(nodesMap(doc)).map((uid) => [uid, nodeView(doc, uid)?.scope])).toEqual([
+		expect(Object.keys(nodesMap(doc)).map((uid) => [uid, live(doc, uid).scope])).toEqual([
 			['a', '__root__'],
 			['b', '__root__'],
 			['m1', 'i1'],

@@ -73,6 +73,12 @@ fn a_node_file_in_the_workspace_is_live_after_a_rescan_and_follows_its_edits() {
     let g = Goofi::new();
     let mount = g.state.mount();
     write_node(&mount.join("nodes_signal"), "my_thing.py", "1.0");
+    let declare = |params: &str| {
+        let path = mount.join("nodes_signal/my_thing.py");
+        let source = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(path, source.replace("    PRODUCER", &format!("    PARAMS = {{'tuning': {params}}}\n    PRODUCER"))).unwrap();
+    };
+    declare("{'retired': goofi.NumParam(1.0, 0.0, 1.0), 'shape': goofi.NumParam([1.0, 0.5, 0.0], 0.0, 1.0)}");
 
     assert_eq!(rescan(&g)["added"], j!(["signal:MyThing"]), "the file becomes a type");
     // The baseline is what the LAST scan found, so refresh with nothing edited says nothing changed.
@@ -82,12 +88,21 @@ fn a_node_file_in_the_workspace_is_live_after_a_rescan_and_follows_its_edits() {
 
     let live = g.add("MyThing");
     emits(&g, live, 1.0);
+    for name in ["retired", "shape[0]", "shape[2]"] {
+        g.call("node param edit", j!({ "node": live.to_string(), "param": format!("tuning/{name}"), "expression": "0.25", "mode": "constant" }));
+    }
 
     write_node(&mount.join("nodes_signal"), "my_thing.py", "2.0");
+    declare("{'shape': goofi.NumParam([1.0, 0.5], 0.0, 1.0)}");
     let diff = rescan(&g);
     assert_eq!(diff["changed"], j!(["signal:MyThing"]), "an edited file reports as changed");
     assert_eq!((&diff["added"], &diff["removed"]), (&j!([]), &j!([])));
     emits(&g, live, 2.0); // the running node is the new code
+    for name in ["retired", "shape[2]"] {
+        assert!(g.graph().param_source(live, "tuning", name).is_none(), "a retired param has no source: {name}");
+    }
+    assert_eq!(g.graph().param_source(live, "tuning", "shape[0]").unwrap().state.expression, "0.25", "a kept element retains its source");
+    assert!(g.error(live).is_none(), "the new instance has no error from retired params: {:?}", g.error(live));
 
     // Removal closes the door; it does not reach into the graph.
     std::fs::remove_file(mount.join("nodes_signal").join("my_thing.py")).unwrap();

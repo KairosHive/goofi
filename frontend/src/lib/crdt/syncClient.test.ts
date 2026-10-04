@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { FakeControl } from '$lib/test/fakeControl';
 import { SyncClient } from './syncClient.svelte';
-import { nodeView } from './graphDoc';
+import { nodesMap } from './graphDoc';
 import type { Op } from './ops';
 
 const OSC = { type: 'Oscillator', name: 'osc', pos: [0, 0] };
@@ -10,7 +10,6 @@ const OSC = { type: 'Oscillator', name: 'osc', pos: [0, 0] };
 const stateWith = (nodes: Record<string, unknown>) => ({
 	nodes,
 	links: {},
-	instances: {},
 	variables: {},
 	arrangement: {}
 });
@@ -29,7 +28,7 @@ describe('SyncClient', () => {
 		ctl.emit({ event: 'doc_state', payload: { v: 7, doc: stateWith({ '1': OSC }) } });
 		expect(client.synced).toBe(true);
 		expect(client.version).toBe(7);
-		expect(nodeView(client.doc, '1')).toMatchObject({ type: 'Oscillator', name: 'osc' });
+		expect(nodesMap(client.doc)['1']).toMatchObject({ type: 'Oscillator', name: 'osc' });
 	});
 
 	it('applies a delta onto the version it names', () => {
@@ -40,8 +39,8 @@ describe('SyncClient', () => {
 			payload: { from: 1, v: 2, ops: [{ op: 'put', path: ['nodes', '2'], value: { type: 'Buffer', name: 'buf' } }] }
 		});
 		expect(client.version).toBe(2);
-		expect(nodeView(client.doc, '2')).toMatchObject({ type: 'Buffer', name: 'buf' });
-		expect(nodeView(client.doc, '1'), 'and leaves the untouched node alone').not.toBeNull();
+		expect(nodesMap(client.doc)['2']).toMatchObject({ type: 'Buffer', name: 'buf' });
+		expect(nodesMap(client.doc)['1'], 'and leaves the untouched node alone').toBeDefined();
 	});
 
 	it('a del REMOVES the path — and a put lands leaf by leaf', () => {
@@ -50,7 +49,7 @@ describe('SyncClient', () => {
 		const { ctl, client } = started();
 		ctl.emit({ event: 'doc_state', payload: { v: 1, doc: stateWith({ '1': OSC }) } });
 		ctl.emit({ event: 'doc_patch', payload: { from: 1, v: 2, ops: [{ op: 'del', path: ['nodes', '1'] }] } });
-		expect(nodeView(client.doc, '1')).toBeNull();
+		expect(nodesMap(client.doc)['1']).toBeUndefined();
 	});
 
 	it('a whole-map put takes the manager key order, which a list shows', () => {
@@ -72,7 +71,7 @@ describe('SyncClient', () => {
 		const { ctl, client } = started();
 		ctl.emit({ event: 'doc_state', payload: { v: 5, doc: stateWith({ '1': OSC }) } });
 		ctl.emit({ event: 'doc_patch', payload: { from: 3, v: 4, ops: [{ op: 'del', path: ['nodes', '1'] }] } });
-		expect(nodeView(client.doc, '1'), 'the already-applied delete was not replayed').not.toBeNull();
+		expect(nodesMap(client.doc)['1'], 'the already-applied delete was not replayed').toBeDefined();
 		expect(client.version).toBe(5);
 		expect(warn, 'and it is not worth a word').not.toHaveBeenCalled();
 		warn.mockRestore();
@@ -89,13 +88,13 @@ describe('SyncClient', () => {
 			event: 'doc_patch',
 			payload: { from: 5, v: 6, ops: [{ op: 'put', path: ['nodes', '9'], value: { type: 'Buffer', name: 'b' } }] }
 		});
-		expect(nodeView(client.doc, '9'), 'the out-of-order delta was not applied').toBeNull();
+		expect(nodesMap(client.doc)['9'], 'the out-of-order delta was not applied').toBeUndefined();
 		expect(client.version, 'and the replica did not move').toBe(1);
 		expect(warn).toHaveBeenCalled();
 
 		ctl.emit({ event: 'doc_state', payload: { v: 6, doc: stateWith({ '9': OSC }) } });
 		expect(client.version).toBe(6);
-		expect(nodeView(client.doc, '9'), 'the re-seed healed it').not.toBeNull();
+		expect(nodesMap(client.doc)['9'], 'the re-seed healed it').toBeDefined();
 		warn.mockRestore();
 	});
 
@@ -106,10 +105,10 @@ describe('SyncClient', () => {
 		ctl.emit({ event: 'doc_state', payload: { v: 3, doc: stateWith({ '1': OSC }) } });
 		client.reset();
 		expect(client.synced).toBe(false);
-		expect(nodeView(client.doc, '1')).toBeNull();
+		expect(nodesMap(client.doc)['1']).toBeUndefined();
 
 		ctl.emit({ event: 'doc_state', payload: { v: 1, doc: stateWith({ '1': { type: 'Buffer', name: 'b' } }) } });
-		expect(nodeView(client.doc, '1')).toMatchObject({ type: 'Buffer' });
+		expect(nodesMap(client.doc)['1']).toMatchObject({ type: 'Buffer' });
 	});
 
 	it('fires the change callback on a seed, on a delta and on a reset, naming what moved', () => {

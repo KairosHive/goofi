@@ -386,6 +386,18 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     assert!(g.instances().is_empty() && g.nodes().contains(&hex(peer)), "s1's undo left s2's node standing");
     assert_eq!(g.call("redo", j!({}))["changed"], true);
     g.call("undo", j!({}));
+    let before = g.doc();
+    let labels = g.state.history_labels("test");
+    g.refuse("node add", j!({ "type": "MissingNodeType" }));
+    assert_eq!(g.state.history_labels("test"), labels, "a refused write keeps the redo run");
+    g.refuse("compound", j!({ "ops": [
+        { "op": "variable entry add", "payload": { "name": "patch.tmp", "value": 1.0, "type": "float" } },
+        { "op": "node edit", "payload": { "node": GHOST, "name": "renamed" } },
+    ] }));
+    assert_eq!(g.doc(), before, "the refused batch leaves the graph unchanged");
+    assert_eq!(g.state.history_labels("test"), labels, "the refused batch keeps the redo run");
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    g.call("undo", j!({}));
     g.add("Buffer");
     let r = g.call("redo", j!({}));
     assert_eq!(r["changed"], false, "the redo run went with the new command");

@@ -4,9 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use goofi_node::{Isolation, Scanned, ScannedType};
-use goofi_signal_sdk::host::Loaded;
-
+use goofi_node::{Engine, Isolation, Scanned, ScannedType};
 use crate::SignalEngine;
 
 pub use goofi_python::catalog::Python;
@@ -60,7 +58,7 @@ impl SignalEngine {
         match loaded {
             Ok(replaced) => Scanned::Registered { isolation: if hosted { Isolation::Hosted } else { Isolation::Native }, replaced },
             Err(reason) => {
-                self.remove_dyn_type(type_name);
+                self.remove_type(type_name);
                 Scanned::Unavailable(reason)
             }
         }
@@ -69,25 +67,9 @@ impl SignalEngine {
     /// After boot the library is described and run by a child, so this process never loads it
     /// and a re-authored node's newest build is what runs.
     fn load_rust(&mut self, artifact: PathBuf, type_name: &str) -> Result<bool, String> {
-        let host = match self.booted {
-            true => Some(self.host.clone().ok_or("no host executable was named, so a node built after boot cannot run")?),
-            false => None,
-        };
-        let describe = match &host {
-            Some(host) => goofi_runtime::hosted::describe(host, &artifact)?,
-            None => goofi_build::open(&artifact)?.describe,
-        };
-        let manifest = goofi_node::manifest_of(type_name, &goofi_node::parse_introspection(&describe)?, None)?;
-        let (factory, tier): (goofi_signal_sdk::NodeFactory, _) = match host {
-            Some(host) => {
-                let iox = self.iox.clone();
-                (Box::new(move |_| Box::new(goofi_runtime::hosted::node(iox.clone(), host.clone(), artifact.clone(), manifest))), &goofi_node::HOSTED)
-            }
-            None => {
-                let loaded = unsafe { Loaded::open(goofi_build::open(&artifact)?.library, manifest) }?;
-                (Box::new(move |_| loaded.instantiate()), &goofi_node::NATIVE)
-            }
-        };
+        let (manifest, factory, tier) = goofi_runtime::hosted::load(
+            self.iox.clone(), artifact, type_name, None, self.host.as_deref(), self.booted,
+        )?;
         Ok(self.register_dyn_type(manifest, factory, tier))
     }
 }
@@ -102,10 +84,9 @@ impl SignalEngine {
             }
             // The latest scan is the answer: a stale runtime type is displaced first.
             Probed::Unavailable(reason) => {
-                self.remove_dyn_type(type_name);
+                self.remove_type(type_name);
                 Scanned::Unavailable(reason)
             }
         }
     }
 }
-

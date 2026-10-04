@@ -133,6 +133,17 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
     g.set_param(konst, "constant", "value", 4.0);
     held.until(|d| f32s(d) == [4.0]).await;
 
+    // A table carries each child's stamps in its body. Equal child values with new stamps must
+    // reach the viewer as a new table: a stamps-only reply can replace only the outer meta.
+    let table = g.add("signal:Table");
+    g.set_param(table, "table", "keys", "value");
+    g.link(konst, "out", table, "arrays");
+    let mut tables = Viewer::open(&base, &hex(table), "out").await;
+    let leaf = |d: &goofi_core::Data| d.as_table().ok()?.get("value").cloned();
+    let first = tables.until(|d| leaf(d).is_some_and(|v| f32s(&v) == [4.0])).await;
+    let index = leaf(&first).unwrap().meta().index().expect("the child index");
+    tables.until(|d| leaf(d).is_some_and(|v| f32s(&v) == [4.0] && v.meta().index().is_some_and(|n| n > index))).await;
+
     // Step: on a half-float ask, a value no half holds arrives as the f32 it is — THAT frame alone.
     held.view(j!([{ "dtype": "array", "ndim": [], "dims": [], "reduce": [], "depth": "f16" }])).await;
     raw_until(&mut held, |dtype, _| dtype == "<f2").await;

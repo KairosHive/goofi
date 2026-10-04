@@ -2,7 +2,7 @@
 //! CSV is, so this is the one stream kind whose file needs no interpretation at all.
 //!
 //! The columns are the first frame's; a frame that brings different ones is a different table and
-//! opens a new file, the way a reshaped array does.
+//! opens a new file.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -18,7 +18,7 @@ impl Csv {
     pub fn create(path: &Path, columns: &[String]) -> Result<Csv, String> {
         let file = File::create_new(path).map_err(|e| e.to_string())?;
         let mut csv = Csv { file: BufWriter::new(file), columns: columns.to_vec(), rows: 0 };
-        let head: Vec<&str> = std::iter::once("t").chain(csv.columns.iter().map(String::as_str)).collect();
+        let head: Vec<String> = std::iter::once("t".to_string()).chain(csv.columns.iter().map(|c| quoted(c))).collect();
         writeln!(csv.file, "{}", head.join(",")).map_err(|e| e.to_string())?;
         Ok(csv)
     }

@@ -1,5 +1,5 @@
-//! Golden conformance against the legacy Python codec: byte-for-byte on the deterministic parts,
-//! semantically on the msgpack meta. The case list below MIRRORS `tests/gen_golden.py`.
+//! Golden conformance against frames captured from the reference Python GOOF v2 encoder:
+//! byte-for-byte on the deterministic parts, semantically on the msgpack meta.
 
 use std::collections::BTreeMap;
 
@@ -64,6 +64,11 @@ fn build_cases() -> Vec<(&'static str, Case)> {
         ("string_empty", Data::string("", Meta::empty())),
         ("table", Data::table(table, Meta::empty())),
         ("table_empty", Data::table(IndexMap::new(), Meta::empty())),
+        ("table_special_keys", Data::table(
+            ["__proto__", "constructor", "toString"].into_iter()
+                .map(|key| (key.to_string(), Data::string(key, Meta::empty()))).collect(),
+            Meta::empty(),
+        )),
     ]
     .into_iter()
     .map(|(name, d)| (name, Case::Frame(d)))
@@ -118,7 +123,7 @@ fn decode_meta(bytes: &[u8]) -> rmpv::Value {
 
 fn load_fixture() -> serde_json::Value {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/goof_golden.json");
-    let text = std::fs::read_to_string(path).expect("read fixture (run gen_golden.py)");
+    let text = std::fs::read_to_string(path).expect("read the committed Python reference frames");
     serde_json::from_str(&text).expect("parse fixture json")
 }
 

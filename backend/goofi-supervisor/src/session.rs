@@ -126,13 +126,22 @@ pub struct Session {
     lock: Option<File>,
 }
 
+/// Serialize session publication and cleanup so a sweep cannot unlink a lock before it is taken.
+fn lock_catalog() -> io::Result<File> {
+    fs::create_dir_all(system_base())?;
+    let file = File::options().read(true).write(true).create(true).truncate(false)
+        .open(system_base().join("catalog.lock"))?;
+    file.lock()?;
+    Ok(file)
+}
+
 impl Session {
     /// Hold a fresh session. The lock is a sibling `<id>.alive` taken BEFORE the directory
     /// exists, so no sweep ever sees a directory that is neither locked nor dead.
     pub fn hold() -> Result<Session, String> {
         let id = fresh_id()?;
         let at = |what: &'static str| move |e: io::Error| format!("{what}: {e}");
-        fs::create_dir_all(system_base()).map_err(at("create the session base"))?;
+        let _catalog = lock_catalog().map_err(at("lock the session catalog"))?;
         let lock = File::create(alive_path(&id)).map_err(at("create the lock"))?;
         lock.lock().map_err(at("take the lock"))?;
         let dir = system_dir(&id);
@@ -241,8 +250,12 @@ pub struct Swept {
 /// its lock file, a stray) and every segment of a dead session. Workspaces are the manager's.
 pub fn sweep_dead() -> Swept {
     let mut swept = Swept::default();
+    let Ok(_catalog) = lock_catalog() else { return swept };
     for entry in fs::read_dir(system_base()).into_iter().flatten().flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "catalog.lock" {
+            continue;
+        }
         if !alive(name.strip_suffix(".alive").unwrap_or(&name)) {
             let path = entry.path();
             swept.directories += usize::from(path.is_dir());

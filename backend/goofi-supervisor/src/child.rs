@@ -124,29 +124,36 @@ fn drain(name: &str, from: impl Read + Send + 'static, source: Source, stream: &
     crate::worker::spawn(format!("{name} {stream}"), move || crate::log::drain(from, source, stream)).ok()
 }
 
-/// Run a one-shot tool as `name` to completion, its output captured, killed at `within`.
+/// Run a one-shot tool as `name` to completion, its output captured on the same deadline.
 pub fn output(name: impl Into<String>, cmd: &mut Command, within: Duration) -> io::Result<Output> {
     let mut child = run(name, cmd).stdout(Out::Pipe).stderr(Out::Pipe).spawn()?;
+    let deadline = Instant::now() + within;
     // Both pipes drained on threads of their own, so a tool that fills one while this waits on
     // the other cannot deadlock against its reader.
-    let stdout = child.inner.stdout.take().and_then(reader);
-    let stderr = child.inner.stderr.take().and_then(reader);
-    let status = child.wait_within(within);
-    let collect = |r: Option<crate::worker::Worker<Vec<u8>>>| r.and_then(|h| h.join().ok()).unwrap_or_default();
-    let (stdout, stderr) = (collect(stdout), collect(stderr));
-    let status = status.ok_or_else(|| {
+    let stdout = reader(child.inner.stdout.take().expect("piped stdout"))?;
+    let stderr = reader(child.inner.stderr.take().expect("piped stderr"))?;
+    let status = child.wait_within(deadline.saturating_duration_since(Instant::now()));
+    let timeout = || {
+        // A tool may have exited while its descendants still hold its output pipes.
+        let _ = force_kill(child.inner.id());
         io::Error::new(io::ErrorKind::TimedOut, format!("{} did not finish in {within:?}", child.name))
-    })?;
+    };
+    let collect = |r: Worker<io::Result<Vec<u8>>>| {
+        r.join_within(deadline.saturating_duration_since(Instant::now()))
+            .ok_or_else(&timeout)?
+            .map_err(|_| io::Error::other("the tool output reader panicked"))?
+    };
+    let (stdout, stderr) = (collect(stdout)?, collect(stderr)?);
+    let status = status.ok_or_else(timeout)?;
     Ok(Output { status, stdout, stderr })
 }
 
-fn reader(mut from: impl Read + Send + 'static) -> Option<Worker<Vec<u8>>> {
+fn reader(mut from: impl Read + Send + 'static) -> io::Result<Worker<io::Result<Vec<u8>>>> {
     crate::worker::spawn("goofi-child-output", move || {
         let mut bytes = Vec::new();
-        let _ = from.read_to_end(&mut bytes);
-        bytes
+        from.read_to_end(&mut bytes)?;
+        Ok(bytes)
     })
-    .ok()
 }
 
 impl Child {

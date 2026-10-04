@@ -1,8 +1,6 @@
 <!-- Agent panel — a terminal on an agent harness running in this patch's workspace. The `Terminal`
      lives per instance in `$lib/stores/termSession`, so it outlives this panel. -->
 <script lang="ts">
-	import { Terminal } from '@xterm/xterm';
-	import { FitAddon } from '@xterm/addon-fit';
 	import '@xterm/xterm/css/xterm.css';
 	import type { PanelProps } from 'panelty';
 	import { graph } from '$lib/stores/graph.svelte';
@@ -10,6 +8,7 @@
 	import { termSession, type TerminalLike } from '$lib/stores/termSession';
 	import { Bar, ChoiceGrid, EmptyState, Icon, IconButton, Select, type Choice } from '$lib/ui';
 	import { untrack } from 'svelte';
+	import { notify } from '$lib/stores/notify.svelte';
 
 	let { panelId }: PanelProps = $props();
 	const hs = harnesses();
@@ -49,7 +48,7 @@
 
 	/** xterm and its fit addon as ONE object: the addon has to live with the terminal that outlives
 	 * this panel, or a remount has nothing to measure with. */
-	function makeTerminal(): TerminalLike {
+	function makeTerminal(Terminal: typeof import('@xterm/xterm').Terminal, FitAddon: typeof import('@xterm/addon-fit').FitAddon): TerminalLike {
 		const t = new Terminal({
 			fontFamily: token('--font-mono'),
 			fontSize: 12,
@@ -69,16 +68,21 @@
 		const el = host;
 		const at = id;
 		if (!el || !at) return;
-		const s = termSession(at, makeTerminal);
-		s.attach(el);
-		// The ONLY thing that proposes a size: an inbound authoritative size sets the terminal
-		// directly, and feeding one back through the fit addon would loop two views of one instance.
-		const ro = new ResizeObserver(() => s.refit());
-		ro.observe(el);
+		let active = true;
+		let detach = () => {};
+		void Promise.all([import('@xterm/xterm'), import('@xterm/addon-fit')]).then(([{ Terminal }, { FitAddon }]) => {
+			if (!active) return;
+			const s = termSession(at, () => makeTerminal(Terminal, FitAddon));
+			s.attach(el);
+			// The container is the only size proposer; an inbound size never echoes a proposal.
+			const ro = new ResizeObserver(() => s.refit());
+			ro.observe(el);
+			detach = () => { ro.disconnect(); s.retract(); };
+		}).catch((error) => { if (active) notify().failure('Agent terminal', error); });
 		return () => {
-			ro.disconnect();
+			active = false;
 			// Gives up the SIZE, not the stream: the socket stays open for whoever shows this next.
-			s.retract();
+			detach();
 		};
 	});
 </script>

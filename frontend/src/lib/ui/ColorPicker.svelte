@@ -380,4 +380,9 @@
 			linear-gradient(to right, transparent, var(--ink)),
 			var(--check);
 	}
+	@media (hover: none) and (pointer: coarse) {
+		:global(.ui-color-track) {
+			height: var(--hit);
+		}
+	}
 </style>

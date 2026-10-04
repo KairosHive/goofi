@@ -31,11 +31,10 @@ impl<'a> Txn<'a> {
         Txn { state, caller, g, history, outbox: Vec::new(), echo: Vec::new(), mark: None, edited: false, preview, labels: Vec::new() }
     }
 
-    /// Run `cmd` through the history. The first command clears the actor's redo run and takes
-    /// the mark everything after is coalesced to, or rolled back to.
+    /// Run `cmd` through the history. The first command takes the mark everything after is
+    /// coalesced to on commit, or rolled back to on refusal.
     pub fn apply(&mut self, cmd: Command) -> Result<Outcome, String> {
         if self.mark.is_none() && !self.preview {
-            self.history.clear_redo(&self.caller.actor);
             self.mark = Some(self.history.mark());
         }
         self.edited = true;

@@ -80,17 +80,6 @@ describe('GraphStore variables mutators — the command surface the panel + agen
 		expect(history().canUndo).toBe(true);
 	});
 
-	it('a lock is ONE op on the entry or on the group, naming only the axis it turns', async () => {
-		const fc = new FakeControl();
-		const g = new GraphStore(fc);
-		seed(fc).variable('patch.gain', { value: 2.5, type: 'float' });
-		await g.lockVariable('patch.gain', { value: true });
-		expect(found(fc, 'variable entry lock')).toEqual({ name: 'patch.gain', value: true });
-		await g.lockVariableGroup('patch', { config: true });
-		expect(found(fc, 'variable group lock')).toEqual({ group: 'patch', config: true });
-		expect(history().canUndo).toBe(true);
-	});
-
 	it('a server rejection propagates (name/collision/system are validated server-side)', async () => {
 		const fc = new FakeControl();
 		fc.failNext('variable entry add');

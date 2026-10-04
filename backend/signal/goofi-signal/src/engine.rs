@@ -74,16 +74,6 @@ impl SignalEngine {
         self.dyn_types.insert(name, DynType { manifest, isolation, factory: Arc::from(factory) }).is_some()
     }
 
-    pub fn remove_dyn_type(&mut self, type_name: &str) -> bool {
-        self.dyn_types.remove(type_name).is_some()
-    }
-
-    pub fn find_entry(&self, type_name: &str) -> Option<LibraryEntry> {
-        self.dyn_types
-            .get(type_name)
-            .map(|dt| LibraryEntry { manifest: dt.manifest, isolation: dt.isolation })
-    }
-
     /// The params as this engine counts them: the author's, then the universal `common` group.
     fn decls_of(manifest: &'static NodeManifest) -> Vec<goofi_node::ParamDecl> {
         manifest.params.iter().copied().chain(goofi_runtime::common_decls(manifest)).collect()
@@ -112,7 +102,7 @@ impl Engine for SignalEngine {
     }
 
     fn remove_type(&mut self, type_name: &str) -> bool {
-        self.remove_dyn_type(type_name)
+        self.dyn_types.remove(type_name).is_some()
     }
 
     fn rust_sdk(&self) -> Option<&'static str> {

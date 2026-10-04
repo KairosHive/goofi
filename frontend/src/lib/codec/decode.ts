@@ -100,7 +100,7 @@ function decodeTable(view: DataView, start: number): Record<string, DataFrame> {
 	let off = start;
 	const n = view.getUint32(off, true);
 	off += 4;
-	const out: Record<string, DataFrame> = {};
+	const out: Record<string, DataFrame> = Object.create(null);
 	for (let i = 0; i < n; i++) {
 		const keyLen = view.getUint16(off, true);
 		off += 2;

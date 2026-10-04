@@ -877,10 +877,6 @@ impl Param {
             _ => 1,
         }
     }
-    /// Whether a number rounds to whole values.
-    pub fn is_int(&self) -> bool {
-        matches!(self, Param::Num { int: true, .. })
-    }
     /// This number holding `values` in its own shape: rounded where it is an int, and cut or
     /// carried to its dimensions — one value fills them all. `None` for a param that is no number.
     /// Dimension `k` as a scalar of this param's kind and bounds — what an element binding is

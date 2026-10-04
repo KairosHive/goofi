@@ -69,7 +69,6 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let gone = format!("long_gone_{}", std::process::id());
     let dead = session::system_dir(&gone);
     std::fs::create_dir_all(&dead).unwrap();
-    std::fs::File::create(dead.join("alive.lock")).unwrap();
     std::fs::write(dead.join("session.json"), format!(r#"{{"id":"{gone}","url":"http://127.0.0.1:1"}}"#)).unwrap();
     let rows = client::list();
     assert!(rows.iter().any(|s| s.id == id && s.url == url), "{rows:?}");
@@ -84,6 +83,8 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     peer.record_url("http://127.0.0.1:1");
     let listed = |who: &str| client::list().iter().any(|s| s.id == who);
     assert!(listed(&busy) && listed(&id), "both alive: {:?}", client::list());
+    session::sweep_dead();
+    assert!(listed(&busy) && listed(&id), "cleanup keeps both published sessions: {:?}", client::list());
     let why = client::resolve_target().unwrap_err();
     assert!(why.contains("several") && why.contains(&busy) && why.contains(&id), "{why}");
     // GOOFI_SESSION breaks the tie — and one naming NOTHING is refused by pointing at

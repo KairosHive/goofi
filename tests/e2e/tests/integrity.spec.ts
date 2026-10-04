@@ -15,6 +15,20 @@ import { closeAddedTab, closeSplit, splitRight, waitForApp } from '../lib/app';
 import { expectIntact } from '../lib/invariants';
 import { addNode, frameSummary, selectNode, waitForNode } from '../lib/goofi';
 import { rawCall } from '../lib/raw';
+import { touchSession, type TouchSession } from '../lib/touch';
+
+/** Use the project's pointer for held drags. */
+async function pointerSession(page: Page, hasTouch: boolean): Promise<TouchSession> {
+	if (hasTouch) return touchSession(page);
+	return {
+		down: async ({ x, y }) => {
+			await page.mouse.move(x, y);
+			await page.mouse.down();
+		},
+		moveTo: ({ x, y }) => page.mouse.move(x, y, { steps: 6 }),
+		up: () => page.mouse.up()
+	};
+}
 
 /** Open the panel header menu, reveal its content submenu, and answer every row it shows. */
 async function panelTypeRows(page: Page): Promise<string[]> {
@@ -394,7 +408,7 @@ test('a dropdown shows and hides the params, sections and group that depend on i
 	}
 });
 
-test('a list section opens one slot per count, and its + button opens another', async ({ page }) => {
+test('a list section opens one slot per count, and its + button opens another', async ({ page, hasTouch }) => {
 	await page.goto('/');
 	await waitForApp(page);
 	try {
@@ -427,13 +441,17 @@ test('a list section opens one slot per count, and its + button opens another', 
 		const state = async () => JSON.stringify((await rawCall(page, 'node state', { node: uid })).result);
 		await expect.poll(state).toContain('ramp.at_2 = 0.9');
 		const grip = slot(2).getByTestId('param-slot-grip');
+		await grip.scrollIntoViewIfNeeded();
 		const from = (await grip.boundingBox())!;
+		const hand = await pointerSession(page, hasTouch);
+		await hand.down({ x: from.x + from.width / 2, y: from.y + from.height / 2 });
+		await expect(slot(2), 'the grip lifts the third slot').toHaveClass(/lifted/);
+		// The short landscape inspector cannot show both ends of this list at once.
+		await slot(0).getByTestId('param-slot-grip').scrollIntoViewIfNeeded();
 		const target = (await slot(0).boundingBox())!;
-		await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
-		await page.mouse.down();
-		await page.mouse.move(target.x + 20, target.y + 2, { steps: 8 });
+		await hand.moveTo({ x: target.x + 20, y: target.y + 2 });
 		await expect(slot(0), 'the drop line shows above the first slot').toHaveClass(/before/);
-		await page.mouse.up();
+		await hand.up();
 		await expect.poll(state).toMatch(/ramp\.at_0 = 0\.9[\s\S]*ramp\.at_1 = 0 [\s\S]*ramp\.at_2 = 0\.7/);
 
 		// The row shortcuts reach a slot's member: `e` over it binds an expression, `c` a constant.
@@ -503,7 +521,7 @@ test('a plain vector opens as one list or as its entries', async ({ page }) => {
 	}
 });
 
-test('a colour param is picked, and its alpha slid', async ({ page }) => {
+test('a colour param is picked, and its alpha slid', async ({ page, hasTouch }) => {
 	await page.goto('/');
 	await waitForApp(page);
 	try {
@@ -567,27 +585,31 @@ test('a colour param is picked, and its alpha slid', async ({ page }) => {
 		// Back in colour view the picker drives the same list: a drag on the alpha strip holds.
 		await picker.getByRole('button').click();
 		const strip = page.getByTestId('color-alpha');
+		await strip.scrollIntoViewIfNeeded();
 		const sbox = (await strip.boundingBox())!;
-		await page.mouse.move(sbox.x + sbox.width * 0.4, sbox.y + sbox.height / 2);
-		await page.mouse.down();
-		await page.mouse.move(sbox.x + sbox.width * 0.9, sbox.y + sbox.height / 2, { steps: 5 });
-		await page.mouse.up();
+		const hand = await pointerSession(page, hasTouch);
+		await hand.down({ x: sbox.x + sbox.width * 0.4, y: sbox.y + sbox.height / 2 });
+		await hand.moveTo({ x: sbox.x + sbox.width * 0.9, y: sbox.y + sbox.height / 2 });
+		await hand.up();
 		await expect.poll(text).toMatch(/threshold\.above = \[1, 0, 0\.25, 0\.[89]\d*\]/);
 		// The square and the hue strip hold too, with the row open and after a second switch.
 		await page.keyboard.press('Escape');
 		await above.getByTestId('param-view-individual').click();
 		await above.getByTestId('param-view-list').click();
 		await picker.getByRole('button').click();
-		const hbox = (await page.getByTestId('color-hue').boundingBox())!;
-		await page.mouse.move(hbox.x + hbox.width * 0.1, hbox.y + hbox.height / 2);
-		await page.mouse.down();
-		await page.mouse.move(hbox.x + hbox.width * 0.5, hbox.y + hbox.height / 2, { steps: 6 });
-		await page.mouse.up();
+		const hue = page.getByTestId('color-hue');
+		await hue.scrollIntoViewIfNeeded();
+		const hbox = (await hue.boundingBox())!;
+		// A native touch slider drags its thumb; a press elsewhere only selects the track.
+		await hand.down({ x: hbox.x + hbox.width * Number(await hue.inputValue()) / 360, y: hbox.y + hbox.height / 2 });
+		await hand.moveTo({ x: hbox.x + hbox.width * 0.5, y: hbox.y + hbox.height / 2 });
+		await hand.up();
+		await expect(hue, 'the hue drag reaches cyan').toHaveValue('180');
+		await square.scrollIntoViewIfNeeded();
 		const qbox = (await page.getByTestId('color-square').boundingBox())!;
-		await page.mouse.move(qbox.x + qbox.width * 0.9, qbox.y + qbox.height * 0.9);
-		await page.mouse.down();
-		await page.mouse.move(qbox.x + qbox.width * 0.95, qbox.y + qbox.height * 0.1, { steps: 6 });
-		await page.mouse.up();
+		await hand.down({ x: qbox.x + qbox.width * 0.9, y: qbox.y + qbox.height * 0.9 });
+		await hand.moveTo({ x: qbox.x + qbox.width * 0.95, y: qbox.y + qbox.height * 0.1 });
+		await hand.up();
 		await expect.poll(text).toMatch(/threshold\.above = \[0\.[01]\d*, 0\.[89]\d*, 0\.[89]\d*, 0\.[89]\d*\]/);
 		await page.keyboard.press('Escape');
 		await expectIntact(page, 'a colour row');

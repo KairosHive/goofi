@@ -20,6 +20,9 @@ interface Slot {
 	/** Every viewer bound to this stream, by its own stable token. THE registry: nothing else
 	 *  counts viewers, and nothing else decides what the backend is asked for. */
 	viewers: Map<string, BoundViewer>;
+	/** The demand sent to the worker; null until the stream is opened. */
+	synced: string | null;
+	reconciling: boolean;
 	current: DataFrame | null;
 	/** What the last frame said of itself, for a stream no reader here holds. */
 	head: FrameHead | null;
@@ -53,27 +56,19 @@ function measureDisplayRate(): void {
 	requestAnimationFrame(step);
 }
 
-/** What the backend has been told to serve for a stream; absent means no stream is open. */
-const synced = new Map<string, string>();
-const reconciling = new Set<string>();
-
 /** Bring the backend in line with the registry for one stream, read once the tick has SETTLED. */
-function reconcile(node: string, slot: string, k: string): void {
-	const s = slots.get(k);
-	const want = s && s.viewers.size > 0 ? JSON.stringify(demand(s)) : null;
-	const have = synced.get(k) ?? null;
-	if (want === have) return;
-
-	if (want === null) {
-		post({ op: 'unsub', node, slot });
-		synced.delete(k);
+function reconcile(node: string, slot: string, k: string, s: Slot): void {
+	if (s.viewers.size === 0) {
+		if (s.synced !== null) post({ op: 'unsub', node, slot });
 		slots.delete(k);
 		return;
 	}
-	const { specs, frames } = JSON.parse(want) as Demand;
-	if (have === null) post({ op: 'sub', node, slot, frames });
+	const { specs, frames } = demand(s);
+	const want = JSON.stringify({ specs, frames });
+	if (want === s.synced) return;
+	if (s.synced === null) post({ op: 'sub', node, slot, frames });
 	post({ op: 'spec', node, slot, specs, frames });
-	synced.set(k, want);
+	s.synced = want;
 }
 
 interface Demand {
@@ -100,12 +95,12 @@ function demand(s: Slot): Demand {
 	return { specs, frames };
 }
 
-function scheduleReconcile(node: string, slot: string, k: string): void {
-	if (reconciling.has(k)) return;
-	reconciling.add(k);
+function scheduleReconcile(node: string, slot: string, k: string, s: Slot): void {
+	if (s.reconciling) return;
+	s.reconciling = true;
 	queueMicrotask(() => {
-		reconciling.delete(k);
-		reconcile(node, slot, k);
+		s.reconciling = false;
+		reconcile(node, slot, k, s);
 	});
 }
 
@@ -114,6 +109,8 @@ function ensureSlot(k: string): Slot {
 	if (!s) {
 		s = {
 			viewers: new Map(),
+			synced: null,
+			reconciling: false,
 			current: null,
 			head: null,
 			drops: new RateMeter(),
@@ -148,15 +145,16 @@ export function bindViewer(
 	measureDisplayRate();
 	const k = streamKey(node, slot);
 	const s = ensureSlot(k);
-	s.viewers.set(token, { cb, specs });
-	scheduleReconcile(node, slot, k);
+	const bound = { cb, specs };
+	s.viewers.set(token, bound);
+	scheduleReconcile(node, slot, k, s);
 	// An open stream sends nothing new for a joiner, so replay the current frame to it alone.
 	if (cb && s.current) feed(cb, s.current);
 	return () => {
 		const cur = slots.get(k);
-		if (cur?.viewers.get(token)?.cb !== cb) return; // already replaced by a later bind
+		if (cur?.viewers.get(token) !== bound) return; // already replaced by a later bind
 		cur.viewers.delete(token);
-		scheduleReconcile(node, slot, k);
+		scheduleReconcile(node, slot, k, cur);
 	};
 }
 

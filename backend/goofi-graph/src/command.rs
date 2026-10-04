@@ -853,7 +853,6 @@ impl CommandHistory {
     }
 
     /// Execute `cmd` against `g`, record its inverse tagged with `actor`, and return the outcome.
-    /// The transaction cleared this actor's redo run before its first command.
     pub fn apply(&mut self, g: &mut Graph, actor: &str, cmd: Command) -> Result<Outcome, String> {
         let key = cmd.key();
         if PREVIEWING.get() {
@@ -911,12 +910,6 @@ impl CommandHistory {
         self.entries.is_empty()
     }
 
-    /// Drop this actor's redo run: what a new command does, once, before the transaction takes
-    /// its mark, so no later removal can move the mark under it.
-    pub fn clear_redo(&mut self, actor: &str) {
-        self.entries.retain(|e| !(e.actor == actor && e.undone));
-    }
-
     /// The mark a transaction takes: every entry after it is the transaction's own, because the
     /// history is held for the transaction's whole run.
     pub fn mark(&self) -> usize {
@@ -930,8 +923,8 @@ impl CommandHistory {
         self.previews.retain(|p| p.actor != actor);
     }
 
-    /// Fold everything after `mark` into ONE named entry, so a transaction is a single undo step. An
-    /// entry sharing the actor's `group` token with the one before it merges into it.
+    /// Commit everything after `mark` as ONE named entry and drop the actor's redo run. An entry
+    /// sharing the actor's `group` token with the one before it merges into it.
     pub fn coalesce(&mut self, mark: usize, label: String, context: Value, group: Option<String>) {
         if self.entries.len() < mark + 1 {
             return;
@@ -939,7 +932,8 @@ impl CommandHistory {
         let actor = self.entries[mark].actor.clone();
         // Newest first: each toggle is an inverse, and a Compound applies its children in order.
         let mut toggles: Vec<Command> = self.entries.drain(mark..).rev().filter_map(|e| e.toggle).collect();
-        let previous = self.entries[..mark].iter().rposition(|e| e.actor == actor && !e.undone);
+        self.entries.retain(|e| !(e.actor == actor && e.undone));
+        let previous = self.entries.iter().rposition(|e| e.actor == actor);
         match previous.filter(|&i| group.is_some() && self.entries[i].group == group) {
             Some(i) => {
                 toggles.extend(self.entries[i].toggle.take().into_iter().flat_map(|t| match t {

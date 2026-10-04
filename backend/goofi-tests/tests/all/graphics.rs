@@ -97,9 +97,7 @@ fn texture_math_maps_ranges_and_selected_channels() {
         g.set_param(node, "common", "width", 8);
         g.set_param(node, "common", "height", 4);
     }
-    for (channel, value) in [("r", 0.25), ("g", 0.5), ("b", 1.0), ("a", 0.75)] {
-        g.set_param(source, "colour", channel, value);
-    }
+    g.set_param(source, "constant", "colour", [0.25, 0.5, 1.0, 0.75]);
     g.link(source, "out", math, "input");
     let expect = |what: &str, expected: [f32; 4]| {
         drawn(&g, math, what, |d| shape(d) == vec![4, 8, 4] && close(px(d, 0, 0), expected));
@@ -777,6 +775,31 @@ fn shaders_render_on_the_gpu() {
     g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "mode": "constant" }));
     g.set_param(inked, "look", "ink", "0.5 0.25 1 1");
     drawn(&g, inked, "bare numbers, one per element", |d| close(px(d, 0, 0), [0.5, 0.25, 1.0, 1.0]));
+    let before = g.doc()["nodes"][hex(inked)].clone();
+    let why = g.refuse("node add", j!({ "type": "graphics:Inked", "param": [
+        { "name": "look/ink", "expression": "[0, 0, 0, 1]", "unexpected": true }
+    ] }));
+    assert!(why.contains("unknown field `unexpected`"), "a list source uses the same validation: {why}");
+    let why = g.refuse("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": "[0, 0, 0, 1]", "mode": "invalid" }));
+    assert!(why.contains("mode"), "a list source validates its mode: {why}");
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": "[0, 0, 0, 1]",
+                                   "value": [0.25, 0.5, 0.75, 1.0], "mode": "constant", "triggers": true }));
+    let params = g.doc()["nodes"][hex(inked)]["params"]["look"].clone();
+    assert_eq!(params["ink"]["value"], j!([0.25, 0.5, 0.75, 1.0]), "the whole literal lands beside the list");
+    for k in 0..4 {
+        let element = &params[format!("ink[{k}]")];
+        assert_eq!((&element["mode"], &element["triggers"]), (&j!("constant"), &j!(true)), "the list keeps each supplied source field: {element}");
+    }
+    drawn(&g, inked, "inactive list elements keep the supplied literal", |d| close(px(d, 0, 0), [0.25, 0.5, 0.75, 1.0]));
+    g.call("undo", j!({}));
+    assert_eq!(g.doc()["nodes"][hex(inked)], before, "one undo restores every element and the literal");
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": r#"['a\',b' and 0.5, 0.25, 1, 1]"# }));
+    let params = g.doc()["nodes"][hex(inked)]["params"]["look"].clone();
+    assert_eq!(params["ink"]["mode"], j!("constant"), "a string's escaped quote does not split the list: {params}");
+    for (k, expression) in [r#"'a\',b' and 0.5"#, "0.25", "1", "1"].iter().enumerate() {
+        assert_eq!(params[format!("ink[{k}]")]["expression"], j!(expression), "element {k}: {params}");
+    }
+    drawn(&g, inked, "an escaped quote and comma in one list element", |d| close(px(d, 0, 0), [0.5, 0.25, 1.0, 1.0]));
     g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": format!("[{dial_name}.out, 0.25, (1, 2)[0], 'a,b']") }));
     let text = g.call("node state", j!({ "node": hex(inked) }))["text"].as_str().expect("text").to_string();
     for line in ["look.ink[1] = expr: 0.25", "look.ink[2] = expr: (1, 2)[0]", "look.ink[3] = expr: 'a,b'"] {
@@ -1358,16 +1381,20 @@ fn the_mosaic_walks_its_cells_onto_the_picture() {
 
     let g = Goofi::new();
     let disc = g.add("graphics:Shape");
-    g.ready(disc);
+    let picture = g.add("graphics:ColorMap");
     let t = g.add("graphics:Tessellate");
-    g.ready(t);
-    g.link(disc, "out", t, "input");
-    for node in [disc, t] {
+    g.link(disc, "out", picture, "input");
+    g.link(picture, "out", t, "input");
+    for node in [disc, picture, t] {
+        g.ready(node);
         g.set_param(node, "common", "width", 192);
         g.set_param(node, "common", "height", 192);
     }
     g.set_param(disc, "shape", "size", 0.6);
     g.set_param(disc, "shape", "soft", 0.01);
+    // Shape holds its RGB through transparent texels. Map its coverage to luminance so the
+    // density sees the rim, while transparent texels stay outside the seam measurement.
+    g.set_param(picture, "map", "key", "alpha");
     g.set_param(t, "tile", "kind", "mosaic");
     g.set_param(t, "mosaic", "cells", 12);
     g.set_param(t, "mosaic", "rate", 0.5);

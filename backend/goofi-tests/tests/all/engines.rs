@@ -435,8 +435,8 @@ fn a_scheduled_engine_beside_the_signal_one() {
     assert_eq!(f32s(&block)[0], 0.25, "the static block, decoded off the shared transport");
     assert_eq!(f32s(&block).len(), 64);
 
-    // Step: an audio output feeds an audio input, or an ARRAY input through the tap; nothing but
-    // audio feeds an audio input, and the refusal names both kinds.
+    // Step: an audio output feeds an audio input; nothing but audio feeds an audio input,
+    // and the refusal names both kinds.
     let other = t.add("SkelAudioOsc");
     t.link(audio, "out", other, "audio");
     let refused = t.refuse("link add", j!({ "from": ep(hex(audio), "echo"), "to": ep(hex(other), "audio") }));
@@ -469,10 +469,14 @@ fn a_scheduled_engine_beside_the_signal_one() {
     drop(again);
     t.call("node remove", j!({ "node": inst }));
 
-    // Step: skeleton → signal. The signal consumer subscribes to the derived name and the
-    // skeleton rings its slot doorbell, so data crosses without a protocol.
+    // Step: skeleton → signal. AudioIn receives the audio tap and emits signal frames.
+    let audio_in = t.add("signal:AudioIn");
+    t.ready(audio_in);
+    t.link(audio, "out", audio_in, "input");
     let echo = t.add("_TestEcho");
-    t.link(audio, "out", echo, "input");
+    let refused = t.refuse("link add", j!({ "from": ep(hex(audio), "out"), "to": ep(hex(echo), "input") }));
+    assert!(refused.contains("AUDIO") && refused.contains("ARRAY"), "{refused}");
+    t.link(audio_in, "out", echo, "input");
     let echoed = t.probe(echo, "out");
     let crossed = t.until("the crossed block", |_| echoed.latest());
     assert_eq!(f32s(&crossed), f32s(&block), "the signal node re-emits what the skeleton made");
@@ -491,7 +495,7 @@ fn a_scheduled_engine_beside_the_signal_one() {
     // evaluated value lands exactly once — static data cannot spam writes.
     let audio_name = t.doc()["nodes"][hex(audio)]["name"].as_str().unwrap().to_string();
     let meter = t.add("_TestParamWrites");
-    t.link(audio, "out", meter, "input");
+    t.link(audio_in, "out", meter, "input");
     let bound = t.call(
         "node param edit",
         j!({ "node": hex(meter), "param": "control/value",
@@ -507,13 +511,19 @@ fn a_scheduled_engine_beside_the_signal_one() {
         "latest-wins modulation of a STATIC value writes once, however many ticks pass"
     );
 
-    // Step: a reference obeys the same rule a cable does — a Float param may read an audio
-    // output, a Str param may not — and the refusal names the kinds.
-    let bound = t.call(
+    // Step: a reference obeys the same rule a cable does: a signal Float param reads the
+    // AudioIn frame, while direct audio references are refused with both kinds named.
+    let refused = t.call(
         "node param edit",
         j!({ "node": hex(meter), "param": "control/value", "reference": format!("{audio_name}.out"), "mode": "reference" }),
     );
-    assert!(bound["error"].is_null(), "a Float param references an audio output: {bound}");
+    assert!(refused["error"].as_str().is_some_and(|e| e.contains("AUDIO") && e.contains("ARRAY")), "{refused}");
+    let audio_in_name = t.doc()["nodes"][hex(audio_in)]["name"].as_str().unwrap().to_string();
+    let bound = t.call(
+        "node param edit",
+        j!({ "node": hex(meter), "param": "control/value", "reference": format!("{audio_in_name}.out"), "mode": "reference" }),
+    );
+    assert!(bound["error"].is_null(), "a Float param references the audio frame: {bound}");
     let picker = t.add("_TestPicker");
     let refused = t.call(
         "node param edit",
@@ -544,8 +554,8 @@ fn a_scheduled_engine_beside_the_signal_one() {
     let frame = t.until("the gfx frame", |_| frame_probe.latest());
     assert_eq!(shape(&frame), vec![8, 8], "the graphics skeleton's static frame");
 
-    // Step: a texture output feeds a texture input, or an ARRAY input through the tap; nothing
-    // but a texture feeds a texture input, and the refusal names both kinds.
+    // Step: a texture output feeds a texture input; GraphicsIn receives its tap and emits
+    // signal frames. The cables refuse other kinds.
     let types = t.call("library list", j!({ "full": true }));
     let row = types["types"].as_array().unwrap().iter().find(|r| r["type"] == "skelgfx:SkelGfxFrame").unwrap();
     assert_eq!(row["output_slots"]["tex"], "TEXTURE", "{row}");
@@ -553,8 +563,13 @@ fn a_scheduled_engine_beside_the_signal_one() {
     let gfx2 = t.add("SkelGfxFrame");
     t.ready(gfx2);
     t.link(gfx, "tex", gfx2, "tex");
+    let graphics_in = t.add("signal:GraphicsIn");
+    t.ready(graphics_in);
+    t.link(gfx, "tex", graphics_in, "input");
     let sink = t.add("_TestEcho");
-    t.link(gfx, "tex", sink, "input");
+    let refused = t.refuse("link add", j!({ "from": ep(hex(gfx), "tex"), "to": ep(hex(sink), "input") }));
+    assert!(refused.contains("TEXTURE") && refused.contains("ARRAY"), "{refused}");
+    t.link(graphics_in, "out", sink, "input");
     let crossed = t.probe(sink, "out");
     let crossed = t.until("the tapped texture", |_| crossed.latest());
     assert_eq!(shape(&crossed), vec![8, 8], "a texture reaches a signal node as a frame");
@@ -584,4 +599,3 @@ fn a_scheduled_engine_beside_the_signal_one() {
     let fresh = t.probe(audio, "out");
     t.until("the audio skeleton still runs", |_| fresh.latest());
 }
-

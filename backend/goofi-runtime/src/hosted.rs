@@ -14,6 +14,35 @@ use goofi_host_sdk::host::{in_slots, Call, CodecNode};
 use goofi_supervisor::child::Child;
 use goofi_transport::{Exchange, Iox, Served};
 
+/// Load a native host type. After boot, its library belongs to a child of `host`.
+pub fn load(
+    iox: Arc<Iox>,
+    artifact: PathBuf,
+    type_name: &str,
+    own: Option<goofi_core::SlotType>,
+    host: Option<&Path>,
+    booted: bool,
+) -> Result<(&'static NodeManifest, goofi_host_sdk::NodeFactory, &'static goofi_node::IsolationCell), String> {
+    let host = if booted {
+        Some(host.ok_or("no host executable was named, so a node built after boot cannot run")?.to_path_buf())
+    } else {
+        None
+    };
+    let describe = match &host {
+        Some(host) => describe(host, &artifact)?,
+        None => goofi_build::open(&artifact)?.describe,
+    };
+    let manifest = goofi_node::manifest_of(type_name, &goofi_node::parse_introspection(&describe)?, own)?;
+    let (factory, tier): (goofi_host_sdk::NodeFactory, _) = match host {
+        Some(host) => (Box::new(move |_| Box::new(node(iox.clone(), host.clone(), artifact.clone(), manifest))), &goofi_node::HOSTED),
+        None => {
+            let loaded = unsafe { goofi_host_sdk::host::Loaded::open(goofi_build::open(&artifact)?.library, manifest) }?;
+            (Box::new(move |_| loaded.instantiate()), &goofi_node::NATIVE)
+        }
+    };
+    Ok((manifest, factory, tier))
+}
+
 /// Makes each exchange's service names unique, so concurrent children never collide.
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -25,7 +54,7 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const SLICE: Duration = Duration::from_millis(100);
 
 /// What a built library says it is, read by a child so the library never enters this process.
-pub fn describe(host: &Path, artifact: &Path) -> Result<String, String> {
+fn describe(host: &Path, artifact: &Path) -> Result<String, String> {
     let mut cmd = std::process::Command::new(host);
     cmd.arg("host").arg("describe").arg(artifact);
     let name = artifact.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -37,7 +66,7 @@ pub fn describe(host: &Path, artifact: &Path) -> Result<String, String> {
 }
 
 /// A node whose library runs in a child of `host`, so this process never loads it.
-pub fn node(iox: Arc<Iox>, host: PathBuf, artifact: PathBuf, manifest: &'static NodeManifest) -> CodecNode<Spawned> {
+fn node(iox: Arc<Iox>, host: PathBuf, artifact: PathBuf, manifest: &'static NodeManifest) -> CodecNode<Spawned> {
     let type_name = manifest.type_name;
     let command = move || {
         let mut cmd = Command::new(&host);

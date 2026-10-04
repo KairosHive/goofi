@@ -166,7 +166,10 @@ impl Row {
             ArgSpec::Listed(list) => {
                 let properties: serde_json::Map<String, Value> = list
                     .iter()
-                    .map(|a| (a.name.clone(), json!({ "type": json_type(a.item()), "format": a.item() })))
+                    .map(|a| (a.name.clone(), match a.item() {
+                        "json" | "any" => json!({}),
+                        item => json!({ "type": json_type(item), "format": item }),
+                    }))
                     .collect();
                 let required: Vec<&str> = list.iter().filter(|a| a.required).map(|a| a.name.as_str()).collect();
                 json!({ "type": "object", "properties": properties, "required": required, "additionalProperties": false })
@@ -189,7 +192,6 @@ fn json_type(word: &str) -> &'static str {
         "float" => "number",
         "int" => "integer",
         "bool" => "boolean",
-        "json" | "any" => "object",
         _ => "string",
     }
 }

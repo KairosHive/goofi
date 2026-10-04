@@ -46,7 +46,7 @@ impl Builder {
             let _ending = Ending(finished);
             f()
         })?;
-        Ok(Worker { handle: Some(handle), done })
+        Ok(Worker { handle, done })
     }
 }
 
@@ -61,7 +61,7 @@ impl Drop for Ending {
 
 /// A running thread. Dropping the handle detaches it; the thread stays listed until it ends.
 pub struct Worker<T = ()> {
-    handle: Option<JoinHandle<T>>,
+    handle: JoinHandle<T>,
     done: Arc<Latch>,
 }
 
@@ -83,8 +83,8 @@ impl<T> Worker<T> {
     }
 
     /// Wait for the thread to end, however long that takes.
-    pub fn join(mut self) -> std::thread::Result<T> {
-        self.handle.take().expect("joined once").join()
+    pub fn join(self) -> std::thread::Result<T> {
+        self.handle.join()
     }
 
     /// Whether the thread has ended.
@@ -94,7 +94,7 @@ impl<T> Worker<T> {
 
     /// Wait up to `within` for the thread to end. `None` is the deadline: the thread runs on,
     /// detached, and stays listed until it ends.
-    pub fn join_within(mut self, within: Duration) -> Option<std::thread::Result<T>> {
-        self.done().wait_within(within).then(|| self.handle.take().expect("joined once").join())
+    pub fn join_within(self, within: Duration) -> Option<std::thread::Result<T>> {
+        self.done().wait_within(within).then(|| self.handle.join())
     }
 }

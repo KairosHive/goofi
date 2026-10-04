@@ -551,18 +551,8 @@ export class GraphStore {
 		await this.ctl.call('variable entry rename', { name: oldName, to: newName });
 	}
 
-	/** Set a control element's widget, its range or its place. */
-	async setVariableControl(name: string, control: ControlView): Promise<void> {
-		await this.ctl.call('variable entry edit', { name, control });
-	}
-
 	async renameVariableGroup(from: string, to: string): Promise<void> {
 		await this.ctl.call('variable group rename', { from, to });
-	}
-
-	/** Make a variable follow `node.slot` (and `index` into a wide frame); an empty reference clears. */
-	async setVariableSource(name: string, reference: string, index?: number): Promise<void> {
-		await this.ctl.call('variable entry source', index === undefined ? { name, reference } : { name, reference, index });
 	}
 
 	/** Bear a widget in a control panel's group through the `control` door, which lifts the
@@ -608,16 +598,6 @@ export class GraphStore {
 
 	async removeControl(group: string, element: string): Promise<void> {
 		await this.ctl.call('control remove', { group, element });
-	}
-
-	/** Lock or unlock one variable on its own account; an axis not named keeps what it has. */
-	async lockVariable(name: string, lock: Partial<LockView>): Promise<void> {
-		await this.ctl.call('variable entry lock', { name, ...lock });
-	}
-
-	/** Lock or unlock a whole group; an axis not named keeps what it has. */
-	async lockVariableGroup(group: string, lock: Partial<LockView>): Promise<void> {
-		await this.ctl.call('variable group lock', { group, ...lock });
 	}
 
 	/** Ask a live node to re-evaluate a param's options. Options only, never the value, so it is

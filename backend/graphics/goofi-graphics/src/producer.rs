@@ -37,26 +37,10 @@ impl crate::GraphicsEngine {
         let (manifest, factory, isolation): (_, Factory, _) = if path.extension().is_some_and(|e| e == "rs") {
             let base = goofi_supervisor::layout::runtime().build();
             let artifact = goofi_build::built(&goofi_build::GRAPHICS, path, &base)?;
-            // Built after boot, it runs HOSTED, as a signal node does: its library in a child of
-            // goofi's own binary, never in this process, whose loader could not unload it.
-            let host = self.booted.then(|| self.host.clone()).flatten();
-            let describe = match &host {
-                Some(host) => goofi_runtime::hosted::describe(host, &artifact)?,
-                None => goofi_build::open(&artifact)?.describe,
-            };
-            let manifest = goofi_node::manifest_of(name, &goofi_node::parse_introspection(&describe)?, Some(SlotType::Texture))?;
-            match host {
-                Some(host) => {
-                    let iox = self.iox.clone();
-                    let factory: Factory = Arc::new(move |_| Box::new(goofi_runtime::hosted::node(iox.clone(), host.clone(), artifact.clone(), manifest)));
-                    (manifest, factory, &goofi_node::HOSTED)
-                }
-                None => {
-                    let opened = goofi_build::open(&artifact)?;
-                    let loaded = Arc::new(unsafe { goofi_host_sdk::host::Loaded::open(opened.library, manifest) }?);
-                    (manifest, Arc::new(move |_| loaded.instantiate()), &goofi_node::NATIVE)
-                }
-            }
+            let (manifest, factory, tier) = goofi_runtime::hosted::load(
+                self.iox.clone(), artifact, name, Some(SlotType::Texture), self.host.as_deref(), self.booted,
+            )?;
+            (manifest, Arc::from(factory), tier)
         } else {
             use goofi_python::catalog::{Probed, probed, routed};
             let probed = probed(path, name, self.python.as_ref())

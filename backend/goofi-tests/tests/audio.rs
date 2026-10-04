@@ -1189,7 +1189,7 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(synth["tags"], j!(["generator"]), "`Instrument` in its subcategories: {synth}");
     let schema = plugin["params"].clone();
     assert_eq!(schema["plugin"]["shape"]["options"], j!(["soft", "mid", "hard"]), "{schema}");
-    assert_eq!(schema["plugin"]["steps"]["vmax"], j!(200), "{schema}");
+    assert_eq!(schema["plugin"]["steps"]["vmax"].as_f64(), Some(200.0), "{schema}");
     assert!(schema["plugin"]["meter"].is_null(), "a read-only parameter is omitted: {schema}");
     let src = g.add("Osc");
     g.link(src, "out", plug, "input");

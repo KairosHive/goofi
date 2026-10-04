@@ -219,6 +219,21 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     std::fs::write(&cut, &bytes[..bytes.len() - 6]).expect("a truncated copy");
     let (_, body) = npy(&std::fs::read(&cut).expect("the truncated stream"));
     assert_eq!(body.len() / 4, 42, "forty-two whole values survive a kill inside the last frame");
+    rec.start(dir.path(), "table-fields", None, None).expect("table recording started");
+    let table = goofi_core::Data::table([
+        ("left,right".into(), goofi_core::Data::string("a,b", goofi_core::Meta::empty())),
+        ("value \"quoted\"\nline".into(), goofi_core::Data::string("say \"yes\"", goofi_core::Meta::empty())),
+    ].into_iter().collect(), goofi_core::Meta::empty());
+    assert!(rec.take_frame(
+        &id, &goofi_codec::encode(&table).expect("a table frame"), None, goofi_record::Timeline::Measured, 4.0, true,
+    ));
+    let folder = rec.stop().expect("table stopped").expect("table folder");
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(folder.join("manifest.json")).expect("table manifest"),
+    ).expect("json");
+    let csv = std::fs::read_to_string(folder.join(manifest["streams"][0]["file"].as_str().expect("table file"))).expect("CSV");
+    assert_eq!(csv, "t,\"left,right\",\"value \"\"quoted\"\"\nline\"\n4,\"a,b\",\"say \"\"yes\"\"\"\n",
+        "column names and values use the same CSV quoting rule");
     rec.start(dir.path(), "audio-formats", None, None).expect("audio recording started");
     for (i, (channels, rate, samples)) in
         [(1, 48_000.0, 4), (1, 48_000.0, 6), (2, 48_000.0, 5), (2, 96_000.0, 3)].into_iter().enumerate()

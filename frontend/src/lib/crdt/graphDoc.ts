@@ -3,25 +3,15 @@
  * Every reader is total: an absent or wrongly-typed leaf answers a default rather than throwing.
  */
 import { EMPTY_PANEL_TYPE, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
-import { ROOT_ID } from '$lib/editor/subpatchScene';
 import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
 import type { Link, Lock, VariableSource, VariableValue } from '$lib/api/generated';
 import type { LayoutNode, Workspace } from 'panelty';
-import { isObj, obj, type Obj } from './ops';
+import { obj, type Obj } from './ops';
 
 export type Doc = Record<string, unknown>;
 
 export function emptyDoc(): Doc {
 	return { nodes: {}, links: {}, variables: {}, arrangement: {} };
-}
-
-export interface NodeView {
-	uid: string;
-	type: string;
-	name: string;
-	pos: [number, number];
-	/** The scope this record is drawn in; `ROOT_ID` when it names none. */
-	scope: string;
 }
 
 /** What a sub-patch facade exposes, derived from the records that name it. */
@@ -45,18 +35,6 @@ export function nodesMap(doc: Doc): Record<string, Obj> {
 	return obj(doc.nodes) as Record<string, Obj>;
 }
 
-function pos2(m: Obj | undefined): [number, number] {
-	const p = m?.pos;
-	const n = (i: number) => (Array.isArray(p) && typeof p[i] === 'number' ? (p[i] as number) : 0);
-	return [n(0), n(1)];
-}
-
-export function nodeView(doc: Doc, uid: string): NodeView | null {
-	const n = nodesMap(doc)[uid];
-	if (!n) return null;
-	return { uid, type: str(n, 'type'), name: str(n, 'name'), pos: pos2(n), scope: optStr(n, 'scope') ?? ROOT_ID };
-}
-
 /** Each facade's face, keyed by its uid: a PORT is the facade's slot, keyed by the port's stable
  * uid and labelled with its renameable name, so a rename relabels without re-keying the wire. */
 export function facadeFaces(doc: Doc): Map<string, FacadeFace> {
@@ -78,18 +56,6 @@ export function facadeFaces(doc: Doc): Map<string, FacadeFace> {
 		face.slot_labels[uid] = str(rec, 'name');
 	}
 	return out;
-}
-
-/** A node's touched-filter zero points (`{"group/name": {value, mode, …}}`), or `undefined`. */
-export function baselineJson(doc: Doc, uid: string): unknown {
-	const v = nodesMap(doc)[uid]?.baseline;
-	return isObj(v) ? v : undefined;
-}
-
-/** A node's opaque per-slot viewer blob (`{slot: {collapsed, kind, settings}}`), or `undefined`. */
-export function viewersJson(doc: Doc, uid: string): unknown {
-	const v = nodesMap(doc)[uid]?.viewers;
-	return isObj(v) ? v : undefined;
 }
 
 /** Every armed output slot, node by node, in the order the document holds them. */
