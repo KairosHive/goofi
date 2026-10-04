@@ -6,7 +6,9 @@ patch variables, and any param reads them the way it reads a control panel today
 
 The same work unifies control data: a param, a variable, a control panel widget and a machine
 attribute hold one kind of value, and variables become producers on the data plane with the
-standing and the transport an output slot has.
+standing and the transport an output slot has. It also removes the reference mode: a param is
+a constant or an expression, and one expression worker in the shared runtime serves every
+engine. The control data and expression work must not add net lines; the machine may.
 
 Status: specification. This records the product decisions agreed through 2026-10-04. No
 implementation has started. Build on `AGENTS.md` and the code; this file carries only what the
@@ -45,9 +47,9 @@ code cannot say.
   connects after the last write receives that frame on connection. Node slots keep no
   history. Every retrieval of a variable yields its value: a new wire, a new viewer, a new
   binding, a reload.
-- A param reads a variable as a stream: `variables.<g>.<e>` in an expression resolves to
-  `BoundVar::Stream`, and the `reference` mode accepts `variables.<g>.<e>[i]` beside
-  `node.slot[i]`. `BoundVar::Value` remains for `nd('x').params` and `me.params` only.
+- A param reads a variable as a stream: `variables.<g>.<e>[i]` in an expression resolves to
+  `BoundVar::Stream`, bare or computed. `BoundVar::Value` remains for `nd('x').params` and
+  `me.params` only.
   `variable_as_param` and the inline re-send of every variable on every settle go away. A
   node that reads only a variable wakes on its frame like on any stream; `triggers` keeps
   its meaning.
@@ -62,8 +64,9 @@ code cannot say.
   `variables`, `<name>`), as it reads a slot. No second socket. The variables panel, the
   control panel widgets, the inspector chips and the machine panel subscribe this way; a knob
   drag previews the value edit through the control socket's one-per-frame coalescing.
-- A followed variable (`source`) copies the picked element, or the whole frame when no index
-  is given.
+- A variable with an expression is a computed variable: bare, it copies the element or the
+  frame on the producer's thread, as the tap does today; computed, the manager's expression
+  worker evaluates it like an engine's, latest-wins.
 - `GraphView.variables` keeps the latest frames for the graphics planner's default size.
 
 ### The control panel
@@ -79,6 +82,39 @@ code cannot say.
   toggle any frame, a text, a dropdown a string, a vector a `[n]`, a colour a `[4]`, a paint
   pad an `[h, w, 4]`.
 
+### Expressions, one way
+
+- A param has two modes, constant and expression. The reference mode, `SourceState.reference`,
+  `ParamEntry.reference`, `parse_reference`, `rename_reference`, the reference variable name,
+  the `reference` argument and descriptor field, the third segment of the mode switch, and
+  the reference picker as a mode are removed. The picker inserts `nd('osc').out[2]` into the
+  expression editor; that is the one spelling. The reference overlay in the node editor draws
+  every `nd()` and `variables.` dependency a bare or computed expression names. A variable's
+  source is the same `{expression}` a param has; `VariableSource`, `variable entry source` and
+  `control source` go, and `control edit {expression}` and `variable entry edit {expression}`
+  take their place.
+- An expression is BARE when its rewritten form is exactly one target with an optional index.
+  A bare expression never enters the interpreter: the engine reads the element or the frame in
+  Rust and, on the audio plane, carries it as a plan edge at zero latency. `expr_rewrite`
+  owns the predicate; `Expression.id == None` is its one effect.
+- Any Python around the target enters the interpreter, on one expression worker per engine
+  that `goofi-runtime` owns. The engine's own thread (a node thread, the audio callback, the
+  graphics ticker) never attaches to Python. The worker evaluates when an input arrives (a
+  stream frame, a variable frame, a settle) or on `TICK` for a timed expression, and hands
+  the result over latest-wins: the engine reads the last value that stands until the next one.
+  A late or stalled evaluation holds the previous value; nothing waits and nothing is dropped.
+  On the audio plane the result is a `[C, BLOCK]` array in the plan arena, one block behind
+  its inputs; on the signal and graphics planes it is the mailbox value the node reads now.
+- Why the engine thread never attaches: the free-threaded interpreter's cyclic collector stops
+  every thread. `goofi-tests/examples/expr_block.rs` measured a block expression at 3 to
+  25 us against a 1333 us budget, and collector stalls of 68 to 208 ms while other threads
+  made cyclic garbage; `gc.disable()` removed them. A held block is the one acceptable outcome.
+- The evaluator's per-call list conversion and dict rebuild go: a frame goes in as a numpy
+  view over its bytes and comes out as bytes, read through `control::read` like any frame.
+- `plan::is_edge` keeps its test (bare, live, same-engine, one target); it no longer needs a
+  mode. The signal plane's `Var::Stream` subscription and the graphics plane's plan edge are
+  the same seam on their planes.
+
 ### Attributes travel as variables
 
 - A playhead is a variable group. Its name is its group name, held by the one rule a control
@@ -86,7 +122,7 @@ code cannot say.
   `<playhead>.<attribute>` in that group. The machine is the writer: it publishes frames on
   the variables' services like a follower does, with no undo entry, no dirty mark and no
   graph lock, equality-gated, paced on the viewer cap. A param links to an attribute with
-  `variables.<playhead>.<attribute>`, as an expression or a bare reference, through the drop
+  `variables.<playhead>.<attribute>`, bare or inside a computation, through the drop
   and the "select for reference" gestures the control panel already has. There is no second
   link mechanism.
 - Three elements of a playhead's group are the machine's own and are refused as attribute
@@ -127,8 +163,8 @@ code cannot say.
     in the one namespace below, read on entry.
   - `when { expression }`: the one expression language params use, read over `variables.*`
     and `t` only. It fires on the rising edge of its gate (`gate(x)`). A node output enters as a
-    variable that follows it (`variable entry source`), so a node drives a machine through the
-    same seam a MIDI knob drives a widget.
+    variable whose expression names it, so a node drives a machine through the same seam a
+    MIDI knob drives a widget.
   - `meet { policy }`: fires when a second playhead arrives in `from`. `policy` chooses who
     takes the transition: `fifo` (the longest resident), `lifo` (the newest arrival), `all`
     (every resident). `alone` is the inverse: fires for the remaining playhead when the
@@ -193,8 +229,10 @@ Under the `machine` phrase, all commands with inverses unless marked:
 
 ### Tests
 
-- Extend `editing.rs` and `running.rs`: a variable followed from a slot, read by a param as a
-  stream, observed through `probe` on the consumer; a binding made after the last write
+- Extend `editing.rs` and `running.rs`: a variable with a bare expression over a slot, read by
+  a param as a stream, observed through `probe` on the consumer; a computed expression on an
+  audio param held one block behind and holding under a stalled evaluator (the test evaluator
+  blocks on a latch); a bare audio expression still a plan edge; a binding made after the last write
   receives that frame; the value path proven to leave no doc patch; an array variable painted
   by op, viewed by `node snapshot --raw`, saved and reloaded whole; undo of a value edit
   re-publishing the previous frame.
@@ -213,7 +251,7 @@ Under the `machine` phrase, all commands with inverses unless marked:
 ## Open
 
 - Whether a `Pulse` target reads an array variable's edge or its arrival. Edge is chosen,
-  matching the reference gate.
+  matching the gate a bare stream has today.
 - Whether a string switches on arrival or on departure. Arrival is chosen; a gate that must
   open at the start of a move is a second attribute with its own transition.
 - Whether a `when` expression may reference a node output directly (`nd('x').out`). Not now:
@@ -226,6 +264,9 @@ Under the `machine` phrase, all commands with inverses unless marked:
   the variable system already reaches every param on every plane.
 - A second value type for attributes, or a second link path beside the variable.
 - A second transport or socket for small values. A `[1]` frame over iceoryx2 is the one path.
+- A second expression language, or a Rust subset for the audio plane. Python on a worker, one
+  block behind, is the one computed path; a bare target is the one fast path.
+- Python inside a device callback, a node thread or the graphics ticker, ever.
 - A variable with history beyond the one frame a late subscriber needs. Latest-wins, like a
   slot.
 - Audio-rate easing in the machine.
