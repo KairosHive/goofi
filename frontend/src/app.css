@@ -537,7 +537,9 @@ textarea:disabled {
 .svelte-flow__handle::before {
 	content: '';
 	position: absolute;
-	top: 50%;
+	left: 0;
+	top: 0;
+	transform: translate(-50%, -50%);
 	width: 7px;
 	height: calc(var(--node-u) - 6px);
 	box-sizing: border-box;

@@ -356,13 +356,19 @@
 		pointer-events: auto;
 		cursor: pointer;
 	}
-	/* The box is the hit area, and the handle is the box. Svelte Flow anchors a cable on the
-	   handle's outer EDGE, so each box ends 4px past the node border and the pill straddles that
-	   border from there: the cable lands under the pill. One slot tall, so neighbours never overlap. */
+	/* The handle is a POINT on the node border at the slot's centre, drawn as the pill (::before)
+	   and taken through its hit area (::after). Svelte Flow draws the cable in flight to a handle's
+	   centre and the settled edge to its outer edge, and a point makes those the same place. The
+	   box itself takes no pointer, so the hit areas are exactly the pseudo-elements, one slot tall,
+	   and neighbours never overlap. */
+	.conn {
+		pointer-events: none;
+	}
 	.conn :global(.svelte-flow__handle) {
-		inset: 0;
-		width: 100%;
-		height: 100%;
+		pointer-events: auto;
+		top: 50%;
+		width: 0;
+		height: 0;
 		min-width: 0;
 		min-height: 0;
 		transform: none;
@@ -370,30 +376,49 @@
 		border: 0;
 		border-radius: 0;
 	}
-	.conn.in {
-		left: -4px;
-		width: 22px;
-		transform: translateY(-50%);
+	.conn :global(.svelte-flow__handle)::after {
+		content: '';
+		position: absolute;
+		top: calc(var(--node-u) / -2);
+		height: var(--node-u);
 	}
-	.conn.in :global(.svelte-flow__handle)::before {
-		left: 4px;
+	/* The point sits on the border PIXEL, not its outer edge: half a pixel in, so a 7px pill
+	   covers three pixels either side of the 1px line. An input's hit area is the pill plus 4px
+	   each side, centred on the border. */
+	.conn.in {
+		left: 0;
+		width: 22px;
 		transform: translate(-50%, -50%);
+	}
+	.conn.in :global(.svelte-flow__handle) {
+		left: calc(50% + 0.5px);
+	}
+	.conn.in :global(.svelte-flow__handle)::after {
+		left: -11px;
+		width: 22px;
 	}
 	.conn.in.multi :global(.svelte-flow__handle)::before {
 		background: transparent;
 		border: 2px solid var(--dtype, var(--border-strong));
 	}
-	/* An output's box runs from its label to 4px past the border, the pill's zone 22px wide. */
+	/* An output's hit area runs from its label to 11px past the border. The box is padded so the
+	   pill's glow stays inside the clip that bounds the hit area at the box's edge, and its label
+	   ends where the slot header's spacer does: 12px in from the border. */
 	.conn.out {
-		right: -4px;
-		padding: 0 22px 0 4px;
+		right: -16px;
+		height: calc(var(--node-u) + 16px);
+		padding: 0 28px 0 4px;
 		transform: translateY(-50%);
+		overflow: hidden;
 		font-family: var(--font-mono);
 		font-size: 10px;
 	}
-	.conn.out :global(.svelte-flow__handle)::before {
-		right: 4px;
-		transform: translate(50%, -50%);
+	.conn.out :global(.svelte-flow__handle) {
+		right: 16.5px;
+	}
+	.conn.out :global(.svelte-flow__handle)::after {
+		right: -11px;
+		width: 100vw;
 	}
 	.out-label {
 		color: var(--dtype, var(--text-dim));
