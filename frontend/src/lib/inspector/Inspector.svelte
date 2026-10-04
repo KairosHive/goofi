@@ -361,7 +361,10 @@
 		return all.filter((r) => admits(filters, r.descriptor, nonDefault, r.group, r.name) && shown(n.params, r.group, r.name));
 	});
 	/** The section a row sits in, so a named section's heading opens once. */
-	const sectionOf = (r: ParamHit | undefined): string | null => r?.descriptor.role?.section ?? null;
+	const sectionOf = (r: ParamHit | undefined): string | null => {
+		const role = r?.descriptor.role;
+		return role && role.as !== 'feed' ? role.section : null;
+	};
 	const slotOf = (r: ParamHit): { section: string; index: number } | null => {
 		const role = r.descriptor.role;
 		return role?.as === 'member' && role.slot != null ? { section: role.section, index: role.slot } : null;

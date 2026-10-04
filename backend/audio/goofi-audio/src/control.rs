@@ -531,6 +531,9 @@ impl Inbox {
             chunk.fill_from_iter([c as f32, n as f32].into_iter().chain(samples));
         }
         self.pos = pos + n as f64 * step - t as f64;
+        // A frame that moved the channel count is held: the replan it asks for may mint a new
+        // ring, and a producer at rest — a variable — sends no next frame to fill it.
+        self.pending = moved.then(|| frame.clone());
         Some(moved || resize)
     }
 }

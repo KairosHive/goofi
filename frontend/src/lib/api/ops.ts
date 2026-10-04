@@ -46,6 +46,7 @@ export type OpName =
 	| 'midi list'
 	| 'midi grab'
 	| 'midi release'
+	| 'midi feed'
 	| 'control list'
 	| 'control add'
 	| 'control edit'
@@ -127,6 +128,7 @@ export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'midi list': 'read',
 	'midi grab': 'write',
 	'midi release': 'write',
+	'midi feed': 'effect',
 	'control list': 'read',
 	'control add': 'write',
 	'control edit': 'write',

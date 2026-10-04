@@ -632,6 +632,14 @@ impl Graph {
                     }
                 }
             }
+            // A feed param: the variable it names enters an input slot, rung by that slot's id.
+            for (slot, d) in goofi_node::feed_decls(leaf.manifest) {
+                let Some(at) = leaf.manifest.inputs.iter().position(|s| s.name == slot) else { continue };
+                let value = leaf.values.get(d.group).and_then(|g| g.get(d.name)).map(goofi_core::Data::value);
+                if let Some(goofi_core::Value::Str(name)) = value {
+                    out.push((name.to_string(), *uid, self.node_generation(*uid), (at + 1).min(64) as EventId));
+                }
+            }
         }
         out
     }
@@ -2396,9 +2404,16 @@ impl Graph {
         let typed = self.typed(entry);
         let param = goofi_node::param(&typed, group, name)
             .ok_or_else(|| format!("no such param `{group}.{name}`"))?;
+        let feed = goofi_node::feed_decls(entry.manifest).any(|(_, d)| d.group == group && d.name == name);
         match kind {
             goofi_node::RequestKind::Refresh if !matches!(param, Param::Str { refresh: true, .. }) => {
                 return Err(format!("param `{group}.{name}` is not refreshable"));
+            }
+            // A feed names a variable: the graph holds the list, so it answers in the node's place.
+            goofi_node::RequestKind::Refresh if feed => {
+                self.offer_variables(uid);
+                self.runtime.refreshed.push((uid, ParamKey::new(group, name)));
+                return Ok(());
             }
             goofi_node::RequestKind::Pulse if !matches!(param, Param::Pulse) => {
                 return Err(format!("param `{group}.{name}` is not a pulse"));
@@ -2907,6 +2922,25 @@ impl Graph {
             .expect("the library entry named it")
             .insert(uid, type_name, generation, &params);
         self.runtime.instances.insert(uid, Instance { engine, health: Health::born(boot_error) });
+        self.offer_variables(uid);
+    }
+
+    /// The patch's variables as the options of every feed param the node has, shown over the
+    /// declared (empty) list; a refresh asks for them again.
+    fn offer_variables(&mut self, uid: Uid) {
+        let Some(manifest) = self.leaf(uid).map(|l| l.manifest) else { return };
+        let keys: Vec<ParamKey> = goofi_node::feed_decls(manifest).map(|(_, d)| ParamKey::new(d.group, d.name)).collect();
+        if keys.is_empty() {
+            return;
+        }
+        let names: Vec<String> = self.patch.variables.lock().entries()
+            .map(|(n, _)| n.to_string())
+            .filter(|n| n.split('.').next() != Some(goofi_core::variables::SYSTEM_GROUP))
+            .collect();
+        let Some(inst) = self.runtime.instances.get_mut(&uid) else { return };
+        for key in keys {
+            inst.health.options.insert(key, names.clone());
+        }
     }
 
     /// Take a node's instance back from its engine. The engine holds its OWN handle on the node's

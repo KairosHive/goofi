@@ -172,6 +172,7 @@ pub fn describe(
                     crate::Role::Member { section, base, slot } => {
                         probe::Role::Member { section: section.to_string(), base: base.to_string(), slot }
                     }
+                    crate::Role::Feed { slot } => probe::Role::Feed { slot: slot.to_string() },
                 }),
                 spec: match p.spec {
                     ParamSpec::Num { default, min, max, int, options, color } => {
@@ -382,6 +383,7 @@ fn param_decl(p: &probe::Param) -> ParamDecl {
             probe::Role::Member { section, base, slot } => {
                 crate::Role::Member { section: leak_str(section), base: leak_str(base), slot: *slot }
             }
+            probe::Role::Feed { slot } => crate::Role::Feed { slot: leak_str(slot) },
         }),
     }
 }

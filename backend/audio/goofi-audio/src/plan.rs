@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use goofi_audio_sdk::BLOCK;
 use goofi_core::SlotType;
 use goofi_runtime::{param_of, scalar_of};
-use goofi_node::{BindingView, GraphView, NodeManifest, Uid};
+use goofi_node::{BindingView, GraphView, NodeManifest, NodeView, Uid};
 
 use crate::Instance;
 
@@ -70,6 +70,13 @@ impl Plan {
             .iter()
             .any(|s| s.idx == idx && s.ins.iter().any(|i| matches!(i, Source::Inbox { inbox: n, .. } if *n == inbox)))
     }
+}
+
+/// Whether a feed param of the node names, for `slot`, a variable the patch holds.
+fn fed(view: &GraphView<'_>, nv: &NodeView<'_>, slot: &str) -> bool {
+    goofi_node::feed_decls(nv.manifest).any(|(fed, d)| {
+        fed == slot && matches!(goofi_node::param(nv.params, d.group, d.name), Some(goofi_core::Param::Str { value, .. }) if view.variables.contains(value))
+    })
 }
 
 /// The inbox an Array input reads — its index among the node's Array inputs — and `None` for an
@@ -193,6 +200,7 @@ pub fn compile(
     }
     for uid in &order {
         let inst = &live[uid];
+        let nv = &view.nodes[uid];
         let outs: Vec<(Region, u16)> = inst.manifest.outputs.iter().map(|o| outs_of[&(*uid, o.name)]).collect();
         let own: Vec<Region> = outs.iter().map(|o| o.0).collect();
         let ins: Vec<Source> = inst
@@ -201,7 +209,8 @@ pub fn compile(
             .iter()
             .enumerate()
             .map(|(i, s)| match inbox_of(inst.manifest, i) {
-                Some(_) if view.wires_into(*uid, s.name).next().is_none() => Source::Silence,
+                // Fed by a cable, or by the variable a feed param names; else silence.
+                Some(_) if view.wires_into(*uid, s.name).next().is_none() && !fed(view, nv, s.name) => Source::Silence,
                 Some(inbox) => {
                     let channels = inst.chans[inbox].load(Ordering::Relaxed);
                     Source::Inbox { at: alloc(channels, &mut plan.arena_len), channels, inbox }

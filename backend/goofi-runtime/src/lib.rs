@@ -74,19 +74,34 @@ pub struct Plane<'a> {
 pub fn desired_of(view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>, decls: &[ParamDecl], plane: &Plane<'_>) -> Desired {
     let carried = |s: &goofi_node::SlotDecl| plane.kind == Some(s.kind);
     let consts = decls.iter().map(|d| param_of(nv.params, d)).collect();
+    // A feed param names a variable: that variable's wire enters the slot the role names.
+    let feeds: Vec<(&str, &str)> = goofi_node::feed_decls(nv.manifest)
+        .filter_map(|(slot, d)| match goofi_node::param(nv.params, d.group, d.name) {
+            Some(goofi_core::Param::Str { value, .. }) if view.variables.contains(value) => Some((slot, value.as_str())),
+            _ => None,
+        })
+        .collect();
     let mut subs = Vec::new();
     let mut inbox = 0;
     for s in nv.manifest.inputs {
         if carried(s) {
             continue;
         }
-        for (wire, (producer, out)) in view.wires_into(uid, s.name).enumerate() {
-            let Some(service) = goofi_transport::output_of(view, producer, out) else { continue };
-            let source = match (s.multi, view.nodes.get(&producer)) {
-                (true, Some(p)) => format!("{}.{out}", p.name),
-                _ => String::new(),
-            };
-            subs.push(Sub::Slot { inbox, wire, service, source });
+        let mut wire = 0;
+        for (producer, out) in view.wires_into(uid, s.name) {
+            if let Some(service) = goofi_transport::output_of(view, producer, out) {
+                let source = match (s.multi, view.nodes.get(&producer)) {
+                    (true, Some(p)) => format!("{}.{out}", p.name),
+                    _ => String::new(),
+                };
+                subs.push(Sub::Slot { inbox, wire, service, source });
+            }
+            wire += 1;
+        }
+        for (_, name) in feeds.iter().filter(|(slot, _)| *slot == s.name) {
+            let service = goofi_transport::output_service(&goofi_transport::variables_base(view.instance), name);
+            subs.push(Sub::Slot { inbox, wire, service, source: format!("variables.{name}") });
+            wire += 1;
         }
         inbox += 1;
     }

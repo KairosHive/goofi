@@ -2,8 +2,8 @@
 
 use serde_json::{json, Value};
 
-use super::{op, NoArgs, ReadOp, WriteOp};
-use crate::Txn;
+use super::{op, EffectOp, NoArgs, ReadOp, WriteOp};
+use crate::{AppState, Caller, Txn};
 use goofi_core::variables::{Midi, MIDI_ENTRIES};
 use goofi_core::Data;
 use goofi_graph::Command;
@@ -26,6 +26,22 @@ op!(Release, "midi release", 1, ReleaseArgs {
 },
     "Release a grabbed MIDI device: its port is closed and its group removed with every entry. An expression that read it is told the variable is not defined.",
     "{removed: true}");
+
+op!(Feed, "midi feed", 2, FeedArgs {
+    pub group: String,
+    /// One MIDI message, status byte first: `[176, 74, 127]` is controller 74 to full on channel 1.
+    pub bytes: Vec<f64>,
+},
+    "Play one MIDI message into a grabbed group as its port would: a note on or off, a controller, the wheel or the channel pressure moves the entry it names, on the device's own thread and under no lock of the graph. What a script plays, and what a test plays in place of a port.",
+    "{ok: true}");
+
+impl EffectOp for Feed {
+    fn run(state: &AppState, a: FeedArgs, _: &Caller) -> Result<Value, String> {
+        let bytes: Vec<u8> = a.bytes.iter().map(|b| b.round().clamp(0.0, 255.0) as u8).collect();
+        state.midi.feed(&a.group, &bytes)?;
+        Ok(json!({ "ok": true }))
+    }
+}
 
 impl ReadOp for List {
     fn run(tx: &mut Txn, _: NoArgs) -> Result<Value, String> {

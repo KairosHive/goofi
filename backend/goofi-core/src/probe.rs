@@ -92,6 +92,8 @@ pub enum Role {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         slot: Option<u32>,
     },
+    /// A string param naming a variable whose wire feeds the input `slot`.
+    Feed { slot: String },
 }
 
 /// The inspector shows a param only while `param` (`name` in the same group, or `group.name`)

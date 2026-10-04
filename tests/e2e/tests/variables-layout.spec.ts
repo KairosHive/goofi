@@ -113,9 +113,12 @@ test('variables group markers stay at the right edge on desktop and touch', asyn
 			expect(await button.evaluate((element) => getComputedStyle(element).justifyContent)).toBe('center');
 		}
 		const editedRow = group.locator('[data-name="renamed.message"]');
-		const nameBox = (await editedRow.getByTestId('variable-name').boundingBox())!;
-		const valueBox = (await editedRow.getByTestId('variable-value').boundingBox())!;
-		expect(Math.abs(nameBox.y - valueBox.y)).toBeLessThan(1);
+		// Polled: the rename re-keys the group, and its rows settle a frame after they are counted.
+		await expect.poll(async () => {
+			const nameBox = (await editedRow.getByTestId('variable-name').boundingBox())!;
+			const valueBox = (await editedRow.getByTestId('variable-value').boundingBox())!;
+			return Math.abs(nameBox.y - valueBox.y);
+		}).toBeLessThan(1);
 		expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 		await page.screenshot({ path: testInfo.outputPath('variables-editing-phone.png') });
 		await panel.getByTestId('variable-add-group-btn').tap();

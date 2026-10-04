@@ -98,18 +98,19 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     assert_eq!(groups["test_keys_1"], j!({ "lock": { "config": false, "value": false }, "midi": { "port": "Test Keys:1", "channel": 1 } }), "{groups}");
     let why = g.refuse("variable entry add", j!({ "group": "test_keys_1" }));
     assert!(why.contains("config-locked"), "a device's group takes no entry of a user's: {why}");
+    let why = g.refuse("variable entry edit", j!({ "name": "test_keys_1.cc", "value": 1 }));
+    assert!(why.contains("value-locked"), "its values are the device's: {why}");
+    assert!(g.refuse("variable group rename", j!({ "from": "test_keys_1", "to": "keys" })).contains("config-locked"));
     assert_eq!(f32s(&g.snapshot_array("variables/test_keys_1.cc")).len(), 128, "every controller, at rest");
-    // The device writes through the store on its own thread, under no lock of the graph's.
-    let store = g.graph().variable_store();
-    let mut cc = vec![0.0; 128];
-    cc[74] = 0.5;
-    assert!(store.lock().drive("test_keys_1.cc", goofi_core::Data::numbers(cc.iter().copied())));
-    assert!(!store.lock().drive("patch.gain", goofi_core::Data::number(9.0)), "a group that reads no device takes no device write");
-    g.until("the controller's frame on the wire", |g| Some(g.snapshot_array("variables/test_keys_1.cc")).filter(|d| f32s(d)[74] == 0.5));
+    // A message fed to the group is what its port would send: controller 74 to half, on channel 1.
+    g.call("midi feed", j!({ "group": "test_keys_1", "bytes": [0xb0, 74, 64] }));
+    g.call("midi feed", j!({ "group": "test_keys_1", "bytes": [0xb1, 7, 127] }));
+    g.until("the controller's frame on the wire", |g| Some(g.snapshot_array("variables/test_keys_1.cc")).filter(|d| (f32s(d)[74] - 64.0 / 127.0).abs() < 1e-6 && f32s(d)[7] == 0.0));
+    assert!(g.refuse("midi feed", j!({ "group": "patch", "bytes": [0xb0, 7, 127] })).contains("no MIDI device"));
     // A widget follows an entry of the bus as it follows a node's output, index and all.
     g.call("control add", j!({ "group": "desk", "kind": "slider", "element": "cutoff" }));
     g.call("control source", j!({ "group": "desk", "element": "cutoff", "reference": "variables.test_keys_1.cc", "index": 74 }));
-    g.until("the widget to follow the controller", |g| Some(g.variable("desk.cutoff")).filter(|v| *v == j!(0.5)));
+    g.until("the widget to follow the controller", |g| Some(g.variable("desk.cutoff")).filter(|v| v.as_f64().is_some_and(|v| (v - 64.0 / 127.0).abs() < 1e-6)));
     // A release takes the group with it, in one step back.
     g.call("midi release", j!({ "group": "test_keys_1" }));
     assert!(g.call("variable list", j!({}))["groups"].get("test_keys_1").is_none(), "the group left with the device");

@@ -451,6 +451,7 @@ pub static TREE: &[Entry] = &[
         Leaf(read::<midi::List>()),
         Leaf(write::<midi::Grab>()),
         Leaf(write::<midi::Release>()),
+        Leaf(effect::<midi::Feed>()),
     ]),
     Group("control", "a control panel: one group of variables drawn as widgets, and the door that edits them", &[
         Leaf(read::<variable::ControlList>()),

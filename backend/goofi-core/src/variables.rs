@@ -544,7 +544,7 @@ impl VariableStore {
     }
 
     /// Flag a group as a device's, or clear the flag, answering the old device for undo. The flag
-    /// config-locks the group: its entries are the device's state, named by the protocol.
+    /// locks the group whole: its entries and their values are the device's.
     pub fn set_midi(&mut self, group: &str, midi: Option<Midi>) -> Result<Option<Midi>, String> {
         if group == SYSTEM_GROUP {
             return Err(format!("`{SYSTEM_GROUP}` is goofi's own; it reads no device"));
@@ -571,10 +571,10 @@ impl VariableStore {
         self.entries.get(name).map(Variable::own_lock).unwrap_or_default()
     }
 
-    /// A group's lock as it holds its members: a MIDI group's config is the device's.
+    /// A group's lock as it holds its members: a MIDI group is the device's on both axes.
     pub fn group_lock(&self, group: &str) -> Lock {
         let Some(rec) = self.groups.get(group) else { return Lock::default() };
-        Lock { config: rec.lock.config || rec.midi.is_some(), value: rec.lock.value }
+        if rec.midi.is_some() { Lock { config: true, value: true } } else { rec.lock }
     }
 
     /// What holds `name` right now: its own lock and its group's together.
@@ -751,8 +751,7 @@ impl VariableStore {
         if from == SYSTEM_GROUP {
             return Err(format!("`{SYSTEM_GROUP}` is goofi's own; it keeps its name"));
         }
-        // The lock set on the group refuses; a device's flag does not, and travels with the name.
-        if self.groups.get(from).is_some_and(|rec| rec.lock.config) {
+        if self.group_lock(from).config {
             return Err(format!("group `{from}` is config-locked"));
         }
         if self.has_group(to) {
@@ -767,9 +766,7 @@ impl VariableStore {
             if self.entries.contains_key(new.as_str()) {
                 return Err(format!("variable `{new}` already exists"));
             }
-            if self.own_lock(old).config {
-                return Err(format!("variable `{old}` is config-locked"));
-            }
+            self.config_locked(old)?;
         }
         for (old, new) in &moved {
             self.move_entry(old, new);

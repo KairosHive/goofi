@@ -3,7 +3,7 @@
 //! the file that authors one, so the two halves cannot drift.
 
 pub use goofi_core;
-pub use goofi_node::{ExprDecl, ExprMode, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Tag};
+pub use goofi_node::{ExprDecl, ExprMode, OutputDecl, ParamDecl, ParamSpec, Role, Show, SlotDecl, Tag};
 
 pub mod abi;
 #[cfg(feature = "host")]

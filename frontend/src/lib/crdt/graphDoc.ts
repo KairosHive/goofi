@@ -132,10 +132,12 @@ function lockOf(raw: unknown): LockView {
 	return { config: l.config === true, value: l.value === true };
 }
 
-/** Explicit groups and their built-in flags, by name. */
+/** Explicit groups and their built-in flags, by name: a device's group is locked whole. */
 export function variableGroupLocks(doc: Doc): Record<string, LockView> {
 	const out: Record<string, LockView> = {};
-	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) out[group] = lockOf(obj(rec).lock);
+	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) {
+		out[group] = obj(rec).midi ? { config: true, value: true } : lockOf(obj(rec).lock);
+	}
 	return out;
 }
 

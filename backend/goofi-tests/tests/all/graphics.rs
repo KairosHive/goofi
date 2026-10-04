@@ -313,6 +313,17 @@ fn shaders_render_on_the_gpu() {
     g.set_param(c, "common", "height", 32);
     let frame = drawn(&g, c, "the resized frame", |d| shape(d) == vec![32, 64, 4]);
     assert!(close(px(&frame, 31, 63), [0.25, 0.5, 1.0, 1.0]));
+    // Step: a pad's sheet reaches the GPU through a Variable node: the `[H, W, 4]` variable is the
+    // texture, top row first, so the red painted over the top half is red there and clear below.
+    g.call("control add", j!({ "group": "paint", "kind": "paint", "element": "pad", "resolution": 4 }));
+    g.call("control paint", j!({ "group": "paint", "element": "pad", "ops": "fill #ff0000 : M 0 0 L 1000 0 L 1000 500 L 0 500 Z" }));
+    let var = g.add("graphics:Variable");
+    g.ready(var);
+    g.set_param(var, "variable", "name", "paint.pad");
+    drawn(&g, var, "the pad as a texture", |d| shape(d) == vec![4, 4, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]) && px(d, 3, 3)[3] < 0.01);
+    g.call("node remove", j!({ "node": hex(var) }));
+    g.call("variable entry remove", j!({ "name": "paint.pad" }));
+
     // Step: a Shape's colour is RGBA with STRAIGHT alpha: its tint is untouched inside, and the
     // coverage scales the colour's own alpha, which is nothing outside.
     let disc = g.add("graphics:Shape");

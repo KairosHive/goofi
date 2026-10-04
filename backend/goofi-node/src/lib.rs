@@ -140,6 +140,16 @@ pub struct ParamDecl {
 pub enum Role {
     Count { section: &'static str },
     Member { section: &'static str, base: &'static str, slot: Option<u32> },
+    /// A `Str` param naming a variable whose wire feeds input `slot`, as a cable into it would.
+    Feed { slot: &'static str },
+}
+
+/// Every feed of a manifest: the input slot and the `Str` param whose value names the variable.
+pub fn feed_decls(manifest: &NodeManifest) -> impl Iterator<Item = (&'static str, &'static ParamDecl)> {
+    manifest.params.iter().filter_map(|d| match d.role {
+        Some(Role::Feed { slot }) => Some((slot, d)),
+        _ => None,
+    })
 }
 
 /// The inspector shows a param only while `param` (`name` in the same group, or `group.name`)

@@ -142,6 +142,9 @@
 							{#if controlled}
 								<span class="grp-control" role="img" aria-label="Control panel" title="Control panel"><Icon name="sliders-horizontal" /></span>
 							{/if}
+							{#if g.midiGroups[grp.group]}
+								<span class="grp-control" role="img" aria-label="MIDI device" title={`MIDI device ${g.midiGroups[grp.group].port}`}><Icon name="piano" /></span>
+							{/if}
 							{#if lock.config || lock.value}
 								<span class="grp-lock" role="img" aria-label="Built-in lock" title="Built-in lock"><Icon name="lock" /></span>
 							{/if}

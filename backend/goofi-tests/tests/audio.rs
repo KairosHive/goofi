@@ -143,7 +143,7 @@ fn a_patch_sounds_under_the_external_clock() {
                        "audio:Filter", "audio:FreqShift", "audio:Gain", "audio:GraphicsIn", "audio:Limiter",
                        "audio:MidiIn",
                        "audio:Mixdown", "audio:Noise", "audio:Osc", "audio:Quantize", "audio:Reverb",
-                       "audio:SignalIn", "audio:Slew"]);
+                       "audio:SignalIn", "audio:Slew", "audio:Variable"]);
     let osc = g.add("Osc");
     let gain = g.add("Gain");
     let out = g.add("AudioOut");
@@ -1197,6 +1197,18 @@ fn a_patch_sounds_under_the_external_clock() {
     g.call("link remove", j!({ "from": ep(hex(src), "out"), "to": ep(hex(plug), "input") }));
     g.set_param(plug, "voice", "gate", true);
     heard(&g, plug, "a C4 from a rising gate at pitch zero", |x| (peak(x) - 0.5).abs() < 0.02 && near(per_tenth(x), 52));
+    // A variable cabled into the plugin's `voice` input through a Variable node: a `[2, 1]` frame
+    // is two channels, the pitch and the velocity of one voice, and it sounds the A4 it names.
+    // The param-driven voice is let go first: a voice held is not asked its pitch again.
+    g.set_param(plug, "voice", "gate", false);
+    heard(&g, plug, "the voice let go before the cable", |x| peak(x) < 1e-3);
+    g.call("variable entry add", j!({ "name": "desk.voice", "value": [[0.75], [1.0]] }));
+    let var = g.add("audio:Variable");
+    g.set_param(var, "variable", "name", "desk.voice");
+    g.link(var, "out", plug, "voice");
+    heard(&g, plug, "an A4 from the variable on the voice cable", |x| near(per_tenth(x), 88));
+    g.call("link remove", j!({ "from": ep(hex(var), "out"), "to": ep(hex(plug), "voice") }));
+    g.call("node remove", j!({ "node": hex(var) }));
 
     // The note is the round and the residual is carried beside it: C7 and 40 cents reads 428
     // crossings a tenth where the round alone reads 418, so a dropped residual fails here.

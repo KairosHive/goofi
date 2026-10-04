@@ -38,7 +38,7 @@ links: { [key in string]: Link }, variables: { [key in string]: VariableRecord }
 export type Archive = { version: number, goofi: string, patch: PatchDoc, viewpoint?: JsonValue, };
 export type Op = { "op": "put", path: Array<string>, value: JsonValue, } | { "op": "del", path: Array<string>, };
 export type ParamShow = { group: string, name: string, any_of: Array<string>, };
-export type ParamRole = { "as": "count", section: string, } | { "as": "member", section: string, base: string, slot: number | null, };
+export type ParamRole = { "as": "count", section: string, } | { "as": "member", section: string, base: string, slot: number | null, } | { "as": "feed", slot: string, };
 export type ParamBase = { doc: string | null, 
 /**
  * What the declaration says this param is worth untouched; `None` for a pulse.
