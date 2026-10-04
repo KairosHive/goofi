@@ -10,29 +10,23 @@ code cannot say.
 
 ## Decisions
 
-### One value type
+### Built on control data
 
-- `goofi_core::variables::VariableValue` gains `Vec(Vec<f64>)` (type name `vec`). It is then
-  the one literal a variable, an attribute, a state value and a param literal are spelled in.
-  `goofi_graph::doc::Scalar` is removed; the untagged literal shape a `.gfi` param holds is
-  the untagged serde form of the same enum. `Param` stays the engine-side carrier with range,
-  `int`, `options` and `color`: an attribute is born from the same declaration and coerces the
-  same way (`Param::with_values`, `VariableValue::coerced_like`).
-- An attribute is a `Variable` template: `{type, value (the default), control?}`. The `control`
-  is the widget a state card and the playhead row draw it with, exactly as a control panel
-  draws a variable. `ControlKind` gains `Vector` and `Color` for the two shapes a param can
-  take that no control panel widget draws yet. The inspector widgets and the control widgets
-  stay one set (`frontend/src/lib/ui`).
+- `control-data.md` comes first: one `Spec` for every control value, `Data` as the one carrier,
+  and variables as producers on the data plane. An attribute is a `Spec` with a default
+  frame and a widget; a state value is a frame coerced through that spec; a playhead's
+  variables are slots of the `variables` producer. Nothing here adds a value type or a path.
 
 ### Attributes travel as variables
 
 - A playhead is a variable group. Its name is its group name, held by the one rule a control
   panel's group is held by (`Graph::group_taken`). Each attribute of the machine is one variable
-  `<playhead>.<attribute>` in that group. The machine is the writer, through the follower's
-  path (`follow_variable`): no undo entry, no dirty mark, equality-gated, paced on the viewer
-  cap. A param links to an attribute with the expression `variables.<playhead>.<attribute>`,
-  through the drop and the "select for reference" gestures the control panel already has.
-  There is no second link mechanism.
+  `<playhead>.<attribute>` in that group. The machine is the writer: it publishes frames on
+  the variables' services like a follower does, with no undo entry, no dirty mark and no
+  graph lock, equality-gated, paced on the viewer cap. A param links to an attribute with
+  `variables.<playhead>.<attribute>`, as an expression or a bare reference, through the drop
+  and the "select for reference" gestures the control panel already has. There is no second
+  link mechanism.
 - Three elements of a playhead's group are the machine's own and are refused as attribute
   names: `state` (string: the state the playhead is in, or is moving to), `from` (string: the
   state it left, empty at rest) and `progress` (float 0..1 along the transition, 1 at rest).
@@ -41,7 +35,7 @@ code cannot say.
   against every writer but the machine. Removing the playhead removes the group. Renaming it
   rewrites every expression that reads it (`rename_group`).
 - A `.gfi` carries the playhead's variables like any other. On load the machine resets every
-  playhead to its start state and rewrites them. A reload does not resume mid-transition.
+  playhead to its start state and publishes them. A reload does not resume mid-transition.
 
 ### Machines
 
@@ -49,7 +43,8 @@ code cannot say.
 - `Machine { attributes: {name: Variable}, states: {name: State}, transitions: {id: Transition},
   playheads: {name: Playhead} }`. State and playhead names are identifiers; a transition id is
   minted by the manager (`t1`, `t2`, …) and never typed by a person except to address one.
-- `State { pos: [x, y], values: {attribute: VariableValue} }`. A state may leave an attribute
+- `State { pos: [x, y], values: {attribute: literal} }`, each literal in the document form
+  the attribute's spec reads. A state may leave an attribute
   out: a playhead entering it keeps the value it holds. A value is coerced to the attribute's
   type on write, and a removed attribute is removed from every state.
 - `Playhead { color, start: state }`. Playheads of one machine share the attribute set. Their
@@ -83,20 +78,21 @@ code cannot say.
   else in the tree eases yet.
 - Interpolation starts from the values the playhead holds now, never from the state it left,
   so a redirection while in flight is continuous. Numbers, ints (rounded) and vectors
-  interpolate; bools and strings switch on arrival. A `step` curve switches everything on
-  arrival.
+  interpolate elementwise, an array of a matching shape included; bools and strings switch
+  on arrival. A `step` curve switches everything on arrival.
 - While in flight, only `manual` can redirect a playhead. The target state's triggers arm on
   arrival; the dwell starts on arrival.
 
 ### Where it runs
 
 - `goofi_graph::machine` owns the model and the stepping: `Machines::advance(now, variables)
-  -> Vec<(variable, VariableValue)>`, pure and clocked by the one patch `Time`. It compiles
+  -> Vec<(variable, Data)>`, pure and clocked by the one patch `Time`. It compiles
   `when` and `after` expressions through the graph's `ExprEvaluator` with `Local::Value`
   locals, the way a `BoundVar::Value` binding is evaluated, so the test evaluator covers it.
-- The follower thread (`spawn_follower`) is the one driver: each pace interval it applies the
-  taps' picks, then `advance`, then settles, projects and broadcasts once. Easing is sampled
-  at the viewer cap; an audio-rate ramp is a `Slew` node's job, not the machine's. Random draws
+- One manager thread, `goofi-machines`, drives it on the viewer-cap pace: it reads the
+  variables' latest frames from the store, calls `advance`, and publishes the writes. It takes
+  no graph lock; the graph lock is for config edits, which replace its model. Easing is
+  sampled at the viewer cap; an audio-rate ramp is a `Slew` node's job, not the machine's. Random draws
   use a seeded generator the test can fix (`machine edit {seed}`).
 
 ### Ops
@@ -148,13 +144,13 @@ Under the `machine` phrase, all commands with inverses unless marked:
 - Whether bools and strings switch on arrival or on departure. Arrival is chosen; a gate that
   must open at the start of a move is a second attribute with its own transition.
 - Whether a `when` expression may reference a node output directly (`nd('x').out`). Not now:
-  it would make the follower a stream consumer. A followed variable is the seam.
+  it would make the machine a stream consumer. A followed variable is the seam.
 - Transition priority beyond `weight`: an explicit order is not offered until a patch asks.
 
 ## Not to be done
 
 - A machine as a node. It would run on one engine's clock and tie its outputs to slots;
   the variable system already reaches every param on every plane.
-- A second value type for attributes, or a second link path beside the expression.
+- A second value type for attributes, or a second link path beside the variable.
 - Audio-rate easing in the machine.
 - Hierarchical or nested machines. Several machines in one patch compose through variables.
