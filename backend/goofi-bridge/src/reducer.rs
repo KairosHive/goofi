@@ -98,6 +98,8 @@ struct Slot {
     specs: Mutex<HashMap<ConnId, Declared>>,
     /// The variables that follow this slot, fed the RAW frame — never a reduction.
     taps: Mutex<Vec<Tap>>,
+    /// The taps moved: the frame held is fed to them, as a producer at rest sends no other.
+    retap: AtomicBool,
     /// `Bytes` so the socket task forwards the SHARED buffer — a per-subscriber copy undoes dedup.
     tx: broadcast::Sender<Bytes>,
     stop: AtomicBool,
@@ -207,6 +209,7 @@ impl SlotReducers {
         for (key, list) in taps {
             let reducer = self.ensure(&mut map, &key);
             *reducer.slot.taps.lock() = list;
+            reducer.slot.retap.store(true, Ordering::Release);
             reducer.poke();
         }
     }
@@ -246,6 +249,7 @@ impl SlotReducers {
             let slot = Slot {
                 specs: Mutex::new(HashMap::new()),
                 taps: Mutex::new(Vec::new()),
+                retap: AtomicBool::new(false),
                 tx: broadcast::channel(16).0,
                 // No door is no wake: the stream is closed, and the next request tries again.
                 stop: AtomicBool::new(bell.is_none()),
@@ -392,7 +396,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
     let (shared, failed) = (reducer.slot.clone(), reducer.slot.clone());
     let (uid, slot) = key.clone();
     match goofi_transport::thread(format!("goofi-reduce-{slot}")).spawn(move || {
-        let Slot { specs, taps, tx, stop, reductions, gen, latest, asked } = &*shared;
+        let Slot { specs, taps, retap, tx, stop, reductions, gen, latest, asked } = &*shared;
         // Owed a serve: watched, holding a frame, and with a new frame or a bump not yet served.
         let owed = |made: &Option<Bytes>, served: Option<u64>, pending: bool| {
             !specs.lock().is_empty() && (made.is_some() || latest.lock().is_some()) && (pending || served != Some(gen.load(Ordering::Acquire)))
@@ -543,7 +547,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 }
             }
             pending |= fresh;
-            if fresh {
+            if fresh || retap.swap(false, Ordering::Acquire) {
                 let taps = taps.lock().clone();
                 if let (false, Some(d)) = (taps.is_empty(), latest.lock().clone()) {
                     for tap in taps {

@@ -14,6 +14,7 @@ pub mod doc;
 mod fsbrowse;
 mod inspect;
 mod mcp;
+pub mod midi;
 pub mod ops;
 pub mod plugins;
 mod origin;
@@ -124,6 +125,8 @@ pub struct AppState {
     pub reducers: reducer::SlotReducers,
     /// The patch's own producer: every variable's wire, written from the store.
     pub variables: Arc<variables::Variables>,
+    /// The MIDI devices grabbed onto the bus, each writing its group through the store.
+    pub midi: Arc<midi::Midi>,
     /// Pulsed after every settle, for whoever derives its address from the graph: a `/data`
     /// socket re-asks which physical slot stands behind its port on the pulse, not on a clock.
     settled: Arc<tokio::sync::watch::Sender<u64>>,
@@ -223,6 +226,7 @@ impl AppState {
         // wire is named under the GRAPH's instance, the one its nodes' services carry.
         let variables = Arc::new(variables::Variables::new(&iox, graph_val.instance())?);
         graph_val.variables().set_plane(variables.clone());
+        let midi = Arc::new(midi::Midi::new(graph_val.variable_store()));
         let graph = Arc::new(Mutex::new(graph_val));
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
         let reducers = reducer::SlotReducers::new(iox.clone(), graph.clone(), variables.clone(), follow_tx);
@@ -240,6 +244,7 @@ impl AppState {
             dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reducers,
             variables,
+            midi,
             settled: Arc::new(tokio::sync::watch::channel(0).0),
             live: Arc::new(LiveHub::default()),
             history: Arc::new(Mutex::new(goofi_graph::CommandHistory::new())),
@@ -278,6 +283,7 @@ impl AppState {
         self.stopping.stop();
         // Parked workers read the stop when they wake.
         self.changed.notify();
+        self.midi.release_all();
         self.scope.close(goofi_transport::SHUTDOWN_WAIT);
         self.reducers.stop_all(goofi_transport::SHUTDOWN_WAIT);
         self.graph.lock().shutdown();
@@ -1486,6 +1492,8 @@ fn sync_followers(state: &AppState, g: &Graph) {
     state.reducers.set_taps(taps);
     // The bindings may have moved: the producer re-reads who it rings.
     state.variables.poke();
+    let closed = state.midi.resync(&g.variables(), false);
+    drop(closed);
 }
 
 /// Re-project the authoritative graph into the document and broadcast the delta, after an RPC

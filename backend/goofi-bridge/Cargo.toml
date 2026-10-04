@@ -42,6 +42,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 # `node snapshot` answers an ARRAY frame as base64 NPY.
 base64 = "0.22"
+# The MIDI devices the manager grabs onto the variable bus.
+midir = "0.11"
 # The command-line split the phrase layer parses with: the same quoting bash gives argv, which is
 # the contract — every transport that speaks lines gets bash's own word rules.
 shell-words = "1"

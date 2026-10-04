@@ -436,6 +436,16 @@ textarea:disabled {
 	scrollbar-color: var(--surface-3) transparent;
 }
 
+/* A panel's root: a column the full height of its host, sized by container queries, whose
+   ScrollArea takes what the bar leaves. The variables and MIDI panels share it. */
+.panel-wrap {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+	container-type: inline-size;
+}
+
 /* The tone pill's type and tone vocabulary: Badge, Chip, Segmented and StatusDot share them. */
 .pill-type {
 	font-family: var(--font-sans);

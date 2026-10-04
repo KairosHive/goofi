@@ -2,7 +2,7 @@
 //! paste admits. Every spelling the `.gfi` and the clipboard carry is a field here.
 
 use goofi_core::record::RecordedOutput;
-use goofi_core::variables::{Control, Lock, VariableSource};
+use goofi_core::variables::{Control, Group, Lock, VariableSource};
 use goofi_core::Data;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -131,12 +131,6 @@ impl Link {
 /// The key a link is stored under: both ends, so the map holds each wire once.
 pub(crate) fn link_key(out: impl std::fmt::Display, slot_out: &str, inp: impl std::fmt::Display, slot_in: &str) -> String {
     format!("{out}.{slot_out}>{inp}.{slot_in}")
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
-pub struct Group {
-    #[serde(default)]
-    pub lock: Lock,
 }
 
 /// The `.gfi` manifest: the document with the version that says how to read it.

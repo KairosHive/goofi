@@ -380,6 +380,8 @@ pub enum Mode {
 /// The one variable a reference rewrites to: the bare-variable source the runtime copies without
 /// an evaluator.
 const REF_VAR: &str = "ref";
+/// The namespace an expression and a reference read a variable under.
+const VARIABLES_NAMESPACE: &str = "variables";
 
 /// A param's source record: the AUTHORED state, both texts retained whatever the mode, and
 /// everything below it DERIVED from the active one at settle.
@@ -686,6 +688,13 @@ impl Graph {
 
     fn resolve_variable_source(&self, source: &goofi_core::variables::VariableSource) -> Result<(Uid, &'static str), String> {
         let (node, slot) = source.reference.split_once('.').ok_or("a source is `node.slot`")?;
+        // A variable is a slot of the patch's own producer, followed as any stream is.
+        if node == VARIABLES_NAMESPACE {
+            return match self.variables().contains(slot) {
+                true => Ok((Uid::VARIABLES, goofi_core::variables::slot_name(slot))),
+                false => Err(format!("variable `{slot}` is not defined")),
+            };
+        }
         self.resolve_stream(node, Some(slot))
     }
 
@@ -3216,7 +3225,7 @@ impl Graph {
             .entries()
             .map(|(name, v)| (name.to_string(), doc::VariableRecord { value: None, control: v.control.clone(), source: v.source.clone(), lock: v.lock }))
             .collect();
-        patch.variable_groups = variables.groups().map(|(g, lock)| (g.to_string(), doc::Group { lock })).collect();
+        patch.variable_groups = variables.groups().map(|(g, rec)| (g.to_string(), rec.clone())).collect();
         // The flat arrangement always exists (at worst the default), so it always rides.
         patch.arrangement = Some(self.patch.arrangement.to_json());
         patch
@@ -3300,6 +3309,7 @@ impl Graph {
         }
         for (group, g) in &doc.variable_groups {
             let _ = self.variables().set_group_lock(group, Some(g.lock));
+            let _ = self.variables().set_midi(group, g.midi.clone());
         }
         // Every uid this load hands out, restored or minted — what keeps two records from landing
         // on one uid when a hand-written file spells the same number two ways.
@@ -3463,6 +3473,9 @@ fn parse_reference(reference: &str) -> Result<expr_rewrite::VarRef, String> {
     let Some((name, slot)) = reference.split_once('.') else {
         return Err(format!("a reference spells `node.slot`, not `{reference}`"));
     };
+    if name == VARIABLES_NAMESPACE && goofi_core::variables::is_valid_variable_name(slot) {
+        return Ok(expr_rewrite::VarRef { var: REF_VAR.to_string(), target: Target::Variable { key: slot.to_string() } });
+    }
     if !goofi_core::variables::is_valid_name(name) || !goofi_core::variables::is_valid_name(slot) {
         return Err(format!("`{reference}` is not a legal reference: {NAME_RULE}"));
     }

@@ -176,6 +176,11 @@ pub enum Command {
         group: String,
         lock: Option<goofi_core::variables::Lock>,
     },
+    /// Flag a group as a MIDI device's, or clear it. Inverts as the device it replaced.
+    MidiVariableGroup {
+        group: String,
+        midi: Option<goofi_core::variables::Midi>,
+    },
     /// Set or clear what a variable follows. Inverts as the source it replaced.
     SourceVariable {
         name: String,
@@ -300,7 +305,7 @@ impl Command {
         }
         let variable = matches!(self, Self::EditVariable { .. } | Self::RemoveVariable { .. }
             | Self::RenameVariable { .. } | Self::RenameVariableGroup { .. } | Self::LockVariable { .. }
-            | Self::LockVariableGroup { .. } | Self::SourceVariable { .. }
+            | Self::LockVariableGroup { .. } | Self::MidiVariableGroup { .. } | Self::SourceVariable { .. }
             | Self::AddVariableGroup { .. } | Self::RemoveVariableGroup { .. });
         let result = (|| match self {
             Command::Compound(cmds) => {
@@ -594,6 +599,11 @@ impl Command {
             Command::LockVariableGroup { group, lock } => {
                 let old = g.variables().set_group_lock(&group, lock)?;
                 Ok(Applied::done(Outcome::Ok, Command::LockVariableGroup { group, lock: old }))
+            }
+
+            Command::MidiVariableGroup { group, midi } => {
+                let old = g.variables().set_midi(&group, midi)?;
+                Ok(Applied::done(Outcome::Ok, Command::MidiVariableGroup { group, midi: old }))
             }
 
             Command::SourceVariable { name, source } => {

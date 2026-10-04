@@ -4,7 +4,7 @@
  */
 import { EMPTY_PANEL_TYPE, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
 import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
-import type { Link, Literal, Lock, VariableSource } from '$lib/api/generated';
+import type { Link, Literal, Lock, Midi, VariableSource } from '$lib/api/generated';
 import type { LayoutNode, Workspace } from 'panelty';
 import { obj, type Obj } from './ops';
 
@@ -136,6 +136,16 @@ function lockOf(raw: unknown): LockView {
 export function variableGroupLocks(doc: Doc): Record<string, LockView> {
 	const out: Record<string, LockView> = {};
 	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) out[group] = lockOf(obj(rec).lock);
+	return out;
+}
+
+/** Every group that reads a MIDI device, by name: the bus MIDI learn listens to. */
+export function midiGroups(doc: Doc): Record<string, Midi> {
+	const out: Record<string, Midi> = {};
+	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) {
+		const midi = obj(rec).midi;
+		if (typeof midi === 'object' && midi && typeof (midi as Midi).port === 'string') out[group] = midi as Midi;
+	}
 	return out;
 }
 

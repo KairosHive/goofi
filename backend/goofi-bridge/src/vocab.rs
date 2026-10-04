@@ -64,6 +64,8 @@ pub static PANEL_TYPES: &[PanelType] = &[
                 doc: "the patch variables, which any expression can read" },
     PanelType { id: "control", title: "Control", icon: "sliders-vertical", accepts_node: false,
                 doc: "knobs, sliders and text widgets over one group of variables" },
+    PanelType { id: "midi", title: "MIDI", icon: "piano", accepts_node: false,
+                doc: "the MIDI devices the host lists, grabbed onto the variable bus or released" },
     PanelType { id: "agent", title: "Agent", icon: "bot", accepts_node: false,
                 doc: "a terminal on an agent harness, running in the patch workspace" },
     PanelType { id: "recorder", title: "Recorder", icon: "circle-dot", accepts_node: true,

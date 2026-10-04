@@ -379,8 +379,8 @@ pub fn snapshot(
 /// variable records, each declared once in Rust and checked into the tree.
 pub fn typescript() -> String {
     use goofi_core::record::{RecordedOutput, VideoQuality};
-    use goofi_core::variables::{Control, ControlKind, Lock, VariableSource};
-    use goofi_graph::doc::{Archive, Group, Link, NodeRecord, ParamEntry, PatchDoc, VariableRecord};
+    use goofi_core::variables::{Control, ControlKind, Group, Lock, Midi, VariableSource};
+    use goofi_graph::doc::{Archive, Link, NodeRecord, ParamEntry, PatchDoc, VariableRecord};
     let cfg = ts_rs::Config::new().with_large_int("number");
     let decls = [
         serde_json::Value::decl(&cfg),
@@ -397,6 +397,7 @@ pub fn typescript() -> String {
         Lock::decl(&cfg),
         VariableSource::decl(&cfg),
         VariableRecord::decl(&cfg),
+        Midi::decl(&cfg),
         Group::decl(&cfg),
         PatchDoc::decl(&cfg),
         Archive::decl(&cfg),

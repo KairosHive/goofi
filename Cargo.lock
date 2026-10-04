@@ -1002,6 +1002,7 @@ dependencies = [
  "goofi-view",
  "goofi-window",
  "libc",
+ "midir",
  "notify",
  "portable-pty",
  "schemars",

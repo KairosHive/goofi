@@ -24,7 +24,8 @@ resolution?: number, x: number, y: number, w: number, h: number, };
 export type Lock = { config: boolean, value: boolean, };
 export type VariableSource = { reference: string, index?: number, };
 export type VariableRecord = { value?: Literal, control?: Control, source?: VariableSource, lock?: Lock, };
-export type Group = { lock: Lock, };
+export type Midi = { port: string, channel?: number, };
+export type Group = { lock: Lock, midi?: Midi, };
 export type PatchDoc = { 
 /**
  * Keyed by uid spelling; a key that is not one is reminted on the way in.

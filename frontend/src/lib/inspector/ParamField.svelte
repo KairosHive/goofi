@@ -320,7 +320,7 @@
 								<MidiLearn
 									label={`${paramName} ${elementName(i)}`}
 									target={`param:${learnId}:${i}`}
-									onLearn={(reference, index) => onSetElementSource?.(i, { reference: `${reference}[${index}]` })}
+									onLearn={(reference, index) => onSetElementSource?.(i, { expression: `${reference}[${index}]` })}
 									testid={`param-element-learn-${i}`}
 								/>
 							</div>
@@ -425,7 +425,7 @@
 			/>
 			{#if num}
 				<MidiLearn label={paramName} target={`param:${learnId}`}
-					onLearn={(reference, index) => onSetSource({ reference: `${reference}[${index}]` })} />
+					onLearn={(reference, index) => onSetSource({ expression: `${reference}[${index}]` })} />
 			{/if}
 			{/if}
 		</div>

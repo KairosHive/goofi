@@ -5,6 +5,7 @@ pub mod history;
 pub mod host;
 pub mod layout;
 pub mod library;
+pub mod midi;
 pub mod node;
 pub mod record;
 pub mod session;
@@ -445,6 +446,11 @@ pub static TREE: &[Entry] = &[
             Leaf(write::<variable::GroupRename>()),
             Leaf(write::<variable::GroupLock>()),
         ]),
+    ]),
+    Group("midi", "the MIDI devices on the variable bus — a grabbed device is a group an expression reads", &[
+        Leaf(read::<midi::List>()),
+        Leaf(write::<midi::Grab>()),
+        Leaf(write::<midi::Release>()),
     ]),
     Group("control", "a control panel: one group of variables drawn as widgets, and the door that edits them", &[
         Leaf(read::<variable::ControlList>()),

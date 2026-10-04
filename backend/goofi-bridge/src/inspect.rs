@@ -276,7 +276,7 @@ pub fn variables(g: &Graph) -> Value {
     let store = g.variables();
     let entries: Vec<Value> = store.entries().map(|(name, v)| variable_json(&store, name, v)).collect();
     let groups: serde_json::Map<String, Value> =
-        store.groups().map(|(group, lock)| (group.to_string(), json!({ "lock": lock }))).collect();
+        store.groups().map(|(group, rec)| (group.to_string(), json!(rec))).collect();
     json!({ "variables": entries, "groups": groups })
 }
 

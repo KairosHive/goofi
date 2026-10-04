@@ -546,7 +546,7 @@ test('a colour param is picked, and its alpha slid', async ({ page, hasTouch }) 
 		// The hex field names the colour exactly, alpha byte included.
 		await page.getByTestId('color-hex').fill('#ff000080');
 		await page.getByTestId('color-hex').press('Enter');
-		await expect.poll(state).toContain('threshold.above = [1, 0, 0, 0.5019607843137255]');
+		await expect.poll(state).toContain('threshold.above = [1, 0, 0, 0.5019608]');
 		await page.getByTestId('color-channel-3').fill('40');
 		await page.getByTestId('color-channel-3').press('Enter');
 		await expect.poll(state).toContain('threshold.above = [1, 0, 0, 0.4] (4d color 0..1)');

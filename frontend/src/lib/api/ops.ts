@@ -43,6 +43,9 @@ export type OpName =
 	| 'variable group add'
 	| 'variable group rename'
 	| 'variable group lock'
+	| 'midi list'
+	| 'midi grab'
+	| 'midi release'
 	| 'control list'
 	| 'control add'
 	| 'control edit'
@@ -121,6 +124,9 @@ export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'variable group add': 'write',
 	'variable group rename': 'write',
 	'variable group lock': 'write',
+	'midi list': 'read',
+	'midi grab': 'write',
+	'midi release': 'write',
 	'control list': 'read',
 	'control add': 'write',
 	'control edit': 'write',

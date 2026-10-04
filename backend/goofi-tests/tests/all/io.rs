@@ -76,9 +76,8 @@ fn a_patch_publishes_what_it_made_and_reads_it_back_off_the_machine() {
         word.latest().filter(|d| text(d) == Some("resting"))
     });
 
-    // MIDI: with no port chosen there is nothing to open, which is silence rather than a fault.
-    // The engine has to be named here — `audio:MidiIn` is a different node with the same name.
-    for ty in ["signal:MidiIn", "signal:MidiOut"] {
+    // MIDI out: with no port chosen there is nothing to open, which is silence rather than a fault.
+    for ty in ["signal:MidiOut"] {
         let n = g.add(ty);
         g.ready(n);
         assert!(g.error(n).is_none(), "{ty} with no port is silent, not broken: {:?}", g.error(n));

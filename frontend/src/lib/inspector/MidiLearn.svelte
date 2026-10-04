@@ -27,28 +27,22 @@
 	function learn(event: MouseEvent): void {
 		if (listening) return midiLearn.stop();
 		midiLearn.stop();
-		const nodes = g.nodes.filter((n) => g.nodeTypes?.find((t) => t.type === n.type)?.tags.includes('midi'));
-		if (nodes.length === 0) {
-			notify().raise('Add a MIDI node to the patch before MIDI learn.');
+		const groups = Object.keys(g.midiGroups);
+		if (groups.length === 0) {
+			notify().raise('Grab a MIDI device in the MIDI panel before MIDI learn.');
 			return;
 		}
-		const start = (uid: string): void => {
+		const start = (chosen: string[]): void => {
 			menu = null;
-			const node = g.nodeById(uid);
-			if (node) midiLearn.start(owner, target, node, (reference, index) => {
-				const current = g.nodeById(uid);
-				if (current) onLearn(`${current.name}.${reference.split('.')[1]}`, index);
-			});
+			midiLearn.start(owner, target, chosen, onLearn);
 		};
-		if (nodes.length === 1) start(nodes[0].uid);
+		if (groups.length === 1) start(groups);
 		else {
 			const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-			menu = { x: rect.left, y: rect.bottom, items: nodes.map((n) => ({ label: n.name, action: () => start(n.uid) })) };
+			menu = { x: rect.left, y: rect.bottom, items: groups.map((group) => ({ label: group, action: () => start([group]) })) };
 		}
 	}
-	$effect(() => {
-		if (listening && !g.nodeById(midiLearn.node)) midiLearn.stop();
-	});
+	midiLearn.watch();
 	onDestroy(() => { if (midiLearn.owner === owner) midiLearn.stop(); });
 </script>
 

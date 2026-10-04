@@ -110,7 +110,7 @@
 	}
 </script>
 
-<div class="wrap" data-testid="variables-panel" bind:this={panel}>
+<div class="panel-wrap" data-testid="variables-panel" bind:this={panel}>
 	<ScrollArea>
 		<div class="gp-body">
 			{#each groups as grp (grp.group)}
@@ -202,13 +202,6 @@
 </div>
 
 <style>
-	.wrap {
-		display: flex;
-		flex-direction: column;
-		height: 100%;
-		min-height: 0;
-		container-type: inline-size;
-	}
 	.gp-body {
 		padding: var(--space-3) var(--space-5) var(--space-6);
 	}

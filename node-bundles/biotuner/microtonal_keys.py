@@ -1,6 +1,6 @@
 """MicrotonalKeys — a keyboard plays a tuning, one voice per key, at the tuning's own step count.
 
-Takes a TUNING (ratios inside an octave) and the `notes` frame from `signal:MidiIn`, and answers
+Takes a TUNING (ratios inside an octave) and a MIDI device's `notes` variable, and answers
 what each held key should SOUND as under that tuning — as pitch, gate and velocity per voice,
 ready to reference from a plugin's `voice` params.
 
@@ -34,7 +34,7 @@ class MicrotonalKeys(goofi.Node):
 
     Inputs:
       input  a tuning: ratios inside an octave, as `Tuning` emits them
-      notes  `signal:MidiIn`'s `notes` — 128 slots, the note number is the INDEX and the velocity the value
+      notes  a grabbed device's `variables.<device>.notes` — 128 slots, the note number is the INDEX and the velocity the value
 
     Outputs:
       voices     the whole keyboard in one wire: pitches then velocities, the layout a plugin's

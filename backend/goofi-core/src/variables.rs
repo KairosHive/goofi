@@ -177,6 +177,29 @@ impl Lock {
     }
 }
 
+/// Where a MIDI group's values come from: a port the host lists, on one channel or on every one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct Midi {
+    pub port: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub channel: Option<u8>,
+}
+
+/// A group's own record: its lock, and for a device's group, the device it is read from.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
+pub struct Group {
+    #[serde(default)]
+    pub lock: Lock,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub midi: Option<Midi>,
+}
+
+/// The entries a MIDI group holds, as the device states them: the last value of every controller
+/// in 0..1, the velocity of every held note, the wheel in -1..1 and the channel pressure in 0..1.
+pub const MIDI_ENTRIES: [(&str, usize); 4] = [("cc", 128), ("notes", 128), ("bend", 1), ("pressure", 1)];
+
 /// What a variable follows: one producer output, `node.slot`, and for a frame wider than one
 /// number the index it reads. A followed variable is written by the manager on every frame and by
 /// nobody else — a MIDI knob bound to a widget is one.
@@ -382,7 +405,7 @@ impl Variable {
 #[derive(Clone)]
 pub struct VariableStore {
     entries: IndexMap<String, Variable>,
-    groups: IndexMap<String, Lock>,
+    groups: IndexMap<String, Group>,
     plane: Option<std::sync::Arc<dyn Plane>>,
 }
 
@@ -448,7 +471,7 @@ impl VariableStore {
                 self.entries.insert(def.name.to_string(), v);
             }
         }
-        self.groups.insert(SYSTEM_GROUP.to_string(), Lock { config: true, value: false });
+        self.groups.insert(SYSTEM_GROUP.to_string(), Group { lock: Lock { config: true, value: false }, midi: None });
     }
 
     pub fn get(&self, name: &str) -> Option<&Data> {
@@ -505,9 +528,37 @@ impl VariableStore {
         true
     }
 
-    /// Explicit groups and their built-in flags, in creation order.
-    pub fn groups(&self) -> impl Iterator<Item = (&str, Lock)> {
-        self.groups.iter().map(|(g, l)| (g.as_str(), *l))
+    /// Explicit groups and their records, in creation order.
+    pub fn groups(&self) -> impl Iterator<Item = (&str, &Group)> {
+        self.groups.iter().map(|(g, rec)| (g.as_str(), rec))
+    }
+
+    /// The device a group reads, if it is a MIDI group.
+    pub fn midi(&self, group: &str) -> Option<&Midi> {
+        self.groups.get(group)?.midi.as_ref()
+    }
+
+    /// Every MIDI group with its device, in creation order.
+    pub fn midi_groups(&self) -> impl Iterator<Item = (&str, &Midi)> {
+        self.groups.iter().filter_map(|(g, rec)| Some((g.as_str(), rec.midi.as_ref()?)))
+    }
+
+    /// Flag a group as a device's, or clear the flag, answering the old device for undo. The flag
+    /// config-locks the group: its entries are the device's state, named by the protocol.
+    pub fn set_midi(&mut self, group: &str, midi: Option<Midi>) -> Result<Option<Midi>, String> {
+        if group == SYSTEM_GROUP {
+            return Err(format!("`{SYSTEM_GROUP}` is goofi's own; it reads no device"));
+        }
+        if !is_valid_identifier(group) {
+            return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
+        }
+        let rec = self.groups.entry(group.to_string()).or_default();
+        Ok(std::mem::replace(&mut rec.midi, midi))
+    }
+
+    /// A device's write: lands only on a MIDI group's entry, under no lock, with no undo.
+    pub fn drive(&mut self, name: &str, value: Data) -> bool {
+        self.midi(group_of(name)).is_some() && self.move_value(name, value)
     }
 
     /// Whether a `.gfi` must leave `name` out: an ephemeral variable's value is goofi's own.
@@ -520,8 +571,10 @@ impl VariableStore {
         self.entries.get(name).map(Variable::own_lock).unwrap_or_default()
     }
 
+    /// A group's lock as it holds its members: a MIDI group's config is the device's.
     pub fn group_lock(&self, group: &str) -> Lock {
-        self.groups.get(group).copied().unwrap_or_default()
+        let Some(rec) = self.groups.get(group) else { return Lock::default() };
+        Lock { config: rec.lock.config || rec.midi.is_some(), value: rec.lock.value }
     }
 
     /// What holds `name` right now: its own lock and its group's together.
@@ -550,10 +603,16 @@ impl VariableStore {
         if !is_valid_identifier(group) {
             return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
         }
-        Ok(match lock {
-            Some(lock) => self.groups.insert(group.to_string(), lock),
-            None => self.groups.shift_remove(group),
-        })
+        let old = self.groups.get(group).map(|rec| rec.lock);
+        match lock {
+            Some(lock) => self.groups.entry(group.to_string()).or_default().lock = lock,
+            // A MIDI group keeps its record: the device flag lives there.
+            None if self.midi(group).is_some() => self.groups[group].lock = Lock::default(),
+            None => {
+                self.groups.shift_remove(group);
+            }
+        }
+        Ok(old)
     }
 
     /// Create an empty group at its saved position.
@@ -565,7 +624,7 @@ impl VariableStore {
             return Err(format!("variable group `{group}` already exists"));
         }
         let at = at.unwrap_or(self.groups.len()).min(self.groups.len());
-        self.groups.shift_insert(at, group.to_string(), Lock::default());
+        self.groups.shift_insert(at, group.to_string(), Group::default());
         Ok(())
     }
 
@@ -669,12 +728,17 @@ impl VariableStore {
         if self.group_lock(group_of(to)).config && group_of(to) != group_of(from) {
             return Err(format!("group `{}` is config-locked", group_of(to)));
         }
-        let at = self.entries.get_index_of(from).expect("checked above");
+        self.move_entry(from, to);
+        Ok(())
+    }
+
+    /// The rename itself: the entry keeps its position, its wire is retired and reopened.
+    fn move_entry(&mut self, from: &str, to: &str) {
+        let at = self.entries.get_index_of(from).expect("checked by the caller");
         let variable = self.entries.shift_remove(from).expect("the index answered");
         self.retire(from);
         self.emit(to, &variable.value);
         self.entries.shift_insert(at, to.to_string(), variable);
-        Ok(())
     }
 
     /// Rename a group, answering every member's old and new name in order. A group with no member
@@ -687,7 +751,8 @@ impl VariableStore {
         if from == SYSTEM_GROUP {
             return Err(format!("`{SYSTEM_GROUP}` is goofi's own; it keeps its name"));
         }
-        if self.group_lock(from).config {
+        // The lock set on the group refuses; a device's flag does not, and travels with the name.
+        if self.groups.get(from).is_some_and(|rec| rec.lock.config) {
             return Err(format!("group `{from}` is config-locked"));
         }
         if self.has_group(to) {
@@ -702,14 +767,16 @@ impl VariableStore {
             if self.entries.contains_key(new.as_str()) {
                 return Err(format!("variable `{new}` already exists"));
             }
-            self.config_locked(old)?;
+            if self.own_lock(old).config {
+                return Err(format!("variable `{old}` is config-locked"));
+            }
         }
         for (old, new) in &moved {
-            self.rename(old, new)?;
+            self.move_entry(old, new);
         }
         if let Some(at) = self.groups.get_index_of(from) {
-            let lock = self.groups.shift_remove(from).unwrap_or_default();
-            self.groups.shift_insert(at, to.to_string(), lock);
+            let rec = self.groups.shift_remove(from).unwrap_or_default();
+            self.groups.shift_insert(at, to.to_string(), rec);
         }
         Ok(moved)
     }
