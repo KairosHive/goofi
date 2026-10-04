@@ -38,7 +38,7 @@ import {
 	type LockView
 } from '$lib/crdt/graphDoc';
 import type { Literal } from '$lib/api/generated';
-import type { Cell } from '$lib/panels/controlLayout';
+import { KIND, type Cell } from '$lib/panels/controlLayout';
 import { liveNode, type RuntimeOverlay, type ViewSources } from '$lib/crdt/liveNode.svelte';
 import { ParamLive, type LiveSource } from '$lib/api/paramLive';
 import type { SourcePatch } from '$lib/api/types';
@@ -582,7 +582,7 @@ export class GraphStore {
 	/** Make the widget named `name` follow the first output of node `uid` that can feed it. */
 	async linkControl(name: string, uid: string): Promise<string | null> {
 		const gv = this.variables.find((v) => v.name === name);
-		const reference = gv ? this.referenceFor(uid, typeof gv.value === 'string' ? 'string' : 'float') : null;
+		const reference = gv ? this.referenceFor(uid, gv.control && KIND[gv.control.kind].draws === 'text' ? 'string' : 'float') : null;
 		if (gv && reference) await this.sourceControl(gv.group, gv.element, reference);
 		return reference;
 	}

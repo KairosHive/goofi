@@ -152,13 +152,20 @@ impl ReadOp for Snapshot {
     fn run(tx: &mut Txn, a: SnapshotArgs) -> Result<Value, String> {
         // The address resolves exactly as a viewer's does: a facade or a port names the stream
         // BEHIND it, and one with nothing behind it yet is the unwired state, never an error.
-        let key = {
-            let (uid, slot) = a.output.resolve(&tx.g, "output")?;
-            if !tx.g.exists(uid) {
-                return Err(format!("no node {}", named(&tx.g, uid)));
+        let key = match a.output.0.strip_prefix("variables/") {
+            // The patch's own producer: a variable by name, held whole.
+            Some(name) => match tx.g.variables().contains(name) {
+                true => Some((goofi_graph::Uid::VARIABLES, name.to_string())),
+                false => return Err(format!("no variable `{name}`")),
+            },
+            None => {
+                let (uid, slot) = a.output.resolve(&tx.g, "output")?;
+                if !tx.g.exists(uid) {
+                    return Err(format!("no node {}", named(&tx.g, uid)));
+                }
+                let slot = vocab::resolve_slot(&tx.g, uid, &slot)?;
+                crate::stream_behind(&tx.g, uid, &slot)
             }
-            let slot = vocab::resolve_slot(&tx.g, uid, &slot)?;
-            crate::stream_behind(&tx.g, uid, &slot)
         };
         let Some(key) = key else {
             return Ok(json!({

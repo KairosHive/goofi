@@ -466,8 +466,9 @@ struct Patch {
     /// The panel arrangement, held FLAT — the fifth doc root. Every mutation is an ordinary
     /// command, so the layout has exactly one projection, as nodes and links do.
     arrangement: layout::Layout,
-    /// Patch-scoped variables, system ones seeded and re-asserted by every `clear`/load.
-    variables: goofi_core::variables::VariableStore,
+    /// Patch-scoped variables, system ones seeded and re-asserted by every `clear`/load. Under a
+    /// lock of its own: a value write is the store's and the plane's, never the graph's.
+    variables: Arc<goofi_supervisor::sync::Mutex<goofi_core::variables::VariableStore>>,
 }
 
 /// What runs the patch: the engines, the catalog, the mint and the live instances.
@@ -495,6 +496,8 @@ struct Runtime {
     origins: std::collections::HashMap<String, Origin>,
     /// A process-lifetime counter: undo restores deleted uids, so none is ever handed out twice.
     next_uid: u64,
+    /// A `system.*` value moved: the next settle runs whatever else moved, so engines re-read it.
+    resettle: bool,
     /// Every uid's birth generation, bumped on EVERY birth and never reset, so a reborn node's
     /// service names stay clear of its predecessor's. Never enters the archive.
     generations: HashMap<Uid, u64>,
@@ -533,13 +536,22 @@ impl Drop for Graph {
     }
 }
 
-/// A variable as the [`Param`] an expression variable carries. The bounds are a carrier's, not a
-/// control's: the evaluator coerces the RESULT to the target param's own type and range.
-fn variable_as_param(value: &Data) -> Param {
-    match value.value() {
-        goofi_core::Value::Str(s) => Param::str_free(s.to_string()),
-        _ => Param::vec(control::numbers(value).collect(), f64::NEG_INFINITY, f64::INFINITY),
-    }
+/// Whether an array is written beside the manifest as a native file rather than into it.
+fn is_wide(value: &Data) -> bool {
+    matches!(value.value(), goofi_core::Value::Array(a) if a.as_bytes().len() > 64 * 4)
+}
+
+/// Where a wide variable's array lives in a workspace: `variables/<name>.npy`.
+fn variable_file(workspace: &std::path::Path, name: &str) -> std::path::PathBuf {
+    workspace.join("variables").join(format!("{name}.npy"))
+}
+
+/// The array a workspace holds for `name`.
+fn read_variable_file(workspace: &std::path::Path, name: &str) -> Result<Data, String> {
+    let path = variable_file(workspace, name);
+    let file = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (shape, samples) = goofi_record::npy::read(&file).map_err(|e| format!("{}: {e}", path.display()))?;
+    Data::array_f32(shape, samples, goofi_core::Meta::default()).map_err(|e| e.to_string())
 }
 
 /// The lowest free doorbell id in the expression range, or `None` when a node has spent all 64.
@@ -556,7 +568,7 @@ impl Graph {
                 nodes: IndexMap::new(),
                 links: IndexMap::new(),
                 arrangement: layout::Layout::default(),
-                variables: goofi_core::variables::VariableStore::new(),
+                variables: Arc::new(goofi_supervisor::sync::Mutex::new(goofi_core::variables::VariableStore::new())),
             },
             viewpoint: serde_json::Value::Null,
             runtime: Runtime {
@@ -569,6 +581,7 @@ impl Graph {
                 unavailable: std::collections::BTreeMap::new(),
                 origins: std::collections::HashMap::new(),
                 next_uid: 1,
+                resettle: false,
                 generations: HashMap::new(),
                 arm_serial: 0,
                 refreshed: Vec::new(),
@@ -593,10 +606,32 @@ impl Graph {
         self.touched.clear();
     }
 
-    /// The authoritative variables store — `entries()` serves the CRDT mirror and the `.gfi`, and an
-    /// expression binding resolves through `get`.
-    pub fn variables(&self) -> &goofi_core::variables::VariableStore {
-        &self.patch.variables
+    /// The authoritative variables store, taken for one statement: a guard held across a call
+    /// that takes it again would deadlock, and the graph lock already orders every caller.
+    pub fn variables(&self) -> std::sync::MutexGuard<'_, goofi_core::variables::VariableStore> {
+        self.patch.variables.lock()
+    }
+
+    /// The store itself, for the writers that take no graph lock: the follower and the machines.
+    pub fn variable_store(&self) -> Arc<goofi_supervisor::sync::Mutex<goofi_core::variables::VariableStore>> {
+        self.patch.variables.clone()
+    }
+
+    /// Every door the variables producer rings: per variable, the consumer and the id a live
+    /// binding on it streams by, with the consumer's generation to name its door.
+    pub fn variable_ringers(&self) -> Vec<(String, Uid, u64, EventId)> {
+        let mut out = Vec::new();
+        for (uid, e) in &self.patch.nodes {
+            let Some(leaf) = e.leaf() else { continue };
+            for b in leaf.sources.values().filter(|b| b.live()) {
+                for v in &b.vars {
+                    if let BoundVar::Stream { producer: Uid::VARIABLES, slot, event_id, .. } = v {
+                        out.push((slot.to_string(), *uid, self.node_generation(*uid), *event_id));
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Apply one variable change; a NEW variable lands at position `at`, and `None` leaves the value
@@ -608,12 +643,12 @@ impl Graph {
         at: Option<usize>,
         control: Option<Option<goofi_core::variables::Control>>,
     ) -> Result<(), String> {
-        self.patch.variables.apply_change(name, value, at, control)
-    }
-
-    /// The store's own writes, for a command that needs no graph-side follow-up.
-    pub(crate) fn variables_mut(&mut self) -> &mut goofi_core::variables::VariableStore {
-        &mut self.patch.variables
+        self.variables().apply_change(name, value, at, control)?;
+        // An engine reads `system.*` off the settled view, so a value there is delivered by a settle.
+        if name.starts_with("system.") {
+            self.runtime.resettle = true;
+        }
+        Ok(())
     }
 
     /// Set or clear what a variable follows, answering what it followed. The reference is held to
@@ -626,24 +661,19 @@ impl Graph {
         if let Some(s) = &source {
             parse_reference(&s.reference)?;
         }
-        self.patch.variables.set_source(name, source)
-    }
-
-    /// The follower's write: what a variable's source delivered. Answers whether anything changed;
-    /// the settle that follows re-sends every binding that reads it.
-    pub fn follow_variable(&mut self, name: &str, value: Data) -> bool {
-        self.patch.variables.follow(name, value)
+        self.variables().set_source(name, source)
     }
 
     /// Every followed variable, resolved: the variable, the producer's uid and slot, and the index.
     /// A source that does not resolve is left out and carries its error instead.
     pub fn variable_sources(&self) -> Vec<(String, Uid, String, Option<usize>)> {
-        self.patch.variables
-            .entries()
-            .filter_map(|(name, v)| {
-                let s = v.source.as_ref()?;
-                let (uid, slot) = self.resolve_variable_source(s).ok()?;
-                Some((name.to_string(), uid, slot.to_string(), s.index))
+        let followed: Vec<(String, goofi_core::variables::VariableSource)> =
+            self.variables().entries().filter_map(|(n, v)| Some((n.to_string(), v.source.clone()?))).collect();
+        followed
+            .into_iter()
+            .filter_map(|(name, s)| {
+                let (uid, slot) = self.resolve_variable_source(&s).ok()?;
+                Some((name, uid, slot.to_string(), s.index))
             })
             .collect()
     }
@@ -661,7 +691,7 @@ impl Graph {
 
     /// Whether a group name is held: by the variables, or by a control panel that names it.
     pub fn group_taken(&self, group: &str) -> bool {
-        self.patch.variables.has_group(group) || self.patch.arrangement.control_panels().iter().any(|(_, held)| held == group)
+        self.variables().has_group(group) || self.patch.arrangement.control_panels().iter().any(|(_, held)| held == group)
     }
 
     /// Add an empty group.
@@ -669,7 +699,7 @@ impl Graph {
         if self.group_taken(group) {
             return Err(format!("variable group `{group}` already exists"));
         }
-        self.patch.variables.add_group(group, at)
+        self.variables().add_group(group, at)
     }
 
     /// Remove an empty group that no panel uses.
@@ -677,12 +707,12 @@ impl Graph {
         if self.patch.arrangement.control_panels().iter().any(|(_, held)| held == group) {
             return Err(format!("variable group `{group}` is used by a control panel"));
         }
-        self.patch.variables.remove_group(group)
+        self.variables().remove_group(group)
     }
 
     /// Rename one variable, and rewrite every expression that reads it.
     pub fn rename_variable(&mut self, from: &str, to: &str) -> Result<Vec<Uid>, String> {
-        self.patch.variables.rename(from, to)?;
+        self.variables().rename(from, to)?;
         let touched = self.rewrite_variable_reads(&[(from.to_string(), to.to_string())]);
         Ok(touched)
     }
@@ -693,10 +723,10 @@ impl Graph {
             return Err(format!("variable group `{to}` already exists"));
         }
         let writes = self.patch.arrangement.regroup(from, to);
-        if writes.is_empty() && !self.patch.variables.has_group(from) {
+        if writes.is_empty() && !self.variables().has_group(from) {
             return Err(format!("no variable group `{from}`"));
         }
-        let moved = self.patch.variables.rename_group(from, to)?;
+        let moved = self.variables().rename_group(from, to)?;
         let touched = self.rewrite_variable_reads(&moved);
         self.patch.arrangement.set_contents(&writes);
         Ok(touched)
@@ -862,6 +892,9 @@ impl Graph {
     /// Tell whichever engine owns `uid` what its readers want of `slot`. Offered to every engine
     /// rather than routed: an engine that does not hold the uid, or cannot render to size, no-ops.
     pub fn set_view_demand(&mut self, uid: Uid, slot: &str, want: Option<goofi_view::ViewWant>) {
+        if uid == Uid::VARIABLES {
+            return;
+        }
         self.runtime.view_wants.insert((uid, slot.to_string()), want);
         let edges = self.resolved_edges();
         self.offer_view_wants(&edges);
@@ -1073,6 +1106,41 @@ impl Graph {
         for engine in &mut self.runtime.engines {
             engine.persist();
         }
+    }
+
+    /// Every wide variable's array written under `workspace/variables/` as a native file, the
+    /// recorder's format, and every file there that names no wide variable removed.
+    pub fn persist_variables(&self, workspace: &std::path::Path) -> Result<(), String> {
+        let wide: Vec<(String, Data)> = self
+            .variables()
+            .entries()
+            .filter(|(_, v)| is_wide(&v.value))
+            .map(|(n, v)| (n.to_string(), v.value.clone()))
+            .collect();
+        let dir = workspace.join("variables");
+        if let Ok(held) = std::fs::read_dir(&dir) {
+            for entry in held.flatten() {
+                let keep = wide.iter().any(|(n, _)| entry.path() == variable_file(workspace, n));
+                if !keep {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+        if wide.is_empty() {
+            let _ = std::fs::remove_dir(&dir);
+            return Ok(());
+        }
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        for (name, value) in wide {
+            let goofi_core::Value::Array(a) = value.value() else { continue };
+            let (path, bytes) = (variable_file(workspace, &name), goofi_record::npy::bytes(a.shape(), a.as_bytes()));
+            // An unchanged file is left alone: a write is an edit to the watcher and the baseline.
+            if std::fs::read(&path).is_ok_and(|held| held == bytes) {
+                continue;
+            }
+            std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        Ok(())
     }
 
     /// Every engine that builds `.rs` node files, with the SDK crate it builds them against.
@@ -1574,7 +1642,7 @@ impl Graph {
         });
         // A variable follows a producer by the same spelling, so the one rename reaches it too.
         let followed: Vec<(String, goofi_core::variables::VariableSource)> = self
-            .patch.variables
+            .variables()
             .entries()
             .filter_map(|(name, v)| {
                 let s = v.source.as_ref()?;
@@ -1583,7 +1651,7 @@ impl Graph {
             })
             .collect();
         for (name, source) in followed {
-            let _ = self.patch.variables.set_source(&name, Some(source));
+            let _ = self.variables().set_source(&name, Some(source));
         }
         referrers
     }
@@ -1758,6 +1826,9 @@ impl Graph {
     /// What real leaf slot an address stands for, one hop per port. `Open` is the port where nothing
     /// feeds the walk yet; `None` means no output slot. `nd()` and a cable both resolve here.
     pub fn stream(&self, uid: Uid, slot: &str) -> Option<Stream> {
+        if uid == Uid::VARIABLES {
+            return self.variables().contains(slot).then(|| Stream::At(uid, goofi_core::variables::slot_name(slot)));
+        }
         let (mut at, mut slot) = self.normalise(uid, slot);
         let mut seen: Vec<Uid> = Vec::new();
         loop {
@@ -2484,13 +2555,11 @@ impl Graph {
         refs.iter()
             .map(|r| (r.var.as_str(), &r.target))
             .map(|(var, t)| match t {
-                Target::Variable { key } => match self.patch.variables.get(key) {
-                    Some(v) => BoundVar::Value { var: var.to_string(), value: variable_as_param(v) },
-                    None => BoundVar::Missing {
-                        var: var.to_string(),
-                        reason: format!("variable `{key}` is not defined"),
-                    },
-                },
+                // A variable is a slot of the patch's own producer, read as any stream is.
+                Target::Variable { key } => stream(var, &mut taken, match self.variables().contains(key) {
+                    true => Ok((Uid::VARIABLES, goofi_core::variables::slot_name(key))),
+                    false => Err(format!("variable `{key}` is not defined")),
+                }),
                 Target::Node { name, slot } => {
                     stream(var, &mut taken, self.resolve_stream(name, slot.as_deref()))
                 }
@@ -2740,9 +2809,10 @@ impl Graph {
         self.derive_bindings();
         let changed = std::mem::take(&mut self.runtime.changed);
         let raw = std::mem::take(&mut self.touched);
-        if changed.is_empty() && raw.is_empty() && !self.engines().any(|e| e.dirty()) {
+        if changed.is_empty() && raw.is_empty() && !self.runtime.resettle && !self.engines().any(|e| e.dirty()) {
             return;
         }
+        self.runtime.resettle = false;
         self.runtime.epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
         self.net_instances(&changed);
         // Port consumers expand to the leaf inputs behind them, a node the batch also removed is
@@ -2768,7 +2838,8 @@ impl Graph {
         let typed: HashMap<Uid, ParamGroups> = self.leaves().map(|(u, l)| (u, self.typed(l))).collect();
         let published = {
             let Runtime { generations, instance, engines, watched, .. } = &mut self.runtime;
-            let view = build_view(&self.patch.nodes, &typed, generations, instance, &edges, watched, &self.patch.variables);
+            let variables = self.patch.variables.lock();
+            let view = build_view(&self.patch.nodes, &typed, generations, instance, &edges, watched, &variables);
             for e in engines.iter_mut() {
                 e.settle(&view, &touched);
             }
@@ -2778,9 +2849,8 @@ impl Graph {
         self.offer_view_wants(&edges);
         // The engines' own facts into `system.*`, from the state this settle reached. Not a
         // command: the user's undoable act is the param they moved.
-        let moved = published.into_iter().fold(false, |acc, (name, value)| self.patch.variables.publish(name, value) || acc);
-        if moved {
-            self.derive_bindings();
+        for (name, value) in published {
+            self.variables().publish(name, value);
         }
     }
 
@@ -2898,7 +2968,7 @@ impl Graph {
         // so that number can come back and the echo be read as an answer nobody asked for.
         self.runtime.refreshed.clear();
         // Variables are patch CONTENT, so a load starts from a fresh seeded store.
-        self.patch.variables = goofi_core::variables::VariableStore::new();
+        self.variables().reset();
         // Time belongs to the PATCH: one loaded an hour in must read what it would at boot. Every
         // engine holds this same object, so there is nothing to push.
         self.runtime.time.restart();
@@ -3141,9 +3211,12 @@ impl Graph {
     /// The whole patch as one document: every record, every variable in order, the arrangement.
     fn document(&self) -> doc::PatchDoc {
         let mut patch = self.fragment(&self.all_uids());
-        patch.variables = self.patch.variables.entries().map(|(name, v)| (name.to_string(), v.clone())).collect();
-        patch.variable_groups =
-            self.patch.variables.groups().map(|(g, lock)| (g.to_string(), doc::Group { lock })).collect();
+        let variables = self.variables();
+        patch.variables = variables
+            .entries()
+            .map(|(name, v)| (name.to_string(), doc::VariableRecord { value: None, control: v.control.clone(), source: v.source.clone(), lock: v.lock }))
+            .collect();
+        patch.variable_groups = variables.groups().map(|(g, lock)| (g.to_string(), doc::Group { lock })).collect();
         // The flat arrangement always exists (at worst the default), so it always rides.
         patch.arrangement = Some(self.patch.arrangement.to_json());
         patch
@@ -3156,20 +3229,27 @@ impl Graph {
         for root in ["nodes", "links", "variables", "variable_groups"] {
             doc[root] = doc.get(root).cloned().unwrap_or_else(|| serde_json::json!({}));
         }
-        for (name, v) in self.patch.variables.entries() {
-            if let Some(error) = v.source.as_ref().and_then(|s| self.variable_source_error(s)) {
+        let sourced: Vec<(String, goofi_core::variables::VariableSource)> =
+            self.variables().entries().filter_map(|(n, v)| Some((n.to_string(), v.source.clone()?))).collect();
+        for (name, s) in sourced {
+            if let Some(error) = self.variable_source_error(&s) {
                 doc["variables"][name]["source"]["error"] = serde_json::Value::String(error);
             }
         }
         doc
     }
 
-    /// The whole patch as its `.gfi` manifest.
+    /// The whole patch as its `.gfi` manifest, every narrow variable's value in it; a wide array
+    /// is the file [`Self::persist_variables`] writes.
     pub fn serialize(&self) -> String {
         let mut patch = self.document();
+        let variables = self.variables();
         // An ephemeral variable is goofi's own to say; writing it into a patch would carry one
         // machine's answer onto another. The system group's lock is re-asserted on load likewise.
-        patch.variables.retain(|name, _| !self.patch.variables.is_ephemeral(name));
+        patch.variables.retain(|name, _| !variables.is_ephemeral(name));
+        for (name, record) in &mut patch.variables {
+            record.value = variables.get(name).filter(|v| !is_wide(v)).cloned();
+        }
         patch.variable_groups.shift_remove(goofi_core::variables::SYSTEM_GROUP);
         let archive = doc::Archive {
             version: doc::MANIFEST_VERSION,
@@ -3195,19 +3275,31 @@ impl Graph {
         // Variables load BEFORE nodes so a node's `variables.*` default-expression resolves at
         // instantiation, IN FILE ORDER. Malformed entries are skipped (best-effort load).
         for (name, v) in &doc.variables {
-            let _ = self.patch.variables.apply_change(name, Some(v.value.clone()), None, None);
+            // A value the manifest left out is the file beside it, or what the widget is born with.
+            let value = match &v.value {
+                Some(value) => value.clone(),
+                None => match read_variable_file(workspace, name) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        warnings.push(format!("variable `{name}`: {e}"));
+                        v.control.as_ref().map_or_else(|| Data::number(0.0), goofi_core::variables::Control::born_value)
+                    }
+                },
+            };
+            let mut variables = self.variables();
+            let _ = variables.apply_change(name, Some(value), None, None);
             if let Some(c) = &v.control {
-                let _ = self.patch.variables.apply_change(name, None, None, Some(Some(c.clone())));
+                let _ = variables.apply_change(name, None, None, Some(Some(c.clone())));
             }
             if let Some(s) = &v.source {
-                let _ = self.patch.variables.set_source(name, Some(s.clone()));
+                let _ = variables.set_source(name, Some(s.clone()));
             }
             if let Some(l) = v.lock {
-                let _ = self.patch.variables.set_lock(name, l);
+                let _ = variables.set_lock(name, l);
             }
         }
         for (group, g) in &doc.variable_groups {
-            let _ = self.patch.variables.set_group_lock(group, Some(g.lock));
+            let _ = self.variables().set_group_lock(group, Some(g.lock));
         }
         // Every uid this load hands out, restored or minted — what keeps two records from landing
         // on one uid when a hand-written file spells the same number two ways.

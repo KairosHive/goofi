@@ -464,6 +464,7 @@ pub fn spawn<E: Executor + 'static>(
                     base: spawn.base,
                     record_door: record_door_service(&spawn.instance),
                     record_bell: None,
+                    held_bells: Vec::new(),
                     manifest: spawn.manifest,
                     decls: spawn.decls,
                     time: spawn.time.clone(),
@@ -556,6 +557,9 @@ struct Runtime<E: Executor> {
     record_door: ServiceName,
     /// The node's one bell on that door, opened by the first arming and kept for its life.
     record_bell: Option<Arc<Doorbell>>,
+    /// One bell per producer door this node asks a held frame of, opened once and kept: a door
+    /// opened twice on one node is a second service state.
+    held_bells: Vec<(String, Doorbell)>,
     manifest: &'static NodeManifest,
     decls: Vec<ParamDecl>,
     time: Arc<goofi_core::time::Time>,
@@ -755,17 +759,22 @@ impl<E: Executor> Runtime<E> {
             let mut resolved = Vec::with_capacity(vars.len());
             for (var, v) in vars {
                 let v = match v {
-                    Var::Stream(service) => {
+                    Var::Stream { service, held } => {
                         let kept = previous
                             .as_mut()
                             .and_then(|p| take_where(&mut p.streams, |(n, s, _)| *n == var && *s == service));
                         if kept.is_some() {
                             kept_names.push(var.clone());
                         }
+                        let fresh = kept.is_none();
                         match kept.map(|(_, _, s)| Ok(s)).unwrap_or_else(|| open_output_subscriber(&self.node, &service)) {
                             Ok(subscriber) => {
                                 streams.push((var.clone(), service.clone(), subscriber));
-                                Var::Stream(service)
+                                // Subscribed: a producer holding its last frame is asked for it now.
+                                if let (true, Some(door)) = (fresh, &held) {
+                                    self.ring_held(door);
+                                }
+                                Var::Stream { service, held }
                             }
                             Err(e) => Var::Missing(e),
                         }
@@ -790,6 +799,19 @@ impl<E: Executor> Runtime<E> {
         }
         self.report(pass);
         triggering
+    }
+
+    /// Ring a producer's door for the frame it holds, through this node's one bell on it.
+    fn ring_held(&mut self, door: &str) {
+        if !self.held_bells.iter().any(|(d, _)| d == door) {
+            match Doorbell::open(&self.node, door) {
+                Ok(bell) => self.held_bells.push((door.to_string(), bell)),
+                Err(e) => return trouble(self.engine, &format!("bell onto `{door}` did not open: {e}")),
+            }
+        }
+        if let Some((_, bell)) = self.held_bells.iter().find(|(d, _)| d == door) {
+            let _ = bell.ring(0);
+        }
     }
 
     /// Answers whether every bell opened; one that did not is logged and tried again next tick. A

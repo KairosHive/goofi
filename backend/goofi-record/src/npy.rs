@@ -21,6 +21,27 @@ pub fn bytes(shape: &[usize], samples: &[u8]) -> Vec<u8> {
     out
 }
 
+/// A whole `<f4` NPY file back: its shape and its samples, refused when it is anything else.
+pub fn read(file: &[u8]) -> Result<(Vec<usize>, Vec<u8>), String> {
+    let short = || "not an NPY file".to_string();
+    if file.len() < 10 || &file[..8] != b"\x93NUMPY\x01\x00" {
+        return Err(short());
+    }
+    let head = 10 + u16::from_le_bytes([file[8], file[9]]) as usize;
+    let dict = std::str::from_utf8(file.get(10..head).ok_or_else(short)?).map_err(|_| short())?;
+    if !dict.contains("'<f4'") || dict.contains("True") {
+        return Err("only a C-ordered `<f4` array is a variable".into());
+    }
+    let (_, tail) = dict.split_once("'shape': (").ok_or_else(short)?;
+    let (dims, _) = tail.split_once(')').ok_or_else(short)?;
+    let shape: Vec<usize> = dims.split(',').map(str::trim).filter(|d| !d.is_empty()).map(|d| d.parse().map_err(|_| short())).collect::<Result<_, _>>()?;
+    let samples = file[head..].to_vec();
+    if shape.iter().product::<usize>() * 4 != samples.len() {
+        return Err("the file's size does not match its shape".into());
+    }
+    Ok((shape, samples))
+}
+
 /// How long the header for `shape` is, with `reserve` bytes left for its first dimension to grow.
 fn head_len(shape: &[usize], reserve: usize) -> usize {
     (10 + dict(shape).len() + reserve + 1).div_ceil(64) * 64

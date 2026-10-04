@@ -48,7 +48,6 @@ export type OpName =
 	| 'control edit'
 	| 'control remove'
 	| 'control paint'
-	| 'control drawing'
 	| 'control source'
 	| 'library list'
 	| 'library get'
@@ -127,7 +126,6 @@ export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'control edit': 'write',
 	'control remove': 'write',
 	'control paint': 'write',
-	'control drawing': 'read',
 	'control source': 'write',
 	'library list': 'read',
 	'library get': 'read',

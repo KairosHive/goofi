@@ -258,10 +258,10 @@ pub fn node(
 }
 
 /// One variable as `variable list` and `control list` answer it.
-pub(crate) fn variable_json(g: &Graph, name: &str, v: &goofi_core::variables::Variable) -> Value {
+pub(crate) fn variable_json(store: &goofi_core::variables::VariableStore, name: &str, v: &goofi_core::variables::Variable) -> Value {
     let mut e = json!({ "name": name, "value": v.value });
     // What holds it, its own lock and its group's together — the answer a writer needs.
-    e["lock"] = json!(g.variables().lock_of(name));
+    e["lock"] = json!(store.lock_of(name));
     if let Some(c) = &v.control {
         e["control"] = json!(c);
     }
@@ -273,9 +273,10 @@ pub(crate) fn variable_json(g: &Graph, name: &str, v: &goofi_core::variables::Va
 
 /// `variable list`: what an expression can read and the variable writes can set.
 pub fn variables(g: &Graph) -> Value {
-    let entries: Vec<Value> = g.variables().entries().map(|(name, v)| variable_json(g, name, v)).collect();
+    let store = g.variables();
+    let entries: Vec<Value> = store.entries().map(|(name, v)| variable_json(&store, name, v)).collect();
     let groups: serde_json::Map<String, Value> =
-        g.variables().groups().map(|(group, lock)| (group.to_string(), json!({ "lock": lock }))).collect();
+        store.groups().map(|(group, lock)| (group.to_string(), json!({ "lock": lock }))).collect();
     json!({ "variables": entries, "groups": groups })
 }
 

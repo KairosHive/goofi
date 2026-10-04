@@ -1,6 +1,6 @@
 //! A whole authoring session: build a patch, save it, find it again, and open it somewhere else.
 
-use goofi_tests::{hex, j, Goofi};
+use goofi_tests::{f32s, hex, j, Goofi};
 use serde_json::Value;
 
 fn panel(g: &Goofi) -> String {
@@ -33,6 +33,11 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
         { "kind": "knob", "min": 0.0, "max": 4.0, "step": 0.01, "x": 2.0, "y": 1.0, "w": 2.0, "h": 2.0 } }));
     let why = g.refuse("variable entry edit", j!({ "name": "patch.gain", "control": { "kind": "text" } }));
     assert!(why.contains("text") && why.contains("array"), "a widget that cannot draw the value: {why}");
+    // A pad's sheet is a WIDE array: it rides the archive as a native file beside the manifest,
+    // and a narrow value as a literal in it.
+    g.call("control add", j!({ "group": "patch", "kind": "paint", "element": "pad", "resolution": 16 }));
+    g.call("control paint", j!({ "group": "patch", "element": "pad", "ops": "fill #ff0000 : M 0 0 L 1000 0 L 1000 500 L 0 500 Z" }));
+    let sheet = g.until("the painted sheet", |g| Some(g.snapshot_array("variables/patch.pad")).filter(|d| f32s(d)[3] > 0.0));
     // A lock rides the archive too, the entry's own and its group's, and so does what it follows.
     g.call("variable entry lock", j!({ "name": "patch.gain", "value": true }));
     g.call("variable entry source", j!({ "name": "patch.gain", "reference": "level.out", "index": 0 }));
@@ -77,6 +82,8 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
                "the widget and its place ride the archive: {saved_gain}");
     assert_eq!(saved_gain["lock"], j!({ "config": false, "value": true }), "{saved_gain}");
     assert_eq!(saved_gain["source"], j!({ "reference": "level.out", "index": 0 }), "{saved_gain}");
+    assert!(saved_gain["value"].is_number(), "a narrow value is a literal in the manifest: {saved_gain}");
+    assert!(saved["patch"]["variables"]["patch.pad"].get("value").is_none(), "a wide array is a file beside it");
     assert_eq!(saved["patch"]["variable_groups"]["patch"]["lock"]["config"], true, "{}", saved["patch"]["variable_groups"]);
     assert!(saved["patch"]["variable_groups"].get("system").is_none(), "the system group's lock is goofi's, not the file's");
 
@@ -118,6 +125,8 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
                "every node came back as it was, uid for uid — facades and ports among them");
     assert_eq!(after["links"], before["links"], "and so did every wire, inner ones included");
     assert_eq!(after["variables"], before["variables"]);
+    assert_eq!(f32s(&other.snapshot_array("variables/patch.pad")), f32s(&sheet), "the sheet came back whole from `variables/patch.pad.npy`");
+    assert!(path.exists() && std::fs::read(&path).unwrap().windows(27).any(|w| w == b"workspace/variables/patch.p"), "the archive carries the file");
     assert_eq!(after["arrangement"], before["arrangement"],
                "…so the panel still names a node that exists");
     assert_eq!(std::fs::read(other.state.mount().join("notes.md")).unwrap(),

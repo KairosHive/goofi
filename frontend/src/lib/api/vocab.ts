@@ -89,7 +89,7 @@ export type ControlKindId =
 export interface ControlKindInfo {
 	readonly id: ControlKindId;
 	/** What a widget of this kind draws: one number, a text, or any frame's truth. */
-	readonly draws: 'number' | 'text' | 'any';
+	readonly draws: 'number' | 'text' | 'image' | 'any';
 	/** The box it is born in, in grid units. */
 	readonly w: number;
 	readonly h: number;
@@ -103,7 +103,7 @@ export const CONTROL_KINDS: readonly ControlKindInfo[] = [
 	{ id: 'text', draws: 'text', w: 6, h: 3 },
 	{ id: 'toggle', draws: 'any', w: 2, h: 2 },
 	{ id: 'dropdown', draws: 'text', w: 6, h: 2 },
-	{ id: 'paint', draws: 'text', w: 8, h: 8 },
+	{ id: 'paint', draws: 'image', w: 8, h: 8 },
 ];
 
 /** How many columns a control panel's grid is, whatever its pixel width. */

@@ -41,10 +41,11 @@ impl Mailbox {
 }
 
 /// One resolved variable as a node's thread receives it: a producer's service to subscribe, a
-/// value delivered inline, or the reason the graph could not resolve it.
+/// value delivered inline, or the reason the graph could not resolve it. `held` is the door of a
+/// producer that keeps its last frame for a late subscriber, rung once the subscription is open.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Var {
-    Stream(String),
+    Stream { service: String, held: Option<String> },
     Value(Param),
     Missing(String),
 }
@@ -98,7 +99,7 @@ impl Expression {
             .into_iter()
             .map(|(name, v)| {
                 let mailbox = match v {
-                    Var::Stream(_) => Mailbox::empty(),
+                    Var::Stream { .. } => Mailbox::empty(),
                     Var::Value(value) => Mailbox::seeded(value),
                     Var::Missing(reason) => Mailbox::missing(reason),
                 };

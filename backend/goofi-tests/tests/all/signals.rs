@@ -877,62 +877,6 @@ fn the_text_and_table_nodes_carry_a_value_out_to_json_and_back() {
 }
 
 /// The texel at `(row, col)`, in the 0..1 a colour frame spans.
-fn texel(d: &Data, row: usize, col: usize) -> [f32; 4] {
-    let s = shape(d);
-    let at = (row * s[1] + col) * 4;
-    f32s(d)[at..at + 4].try_into().expect("four channels")
-}
-
-/// What a hand leaves on a drawing widget, and what `control paint` leaves beside it, is a frame
-/// like any other: the node reads the variable the widget IS and rasterizes its ops.
-#[test]
-fn a_drawing_widget_reaches_the_patch_as_a_frame() {
-    let g = Goofi::new();
-    // Binding an expression COMPILES it, which wants an evaluator present; reading a bare variable
-    // does not, so this one is never asked what `variables.pad.sketch` means.
-    g.graph().set_evaluator(std::sync::Arc::new(goofi_tests::FirstVar::default()));
-    g.call("control add", j!({ "group": "pad", "kind": "paint", "element": "sketch" }));
-    let node = g.add("Drawing");
-    g.set_param(node, "drawing", "size", 100);
-    let bound = g.call("node param edit", j!({ "node": hex(node), "param": "drawing/image",
-                                               "expression": "variables.pad.sketch" }));
-    assert!(bound["error"].is_null(), "the pad is pointed at the way a knob's value is: {bound}");
-    let probe = g.probe(node, "out");
-    g.ready(node);
-
-    // Step: a pad nobody has drawn on has no picture, and the node says nothing rather than
-    // inventing a blank one.
-    assert!(g.stays(|_| probe.latest().is_none()), "an empty pad emitted a frame");
-
-    // Step: a red stroke across the top and a soft blue one down the left, then a green fill in the
-    // lower right with an erased line through it.
-    g.call("control paint", j!({ "group": "pad", "element": "sketch", "ops":
-        "stroke #ff0000 width 60 : M 100 100 L 900 100\n\
-         stroke #0000ff width 60 soft 20 : M 100 300 L 100 900\n\
-         fill #00ff00 : M 500 500 L 950 500 L 950 950 L 500 950 Z\n\
-         stroke erase width 100 cap butt : M 500 700 L 950 700" }));
-    let frame = g.until("the drawing as a frame", |_| probe.latest().filter(|d| shape(d) == vec![100, 100, 4]));
-    let close = |got: [f32; 4], want: [f32; 4]| got.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.02);
-    assert!(close(texel(&frame, 10, 50), [1.0, 0.0, 0.0, 1.0]), "{:?}", texel(&frame, 10, 50));
-    assert_eq!(texel(&frame, 40, 50)[3], 0.0, "the sheet is clear where nothing was drawn");
-    assert!(close(texel(&frame, 60, 80), [0.0, 1.0, 0.0, 1.0]), "{:?}", texel(&frame, 60, 80));
-    assert_eq!(texel(&frame, 70, 80)[3], 0.0, "the eraser cut through the fill");
-    let soft = texel(&frame, 60, 10);
-    assert!(soft[2] > 0.99 && soft[3] > 0.5, "the soft stroke's middle: {soft:?}");
-    let edge = texel(&frame, 60, 14);
-    assert!(edge[3] > 0.02 && edge[3] < 0.9, "the soft stroke fades at its edge: {edge:?}");
-    assert!(g.error(node).is_none(), "a drawing is not a fault");
-
-    // Step: a clear makes the next frame empty.
-    g.call("control paint", j!({ "group": "pad", "element": "sketch", "ops": "clear" }));
-    g.until("a cleared sheet", |_| probe.latest().filter(|d| f32s(d).iter().all(|v| *v == 0.0)));
-
-    // Step: what is not a drawing is the NODE's error, in words, and never a panic.
-    g.call("variable entry edit", j!({ "name": "pad.sketch", "value": "!!" }));
-    let why = g.until("the node says what it could not read", |_| g.error(node));
-    assert!(why.contains("drawing"), "{why}");
-}
-
 #[test]
 fn buffer_seconds_use_sample_rate_and_updates_stack_frames() {
     let g = Goofi::new();

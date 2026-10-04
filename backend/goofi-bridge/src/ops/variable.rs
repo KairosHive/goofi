@@ -102,8 +102,9 @@ op!(ControlAdd, "control add", 2, ControlAddArgs {
     pub max: Option<f64>,
     pub step: Option<f64>,
     pub options: Option<Value>,
+    pub resolution: Option<u32>,
 },
-    "Bear a widget in a control panel's group: a variable holding what the kind draws, carrying the widget. `kind` is knob/slider/number/text/toggle/dropdown/paint. `element` is minted `knob0`, `knob1`, … when not given, and the cell is the first free one when `x`/`y` are not. A config-locked group refuses it, as it refuses every other edit to what it holds.",
+    "Bear a widget in a control panel's group: a variable holding what the kind draws, carrying the widget. `kind` is knob/slider/number/text/toggle/dropdown/paint. `element` is minted `knob0`, `knob1`, … when not given, and the cell is the first free one when `x`/`y` are not. A `paint` pad holds an `[h, w, 4]` RGBA array in 0..1, `resolution` texels a side (128 when not given). A config-locked group refuses it, as it refuses every other edit to what it holds.",
     "{name, control} — the variable's full name and the widget as stored");
 
 op!(ControlEdit, "control edit", 2, ControlEditArgs {
@@ -119,8 +120,9 @@ op!(ControlEdit, "control edit", 2, ControlEditArgs {
     pub y: Option<f64>,
     pub w: Option<f64>,
     pub h: Option<f64>,
+    pub resolution: Option<u32>,
 },
-    "Change a widget: `name` renames the element (every expression reading it follows), and the rest re-shape the widget, its range, its options or its cell. ONE undo step, and refused by a config lock.",
+    "Change a widget: `name` renames the element (every expression reading it follows), and the rest re-shape the widget, its range, its options or its cell. `resolution` re-sizes a paint pad, which starts it clear. ONE undo step, and refused by a config lock.",
     "{name} — the element's full name after the edit");
 
 op!(ControlRemove, "control remove", 2, ControlRemoveArgs {
@@ -135,15 +137,8 @@ op!(ControlPaint, "control paint", 2, ControlPaintArgs {
     pub element: String,
     pub ops: String,
 },
-    "Append drawing ops to a `paint` widget, as ONE undoable edit of its variable — the pad sends each finished hand stroke through this same op. The variable holds the drawing as base64 byte code of timed atomic ops; `control drawing` reads it back as text. `ops` is one op per line or `;`, `//` to end of line a comment: `stroke [ink] [width w] [soft s] [cap round|butt|square] [dash solid|dash|dot] : <path>`, `fill [ink] : <path>` and `clear`, which drops what came before. A path is `M x y` (move), `L x y` (line), `C x1 y1 x2 y2 x y` (cubic bezier) and `Z` (close), and must start with `M`. Ink is `#rgb`, `#rrggbb`, `#rrggbbaa` or `erase`; the stroke defaults are black, width 10, soft 0, cap round, dash solid. Coordinates, width and soft span 0..1000 whatever pixel size the pad is, the origin is the TOP-left with y running down. A `+ms` before an op or a segment is its time since the previous one, so a drawing replays.",
-    "{ops, bytes} — the ops appended, and the size of the stored byte code");
-
-op!(ControlDrawing, "control drawing", 2, ControlDrawingArgs {
-    pub group: String,
-    pub element: String,
-},
-    "Read a `paint` widget's drawing as the text form `control paint` takes, one op per line.",
-    "{text, ops, bytes} — the drawing as text, its op count and its byte code size");
+    "Draw onto a `paint` widget's array, as ONE undoable edit of its variable — the pad sends each finished hand stroke through this same op. The variable holds the sheet as an `[h, w, 4]` RGBA array in 0..1; `node snapshot variables/<group>.<element> --raw` reads it back. `ops` is one op per line or `;`, `//` to end of line a comment: `stroke [ink] [width w] [soft s] [cap round|butt|square] [dash solid|dash|dot] : <path>`, `fill [ink] : <path>` and `clear`, which drops what came before. A path is `M x y` (move), `L x y` (line), `C x1 y1 x2 y2 x y` (cubic bezier) and `Z` (close), and must start with `M`. Ink is `#rgb`, `#rrggbb`, `#rrggbbaa` or `erase`; the stroke defaults are black, width 10, soft 0, cap round, dash solid. Coordinates, width and soft span 0..1000 whatever pixel size the pad is, the origin is the TOP-left with y running down. A `+ms` before an op or a segment is its time since the previous one, so a drawing replays.",
+    "{ops, shape} — the ops drawn, and the sheet's shape");
 
 op!(ControlSource, "control source", 2, ControlSourceArgs {
     pub group: String,
@@ -344,18 +339,18 @@ impl ReadOp for ControlList {
                 }
             }
         }
+        let store = tx.g.variables();
         for group in order {
-            let elements: Vec<Value> = tx.g
-                .variables()
+            let elements: Vec<Value> = store
                 .entries()
                 .filter(|(name, v)| v.control.is_some() && name.split_once('.').is_some_and(|(gr, _)| gr == group))
                 .map(|(name, v)| {
-                    let mut e = inspect::variable_json(&tx.g, name, v);
+                    let mut e = inspect::variable_json(&store, name, v);
                     e["element"] = json!(name.split_once('.').map_or(name, |(_, el)| el));
                     e
                 })
                 .collect();
-            groups.insert(group.clone(), json!({ "lock": tx.g.variables().group_lock(&group), "elements": elements }));
+            groups.insert(group.clone(), json!({ "lock": store.group_lock(&group), "elements": elements }));
         }
         Ok(json!({ "panels": panels, "groups": groups }))
     }
@@ -377,10 +372,6 @@ impl WriteOp for ControlAdd {
         if tx.g.variables().get(&name).is_some() {
             return Err(format!("`{name}` already exists — `control edit` changes it"));
         }
-        let value = match a.value.map(|v| v.0).filter(|v| !v.is_null()) {
-            Some(v) => literal(v)?,
-            None => kind.born_value(),
-        };
         let (bw, bh) = kind.born_box();
         let (w, h) = (a.w.unwrap_or(bw), a.h.unwrap_or(bh));
         let (x, y) = match (a.x, a.y) {
@@ -396,7 +387,7 @@ impl WriteOp for ControlAdd {
             }
         };
         let mut record = json!({ "kind": kind, "x": x, "y": y, "w": w, "h": h });
-        for (key, v) in [("min", json!(a.min)), ("max", json!(a.max)), ("step", json!(a.step)), ("options", json!(a.options))] {
+        for (key, v) in [("min", json!(a.min)), ("max", json!(a.max)), ("step", json!(a.step)), ("options", json!(a.options)), ("resolution", json!(a.resolution))] {
             if !v.is_null() {
                 record[key] = v;
             }
@@ -407,6 +398,10 @@ impl WriteOp for ControlAdd {
             }
         }
         let control: Control = serde_json::from_value(record.clone()).map_err(|e| e.to_string())?;
+        let value = match a.value.map(|v| v.0).filter(|v| !v.is_null()) {
+            Some(v) => literal(v)?,
+            None => control.born_value(),
+        };
         tx.apply(Command::EditVariable { name: name.clone(), value: Some(value), at: None, control: Some(Some(control)) })?;
         Ok(json!({ "name": name, "control": record }))
     }
@@ -435,6 +430,7 @@ impl WriteOp for ControlEdit {
         let fields = [
             ("kind", json!(a.kind)), ("min", json!(a.min)), ("max", json!(a.max)), ("step", json!(a.step)),
             ("options", json!(a.options)), ("x", json!(a.x)), ("y", json!(a.y)), ("w", json!(a.w)), ("h", json!(a.h)),
+            ("resolution", json!(a.resolution)),
         ];
         for (key, v) in fields {
             if !v.is_null() {
@@ -444,7 +440,9 @@ impl WriteOp for ControlEdit {
         }
         if touched {
             let control: Control = serde_json::from_value(record).map_err(|e| e.to_string())?;
-            cmds.push(Command::EditVariable { name: target.clone(), value: None, at: None, control: Some(Some(control)) });
+            // A pad re-sized starts clear: its array is the one shape the widget draws.
+            let value = (a.resolution.is_some() && control.kind == ControlKind::Paint).then(|| control.born_value());
+            cmds.push(Command::EditVariable { name: target.clone(), value, at: None, control: Some(Some(control)) });
         }
         if cmds.is_empty() {
             return Err("nothing to change — give a name, a kind, a range, options or a cell".into());
@@ -470,43 +468,38 @@ impl WriteOp for ControlRemove {
     }
 }
 
-/// The `paint` widget `group.element`, and the drawing it holds.
-fn drawing_of(g: &Graph, group: &str, element: &str) -> Result<(String, String), String> {
+/// The `paint` widget `group.element`, and the sheet it holds.
+fn sheet_of(g: &Graph, group: &str, element: &str) -> Result<(String, Data), String> {
     let name = element_of(g, group, element)?;
-    match (g.variables().control(&name).map(|c| c.kind), g.variables().get(&name).map(Data::value)) {
-        (Some(ControlKind::Paint), Some(goofi_core::Value::Str(code))) => Ok((name, code.to_string())),
+    let variables = g.variables();
+    match (variables.control(&name).map(|c| c.kind), variables.get(&name)) {
+        (Some(ControlKind::Paint), Some(sheet)) => Ok((name, sheet.clone())),
         (kind, _) => {
             let kind = kind.map_or("", ControlKind::as_str);
-            Err(format!("`{name}` is a {kind} widget; only a `paint` one holds a drawing"))
+            Err(format!("`{name}` is a {kind} widget; only a `paint` one holds a sheet"))
         }
     }
 }
 
 impl WriteOp for ControlPaint {
     fn run(tx: &mut Txn, a: ControlPaintArgs) -> Result<Value, String> {
-        let (name, code) = drawing_of(&tx.g, &a.group, &a.element)?;
+        let (name, sheet) = sheet_of(&tx.g, &a.group, &a.element)?;
         let ops = goofi_core::drawing::parse(&a.ops)?;
         if ops.is_empty() {
-            return Err("no ops to append".into());
+            return Err("no ops to draw".into());
         }
-        let count = ops.len();
-        let code = goofi_core::drawing::append(&code, ops)?;
-        let bytes = code.len() / 4 * 3 - code.bytes().rev().take_while(|b| *b == b'=').count();
-        tx.apply(Command::EditVariable { name, value: Some(Data::text(code)), at: None, control: None })?;
-        Ok(json!({ "ops": count, "bytes": bytes }))
+        let goofi_core::Value::Array(held) = sheet.value() else { return Err(format!("`{name}` holds no sheet")) };
+        let [h, w, 4] = held.shape() else { return Err(format!("`{name}` holds {:?}, not a sheet", held.shape())) };
+        let texels: Vec<f32> = held.values().collect();
+        let drawn = goofi_core::drawing::raster(&texels, *w as u32, *h as u32, &ops)?;
+        let bytes = drawn.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let value = Data::array_f32(vec![*h, *w, 4], bytes, goofi_core::Meta::default()).map_err(|e| e.to_string())?;
+        tx.apply(Command::EditVariable { name, value: Some(value), at: None, control: None })?;
+        Ok(json!({ "ops": ops.len(), "shape": [h, w, 4] }))
     }
 
     fn label(a: &ControlPaintArgs, _: &Value) -> String {
         format!("Paint {}.{}", a.group, a.element)
-    }
-}
-
-impl ReadOp for ControlDrawing {
-    fn run(tx: &mut Txn, a: ControlDrawingArgs) -> Result<Value, String> {
-        let (_, code) = drawing_of(&tx.g, &a.group, &a.element)?;
-        let ops = goofi_core::drawing::from_value(&code)?;
-        let bytes = goofi_core::drawing::encode(&ops).len();
-        Ok(json!({ "text": goofi_core::drawing::print(&ops), "ops": ops.len(), "bytes": bytes }))
     }
 }
 

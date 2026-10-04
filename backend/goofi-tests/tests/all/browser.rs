@@ -229,8 +229,8 @@ async fn a_tab_mirrors_the_graph_off_the_document_events_and_follows_a_peer_edit
     assert_eq!(c.doc().read_at(&["variable_groups", "system", "lock", "config"]), Some(j!(true)),
                "the system group's lock rides the replica");
     peer.call("variable entry add", j!({ "name": "patch.subject", "value": "P07" })).await;
-    c.until_doc(|d| d.read_at(&["variables", "patch.subject", "value"]).is_some()).await;
-    assert_eq!(c.doc().read_at(&["variables", "patch.subject", "value"]), Some(j!("P07")));
+    c.until_doc(|d| d.read_at(&["variables", "patch.subject"]).is_some()).await;
+    assert_eq!(c.doc().read_at(&["variables", "patch.subject"]), Some(j!({})), "a value is no document field");
     assert_eq!(c.doc().read_at(&["variables", "patch.subject", "lock"]), None,
                "a user variable carries no lock until one is set");
     // A rename keeps its place, and a list shows the replica's key order: it must be the manager's.
@@ -601,8 +601,7 @@ async fn three_devices_edit_one_patch_at_once_and_end_on_the_same_document() {
         let amplitude = d.read_at(&["nodes", uid.as_str(), "params", "lfo", "amplitude", "value"]).and_then(|v| v.as_f64());
         assert!((amplitude.unwrap_or(f64::NAN) - 0.1 * i as f64).abs() < 1e-6,
                 "A's rename and its param edit both landed on osc{i}: {amplitude:?}");
-        assert_eq!(d.read_at(&["variables", &format!("patch.g{i}"), "value"]), Some(j!(i)),
-                   "device B's variable g{i}");
+        assert_eq!(g.variable(&format!("patch.g{i}")), j!(i), "device B's variable g{i}");
     }
 }
 

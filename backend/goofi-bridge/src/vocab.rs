@@ -238,7 +238,7 @@ pub fn typescript() -> String {
          export interface ControlKindInfo {{\n\
          \treadonly id: ControlKindId;\n\
          \t/** What a widget of this kind draws: one number, a text, or any frame's truth. */\n\
-         \treadonly draws: 'number' | 'text' | 'any';\n\
+         \treadonly draws: 'number' | 'text' | 'image' | 'any';\n\
          \t/** The box it is born in, in grid units. */\n\
          \treadonly w: number;\n\
          \treadonly h: number;\n\

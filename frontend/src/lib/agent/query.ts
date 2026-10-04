@@ -1,4 +1,5 @@
 /** Agent read/introspection surface — paired with `commands`. */
+import { variableValue } from '$lib/stores/variableValues.svelte';
 import { graph } from '$lib/stores/graph.svelte';
 import { selection } from '$lib/stores/selection.svelte';
 import { workspace } from 'panelty';
@@ -11,6 +12,7 @@ import { reconstructMeta } from '$lib/editor/metaFormat';
 
 import type { LinkInfo, NodeInstanceInfo, NodeTypeInfo } from '$lib/api/control';
 import type { VariableView } from '$lib/crdt/graphDoc';
+import type { Literal } from '$lib/api/generated';
 
 export interface FrameSummary {
 	dtype: string;
@@ -77,8 +79,10 @@ export const query = {
 	nodeTypes: (): NodeTypeInfo[] | null => graph().nodeTypes,
 	/** Whether the replica has pulled from the manager yet; until true, `graph()` reads describe an EMPTY replica. */
 	docSynced: (): boolean => graph().docSynced,
-	/** Every patch variable (system + user), in system-first/creation order. */
-	variables: (): VariableView[] => graph().variables,
+	/** Every patch variable (system + user), in system-first/creation order, each with the value a
+	 * watcher of it holds — null until a panel shows it. */
+	variables: (): (VariableView & { value: Literal | null })[] =>
+		graph().variables.map((v) => ({ ...v, value: variableValue(v.name) })),
 	node: (uid: string): NodeInstanceInfo | null => graph().nodeById(uid),
 	nodeParams: (uid: string): NodeInstanceInfo['params'] | null =>
 		graph().nodeById(uid)?.params ?? null,

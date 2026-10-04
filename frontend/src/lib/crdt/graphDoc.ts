@@ -110,8 +110,6 @@ export interface VariableView {
 	name: string;
 	group: string;
 	element: string;
-	/** A number, a list (nested for a wider array) or a string — the literal of its frame. */
-	value: Literal;
 	/** Present when this variable is a control-panel element. */
 	control?: ControlView;
 	/** Present when the manager writes this variable from a producer; nobody else may set it. */
@@ -151,14 +149,12 @@ export function variableViews(doc: Doc): VariableView[] {
 	const out: VariableView[] = [];
 	for (const [name, raw] of Object.entries(obj(doc.variables))) {
 		const g = obj(raw);
-		const value = g.value;
 		const dot = name.indexOf('.');
-		if (dot > 0 && (typeof value === 'number' || typeof value === 'string' || Array.isArray(value))) {
+		if (dot > 0) {
 			out.push({
 				name,
 				group: name.slice(0, dot),
 				element: name.slice(dot + 1),
-				value: value as Literal,
 				control: (g.control as ControlView | undefined) ?? undefined,
 				source: sourceOf(g.source),
 				lock: lockOf(g.lock)

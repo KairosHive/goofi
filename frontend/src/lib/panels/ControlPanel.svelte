@@ -33,13 +33,14 @@
 	} from '$lib/ui';
 	import type { Literal } from '$lib/api/generated';
 	import { CONTROL_COLUMNS, CONTROL_KINDS } from '$lib/api/vocab';
+	import { variableForm, variableImage, variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import { KIND, cellAt, movedBy, resizedBy, sameCell, type Cell, type Kind, type Units } from './controlLayout';
 
 	interface ControlState {
 		group?: string;
 	}
 
-	type Value = Literal;
+	type Value = Literal | null;
 
 	let props: PanelProps = $props();
 	const g = graph();
@@ -50,6 +51,9 @@
 	const named = $derived(group !== '');
 	const groupLock = $derived<LockView>(g.variableGroups[group] ?? { config: false, value: false });
 	const elements = $derived(g.variables.filter((gv) => gv.group === group && gv.control));
+	// Values come over the data plane, one stream per widget drawn.
+	watchVariables(() => elements.map((gv) => gv.name));
+	/** What a widget's kind must draw for this value: the form it holds, `text` and `number` as the kinds say. */
 	// What a node dropped on one of this panel's widgets means, said by the panel that draws them.
 	$effect(() =>
 		uiStore.onNodeDrop(props.panelId, (uid, name) => {
@@ -156,7 +160,7 @@
 	}
 
 	function commitValue(gv: VariableView, v: Value): Promise<void> {
-		return g.setVariableValue(gv.name, v).catch(() => {});
+		return v === null ? Promise.resolve() : g.setVariableValue(gv.name, v).catch(() => {});
 	}
 
 	function num(v: Value): number {
@@ -376,11 +380,11 @@
 	{:else if c.kind === 'toggle'}
 		<Toggle value={truth(value)} {onChange} />
 	{:else if c.kind === 'dropdown'}
-		<Select value={String(value)} options={c.options ?? []} {onChange} />
+		<Select value={String(value ?? '')} options={c.options ?? []} {onChange} />
 	{:else if c.kind === 'paint'}
-		<PaintPad value={String(value)} onStroke={(ops) => name && g.paintControl(group, name.slice(group.length + 1), ops)} />
+		<PaintPad value={variableImage(name)} onStroke={(ops) => name && g.paintControl(group, name.slice(group.length + 1), ops)} />
 	{:else}
-		<TextInput multiline value={String(value)} aria-label={label} {onChange} />
+		<TextInput multiline value={String(value ?? '')} aria-label={label} {onChange} />
 	{/if}
 {/snippet}
 
@@ -482,7 +486,7 @@
 							class:broken={gv.source?.error !== undefined}
 							title={gv.source ? gv.source.error ?? `Follows ${gv.source.reference}` : held.value ? 'Value-locked' : undefined}
 						>
-							{@render widget(c, gv.value, gv.element, (v) => commitValue(gv, v), gv.name, (v) => g.previewVariableValue(gv.name, v))}
+							{@render widget(c, c.kind === 'paint' ? null : variableValue(gv.name), gv.element, (v) => commitValue(gv, v), gv.name, (v) => g.previewVariableValue(gv.name, v))}
 						</div>
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<span
@@ -514,7 +518,7 @@
 							</div>
 						{/if}
 						{#if edit}
-							{#if typeof gv.value === 'number'}
+							{#if variableForm(gv.name) === 'number'}
 								<div class="learn">
 									<MidiLearn label={gv.element} target={`control:${gv.name}`} testid="control-learn" onLearn={learn(gv)} />
 								</div>
@@ -584,7 +588,7 @@
 							<Select
 								data-testid="control-props-kind"
 								value={pc.kind}
-								options={CONTROL_KINDS.filter((k) => k.draws === 'any' || k.draws === (typeof pv.value === 'string' ? 'text' : 'number')).map((k) => k.id)}
+								options={CONTROL_KINDS.filter((k) => k.draws === 'any' || k.draws === variableForm(pv.name)).map((k) => k.id)}
 								onChange={(v) => setControl(pv, { kind: v as Kind })}
 							/>
 						</Field>
@@ -609,7 +613,7 @@
 							<Field label="link" doc="The node output the widget follows; a node dropped onto the widget lands here">
 								<RefPicker
 									value={pv.source?.reference ?? null}
-									paramType={typeof pv.value === 'string' ? 'string' : 'float'}
+									paramType={variableForm(pv.name) === 'text' ? 'string' : 'float'}
 									onCommit={(r) => setSource(pv, r)}
 									testid="control-props-link"
 								/>
@@ -623,7 +627,7 @@
 								<NumberInput value={pv.source.index ?? 0} min={0} step={1} onChange={(v) => setIndex(pv, v)} />
 							</Field>
 						{/if}
-						{#if typeof pv.value === 'number'}
+						{#if variableForm(pv.name) === 'number'}
 							<Field label="range" doc="min, max and step">
 								<NumberInput value={pc.min ?? 0} title="min" onChange={(v) => setControl(pv, { min: v })} />
 								<NumberInput value={pc.max ?? 1} title="max" onChange={(v) => setControl(pv, { max: v })} />
@@ -642,7 +646,7 @@
 						{/if}
 						<!-- The corner buttons' door for a finger: a cell is narrower than two finger-sized targets. -->
 						<div class="touch-actions">
-							{#if typeof pv.value === 'number'}
+							{#if variableForm(pv.name) === 'number'}
 								<MidiLearn label={pv.element} target={`control:${pv.name}`} testid="control-learn" onLearn={learn(pv)} />
 							{/if}
 							<Chip tone="danger" data-testid="control-delete" onclick={() => void g.removeControl(group, pv.element)}>delete</Chip>
@@ -663,7 +667,7 @@
 				<div class="widget">
 					{@render widget(
 						{ kind: lift.kind, min: 0, max: 1, step: 0.01, x: 0, y: 0, w: 0, h: 0 },
-						({ number: 0.5, any: 0, text: '' } as const)[KIND[lift.kind].draws],
+						({ number: 0.5, any: 0, text: '', image: null } as const)[KIND[lift.kind].draws],
 						lift.kind,
 						() => {}
 					)}

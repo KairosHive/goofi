@@ -268,9 +268,11 @@ test.describe('the control socket', () => {
 
 			await test.step('a variable is patch state, and lands the same way', async () => {
 				await page.evaluate(() => (window as any).goofi.commands.addVariable('patch.seam_probe', 7));
+				// A value is a frame, not a document field: the list answers it.
 				await expect
-					.poll(async () => (await backendDoc(page)).variables['patch.seam_probe']?.value)
+					.poll(async () => (await rawCall(page, 'variable list', {})).result.variables.find((v: any) => v.name === 'patch.seam_probe')?.value)
 					.toBe(7);
+				expect((await backendDoc(page)).variables['patch.seam_probe']).toEqual({});
 			});
 
 			await test.step('a delta landing mid-drag does not put the node back where it started', async () => {
@@ -593,9 +595,9 @@ test.describe('the control socket', () => {
 					.toBe(0);
 			});
 			await test.step('a drawing restores its pixels through undo, redo and replacement', async () => {
+				await rawCall(page, 'control add', { group: 'review', kind: 'paint', element: 'picture', x: 0, y: 0, w: 5, h: 5 });
 				await page.evaluate(async () => {
 					const g = (window as any).goofi;
-					await g.commands.addVariable('review.picture', '', { kind: 'paint', x: 0, y: 0, w: 5, h: 5 });
 					const panel = g.query.panels()[0];
 					g.commands.setPanelType(panel.panelId, 'control');
 					g.commands.setPanelState(panel.panelId, { group: 'review' });
@@ -605,19 +607,20 @@ test.describe('the control socket', () => {
 				// A panel opens in edit mode, where a widget takes no pointer: leave it to draw.
 				await page.getByTestId('control-edit-toggle').click();
 				const pixels = () => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL());
-				const code = async () => String((await backendDoc(page)).variables['review.picture']?.value ?? '');
 				const empty = await pixels();
 				const box = (await canvas.boundingBox())!;
 				await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
 				await page.mouse.down();
 				await page.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.7, { steps: 8 });
 				await page.mouse.up();
-				// The hand stroke lands in the variable as byte code, and reads back as one stroke op.
-				await expect.poll(code).not.toBe('');
-				const drawn = (await rawCall(page, 'control drawing', { group: 'review', element: 'picture' })).result;
-				expect(drawn.ops).toBe(1);
-				expect(drawn.text).toMatch(/^stroke #4aa3ff width 24 soft 0 cap round dash solid : M 3\d\d(\.\d)? 3\d\d(\.\d)? (\+\d+ )?L/);
-				const stroke = await code();
+				// The hand stroke lands in the variable's sheet, which comes back over the data plane and
+				// replaces the local preview: the picture is what the manager painted.
+				const inked = () =>
+					page.evaluate(() => {
+						const v = (window as any).goofi.query.variables().find((e: any) => e.name === 'review.picture')?.value;
+						return Array.isArray(v) && v.some((row: number[][]) => row.some((px) => px[3] > 0));
+					});
+				await expect.poll(inked).toBe(true);
 				await expect.poll(pixels).not.toBe(empty);
 				const picture = await pixels();
 				await undo(page);
@@ -628,11 +631,7 @@ test.describe('the control socket', () => {
 				await expect.poll(pixels).toBe(empty);
 				await undo(page);
 				await expect.poll(pixels).toBe(picture);
-				await rawCall(page, 'variable entry edit', { name: 'review.picture', value: '' });
-				await expect.poll(pixels).toBe(empty);
-				await rawCall(page, 'variable entry edit', { name: 'review.picture', value: stroke });
-				await expect.poll(pixels).toBe(picture);
-				// A CLI stroke appends through the same op and shows on the pad.
+				// A CLI stroke draws through the same op and shows on the pad.
 				await rawCall(page, 'control paint', {
 					group: 'review', element: 'picture', ops: 'stroke #ff0000 width 40 : M 100 800 L 300 800'
 				});
@@ -641,7 +640,6 @@ test.describe('the control socket', () => {
 					Array.from(el.getContext('2d')!.getImageData(Math.round(el.width * 0.2), Math.round(el.height * 0.8), 1, 1).data)
 				);
 				expect(red).toEqual([255, 0, 0, 255]);
-				expect((await rawCall(page, 'control drawing', { group: 'review', element: 'picture' })).result.ops).toBe(2);
 				await page.evaluate(async () => {
 					const g = (window as any).goofi;
 					await g.commands.removeVariable('review.picture');

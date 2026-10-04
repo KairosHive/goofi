@@ -153,24 +153,22 @@ describe('graphDoc variables', () => {
 		const doc: Doc = {
 			...seedDoc(),
 			variables: {
-				'system.default_ufreq': { value: 30 },
-				'system.goofi_home': { value: '/home/u/.goofi', lock: { value: true } },
-				'patch.subject': { value: 'P07' },
+				'system.default_ufreq': {},
+				'system.goofi_home': { lock: { value: true } },
+				'patch.subject': {},
 				'mixer.gain': {
-					value: 0.5,
 					control: { kind: 'knob', min: 0, max: 1, x: 2, y: 1, w: 2, h: 2 }
 				},
-				// Every variable is `group.element`; one without a group is malformed and is skipped,
-				// exactly as one whose value is no literal is.
-				loose: { value: 1 }
+				// Every variable is `group.element`; one without a group is malformed and is skipped.
+				loose: {}
 			}
 		};
 		const free = { config: false, value: false };
 		expect(variableViews(doc)).toEqual([
-			{ name: 'system.default_ufreq', group: 'system', element: 'default_ufreq', value: 30, control: undefined, lock: free },
-			{ name: 'system.goofi_home', group: 'system', element: 'goofi_home', value: '/home/u/.goofi', control: undefined, lock: { config: false, value: true } },
-			{ name: 'patch.subject', group: 'patch', element: 'subject', value: 'P07', control: undefined, lock: free },
-			{ name: 'mixer.gain', group: 'mixer', element: 'gain', value: 0.5, control: { kind: 'knob', min: 0, max: 1, x: 2, y: 1, w: 2, h: 2 }, lock: free }
+			{ name: 'system.default_ufreq', group: 'system', element: 'default_ufreq', control: undefined, lock: free },
+			{ name: 'system.goofi_home', group: 'system', element: 'goofi_home', control: undefined, lock: { config: false, value: true } },
+			{ name: 'patch.subject', group: 'patch', element: 'subject', control: undefined, lock: free },
+			{ name: 'mixer.gain', group: 'mixer', element: 'gain', control: { kind: 'knob', min: 0, max: 1, x: 2, y: 1, w: 2, h: 2 }, lock: free }
 		]);
 	});
 

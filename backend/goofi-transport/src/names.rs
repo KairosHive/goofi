@@ -28,6 +28,12 @@ pub fn output_service(base: &str, slot: &str) -> ServiceName {
     format!("goofi_{base}_out_{slot}")
 }
 
+/// The base of the patch's own producer, [`Uid::VARIABLES`], whose slots are the variables. It
+/// lives as long as the manager, so it carries no generation.
+pub fn variables_base(instance: &str) -> String {
+    format!("{instance}_variables")
+}
+
 /// The door a slot's reducer parks on, rung by whichever generation of the node produces the
 /// slot: named without the generation, so a restart rings the same reducer.
 pub fn view_door_service(instance: &str, uid: Uid, slot: &str) -> ServiceName {
@@ -70,8 +76,8 @@ pub fn targets_of<'a>(
 
 /// One output slot's data service name, from the view's birth facts.
 pub fn output_of(view: &GraphView<'_>, uid: Uid, slot: &str) -> Option<ServiceName> {
-    let node = view.nodes.get(&uid)?;
-    Some(output_service(&service_base(view.instance, uid, node.generation), slot))
+    let base = if uid == Uid::VARIABLES { variables_base(view.instance) } else { service_base(view.instance, uid, view.nodes.get(&uid)?.generation) };
+    Some(output_service(&base, slot))
 }
 
 /// A resolved variable as a node receives it: a service rather than a uid, because a node
@@ -79,8 +85,10 @@ pub fn output_of(view: &GraphView<'_>, uid: Uid, slot: &str) -> Option<ServiceNa
 pub fn var_of(view: &GraphView<'_>, v: &BoundVar) -> (String, Var) {
     match v {
         BoundVar::Stream { var, producer, slot, .. } => {
+            // The variables producer holds its last frame; a node slot has only what comes next.
+            let held = (*producer == Uid::VARIABLES).then(|| door_service(&variables_base(view.instance)));
             let src = output_of(view, *producer, slot)
-                .map_or_else(|| Var::Missing(format!("`{var}` names no running node")), Var::Stream);
+                .map_or_else(|| Var::Missing(format!("`{var}` names no running node")), |service| Var::Stream { service, held });
             (var.clone(), src)
         }
         BoundVar::Value { var, value } => (var.clone(), Var::Value(value.clone())),

@@ -7,8 +7,6 @@ license.workspace = true
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }
 indexmap = "2"
-# A drawing widget's value is base64 byte code, and `src/drawing.rs` rasterizes it.
-base64 = "0.22"
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 # Canonicalisation WITHOUT the `\\?\` verbatim prefix that `std::fs::canonicalize` always returns
 # on Windows — see `src/path.rs`. It keeps the prefix on the paths that genuinely need it (past

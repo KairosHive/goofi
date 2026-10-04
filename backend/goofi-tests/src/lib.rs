@@ -360,6 +360,24 @@ impl Goofi {
         self.call("session state", json!({}))
     }
 
+    /// A variable's value as the store holds it now — a value is a frame, not a document field.
+    pub fn variable(&self, name: &str) -> Value {
+        let listed = self.call("variable list", json!({}));
+        listed["variables"].as_array().into_iter().flatten().find(|e| e["name"] == name).map(|e| e["value"].clone()).unwrap_or(Value::Null)
+    }
+
+    /// The array a stream holds, read whole through `node snapshot --raw` once its feed delivers:
+    /// `variables/<name>` for a variable, `node/slot` for a slot.
+    pub fn snapshot_array(&self, address: &str) -> goofi_core::Data {
+        self.until(&format!("a raw snapshot of `{address}`"), |g| {
+            use base64::Engine;
+            let got = g.call("node snapshot", json!({ "output": address, "raw": true }));
+            let bytes = base64::engine::general_purpose::STANDARD.decode(got["npy_b64"].as_str()?).ok()?;
+            let (shape, samples) = goofi_record::npy::read(&bytes).ok()?;
+            goofi_core::Data::array_f32(shape, samples, goofi_core::Meta::default()).ok()
+        })
+    }
+
     /// Bind a real server on a free port and answer its `ws://host:port` base.
     pub async fn serve(&self) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1142,7 +1160,8 @@ impl goofi_node::ExprEvaluator for FirstVar {
             .values()
             .flatten()
             .find_map(|local| match local {
-                goofi_node::Local::Frame(d) => f32s(d).first().map(|v| *v as f64),
+                // A frame reads as a control frame does: a text with no number in it is nothing.
+                goofi_node::Local::Frame(d) => goofi_core::control::numbers(d).next(),
                 goofi_node::Local::Value(p) => p.as_f64(),
             })
             .ok_or_else(|| goofi_node::ExprError("no local arrived".into()))?;

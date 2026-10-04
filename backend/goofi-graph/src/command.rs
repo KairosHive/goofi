@@ -542,11 +542,12 @@ impl Command {
             Command::RemoveVariable { name } => {
                 // The inverse re-adds at the removed index, with everything that rode on the entry
                 // — its widget, what it followed, its own lock.
-                let old = g.variables().get(&name).cloned();
-                let at = g.variables().index_of(&name);
-                let old_control = Some(g.variables().control(&name).cloned());
-                let (old_source, old_lock) = (g.variables().source(&name).cloned(), g.variables().own_lock(&name));
-                g.variables_mut().remove(&name)?;
+                let mut store = g.variables();
+                let old = store.get(&name).cloned();
+                let at = store.index_of(&name);
+                let old_control = Some(store.control(&name).cloned());
+                let (old_source, old_lock) = (store.source(&name).cloned(), store.own_lock(&name));
+                store.remove(&name)?;
                 let mut inverse = vec![Command::EditVariable { name: name.clone(), value: old, at, control: old_control }];
                 if old_source.is_some() {
                     inverse.push(Command::SourceVariable { name: name.clone(), source: old_source });
@@ -586,12 +587,12 @@ impl Command {
             }
 
             Command::LockVariable { name, lock } => {
-                let old = g.variables_mut().set_lock(&name, lock)?;
+                let old = g.variables().set_lock(&name, lock)?;
                 Ok(Applied::done(Outcome::Ok, Command::LockVariable { name, lock: old }))
             }
 
             Command::LockVariableGroup { group, lock } => {
-                let old = g.variables_mut().set_group_lock(&group, lock)?;
+                let old = g.variables().set_group_lock(&group, lock)?;
                 Ok(Applied::done(Outcome::Ok, Command::LockVariableGroup { group, lock: old }))
             }
 

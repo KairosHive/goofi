@@ -110,6 +110,7 @@ impl EffectOp for Save {
         let (manifest, extra, packed, revision) = {
             let mut g = state.graph.lock();
             g.persist();
+            g.persist_variables(&mount)?;
             let revision = state.doc.lock().version();
             (g.serialize(), crate::bundled_custom(&g, &state.custom), goofi_graph::archive::fingerprint(&mount), revision)
         };

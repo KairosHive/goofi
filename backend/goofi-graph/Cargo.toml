@@ -12,6 +12,7 @@ goofi-core = { path = "../goofi-core" }
 goofi-node = { path = "../goofi-node" }
 # What a viewer asks of a producer, which `set_view_demand` carries to every engine.
 goofi-view = { path = "../goofi-view" }
+goofi-record = { path = "../goofi-record" }
 
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

@@ -20,56 +20,25 @@ Status: in progress. This records the product decisions agreed through 2026-10-0
 - `Data` is the one value and `control::read` the one conversion. The array carrier is f32,
   so a literal holds seven significant digits and a whole number up to 16,777,216 exactly;
   every read of an f32 yields the f64 its shortest decimal denotes, so `0.97` reads as `0.97`.
-- A `.gfi` writes a wide array as a native data file (the recorder's format) at
-  `variables/<name>`. It lands with the paint pad's array: until values leave the document, a
-  wide array in the archive would be a second copy of what the replica already carries.
 
 ### Variables are producers
 
-- A variable is an output slot of the patch's own producer, `variables`, a base the manager
-  holds like a node's. `output_service(base, "<group>.<element>")` is its data service and
-  `view_door_service` its viewers' door. The reducer, the recorder, `node snapshot` and the
-  frontend's `/data/variables/<name>` reach it by the same names a node's slot has. The
-  reducer and the data worker are generalized where a base that is not a node needs it; one
-  infrastructure serves node producers and the variables producer.
-- A variable has no tick. Its service is opened with a history of one, so a subscriber that
-  connects after the last write receives that frame on connection. Node slots keep no
-  history. Every retrieval of a variable yields its value: a new wire, a new viewer, a new
-  binding, a reload.
-- A param reads a variable as a stream: `variables.<g>.<e>[i]` in an expression resolves to
-  `BoundVar::Stream`, bare or computed. `BoundVar::Value` remains for `nd('x').params` and
-  `me.params` only.
-  `variable_as_param` and the inline re-send of every variable on every settle go away. A
-  node that reads only a variable wakes on its frame like on any stream; `triggers` keeps
-  its meaning.
-- A value write publishes a frame and nothing else: `VariableStore::set`, `follow`, `publish`
-  and the machine's writes take the store's own lock, emit on the service, and return. The
-  graph lock, `settle`, `replica()` and the doc broadcast are the config path (add, remove,
-  rename, widget, source, lock). The follower thread shrinks to a tap sink.
-- Values leave the document. `variables.<name>` holds `{control?, source?, lock?}`. A value
-  edit stays a command whose inverse holds the previous frame; undo re-publishes it. Save
-  takes the store's latest frames; load publishes them before the first settle.
-- The frontend reads every variable value through the data worker (`bindViewer` on
-  `variables`, `<name>`), as it reads a slot. No second socket. The variables panel, the
-  control panel widgets, the inspector chips and the machine panel subscribe this way; a knob
-  drag previews the value edit through the control socket's one-per-frame coalescing.
 - A variable with an expression is a computed variable: bare, it copies the element or the
   frame on the producer's thread, as the tap does today; computed, the manager's expression
   worker evaluates it like an engine's, latest-wins.
-- `GraphView.variables` keeps the latest frames for the graphics planner's default size.
+- A pad's sheet reaches the GPU through a graphics node that reads `variables.<pad>` whole.
+  A param holds a number or a text, so this needs the array-bearing param of the expression
+  stage, or a cable from the variables producer. Until then a pad is drawn, saved and read by
+  an expression, and not rendered.
+- Every reader of a variable subscribes to its wire, the default `variables.system.*`
+  expressions of every node included: a service takes 256 subscribers, so a patch of more
+  nodes than that reading one variable is refused by the transport. Raise the ceiling, or
+  share one subscription per process, when a patch asks.
 
 ### The control panel
 
-- A widget is a `Control { kind, min?, max?, step?, options, x, y, w, h }` as today; range,
-  step and options are presentation, the widget's own. `ControlKind` gains `Vector` and
-  `Color`. `Paint` draws an `[h, w, 4]` f32 RGBA array in 0..1: `control paint {ops}`
-  rasterizes the strokes in the manager with `drawing::raster` into the array and publishes
-  it; the stroke script is the edit, the array is the value. The base64 byte-code string,
-  `drawing::encode/decode/append/to_value/from_value`, and the node-side rasterizing of a
-  string are removed. A pad's resolution is `control edit {resolution}`.
-- `fits` becomes a reading of the frame: a knob, a slider and a number draw a `[1]` array, a
-  toggle any frame, a text, a dropdown a string, a vector a `[n]`, a colour a `[4]`, a paint
-  pad an `[h, w, 4]`.
+- `ControlKind` gains `Vector` and `Color`: a vector draws a `[n]` array, a colour a `[4]`,
+  through `fits` as the other kinds do.
 
 ### Expressions, one way
 
@@ -218,13 +187,9 @@ Under the `machine` phrase, all commands with inverses unless marked:
 
 ### Tests
 
-- Extend `editing.rs` and `running.rs`: a variable with a bare expression over a slot, read by
-  a param as a stream, observed through `probe` on the consumer; a computed expression on an
-  audio param held one block behind and holding under a stalled evaluator (the test evaluator
-  blocks on a latch); a bare audio expression still a plan edge; a binding made after the last write
-  receives that frame; the value path proven to leave no doc patch; an array variable painted
-  by op, viewed by `node snapshot --raw`, saved and reloaded whole; undo of a value edit
-  re-publishing the previous frame.
+- Extend `editing.rs` and `running.rs`: a computed expression on an audio param held one
+  block behind and holding under a stalled evaluator (the test evaluator blocks on a latch);
+  a bare audio expression still a plan edge; the value path proven to leave no doc patch.
 - `goofi-tests/tests/all/machine.rs`: one session builds a machine through ops, binds a
   param through `variables.<playhead>.<attr>` with `FirstVar`, fires a transition and polls
   the param through `probe` on the consumer and the playhead variables through their
@@ -232,10 +197,9 @@ Under the `machine` phrase, all commands with inverses unless marked:
   transition is reached by polling, never by sleeping; an eased transition is sampled and the
   samples are monotonic and end at the target; `meet` with each policy; a `when` trigger from
   a followed variable; save, reload, start state. Undo walks the edits back.
-- Playwright: the control panel's knob and paint pad over the data worker; the variables
-  panel listing a vector and an array; a desktop and a phone session open the machine panel,
-  add two states and a transition by gesture, fire it, and see the dot on the target card. A
-  layout integrity run covers it.
+- Playwright: the variables panel listing a vector and an array; a desktop and a phone
+  session open the machine panel, add two states and a transition by gesture, fire it, and
+  see the dot on the target card. A layout integrity run covers it.
 
 ## Open
 
@@ -267,15 +231,12 @@ Build in this order. Each stage ends at a tested commit, with the full local che
 is a point to compact the context. Read this file and `AGENTS.md` first; inspect the diff since
 the last stage's commit; keep this file current by deleting what has shipped.
 
-1. **Variables as producers.** The `variables` base, services with a history of one, the
-   reducer and data worker generalized, values off the document and off the graph lock, the
-   frontend on `/data/variables/<name>`, the paint pad over an array and its archive file.
-   Report the line delta.
-2. **Expressions, one way.** The reference mode removed, the bare predicate, the expression
+1. **Expressions, one way.** The reference mode removed, the bare predicate, the expression
    worker in `goofi-runtime` for all three engines with latest-wins handover, the evaluator's
-   bytes path, variable expressions. Report the line delta; the control data stage shipped at
-   a net loss, and the three stages together must not add net lines.
-3. **Machines.** The model, the ops, the `goofi-machines` thread, the situation.
-4. **The panel.** The canvas, the cards, the dot, the side pane, the Playwright sessions.
+   bytes path, variable expressions. Report the line delta: the control data stage shipped at
+   +28 and the variables stage at +100, and the three stages together must not add net lines,
+   so this one removes at least 128.
+2. **Machines.** The model, the ops, the `goofi-machines` thread, the situation.
+3. **The panel.** The canvas, the cards, the dot, the side pane, the Playwright sessions.
 
 Roadmap maintenance does not start implementation. Wait for the user's build instruction.

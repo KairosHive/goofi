@@ -28,6 +28,9 @@ pub use type_id::{bare, qualify, split as split_type_id};
 pub struct Uid(pub u64);
 
 impl Uid {
+    /// The patch's own producer, whose output slots are its variables. Nodes are minted from 1.
+    pub const VARIABLES: Uid = Uid(0);
+
     pub fn to_hex(self) -> String {
         format!("{:012x}", self.0)
     }

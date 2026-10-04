@@ -41,16 +41,16 @@ fn union_specs(by_conn: &HashMap<ConnId, Declared>) -> Vec<ViewSpec> {
     by_conn.values().flat_map(|d| d.specs.iter()).cloned().collect()
 }
 
+/// The viewer cap, `system.viewer_fps`: at least one frame a second.
+fn cap_of(store: &goofi_core::variables::VariableStore) -> f64 {
+    let fps = store.get("system.viewer_fps").map_or(0.0, goofi_core::control::number_of);
+    if fps.is_finite() { fps.max(1.0) } else { 1.0 }
+}
+
 /// The gap between two serves of a slot: its fastest display's, never faster than the cap.
 fn serve_interval(by_conn: &HashMap<ConnId, Declared>, cap: f64) -> Duration {
     let fps = by_conn.values().map(|d| d.fps.unwrap_or(cap)).fold(1.0, f64::max);
     Duration::from_secs_f64(1.0 / fps.min(cap))
-}
-
-/// The viewer cap `system.viewer_fps` holds, as frames a second no slower than one.
-fn cap_of(g: &Graph) -> f64 {
-    let fps = g.variables().get("system.viewer_fps").map_or(0.0, goofi_core::control::number_of);
-    if fps.is_finite() { fps.max(1.0) } else { 1.0 }
 }
 
 /// A rate on ONE grid for the whole process: every serve lands on a tick of its interval, so
@@ -158,15 +158,16 @@ pub struct SlotReducers {
     follow: std::sync::mpsc::Sender<Followed>,
     /// The graph's instance, which every view door is named under.
     instance: Arc<str>,
-    /// `system.viewer_fps` as f64 bits, projected from settled state.
-    cap: Arc<AtomicU64>,
+    /// The store, read for the viewer cap; and the producer, rung for the frame a fresh feed is owed.
+    store: Arc<Mutex<goofi_core::variables::VariableStore>>,
+    variables: Arc<crate::variables::Variables>,
 }
 
 impl SlotReducers {
-    pub fn new(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, follow: std::sync::mpsc::Sender<Followed>) -> SlotReducers {
-        let (instance, cap) = {
+    pub fn new(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, variables: Arc<crate::variables::Variables>, follow: std::sync::mpsc::Sender<Followed>) -> SlotReducers {
+        let (instance, store) = {
             let g = graph.lock();
-            (Arc::from(g.instance()), cap_of(&g))
+            (Arc::from(g.instance()), g.variable_store())
         };
         SlotReducers {
             inner: Arc::new(Mutex::new(HashMap::new())),
@@ -175,18 +176,14 @@ impl SlotReducers {
             iox: Arc::new((iox, Mutex::new(None))),
             follow,
             instance,
-            cap: Arc::new(AtomicU64::new(cap.to_bits())),
+            store,
+            variables,
         }
-    }
-
-    /// Take the viewer cap from settled state.
-    pub fn set_cap(&self, g: &Graph) {
-        self.cap.store(cap_of(g).to_bits(), Ordering::Relaxed);
     }
 
     /// The gap the viewer cap asks for between two writes of one stream.
     pub fn cap_interval(&self) -> Duration {
-        Duration::from_secs_f64(1.0 / f64::from_bits(self.cap.load(Ordering::Relaxed)))
+        Duration::from_secs_f64(1.0 / cap_of(&self.store.lock()))
     }
 
     /// The graph settled: every loop re-reads its slot's address on its next wake, so a restart
@@ -369,16 +366,19 @@ struct SlotFeed {
     _node: Arc<goofi_transport::IoxNode>,
 }
 
-/// Open a subscriber on `(uid, slot)`'s current output service, or `None` while the node is not
-/// addressable; a miss is retried on the next re-home rather than being fatal.
-fn open_feed(graph: &Mutex<Graph>, iox: &SharedIox, uid: Uid, slot: &str) -> Option<SlotFeed> {
+/// Open a subscriber on `(uid, slot)`'s current output service, or `None` while the producer is
+/// not addressable; a miss is retried on the next re-home rather than being fatal. A variable's
+/// producer holds its last frame, and is poked for it once the feed is open.
+fn open_feed(graph: &Mutex<Graph>, iox: &SharedIox, variables: &crate::variables::Variables, uid: Uid, slot: &str) -> Option<SlotFeed> {
     let service = {
         let g = graph.lock();
-        g.manifest(uid)?;
-        crate::output_service_of(&g, uid, slot)
+        crate::producer_alive(&g, uid, slot).then(|| crate::output_service_of(&g, uid, slot))?
     };
     let node = shared_iox(iox)?;
     let subscriber = goofi_transport::open_output_subscriber(&node, &service).ok()?;
+    if uid == Uid::VARIABLES {
+        variables.poke();
+    }
     Some(SlotFeed { _node: node, subscriber })
 }
 
@@ -386,7 +386,7 @@ fn open_feed(graph: &Mutex<Graph>, iox: &SharedIox, uid: Uid, slot: &str) -> Opt
 /// ring; a held serve, an idle expiry, a watch's grace and a snapshot's window are its deadlines.
 fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, door: String) -> Option<goofi_supervisor::worker::Worker> {
     let (graph, iox, follow) = (reducers.graph.clone(), reducers.iox.clone(), reducers.follow.clone());
-    let cap = reducers.cap.clone();
+    let (store, variables) = (reducers.store.clone(), reducers.variables.clone());
     // Weak: the map owns this loop's entry, and the loop removes it; a strong one would be a cycle.
     let slots: Weak<Mutex<HashMap<SlotKey, SlotReducer>>> = Arc::downgrade(&reducers.inner);
     let (shared, failed) = (reducer.slot.clone(), reducer.slot.clone());
@@ -438,7 +438,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
         let mut stamped: Option<u64> = None;
         loop {
             let now = std::time::Instant::now();
-            let interval = serve_interval(&specs.lock(), f64::from_bits(cap.load(Ordering::Relaxed)));
+            let interval = serve_interval(&specs.lock(), cap_of(&store.lock()));
             // Armed only when a serve is owed: a fresh frame after an idle tick waits for the next.
             // A tick already passed stays owed, so the pass after this wait serves it.
             let duties = [
@@ -478,7 +478,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 homed = Some(seen);
                 let current = {
                     let g = graph.lock();
-                    g.manifest(uid).map(|_| crate::output_service_of(&g, uid, &slot))
+                    crate::producer_alive(&g, uid, &slot).then(|| crate::output_service_of(&g, uid, &slot))
                 };
                 let Some(current) = current else {
                     if let Some(slots) = slots.upgrade() {
@@ -509,7 +509,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             if asked_at.elapsed() > IDLE {
                 feed = None;
             } else if feed.is_none() {
-                feed = open_feed(&graph, &iox, uid, &slot);
+                feed = open_feed(&graph, &iox, &variables, uid, &slot);
             }
             // Watched exactly while the feed is open: the producer rings this door once each
             // frame is out, and stops when nobody reads them.
@@ -591,7 +591,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             // the duty the loop wakes to when the pace comes due. The rate is read again: the
             // viewer this serves may have joined during the wait.
             let now = std::time::Instant::now();
-            let interval = serve_interval(&specs.lock(), f64::from_bits(cap.load(Ordering::Relaxed)));
+            let interval = serve_interval(&specs.lock(), cap_of(&store.lock()));
             if now < pace.due(interval, now) {
                 continue;
             }

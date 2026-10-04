@@ -150,7 +150,13 @@ fn tick(state: &AppState, last: &mut Option<Stamp>) {
         }
         return;
     }
-    let manifest = state.graph.lock().serialize();
+    let (manifest, arrays) = {
+        let g = state.graph.lock();
+        (g.serialize(), g.persist_variables(&dir.join(archive::WORKSPACE)))
+    };
+    if let Err(e) = arrays {
+        goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("autosave: {e}"));
+    }
     if last.as_ref().is_some_and(|(m, fp)| *m == manifest && *fp == seen) {
         return;
     }

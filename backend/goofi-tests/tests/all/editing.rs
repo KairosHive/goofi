@@ -124,9 +124,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // nobody else may set it until the source is cleared. The reference follows a node rename.
     g.call("variable entry add", j!({ "name": "desk.level", "value": 0.0 }));
     g.call("variable entry source", j!({ "name": "desk.level", "reference": "carrier.out" }));
-    g.until("the followed variable to take the LFO's value", |g| {
-        g.doc()["variables"]["desk.level"]["value"].as_f64().filter(|v| *v != 0.0)
-    });
+    g.until("the followed variable to take the LFO's value", |g| g.variable("desk.level").as_f64().filter(|v| *v != 0.0));
     let why = g.refuse("variable entry edit", j!({ "name": "desk.level", "value": 0.5 }));
     assert!(why.contains("follows") && why.contains("carrier.out"), "{why}");
     // An expression READING the followed variable is handed each pick through the expression it
@@ -163,7 +161,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // the clear lands on what the author typed. A probe opened now sees only frames newer than it.
     let after = g.probe(osc, "out");
     g.until("the carrier to emit after the clear", |_| after.latest());
-    assert!(g.stays(|g| g.doc()["variables"]["desk.level"]["value"] == j!(0.5)), "the cleared source writes no more");
+    assert!(g.stays(|g| g.variable("desk.level") == j!(0.5)), "the cleared source writes no more");
 
     // A panel made a control panel with no group of its own is born naming a fresh one.
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "viewer" }));
@@ -188,41 +186,54 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("control edit", j!({ "group": "control0", "element": "level", "x": 0.0, "y": 3.0 }));
     assert_eq!(g.doc()["variables"]["control0.level"]["control"]["y"], 3.0, "the followed widget moved");
     g.call("variable entry lock", j!({ "name": "control0.level", "value": false }));
-    // A `paint` widget holds a script of timed drawing ops as byte code. `control paint` APPENDS
-    // ops to it as one undoable edit, and `control drawing` reads the same ops back as text.
-    g.call("control add", j!({ "group": "control0", "kind": "paint", "element": "pad" }));
-    let script = "stroke #ff00aa width 40 soft 2.5 cap butt dash dot : M 100 100 +16 L 200 200 +8 C 250 100 300 300 400 200\n\
-                  +120 fill #00ff0080 : M 500 500 L 900 500 L 700 900 Z\n\
-                  stroke erase : M 600 600 L 700 700";
+    // A `paint` widget holds an `[h, w, 4]` RGBA sheet in 0..1. `control paint` draws a script of
+    // timed ops onto it as ONE undoable edit, and a raw snapshot of the variable reads the sheet.
+    g.call("control add", j!({ "group": "control0", "kind": "paint", "element": "pad", "resolution": 100 }));
+    let texel = |d: &goofi_core::Data, row: usize, col: usize| -> [f32; 4] {
+        let at = (row * 100 + col) * 4;
+        f32s(d)[at..at + 4].try_into().expect("four channels")
+    };
+    let blank = g.snapshot_array("variables/control0.pad");
+    assert_eq!(goofi_tests::shape(&blank), vec![100, 100, 4]);
+    assert!(f32s(&blank).iter().all(|v| *v == 0.0), "a pad is born clear");
+    let script = "stroke #ff0000 width 60 : M 100 100 L 900 100\n\
+                  stroke #0000ff width 60 soft 20 : M 100 300 L 100 900\n\
+                  fill #00ff00 : M 500 500 L 950 500 L 950 950 L 500 950 Z\n\
+                  stroke erase width 100 cap butt : M 500 700 L 950 700";
     let drew = g.call("control paint", j!({ "group": "control0", "element": "pad", "ops": script }));
-    assert_eq!(drew["ops"], j!(3), "{drew}");
-    let read = g.call("control drawing", j!({ "group": "control0", "element": "pad" }));
-    let text = read["text"].as_str().unwrap().to_string();
-    assert!(text.contains("+16 L 200 200") && text.contains("+120 fill #00ff0080"), "{text}");
-    assert_eq!(read["bytes"], drew["bytes"], "{read}");
-    // The text form round-trips through the byte code: printed and parsed again, it stores the same.
-    g.call("control add", j!({ "group": "control0", "kind": "paint", "element": "copy" }));
-    g.call("control paint", j!({ "group": "control0", "element": "copy", "ops": text }));
-    let doc = g.doc();
-    assert_eq!(doc["variables"]["control0.copy"]["value"], doc["variables"]["control0.pad"]["value"]);
-    // A second call appends, and undo takes back that one stroke only.
-    let before = doc["variables"]["control0.pad"]["value"].clone();
-    g.call("control paint", j!({ "group": "control0", "element": "pad", "ops": "stroke : M 0 0 L 1000 1000" }));
-    assert_eq!(g.call("control drawing", j!({ "group": "control0", "element": "pad" }))["ops"], j!(4));
+    assert_eq!((&drew["ops"], &drew["shape"]), (&j!(4), &j!([100, 100, 4])), "{drew}");
+    let frame = g.until("the drawn sheet", |g| Some(g.snapshot_array("variables/control0.pad")).filter(|d| texel(d, 10, 50)[3] > 0.0));
+    let close = |got: [f32; 4], want: [f32; 4]| got.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.02);
+    assert!(close(texel(&frame, 10, 50), [1.0, 0.0, 0.0, 1.0]), "{:?}", texel(&frame, 10, 50));
+    assert_eq!(texel(&frame, 40, 50)[3], 0.0, "the sheet is clear where nothing was drawn");
+    assert!(close(texel(&frame, 60, 80), [0.0, 1.0, 0.0, 1.0]), "{:?}", texel(&frame, 60, 80));
+    assert_eq!(texel(&frame, 70, 80)[3], 0.0, "the eraser cut through the fill");
+    let soft = texel(&frame, 60, 10);
+    assert!(soft[2] > 0.99 && soft[3] > 0.5, "the soft stroke's middle: {soft:?}");
+    let edge = texel(&frame, 60, 14);
+    assert!(edge[3] > 0.02 && edge[3] < 0.9, "the soft stroke fades at its edge: {edge:?}");
+    // A second call draws over the sheet, and undo takes back that one stroke only: the inverse
+    // holds the previous sheet and publishes it again.
+    g.call("control paint", j!({ "group": "control0", "element": "pad", "ops": "stroke #000 width 100 : M 0 0 L 1000 1000" }));
+    assert_eq!(texel(&frame, 25, 25)[3], 0.0, "clear before the diagonal");
+    g.until("the diagonal", |g| Some(g.snapshot_array("variables/control0.pad")).filter(|d| texel(d, 25, 25)[3] > 0.0));
     g.call("undo", j!({}));
-    assert_eq!(g.doc()["variables"]["control0.pad"]["value"], before, "undo removes the appended stroke");
-    // A clear drops every op before it, so the drawing restarts.
-    g.call("control paint", j!({ "group": "control0", "element": "pad", "ops": "clear; stroke : M 1 1 L 2 2" }));
-    let read = g.call("control drawing", j!({ "group": "control0", "element": "pad" }));
-    assert_eq!(read["text"], "clear\nstroke #000000 width 10 soft 0 cap round dash solid : M 1 1 L 2 2", "{read}");
+    g.until("the sheet before the stroke", |g| Some(g.snapshot_array("variables/control0.pad")).filter(|d| f32s(d) == f32s(&frame)));
+    // A clear starts the sheet over.
+    g.call("control paint", j!({ "group": "control0", "element": "pad", "ops": "clear; stroke width 100 : M 0 0 L 100 100" }));
+    g.until("a cleared sheet", |g| Some(g.snapshot_array("variables/control0.pad")).filter(|d| texel(d, 10, 50)[3] == 0.0 && texel(d, 5, 5)[3] > 0.0));
     let why = g.refuse("control paint", j!({ "group": "control0", "element": "pad",
                                             "ops": "stroke : M 1 1\nstrok : M 2 2" }));
     assert!(why.contains("line 2") && why.contains("strok"), "a refusal names the line: {why}");
     let why = g.refuse("control paint", j!({ "group": "control0", "element": "pad", "ops": "stroke : L 1 1" }));
     assert!(why.contains("starts with `M"), "{why}");
     let why = g.refuse("control paint", j!({ "group": "control0", "element": "knob0", "ops": "clear" }));
-    assert!(why.contains("knob"), "only a `paint` widget holds a drawing: {why}");
-    g.call("control remove", j!({ "group": "control0", "element": "copy" }));
+    assert!(why.contains("knob"), "only a `paint` widget holds a sheet: {why}");
+    // A re-sized pad starts clear at its new shape; a text is not a sheet.
+    g.call("control edit", j!({ "group": "control0", "element": "pad", "resolution": 8 }));
+    assert_eq!(goofi_tests::shape(&g.until("the re-sized sheet", |g| Some(g.snapshot_array("variables/control0.pad")).filter(|d| goofi_tests::shape(d)[0] == 8))), vec![8, 8, 4]);
+    let why = g.refuse("variable entry edit", j!({ "name": "control0.pad", "value": "!!" }));
+    assert!(why.contains("paint") && why.contains("string"), "{why}");
     g.call("control remove", j!({ "group": "control0", "element": "pad" }));
 
     for kind in goofi_core::variables::ControlKind::ALL {
@@ -291,19 +302,19 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // A value is an array or a string, and an edit may switch between the two forms: a number, a
     // bool and a list are arrays, nested for a wider one; text is a string. Undo walks it back.
     g.call("variable entry edit", j!({ "name": "bench.entry0", "value": "hello" }));
-    assert_eq!(g.doc()["variables"]["bench.entry0"]["value"], "hello");
+    assert_eq!(g.variable("bench.entry0"), "hello");
     g.call("undo", j!({}));
-    assert_eq!(g.doc()["variables"]["bench.entry0"]["value"], 0);
+    assert_eq!(g.variable("bench.entry0"), 0);
     g.call("redo", j!({}));
     assert_eq!(g.call("variable entry edit", j!({ "name": "bench.entry1", "value": true }))["value"], 1,
                "a bool is stored as the number it reads as");
     assert_eq!(g.call("variable entry edit", j!({ "name": "bench.entry1", "value": [[1, 2], [3, 4.5]] }))["value"],
                j!([[1, 2], [3, 4.5]]), "a nested list is an array of that shape, printed back as it was typed");
-    assert_eq!(g.doc()["variables"]["bench.entry1"]["value"], j!([[1, 2], [3, 4.5]]));
+    assert_eq!(g.variable("bench.entry1"), j!([[1, 2], [3, 4.5]]));
     g.refuse("variable entry edit", j!({ "name": "bench.entry1", "value": [[1, 2], [3]] }));
     g.refuse("variable entry edit", j!({ "name": "bench.entry1", "value": { "no": "object" } }));
     g.call("undo", j!({}));
-    assert_eq!(g.doc()["variables"]["bench.entry1"]["value"], 1);
+    assert_eq!(g.variable("bench.entry1"), 1);
     g.refuse("variable entry edit", j!({ "name": "system.default_ufreq", "value": "no" }));
     g.call("variable entry add", j!({ "name": "bench.knob", "value": 1.0,
         "control": { "kind": "knob", "x": 0, "y": 0, "w": 3, "h": 3 } }));
@@ -369,7 +380,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let built = g.doc();
 
     // A compound is ONE step though it is an add plus a remove composed.
-    let expected_steps = 67 + 2 * goofi_core::variables::ControlKind::ALL.len();
+    let expected_steps = 65 + 2 * goofi_core::variables::ControlKind::ALL.len();
     let mut steps = 0;
     while g.call("undo", j!({}))["changed"] == true {
         steps += 1;
@@ -411,8 +422,8 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let saved = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
     g.call("session load", j!({ "content": saved }));
     assert!(g.doc()["variable_groups"]["group0"].is_object() && g.doc()["variable_groups"]["group1"].is_object());
-    assert_eq!(g.doc()["variables"]["bench.entry0"]["value"], "hello");
-    assert_eq!(g.doc()["variables"]["bench.entry1"]["value"], 1);
+    assert_eq!(g.variable("bench.entry0"), "hello");
+    assert_eq!(g.variable("bench.entry1"), 1);
 
     // The NAME is the arrangement's to mint: a caller that asks for none gets the first free
     // `Tab n`, so nobody has to reserve one against a strip they cannot see settle.
@@ -533,12 +544,12 @@ fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
     one.call("variable entry add", j!({ "name": "audit.bad", "value": 1.0 }));
     one.refuse("variable entry edit", j!({ "name": "audit.bad", "value": 2.0, "control": bad_control }));
     one.call("variable entry add", j!({ "name": "audit.after", "value": 3.0 }));
-    assert_eq!(one.doc()["variables"]["audit.bad"]["value"], 1.0);
+    assert_eq!(one.variable("audit.bad"), 1.0);
     one.refuse("compound", j!({ "ops": [
         { "op": "variable entry edit", "payload": { "name": "audit.after", "value": 4.0 } },
         { "op": "variable entry edit", "payload": { "name": "audit.bad", "value": 5.0, "control": bad_control } }
     ] }));
-    assert_eq!(one.doc()["variables"]["audit.after"]["value"], 3.0);
+    assert_eq!(one.variable("audit.after"), 3.0);
     one.call("undo", j!({}));
     assert!(one.doc()["variables"].get("audit.after").is_none());
     two.call("variable entry remove", j!({ "name": "audit.bad" }));
@@ -557,23 +568,23 @@ fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
     one.refuse("variable group rename", j!({ "from": "first", "to": "panelonly" }));
     one.call("variable group rename", j!({ "from": "first", "to": "renamed" }));
     one.call("undo", j!({}));
-    assert_eq!(one.doc()["variables"]["first.one"]["value"], 1.0);
+    assert_eq!(one.variable("first.one"), 1.0);
     one.call("redo", j!({}));
     two.call("variable entry add", j!({ "name": "renamed.peer", "value": 2.0 }));
     one.call("undo", j!({}));
-    assert_eq!(one.doc()["variables"]["renamed.peer"]["value"], 2.0);
-    assert_eq!(one.doc()["variables"]["renamed.one"]["value"], 1.0);
+    assert_eq!(one.variable("renamed.peer"), 2.0);
+    assert_eq!(one.variable("renamed.one"), 1.0);
     assert!(one.doc()["variables"].get("first.peer").is_none());
 
     one.call("variable entry edit", j!({ "name": "renamed.one", "value": 4.0 }));
     two.call("variable entry lock", j!({ "name": "renamed.one", "value": true }));
     one.call("undo", j!({}));
-    assert_eq!(one.doc()["variables"]["renamed.one"]["value"], 4.0);
+    assert_eq!(one.variable("renamed.one"), 4.0);
     one.refuse("variable entry edit", j!({ "name": "renamed.one", "value": 5.0 }));
     one.call("variable entry rename", j!({ "name": "second.two", "to": "second.moved" }));
     two.call("variable entry rename", j!({ "name": "second.moved", "to": "second.peer" }));
     one.call("undo", j!({}));
-    assert_eq!(one.doc()["variables"]["second.peer"]["value"], 2.0);
+    assert_eq!(one.variable("second.peer"), 2.0);
 }
 
 #[test]

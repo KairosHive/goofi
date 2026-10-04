@@ -38,9 +38,9 @@ const CAT: ExprCatalogue = {
 	],
 	self: 'buffer0',
 	variables: [
-		{ name: 'system.default_ufreq', group: 'system', element: 'default_ufreq', value: 30 },
-		{ name: 'mixer.gain', group: 'mixer', element: 'gain', value: 1 },
-		{ name: 'mixer.pan', group: 'mixer', element: 'pan', value: 0 }
+		{ name: 'system.default_ufreq', group: 'system', element: 'default_ufreq', form: 'number' },
+		{ name: 'mixer.gain', group: 'mixer', element: 'gain', form: 'number' },
+		{ name: 'mixer.pan', group: 'mixer', element: 'pan', form: 'number' }
 	]
 };
 

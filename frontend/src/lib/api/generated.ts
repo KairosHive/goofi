@@ -16,14 +16,14 @@ export type NodeRecord = { type: string, name: string, pos: [number, number],
 scope?: string, params: { [key in string]: { [key in string]: ParamEntry } }, viewers?: JsonValue, baseline?: JsonValue, record: Array<RecordedOutput>, };
 export type Link = { node_out: string, slot_out: string, node_in: string, slot_in: string, };
 export type ControlKind = "knob" | "slider" | "number" | "text" | "toggle" | "dropdown" | "paint";
-export type Control = { kind: ControlKind, min?: number, max?: number, step?: number, options: Array<string>, x: number, y: number, w: number, h: number, };
+export type Control = { kind: ControlKind, min?: number, max?: number, step?: number, options: Array<string>, 
+/**
+ * A paint pad's side in texels; absent is 128.
+ */
+resolution?: number, x: number, y: number, w: number, h: number, };
 export type Lock = { config: boolean, value: boolean, };
 export type VariableSource = { reference: string, index?: number, };
-export type Variable = { value: Literal, control?: Control, source?: VariableSource, 
-/**
- * The variable's OWN lock, apart from its group's; absent is the default.
- */
-lock?: Lock, };
+export type VariableRecord = { value?: Literal, control?: Control, source?: VariableSource, lock?: Lock, };
 export type Group = { lock: Lock, };
 export type PatchDoc = { 
 /**
@@ -33,7 +33,7 @@ nodes: { [key in string]: NodeRecord },
 /**
  * Keyed `out.slot>in.slot`, which is derived from the link and never read back.
  */
-links: { [key in string]: Link }, variables: { [key in string]: Variable }, variable_groups: { [key in string]: Group }, arrangement?: JsonValue, };
+links: { [key in string]: Link }, variables: { [key in string]: VariableRecord }, variable_groups: { [key in string]: Group }, arrangement?: JsonValue, };
 export type Archive = { version: number, goofi: string, patch: PatchDoc, viewpoint?: JsonValue, };
 export type Op = { "op": "put", path: Array<string>, value: JsonValue, } | { "op": "del", path: Array<string>, };
 export type ParamShow = { group: string, name: string, any_of: Array<string>, };

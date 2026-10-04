@@ -4,7 +4,14 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{control, Data, Value};
+use crate::{control, Data, Meta, Value};
+
+/// Where a variable's frames go: the data plane the store publishes on. A value write is a
+/// publish and nothing else; a removed variable retires its wire.
+pub trait Plane: Send + Sync {
+    fn publish(&self, name: &str, value: &Data);
+    fn retire(&self, name: &str);
+}
 
 /// What a control element is drawn as.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -43,22 +50,14 @@ impl ControlKind {
         }
     }
 
-    /// What a widget of this kind draws: one `number`, a `text`, or `any` frame's truth.
+    /// What a widget of this kind draws: one `number`, a `text`, an `image` (an `[h, w, 4]` RGBA
+    /// array in 0..1), or `any` frame's truth.
     pub fn draws(self) -> &'static str {
         match self {
             ControlKind::Knob | ControlKind::Slider | ControlKind::Number => "number",
             ControlKind::Toggle => "any",
-            ControlKind::Text | ControlKind::Dropdown | ControlKind::Paint => "text",
-        }
-    }
-
-    /// The value a widget of this kind is born holding.
-    pub fn born_value(self) -> Data {
-        match self {
-            // A drawing is base64 byte code (`goofi_core::drawing`), a STRING like any other: the
-            // widget draws it, an expression reads it, and nothing new crosses the wire for it.
-            ControlKind::Text | ControlKind::Dropdown | ControlKind::Paint => Data::text(""),
-            _ => Data::number(0.0),
+            ControlKind::Text | ControlKind::Dropdown => "text",
+            ControlKind::Paint => "image",
         }
     }
 
@@ -116,6 +115,9 @@ pub struct Control {
     pub step: Option<f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
+    /// A paint pad's side in texels; absent is 128.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<u32>,
     #[serde(default)]
     pub x: f64,
     #[serde(default)]
@@ -131,8 +133,21 @@ impl Control {
     pub fn fits(&self, value: &Data) -> bool {
         match (self.kind.draws(), value.value()) {
             ("number", Value::Array(a)) => a.shape() == [1],
+            ("image", Value::Array(a)) => matches!(a.shape(), [_, _, 4]),
             ("any", _) | ("text", Value::Str(_)) => true,
             _ => false,
+        }
+    }
+
+    /// The value a widget of this kind is born holding: a paint pad, a clear `[side, side, 4]` sheet.
+    pub fn born_value(&self) -> Data {
+        match self.kind {
+            ControlKind::Text | ControlKind::Dropdown => Data::text(""),
+            ControlKind::Paint => {
+                let side = self.resolution.unwrap_or(128).clamp(1, 1024) as usize;
+                Data::array_f32(vec![side, side, 4], vec![0; side * side * 16], Meta::default()).expect("a whole number of texels")
+            }
+            _ => Data::number(0.0),
         }
     }
 
@@ -315,6 +330,23 @@ pub fn is_valid_name(name: &str) -> bool {
 /// to set.
 pub const SYSTEM_GROUP: &str = "system";
 
+/// A variable's name as a producer's slot name: one leaked copy per distinct name, because a
+/// slot is spelled `&'static str` everywhere a wire is, and a patch names few variables.
+pub fn slot_name(name: &str) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static NAMES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let mut held = NAMES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    match held.get(name) {
+        Some(s) => s,
+        None => {
+            let s: &'static str = Box::leak(name.to_string().into_boxed_str());
+            held.insert(s);
+            s
+        }
+    }
+}
+
 fn is_ephemeral(name: &str) -> bool {
     SYSTEM_VARIABLES.iter().any(|d| d.ephemeral && d.name == name)
 }
@@ -323,19 +355,14 @@ fn group_of(name: &str) -> &str {
     split_variable(name).map(|(g, _)| g).unwrap_or(name)
 }
 
-/// One variable: its value beside the widget, source and lock it carries. The serde shape is
-/// the `.gfi`'s and the doc's: `{value, control?, source?, lock?}`, the value a literal.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
-#[ts(optional_fields)]
+/// One variable: its latest frame beside the widget, source and lock it carries. The frame is
+/// the plane's; the rest is the document's (`goofi_graph::doc::VariableRecord`).
+#[derive(Clone, Debug, PartialEq)]
 pub struct Variable {
-    #[ts(type = "Literal")]
     pub value: Data,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control: Option<Control>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<VariableSource>,
     /// The variable's OWN lock, apart from its group's; absent is the default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lock: Option<Lock>,
 }
 
@@ -350,11 +377,13 @@ impl Variable {
 }
 
 /// The authoritative variables map. Locks decide what a caller may change, and the insertion order
-/// is observable (the panel, the `.gfi` and the mirror all read it).
+/// is observable (the panel, the `.gfi` and the mirror all read it). Every value write goes out on
+/// the plane from here, under the store's own lock, so the order the plane sees is the store's.
 #[derive(Clone)]
 pub struct VariableStore {
     entries: IndexMap<String, Variable>,
     groups: IndexMap<String, Lock>,
+    plane: Option<std::sync::Arc<dyn Plane>>,
 }
 
 impl Default for VariableStore {
@@ -365,22 +394,58 @@ impl Default for VariableStore {
 
 impl VariableStore {
     pub fn new() -> VariableStore {
-        let mut s = VariableStore { entries: IndexMap::new(), groups: IndexMap::new() };
+        let mut s = VariableStore { entries: IndexMap::new(), groups: IndexMap::new(), plane: None };
         s.reassert_system();
         s
+    }
+
+    /// Put the store on a plane: every frame it holds goes out now, and every write from here on.
+    pub fn set_plane(&mut self, plane: std::sync::Arc<dyn Plane>) {
+        self.plane = Some(plane);
+        for (name, v) in &self.entries {
+            self.emit(name, &v.value);
+        }
+    }
+
+    fn emit(&self, name: &str, value: &Data) {
+        if let Some(p) = &self.plane {
+            p.publish(name, value);
+        }
+    }
+
+    fn retire(&self, name: &str) {
+        if let Some(p) = &self.plane {
+            p.retire(name);
+        }
+    }
+
+    /// Back to the seeded store a load starts from, every wire of the old content retired.
+    pub fn reset(&mut self) {
+        // The system wires stay open: every node's default expression reads one, and a wire
+        // reopened under a live reader is a second service. Their values start over in place.
+        let gone: Vec<String> = self.entries.keys().filter(|n| !n.starts_with("system.")).cloned().collect();
+        for name in &gone {
+            self.retire(name);
+            self.entries.shift_remove(name);
+        }
+        self.groups.clear();
+        self.seed_system(true);
     }
 
     /// Back-fill any missing system variable with its default — on construction and after a load —
     /// and re-lock the system group. An EPHEMERAL one is overwritten instead: goofi says what it
     /// holds, never a file.
     pub fn reassert_system(&mut self) {
+        self.seed_system(false);
+    }
+
+    fn seed_system(&mut self, all: bool) {
         for def in SYSTEM_VARIABLES {
-            if def.ephemeral {
+            if all || def.ephemeral || !self.entries.contains_key(def.name) {
                 let mut v = Variable::of((def.value)());
-                v.lock = Some(Lock { config: false, value: true });
+                v.lock = def.ephemeral.then_some(Lock { config: false, value: true });
+                self.emit(def.name, &v.value);
                 self.entries.insert(def.name.to_string(), v);
-            } else {
-                self.entries.entry(def.name.to_string()).or_insert_with(|| Variable::of((def.value)()));
             }
         }
         self.groups.insert(SYSTEM_GROUP.to_string(), Lock { config: true, value: false });
@@ -411,22 +476,23 @@ impl VariableStore {
         Ok(std::mem::replace(&mut self.entries[name].source, source))
     }
 
-    /// The follower's own write: what the source delivered. It answers whether the value
-    /// CHANGED, and a value-locked variable takes nothing, silently.
-    pub fn follow(&mut self, name: &str, value: Data) -> bool {
+    /// The follower's own write: what the source delivered. A value-locked variable takes
+    /// nothing, silently.
+    pub fn follow(&mut self, name: &str, value: Data) {
         // A variable with no source has no follower: a pick already in flight when one is cleared
         // would otherwise land after, and overwrite the value the clearing author then typed.
-        if is_ephemeral(name) || self.lock_of(name).value || self.source(name).is_none() {
-            return false;
+        if !is_ephemeral(name) && !self.lock_of(name).value && self.source(name).is_some() {
+            self.move_value(name, value);
         }
-        self.move_value(name, value)
     }
 
     /// An ENGINE's own published fact, which is why it passes the value lock: the lock exists to
     /// keep every other writer out, and the engine is the one it is held for. Only an ephemeral
-    /// name takes one. Answers whether the value MOVED, which is what a rebind is worth doing for.
-    pub fn publish(&mut self, name: &str, value: Data) -> bool {
-        is_ephemeral(name) && self.move_value(name, value)
+    /// name takes one.
+    pub fn publish(&mut self, name: &str, value: Data) {
+        if is_ephemeral(name) {
+            self.move_value(name, value);
+        }
     }
 
     fn move_value(&mut self, name: &str, value: Data) -> bool {
@@ -435,6 +501,7 @@ impl VariableStore {
             return false;
         }
         existing.value = value;
+        self.emit(name, &self.entries[name].value);
         true
     }
 
@@ -548,6 +615,7 @@ impl VariableStore {
                 format!("{why}, and it holds {}: {} is {}", control::form(existing), control::text(&value), control::form(&value))
             })?;
         }
+        self.emit(name, &value);
         self.entries[name].value = value;
         Ok(())
     }
@@ -565,6 +633,7 @@ impl VariableStore {
             return Err(format!("group `{}` is config-locked", group_of(name)));
         }
         let at = at.unwrap_or(usize::MAX).min(self.entries.len());
+        self.emit(name, &value);
         self.entries.shift_insert(at, name.to_string(), Variable::of(value));
         Ok(())
     }
@@ -581,6 +650,7 @@ impl VariableStore {
         }
         self.config_locked(name)?;
         self.entries.shift_remove(name);
+        self.retire(name);
         Ok(())
     }
 
@@ -601,6 +671,8 @@ impl VariableStore {
         }
         let at = self.entries.get_index_of(from).expect("checked above");
         let variable = self.entries.shift_remove(from).expect("the index answered");
+        self.retire(from);
+        self.emit(to, &variable.value);
         self.entries.shift_insert(at, to.to_string(), variable);
         Ok(())
     }

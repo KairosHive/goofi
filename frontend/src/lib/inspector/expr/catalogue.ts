@@ -2,6 +2,7 @@
 import { graph, type GraphStore } from '$lib/stores/graph.svelte';
 import type { VariableView } from '$lib/crdt/graphDoc';
 import { engineOf } from '$lib/editor/typeId';
+import { formOf, variableFrame, type Form } from '$lib/stores/variableValues.svelte';
 
 export interface CatalogueSlot {
 	name: string;
@@ -24,7 +25,8 @@ export interface CatalogueNode {
 	params: CatalogueGroup[];
 }
 
-export type CatalogueVariable = Pick<VariableView, 'name' | 'group' | 'element' | 'value'>;
+/** A variable, with the form its live value holds when a watcher has it; the document says nothing. */
+export type CatalogueVariable = Pick<VariableView, 'name' | 'group' | 'element'> & { form?: Form };
 
 export interface ExprCatalogue {
 	nodes: CatalogueNode[];
@@ -51,6 +53,9 @@ export function liveCatalogue(g: GraphStore = graph()): ExprCatalogue {
 				names: Object.keys(names)
 			}))
 		})),
-		variables: g.variables
+		variables: g.variables.map((v) => {
+			const frame = variableFrame(v.name);
+			return { name: v.name, group: v.group, element: v.element, ...(frame ? { form: formOf(frame) } : {}) };
+		})
 	};
 }

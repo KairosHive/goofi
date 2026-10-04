@@ -1,21 +1,24 @@
-<!-- PaintPad — a canvas that paints a drawing's byte code. A hand stroke paints locally while the
-     pointer is down; on pointer up it goes out as ONE `control paint` op, the CLI's own door. -->
+<!-- PaintPad — a canvas that shows the pad's `[h, w, 4]` RGBA array. A hand stroke paints locally
+     while the pointer is down; on pointer up it goes out as ONE `control paint` op, the CLI's own
+     door, and the array that comes back is what the sheet then shows. -->
 <script lang="ts">
 	import { Button } from 'panelty';
-	import { SPAN, decode, paint, strokeText } from '$lib/api/drawing';
+	import { SPAN, strokeText } from '$lib/api/drawing';
+	import type { ArrayData } from '$lib/codec/decode';
 
 	let {
 		value,
 		onStroke,
 		disabled = false
 	}: {
-		value: string;
-		/** Append ops, in the text form `control paint` takes. */
+		/** The sheet as the variable holds it; null before its first frame lands. */
+		value: ArrayData | null;
+		/** Draw ops, in the text form `control paint` takes. */
 		onStroke: (ops: string) => void;
 		disabled?: boolean;
 	} = $props();
 
-	/** The bitmap's own size: resizing the widget rescales the picture rather than cropping it. */
+	/** The canvas's own size: the sheet is scaled onto it, so the widget's size is free. */
 	const SIZE = 512;
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
@@ -32,7 +35,16 @@
 
 	$effect(() => {
 		const ctx = canvas?.getContext('2d');
-		if (ctx) paint(ctx, decode(value), SIZE);
+		if (!ctx) return;
+		ctx.clearRect(0, 0, SIZE, SIZE);
+		if (!value) return;
+		const [h, w] = value.shape;
+		const texels = new Uint8ClampedArray(w * h * 4);
+		for (let i = 0; i < texels.length; i++) texels[i] = Math.round(Math.min(Math.max(Number(value.values[i]), 0), 1) * 255);
+		const sheet = new OffscreenCanvas(w, h);
+		sheet.getContext('2d')?.putImageData(new ImageData(texels, w, h), 0, 0);
+		ctx.imageSmoothingEnabled = false;
+		ctx.drawImage(sheet, 0, 0, SIZE, SIZE);
 	});
 
 	function at(e: PointerEvent): [number, number] | null {

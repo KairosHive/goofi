@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use iceoryx2::port::update_connections::UpdateConnections;
 use iceoryx2::prelude::*;
 
 use goofi_node::EventId;
@@ -59,8 +60,12 @@ impl Doorbell {
     /// Open a door by name, on the ringer's OWN iceoryx2 node — one bell per producing NODE, since
     /// each node counts against `max_nodes`. `open_or_create`: the service is the rendezvous.
     pub fn open(node: &IoxNode, service: &str) -> Result<Doorbell, String> {
-        let door = event_service(node, service)?;
-        Ok(Doorbell(door.notifier_builder().create().map_err(|e| format!("notifier `{service}`: {e}"))?))
+        Self::on(&event_service(node, service)?, service)
+    }
+
+    /// A bell on a door this node already holds open, so the door is opened once on the node.
+    pub fn on(door: &EventService, what: &str) -> Result<Doorbell, String> {
+        Ok(Doorbell(door.notifier_builder().create().map_err(|e| format!("notifier `{what}`: {e}"))?))
     }
 
     /// Ring it. A failed ring costs a wake, never a message: the payload is already in a queue the
@@ -79,6 +84,8 @@ impl Doorbell {
 pub enum ServiceKind {
     /// A data wire: one producer; no history, because a link never replays; one deep, latest wins.
     Data,
+    /// A variable's wire: as `Data`, but the last frame is kept for a subscriber that comes late.
+    Held,
     /// A recorder's own service on an output slot: one reader, and a buffer deep enough that a
     /// journal commit costs no frames. Depth is per service, so this is never the shared data one.
     Record(RecordShape),
@@ -90,7 +97,7 @@ impl ServiceKind {
     /// How deep each subscriber's buffer is, and how many subscribers the service takes.
     fn shape(self) -> (usize, usize) {
         match self {
-            ServiceKind::Data => (1, MAX_SUBSCRIBERS),
+            ServiceKind::Data | ServiceKind::Held => (1, MAX_SUBSCRIBERS),
             ServiceKind::Record(shape) => (shape.buffer, 1),
             ServiceKind::Exchange => (2, 16),
         }
@@ -105,7 +112,7 @@ pub fn stream_service(node: &IoxNode, name: &str, kind: ServiceKind) -> Result<B
         .publish_subscribe::<[u8]>()
         .max_nodes(MAX_NODES)
         .enable_safe_overflow(true)
-        .history_size(0)
+        .history_size(usize::from(kind == ServiceKind::Held))
         .subscriber_max_buffer_size(buffer)
         .max_publishers(1)
         .max_subscribers(subscribers)
@@ -191,6 +198,12 @@ pub fn open_record_subscriber(node: &IoxNode, service: &str, shape: RecordShape)
 
 pub fn subscriber(service: &ByteService, what: &str) -> Result<ByteSubscriber, String> {
     service.subscriber_builder().create().map_err(|e| format!("subscriber `{what}`: {e}"))
+}
+
+/// Hand a `Held` service's last frame to every subscriber that connected since the last send;
+/// iceoryx2 delivers history only when the publisher looks at its connections.
+pub fn deliver_held(publisher: &BytePublisher) {
+    let _ = publisher.update_connections();
 }
 
 /// A publisher that can grow past its initial pool: a GOOF frame is variable-size, and `Static`

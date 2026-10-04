@@ -31,6 +31,7 @@ fn pack(state: &AppState) -> Result<Vec<u8>, String> {
     let tmp = goofi_supervisor::scope::PathLease::new(tmp);
     let (manifest, extra) = {
         let g = state.graph.lock();
+        g.persist_variables(&mount)?;
         (g.serialize(), crate::bundled_custom(&g, &state.custom))
     };
     let packed = goofi_graph::archive::write_gfi(tmp.path(), &manifest, &mount, &extra);

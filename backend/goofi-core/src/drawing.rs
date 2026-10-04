@@ -1,25 +1,13 @@
-//! A drawing: a script of timed atomic ops, stored as compact byte code. A pad's hand and the CLI
-//! both append to it; a node rasterizes it. The byte code is the one stored form.
-//!
-//! Byte code, a run of ops. Every number is a LEB128 varint; `dt` is milliseconds since the
-//! previous timestamp in the drawing, op or segment.
-//! - op: `dt << 2 | code`, code 0 clear, 1 stroke, 2 fill.
-//! - stroke: `flags` (bits 0-1 cap round/butt/square, bits 2-3 dash solid/dash/dot, bit 4 erase),
-//!   `r g b a` unless erase, `width`, `soft`, then a path.
-//! - fill: `flags` (bit 4 erase), `r g b a` unless erase, then a path.
-//! - path: segment count, then per segment `dt << 2 | tag` (0 move, 1 line, 2 cubic, 3 close) and
-//!   its points as zigzag deltas from the previous point of the path, which starts at 0,0.
-//!
-//! Coordinates, width and softness are u16, 64 to a unit of [`SPAN`]; the origin is the top left, y runs down.
-//! The variable holds the byte code as base64. The text form is one op per line (or `;`):
+//! A drawing: a script of timed atomic ops, which a paint pad's hand and the CLI both send, and
+//! which the manager rasterizes onto the pad's array. The text form is one op per line (or `;`):
 //! `[+ms] stroke [ink] [width w] [soft s] [cap c] [dash d] : [+ms] M x y L x y C x y x y x y Z`,
 //! `[+ms] fill [ink] : path` and `[+ms] clear`; ink is `#rgb`, `#rrggbb`, `#rrggbbaa` or `erase`.
-
-use base64::Engine;
+//! Coordinates, width and softness span [`SPAN`] whatever the pad's size; the origin is the top
+//! left, y runs down.
 
 /// The square that text coordinates, widths and softness span.
 pub const SPAN: f32 = 1000.0;
-/// The byte code's units: 64 to one text unit, so whole text values stay exact.
+/// The quantum coordinates are held in: 64 to one text unit, so whole text values stay exact.
 const Q: f32 = 64000.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,32 +71,8 @@ pub struct Op {
 
 const CAPS: [(Cap, &str); 3] = [(Cap::Round, "round"), (Cap::Butt, "butt"), (Cap::Square, "square")];
 const DASHES: [(Dash, &str); 3] = [(Dash::Solid, "solid"), (Dash::Dash, "dash"), (Dash::Dot, "dot")];
-const ERASE: u8 = 0x10;
-
-fn put(out: &mut Vec<u8>, mut v: u64) {
-    loop {
-        let b = (v & 0x7f) as u8;
-        v >>= 7;
-        if v == 0 {
-            out.push(b);
-            return;
-        }
-        out.push(b | 0x80);
-    }
-}
-
-fn put_ink(out: &mut Vec<u8>, flags: u8, ink: Ink) {
-    match ink {
-        Ink::Erase => out.push(flags | ERASE),
-        Ink::Rgba(c) => {
-            out.push(flags);
-            out.extend_from_slice(&c);
-        }
-    }
-}
-
 impl Seg {
-    fn tag(&self) -> u64 {
+    fn tag(&self) -> usize {
         match self {
             Seg::Move(_) => 0,
             Seg::Line(_) => 1,
@@ -126,167 +90,11 @@ impl Seg {
     }
 }
 
-fn put_path(out: &mut Vec<u8>, path: &[Segment]) {
-    put(out, path.len() as u64);
-    let mut at = [0i64; 2];
-    for s in path {
-        put(out, (s.dt as u64) << 2 | s.seg.tag());
-        for p in s.seg.points() {
-            for i in 0..2 {
-                let d = p[i] as i64 - at[i];
-                put(out, ((d << 1) ^ (d >> 63)) as u64);
-                at[i] = p[i] as i64;
-            }
-        }
-    }
-}
-
-/// The byte code of `ops`.
-pub fn encode(ops: &[Op]) -> Vec<u8> {
-    let mut out = Vec::new();
-    for op in ops {
-        let code = match &op.kind {
-            Kind::Clear => 0,
-            Kind::Stroke(..) => 1,
-            Kind::Fill(..) => 2,
-        };
-        put(&mut out, (op.dt as u64) << 2 | code);
-        match &op.kind {
-            Kind::Clear => {}
-            Kind::Stroke(s, path) => {
-                let cap = CAPS.iter().position(|c| c.0 == s.cap).unwrap() as u8;
-                let dash = DASHES.iter().position(|d| d.0 == s.dash).unwrap() as u8;
-                put_ink(&mut out, cap | dash << 2, s.ink);
-                put(&mut out, s.width as u64);
-                put(&mut out, s.soft as u64);
-                put_path(&mut out, path);
-            }
-            Kind::Fill(ink, path) => {
-                put_ink(&mut out, 0, *ink);
-                put_path(&mut out, path);
-            }
-        }
-    }
-    out
-}
-
-struct Reader<'a> {
-    bytes: &'a [u8],
-    at: usize,
-}
-
-impl Reader<'_> {
-    fn byte(&mut self) -> Result<u8, String> {
-        let b = *self.bytes.get(self.at).ok_or("the drawing ends inside an op")?;
-        self.at += 1;
-        Ok(b)
-    }
-
-    fn var(&mut self) -> Result<u64, String> {
-        let mut v = 0u64;
-        for shift in (0..64).step_by(7) {
-            let b = self.byte()?;
-            v |= ((b & 0x7f) as u64) << shift;
-            if b & 0x80 == 0 {
-                return Ok(v);
-            }
-        }
-        Err("the drawing holds a number too long".into())
-    }
-
-    fn small(&mut self, max: u64, what: &str) -> Result<u64, String> {
-        let v = self.var()?;
-        if v > max {
-            return Err(format!("the drawing holds a {what} out of range"));
-        }
-        Ok(v)
-    }
-
-    fn ink(&mut self) -> Result<(u8, Ink), String> {
-        let flags = self.byte()?;
-        if flags & ERASE != 0 {
-            return Ok((flags, Ink::Erase));
-        }
-        Ok((flags, Ink::Rgba([self.byte()?, self.byte()?, self.byte()?, self.byte()?])))
-    }
-
-    fn path(&mut self) -> Result<Vec<Segment>, String> {
-        let n = self.var()? as usize;
-        let mut at = [0i64; 2];
-        let mut path = Vec::with_capacity(n.min(self.bytes.len()));
-        for _ in 0..n {
-            let head = self.small(u32::MAX as u64 * 4 + 3, "time")?;
-            let mut pt = || -> Result<Point, String> {
-                let mut p = [0u16; 2];
-                for i in 0..2 {
-                    let z = self.var()?;
-                    at[i] += ((z >> 1) as i64) ^ -((z & 1) as i64);
-                    p[i] = u16::try_from(at[i]).map_err(|_| "the drawing holds a point off the sheet")?;
-                }
-                Ok(p)
-            };
-            let seg = match head & 3 {
-                0 => Seg::Move(pt()?),
-                1 => Seg::Line(pt()?),
-                2 => Seg::Cubic(pt()?, pt()?, pt()?),
-                _ => Seg::Close,
-            };
-            path.push(Segment { dt: (head >> 2) as u32, seg });
-        }
-        check_path(&path)?;
-        Ok(path)
-    }
-}
-
 fn check_path(path: &[Segment]) -> Result<(), String> {
     match path.first() {
         Some(Segment { seg: Seg::Move(_), .. }) => Ok(()),
         _ => Err("a path starts with `M x y`".into()),
     }
-}
-
-/// The ops in `bytes`, refused with a reason when it is not byte code.
-pub fn decode(bytes: &[u8]) -> Result<Vec<Op>, String> {
-    let mut r = Reader { bytes, at: 0 };
-    let mut ops = Vec::new();
-    while r.at < bytes.len() {
-        let head = r.small(u32::MAX as u64 * 4 + 3, "time")?;
-        let kind = match head & 3 {
-            0 => Kind::Clear,
-            1 => {
-                let (flags, ink) = r.ink()?;
-                let cap = CAPS.get((flags & 3) as usize).ok_or("the drawing holds an unknown cap")?.0;
-                let dash = DASHES.get((flags >> 2 & 3) as usize).ok_or("the drawing holds an unknown dash")?.0;
-                let width = r.small(u16::MAX as u64, "width")? as u16;
-                let soft = r.small(u16::MAX as u64, "softness")? as u16;
-                Kind::Stroke(Stroke { ink, width, soft, cap, dash }, r.path()?)
-            }
-            2 => Kind::Fill(r.ink()?.1, r.path()?),
-            _ => return Err("the drawing holds an unknown op".into()),
-        };
-        ops.push(Op { dt: (head >> 2) as u32, kind });
-    }
-    Ok(ops)
-}
-
-/// The ops a variable value holds: base64 byte code, empty for a blank sheet.
-pub fn from_value(value: &str) -> Result<Vec<Op>, String> {
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(value.trim())
-        .map_err(|e| format!("the drawing is not base64: {e}"))?;
-    decode(&bytes)
-}
-
-pub fn to_value(ops: &[Op]) -> String {
-    base64::engine::general_purpose::STANDARD.encode(encode(ops))
-}
-
-/// `stored` with `more` appended. Ops before the last clear cannot show, so they are dropped.
-pub fn append(stored: &str, more: Vec<Op>) -> Result<String, String> {
-    let mut ops = from_value(stored)?;
-    ops.extend(more);
-    let from = ops.iter().rposition(|o| o.kind == Kind::Clear).unwrap_or(0);
-    Ok(to_value(&ops[from..]))
 }
 
 fn quantize(v: &str, what: &str) -> Result<u16, String> {
@@ -432,7 +240,7 @@ pub fn print(ops: &[Op]) -> String {
         p.iter()
             .map(|s| {
                 let pts: Vec<String> = s.seg.points().iter().map(|p| format!(" {} {}", spell(p[0]), spell(p[1]))).collect();
-                let tag = ["M", "L", "C", "Z"][s.seg.tag() as usize];
+                let tag = ["M", "L", "C", "Z"][s.seg.tag()];
                 format!("{}{tag}{}", at(s.dt), pts.concat())
             })
             .collect::<Vec<_>>()
@@ -456,10 +264,24 @@ pub fn print(ops: &[Op]) -> String {
     lines.join("\n")
 }
 
-/// The drawing as straight RGBA rows, row 0 the top, at `width` x `height` pixels.
-pub fn raster(ops: &[Op], width: u32, height: u32) -> Result<Vec<u8>, String> {
-    use tiny_skia::{BlendMode, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, PixmapPaint, StrokeDash, Transform};
-    let mut sheet = Pixmap::new(width, height).ok_or("a drawing wants a size above zero")?;
+/// `ops` drawn onto `sheet`, an `[height, width, 4]` straight RGBA array in 0..1, row 0 the top:
+/// the array after the strokes, in the same form.
+pub fn raster(sheet: &[f32], width: u32, height: u32, ops: &[Op]) -> Result<Vec<f32>, String> {
+    use tiny_skia::{BlendMode, ColorU8, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, PixmapPaint, StrokeDash, Transform};
+    let texels = (width as usize) * (height as usize);
+    if sheet.len() != texels * 4 {
+        return Err(format!("a {width}x{height} pad holds {} numbers, not {}", texels * 4, sheet.len()));
+    }
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let data: Vec<u8> = sheet
+        .chunks_exact(4)
+        .flat_map(|t| {
+            let c = ColorU8::from_rgba(byte(t[0]), byte(t[1]), byte(t[2]), byte(t[3])).premultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect();
+    let mut sheet = Pixmap::from_vec(data, tiny_skia::IntSize::from_wh(width, height).ok_or("a drawing wants a size above zero")?)
+        .ok_or("a drawing wants a size above zero")?;
     let (sx, sy) = (width as f32 / Q, height as f32 / Q);
     let scale = (sx + sy) / 2.0;
     let build = |path: &[Segment]| {
@@ -529,7 +351,7 @@ pub fn raster(ops: &[Op], width: u32, height: u32) -> Result<Vec<u8>, String> {
     }
     Ok(sheet.pixels().iter().flat_map(|p| {
         let c = p.demultiply();
-        [c.red(), c.green(), c.blue(), c.alpha()]
+        [c.red(), c.green(), c.blue(), c.alpha()].map(|v| f32::from(v) / 255.0)
     }).collect())
 }
 

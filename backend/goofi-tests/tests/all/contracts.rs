@@ -555,7 +555,9 @@ fn the_control_plane_document_is_the_patch_and_a_delta_is_path_ops() {
     let state = goofi_tests::arrangement_node(&doc["arrangement"], &panel).expect("the panel")["state"].clone();
     assert_eq!(state["node"], hex(osc), "a panel's state is JSON: {state}");
     assert_eq!(doc["nodes"][hex(osc)]["params"]["lfo"]["frequency"]["mode"], "expression", "a source rides inline");
-    assert_eq!(doc["variables"]["patch.subject"]["value"], "P07");
+    // A value is a frame on the data plane, never a document field; the list answers it.
+    assert!(doc["variables"]["patch.subject"].is_object() && doc["variables"]["patch.subject"].get("value").is_none(), "{}", doc["variables"]);
+    assert_eq!(g.variable("patch.subject"), "P07");
 }
 
 fn panel_id(g: &Goofi) -> String {

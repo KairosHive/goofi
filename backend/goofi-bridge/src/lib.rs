@@ -23,6 +23,7 @@ mod record;
 pub mod reducer;
 pub mod schemas;
 pub mod term;
+pub mod variables;
 pub mod vocab;
 
 use std::collections::HashMap;
@@ -121,6 +122,8 @@ pub struct AppState {
     dirty: Arc<std::sync::atomic::AtomicBool>,
     /// One reduction per active (node, slot), fanned out to every viewer.
     pub reducers: reducer::SlotReducers,
+    /// The patch's own producer: every variable's wire, written from the store.
+    pub variables: Arc<variables::Variables>,
     /// Pulsed after every settle, for whoever derives its address from the graph: a `/data`
     /// socket re-asks which physical slot stands behind its port on the pulse, not on a clock.
     settled: Arc<tokio::sync::watch::Sender<u64>>,
@@ -216,9 +219,13 @@ impl AppState {
         graph_val.set_workspace(&dir);
         let mut doc = crate::doc::GraphDoc::new();
         doc.reconcile_root(graph_val.replica());
+        // On the plane before anything reads: the seeded system values are its first frames. Every
+        // wire is named under the GRAPH's instance, the one its nodes' services carry.
+        let variables = Arc::new(variables::Variables::new(&iox, graph_val.instance())?);
+        graph_val.variables().set_plane(variables.clone());
         let graph = Arc::new(Mutex::new(graph_val));
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
-        let reducers = reducer::SlotReducers::new(iox.clone(), graph.clone(), follow_tx);
+        let reducers = reducer::SlotReducers::new(iox.clone(), graph.clone(), variables.clone(), follow_tx);
         let state = AppState {
             iox: iox.clone(),
             plugins: Arc::new(plugins::Plugins::default()),
@@ -232,6 +239,7 @@ impl AppState {
             doc: Arc::new(Mutex::new(doc)),
             dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reducers,
+            variables,
             settled: Arc::new(tokio::sync::watch::channel(0).0),
             live: Arc::new(LiveHub::default()),
             history: Arc::new(Mutex::new(goofi_graph::CommandHistory::new())),
@@ -253,6 +261,8 @@ impl AppState {
             scope: Arc::new(goofi_supervisor::scope::Scope::default()),
         };
         spawn_follower(state.clone(), follow_rx);
+        let (served, graph, stopping) = (state.variables.clone(), state.graph.clone(), state.stopping.clone());
+        state.scope.spawn("goofi-variables", move || served.serve(&graph, &stopping));
         autosave::spawn(state.clone());
         *state.record_worker.lock() = record::spawn(iox, state.graph.clone(), state.recorder.clone(), state.record_drain.clone());
         Ok(state)
@@ -982,13 +992,22 @@ pub fn register_dyn_type(
     replaced
 }
 
-/// One output slot's data service name — the resolver over the graph's own birth facts. Also the
-/// `/data` plane's subscribe address.
+/// One output slot's data service name — the resolver over the graph's own birth facts, a
+/// variable's under the variables producer. Also the `/data` plane's subscribe address.
 pub fn output_service_of(g: &Graph, uid: goofi_graph::Uid, slot: &str) -> String {
-    goofi_transport::output_service(
-        &goofi_transport::service_base(g.instance(), uid, g.node_generation(uid)),
-        slot,
-    )
+    let base = match uid {
+        Uid::VARIABLES => goofi_transport::variables_base(g.instance()),
+        uid => goofi_transport::service_base(g.instance(), uid, g.node_generation(uid)),
+    };
+    goofi_transport::output_service(&base, slot)
+}
+
+/// Whether anything produces `(uid, slot)` right now: a running node, or a variable the patch holds.
+pub(crate) fn producer_alive(g: &Graph, uid: Uid, slot: &str) -> bool {
+    match uid {
+        Uid::VARIABLES => g.variables().contains(slot),
+        uid => g.manifest(uid).is_some(),
+    }
 }
 
 /// Every node type name visible in the catalog — all engines' libraries plus the unavailable
@@ -1420,11 +1439,13 @@ pub(crate) fn reconcile_and_broadcast(state: &AppState, mut doc: MutexGuard<crat
     }
 }
 
-/// The follower: every tap's pick lands here, a batch at a time, and a changed variable is written
-/// and broadcast as any edit is. It is the manager writing, so it leaves no undo entry.
+/// The follower: every tap's pick lands here, a batch at a time, and is written into the store —
+/// which publishes it — under the store's lock alone. The manager writing, so no undo entry, no
+/// dirty mark, and no document.
 fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Followed>) {
     let owner = state.clone();
     owner.scope.spawn("goofi-follower", move || {
+        let store = state.graph.lock().variable_store();
         let mut pace = reducer::Pace::new();
         loop {
             // A bounded wait, so the stop is read between batches.
@@ -1438,8 +1459,8 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             };
-            // One write per viewer interval: a followed slot at its full rate re-projects the
-            // document once, with each variable's newest pick.
+            // One write per viewer interval: a followed slot at its full rate publishes each
+            // variable's newest pick once.
             let mut latest: HashMap<String, goofi_core::Data> = HashMap::new();
             latest.insert(first.0, first.1);
             let interval = state.reducers.cap_interval();
@@ -1448,12 +1469,9 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
                 latest.insert(name, value);
             }
             pace.take(interval, Instant::now());
-            let mut g = state.graph.lock();
-            let changed = latest.into_iter().fold(false, |acc, (name, value)| g.follow_variable(&name, value) || acc);
-            if changed {
-                let (doc, projection) = settle_and_project(&state, &mut g);
-                drop(g);
-                reconcile_and_broadcast(&state, doc, projection, Vec::new());
+            let mut store = store.lock();
+            for (name, value) in latest {
+                store.follow(&name, value);
             }
         }
     });
@@ -1466,7 +1484,8 @@ fn sync_followers(state: &AppState, g: &Graph) {
         taps.entry((uid, slot)).or_default().push(reducer::Tap { variable, index });
     }
     state.reducers.set_taps(taps);
-    state.reducers.set_cap(g);
+    // The bindings may have moved: the producer re-reads who it rings.
+    state.variables.poke();
 }
 
 /// Re-project the authoritative graph into the document and broadcast the delta, after an RPC
@@ -1705,9 +1724,11 @@ async fn handle_params(socket: WebSocket, state: AppState, node: String) {
 async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: String) {
     let (mut tx, mut rx) = socket.split();
 
-    let uid = match Uid::from_hex(&node) {
-        Some(u) => u,
-        None => {
+    // `variables` is the patch's own producer, its slots the variables by name.
+    let uid = match (node.as_str(), Uid::from_hex(&node)) {
+        ("variables", _) => Uid::VARIABLES,
+        (_, Some(u)) => u,
+        (_, None) => {
             farewell(tx, rx, 4004, "bad node uid").await;
             return;
         }
@@ -1716,7 +1737,10 @@ async fn handle_data(socket: WebSocket, state: AppState, node: String, slot: Str
     // again below, because a port with nothing wired is a real node with no data.
     let named = {
         let g = state.graph.lock();
-        vocab::resolve_slot(&g, uid, &slot).ok()
+        match uid {
+            Uid::VARIABLES => g.variables().contains(&slot).then_some(slot.clone()),
+            uid => vocab::resolve_slot(&g, uid, &slot).ok(),
+        }
     };
     let Some(slot) = named else {
         farewell(tx, rx, 4004, "unknown node/slot").await;
