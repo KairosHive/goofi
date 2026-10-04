@@ -1,6 +1,6 @@
 // The app shell: it runs the goofi backend beside it, shows the app it serves, and installs a
 // newer release when the backend asks (`goofi update`) or one is found at start.
-const { app, BrowserWindow, dialog, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const { autoUpdater } = require('electron-updater');
@@ -89,6 +89,7 @@ autoUpdater.on('update-downloaded', () => {
 });
 
 app.whenReady().then(async () => {
+	Menu.setApplicationMenu(null);
 	let url;
 	try {
 		url = await startBackend();
@@ -102,6 +103,7 @@ app.whenReady().then(async () => {
 		height: 900,
 		title: 'goofi',
 		backgroundColor: '#101014',
+		icon: path.join(__dirname, 'build', 'icon.png'),
 		webPreferences: { contextIsolation: true, sandbox: true },
 	});
 	window.on('closed', () => { window = null; app.quit(); });
