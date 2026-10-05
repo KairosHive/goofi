@@ -25,6 +25,7 @@ pub mod command;
 pub use command::{open_preview, Applied, Command, CommandHistory, Ctx, Flip, Outcome, PreviewScope, Skip, SourceState};
 
 pub mod expr_rewrite;
+pub mod machine;
 
 pub use goofi_node::Uid;
 
@@ -453,6 +454,9 @@ struct Patch {
     /// Patch-scoped variables, system ones seeded and re-asserted by every `clear`/load. Under a
     /// lock of its own: a value write is the store's and the plane's, never the graph's.
     variables: Arc<goofi_supervisor::sync::Mutex<goofi_core::variables::VariableStore>>,
+    /// The state machines, the sixth doc root. Each playhead is a group of variables the machine
+    /// owns, held in step with this model by [`Graph::sync_playheads`].
+    machines: IndexMap<String, machine::Machine>,
 }
 
 /// What runs the patch: the engines, the catalog, the mint and the live instances.
@@ -555,6 +559,7 @@ impl Graph {
                 links: IndexMap::new(),
                 arrangement: layout::Layout::default(),
                 variables: Arc::new(goofi_supervisor::sync::Mutex::new(goofi_core::variables::VariableStore::new())),
+                machines: IndexMap::new(),
             },
             viewpoint: serde_json::Value::Null,
             runtime: Runtime {
@@ -758,6 +763,117 @@ impl Graph {
         let touched = self.rewrite_variable_reads(&moved);
         self.patch.arrangement.set_contents(&writes);
         Ok(touched)
+    }
+
+    pub fn machines(&self) -> &IndexMap<String, machine::Machine> {
+        &self.patch.machines
+    }
+
+    /// Set, replace or remove (`None`) a machine whole, answering the record it replaced. A new one
+    /// lands at `at`. Every playhead's group follows.
+    pub fn set_machine(&mut self, name: &str, record: Option<machine::Machine>, at: Option<usize>) -> Result<Option<machine::Machine>, String> {
+        if !goofi_core::variables::is_valid_identifier(name) {
+            return Err(format!("invalid machine name `{name}`: {}", machine::NAME_RULE));
+        }
+        let old = match record {
+            None => self.patch.machines.shift_remove(name),
+            Some(record) => {
+                record.check()?;
+                for ph in record.playheads.keys() {
+                    let mine = self.variables().machine(ph) == Some(name);
+                    if !mine && self.group_taken(ph) {
+                        return Err(format!("`{ph}` is a variable group already; a playhead's name is its group"));
+                    }
+                }
+                match self.patch.machines.get_index_of(name) {
+                    Some(_) => self.patch.machines.insert(name.to_string(), record),
+                    None => {
+                        let at = at.unwrap_or(usize::MAX).min(self.patch.machines.len());
+                        self.patch.machines.shift_insert(at, name.to_string(), record);
+                        None
+                    }
+                }
+            }
+        };
+        self.sync_playheads();
+        Ok(old)
+    }
+
+    /// Rename a machine, keeping its place. Its playheads' groups are the playheads' own names.
+    pub fn rename_machine(&mut self, from: &str, to: &str) -> Result<(), String> {
+        if !goofi_core::variables::is_valid_identifier(to) {
+            return Err(format!("invalid machine name `{to}`: {}", machine::NAME_RULE));
+        }
+        if self.patch.machines.contains_key(to) {
+            return Err(format!("machine `{to}` already exists"));
+        }
+        let at = self.patch.machines.get_index_of(from).ok_or_else(|| format!("no machine `{from}`"))?;
+        let record = self.patch.machines.shift_remove(from).expect("the index answered");
+        self.patch.machines.shift_insert(at, to.to_string(), record);
+        self.sync_playheads();
+        Ok(())
+    }
+
+    /// Rename a playhead, and rewrite every expression that reads its variables.
+    pub fn rename_playhead(&mut self, machine: &str, from: &str, to: &str) -> Result<Vec<Uid>, String> {
+        let m = self.patch.machines.get(machine).ok_or_else(|| format!("no machine `{machine}`"))?;
+        if !m.playheads.contains_key(from) {
+            return Err(format!("no playhead `{from}` in machine `{machine}`"));
+        }
+        let mut next = m.clone();
+        let at = next.playheads.get_index_of(from).expect("checked");
+        let record = next.playheads.shift_remove(from).expect("checked");
+        next.playheads.shift_insert(at, to.to_string(), record);
+        let moved: Vec<(String, String)> =
+            m.playhead_entries(from).into_iter().map(|(name, ..)| (name.clone(), name.replacen(from, to, 1))).collect();
+        self.set_machine(machine, Some(next), None)?;
+        Ok(self.rewrite_variable_reads(&moved))
+    }
+
+    /// Rename an attribute in every state and playhead, and rewrite every expression that reads it.
+    pub fn rename_attribute(&mut self, machine: &str, from: &str, to: &str) -> Result<Vec<Uid>, String> {
+        let m = self.patch.machines.get(machine).ok_or_else(|| format!("no machine `{machine}`"))?;
+        if !m.attributes.contains_key(from) {
+            return Err(format!("no attribute `{from}` in machine `{machine}`"));
+        }
+        if m.attributes.contains_key(to) {
+            return Err(format!("attribute `{to}` already exists in machine `{machine}`"));
+        }
+        let mut next = m.clone();
+        let rekey = |map: &mut IndexMap<String, Data>| {
+            if let Some(at) = map.get_index_of(from) {
+                let v = map.shift_remove(from).expect("the index answered");
+                map.shift_insert(at, to.to_string(), v);
+            }
+        };
+        let at = next.attributes.get_index_of(from).expect("checked");
+        let attr = next.attributes.shift_remove(from).expect("checked");
+        next.attributes.shift_insert(at, to.to_string(), attr);
+        next.states.values_mut().for_each(|s| rekey(&mut s.values));
+        let moved: Vec<(String, String)> = m.playheads.keys().map(|ph| (format!("{ph}.{from}"), format!("{ph}.{to}"))).collect();
+        self.set_machine(machine, Some(next), None)?;
+        Ok(self.rewrite_variable_reads(&moved))
+    }
+
+    /// Hold every playhead's group in step with the machines: one group per playhead, owned by its
+    /// machine, with the machine's three elements and one entry per attribute; nothing else.
+    fn sync_playheads(&mut self) {
+        let mut store = self.variables();
+        let wanted: Vec<(String, String, goofi_core::variables::Entries)> = self
+            .patch
+            .machines
+            .iter()
+            .flat_map(|(m, record)| record.playheads.keys().map(move |ph| (ph.clone(), m.clone(), record.playhead_entries(ph))))
+            .collect();
+        let gone: Vec<String> =
+            store.groups().filter(|(g, rec)| rec.machine.is_some() && !wanted.iter().any(|(ph, m, _)| ph == g && Some(m.as_str()) == rec.machine.as_deref())).map(|(g, _)| g.to_string()).collect();
+        for group in gone {
+            store.release(&group);
+        }
+        for (ph, m, entries) in wanted {
+            let record = goofi_core::variables::Group { machine: Some(m), ..Default::default() };
+            let _ = store.claim(&ph, record, entries);
+        }
     }
 
     /// Follow a set of variable renames into every expression that spells one, answering the nodes
@@ -3041,7 +3157,8 @@ impl Graph {
         // An un-echoed refresh names a node the patch no longer holds — and a load restores uids,
         // so that number can come back and the echo be read as an answer nobody asked for.
         self.runtime.refreshed.clear();
-        // Variables are patch CONTENT, so a load starts from a fresh seeded store.
+        // Variables and machines are patch CONTENT, so a load starts from a fresh seeded store.
+        self.patch.machines.clear();
         self.variables().reset();
         // Time belongs to the PATCH: one loaded an hour in must read what it would at boot. Every
         // engine holds this same object, so there is nothing to push.
@@ -3288,6 +3405,7 @@ impl Graph {
             .map(|(name, v)| (name.to_string(), doc::VariableRecord { value: None, control: v.control.clone(), expression: v.expression.clone(), lock: v.lock }))
             .collect();
         patch.variable_groups = variables.groups().map(|(g, rec)| (g.to_string(), rec.clone())).collect();
+        patch.machines = self.patch.machines.clone();
         // The flat arrangement always exists (at worst the default), so it always rides.
         patch.arrangement = Some(self.patch.arrangement.to_json());
         patch
@@ -3297,7 +3415,7 @@ impl Graph {
     /// variable's expression why it cannot bind — the one runtime fact the panel shows inline.
     pub fn replica(&self) -> serde_json::Value {
         let mut doc = serde_json::to_value(self.document()).expect("a plain record");
-        for root in ["nodes", "links", "variables", "variable_groups"] {
+        for root in ["nodes", "links", "variables", "variable_groups", "machines"] {
             doc[root] = doc.get(root).cloned().unwrap_or_else(|| serde_json::json!({}));
         }
         for (name, b) in &self.runtime.variable_binds {
@@ -3319,8 +3437,8 @@ impl Graph {
         for (name, record) in &mut patch.variables {
             record.value = variables.get(name).filter(|v| !is_wide(v)).cloned();
         }
-        // A device's group is the session's likewise: the patch names what reads it, not the device.
-        patch.variable_groups.retain(|g, rec| g != goofi_core::variables::SYSTEM_GROUP && rec.midi.is_none());
+        // A device's group is the session's likewise, and a playhead's is its machine's to re-derive.
+        patch.variable_groups.retain(|g, rec| g != goofi_core::variables::SYSTEM_GROUP && !rec.owned());
         let archive = doc::Archive {
             version: doc::MANIFEST_VERSION,
             goofi: env!("CARGO_PKG_VERSION").to_string(),
@@ -3370,6 +3488,13 @@ impl Graph {
         }
         for (group, g) in &doc.variable_groups {
             let _ = self.variables().set_group_lock(group, Some(g.lock));
+        }
+        // Machines after the variables and before the nodes: a playhead's variables are born here,
+        // and a node's expression may read one at instantiation.
+        for (name, m) in &doc.machines {
+            if let Err(e) = self.set_machine(name, Some(m.clone()), None) {
+                warnings.push(format!("machine `{name}` dropped: {e}"));
+            }
         }
         // Every uid this load hands out, restored or minted — what keeps two records from landing
         // on one uid when a hand-written file spells the same number two ways.

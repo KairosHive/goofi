@@ -5,6 +5,7 @@ pub mod history;
 pub mod host;
 pub mod layout;
 pub mod library;
+pub mod machine;
 pub mod midi;
 pub mod node;
 pub mod record;
@@ -445,6 +446,39 @@ pub static TREE: &[Entry] = &[
             Leaf(write::<variable::GroupRename>()),
             Leaf(write::<variable::GroupLock>()),
         ]),
+    ]),
+    Group("machine", "a state machine: states, the transitions between them, and the playheads whose variables they write", &[
+        Leaf(read::<machine::List>()),
+        Leaf(write::<machine::Add>()),
+        Leaf(write::<machine::Remove>()),
+        Leaf(write::<machine::Rename>()),
+        Leaf(write::<machine::Edit>()),
+        Group("attribute", "one attribute — a value every state may set, carried by every playhead as `variables.<playhead>.<attribute>`", &[
+            Leaf(write::<machine::AttributeAdd>()),
+            Leaf(write::<machine::AttributeEdit>()),
+            Leaf(write::<machine::AttributeRemove>()),
+            Leaf(write::<machine::AttributeRename>()),
+        ]),
+        Group("state", "one state — a card on the canvas and the attributes it sets", &[
+            Leaf(write::<machine::StateAdd>()),
+            Leaf(write::<machine::StateEdit>()),
+            Leaf(write::<machine::StateRemove>()),
+            Leaf(write::<machine::StateRename>()),
+        ]),
+        Group("transition", "one transition, addressed by the id the manager minted", &[
+            Leaf(write::<machine::TransitionAdd>()),
+            Leaf(write::<machine::TransitionEdit>()),
+            Leaf(write::<machine::TransitionRemove>()),
+        ]),
+        Group("playhead", "one playhead — a dot on the canvas, and the variable group it writes", &[
+            Leaf(write::<machine::PlayheadAdd>()),
+            Leaf(write::<machine::PlayheadEdit>()),
+            Leaf(write::<machine::PlayheadRemove>()),
+            Leaf(write::<machine::PlayheadRename>()),
+        ]),
+        Leaf(effect::<machine::Fire>()),
+        Leaf(effect::<machine::Jump>()),
+        Leaf(effect::<machine::Reset>()),
     ]),
     Group("midi", "the MIDI devices on the variable bus — a port the patch reads is a group, open while it is read", &[
         Leaf(read::<midi::List>()),

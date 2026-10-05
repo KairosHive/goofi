@@ -28,7 +28,32 @@ export type VariableRecord = { value?: Literal, control?: Control,
  */
 expression?: string, lock?: Lock, };
 export type Midi = { port: string, };
-export type Group = { lock: Lock, midi?: Midi, };
+export type Group = { lock: Lock, midi?: Midi, machine?: string, };
+export type Attribute = { default: Literal, control?: Control, };
+export type State = { pos: [number, number], values?: Record<string, Literal>, };
+export type Curve = "step" | "linear" | "in" | "out" | "in_out" | "smooth";
+export type Policy = "fifo" | "lifo" | "all";
+export type Seconds = number | string;
+export type Trigger = { "kind": "manual" } | { "kind": "after", seconds: Seconds, chance: number, } | { "kind": "when", expression: string, } | { "kind": "meet", policy: Policy, } | { "kind": "alone" };
+export type Transition = { 
+/**
+ * A state name, or `*` for any state.
+ */
+from: string, to: string, triggers?: Array<Trigger>, 
+/**
+ * Seconds; 0 is instant.
+ */
+duration: number, curve: Curve, 
+/**
+ * The draw among transitions that fire together; 0 is never drawn.
+ */
+weight: number, };
+export type Playhead = { color: string, start: string, };
+export type Machine = { attributes: { [key in string]: Attribute }, states: { [key in string]: State }, transitions: { [key in string]: Transition }, playheads: { [key in string]: Playhead }, 
+/**
+ * What the random draws start from; absent is 0.
+ */
+seed?: number, };
 export type PatchDoc = { 
 /**
  * Keyed by uid spelling; a key that is not one is reminted on the way in.
@@ -37,7 +62,7 @@ nodes: { [key in string]: NodeRecord },
 /**
  * Keyed `out.slot>in.slot`, which is derived from the link and never read back.
  */
-links: { [key in string]: Link }, variables: { [key in string]: VariableRecord }, variable_groups: { [key in string]: Group }, arrangement?: JsonValue, };
+links: { [key in string]: Link }, variables: { [key in string]: VariableRecord }, variable_groups: { [key in string]: Group }, machines: { [key in string]: Machine }, arrangement?: JsonValue, };
 export type Archive = { version: number, goofi: string, patch: PatchDoc, viewpoint?: JsonValue, };
 export type Op = { "op": "put", path: Array<string>, value: JsonValue, } | { "op": "del", path: Array<string>, };
 export type ParamShow = { group: string, name: string, any_of: Array<string>, };

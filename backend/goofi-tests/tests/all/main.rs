@@ -22,6 +22,7 @@ mod inspect;
 #[cfg(not(feature = "embed"))]
 mod io;
 mod logging;
+mod machine;
 mod nodes;
 #[cfg(feature = "embed")]
 mod param_modulation;

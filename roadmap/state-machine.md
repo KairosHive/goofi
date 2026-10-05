@@ -4,9 +4,9 @@ A panel that hosts machines. A machine is a set of states, the transitions betwe
 the playheads that travel through them. A playhead writes the values its states hold into
 patch variables, and any param reads them the way it reads a control panel today.
 
-Control data is unified already: a param, a variable, a control panel widget and a machine
-attribute hold one kind of value, a variable is a producer on the data plane, and a param is a
-constant or an expression served by one expression worker per engine. The machine builds on that.
+The machines themselves are built: `goofi_graph::machine` is the model and the stepping, the
+`machine` ops build one, the `goofi-machines` thread drives it, and a playhead is an owned
+variable group `<playhead>.{state, left, progress, <attribute>…}`. What remains is the panel.
 
 Status: in progress. This records the product decisions agreed through 2026-10-04. Build on
 `AGENTS.md` and the code; this file carries only what the code cannot say.
@@ -25,100 +25,6 @@ Status: in progress. This records the product decisions agreed through 2026-10-0
   through `fits` as the other kinds do. Unbuilt; it lands with the panel stage, whose
   Playwright session lists a vector.
 
-### Attributes travel as variables
-
-- A playhead is a variable group. Its name is its group name, held by the one rule a control
-  panel's group is held by (`Graph::group_taken`). Each attribute of the machine is one variable
-  `<playhead>.<attribute>` in that group. The machine is the writer: it publishes frames on
-  the variables' services like a follower does, with no undo entry, no dirty mark and no
-  graph lock, equality-gated, paced on the viewer cap. A param links to an attribute with
-  `variables.<playhead>.<attribute>`, bare or inside a computation, through the drop
-  and the "select for reference" gestures the control panel already has. There is no second
-  link mechanism.
-- Three elements of a playhead's group are the machine's own and are refused as attribute
-  names: `state` (string: the state the playhead is in, or is moving to), `from` (string: the
-  state it left, empty at rest) and `progress` (float 0..1 along the transition, 1 at rest).
-  An expression reads them like any variable; the panel animates from them.
-- The group is config-locked for the life of the playhead; the variables are value-locked
-  against every writer but the machine. Removing the playhead removes the group. Renaming it
-  rewrites every expression that reads it (`rename_group`).
-- A `.gfi` carries the playhead's variables like any other. On load the machine resets every
-  playhead to its start state and publishes them. A reload does not resume mid-transition.
-
-### Machines
-
-- The document gains the root `machines: {name: Machine}`. A machine name is an identifier.
-- `Machine { attributes: {name: Attribute}, states: {name: State}, transitions: {id: Transition},
-  playheads: {name: Playhead} }`. `Attribute { default: literal, control }`: the default
-  frame and the widget a state card and a playhead row draw it with, exactly as a control
-  panel draws a variable. State and playhead names are identifiers; a transition id is
-  minted by the manager (`t1`, `t2`, …) and never typed by a person except to address one.
-- `State { pos: [x, y], values: {attribute: literal} }`, each literal an array or a string in
-  the document form. A state may leave an attribute out: a playhead entering it keeps the
-  value it holds. A removed attribute is removed from every state.
-- `Playhead { color, start: state }`. Playheads of one machine share the attribute set. Their
-  colour is theirs alone and is what the canvas draws them as.
-- A playhead is in exactly one state, or on exactly one transition. Several active states
-  are several playheads. A machine with no playhead runs nothing.
-
-### Transitions
-
-- `Transition { from, to, triggers: [Trigger], duration, curve, weight }`. `from` is a state
-  name or `*` (any state). `to` may equal `from`: a re-entry restarts the dwell.
-- A transition fires when any of its triggers fires. Trigger kinds, covering the decision
-  space:
-  - `manual`: the `machine fire` op, or a tap on the transition in the panel.
-  - `after { seconds, chance }`: when the playhead has dwelt `seconds` in `from`, roll
-    `chance` (default 1). A failed roll re-arms the same dwell. `seconds` may be an expression,
-    in the one namespace below, read on entry.
-  - `when { expression }`: the one expression language params use, read over `variables.*`
-    and `t` only. It fires on the rising edge of its gate (`gate(x)`). A node output enters as a
-    variable whose expression names it, so a node drives a machine through the same seam a
-    MIDI knob drives a widget.
-  - `meet { policy }`: fires when a second playhead arrives in `from`. `policy` chooses who
-    takes the transition: `fifo` (the longest resident), `lifo` (the newest arrival), `all`
-    (every resident). `alone` is the inverse: fires for the remaining playhead when the
-    second-to-last leaves.
-- When several transitions out of one state fire in the same tick, one is drawn by `weight`
-  (default 1; 0 is never drawn). This is also how a random branch is spelled: several
-  `after` transitions of the same dwell with different weights.
-- `duration` is seconds; 0 is instant. `curve` is one of `step`, `linear`, `in`, `out`,
-  `in_out` (quadratic), `smooth` (smoothstep). `goofi_core::ease` owns the curves; nothing
-  else in the tree eases yet.
-- Interpolation starts from the values the playhead holds now, never from the state it left,
-  so a redirection while in flight is continuous. Arrays of one shape interpolate
-  elementwise; a string, or arrays of two shapes, switch on arrival. A `step` curve switches
-  everything on arrival.
-- While in flight, only `manual` can redirect a playhead. The target state's triggers arm on
-  arrival; the dwell starts on arrival.
-
-### Where it runs
-
-- `goofi_graph::machine` owns the model and the stepping: `Machines::advance(now, variables)
-  -> Vec<(variable, Data)>`, pure and clocked by the one patch `Time`. It compiles
-  `when` and `after` expressions through the graph's `ExprEvaluator` with `Local::Value`
-  locals, the way a `BoundVar::Value` binding is evaluated, so the test evaluator covers it.
-- One manager thread, `goofi-machines`, drives it on the viewer-cap pace: it reads the
-  variables' latest frames from the store, calls `advance`, and publishes the writes. It takes
-  no graph lock; the graph lock is for config edits, which replace its model. Easing is
-  sampled at the viewer cap; an audio-rate ramp is a `Slew` node's job, not the machine's.
-  Random draws use a seeded generator the test can fix (`machine edit {seed}`).
-
-### Ops
-
-Under the `machine` phrase, all commands with inverses unless marked:
-
-- `machine list`, `machine add {name}`, `machine remove`, `machine rename`, `machine edit {seed?}`.
-- `machine attribute add {machine, name, value, control?}`, `edit`, `remove`, `rename`.
-- `machine state add {machine, name, pos?, values?}`, `edit {pos?, values?}` (a `values` key
-  set to null clears that attribute from the state), `remove`, `rename`.
-- `machine transition add {machine, from, to, triggers?, duration?, curve?, weight?}`, `edit`,
-  `remove`. A transition is addressed by its id.
-- `machine playhead add {machine, name, color?, start}`, `edit`, `remove`, `rename`.
-- Effects, not undoable and not dirtying: `machine fire {machine, playhead, transition}`,
-  `machine jump {machine, playhead, state}` (instant, no easing), `machine reset {machine}`.
-- Previews: a state drag previews `machine state edit {pos}` as a node drag does.
-
 ### Panel
 
 - Panel type `machine`, state `{machine}`, as `control` holds `{group}`. An empty panel
@@ -129,23 +35,20 @@ Under the `machine` phrase, all commands with inverses unless marked:
   tap sets. Edges are the `straight` edge type; a transition's trigger summary is its label.
   A self-transition is a loop at the card's corner.
 - Each playhead is a coloured dot. At rest it sits on its state's card; in flight it moves
-  along the edge from `from` to `state` at `progress`, interpolated between replica updates on
-  the paint loop so it is smooth at the cap. A card lists the playheads in it in arrival order.
+  along the edge from `variables.<playhead>.left` to `.state` at `.progress`, interpolated
+  between replica updates on the paint loop so it is smooth at the cap. A card lists the
+  playheads in it in arrival order.
 - A side pane holds the machine's attribute list and playhead list. A playhead row shows each
   attribute's live value with a chip `variables.<playhead>.<attribute>` that drags onto any
   param field or control widget. The selected transition's pane edits triggers, duration,
   curve and weight.
-- Tapping a transition fires it for the playhead(s) in `from`; a long-press opens its pane.
+- Tapping a transition fires it (`machine fire`) for the playhead(s) in its `from`; a
+  long-press opens its pane. A card drag previews `machine state edit {pos}` as a node drag does.
+- A machine's playhead groups are owned: `variable_groups.<playhead>.machine` names the machine,
+  and the variables panel draws them locked whole, as it draws a device's group.
 
 ### Tests
 
-- `goofi-tests/tests/all/machine.rs`: one session builds a machine through ops, binds a
-  param through `variables.<playhead>.<attr>` with `FirstVar`, fires a transition and polls
-  the param through `probe` on the consumer and the playhead variables through their
-  services; an `after`
-  transition is reached by polling, never by sleeping; an eased transition is sampled and the
-  samples are monotonic and end at the target; `meet` with each policy; a `when` trigger from
-  a followed variable; save, reload, start state. Undo walks the edits back.
 - Playwright: the variables panel listing a vector and an array; a desktop and a phone
   session open the machine panel, add two states and a transition by gesture, fire it, and
   see the dot on the target card. A layout integrity run covers it.
@@ -163,6 +66,8 @@ Under the `machine` phrase, all commands with inverses unless marked:
   expressions of every node included: a service takes 256 subscribers, so a patch of more
   nodes than that reading one variable is refused by the transport. Raise the ceiling, or
   share one subscription per process, when a patch asks.
+- An expression a machine cannot evaluate is logged under `machines` once per message. Whether
+  the panel should show it beside the transition, as a variable's `error` rides the replica.
 
 ## Not to be done
 
@@ -177,6 +82,8 @@ Under the `machine` phrase, all commands with inverses unless marked:
   slot.
 - Audio-rate easing in the machine.
 - Hierarchical or nested machines. Several machines in one patch compose through variables.
+- A playhead's variables in the `.gfi`. The machine re-derives them from its model on load,
+  so the file carries the model alone, as it carries no device's group.
 
 ## Stages and continuation after context compaction
 
@@ -184,20 +91,16 @@ Build in this order. Each stage ends at a tested commit, with the full local che
 is a point to compact the context. Read this file and `AGENTS.md` first; inspect the diff since
 the last stage's commit; keep this file current by deleting what has shipped.
 
-1. **Machines.** The model, the ops, the `goofi-machines` thread, the situation.
-2. **The panel.** The canvas, the cards, the dot, the side pane, the Playwright sessions, and
+1. **The panel.** The canvas, the cards, the dot, the side pane, the Playwright sessions, and
    the `Vector` and `Color` control kinds.
 
-**Handover, 2026-10-04.** The Expressions stage shipped: a param is a constant or an
-expression; a bare expression (`expr_rewrite::is_bare`: one target, an optional index) is read in
-Rust and is the audio plan edge; anything else runs on `goofi_runtime::expr::Worker`, one per
-engine, latest-wins, and on audio lands as a `[C, BLOCK]` block (`plan::Source::Block`) held
-while the evaluator is away; a variable's `expression` is computed by the manager's follower
-thread; the evaluator takes numpy views in and bytes out. The control data stage shipped at +28
-lines and the variables stage at +100; the expressions stage removed the rest, so the three
-together add no net lines. Stage 1, Machines, is next and has not started: `Graph::group_taken`
-holds a playhead's group, `VariableStore::follow` is the write a machine makes, and the
-follower in `goofi-bridge` shows the pace and the lock discipline a `goofi-machines` thread
-takes.
+**Handover, 2026-10-04.** The Machines stage shipped: `goofi_graph::machine::{Machine, Machines}`
+(the document record and the stepping), `Command::{SetMachine, RenameMachine, RenamePlayhead,
+RenameAttribute}`, the `machine` op phrase, `goofi_bridge::machines` (the `goofi-machines`
+thread, driven by `Machines::advance` on the viewer cap, writing through `VariableStore::drive`),
+and the `machine::` situation. The machine's own playhead element for the state left is `left`,
+not `from`: `from` is a Python keyword and no variable element may be one. The panel stage is
+next and has not started; `panels/ControlPanel.svelte` and the node editor's canvas are what it
+builds on, and `graphDoc.ts` already reads `machines` as a root and an owned group's lock.
 
 Roadmap maintenance does not start implementation. Wait for the user's build instruction.

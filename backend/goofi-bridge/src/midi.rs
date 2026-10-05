@@ -186,7 +186,7 @@ impl Midi {
         let mut changed = !gone.is_empty();
         let mut store = self.store.lock();
         for group in &gone {
-            store.release_midi(group);
+            store.release(group);
         }
         let closed = Closed { _ports: gone.iter().filter_map(|g| open.remove(g)).collect() };
         let opening: Vec<(String, String)> = listed.iter().filter(|(_, g)| wanted.contains(g.as_str()) && !open.contains_key(g)).cloned().collect();

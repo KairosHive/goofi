@@ -42,6 +42,29 @@ export type OpName =
 	| 'variable group add'
 	| 'variable group rename'
 	| 'variable group lock'
+	| 'machine list'
+	| 'machine add'
+	| 'machine remove'
+	| 'machine rename'
+	| 'machine edit'
+	| 'machine attribute add'
+	| 'machine attribute edit'
+	| 'machine attribute remove'
+	| 'machine attribute rename'
+	| 'machine state add'
+	| 'machine state edit'
+	| 'machine state remove'
+	| 'machine state rename'
+	| 'machine transition add'
+	| 'machine transition edit'
+	| 'machine transition remove'
+	| 'machine playhead add'
+	| 'machine playhead edit'
+	| 'machine playhead remove'
+	| 'machine playhead rename'
+	| 'machine fire'
+	| 'machine jump'
+	| 'machine reset'
 	| 'midi list'
 	| 'midi learn'
 	| 'control list'
@@ -120,6 +143,29 @@ export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'variable group add': 'write',
 	'variable group rename': 'write',
 	'variable group lock': 'write',
+	'machine list': 'read',
+	'machine add': 'write',
+	'machine remove': 'write',
+	'machine rename': 'write',
+	'machine edit': 'write',
+	'machine attribute add': 'write',
+	'machine attribute edit': 'write',
+	'machine attribute remove': 'write',
+	'machine attribute rename': 'write',
+	'machine state add': 'write',
+	'machine state edit': 'write',
+	'machine state remove': 'write',
+	'machine state rename': 'write',
+	'machine transition add': 'write',
+	'machine transition edit': 'write',
+	'machine transition remove': 'write',
+	'machine playhead add': 'write',
+	'machine playhead edit': 'write',
+	'machine playhead remove': 'write',
+	'machine playhead rename': 'write',
+	'machine fire': 'effect',
+	'machine jump': 'effect',
+	'machine reset': 'effect',
 	'midi list': 'read',
 	'midi learn': 'effect',
 	'control list': 'read',

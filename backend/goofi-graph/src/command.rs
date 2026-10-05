@@ -180,6 +180,30 @@ pub enum Command {
         name: String,
         expression: Option<String>,
     },
+    /// Set, replace or remove (`None`) a machine WHOLE: every edit to what one holds is this
+    /// command, so the inverse is the record it replaced. `at` is where a removal's inverse re-adds.
+    SetMachine {
+        name: String,
+        machine: Option<Box<crate::machine::Machine>>,
+        at: Option<usize>,
+    },
+    /// Renames with a reach beyond the record: a machine's name, a playhead's (its variable group)
+    /// and an attribute's (an element of every playhead), each rewriting the expressions that read
+    /// what moved. Each inverts as the reverse rename.
+    RenameMachine {
+        from: String,
+        to: String,
+    },
+    RenamePlayhead {
+        machine: String,
+        from: String,
+        to: String,
+    },
+    RenameAttribute {
+        machine: String,
+        from: String,
+        to: String,
+    },
     /// Move a tab to a position in the strip. Its CONTENT is a position, so it cannot ride
     /// [`Command::LayoutContents`]; it inverts as another reorder, aimed at where the tab is now.
     LayoutReorderTab {
@@ -253,6 +277,7 @@ impl Command {
             Command::EditParam { uid, group, name, .. } => format!("param {} {group}/{name}", uid.0),
             Command::EditNode { uid, .. } => format!("node {}", uid.0),
             Command::EditVariable { name, .. } => format!("variable {name}"),
+            Command::SetMachine { name, .. } => format!("machine {name}"),
             Command::LayoutResizeSplit { split, .. } => format!("split {split}"),
             Command::LayoutContents { writes } => {
                 let mut ids: Vec<&str> = writes.iter().map(|(id, _)| id.as_str()).collect();
@@ -300,7 +325,8 @@ impl Command {
         let variable = matches!(self, Self::EditVariable { .. } | Self::RemoveVariable { .. }
             | Self::RenameVariable { .. } | Self::RenameVariableGroup { .. } | Self::LockVariable { .. }
             | Self::LockVariableGroup { .. } | Self::SourceVariable { .. }
-            | Self::AddVariableGroup { .. } | Self::RemoveVariableGroup { .. });
+            | Self::AddVariableGroup { .. } | Self::RemoveVariableGroup { .. } | Self::SetMachine { .. }
+            | Self::RenameMachine { .. } | Self::RenamePlayhead { .. } | Self::RenameAttribute { .. });
         let result = (|| match self {
             Command::Compound(cmds) => {
                 let mut inverses = Vec::with_capacity(cmds.len());
@@ -598,6 +624,27 @@ impl Command {
             Command::SourceVariable { name, expression } => {
                 let old = g.set_variable_expression(&name, expression)?;
                 Ok(Applied::done(Outcome::Ok, Command::SourceVariable { name, expression: old }))
+            }
+
+            Command::SetMachine { name, machine, at } => {
+                let held = g.machines().get_index_of(&name);
+                let old = g.set_machine(&name, machine.map(|m| *m), at)?;
+                Ok(Applied::done(Outcome::Ok, Command::SetMachine { name, machine: old.map(Box::new), at: held }))
+            }
+
+            Command::RenameMachine { from, to } => {
+                g.rename_machine(&from, &to)?;
+                Ok(Applied::done(Outcome::Ok, Command::RenameMachine { from: to, to: from }))
+            }
+
+            Command::RenamePlayhead { machine, from, to } => {
+                let touched = g.rename_playhead(&machine, &from, &to)?;
+                Ok(Applied::done(Outcome::Nodes(touched), Command::RenamePlayhead { machine, from: to, to: from }))
+            }
+
+            Command::RenameAttribute { machine, from, to } => {
+                let touched = g.rename_attribute(&machine, &from, &to)?;
+                Ok(Applied::done(Outcome::Nodes(touched), Command::RenameAttribute { machine, from: to, to: from }))
             }
 
             Command::LayoutReorderTab { tab, to_index } => {

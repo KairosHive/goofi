@@ -184,7 +184,9 @@ pub struct Midi {
     pub port: String,
 }
 
-/// A group's own record: its lock, and for a device's group, the device it is read from.
+/// A group's own record: its lock; for a device's group, the device it is read from; for a
+/// playhead's, the machine that moves it. An OWNED group is locked whole against every hand but
+/// its owner's, and the owner writes it through [`VariableStore::drive`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
 pub struct Group {
     #[serde(default)]
@@ -192,6 +194,24 @@ pub struct Group {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub midi: Option<Midi>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub machine: Option<String>,
+}
+
+impl Group {
+    pub fn owned(&self) -> bool {
+        self.midi.is_some() || self.machine.is_some()
+    }
+
+    /// Who holds the group, in the words a refusal uses.
+    fn owner(&self) -> &'static str {
+        match (&self.midi, &self.machine) {
+            (Some(_), _) => "a MIDI device's",
+            (_, Some(_)) => "a machine's playhead",
+            _ => "nobody's",
+        }
+    }
 }
 
 /// The entries a MIDI group holds, over all 16 channels: every controller in 0..1 and every held
@@ -286,6 +306,9 @@ const RESERVED: &[&str] = &[
     "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try",
     "while", "with", "yield",
 ];
+
+/// What an owned group holds: each entry's name, the value it is born with, and its widget.
+pub type Entries = Vec<(String, Data, Option<Control>)>;
 
 /// A legal name in the ONE expression namespace: `[A-Za-z_][A-Za-z0-9_]*` and not reserved.
 ///
@@ -462,7 +485,7 @@ impl VariableStore {
                 self.entries.insert(def.name.to_string(), v);
             }
         }
-        self.groups.insert(SYSTEM_GROUP.to_string(), Group { lock: Lock { config: true, value: false }, midi: None });
+        self.groups.insert(SYSTEM_GROUP.to_string(), Group { lock: Lock { config: true, value: false }, ..Group::default() });
     }
 
     pub fn get(&self, name: &str) -> Option<&Data> {
@@ -530,29 +553,61 @@ impl VariableStore {
         self.groups.get(group)?.midi.as_ref()
     }
 
+    /// The machine whose playhead a group is, if it is one.
+    pub fn machine(&self, group: &str) -> Option<&str> {
+        self.groups.get(group)?.machine.as_deref()
+    }
+
+    fn owned(&self, group: &str) -> bool {
+        self.groups.get(group).is_some_and(Group::owned)
+    }
 
     /// Open a device as a group: the device's flag, which locks the group whole, and its entries
     /// at rest. Not a command — the session owns it, as it owns the system group.
     pub fn grab_midi(&mut self, group: &str, port: &str) -> Result<(), String> {
-        if !is_valid_identifier(group) || group == SYSTEM_GROUP {
-            return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
-        }
         if self.has_group(group) {
             return Err(format!("variable group `{group}` already exists"));
         }
-        self.groups.insert(group.to_string(), Group { lock: Lock::default(), midi: Some(Midi { port: port.to_string() }) });
-        for (entry, width) in MIDI_ENTRIES {
-            let name = format!("{group}.{entry}");
-            let v = Variable::of(Data::numbers(std::iter::repeat_n(0.0, width)));
-            self.emit(&name, &v.value);
-            self.entries.insert(name, v);
+        let record = Group { midi: Some(Midi { port: port.to_string() }), ..Group::default() };
+        let entries = MIDI_ENTRIES.map(|(entry, width)| (format!("{group}.{entry}"), Data::numbers(std::iter::repeat_n(0.0, width)), None));
+        self.claim(group, record, entries.into())
+    }
+
+    /// Hold `group` whole for its owner, with exactly `entries`: one already held keeps its value
+    /// and takes the widget, a new one is born at its value, one not named is retired. The owner's
+    /// write, never a command; a group that is somebody else's is refused.
+    pub fn claim(&mut self, group: &str, record: Group, entries: Entries) -> Result<(), String> {
+        if !is_valid_identifier(group) || group == SYSTEM_GROUP {
+            return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
         }
+        if self.has_group(group) && self.groups.get(group).map(|r| (&r.midi, &r.machine)) != Some((&record.midi, &record.machine)) {
+            return Err(format!("variable group `{group}` already exists"));
+        }
+        if let Some((name, ..)) = entries.iter().find(|(n, ..)| split_variable(n).is_none_or(|(g, _)| g != group)) {
+            return Err(format!("invalid variable name `{name}`: {VARIABLE_NAME_RULE}"));
+        }
+        let gone: Vec<String> =
+            self.entries.keys().filter(|n| group_of(n) == group && !entries.iter().any(|(e, ..)| e == *n)).cloned().collect();
+        for name in &gone {
+            self.retire(name);
+            self.entries.shift_remove(name);
+        }
+        for (name, value, control) in entries {
+            match self.entries.get_mut(&name) {
+                Some(held) => held.control = control,
+                None => {
+                    self.emit(&name, &value);
+                    self.entries.insert(name, Variable { control, ..Variable::of(value) });
+                }
+            }
+        }
+        self.groups.insert(group.to_string(), record);
         Ok(())
     }
 
-    /// Close a device's group: its entries retired, its record gone. Nothing if `group` is no device's.
-    pub fn release_midi(&mut self, group: &str) {
-        if self.midi(group).is_none() {
+    /// Close an owned group: its entries retired, its record gone. Nothing if `group` is nobody's.
+    pub fn release(&mut self, group: &str) {
+        if !self.owned(group) {
             return;
         }
         let gone: Vec<String> = self.entries.keys().filter(|n| group_of(n) == group).cloned().collect();
@@ -563,15 +618,15 @@ impl VariableStore {
         self.groups.shift_remove(group);
     }
 
-    /// A device's write: lands only on a MIDI group's entry, under no lock, with no undo.
+    /// An owner's write: lands only on an owned group's entry, under no lock, with no undo.
     pub fn drive(&mut self, name: &str, value: Data) -> bool {
-        self.midi(group_of(name)).is_some() && self.move_value(name, value)
+        self.owned(group_of(name)) && self.move_value(name, value)
     }
 
     /// Whether a `.gfi` must leave `name` out: an ephemeral value is goofi's own, a device's is
-    /// the session's.
+    /// the session's, a playhead's is the machine's to re-derive.
     pub fn is_ephemeral(&self, name: &str) -> bool {
-        is_ephemeral(name) || self.midi(group_of(name)).is_some()
+        is_ephemeral(name) || self.owned(group_of(name))
     }
 
     /// A variable's OWN lock, apart from its group's.
@@ -579,10 +634,10 @@ impl VariableStore {
         self.entries.get(name).map(Variable::own_lock).unwrap_or_default()
     }
 
-    /// A group's lock as it holds its members: a MIDI group is the device's on both axes.
+    /// A group's lock as it holds its members: an owned group is its owner's on both axes.
     pub fn group_lock(&self, group: &str) -> Lock {
         let Some(rec) = self.groups.get(group) else { return Lock::default() };
-        if rec.midi.is_some() { Lock { config: true, value: true } } else { rec.lock }
+        if rec.owned() { Lock { config: true, value: true } } else { rec.lock }
     }
 
     /// What holds `name` right now: its own lock and its group's together.
@@ -611,8 +666,8 @@ impl VariableStore {
         if !is_valid_identifier(group) {
             return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
         }
-        if self.midi(group).is_some() {
-            return Err(format!("group `{group}` is a MIDI device's; it is locked whole"));
+        if let Some(rec) = self.groups.get(group).filter(|r| r.owned()) {
+            return Err(format!("group `{group}` is {}; it is locked whole", rec.owner()));
         }
         let old = self.groups.get(group).map(|rec| rec.lock);
         match lock {

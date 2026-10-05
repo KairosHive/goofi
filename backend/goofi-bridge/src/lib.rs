@@ -14,6 +14,7 @@ pub mod doc;
 mod fsbrowse;
 mod inspect;
 mod mcp;
+pub mod machines;
 pub mod midi;
 pub mod ops;
 pub mod plugins;
@@ -128,6 +129,8 @@ pub struct AppState {
     pub variables: Arc<variables::Variables>,
     /// The MIDI devices open on the bus, each writing its group through the store.
     pub midi: Arc<midi::Midi>,
+    /// The state machines' thread, handed the settled model and every fire.
+    pub machines: Arc<machines::Driver>,
     /// Pulsed after every settle, for whoever derives its address from the graph: a `/data`
     /// socket re-asks which physical slot stands behind its port on the pulse, not on a clock.
     settled: Arc<tokio::sync::watch::Sender<u64>>,
@@ -230,6 +233,7 @@ impl AppState {
         let midi = Arc::new(midi::Midi::new(graph_val.variable_store()));
         let graph = Arc::new(Mutex::new(graph_val));
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
+        let (machines, machines_rx) = machines::Driver::new();
         let reducers = reducer::SlotReducers::new(iox.clone(), graph.clone(), variables.clone(), follow_tx);
         let state = AppState {
             iox: iox.clone(),
@@ -246,6 +250,7 @@ impl AppState {
             reducers,
             variables,
             midi,
+            machines: Arc::new(machines),
             settled: Arc::new(tokio::sync::watch::channel(0).0),
             live: Arc::new(LiveHub::default()),
             history: Arc::new(Mutex::new(goofi_graph::CommandHistory::new())),
@@ -267,6 +272,7 @@ impl AppState {
             scope: Arc::new(goofi_supervisor::scope::Scope::default()),
         };
         spawn_follower(state.clone(), follow_rx);
+        machines::spawn(state.clone(), machines_rx);
         let (served, graph, stopping) = (state.variables.clone(), state.graph.clone(), state.stopping.clone());
         state.scope.spawn("goofi-variables", move || served.serve(&graph, &stopping));
         autosave::spawn(state.clone());
@@ -1521,8 +1527,8 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
     });
 }
 
-/// Hand the follower every variable expression and the reducers every slot one reads, from
-/// settled state, after each mutation.
+/// Hand the follower every variable expression, the reducers every slot one reads and the
+/// machines their model, from settled state, after each mutation.
 fn sync_followers(state: &AppState, g: &Graph) {
     let mut taps: HashMap<reducer::SlotKey, Vec<reducer::Tap>> = HashMap::new();
     let mut wanted = Vec::new();
@@ -1543,6 +1549,7 @@ fn sync_followers(state: &AppState, g: &Graph) {
     }
     state.reducers.follow(reducer::Followed::Desired(wanted, g.evaluator()));
     state.reducers.set_taps(taps);
+    state.machines.configure(g);
     // The bindings may have moved: the producer re-reads who it rings.
     state.variables.poke();
     let (closed, _) = state.midi.resync(g);

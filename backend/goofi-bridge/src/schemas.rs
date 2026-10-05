@@ -375,12 +375,14 @@ pub fn snapshot(
     snap
 }
 
-/// The frontend's generated types: the document, the deltas, the param descriptor and the
-/// variable records, each declared once in Rust and checked into the tree.
+/// The frontend's generated types: the document, the deltas, the param descriptor, the variable
+/// records and the machines, each declared once in Rust and checked into the tree.
 pub fn typescript() -> String {
     use goofi_core::record::{RecordedOutput, VideoQuality};
     use goofi_core::variables::{Control, ControlKind, Group, Lock, Midi};
     use goofi_graph::doc::{Archive, Link, NodeRecord, ParamEntry, PatchDoc, VariableRecord};
+    use goofi_graph::machine::{Attribute, Machine, Playhead, Policy, Seconds, State, Transition, Trigger};
+    use goofi_core::ease::Curve;
     let cfg = ts_rs::Config::new().with_large_int("number");
     let decls = [
         serde_json::Value::decl(&cfg),
@@ -398,6 +400,15 @@ pub fn typescript() -> String {
         VariableRecord::decl(&cfg),
         Midi::decl(&cfg),
         Group::decl(&cfg),
+        Attribute::decl(&cfg),
+        State::decl(&cfg),
+        Curve::decl(&cfg),
+        Policy::decl(&cfg),
+        Seconds::decl(&cfg),
+        Trigger::decl(&cfg),
+        Transition::decl(&cfg),
+        Playhead::decl(&cfg),
+        Machine::decl(&cfg),
         PatchDoc::decl(&cfg),
         Archive::decl(&cfg),
         crate::doc::Op::decl(&cfg),

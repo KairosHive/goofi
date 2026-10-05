@@ -11,7 +11,7 @@ import { obj, type Obj } from './ops';
 export type Doc = Record<string, unknown>;
 
 export function emptyDoc(): Doc {
-	return { nodes: {}, links: {}, variables: {}, arrangement: {} };
+	return { nodes: {}, links: {}, variables: {}, machines: {}, arrangement: {} };
 }
 
 /** What a sub-patch facade exposes, derived from the records that name it. */
@@ -122,11 +122,13 @@ function lockOf(raw: unknown): LockView {
 	return { config: l.config === true, value: l.value === true };
 }
 
-/** Explicit groups and their built-in flags, by name: a device's group is locked whole. */
+/** Explicit groups and their built-in flags, by name: an owned group — a device's, a machine's
+ *  playhead — is locked whole. */
 export function variableGroupLocks(doc: Doc): Record<string, LockView> {
 	const out: Record<string, LockView> = {};
 	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) {
-		out[group] = obj(rec).midi ? { config: true, value: true } : lockOf(obj(rec).lock);
+		const r = obj(rec);
+		out[group] = r.midi || r.machine ? { config: true, value: true } : lockOf(r.lock);
 	}
 	return out;
 }

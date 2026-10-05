@@ -14,8 +14,8 @@ use crate::{Mode, SourceState};
 /// The `.gfi` version this build writes and reads.
 pub const MANIFEST_VERSION: i64 = 1;
 
-/// One patch's worth of nodes, links, variables and chrome. A fragment is one with no variables
-/// and no arrangement; the archive body is one with both.
+/// One patch's worth of nodes, links, variables, machines and chrome. A fragment is one with
+/// nodes and links alone; the archive body is one with all of them.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
 #[ts(optional_fields)]
 pub struct PatchDoc {
@@ -29,6 +29,8 @@ pub struct PatchDoc {
     pub variables: IndexMap<String, VariableRecord>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub variable_groups: IndexMap<String, Group>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub machines: IndexMap<String, crate::machine::Machine>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arrangement: Option<Value>,
 }
