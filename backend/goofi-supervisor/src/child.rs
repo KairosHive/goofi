@@ -46,6 +46,7 @@ pub struct Spawn<'a> {
     stdin: bool,
     stdout: Out,
     stderr: Out,
+    windowless: bool,
 }
 
 /// Describe `cmd` as `name` — the words a reader of the inventory sees. By default stdin is
@@ -53,7 +54,7 @@ pub struct Spawn<'a> {
 pub fn run(name: impl Into<String>, cmd: &mut Command) -> Spawn<'_> {
     let name = name.into();
     let source = Source::component(&name);
-    Spawn { name, cmd, source, stdin: false, stdout: Out::Log, stderr: Out::Log }
+    Spawn { name, cmd, source, stdin: false, stdout: Out::Log, stderr: Out::Log, windowless: false }
 }
 
 /// Spawn `cmd` as `name` with the default wiring.
@@ -84,9 +85,15 @@ impl Spawn<'_> {
         self
     }
 
+    /// Give a console child no window of its own: one goofi runs with no console would show one.
+    pub fn windowless(mut self) -> Self {
+        self.windowless = true;
+        self
+    }
+
     /// Start the child: the session, the liveness pipe and the process group are added here.
     pub fn spawn(self) -> io::Result<Child> {
-        let Spawn { name, cmd, source, stdin, stdout, stderr } = self;
+        let Spawn { name, cmd, source, stdin, stdout, stderr, windowless } = self;
         if let Some(session) = crate::session::id() {
             cmd.env(crate::session::ENV, session);
         }
@@ -96,8 +103,19 @@ impl Spawn<'_> {
                 cmd.env_remove(key);
             }
         }
+        // Its own process group, so a Ctrl+C at the terminal reaches goofi alone, which then
+        // stops its children in order.
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(cmd, 0);
+        #[cfg(windows)]
+        {
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            let window = if windowless { CREATE_NO_WINDOW } else { 0 };
+            std::os::windows::process::CommandExt::creation_flags(cmd, CREATE_NEW_PROCESS_GROUP | window);
+        }
+        #[cfg(not(windows))]
+        let _ = windowless;
         cmd.stdin(if stdin { Stdio::piped() } else { Stdio::null() });
         let wire = |out: Out| match out {
             Out::Log | Out::Pipe => Stdio::piped(),
