@@ -14,7 +14,7 @@ use goofi_graph::{Command, Graph};
 const VALUES: &str = "`values` is `{attribute: literal}`, each a number, a list of numbers (nested for a wider array), a bool or a string; an attribute a state leaves out is kept by a playhead entering it";
 
 op!(List, "machine list", 0, NoArgs,
-    "Every state machine, whole: its attributes, states, transitions (by id), playheads and seed. Where a playhead IS right now is its variables: `variables.<playhead>.state`, `.left` and `.progress`, read through `variable list` like its attributes.",
+    "Every state machine, whole: its attributes, states, transitions (by id), playheads and seed. Where a playhead IS right now is its variables: `variables.<playhead>.state`, `.prev` and `.progress`, read through `variable list` like its attributes.",
     "{machines: {name: {attributes: {name: {default, control?}}, states: {name: {pos, values}}, transitions: {id: {from, to, triggers, duration, curve, weight}}, playheads: {name: {color, start}}, seed?}}}");
 
 op!(Add, "machine add", 1, AddArgs {
@@ -50,7 +50,7 @@ op!(AttributeAdd, "machine attribute add", 2, AttributeAddArgs {
     #[schemars(with = "Option<Value>")]
     pub control: Option<Control>,
 },
-    "Add an attribute: a value every state may set and every playhead carries as `variables.<playhead>.<name>`. `value` is its default, a number, a list of numbers (nested for a wider array), a bool or a string. `control` is the widget a state card and a playhead row draw it with, as `variable entry add` takes one; it must be able to draw the value. `state`, `left` and `progress` are the machine's own and refused.",
+    "Add an attribute: a value every state may set and every playhead carries as `variables.<playhead>.<name>`. `value` is its default, a number, a list of numbers (nested for a wider array), a bool or a string. `control` is the widget a state card and a playhead row draw it with, as `variable entry add` takes one; it must be able to draw the value. `state`, `prev` and `progress` are the machine's own and refused.",
     "{name, value} — the attribute and its default as stored");
 
 op!(AttributeEdit, "machine attribute edit", 2, AttributeEditArgs {
@@ -151,7 +151,7 @@ op!(PlayheadAdd, "machine playhead add", 2, PlayheadAddArgs {
     pub color: Option<String>,
     pub start: String,
 },
-    "Add a playhead, starting in state `start`. Its name is its variable group: `variables.<name>.<attribute>` for every attribute, and the machine's own `variables.<name>.state` (the state it is in, or is moving to), `.left` (the state it left, empty at rest) and `.progress` (0..1 along the transition, 1 at rest). The group is the machine's: locked whole, written by the machine alone, removed with the playhead. Without a name, use the first free playhead0/playhead1/... name. `color` is what the canvas draws it as.",
+    "Add a playhead, starting in state `start`. Its name is its variable group: `variables.<name>.<attribute>` for every attribute, and the machine's own `variables.<name>.state` (the state it is in, or is moving to), `.prev` (the state it left, empty at rest) and `.progress` (0..1 along the transition, 1 at rest). The group is the machine's: locked whole, written by the machine alone, removed with the playhead. Without a name, use the first free playhead0/playhead1/... name. `color` is what the canvas draws it as.",
     "{name} — the playhead as stored");
 
 op!(PlayheadEdit, "machine playhead edit", 2, PlayheadEditArgs {

@@ -56,7 +56,7 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     at_rest_in(&g, "head", "A");
     assert_eq!(number(&g, "head.gain"), 0.2);
     assert_eq!(g.variable("head.label"), j!("a"));
-    assert_eq!(g.variable("head.left"), j!(""));
+    assert_eq!(g.variable("head.prev"), j!(""));
     let listed = g.call("variable list", j!({}));
     assert_eq!(listed["groups"]["head"]["machine"], j!("seq"), "{}", listed["groups"]);
     assert_eq!(g.doc()["variables"]["head.gain"]["control"]["kind"], j!("knob"), "the attribute's widget rides the variable");

@@ -6,7 +6,7 @@ patch variables, and any param reads them the way it reads a control panel today
 
 The machines themselves are built: `goofi_graph::machine` is the model and the stepping, the
 `machine` ops build one, the `goofi-machines` thread drives it, and a playhead is an owned
-variable group `<playhead>.{state, left, progress, <attribute>…}`. What remains is the panel.
+variable group `<playhead>.{state, prev, progress, <attribute>…}`. What remains is the panel.
 
 Status: in progress. This records the product decisions agreed through 2026-10-04. Build on
 `AGENTS.md` and the code; this file carries only what the code cannot say.
@@ -35,7 +35,7 @@ Status: in progress. This records the product decisions agreed through 2026-10-0
   tap sets. Edges are the `straight` edge type; a transition's trigger summary is its label.
   A self-transition is a loop at the card's corner.
 - Each playhead is a coloured dot. At rest it sits on its state's card; in flight it moves
-  along the edge from `variables.<playhead>.left` to `.state` at `.progress`, interpolated
+  along the edge from `variables.<playhead>.prev` to `.state` at `.progress`, interpolated
   between replica updates on the paint loop so it is smooth at the cap. A card lists the
   playheads in it in arrival order.
 - A side pane holds the machine's attribute list and playhead list. A playhead row shows each
@@ -98,7 +98,7 @@ the last stage's commit; keep this file current by deleting what has shipped.
 (the document record and the stepping), `Command::{SetMachine, RenameMachine, RenamePlayhead,
 RenameAttribute}`, the `machine` op phrase, `goofi_bridge::machines` (the `goofi-machines`
 thread, driven by `Machines::advance` on the viewer cap, writing through `VariableStore::drive`),
-and the `machine::` situation. The machine's own playhead element for the state left is `left`,
+and the `machine::` situation. The machine's own playhead element for the state left is `prev`,
 not `from`: `from` is a Python keyword and no variable element may be one. The panel stage is
 next and has not started; `panels/ControlPanel.svelte` and the node editor's canvas are what it
 builds on, and `graphDoc.ts` already reads `machines` as a root and an owned group's lock.

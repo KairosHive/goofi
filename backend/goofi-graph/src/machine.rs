@@ -16,7 +16,7 @@ use ts_rs::TS;
 use crate::expr_rewrite::{self, Target};
 
 /// The elements of a playhead's group that are the machine's own, and no attribute's name.
-pub const OWN: [&str; 3] = ["state", "left", "progress"];
+pub const OWN: [&str; 3] = ["state", "prev", "progress"];
 
 /// How many instant transitions one playhead takes in one tick before the rest wait for the next.
 const HOPS: usize = 8;
@@ -229,7 +229,7 @@ struct Flight {
 /// One playhead's run: where it is, what it holds, and what is armed for it.
 struct Head {
     state: String,
-    left: String,
+    prev: String,
     progress: f64,
     held: IndexMap<String, Data>,
     arrived: f64,
@@ -411,7 +411,7 @@ impl Machines {
             step(machine, run, &ctx, events);
             for (ph, head) in &run.heads {
                 out.push((format!("{ph}.state"), Data::text(head.state.as_str())));
-                out.push((format!("{ph}.left"), Data::text(head.left.as_str())));
+                out.push((format!("{ph}.prev"), Data::text(head.prev.as_str())));
                 out.push((format!("{ph}.progress"), Data::number(head.progress)));
                 out.extend(head.held.iter().map(|(a, v)| (format!("{ph}.{a}"), v.clone())));
             }
@@ -500,7 +500,7 @@ fn leaves(t: &Transition, state: &str) -> bool {
 fn born(machine: &Machine, state: &str, ctx: &Ctx, events: &mut Events) -> Head {
     let mut head = Head {
         state: String::new(),
-        left: String::new(),
+        prev: String::new(),
         progress: 1.0,
         held: machine.attributes.iter().map(|(a, attr)| (a.clone(), attr.default.clone())).collect(),
         arrived: ctx.now,
@@ -516,7 +516,7 @@ fn born(machine: &Machine, state: &str, ctx: &Ctx, events: &mut Events) -> Head 
 /// Put `head` in `state` now: the state's values land, the dwell starts, its triggers arm.
 fn arrive(head: &mut Head, machine: &Machine, state: &str, ctx: &Ctx, events: &mut Events) {
     head.state = state.to_string();
-    head.left.clear();
+    head.prev.clear();
     head.progress = 1.0;
     head.flight = None;
     head.arrived = ctx.now;
@@ -617,15 +617,15 @@ fn blend(a: &Data, b: &Data, t: f64) -> Data {
 /// head holds now, so a redirection mid-flight is continuous.
 fn depart(head: &mut Head, machine: &Machine, id: &str, ctx: &Ctx, events: &mut Events) {
     let t = &machine.transitions[id];
-    let left = head.state.clone();
-    events.left.push(left.clone());
+    let prev = head.state.clone();
+    events.left.push(prev.clone());
     let target: IndexMap<String, Data> =
         machine.states.get(&t.to).map(|s| s.values.iter().filter(|(a, _)| head.held.contains_key(*a)).map(|(a, v)| (a.clone(), v.clone())).collect()).unwrap_or_default();
     head.fire = None;
     if t.duration <= 0.0 {
         return arrive(head, machine, &t.to, ctx, events);
     }
-    head.left = left;
+    head.prev = prev;
     head.state = t.to.clone();
     head.progress = 0.0;
     head.due.clear();
