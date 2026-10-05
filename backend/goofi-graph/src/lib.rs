@@ -26,6 +26,7 @@ pub use command::{open_preview, Applied, Command, CommandHistory, Ctx, Flip, Out
 
 pub mod expr_rewrite;
 pub mod machine;
+pub mod variable_projection;
 
 pub use goofi_node::Uid;
 
@@ -210,7 +211,7 @@ pub fn param_commands(
             // its own, and the whole param steps back to its literal with the list retained.
             if let Some(items) = element_expressions(&existing, name, spec) {
                 let mut element_spec = spec.clone();
-                element_spec.as_object_mut().expect("a list expression spec").shift_remove("value");
+                element_spec.as_object_mut().expect("a list expression spec").remove("value");
                 for (k, item) in items.iter().enumerate() {
                     let element = format!("{name}[{k}]");
                     let cur = g.param_source(uid, group, &element).map(|s| s.state);
@@ -394,6 +395,7 @@ impl ParamSource {
 /// One variable's source as the follower reads it: the rewritten text, the evaluator's handle —
 /// none for a bare source — and every variable it names, resolved.
 pub struct VariableBinding<'a> {
+    pub owner: goofi_core::identity::Identity,
     pub name: &'a str,
     pub rewritten: &'a str,
     pub id: Option<goofi_node::BindingId>,
@@ -405,6 +407,7 @@ pub struct VariableBinding<'a> {
 pub struct SourceInfo {
     pub state: SourceState,
     pub error: Option<String>,
+    pub dependencies: Vec<doc::Dependency>,
 }
 
 /// One end of a wire, resolved once: the slot's `&'static` name, its dtype, and whether it takes
@@ -478,6 +481,8 @@ struct Runtime {
     evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>>,
     /// Every variable with an expression, derived at settle as a param's source is.
     variable_binds: IndexMap<String, ParamSource>,
+    /// One-way reports from the machine runtime, guarded by the machine's birth.
+    machine_health: IndexMap<String, (goofi_core::identity::Identity, machine::Health)>,
     /// Types that exist on disk but cannot load here → why. Greyed in the palette, so a node
     /// needing an uninstalled dependency explains itself instead of silently not existing.
     unavailable: std::collections::BTreeMap<String, Greyed>,
@@ -570,6 +575,7 @@ impl Graph {
                 time: Arc::new(goofi_core::time::Time::new()),
                 evaluator: None,
                 variable_binds: IndexMap::new(),
+                machine_health: IndexMap::new(),
                 unavailable: std::collections::BTreeMap::new(),
                 origins: std::collections::HashMap::new(),
                 next_uid: 1,
@@ -695,7 +701,7 @@ impl Graph {
             .variable_binds
             .iter()
             .filter(|(_, b)| b.live())
-            .map(|(name, b)| VariableBinding { name, rewritten: &b.rewritten, id: b.id, vars: &b.vars })
+            .map(|(name, b)| VariableBinding { owner: self.variables().binding(name).expect("bound variable exists"), name, rewritten: &b.rewritten, id: b.id, vars: &b.vars })
             .collect()
     }
 
@@ -716,6 +722,7 @@ impl Graph {
             let state = SourceState { mode: Mode::Expression, expression, triggers: false };
             let prior = self.runtime.variable_binds.shift_remove(&name).unwrap_or_else(|| ParamSource::fresh(state.clone()));
             let derived = self.derive(Uid::VARIABLES, &ParamKey::new("variables", &name), &state);
+            if prior.vars.len() != derived.vars.len() || !prior.vars.iter().zip(&derived.vars).all(|(old, new)| old.same_source(new)) { self.variables().rebind(&name); }
             let (id, error) = self.compiled(&prior, &derived);
             let record = ParamSource { state, id, rewritten: derived.rewritten, vars: derived.vars, refs: derived.refs, bind_error: error };
             self.runtime.variable_binds.insert(name, record);
@@ -767,6 +774,32 @@ impl Graph {
 
     pub fn machines(&self) -> &IndexMap<String, machine::Machine> {
         &self.patch.machines
+    }
+
+    /// Effective transition order from the same rule used by runtime selection.
+    pub fn machine_outgoing(&self) -> IndexMap<&str, IndexMap<&str, Vec<&str>>> {
+        self.machines().iter().map(|(name, machine)| (name.as_str(),
+            machine.states.keys().map(|state| (state.as_str(), machine.outgoing(state))).collect())).collect()
+    }
+
+    /// Accept a runtime report only from the current authored model.
+    pub fn report_machine_health(&mut self, reports: Vec<(String, machine::Machine, machine::Health)>) -> bool {
+        let before = self.machine_health();
+        self.runtime.machine_health.retain(|name, (identity, _)| self.patch.machines.get(name).is_some_and(|machine| machine.identity == *identity));
+        for (name, model, health) in reports {
+            if self.patch.machines.get(&name) == Some(&model) {
+                self.runtime.machine_health.insert(name, (model.identity, health));
+            }
+        }
+        before != self.machine_health()
+    }
+
+    /// Failures reported by each current machine runtime; never part of the saved patch.
+    pub fn machine_health(&self) -> IndexMap<String, machine::Health> {
+        self.runtime.machine_health.iter().filter_map(|(name, (identity, health))| {
+            self.patch.machines.get(name).filter(|machine| machine.identity == *identity)?;
+            Some((name.clone(), health.clone()))
+        }).collect()
     }
 
     /// Set, replace or remove (`None`) a machine whole, answering the record it replaced. A new one
@@ -851,8 +884,12 @@ impl Graph {
         let at = next.attributes.get_index_of(from).expect("checked");
         let attr = next.attributes.shift_remove(from).expect("checked");
         next.attributes.shift_insert(at, to.to_string(), attr);
-        next.states.values_mut().for_each(|s| rekey(&mut s.values));
+        next.states.values_mut().for_each(|s| { rekey(&mut s.values); rekey(&mut s.exit_values); });
+        next.transitions.values_mut().for_each(|t| rekey(&mut t.values));
         let moved: Vec<(String, String)> = m.playheads.keys().map(|ph| (format!("{ph}.{from}"), format!("{ph}.{to}"))).collect();
+        for (ph, head) in &m.playheads {
+            self.variables().transfer_entry(&format!("{ph}.{from}"), &format!("{ph}.{to}"), &head.identity)?;
+        }
         self.set_machine(machine, Some(next), None)?;
         Ok(self.rewrite_variable_reads(&moved))
     }
@@ -861,19 +898,23 @@ impl Graph {
     /// machine, with the machine's three elements and one entry per attribute; nothing else.
     fn sync_playheads(&mut self) {
         let mut store = self.variables();
-        let wanted: Vec<(String, String, goofi_core::variables::Entries)> = self
+        let wanted: Vec<(String, String, goofi_core::identity::Identity, goofi_core::variables::Entries)> = self
             .patch
             .machines
             .iter()
-            .flat_map(|(m, record)| record.playheads.keys().map(move |ph| (ph.clone(), m.clone(), record.playhead_entries(ph))))
+            .flat_map(|(m, record)| record.playheads.iter().map(move |(ph, head)| (ph.clone(), m.clone(), head.identity.clone(), record.playhead_entries(ph))))
             .collect();
+        for (ph, _, identity, _) in &wanted {
+            let old = store.groups().find(|(name, record)| *name != ph && record.identity == *identity).map(|(name, _)| name.to_string());
+            if let Some(old) = old { let _ = store.transfer_group(&old, ph, identity); }
+        }
         let gone: Vec<String> =
-            store.groups().filter(|(g, rec)| rec.machine.is_some() && !wanted.iter().any(|(ph, m, _)| ph == g && Some(m.as_str()) == rec.machine.as_deref())).map(|(g, _)| g.to_string()).collect();
+            store.groups().filter(|(g, rec)| rec.machine.is_some() && !wanted.iter().any(|(ph, _, identity, _)| ph == g && *identity == rec.identity)).map(|(g, _)| g.to_string()).collect();
         for group in gone {
             store.release(&group);
         }
-        for (ph, m, entries) in wanted {
-            let record = goofi_core::variables::Group { machine: Some(m), ..Default::default() };
+        for (ph, m, identity, entries) in wanted {
+            let record = goofi_core::variables::Group { identity, machine: Some(m), ..Default::default() };
             let _ = store.claim(&ph, record, entries);
         }
     }
@@ -881,8 +922,16 @@ impl Graph {
     /// Follow a set of variable renames into every expression that spells one, answering the nodes
     /// whose source text changed.
     fn rewrite_variable_reads(&mut self, moved: &[(String, String)]) -> Vec<Uid> {
+        for (from, to) in moved {
+            if let Some(binding) = self.runtime.variable_binds.shift_remove(from) {
+                self.runtime.variable_binds.insert(to.clone(), binding);
+            }
+        }
         let rename = |name: &str| moved.iter().find(|(old, _)| old == name).map(|(_, new)| new.clone());
         self.rewrite_variable_expressions(|e| expr_rewrite::rename_variables(e, rename));
+        for machine in self.patch.machines.values_mut() {
+            machine.rewrite_expressions(|e| expr_rewrite::rename_variables(e, rename));
+        }
         self.rewrite_sources(|s| {
             Some(SourceState { expression: expr_rewrite::rename_variables(&s.expression, rename)?, ..s.clone() })
         })
@@ -893,7 +942,7 @@ impl Graph {
         let edits: Vec<(String, String)> =
             self.variables().entries().filter_map(|(n, v)| Some((n.to_string(), edit(v.expression.as_deref()?)?))).collect();
         for (name, expression) in edits {
-            let _ = self.variables().set_expression(&name, Some(expression));
+            self.variables().rewrite_expression(&name, expression);
         }
     }
 
@@ -1191,6 +1240,10 @@ impl Graph {
 
     pub fn engine_ids(&self) -> Vec<&'static str> {
         self.runtime.engines.iter().map(|e| e.id()).collect()
+    }
+
+    pub fn sample_clock(&self) -> Option<(goofi_core::samples::SampleClock, u64)> {
+        self.engines().find_map(|engine| engine.sample_clock())
     }
 
     /// What the engines find on their own account, after every root.
@@ -2698,7 +2751,7 @@ impl Graph {
                 },
                 Some(event_id) => {
                     taken.push(event_id);
-                    BoundVar::Stream { var: var.to_string(), producer, slot, event_id }
+                    BoundVar::Stream { var: var.to_string(), producer, generation: if producer == Uid::VARIABLES { self.variables().generation(slot).unwrap_or(0) } else { self.node_generation(producer) }, slot, event_id }
                 }
             },
         };
@@ -2710,10 +2763,13 @@ impl Graph {
             .map(|r| (r.var.as_str(), &r.target))
             .map(|(var, t)| match t {
                 // A variable is a slot of the patch's own producer, read as any stream is.
-                Target::Variable { key } => stream(var, &mut taken, match self.variables().contains(key) {
-                    true => Ok((Uid::VARIABLES, goofi_core::variables::slot_name(key))),
-                    false => Err(format!("variable `{key}` is not defined")),
-                }),
+                Target::Variable { key } => {
+                    let exists = self.variables().contains(key);
+                    stream(var, &mut taken, match exists {
+                        true => Ok((Uid::VARIABLES, goofi_core::variables::slot_name(key))),
+                        false => Err(format!("variable `{key}` is not defined")),
+                    })
+                }
                 Target::Node { name, slot } => {
                     stream(var, &mut taken, self.resolve_stream(name, slot.as_deref()))
                 }
@@ -2778,7 +2834,20 @@ impl Graph {
         let entry = self.leaf(uid)?;
         let key = ParamKey::new(group, name);
         let b = entry.sources.get(&key)?;
-        Some(SourceInfo { state: b.state.clone(), error: source_error(entry, self.health(uid), &key) })
+        let dependencies = b.vars.iter().zip(&b.refs).filter_map(|(var, reference)| {
+            if let Some((node, slot)) = var.wire() {
+                return Some(if node == Uid::VARIABLES { doc::Dependency::Variable { name: slot.to_string() } }
+                    else { doc::Dependency::Output { node: node.to_hex(), slot: slot.to_string() } });
+            }
+            if !matches!(var, BoundVar::Value { .. }) { return None; }
+            let (node, group, name) = match &reference.target {
+                Target::NodeParam { name, group, param } => (self.uid_by_name(name)?, group, param),
+                Target::MeParam { group, param } => (uid, group, param),
+                _ => return None,
+            };
+            Some(doc::Dependency::Param { node: node.to_hex(), group: group.clone(), name: name.clone() })
+        }).collect();
+        Some(SourceInfo { state: b.state.clone(), error: source_error(entry, self.health(uid), &key), dependencies })
     }
 
     /// Every param error on `uid` as `(group, name, message)` — what the live sweep broadcasts, so
@@ -2961,6 +3030,7 @@ impl Graph {
     /// item once however often the batch touched it. Free when nothing was.
     pub fn settle(&mut self) {
         self.derive_bindings();
+        self.variables().prepare_publication();
         let changed = std::mem::take(&mut self.runtime.changed);
         let raw = std::mem::take(&mut self.touched);
         if changed.is_empty() && raw.is_empty() && !self.runtime.resettle && !self.engines().any(|e| e.dirty()) {
@@ -3161,10 +3231,11 @@ impl Graph {
         self.runtime.refreshed.clear();
         // Variables and machines are patch CONTENT, so a load starts from a fresh seeded store.
         self.patch.machines.clear();
-        self.variables().reset();
+        self.runtime.machine_health.clear();
         // Time belongs to the PATCH: one loaded an hour in must read what it would at boot. Every
         // engine holds this same object, so there is nothing to push.
         self.runtime.time.restart();
+        self.variables().reset();
     }
 
     /// Every uid `roots` reaches: the roots, whatever their scopes hold to any depth, and those
@@ -3417,12 +3488,27 @@ impl Graph {
     /// variable's expression why it cannot bind — the one runtime fact the panel shows inline.
     pub fn replica(&self) -> serde_json::Value {
         let mut doc = serde_json::to_value(self.document()).expect("a plain record");
+        doc["machine_health"] = serde_json::json!(self.machine_health());
+        doc["machine_outgoing"] = serde_json::json!(self.machine_outgoing());
         for root in ["nodes", "links", "variables", "variable_groups", "machines"] {
             doc[root] = doc.get(root).cloned().unwrap_or_else(|| serde_json::json!({}));
         }
-        for (name, b) in &self.runtime.variable_binds {
-            if let (Some(error), Some(record)) = (&b.bind_error, doc["variables"].get_mut(name)) {
-                record["error"] = serde_json::Value::String(error.clone());
+        for (uid, leaf) in self.leaves() {
+            for key in leaf.sources.keys() {
+                if let Some(source) = self.param_source(uid, &key.group, &key.name) {
+                    if !source.dependencies.is_empty() {
+                        if let Some(record) = doc["nodes"][uid.to_hex()]["params"][&key.group].get_mut(&key.name) {
+                            record["dependencies"] = serde_json::json!(source.dependencies);
+                        }
+                    }
+                }
+            }
+        }
+        let store = self.variables();
+        for name in self.runtime.variable_binds.keys() {
+            let error = self.variable_binding_error(name).or_else(|| store.error(name).map(str::to_string));
+            if let (Some(error), Some(record)) = (error, doc["variables"].get_mut(name)) {
+                record["error"] = serde_json::Value::String(error);
             }
         }
         doc

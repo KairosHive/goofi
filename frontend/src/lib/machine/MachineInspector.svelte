@@ -3,7 +3,7 @@
      machine itself: its name, its seed, its attributes and its playheads. Laid out as the node
      inspector lays out a node: Field rows, slot blocks for the lists, a rule between sections. -->
 <script lang="ts">
-	import type { Attribute, Literal, Machine } from '$lib/api/generated';
+	import type { Attribute, Literal, Machine, Selection } from '$lib/api/generated';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import IdentityBar from '$lib/inspector/IdentityBar.svelte';
 	import ParamField from '$lib/inspector/ParamField.svelte';
@@ -18,21 +18,27 @@
 	import { dotColor, hexToRgba, rgbaToHex } from './layout';
 	import type { Subject } from './subject';
 	import TransitionForm from './TransitionForm.svelte';
+	import Assignments from './Assignments.svelte';
 	import { summary as triggerSummary } from './triggers';
 
 	let {
 		name,
 		m,
 		subject,
-		onClose
+		onClose,
+		onRename,
+		onSelectTransition
 	}: {
 		name: string;
 		m: Machine;
 		subject: Subject;
 		onClose: () => void;
+		onRename: (name: string) => void;
+		onSelectTransition: (id: string) => void;
 	} = $props();
 
 	const g = graph();
+	const health = $derived(g.machineHealth[name]);
 	const states = $derived(Object.keys(m.states));
 	const playheads = $derived(Object.keys(m.playheads));
 	const attrs = $derived(Object.entries(m.attributes));
@@ -70,14 +76,22 @@
 	}
 
 	// ---- the state: its values, and the transitions into and out of it.
-	const state = $derived(subject.kind === 'state' ? m.states[subject.id] : undefined);
-	const values = $derived(state?.values ?? {});
+	const selectedState = $derived(subject.kind === 'state' ? m.states[subject.id] : undefined);
+	const values = $derived(selectedState?.values ?? {});
 	const editState = (patch: Record<string, Literal | null>): void => {
 		if (subject.kind === 'state') call('machine state edit', { name: subject.id, values: patch });
 	};
 	const transitions = $derived(Object.entries(m.transitions));
 	const incoming = $derived(subject.kind === 'state' ? transitions.filter(([, t]) => t.to === subject.id) : []);
-	const outgoing = $derived(subject.kind === 'state' ? transitions.filter(([, t]) => t.from === subject.id || t.from === '*') : []);
+	const outgoingIds = $derived(subject.kind === 'state' ? g.machineOutgoing[name]?.[subject.id] ?? [] : []);
+	const outgoing = $derived(outgoingIds.filter((id) => id in m.transitions).map((id): [string, Machine['transitions'][string]] => [id, m.transitions[id]]));
+	function moveTransition(i: number, delta: number): void {
+		if (subject.kind !== 'state') return;
+		const order = [...outgoingIds];
+		const [id] = order.splice(i, 1);
+		order.splice(i + delta, 0, id);
+		call('machine state edit', { name: subject.id, order });
+	}
 	const transition = $derived(subject.kind === 'transition' ? m.transitions[subject.id] : undefined);
 	const arrow = (t: Machine['transitions'][string]): string => `${t.from === '*' ? 'any' : t.from} → ${t.to}`;
 </script>
@@ -98,22 +112,38 @@
 		{#if list.length === 0}
 			<div class="empty">None</div>
 		{/if}
-		{#each list as [id, t] (id)}
-			<Disclosure class="transition-row" data-testid={`transition-row-${id}`}>
-				{#snippet summary()}
+		{#each list as [id, t], i (id)}
+			<div class="transition-item">
+				<Button variant="ghost" class="transition-row" data-testid={`transition-row-${id}`}
+					onclick={() => onSelectTransition(id)}>
 					<span class="arrow">{arrow(t)}</span>
 					<span class="when">{triggerSummary(t)}</span>
-				{/snippet}
-				{#snippet children()}
-					<TransitionForm {name} {m} {id} />
-				{/snippet}
-			</Disclosure>
+				</Button>
+				<div class="reorder">
+					{#if testid === 'transitions-out'}
+						<IconButton variant="ghost" size="sm" label="Move transition up" disabled={i === 0} data-testid={`transition-up-${id}`}
+							onclick={() => { moveTransition(i, -1); }}><Icon name="chevron-down" style="transform: rotate(180deg)" /></IconButton>
+						<IconButton variant="ghost" size="sm" label="Move transition down" disabled={i === list.length - 1} data-testid={`transition-down-${id}`}
+							onclick={() => { moveTransition(i, 1); }}><Icon name="chevron-down" /></IconButton>
+					{/if}
+				</div>
+			</div>
 		{/each}
 	</section>
 {/snippet}
 
 <div class="inspector" data-testid="machine-inspector" data-subject={subject.kind}>
-	{#if subject.kind === 'state' && state}
+	{#if health && (health.expressions.length || Object.keys(health.playheads).length)}
+		<section class="runtime-health" data-testid="machine-health" aria-live="polite">
+			{#each Object.entries(health.playheads) as [playhead, error] (playhead)}
+				<p><strong>{playhead}</strong>: {error}. Reset or jump to recover.</p>
+			{/each}
+			{#each health.expressions as issue}
+				<p><strong>{issue.playhead ? `${issue.playhead}: ` : ''}{issue.transition} {issue.surface.kind}{'index' in issue.surface ? ` ${issue.surface.index + 1}` : ''}</strong>: <code>{issue.expression}</code>: {issue.error}</p>
+			{/each}
+		</section>
+	{/if}
+	{#if subject.kind === 'state' && selectedState}
 		{@const id = subject.id}
 		{#key id}
 			<IdentityBar type="state" {onClose}>
@@ -126,26 +156,19 @@
 			<div class="rows">
 				<section class="section" data-testid="state-values">
 					{@render sectionHead('values')}
-					{#if attrs.length === 0}
-						<div class="empty">No attributes yet. Select nothing to add them to the machine.</div>
-					{/if}
-					{#each attrs as [attr, a] (attr)}
-						{#if attr in values}
-							<div class="value" data-testid={`state-value-${attr}`}>
-								<ParamField paramName={attr} descriptor={descriptorFor(a, values[attr])} literal viewKey={`${name}/${id}/${attr}`}
-									onCommit={(v) => editState({ [attr]: literalOf(v) })}
-									onPreview={(v) => g.previewState(name, id, { values: { [attr]: v } })} />
-								<IconButton variant="ghost" size="sm" label={`Clear ${attr}`} title="Leave it unset: a playhead entering keeps what it holds" data-testid="state-clear" onclick={() => editState({ [attr]: null })}><Icon name="minus" /></IconButton>
-							</div>
-						{:else}
-							<div class="fields">
-								<Field label={attr} row doc="Unset: a playhead entering keeps what it holds">
-									<Button variant="ghost" size="sm" data-testid={`state-unset-${attr}`} onclick={() => editState({ [attr]: a.default })}>set here</Button>
-								</Field>
-							</div>
-						{/if}
-					{/each}
+					<Assignments attributes={m.attributes} {values} viewKey={`${name}/${id}`} testid="state" onCommit={editState}
+						onPreview={(values) => g.previewState(name, id, { values })} />
 				</section>
+				<section class="section" data-testid="state-selection">
+					<div class="fields"><Field label="selection" doc="How this state chooses among enabled outgoing transitions" row>
+						<Select aria-label="transition selection" value={selectedState.selection} options={['ordered', 'weighted', 'uniform']}
+							onChange={(selection) => call('machine state edit', { name: id, selection: selection as Selection })} />
+					</Field></div>
+				</section>
+				<Disclosure>{#snippet summary()}exit values{/snippet}{#snippet children()}
+					<Assignments attributes={m.attributes} values={selectedState.exit_values ?? {}} viewKey={`${name}/${id}/exit`}
+						onCommit={(exit_values) => call('machine state edit', { name: id, exit_values })} />
+				{/snippet}</Disclosure>
 				{@render transitionList('incoming', incoming, 'transitions-in')}
 				{@render transitionList('outgoing', outgoing, 'transitions-out')}
 			</div>
@@ -163,7 +186,10 @@
 		{#key name}
 			<IdentityBar type="state machine" {onClose}>
 				{#snippet title()}
-					<RenameField value={name} valid={isValidIdentifier} label="Machine name" testid="machine-name" onRename={(to) => call('machine rename', { to })} />
+					<RenameField value={name} valid={isValidIdentifier} label="Machine name" testid="machine-name" onRename={async (to) => {
+						await g.machine('machine rename', { machine: name, to });
+						onRename(to);
+					}} />
 				{/snippet}
 			</IdentityBar>
 		{/key}
@@ -265,11 +291,21 @@
 </div>
 
 <style>
+	.runtime-health {
+		max-height: 12rem;
+		min-height: 0;
+		overflow: auto;
+		padding: var(--space-3);
+		color: var(--danger);
+		overflow-wrap: anywhere;
+	}
+	.runtime-health p { margin: 0 0 var(--space-2); }
 	.inspector {
 		display: flex;
 		flex-direction: column;
 		flex: 1;
 		min-height: 0;
+		container-type: inline-size;
 	}
 	/* The body, as the node inspector's rows: the pane's own ground, one padding, rows in a column. */
 	.rows {
@@ -331,9 +367,6 @@
 		gap: var(--space-3);
 		min-height: var(--hit);
 	}
-	.rows :global(.slack) {
-		flex: 1 1 auto;
-	}
 	.rows :global(.actions) {
 		display: flex;
 		justify-content: flex-end;
@@ -348,17 +381,6 @@
 		display: inline-flex;
 		flex: 0 0 auto;
 		width: var(--chrome-control-h);
-	}
-	/* A set value is a param row, with the clear beside it; the row's own negative margin is undone. */
-	.value {
-		display: flex;
-		align-items: flex-start;
-		gap: var(--space-2);
-	}
-	.value > :global(.pf-param) {
-		flex: 1 1 auto;
-		min-width: 0;
-		margin-inline: 0;
 	}
 	.mono {
 		font-family: var(--font-mono);
@@ -378,10 +400,6 @@
 		font-family: var(--font-mono);
 		color: var(--text-muted);
 	}
-	.rows :global(.transition-row) {
-		--disclosure-surface: var(--surface-2);
-		--disclosure-hover: var(--surface-3);
-	}
 	.arrow {
 		font-family: var(--font-mono);
 		font-weight: 600;
@@ -390,5 +408,15 @@
 		margin-inline-start: var(--space-3);
 		color: var(--text-muted);
 		font-weight: 400;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
+	@container (max-width: 340px) {
+		.rows { padding: var(--space-3); }
+		.rows :global(.fields) { grid-template-columns: minmax(0, 1fr); }
+		.rows :global(.slot-head) { flex-wrap: wrap; gap: var(--space-2); }
+	}
+	.transition-item { display: flex; align-items: flex-start; gap: var(--space-2); min-width: 0; }
+	.transition-item :global(.transition-row) { flex: 1; min-width: 0; justify-content: flex-start; }
+	.reorder { display: flex; flex-direction: column; }
 </style>

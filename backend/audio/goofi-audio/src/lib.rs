@@ -432,6 +432,7 @@ impl AudioEngine {
     /// interleaved — exactly what a device callback would receive.
     pub fn drive(&mut self, frames: usize) -> (Vec<f32>, u16) {
         let mut rt = self.runtime.lock();
+        rt.apply_pending();
         let channels = rt.channels();
         let mut out = vec![0.0; frames * channels as usize];
         rt.render_into(&mut out);
@@ -716,6 +717,7 @@ impl AudioEngine {
 }
 
 impl Engine for AudioEngine {
+    fn sample_clock(&self) -> Option<(goofi_core::samples::SampleClock, u64)> { self.audio.anchor.sample_clock() }
     fn id(&self) -> &'static str {
         "audio"
     }
@@ -798,7 +800,10 @@ impl Engine for AudioEngine {
         // made on its own thread, where an OS handle it opens never has to cross one.
         let inboxes: Vec<control::Inbox> = inbox_in.into_iter().map(control::Inbox::new).collect();
         let (inbox_chans, wanted) = AudioHalf::cells(&inboxes);
-        let (blocks_in, blocks_out) = rtrb::RingBuffer::<f32>::new(control::BLOCKS_RING);
+        let (blocks_in, blocks_out) = rtrb::RingBuffer::<runtime::ControlFrame>::new(control::BLOCKS_RING);
+        let (retired_in, retired_out) = rtrb::RingBuffer::<runtime::ControlFrame>::new(control::BLOCKS_RING);
+        let param_bindings: Arc<[AtomicU64]> = manifest.params.iter().map(|_| AtomicU64::new(0)).collect();
+        let param_faults: Arc<[runtime::ControlFaultCell]> = manifest.params.iter().map(|_| runtime::ControlFaultCell::default()).collect();
         let param_chans: Vec<Arc<AtomicU16>> = manifest.params.iter().map(|_| Arc::new(AtomicU16::new(1))).collect();
         let minted = Minted { inboxes: vec![control::INBOX_SEED; inbox_chans.len()], outs: vec![1; manifest.outputs.len()] };
         let birth = control::Birth {
@@ -807,6 +812,9 @@ impl Engine for AudioEngine {
             params: atomics.clone(),
             inboxes,
             blocks: blocks_in,
+            retired_controls: retired_out,
+            param_bindings: param_bindings.clone(),
+            param_faults: param_faults.clone(),
             param_chans: param_chans.clone(),
             taps: tap_out,
             recs: rec_out,
@@ -838,6 +846,10 @@ impl Engine for AudioEngine {
             params: atomics,
             inboxes: inbox_out.into_iter().map(|ring| Frames::new(ring, Playback::of(manifest), self.audio.rate())).collect(),
             blocks: blocks_out,
+            retired_controls: retired_in,
+            control_frames: manifest.params.iter().map(|_| runtime::ControlValue::default()).collect(),
+            param_bindings,
+            param_faults,
             taps: tap_in,
             recs: rec_in,
             dead: false,
@@ -871,6 +883,10 @@ impl Engine for AudioEngine {
     }
 
     fn settle(&mut self, view: &GraphView<'_>, _touched: &[Touched]) {
+        if self.audio.anchor.sample_clock().is_some_and(|(clock, _)| clock.patch_epoch != self.time.stamp().0) {
+            let _render = self.runtime.lock();
+            self.audio.anchor.tie(self.time.now(), self.audio.rate());
+        }
         self.dirty = false;
         if std::mem::take(&mut self.sweep) {
             self.sweep_state();

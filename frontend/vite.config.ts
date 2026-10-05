@@ -5,6 +5,15 @@ const BRIDGE = process.env.GOOFI_BRIDGE ?? 'http://127.0.0.1:8000';
 
 export default defineConfig({
 	plugins: [sveltekit()],
+	build: {
+		rolldownOptions: {
+			output: {
+				codeSplitting: {
+					groups: [{ name: 'flow', test: /node_modules[\\/]@xyflow[\\/]/ }]
+				}
+			}
+		}
+	},
 	server: {
 		port: 5173,
 		strictPort: false,

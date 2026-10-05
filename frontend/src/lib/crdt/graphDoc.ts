@@ -4,7 +4,7 @@
  */
 import { EMPTY_PANEL_TYPE, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
 import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
-import type { Link, Literal, Lock, Machine, Midi } from '$lib/api/generated';
+import type { Health, Link, Literal, Lock, Machine, Midi } from '$lib/api/generated';
 import type { LayoutNode, Workspace } from 'panelty';
 import { obj, type Obj } from './ops';
 
@@ -167,6 +167,22 @@ export function machineViews(doc: Doc): Record<string, Machine> {
 		};
 	}
 	return out;
+}
+
+/** Effective transition order from the backend's shared resolver. */
+export function machineOutgoing(doc: Doc): Record<string, Record<string, string[]>> {
+	return Object.fromEntries(Object.entries(obj(doc.machine_outgoing)).map(([name, states]) => [name,
+		Object.fromEntries(Object.entries(obj(states)).map(([state, ids]) => [state,
+			Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []]))]));
+}
+
+/** Standing machine failures from the runtime owner. */
+export function machineHealth(doc: Doc): Record<string, Health> {
+	return Object.fromEntries(Object.entries(obj(doc.machine_health)).map(([name, value]) => {
+		const health = obj(value);
+		const messages = (raw: unknown): Record<string, string> => Object.fromEntries(Object.entries(obj(raw)).filter(([, message]) => typeof message === 'string')) as Record<string, string>;
+		return [name, { expressions: Array.isArray(health.expressions) ? health.expressions as Health['expressions'] : [], playheads: messages(health.playheads) }];
+	}));
 }
 
 /** What holds `gv` right now: its own lock and its group's together. */

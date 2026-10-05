@@ -16,7 +16,7 @@ use goofi_node::{NodeManifest, ParamKey};
 
 use crate::nodes::midi_in::{Note, NO_PORT};
 use crate::nodes::{audio_in, audio_out, audio_playback, midi_in};
-use crate::runtime::{Entry, REC_HEADER};
+use crate::runtime::{ControlFrame, Entry, REC_HEADER};
 use crate::{wav, Clock, DEFAULT_DEVICE, NO_DEVICE, RATE};
 
 /// An inbox is born this many floats wide and follows the frames that arrive: four of the
@@ -36,8 +36,8 @@ pub fn tap_ring(width: u16) -> usize {
 pub fn rec_ring(width: u16) -> usize {
     (REC_HEADER + width.max(1) as usize * BLOCK) * (RATE as usize / BLOCK)
 }
-/// The computed results ring holds a few blocks of a few channels; a wider result is dropped.
-pub const BLOCKS_RING: usize = (3 + 8 * BLOCK) * 4;
+/// Prepared control windows waiting for their audio sample positions.
+pub const BLOCKS_RING: usize = 64;
 /// Notes a port may hold between two blocks.
 pub const NOTE_RING: usize = 1024;
 /// How much of a file one read takes, in frames of the file's own rate.
@@ -121,9 +121,13 @@ pub struct AudioHalf {
     /// The pulse params raised since the last run, by index.
     pulses: Vec<usize>,
     inboxes: Vec<Inbox>,
-    /// The computed params' results to the audio thread, and per param the channel count the
+    /// Bound params' frames to the audio thread, and per param the channel count the
     /// plan sizes its region by.
-    blocks: rtrb::Producer<f32>,
+    blocks: rtrb::Producer<ControlFrame>,
+    retired_controls: rtrb::Consumer<ControlFrame>,
+    param_bindings: Arc<[AtomicU64]>,
+    param_faults: Arc<[crate::runtime::ControlFaultCell]>,
+    control_errors: Vec<Option<String>>,
     param_chans: Vec<Arc<AtomicU16>>,
     /// One per output: the ring the audio thread fills after every block.
     taps: Vec<rtrb::Consumer<f32>>,
@@ -142,7 +146,10 @@ pub struct Birth {
     pub manifest: &'static NodeManifest,
     pub params: Arc<[AtomicU64]>,
     pub inboxes: Vec<Inbox>,
-    pub blocks: rtrb::Producer<f32>,
+    pub blocks: rtrb::Producer<ControlFrame>,
+    pub retired_controls: rtrb::Consumer<ControlFrame>,
+    pub param_bindings: Arc<[AtomicU64]>,
+    pub param_faults: Arc<[crate::runtime::ControlFaultCell]>,
     pub param_chans: Vec<Arc<AtomicU16>>,
     pub taps: Vec<rtrb::Consumer<f32>>,
     /// Per output: the recording ring's consumer.
@@ -169,6 +176,10 @@ impl AudioHalf {
             pulses: Vec::new(),
             inboxes: birth.inboxes,
             blocks: birth.blocks,
+            retired_controls: birth.retired_controls,
+            param_bindings: birth.param_bindings,
+            param_faults: birth.param_faults,
+            control_errors: vec![None; birth.manifest.params.len()],
             param_chans: birth.param_chans,
             taps: birth.taps,
             recs: birth.recs,
@@ -368,21 +379,42 @@ impl Executor for AudioHalf {
         self.inboxes[inbox].enter(frame, rate, entry).unwrap_or(false)
     }
 
-    /// A computed result, `[t]` or `[c, t]`, to the audio thread as one chunk; a moved channel
+    /// A bound result, `[t]` or `[c, t]`, to the audio thread as one window; a moved channel
     /// count asks for the re-plan that re-sizes its region.
     fn frame(&mut self, param: usize, frame: &Data) -> bool {
-        let goofi_core::Value::Array(a) = frame.value() else { return false };
-        let (chans, len) = match a.shape() {
-            [t] => (1, *t),
-            [c, t] => (*c, *t),
-            _ => return false,
+        while self.retired_controls.pop().is_ok() {}
+        let shape = match frame.value() {
+            goofi_core::Value::Array(a) => Some(a.shape()),
+            _ => None,
         };
-        let width = (chans.min(crate::plan::CEILING as usize)) as u16;
-        let moved = chans * len > 0 && self.param_chans[param].swap(width, Ordering::Relaxed) != width;
-        if let Ok(chunk) = self.blocks.write_chunk_uninit(3 + chans * len) {
-            chunk.fill_from_iter([param as f32, chans as f32, len as f32].into_iter().chain(a.values()));
-        }
+        let dimensions = shape.and_then(|shape| match shape {
+            [t] => Some((1, *t)),
+            [c, t] => Some((*c, *t)),
+            _ => None,
+        }).filter(|(chans, len)| *chans > 0 && *len > 0 && *chans <= crate::plan::CEILING as usize);
+        let invalid = goofi_core::samples::SampleSpan::validate(frame).err().or_else(|| {
+            (shape.is_some() && dimensions.is_none()).then(|| format!("param {param}: invalid control frame shape {shape:?}"))
+        });
+        let (chans, _) = if invalid.is_none() { dimensions.unwrap_or((0, 0)) } else { (0, 0) };
+        let moved = chans > 0 && self.param_chans[param].swap(chans as u16, Ordering::Relaxed) != chans as u16;
+        let prepared = ControlFrame { param, birth: self.param_bindings[param].load(Ordering::Acquire),
+            span: if chans > 0 { goofi_core::samples::SampleSpan::of(frame) } else { None }, frame: (chans > 0).then(|| frame.clone()) };
+        self.control_errors[param] = self.blocks.push(prepared).err().map(|_| format!("param {param}: control frame queue is full")).or(invalid);
         moved
+    }
+
+    fn binding_changed(&mut self, param: usize, birth: u64) {
+        self.param_bindings[param].store(birth, Ordering::Release);
+        self.control_errors[param] = None;
+    }
+
+    fn fault(&self) -> Option<goofi_runtime::Fault> {
+        self.control_errors.iter().flatten().next().cloned().or_else(|| self.param_faults.iter().enumerate().find_map(|(param, fault)| {
+            fault.load(self.param_bindings[param].load(Ordering::Acquire)).map(|fault| match fault {
+                crate::runtime::ControlFault::Gap(sample) => format!("param {param}: timed control is missing at audio sample {sample}"),
+                crate::runtime::ControlFault::QueueFull => format!("param {param}: timed control window queue is full"),
+            })
+        })).map(goofi_runtime::Fault::Process)
     }
 
     fn rewire(&mut self, inbox: usize, wires: &[(String, String)]) {
@@ -397,6 +429,7 @@ impl Executor for AudioHalf {
     }
 
     fn run(&mut self, cx: &Cx<'_>, publish: &mut dyn FnMut(usize, Out<'_>)) -> Ticked {
+        while self.retired_controls.pop().is_ok() {}
         let mut ticked = Ticked::default();
         ticked.replan |= self.open_io(cx.consts, &mut ticked.errors);
         if let Some(mode) = self.playback.mode() {

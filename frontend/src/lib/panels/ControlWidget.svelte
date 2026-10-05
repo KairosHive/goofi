@@ -3,6 +3,7 @@
 <script lang="ts">
 	import type { Literal } from '$lib/api/generated';
 	import type { ControlView } from '$lib/crdt/graphDoc';
+	import { truth } from '$lib/codec/control';
 	import type { ArrayData } from '$lib/codec/decode';
 	import { ColorPicker, Knob, NumberInput, PaintPad, Select, Slider, TextInput, Toggle } from '$lib/ui';
 
@@ -36,10 +37,7 @@
 		if (typeof v === 'number') return [v];
 		return Array.isArray(v) ? v.map((x) => (typeof x === 'number' ? x : 0)) : [];
 	}
-	/** The one truth rule, as `control::truth` reads it: a non-empty text, or any number above zero. */
-	function truth(v: Literal | null): boolean {
-		return typeof v === 'string' ? v !== '' : typeof v === 'number' ? v > 0 : Array.isArray(v) ? v.some(truth) : v === true;
-	}
+
 	const withAt = (i: number, n: number): number[] => nums(value).map((held, k) => (k === i ? n : held));
 </script>
 

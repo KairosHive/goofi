@@ -37,6 +37,8 @@ expression and variable decisions remain in force.
   transition can have a different priority in each state. One shared resolver produces the
   order for execution and the inspector. Editing/removing a transition removes invalid
   priority references; renaming a state preserves the relation.
+  Publish the resolved order beside the authored model in the same replica batch; the inspector
+  must not fetch and retain a separate, delayed order list.
 - Every transition has `chance` in 0..1 (default 1) and a finite, nonnegative `weight`
   (default 1). Chance is the probability that an otherwise enabled transition participates
   in this decision. Weight is its relative share when the state's policy is `weighted`.
@@ -117,6 +119,11 @@ expression and variable decisions remain in force.
 - Audio sample positions map to this clock. Scheduled edges and numeric travel must reach
   the relevant samples independently of UI updates and worker wake cadence. Reuse the
   existing data-plane binding; do not add a second expression evaluator in the callback.
+  Numeric controls use a fixed 10 ms presentation delay on this clock. An absent prepared
+  interval holds its last value and reports a control fault; it must not shift the interval
+  to the callback that receives it. A clock or binding replacement rejects old intervals.
+  Computed variables retain source timestamps. A condition must not cross unresolved
+  expression work or use expression completion as its event time.
 - Project active transition identity, departure/end times and arrival order from runtime
   facts. The panel uses the same route for preview, connected edge and traveling dot,
   including parallel edges, self-transitions and wildcard routes.
@@ -133,25 +140,25 @@ Timer ownership follows entry/exit lifetime, as in
 Uniform ranges, probability and interpolated travel are explicitly specified above as
 goofi behavior; they are not attributed to those standards.
 
-## Remaining implementation and verification
+## Remaining work
 
-1. Complete clocked execution, ordered/weighted/uniform selection, transition chances,
-   guards, trigger modes, events, internal/self transitions, local lifecycle assignments and
-   random durations. Verify exact deadlines, independent triggers, simultaneous decisions,
-   deterministic retry/catch-up/reset, source edits, input timestamps and audio samples.
-2. Fix expression binding identity, stale-result rejection, producer-aware input carry,
-   bounded worker notifications and deterministic blocking fixtures. Complete positional
-   evaluation and common runtime error projection.
-3. Preserve identity and execution through machine/state/playhead/attribute/group/element
-   renames. Include every machine expression and lifecycle value field in shared traversals.
-4. Complete common model validation, owner-safe publication and truthful effect acceptance.
-5. Complete inspector controls above and restore endpoint editing. Fix preview/edge/dot
-   geometry, arrival facts, parallel/self/wildcard routes, navigation and selection, bool/
-   color/numeric conversion, resolved dependency overlays and responsive layout. Keep label
-   selection and the single-playhead fire picker from the final Claude session.
-6. Remove unused paint printing/timing and stale documentation. Strengthen existing sessions
-   with held-worker replacements, successful clean-patch effects, followed-variable triggers,
-   exact audio blocks and responsive panel scenes. Remove tests only when their behavior is
-   obsolete or already covered by a stronger session.
-7. Run warning-free workspace build/clippy/tests, frontend check/tests and relevant browser
-   sessions. Re-review fixes, commit tested checkpoints and remove this entry when complete.
+1. Reduce the review diff further. Shared expression ownership and Python conversion removed
+   another 32 net product lines. The product diff against `258f8544` is still +2,453 lines.
+   The requested size reduction is not complete. Keep the clock, selection, lifecycle and
+   inspector rules above.
+2. Release the prepared upstream panelty navigation fix (`660a5c4`, version 0.2.0), then verify
+   the prepared version pin and local lockfile. Publication needs user approval. The local tests use
+   that prepared version; the draft pin and integrity match its archive. Verify a clean install,
+   frontend checks and navigation after the pin.
+3. Commit the tested implementation checkpoints and remove this entry when the work is complete.
+
+The current checkout passes workspace build and clippy with warnings denied, 196 Rust tests,
+738 frontend tests, frontend/e2e typechecks, and 17 relevant browser sessions across desktop,
+phone and tablet in both orientations. The browser sessions include the machine inspector,
+preview geometry, random ranges, transition order, runtime health, layout integrity and touch
+expression selection. Upstream panelty passes 77 tests and its typecheck. The draft dependency pin still needs
+publication and the clean-install check above.
+After the expression cleanup, all 169 general sessions and four audio sessions passed again,
+including sampled Python evaluation, alias dependencies, binding replacement and machine timing.
+The settled outgoing-order projection also passes all eight machine sessions, 738 frontend tests,
+typechecks and the five machine browser layouts, including switching between states.

@@ -7,6 +7,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{Data, Meta, Param, Value};
 
+pub fn mix(a: f32, b: f32, t: f64) -> f32 {
+    (f64::from(a) + (f64::from(b) - f64::from(a)) * t) as f32
+}
+
 /// A literal as a document spells it; the shape of a list is the shape of the array it reads as.
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -46,6 +50,7 @@ impl Literal {
 /// string a string. A texture or a table has no literal and writes as `null`.
 impl Serialize for Data {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        if crate::samples::SampleSpan::of(self).is_some() { return self.control_value().serialize(s); }
         match self.value() {
             Value::Str(text) => s.serialize_str(text),
             Value::Array(a) => {
@@ -132,6 +137,9 @@ impl Data {
 /// The numbers a frame reads as: an array's elements, or a string parsed as a JSON number or
 /// list, or as bare numbers set apart by commas or spaces. A string that is none of these is empty.
 pub fn numbers(d: &Data) -> Box<dyn Iterator<Item = f64> + '_> {
+    if let (Some(span), Value::Array(array)) = (crate::samples::SampleSpan::of(d), d.value()) {
+        return Box::new(array.values().skip(span.length - 1).step_by(span.length).map(precise));
+    }
     match d.value() {
         Value::Array(a) => Box::new(a.values().map(precise)),
         Value::Str(s) => {
@@ -159,7 +167,7 @@ pub fn number_of(d: &Data) -> f64 {
 pub fn truth(d: &Data) -> bool {
     match d.value() {
         Value::Str(s) => !s.is_empty(),
-        Value::Array(a) => a.values().any(|v| v > 0.0),
+        Value::Array(_) => numbers(d).any(|v| v > 0.0),
         _ => false,
     }
 }

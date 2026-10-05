@@ -34,6 +34,11 @@ pub fn variables_base(instance: &str) -> String {
     format!("{instance}_variables")
 }
 
+/// One variable's output service, derived from its birth identity.
+pub fn variable_output(instance: &str, name: &str, generation: u64) -> ServiceName {
+    output_service(&format!("{}_{generation}", variables_base(instance)), name)
+}
+
 /// The door a slot's reducer parks on, rung by whichever generation of the node produces the
 /// slot: named without the generation, so a restart rings the same reducer.
 pub fn view_door_service(instance: &str, uid: Uid, slot: &str) -> ServiceName {
@@ -76,8 +81,8 @@ pub fn targets_of<'a>(
 
 /// One output slot's data service name, from the view's birth facts.
 pub fn output_of(view: &GraphView<'_>, uid: Uid, slot: &str) -> Option<ServiceName> {
-    let base = if uid == Uid::VARIABLES { variables_base(view.instance) } else { service_base(view.instance, uid, view.nodes.get(&uid)?.generation) };
-    Some(output_service(&base, slot))
+    if uid == Uid::VARIABLES { return Some(variable_output(view.instance, slot, view.variables.generation(slot)?)); }
+    Some(output_service(&service_base(view.instance, uid, view.nodes.get(&uid)?.generation), slot))
 }
 
 /// A resolved variable as a node receives it: a service rather than a uid, because a node

@@ -478,7 +478,7 @@ test('a held slot or control element is picked for reference, and a held param t
 			await take.tap();
 			await expect.poll(() => param(osc, 'frequency', 'mode')).toBe('expression');
 			expect(await param(osc, 'frequency', 'expression')).toBe("nd('carrier')");
-			await expect(page.getByTestId('reference-edge'), 'the selected node draws what it reads').toHaveCount(1);
+			await expect(page.locator(`[data-testid="reference-edge"][data-edge="${lfo}/out>${osc}"]`), 'the selected node draws its output dependency once').toHaveCount(1);
 		});
 
 		await test.step('a held control element is picked, and a held param reads it', async () => {

@@ -564,8 +564,12 @@ fn a_patch_sounds_under_the_external_clock() {
     assert!(bound["error"].is_null(), "{bound}");
     g.set_param(source, "constant", "value", 0.5);
     sounds(&g, "the computed gain to land", |x| (peak(x) - 0.5).abs() < 0.01);
-    evaluator.latch.store(true, std::sync::atomic::Ordering::Relaxed);
+    let held = evaluator.hold();
     g.set_param(source, "constant", "value", 1.0);
+    g.until("the expression worker to enter the held evaluation", |g| {
+        drive(g, TENTH);
+        held.entered().then_some(())
+    });
     assert!(
         g.stays(|g| {
             let (x, _) = drive(g, TENTH);
@@ -573,7 +577,7 @@ fn a_patch_sounds_under_the_external_clock() {
         }),
         "a stalled evaluator holds the last block"
     );
-    evaluator.latch.store(false, std::sync::atomic::Ordering::Relaxed);
+    drop(held);
     sounds(&g, "…and the result lands once it is back", |x| (peak(x) - 1.0).abs() < 0.01);
 
     // Step: a binding that evaluates to NaN is a binding error like any other — the param names
@@ -596,7 +600,7 @@ fn a_patch_sounds_under_the_external_clock() {
         j!({ "node": hex(gain3), "param": "gain/gain", "expression": format!("nd('{source_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
-    assert!(g.stays(|g| g.error(gain3).is_none()), "a wide frame reads whole");
+    assert!(g.stays(|g| g.error(gain3).is_none()), "a wide frame reads whole: {:?}", g.error(gain3));
     g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "value": 0.5, "mode": "constant" }));
     sounds(&g, "the literal to land", |x| (peak(x) - 0.5).abs() < 0.01);
 
@@ -1668,4 +1672,105 @@ fn wide(g: &Goofi, what: &str, channels: u16) -> Vec<f32> {
         let (x, c) = drive(g, TENTH);
         (c == channels).then_some(x)
     })
+}
+
+#[test]
+fn timed_control_windows_keep_their_sample_positions_through_the_audio_engine() {
+    use goofi_core::samples::SampleSpan;
+    use goofi_core::Data;
+    use goofi_audio_sdk::BLOCK;
+
+    let g = Goofi::new();
+    g.graph().set_evaluator(Arc::new(FirstVar::default()));
+    let one = held_one(&g);
+    let bare = g.add("Gain");
+    let computed = g.add("Gain");
+    for (gain, channel) in [(bare, "1"), (computed, "2")] {
+        let out = g.add("AudioOut");
+        g.set_param(out, "audio", "channels", channel);
+        g.link(one, "out", gain, "input");
+        g.link(gain, "out", out, "input");
+    }
+    sounds(&g, "both timing lanes to hold one", |samples| samples.iter().all(|sample| *sample == 1.0));
+    g.call("variable entry add", j!({ "name": "timed.source", "value": 1.0 }));
+    g.call("variable entry add", j!({ "name": "timed.replacement", "value": 0.2 }));
+    let mut events = g.events();
+    for (gain, expression) in [(bare, "variables.timed.source"), (computed, "variables.timed.source * 1")] {
+        g.call("node param edit", j!({ "node": hex(gain), "param": "gain/gain", "expression": expression }));
+    }
+    goofi_tests::applied(&g);
+    let (clock, first) = g.graph().sample_clock().expect("the external audio clock is tied");
+
+    // Publishing through the public variable producer preserves metadata that a literal op
+    // does not carry. Each acknowledgment comes from the real audio control half.
+    let mut publish = |start: u64, samples: &[f32]| {
+        let frame = Data::array_f32(vec![1, samples.len()], samples.iter().flat_map(|v| v.to_le_bytes()).collect(),
+            SampleSpan { clock, first: start, length: samples.len() }.meta()).unwrap();
+        g.graph().variables().set("timed.source", frame).unwrap();
+        let mut seen = [false; 2];
+        while !seen.iter().all(|seen| *seen) {
+            let event = events.next("param_values");
+            for (i, gain) in [bare, computed].into_iter().enumerate() {
+                let value = event["nodes"][hex(gain)]["values"]["gain"]["gain"].as_f64();
+                seen[i] |= value.is_some_and(|value| (value - f64::from(*samples.last().unwrap())).abs() < 1e-6);
+            }
+        }
+        goofi_tests::applied(&g);
+    };
+    let check = |samples: &[f32], channels: u16, expected: &[f32]| {
+        assert_eq!(channels, 2, "one channel per binding kind");
+        for channel in 0..2 {
+            let actual = lane(samples, channel, channels);
+            assert_eq!(actual, expected, "binding channel {} uses the supplied sample positions", channel + 1);
+        }
+    };
+
+    // The future window lands first. The earlier window has two intrablock edges and must
+    // expire behind it without shifting the future samples or hiding the uncovered interval.
+    let first_values: Vec<_> = (0..3 * BLOCK).map(|i| if i < 23 { 0.125 } else if i < BLOCK + 17 { 0.375 } else { 0.875 }).collect();
+    let second_values: Vec<_> = (0..2 * BLOCK).map(|i| if i < BLOCK + 11 { 0.5 } else { 0.75 }).collect();
+    publish(first + (4 * BLOCK) as u64, &second_values);
+    publish(first, &first_values);
+    let (samples, channels) = drive(&g, first_values.len());
+    check(&samples, channels, &first_values);
+    let unrelated = g.add("Osc");
+    g.call("node remove", j!({ "node": hex(unrelated) }));
+    goofi_tests::applied(&g);
+    let (samples, channels) = drive(&g, BLOCK);
+    check(&samples, channels, &[0.875; BLOCK]);
+    g.until("the uncovered sample interval to be reported", |g| {
+        g.error(bare).filter(|error| error.contains("timed control is missing"))
+    });
+    let (samples, channels) = drive(&g, second_values.len());
+    check(&samples, channels, &second_values);
+    g.until("coverage to clear the standing gap", |g| g.error(bare).is_none().then_some(()));
+
+    // A queued result belongs to its binding birth. Replacing the source before the callback
+    // consumes that result must keep it out of the new binding's region.
+    let (_, next) = g.graph().sample_clock().unwrap();
+    publish(next, &[0.9375; BLOCK]);
+    g.call("node param edit", j!({ "node": hex(bare), "param": "gain/gain", "expression": "variables.timed.replacement" }));
+    loop {
+        let event = events.next("param_values");
+        if event["nodes"][hex(bare)]["values"]["gain"]["gain"].as_f64().is_some_and(|value| (value - 0.2).abs() < 1e-6) { break; }
+    }
+    goofi_tests::applied(&g);
+    let (samples, channels) = drive(&g, BLOCK);
+    assert!(lane(&samples, 0, channels).iter().all(|sample| (*sample - 0.2).abs() < 1e-6), "the old queued binding cannot overwrite its replacement");
+    assert_eq!(lane(&samples, 1, channels), vec![0.9375; BLOCK], "the unchanged computed binding still consumes the queued window");
+
+    // A bad interior sample must be refused before DSP, even when the current tail is valid.
+    let (_, next) = g.graph().sample_clock().unwrap();
+    let mut values = vec![0.625f32; BLOCK];
+    values[23] = f32::NAN;
+    let frame = Data::array_f32(vec![1, BLOCK], values.iter().flat_map(|v| v.to_le_bytes()).collect(),
+        SampleSpan { clock, first: next, length: BLOCK }.meta()).unwrap();
+    g.graph().variables().set("timed.source", frame).unwrap();
+    g.until("the interior NaN to be refused", |g| g.error(computed).filter(|error| error.contains("evaluated to NaN")));
+    let (samples, _) = drive(&g, BLOCK);
+    assert!(samples.iter().all(|sample| sample.is_finite()), "a rejected frame cannot stop the DSP node");
+    g.call("node param edit", j!({ "node": hex(computed), "param": "gain/gain", "value": 0.625, "mode": "constant" }));
+    goofi_tests::applied(&g);
+    let (samples, channels) = drive(&g, BLOCK);
+    assert_eq!(lane(&samples, 1, channels), vec![0.625; BLOCK], "the node still runs after the rejected frame");
 }

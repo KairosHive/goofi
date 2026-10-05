@@ -26,11 +26,7 @@ export type UnknownParam = ParamBase & { type: 'unknown'; value: unknown };
 
 /** One element of a vector param as its own source: `name[i]` in the document, driving that
  * dimension alone. `value` is what it evaluates to while driven. */
-export interface ElementSource {
-	mode: ParamMode;
-	expression: string | null;
-	triggers: boolean;
-	error: string | null;
+export interface ElementSource extends Pick<ParamBase, 'mode' | 'expression' | 'triggers' | 'error' | 'dependencies'> {
 	value: number | undefined;
 }
 

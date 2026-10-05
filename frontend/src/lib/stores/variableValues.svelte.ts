@@ -3,6 +3,7 @@
  * a widget or a chip reads one from. */
 import { bindViewer } from '$lib/api/frames';
 import type { Literal } from '$lib/api/generated';
+import { decimal32 } from '$lib/codec/control';
 import { isArrayFrame, isStringFrame, type ArrayData, type DataFrame } from '$lib/codec/decode';
 
 /** The latest frame per watched variable; absent until its first frame lands. */
@@ -64,11 +65,11 @@ function literalOf(frame: DataFrame | null): Literal | null {
 	if (isStringFrame(frame)) return frame.data;
 	if (!isArrayFrame(frame)) return null;
 	const { shape, values } = frame.data;
-	if (shape.length === 1 && shape[0] === 1) return values[0];
+	if (shape.length === 1 && shape[0] === 1) return decimal32(values[0]);
 	let at = 0;
 	const nest = (dim: number): Literal[] =>
-		Array.from({ length: shape[dim] }, () => (dim === shape.length - 1 ? values[at++] : nest(dim + 1)));
-	return shape.length === 0 ? values[0] : nest(0);
+		Array.from({ length: shape[dim] }, () => (dim === shape.length - 1 ? decimal32(values[at++]) : nest(dim + 1)));
+	return shape.length === 0 ? decimal32(values[0]) : nest(0);
 }
 
 /** The form a frame holds: a `number`, a `text`, an `image` (a pad's `[h, w, 4]`), or a `list`;

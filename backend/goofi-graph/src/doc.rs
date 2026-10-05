@@ -76,6 +76,15 @@ pub struct NodeRecord {
     pub record: Vec<RecordedOutput>,
 }
 
+/// A resolved expression dependency, projected to the replica and never saved as authored state.
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Dependency {
+    Output { node: String, slot: String },
+    Variable { name: String },
+    Param { node: String, group: String, name: String },
+}
+
 /// One param's literal and, when it has one, its source record inline.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
 #[ts(optional_fields)]

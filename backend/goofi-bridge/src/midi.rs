@@ -53,6 +53,7 @@ pub struct Port {
 
 /// The device's state as the group's entries carry it, and the names it is written under.
 struct State {
+    owner: goofi_core::identity::Identity,
     cc: Vec<f32>,
     notes: Vec<f32>,
     bend: [f32; 16],
@@ -61,9 +62,9 @@ struct State {
 }
 
 impl State {
-    fn new(group: &str) -> State {
+    fn new(group: &str, owner: goofi_core::identity::Identity) -> State {
         let names = MIDI_ENTRIES.map(|(e, _)| format!("{group}.{e}"));
-        State { cc: vec![0.0; 16 * 128], notes: vec![0.0; 16 * 128], bend: [0.0; 16], pressure: [0.0; 16], names }
+        State { owner, cc: vec![0.0; 16 * 128], notes: vec![0.0; 16 * 128], bend: [0.0; 16], pressure: [0.0; 16], names }
     }
 
     /// Fold one message in and write the entry it moved through the store; a message that is
@@ -71,7 +72,7 @@ impl State {
     fn feed(&mut self, bytes: &[u8], store: &Mutex<VariableStore>) {
         if let Some(entry) = self.take(bytes) {
             let i = MIDI_ENTRIES.iter().position(|(e, _)| *e == entry).expect("a named entry");
-            store.lock().drive(&self.names[i], self.frame(entry));
+            store.lock().drive(&self.names[i], &self.owner, self.frame(entry), None);
         }
     }
 
@@ -191,14 +192,15 @@ impl Midi {
         let closed = Closed { _ports: gone.iter().filter_map(|g| open.remove(g)).collect() };
         let opening: Vec<(String, String)> = listed.iter().filter(|(_, g)| wanted.contains(g.as_str()) && !open.contains_key(g)).cloned().collect();
         for (port, group) in &opening {
-            let grab = match self.connect(port, group) {
+            let identity = goofi_core::identity::Identity::default();
+            let grab = match self.connect(port, group, identity.clone()) {
                 Ok(grab) => grab,
                 Err(e) => {
                     trouble(&format!("`{port}` did not open for `{group}`: {e}"));
                     continue;
                 }
             };
-            match store.grab_midi(group, port) {
+            match store.grab_midi(group, port, identity) {
                 Ok(()) => {
                     open.insert(group.clone(), grab);
                     changed = true;
@@ -209,10 +211,10 @@ impl Midi {
         (closed, changed)
     }
 
-    fn connect(&self, port: &str, group: &str) -> Result<Grab, String> {
+    fn connect(&self, port: &str, group: &str, owner: goofi_core::identity::Identity) -> Result<Grab, String> {
         let (input, ports) = Midi::host()?;
         let (_, port_id) = ports.iter().find(|(name, _)| name == port).ok_or("the host no longer lists it")?;
-        let (store, mut state) = (self.store.clone(), State::new(group));
+        let (store, mut state) = (self.store.clone(), State::new(group, owner));
         let link = input.connect(port_id, "goofi-in", move |_, bytes, _| state.feed(bytes, &store), ()).map_err(|e| e.to_string())?;
         let link = goofi_supervisor::scope::leased(goofi_supervisor::scope::Kind::Device, format!("midi in {port}"), link);
         Ok(Grab { port: port.to_string(), _link: link })

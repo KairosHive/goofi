@@ -99,9 +99,10 @@ pub fn desired_of(view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>, decls: &[Pa
             wire += 1;
         }
         for (_, name) in feeds.iter().filter(|(slot, _)| *slot == s.name) {
-            let service = goofi_transport::output_service(&goofi_transport::variables_base(view.instance), name);
-            subs.push(Sub::Slot { inbox, wire, service, source: format!("variables.{name}") });
-            wire += 1;
+            if let Some(service) = goofi_transport::output_of(view, Uid::VARIABLES, name) {
+                subs.push(Sub::Slot { inbox, wire, service, source: format!("variables.{name}") });
+                wire += 1;
+            }
         }
         inbox += 1;
     }
@@ -325,6 +326,8 @@ pub trait Executor {
     fn frame(&mut self, _param: usize, _frame: &Data) -> bool {
         false
     }
+    /// A whole binding's birth changed. Queued frame consumers reject earlier births.
+    fn binding_changed(&mut self, _param: usize, _birth: u64) {}
     /// A pulse param was raised: by the op, or by its source's rising edge.
     fn pulse(&mut self, _param: usize) -> Ticked {
         Ticked::default()
@@ -554,6 +557,7 @@ fn wiring(slots: &[SlotSub]) -> BTreeMap<usize, Vec<(ServiceName, String)>> {
 }
 
 struct Bind {
+    birth: goofi_core::identity::Identity,
     param: usize,
     /// The one dimension this binding writes; `None` writes the whole param.
     elem: Option<usize>,
@@ -813,12 +817,15 @@ impl<E: Executor> Runtime<E> {
             if let Some(p) = &previous {
                 expr.carry(&p.expr, |name| kept_names.iter().any(|n| n == name));
             }
-            let kept_cell = previous.as_mut().and_then(|p| p.cell.take());
+            let kept_cell = previous.as_mut().filter(|p| p.expr.id == id && p.sent == sent).and_then(|p| p.cell.take());
             let cell = id.map(|_| kept_cell.unwrap_or_else(|| Arc::new(expr::Cell::new(door_service(&self.base)))));
-            self.binds.push(Bind { param, elem, key, expr, cell, sent, trigger, streams });
+            let birth = previous.as_ref().filter(|p| !moved && p.expr.id == id).map(|p| p.birth.clone()).unwrap_or_default();
+            if elem.is_none() { self.exec.binding_changed(param, birth.generation()); }
+            self.binds.push(Bind { birth, param, elem, key, expr, cell, sent, trigger, streams });
         }
         let mut pass = Pass::default();
         for dropped in old {
+            if dropped.elem.is_none() { self.exec.binding_changed(dropped.param, 0); }
             pass.values |= self.evaluated.shift_remove(&dropped.key).is_some();
             if self.errors.shift_remove(&dropped.key).is_some() {
                 pass.errors.push((dropped.key, None));
@@ -1048,16 +1055,7 @@ impl<E: Executor> Runtime<E> {
         for i in 0..self.binds.len() {
             let Some(result) = self.binds[i].cell.as_ref().and_then(|c| c.take()) else { continue };
             trigger |= fires(&self.binds[i]);
-            let (param, whole) = (self.binds[i].param, self.binds[i].elem.is_none());
-            let mut replan = false;
-            let outcome = result.map(|frame| {
-                replan = whole && self.exec.frame(param, &frame);
-                Some(goofi_core::control::read(&frame, &self.target(i)))
-            });
-            if replan {
-                self.shared.ask_settle();
-            }
-            self.land(i, outcome, &mut pass);
+            self.land_frame(i, result, &mut pass);
         }
         for (key, why) in undecodable {
             self.record_error(key, Some(why), &mut pass);
@@ -1192,7 +1190,7 @@ impl<E: Executor> Runtime<E> {
         let outcome = match self.binds[i].expr.inputs() {
             Err(e) => Err(e),
             Ok(None) => Ok(None),
-            Ok(Some(Inputs::Bare(frame))) => Ok(Some(goofi_core::control::read(&frame, &target))),
+            Ok(Some(Inputs::Bare(frame))) => { self.land_frame(i, Ok(frame), pass); return; },
             Ok(Some(Inputs::Computed(locals))) => {
                 let b = &self.binds[i];
                 let range = match &target {
@@ -1204,6 +1202,21 @@ impl<E: Executor> Runtime<E> {
                 return;
             }
         };
+        self.land(i, outcome, pass);
+    }
+
+    fn land_frame(&mut self, i: usize, result: Result<Data, String>, pass: &mut Pass) {
+        let (param, whole) = (self.binds[i].param, self.binds[i].elem.is_none());
+        let outcome = result.and_then(|frame| {
+            goofi_core::samples::SampleSpan::validate(&frame)?;
+            if let goofi_core::Value::Array(array) = frame.value() {
+                if let Some(value) = array.values().find(|value| !value.is_finite()) {
+                    return Err(format!("evaluated to {value}"));
+                }
+            }
+            if whole && self.exec.frame(param, &frame) { self.shared.ask_settle(); }
+            Ok(Some(goofi_core::control::read(&frame, &self.target(i))))
+        });
         self.land(i, outcome, pass);
     }
 

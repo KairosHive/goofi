@@ -11,6 +11,7 @@ pub mod expr;
 pub mod mailbox;
 pub mod seam;
 pub mod sections;
+pub mod samples;
 pub mod tags;
 pub mod type_id;
 pub use describe::{describe, digest_of, engine_of, folder_of, illegal_param, interned, leak_manifest, manifest_of, node_file_count, node_files, parse_introspection, type_name_of};
@@ -280,6 +281,39 @@ pub struct Compiled {
     pub id: BindingId,
 }
 
+/// A pure expression and whether its value can change as patch time advances.
+pub struct DeterministicCompiled {
+    pub compiled: Compiled,
+    pub observes_time: bool,
+}
+
+/// An owning reference to an evaluator's deterministic function.
+pub struct RetainedExpression {
+    evaluator: std::sync::Arc<dyn ExprEvaluator>,
+    pub id: BindingId,
+    pub observes_time: bool,
+}
+
+impl RetainedExpression {
+    pub fn compile(evaluator: std::sync::Arc<dyn ExprEvaluator>, source: &str) -> Result<Self, ExprError> {
+        let code = evaluator.compile_deterministic(source)?;
+        Ok(Self { evaluator, id: code.compiled.id, observes_time: code.observes_time })
+    }
+
+    pub fn new(evaluator: std::sync::Arc<dyn ExprEvaluator>, id: BindingId) -> Result<Self, ExprError> {
+        let observes_time = evaluator.retain_deterministic(id)?;
+        Ok(Self { evaluator, id, observes_time })
+    }
+
+    pub fn eval(&self, ctx: &EvalCtx<'_>) -> Result<Data, ExprError> {
+        self.evaluator.eval(self.id, ctx)
+    }
+}
+
+impl Drop for RetainedExpression {
+    fn drop(&mut self) { self.evaluator.release(self.id); }
+}
+
 /// One expression variable's value, as the graph resolved it.
 #[derive(Clone, Debug)]
 pub enum Local {
@@ -301,7 +335,19 @@ pub struct EvalCtx<'a> {
 /// no pyo3 dependency. A result is a frame, read into its target through `control::read`.
 pub trait ExprEvaluator: Send + Sync {
     fn compile(&self, source: &str) -> Result<Compiled, ExprError>;
+    /// Compile with deterministic capabilities only. An evaluator must opt in to this policy.
+    fn compile_deterministic(&self, _source: &str) -> Result<DeterministicCompiled, ExprError> {
+        Err(ExprError("the evaluator does not support deterministic expressions".into()))
+    }
+    /// Retain the existing function, refusing capabilities that cannot be projected deterministically.
+    fn retain_deterministic(&self, _id: BindingId) -> Result<bool, ExprError> {
+        Err(ExprError("the evaluator does not support deterministic expression projection".into()))
+    }
     fn eval(&self, id: BindingId, ctx: &EvalCtx<'_>) -> Result<Data, ExprError>;
+    /// Evaluate one compatible sample interval with the same scalar semantics at every sample.
+    fn eval_sampled(&self, id: BindingId, ctx: &EvalCtx<'_>, span: goofi_core::samples::SampleSpan) -> Result<Data, ExprError> {
+        samples::pointwise(self, id, ctx, span)
+    }
     fn release(&self, id: BindingId);
 }
 

@@ -4,7 +4,6 @@
      drawing and the gesture in flight. -->
 <script lang="ts">
 	import {
-		ConnectionLineType,
 		ConnectionMode,
 		Controls,
 		SvelteFlow,
@@ -27,12 +26,14 @@
 	import StateCard from '$lib/machine/StateCard.svelte';
 	import type { Subject } from '$lib/machine/subject';
 	import TransitionEdge from '$lib/machine/TransitionEdge.svelte';
-	import { CARD_W, FALLBACK_H } from '$lib/machine/layout';
+	import ConnectionPreview from '$lib/machine/ConnectionPreview.svelte';
+	import { courses, type LabelSize, type RouteGeometry } from '$lib/machine/geometry';
+	import { CARD_W, FALLBACK_H, cardBox } from '$lib/machine/layout';
 	import { summary } from '$lib/machine/triggers';
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
-	import { Chip, EmptyState, Icon, IconButton, Select } from '$lib/ui';
+	import { Chip, EmptyState, Icon, IconButton, Select, isTextEditingTarget } from '$lib/ui';
 	import PanelBar from './PanelBar.svelte';
 	import SidePane from './SidePane.svelte';
 
@@ -49,7 +50,13 @@
 	const machine = $derived(name ? g.machines[name] : undefined);
 
 	function choose(machine: string): void {
-		setState({ machine }, 'authored', `Show machine ${machine}`);
+		setState({ machine }, 'navigation');
+	}
+	function renamed(machine: string): void {
+		const next = camera(`${panelId}/machine/${machine}`);
+		next.viewport = cam.viewport;
+		next.fittedEpoch = cam.fittedEpoch;
+		choose(machine);
 	}
 	async function create(): Promise<void> {
 		try {
@@ -85,6 +92,12 @@
 	// ---- the flow's nodes and edges, derived from the document; a drag pins a box until the doc agrees.
 	let flowNodes = $state.raw<Node[]>([]);
 	let flowEdges = $state.raw<Edge[]>([]);
+	let labelSizes = $state.raw<Record<string, LabelSize>>({});
+	const geometry = $derived(machine ? courses(machine, (id) => cardBox(flowNodes, id), (key) => labelSizes[key]) : new Map());
+	function measured(key: string, size: LabelSize): void {
+		const previous = labelSizes[key];
+		if (previous?.w !== size.w || previous?.h !== size.h) labelSizes = { ...labelSizes, [key]: size };
+	}
 	const pinned = new Map<string, { x: number; y: number }>();
 	$effect(() => {
 		const m = machine;
@@ -107,30 +120,23 @@
 			return;
 		}
 		const selected = sel.edges(panelId);
-		// A `*` transition has no box to leave from; it is listed under every state and fired there.
-		const drawn = Object.entries(m.transitions).filter(([, t]) => t.from in m.states && t.to in m.states);
-		// The transitions between one pair of boxes, either way, take lanes side by side.
-		const pairKey = (t: { from: string; to: string }): string => [t.from, t.to].sort().join('|');
-		const lanes = new Map<string, string[]>();
-		for (const [id, t] of drawn) lanes.set(pairKey(t), [...(lanes.get(pairKey(t)) ?? []), id]);
-		flowEdges = drawn.map(([id, t]) => {
-			const siblings = lanes.get(pairKey(t))!;
-			return {
-				id,
-				source: t.from,
-				target: t.to,
-				type: 'transition',
-				selected: selected.has(id),
-				data: { summary: summary(t), k: siblings.indexOf(id), n: siblings.length, onPick: () => sel.setSelection(panelId, [], [id]) }
-			};
-		});
+		flowEdges = [...geometry.values()].map((r) => ({
+			id: r.key, source: r.source, target: r.target, type: 'transition', selected: selected.has(r.id),
+			data: { summary: summary(m.transitions[r.id]), geometry: r, labelSize: labelSizes[r.key],
+				onMeasure: (size: LabelSize) => measured(r.key, size), onPick: (event: MouseEvent) => pickTransition(r.id, event) }
+		}));
 	});
 	/** Flow's own `selected` flags, written back from the store after Flow has had its say. */
 	function reassertSelection(): void {
 		flowNodes = flowNodes.map((n) => ({ ...n, selected: sel.nodes(panelId).has(n.id) }));
-		flowEdges = flowEdges.map((e) => ({ ...e, selected: sel.edges(panelId).has(e.id) }));
+		flowEdges = flowEdges.map((e) => ({ ...e, selected: sel.edges(panelId).has(transitionId(e)) }));
 	}
 	const modifier = (e: MouseEvent | TouchEvent): boolean => 'shiftKey' in e && (e.shiftKey || e.ctrlKey || e.metaKey);
+	const transitionId = (edge: Edge): string => (edge.data?.geometry as RouteGeometry).id;
+	function pickTransition(id: string, event: MouseEvent | TouchEvent): void {
+		sel.clickEdge(panelId, id, modifier(event));
+		void tick().then(reassertSelection);
+	}
 
 	const nodeTypes = { state: StateCard };
 	const edgeTypes = { transition: TransitionEdge };
@@ -140,12 +146,38 @@
 
 	// ---- the camera, kept per panel so a reshape keeps the framing.
 	let rootEl = $state<HTMLDivElement | null>(null);
+	let inset = $state({ right: 0, bottom: 0 });
+	$effect(() => {
+		const root = rootEl;
+		const open = inspectorOn && subject !== null;
+		const pane = root?.querySelector<HTMLElement>('[data-testid="auto-side-panel"]');
+		if (!root || !pane || !open) { inset = { right: 0, bottom: 0 }; return; }
+		// Reserve the pane and its actual resize grip; its CSS remains the size and axis owner.
+		const update = (): void => {
+			const vertical = getComputedStyle(pane).getPropertyValue('--pane-axis').trim() === 'y';
+			const grip = pane.querySelector<HTMLElement>('[data-testid="panel-resize-handle"]');
+			const panel = pane.getBoundingClientRect();
+			const band = grip?.getBoundingClientRect();
+			const before = grip ? getComputedStyle(grip, '::before') : null;
+			const extra = band ? Math.max(0, vertical ? panel.top - band.top : panel.left - band.left)
+				+ Math.max(0, -(parseFloat(vertical ? before?.top ?? '' : before?.left ?? '') || 0)) : 0;
+			inset = vertical ? { right: 0, bottom: pane.offsetHeight + extra } : { right: pane.offsetWidth + extra, bottom: 0 };
+		};
+		const observer = new ResizeObserver(update);
+		observer.observe(pane);
+		update();
+		return () => observer.disconnect();
+	});
 	let screenToFlow = $state<((p: { x: number; y: number }) => { x: number; y: number }) | undefined>(undefined);
 	let getViewport = $state<(() => Viewport) | undefined>(undefined);
 	let setViewport = $state<((v: Viewport) => void) | undefined>(undefined);
 	let flowFit = $state<((o?: FitViewOptions) => Promise<boolean>) | undefined>(undefined);
-	const cam = camera(untrack(() => panelId));
-	let viewport = $state<Viewport>(cam.viewport ?? { x: 0, y: 0, zoom: 1 });
+	const cam = $derived(camera(`${panelId}/machine/${name}`));
+	let viewport = $state<Viewport>({ x: 0, y: 0, zoom: 1 });
+	$effect(() => {
+		const current = cam;
+		untrack(() => { sel.clear(panelId); pinned.clear(); labelSizes = {}; viewport = current.viewport ?? { x: 0, y: 0, zoom: 1 }; });
+	});
 	// Frame the machine once per load, never on an interactive add.
 	$effect(() => {
 		const epoch = g.loadEpoch;
@@ -162,16 +194,11 @@
 		const pos = [Math.round(p.x - CARD_W / 2), Math.round(p.y - FALLBACK_H / 2)];
 		void call('machine state add', { pos });
 	}
-	const DOUBLE_CLICK_MS = 350;
-	let lastPaneClick = { at: 0, x: 0, y: 0 };
 	function onPaneClick({ event }: { event: MouseEvent }): void {
-		const now = performance.now();
-		if (now - lastPaneClick.at < DOUBLE_CLICK_MS && Math.hypot(event.clientX - lastPaneClick.x, event.clientY - lastPaneClick.y) < 30) {
-			lastPaneClick.at = 0;
+		if (event.detail === 2) {
 			addState({ x: event.clientX, y: event.clientY });
 			return;
 		}
-		lastPaneClick = { at: now, x: event.clientX, y: event.clientY };
 		sel.clickPane(panelId, event.shiftKey);
 		if (sel.nodes(panelId).size || sel.edges(panelId).size) void tick().then(reassertSelection);
 	}
@@ -198,9 +225,8 @@
 	 * their own transitions with them. */
 	function deleteElements({ nodes, edges }: { nodes: Node[]; edges: Edge[] }): void {
 		const gone = new Set(nodes.map((n) => n.id));
-		for (const e of edges) {
-			if (!gone.has(e.source) && !gone.has(e.target)) void call('machine transition remove', { id: e.id });
-		}
+		const transitions = new Set(edges.filter((e) => !gone.has(e.source) && !gone.has(e.target)).map((e) => transitionId(e)));
+		for (const id of transitions) void call('machine transition remove', { id });
 		for (const n of nodes) void call('machine state remove', { name: n.id });
 	}
 
@@ -220,6 +246,7 @@
 	}
 
 	function onKeydown(e: KeyboardEvent): void {
+		if (e.defaultPrevented || isTextEditingTarget(e.target)) return;
 		if (e.key === 'Escape' && (sel.nodes(panelId).size || sel.edges(panelId).size)) {
 			sel.clear(panelId);
 			e.preventDefault();
@@ -278,15 +305,16 @@
 					onclick={() => void call('machine reset', {})}><Icon name="refresh-cw" /></IconButton>
 			{/snippet}
 		</PanelBar>
+		{#key name}
 		<SvelteFlowProvider>
-			<div class="canvas canvas-wrap" bind:this={rootEl}>
+			<div class="canvas canvas-wrap" bind:this={rootEl} style:padding-right={`${inset.right}px`} style:padding-bottom={`${inset.bottom}px`}>
 				<SvelteFlow
 					bind:nodes={flowNodes}
 					bind:edges={flowEdges}
 					{nodeTypes}
 					{edgeTypes}
 					connectionMode={ConnectionMode.Loose}
-					connectionLineType={ConnectionLineType.Straight}
+					connectionLineComponent={ConnectionPreview}
 					connectionRadius={CARD_W / 2 + 20}
 					deleteKey={['Delete', 'Backspace']}
 					ondelete={deleteElements}
@@ -295,15 +323,11 @@
 					onnodedragstop={onNodeDragStop}
 					onnodeclick={({ node, event }) => {
 						// A plain click is the whole selection, the transition included, as Flow itself has it.
-						if (modifier(event)) sel.clickNode(panelId, node.id, true);
-						else sel.setSelection(panelId, [node.id], []);
+						sel.clickNode(panelId, node.id, modifier(event));
 						void tick().then(reassertSelection);
 					}}
-					onedgeclick={({ edge, event }) => {
-						sel.clickEdge(panelId, edge.id, modifier(event));
-						void tick().then(reassertSelection);
-					}}
-					onselectionend={() => sel.setSelection(panelId, flowNodes.filter((n) => n.selected).map((n) => n.id), flowEdges.filter((e) => e.selected).map((e) => e.id))}
+					onedgeclick={({ edge, event }) => pickTransition(transitionId(edge), event)}
+					onselectionend={() => sel.setSelection(panelId, flowNodes.filter((n) => n.selected).map((n) => n.id), flowEdges.filter((e) => e.selected).map((e) => transitionId(e)))}
 					onpaneclick={onPaneClick}
 					fitViewOptions={FIT_OPTIONS}
 					minZoom={MIN_ZOOM}
@@ -315,7 +339,7 @@
 					<Controls showLock={false} />
 					<FlowApi bind:screenToFlowPosition={screenToFlow} bind:getViewport bind:setViewport bind:fitView={flowFit} />
 					<ViewportPortal target="front">
-						<PlayheadDots m={machine} nodes={flowNodes} />
+						<PlayheadDots m={machine} nodes={flowNodes} {geometry} />
 					</ViewportPortal>
 				</SvelteFlow>
 				{#if flowNodes.length === 0}
@@ -329,11 +353,13 @@
 				<!-- Its ✕ DISMISSES, holding only until the selection changes; its ◧ is the switch. -->
 				<SidePane {subject} enabled={inspectorOn} onClose={dismiss} onToggle={() => sel.setInspector(panelId, !inspectorOn)}>
 					{#snippet children(shown)}
-						<MachineInspector {name} m={machine} subject={shown} onClose={dismiss} />
+						<MachineInspector {name} m={machine} subject={shown} onClose={dismiss} onRename={renamed}
+							onSelectTransition={(id) => { sel.setSelection(panelId, [], [id]); }} />
 					{/snippet}
 				</SidePane>
 			</div>
 		</SvelteFlowProvider>
+		{/key}
 	{/if}
 </div>
 

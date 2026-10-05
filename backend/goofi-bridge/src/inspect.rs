@@ -126,10 +126,9 @@ pub fn patch(g: &Graph, scope: Option<Uid>) -> Result<String, String> {
     Ok(out)
 }
 
-/// Every standing error in the patch, with the age of each — what `session status` answers:
-/// a patch's health is the patch's, not a scope's.
+/// Project every standing node and machine failure into the session inspection.
 pub fn errors(g: &Graph) -> Vec<Value> {
-    g.node_uids()
+    let mut errors: Vec<Value> = g.node_uids()
         .into_iter()
         .filter(|u| g.last_error(*u).is_some())
         .map(|uid| {
@@ -140,7 +139,29 @@ pub fn errors(g: &Graph) -> Vec<Value> {
                 "standing": g.error_age(uid).map(|d| d.as_secs_f64()),
             })
         })
-        .collect()
+        .collect();
+    for (machine, health) in g.machine_health() {
+        for issue in health.expressions {
+            errors.push(serde_json::json!({
+                "machine": machine,
+                "playhead": issue.playhead,
+                "transition": issue.transition,
+                "surface": issue.surface,
+                "expression": issue.expression,
+                "error": issue.error,
+                "standing": null,
+            }));
+        }
+        for (playhead, error) in health.playheads {
+            errors.push(serde_json::json!({
+                "machine": machine,
+                "playhead": playhead,
+                "error": error,
+                "standing": null,
+            }));
+        }
+    }
+    errors
 }
 
 fn param_line(p: &goofi_core::Param, source: Option<&goofi_graph::SourceInfo>) -> String {
@@ -264,7 +285,7 @@ pub(crate) fn variable_json(g: &Graph, store: &goofi_core::variables::VariableSt
     }
     if let Some(x) = &v.expression {
         e["expression"] = json!(x);
-        if let Some(error) = g.variable_binding_error(name) {
+        if let Some(error) = g.variable_binding_error(name).or_else(|| v.error.clone()) {
             e["error"] = json!(error);
         }
     }

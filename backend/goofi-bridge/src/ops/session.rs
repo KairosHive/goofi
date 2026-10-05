@@ -8,8 +8,8 @@ use crate::schemas::Detail;
 use crate::{autosave, fsbrowse, inspect, schemas, AppState, Caller, Event, Txn};
 
 op!(Status, "session status", 0, NoArgs,
-    "The session's identity AND its health: which instance this is, where the patch lives, whether it differs from disk, and every standing error with how long it has stood. One read for `is my patch healthy, and have I saved it`.",
-    "{instance_id, save_path: string | null, workspace, dirty: bool, errors: [{node, path, error, standing}], audio, graphics} — `node` is the name to pass back, `path` where it sits; `audio` and `graphics` carry that engine's clock and counters — `graphics.windows` is how many `Window` nodes have a window open — and are null where the engine is not registered");
+    "The session's identity AND its health: which instance this is, where the patch lives, whether it differs from disk, and every standing node or machine error. One read for `is my patch healthy, and have I saved it`.",
+    "{instance_id, save_path: string | null, workspace, dirty: bool, errors: [node or machine failure], audio, graphics} — node failures have {node, path, error, standing}; machine failures have {machine, playhead, error, standing: null}, with {transition, surface, expression} for expression failures. `standing` is the age in seconds when available. `audio` and `graphics` carry that engine's clock and counters — `graphics.windows` is how many `Window` nodes have a window open — and are null where the engine is not registered");
 
 op!(State, "session state", 0, NoArgs,
     "The whole replicated document, exact and ATOMIC: nodes, links, variables and arrangement in one read — what every client mirrors, read without the sync protocol that carries it. ONE `nodes` map carries leaves, sub-patch facades and boundary ports alike, each naming its scope, and a port's inner wire is in `links` like any other cable. Narrowing is the caller's: pipe it through `jq`.",
@@ -182,12 +182,14 @@ fn load_patch(state: &AppState, source: &Source) -> Result<Value, String> {
         crate::rescan(state, &mut g, &staged);
         // Parse BEFORE anything is announced or committed.
         goofi_supervisor::progress::report("Starting the patch's nodes");
+        g.variables().defer_publication();
         let warnings = match g.load_doc(&content, &staged) {
             Ok(warnings) => warnings,
             Err(e) => {
                 // Refused, so the registry the scan above swapped is re-derived from the mount
                 // that is still live; the staged mount goes with `fresh`.
                 crate::rescan(state, &mut g, &state.mount());
+                g.variables().finish_publication(true);
                 return Err(e);
             }
         };

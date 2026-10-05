@@ -26,7 +26,7 @@ const WORKERS = Number(
 	process.env.GOOFI_E2E_WORKERS ?? Math.max(1, Math.min(8, Math.floor(os.cpus().length / 2)))
 );
 
-const INTEGRITY = /integrity\.spec\.ts$/;
+const RESPONSIVE = /(integrity|machine)\.spec\.ts$/;
 
 /** What a wait may take: paid only by a failure, so a busy runner never reaches it. */
 export const WAIT = 60_000;
@@ -51,9 +51,7 @@ export default defineConfig({
 		headless: true,
 		trace: 'on-first-retry'
 	},
-	// The projects are the geometries the specs are asked in. Only the
-	// integrity sweep is asked more than once: it is the responsive test, and re-asking it is what
-	// makes it one.
+	// Repeat layout and state-machine gestures in each supported geometry.
 	projects: [
 		{ name: 'desktop', testIgnore: /touch\.spec\.ts$/ },
 		{
@@ -63,13 +61,18 @@ export default defineConfig({
 		},
 		{
 			name: 'phone-landscape',
-			testMatch: INTEGRITY,
+			testMatch: RESPONSIVE,
 			use: { ...devices['Pixel 7 landscape'] }
 		},
 		{
 			name: 'tablet',
-			testMatch: INTEGRITY,
+			testMatch: RESPONSIVE,
 			use: { ...devices['Galaxy Tab S4'] }
+		},
+		{
+			name: 'tablet-landscape',
+			testMatch: RESPONSIVE,
+			use: { ...devices['Galaxy Tab S4'], viewport: { width: 1138, height: 712 } }
 		}
 	]
 });

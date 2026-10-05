@@ -4,7 +4,7 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { Icon } from 'panelty';
 	import { IconButton } from 'panelty';
-		import { claimFieldControlId } from './field';
+	import { claimFieldControlId } from './field';
 
 	let {
 		value,
@@ -17,6 +17,9 @@
 		disabled = false,
 		density = 'comfortable',
 		class: klass = '',
+		'aria-label': ariaLabel,
+		'aria-labelledby': ariaLabelledby,
+		'aria-describedby': ariaDescribedby,
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
 		value: string;
@@ -45,6 +48,9 @@
 <div {...rest} class={`ui-select ${density === 'chrome' ? 'd-chrome ' : ''}${klass}`.trim()}>
 	<select
 		id={fieldId}
+		aria-label={ariaLabel}
+		aria-labelledby={ariaLabelledby}
+		aria-describedby={ariaDescribedby}
 		class="ui-select-input"
 		{value}
 		disabled={disabled || refreshing}

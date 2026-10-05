@@ -8,6 +8,30 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// what lets a render or callback thread read the time with no lock.
 static BASE: LazyLock<Instant> = LazyLock::new(Instant::now);
 
+/// A patch-clock instant, in fixed-point seconds. The fractional precision keeps a
+/// sub-sample period accurate when deadlines are added over a long run.
+pub type Tick = u128;
+pub const TICKS_PER_SECOND: Tick = 1 << 64;
+/// The shared observation grid for time-dependent control predicates.
+pub const CONTROL_RATE: Tick = 48_000;
+
+pub fn next_control_tick(at: Tick) -> Tick {
+    let whole = at / TICKS_PER_SECOND * TICKS_PER_SECOND;
+    let fraction = at % TICKS_PER_SECOND;
+    let mut index = fraction * CONTROL_RATE / TICKS_PER_SECOND + 1;
+    if index * TICKS_PER_SECOND / CONTROL_RATE <= fraction { index += 1; }
+    whole + index * TICKS_PER_SECOND / CONTROL_RATE
+}
+
+pub fn ticks(seconds: f64) -> Option<Tick> {
+    (seconds.is_finite() && seconds >= 0.0 && seconds < u64::MAX as f64)
+        .then(|| (seconds * TICKS_PER_SECOND as f64).round() as Tick)
+}
+
+pub fn seconds(tick: Tick) -> f64 {
+    tick as f64 / TICKS_PER_SECOND as f64
+}
+
 /// What drives an engine with a clock of its own: the harness's hand, or the engine itself —
 /// the device the audio nodes name, or the render timer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,7 +75,23 @@ impl Time {
 
     /// Seconds since the patch began.
     pub fn now(&self) -> f64 {
-        since_base().saturating_sub(self.origin.load(Ordering::Relaxed)) as f64 / 1e9
+        self.now_nanos() as f64 / 1e9
+    }
+
+    /// Integer patch time for deadlines that must not accumulate rounding or wake delays.
+    pub fn now_nanos(&self) -> u64 {
+        since_base().saturating_sub(self.origin.load(Ordering::Relaxed))
+    }
+
+    pub fn now_ticks(&self) -> Tick {
+        self.stamp().1
+    }
+
+    /// Origin identity and instant from one clock read. A load changes the identity.
+    pub fn stamp(&self) -> (u64, Tick) {
+        let origin = self.origin.load(Ordering::Relaxed);
+        let nanos = since_base().saturating_sub(origin);
+        (origin, u128::from(nanos) * TICKS_PER_SECOND / 1_000_000_000)
     }
 
     /// The wall time the patch began at — the one UTC a recording's manifest states, so nothing

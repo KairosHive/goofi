@@ -163,6 +163,99 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.until("the carrier to emit after the clear", |_| after.latest());
     assert!(g.stays(|g| g.variable("desk.level") == j!(0.5)), "the cleared source writes no more");
 
+    // Hold the replacement too: an old completion cannot hide behind its next valid value.
+    g.call("variable entry add", j!({ "name": "desk.source", "value": 0.25 }));
+    g.call("variable entry add", j!({ "name": "desk.other", "value": 0.75 }));
+    g.call("variable entry add", j!({ "name": "desk.stalled", "value": 0.0 }));
+    let old = evaluator.hold_value(0.25);
+    let replacement = evaluator.hold_value(0.75);
+    g.call("variable entry edit", j!({ "name": "desk.stalled", "expression": "variables.desk.source * 1" }));
+    g.until("the old variable evaluation to enter", |_| old.entered().then_some(()));
+    g.call("variable entry edit", j!({ "name": "desk.stalled", "expression": "variables.desk.other * 1" }));
+    drop(old);
+    g.until("the replacement variable evaluation to enter", |_| replacement.entered().then_some(()));
+    assert!(g.stays(|g| g.variable("desk.stalled").as_f64() == Some(0.0)), "the active replacement rejects the retired completion: {}", g.variable("desk.stalled"));
+    drop(replacement);
+    g.until("the replacement variable result", |g| (g.variable("desk.stalled") == j!(0.75)).then_some(()));
+
+    let old = evaluator.hold_value(0.25);
+    let replacement = evaluator.hold_value(0.5);
+    g.call("variable entry edit", j!({ "name": "desk.stalled", "expression": "variables.desk.source * 1" }));
+    g.until("the first A evaluation to enter", |_| old.entered().then_some(()));
+    g.call("variable entry edit", j!({ "name": "desk.stalled", "expression": "variables.desk.other * 1" }));
+    g.call("variable entry edit", j!({ "name": "desk.source", "value": 0.5 }));
+    g.call("variable entry edit", j!({ "name": "desk.stalled", "expression": "variables.desk.source * 1" }));
+    drop(old);
+    g.until("the new A evaluation to enter", |_| replacement.entered().then_some(()));
+    assert!(g.stays(|g| g.variable("desk.stalled") == j!(0.75)), "returning to A does not authorize its retired result");
+    drop(replacement);
+    g.until("the new A result", |g| (g.variable("desk.stalled") == j!(0.5)).then_some(()));
+
+    g.call("variable entry edit", j!({ "name": "desk.source", "value": 0.25 }));
+    g.until("the dependent to follow its source", |g| (g.variable("desk.stalled") == j!(0.25)).then_some(()));
+    let old = evaluator.hold_value(0.5);
+    let replacement = evaluator.hold_value(0.75);
+    g.call("variable entry edit", j!({ "name": "desk.source", "value": 0.5 }));
+    g.until("the retired producer evaluation to enter", |_| old.entered().then_some(()));
+    g.call("compound", j!({ "ops": [
+        { "op": "variable entry remove", "payload": { "name": "desk.source" } },
+        { "op": "variable entry add", "payload": { "name": "desk.source", "value": 0.75 } }
+    ] }));
+    drop(old);
+    g.until("the new producer evaluation to enter", |_| replacement.entered().then_some(()));
+    assert!(g.stays(|g| g.variable("desk.stalled") == j!(0.25)), "recreating a source retires its dependent evaluation without changing the expression");
+    drop(replacement);
+    g.until("the new producer result", |g| (g.variable("desk.stalled") == j!(0.75)).then_some(()));
+    g.call("variable entry edit", j!({ "name": "desk.stalled", "expression": "'bad'" }));
+    g.until("an evaluation error to reach the document", |g| g.doc()["variables"]["desk.stalled"]["error"].as_str().map(str::to_string));
+    g.call("variable entry edit", j!({ "name": "desk.stalled", "expression": "variables.desk.source * 1" }));
+    g.until("the replacement to clear its error", |g| (g.variable("desk.stalled") == j!(0.75) && g.doc()["variables"]["desk.stalled"].get("error").is_none()).then_some(()));
+    for name in ["desk.source", "desk.other", "desk.stalled"] { g.call("variable entry remove", j!({ "name": name })); }
+
+    // A node's computed binding rejects the old completion while its replacement is held.
+    g.call("variable entry add", j!({ "name": "desk.before", "value": 0.25 }));
+    g.call("variable entry add", j!({ "name": "desk.after", "value": 0.75 }));
+    let bound_reader = g.add("_TestConst");
+    g.set_param(bound_reader, "constant", "value", 0.0);
+    let values = g.probe(bound_reader, "out");
+    let old = evaluator.hold_value(0.25);
+    let replacement = evaluator.hold_value(0.75);
+    g.call("node param edit", j!({ "node": hex(bound_reader), "param": "constant/value", "expression": "variables.desk.before * 1" }));
+    g.until("the old node binding to enter", |_| old.entered().then_some(()));
+    g.call("node param edit", j!({ "node": hex(bound_reader), "param": "constant/value", "expression": "variables.desk.after * 1" }));
+    drop(old);
+    g.until("the replacement node evaluation to enter", |_| replacement.entered().then_some(()));
+    g.until("the reader to emit while its replacement is held", |_| values.latest());
+    assert!(g.stays(|_| values.latest().is_some_and(|frame| f32s(&frame) == [0.0])), "the old result cannot land in the new binding");
+    drop(replacement);
+    g.until("the replacement result to publish", |_| values.latest().filter(|frame| f32s(frame) == [0.75]));
+    let owns_notification = |g: &Goofi, uid| {
+        g.call("session status", j!({}))["resources"].as_array().unwrap().iter().any(|entry|
+            entry["kind"] == "port" && entry["name"].as_str().is_some_and(|name|
+                name.contains(" expression notification ") && name.contains(&format!("_{}_", hex(uid)))))
+    };
+    g.until("the expression notifier owner to be listed", |g| owns_notification(g, bound_reader).then_some(()));
+    let stalled = evaluator.hold_value(0.25);
+    g.call("variable entry edit", j!({ "name": "desk.after", "value": 0.25 }));
+    g.until("the retired node evaluation to enter", |_| stalled.entered().then_some(()));
+    assert!(owns_notification(&g, bound_reader), "the unchanged live binding still owns its notifier while evaluating");
+    g.call("node param edit", j!({ "node": hex(bound_reader), "param": "constant/value", "expression": "" }));
+    g.until("clearing the held binding to release its notifier", |g| (!owns_notification(g, bound_reader)).then_some(()));
+    // Replacement jobs remain owned by their cells, even when the evaluator cannot drain them.
+    g.call("variable entry edit", j!({ "name": "desk.after", "value": 0.75 }));
+    g.call("node param edit", j!({ "node": hex(bound_reader), "param": "constant/value", "expression": "variables.desk.after * 1" }));
+    g.call("node param edit", j!({ "node": hex(bound_reader), "param": "constant/value", "expression": "variables.desk.before * 1" }));
+    g.call("node remove", j!({ "node": hex(bound_reader) }));
+    drop(stalled);
+    let witness = g.add("_TestConst");
+    let completed = g.probe(witness, "out");
+    g.call("node param edit", j!({ "node": hex(witness), "param": "constant/value", "expression": "variables.desk.after * 1" }));
+    g.until("live work after retired replacements to complete", |_| completed.latest().filter(|frame| f32s(frame) == [0.75]));
+    assert!(!owns_notification(&g, bound_reader), "a retired result cannot reopen the removed node's notifier");
+    g.call("node remove", j!({ "node": hex(witness) }));
+    g.until("removing the live reader to release its notifier", |g| (!owns_notification(g, witness)).then_some(()));
+    for name in ["desk.before", "desk.after"] { g.call("variable entry remove", j!({ "name": name })); }
+
     // A panel made a control panel with no group of its own is born naming a fresh one.
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "viewer" }));
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "control" }));
@@ -187,7 +280,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     assert_eq!(g.doc()["variables"]["control0.level"]["control"]["y"], 3.0, "the followed widget moved");
     g.call("variable entry lock", j!({ "name": "control0.level", "value": false }));
     // A `paint` widget holds an `[h, w, 4]` RGBA sheet in 0..1. `control paint` draws a script of
-    // timed ops onto it as ONE undoable edit, and a raw snapshot of the variable reads the sheet.
+    // ops onto it as ONE undoable edit, and a raw snapshot of the variable reads the sheet.
     g.call("control add", j!({ "group": "control0", "kind": "paint", "element": "pad", "resolution": 100 }));
     let texel = |d: &goofi_core::Data, row: usize, col: usize| -> [f32; 4] {
         let at = (row * 100 + col) * 4;
@@ -380,7 +473,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let built = g.doc();
 
     // A compound is ONE step though it is an add plus a remove composed.
-    let expected_steps = 65 + 2 * goofi_core::variables::ControlKind::ALL.len();
+    let expected_steps = 99 + 2 * goofi_core::variables::ControlKind::ALL.len();
     let mut steps = 0;
     while g.call("undo", j!({}))["changed"] == true {
         steps += 1;

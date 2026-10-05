@@ -7,6 +7,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 pub mod variables;
+pub mod identity;
 pub mod control;
 pub mod drawing;
 pub mod ease;
@@ -18,6 +19,7 @@ pub mod scale;
 pub mod record;
 pub mod stream;
 pub mod time;
+pub mod samples;
 pub mod texture;
 
 pub use indexmap;
@@ -568,7 +570,7 @@ pub struct Data(Arc<DataInner>);
 /// Equal by VALUE, the stamps aside: what a variable asks when a write arrives.
 impl PartialEq for Data {
     fn eq(&self, other: &Data) -> bool {
-        self.same(other) || self.0.value == other.0.value
+        self.same(other) || (self.0.value == other.0.value && samples::SampleSpan::of(self) == samples::SampleSpan::of(other))
     }
 }
 

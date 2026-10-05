@@ -33,6 +33,8 @@ import {
 	machineGroups,
 	midiGroups,
 	machineViews,
+	machineHealth,
+	machineOutgoing,
 	arrangementTabs,
 	type Doc,
 	type VariableView,
@@ -147,6 +149,8 @@ export class GraphStore {
 	machineGroups: Record<string, string> = $derived(machineGroups(this.doc));
 	/** Every state machine, by name, doc-authoritative. */
 	machines: Record<string, Machine> = $derived(machineViews(this.doc));
+	machineHealth = $derived(machineHealth(this.doc));
+	machineOutgoing = $derived(machineOutgoing(this.doc));
 
 	/** Bumps on every WHOLESALE graph load, never on an incremental add/remove; editors re-fit on it. */
 	loadEpoch = $state(0);

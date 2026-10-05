@@ -104,7 +104,7 @@ class SelectionStore {
 	clickNode(panelId: string, name: string, modifier: boolean): void {
 		const cur = this.sel(panelId);
 		const nodes = modifier || this.multiSelect ? toggled(cur.nodes, name) : new Set([name]);
-		this.write(panelId, { nodes, edges: cur.edges });
+		this.write(panelId, { nodes, edges: modifier || this.multiSelect ? cur.edges : new Set() });
 	}
 
 	selectNodes(panelId: string, names: Iterable<string>): void {

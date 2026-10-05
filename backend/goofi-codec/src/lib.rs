@@ -235,6 +235,7 @@ impl<'a> Body<'a> {
 /// An 8-bit array frame for the browser hop, where `Data` itself stays f32: the same header and
 /// the same meta, with a `|u1` body.
 pub fn encode_u8(shape: &[usize], texels: &[u8], meta: &goofi_core::Meta) -> Result<Vec<u8>, EncodeError> {
+    goofi_core::samples::SampleSpan::validate_shape(meta, shape).map_err(EncodeError::Serialize)?;
     let mut body = array_head_bytes(b"|u1", shape)?;
     body.extend_from_slice(texels);
     frame(0, pack_array_meta(meta, shape, "uint8")?, body)
@@ -243,6 +244,7 @@ pub fn encode_u8(shape: &[usize], texels: &[u8], meta: &goofi_core::Meta) -> Res
 /// A half-float array frame for a line viewer's hop, where `Data` itself stays f32: the same
 /// header and the same meta, with a `<f2` body. `None` for a finite sample beyond a half's range.
 pub fn encode_f16(d: &Data) -> Result<Option<Vec<u8>>, EncodeError> {
+    goofi_core::samples::SampleSpan::validate(d).map_err(EncodeError::Serialize)?;
     let Value::Array(store) = d.value() else { return Ok(None) };
     let mut halves = Vec::with_capacity(store.as_bytes().len() / 2);
     for v in store.values() {
@@ -347,6 +349,7 @@ const DERIVED_KEYS: [&str; 2] = ["shape", "dtype"];
 
 /// Serialize a `Data`'s `Meta` to the msgpack map used in a GOOF frame.
 fn pack_meta(d: &Data) -> Result<Vec<u8>, EncodeError> {
+    goofi_core::samples::SampleSpan::validate(d).map_err(EncodeError::Serialize)?;
     let meta = d.meta();
     match d.value() {
         Value::Texture(_) => pack(carried(meta)),
@@ -509,7 +512,7 @@ pub(crate) fn decode_at(buf: &Arc<Vec<u8>>, at: Range<usize>, depth: usize) -> s
     let (tag, meta, body) = split_at(frame)?;
     let meta = parse_meta(&frame[meta])?;
     let body = at.start + body.start..at.start + body.end;
-    match tag {
+    let data = match tag {
         0 => decode_array_body(buf, body, meta),
         1 => {
             let s = std::str::from_utf8(&buf[body]).map_err(|e| e.to_string())?;
@@ -519,7 +522,9 @@ pub(crate) fn decode_at(buf: &Arc<Vec<u8>>, at: Range<usize>, depth: usize) -> s
         3 => Data::texture(rmp_serde::from_slice(&buf[body]).map_err(|e| e.to_string())?, meta),
         STAMPS_TAG => Err("a stamps frame carries no data".into()),
         other => Err(format!("unknown dtype tag {other}")),
-    }
+    }?;
+    goofi_core::samples::SampleSpan::validate(&data)?;
+    Ok(data)
 }
 
 /// A forward-only, bounds-checked reader over byte runs read as one: a hostile frame yields

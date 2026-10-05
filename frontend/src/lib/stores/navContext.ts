@@ -58,7 +58,7 @@ export async function restoreNavContext(ctx: NavContext): Promise<void> {
 		const want = arrayToPath(path);
 		if (asStateObject(p.state).subpatchPath !== want) {
 			// Re-orienting the editor is navigation, so it must not dirty the patch.
-			ws.setPanelState(panelId, { ...asStateObject(p.state), subpatchPath: want }, 'navigation');
+			ws.setPanelState(panelId, { subpatchPath: want }, 'navigation');
 		}
 	}
 	for (const [panelId, s] of Object.entries(ctx.selection)) {

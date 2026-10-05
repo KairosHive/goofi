@@ -9,7 +9,8 @@ use crate::{control, Data, Meta, Value};
 /// Where a variable's frames go: the data plane the store publishes on. A value write is a
 /// publish and nothing else; a removed variable retires its wire.
 pub trait Plane: Send + Sync {
-    fn publish(&self, name: &str, value: &Data);
+    fn prepare(&self, name: &str, generation: u64);
+    fn publish(&self, name: &str, generation: u64, value: &Data);
     fn retire(&self, name: &str);
 }
 
@@ -141,6 +142,7 @@ pub struct Control {
 impl Control {
     /// Whether this widget can draw `value`, by what its kind draws.
     pub fn fits(&self, value: &Data) -> bool {
+        if crate::samples::SampleSpan::of(value).is_some() { return self.fits(&value.control_value()); }
         match (self.kind.draws(), value.value()) {
             ("number", Value::Array(a)) => a.shape() == [1],
             ("vector", Value::Array(a)) => a.shape().len() == 1,
@@ -204,6 +206,9 @@ pub struct Midi {
 /// its owner's, and the owner writes it through [`VariableStore::drive`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
 pub struct Group {
+    #[serde(skip)]
+    #[ts(skip)]
+    pub identity: crate::identity::Identity,
     #[serde(default)]
     pub lock: Lock,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -408,6 +413,9 @@ fn group_of(name: &str) -> &str {
 /// the plane's; the rest is the document's (`goofi_graph::doc::VariableRecord`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Variable {
+    identity: crate::identity::Identity,
+    binding: crate::identity::Identity,
+    pub error: Option<String>,
     pub value: Data,
     pub control: Option<Control>,
     /// The expression the manager computes it by — bare, one producer's frame copied as it comes;
@@ -419,7 +427,7 @@ pub struct Variable {
 
 impl Variable {
     pub fn of(value: Data) -> Variable {
-        Variable { value, control: None, expression: None, lock: None }
+        Variable { identity: crate::identity::Identity::default(), binding: crate::identity::Identity::default(), error: None, value, control: None, expression: None, lock: None }
     }
 
     pub fn own_lock(&self) -> Lock {
@@ -435,6 +443,14 @@ pub struct VariableStore {
     entries: IndexMap<String, Variable>,
     groups: IndexMap<String, Group>,
     plane: Option<std::sync::Arc<dyn Plane>>,
+    watch: Option<std::sync::Arc<dyn Watch>>,
+    /// The before-state of an authored batch, discarded after its final projection.
+    publication: Option<IndexMap<String, Variable>>,
+}
+
+/// A one-way observer of committed input frames, independent of viewer demand.
+pub trait Watch: Send + Sync {
+    fn changed(&self, values: Vec<(String, Option<Data>)>);
 }
 
 impl Default for VariableStore {
@@ -445,8 +461,8 @@ impl Default for VariableStore {
 
 impl VariableStore {
     pub fn new() -> VariableStore {
-        let mut s = VariableStore { entries: IndexMap::new(), groups: IndexMap::new(), plane: None };
-        s.reassert_system();
+        let mut s = VariableStore { entries: IndexMap::new(), groups: IndexMap::new(), plane: None, watch: None, publication: None };
+        s.seed_system();
         s
     }
 
@@ -458,16 +474,66 @@ impl VariableStore {
         }
     }
 
-    fn emit(&self, name: &str, value: &Data) {
-        if let Some(p) = &self.plane {
-            p.publish(name, value);
+    pub fn set_watch(&mut self, watch: std::sync::Arc<dyn Watch>) {
+        self.watch = Some(watch);
+        let values = self.entries.iter().filter(|(name, _)| self.machine(group_of(name)).is_none())
+            .map(|(name, variable)| (name.clone(), Some(variable.value.clone()))).collect();
+        if let Some(watch) = &self.watch { watch.changed(values); }
+    }
+
+    /// Start a publication batch. Return true only to the caller that must finish it.
+    pub fn defer_publication(&mut self) -> bool {
+        if self.publication.is_some() { return false; }
+        self.publication = Some(self.entries.clone());
+        true
+    }
+
+    /// Open settled producers before consumers can create their services with another schema.
+    pub fn prepare_publication(&self) {
+        if let Some(plane) = &self.plane {
+            for (name, variable) in &self.entries { plane.prepare(name, variable.identity.generation()); }
         }
     }
 
-    fn retire(&self, name: &str) {
-        if let Some(p) = &self.plane {
-            p.retire(name);
+    /// Publish the final difference; the graph can deliver its inputs with the settled model.
+    pub fn finish_publication(&mut self, notify: bool) -> Vec<(String, Option<Data>)> {
+        let Some(before) = self.publication.take() else { return Vec::new() };
+        let mut values = Vec::new();
+        for name in before.keys().filter(|name| !self.entries.contains_key(*name)) {
+            if let Some(plane) = &self.plane { plane.retire(name); }
+            values.push((name.clone(), None));
         }
+        for (name, current) in &self.entries {
+            if before.get(name).is_none_or(|old| old.identity != current.identity || old.value != current.value) {
+                if let Some(plane) = &self.plane { plane.publish(name, current.identity.generation(), &current.value); }
+                if self.machine(group_of(name)).is_none() { values.push((name.clone(), Some(current.value.clone()))); }
+            }
+        }
+        if notify {
+            if let Some(watch) = &self.watch { if !values.is_empty() { watch.changed(values.clone()); } }
+        }
+        values
+    }
+
+    /// The variable producer's birth, retained by a rename and replaced by a new entry.
+    pub fn generation(&self, name: &str) -> Option<u64> {
+        Some(self.entries.get(name)?.identity.generation())
+    }
+
+    fn emit(&self, name: &str, value: &Data) {
+        if self.publication.is_some() { return; }
+        if self.machine(group_of(name)).is_none() {
+            if let Some(watch) = &self.watch { watch.changed(vec![(name.to_string(), Some(value.clone()))]); }
+        }
+        if let (Some(plane), Some(generation)) = (&self.plane, self.generation(name)) { plane.publish(name, generation, value); }
+    }
+
+    fn retire(&self, name: &str) {
+        if self.publication.is_some() { return; }
+        if self.machine(group_of(name)).is_none() {
+            if let Some(watch) = &self.watch { watch.changed(vec![(name.to_string(), None)]); }
+        }
+        if let Some(p) = &self.plane { p.retire(name); }
     }
 
     /// Back to the seeded store a load starts from, every wire of the old content retired.
@@ -481,24 +547,16 @@ impl VariableStore {
             self.entries.shift_remove(name);
         }
         self.groups.retain(|_, rec| rec.midi.is_some());
-        self.seed_system(true);
+        self.seed_system();
     }
 
-    /// Back-fill any missing system variable with its default — on construction and after a load —
-    /// and re-lock the system group. An EPHEMERAL one is overwritten instead: goofi says what it
-    /// holds, never a file.
-    pub fn reassert_system(&mut self) {
-        self.seed_system(false);
-    }
-
-    fn seed_system(&mut self, all: bool) {
+    fn seed_system(&mut self) {
         for def in SYSTEM_VARIABLES {
-            if all || def.ephemeral || !self.entries.contains_key(def.name) {
-                let mut v = Variable::of((def.value)());
-                v.lock = def.ephemeral.then_some(Lock { config: false, value: true });
-                self.emit(def.name, &v.value);
-                self.entries.insert(def.name.to_string(), v);
-            }
+            let mut v = Variable::of((def.value)());
+            v.lock = def.ephemeral.then_some(Lock { config: false, value: true });
+            if let Some(existing) = self.entries.get(def.name) { v.identity = existing.identity.clone(); }
+            self.entries.insert(def.name.to_string(), v);
+            self.emit(def.name, &self.entries[def.name].value);
         }
         self.groups.insert(SYSTEM_GROUP.to_string(), Group { lock: Lock { config: true, value: false }, ..Group::default() });
     }
@@ -526,17 +584,55 @@ impl VariableStore {
             return Err(format!("no such variable `{name}`"));
         }
         self.config_locked(name)?;
-        Ok(std::mem::replace(&mut self.entries[name].expression, expression.filter(|e| !e.trim().is_empty())))
+        let expression = expression.filter(|e| !e.trim().is_empty());
+        if self.entries[name].expression != expression { self.rebind(name); }
+        Ok(std::mem::replace(&mut self.entries[name].expression, expression))
+    }
+
+    pub fn binding(&self, name: &str) -> Option<crate::identity::Identity> {
+        self.entries.get(name).map(|v| v.binding.clone())
+    }
+
+    /// Rewrite a renamed reference without replacing the expression's source identity.
+    pub fn rewrite_expression(&mut self, name: &str, expression: String) {
+        if let Some(variable) = self.entries.get_mut(name).filter(|variable| variable.expression.is_some()) {
+            variable.expression = Some(expression);
+        }
+    }
+
+    /// Retire evaluations when the resolved source changes, including a return to an old source.
+    pub fn rebind(&mut self, name: &str) {
+        if let Some(variable) = self.entries.get_mut(name) {
+            variable.binding = crate::identity::Identity::default();
+            variable.error = None;
+        }
     }
 
     /// The follower's own write: what the expression delivered. A value-locked variable takes
     /// nothing, silently.
-    pub fn follow(&mut self, name: &str, value: Data) {
+    pub fn follow(&mut self, name: &str, binding: &crate::identity::Identity, value: Result<Data, String>) -> bool {
+        let value = value.and_then(|value| {
+            crate::samples::SampleSpan::validate(&value)?;
+            Ok(value)
+        });
         // A variable with no expression has no follower: a pick already in flight when one is
         // cleared would otherwise land after, and overwrite the value the clearing author then typed.
-        if !is_ephemeral(name) && !self.lock_of(name).value && self.expression(name).is_some() {
-            self.move_value(name, value);
+        if !is_ephemeral(name) && !self.lock_of(name).value && self.expression(name).is_some() && self.binding(name).as_ref() == Some(binding) {
+            let previous = self.entries[name].error.clone();
+            match value {
+                Ok(value) => {
+                    self.entries[name].error = None;
+                    self.move_value(name, value, None);
+                }
+                Err(why) => self.entries[name].error = Some(why),
+            }
+            return previous != self.entries[name].error;
         }
+        false
+    }
+
+    pub fn error(&self, name: &str) -> Option<&str> {
+        self.entries.get(name)?.error.as_deref()
     }
 
     /// An ENGINE's own published fact, which is why it passes the value lock: the lock exists to
@@ -544,17 +640,17 @@ impl VariableStore {
     /// name takes one.
     pub fn publish(&mut self, name: &str, value: Data) {
         if is_ephemeral(name) {
-            self.move_value(name, value);
+            self.move_value(name, value, None);
         }
     }
 
-    fn move_value(&mut self, name: &str, value: Data) -> bool {
+    fn move_value(&mut self, name: &str, value: Data, samples: Option<Data>) -> bool {
         let Some(existing) = self.entries.get_mut(name) else { return false };
-        if existing.value == value {
+        if existing.value == value && samples.is_none() {
             return false;
         }
         existing.value = value;
-        self.emit(name, &self.entries[name].value);
+        self.emit(name, samples.as_ref().unwrap_or(&self.entries[name].value));
         true
     }
 
@@ -579,11 +675,11 @@ impl VariableStore {
 
     /// Open a device as a group: the device's flag, which locks the group whole, and its entries
     /// at rest. Not a command — the session owns it, as it owns the system group.
-    pub fn grab_midi(&mut self, group: &str, port: &str) -> Result<(), String> {
+    pub fn grab_midi(&mut self, group: &str, port: &str, identity: crate::identity::Identity) -> Result<(), String> {
         if self.has_group(group) {
             return Err(format!("variable group `{group}` already exists"));
         }
-        let record = Group { midi: Some(Midi { port: port.to_string() }), ..Group::default() };
+        let record = Group { identity, midi: Some(Midi { port: port.to_string() }), ..Group::default() };
         let entries = MIDI_ENTRIES.map(|(entry, width)| (format!("{group}.{entry}"), Data::numbers(std::iter::repeat_n(0.0, width)), None));
         self.claim(group, record, entries.into())
     }
@@ -595,7 +691,7 @@ impl VariableStore {
         if !is_valid_identifier(group) || group == SYSTEM_GROUP {
             return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
         }
-        if self.has_group(group) && self.groups.get(group).map(|r| (&r.midi, &r.machine)) != Some((&record.midi, &record.machine)) {
+        if self.has_group(group) && self.groups.get(group).map(|r| &r.identity) != Some(&record.identity) {
             return Err(format!("variable group `{group}` already exists"));
         }
         if let Some((name, ..)) = entries.iter().find(|(n, ..)| split_variable(n).is_none_or(|(g, _)| g != group)) {
@@ -607,16 +703,16 @@ impl VariableStore {
             self.retire(name);
             self.entries.shift_remove(name);
         }
+        self.groups.insert(group.to_string(), record);
         for (name, value, control) in entries {
             match self.entries.get_mut(&name) {
                 Some(held) => held.control = control,
                 None => {
-                    self.emit(&name, &value);
-                    self.entries.insert(name, Variable { control, ..Variable::of(value) });
+                    self.entries.insert(name.clone(), Variable { control, ..Variable::of(value) });
+                    self.emit(&name, &self.entries[&name].value);
                 }
             }
         }
-        self.groups.insert(group.to_string(), record);
         Ok(())
     }
 
@@ -633,9 +729,33 @@ impl VariableStore {
         self.groups.shift_remove(group);
     }
 
-    /// An owner's write: lands only on an owned group's entry, under no lock, with no undo.
-    pub fn drive(&mut self, name: &str, value: Data) -> bool {
-        self.owned(group_of(name)) && self.move_value(name, value)
+    /// Publish an owner's current value and, when supplied, its completed sample interval.
+    pub fn drive(&mut self, name: &str, owner: &crate::identity::Identity, value: Data, samples: Option<Data>) -> bool {
+        self.groups.get(group_of(name)).is_some_and(|group| group.owned() && group.identity == *owner) && self.move_value(name, value, samples)
+    }
+
+    /// Transfer a surviving owner's group without recreating its held values.
+    pub fn transfer_group(&mut self, from: &str, to: &str, owner: &crate::identity::Identity) -> Result<(), String> {
+        if !self.groups.get(from).is_some_and(|group| group.owned() && group.identity == *owner) {
+            return Err(format!("group `{from}` has a different owner"));
+        }
+        if !is_valid_identifier(to) || self.has_group(to) { return Err(format!("group `{to}` is unavailable")); }
+        let moved: Vec<(String, String)> = self.entries.keys().filter_map(|name| split_variable(name).filter(|(group, _)| *group == from).map(|(_, element)| (name.clone(), format!("{to}.{element}")))).collect();
+        let at = self.groups.get_index_of(from).ok_or_else(|| format!("no group `{from}`"))?;
+        let group = self.groups.shift_remove(from).ok_or_else(|| format!("no group `{from}`"))?;
+        self.groups.shift_insert(at, to.to_string(), group);
+        for (from, to) in moved { self.move_entry(&from, &to); }
+        Ok(())
+    }
+
+    /// Transfer an owner's element during an attribute rename.
+    pub fn transfer_entry(&mut self, from: &str, to: &str, owner: &crate::identity::Identity) -> Result<(), String> {
+        if !self.groups.get(group_of(from)).is_some_and(|group| group.owned() && group.identity == *owner) || group_of(from) != group_of(to) {
+            return Err("an owned element must stay with its owner".into());
+        }
+        if !is_valid_variable_name(to) || self.entries.contains_key(to) || !self.entries.contains_key(from) { return Err(format!("element `{to}` is unavailable")); }
+        self.move_entry(from, to);
+        Ok(())
     }
 
     /// Whether a `.gfi` must leave `name` out: an ephemeral value is goofi's own, a device's is
@@ -738,6 +858,7 @@ impl VariableStore {
     /// Set an existing variable. A change of FORM, an array for a string or back, is what every
     /// expression reading it depends on, so it also needs an unlocked configuration.
     pub fn set(&mut self, name: &str, value: Data) -> Result<(), String> {
+        crate::samples::SampleSpan::validate(&value)?;
         if is_ephemeral(name) {
             return Err(format!("variable `{name}` is read-only: it is ephemeral, and goofi says what it holds"));
         }
@@ -753,14 +874,15 @@ impl VariableStore {
                 format!("{why}, and it holds {}: {} is {}", control::form(existing), control::text(&value), control::form(&value))
             })?;
         }
-        self.emit(name, &value);
         self.entries[name].value = value;
+        self.emit(name, &self.entries[name].value);
         Ok(())
     }
 
     /// Add a NEW user variable, at ordered position `at` (clamped) when given — the re-add a
     /// delete/rename undo needs. Errors on an invalid name or a collision.
     pub fn add(&mut self, name: &str, value: Data, at: Option<usize>) -> Result<(), String> {
+        crate::samples::SampleSpan::validate(&value)?;
         if !is_valid_variable_name(name) {
             return Err(format!("invalid variable name `{name}`: {VARIABLE_NAME_RULE}"));
         }
@@ -771,8 +893,8 @@ impl VariableStore {
             return Err(format!("group `{}` is config-locked", group_of(name)));
         }
         let at = at.unwrap_or(usize::MAX).min(self.entries.len());
-        self.emit(name, &value);
         self.entries.shift_insert(at, name.to_string(), Variable::of(value));
+        self.emit(name, &self.entries[name].value);
         Ok(())
     }
 
@@ -816,8 +938,8 @@ impl VariableStore {
         let at = self.entries.get_index_of(from).expect("checked by the caller");
         let variable = self.entries.shift_remove(from).expect("the index answered");
         self.retire(from);
-        self.emit(to, &variable.value);
         self.entries.shift_insert(at, to.to_string(), variable);
+        self.emit(to, &self.entries[to].value);
     }
 
     /// Rename a group, answering every member's old and new name in order. A group with no member

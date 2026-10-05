@@ -29,7 +29,6 @@
 
 <!-- Mono inline, not in a scoped rule: a class here never reaches another component's markup. -->
 <Select
-	density="chrome"
 	style="font-family: var(--font-mono)"
 	value={list.value}
 	options={list.options}

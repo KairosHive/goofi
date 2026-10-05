@@ -31,26 +31,31 @@ export type Midi = { port: string, };
 export type Group = { lock: Lock, midi?: Midi, machine?: string, };
 export type AttributeKind = { "type": "num", vmin: number, vmax: number, int: boolean, color: boolean, } | { "type": "bool" } | { "type": "string", options?: Array<string>, };
 export type Attribute = { default: Literal, kind: AttributeKind, };
-export type State = { pos: [number, number], values?: Record<string, Literal>, };
+export type State = { pos: [number, number], values?: Record<string, Literal>, exit_values?: Record<string, Literal>, selection: Selection, order?: Array<string>, };
 export type Curve = "step" | "linear" | "in" | "out" | "in_out" | "smooth";
 export type Policy = "fifo" | "lifo" | "all";
-export type Seconds = number | string;
-export type Trigger = { "kind": "manual" } | { "kind": "after", seconds: Seconds, weight: number, } | { "kind": "when", expression: string, weight: number, } | { "kind": "meet", policy: Policy, } | { "kind": "alone" };
+export type Selection = "ordered" | "weighted" | "uniform";
+export type Edge = "rising" | "falling" | "change" | "level";
+export type Seconds = number | string | { min: number, max: number, };
+export type Trigger = { "kind": "manual" } | { "kind": "after", seconds: Seconds, } | { "kind": "when", expression: string, edge: Edge, } | { "kind": "event", name: string, } | { "kind": "always" } | { "kind": "meet", policy: Policy, } | { "kind": "alone" };
 export type Transition = { 
 /**
  * A state name, or `*` for any state.
  */
 from: string, to: string, triggers?: Array<Trigger>, 
 /**
- * Seconds; 0 is instant.
+ * Sampled once at departure; zero is instant.
  */
-duration: number, curve: Curve, };
+duration: Seconds, curve: Curve, chance: number, weight: number, guard?: string | null, internal: boolean, values?: Record<string, Literal>, };
 export type Playhead = { color: string, start: string, };
 export type Machine = { attributes: { [key in string]: Attribute }, states: { [key in string]: State }, transitions: { [key in string]: Transition }, playheads: { [key in string]: Playhead }, 
 /**
  * What the random draws start from; absent is 0.
  */
 seed?: number, };
+export type ExpressionSurface = { "kind": "guard" } | { "kind": "duration" } | { "kind": "when", index: number, } | { "kind": "after", index: number, };
+export type ExpressionIssue = { playhead: string | null, transition: string, surface: ExpressionSurface, expression: string, error: string, };
+export type Health = { expressions: Array<ExpressionIssue>, playheads: { [key in string]: string }, };
 export type PatchDoc = { 
 /**
  * Keyed by uid spelling; a key that is not one is reminted on the way in.
@@ -92,5 +97,6 @@ triggers: boolean,
 /**
  * The active source's bind, compile or arrival error.
  */
-error: string | null, };
+error: string | null, dependencies?: Array<Dependency>, };
+export type Dependency = { "kind": "output", node: string, slot: string, } | { "kind": "variable", name: string, } | { "kind": "param", node: string, group: string, name: string, };
 export type ParamKind = { "type": "num", value: number | number[], vmin: number, vmax: number, int: boolean, options: Array<number>, color: boolean, } | { "type": "bool", value: boolean, } | { "type": "string", value: string, options: Array<string> | null, } | { "type": "pulse", value: null, };

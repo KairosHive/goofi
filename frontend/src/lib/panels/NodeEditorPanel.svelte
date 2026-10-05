@@ -236,7 +236,7 @@
 	/** Write the path into the panel's state as NAVIGATION: descending into a sub-patch is looking,
 	 * not editing, so it must not mark the patch unsaved. */
 	function setPath(path: string[]): void {
-		setState({ ...asStateObject(panelState), subpatchPath: arrayToPath(path) }, 'navigation');
+		setState({ subpatchPath: arrayToPath(path) }, 'navigation');
 	}
 
 	/** uid → the scope it is drawn in. Membership rides the record, so this is a read, not a walk. */
@@ -1098,7 +1098,7 @@
 				/>
 			{/if}
 			<ViewportPortal target="back">
-				<ReferenceEdges nodes={flowNodes} selected={selectedNode?.uid ?? null} />
+				<ReferenceEdges nodes={flowNodes} selected={selectedNode?.uid ?? null} {drawEndpoint} />
 			</ViewportPortal>
 			{#if snapGuides.length > 0}
 				<ViewportPortal target="front">

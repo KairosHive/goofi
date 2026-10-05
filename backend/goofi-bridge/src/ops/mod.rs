@@ -477,6 +477,7 @@ pub static TREE: &[Entry] = &[
             Leaf(write::<machine::PlayheadRename>()),
         ]),
         Leaf(effect::<machine::Fire>()),
+        Leaf(effect::<machine::Event>()),
         Leaf(effect::<machine::Jump>()),
         Leaf(effect::<machine::Reset>()),
     ]),

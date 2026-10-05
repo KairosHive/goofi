@@ -59,6 +59,7 @@ pub fn reduce_for_view(frame: &Data, plan: &MergedViewSpec) -> Data {
     let mut meta = frame.meta().clone();
     meta.set_channels(axes);
     meta.set_reduced(Some(MetaValue::Map(reduced)));
+    crate::samples::SampleSpan::remove(&mut meta);
     Data::array_f32(shape, bytes.into_owned(), meta).unwrap_or_else(|_| frame.clone())
 }
 

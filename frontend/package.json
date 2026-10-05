@@ -37,7 +37,7 @@
     "@xterm/xterm": "^6.0.0",
     "@xyflow/svelte": "^1.0.0",
     "marked": "^18.0.5",
-    "panelty": "0.1.4",
+    "panelty": "0.2.0",
     "plotluck": "0.3.0"
   }
 }

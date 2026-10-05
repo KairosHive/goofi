@@ -80,7 +80,7 @@ impl EffectOp for Redo {
 /// A flip's reply and tail. Only a flip that CHANGED something raises the dot: an empty stack
 /// is not an edit. The reply carries the flipped entry's context and the labels now on top.
 fn flip(state: &AppState, caller: &Caller, f: fn(&mut CommandHistory, &mut Graph, &str) -> Flip) -> Result<Value, String> {
-    let mut tx = Txn::begin(state, caller, false);
+    let mut tx = Txn::begin(state, caller, false, true);
     let flip = f(&mut tx.history, &mut tx.g, &caller.actor);
     let (undo, redo) = tx.history.labels(&caller.actor);
     let result = json!({ "changed": flip.changed, "context": flip.context, "stale": flip.stale, "undo": undo, "redo": redo });
@@ -115,7 +115,7 @@ impl EffectOp for Compound {
         }
         // One transaction for every step: the graph is held throughout, so nothing is delivered or
         // projected between two steps, and a refused step drops it, which takes the others back.
-        let mut tx = Txn::begin(state, caller, false);
+        let mut tx = Txn::begin(state, caller, false, true);
         let mut results = Vec::with_capacity(resolved.len());
         for (i, (op, f, arg)) in resolved.iter().enumerate() {
             match f(&mut tx, arg) {

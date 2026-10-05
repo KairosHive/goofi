@@ -22,22 +22,39 @@ pub type ConnId = u64;
 pub struct Tap {
     pub variable: String,
     pub var: String,
+    pub owner: goofi_core::identity::Identity,
 }
 
 /// One computed variable as the follower holds it: the rewritten text, the evaluator's handle —
 /// none for a bare source — and every variable it names.
 pub struct Following {
+    pub owner: goofi_core::identity::Identity,
     pub name: String,
     pub rewritten: String,
     pub id: Option<goofi_node::BindingId>,
     pub vars: Vec<(String, goofi_node::Var)>,
+    pub sources: Vec<goofi_node::BoundVar>,
 }
 
 /// What reaches the follower: a tap's frame, or the whole set of variables it computes, from
 /// settled state, with the evaluator the graph compiled them against.
 pub enum Followed {
-    Frame { variable: String, var: String, frame: goofi_core::Data },
+    Frame { service: String, taps: Vec<Tap>, frame: goofi_core::Data },
     Desired(Vec<Following>, Option<Arc<dyn goofi_node::ExprEvaluator>>),
+}
+
+/// Deliver each raw frame to all its followers before viewer reduction or pacing.
+fn follow_frame(follow: &std::sync::mpsc::Sender<Followed>, machines: &crate::machines::Driver, raw: Option<&str>, service: &str, taps: &[Tap], frame: &goofi_core::Data) {
+    if taps.is_empty() { return; }
+    if let Some(key) = raw { machines.frame(key.to_string(), service.to_string(), frame.clone()); }
+    let frame = match frame.value() {
+        goofi_core::Value::Array(array) => {
+            let clean = goofi_core::Data::array(array.clone(), goofi_core::Meta::default());
+            goofi_core::samples::SampleSpan::of(frame).map_or(clean.clone(), |span| clean.with_sample_span(span))
+        },
+        _ => frame.clone(),
+    };
+    let _ = follow.send(Followed::Frame { service: service.to_string(), taps: taps.to_vec(), frame });
 }
 
 /// What one connection declares for a slot: the viewers' specs and the rate its display paints at.
@@ -178,10 +195,11 @@ pub struct SlotReducers {
     /// The store, read for the viewer cap; and the producer, rung for the frame a fresh feed is owed.
     store: Arc<Mutex<goofi_core::variables::VariableStore>>,
     variables: Arc<crate::variables::Variables>,
+    machines: Arc<crate::machines::Driver>,
 }
 
 impl SlotReducers {
-    pub fn new(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, variables: Arc<crate::variables::Variables>, follow: std::sync::mpsc::Sender<Followed>) -> SlotReducers {
+    pub fn new(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, variables: Arc<crate::variables::Variables>, follow: std::sync::mpsc::Sender<Followed>, machines: Arc<crate::machines::Driver>) -> SlotReducers {
         let (instance, store) = {
             let g = graph.lock();
             (Arc::from(g.instance()), g.variable_store())
@@ -195,6 +213,7 @@ impl SlotReducers {
             instance,
             store,
             variables,
+            machines,
         }
     }
 
@@ -410,7 +429,7 @@ fn open_feed(graph: &Mutex<Graph>, iox: &SharedIox, variables: &crate::variables
 /// ring; a held serve, an idle expiry, a watch's grace and a snapshot's window are its deadlines.
 fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, door: String) -> Option<goofi_supervisor::worker::Worker> {
     let (graph, iox, follow) = (reducers.graph.clone(), reducers.iox.clone(), reducers.follow.clone());
-    let (store, variables) = (reducers.store.clone(), reducers.variables.clone());
+    let (store, variables, machines) = (reducers.store.clone(), reducers.variables.clone(), reducers.machines.clone());
     // Weak: the map owns this loop's entry, and the loop removes it; a strong one would be a cycle.
     let slots: Weak<Mutex<HashMap<SlotKey, SlotReducer>>> = Arc::downgrade(&reducers.inner);
     let (shared, failed) = (reducer.slot.clone(), reducer.slot.clone());
@@ -431,6 +450,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
         let mut feed: Option<SlotFeed> = None;
         // The cache still belongs to this service after an idle port is dropped.
         let mut source: Option<String> = None;
+        let mut raw: Option<String> = None;
         // The graph epoch the address was last read at: a poke re-reads it only when the graph
         // moved since, or while the feed has yet to open.
         let epoch = graph.lock().epoch();
@@ -502,9 +522,10 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 homed = Some(seen);
                 let current = {
                     let g = graph.lock();
-                    crate::producer_alive(&g, uid, &slot).then(|| crate::output_service_of(&g, uid, &slot))
+                    crate::producer_alive(&g, uid, &slot).then(|| (crate::output_service_of(&g, uid, &slot),
+                        (uid != Uid::VARIABLES).then(|| goofi_graph::variable_projection::stream_key(uid, g.node_generation(uid), &slot))))
                 };
-                let Some(current) = current else {
+                let Some((current, current_raw)) = current else {
                     if let Some(slots) = slots.upgrade() {
                         // Only THIS task's entry: an undo puts a removed node back at the same uid,
                         // and a viewer that re-subscribed since holds a reducer this one must keep.
@@ -515,6 +536,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                     }
                     return;
                 };
+                raw = current_raw;
                 if source.as_ref() != Some(&current) {
                     source = Some(current);
                     // A new generation is a new producer, and its readback starts at the frame's
@@ -546,6 +568,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 }
             }
             let mut fresh = false;
+            let current_taps = taps.lock().clone();
             if let Some(f) = &feed {
                 while let Ok(Some(sample)) = f.subscriber.receive() {
                     let Some(header) = Peek::of(sample.payload()) else { continue };
@@ -559,6 +582,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                         continue;
                     }
                     if let Ok(frame) = goofi_codec::decode(sample.payload()) {
+                        if let Some(service) = &source { follow_frame(&follow, &machines, raw.as_deref(), service, &current_taps, &frame); }
                         peeked = Some(header);
                         made = None;
                         *latest.lock() = Some(frame);
@@ -567,17 +591,9 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 }
             }
             pending |= fresh;
-            if fresh || retap.swap(false, Ordering::Acquire) {
-                let taps = taps.lock().clone();
-                if let (false, Some(d)) = (taps.is_empty(), latest.lock().clone()) {
-                    // The frame as it came, the stamps off: a variable holds a value, not its tick.
-                    let frame = match d.value() {
-                        goofi_core::Value::Array(a) => goofi_core::Data::array(a.clone(), goofi_core::Meta::default()),
-                        _ => d,
-                    };
-                    for tap in taps {
-                        let _ = follow.send(Followed::Frame { variable: tap.variable, var: tap.var, frame: frame.clone() });
-                    }
+            if retap.swap(false, Ordering::Acquire) && !fresh {
+                if let (Some(service), Some(frame)) = (&source, latest.lock().as_ref()) {
+                    follow_frame(&follow, &machines, raw.as_deref(), service, &current_taps, frame);
                 }
             }
             // The raw frame for a variable or a snapshot, a box for a declared viewer, and one texel
@@ -628,6 +644,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 Some(ready) => ready.clone(),
                 None => {
                     let Some(d) = latest.lock().clone() else { continue };
+                    let d = if uid == Uid::VARIABLES { d.control_value() } else { d };
                     let encoded = if same {
                         goofi_codec::encode_stamps(d.meta())
                     } else {
@@ -718,4 +735,3 @@ impl Peek {
         Some(Peek { tag, shape, ready: dtype == b"|u1" })
     }
 }
-

@@ -388,9 +388,22 @@ describe('viewpoint stays here', () => {
 		ws.setPanelState('panel-2', { subpatchPath: '/inst0' }, 'navigation');
 		await Promise.resolve();
 		expect(sent(), 'entering a sub-patch is a look, not an edit').toEqual([]);
-		expect(ws.viewpoint().paths).toEqual({ 'panel-2': '/inst0' });
+		expect(ws.viewpoint().views).toEqual({ 'panel-2': { type: 'node-editor', state: { subpatchPath: '/inst0' } } });
 		const root = ws.active.root;
 		expect(root.kind === 'panel' && root.state).toEqual({ subpatchPath: '/inst0' });
+	});
+
+	it('uses the same navigation contract for a machine and clears it when the panel type changes', async () => {
+		const ws = boot([tab('tab-1', 'Main', 'panel-2', 'machine')]);
+		ws.setPanelState('panel-2', { machine: 'sequence' }, 'navigation');
+		await Promise.resolve();
+		expect(sent()).toEqual([]);
+		expect(ws.active.root.kind === 'panel' && ws.active.root.state).toEqual({ machine: 'sequence' });
+		const viewpoint = ws.viewpoint();
+		ws.restoreViewpoint(viewpoint);
+		expect(ws.active.root.kind === 'panel' && ws.active.root.state).toEqual({ machine: 'sequence' });
+		ws.syncFromDoc([tab('tab-1', 'Main', 'panel-2', 'node-editor')]);
+		expect(ws.viewpoint().views).toEqual({});
 	});
 
 	it('keeps the sub-patch path out of a write that IS shared', async () => {
@@ -429,7 +442,7 @@ describe('viewpoint stays here', () => {
 		// Still this client's alone: two pages maximized, and not one byte of it on the wire or in
 		// the viewpoint the manager stores and rides into the `.gfi`.
 		expect(sent()).toEqual([]);
-		expect(Object.keys(ws.viewpoint()).sort()).toEqual(['panel', 'paths', 'tab']);
+		expect(Object.keys(ws.viewpoint()).sort()).toEqual(['panel', 'tab', 'views']);
 	});
 
 	it('keeps a restored viewpoint through the boundary a fresh session resets across', () => {
@@ -440,13 +453,13 @@ describe('viewpoint stays here', () => {
 		// `set_viewpoint` pushed the loss to the manager.
 		const two = [...split(), tab('tab-7', 'Second', 'panel-8', 'node-editor')];
 		const ws = boot([]);
-		ws.restoreViewpoint({ tab: 'tab-7', panel: 'panel-8', paths: { 'panel-8': '/inst0' } });
+		ws.restoreViewpoint({ tab: 'tab-7', panel: 'panel-8', views: { 'panel-8': { type: 'node-editor', state: { subpatchPath: '/inst0' } } } });
 		ws.syncFromDoc([]);
 		ws.syncFromDoc(two);
 		expect(ws.viewpoint(), 'a reload lands where it left off').toEqual({
 			tab: 'tab-7',
 			panel: 'panel-8',
-			paths: { 'panel-8': '/inst0' }
+			views: { 'panel-8': { type: 'node-editor', state: { subpatchPath: '/inst0' } } }
 		});
 	});
 

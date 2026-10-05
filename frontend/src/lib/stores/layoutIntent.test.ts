@@ -117,6 +117,6 @@ describe('layout write intent', () => {
 	it('still hands the viewpoint over to be persisted', () => {
 		const ws = boot();
 		ws.setPanelState('panel-2', { subpatchPath: '/inst0' }, 'navigation');
-		expect(ws.viewpoint()).toMatchObject({ paths: { 'panel-2': '/inst0' } });
+		expect(ws.viewpoint()).toMatchObject({ views: { 'panel-2': { type: 'node-editor', state: { subpatchPath: '/inst0' } } } });
 	});
 });

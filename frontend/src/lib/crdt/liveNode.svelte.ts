@@ -6,6 +6,7 @@ import { boundaryType } from '$lib/api/vocab';
 import { nodesMap, type Doc, type FacadeFace } from './graphDoc';
 import { ROOT_ID } from '$lib/editor/subpatchScene';
 import { isObj, obj, type Obj } from './ops';
+import type { Dependency } from '$lib/api/generated';
 
 /** What the runtime planes report about one node — never in the document. */
 export interface RuntimeOverlay {
@@ -76,11 +77,13 @@ function liveParam(uid: string, group: string, name: string, catalog: ParamDescr
 			expression: typeof el.expression === 'string' ? el.expression : null,
 			triggers: el.triggers === true,
 			error: cx.runtime(uid)?.errors?.[group]?.[key] ?? null,
-			value: typeof live === 'number' ? live : undefined
+			value: typeof live === 'number' ? live : undefined,
+			dependencies: Array.isArray(el.dependencies) ? el.dependencies as Dependency[] : []
 		};
 	};
 	return accessors(p, {
 		mode,
+		dependencies: () => Array.isArray(leaf().dependencies) ? leaf().dependencies as Dependency[] : [],
 		...(dims > 1 ? { elements: () => Array.from({ length: dims }, (_, i) => element(i)) } : {}),
 		expression: () => (typeof leaf().expression === 'string' ? leaf().expression : null),
 		triggers: () => leaf().triggers === true,

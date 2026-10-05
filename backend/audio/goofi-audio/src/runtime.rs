@@ -2,6 +2,7 @@
 //! every message is a pointer move, every port is a view into the arena the plan laid out.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
@@ -9,6 +10,8 @@ use std::time::{Duration, Instant};
 
 use goofi_audio_sdk::{cross, AudioNode, Block, Port, PortMut, BLOCK, MAX_PORTS};
 use goofi_node::{NodeManifest, ParamSpec, Uid};
+use goofi_core::{Data, Value};
+use goofi_core::samples::SampleSpan;
 
 use crate::plan::{Plan, Source, Stage, SILENCE};
 
@@ -42,8 +45,12 @@ pub struct Slot {
     pub params: Arc<[AtomicU64]>,
     /// One per Array input, in declaration order.
     pub inboxes: Vec<Frames>,
-    /// The computed params' results, a chunk each: `param`, `channels`, `len`, then the samples.
-    pub blocks: rtrb::Consumer<f32>,
+    /// Bound control frames with exact binding identities and optional sample positions.
+    pub blocks: rtrb::Consumer<ControlFrame>,
+    pub retired_controls: rtrb::Producer<ControlFrame>,
+    pub control_frames: Vec<ControlValue>,
+    pub param_bindings: Arc<[AtomicU64]>,
+    pub param_faults: Arc<[ControlFaultCell]>,
     /// One per output: what the control half publishes to whoever subscribes.
     pub taps: Vec<rtrb::Producer<f32>>,
     /// One per output: every block, whole, for the recorder.
@@ -54,6 +61,86 @@ pub struct Slot {
     pub overruns: u8,
     /// What the watchdog takes one `process` to cost in place of the wall time it took, when stated.
     pub cost: Option<Duration>,
+}
+
+/// Prepared control data. Its birth and sample positions survive the callback boundary.
+pub struct ControlFrame {
+    pub param: usize,
+    pub birth: u64,
+    pub span: Option<SampleSpan>,
+    pub frame: Option<Data>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ControlFault {
+    Gap(u64),
+    QueueFull,
+}
+
+/// One callback-owned diagnostic cell. Zero is healthy; the last tag is queue overflow.
+#[derive(Default)]
+pub struct ControlFaultCell {
+    birth: AtomicU64,
+    fault: AtomicU64,
+}
+
+impl ControlFaultCell {
+    pub fn load(&self, birth: u64) -> Option<ControlFault> {
+        if birth == 0 || self.birth.load(Ordering::SeqCst) != birth { return None; }
+        let value = self.fault.load(Ordering::SeqCst);
+        if self.birth.load(Ordering::SeqCst) != birth { return None; }
+        match value {
+            0 => None,
+            u64::MAX => Some(ControlFault::QueueFull),
+            value => Some(ControlFault::Gap(value - 1)),
+        }
+    }
+
+    fn store(&self, birth: u64, fault: Option<ControlFault>) {
+        let value = match fault {
+            None => 0,
+            Some(ControlFault::QueueFull) => u64::MAX,
+            Some(ControlFault::Gap(sample)) => sample.saturating_add(1).min(u64::MAX - 1),
+        };
+        self.birth.store(0, Ordering::SeqCst);
+        self.fault.store(value, Ordering::SeqCst);
+        self.birth.store(birth, Ordering::SeqCst);
+    }
+
+    fn recover_queue(&self) {
+        let _ = self.fault.compare_exchange(u64::MAX, 0, Ordering::SeqCst, Ordering::SeqCst);
+    }
+}
+
+pub struct ControlValue {
+    birth: u64,
+    epoch: u64,
+    expected: Option<u64>,
+    held: Vec<f32>,
+    held_channels: usize,
+    frames: VecDeque<ControlFrame>,
+}
+
+impl Default for ControlValue {
+    fn default() -> Self {
+        Self { birth: 0, epoch: 0, expected: None,
+            held: vec![0.0; crate::plan::CEILING as usize], held_channels: 0,
+            frames: VecDeque::with_capacity(crate::control::BLOCKS_RING) }
+    }
+}
+
+impl ControlValue {
+    fn retire(&mut self, retired: &mut rtrb::Producer<ControlFrame>, first: u64) {
+        let mut i = 0;
+        while i < self.frames.len() && retired.slots() > 0 {
+            let frame = &self.frames[i];
+            let obsolete = frame.birth != self.birth || frame.span.is_some_and(|span| span.clock.epoch != self.epoch || span.first + span.length as u64 <= first)
+                || self.frames.iter().skip(i + 1).any(|later| later.birth == self.birth && later.span.is_none_or(|span| span.clock.epoch == self.epoch && frame.span.is_none() && span.first <= first));
+            if obsolete {
+                if let Some(frame) = self.frames.remove(i) { let _ = retired.push(frame); }
+            } else { i += 1; }
+        }
+    }
 }
 
 /// The audio thread's end of a device's or a file's feed: chunks of interleaved samples, each
@@ -124,34 +211,85 @@ impl Inbox {
     }
 }
 
-/// Drop all but the newest `keep` (at most `QUEUED`) chunks queued `from` samples on; answers
-/// whether any went.
-/// Every computed result that landed since the last block, each into its param's region: a block
-/// is copied, a shorter result holds its last sample, a narrower one repeats its last channel. A
-/// param with no result this block keeps the region as it was — the hold.
-fn take_blocks(ring: &mut rtrb::Consumer<f32>, stage: &Stage, arena: &mut [f32]) {
-    while let Ok(head) = ring.read_chunk(3) {
-        let (a, b) = head.as_slices();
-        let at = |i: usize| if i < a.len() { a[i] } else { b[i - a.len()] };
-        let (param, chans, len) = (at(0) as usize, at(1) as usize, at(2) as usize);
-        head.commit_all();
-        let Ok(body) = ring.read_chunk(chans * len) else { break };
-        let region = stage.params.iter().find_map(|s| match s {
-            Source::Block { at, channels, param: p } if *p == param => Some((*at, *channels as usize)),
-            _ => None,
-        });
-        if let (Some((at, channels)), true) = (region, chans * len > 0) {
-            let (a, b) = body.as_slices();
-            let sample = |i: usize| if i < a.len() { a[i] } else { b[i - a.len()] };
-            let region = carve(arena, &[(at, channels * BLOCK)]).take(0);
-            for c in 0..channels {
-                let from = c.min(chans - 1) * len;
-                for i in 0..BLOCK {
-                    region[c * BLOCK + i] = sample(from + if len >= BLOCK { i } else { len - 1 });
-                }
-            }
+/// Fill bound params at their sample positions, holding the last value across missing coverage.
+fn take_blocks(slot: &mut Slot, stage: &Stage, arena: &mut [f32], first: u64, epoch: u64) {
+    // Return replaced buffers for release on the control thread, with no callback allocation.
+    for (param, control) in slot.control_frames.iter_mut().enumerate() {
+        let birth = slot.param_bindings[param].load(Ordering::Acquire);
+        if control.birth != birth {
+            control.birth = birth;
+            control.expected = None;
+            control.held.fill(f64::from_bits(slot.params[param].load(Ordering::Relaxed)) as f32);
+            control.held_channels = 0;
+            slot.param_faults[param].store(birth, None);
         }
-        body.commit_all();
+        if control.epoch != epoch {
+            control.epoch = epoch;
+            control.expected = None;
+            slot.param_faults[param].store(birth, None);
+        }
+        control.retire(&mut slot.retired_controls, first);
+    }
+    while slot.retired_controls.slots() > 0 {
+        let Ok(frame) = slot.blocks.pop() else { break };
+        let param = frame.param;
+        let valid = param < slot.control_frames.len() && frame.birth == slot.param_bindings[param].load(Ordering::Acquire)
+            && frame.span.is_none_or(|span| span.clock.epoch == epoch);
+        let retired = if valid && slot.control_frames[param].frames.len() < crate::control::BLOCKS_RING {
+            slot.param_faults[param].recover_queue();
+            let control = &mut slot.control_frames[param];
+            if let Some(span) = frame.span { control.expected = Some(control.expected.unwrap_or(span.first).min(span.first)); }
+            control.frames.push_back(frame); None
+        } else {
+            if valid { slot.param_faults[param].store(frame.birth, Some(ControlFault::QueueFull)); }
+            Some(frame)
+        };
+        if let Some(retired) = retired { let _ = slot.retired_controls.push(retired); }
+    }
+    for source in &stage.params {
+        let Source::Block { at, channels, param } = source else { continue };
+        let region = carve(arena, &[(*at, *channels as usize * BLOCK)]).take(0);
+        let birth = slot.param_bindings[*param].load(Ordering::Acquire);
+        let control = &mut slot.control_frames[*param];
+        control.retire(&mut slot.retired_controls, first);
+        let plain_end = control.frames.iter().rposition(|frame| frame.birth == birth && frame.span.is_none()).and_then(|i| {
+            control.frames.iter().skip(i + 1).filter(|frame| frame.birth == birth).filter_map(|frame| frame.span.filter(|span| span.clock.epoch == epoch).map(|span| span.first)).min()
+        });
+        let mut missing = 0;
+        let channels = *channels as usize;
+        if control.held_channels > 0 && channels > control.held_channels {
+            let last = control.held[control.held_channels - 1];
+            control.held[control.held_channels..channels].fill(last);
+        }
+        for i in 0..BLOCK {
+            let sample = first + i as u64;
+            let found = control.frames.iter().rev().find(|frame| frame.birth == birth && match frame.span {
+                Some(span) => span.clock.epoch == epoch && sample >= span.first && sample - span.first < span.length as u64,
+                None => plain_end.is_none_or(|end| sample < end),
+            });
+            let array = found.and_then(|frame| frame.frame.as_ref()).and_then(|frame| match frame.value() {
+                Value::Array(array) => match array.shape() {
+                    [n] => Some((array, 1, *n)), [c, n] => Some((array, *c, *n)), _ => None,
+                }, _ => None,
+            });
+            for c in 0..channels {
+                let held = &mut control.held[c];
+                if let Some((array, width, length)) = array {
+                    let offset = found.and_then(|frame| frame.span).map_or(i.min(length - 1), |span| (sample - span.first) as usize);
+                    let p = (c.min(width - 1) * length + offset) * 4;
+                    let bytes = array.as_bytes();
+                    *held = f32::from_le_bytes([bytes[p], bytes[p + 1], bytes[p + 2], bytes[p + 3]]);
+                } else if found.is_some() {
+                    *held = f64::from_bits(slot.params[*param].load(Ordering::Relaxed)) as f32;
+                }
+                region[c * BLOCK + i] = *held;
+            }
+            if found.is_none() && control.expected.is_some_and(|first| sample >= first) && missing == 0 { missing = sample + 1; }
+        }
+        control.held_channels = channels;
+        if slot.param_faults[*param].load(birth) != Some(ControlFault::QueueFull) {
+            slot.param_faults[*param].store(birth, (missing > 0).then(|| ControlFault::Gap(missing - 1)));
+        }
     }
 }
 
@@ -423,6 +561,7 @@ struct Tie {
     at: u64,
     time: f64,
     rate: f64,
+    patch_epoch: u64,
 }
 
 /// Ties kept, so a block still in a ring when the device moved is read against the tie it was
@@ -442,7 +581,7 @@ pub struct Anchor {
 
 impl Anchor {
     pub fn new(time: Arc<goofi_core::time::Time>) -> Anchor {
-        let tie = Tie { at: 0, time: time.now(), rate: crate::RATE };
+        let tie = Tie { at: 0, time: time.now(), rate: crate::RATE, patch_epoch: time.stamp().0 };
         Anchor {
             blocks: AtomicU64::new(0),
             epoch: AtomicU64::new(0),
@@ -454,7 +593,7 @@ impl Anchor {
     /// Tie the clock to the block that will be rendered NEXT. The caller holds the runtime lock, so
     /// no block is rendered between reading the count and reading the clock.
     pub fn tie(&self, time: f64, rate: f64) {
-        let tie = Tie { at: self.blocks.load(Ordering::Relaxed), time, rate };
+        let tie = Tie { at: self.blocks.load(Ordering::Relaxed), time, rate, patch_epoch: self.time.stamp().0 };
         let epoch = self.epoch.load(Ordering::Relaxed) + 1;
         let mut ties = self.ties.lock();
         ties.push((epoch, tie));
@@ -467,6 +606,15 @@ impl Anchor {
 
     pub fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::Acquire)
+    }
+
+    pub fn sample_clock(&self) -> Option<(goofi_core::samples::SampleClock, u64)> {
+        let ties = self.ties.lock();
+        let (epoch, tie) = ties.last()?;
+        Some((goofi_core::samples::SampleClock {
+            patch_epoch: tie.patch_epoch, epoch: *epoch,
+            origin: goofi_core::time::ticks(tie.time)?, first: tie.at.checked_mul(BLOCK as u64)?, rate: tie.rate as u32,
+        }, self.blocks.load(Ordering::Relaxed).checked_mul(BLOCK as u64)?))
     }
 
     /// Patch seconds at engine block `n`, read against the tie `epoch` names — the one the block
@@ -660,7 +808,7 @@ impl Runtime {
         let arena: &mut [f32] = &mut self.arena;
         for stage in &self.plan.stages {
             let Some(slot) = self.slab[stage.idx].as_mut().filter(|s| s.serial == stage.serial) else { continue };
-            take_blocks(&mut slot.blocks, stage, arena);
+            take_blocks(slot, stage, arena, n * BLOCK as u64, epoch);
             for src in stage.params.iter().chain(&stage.ins) {
                 match src {
                     Source::Scalar { at, param } => {

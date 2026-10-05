@@ -73,6 +73,11 @@ pub fn pick(local: &Local, index: Option<usize>) -> Result<Data, String> {
         (goofi_core::Value::Texture(_), _) => Err("a bare source cannot read an unrendered texture submission".into()),
         (goofi_core::Value::Table(_), _) => Err("a bare source cannot read a TABLE output".into()),
         (goofi_core::Value::Array(a), Some(at)) => {
+            if let Some(span) = goofi_core::samples::SampleSpan::of(&frame) {
+                if at >= a.shape()[0] { return Err(format!("index {at} is outside frame {:?}", a.shape())); }
+                let bytes = a.as_bytes()[at * span.length * 4..(at + 1) * span.length * 4].to_vec();
+                return Data::array_f32(vec![1, span.length], bytes, span.meta()).map_err(|error| error.to_string());
+            }
             let x = a.values().nth(at).ok_or_else(|| format!("index {at} is outside frame {:?}", a.shape()))?;
             Ok(Data::number(f64::from(x)))
         }

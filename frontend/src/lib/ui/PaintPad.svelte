@@ -26,12 +26,8 @@
 	let size = $state(24);
 	let soft = $state(0);
 	let erasing = $state(false);
-	/** The stroke under the pointer: `[x, y, ms since the last point]`, and when its last point came. */
-	let points: [number, number, number][] = [];
-	let lastAt = 0;
-	/** When the previous stroke ended, so the next one's time counts from it. */
-	let endedAt = 0;
-	let startAt = 0;
+	/** The stroke under the pointer, in drawing coordinates. */
+	let points: [number, number][] = [];
 
 	$effect(() => {
 		const ctx = canvas?.getContext('2d');
@@ -78,8 +74,7 @@
 		if (disabled) return;
 		const p = at(e);
 		if (!p) return;
-		startAt = lastAt = performance.now();
-		points = [[p[0], p[1], 0]];
+		points = [p];
 		(e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
 		local(p, p);
 		e.preventDefault();
@@ -88,16 +83,13 @@
 		const last = points.at(-1);
 		const p = at(e);
 		if (!last || !p) return;
-		const now = performance.now();
-		points.push([p[0], p[1], now - lastAt]);
-		lastAt = now;
+		points.push(p);
 		local([last[0], last[1]], p);
 	}
 	function up(): void {
 		if (!points.length) return;
-		onStroke(strokeText(ink(), size, soft, points, endedAt ? startAt - endedAt : 0));
+		onStroke(strokeText(ink(), size, soft, points));
 		points = [];
-		endedAt = lastAt;
 	}
 	function clear(): void {
 		if (!disabled) onStroke('clear');

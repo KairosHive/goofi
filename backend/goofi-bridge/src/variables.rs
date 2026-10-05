@@ -10,12 +10,13 @@ use goofi_graph::{Graph, Uid};
 use goofi_supervisor::sync::Mutex;
 use goofi_node::EventId;
 use goofi_transport::{
-    deliver_held, door_service, event_service, output_service, publisher, service_base, stream_service, variables_base,
+    deliver_held, door_service, event_service, publisher, service_base, stream_service, variables_base,
     view_door_service, BytePublisher, ByteService, Doorbell, IoxNode, ServiceKind, INITIAL_SLICE, VIEW_EVENT_ID,
 };
 
 /// One variable's wire: its publisher, and the bell on its view door for the reducer parked there.
 struct Port {
+    generation: u64,
     publisher: BytePublisher,
     view: Doorbell,
     _service: ByteService,
@@ -115,28 +116,36 @@ fn trouble(why: &str) {
     goofi_supervisor::log::record(goofi_supervisor::log::Source::component("variables"), goofi_supervisor::log::Level::Error, None, why.to_string());
 }
 
+fn prepare_port(instance: &str, inner: &mut Inner, name: &str, generation: u64) -> Result<(), String> {
+    if inner.ports.get(name).is_some_and(|port| port.generation != generation) {
+        inner.ports.remove(name);
+    }
+    if !inner.ports.contains_key(name) {
+        let service = stream_service(&inner.node, &goofi_transport::variable_output(instance, name, generation), ServiceKind::Held)?;
+        let publisher = publisher(&service, name, INITIAL_SLICE)?;
+        let view = Doorbell::open(&inner.node, &view_door_service(instance, Uid::VARIABLES, name))?;
+        inner.ports.insert(name.to_string(), Port { generation, publisher, view, _service: service });
+    }
+    Ok(())
+}
+
 impl goofi_core::variables::Plane for Variables {
-    fn publish(&self, name: &str, value: &goofi_core::Data) {
+    fn prepare(&self, name: &str, generation: u64) {
+        if let Err(e) = prepare_port(&self.instance, &mut self.inner.lock(), name, generation) {
+            trouble(&format!("`{name}` has no wire: {e}"));
+        }
+    }
+
+    fn publish(&self, name: &str, generation: u64, value: &goofi_core::Data) {
         let bytes = match goofi_codec::encode(value) {
             Ok(bytes) => bytes,
             Err(e) => return trouble(&format!("`{name}` cannot cross: {e}")),
         };
         let mut inner = self.inner.lock();
-        let Inner { ports, ringers, bells, node } = &mut *inner;
-        if !ports.contains_key(name) {
-            let service = stream_service(node, &output_service(&variables_base(&self.instance), name), ServiceKind::Held);
-            let port = service.and_then(|service| {
-                let publisher = publisher(&service, name, INITIAL_SLICE)?;
-                let view = Doorbell::open(node, &view_door_service(&self.instance, Uid::VARIABLES, name))?;
-                Ok(Port { publisher, view, _service: service })
-            });
-            match port {
-                Ok(port) => {
-                    ports.insert(name.to_string(), port);
-                }
-                Err(e) => return trouble(&format!("`{name}` has no wire: {e}")),
-            }
+        if let Err(e) = prepare_port(&self.instance, &mut inner, name, generation) {
+            return trouble(&format!("`{name}` has no wire: {e}"));
         }
+        let Inner { ports, ringers, bells, node } = &mut *inner;
         let port = &ports[name];
         let doors: Vec<(String, EventId)> = ringers.get(name).cloned().unwrap_or_default();
         for (door, _) in &doors {

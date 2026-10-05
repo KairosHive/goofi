@@ -1,3 +1,4 @@
+import type { Machine } from '$lib/api/generated';
 /** A transition's course between two state boxes, in FLOW units: a straight line from centre to
  * centre cut at each border, or a loop off the right side when a state re-enters itself. The edge
  * draws it and the playhead dots fly along it, so both agree on every point. */
@@ -13,14 +14,18 @@ export interface Course {
 	/** The SVG path. */
 	d: string;
 	length: number;
+	label?: { x: number; y: number };
 	/** The point `s` (0..1) of the way along, by arc length, and the heading there in degrees. */
 	at(s: number): { x: number; y: number; angle: number };
-	/** The `s` of the point nearest `p`. */
-	near(p: { x: number; y: number }): number;
 }
 
 /** A loop's reach beyond its box. */
 const LOOP_R = 22;
+/** Bounds shared with the label's CSS, including touch padding. */
+export const LABEL_W = 240;
+export const LABEL_H = 44;
+const LABEL_GAP = 8;
+export interface LabelSize { w: number; h: number }
 
 /** Where a ray from `(px, py)`, a point inside the box, along `(dx, dy)` leaves it. */
 function exit(b: Box, px: number, py: number, dx: number, dy: number): { x: number; y: number } {
@@ -38,18 +43,6 @@ function polyline(pts: { x: number; y: number }[], d: string): Course {
 	return {
 		d,
 		length,
-		near(p) {
-			let best = { d2: Infinity, s: 0 };
-			for (let i = 1; i < pts.length; i++) {
-				const a = pts[i - 1];
-				const b = pts[i];
-				const seg = cum[i] - cum[i - 1];
-				const f = seg === 0 ? 0 : Math.min(1, Math.max(0, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / (seg * seg)));
-				const d2 = (a.x + (b.x - a.x) * f - p.x) ** 2 + (a.y + (b.y - a.y) * f - p.y) ** 2;
-				if (d2 < best.d2) best = { d2, s: length === 0 ? 0 : (cum[i - 1] + seg * f) / length };
-			}
-			return best.s;
-		},
 		at(s) {
 			const want = Math.min(Math.max(s, 0), 1) * length;
 			let i = 1;
@@ -65,17 +58,84 @@ function polyline(pts: { x: number; y: number }[], d: string): Course {
 
 /** The course from `from` to `to`, shifted `offset` to its right so two transitions between one
  * pair of boxes run side by side; the same box twice is a loop. */
-export function course(from: Box, to: Box, offset = 0): Course {
-	if (from === to || (from.x === to.x && from.y === to.y && from.w === to.w && from.h === to.h)) return loop(from);
-	const dx = to.x + to.w / 2 - (from.x + from.w / 2);
-	const dy = to.y + to.h / 2 - (from.y + from.h / 2);
-	if (dx === 0 && dy === 0) return loop(from);
+export function course(from: Box, to: Box, offset = 0, at = 0.5, loopIndex = 0, label?: { x: number; y: number }): Course {
+	if (from === to || (from.x === to.x && from.y === to.y && from.w === to.w && from.h === to.h)) return loop(from, loopIndex, label);
+	const ax = from.x + from.w / 2;
+	const ay = from.y + from.h / 2;
+	const bx = to.x + to.w / 2;
+	const by = to.y + to.h / 2;
+	const dx = bx - ax;
+	const dy = by - ay;
 	const len = Math.hypot(dx, dy);
-	const ox = (-dy / len) * offset;
-	const oy = (dx / len) * offset;
-	const a = exit(from, from.x + from.w / 2 + ox, from.y + from.h / 2 + oy, dx, dy);
-	const b = exit(to, to.x + to.w / 2 + ox, to.y + to.h / 2 + oy, -dx, -dy);
-	return polyline([a, b], `M ${a.x} ${a.y} L ${b.x} ${b.y}`);
+	if (len === 0) return loop(from, loopIndex, label);
+	const mid = label ?? { x: ax + dx * at - dy / len * offset, y: ay + dy * at + dx / len * offset };
+	// Fan to separate lanes from ports on the border. No lane starts outside its card.
+	const a = exit(from, ax, ay, mid.x - ax, mid.y - ay);
+	const b = exit(to, bx, by, mid.x - bx, mid.y - by);
+	return { ...polyline([a, mid, b], `M ${a.x} ${a.y} L ${mid.x} ${mid.y} L ${b.x} ${b.y}`), label: mid };
+}
+
+/** Expand authored wildcard sources as a one-way canvas projection. */
+function routes(m: Machine): { key: string; id: string; source: string; target: string }[] {
+	return Object.entries(m.transitions).flatMap(([id, t]) => (t.from === '*' ? Object.keys(m.states) : [t.from])
+		.map((source) => ({ key: t.from === '*' ? `${id}@${source}` : id, id, source, target: t.to })));
+}
+
+export type RouteGeometry = ReturnType<typeof routes>[number] & { course: Course; label: { x: number; y: number } };
+
+/** Follow the runtime endpoints, including when an authored transition changes during travel. */
+export function flightCourse(geometry: Map<string, RouteGeometry>, id: string, source: string, target: string, box: (id: string) => Box | null): Course | null {
+	const route = [...geometry.values()].find((r) => r.id === id && r.source === source && r.target === target);
+	if (route) return route.course;
+	const from = box(source);
+	const to = source === target ? from : box(target);
+	return from && to ? course(from, to) : null;
+}
+
+/** Resolve the whole scene once, in authored order, for edges, preview and dots. */
+export function courses(m: Machine, box: (id: string) => Box | null, size: (key: string) => LabelSize | undefined = () => undefined): Map<string, RouteGeometry> {
+	const projected = routes(m);
+	const pairKey = (r: (typeof projected)[number]): string => [r.source, r.target].sort().join('|');
+	const pairs = Map.groupBy(projected, pairKey);
+	const result = new Map<string, RouteGeometry>();
+	const obstacles = Object.keys(m.states).flatMap((id) => {
+		const b = box(id);
+		return b ? [b] : [];
+	});
+	for (const sibling of projected) {
+		const { w, h } = size(sibling.key) ?? { w: LABEL_W, h: LABEL_H };
+		const siblings = pairs.get(pairKey(sibling))!;
+		const k = siblings.indexOf(sibling);
+		const a = box(sibling.source);
+		const b = sibling.source === sibling.target ? a : box(sibling.target);
+		if (!a || !b) continue;
+		const l = lane(k, siblings.length, sibling.source, sibling.target);
+		let c = course(a, b, l.offset, l.at, k);
+		const label = { ...(c.label ?? c.at(0.5)) };
+		const dx = b.x + b.w / 2 - a.x - a.w / 2;
+		const dy = b.y + b.h / 2 - a.y - a.h / 2;
+		const len = Math.hypot(dx, dy);
+		const side = l.offset < 0 ? -1 : 1;
+		const normal = len === 0 ? { x: 1, y: 0 } : { x: -dy / len * side, y: dx / len * side };
+		// A lane clears cards and all earlier labels, including other state pairs.
+		let moved: boolean;
+		do {
+			moved = false;
+			for (const obstacle of obstacles) {
+				const expanded = { x: obstacle.x - w / 2 - LABEL_GAP, y: obstacle.y - h / 2 - LABEL_GAP,
+					w: obstacle.w + w + 2 * LABEL_GAP, h: obstacle.h + h + 2 * LABEL_GAP };
+				if (label.x < expanded.x || label.x > expanded.x + expanded.w || label.y < expanded.y || label.y > expanded.y + expanded.h) continue;
+				const border = exit(expanded, label.x, label.y, normal.x, normal.y);
+				label.x = border.x + normal.x;
+				label.y = border.y + normal.y;
+				moved = true;
+			}
+		} while (moved);
+		c = course(a, b, l.offset, l.at, k, label);
+		result.set(sibling.key, { ...sibling, course: c, label });
+		obstacles.push({ x: label.x - w / 2, y: label.y - h / 2, w, h });
+	}
+	return result;
 }
 
 /** How far apart two courses between one pair of boxes run: a label's height and a little more,
@@ -86,26 +146,20 @@ export const LANE_GAP = 44;
  * runs, in the pair's one frame so the two directions take opposite sides, and where between the
  * two CENTRES its label sits — the pair's frame again, so the labels of a pair never meet however
  * each course is cut by its box. */
-export function lane(k: number, n: number, source: string, target: string): { offset: number; at: number } {
+function lane(k: number, n: number, source: string, target: string): { offset: number; at: number } {
 	const side = source <= target ? 1 : -1;
 	const along = n === 1 ? 0.5 : 0.3 + (0.4 * k) / (n - 1);
 	return { offset: side * (k - (n - 1) / 2) * LANE_GAP, at: side === 1 ? along : 1 - along };
 }
 
-/** Where a course's label sits: the course's point nearest to `at` of the way from `from`'s
- * centre to `to`'s, kept off both ends. */
-export function labelAt(c: Course, from: Box, to: Box, at: number): { x: number; y: number } {
-	const ref = { x: from.x + from.w / 2 + (to.x + to.w / 2 - from.x - from.w / 2) * at, y: from.y + from.h / 2 + (to.y + to.h / 2 - from.y - from.h / 2) * at };
-	return c.at(Math.min(0.85, Math.max(0.15, c.near(ref))));
-}
-
 /** A loop out of the right side and back in, bulging past the box by LOOP_R. */
-function loop(b: Box): Course {
+function loop(b: Box, index = 0, label?: { x: number; y: number }): Course {
+	const radius = Math.max(LOOP_R + index * LANE_GAP, ((label?.x ?? b.x + b.w) - b.x - b.w) / 1.95);
 	const x = b.x + b.w;
 	const p0 = { x, y: b.y + b.h * 0.3 };
 	const p3 = { x, y: b.y + b.h * 0.7 };
-	const p1 = { x: x + 2.6 * LOOP_R, y: p0.y - 1.4 * LOOP_R };
-	const p2 = { x: x + 2.6 * LOOP_R, y: p3.y + 1.4 * LOOP_R };
+	const p1 = { x: x + 2.6 * radius, y: p0.y - 1.4 * radius };
+	const p2 = { x: x + 2.6 * radius, y: p3.y + 1.4 * radius };
 	const pts = [];
 	for (let i = 0; i <= 32; i++) {
 		const t = i / 32;

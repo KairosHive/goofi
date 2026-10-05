@@ -1,6 +1,7 @@
 /** An attribute as a node's param: the faces the inspector offers, and the descriptor that draws a
  * value with the param widget of the attribute's kind. */
 import type { Attribute, AttributeKind, Literal } from '$lib/api/generated';
+import { truth } from '$lib/codec/control';
 import type { ParamDescriptor } from '$lib/api/types';
 
 export type Face = 'number' | 'vector' | 'color' | 'toggle' | 'text' | 'select';
@@ -51,7 +52,7 @@ export function descriptorFor(a: Attribute, value: Literal): ParamDescriptor {
 		case 'num':
 			return { ...base, type: 'num', value: value as number | number[], vmin: k.vmin, vmax: k.vmax, int: k.int, options: [], color: k.color };
 		case 'bool':
-			return { ...base, type: 'bool', value: Boolean(value) };
+			return { ...base, type: 'bool', value: truth(value) };
 		default:
 			return { ...base, type: 'string', value: String(value), options: k.options ?? null };
 	}

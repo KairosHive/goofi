@@ -1,7 +1,7 @@
-//! A drawing: a script of timed atomic ops, which a paint pad's hand and the CLI both send, and
+//! A drawing: a script of atomic ops, which a paint pad's hand and the CLI both send, and
 //! which the manager rasterizes onto the pad's array. The text form is one op per line (or `;`):
-//! `[+ms] stroke [ink] [width w] [soft s] [cap c] [dash d] : [+ms] M x y L x y C x y x y x y Z`,
-//! `[+ms] fill [ink] : path` and `[+ms] clear`; ink is `#rgb`, `#rrggbb`, `#rrggbbaa` or `erase`.
+//! `stroke [ink] [width w] [soft s] [cap c] [dash d] : M x y L x y C x y x y x y Z`,
+//! `fill [ink] : path` and `clear`; ink is `#rgb`, `#rrggbb`, `#rrggbbaa` or `erase`.
 //! Coordinates, width and softness span [`SPAN`] whatever the pad's size; the origin is the top
 //! left, y runs down.
 
@@ -50,49 +50,23 @@ pub enum Seg {
     Close,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Segment {
-    pub dt: u32,
-    pub seg: Seg,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
     Clear,
-    Stroke(Stroke, Vec<Segment>),
-    Fill(Ink, Vec<Segment>),
+    Stroke(Stroke, Vec<Seg>),
+    Fill(Ink, Vec<Seg>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Op {
-    pub dt: u32,
     pub kind: Kind,
 }
 
 const CAPS: [(Cap, &str); 3] = [(Cap::Round, "round"), (Cap::Butt, "butt"), (Cap::Square, "square")];
 const DASHES: [(Dash, &str); 3] = [(Dash::Solid, "solid"), (Dash::Dash, "dash"), (Dash::Dot, "dot")];
-impl Seg {
-    fn tag(&self) -> usize {
-        match self {
-            Seg::Move(_) => 0,
-            Seg::Line(_) => 1,
-            Seg::Cubic(..) => 2,
-            Seg::Close => 3,
-        }
-    }
-
-    fn points(&self) -> Vec<Point> {
-        match *self {
-            Seg::Move(p) | Seg::Line(p) => vec![p],
-            Seg::Cubic(a, b, c) => vec![a, b, c],
-            Seg::Close => vec![],
-        }
-    }
-}
-
-fn check_path(path: &[Segment]) -> Result<(), String> {
+fn check_path(path: &[Seg]) -> Result<(), String> {
     match path.first() {
-        Some(Segment { seg: Seg::Move(_), .. }) => Ok(()),
+        Some(Seg::Move(_)) => Ok(()),
         _ => Err("a path starts with `M x y`".into()),
     }
 }
@@ -103,11 +77,6 @@ fn quantize(v: &str, what: &str) -> Result<u16, String> {
         return Err(format!("{what} `{v}` is outside 0..{SPAN}"));
     }
     Ok((x / SPAN * Q).round() as u16)
-}
-
-fn spell(q: u16) -> String {
-    let s = format!("{:.2}", q as f32 * SPAN / Q);
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 fn parse_ink(word: &str) -> Option<Ink> {
@@ -130,29 +99,8 @@ fn parse_ink(word: &str) -> Option<Ink> {
     Some(Ink::Rgba(c))
 }
 
-fn spell_ink(ink: Ink) -> String {
-    match ink {
-        Ink::Erase => "erase".into(),
-        Ink::Rgba([r, g, b, 255]) => format!("#{r:02x}{g:02x}{b:02x}"),
-        Ink::Rgba([r, g, b, a]) => format!("#{r:02x}{g:02x}{b:02x}{a:02x}"),
-    }
-}
-
-/// A `+ms` time word, or None for any other word.
-fn time(word: &str) -> Option<Result<u32, String>> {
-    let ms = word.strip_prefix('+')?;
-    Some(ms.parse().map_err(|_| format!("`{word}` is not a time in ms")))
-}
-
 fn parse_op(words: &[&str]) -> Result<Op, String> {
     let mut w = words.iter().copied().peekable();
-    let dt = match w.peek().and_then(|x| time(x)) {
-        Some(t) => {
-            w.next();
-            t?
-        }
-        None => 0,
-    };
     let verb = w.next().unwrap_or_default();
     let head: Vec<&str> = w.by_ref().take_while(|x| *x != ":").collect();
     let path: Vec<&str> = w.collect();
@@ -185,18 +133,13 @@ fn parse_op(words: &[&str]) -> Result<Op, String> {
         "clear" => return Err("`clear` takes no path".into()),
         other => return Err(format!("`{other}` is not an op: clear, stroke or fill")),
     };
-    Ok(Op { dt, kind })
+    Ok(Op { kind })
 }
 
-fn parse_path(words: &[&str]) -> Result<Vec<Segment>, String> {
+fn parse_path(words: &[&str]) -> Result<Vec<Seg>, String> {
     let mut path = Vec::new();
     let mut w = words.iter().copied();
-    let mut dt = 0;
     while let Some(word) = w.next() {
-        if let Some(t) = time(word) {
-            dt = t?;
-            continue;
-        }
         let mut pt = || -> Result<Point, String> {
             let mut p = [0u16; 2];
             for c in &mut p {
@@ -211,8 +154,7 @@ fn parse_path(words: &[&str]) -> Result<Vec<Segment>, String> {
             "Z" => Seg::Close,
             other => return Err(format!("`{other}` is not a segment: M, L, C or Z")),
         };
-        path.push(Segment { dt, seg });
-        dt = 0;
+        path.push(seg);
     }
     check_path(&path)?;
     Ok(path)
@@ -231,37 +173,6 @@ pub fn parse(text: &str) -> Result<Vec<Op>, String> {
         }
     }
     Ok(ops)
-}
-
-/// The text form of `ops`, one op per line, which [`parse`] reads back to the same ops.
-pub fn print(ops: &[Op]) -> String {
-    let at = |dt: u32| if dt == 0 { String::new() } else { format!("+{dt} ") };
-    let path = |p: &[Segment]| {
-        p.iter()
-            .map(|s| {
-                let pts: Vec<String> = s.seg.points().iter().map(|p| format!(" {} {}", spell(p[0]), spell(p[1]))).collect();
-                let tag = ["M", "L", "C", "Z"][s.seg.tag()];
-                format!("{}{tag}{}", at(s.dt), pts.concat())
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    let lines: Vec<String> = ops
-        .iter()
-        .map(|o| match &o.kind {
-            Kind::Clear => format!("{}clear", at(o.dt)),
-            Kind::Stroke(s, p) => {
-                let cap = CAPS.iter().find(|c| c.0 == s.cap).unwrap().1;
-                let dash = DASHES.iter().find(|d| d.0 == s.dash).unwrap().1;
-                format!(
-                    "{}stroke {} width {} soft {} cap {cap} dash {dash} : {}",
-                    at(o.dt), spell_ink(s.ink), spell(s.width), spell(s.soft), path(p)
-                )
-            }
-            Kind::Fill(ink, p) => format!("{}fill {} : {}", at(o.dt), spell_ink(*ink), path(p)),
-        })
-        .collect();
-    lines.join("\n")
 }
 
 /// `ops` drawn onto `sheet`, an `[height, width, 4]` straight RGBA array in 0..1, row 0 the top:
@@ -284,11 +195,11 @@ pub fn raster(sheet: &[f32], width: u32, height: u32, ops: &[Op]) -> Result<Vec<
         .ok_or("a drawing wants a size above zero")?;
     let (sx, sy) = (width as f32 / Q, height as f32 / Q);
     let scale = (sx + sy) / 2.0;
-    let build = |path: &[Segment]| {
+    let build = |path: &[Seg]| {
         let f = |p: Point| (p[0] as f32 * sx, p[1] as f32 * sy);
         let mut b = PathBuilder::new();
         for s in path {
-            match s.seg {
+            match *s {
                 Seg::Move(p) => b.move_to(f(p).0, f(p).1),
                 Seg::Line(p) => b.line_to(f(p).0, f(p).1),
                 Seg::Cubic(a, c, e) => b.cubic_to(f(a).0, f(a).1, f(c).0, f(c).1, f(e).0, f(e).1),

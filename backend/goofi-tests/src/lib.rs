@@ -1140,12 +1140,56 @@ pub fn install_all(g: &Goofi, files: &[(&str, &str)]) -> Vec<String> {
 /// The one-variable evaluator a modulation step needs: its first variable's frame, whole, which
 /// the reader coerces as it does any frame — no interpreter, so a scenario runs in the default
 /// suite. It counts its compiles, so a test can tell a refreshed binding from a rebuilt one, and
-/// holds while `latch` is raised, so a test can see a stalled evaluation hold the value before it.
+/// can hold one evaluation with an entry signal and a release guard.
 #[derive(Default)]
 pub struct FirstVar {
     pub compiles: std::sync::atomic::AtomicUsize,
     pub evals: std::sync::atomic::AtomicUsize,
-    pub latch: std::sync::atomic::AtomicBool,
+    hold: goofi_supervisor::sync::Mutex<Vec<Arc<EvaluationGate>>>,
+}
+
+#[derive(Default)]
+struct EvaluationGate {
+    value: Option<f64>,
+    entered: goofi_supervisor::sync::Latch,
+    released: goofi_supervisor::sync::Mutex<bool>,
+    wake: goofi_supervisor::sync::Condvar,
+}
+
+pub struct EvaluationHold {
+    evaluator: Arc<FirstVar>,
+    gate: Arc<EvaluationGate>,
+}
+
+impl FirstVar {
+    pub fn hold(self: &Arc<Self>) -> EvaluationHold {
+        self.hold_for(None)
+    }
+
+    /// Hold only evaluations with this first input, so successive sources have separate gates.
+    pub fn hold_value(self: &Arc<Self>, value: f64) -> EvaluationHold {
+        self.hold_for(Some(value))
+    }
+
+    fn hold_for(self: &Arc<Self>, value: Option<f64>) -> EvaluationHold {
+        let gate = Arc::new(EvaluationGate { value, ..Default::default() });
+        let mut held = self.hold.lock();
+        assert!(!held.iter().any(|gate| gate.value == value), "this evaluation is already held");
+        held.push(gate.clone());
+        EvaluationHold { evaluator: self.clone(), gate }
+    }
+}
+
+impl EvaluationHold {
+    pub fn entered(&self) -> bool { self.gate.entered.is_open() }
+}
+
+impl Drop for EvaluationHold {
+    fn drop(&mut self) {
+        self.evaluator.hold.lock().retain(|gate| !Arc::ptr_eq(gate, &self.gate));
+        *self.gate.released.lock() = true;
+        self.gate.wake.notify_all();
+    }
 }
 
 impl goofi_node::ExprEvaluator for FirstVar {
@@ -1153,12 +1197,21 @@ impl goofi_node::ExprEvaluator for FirstVar {
         self.compiles.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(goofi_node::Compiled { id: 1 })
     }
+    fn compile_deterministic(&self, source: &str) -> Result<goofi_node::DeterministicCompiled, goofi_node::ExprError> {
+        // This fixture reads its first input; it has no time or other implicit input.
+        self.compile(source).map(|compiled| goofi_node::DeterministicCompiled { compiled, observes_time: false })
+    }
+    fn retain_deterministic(&self, _id: goofi_node::BindingId) -> Result<bool, goofi_node::ExprError> { Ok(false) }
     fn eval(&self, _id: goofi_node::BindingId, ctx: &goofi_node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_node::ExprError> {
-        while self.latch.load(std::sync::atomic::Ordering::Relaxed) {
-            std::thread::sleep(std::time::Duration::from_millis(5));
+        let result = first_var(ctx);
+        let value = result.as_ref().ok().map(goofi_core::control::number_of);
+        let gate = self.hold.lock().iter().find(|gate| gate.value.is_none() || gate.value == value).cloned();
+        if let Some(gate) = gate {
+            gate.entered.open();
+            drop(gate.wake.wait_while(gate.released.lock(), |released| !*released));
         }
         self.evals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        first_var(ctx)
+        result
     }
     fn release(&self, _id: goofi_node::BindingId) {}
 }

@@ -3,18 +3,18 @@
 use serde_json::{json, Value};
 
 use super::{op, Any, EffectOp, NoArgs, ReadOp, WriteOp};
-use crate::machines::Msg;
+use crate::machines::Effect;
 use crate::{AppState, Caller, Txn};
 use goofi_core::ease::Curve;
 use goofi_core::Data;
-use goofi_graph::machine::{Attribute, AttributeKind, Machine, Playhead, State, Transition, Trigger, OWN};
+use goofi_graph::machine::{Attribute, AttributeKind, Machine, Playhead, Seconds, Selection, State, Transition, Trigger, OWN};
 use goofi_graph::{Command, Graph};
 
 const VALUES: &str = "`values` is `{attribute: literal}`, each a number, a list of numbers (nested for a wider array), a bool or a string; an attribute a state leaves out is kept by a playhead entering it";
 
 op!(List, "machine list", 0, NoArgs,
-    "Every state machine, whole: its attributes, states, transitions (by id), playheads and seed. Where a playhead IS right now is its variables: `variables.<playhead>.state`, `.prev` and `.progress`, read through `variable list` like its attributes.",
-    "{machines: {name: {attributes: {name: {default, kind}}, states: {name: {pos, values}}, transitions: {id: {from, to, triggers, duration, curve}}, playheads: {name: {color, start}}, seed?}}}");
+    "Every authored state machine, its standing runtime health, the resolved outgoing transition order for each state and the reserved runtime element names. Health reports expression failures and stopped playheads; successful reevaluation or recovery clears them. Live playhead state is read through its variables: state (resident or destination), prev (departure state during travel), progress (0..1), transition (active ID), and arrived (global clock ticks, as a decimal integer string; one second is 2^64 ticks).",
+    "{machines, health: {machine: {expressions: [{playhead, transition, surface, expression, error}], playheads: {playhead: error}}}, outgoing: {machine: {state: [transition IDs]}}, runtime_elements: [reserved variable element names]}");
 
 op!(Add, "machine add", 1, AddArgs {
     pub name: Option<String>,
@@ -39,7 +39,7 @@ op!(Edit, "machine edit", 1, EditArgs {
     pub machine: String,
     pub seed: Option<u64>,
 },
-    "Change a machine's own settings: `seed` starts its random draws — the draw among the triggers that fire together — so a run repeats.",
+    "Change a machine's seed for repeatable chance, selection and random-duration draws. Reset restarts the seeded run.",
     "{seed}");
 
 op!(AttributeAdd, "machine attribute add", 2, AttributeAddArgs {
@@ -49,7 +49,7 @@ op!(AttributeAdd, "machine attribute add", 2, AttributeAddArgs {
     #[schemars(with = "Option<Value>")]
     pub kind: Option<AttributeKind>,
 },
-    "Add an attribute: a value every state may set and every playhead carries as `variables.<playhead>.<name>`. `value` is its default. `kind` is what the attribute is, as a node's param is: `{type: num, vmin, vmax, int?, color?}` holding a number or a list of them (four for a colour), `{type: bool}` holding 0 or 1, or `{type: string, options?}` holding a text; left out, a number is a `num` in 0..1 and a text a `string`. The inspector draws each with that param's widget, and a playhead's variable wears the control-panel widget nearest it. `state`, `prev` and `progress` are the machine's own and refused.",
+    "Add an attribute: a value every state may set and every playhead carries as `variables.<playhead>.<name>`. `value` is its default. `kind` is what the attribute is, as a node's param is: `{type: num, vmin, vmax, int?, color?}` holding a number or a list of them (four for a colour), `{type: bool}` holding 0 or 1, or `{type: string, options?}` holding a text; left out, a number is a `num` in 0..1 and a text a `string`. The inspector draws each with that param's widget, and a playhead's variable wears the control-panel widget nearest it. Runtime element names from `machine list` are reserved and refused.",
     "{name, value} — the attribute and its default as stored");
 
 op!(AttributeEdit, "machine attribute edit", 2, AttributeEditArgs {
@@ -82,6 +82,10 @@ op!(StateAdd, "machine state add", 2, StateAddArgs {
     pub name: Option<String>,
     pub pos: Option<[f64; 2]>,
     pub values: Option<Value>,
+    pub exit_values: Option<Value>,
+    #[schemars(with = "Option<Value>")]
+    pub selection: Option<Selection>,
+    pub order: Option<Vec<String>>,
 },
     "Add a state. Without a name, use the first free state0/state1/... name. `pos` is where its card sits on the canvas. `values` is `{attribute: literal}`, each a number, a list of numbers (nested for a wider array), a bool or a string; an attribute a state leaves out is kept by a playhead entering it.",
     "{name} — the state as stored");
@@ -91,8 +95,12 @@ op!(StateEdit, "machine state edit", 2, StateEditArgs {
     pub name: String,
     pub pos: Option<[f64; 2]>,
     pub values: Option<Value>,
+    pub exit_values: Option<Value>,
+    #[schemars(with = "Option<Value>")]
+    pub selection: Option<Selection>,
+    pub order: Option<Vec<String>>,
 },
-    "Change a state's place and/or what it sets. `values` keys set an attribute each, and a key set to `null` clears that attribute from the state, so a playhead entering it keeps what it holds. Previewable: a card drag sends `pos` as a preview.",
+    "Change a state's place, entry/exit values, selection policy (ordered/weighted/uniform), or preferred outgoing transition IDs in order. `values` keys set an attribute each, and a key set to `null` clears that attribute from the state, so a playhead entering it keeps what it holds. Previewable: a card drag sends `pos` as a preview.",
     "{name}");
 
 op!(StateRemove, "machine state remove", 2, StateRemoveArgs {
@@ -114,11 +122,19 @@ op!(TransitionAdd, "machine transition add", 1, TransitionAddArgs {
     pub machine: String,
     pub from: String,
     pub to: String,
-    pub triggers: Option<Value>,
-    pub duration: Option<f64>,
-    pub curve: Option<String>,
+    #[schemars(with = "Option<Vec<Value>>")]
+    pub triggers: Option<Vec<Trigger>>,
+    #[schemars(with = "Option<Value>")]
+    pub duration: Option<Seconds>,
+    pub chance: Option<f64>,
+    pub weight: Option<f64>,
+    pub guard: Option<String>,
+    pub internal: Option<bool>,
+    pub values: Option<Value>,
+    #[schemars(with = "Option<String>")]
+    pub curve: Option<Curve>,
 },
-    "Add a transition from one state to another (`from` may be `*`, any state; `to` may equal `from`, a re-entry that restarts the dwell). It fires when any of its `triggers` fires: `{kind: manual}` — `machine fire`, or the inspector's fire button; `{kind: after, seconds, weight?}` — once the playhead has dwelt `seconds` (a number, or an expression over `variables.*` read on entry); `{kind: when, expression, weight?}` — the one expression language a param uses, over `variables.*` and `t` alone, firing on the rising edge of its truth; `{kind: meet, policy?}` — when a second playhead arrives in `from`, `fifo` (the longest resident goes, the default), `lifo` (the newest) or `all` (every resident); `{kind: alone}` — for the playhead left behind when the second-to-last leaves `from`. When several `after` and `when` triggers out of one state fire in one tick, one is drawn by `weight` (default 1; 0 is never drawn) — a random branch is several `after` triggers of one dwell with different weights. `duration` is seconds (0, instant, is the default); `curve` is step/linear/in/out/in_out/smooth, eased from what the playhead holds now so a redirection is continuous, arrays of one shape elementwise, anything else switching on arrival.",
+    "Add a transition from a state (or `*`, any state) to a state. A trigger offers it: manual; after {seconds}; when {expression, edge?} with rising/falling/change/level; event {name}; always; meet {policy?} with fifo/lifo/all; alone. Several triggers offer one transition, once. A guard expression can block any trigger. Chance in 0..1 defaults to 1; weight defaults to 1 and is used by weighted selection. A state's selection is ordered (first successful chance), weighted (relative shares), or uniform. State order lists preferred outgoing IDs. After seconds and travel duration accept a nonnegative number, an expression over variables and t, or a uniform random range {min, max}, sampled once when armed/taken. Failed or unselected positive timers retry from their deadline using that interval. Travel eases held values through curve step/linear/in/out/in_out/smooth; strings and unlike shapes switch on arrival. A self-transition re-enters; internal=true requires a zero-duration self-transition and preserves dwell. Values are local transition assignments. Manual fire validates the live source and guard, then bypasses chance and selection.",
     "{id} — the transition's id, `t1`, `t2`, …, which every later op addresses it by");
 
 op!(TransitionEdit, "machine transition edit", 2, TransitionEditArgs {
@@ -126,11 +142,19 @@ op!(TransitionEdit, "machine transition edit", 2, TransitionEditArgs {
     pub id: String,
     pub from: Option<String>,
     pub to: Option<String>,
-    pub triggers: Option<Value>,
-    pub duration: Option<f64>,
-    pub curve: Option<String>,
+    #[schemars(with = "Option<Vec<Value>>")]
+    pub triggers: Option<Vec<Trigger>>,
+    #[schemars(with = "Option<Value>")]
+    pub duration: Option<Seconds>,
+    pub chance: Option<f64>,
+    pub weight: Option<f64>,
+    pub guard: Option<String>,
+    pub internal: Option<bool>,
+    pub values: Option<Value>,
+    #[schemars(with = "Option<String>")]
+    pub curve: Option<Curve>,
 },
-    "Change a transition: any of the fields `machine transition add` takes, the rest kept. `triggers` replaces the whole list.",
+    "Change a transition: any field from `machine transition add`, the rest kept. Triggers replace the list. An empty guard clears it. Values patch local assignments; null clears one. Endpoint changes remove invalid state-order references.",
     "{id}");
 
 op!(TransitionRemove, "machine transition remove", 2, TransitionRemoveArgs {
@@ -178,7 +202,15 @@ op!(Fire, "machine fire", 1, FireArgs {
     pub playhead: String,
     pub transition: String,
 },
-    "Take a transition for a playhead, as a tap on it does: the transition must leave the state the playhead is in, or is moving to — a manual fire is the one thing that redirects a playhead in flight. Not undoable, and no change to the patch.",
+    "Take an explicitly selected transition for a playhead: the transition must leave the state the playhead is in, or is moving to — a manual fire is the one thing that redirects a playhead in flight. Not undoable, and no change to the patch.",
+    "{ok: true}");
+
+op!(Event, "machine event", 1, EventArgs {
+    pub machine: String,
+    pub event: String,
+    pub playhead: Option<String>,
+},
+    "Offer a named event to resident playheads. Without `playhead`, all resident playheads receive it as one batch. Event triggers, guards, chances and the state's selection policy decide each move. An event is consumed once. Not undoable, and no change to the patch.",
     "{ok: true}");
 
 op!(Jump, "machine jump", 1, JumpArgs {
@@ -197,7 +229,7 @@ op!(Reset, "machine reset", 1, ResetArgs {
 
 impl ReadOp for List {
     fn run(tx: &mut Txn, _: NoArgs) -> Result<Value, String> {
-        Ok(json!({ "machines": tx.g.machines() }))
+        Ok(json!({ "machines": tx.g.machines(), "health": tx.g.machine_health(), "outgoing": tx.g.machine_outgoing(), "runtime_elements": OWN }))
     }
 }
 
@@ -216,39 +248,31 @@ fn set(tx: &mut Txn, name: &str, next: Machine) -> Result<(), String> {
     Ok(())
 }
 
-/// A kind must hold every value it will be handed.
-fn fits(kind: &AttributeKind, value: &Data) -> Result<(), String> {
-    if kind.fits(value) { Ok(()) } else { Err(kind.mismatch(value)) }
-}
-
-/// The attribute values an op names, each checked against the attribute and its widget. A `null`
+/// The attribute values an op names. A `null`
 /// is answered as `None`: the caller decides whether that clears or is refused.
 fn values_of(m: &Machine, values: Option<Value>) -> Result<Vec<(String, Option<Data>)>, String> {
     let Some(values) = values else { return Ok(Vec::new()) };
     let map = values.as_object().ok_or(VALUES)?;
     let mut out = Vec::with_capacity(map.len());
     for (attr, v) in map {
-        let a = m.attributes.get(attr).ok_or_else(|| format!("no attribute `{attr}` in the machine"))?;
+        if !m.attributes.contains_key(attr) { return Err(format!("no attribute `{attr}` in the machine")); }
         if v.is_null() {
             out.push((attr.clone(), None));
             continue;
         }
         let value = literal(v.clone())?;
-        fits(&a.kind, &value).map_err(|why| format!("attribute `{attr}`: {why}"))?;
         out.push((attr.clone(), Some(value)));
     }
     Ok(out)
 }
 
-fn parse_curve(v: &str) -> Result<Curve, String> {
-    serde_json::from_value(json!(v)).map_err(|_| {
-        let curves = Curve::ALL.iter().map(|c| c.as_str()).collect::<Vec<_>>().join("/");
-        format!("`curve` is one of {curves}, not `{v}`")
-    })
-}
-
-fn parse_triggers(v: Value) -> Result<Vec<Trigger>, String> {
-    serde_json::from_value(v).map_err(|e| format!("`triggers` is a list of {{kind: manual|after|when|meet|alone, …}}: {e}"))
+fn apply_values(target: &mut goofi_core::indexmap::IndexMap<String, Data>, edits: Vec<(String, Option<Data>)>) {
+    for (name, value) in edits {
+        match value {
+            Some(value) => { target.insert(name, value); }
+            None => { target.shift_remove(&name); }
+        }
+    }
 }
 
 impl WriteOp for Add {
@@ -314,8 +338,7 @@ impl WriteOp for AttributeAdd {
         }
         let value = literal(a.value.0)?;
         let kind = a.kind.unwrap_or_else(|| AttributeKind::of(&value));
-        fits(&kind, &value)?;
-        m.attributes.insert(a.name.clone(), Attribute { default: value.clone(), kind });
+        m.attributes.insert(a.name.clone(), Attribute { identity: Default::default(), default: value.clone(), kind });
         set(tx, &a.machine, m)?;
         Ok(json!({ "name": a.name, "value": value }))
     }
@@ -338,13 +361,6 @@ impl WriteOp for AttributeEdit {
         if let Some(k) = a.kind {
             attr.kind = k;
         }
-        fits(&attr.kind, &attr.default)?;
-        let kind = attr.kind.clone();
-        for (state, s) in &m.states {
-            if let Some(v) = s.values.get(&a.name) {
-                fits(&kind, v).map_err(|why| format!("state `{state}`: {why}"))?;
-            }
-        }
         set(tx, &a.machine, m)?;
         Ok(json!({ "name": a.name }))
     }
@@ -360,7 +376,9 @@ impl WriteOp for AttributeRemove {
         m.attributes.shift_remove(&a.name).ok_or_else(|| format!("no attribute `{}` in machine `{}`", a.name, a.machine))?;
         for s in m.states.values_mut() {
             s.values.shift_remove(&a.name);
+            s.exit_values.shift_remove(&a.name);
         }
+        for t in m.transitions.values_mut() { t.values.shift_remove(&a.name); }
         set(tx, &a.machine, m)?;
         Ok(json!({ "removed": true }))
     }
@@ -392,7 +410,9 @@ impl WriteOp for StateAdd {
             return Err(format!("state `{name}` already exists — `machine state edit` changes it"));
         }
         let values = values_of(&m, a.values)?.into_iter().filter_map(|(k, v)| Some((k, v?))).collect();
-        m.states.insert(name.clone(), State { pos: a.pos.unwrap_or_default(), values });
+        let exit_values = values_of(&m, a.exit_values)?.into_iter().filter_map(|(k, v)| Some((k, v?))).collect();
+        m.states.insert(name.clone(), State { identity: Default::default(), pos: a.pos.unwrap_or_default(), values, exit_values,
+            selection: a.selection.unwrap_or_default(), order: a.order.unwrap_or_default() });
         set(tx, &a.machine, m)?;
         Ok(json!({ "name": name }))
     }
@@ -405,14 +425,18 @@ impl WriteOp for StateAdd {
 impl WriteOp for StateEdit {
     fn run(tx: &mut Txn, a: StateEditArgs) -> Result<Value, String> {
         let mut m = machine_of(&tx.g, &a.machine)?;
-        if a.pos.is_none() && a.values.is_none() {
-            return Err("nothing to change — give a pos or values".into());
+        if a.pos.is_none() && a.values.is_none() && a.exit_values.is_none() && a.selection.is_none() && a.order.is_none() {
+            return Err("nothing to change — give pos, values, exit_values, selection or order".into());
         }
         let values = values_of(&m, a.values)?;
+        let exit_values = values_of(&m, a.exit_values)?;
         let s = m.states.get_mut(&a.name).ok_or_else(|| format!("no state `{}` in machine `{}`", a.name, a.machine))?;
         if let Some(pos) = a.pos {
             s.pos = pos;
         }
+        if let Some(selection) = a.selection { s.selection = selection; }
+        if let Some(order) = a.order { s.order = order; }
+        apply_values(&mut s.exit_values, exit_values);
         for (attr, v) in values {
             match v {
                 Some(v) => {
@@ -446,6 +470,7 @@ impl WriteOp for StateRemove {
         }
         m.states.shift_remove(&a.name);
         m.transitions.retain(|_, t| t.from != a.name && t.to != a.name);
+        m.prune_order();
         set(tx, &a.machine, m)?;
         Ok(json!({ "removed": true }))
     }
@@ -487,12 +512,18 @@ impl WriteOp for TransitionAdd {
     fn run(tx: &mut Txn, a: TransitionAddArgs) -> Result<Value, String> {
         let mut m = machine_of(&tx.g, &a.machine)?;
         let id = goofi_core::fresh_name("t", 1, |n| m.transitions.contains_key(n));
+        let values = values_of(&m, a.values)?.into_iter().filter_map(|(k, v)| Some((k, v?))).collect();
         let t = Transition {
             from: a.from,
             to: a.to,
-            triggers: a.triggers.map(parse_triggers).transpose()?.unwrap_or_default(),
-            duration: a.duration.unwrap_or(0.0),
-            curve: a.curve.as_deref().map(parse_curve).transpose()?.unwrap_or_default(),
+            triggers: a.triggers.unwrap_or_default(),
+            duration: a.duration.unwrap_or_default(),
+            chance: a.chance.unwrap_or(1.0),
+            weight: a.weight.unwrap_or(1.0),
+            guard: a.guard.filter(|s| !s.trim().is_empty()),
+            internal: a.internal.unwrap_or_default(),
+            values,
+            curve: a.curve.unwrap_or_default(),
         };
         m.transitions.insert(id.clone(), t);
         set(tx, &a.machine, m)?;
@@ -507,6 +538,7 @@ impl WriteOp for TransitionAdd {
 impl WriteOp for TransitionEdit {
     fn run(tx: &mut Txn, a: TransitionEditArgs) -> Result<Value, String> {
         let mut m = machine_of(&tx.g, &a.machine)?;
+        let values = values_of(&m, a.values)?;
         let t = m.transitions.get_mut(&a.id).ok_or_else(|| format!("no transition `{}` in machine `{}`", a.id, a.machine))?;
         if let Some(from) = a.from {
             t.from = from;
@@ -515,14 +547,18 @@ impl WriteOp for TransitionEdit {
             t.to = to;
         }
         if let Some(triggers) = a.triggers {
-            t.triggers = parse_triggers(triggers)?;
+            t.triggers = triggers;
         }
         if let Some(duration) = a.duration {
             t.duration = duration;
         }
-        if let Some(curve) = &a.curve {
-            t.curve = parse_curve(curve)?;
-        }
+        if let Some(curve) = a.curve { t.curve = curve; }
+        if let Some(chance) = a.chance { t.chance = chance; }
+        if let Some(weight) = a.weight { t.weight = weight; }
+        if let Some(guard) = a.guard { t.guard = (!guard.trim().is_empty()).then_some(guard); }
+        if let Some(internal) = a.internal { t.internal = internal; }
+        apply_values(&mut t.values, values);
+        m.prune_order();
         set(tx, &a.machine, m)?;
         Ok(json!({ "id": a.id }))
     }
@@ -536,6 +572,7 @@ impl WriteOp for TransitionRemove {
     fn run(tx: &mut Txn, a: TransitionRemoveArgs) -> Result<Value, String> {
         let mut m = machine_of(&tx.g, &a.machine)?;
         m.transitions.shift_remove(&a.id).ok_or_else(|| format!("no transition `{}` in machine `{}`", a.id, a.machine))?;
+        m.prune_order();
         set(tx, &a.machine, m)?;
         Ok(json!({ "removed": true }))
     }
@@ -552,7 +589,7 @@ impl WriteOp for PlayheadAdd {
         if m.playheads.contains_key(&name) {
             return Err(format!("playhead `{name}` already exists — `machine playhead edit` changes it"));
         }
-        m.playheads.insert(name.clone(), Playhead { color: a.color.unwrap_or_default(), start: a.start });
+        m.playheads.insert(name.clone(), Playhead { identity: Default::default(), color: a.color.unwrap_or_default(), start: a.start });
         set(tx, &a.machine, m)?;
         Ok(json!({ "name": name }))
     }
@@ -608,45 +645,30 @@ impl WriteOp for PlayheadRename {
     }
 }
 
-/// The machine, playhead and (when named) transition or state an effect addresses, checked
-/// against the settled model before the thread is told.
-fn addressed(state: &AppState, machine: &str, playhead: &str, transition: Option<&str>, target: Option<&str>) -> Result<(), String> {
-    let g = state.graph.lock();
-    let m = machine_of(&g, machine)?;
-    if !m.playheads.contains_key(playhead) {
-        return Err(format!("no playhead `{playhead}` in machine `{machine}`"));
-    }
-    if let Some(id) = transition.filter(|id| !m.transitions.contains_key(*id)) {
-        return Err(format!("no transition `{id}` in machine `{machine}`"));
-    }
-    if let Some(s) = target.filter(|s| !m.states.contains_key(*s)) {
-        return Err(format!("no state `{s}` in machine `{machine}`"));
-    }
-    Ok(())
-}
-
 impl EffectOp for Fire {
     fn run(state: &AppState, a: FireArgs, _: &Caller) -> Result<Value, String> {
-        addressed(state, &a.machine, &a.playhead, Some(&a.transition), None)?;
-        state.machines.send(Msg::Fire { machine: a.machine, playhead: a.playhead, transition: a.transition });
+        state.machines.effect(Effect::Fire { machine: a.machine, playhead: a.playhead, transition: a.transition })?;
         Ok(json!({ "ok": true }))
     }
 }
 
 impl EffectOp for Jump {
     fn run(state: &AppState, a: JumpArgs, _: &Caller) -> Result<Value, String> {
-        addressed(state, &a.machine, &a.playhead, None, Some(&a.state))?;
-        state.machines.send(Msg::Jump { machine: a.machine, playhead: a.playhead, state: a.state });
+        state.machines.effect(Effect::Jump { machine: a.machine, playhead: a.playhead, state: a.state })?;
         Ok(json!({ "ok": true }))
     }
 }
 
 impl EffectOp for Reset {
     fn run(state: &AppState, a: ResetArgs, _: &Caller) -> Result<Value, String> {
-        if let Some(m) = &a.machine {
-            machine_of(&state.graph.lock(), m)?;
-        }
-        state.machines.send(Msg::Reset { machine: a.machine });
+        state.machines.effect(Effect::Reset { machine: a.machine })?;
+        Ok(json!({ "ok": true }))
+    }
+}
+
+impl EffectOp for Event {
+    fn run(state: &AppState, a: EventArgs, _: &Caller) -> Result<Value, String> {
+        state.machines.effect(Effect::Event { machine: a.machine, name: a.event, playhead: a.playhead })?;
         Ok(json!({ "ok": true }))
     }
 }

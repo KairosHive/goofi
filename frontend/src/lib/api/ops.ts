@@ -63,6 +63,7 @@ export type OpName =
 	| 'machine playhead remove'
 	| 'machine playhead rename'
 	| 'machine fire'
+	| 'machine event'
 	| 'machine jump'
 	| 'machine reset'
 	| 'midi list'
@@ -164,6 +165,7 @@ export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'machine playhead remove': 'write',
 	'machine playhead rename': 'write',
 	'machine fire': 'effect',
+	'machine event': 'effect',
 	'machine jump': 'effect',
 	'machine reset': 'effect',
 	'midi list': 'read',

@@ -146,7 +146,7 @@ pub fn compile(
             let bound = nv.bindings.iter().find(|b| b.key.group == d.group && b.key.name == d.name);
             if let Some(b) = bound.filter(|b| is_edge(b, all)) {
                 refs.insert((*uid, i), b.vars[0].wire().expect("an edge"));
-            } else if bound.is_some_and(|b| b.live && b.id.is_some()) {
+            } else if bound.is_some_and(|b| b.live) {
                 computed.insert((*uid, i));
             }
         }

@@ -27,7 +27,7 @@ pub type EventId = u8;
 #[derive(Clone, Debug, PartialEq)]
 pub enum BoundVar {
     /// A producer's output slot, and the doorbell id it rings this consumer with.
-    Stream { var: String, producer: Uid, slot: &'static str, event_id: EventId },
+    Stream { var: String, producer: Uid, generation: u64, slot: &'static str, event_id: EventId },
     /// A `variables.*` read, resolved and shipped inline — a variables edit re-sends the binding.
     Value { var: String, value: Param },
     /// The graph could not resolve it: an unknown node, a slot that does not exist, an ambiguous
@@ -36,6 +36,15 @@ pub enum BoundVar {
 }
 
 impl BoundVar {
+    /// A variable rename changes its wire address, not the producer represented by its birth.
+    pub fn same_source(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Stream { var, producer, generation, slot, .. }, Self::Stream { var: next_var, producer: next, generation: next_generation, slot: next_slot, .. }) =>
+                var == next_var && producer == next && generation == next_generation && (producer == &Uid::VARIABLES || slot == next_slot),
+            _ => self == other,
+        }
+    }
+
     /// The producer wire a stream variable subscribes, `None` for the other kinds.
     pub fn wire(&self) -> Option<(Uid, &'static str)> {
         match self {
@@ -201,6 +210,8 @@ pub enum RequestKind {
 /// An engine: the runtime authority for its nodes' instances, health, transport and library. The
 /// graph applies every op to the MODEL and propagates through these in-memory doors.
 pub trait Engine: Send {
+    /// The sample timeline this engine renders; the callback retains clock ownership.
+    fn sample_clock(&self) -> Option<(goofi_core::samples::SampleClock, u64)> { None }
     /// The id a registration is keyed by, and the palette's provenance for this library.
     fn id(&self) -> &'static str;
     /// Whether this engine's drain marked work only a settle can finish — a Ready it collected,

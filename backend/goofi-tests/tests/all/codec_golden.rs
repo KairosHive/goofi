@@ -245,6 +245,53 @@ fn a_request_carries_each_multi_frame_with_its_source_and_a_big_one_by_reference
 
 #[test]
 fn malformed_and_deep_frames_are_refused_before_reduction() {
+    use goofi_core::samples::{SampleClock, SampleSpan};
+    use goofi_core::time::TICKS_PER_SECOND;
+    let span = SampleSpan { clock: SampleClock { patch_epoch: u64::MAX - 1, epoch: u64::MAX,
+        origin: 17 * TICKS_PER_SECOND + 1, first: (1u64 << 54) + 3, rate: 48_000 },
+        first: (1u64 << 54) + 7, length: 4 };
+    let positioned = arr(&[1, 4], le_bytes(&[1.0, 2.0, 3.0, 4.0]), span.meta());
+    for wire in [encode(&positioned), encode_f16(&positioned).unwrap().unwrap(), encode_u8(&[1, 4], &[1, 2, 3, 4], positioned.meta()).unwrap()] {
+        let decoded = goofi_codec::decode(&wire).unwrap();
+        assert_eq!(SampleSpan::of(&decoded), Some(span), "integer positions survive the wire beyond f64 precision");
+        assert_eq!(decoded.control_value(), Data::numbers([4.0]));
+    }
+    let positioned_wire = encode(&positioned);
+    let (tag, packed, body) = split_frame(&positioned_wire).unwrap();
+    for (key, invalid) in [
+        ("first", span.clock.first - 1),
+        ("first", u64::MAX), ("origin_hi", u64::MAX),
+    ] {
+        let mut map = rmpv::decode::read_value(&mut &packed[..]).unwrap();
+        let rmpv::Value::Map(ref mut entries) = map else { panic!("metadata map") };
+        let (_, samples) = entries.iter_mut().find(|(key, _)| key.as_str() == Some("samples")).unwrap();
+        let rmpv::Value::Map(samples) = samples else { panic!("sample clock map") };
+        samples.iter_mut().find(|(name, _)| name.as_str() == Some(key)).unwrap().1 = invalid.into();
+        if key == "origin_hi" {
+            samples.iter_mut().find(|(name, _)| name.as_str() == Some("origin_lo")).unwrap().1 = u64::MAX.into();
+        }
+        let mut meta = Vec::new();
+        rmpv::encode::write_value(&mut meta, &map).unwrap();
+        let mut wire = b"GOOF\x02".to_vec();
+        wire.push(tag);
+        wire.extend_from_slice(&(meta.len() as u32).to_le_bytes());
+        wire.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        wire.extend_from_slice(&meta);
+        wire.extend_from_slice(body);
+        assert!(goofi_codec::decode(&wire).unwrap_err().contains("sampled frame"), "invalid {key} must not become an untimed frame");
+    }
+    for rate in [None, Some(0.0), Some(-1.0), Some(48_000.5), Some(f64::from(u32::MAX) + 1.0), Some(f64::NAN)] {
+        let mut meta = span.meta();
+        meta.set_sfreq(rate);
+        let invalid = arr(&[1, 4], le_bytes(&[1.0, 2.0, 3.0, 4.0]), meta);
+        assert!(goofi_codec::encode(&invalid).is_err(), "sample rates must be positive u32 integers: {rate:?}");
+    }
+    let invalid = arr(&[4], le_bytes(&[1.0, 2.0, 3.0, 4.0]), span.meta());
+    assert!(goofi_codec::encode(&invalid).is_err());
+    assert!(goofi_codec::encode_f16(&invalid).is_err());
+    assert!(encode_u8(&[4], &[1, 2, 3, 4], invalid.meta()).is_err());
+    assert!(goofi_node::samples::intersection(&[("source".into(), goofi_node::Local::Frame(invalid))]).is_err());
+
     // The decoder reads lengths out of the frame, and runs in the browser: it must refuse, never panic.
     let good = encode(&arr(&[2], vec![0u8; 8], Meta::new().with_sfreq(Some(1.0))));
     assert!(goofi_codec::decode(&good).is_ok(), "the fixture is a frame that DOES decode");

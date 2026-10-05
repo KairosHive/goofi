@@ -18,6 +18,7 @@ pub struct Txn<'a> {
     /// The history mark this transaction's first command took; none while it has applied nothing.
     mark: Option<usize>,
     edited: bool,
+    committed: bool,
     preview: bool,
     /// What the write steps say they did; the history entry names one, or counts several.
     labels: Vec<String>,
@@ -25,10 +26,11 @@ pub struct Txn<'a> {
 
 impl<'a> Txn<'a> {
     /// Hold the graph, then the history — the one lock order — until the drop.
-    pub fn begin(state: &'a AppState, caller: &'a Caller, preview: bool) -> Txn<'a> {
+    pub fn begin(state: &'a AppState, caller: &'a Caller, preview: bool, authored: bool) -> Txn<'a> {
         let g = state.graph.lock();
         let history = state.history.lock();
-        Txn { state, caller, g, history, outbox: Vec::new(), echo: Vec::new(), mark: None, edited: false, preview, labels: Vec::new() }
+        if authored { g.variables().defer_publication(); }
+        Txn { state, caller, g, history, outbox: Vec::new(), echo: Vec::new(), mark: None, edited: false, committed: false, preview, labels: Vec::new() }
     }
 
     /// Run `cmd` through the history. The first command takes the mark everything after is
@@ -70,6 +72,8 @@ impl<'a> Txn<'a> {
         let state = self.state;
         let mut outbox = std::mem::take(&mut self.outbox);
         if !self.edited {
+            self.g.variables().finish_publication(true);
+            self.committed = true;
             outbox.extend(self.echoes());
             drop(self);
             for event in outbox {
@@ -90,6 +94,7 @@ impl<'a> Txn<'a> {
         }
         let (doc, projection) = crate::settle_and_project(state, &mut self.g);
         outbox.extend(self.echoes());
+        self.committed = true;
         drop(self);
         state.settled_now();
         crate::reconcile_and_broadcast(state, doc, projection, outbox);
@@ -105,8 +110,13 @@ impl<'a> Txn<'a> {
 impl Drop for Txn<'_> {
     /// Not committed — refused, or unwinding: what this transaction applied is taken back.
     fn drop(&mut self) {
-        if let Some(mark) = self.mark {
-            self.history.rollback(&mut self.g, mark);
+        if self.committed { return; }
+        if let Some(mark) = self.mark { self.history.rollback(&mut self.g, mark); }
+        if self.edited {
+            let (doc, projection) = crate::settle_and_project(self.state, &mut self.g);
+            crate::reconcile_and_broadcast(self.state, doc, projection, Vec::new());
+        } else {
+            self.g.variables().finish_publication(true);
         }
     }
 }

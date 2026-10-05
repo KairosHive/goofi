@@ -3,6 +3,7 @@
 
 use goofi_core::{control, Data, Param};
 use goofi_graph::{Graph, Mode, Origin, SourceInfo, Uid};
+use goofi_graph::doc::Dependency;
 use serde::Serialize;
 use ts_rs::TS;
 use goofi_node::{NodeManifest, ParamGroups};
@@ -55,6 +56,9 @@ pub struct ParamBase {
     pub triggers: bool,
     /// The active source's bind, compile or arrival error.
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dependencies: Option<Vec<Dependency>>,
 }
 
 /// Holds while the param `group.name` has one of `any_of`, compared as text.
@@ -125,6 +129,7 @@ pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi
         expression: source.and_then(|s| text(&s.state.expression)),
         triggers: source.is_some_and(|s| s.state.triggers),
         error: source.and_then(|s| s.error.clone()),
+        dependencies: source.map(|source| source.dependencies.clone()).filter(|dependencies| !dependencies.is_empty()),
     };
     let kind = match p {
         Param::Num { vmin, vmax, int, options, color, .. } => ParamKind::Num {
@@ -381,7 +386,7 @@ pub fn typescript() -> String {
     use goofi_core::record::{RecordedOutput, VideoQuality};
     use goofi_core::variables::{Control, ControlKind, Group, Lock, Midi};
     use goofi_graph::doc::{Archive, Link, NodeRecord, ParamEntry, PatchDoc, VariableRecord};
-    use goofi_graph::machine::{Attribute, AttributeKind, Machine, Playhead, Policy, Seconds, State, Transition, Trigger};
+    use goofi_graph::machine::{Attribute, AttributeKind, ExpressionIssue, ExpressionSurface, Health, Machine, Edge, Playhead, Policy, Seconds, Selection, State, Transition, Trigger};
     use goofi_core::ease::Curve;
     let cfg = ts_rs::Config::new().with_large_int("number");
     let decls = [
@@ -405,17 +410,23 @@ pub fn typescript() -> String {
         State::decl(&cfg),
         Curve::decl(&cfg),
         Policy::decl(&cfg),
+        Selection::decl(&cfg),
+        Edge::decl(&cfg),
         Seconds::decl(&cfg),
         Trigger::decl(&cfg),
         Transition::decl(&cfg),
         Playhead::decl(&cfg),
         Machine::decl(&cfg),
+        ExpressionSurface::decl(&cfg),
+        ExpressionIssue::decl(&cfg),
+        Health::decl(&cfg),
         PatchDoc::decl(&cfg),
         Archive::decl(&cfg),
         crate::doc::Op::decl(&cfg),
         ParamShow::decl(&cfg),
         ParamRole::decl(&cfg),
         ParamBase::decl(&cfg),
+        Dependency::decl(&cfg),
         ParamKind::decl(&cfg),
     ];
     let body = decls.iter().map(|d| format!("export {d}\n")).collect::<String>();

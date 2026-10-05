@@ -233,8 +233,10 @@ impl AppState {
         let midi = Arc::new(midi::Midi::new(graph_val.variable_store()));
         let graph = Arc::new(Mutex::new(graph_val));
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
-        let (machines, machines_rx) = machines::Driver::new();
-        let reducers = reducer::SlotReducers::new(iox.clone(), graph.clone(), variables.clone(), follow_tx);
+        let (machines, machines_rx) = machines::Driver::new(graph.lock().time());
+        let machines = Arc::new(machines);
+        graph.lock().variables().set_watch(machines.clone());
+        let reducers = reducer::SlotReducers::new(iox.clone(), graph.clone(), variables.clone(), follow_tx, machines.clone());
         let state = AppState {
             iox: iox.clone(),
             plugins: Arc::new(plugins::Plugins::default()),
@@ -250,7 +252,7 @@ impl AppState {
             reducers,
             variables,
             midi,
-            machines: Arc::new(machines),
+            machines,
             settled: Arc::new(tokio::sync::watch::channel(0).0),
             live: Arc::new(LiveHub::default()),
             history: Arc::new(Mutex::new(goofi_graph::CommandHistory::new())),
@@ -1004,10 +1006,8 @@ pub fn register_dyn_type(
 /// One output slot's data service name — the resolver over the graph's own birth facts, a
 /// variable's under the variables producer. Also the `/data` plane's subscribe address.
 pub fn output_service_of(g: &Graph, uid: goofi_graph::Uid, slot: &str) -> String {
-    let base = match uid {
-        Uid::VARIABLES => goofi_transport::variables_base(g.instance()),
-        uid => goofi_transport::service_base(g.instance(), uid, g.node_generation(uid)),
-    };
+    if uid == Uid::VARIABLES { return goofi_transport::variable_output(g.instance(), slot, g.variables().generation(slot).unwrap_or(0)); }
+    let base = goofi_transport::service_base(g.instance(), uid, g.node_generation(uid));
     goofi_transport::output_service(&base, slot)
 }
 
@@ -1269,13 +1269,10 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
 impl AppState {
     /// A socket closed mid-drag: its actor's previews go back to the last committed state.
     pub fn end_previews(&self, actor: &str) {
-        let reverted = {
-            let mut g = self.graph.lock();
-            self.history.lock().revert_previews(&mut g, actor)
-        };
-        if reverted {
-            resync_and_broadcast(self);
-        }
+        let caller = Caller { actor: actor.to_string(), ..Caller::default() };
+        let mut tx = Txn::begin(self, &caller, true, true);
+        if tx.history.revert_previews(&mut tx.g, actor) { tx.touch(); }
+        tx.commit();
     }
 
     /// The graph settled: wake every reducer and pulse every `/data` socket, so each re-reads
@@ -1373,7 +1370,7 @@ impl AppState {
         let result = match spec.handler {
             ops::Handler::PluginRead | ops::Handler::PluginEffect => self.plugins.call(op, &payload, actor),
             ops::Handler::Read(f) | ops::Handler::Write(f) => {
-                let mut tx = Txn::begin(self, caller, preview);
+                let mut tx = Txn::begin(self, caller, preview, spec.handler.is_write());
                 let result = f(&mut tx, &payload);
                 // A refusal drops the transaction, which takes back what it applied.
                 if result.is_ok() {
@@ -1450,78 +1447,97 @@ pub(crate) fn reconcile_and_broadcast(state: &AppState, mut doc: MutexGuard<crat
 
 /// The follower, the manager's expression worker: every tap's frame lands here, a batch at a
 /// time, in the expression that reads it; a bare one is copied and a computed one evaluated, and
-/// the value is written into the store — which publishes it — under the store's lock alone. The
-/// manager writing, so no undo entry, no dirty mark, and no document.
+/// results are accepted against settled bindings under graph then store. A value changes no
+/// authored record; a changed error is projected through the control document.
+struct FollowingExpression {
+    owner: goofi_core::identity::Identity,
+    sources: Vec<(String, goofi_node::Var)>,
+    identities: Vec<goofi_node::BoundVar>,
+    expression: goofi_node::Expression,
+}
+
 fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Followed>) {
     let owner = state.clone();
     owner.scope.spawn("goofi-follower", move || {
-        let (store, time) = {
+        let time = {
             let g = state.graph.lock();
-            (g.variable_store(), g.time())
+            g.time()
         };
-        let mut pace = reducer::Pace::new();
-        let mut held: IndexMap<String, goofi_node::Expression> = IndexMap::new();
+        let mut held: IndexMap<String, FollowingExpression> = IndexMap::new();
         let mut evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>> = None;
         loop {
-            // A bounded wait, so the stop is read between batches; a timed expression runs on it.
-            let first = match rx.recv_timeout(state.reducers.cap_interval()) {
+            // Stream frames run on arrival. Only expressions without a stream need a timer.
+            let message = match rx.recv_timeout(Duration::from_millis(10)) {
                 Ok(first) => Some(first),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) if state.stopping.stopped() => return,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             };
-            // One write per viewer interval: a followed slot at its full rate lands each frame's
-            // newest once, and the batch is read whole before anything is evaluated.
-            let interval = state.reducers.cap_interval();
-            let due = pace.due(interval, Instant::now());
+            if state.stopping.stopped() { return; }
             let mut touched: Vec<String> = Vec::new();
-            let mut batch: Vec<reducer::Followed> = first.into_iter().collect();
-            while let Ok(msg) = rx.recv_timeout(due.saturating_duration_since(Instant::now())) {
-                batch.push(msg);
-            }
-            pace.take(interval, Instant::now());
-            for msg in batch {
+            if let Some(msg) = message {
                 match msg {
                     reducer::Followed::Desired(wanted, ev) => {
                         evaluator = ev;
                         let previous = std::mem::take(&mut held);
                         for f in wanted {
-                            let mut expr = goofi_node::Expression::new(f.rewritten, f.id, f.vars);
-                            if let Some(p) = previous.get(&f.name) {
-                                expr.carry(p, |var| p.vars.contains_key(var));
+                            let mut expr = goofi_node::Expression::new(f.rewritten, f.id, f.vars.clone());
+                            if let Some(p) = previous.get(&f.name).or_else(|| previous.values().find(|previous| previous.owner == f.owner)) {
+                                expr.carry(&p.expression, |var| f.sources.iter().any(|source| match source {
+                                    goofi_node::BoundVar::Stream { var: name, .. } | goofi_node::BoundVar::Value { var: name, .. } | goofi_node::BoundVar::Missing { var: name, .. } =>
+                                        name == var && p.identities.iter().any(|previous| source.same_source(previous)),
+                                }));
                             }
-                            held.insert(f.name.clone(), expr);
+                            held.insert(f.name.clone(), FollowingExpression { owner: f.owner, sources: f.vars, identities: f.sources, expression: expr });
                             touched.push(f.name);
                         }
                     }
-                    reducer::Followed::Frame { variable, var, frame } => {
-                        if let Some(expr) = held.get_mut(&variable) {
-                            expr.deliver(&var, frame);
-                            touched.push(variable);
+                    reducer::Followed::Frame { service, taps, frame } => {
+                        for tap in taps {
+                            if let Some(current) = held.get_mut(&tap.variable).filter(|current| current.owner == tap.owner) {
+                                if !current.sources.iter().any(|(var, source)| var == &tap.var && matches!(source, goofi_node::Var::Stream { service: expected, .. } if expected == &service)) { continue; }
+                                current.expression.deliver(&tap.var, frame.clone());
+                                touched.push(tap.variable);
+                            }
                         }
                     }
                 }
             }
-            // A computed expression with no stream behind it follows the time, every interval.
-            touched.extend(held.iter().filter(|(_, e)| e.id.is_some() && e.vars.values().all(|m| matches!(m.value(), Some(goofi_node::Local::Value(_))))).map(|(n, _)| n.clone()));
+            // A computed expression with no stream follows the patch clock, independently of viewers.
+            touched.extend(held.iter().filter(|(_, current)| current.expression.id.is_some() && current.expression.vars.values().all(|m| matches!(m.value(), Some(goofi_node::Local::Value(_))))).map(|(n, _)| n.clone()));
             touched.sort();
             touched.dedup();
             let t = time.now();
+            let mut results = Vec::new();
             for name in touched {
-                let Some(expr) = held.get(&name) else { continue };
+                let Some(current) = held.get(&name) else { continue };
+                let expr = &current.expression;
                 let value = match expr.inputs() {
                     Ok(Some(goofi_node::mailbox::Inputs::Bare(frame))) => Ok(frame),
                     Ok(Some(goofi_node::mailbox::Inputs::Computed(locals))) => match (&evaluator, expr.id) {
-                        (Some(ev), Some(id)) => ev.eval(id, &goofi_node::EvalCtx { locals: &locals, t, range: (0.0, 1.0) }).map_err(|e| e.0),
+                        (Some(ev), Some(id)) => goofi_node::samples::eval_frame(ev.as_ref(), id, &goofi_node::EvalCtx { locals: &locals, t, range: (0.0, 1.0) }).map_err(|e| e.0),
                         _ => Err("no expression evaluator available".to_string()),
                     },
                     Ok(None) => continue,
                     Err(e) => Err(e),
                 };
-                match value {
-                    Ok(frame) => store.lock().follow(&name, frame),
-                    Err(why) => goofi_supervisor::log::record(goofi_supervisor::log::Source::component("variables"), goofi_supervisor::log::Level::Error, None, format!("`{name}`: {why}")),
-                }
+                results.push((name, current.owner.clone(), value));
+            }
+            if results.is_empty() { continue; }
+            let g = state.graph.lock();
+            let errors_changed = {
+                let mut store = g.variables();
+                let publish = store.defer_publication();
+                let mut changed = false;
+                for (name, owner, value) in results { changed |= store.follow(&name, &owner, value); }
+                if publish { store.finish_publication(true); }
+                changed
+            };
+            if errors_changed {
+                let doc = state.doc.lock();
+                let projection = g.replica();
+                drop(g);
+                reconcile_and_broadcast(&state, doc, projection, Vec::new());
             }
         }
     });
@@ -1537,15 +1553,15 @@ fn sync_followers(state: &AppState, g: &Graph) {
             let (var, resolved) = match v {
                 // The reducer brings the frame; the follower subscribes to nothing itself.
                 goofi_node::BoundVar::Stream { var, producer, slot, .. } => {
-                    taps.entry((*producer, slot.to_string())).or_default().push(reducer::Tap { variable: b.name.to_string(), var: var.clone() });
-                    (var, goofi_node::Var::Stream { service: String::new(), held: None })
+                    taps.entry((*producer, slot.to_string())).or_default().push(reducer::Tap { variable: b.name.to_string(), var: var.clone(), owner: b.owner.clone() });
+                    (var, goofi_node::Var::Stream { service: output_service_of(g, *producer, slot), held: None })
                 }
                 goofi_node::BoundVar::Value { var, value } => (var, goofi_node::Var::Value(value.clone())),
                 goofi_node::BoundVar::Missing { var, reason } => (var, goofi_node::Var::Missing(reason.clone())),
             };
             (var.clone(), resolved)
         });
-        wanted.push(reducer::Following { name: b.name.to_string(), rewritten: b.rewritten.to_string(), id: b.id, vars: vars.collect() });
+        wanted.push(reducer::Following { owner: b.owner.clone(), name: b.name.to_string(), rewritten: b.rewritten.to_string(), id: b.id, vars: vars.collect(), sources: b.vars.to_vec() });
     }
     state.reducers.follow(reducer::Followed::Desired(wanted, g.evaluator()));
     state.reducers.set_taps(taps);

@@ -199,7 +199,7 @@ one field per dimension, and an expression gives a sequence of that length or on
 every dimension. `goofi.ColorParam(default=(1, 1, 1, 1))`, `ParamSpec::color(&[…])` and
 `"kind": "color"` are the four-dimensional RGBA number from 0 to 1 that the inspector picks.
 One ELEMENT of a vector is addressed `name[i]`: its literal is that dimension of the list, and a
-source on it — an expression or a reference — drives that dimension alone, over whatever the whole
+source on it — an expression — drives that dimension alone, over whatever the whole
 param's source gives the others. The inspector's vector view shows one row per element.
 
 A param can show only while one other param of the same node has one of a list of values. That
@@ -216,7 +216,7 @@ params without a group. A member is stored as `section_name`, so two sections ca
 and the inspector shows it under the section's heading by its own. With `repeat` it is a list: the inspector heads it with a count, shown
 with a − and a + button, and opens that many numbered slots of its params. The count is an int
 param named after the section, and each slot's param is `name_<slot>`, so an expression, a
-reference or a preset addresses one slot like any param. `defaults` gives each slot its own
+expression or a preset addresses one slot like any param. `defaults` gives each slot its own
 default, and the last carries on. The shader reads a list as `p.name[i]` and the count as
 `p.section`; a slot past the count keeps its value and is not shown. `max` is at most 64.
 
