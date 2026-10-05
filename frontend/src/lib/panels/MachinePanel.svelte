@@ -4,6 +4,7 @@
      drawing and the gesture in flight. -->
 <script lang="ts">
 	import {
+		ConnectionLineType,
 		ConnectionMode,
 		Controls,
 		SvelteFlow,
@@ -292,6 +293,7 @@
 					{nodeTypes}
 					{edgeTypes}
 					connectionMode={ConnectionMode.Loose}
+					connectionLineType={ConnectionLineType.Straight}
 					connectionRadius={CARD_W / 2 + 20}
 					deleteKey={['Delete', 'Backspace']}
 					ondelete={deleteElements}
