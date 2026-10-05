@@ -23,6 +23,14 @@ mod pyinit {
         static INIT: Once = Once::new();
         INIT.call_once(|| {
             pyo3::append_to_inittab!(goofi_module);
+            // The first import of `signal` claims a SIGINT the C runtime still has at SIG_DFL.
+            // On Windows that is always so, and the runtime's console handler would then swallow
+            // Ctrl+C before goofi's. Import it once here, on the thread that initializes Python,
+            // and give SIGINT back.
+            #[cfg(windows)]
+            Python::attach(|py| {
+                let _ = py.run(c"import signal\nsignal.signal(signal.SIGINT, signal.SIG_DFL)", None, None);
+            });
         });
     }
 
