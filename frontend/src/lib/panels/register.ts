@@ -11,7 +11,6 @@ import VariablesPanel from './VariablesPanel.svelte';
 import ControlPanel from './ControlPanel.svelte';
 import AgentPanel from './AgentPanel.svelte';
 import RecorderPanel from './RecorderPanel.svelte';
-import MidiPanel from './MidiPanel.svelte';
 
 const components: Record<PanelTypeId, Component<PanelProps>> = {
 	empty: EmptyPanel,
@@ -21,7 +20,6 @@ const components: Record<PanelTypeId, Component<PanelProps>> = {
 	console: ConsolePanel,
 	variables: VariablesPanel,
 	control: ControlPanel,
-	midi: MidiPanel,
 	agent: AgentPanel,
 	recorder: RecorderPanel
 };

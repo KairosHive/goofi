@@ -348,10 +348,16 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 				'the drop bore a slider with a fresh name'
 			).toBeVisible();
 
-			// The grab picked the knob, so its form is open; a finger's learn is there, and a patch with
-			// no MIDI node is told so rather than handed an empty list.
-			await page.getByTestId('control-props').getByTestId('control-learn').tap();
-			await expect(page.getByTestId('toast'), 'learn with no MIDI node says so').toContainText('MIDI');
+			// The grab picked the knob, so its form is open; a finger's learn is there, and a machine
+			// with no MIDI device is told so rather than left listening to nothing.
+			const learn = page.getByTestId('control-props').getByTestId('control-learn');
+			await learn.tap();
+			if (((await rawCall(page, 'midi list', {})).result.ports as unknown[]).length === 0) {
+				await expect(page.getByTestId('toast'), 'learn with no MIDI device says so').toContainText('MIDI');
+			} else {
+				await expect(learn).toHaveAttribute('aria-pressed', 'true');
+				await learn.tap();
+			}
 		});
 	} finally {
 		await restorePanelType(page);

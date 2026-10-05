@@ -1,117 +1,40 @@
-//! The MIDI devices on the variable bus: list the host's ports, grab one as a group, release it.
+//! The MIDI devices on the variable bus: list the host's ports, and learn from every one of them.
 
 use serde_json::{json, Value};
 
-use super::{op, EffectOp, NoArgs, ReadOp, WriteOp};
+use super::{op, EffectOp, NoArgs, ReadOp};
 use crate::{AppState, Caller, Txn};
-use goofi_core::variables::{Midi, MIDI_ENTRIES};
-use goofi_core::Data;
-use goofi_graph::Command;
 
 op!(List, "midi list", 0, NoArgs,
-    "Every MIDI input port the host lists, with the group that reads it where one is grabbed, and every grabbed group whose port is gone. Listing also retries the gone ports, so a device plugged back in is read again.",
-    "{ports: [{port, group?, channel?, state: present|gone}], reason?} — `reason` names why the host lists nothing");
+    "Every MIDI input port the host lists, with the group it is read as — named after the port — and whether it is open. A port is open while the patch reads its group, in an expression, a Variable node or a followed variable, and whole for the length of a learn.",
+    "{ports: [{port, group, open}], learning, reason?} — `reason` names why the host lists nothing");
 
-op!(Grab, "midi grab", 1, GrabArgs {
-    pub port: String,
-    /// 1 to 16; absent reads every channel.
-    pub channel: Option<u8>,
-    pub group: Option<String>,
+op!(Learn, "midi learn", 1, LearnArgs {
+    /// `true` starts a learn, `false` ends it; the learn ends by itself after thirty seconds.
+    pub on: bool,
 },
-    "Grab a MIDI port onto the variable bus as a group — named after the port unless `group` says otherwise — of `cc` (128 controllers in 0..1), `notes` (128 held velocities), `bend` (-1..1) and `pressure` (0..1), written as the device plays. The grab is patch config: a saved patch grabs its devices again on load, and a port the host does not list is held at its last values. The group is config-locked; an expression reads `variables.<group>.cc[74]`.",
-    "{group} — the group as stored");
-
-op!(Release, "midi release", 1, ReleaseArgs {
-    pub group: String,
-},
-    "Release a grabbed MIDI device: its port is closed and its group removed with every entry. An expression that read it is told the variable is not defined.",
-    "{removed: true}");
-
-op!(Feed, "midi feed", 2, FeedArgs {
-    pub group: String,
-    /// One MIDI message, status byte first: `[176, 74, 127]` is controller 74 to full on channel 1.
-    pub bytes: Vec<f64>,
-},
-    "Play one MIDI message into a grabbed group as its port would: a note on or off, a controller, the wheel or the channel pressure moves the entry it names, on the device's own thread and under no lock of the graph. What a script plays, and what a test plays in place of a port.",
-    "{ok: true}");
-
-impl EffectOp for Feed {
-    fn run(state: &AppState, a: FeedArgs, _: &Caller) -> Result<Value, String> {
-        let bytes: Vec<u8> = a.bytes.iter().map(|b| b.round().clamp(0.0, 255.0) as u8).collect();
-        state.midi.feed(&a.group, &bytes)?;
-        Ok(json!({ "ok": true }))
-    }
-}
+    "Open every MIDI port the host lists that is not held elsewhere, for thirty seconds: each is a group of `cc` and `notes` (16 channels of 128, at `(channel - 1) * 128 + number`), `bend` and `pressure` (one a channel), written as the device plays. A reader of the group — an expression, a Variable node, a followed variable — keeps its device open after the learn; every other port is let go when the learn ends.",
+    "{groups: [{group, port}], seconds} — the groups open now, and how long the learn lasts");
 
 impl ReadOp for List {
     fn run(tx: &mut Txn, _: NoArgs) -> Result<Value, String> {
-        let closed = tx.state.midi.resync(&tx.g.variables(), true);
-        drop(closed);
-        let (ports, reason) = tx.state.midi.list(&tx.g.variables());
+        let reason = tx.state.midi.probe();
+        let (ports, learning) = tx.state.midi.list();
         Ok(match reason {
-            Some(reason) => json!({ "ports": ports, "reason": reason }),
-            None => json!({ "ports": ports }),
+            Some(reason) => json!({ "ports": ports, "learning": learning, "reason": reason }),
+            None => json!({ "ports": ports, "learning": learning }),
         })
     }
 }
 
-/// The identifier a port's name reads as: `Launch Control XL:1` is `launch_control_xl_1`.
-fn group_of(port: &str, taken: impl Fn(&str) -> bool) -> String {
-    let mut base = String::new();
-    for c in port.chars() {
-        let c = if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' };
-        if c != '_' || !base.ends_with('_') {
-            base.push(c);
+impl EffectOp for Learn {
+    fn run(state: &AppState, a: LearnArgs, _: &Caller) -> Result<Value, String> {
+        state.midi.learn(a.on);
+        if a.on {
+            state.midi.probe();
         }
-    }
-    let base = base.trim_matches('_');
-    let base = match base.chars().next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => base.to_string(),
-        _ => format!("midi_{base}"),
-    };
-    if taken(&base) { goofi_core::fresh_name(&base, 2, taken) } else { base }
-}
-
-impl WriteOp for Grab {
-    fn run(tx: &mut Txn, a: GrabArgs) -> Result<Value, String> {
-        if a.channel.is_some_and(|c| !(1..=16).contains(&c)) {
-            return Err("`channel` is 1 to 16, or absent for every channel".into());
-        }
-        let group = match a.group {
-            Some(group) if tx.g.group_taken(&group) => return Err(format!("variable group `{group}` already exists")),
-            Some(group) => group,
-            None => group_of(&a.port, |n| tx.g.group_taken(n)),
-        };
-        tx.apply(Command::AddVariableGroup { group: group.clone(), at: None })?;
-        for (entry, width) in MIDI_ENTRIES {
-            let value = Data::numbers(std::iter::repeat_n(0.0, width));
-            tx.apply(Command::EditVariable { name: format!("{group}.{entry}"), value: Some(value), at: None, control: None })?;
-        }
-        tx.apply(Command::MidiVariableGroup { group: group.clone(), midi: Some(Midi { port: a.port, channel: a.channel }) })?;
-        Ok(json!({ "group": group }))
-    }
-
-    fn label(_: &GrabArgs, o: &Value) -> String {
-        format!("Grab MIDI {}", o["group"].as_str().unwrap_or_default())
-    }
-}
-
-impl WriteOp for Release {
-    fn run(tx: &mut Txn, a: ReleaseArgs) -> Result<Value, String> {
-        if tx.g.variables().midi(&a.group).is_none() {
-            return Err(format!("`{}` reads no MIDI device", a.group));
-        }
-        tx.apply(Command::MidiVariableGroup { group: a.group.clone(), midi: None })?;
-        let entries: Vec<String> = tx.g.variables().entries().map(|(n, _)| n.to_string())
-            .filter(|n| goofi_core::variables::split_variable(n).is_some_and(|(g, _)| g == a.group)).collect();
-        for name in entries {
-            tx.apply(Command::RemoveVariable { name })?;
-        }
-        tx.apply(Command::RemoveVariableGroup { group: a.group })?;
-        Ok(json!({ "removed": true }))
-    }
-
-    fn label(a: &ReleaseArgs, _: &Value) -> String {
-        format!("Release MIDI {}", a.group)
+        crate::resync_and_broadcast(state);
+        let groups: Vec<Value> = state.midi.open().into_iter().map(|(group, port)| json!({ "group": group, "port": port })).collect();
+        Ok(json!({ "groups": groups, "seconds": crate::midi::LEARN.as_secs() }))
     }
 }

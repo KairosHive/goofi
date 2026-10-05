@@ -140,16 +140,26 @@ pub struct ParamDecl {
 pub enum Role {
     Count { section: &'static str },
     Member { section: &'static str, base: &'static str, slot: Option<u32> },
-    /// A `Str` param naming a variable whose wire feeds input `slot`, as a cable into it would.
-    Feed { slot: &'static str },
+    /// A `Str` param naming a variable's element, beside the `Str` param `group` of the same
+    /// param group naming its group: that variable's wire feeds input `slot`, as a cable would.
+    Feed { slot: &'static str, group: &'static str },
 }
 
-/// Every feed of a manifest: the input slot and the `Str` param whose value names the variable.
-pub fn feed_decls(manifest: &NodeManifest) -> impl Iterator<Item = (&'static str, &'static ParamDecl)> {
+/// Every feed of a manifest: the input slot, the group param's name, and the element param.
+pub fn feed_decls(manifest: &NodeManifest) -> impl Iterator<Item = (&'static str, &'static str, &'static ParamDecl)> {
     manifest.params.iter().filter_map(|d| match d.role {
-        Some(Role::Feed { slot }) => Some((slot, d)),
+        Some(Role::Feed { slot, group }) => Some((slot, group, d)),
         _ => None,
     })
+}
+
+/// The variable a feed names, `group.element`, or none while either param is empty.
+pub fn feed_name(params: &ParamGroups, group_param: &str, element: &ParamDecl) -> Option<String> {
+    let text = |name: &str| match param(params, element.group, name) {
+        Some(goofi_core::Param::Str { value, .. }) if !value.is_empty() => Some(value.clone()),
+        _ => None,
+    };
+    Some(format!("{}.{}", text(group_param)?, text(element.name)?))
 }
 
 /// The inspector shows a param only while `param` (`name` in the same group, or `group.name`)

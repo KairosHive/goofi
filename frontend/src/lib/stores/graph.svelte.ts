@@ -549,18 +549,10 @@ export class GraphStore {
 		await this.ctl.call('variable group rename', { from, to });
 	}
 
-	/** The host's MIDI ports, with the group each grabbed one feeds; a gone port is one only the patch names. */
-	listMidi(): Promise<{ ports: MidiPort[]; reason?: string }> {
-		return this.ctl.call('midi list');
-	}
-
-	async grabMidi(port: string, channel?: number): Promise<string> {
-		const result = await this.ctl.call('midi grab', channel === undefined ? { port } : { port, channel }) as { group: string };
-		return result.group;
-	}
-
-	async releaseMidi(group: string): Promise<void> {
-		await this.ctl.call('midi release', { group });
+	/** Start or end a MIDI learn: every port the host lists opens as a group for `seconds`, and
+	 * the ones nothing reads close again when it ends. */
+	learnMidi(on: boolean): Promise<{ groups: { group: string; port: string }[]; seconds: number }> {
+		return this.ctl.call('midi learn', { on });
 	}
 
 	/** Bear a widget in a control panel's group through the `control` door, which lifts the
@@ -775,13 +767,6 @@ export class GraphStore {
 }
 
 /** The `node.slot` reference to `slot`; a facade keys slots by port uid, so the label names it. */
-export interface MidiPort {
-	port: string;
-	group?: string;
-	channel?: number;
-	state: 'present' | 'gone';
-}
-
 export function slotReference(node: NodeInstanceInfo, slot: string): string {
 	return `${node.name}.${node.slot_labels?.[slot] ?? slot}`;
 }

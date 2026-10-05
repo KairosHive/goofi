@@ -5,15 +5,25 @@ use goofi_audio_sdk::goofi_core::SlotType;
 use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Role, SlotDecl, Tag};
 
 goofi_audio_sdk::params! {
-    NAME = ParamDecl {
+    GROUP = ParamDecl {
         group: "variable",
-        name: "name",
+        name: "group",
         spec: ParamSpec::Str { default: "", options: &[], refresh: true },
         expression: None,
-        doc: Some("the variable to read, `group.element`"),
+        doc: Some("the variable's group; the list is the patch's groups"),
         section: 0,
         show: None,
-        role: Some(Role::Feed { slot: "value" }),
+        role: None,
+    },
+    ELEMENT = ParamDecl {
+        group: "variable",
+        name: "element",
+        spec: ParamSpec::Str { default: "", options: &[], refresh: true },
+        expression: None,
+        doc: Some("the variable in that group; the list follows the group chosen"),
+        section: 0,
+        show: None,
+        role: Some(Role::Feed { slot: "value", group: "group" }),
     },
 }
 
@@ -24,7 +34,7 @@ static OUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Audio }
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Input],
     doc: "A variable's frame on the audio plane.\n\
-          `name` picks the variable; its frames enter as `SignalIn` plays a waveform, the value as \
+          `group` and `element` pick the variable; its frames enter as `SignalIn` plays a waveform, the value as \
           it stands: a `[1]` value is a level, a `[C, T]` frame is C channels of T samples looped \
           until the next.",
     inputs: INS,

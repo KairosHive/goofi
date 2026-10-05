@@ -319,7 +319,8 @@ fn shaders_render_on_the_gpu() {
     g.call("control paint", j!({ "group": "paint", "element": "pad", "ops": "fill #ff0000 : M 0 0 L 1000 0 L 1000 500 L 0 500 Z" }));
     let var = g.add("graphics:Variable");
     g.ready(var);
-    g.set_param(var, "variable", "name", "paint.pad");
+    g.set_param(var, "variable", "group", "paint");
+    g.set_param(var, "variable", "element", "pad");
     drawn(&g, var, "the pad as a texture", |d| shape(d) == vec![4, 4, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]) && px(d, 3, 3)[3] < 0.01);
     g.call("node remove", j!({ "node": hex(var) }));
     g.call("variable entry remove", j!({ "name": "paint.pad" }));

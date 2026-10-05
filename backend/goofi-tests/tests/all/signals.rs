@@ -881,24 +881,31 @@ fn the_text_and_table_nodes_carry_a_value_out_to_json_and_back() {
     g.call("variable entry add", j!({ "name": "desk.word", "value": "hi" }));
     let var = g.add("signal:Variable");
     let (pv, pt) = (g.probe(var, "out"), g.probe(var, "text"));
-    set(var, "variable", "name", j!("desk.level"));
+    // The group is picked from a list, the patch's groups, offered at birth; the element from the
+    // chosen group's, offered as the group is picked — the graph answers both, the node's engine
+    // never sees the store.
+    let state = g.call("node state", j!({ "node": hex(var) }))["text"].to_string();
+    assert!(state.contains("one of [system, desk]") && state.contains("one of []"), "groups at birth, no element yet: {state}");
+    let mut ev = g.events();
+    set(var, "variable", "group", j!("desk"));
+    let options = g.until("the group's elements offered", |_| {
+        let p = ev.next("state_update");
+        (p["node"] == hex(var) && p["refreshed_params"] == j!([["variable", "element"]])).then_some(p["params"]["variable"]["element"]["options"].clone())
+    });
+    assert_eq!(options, j!(["level", "word"]));
+    set(var, "variable", "element", j!("level"));
     g.until("the variable's value on the cable", |_| pv.latest().filter(|d| f32s(d) == vec![0.5]));
     g.call("variable entry edit", j!({ "name": "desk.level", "value": 0.75 }));
     g.until("the edit as the next frame", |_| pv.latest().filter(|d| f32s(d) == vec![0.75]));
-    set(var, "variable", "name", j!("desk.word"));
+    set(var, "variable", "element", j!("word"));
     g.until("a string variable on the string output", |_| pt.latest().filter(|d| text(d) == Some("hi")));
-    // The name is picked from a list: the patch's variables, offered at birth and again on a
-    // refresh, which the graph answers itself — the node's engine never sees the store.
-    let state = g.call("node state", j!({ "node": hex(var) }))["text"].to_string();
-    assert!(state.contains("one of [desk.level, desk.word]"), "offered at birth, the system group kept out: {state}");
     g.call("variable entry add", j!({ "name": "desk.late", "value": 1 }));
-    let mut ev = g.events();
-    g.call("node param request", j!({ "node": hex(var), "param": "variable/name", "request": "refresh" }));
+    g.call("node param request", j!({ "node": hex(var), "param": "variable/element", "request": "refresh" }));
     let options = g.until("the refreshed list's echo", |_| {
         let p = ev.next("state_update");
-        (p["node"] == hex(var) && p["refreshed_params"] == j!([["variable", "name"]])).then_some(p["params"]["variable"]["name"]["options"].clone())
+        (p["node"] == hex(var) && p["refreshed_params"] == j!([["variable", "element"]])).then_some(p["params"]["variable"]["element"]["options"].clone())
     });
-    assert_eq!(options, j!(["desk.level", "desk.word", "desk.late"]));
+    assert_eq!(options, j!(["level", "word", "late"]));
 }
 
 /// The texel at `(row, col)`, in the 0..1 a colour frame spans.

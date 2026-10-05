@@ -437,7 +437,7 @@ textarea:disabled {
 }
 
 /* A panel's root: a column the full height of its host, sized by container queries, whose
-   ScrollArea takes what the bar leaves. The variables and MIDI panels share it. */
+   ScrollArea takes what the bar leaves. */
 .panel-wrap {
 	display: flex;
 	flex-direction: column;

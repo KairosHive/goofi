@@ -632,12 +632,42 @@ impl Graph {
                     }
                 }
             }
-            // A feed param: the variable it names enters an input slot, rung by that slot's id.
-            for (slot, d) in goofi_node::feed_decls(leaf.manifest) {
+            // A feed: the variable it names enters an input slot, rung by that slot's id.
+            let typed = self.typed(leaf);
+            for (slot, group, d) in goofi_node::feed_decls(leaf.manifest) {
                 let Some(at) = leaf.manifest.inputs.iter().position(|s| s.name == slot) else { continue };
-                let value = leaf.values.get(d.group).and_then(|g| g.get(d.name)).map(goofi_core::Data::value);
-                if let Some(goofi_core::Value::Str(name)) = value {
-                    out.push((name.to_string(), *uid, self.node_generation(*uid), (at + 1).min(64) as EventId));
+                if let Some(name) = goofi_node::feed_name(&typed, group, d) {
+                    out.push((name, *uid, self.node_generation(*uid), (at + 1).min(64) as EventId));
+                }
+            }
+        }
+        out
+    }
+
+    /// Every variable group the patch refers to: in a source's text, a feed, or what a variable
+    /// follows. What holds a MIDI device open — a group a device's name resolves to is read.
+    pub fn referenced_groups(&self) -> HashSet<String> {
+        let group_of = |name: &str| goofi_core::variables::split_variable(name).map(|(g, _)| g.to_string());
+        let mut out = HashSet::new();
+        for (_, leaf) in self.leaves() {
+            for r in leaf.sources.values().flat_map(|b| &b.refs) {
+                if let expr_rewrite::Target::Variable { key } = &r.target {
+                    out.extend(group_of(key));
+                }
+            }
+            let typed = self.typed(leaf);
+            for (_, group, d) in goofi_node::feed_decls(leaf.manifest) {
+                if let Some(goofi_core::Param::Str { value, .. }) = goofi_node::param(&typed, d.group, group) {
+                    if !value.is_empty() {
+                        out.insert(value.clone());
+                    }
+                }
+            }
+        }
+        for (_, v) in self.variables().entries() {
+            if let Some(s) = &v.source {
+                if let Some(name) = s.reference.strip_prefix("variables.") {
+                    out.extend(group_of(name));
                 }
             }
         }
@@ -2394,6 +2424,16 @@ impl Graph {
         // The record has moved and the delivery is recorded for settle; nothing else happens
         // here. `on_param_changed` runs on the node's own thread, so its failure arrives as a fault.
         self.notify_param(uid, &key);
+        // A feed's group chosen: the elements offered beside it are that group's now.
+        let manifest = self.leaf(uid).expect("looked up above").manifest;
+        let elements: Vec<ParamKey> = goofi_node::feed_decls(manifest)
+            .filter(|(_, g, d)| d.group == group && *g == name)
+            .map(|(_, _, d)| ParamKey::new(d.group, d.name))
+            .collect();
+        if !elements.is_empty() {
+            self.offer_variables(uid);
+            self.runtime.refreshed.extend(elements.into_iter().map(|k| (uid, k)));
+        }
         Ok(())
     }
 
@@ -2404,7 +2444,7 @@ impl Graph {
         let typed = self.typed(entry);
         let param = goofi_node::param(&typed, group, name)
             .ok_or_else(|| format!("no such param `{group}.{name}`"))?;
-        let feed = goofi_node::feed_decls(entry.manifest).any(|(_, d)| d.group == group && d.name == name);
+        let feed = goofi_node::feed_decls(entry.manifest).any(|(_, g, d)| d.group == group && (d.name == name || g == name));
         match kind {
             goofi_node::RequestKind::Refresh if !matches!(param, Param::Str { refresh: true, .. }) => {
                 return Err(format!("param `{group}.{name}` is not refreshable"));
@@ -2925,21 +2965,40 @@ impl Graph {
         self.offer_variables(uid);
     }
 
-    /// The patch's variables as the options of every feed param the node has, shown over the
-    /// declared (empty) list; a refresh asks for them again.
+    /// The patch's groups as the options of every feed's group param, and the chosen group's
+    /// elements as its element param's, shown over the declared (empty) lists; a refresh asks again.
     fn offer_variables(&mut self, uid: Uid) {
-        let Some(manifest) = self.leaf(uid).map(|l| l.manifest) else { return };
-        let keys: Vec<ParamKey> = goofi_node::feed_decls(manifest).map(|(_, d)| ParamKey::new(d.group, d.name)).collect();
-        if keys.is_empty() {
+        let Some(leaf) = self.leaf(uid) else { return };
+        let typed = self.typed(leaf);
+        let feeds: Vec<(ParamKey, ParamKey, Option<String>)> = goofi_node::feed_decls(leaf.manifest)
+            .map(|(_, group, d)| {
+                let chosen = match goofi_node::param(&typed, d.group, group) {
+                    Some(goofi_core::Param::Str { value, .. }) => Some(value.clone()),
+                    _ => None,
+                };
+                (ParamKey::new(d.group, group), ParamKey::new(d.group, d.name), chosen)
+            })
+            .collect();
+        if feeds.is_empty() {
             return;
         }
-        let names: Vec<String> = self.patch.variables.lock().entries()
-            .map(|(n, _)| n.to_string())
-            .filter(|n| n.split('.').next() != Some(goofi_core::variables::SYSTEM_GROUP))
-            .collect();
+        let variables = self.patch.variables.lock();
+        let mut groups: Vec<String> = Vec::new();
+        let mut elements: HashMap<String, Vec<String>> = HashMap::new();
+        for (name, _) in variables.entries() {
+            if let Some((g, e)) = goofi_core::variables::split_variable(name) {
+                if !groups.iter().any(|h| h == g) {
+                    groups.push(g.to_string());
+                }
+                elements.entry(g.to_string()).or_default().push(e.to_string());
+            }
+        }
+        drop(variables);
         let Some(inst) = self.runtime.instances.get_mut(&uid) else { return };
-        for key in keys {
-            inst.health.options.insert(key, names.clone());
+        for (group_key, element_key, chosen) in feeds {
+            inst.health.options.insert(group_key, groups.clone());
+            let offered = chosen.and_then(|g| elements.get(&g).cloned()).unwrap_or_default();
+            inst.health.options.insert(element_key, offered);
         }
     }
 
@@ -3293,7 +3352,8 @@ impl Graph {
         for (name, record) in &mut patch.variables {
             record.value = variables.get(name).filter(|v| !is_wide(v)).cloned();
         }
-        patch.variable_groups.shift_remove(goofi_core::variables::SYSTEM_GROUP);
+        // A device's group is the session's likewise: the patch names what reads it, not the device.
+        patch.variable_groups.retain(|g, rec| g != goofi_core::variables::SYSTEM_GROUP && rec.midi.is_none());
         let archive = doc::Archive {
             version: doc::MANIFEST_VERSION,
             goofi: env!("CARGO_PKG_VERSION").to_string(),
@@ -3343,7 +3403,6 @@ impl Graph {
         }
         for (group, g) in &doc.variable_groups {
             let _ = self.variables().set_group_lock(group, Some(g.lock));
-            let _ = self.variables().set_midi(group, g.midi.clone());
         }
         // Every uid this load hands out, restored or minted — what keeps two records from landing
         // on one uid when a hand-written file spells the same number two ways.

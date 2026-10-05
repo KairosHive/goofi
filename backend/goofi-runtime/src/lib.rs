@@ -75,11 +75,9 @@ pub fn desired_of(view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>, decls: &[Pa
     let carried = |s: &goofi_node::SlotDecl| plane.kind == Some(s.kind);
     let consts = decls.iter().map(|d| param_of(nv.params, d)).collect();
     // A feed param names a variable: that variable's wire enters the slot the role names.
-    let feeds: Vec<(&str, &str)> = goofi_node::feed_decls(nv.manifest)
-        .filter_map(|(slot, d)| match goofi_node::param(nv.params, d.group, d.name) {
-            Some(goofi_core::Param::Str { value, .. }) if view.variables.contains(value) => Some((slot, value.as_str())),
-            _ => None,
-        })
+    let feeds: Vec<(&str, String)> = goofi_node::feed_decls(nv.manifest)
+        .filter_map(|(slot, group, d)| Some((slot, goofi_node::feed_name(nv.params, group, d)?)))
+        .filter(|(_, name)| view.variables.contains(name))
         .collect();
     let mut subs = Vec::new();
     let mut inbox = 0;

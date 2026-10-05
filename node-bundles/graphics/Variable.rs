@@ -22,16 +22,28 @@ impl Node for Variable {
     }
 }
 
-static PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "variable",
-    name: "name",
-    spec: ParamSpec::Str { default: "", options: &[], refresh: true },
-    expression: None,
-    doc: Some("the variable to read, `group.element`"),
-    section: 0,
-    show: None,
-    role: Some(Role::Feed { slot: "value" }),
-}];
+static PARAMS: &[ParamDecl] = &[
+    ParamDecl {
+        group: "variable",
+        name: "group",
+        spec: ParamSpec::Str { default: "", options: &[], refresh: true },
+        expression: None,
+        doc: Some("the variable's group; the list is the patch's groups"),
+        section: 0,
+        show: None,
+        role: None,
+    },
+    ParamDecl {
+        group: "variable",
+        name: "element",
+        spec: ParamSpec::Str { default: "", options: &[], refresh: true },
+        expression: None,
+        doc: Some("the variable in that group; the list follows the group chosen"),
+        section: 0,
+        show: None,
+        role: Some(Role::Feed { slot: "value", group: "group" }),
+    },
+];
 
 static INPUTS: &[SlotDecl] = &[SlotDecl { name: "value", kind: SlotType::Array, trigger_process: true, multi: false, required: false }];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Texture }];
@@ -39,7 +51,7 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Text
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Input],
     doc: "A variable's texels as a texture.\n\
-          `name` picks the variable; an `[H, W, 4]` or `[H, W, 3]` frame of values in 0..1 — a \
+          `group` and `element` pick the variable; an `[H, W, 4]` or `[H, W, 3]` frame of values in 0..1 — a \
           paint pad's sheet — is the texture, top row first.",
     inputs: INPUTS,
     outputs: OUTPUTS,

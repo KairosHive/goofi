@@ -1,8 +1,6 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
-	import { ContextMenu, type MenuItem } from 'panelty';
 	import { Icon } from '$lib/ui';
-	import { graph } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { midiLearn } from '$lib/stores/midiLearn.svelte';
 
@@ -13,9 +11,7 @@
 		testid?: string;
 	} = $props();
 	const owner = $props.id();
-	const g = graph();
 	const listening = $derived(midiLearn.target === target);
-	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
 	/** Stop the press before the control board's direct drag listener sees it. */
 	function stopDrag(button: HTMLButtonElement): { destroy(): void } {
@@ -24,22 +20,12 @@
 		return { destroy: () => button.removeEventListener('pointerdown', stop) };
 	}
 
-	function learn(event: MouseEvent): void {
+	async function learn(): Promise<void> {
 		if (listening) return midiLearn.stop();
-		midiLearn.stop();
-		const groups = Object.keys(g.midiGroups);
-		if (groups.length === 0) {
-			notify().raise('Grab a MIDI device in the MIDI panel before MIDI learn.');
-			return;
-		}
-		const start = (chosen: string[]): void => {
-			menu = null;
-			midiLearn.start(owner, target, chosen, onLearn);
-		};
-		if (groups.length === 1) start(groups);
-		else {
-			const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-			menu = { x: rect.left, y: rect.bottom, items: groups.map((group) => ({ label: group, action: () => start([group]) })) };
+		try {
+			if ((await midiLearn.start(owner, target, onLearn)) === 0) notify().raise('No MIDI device is plugged in to learn from.');
+		} catch (e) {
+			notify().raise(`MIDI learn: ${String(e)}`);
 		}
 	}
 	midiLearn.watch();
@@ -49,12 +35,9 @@
 <button type="button" class:listening data-testid={testid}
 	aria-label={`MIDI learn for ${label}`} aria-pressed={listening}
 	title={listening ? 'Listening for a MIDI change. Click to cancel.' : 'MIDI learn'}
-	use:stopDrag onclick={learn}>
+	use:stopDrag onclick={() => void learn()}>
 	{#if listening}<span class="spinner" aria-hidden="true"></span>{:else}<Icon name="radio" />{/if}
 </button>
-{#if menu}
-	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
-{/if}
 
 <style>
 	button {

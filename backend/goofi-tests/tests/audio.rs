@@ -1204,7 +1204,8 @@ fn a_patch_sounds_under_the_external_clock() {
     heard(&g, plug, "the voice let go before the cable", |x| peak(x) < 1e-3);
     g.call("variable entry add", j!({ "name": "desk.voice", "value": [[0.75], [1.0]] }));
     let var = g.add("audio:Variable");
-    g.set_param(var, "variable", "name", "desk.voice");
+    g.set_param(var, "variable", "group", "desk");
+    g.set_param(var, "variable", "element", "voice");
     g.link(var, "out", plug, "voice");
     heard(&g, plug, "an A4 from the variable on the voice cable", |x| near(per_tenth(x), 88));
     g.call("link remove", j!({ "from": ep(hex(var), "out"), "to": ep(hex(plug), "voice") }));

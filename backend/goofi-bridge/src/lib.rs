@@ -125,7 +125,7 @@ pub struct AppState {
     pub reducers: reducer::SlotReducers,
     /// The patch's own producer: every variable's wire, written from the store.
     pub variables: Arc<variables::Variables>,
-    /// The MIDI devices grabbed onto the bus, each writing its group through the store.
+    /// The MIDI devices open on the bus, each writing its group through the store.
     pub midi: Arc<midi::Midi>,
     /// Pulsed after every settle, for whoever derives its address from the graph: a `/data`
     /// socket re-asks which physical slot stands behind its port on the pulse, not on a clock.
@@ -269,6 +269,7 @@ impl AppState {
         let (served, graph, stopping) = (state.variables.clone(), state.graph.clone(), state.stopping.clone());
         state.scope.spawn("goofi-variables", move || served.serve(&graph, &stopping));
         autosave::spawn(state.clone());
+        spawn_midi(state.clone());
         *state.record_worker.lock() = record::spawn(iox, state.graph.clone(), state.recorder.clone(), state.record_drain.clone());
         Ok(state)
     }
@@ -1492,8 +1493,36 @@ fn sync_followers(state: &AppState, g: &Graph) {
     state.reducers.set_taps(taps);
     // The bindings may have moved: the producer re-reads who it rings.
     state.variables.poke();
-    let closed = state.midi.resync(&g.variables(), false);
+    let (closed, _) = state.midi.resync(g);
     drop(closed);
+}
+
+/// How often the host is asked which MIDI ports it lists: a plug or a pull shows within it.
+const MIDI_POLL: Duration = Duration::from_secs(2);
+
+/// The MIDI watch: the host's ports asked for on a clock, the devices the patch reads opened and
+/// the ones it stopped reading — or a learn ran out on — closed, each move broadcast.
+fn spawn_midi(state: AppState) {
+    let owner = state.clone();
+    owner.scope.spawn("goofi-midi", move || {
+        while !state.stopping.stopped() {
+            state.midi.probe();
+            let changed = {
+                let g = state.graph.lock();
+                let (closed, changed) = state.midi.resync(&g);
+                drop(g);
+                drop(closed);
+                changed
+            };
+            if changed {
+                resync_and_broadcast(&state);
+            }
+            let until = Instant::now() + MIDI_POLL;
+            while Instant::now() < until && !state.stopping.stopped() {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    });
 }
 
 /// Re-project the authoritative graph into the document and broadcast the delta, after an RPC

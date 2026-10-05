@@ -1,28 +1,40 @@
-//! The MIDI devices on the variable bus. A grabbed device is a group of variables the manager
-//! writes from the device's own callback thread, through the store and nothing else: no graph
-//! lock, no settle, no undo. Which device a group reads is the document's; the port is the host's.
+//! The MIDI devices on the variable bus. Every input port the host lists is a group, named after
+//! the port, that the session opens while the patch reads it — in a source, a feed or a followed
+//! variable — and during a learn opens whole, so a controller never seen before can be mapped.
+//! A device writes its group from its own callback thread, through the store and nothing else.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use goofi_core::variables::{Midi as Device, VariableStore, MIDI_ENTRIES};
+use goofi_core::variables::{VariableStore, MIDI_ENTRIES};
 use goofi_core::Data;
+use goofi_graph::Graph;
 use goofi_supervisor::sync::Mutex;
 use serde::Serialize;
 
-/// One grabbed group: the device it reads, its state, and the open port while the host lists it.
+/// How long a learn keeps every port open with nothing mapped.
+pub const LEARN: Duration = Duration::from_secs(30);
+
+/// One open port: the group it writes, and the connection the host holds it by.
 struct Grab {
-    device: Device,
-    state: Arc<Mutex<State>>,
-    link: Option<goofi_supervisor::scope::Leased<midir::MidiInputConnection<()>>>,
+    port: String,
+    _link: goofi_supervisor::scope::Leased<midir::MidiInputConnection<()>>,
+}
+
+struct Inner {
+    /// The host's ports as of the last probe, each with the group it is read as.
+    listed: Vec<(String, String)>,
+    /// The open ports, by group.
+    open: HashMap<String, Grab>,
+    /// When the learn under way ends; none outside a learn.
+    learn: Option<Instant>,
 }
 
 pub struct Midi {
     store: Arc<Mutex<VariableStore>>,
-    /// Locked AFTER the store and never around a state: a callback takes a state, then the store.
-    open: Mutex<HashMap<String, Grab>>,
-    /// The groups tried since the last probe, so a gone port is not looked up on every settle.
-    tried: Mutex<HashSet<String>>,
+    /// Locked BEFORE the store, as a callback locks nothing but the store.
+    inner: Mutex<Inner>,
 }
 
 /// Ports closed by a resync, to be dropped once the caller has released the store.
@@ -31,36 +43,31 @@ pub struct Closed {
     _ports: Vec<Grab>,
 }
 
-/// A port as `midi list` answers it: the host's name, and the group that reads it if one does.
+/// A port as `midi list` answers it: the host's name, its group, and whether it is open.
 #[derive(Serialize)]
 pub struct Port {
     pub port: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub group: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel: Option<u8>,
-    /// `present` when the host lists the port, `gone` when only the document names it.
-    pub state: &'static str,
+    pub group: String,
+    pub open: bool,
 }
 
 /// The device's state as the group's entries carry it, and the names it is written under.
 struct State {
-    cc: [f32; 128],
-    notes: [f32; 128],
-    bend: f32,
-    pressure: f32,
-    channel: Option<u8>,
+    cc: Vec<f32>,
+    notes: Vec<f32>,
+    bend: [f32; 16],
+    pressure: [f32; 16],
     names: [String; 4],
 }
 
 impl State {
-    fn new(group: &str, channel: Option<u8>) -> State {
+    fn new(group: &str) -> State {
         let names = MIDI_ENTRIES.map(|(e, _)| format!("{group}.{e}"));
-        State { cc: [0.0; 128], notes: [0.0; 128], bend: 0.0, pressure: 0.0, channel, names }
+        State { cc: vec![0.0; 16 * 128], notes: vec![0.0; 16 * 128], bend: [0.0; 16], pressure: [0.0; 16], names }
     }
 
     /// Fold one message in and write the entry it moved through the store; a message that is
-    /// not state, or on another channel, writes nothing.
+    /// not state writes nothing.
     fn feed(&mut self, bytes: &[u8], store: &Mutex<VariableStore>) {
         if let Some(entry) = self.take(bytes) {
             let i = MIDI_ENTRIES.iter().position(|(e, _)| *e == entry).expect("a named entry");
@@ -71,31 +78,30 @@ impl State {
     /// Fold one message in; answer the entry it moved, or none for a message that is not state.
     fn take(&mut self, bytes: &[u8]) -> Option<&'static str> {
         let (status, rest) = bytes.split_first()?;
-        if self.channel.is_some_and(|c| status & 0x0f != c - 1) {
-            return None;
-        }
+        let channel = (status & 0x0f) as usize;
         let at = |i: usize| rest.get(i).copied().unwrap_or(0);
+        let slot = channel * 128 + (at(0) as usize & 127);
         Some(match status & 0xf0 {
             0x90 if at(1) > 0 => {
-                self.notes[at(0) as usize & 127] = at(1) as f32 / 127.0;
+                self.notes[slot] = at(1) as f32 / 127.0;
                 "notes"
             }
             0x80 | 0x90 => {
-                self.notes[at(0) as usize & 127] = 0.0;
+                self.notes[slot] = 0.0;
                 "notes"
             }
             0xb0 => {
-                self.cc[at(0) as usize & 127] = at(1) as f32 / 127.0;
+                self.cc[slot] = at(1) as f32 / 127.0;
                 "cc"
             }
             0xd0 => {
-                self.pressure = at(0) as f32 / 127.0;
+                self.pressure[channel] = at(0) as f32 / 127.0;
                 "pressure"
             }
             // The wheel is 14-bit and asymmetric, -8192 down and 8191 up: each side has its own end.
             0xe0 => {
                 let pitch = (at(0) as i32 | (at(1) as i32) << 7) - 8192;
-                self.bend = pitch as f32 / if pitch >= 0 { 8191.0 } else { 8192.0 };
+                self.bend[channel] = pitch as f32 / if pitch >= 0 { 8191.0 } else { 8192.0 };
                 "bend"
             }
             _ => return None,
@@ -103,18 +109,19 @@ impl State {
     }
 
     fn frame(&self, entry: &str) -> Data {
+        let wide = |v: &[f32]| Data::numbers(v.iter().map(|v| *v as f64));
         match entry {
-            "cc" => Data::numbers(self.cc.iter().map(|v| *v as f64)),
-            "notes" => Data::numbers(self.notes.iter().map(|v| *v as f64)),
-            "bend" => Data::number(self.bend as f64),
-            _ => Data::number(self.pressure as f64),
+            "cc" => wide(&self.cc),
+            "notes" => wide(&self.notes),
+            "bend" => wide(&self.bend),
+            _ => wide(&self.pressure),
         }
     }
 }
 
 impl Midi {
     pub fn new(store: Arc<Mutex<VariableStore>>) -> Midi {
-        Midi { store, open: Mutex::new(HashMap::new()), tried: Mutex::new(HashSet::new()) }
+        Midi { store, inner: Mutex::new(Inner { listed: Vec::new(), open: HashMap::new(), learn: None }) }
     }
 
     /// The host's input ports by name, or why it has none.
@@ -125,78 +132,115 @@ impl Midi {
         Ok((input, ports))
     }
 
-    /// Every port the host lists, grabbed or not, and every grabbed group whose port is gone.
-    pub fn list(&self, store: &VariableStore) -> (Vec<Port>, Option<String>) {
-        let (listed, reason) = match Midi::host() {
+    /// Ask the host which ports it lists now, so a device plugged in or pulled is seen by the
+    /// next resync; answers why the host lists nothing.
+    pub fn probe(&self) -> Option<String> {
+        let (ports, reason) = match Midi::host() {
             Ok((_, ports)) => (ports.into_iter().map(|(name, _)| name).collect::<Vec<_>>(), None),
             Err(e) => (Vec::new(), Some(e)),
         };
-        let mut ports: Vec<Port> = listed.iter().map(|name| Port { port: name.clone(), group: None, channel: None, state: "present" }).collect();
-        for (group, device) in store.midi_groups() {
-            match ports.iter_mut().find(|p| p.port == device.port && p.group.is_none()) {
-                Some(p) => {
-                    p.group = Some(group.to_string());
-                    p.channel = device.channel;
-                }
-                None => ports.push(Port { port: device.port.clone(), group: Some(group.to_string()), channel: device.channel, state: "gone" }),
-            }
-        }
-        (ports, reason)
+        let mut inner = self.inner.lock();
+        let named = std::mem::take(&mut inner.listed);
+        inner.listed = ports.into_iter().map(|p| {
+            let group = named.iter().find(|(n, _)| *n == p).map(|(_, g)| g.clone()).unwrap_or_default();
+            (p, group)
+        }).collect();
+        reason
     }
 
-    /// Match the grabs to the document's MIDI groups and open each port the host lists; `probe`
-    /// retries the gone ones. The closed ports come back, to drop once the store is let go.
-    pub fn resync(&self, store: &VariableStore, probe: bool) -> Closed {
-        let wanted: HashMap<String, Device> = store.midi_groups().map(|(g, d)| (g.to_string(), d.clone())).collect();
-        let mut open = self.open.lock();
-        let mut tried = self.tried.lock();
-        // A closed port's callback may be waiting on the store: it is dropped after the store.
-        let gone: Vec<String> = open.iter().filter(|(g, grab)| wanted.get(*g) != Some(&grab.device)).map(|g| g.0.clone()).collect();
+    /// Start or end a learn: thirty seconds of every port open, ended early by the mapping made.
+    pub fn learn(&self, on: bool) {
+        self.inner.lock().learn = on.then(|| Instant::now() + LEARN);
+    }
+
+    /// Every port the host listed at the last probe, and whether it is open.
+    pub fn list(&self) -> (Vec<Port>, bool) {
+        let inner = self.inner.lock();
+        let ports = inner.listed.iter().map(|(port, group)| Port { port: port.clone(), group: group.clone(), open: inner.open.contains_key(group) }).collect();
+        (ports, inner.learn.is_some())
+    }
+
+    /// The open groups, with their ports.
+    pub fn open(&self) -> Vec<(String, String)> {
+        self.inner.lock().open.iter().map(|(g, grab)| (g.clone(), grab.port.clone())).collect()
+    }
+
+    /// Open every listed port the patch reads, or every one under a learn, and close the rest.
+    /// Answers the closed ports, to drop once the store is let go, and whether anything moved.
+    pub fn resync(&self, g: &Graph) -> (Closed, bool) {
+        let referenced = g.referenced_groups();
+        let mut inner = self.inner.lock();
+        if inner.learn.is_some_and(|end| Instant::now() >= end) {
+            inner.learn = None;
+        }
+        let learning = inner.learn.is_some();
+        let Inner { listed, open, .. } = &mut *inner;
+        let mut taken: HashSet<String> = HashSet::new();
+        for (port, group) in listed.iter_mut() {
+            let held = open.iter().find(|(_, grab)| grab.port == *port).map(|(g, _)| g.clone());
+            *group = held.unwrap_or_else(|| group_of(port, |n| taken.contains(n) || (!open.contains_key(n) && g.group_taken(n))));
+            taken.insert(group.clone());
+        }
+        let wanted: HashSet<&str> = listed.iter().filter(|(_, g)| learning || referenced.contains(g)).map(|(_, g)| g.as_str()).collect();
+        let gone: Vec<String> = open.keys().filter(|g| !wanted.contains(g.as_str())).cloned().collect();
+        let mut changed = !gone.is_empty();
+        let mut store = self.store.lock();
+        for group in &gone {
+            store.release_midi(group);
+        }
         let closed = Closed { _ports: gone.iter().filter_map(|g| open.remove(g)).collect() };
-        for (group, device) in &wanted {
-            open.entry(group.clone()).or_insert_with(|| Grab {
-                device: device.clone(),
-                state: Arc::new(Mutex::new(State::new(group, device.channel))),
-                link: None,
-            });
-        }
-        if probe {
-            tried.clear();
-        }
-        tried.retain(|g| wanted.contains_key(g));
-        let missing: Vec<String> = open.iter().filter(|(g, grab)| grab.link.is_none() && !tried.contains(*g)).map(|g| g.0.clone()).collect();
-        if missing.is_empty() {
-            return closed;
-        }
-        let Ok((_, ports)) = Midi::host() else { return closed };
-        for group in missing {
-            tried.insert(group.clone());
-            let grab = open.get_mut(&group).expect("listed above");
-            let Some((_, port)) = ports.iter().find(|(name, _)| *name == grab.device.port) else { continue };
-            let Ok((input, _)) = Midi::host() else { return closed };
-            let (store, state) = (self.store.clone(), grab.state.clone());
-            match input.connect(port, "goofi-in", move |_, bytes, _| state.lock().feed(bytes, &store), ()) {
-                Ok(link) => {
-                    let name = format!("midi in {}", grab.device.port);
-                    grab.link = Some(goofi_supervisor::scope::leased(goofi_supervisor::scope::Kind::Device, name, link));
+        let opening: Vec<(String, String)> = listed.iter().filter(|(_, g)| wanted.contains(g.as_str()) && !open.contains_key(g)).cloned().collect();
+        for (port, group) in &opening {
+            let grab = match self.connect(port, group) {
+                Ok(grab) => grab,
+                Err(e) => {
+                    trouble(&format!("`{port}` did not open for `{group}`: {e}"));
+                    continue;
                 }
-                Err(e) => trouble(&format!("`{}` did not open for `{group}`: {e}", grab.device.port)),
+            };
+            match store.grab_midi(group, port) {
+                Ok(()) => {
+                    open.insert(group.clone(), grab);
+                    changed = true;
+                }
+                Err(e) => trouble(&format!("`{group}` is no group for `{port}`: {e}")),
             }
         }
-        closed
+        (closed, changed)
     }
 
-    /// One message into a group as its port would send it: what a script or a test plays.
-    pub fn feed(&self, group: &str, bytes: &[u8]) -> Result<(), String> {
-        let state = self.open.lock().get(group).map(|g| g.state.clone()).ok_or_else(|| format!("`{group}` reads no MIDI device"))?;
-        state.lock().feed(bytes, &self.store);
-        Ok(())
+    fn connect(&self, port: &str, group: &str) -> Result<Grab, String> {
+        let (input, ports) = Midi::host()?;
+        let (_, port_id) = ports.iter().find(|(name, _)| name == port).ok_or("the host no longer lists it")?;
+        let (store, mut state) = (self.store.clone(), State::new(group));
+        let link = input.connect(port_id, "goofi-in", move |_, bytes, _| state.feed(bytes, &store), ()).map_err(|e| e.to_string())?;
+        let link = goofi_supervisor::scope::leased(goofi_supervisor::scope::Kind::Device, format!("midi in {port}"), link);
+        Ok(Grab { port: port.to_string(), _link: link })
     }
 
-    /// Close every port; the groups keep their flags for the next boot.
+    /// Close every port.
     pub fn release_all(&self) {
-        self.open.lock().clear();
+        self.inner.lock().open.clear();
     }
+}
+
+/// The identifier a port's name reads as: `Launch Control XL:1` is `launch_control_xl_1`. The
+/// `client:port` numbers ALSA appends change with every plug, so they are not part of it.
+fn group_of(port: &str, taken: impl Fn(&str) -> bool) -> String {
+    let stable = port.rsplit_once(' ').filter(|(_, tail)| tail.split_once(':').is_some_and(|(c, p)| c.parse::<u32>().is_ok() && p.parse::<u32>().is_ok())).map_or(port, |(head, _)| head);
+    let mut base = String::new();
+    for c in stable.chars() {
+        let c = if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' };
+        if c != '_' || !base.ends_with('_') {
+            base.push(c);
+        }
+    }
+    let base = base.trim_matches('_');
+    let base = match base.chars().next() {
+        Some(c) if c.is_ascii_alphabetic() => base.to_string(),
+        _ => format!("midi_{base}"),
+    };
+    if taken(&base) { goofi_core::fresh_name(&format!("{base}_"), 2, taken) } else { base }
 }
 
 fn trouble(why: &str) {

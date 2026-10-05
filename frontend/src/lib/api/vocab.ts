@@ -14,7 +14,6 @@ export type PanelTypeId =
 	| 'console'
 	| 'variables'
 	| 'control'
-	| 'midi'
 	| 'agent'
 	| 'recorder';
 
@@ -63,7 +62,6 @@ export const PANEL_TYPES: readonly PanelTypeInfo[] = [
 	{ id: 'console', title: 'Console', icon: 'terminal', acceptsNode: true, doc: 'the patch log; a bound node filters it to that node' },
 	{ id: 'variables', title: 'Variables', icon: 'globe', acceptsNode: false, doc: 'the patch variables, which any expression can read' },
 	{ id: 'control', title: 'Control', icon: 'sliders-vertical', acceptsNode: false, doc: 'knobs, sliders and text widgets over one group of variables' },
-	{ id: 'midi', title: 'MIDI', icon: 'piano', acceptsNode: false, doc: 'the MIDI devices the host lists, grabbed onto the variable bus or released' },
 	{ id: 'agent', title: 'Agent', icon: 'bot', acceptsNode: false, doc: 'a terminal on an agent harness, running in the patch workspace' },
 	{ id: 'recorder', title: 'Recorder', icon: 'circle-dot', acceptsNode: true, doc: 'capture the output slots of any node to disk, on one clock' },
 ];

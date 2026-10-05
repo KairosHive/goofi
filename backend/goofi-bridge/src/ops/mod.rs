@@ -447,11 +447,9 @@ pub static TREE: &[Entry] = &[
             Leaf(write::<variable::GroupLock>()),
         ]),
     ]),
-    Group("midi", "the MIDI devices on the variable bus — a grabbed device is a group an expression reads", &[
+    Group("midi", "the MIDI devices on the variable bus — a port the patch reads is a group, open while it is read", &[
         Leaf(read::<midi::List>()),
-        Leaf(write::<midi::Grab>()),
-        Leaf(write::<midi::Release>()),
-        Leaf(effect::<midi::Feed>()),
+        Leaf(effect::<midi::Learn>()),
     ]),
     Group("control", "a control panel: one group of variables drawn as widgets, and the door that edits them", &[
         Leaf(read::<variable::ControlList>()),

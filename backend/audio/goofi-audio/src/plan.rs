@@ -74,9 +74,8 @@ impl Plan {
 
 /// Whether a feed param of the node names, for `slot`, a variable the patch holds.
 fn fed(view: &GraphView<'_>, nv: &NodeView<'_>, slot: &str) -> bool {
-    goofi_node::feed_decls(nv.manifest).any(|(fed, d)| {
-        fed == slot && matches!(goofi_node::param(nv.params, d.group, d.name), Some(goofi_core::Param::Str { value, .. }) if view.variables.contains(value))
-    })
+    goofi_node::feed_decls(nv.manifest)
+        .any(|(fed, group, d)| fed == slot && goofi_node::feed_name(nv.params, group, d).is_some_and(|n| view.variables.contains(&n)))
 }
 
 /// The inbox an Array input reads — its index among the node's Array inputs — and `None` for an

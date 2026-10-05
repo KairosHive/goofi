@@ -87,58 +87,64 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     assert_eq!(saved["patch"]["variable_groups"]["patch"]["lock"]["config"], true, "{}", saved["patch"]["variable_groups"]);
     assert!(saved["patch"]["variable_groups"].get("system").is_none(), "the system group's lock is goofi's, not the file's");
 
-    // Step: a MIDI device is a group on the bus. A port the host does not list is grabbed all the
-    // same — the grab is the patch's — and listed as gone, its entries holding their last frame.
-    let group = g.call("midi grab", j!({ "port": "Test Keys:1", "channel": 1 }))["group"].as_str().unwrap().to_string();
-    assert_eq!(group, "test_keys_1", "the group is named after the port");
-    let listed = g.call("midi list", j!({}));
-    let gone = listed["ports"].as_array().unwrap().iter().find(|p| p["group"] == "test_keys_1").cloned().expect("the grabbed port is listed");
-    assert_eq!((&gone["state"], &gone["port"], &gone["channel"]), (&j!("gone"), &j!("Test Keys:1"), &j!(1)), "{listed}");
-    let groups = g.call("variable list", j!({}))["groups"].clone();
-    assert_eq!(groups["test_keys_1"], j!({ "lock": { "config": false, "value": false }, "midi": { "port": "Test Keys:1", "channel": 1 } }), "{groups}");
-    let why = g.refuse("variable entry add", j!({ "group": "test_keys_1" }));
-    assert!(why.contains("config-locked"), "a device's group takes no entry of a user's: {why}");
-    let why = g.refuse("variable entry edit", j!({ "name": "test_keys_1.cc", "value": 1 }));
-    assert!(why.contains("value-locked"), "its values are the device's: {why}");
-    assert!(g.refuse("variable group rename", j!({ "from": "test_keys_1", "to": "keys" })).contains("config-locked"));
-    assert_eq!(f32s(&g.snapshot_array("variables/test_keys_1.cc")).len(), 128, "every controller, at rest");
-    // A message fed to the group is what its port would send: controller 74 to half, on channel 1.
-    g.call("midi feed", j!({ "group": "test_keys_1", "bytes": [0xb0, 74, 64] }));
-    g.call("midi feed", j!({ "group": "test_keys_1", "bytes": [0xb1, 7, 127] }));
-    g.until("the controller's frame on the wire", |g| Some(g.snapshot_array("variables/test_keys_1.cc")).filter(|d| (f32s(d)[74] - 64.0 / 127.0).abs() < 1e-6 && f32s(d)[7] == 0.0));
-    assert!(g.refuse("midi feed", j!({ "group": "patch", "bytes": [0xb0, 7, 127] })).contains("no MIDI device"));
-    // A widget follows an entry of the bus as it follows a node's output, index and all.
-    g.call("control add", j!({ "group": "desk", "kind": "slider", "element": "cutoff" }));
-    g.call("control source", j!({ "group": "desk", "element": "cutoff", "reference": "variables.test_keys_1.cc", "index": 74 }));
-    g.until("the widget to follow the controller", |g| Some(g.variable("desk.cutoff")).filter(|v| v.as_f64().is_some_and(|v| (v - 64.0 / 127.0).abs() < 1e-6)));
-    // A release takes the group with it, in one step back.
-    g.call("midi release", j!({ "group": "test_keys_1" }));
-    assert!(g.call("variable list", j!({}))["groups"].get("test_keys_1").is_none(), "the group left with the device");
-    g.call("undo", j!({}));
-    assert_eq!(g.call("variable list", j!({}))["groups"]["test_keys_1"]["midi"]["port"], "Test Keys:1", "one undo brings the device back");
-    assert_eq!(f32s(&g.snapshot_array("variables/test_keys_1.notes")).len(), 128, "with its entries");
-    // A port the host lists is read: the manager holds it as a device, and a controller turned on
-    // it lands on the bus. A machine with no sequencer has no port to make.
+    // Step: a MIDI device is a group on the bus, the session's and never a patch's: a learn opens
+    // every port the host lists, and a port stays open while the patch reads its group. A machine
+    // with no sequencer has no port to make, and a learn there finds nothing.
     #[cfg(unix)]
     if midir::MidiOutput::new("goofi-test").is_ok() {
         use midir::os::unix::VirtualOutput;
-        let mut keys = midir::MidiOutput::new("goofi-test").unwrap().create_virtual("goofi-test-keys").expect("a virtual port");
-        let port = g.until("the virtual port to be listed", |g| {
-            g.call("midi list", j!({}))["ports"].as_array().unwrap().iter()
-                .find_map(|p| p["port"].as_str().filter(|n| n.contains("goofi-test-keys")).map(str::to_string))
+        let mut keys = Some(midir::MidiOutput::new("goofi-test").unwrap().create_virtual("goofi-test-keys").expect("a virtual port"));
+        let live = g.until("the virtual port to open under a learn", |g| {
+            g.call("midi learn", j!({ "on": true }))["groups"].as_array().unwrap().iter()
+                .find(|p| p["port"].as_str().unwrap().contains("goofi-test-keys")).map(|p| p["group"].as_str().unwrap().to_string())
         });
-        let live = g.call("midi grab", j!({ "port": port }))["group"].as_str().unwrap().to_string();
+        assert_eq!(live, "goofi_test_goofi_test_keys", "named after the port, the host's own numbers left off");
         let held = |g: &Goofi| g.call("session status", j!({}))["resources"].as_array().unwrap().iter()
             .any(|r| r["kind"] == "device" && r["name"].as_str().unwrap().contains("goofi-test-keys"));
-        g.until("a controller turned on the port to land on the bus", |g| {
-            keys.send(&[0xb0, 7, 127]).expect("a control change");
-            Some(g.snapshot_array(&format!("variables/{live}.cc"))).filter(|d| f32s(d)[7] > 0.99)
-        });
         assert!(held(&g), "the port is a device the session holds");
-        let listed = g.call("midi list", j!({}));
-        assert!(listed["ports"].as_array().unwrap().iter().any(|p| p["group"] == live && p["state"] == "present"), "{listed}");
-        g.call("midi release", j!({ "group": live }));
-        assert!(!held(&g), "a release lets the port go");
+        let group = g.call("variable list", j!({}))["groups"][&live].clone();
+        assert!(group["midi"]["port"].as_str().unwrap().contains("goofi-test-keys"), "{group}");
+        let why = g.refuse("variable entry add", j!({ "group": &live }));
+        assert!(why.contains("config-locked"), "a device's group takes no entry of a user's: {why}");
+        let why = g.refuse("variable entry edit", j!({ "name": format!("{live}.cc"), "value": 1 }));
+        assert!(why.contains("value-locked"), "its values are the device's: {why}");
+        assert!(g.refuse("variable group rename", j!({ "from": &live, "to": "keys" })).contains("config-locked"));
+        assert!(g.refuse("variable group lock", j!({ "group": &live, "config": false })).contains("MIDI device"));
+        assert_eq!(f32s(&g.snapshot_array(&format!("variables/{live}.cc"))).len(), 16 * 128, "every controller on every channel, at rest");
+        // What the device plays lands on the bus: controller 74 on channel 1, 7 on channel 2.
+        g.until("the controllers turned on the port to land on the bus", |g| {
+            let keys = keys.as_mut().unwrap();
+            keys.send(&[0xb0, 74, 64]).expect("a control change");
+            keys.send(&[0xb1, 7, 127]).expect("a control change");
+            Some(g.snapshot_array(&format!("variables/{live}.cc"))).filter(|d| (f32s(d)[74] - 64.0 / 127.0).abs() < 1e-6 && f32s(d)[128 + 7] > 0.99)
+        });
+        // A widget follows an entry of the bus as it follows a node's output, index and all, and
+        // the follow is what keeps the device open once the learn ends. No patch carries the group.
+        g.call("control add", j!({ "group": "desk", "kind": "slider", "element": "cutoff" }));
+        g.call("control source", j!({ "group": "desk", "element": "cutoff", "reference": format!("variables.{live}.cc"), "index": 74 }));
+        g.until("the widget to follow the controller", |g| Some(g.variable("desk.cutoff")).filter(|v| v.as_f64().is_some_and(|v| (v - 64.0 / 127.0).abs() < 1e-6)));
+        g.call("midi learn", j!({ "on": false }));
+        assert!(g.call("variable list", j!({}))["groups"].get(&live).is_some(), "read by a widget, the device stays open");
+        assert!(held(&g));
+        let yaml = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
+        let saved: serde_json::Value = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert!(saved["patch"]["variable_groups"].get(&live).is_none() && saved["patch"]["variables"].get(format!("{live}.cc")).is_none(),
+                "the device is the session's, the reader the patch's: {}", saved["patch"]["variable_groups"]);
+        // The last reader gone, the device is let go with its group; a reader made with no device
+        // open waits for one, and the watch opens the port for it without a learn.
+        g.call("control source", j!({ "group": "desk", "element": "cutoff", "reference": "" }));
+        g.until("the device to close with no reader", |g| g.call("variable list", j!({}))["groups"].get(&live).is_none().then_some(()));
+        assert!(!held(&g), "a device nothing reads is let go");
+        g.call("control source", j!({ "group": "desk", "element": "cutoff", "reference": format!("variables.{live}.cc"), "index": 74 }));
+        g.until("the device to open for its reader", |g| held(g).then_some(()));
+        // Pulled, the device takes its group with it; the reader waits for the next plug.
+        drop(keys.take());
+        g.until("the pulled device's group to go", |g| g.call("variable list", j!({}))["groups"].get(&live).is_none().then_some(()));
+        g.call("control source", j!({ "group": "desk", "element": "cutoff", "reference": "" }));
+        g.call("control remove", j!({ "group": "desk", "element": "cutoff" }));
+    } else {
+        assert_eq!(g.call("midi learn", j!({ "on": true }))["groups"], j!([]), "no sequencer, no port");
+        g.call("midi learn", j!({ "on": false }));
     }
 
     g.call("layout panel edit", j!({ "panel": panel(&g), "type": "viewer",
@@ -179,8 +185,6 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
                "every node came back as it was, uid for uid — facades and ports among them");
     assert_eq!(after["links"], before["links"], "and so did every wire, inner ones included");
     assert_eq!(after["variables"], before["variables"]);
-    assert_eq!(after["variable_groups"]["test_keys_1"]["midi"]["port"], "Test Keys:1", "the grab rode the archive: {}", after["variable_groups"]);
-    assert_eq!(other.call("midi list", j!({}))["ports"].as_array().unwrap().iter().find(|p| p["group"] == "test_keys_1").map(|p| p["state"].clone()), Some(j!("gone")));
     assert_eq!(f32s(&other.snapshot_array("variables/patch.pad")), f32s(&sheet), "the sheet came back whole from `variables/patch.pad.npy`");
     assert!(path.exists() && std::fs::read(&path).unwrap().windows(27).any(|w| w == b"workspace/variables/patch.p"), "the archive carries the file");
     assert_eq!(after["arrangement"], before["arrangement"],

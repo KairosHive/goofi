@@ -93,7 +93,7 @@ pub enum Role {
         slot: Option<u32>,
     },
     /// A string param naming a variable whose wire feeds the input `slot`.
-    Feed { slot: String },
+    Feed { slot: String, group: String },
 }
 
 /// The inspector shows a param only while `param` (`name` in the same group, or `group.name`)

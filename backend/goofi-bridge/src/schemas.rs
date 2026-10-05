@@ -73,7 +73,7 @@ pub struct ParamShow {
 pub enum ParamRole {
     Count { section: String },
     Member { section: String, base: String, slot: Option<u32> },
-    Feed { slot: String },
+    Feed { slot: String, group: String },
 }
 
 /// A descriptor's typed half: the value with the bounds or options its type carries.
@@ -119,7 +119,7 @@ pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi
         role: decl.and_then(|d| d.role).map(|r| match r {
             goofi_node::Role::Count { section } => ParamRole::Count { section: section.into() },
             goofi_node::Role::Member { section, base, slot } => ParamRole::Member { section: section.into(), base: base.into(), slot },
-            goofi_node::Role::Feed { slot } => ParamRole::Feed { slot: slot.into() },
+            goofi_node::Role::Feed { slot, group } => ParamRole::Feed { slot: slot.into(), group: group.into() },
         }),
         refreshable: matches!(p, Param::Str { refresh: true, .. }),
         mode: source.map(|s| s.state.mode).unwrap_or_default(),

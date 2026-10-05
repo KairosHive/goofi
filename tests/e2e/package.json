@@ -3,7 +3,7 @@
 	"private": true,
 	"description": "Playwright end-to-end suite driving the real goofi backend + SPA.",
 	"scripts": {
-		"build:backend": "npm --prefix ../../frontend run build && cargo build --manifest-path ../../Cargo.toml -p goofi-cli",
+		"build:backend": "npm --prefix ../../frontend run build && cargo build --manifest-path ../../Cargo.toml -p goofi-cli -p goofi-tests --bin goofi --bin midikeys",
 		"e2e": "npm run check && npm run build:backend && playwright test",
 		"e2e:plugins": "npm run check && playwright test --config playwright.plugins.config.ts",
 		"test": "playwright test",

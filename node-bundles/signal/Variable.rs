@@ -20,16 +20,28 @@ impl Node for Variable {
     }
 }
 
-static PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "variable",
-    name: "name",
-    spec: ParamSpec::Str { default: "", options: &[], refresh: true },
-    expression: None,
-    doc: Some("the variable to read, `group.element`"),
-    section: 0,
-    show: None,
-    role: Some(Role::Feed { slot: "value" }),
-}];
+static PARAMS: &[ParamDecl] = &[
+    ParamDecl {
+        group: "variable",
+        name: "group",
+        spec: ParamSpec::Str { default: "", options: &[], refresh: true },
+        expression: None,
+        doc: Some("the variable's group; the list is the patch's groups"),
+        section: 0,
+        show: None,
+        role: None,
+    },
+    ParamDecl {
+        group: "variable",
+        name: "element",
+        spec: ParamSpec::Str { default: "", options: &[], refresh: true },
+        expression: None,
+        doc: Some("the variable in that group; the list follows the group chosen"),
+        section: 0,
+        show: None,
+        role: Some(Role::Feed { slot: "value", group: "group" }),
+    },
+];
 
 static INPUTS: &[SlotDecl] = &[SlotDecl { name: "value", kind: SlotType::Array, trigger_process: true, multi: false, required: false }];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }, OutputDecl { name: "text", kind: SlotType::String }];
@@ -37,7 +49,7 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Arra
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Input],
     doc: "A variable's frame on a cable.\n\
-          `name` picks the variable; every frame it holds leaves whole on `out`, or on `text` for a \
+          `group` and `element` pick the variable; every frame it holds leaves whole on `out`, or on `text` for a \
           string. A MIDI device's `notes` or a pad's sheet reaches a node this way.",
     inputs: INPUTS,
     outputs: OUTPUTS,
