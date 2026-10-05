@@ -237,4 +237,13 @@ the last stage's commit; keep this file current by deleting what has shipped.
 2. **Machines.** The model, the ops, the `goofi-machines` thread, the situation.
 3. **The panel.** The canvas, the cards, the dot, the side pane, the Playwright sessions.
 
+**Handover, 2026-10-04.** Shipped before this file's stages: three panel defects (`626470cb`),
+MIDI as a variable bus (`74fcb166`), a Variable node per engine (`20d689ba`), and the MIDI
+rework (`ce200131`): a device group is the session's, opened while a reader — an expression,
+a Variable feed, a followed variable — names it and during a 30 s `midi learn`; the Variable
+nodes take `group` then `element`, two refreshable lists. Stage 1, Expressions, is next and has
+not started. The reference mode it removes is `Mode::Reference` in `goofi-graph` (`derive`,
+`resolve_vars`, `reference_kind_error`) and the `reference` texts of `SourceState`; the feed
+role (`goofi_node::Role::Feed`) and `referenced_groups` read variables and must keep working.
+
 Roadmap maintenance does not start implementation. Wait for the user's build instruction.
