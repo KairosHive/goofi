@@ -6,16 +6,15 @@ use super::{op, Any, EffectOp, NoArgs, ReadOp, WriteOp};
 use crate::machines::Msg;
 use crate::{AppState, Caller, Txn};
 use goofi_core::ease::Curve;
-use goofi_core::variables::Control;
 use goofi_core::Data;
-use goofi_graph::machine::{Attribute, Machine, Playhead, State, Transition, Trigger, OWN};
+use goofi_graph::machine::{Attribute, AttributeKind, Machine, Playhead, State, Transition, Trigger, OWN};
 use goofi_graph::{Command, Graph};
 
 const VALUES: &str = "`values` is `{attribute: literal}`, each a number, a list of numbers (nested for a wider array), a bool or a string; an attribute a state leaves out is kept by a playhead entering it";
 
 op!(List, "machine list", 0, NoArgs,
     "Every state machine, whole: its attributes, states, transitions (by id), playheads and seed. Where a playhead IS right now is its variables: `variables.<playhead>.state`, `.prev` and `.progress`, read through `variable list` like its attributes.",
-    "{machines: {name: {attributes: {name: {default, control?}}, states: {name: {pos, values}}, transitions: {id: {from, to, triggers, duration, curve, weight}}, playheads: {name: {color, start}}, seed?}}}");
+    "{machines: {name: {attributes: {name: {default, kind}}, states: {name: {pos, values}}, transitions: {id: {from, to, triggers, duration, curve, weight}}, playheads: {name: {color, start}}, seed?}}}");
 
 op!(Add, "machine add", 1, AddArgs {
     pub name: Option<String>,
@@ -48,21 +47,19 @@ op!(AttributeAdd, "machine attribute add", 2, AttributeAddArgs {
     pub name: String,
     pub value: Any,
     #[schemars(with = "Option<Value>")]
-    pub control: Option<Control>,
+    pub kind: Option<AttributeKind>,
 },
-    "Add an attribute: a value every state may set and every playhead carries as `variables.<playhead>.<name>`. `value` is its default, a number, a list of numbers (nested for a wider array), a bool or a string. `control` is the widget a state card and a playhead row draw it with, as `variable entry add` takes one; it must be able to draw the value. `state`, `prev` and `progress` are the machine's own and refused.",
+    "Add an attribute: a value every state may set and every playhead carries as `variables.<playhead>.<name>`. `value` is its default. `kind` is what the attribute is, as a node's param is: `{type: num, vmin, vmax, int?, color?}` holding a number or a list of them (four for a colour), `{type: bool}` holding 0 or 1, or `{type: string, options?}` holding a text; left out, a number is a `num` in 0..1 and a text a `string`. The inspector draws each with that param's widget, and a playhead's variable wears the control-panel widget nearest it. `state`, `prev` and `progress` are the machine's own and refused.",
     "{name, value} — the attribute and its default as stored");
 
 op!(AttributeEdit, "machine attribute edit", 2, AttributeEditArgs {
     pub machine: String,
     pub name: String,
     pub value: Option<Any>,
-    /// Absent leaves the widget alone, `null` clears it, an object sets it.
-    #[serde(default, deserialize_with = "super::nullable")]
     #[schemars(with = "Option<Value>")]
-    pub control: Option<Option<Control>>,
+    pub kind: Option<AttributeKind>,
 },
-    "Change an attribute's default and/or its widget.",
+    "Change an attribute's default and/or its kind; the kind must hold the default and every state's value.",
     "{name}");
 
 op!(AttributeRemove, "machine attribute remove", 2, AttributeRemoveArgs {
@@ -221,12 +218,9 @@ fn set(tx: &mut Txn, name: &str, next: Machine) -> Result<(), String> {
     Ok(())
 }
 
-/// A widget must be able to draw every value it will be handed.
-fn fits(control: Option<&Control>, value: &Data) -> Result<(), String> {
-    match control.filter(|c| !c.fits(value)) {
-        Some(c) => Err(c.mismatch(value)),
-        None => Ok(()),
-    }
+/// A kind must hold every value it will be handed.
+fn fits(kind: &AttributeKind, value: &Data) -> Result<(), String> {
+    if kind.fits(value) { Ok(()) } else { Err(kind.mismatch(value)) }
 }
 
 /// The attribute values an op names, each checked against the attribute and its widget. A `null`
@@ -242,7 +236,7 @@ fn values_of(m: &Machine, values: Option<Value>) -> Result<Vec<(String, Option<D
             continue;
         }
         let value = literal(v.clone())?;
-        fits(a.control.as_ref(), &value).map_err(|why| format!("attribute `{attr}`: {why}"))?;
+        fits(&a.kind, &value).map_err(|why| format!("attribute `{attr}`: {why}"))?;
         out.push((attr.clone(), Some(value)));
     }
     Ok(out)
@@ -321,8 +315,9 @@ impl WriteOp for AttributeAdd {
             return Err(format!("`{}` is the machine's own element of a playhead; an attribute cannot take it", a.name));
         }
         let value = literal(a.value.0)?;
-        fits(a.control.as_ref(), &value)?;
-        m.attributes.insert(a.name.clone(), Attribute { default: value.clone(), control: a.control });
+        let kind = a.kind.unwrap_or_else(|| AttributeKind::of(&value));
+        fits(&kind, &value)?;
+        m.attributes.insert(a.name.clone(), Attribute { default: value.clone(), kind });
         set(tx, &a.machine, m)?;
         Ok(json!({ "name": a.name, "value": value }))
     }
@@ -336,20 +331,20 @@ impl WriteOp for AttributeEdit {
     fn run(tx: &mut Txn, a: AttributeEditArgs) -> Result<Value, String> {
         let mut m = machine_of(&tx.g, &a.machine)?;
         let attr = m.attributes.get_mut(&a.name).ok_or_else(|| format!("no attribute `{}` in machine `{}`", a.name, a.machine))?;
-        if a.value.is_none() && a.control.is_none() {
-            return Err("nothing to change — give a value or a control".into());
+        if a.value.is_none() && a.kind.is_none() {
+            return Err("nothing to change — give a value or a kind".into());
         }
         if let Some(v) = a.value {
             attr.default = literal(v.0)?;
         }
-        if let Some(c) = a.control {
-            attr.control = c;
+        if let Some(k) = a.kind {
+            attr.kind = k;
         }
-        fits(attr.control.as_ref(), &attr.default)?;
-        let widget = attr.control.clone();
+        fits(&attr.kind, &attr.default)?;
+        let kind = attr.kind.clone();
         for (state, s) in &m.states {
             if let Some(v) = s.values.get(&a.name) {
-                fits(widget.as_ref(), v).map_err(|why| format!("state `{state}`: {why}"))?;
+                fits(&kind, v).map_err(|why| format!("state `{state}`: {why}"))?;
             }
         }
         set(tx, &a.machine, m)?;

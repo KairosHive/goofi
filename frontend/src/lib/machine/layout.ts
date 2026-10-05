@@ -2,12 +2,12 @@
  * dock is known before the card is measured. */
 import type { Node } from '@xyflow/svelte';
 
-/** A state card's width; its height follows its rows. */
+/** A state card's width; its height is its name's row. */
 export const CARD_W = 200;
 /** A card's height before Svelte Flow has measured it. */
-export const FALLBACK_H = 72;
-/** The dock strip along a card's top where resting dots sit: the first dot's centre, and the step. */
-export const DOCK = { x: 14, y: 11, step: 16 } as const;
+export const FALLBACK_H = 44;
+/** Where resting dots sit along a card's top edge: the first dot's centre, and the step. */
+export const DOCK = { x: 14, step: 16 } as const;
 /** A dot's diameter in flow units. */
 export const DOT = 12;
 

@@ -143,6 +143,16 @@ export function midiGroups(doc: Doc): Record<string, Midi> {
 	return out;
 }
 
+/** Every group a machine's playhead owns, by name, with the machine it belongs to. */
+export function machineGroups(doc: Doc): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) {
+		const machine = obj(rec).machine;
+		if (typeof machine === 'string') out[group] = machine;
+	}
+	return out;
+}
+
 /** Every state machine, by name. The wire leaves an empty map out; a view always has the four. */
 export function machineViews(doc: Doc): Record<string, Machine> {
 	const out: Record<string, Machine> = {};

@@ -59,6 +59,7 @@
 	import { copyText } from '$lib/clipboard';
 	import { registerEditor, unregisterEditor } from './editorCommands';
 	import SidePane from './SidePane.svelte';
+	import Inspector from '$lib/inspector/Inspector.svelte';
 	import { arrayToPath, asStateObject, pathToArray } from 'panelty';
 	import { Button, IconButton, EmptyState, isTextEditingTarget } from '$lib/ui';
 	import { clampToViewport, overlayViewport } from 'panelty';
@@ -1139,27 +1140,17 @@
 			</div>
 		{/if}
 
-		<!-- Absent exactly while the pane is open: the pane covers this corner at every width, and a
-		     mounted control under it is invisible but still tabbable. -->
-		{#if !(inspectorOn && selectedNode)}
-			<IconButton
-				class="inspector-toggle"
-				label="Toggle inspector"
-				title={inspectorOn ? 'Hide the inspector' : 'Show the inspector when a node is selected'}
-				aria-pressed={inspectorOn}
-				data-testid="inspector-toggle"
-				onclick={() => sel.setInspector(panelId, !inspectorOn)}
-			>
-				◧
-			</IconButton>
-		{/if}
-
-		<!-- Its ✕ DISMISSES, holding only until the selection changes; the ◧ above is the switch. -->
+		<!-- Its ✕ DISMISSES, holding only until the selection changes; its ◧ is the switch. -->
 		<SidePane
-			node={selectedNode}
+			subject={selectedNode}
 			enabled={inspectorOn}
 			onClose={() => sel.dismissInspectorFor(panelId)}
-		/>
+			onToggle={() => sel.setInspector(panelId, !inspectorOn)}
+		>
+			{#snippet children(node)}
+				<Inspector {node} onClose={() => sel.dismissInspectorFor(panelId)} />
+			{/snippet}
+		</SidePane>
 	</div>
 </SvelteFlowProvider>
 
@@ -1208,18 +1199,6 @@
 		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		background: var(--surface-1);
-	}
-	.editor-panel :global(.inspector-toggle) {
-		position: absolute;
-		top: 10px;
-		right: 10px;
-		z-index: 5;
-		/* Not `--disabled-opacity`: a ghosted affordance over the canvas, not a disabled control. */
-		opacity: 0.5;
-	}
-	.editor-panel :global(.inspector-toggle:hover),
-	.editor-panel :global(.inspector-toggle[aria-pressed='true']) {
-		opacity: 1;
 	}
 	.link-ghost {
 		position: fixed;

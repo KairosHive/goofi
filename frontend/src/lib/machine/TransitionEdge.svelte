@@ -1,26 +1,30 @@
-<!-- A transition on the machine canvas: a straight edge, or a loop at the card's corner when it
-     re-enters its own state. Its label carries the trigger summary; a tap fires it, a long press or
-     a right-click picks it for the pane. -->
+<!-- A transition on the machine canvas: a line from box to box, or a loop off the side when it
+     re-enters its own state, with chevrons along it for the way it goes — one stroke, so hover and
+     selection reach the whole of it. A click on the line selects it; its label carries the trigger
+     summary, and a tap on the label fires it. -->
 <script lang="ts">
-	import { BaseEdge, EdgeLabel, getStraightPath, type EdgeProps } from '@xyflow/svelte';
+	import { BaseEdge, EdgeLabel, useStore, type EdgeProps, type InternalNode } from '@xyflow/svelte';
 	import { createLongPress } from 'panelty';
+	import { course, marked, type Box } from './geometry';
+	import { CARD_W, FALLBACK_H } from './layout';
 
-	let { id, source, target, sourceX, sourceY, targetX, targetY, markerEnd, data }: EdgeProps = $props();
-	const d = $derived(data as { summary: string; picked: boolean; onFire: () => void; onPick: () => void });
+	let { id, source, target, selected, data }: EdgeProps = $props();
+	const d = $derived(data as { summary: string; onFire: () => void; onPick: () => void });
 
-	/** A loop's radius in flow units. */
-	const R = 26;
+	const store = useStore();
+	const boxOf = (n: InternalNode | undefined): Box | null =>
+		n ? { x: n.internals.positionAbsolute.x, y: n.internals.positionAbsolute.y, w: n.measured.width ?? CARD_W, h: n.measured.height ?? FALLBACK_H } : null;
 	const geometry = $derived.by(() => {
-		if (source === target) {
-			const [x, y] = [sourceX, sourceY];
-			const path = `M ${x} ${y} C ${x + 2 * R} ${y + R * 0.2}, ${x + 2 * R} ${y - 2.6 * R}, ${x} ${y - 2 * R} C ${x - R} ${y - 1.8 * R}, ${x - R} ${y - 0.4 * R}, ${x} ${y}`;
-			return { path, x: x + 1.3 * R, y: y - 1.4 * R };
-		}
-		const [path, x, y] = getStraightPath({ sourceX, sourceY, targetX, targetY });
-		return { path, x, y };
+		// Read through `nodes`, as the hook does: a measurement lands there before the lookup moves.
+		void store.nodes;
+		const a = boxOf(store.nodeLookup.get(source));
+		const b = boxOf(store.nodeLookup.get(target));
+		if (!a || !b) return null;
+		const c = course(a, source === target ? a : b);
+		return { d: marked(c), label: c.at(0.5) };
 	});
 
-	// The touch door onto the pane: a held label picks and the lift's click is then not a fire.
+	// The touch door onto the inspector: a held label picks, and the lift's click is then not a fire.
 	let held = false;
 	const press = createLongPress(() => {
 		held = true;
@@ -35,35 +39,36 @@
 	}
 </script>
 
-<BaseEdge {id} path={geometry.path} {markerEnd} class={d.picked ? 'transition picked' : 'transition'} interactionWidth={24} />
-<EdgeLabel x={geometry.x} y={geometry.y} transparent>
-	<button
-		type="button"
-		class="label nodrag nopan"
-		class:picked={d.picked}
-		data-testid={`transition-${id}`}
-		title="Tap to fire; hold or right-click to edit"
-		onclick={tap}
-		oncontextmenu={(e) => {
-			e.preventDefault();
-			d.onPick();
-		}}
-		onpointerdown={(e) => {
-			if (e.pointerType !== 'mouse') press.start(e);
-		}}
-		onpointermove={press.move}
-		onpointerup={press.cancel}
-		onpointercancel={press.cancel}>{d.summary}</button
-	>
-</EdgeLabel>
+{#if geometry}
+	<BaseEdge {id} path={geometry.d} class="transition" interactionWidth={24} />
+	<EdgeLabel x={geometry.label.x} y={geometry.label.y} transparent>
+		<button
+			type="button"
+			class="label nodrag nopan"
+			class:picked={selected}
+			data-testid={`transition-${id}`}
+			title="Tap to fire; hold or right-click to inspect"
+			onclick={tap}
+			oncontextmenu={(e) => {
+				e.preventDefault();
+				d.onPick();
+			}}
+			onpointerdown={(e) => {
+				if (e.pointerType !== 'mouse') press.start(e);
+			}}
+			onpointermove={press.move}
+			onpointerup={press.cancel}
+			onpointercancel={press.cancel}>{d.summary}</button
+		>
+	</EdgeLabel>
+{/if}
 
 <style>
+	/* The stroke alone: its ink on hover and selection is the editor's, from app.css. */
 	:global(.svelte-flow__edge-path.transition) {
-		stroke: var(--border-strong);
 		stroke-width: 2;
-	}
-	:global(.svelte-flow__edge-path.transition.picked) {
-		stroke: var(--accent);
+		stroke-linecap: round;
+		stroke-linejoin: round;
 	}
 	.label {
 		min-height: var(--hit);

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use goofi_core::control;
 use goofi_core::ease::Curve;
-use goofi_core::variables::{is_valid_identifier, Control, Entries};
+use goofi_core::variables::{is_valid_identifier, Control, ControlKind, Entries};
 use goofi_core::{Data, Meta, Value};
 use goofi_node::{EvalCtx, ExprEvaluator, Local};
 use indexmap::IndexMap;
@@ -44,14 +44,99 @@ pub struct Machine {
     pub seed: Option<u64>,
 }
 
-/// The default frame of an attribute, and the widget a state card and a playhead row draw it with.
+/// What an attribute is, as a node's param is: a number — one, a vector, or a colour — a bool, or a
+/// text, maybe one of some options. The inspector draws it with the param widget of that kind.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
-#[ts(optional_fields)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum AttributeKind {
+    Num {
+        vmin: f64,
+        vmax: f64,
+        #[serde(default)]
+        int: bool,
+        #[serde(default)]
+        color: bool,
+    },
+    Bool,
+    #[serde(rename = "string")]
+    Str {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        options: Option<Vec<String>>,
+    },
+}
+
+impl AttributeKind {
+    /// The kind a bare default implies: a number in 0..1, or a text.
+    pub fn of(value: &Data) -> Self {
+        match value.value() {
+            Value::Str(_) => AttributeKind::Str { options: None },
+            _ => AttributeKind::Num { vmin: 0.0, vmax: 1.0, int: false, color: false },
+        }
+    }
+
+    /// Whether `value` is one this kind holds: numbers in one dimension (four for a colour), a bool
+    /// as one number, a text (one of the options, where there are some).
+    pub fn fits(&self, value: &Data) -> bool {
+        match (self, value.value()) {
+            (AttributeKind::Num { color: true, .. }, Value::Array(a)) => a.shape() == [4],
+            (AttributeKind::Num { .. }, Value::Array(a)) => a.shape().len() == 1,
+            (AttributeKind::Bool, Value::Array(a)) => a.shape() == [1],
+            (AttributeKind::Str { options: Some(o) }, Value::Str(s)) => o.iter().any(|x| x.as_str() == s.as_ref()),
+            (AttributeKind::Str { .. }, Value::Str(_)) => true,
+            _ => false,
+        }
+    }
+
+    pub fn mismatch(&self, value: &Data) -> String {
+        let kind = match self {
+            AttributeKind::Num { color: true, .. } => "colour",
+            AttributeKind::Num { .. } => "num",
+            AttributeKind::Bool => "bool",
+            AttributeKind::Str { options: Some(_) } => "string of the options",
+            AttributeKind::Str { .. } => "string",
+        };
+        format!("a `{kind}` attribute cannot hold {}", control::form(value))
+    }
+
+    /// The control-panel widget a playhead's variable of this kind wears, by the default's shape.
+    pub fn control(&self, default: &Data) -> Control {
+        let dims = match default.value() {
+            Value::Array(a) => a.shape().first().copied().unwrap_or(1),
+            _ => 1,
+        };
+        let (kind, range, options) = match self {
+            AttributeKind::Num { color: true, .. } => (ControlKind::Color, None, Vec::new()),
+            AttributeKind::Num { vmin, vmax, int, .. } => {
+                let range = Some((*vmin, *vmax, if *int { 1.0 } else { 0.01 }));
+                (if dims > 1 { ControlKind::Vector } else { ControlKind::Knob }, range, Vec::new())
+            }
+            AttributeKind::Bool => (ControlKind::Toggle, None, Vec::new()),
+            AttributeKind::Str { options: Some(o) } => (ControlKind::Dropdown, None, o.clone()),
+            AttributeKind::Str { options: None } => (ControlKind::Text, None, Vec::new()),
+        };
+        let (w, h) = kind.born_box();
+        Control {
+            kind,
+            min: range.map(|r| r.0),
+            max: range.map(|r| r.1),
+            step: range.map(|r| r.2),
+            options,
+            resolution: None,
+            x: 0.0,
+            y: 0.0,
+            w,
+            h,
+        }
+    }
+}
+
+/// An attribute: what it is, and the default every state starts from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Attribute {
     #[ts(type = "Literal")]
     pub default: Data,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub control: Option<Control>,
+    pub kind: AttributeKind,
 }
 
 /// A state: where its card sits, and the attributes it sets; one left out is kept on entry.
@@ -205,7 +290,7 @@ impl Machine {
         OWN.iter()
             .zip(own)
             .map(|(e, (v, c))| (format!("{playhead}.{e}"), v, c))
-            .chain(self.attributes.iter().map(|(a, attr)| (format!("{playhead}.{a}"), held(a, attr), attr.control.clone())))
+            .chain(self.attributes.iter().map(|(a, attr)| (format!("{playhead}.{a}"), held(a, attr), Some(attr.kind.control(&attr.default)))))
             .collect()
     }
 }

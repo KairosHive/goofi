@@ -15,6 +15,8 @@
 	import { nodeHealth } from '$lib/editor/nodeHealth';
 	import { isTextEditingTarget } from '$lib/ui/textEditing';
 	import ParamField from './ParamField.svelte';
+	import IdentityBar from './IdentityBar.svelte';
+	import RenameField from './RenameField.svelte';
 	import { isNumeric } from './controlKind';
 	import { MODE_FACE, sourceForMode } from './paramSeed';
 	import SubPatchInspector from '$lib/editor/SubPatchInspector.svelte';
@@ -33,7 +35,6 @@
 		type NonDefault
 	} from './paramFilters';
 	import {
-		Bar,
 		Tabs,
 		Badge,
 		Button,
@@ -69,39 +70,6 @@
 		send('update', (uid) => g.updateParam(uid, group, name, value));
 	const setSource = (group: string, name: string, source: SourcePatch): void =>
 		send('set source', (uid) => g.setSource(uid, group, name, source));
-
-	// Keyed by uid, so switching nodes closes the editor while a live state update (which re-creates the
-	// node object) leaves an open edit untouched.
-	let editingUid = $state<string | null>(null);
-	let nameDraft = $state('');
-	const editingName = $derived(node != null && editingUid === node.uid);
-
-	function startRename(): void {
-		if (!node) return;
-		nameDraft = node.name;
-		editingUid = node.uid;
-	}
-	function commitRename(): void {
-		// Escape/cancel nulls editingUid first, so the blur the unmounting input fires is a no-op here.
-		const uid = editingUid;
-		if (!uid || !node || node.uid !== uid) {
-			editingUid = null;
-			return;
-		}
-		const base = nameDraft.trim();
-		// The manager refuses a name an expression could not read as an attribute; the field stays
-		// open with the draft, marked bad, rather than throwing the user's typing away on a blur.
-		if (!isValidName(base)) return;
-		editingUid = null;
-		void g.renameNode(uid, base).catch((e) => console.warn('rename failed', e));
-	}
-	function cancelRename(): void {
-		editingUid = null;
-	}
-	function focusInput(el: HTMLInputElement): void {
-		el.focus();
-		el.select();
-	}
 
 	// Custom nodes can be saved from the patch or from the library.
 	const savable = $derived.by(() => {
@@ -434,85 +402,48 @@
 				{#snippet hint()}Select a node to edit its parameters.{/snippet}
 			</EmptyState>
 		{:else}
-			<Bar class="pf-identity-bar">
-				{#snippet start()}
-					<div class="pf-identity">
-						<div class="pf-title">
-							{#if editingName}
-								<!-- svelte-ignore a11y_autofocus -->
-								<input
-									{...MODE_ATTRS.search}
-									class="pf-rename"
-									class:bad={nameDraft.trim() !== '' && !isValidName(nameDraft.trim())}
-									aria-label="Node name"
-									value={nameDraft}
-									oninput={(e) => (nameDraft = e.currentTarget.value)}
-									onblur={commitRename}
-									onkeydown={(e) => {
-										if (e.key === 'Enter') commitRename();
-										else if (e.key === 'Escape') cancelRename();
-									}}
-									data-testid="node-name-input"
-									use:focusInput
-								/>
-							{:else}
-								<button
-									class="pf-name"
-									title="Click to rename"
-									onclick={startRename}
-									data-testid="node-name">{node.name}</button
-								>
-							{/if}
-						</div>
-						<div class="pf-type">{formatName(bareName(node.type))}</div>
-					</div>
-				{/snippet}
-				{#snippet end()}
-					{#if savable}
-						<IconButton
-							variant="ghost"
-							density="chrome"
-							label="Save to custom library"
-							title="Move this node's file into your private library, where every patch finds it"
-							data-testid="save-to-library"
-							disabled={saving}
-							onclick={() => void saveToLibrary(node.type, false)}><Icon name="save" /></IconButton
+			{#key node.uid}
+				<IdentityBar type={formatName(bareName(node.type))} {onClose}>
+					{#snippet title()}
+						<RenameField value={node.name} valid={isValidName} label="Node name" testid="node-name"
+							onRename={(name) => send('rename', (uid) => g.renameNode(uid, name))} />
+					{/snippet}
+					{#snippet end()}
+						{#if savable}
+							<IconButton
+								variant="ghost"
+								density="chrome"
+								label="Save to custom library"
+								title="Move this node's file into your private library, where every patch finds it"
+								data-testid="save-to-library"
+								disabled={saving}
+								onclick={() => void saveToLibrary(node.type, false)}><Icon name="save" /></IconButton
+							>
+						{/if}
+						{#if node.editor}
+							<IconButton
+								variant="ghost"
+								density="chrome"
+								label="Open plugin editor"
+								title="Open this plugin's own editor, in a window on the machine goofi runs on"
+								data-testid="inspector-editor"
+								onclick={() => send('editor', (uid) => getControl().call('node editor', { node: uid }))}
+								><Icon name="app-window" /></IconButton
+							>
+						{/if}
+						<Badge
+							tone={health.tone}
+							class="pf-state"
+							title={health.hint}
+							data-testid="node-state"
 						>
-					{/if}
-					{#if node.editor}
-						<IconButton
-							variant="ghost"
-							density="chrome"
-							label="Open plugin editor"
-							title="Open this plugin's own editor, in a window on the machine goofi runs on"
-							data-testid="inspector-editor"
-							onclick={() => send('editor', (uid) => getControl().call('node editor', { node: uid }))}
-							><Icon name="app-window" /></IconButton
-						>
-					{/if}
-					<Badge
-						tone={health.tone}
-						class="pf-state"
-						title={health.hint}
-						data-testid="node-state"
-					>
-						{health.status}{#if health.runtime}<span class="pf-runtime" data-testid="node-runtime"
-								>{health.runtime}</span
-							>{/if}
-					</Badge>
-					{#if onClose}
-						<IconButton
-							variant="ghost"
-							density="chrome"
-							class="pf-close"
-							label="Close inspector"
-							title="Close the inspector"
-							data-testid="inspector-close"
-							onclick={onClose}><Icon name="x" /></IconButton
-						>
-					{/if}
-				{/snippet}
-			</Bar>
+							{health.status}{#if health.runtime}<span class="pf-runtime" data-testid="node-runtime"
+									>{health.runtime}</span
+								>{/if}
+						</Badge>
+					{/snippet}
+				</IdentityBar>
+			{/key}
 
 			{#if docRest}
 				<Disclosure class="pf-docs">
@@ -793,66 +724,6 @@
 		flex-direction: column;
 		min-width: 0;
 	}
-	.pf-identity {
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-1);
-		min-width: 0;
-	}
-	.pf-title {
-		font-size: var(--fs-strong);
-		font-weight: 600;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	/* Mono, stated after the `font: inherit` reset that would otherwise wipe it: the same identifier
-	   the canvas paints on the node. */
-	.pf-name,
-	.pf-rename {
-		font: inherit;
-		font-family: var(--font-mono);
-		color: var(--text);
-	}
-	.pf-name {
-		background: none;
-		border: none;
-		padding: 0;
-		cursor: text;
-		border-radius: var(--radius-sm);
-		/* The truncation is the BUTTON's own: `text-overflow` on `.pf-title` reaches the text in it,
-		   never an overflowing child element, so a long name was cut mid-word with no ellipsis. */
-		display: block;
-		max-width: 100%;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.pf-name:hover {
-		text-decoration: underline;
-		text-decoration-style: dotted;
-		text-underline-offset: 2px;
-	}
-	.pf-rename {
-		width: 100%;
-		font-size: var(--fs-strong);
-		font-weight: 600;
-		padding: var(--space-1) var(--space-2);
-		background: var(--surface-2);
-		border: 1px solid var(--accent);
-		border-radius: var(--radius-sm);
-	}
-	.pf-rename.bad {
-		color: var(--danger);
-	}
-	.pf-type {
-		color: var(--text-muted);
-		font-family: var(--font-mono);
-		font-size: var(--fs-micro);
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
 	.pf-docstring {
 		margin: 0;
 		font-size: var(--fs-small);
@@ -876,21 +747,6 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-	}
-	/* Anchored on `.param-form`, a real element of THIS template: `pf-identity-bar` is a class passed to
-	   another component, and Svelte's scoping hash never reaches its markup. */
-	.param-form :global(.pf-identity-bar) {
-		/* The ✕ must never be squeezed into overflow past the pane's edge; the name is what ellipsizes. */
-		--bar-end-min: max-content;
-		/* Two lines tall by construction, so it takes back the padding a one-row strip has none of. */
-		--bar-pad-y: var(--space-2);
-	}
-	.param-form :global(.pf-identity-bar .pf-close) {
-		--panelty-icon-btn-size: 22px;
-		color: var(--text-dim);
-	}
-	.param-form :global(.pf-identity-bar .pf-close:hover) {
-		color: var(--text);
 	}
 	/* The runtime rides INSIDE the state pill rather than beside it: one pill is what the row has
 	   space for, and a second would be the first thing a narrow pane drops. */
@@ -1027,15 +883,9 @@
 		color: var(--text-muted);
 		font-size: var(--fs-small);
 	}
-	/* With no hover the editable cue rests visible; the fields restate app.css's 16px coarse floor,
-	   which their own size would outrank, so focusing one does not force-zoom iOS. */
+	/* The field restates app.css's 16px coarse floor, which its own size would outrank, so focusing
+	   it does not force-zoom iOS. */
 	@media (hover: none) and (pointer: coarse) {
-		.pf-name {
-			text-decoration: underline;
-			text-decoration-style: dotted;
-			text-underline-offset: 2px;
-		}
-		.pf-rename,
 		.pf-search {
 			font-size: 16px;
 		}

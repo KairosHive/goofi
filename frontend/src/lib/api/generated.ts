@@ -29,7 +29,8 @@ export type VariableRecord = { value?: Literal, control?: Control,
 expression?: string, lock?: Lock, };
 export type Midi = { port: string, };
 export type Group = { lock: Lock, midi?: Midi, machine?: string, };
-export type Attribute = { default: Literal, control?: Control, };
+export type AttributeKind = { "type": "num", vmin: number, vmax: number, int: boolean, color: boolean, } | { "type": "bool" } | { "type": "string", options?: Array<string>, };
+export type Attribute = { default: Literal, kind: AttributeKind, };
 export type State = { pos: [number, number], values?: Record<string, Literal>, };
 export type Curve = "step" | "linear" | "in" | "out" | "in_out" | "smooth";
 export type Policy = "fifo" | "lifo" | "all";

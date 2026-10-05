@@ -38,6 +38,7 @@
 		selfName,
 		dropZone = null,
 		viewKey = '',
+		literal = false,
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
 		paramName: string;
@@ -47,7 +48,8 @@
 		onCommit: (value: unknown) => unknown;
 		/** A step of a drag on the value, ahead of its commit. */
 		onPreview?: (value: number | number[]) => unknown;
-		onSetSource: (source: SourcePatch) => void;
+		/** Absent on a literal row, which takes no source. */
+		onSetSource?: (source: SourcePatch) => void;
 		/** One element of a vector: its literal into its dimension, and its own source. */
 		onCommitElement?: (index: number, value: number) => unknown;
 		onSetElementSource?: (index: number, source: SourcePatch) => void;
@@ -60,6 +62,8 @@
 		dropZone?: string | null;
 		/** `uid/group/name`, under which a colour's view (picker or vector) is remembered. */
 		viewKey?: string;
+		/** A value alone — a machine attribute's — with no source to pick, trigger or learn. */
+		literal?: boolean;
 	} = $props();
 
 	const learnId = $props.id();
@@ -71,13 +75,15 @@
 	);
 
 	function acceptVariable(el: HTMLDivElement): { destroy(): void } {
-		const drop = (event: Event): void => onSetSource({ expression: (event as CustomEvent<string>).detail });
+		const drop = (event: Event): void => onSetSource?.({ expression: (event as CustomEvent<string>).detail });
 		el.addEventListener('variable-expression-drop', drop);
 		return { destroy: () => el.removeEventListener('variable-expression-drop', drop) };
 	}
 
 	/** Every part the row shows, from the descriptor and the reader's view; see `rowPlan`. */
-	const plan = $derived(rowPlan(descriptor, { individual: uiStore.paramView[viewKey] === 'individual' }));
+	const plan = $derived(rowPlan(descriptor, { individual: uiStore.paramView[viewKey] === 'individual', sources: !literal }));
+	/** Whether the caret has anything to open. */
+	const openable = $derived(plan.list || plan.elements || plan.source || plan.foot);
 	const dims = $derived(isNumeric(descriptor) ? numValues(descriptor).length : 1);
 	/** Each element's own source, which an entry row shows beside its number. */
 	const elements = $derived(descriptor.elements ?? []);
@@ -115,7 +121,7 @@
 	};
 
 	function choose(mode: ParamMode): void {
-		if (mode !== descriptor.mode) onSetSource(sourceForMode(descriptor, mode));
+		if (mode !== descriptor.mode) onSetSource?.(sourceForMode(descriptor, mode));
 	}
 </script>
 
@@ -154,7 +160,7 @@
 		doc={descriptor.doc ?? undefined}
 		expanded={open}
 		stretchSummary
-		onExpand={() => (open = !open)}
+		onExpand={openable ? () => (open = !open) : undefined}
 	>
 		<!-- `display: contents` so the face inherits WITHOUT laying out: Field requires paired controls to
 		     be its direct children, and a real box would take them out of the @container column-flip. -->
@@ -339,7 +345,7 @@
 						{selfName}
 						value={descriptor.expression ?? ''}
 						error={descriptor.error}
-						onCommit={(expression) => onSetSource({ expression })}
+						onCommit={(expression) => onSetSource?.({ expression })}
 						label={`${paramName} expression`}
 						placeholder="nd('oscillator0').out.data.mean()"
 						testid="param-expr-input"
@@ -358,7 +364,7 @@
 							testid: 'param-triggers'
 						}
 					]}
-					onChange={() => onSetSource({ triggers: !descriptor.triggers })}
+					onChange={() => onSetSource?.({ triggers: !descriptor.triggers })}
 				/>
 			{/if}
 			{#if plan.foot}
@@ -377,7 +383,7 @@
 			/>
 			{#if num}
 				<MidiLearn label={paramName} target={`param:${learnId}`}
-					onLearn={(reference, index) => onSetSource({ expression: `${reference}[${index}]` })} />
+					onLearn={(reference, index) => onSetSource?.({ expression: `${reference}[${index}]` })} />
 			{/if}
 			{/if}
 		</div>

@@ -1,27 +1,34 @@
-<!-- The selected node's inspector, on a drag-resizable pane at the host's right or (portrait) bottom
-     edge. It stays mounted and parked when closed, so open and close are the same visible slide. -->
-<script lang="ts">
+<!-- An inspector on a drag-resizable pane at the host's right or (portrait) bottom edge: the node
+     editor's and the state machine's, each filling it with its own content. It stays mounted and
+     parked when closed, so open and close are the same visible slide; while parked, the ◧ over the
+     canvas is the switch that brings it back. -->
+<script lang="ts" generics="T">
 	import { beginDrag } from 'panelty';
-	import { onDestroy } from 'svelte';
-	import Inspector from '$lib/inspector/Inspector.svelte';
-	import type { NodeInstanceInfo } from '$lib/api/control';
+	import { onDestroy, type Snippet } from 'svelte';
+	import { IconButton } from '$lib/ui';
 
 	let {
-		node,
+		subject,
 		enabled,
-		onClose
+		onClose,
+		onToggle,
+		children
 	}: {
-		node: NodeInstanceInfo | null;
+		/** What the pane shows; null parks it. */
+		subject: T | null;
 		enabled: boolean;
-		/** Dismiss this editor's inspector until the selection changes. */
+		/** The ✕: dismiss this pane until the selection changes. */
 		onClose: () => void;
+		/** The ◧: flip the standing preference. */
+		onToggle: () => void;
+		children: Snippet<[T]>;
 	} = $props();
 
-	/** Closing is a real outro, so the last node stays rendered until the slide finishes. */
-	let renderedNode = $state<NodeInstanceInfo | null>(null);
-	const open = $derived(enabled && node !== null);
+	/** Closing is a real outro, so the last subject stays rendered until the slide finishes. */
+	let rendered = $state<T | null>(null);
+	const open = $derived(enabled && subject !== null);
 	$effect(() => {
-		if (open) renderedNode = node;
+		if (open) rendered = subject;
 	});
 
 	type PaneAxis = 'x' | 'y';
@@ -45,7 +52,7 @@
 
 	function finishTransition(e: TransitionEvent): void {
 		if (e.target !== e.currentTarget || e.propertyName !== 'transform' || open) return;
-		renderedNode = null;
+		rendered = null;
 	}
 
 	/** The in-flight resize's teardown; non-null only between pointerdown and its resolution. */
@@ -110,8 +117,25 @@
 		onpointerdown={startResize}
 		data-testid="panel-resize-handle"
 	></div>
-	<Inspector node={renderedNode} {onClose} />
+	{#if rendered !== null}
+		{@render children(rendered)}
+	{/if}
 </aside>
+
+<!-- Absent exactly while the pane is open: the pane covers this corner at every width, and a
+     mounted control under it is invisible but still tabbable. -->
+{#if !open}
+	<IconButton
+		class="inspector-toggle"
+		label="Toggle inspector"
+		title={enabled ? 'Hide the inspector' : 'Show the inspector'}
+		aria-pressed={enabled}
+		data-testid="inspector-toggle"
+		onclick={onToggle}
+	>
+		◧
+	</IconButton>
+{/if}
 
 <style>
 	.side-panel {
@@ -157,6 +181,18 @@
 	}
 	.side-panel.resizing * {
 		user-select: none;
+	}
+	:global(.inspector-toggle) {
+		position: absolute;
+		top: 10px;
+		right: 10px;
+		z-index: 5;
+		/* Not `--disabled-opacity`: a ghosted affordance over the canvas, not a disabled control. */
+		opacity: 0.5;
+	}
+	:global(.inspector-toggle:hover),
+	:global(.inspector-toggle[aria-pressed='true']) {
+		opacity: 1;
 	}
 	.resize-handle {
 		position: absolute;

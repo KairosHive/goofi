@@ -64,7 +64,7 @@ pub static PANEL_TYPES: &[PanelType] = &[
                 doc: "the patch variables, which any expression can read" },
     PanelType { id: "control", title: "Control", icon: "sliders-vertical", accepts_node: false,
                 doc: "knobs, sliders and text widgets over one group of variables" },
-    PanelType { id: "machine", title: "Machine", icon: "waypoints", accepts_node: false,
+    PanelType { id: "machine", title: "State machine", icon: "waypoints", accepts_node: false,
                 doc: "one state machine: its states, transitions and playheads on a canvas" },
     PanelType { id: "agent", title: "Agent", icon: "bot", accepts_node: false,
                 doc: "a terminal on an agent harness, running in the patch workspace" },

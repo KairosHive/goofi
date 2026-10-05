@@ -382,6 +382,32 @@
 		top: calc(var(--node-u) / -2);
 		height: var(--node-u);
 	}
+	/* The capsule: dtype-coloured, on the border, as tall as the slot it serves. A single input is
+	   filled; a multi-input is the outline alone. */
+	.conn :global(.svelte-flow__handle)::before {
+		content: '';
+		position: absolute;
+		left: 0;
+		top: 0;
+		transform: translate(-50%, -50%);
+		width: 7px;
+		height: calc(var(--node-u) - 6px);
+		box-sizing: border-box;
+		border-radius: 999px;
+		background: var(--dtype, var(--border-strong));
+		box-shadow: 0 0 0 2px var(--surface-1);
+		transition:
+			width var(--dur-fast) var(--ease),
+			height var(--dur-fast) var(--ease),
+			box-shadow var(--dur-fast) var(--ease);
+	}
+	.conn :global(.svelte-flow__handle:hover)::before {
+		width: 9px;
+		height: calc(var(--node-u) - 4px);
+		box-shadow:
+			0 0 0 2px var(--surface-1),
+			0 0 8px var(--dtype, var(--accent));
+	}
 	/* The point sits on the border PIXEL, not its outer edge: half a pixel in, so a 7px pill
 	   covers three pixels either side of the 1px line. An input's hit area is the pill plus 4px
 	   each side, centred on the border. */

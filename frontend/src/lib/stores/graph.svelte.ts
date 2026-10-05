@@ -30,6 +30,7 @@ import {
 	recordedSlots,
 	variableViews,
 	variableGroupLocks,
+	machineGroups,
 	midiGroups,
 	machineViews,
 	arrangementTabs,
@@ -143,6 +144,7 @@ export class GraphStore {
 	variableGroups: Record<string, LockView> = $derived(variableGroupLocks(this.doc));
 	/** Every group that reads a MIDI device, by name. */
 	midiGroups: Record<string, Midi> = $derived(midiGroups(this.doc));
+	machineGroups: Record<string, string> = $derived(machineGroups(this.doc));
 	/** Every state machine, by name, doc-authoritative. */
 	machines: Record<string, Machine> = $derived(machineViews(this.doc));
 

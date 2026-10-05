@@ -33,15 +33,18 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     assert!(g.doc()["machines"]["seq"].is_object(), "the machine is a document root: {}", g.doc()["machines"]);
     let why = g.refuse("machine add", j!({ "name": "seq" }));
     assert!(why.contains("already exists"), "{why}");
-    // An attribute is a value every state may set; its widget must draw its default, and the
+    // An attribute is a value every state may set; its kind must hold its default, and the
     // machine's own three element names are not an attribute's to take.
-    let knob = j!({ "kind": "knob", "min": 0.0, "max": 1.0, "step": 0.01, "x": 0.0, "y": 0.0, "w": 4.0, "h": 4.0 });
-    write("machine attribute add", j!({ "machine": "seq", "name": "gain", "value": 0.0, "control": knob }));
+    let num = j!({ "type": "num", "vmin": 0.0, "vmax": 1.0 });
+    write("machine attribute add", j!({ "machine": "seq", "name": "gain", "value": 0.0, "kind": num }));
     write("machine attribute add", j!({ "machine": "seq", "name": "label", "value": "a" }));
+    assert_eq!(g.doc()["machines"]["seq"]["attributes"]["label"]["kind"]["type"], j!("string"), "a text default is a string attribute");
     let why = g.refuse("machine attribute add", j!({ "machine": "seq", "name": "state", "value": 0.0 }));
     assert!(why.contains("machine's own"), "{why}");
-    let why = g.refuse("machine attribute add", j!({ "machine": "seq", "name": "shape", "value": "x", "control": knob }));
-    assert!(why.contains("knob") && why.contains("string"), "{why}");
+    let why = g.refuse("machine attribute add", j!({ "machine": "seq", "name": "shape", "value": "x", "kind": num }));
+    assert!(why.contains("`num`") && why.contains("string"), "{why}");
+    let why = g.refuse("machine attribute edit", j!({ "machine": "seq", "name": "label", "kind": { "type": "string", "options": ["b"] } }));
+    assert!(why.contains("options"), "the options must hold the default: {why}");
     write("machine state add", j!({ "machine": "seq", "name": "A", "pos": [0.0, 0.0], "values": { "gain": 0.2, "label": "a" } }));
     write("machine state add", j!({ "machine": "seq", "name": "B", "pos": [200.0, 0.0], "values": { "gain": 1.0 } }));
     write("machine state add", j!({ "machine": "seq", "name": "C", "pos": [400.0, 0.0], "values": { "gain": 0.0, "label": "c" } }));
@@ -59,7 +62,7 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     assert_eq!(g.variable("head.prev"), j!(""));
     let listed = g.call("variable list", j!({}));
     assert_eq!(listed["groups"]["head"]["machine"], j!("seq"), "{}", listed["groups"]);
-    assert_eq!(g.doc()["variables"]["head.gain"]["control"]["kind"], j!("knob"), "the attribute's widget rides the variable");
+    assert_eq!(g.doc()["variables"]["head.gain"]["control"]["kind"], j!("knob"), "a number attribute's variable wears a knob");
     assert_eq!(g.doc()["variables"]["head.gain"]["lock"], Value::Null, "the lock is the group's, not the entry's own");
     for (op, payload) in [
         ("variable entry edit", j!({ "name": "head.gain", "value": 0.5 })),

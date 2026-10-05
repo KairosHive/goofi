@@ -45,11 +45,14 @@ export type RowPlan = {
 export type RowView = {
 	/** The reader opened the list as individual entries. */
 	individual: boolean;
+	/** The value may take a source; false is a literal alone, with no foot and no entry sources. */
+	sources?: boolean;
 };
 
 export function rowPlan(d: ParamDescriptor, view: RowView): RowPlan {
 	const kind = controlKind(d);
-	const entries = kind === 'color' || kind === 'vector';
+	const sources = view.sources !== false;
+	const entries = sources && (kind === 'color' || kind === 'vector');
 	const individual = entries && view.individual;
 	const driven = d.mode !== 'constant';
 	const anyEntryDriven = (d.elements ?? []).some((e) => e.mode !== 'constant');
@@ -58,9 +61,9 @@ export function rowPlan(d: ParamDescriptor, view: RowView): RowPlan {
 		face: kind === 'color' && individual ? 'vector' : kind,
 		viewSwitch: entries,
 		disabled: driven || (entries && !individual && anyEntryDriven),
-		list: entries && !individual && !source,
+		list: (kind === 'color' || kind === 'vector') && !individual && !source,
 		elements: individual,
 		source,
-		foot: !individual
+		foot: sources && !individual
 	};
 }

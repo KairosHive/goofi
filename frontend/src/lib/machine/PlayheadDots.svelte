@@ -1,11 +1,13 @@
-<!-- Every playhead as a coloured dot: at rest on its state's dock, in arrival order; in flight
-     along the edge from `.prev` to `.state` at `.progress`. Rendered inside a front ViewportPortal,
-     so flow units are its pixels; a glide between frames keeps it smooth at the cap. -->
+<!-- Every playhead as a coloured dot: at rest on its state's top edge, in arrival order; in flight
+     along the transition's course from `.prev` to `.state` at `.progress`. Rendered inside a front ViewportPortal,
+     so flow units are its pixels. A glide between two frames of ONE flight keeps it smooth at the
+     cap; a new course, or coming to rest, is a new element, so a dot never eases across a jump. -->
 <script lang="ts">
 	import type { Node } from '@xyflow/svelte';
 	import { untrack } from 'svelte';
 	import type { Machine } from '$lib/api/generated';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
+	import { course } from './geometry';
 	import { DOCK, DOT, cardBox, dotColor } from './layout';
 
 	let { m, nodes }: { m: Machine; nodes: Node[] } = $props();
@@ -39,17 +41,17 @@
 		if (!to) return null;
 		if (!w.flying) {
 			const i = Math.max(0, (order[w.state] ?? []).indexOf(w.p));
-			return { x: to.x + DOCK.x + i * DOCK.step, y: to.y + DOCK.y };
+			return { x: to.x + DOCK.x + i * DOCK.step, y: to.y };
 		}
 		const from = cardBox(nodes, w.prev);
-		const a = from ? { x: from.x + from.w, y: from.y + from.h / 2 } : { x: to.x, y: to.y + to.h / 2 };
-		const b = { x: to.x, y: to.y + to.h / 2 };
-		return { x: a.x + (b.x - a.x) * w.progress, y: a.y + (b.y - a.y) * w.progress };
+		if (!from) return { x: to.x + DOCK.x, y: to.y };
+		const { x, y } = course(from, to).at(w.progress);
+		return { x, y };
 	}
 </script>
 
 <div class="dots" data-testid="playhead-dots">
-	{#each where as w (w.p)}
+	{#each where as w (`${w.p}:${w.flying ? `${w.prev}>${w.state}` : `rest:${w.state}`}`)}
 		{@const p = at(w)}
 		{#if p}
 			<div
